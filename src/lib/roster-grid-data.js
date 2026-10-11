@@ -43,7 +43,7 @@
 
 import { isLiveAssignment } from './roster'
 import { siblingLocationIds } from './sibling-locations'
-import { addDaysISO } from './dublin-time'
+import { addDaysISO } from '@shared/zoned-time'
 import { logWarn } from './log'
 import { EMPLOYEE_TYPE } from '@shared/working-time'
 import { shiftKindOf } from '@shared/shift-kind'

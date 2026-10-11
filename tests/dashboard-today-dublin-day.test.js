@@ -1,4 +1,7 @@
 // TODAYTZ.1 — /dashboard/today must key "today" off Europe/Dublin.
+// TZ.11a — and since the timezone wave, off the ACTIVE studio's zone
+// (`todayStrIn(zoneOfLocation(user.activeLocation))`), which is Europe/Dublin
+// for every UN1T studio: the same day, from the studio's own column.
 //
 // The page is an async server component that fans out to half a dozen
 // collaborators, so booting it in a test would be a rig around one line. The
@@ -6,7 +9,7 @@
 // Vercel runs in UTC — between midnight and 01:00 Dublin during BST the server
 // is still on yesterday, so the month grid highlighted the wrong cell and
 // "on with you today" listed yesterday's shifts. CLAUDE.md's rule is
-// dublinTodayStr() for a business today, and the guardrails lint rule only
+// todayStrIn(zone) for a business today, and the guardrails lint rule only
 // catches the `new Date().toISOString().slice(…)` spelling, not this one
 // (local getters on a UTC box).
 //
@@ -17,7 +20,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { stripComments } from './helpers/js-code.js'
-import { dublinTodayStr } from '../src/lib/dublin-time.js'
+import { todayStrIn } from '../shared/zoned-time.js'
 
 const PAGE = path.resolve(import.meta.dirname, '../src/app/dashboard/today/page.js')
 const source = readFileSync(PAGE, 'utf8')
@@ -37,9 +40,10 @@ describe('/dashboard/today — "today" is a Dublin day', () => {
     expect(lines(stripComments('// see providers/*.js\nconst a = 1\n/* x */\n'))).toBe(1)
   })
 
-  it('imports and calls dublinTodayStr()', () => {
-    expect(code).toMatch(/import\s*\{[^}]*\bdublinTodayStr\b[^}]*\}\s*from\s*['"]@\/lib\/dublin-time['"]/)
-    expect(code).toMatch(/dublinTodayStr\(\)/)
+  it('imports todayStrIn + zoneOfLocation and keys today off the active studio (TZ.11a)', () => {
+    expect(code).toMatch(/import\s*\{[^}]*\btodayStrIn\b[^}]*\}\s*from\s*['"]@\/lib\/location-time['"]/)
+    expect(code).toMatch(/const zone = zoneOfLocation\(user\.activeLocation\)/)
+    expect(code).not.toMatch(/dublin-time/)
   })
 
   it('derives no date string from the server clock', () => {
@@ -53,11 +57,11 @@ describe('/dashboard/today — "today" is a Dublin day', () => {
   it('hands the SAME today to the month grid and to the swap actions', () => {
     // Two surfaces on one page disagreeing about today is its own bug; one
     // binding, used twice.
-    expect(code).toMatch(/const todayIso = dublinTodayStr\(\)/)
+    expect(code).toMatch(/const todayIso = todayStrIn\(zone\)/)
     expect(code).toMatch(/buildMonthMatrix\([^)]*todayIso\)/)
     expect(code).toMatch(/todayIso=\{todayIso\}/)
     // Exactly one call site, so the two cannot drift or straddle midnight.
-    expect(code.match(/dublinTodayStr\(\)/g)).toHaveLength(1)
+    expect(code.match(/todayStrIn\(/g)).toHaveLength(1)
   })
 
   // A4 REVENUEMTD.1 — fetchPersonalDashboardData runs HERE on the server (UTC),
@@ -67,9 +71,9 @@ describe('/dashboard/today — "today" is a Dublin day', () => {
     expect(code).toMatch(/fetchPersonalDashboardData\(\s*db\s*,\s*user\.id\s*,\s*user\.activeLocation\?\.id\s*,\s*\{\s*todayIso\s*\}\s*\)/)
   })
 
-  it('dublinTodayStr really answers a Dublin calendar day', () => {
-    expect(dublinTodayStr()).toMatch(/^\d{4}-\d{2}-\d{2}$/)
-    expect(dublinTodayStr()).toBe(
+  it('todayStrIn(Europe/Dublin) really answers a Dublin calendar day', () => {
+    expect(todayStrIn('Europe/Dublin')).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(todayStrIn('Europe/Dublin')).toBe(
       new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Dublin', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()),
     )
   })

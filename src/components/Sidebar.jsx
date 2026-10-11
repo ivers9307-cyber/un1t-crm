@@ -13,6 +13,7 @@ import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { usePolledCount } from './use-polled-count'
 import { ALL_NAV, NAV_SECTIONS, DASHBOARD_LINK_PERM_KEYS, activeHrefFor } from '@/lib/nav-items'
 import { withTitleBadge, stripTitleBadge } from '@/lib/tab-title-badge'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 const roleLabels = {
   master: 'Master',
@@ -362,7 +363,7 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
             {branding?.logo_url ? (
               <img src={branding.logo_url} alt={branding.company_name || 'Logo'} className="h-[54px] max-w-full object-contain" />
             ) : (
-              <h1 className="text-xl font-bold tracking-wider">{branding?.company_name || 'UN1T'}</h1>
+              <h1 className="text-xl font-bold tracking-wider">{branding?.company_name || PLATFORM_NAME}</h1>
             )}
           </div>
           {/* Mobile-only close affordance — duplicates the backdrop

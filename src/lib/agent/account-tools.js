@@ -21,7 +21,8 @@
 // Pure helpers (identityMatches, formatMembership, formatNextClass,
 // formatRecentAttendance) are unit-tested; the executor does the IO.
 
-import { formatDublinClassTime } from './dublin-format'
+import { formatClassTime } from './dublin-format'
+import { DEFAULT_TZ } from '@/lib/location-time'
 import { escapeLikePattern } from '../like-escape'
 import { linkedAccountsForContact, hasBookableMembership, electWriteAccount } from '@/lib/person-accounts'
 
@@ -291,12 +292,13 @@ export function formatMembership(contact) {
  * array (each row: { event_name, model_name, time_start unix-sec, status }).
  * Pure. now injectable for tests.
  *
- * class_time is a DUBLIN WALL-CLOCK label ("Sat 13 Jun, 07:00"), never a raw
+ * class_time is a WALL-CLOCK label in the studio's zone (TZ.5; it was Dublin
+ * for every studio) ("Sat 13 Jun, 07:00"), never a raw
  * UTC ISO string: handing the model UTC is what told a customer their 7am
  * summer class was at "6am" (live test 2026-06-12, fixed for the booking
  * tools then and for this one in MIA-REVIEW.3). Same helper both sides.
  */
-export function formatNextClass(recentBookings, now = new Date()) {
+export function formatNextClass(recentBookings, now = new Date(), zone = DEFAULT_TZ) {
   const nowSec = Math.floor(now.getTime() / 1000)
   const upcoming = (recentBookings || [])
     .filter(b => b && Number(b.time_start) > nowSec && String(b.status || '').toUpperCase() !== 'CANCELLED')
@@ -306,7 +308,7 @@ export function formatNextClass(recentBookings, now = new Date()) {
   return {
     found: true,
     class_name: next.event_name || next.model_name || 'your class',
-    class_time: formatDublinClassTime(Number(next.time_start)),
+    class_time: formatClassTime(Number(next.time_start), zone),
   }
 }
 
@@ -598,6 +600,13 @@ async function getMyPaymentReminder(db, { verifiedId, locationId }) {
     const memberId = owner?.glofox_member_id
     if (!memberId) return result
 
+    // W1.M3b — the live overdue check belongs to the studio's membership
+    // source: a studio with none (or a provider without invoices) answers
+    // 'unknown' without a credentials read. Same lazy-import reasoning as above.
+    const { resolveMembershipSource } = await import('@/lib/membership/source')
+    const provider = await resolveMembershipSource(db, locationId || owner?.location_id)
+    if (!provider.capabilities.invoices) return result
+
     const creds = await glofoxCredentialsForLocation(db, locationId || owner?.location_id)
     if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken) return result
 
@@ -763,7 +772,7 @@ export async function executeAccountTool(toolName, input, ctx) {
       try {
         const rows = await fetchContactRowsByIds(db, ids, 'recent_bookings')
         const combined = rows.flatMap((r) => (Array.isArray(r?.recent_bookings) ? r.recent_bookings : []))
-        return formatNextClass(combined)
+        return formatNextClass(combined, new Date(), ctx.zone || DEFAULT_TZ)
       } catch (err) {
         console.error('[agent][account] get_my_next_class group read failed:', err?.message || err)
         // fall through to the single-contact read below
@@ -773,7 +782,7 @@ export async function executeAccountTool(toolName, input, ctx) {
       .select('recent_bookings')
       .eq('id', verifiedId)
       .maybeSingle()
-    return formatNextClass(data?.recent_bookings)
+    return formatNextClass(data?.recent_bookings, new Date(), ctx.zone || DEFAULT_TZ)
   }
 
   if (toolName === 'get_my_recent_attendance') {

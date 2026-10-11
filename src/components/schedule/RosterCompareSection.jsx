@@ -143,7 +143,7 @@ function CompareBody({ data, rosterId, showUnchanged, onChooseBaseline }) {
   return (
     <div className="mt-1">
       <div className="text-xs text-un1t-subtle">
-        Compared with the publish of {publishedLabel(data.baseline.published_at)}
+        Compared with the publish of {publishedLabel(data.baseline.published_at, data.timezone)}
         {data.baseline.published_by_name ? ` by ${data.baseline.published_by_name}` : ''}
       </div>
       {(data.publishes || []).length > 1 && (
@@ -156,7 +156,7 @@ function CompareBody({ data, rosterId, showUnchanged, onChooseBaseline }) {
             className="max-w-full rounded-md border border-un1t-border bg-un1t-surface px-2 py-1 text-xs text-un1t-text"
           >
             {data.publishes.map((p) => (
-              <option key={p.snapshot_id} value={p.snapshot_id}>{publishOptionLabel(p, rosterId)}</option>
+              <option key={p.snapshot_id} value={p.snapshot_id}>{publishOptionLabel(p, rosterId, data.timezone)}</option>
             ))}
           </select>
         </div>

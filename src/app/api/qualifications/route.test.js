@@ -2,7 +2,7 @@
 // src/lib/qualifications-server.test.js; here: the gates, the query and body
 // contracts, and that the route sends what the data layer answers.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({ db: true })) }))
 vi.mock('@/lib/auth', async (importOriginal) => {
@@ -14,7 +14,6 @@ vi.mock('@/lib/auth', async (importOriginal) => {
     hasRoleAtAnyLocation: real.hasRoleAtAnyLocation,
   }
 })
-vi.mock('@/lib/dublin-time', async (importOriginal) => ({ ...(await importOriginal()), dublinTodayStr: () => '2026-09-28' }))
 vi.mock('@/lib/qualifications-server', async (importOriginal) => ({
   ...(await importOriginal()),
   loadQualificationsPage: vi.fn(),
@@ -38,11 +37,16 @@ const getReq = (params = {}) => {
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
   return { url: url.toString() }
 }
+afterEach(() => vi.useRealTimers())
+
 const postReq = (body) => ({ url: 'http://test/api/qualifications', json: async () => body })
 const VALID = { profile_id: PERSON, qualification_type_id: TYPE, issued_on: '2026-01-10', expires_on: '2028-01-10', note: 'PHECC' }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // TZ.8b — "today" is the studio's day off the clock (this studio carries no
+  // timezone: DEFAULT_TZ, Europe/Dublin): 12:00 IST on 28 Sep 2026.
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-09-28T11:00:00Z') })
   assertLocationAccess.mockReturnValue(null)
   loadQualificationsPage.mockResolvedValue({ status: 200, body: { success: true, data: { audience: 'self' } } })
   createQualificationRecord.mockResolvedValue({ status: 201, body: { success: true, data: { id: 'r1' } } })
@@ -74,6 +78,17 @@ describe('GET /api/qualifications', () => {
     expect(res.status).toBe(200)
     expect(loadQualificationsPage).toHaveBeenCalledWith({ db: true }, { user: coach, locationId: LOC, today: '2026-09-28' })
     expect(await res.json()).toEqual({ success: true, data: { audience: 'self' } })
+  })
+
+  it('TZ.8b: expiry is judged on the studio\'s own day (New York at 23:00 EDT is still the day before)', async () => {
+    vi.setSystemTime(Date.parse('2026-09-28T03:00:00Z')) // 04:00 IST on 28 Sep; 23:00 EDT on 27 Sep
+    const nyCoach = { ...coach, locations: [{ id: LOC, timezone: 'America/New_York' }] }
+    getCurrentUser.mockResolvedValue(nyCoach)
+    await GET(getReq({ location_id: LOC }))
+    expect(loadQualificationsPage).toHaveBeenLastCalledWith({ db: true }, { user: nyCoach, locationId: LOC, today: '2026-09-27' })
+    getCurrentUser.mockResolvedValue(coach)
+    await GET(getReq({ location_id: LOC }))
+    expect(loadQualificationsPage).toHaveBeenLastCalledWith({ db: true }, { user: coach, locationId: LOC, today: '2026-09-28' })
   })
 
   it('sends the data layer\'s failure as it is', async () => {

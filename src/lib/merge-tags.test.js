@@ -53,6 +53,8 @@ describe('the registry and applyMergeTags() agree', () => {
     }
     const extras = {
       location_name: 'UN1T Stillorgan',
+      // W1.S1a — the sending location's configured brand.
+      company_name: 'UN1T Stillorgan',
       unsubscribe_url: 'https://example.com/unsubscribe/tok',
       preference_url: 'https://example.com/preferences/tok',
       booking_token: 'cGF5bG9hZA.c2ln',

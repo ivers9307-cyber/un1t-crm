@@ -12,6 +12,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { HOST_COLS, loadHostForOrg } from '@/lib/hosts'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -49,7 +50,8 @@ const PatchSchema = z.object({
   // webhook on that stream to /api/webhooks/postmark with all six events and
   // the x-webhook-token header). Empty string clears it → sends fail closed.
   postmark_stream_id: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,63}$/)
-    .refine((s) => !RESERVED_POSTMARK_STREAMS.has(s), { message: "That is UN1T's shared Postmark stream — enter the host's own stream id" })
+    // W1.S1c: the shared streams are the platform's (one Postmark server).
+    .refine((s) => !RESERVED_POSTMARK_STREAMS.has(s), { message: `That is ${PLATFORM_NAME}'s shared Postmark stream. Enter the host's own stream id.` })
     .nullable().optional().or(z.literal('')),
 }).refine((o) => Object.keys(o).length > 0, { message: 'No fields to update' })
 

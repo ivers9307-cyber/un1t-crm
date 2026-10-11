@@ -33,6 +33,7 @@ import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
 import { loadFrontPage, publicWelcomePathForLocation } from '@/lib/welcome-front-page'
 import { resolveTenantLocationId, resolveTenantOrgId } from '@/lib/tenant-domains-edge'
 import { resolveGymSiteName } from '@/lib/default-site-name'
+import { resolveLocationBrand, resolveOrgChrome } from '@/lib/host-brand'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,7 +54,7 @@ async function loadEditSeed() {
     const db = createServerClient()
     const { data } = await db
       .from('landing_page_settings')
-      .select('*')
+      .select('*, locations:location_id ( organization_id )')
       .order('updated_at', { ascending: false })
       .limit(1)
       .maybeSingle()
@@ -86,7 +87,7 @@ export async function generateMetadata() {
 
 // Shared inner content for a tile (cover image + scrim + centre text).
 // Rendered inside either a <Link> (active) or a <div> (disabled).
-function TileBody({ s }) {
+function TileBody({ s, brand }) {
   return (
     <>
       {/* Cover image (operator-set or hero fallback). When absent,
@@ -103,7 +104,7 @@ function TileBody({ s }) {
           on active tiles it lightens on hover to read as "selected". */}
       <div className={`absolute inset-0 transition-colors duration-500 ${s.disabled ? 'bg-black/70' : 'bg-black/55 group-hover:bg-black/35'}`} />
       <div className="relative z-10 text-center px-6">
-        <div className="text-[10px] uppercase tracking-[0.45em] text-white/55 mb-4 font-semibold">UN1T Dublin</div>
+        {brand && <div className="text-[10px] uppercase tracking-[0.45em] text-white/55 mb-4 font-semibold">{brand}</div>}
         {s.disabled && (
           <div className="mb-4 inline-block rounded-full border border-white/40 px-3.5 py-1 text-[10px] uppercase tracking-[0.25em] text-white/80">
             Coming soon
@@ -131,12 +132,24 @@ export default async function WelcomePage(props) {
   if (searchParams?.edit === '1') {
     const row = await loadEditSeed()
     const blocks = blocksOrDefault(row?.blocks)
+    // W1.S1b — the seed row's own studio brand and its organisation's
+    // footer chrome (both cached), the same footer /welcome/[location]
+    // renders live, so the preview matches the page; never a literal.
+    const [seedBrand, chrome] = await Promise.all([
+      resolveLocationBrand({ locationId: row?.location_id || null }),
+      resolveOrgChrome({ orgId: row?.locations?.organization_id || null }),
+    ])
+    const footer = { brand: chrome.companyName, studios: chrome.studios, legalName: chrome.legalName }
     return (
       <EditModeOverlay
         initialBlocks={blocks}
         initialLogoUrl={row?.logo_url || null}
-        initialLogoAlt={row?.logo_alt || 'UN1T Dublin'}
+        initialLogoAlt={row?.logo_alt || seedBrand.companyName}
+        fallbackLogoAlt={seedBrand.companyName}
+        wordmark={seedBrand.shortName}
+        locationName={seedBrand.locationName}
         initialLogoWidthPx={row?.logo_width_px || 200}
+        footer={footer}
       />
     )
   }
@@ -158,6 +171,12 @@ export default async function WelcomePage(props) {
   }
 
   const { headline, intro, tiles } = await loadFrontPageForHost(host)
+  // W1.S1b — the brand bar and the tile eyebrows name the request host's
+  // organisation (the same cached resolver as the tab title above; the
+  // platform name on the CRM host). The first word stays bright and the rest
+  // dims, the way the bar was drawn for "UN1T DUBLIN".
+  const brand = await resolveGymSiteName({ host })
+  const [brandHead, ...brandTail] = brand.split(/\s+/).filter(Boolean)
 
   const tileWrapClasses = 'group relative flex-1 min-h-[50svh] md:min-h-screen overflow-hidden flex items-center justify-center border-b border-white/10 md:border-b-0 md:border-r last:border-0'
 
@@ -168,7 +187,8 @@ export default async function WelcomePage(props) {
           never blocks a tile. */}
       <div className="pointer-events-none absolute top-0 inset-x-0 z-20 pt-8 md:pt-10 px-6 text-center lp-hero-stagger">
         <div className="font-display font-extrabold text-xl md:text-2xl tracking-[0.3em] text-white drop-shadow">
-          UN1T <span className="text-white/55">DUBLIN</span>
+          <span className="uppercase">{brandHead}</span>
+          {brandTail.length > 0 && <> <span className="uppercase text-white/55">{brandTail.join(' ')}</span></>}
         </div>
         {headline && (
           <h1 className="mt-4 font-display font-extrabold uppercase text-2xl md:text-3xl tracking-tight drop-shadow">{headline}</h1>
@@ -185,11 +205,11 @@ export default async function WelcomePage(props) {
             aria-disabled="true"
             className={`${tileWrapClasses} cursor-not-allowed select-none`}
           >
-            <TileBody s={s} />
+            <TileBody s={s} brand={brand} />
           </div>
         ) : (
           <Link key={s.path} href={`/welcome/${s.path}`} className={tileWrapClasses}>
-            <TileBody s={s} />
+            <TileBody s={s} brand={brand} />
           </Link>
         )
       )}

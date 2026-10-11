@@ -17,6 +17,8 @@ import { buildCachedSystem, SKIP_PREFIX } from './prompt'
 import { formatHistoryForClaude, isSkipResponse, parseAgentResponse } from './core'
 import { formatNextClass } from './account-tools'
 import { getLocationBranding } from '@/lib/location-branding'
+import { instantToZonedParts, zoneOfLocation } from '@/lib/location-time'
+import { resolveMembershipSource } from '@/lib/membership/source'
 import { anthropicMessages } from '@/lib/anthropic'
 
 // MIA-SONNET5 — in step with the inbound reply path (see auto-reply.js).
@@ -111,12 +113,27 @@ export function sanitizeSuggestion(text) {
   return s || null
 }
 
+const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+/**
+ * TZ.17 — "today" for the prompt, in Date#toDateString's exact shape
+ * ('Sun Oct 11 2026') but on the studio's calendar. It was the host clock's
+ * (`new Date().toDateString()`, UTC on Vercel), so from 00:00 to 01:00 Irish
+ * summer time Mia was told it was still yesterday.
+ * @param {number} nowMs
+ * @param {string} zone IANA zone
+ */
+export function zonedDateString(nowMs, zone) {
+  const p = instantToZonedParts(nowMs, zone)
+  return `${WD[p.weekday - 1]} ${MON[p.mo - 1]} ${String(p.d).padStart(2, '0')} ${String(p.y).padStart(4, '0')}`
+}
+
 // One short proactive message in Mia's voice, given the thread + an
 // instruction. Mirrors followups.js composeAgentText verbatim (same
 // model/max_tokens/system-cache shape) — see file header. Returns
 // { text } or { error }; never throws.
 // Exported for tests (repo convention) — see compose-effort.test.js.
-export async function composeAgentText(location, settings, historyRows, instruction, companyName, signal) {
+export async function composeAgentText(location, settings, historyRows, instruction, companyName, signal, membershipSource = null) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   const system = buildCachedSystem({
@@ -124,9 +141,10 @@ export async function composeAgentText(location, settings, historyRows, instruct
     locationName: location.name,
     agentName: settings?.agent_name || null,
     membershipUrl: settings?.membership_signup_url || null,
+    membershipSource, // W1.M3b — null renders the Glofox default
     tone: settings?.tone || null,
     extraRules: settings?.extra_rules || null,
-    today: new Date().toDateString(),
+    today: zonedDateString(Date.now(), zoneOfLocation(location)),
   })
   const messages = [
     ...formatHistoryForClaude(historyRows || []),
@@ -170,7 +188,7 @@ export async function composeApprovalSuggestion(db, row, { signal } = {}) {
   if (!row?.location_id) return { error: 'no_location' }
 
   const { data: location } = await db.from('locations')
-    .select('id, name, settings')
+    .select('id, name, settings, timezone')
     .eq('id', row.location_id)
     .maybeSingle()
   if (!location) return { error: 'location_not_found' }
@@ -196,7 +214,8 @@ export async function composeApprovalSuggestion(db, row, { signal } = {}) {
     if (contact) {
       ctx.firstName = contact.first_name || (contact.name ? contact.name.split(' ')[0] : null)
       ctx.membershipStatus = contact.glofox_membership_state || null
-      const next = formatNextClass(contact.recent_bookings)
+      // TZ.17 — the class time on the studio's clock (it was the default zone).
+      const next = formatNextClass(contact.recent_bookings, new Date(), zoneOfLocation(location))
       if (next.found) {
         ctx.nextClassName = next.class_name
         ctx.nextClassTime = next.class_time
@@ -206,7 +225,8 @@ export async function composeApprovalSuggestion(db, row, { signal } = {}) {
 
   const instruction = buildSuggestionInstruction(row.kind, row.status, ctx)
   const branding = await getLocationBranding(db, location.id)
-  const composed = await composeAgentText(location, settings, historyRows, instruction, branding.companyName, signal)
+  const provider = await resolveMembershipSource(db, location.id) // W1.M3b
+  const composed = await composeAgentText(location, settings, historyRows, instruction, branding.companyName, signal, { key: provider.key, label: provider.label })
   if (composed.error) return { error: composed.error }
 
   const text = sanitizeSuggestion(composed.text)

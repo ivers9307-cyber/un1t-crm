@@ -29,6 +29,7 @@ const { logError } = await import('@/lib/log')
 const { contactMatchesSequenceAudience } = await import('./audience.js')
 const { enrolContacts } = await import('./enrol.js')
 const cronTriggers = await import('./cron-triggers.js')
+const { instantToZonedParts } = await import('@shared/zoned-time')
 
 beforeEach(() => {
   createServerClient.mockReset()
@@ -56,7 +57,10 @@ function mockDb(tables) {
   return {
     calls,
     from: vi.fn((table) => {
-      const t = tables[table]
+      // TZ.4 — the anniversary/audience runners read every sequence's studio
+      // zone (locations.timezone) once per run. A test that does not model it
+      // gets "no rows", i.e. every studio on the Europe/Dublin floor.
+      const t = tables[table] ?? (table === 'locations' ? { list: [] } : undefined)
       if (!t) throw new Error(`unexpected table: ${table}`)
       const cfg = Array.isArray(t) ? t.shift() : t
       const record = (method) => vi.fn((...args) => { calls.push({ table, method, args }); return builder })
@@ -86,6 +90,16 @@ function mockDb(tables) {
 
 // ── event_reminder ──────────────────────────────────────────────
 
+// TZ.17 — a booking's date + start_time are the STUDIO's wall clock (Europe/
+// Dublin here: the tests' sequences carry no modelled zone, so the floor
+// applies). These fixtures used to compose them from the UTC clock, which only
+// matched because the runner read the pair as UTC too.
+function dublinWall(d) {
+  const p = instantToZonedParts(d.getTime(), 'Europe/Dublin')
+  const two = (n) => String(n).padStart(2, '0')
+  return { date: p.dateKey, time: `${two(p.h)}:${two(p.mi)}:${two(p.s)}` }
+}
+
 describe('runEventReminderTriggers', () => {
   it('returns zero stats when there are no active event_reminder sequences', async () => {
     createServerClient.mockReturnValue(mockDb({ email_sequences: { list: [] } }))
@@ -109,8 +123,7 @@ describe('runEventReminderTriggers', () => {
     // Sequence wants 24h before. Booking is 6h before NOW → outside
     // the ±1h tolerance around the 24h target.
     const farFuture = new Date(Date.now() + 6 * 3600_000)
-    const dateStr = farFuture.toISOString().slice(0, 10)
-    const timeStr = farFuture.toISOString().slice(11, 19)
+    const { date: dateStr, time: timeStr } = dublinWall(farFuture)
 
     // The DB-level date filter is a wide gte/lte — it'll return the
     // booking, but the in-memory exact-window check should reject.
@@ -133,7 +146,7 @@ describe('runEventReminderTriggers', () => {
         { id: 's1', location_id: 'loc-1', trigger_config: { hours_before: 24 }, audience_filter: null },
       ] },
       bookings: { list: [
-        { id: 'b1', contact_id: null, booking_date: target.toISOString().slice(0, 10), start_time: target.toISOString().slice(11, 19) },
+        { id: 'b1', contact_id: null, booking_date: dublinWall(target).date, start_time: dublinWall(target).time },
       ] },
     }))
     await cronTriggers.runEventReminderTriggers()
@@ -147,7 +160,7 @@ describe('runEventReminderTriggers', () => {
         { id: 's1', location_id: 'loc-1', trigger_config: { hours_before: 24 }, audience_filter: null },
       ] },
       bookings: { list: [
-        { id: 'b1', contact_id: 'c1', booking_date: target.toISOString().slice(0, 10), start_time: target.toISOString().slice(11, 19), event_type_id: 'evt-A' },
+        { id: 'b1', contact_id: 'c1', booking_date: dublinWall(target).date, start_time: dublinWall(target).time, event_type_id: 'evt-A' },
       ] },
       sequence_enrollments: { maybeSingle: { id: 'enr-1' } }, // already enrolled
     }))
@@ -164,7 +177,7 @@ describe('runEventReminderTriggers', () => {
         { id: 's1', location_id: 'loc-1', trigger_config: { hours_before: 24 }, audience_filter: null },
       ] },
       bookings: { list: [
-        { id: 'b1', contact_id: 'c1', booking_date: target.toISOString().slice(0, 10), start_time: target.toISOString().slice(11, 19), event_type_id: 'evt-A' },
+        { id: 'b1', contact_id: 'c1', booking_date: dublinWall(target).date, start_time: dublinWall(target).time, event_type_id: 'evt-A' },
       ] },
       sequence_enrollments: { maybeSingle: null },
     }))
@@ -185,10 +198,50 @@ describe('runEventReminderTriggers', () => {
         { id: 's1', location_id: 'loc-1', trigger_config: { hours_before: 24, event_type_id: 'evt-B' }, audience_filter: null },
       ] },
       bookings: { list: [
-        { id: 'b1', contact_id: 'c1', booking_date: target.toISOString().slice(0, 10), start_time: target.toISOString().slice(11, 19), event_type_id: 'evt-A' },
+        { id: 'b1', contact_id: 'c1', booking_date: dublinWall(target).date, start_time: dublinWall(target).time, event_type_id: 'evt-A' },
       ] },
     }))
     await cronTriggers.runEventReminderTriggers()
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+})
+
+describe('TZ.17 event_reminder — the studio wall clock, exactly once across the change', () => {
+  // On the deploy day the old (UTC-read) window and the new (studio-read) one
+  // overlap: in Irish summer time the new one opens an hour EARLIER than the
+  // old one did. A booking the old code already enrolled must not be enrolled
+  // again by the new code, and vice versa: the dedup is on (sequence, contact,
+  // booking) across every enrolment status, so the second sweep only skips.
+  it('a booking enrolled by one sweep is skipped by the next, whatever window found it', async () => {
+    const target = new Date(Date.now() + 24 * 3600_000)
+    const seq = { id: 's1', location_id: 'loc-1', trigger_config: { hours_before: 24 }, audience_filter: null }
+    const booking = { id: 'b1', contact_id: 'c1', booking_date: dublinWall(target).date, start_time: dublinWall(target).time, event_type_id: 'evt-A' }
+    createServerClient.mockReturnValue(mockDb({ email_sequences: { list: [seq] }, bookings: { list: [booking] }, sequence_enrollments: { maybeSingle: null } }))
+    expect(await cronTriggers.runEventReminderTriggers()).toMatchObject({ fired: 1, skipped: 0 })
+    createServerClient.mockReturnValue(mockDb({ email_sequences: { list: [seq] }, bookings: { list: [booking] }, sequence_enrollments: { maybeSingle: { id: 'enr-1' } } }))
+    expect(await cronTriggers.runEventReminderTriggers()).toMatchObject({ fired: 0, skipped: 1 })
+    expect(enrolContacts).toHaveBeenCalledTimes(1)
+  })
+
+  it('the booking_date pre-filter is the studio days of the window (not the UTC days)', async () => {
+    const db = mockDb({ email_sequences: { list: [{ id: 's1', location_id: 'loc-1', trigger_config: { hours_before: 0 }, audience_filter: null }] }, bookings: { list: [] } })
+    createServerClient.mockReturnValue(db)
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.parse('2026-07-01T23:30:00Z')) // 00:30 IST on 2 Jul
+    try {
+      await cronTriggers.runEventReminderTriggers()
+    } finally { vi.useRealTimers() }
+    const bounds = db.calls.filter((c) => c.table === 'bookings' && (c.method === 'gte' || c.method === 'lte')).map((c) => [c.method, ...c.args])
+    expect(bounds).toEqual([['gte', 'booking_date', '2026-07-01'], ['lte', 'booking_date', '2026-07-02']]) // 23:30 IST 1 Jul → 01:30 IST 2 Jul
+  })
+
+  it('an unreadable studio zone enrols nobody this tick (counted, not guessed)', async () => {
+    const db = mockDb({
+      email_sequences: { list: [{ id: 's1', location_id: 'loc-1', trigger_config: { hours_before: 24 }, audience_filter: null }] },
+      locations: { error: 'down' },
+    })
+    createServerClient.mockReturnValue(db)
+    expect(await cronTriggers.runEventReminderTriggers()).toEqual({ fired: 0, skipped: 0, errored: 1 })
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 })
@@ -705,8 +758,8 @@ describe('cron triggers — one failing sequence must not stop the others (CRONI
     const target = new Date(Date.now() + 24 * 3600_000)
     const booking = (id) => ({
       id, contact_id: `c-${id}`,
-      booking_date: target.toISOString().slice(0, 10),
-      start_time: target.toISOString().slice(11, 19),
+      booking_date: dublinWall(target).date,
+      start_time: dublinWall(target).time,
       event_type_id: 'evt-A',
     })
     const db = mockDb({

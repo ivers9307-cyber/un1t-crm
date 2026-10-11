@@ -123,7 +123,10 @@ export const SettingsSchema = z.object({
   quiet_hours: z.object({
     start: z.string().regex(/^\d{1,2}:\d{2}$/),
     end: z.string().regex(/^\d{1,2}:\d{2}$/),
-    tz: z.string().max(64).optional().default('Europe/Dublin'),
+    // TZ.5 — null = the studio's own zone (locations.timezone), resolved at
+    // read time (core.isWithinQuietHours). A stored zone, incl. a legacy
+    // 'Europe/Dublin', is kept and still wins.
+    tz: z.string().max(64).nullable().optional().default(null),
   }).nullable().optional(),
   // Cost/abuse ceilings. Omitted → code defaults (20/conv/hr, 500/loc/day).
   limits: z.object({

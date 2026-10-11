@@ -18,7 +18,14 @@ vi.mock('@/lib/challenges-io', () => ({
   computeCollective: vi.fn(() => Promise.resolve({ total: 500, target: 1000, pct: 50 })),
 }))
 
+// W1.S1b — the studio's brand rides the payload; resolved through the
+// per-location cache, mocked here so the assertion is the CALL + the shape.
+vi.mock('@/lib/host-brand', () => ({
+  resolveLocationBrand: vi.fn(async () => ({ companyName: 'Gym A North', shortName: 'Gym A', locationName: 'Gym A North' })),
+}))
+
 import { GET } from './route.js'
+import { resolveLocationBrand } from '@/lib/host-brand'
 import { createServerClient } from '@/lib/supabase'
 import { computeStandings } from '@/lib/challenges-io'
 
@@ -91,6 +98,20 @@ describe('GET /api/public/tv-challenges/[token]', () => {
     expect(JSON.stringify(body)).not.toContain('contact_id')
   })
 
+  it("TZ.12: carries the token's location zone for the header clock (NULL column → Europe/Dublin)", async () => {
+    const ny = await (await callRoute(makeDb({
+      display: { location_id: 'loc-ny', active: true },
+      location: { id: 'loc-ny', name: 'NY', timezone: 'America/New_York' },
+    }), 'ny-token')).json()
+    expect(ny.timezone).toBe('America/New_York')
+    expect(ny.location).toEqual({ id: 'loc-ny', name: 'NY' })
+    const dub = await (await callRoute(makeDb({
+      display: { location_id: 'loc-1', active: true },
+      location: { id: 'loc-1', name: 'Stillorgan', timezone: null },
+    }), 'good-token')).json()
+    expect(dub.timezone).toBe('Europe/Dublin')
+  })
+
   it('returns 404 for an unknown token (no row) without touching challenges', async () => {
     const db = makeDb({ display: null, location: null })
     const res = await callRoute(db, 'bad-token')
@@ -120,5 +141,46 @@ describe('GET /api/public/tv-challenges/[token]', () => {
     expect(res.status).toBe(429)
     const key = db.rpc.mock.calls[0][1]?.p_key ?? JSON.stringify(db.rpc.mock.calls[0])
     expect(String(key)).toContain('good-token')
+  })
+
+  it('W1.S1b: carries the studio\'s brand from the per-location cache, keyed by the TOKEN\'s location', async () => {
+    const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan' } })
+    const res = await callRoute(db, 'good-token')
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.brand).toEqual({ name: 'Gym A North', short_name: 'Gym A' })
+    expect(resolveLocationBrand).toHaveBeenCalledWith(expect.objectContaining({ locationId: 'loc-1' }))
+    expect(JSON.stringify(body)).not.toMatch(/UN1T/)
+  })
+
+  it('W1.S1b: an unknown token never resolves a brand', async () => {
+    const db = makeDb({ display: null, location: null })
+    await callRoute(db, 'bad-token')
+    expect(resolveLocationBrand).not.toHaveBeenCalled()
+  })
+})
+
+// TZ.17 ⚠️ — the monthly gym board starts on the studio's 1st at local midnight.
+describe('TZ.17 the gym board month is the studio month', () => {
+  const run = async (nowIso, timezone) => {
+    vi.useFakeTimers(); vi.setSystemTime(Date.parse(nowIso))
+    try {
+      const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan', timezone } })
+      await callRoute(db, 'good-token')
+    } finally { vi.useRealTimers() }
+    return computeStandings.mock.calls.at(-1)[1].fromIso
+  }
+  it('Dublin at 00:30 IST on 2 Jul: from 00:00 IST on 1 Jul (it was 00:00 UTC)', async () => {
+    expect(await run('2026-07-01T23:30:00Z', 'Europe/Dublin')).toBe('2026-06-30T23:00:00.000Z')
+  })
+  it('Dublin at 00:30 IST on 1 Jul is already July (the UTC board still showed June)', async () => {
+    expect(await run('2026-06-30T23:30:00Z', 'Europe/Dublin')).toBe('2026-06-30T23:00:00.000Z')
+  })
+  it('Dublin in winter: unchanged (00:00 UTC on the 1st)', async () => {
+    expect(await run('2026-01-15T12:00:00Z', 'Europe/Dublin')).toBe('2026-01-01T00:00:00.000Z')
+  })
+  it('New York: 00:00 EDT on 1 Nov, 00:00 EST on 1 Dec', async () => {
+    expect(await run('2026-11-15T12:00:00Z', 'America/New_York')).toBe('2026-11-01T04:00:00.000Z')
+    expect(await run('2026-12-15T12:00:00Z', 'America/New_York')).toBe('2026-12-01T05:00:00.000Z')
   })
 })

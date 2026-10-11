@@ -24,6 +24,7 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { Card, Button } from '@/components/ui'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 function formatDate(iso) {
   if (!iso) return ''
@@ -88,7 +89,7 @@ export default function WidgetTokensCard({ profileId }) {
   return (
     <Card title="Home-screen widgets">
       <p className="text-xs text-un1t-subtle mb-3">
-        Each row below is one device this person has added a UN1T home-screen widget
+        Each row below is one device this person has added a {PLATFORM_NAME} home-screen widget
         to. Revoking a device kills every widget on it immediately — including its
         door button — without signing them out of the app itself. Use this if a
         phone is lost or stolen.

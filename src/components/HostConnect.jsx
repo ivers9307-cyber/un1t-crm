@@ -14,11 +14,12 @@
 //      connected account but hasn't finished, the button becomes "Finish Stripe
 //      setup" and we nudge them to pick up where they left off.
 //
-// Standalone dark UN1T brand (bg-black + lp-* tokens), matching the event
+// Standalone dark brand (bg-black + lp-* tokens), matching the event
 // reskin — this is the host's view, never the CRM shell.
 
 import { useCallback, useEffect, useState } from 'react'
 import { Loader2, AlertCircle, ArrowRight, Check, Minus } from 'lucide-react'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 // One onboarding-status flag as a small dark pill. The accent lives on the icon
 // (a separate className) so this file never pairs a bg-*-500/10 tint with a
@@ -34,7 +35,10 @@ function StatusPill({ ok, label }) {
   )
 }
 
-export default function HostConnect({ token }) {
+// fallbackBrand (W1.S1c): the request host's organisation, from the server
+// page, for the invalid-link state where the API names no host. A loaded
+// status carries the host's own organisation (`brand`, `brand_short`).
+export default function HostConnect({ token, fallbackBrand = PLATFORM_NAME }) {
   const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
@@ -101,7 +105,7 @@ export default function HostConnect({ token }) {
         <div className="lp-card-glow rounded-2xl p-8 max-w-sm text-center">
           <AlertCircle size={32} className="mx-auto text-red-400 mb-4" />
           <p className="text-white/70 leading-relaxed">
-            This link is invalid or has expired — ask UN1T for a new one.
+            This link is invalid or has expired. Ask {fallbackBrand || PLATFORM_NAME} for a new one.
           </p>
         </div>
       </div>
@@ -109,6 +113,7 @@ export default function HostConnect({ token }) {
   }
 
   const name = status.name || 'Your account'
+  const brandShort = status.brand_short || status.brand || fallbackBrand || PLATFORM_NAME
   const isReady = status.charges_enabled === true
   const started = status.connected === true
 
@@ -153,7 +158,7 @@ export default function HostConnect({ token }) {
           <p className="text-[11px] uppercase tracking-[0.2em] text-white/45 font-semibold">
             Get paid for your events
           </p>
-          <h1 className="text-3xl font-bold uppercase tracking-tight mt-3">{name} × UN1T</h1>
+          <h1 className="text-3xl font-bold uppercase tracking-tight mt-3">{name} × {brandShort}</h1>
         </div>
 
         <div className="lp-card-glow rounded-2xl p-6">

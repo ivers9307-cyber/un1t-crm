@@ -76,15 +76,18 @@
 
 import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream, consentColumnFor, isTransientSendError, getDefaultMailboxAddress } from './postmark.js'
 import { resolveEmailSender } from './tenant-email.js'
+import { withRequestedFrom } from './from-address.js'
 import { injectPreheader, htmlToPlainText } from './email-content.js'
 import { resolveAbPhase, assignAbVariants, clampAbTestPct, decideAbOutcome, subjectForVariant, AB_FALLBACK_VARIANT } from './campaign-ab.js'
 import { frequencyCapFromLocationSettings, capCutoffIso, stampMarketingTouch, CAMPAIGN_CAP_SKIP_AFTER_MS } from './frequency-cap.js'
 import { loadNonOpenerContactIds } from './campaign-resend.js'
 import { resolveCustomerBaseUrl } from './tenant-host.js'
+import { getLocationBranding } from './location-branding.js'
 import { logInfo } from './log.js'
 import { buildCampaignViewUrl, prependViewInBrowserLink, fetchLocationEmailCopy } from './campaign-web-view.js'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { withSendMarker } from './postmark-send-marker.js'
+import { zoneOfLocation } from './location-time.js'
 
 const CHUNK_SIZE = 500             // recipients per cron tick per campaign
 const AUDIENCE_PAGE_SIZE = 1000    // audience load page (CAMPAIGN.11)
@@ -139,7 +142,8 @@ async function writeOrLog(builder, what, campaignId) {
  *
  * @param {SupabaseClient} db — service-role client
  * @param {object} campaign — full campaigns row (joined with
- *   locations(name, slug, email_inbox_reply_to, settings) — settings feeds
+ *   locations(name, slug, email_inbox_reply_to, settings, features, timezone)
+ *   — settings feeds
  *   the FREQ-CAP.1 gate; a missing join degrades to cap-disabled)
  * @returns {Promise<{ phase: string, sent?: number, error?: string }>}
  */
@@ -769,10 +773,26 @@ export async function tickCampaignSend(db, campaign) {
   // batch is built. With no live tenant email domain (every org today) this
   // is the PRE-DOMAIN sender: the platform address, the studio's brand as
   // display name, the studio's reply-to. With a live tenant, the batch rides
-  // that org's Postmark server + verified From. Either way the ADDRESS on the
-  // wire is the resolver's — campaign.from_email is never sent (it was only
-  // ever right by accident when it equalled POSTMARK_FROM_EMAIL).
-  const tenantSender = await resolveEmailSender(db, campaign.location_id)
+  // that org's Postmark server + verified From.
+  //
+  // FROMDOMAIN — campaign.from_email is honoured when, and only when, it is an
+  // address on the org's VERIFIED sending domain (garrett@un1tdublin.com on a
+  // live un1tdublin.com); anything else (another domain, a subdomain, no live
+  // domain at all) sends from the resolver's own address, exactly as W1.E2.
+  // withRequestedFrom swaps only fromEmail: the server token, the display name
+  // and the reply-to stay the resolver's.
+  const tenantSender = withRequestedFrom(
+    await resolveEmailSender(db, campaign.location_id),
+    campaign.from_email,
+  )
+  // W1.S1a — {{company_name}}: the campaign location's configured brand,
+  // resolved once per batch (getLocationBranding never throws; '' when
+  // unresolved). Same extras on the body, the preheader and the subject.
+  const { companyName: campaignBrand } = await getLocationBranding(db, campaign.location_id)
+  const companyName = campaignBrand || ''
+  // TZ.17 — {{current_year}} on the campaign studio's calendar (the join
+  // carries locations.timezone; a missing join is Europe/Dublin).
+  const mergeZone = zoneOfLocation(campaign.locations)
 
   const emailBatch = queuedRows.map(row => {
     const contact = row.contact
@@ -796,8 +816,10 @@ export async function tickCampaignSend(db, campaign) {
 
     const merged = applyMergeTags(campaign.html_content, contact, {
       location_name: campaign.locations?.name || '',
+      company_name: companyName,
       unsubscribe_url: unsubscribeUrl,
       preference_url: preferenceUrl,
+      zone: mergeZone, // TZ.17 — {{current_year}} on the sending studio's calendar
     })
     const personalizedHtml = unsubscribeUrl ? appendUnsubscribeFooter(merged, unsubscribeUrl) : merged
 
@@ -810,7 +832,7 @@ export async function tickCampaignSend(db, campaign) {
     // the editor but never used at send time. Inject it as a standard
     // hidden preheader, first thing inside the body, merge tags applied.
     const previewText = campaign.preview_text
-      ? applyMergeTags(campaign.preview_text, contact, { location_name: campaign.locations?.name || '' })
+      ? applyMergeTags(campaign.preview_text, contact, { location_name: campaign.locations?.name || '', company_name: companyName, zone: mergeZone })
       : null
     // WEBVIEW.1 — "view in browser", inserted AFTER the plain-text part is
     // derived (the text alternative is never clipped, so it does not need the
@@ -846,14 +868,17 @@ export async function tickCampaignSend(db, campaign) {
       // 'News from ' while the identical tag in the body rendered correctly.
       subject: applyMergeTags(rawSubject, contact, {
         location_name: campaign.locations?.name || '',
+        company_name: companyName,
         unsubscribe_url: unsubscribeUrl,
         preference_url: preferenceUrl,
+        zone: mergeZone,
       }),
       htmlBody: finalHtml,
       textBody,
       // W1.E2 — the operator's From NAME is a display name on the resolved
-      // address (sendBatch applies it); no `from` header is built here, so
-      // campaign.from_email cannot reach the wire.
+      // address (sendBatch applies it); no `from` header is built here. The
+      // address is tenantSender's (FROMDOMAIN: campaign.from_email when it is
+      // on the verified domain, the resolver's otherwise).
       fromName: campaign.from_name || undefined,
       // EMAIL-INBOX.1 / EMAIL-MAILBOX-ADMIN.1 — a per-campaign reply_to wins;
       // otherwise the studio's default account, resolved once above; below
@@ -881,8 +906,9 @@ export async function tickCampaignSend(db, campaign) {
   })
 
   // W1.E2 — email_sends.from_email is the ADDRESS that went on the wire (the
-  // resolver's, for every email in the chunk; the display name is not an
-  // address and is not logged — same shape as the transactional path).
+  // same for every email in the chunk: FROMDOMAIN's pick, which sendBatch
+  // puts on the wire via resolvedFromOf(tenantSender); the display name is
+  // not an address and is not logged — same shape as the transactional path).
   const loggedFromEmail = tenantSender.fromEmail || null
 
   const results = await sendBatch(emailBatch, { sender: tenantSender })

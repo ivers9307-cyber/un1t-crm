@@ -21,6 +21,7 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/member/supabase'
 import { useAuth } from '../../lib/member/contact-context'
+import { useMemberBrand } from '../../lib/member/use-member-brand'
 import { useReduceMotion, useCountUp } from '../../lib/member/motion'
 import ZoneBar from '../../components/member/ui/ZoneBar'
 import {
@@ -134,6 +135,7 @@ export default function LiveScreen() {
 // ── Active live view ─────────────────────────────────────────────
 
 function LiveActive({ model, reduceMotion, onClose }) {
+  const { productNames } = useMemberBrand()
   // Zone DATA colour on the dark canvas — this zone colour IS the screen's
   // accent while live (Afterglow: the accent is earned, never fixed chrome).
   const zoneColor = zoneColorDark(model.zone?.id) || '#727170'
@@ -186,7 +188,7 @@ function LiveActive({ model, reduceMotion, onClose }) {
         {/* Points — an EARNED number (two-tier numeral rule): display face */}
         <View className="mt-8 flex-row items-end justify-center">
           <Text className="text-5xl font-display-black text-chalk">{points}</Text>
-          <Text className="mb-1.5 ml-2 text-base font-body-semibold text-chalk-2">UN1T Points</Text>
+          <Text className="mb-1.5 ml-2 text-base font-body-semibold text-chalk-2">{productNames.points}</Text>
         </View>
 
         {/* Burn progress */}
@@ -338,6 +340,7 @@ function ZoneLegend({ zonesSeconds }) {
 // ── Complete / no-session state ──────────────────────────────────
 
 function CompleteState({ model, sessionId, onClose }) {
+  const { productNames } = useMemberBrand()
   const router = useRouter()
   const finished = model.active && model.ended
   // The accent is EARNED — a zone sustained >=3 min in the session already
@@ -361,7 +364,7 @@ function CompleteState({ model, sessionId, onClose }) {
         </Text>
         <Text className="mt-2 text-sm font-body text-chalk-2 text-center leading-5">
           {finished
-            ? 'Nice work. Your full report is on the way — zones, UN1T Points and your Burn will land here shortly.'
+            ? `Nice work. Your full report is on the way — zones, ${productNames.points} and your Burn will land here shortly.`
             : "You're not training right now. When you pair your strap at the studio, your live heart rate and points will show up here."}
         </Text>
 

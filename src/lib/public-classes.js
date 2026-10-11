@@ -1,6 +1,8 @@
 // Public class listing for the /start wizard. Reuses the Glofox event fetch
 // the agent uses, but shapes each class with a structured day (YYYY-MM-DD,
-// Europe/Dublin) + HH:MM time so the UI can group by day. No auth — display-
+// in the studio's own zone, TZ.7) + HH:MM time so the UI can group by day.
+// Glofox's `time_start` is an instant (unix seconds) and is never re-zoned:
+// only its day/time/label are rendered on the studio's clock. No auth — display-
 // safe class data only: name and time. PUBCAP.1: NEVER a capacity figure
 // (Richard's rule: class/event capacity is never surfaced to customers — no
 // spots left, no size, no booked count, not even a "full" flag). Fullness is
@@ -8,11 +10,14 @@
 // left out of the list.
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetchUpcomingEvents } from '@/lib/glofox'
 import { parseManualTimetable, manualClassOccurrences, manualTimetableConfigFromBlocks } from '@/lib/manual-timetable'
+import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
+import { logWarn } from '@/lib/log'
 
-const DUBLIN = 'Europe/Dublin'
-const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: DUBLIN, year: 'numeric', month: '2-digit', day: '2-digit' })
-const timeFmt = new Intl.DateTimeFormat('en-GB', { timeZone: DUBLIN, hour: '2-digit', minute: '2-digit', hour12: false })
-const labelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: DUBLIN, weekday: 'short', day: 'numeric', month: 'short' })
+// The exact Intl options the Dublin formatters used, so a Dublin studio's
+// day/time/label text is byte-identical (TZ.7).
+const DAY_OPTS = Object.freeze({ year: 'numeric', month: '2-digit', day: '2-digit' })
+const TIME_OPTS = Object.freeze({ hour: '2-digit', minute: '2-digit', hour12: false })
+const LABEL_OPTS = Object.freeze({ weekday: 'short', day: 'numeric', month: 'short' })
 
 // The ONLY keys a public class carries. tests/public-classes pin this list so
 // a new field has to be added here on purpose, never leak in via a spread.
@@ -25,7 +30,8 @@ export function isEventFull(e) {
   return size > 0 && booked >= size
 }
 
-export function shapePublicClass(e) {
+/** A raw Glofox event → the public class shape, rendered in `zone` (the studio's). */
+export function shapePublicClass(e, zone = DEFAULT_TZ) {
   const startSec = Number(e.time_start) || 0
   const ms = startSec * 1000
   const d = new Date(ms)
@@ -33,9 +39,9 @@ export function shapePublicClass(e) {
     event_id: e._id || e.id,
     name: e.name || 'Class',
     starts_at: new Date(ms).toISOString(),
-    day: dayFmt.format(d),
-    day_label: labelFmt.format(d),
-    time: timeFmt.format(d),
+    day: formatInZone(d, zone, DAY_OPTS, 'en-CA'),
+    day_label: formatInZone(d, zone, LABEL_OPTS, 'en-IE'),
+    time: formatInZone(d, zone, TIME_OPTS, 'en-GB'),
   }
 }
 
@@ -63,6 +69,11 @@ export function isClassHidden(name, keywords) {
  *   error 'glofox_unreachable' — Glofox did not answer.
  *   error 'manual_timetable_unreadable' — a studio with no Glofox whose
  *     landing row (where its hand-written timetable lives) could not be read.
+ *   error 'location_zone_unreadable' — a studio with no Glofox whose
+ *     timezone could not be read (TZ.7): its timetable is wall clock in that
+ *     zone, so it cannot be turned into class times on a guessed clock. A
+ *     Glofox studio's classes are instants, so there the zone only labels
+ *     them and an unreadable one falls back to DEFAULT_TZ.
  *   A studio with no Glofox lists the timetable written on its class_funnel
  *   block (MANUALFUNNEL.1), or { classes: [], error: null } when it has none.
  */
@@ -79,10 +90,14 @@ export async function readPublicClasses(db, locationId, days = 7) {
   const { ok, events } = await fetchUpcomingEvents(creds, { start, end, limit: 100 })
   if (!ok || !Array.isArray(events)) return { classes: [], error: 'glofox_unreachable' }
   const now = Date.now()
+  const zone = await getLocationZone(db, locationId).catch((err) => {
+    logWarn('public-classes', 'location zone unreadable; labelling in the default zone', { locationId, err })
+    return DEFAULT_TZ
+  })
   const classes = events
     .filter((e) => e && e.active !== false && e.private !== true && (Number(e.time_start) || 0) * 1000 > now)
     .filter((e) => !isEventFull(e))
-    .map(shapePublicClass)
+    .map((e) => shapePublicClass(e, zone))
     .filter((c) => !isClassHidden(c.name, hidden))
     .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
   return { classes, error: null }
@@ -100,8 +115,15 @@ async function readManualClasses(db, locationId, days) {
   if (error) return { classes: [], error: 'manual_timetable_unreadable' }
   const cfg = manualTimetableConfigFromBlocks(data?.blocks)
   if (!cfg) return { classes: [], error: null }
+  let zone
+  try {
+    zone = await getLocationZone(db, locationId)
+  } catch (err) {
+    logWarn('public-classes', 'location zone unreadable; manual timetable not listed', { locationId, err })
+    return { classes: [], error: 'location_zone_unreadable' }
+  }
   const { slots } = parseManualTimetable(cfg.text)
-  const classes = manualClassOccurrences({ slots, startDate: cfg.startDate, minNoticeHours: cfg.minNoticeHours, days })
+  const classes = manualClassOccurrences({ slots, startDate: cfg.startDate, minNoticeHours: cfg.minNoticeHours, days, zone })
   return { classes, error: null }
 }
 

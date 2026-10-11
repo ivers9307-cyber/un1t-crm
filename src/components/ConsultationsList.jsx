@@ -13,6 +13,7 @@
 //                   resolution
 //   currentUserId — id of the signed-in user, used as the default coach
 //                   for a new consultation
+//   zone          — the contact's home studio zone (TZ.13), handed to the form
 //
 // Edit/Delete hit the consultations API; router.refresh() after a delete.
 // Every non-submit button is type="button".
@@ -30,7 +31,7 @@ function formatConsultDate(iso) {
   return d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
-export default function ConsultationsList({ contactId, consultations = [], coaches = [], currentUserId = '' }) {
+export default function ConsultationsList({ contactId, consultations = [], coaches = [], currentUserId = '', zone }) {
   const router = useRouter()
   const [adding, setAdding] = useState(false)
   const [editingId, setEditingId] = useState(null)
@@ -93,6 +94,7 @@ export default function ConsultationsList({ contactId, consultations = [], coach
             contactId={contactId}
             coaches={coaches}
             selectedCoachId={currentUserId}
+            zone={zone}
             onDone={() => setAdding(false)}
             onCancel={() => setAdding(false)}
           />
@@ -112,6 +114,7 @@ export default function ConsultationsList({ contactId, consultations = [], coach
                   contactId={contactId}
                   coaches={coaches}
                   consultation={c}
+                  zone={zone}
                   onDone={() => setEditingId(null)}
                   onCancel={() => setEditingId(null)}
                 />

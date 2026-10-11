@@ -40,6 +40,7 @@ import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { glofoxCredentialsForLocation, fetchUserBookingsResult, fetchMemberResult, glofoxHttpStats, glofoxHttpStatsSince } from '@/lib/glofox'
 import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
+import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
 import { computeBookingAggregates, mergeBookingAggregates, trimRecentBookings, extractMembershipPlan, extractMembershipState, extractMemberProfile } from '@/lib/glofox-sync'
 import { logWarn } from '@/lib/log'
 
@@ -67,19 +68,13 @@ export async function GET(request) {
   const httpBefore = glofoxHttpStats()
   const db = createServerClient()
 
-  // Locations with Glofox configured — same discovery as glofox-sync.
-  const { data: locations, error: locErr } = await db
-    .from('locations')
-    .select('id, name, settings')
-    .filter('settings', 'cs', JSON.stringify({ glofox: {} }))
+  // W1.M3b — same discovery as glofox-sync: the membership seam, never the
+  // settings slice. A failed seam read is a 500 with no heartbeat.
+  const { eligible, skipped, error: locErr } = await locationsWithSource(db, 'glofox', { module: 'glofox-attendance-refresh' })
   if (locErr) {
     console.warn(`[cron][glofox-attendance-refresh] list locations failed: ${locErr.message}`)
     return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
   }
-  const eligible = (locations || []).filter(loc => {
-    const cfg = loc.settings?.glofox || {}
-    return cfg.branch_id && cfg.api_key && cfg.api_token
-  })
 
   const perLocation = []
   let budgetExhausted = false
@@ -94,19 +89,23 @@ export async function GET(request) {
   // The run is time-bound (sequential, TIME_BUDGET_MS), so refreshed < eligible
   // with budget_exhausted=true is its normal shape; the stalest-first order
   // rotates who is left for tomorrow.
-  await stampHeartbeat('glofox-attendance-refresh', attendanceOutcome(perLocation, budgetExhausted, glofoxHttpStatsSince(httpBefore)))
+  await stampHeartbeat('glofox-attendance-refresh', attendanceOutcome(perLocation, budgetExhausted, glofoxHttpStatsSince(httpBefore), skipped))
 
   return NextResponse.json({
     success: true,
     locations_processed: perLocation.length,
+    locations_skipped: skipped.length,
+    ...skippedSummary(skipped),
     budget_exhausted: budgetExhausted,
     per_location: perLocation,
   })
 }
 
-function attendanceOutcome(perLocation, budgetExhausted, glofoxHttp) {
+function attendanceOutcome(perLocation, budgetExhausted, glofoxHttp, skipped = []) {
   const sum = (k) => perLocation.reduce((n, r) => n + (r.summary?.[k] ?? 0), 0)
   return {
+    // W1.M3b — locations on the source the seam would not hand over this tick.
+    ...skippedSummary(skipped),
     eligible: perLocation.reduce((n, r) => n + (r.eligible ?? 0), 0),
     refreshed: sum('refreshed'),
     fetch_failed: sum('fetch_failed'),

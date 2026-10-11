@@ -131,13 +131,19 @@ describe('runReplaceNotices', () => {
     expect(logError).toHaveBeenCalled()
   })
 
-  it('an unreadable timezone is Europe/Dublin, never a skipped studio', async () => {
+  // TZ.8a — never a guessed zone: an unreadable locations table skips the
+  // tick as an arm error, nothing told or stamped, and the rows stay held for
+  // the next tick (a wrong "started" would stamp a notice away for good).
+  it('an unreadable timezone skips the tick as an arm error: nothing sent, nothing stamped', async () => {
     const db = scriptedDb({
       roster_change_log: [{ data: [row('r1', 'coach-a', 'unassigned')], error: null }, STAMPED(['r1'])],
       locations: [{ data: null, error: { message: 'x' } }],
     })
-    await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
-    expect(notifyRosterChanges).toHaveBeenCalledTimes(1)
+    const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
+    expect(chainsFor(db, 'roster_change_log')).toHaveLength(1)
+    expect(stats).toMatchObject({ errors: 1, told: 0, silent: 0, started: 0 })
+    expect(logError).toHaveBeenCalled()
   })
 
   // REPLACE.1a review 1 — a delivered notice whose stamp fails would be sent

@@ -156,7 +156,7 @@ export default function BrandingSettings({ user, locationId: propLocationId }) {
             value={companyName}
             onChange={e => setCompanyName(e.target.value)}
             className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
-            placeholder="UN1T"
+            placeholder="Your brand name"
           />
           <button
             onClick={handleSaveName}

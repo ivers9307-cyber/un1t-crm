@@ -1043,15 +1043,24 @@ describe('dashboard-data stays loadable on the phone, and the server reads Dubli
     // Catches a multi-line `import {\n …\n} from './dublin-time.js'` too.
     expect(code).not.toMatch(/from\s+['"][^'"]*dublin-time/)
     expect(code).not.toMatch(/new Intl\.DateTimeFormat/)
-    expect(code).toMatch(/import\(\s*['"]\.\/dublin-time\.js['"]\s*\)/)
+    // TZ.11a — nothing loads dublin-time.js any more, lazily or otherwise.
+    expect(code).not.toMatch(/dublin-time/)
   })
 
-  it.each(['fetchTodayOps', 'fetchRevenueMTD', 'fetchFunnelCounts', 'fetchAdsSummary'])(
+  // TZ.11a / TZ.11c — all four take their zone from the caller (the studio's;
+  // fetchAdsSummary the ad account's) through a static ./zoned-time.js import,
+  // which builds no Intl object at import.
+  it.each([
+    ['fetchTodayOps', /\b(dateKeyIn|dayRangeMsIn|weekStartMsIn)\([^;]*\bzone\b/],
+    ['fetchRevenueMTD', /\b(dateKeyIn|monthStartMsIn)\([^;]*\bzone\b/],
+    ['fetchFunnelCounts', /\bmonthStartMsIn\([^;]*\bzone\b/],
+    ['fetchAdsSummary', /\bdateKeyIn\(nowMs, zone\)/],
+  ])(
     '%s (server-run) builds no window from the local calendar',
-    (name) => {
+    (name, calendar) => {
       const b = body(name)
       expect(b.length, `${name} not found`).toBeGreaterThan(50)
-      expect(b).toMatch(/loadDublinTime\(\)/)
+      expect(b).toMatch(calendar)
       expect(b).not.toMatch(/\b(startOfMonth|startOfWeek|endOfWeek|isoDate)\(/)
       expect(b).not.toMatch(/\.(setHours|setDate|getDate|getDay|getMonth|getFullYear)\(/)
     },

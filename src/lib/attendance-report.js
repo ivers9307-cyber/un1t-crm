@@ -26,8 +26,7 @@
 //   with the status; one that reads on time has minutes_late null (the coach
 //   didn't walk in at that instant, so "10 early" would be noise).
 
-import { addDaysISO } from './dublin-time'
-import { resolveTz } from './tz-time'
+import { addDaysISO, resolveZone } from '@/lib/location-time'
 import { isRealCalendarDate, uuidLike } from './schemas'
 import { reportPeriodError } from './report-period'
 import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
@@ -38,7 +37,7 @@ import {
 
 export const DEFAULT_WINDOW_DAYS = 14
 
-/** The page's default period: the 14 days before `today` and today. `today` is dublinTodayStr(). */
+/** The page's default period: the 14 days before `today` and today. `today` is the studio's day (todayStrIn). */
 export function defaultAttendancePeriod(today) {
   return { from: addDaysISO(today, -DEFAULT_WINDOW_DAYS), to: today }
 }
@@ -47,10 +46,10 @@ const PERIOD_NAMES = { startName: 'from', endName: 'to' }
 
 /**
  * The report's query, checked before any read.
- * `to` defaults to `today` (the Dublin day), `from` to 14 days before `to`.
+ * `to` defaults to `today` (the studio's day), `from` to 14 days before `to`.
  *
  * @param {URLSearchParams} searchParams
- * @param {string} today  YYYY-MM-DD, dublinTodayStr()
+ * @param {string} today  YYYY-MM-DD, the studio's todayStrIn(zone)
  * @returns {{ from: string, to: string, profileId: string|null } | { error: string }}
  */
 export function parseAttendanceQuery(searchParams, today) {
@@ -121,12 +120,12 @@ function rowOrder(x, y) {
  * @param {object} args
  * @param {object[]} args.assignments  shift_assignments rows with `block` and `profile` embedded
  * @param {object[]} [args.events]     staff_attendance_events { matched_assignment_id, source }
- * @param {string|null} [args.tz]      locations.timezone; unknown → Europe/Dublin
+ * @param {string|null} [args.tz]      locations.timezone; unknown → DEFAULT_TZ
  * @param {number} [args.nowMs]        what pending/no-show is judged against
  * @returns {{ rows: object[], summary: { total, on_time, late, no_show, pending } }}
  */
 export function buildAttendanceReport({ assignments, events = [], tz = null, nowMs = Date.now() } = {}) {
-  const zone = resolveTz(tz)
+  const zone = resolveZone(tz)
   const sources = sourcesByAssignment(events)
 
   const base = (Array.isArray(assignments) ? assignments : [])

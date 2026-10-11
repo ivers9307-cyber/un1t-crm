@@ -14,7 +14,7 @@
 import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
 import { createRacePayment } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { wouldFit } from '@/lib/event-signups'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 
@@ -164,14 +164,16 @@ export async function registerSoloEventEntry(db, { race, waveId, contact, member
 
   // Free-entry payment row + confirmations — the route's exact tail.
   try {
-    const baseUrl = getAppUrl()
+    // W1.L3b — the EVENT LOCATION's tenant host, canonical /event/ path
+    // (/race/ is a CRM-host-only next.config alias).
+    const baseUrl = await resolveCustomerBaseUrl(db, race.location_id)
     const paymentResult = await createRacePayment({
       db,
       race,
       registration,
       captain: { name: fullName, email, phone: contact.phone || null },
       pricing,
-      returnUrl: `${baseUrl}/race/${race.slug}/confirmed?registration=${registration.id}`,
+      returnUrl: `${baseUrl}/event/${race.slug}/confirmed?registration=${registration.id}`,
     })
     if (paymentResult?.checkout?.free) {
       try {

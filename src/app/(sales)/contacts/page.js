@@ -6,6 +6,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermission } from '@/lib/permissions'
 import { canWriteSegmentsAt } from '@/lib/segment-access'
 import ContactsView from '@/components/ContactsView'
+import { zoneOfLocation } from '@/lib/location-time'
 import ContactsHeaderActions from '@/components/ContactsHeaderActions'
 import { crossoverContactIds, fetchCrossoverContext, fetchListMembershipFlags } from '@/lib/contact-crossovers'
 import { attachLinkedCounts } from '@/lib/person-links'
@@ -180,6 +181,7 @@ export default async function ContactsPage(props) {
         <ContactsView
           initialContacts={contacts || []}
           locationId={locationId}
+          locationTimeZone={zoneOfLocation(user.activeLocation)}
           crossoverContext={crossoverContext}
           listFlags={listFlags}
           initialStatus={status}

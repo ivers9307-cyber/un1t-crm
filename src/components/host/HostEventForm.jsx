@@ -12,6 +12,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ImagePlus, Loader2, X } from 'lucide-react'
 import { HOST_EVENT_KINDS } from '@/lib/host-events'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 
 const KIND_LABELS = {
@@ -43,7 +44,8 @@ const input =
 const labelCls = 'block text-xs uppercase tracking-wide text-white/45 mb-1.5'
 const sectionCls = 'text-xs uppercase tracking-[0.15em] text-white/45 mb-3'
 
-export default function HostEventForm({ mode = 'create', initial = null, eventId = null }) {
+// brandName (W1.S1c): the host's organisation, resolved by the server page.
+export default function HostEventForm({ mode = 'create', initial = null, eventId = null, brandName = PLATFORM_NAME }) {
   const router = useRouter()
   const isEdit = mode === 'edit'
 
@@ -270,7 +272,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
               type="text"
               value={venueName}
               onChange={(e) => setVenueName(e.target.value)}
-              placeholder="e.g. UN1T Stillorgan"
+              placeholder="e.g. Main studio"
               className={input}
               required
             />
@@ -524,7 +526,7 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
         {showEmail && (
           <div className="mt-4 space-y-4 border-l border-white/10 pl-4">
             <p className="text-xs text-white/40">
-              Customise the confirmation and reminder emails attendees receive. Leave blank to use UN1T defaults.
+              Customise the confirmation and reminder emails attendees receive. Leave blank to use {brandName} defaults.
             </p>
             <div>
               <label htmlFor="he-csub" className={labelCls}>Confirmation subject</label>

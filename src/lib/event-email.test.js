@@ -30,6 +30,27 @@ function fakeDb(templateRow) {
   return { from: () => chain }
 }
 
+// W1.S1a — a fake for getLocationBranding: company_settings / locations /
+// org_settings rows keyed by location id ({ name, company_name }).
+function brandDb(byLocation) {
+  return {
+    from(table) {
+      let id = null
+      const chain = {
+        select: () => chain,
+        eq: (_col, v) => { id = v; return chain },
+        limit: () => {
+          const row = byLocation[id]
+          if (table === 'company_settings') return Promise.resolve({ data: row?.company_name ? [{ company_name: row.company_name }] : [], error: null })
+          if (table === 'locations') return Promise.resolve({ data: row ? [{ name: row.name, organization_id: null }] : [], error: null })
+          return Promise.resolve({ data: [], error: null })
+        },
+      }
+      return chain
+    },
+  }
+}
+
 // A representative, fully-populated confirmation ctx (the shape
 // sendRaceConfirmations composes): captain + member badge, a wave, a location,
 // a fee breakdown, and a per-person check-in QR each.
@@ -55,13 +76,17 @@ const CONFIRM_CTX = {
   // it here." linking here. The minimal ctx below has no link, and pins that
   // the copy is then exactly as before.
   manageUrl: 'https://crm.example/event/entry/PAYLOAD.SIG',
+  // W1.S1a — the SENDING location's brand (sendEmail resolves it from the
+  // comms location). DELIBERATE snapshot change: the header wordmark, the
+  // member badge and the signature line used to be a fixed gym name.
+  brand: 'UN1T Stillorgan',
 }
 
 describe('confirmation email — characterization (default look)', () => {
   it('renders byte-for-byte today (full ctx)', () => {
     expect(buildConfirmationEmailHtml(CONFIRM_CTX)).toMatchInlineSnapshot(`
       "<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#fff;color:#111;max-width:560px;margin:0 auto;padding:24px">
-        <div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T</div>
+        <div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T Stillorgan</div>
         <h1 style="font-size:24px;margin:24px 0 8px">You're registered, Alice.</h1>
         <p style="margin:0 0 16px;color:#444;font-size:15px">Team <strong>The Quaddies</strong> is locked in for <strong>Summer Hyrox Sim</strong>.</p>
 
@@ -74,7 +99,7 @@ describe('confirmation email — characterization (default look)', () => {
         </table>
 
         <h3 style="font-size:16px;margin:24px 0 8px">Your team</h3>
-        <ul style="padding-left:20px;margin:0 0 24px;font-size:14px;line-height:1.7"><li>Alice Captain <em>(captain)</em> <span style="color:#7a5a00;font-size:11px;background:#fff4cc;padding:1px 6px;border-radius:9999px;margin-left:6px">UN1T member</span></li><li>Bob Member</li></ul>
+        <ul style="padding-left:20px;margin:0 0 24px;font-size:14px;line-height:1.7"><li>Alice Captain <em>(captain)</em> <span style="color:#7a5a00;font-size:11px;background:#fff4cc;padding:1px 6px;border-radius:9999px;margin-left:6px">UN1T Stillorgan member</span></li><li>Bob Member</li></ul>
 
         <h3 style="font-size:16px;margin:24px 0 8px">Check-in codes</h3>
         <p style="margin:0 0 12px;color:#666;font-size:13px">Show your code to a team member at the door for a quick check-in.</p>
@@ -91,14 +116,21 @@ describe('confirmation email — characterization (default look)', () => {
           <strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.<br><br>Need a different date? <a href="https://crm.example/event/entry/PAYLOAD.SIG" style="color:#111;font-weight:600">Change it here</a>.
         </div>
 
-        <p style="color:#999;font-size:12px;margin-top:24px;text-align:center">UN1T · UN1T Stillorgan</p>
+        <p style="color:#999;font-size:12px;margin-top:24px;text-align:center">UN1T Stillorgan</p>
       </div>"
     `)
   })
 
-  it('has the black #000 "UN1T" header', () => {
+  it('the black #000 header carries the sending location brand as its wordmark (W1.S1a)', () => {
     const html = buildConfirmationEmailHtml(CONFIRM_CTX)
-    expect(html).toContain('<div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T</div>')
+    expect(html).toContain('<div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T Stillorgan</div>')
+  })
+
+  it('names the member badge for the brand, and says "Member" when no brand is known (W1.S1a)', () => {
+    expect(buildConfirmationEmailHtml({ ...CONFIRM_CTX, brand: 'Northside Strength' })).toContain('>Northside Strength member</span>')
+    const bare = buildConfirmationEmailHtml({ ...CONFIRM_CTX, brand: '' })
+    expect(bare).toContain('>Member</span>')
+    expect(bare).not.toMatch(/UN1T member|UN1T<\/div>/)
   })
 
   it('has the key info rows (date/wave/where/team size/total paid)', () => {
@@ -140,7 +172,7 @@ describe('confirmation email — characterization (default look)', () => {
     expect(html).toContain('&lt;script&gt;')
   })
 
-  it('omits wave/where rows + QR grid when unset (minimal ctx)', () => {
+  it('omits wave/where rows + QR grid when unset (minimal ctx; no brand = an empty band, never another gym)', () => {
     const minimal = {
       raceName: 'Bare Event',
       raceDateLabel: '1 Jan 2026',
@@ -158,7 +190,7 @@ describe('confirmation email — characterization (default look)', () => {
     }
     expect(buildConfirmationEmailHtml(minimal)).toMatchInlineSnapshot(`
       "<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#fff;color:#111;max-width:560px;margin:0 auto;padding:24px">
-        <div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T</div>
+        <div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px"></div>
         <h1 style="font-size:24px;margin:24px 0 8px">You're registered, team captain.</h1>
         <p style="margin:0 0 16px;color:#444;font-size:15px">Team <strong>Solo</strong> is locked in for <strong>Bare Event</strong>.</p>
 
@@ -177,7 +209,7 @@ describe('confirmation email — characterization (default look)', () => {
           <strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.
         </div>
 
-        <p style="color:#999;font-size:12px;margin-top:24px;text-align:center">UN1T · </p>
+        <p style="color:#999;font-size:12px;margin-top:24px;text-align:center"></p>
       </div>"
     `)
   })
@@ -195,9 +227,10 @@ describe('reminder email — characterization (default look)', () => {
       whenLabel: 'Saturday, 11 July 2026 · 09:30',
       locationName: 'UN1T Stillorgan',
       members,
+      brand: 'UN1T Stillorgan',
     })).toMatchInlineSnapshot(`
       "<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#fff;color:#111;max-width:560px;margin:0 auto;padding:24px">
-        <div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T</div>
+        <div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T Stillorgan</div>
         <h1 style="font-size:24px;margin:24px 0 8px">See you soon.</h1>
         <p style="margin:0 0 16px;color:#444;font-size:15px">A quick reminder for <strong>Summer Hyrox Sim</strong>.</p>
 
@@ -221,14 +254,14 @@ describe('reminder email — characterization (default look)', () => {
           <strong>Before you arrive:</strong> get here 30 minutes early, and bring water + a towel. Can't make it? Just reply to let us know.
         </div>
 
-        <p style="color:#999;font-size:12px;margin-top:24px;text-align:center">UN1T · UN1T Stillorgan</p>
+        <p style="color:#999;font-size:12px;margin-top:24px;text-align:center">UN1T Stillorgan</p>
       </div>"
     `)
   })
 
-  it('has the black #000 "UN1T" header', () => {
-    const html = buildReminderEmailHtml({ eventName: 'E', whenLabel: 'w', locationName: 'L', members })
-    expect(html).toContain('<div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T</div>')
+  it('the black #000 header carries the brand it is given (W1.S1a)', () => {
+    const html = buildReminderEmailHtml({ eventName: 'E', whenLabel: 'w', locationName: 'L', members, brand: 'UN1T Hatch Street' })
+    expect(html).toContain('<div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T Hatch Street</div>')
   })
 
   it('has the when/where rows and QR grid', () => {
@@ -260,19 +293,36 @@ describe('buildEventEmailShell — per-event styling', () => {
     afterInfoHtml: '',
     footerHtml: 'foot',
     locationName: 'Stillorgan',
+    brand: 'UN1T Hatch Street',
   }
 
-  it('default header is the black #000 "UN1T" wordmark', () => {
+  it('default header is the black #000 band with the brand as its wordmark (W1.S1a)', () => {
     expect(buildEventEmailShell(base)).toContain(
-      '<div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T</div>'
+      '<div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T Hatch Street</div>'
     )
+  })
+
+  it('escapes the brand and never falls back to another gym\'s wordmark (W1.S1a)', () => {
+    const evil = buildEventEmailShell({ ...base, brand: '<b>Gym</b>' })
+    expect(evil).toContain('>&lt;b&gt;Gym&lt;/b&gt;</div>')
+    expect(evil).not.toContain('<b>Gym</b>')
+    const blank = buildEventEmailShell({ ...base, brand: '' })
+    expect(blank).toContain('<div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px"></div>')
+    expect(blank).toContain('text-align:center">Stillorgan</p>')
+    expect(blank).not.toContain('UN1T')
+  })
+
+  it('signature line is "brand · location", dropping a location that IS the brand (W1.S1a)', () => {
+    expect(buildEventEmailShell(base)).toContain('text-align:center">UN1T Hatch Street · Stillorgan</p>')
+    expect(buildEventEmailShell({ ...base, locationName: 'UN1T Hatch Street' })).toContain('text-align:center">UN1T Hatch Street</p>')
+    expect(buildEventEmailShell({ ...base, locationName: '' })).toContain('text-align:center">UN1T Hatch Street</p>')
   })
 
   it('accentHex recolours the header band', () => {
     const html = buildEventEmailShell({ ...base, accentHex: '#ff8800' })
     expect(html).toContain('background:#ff8800;color:#fff;padding:24px;text-align:center')
     expect(html).not.toContain('background:#000;color:#fff;padding:24px;text-align:center')
-    expect(html).toContain('>UN1T</div>')
+    expect(html).toContain('>UN1T Hatch Street</div>')
   })
 
   it('ignores an invalid accentHex (falls back to #000, no style injection)', () => {
@@ -283,8 +333,8 @@ describe('buildEventEmailShell — per-event styling', () => {
 
   it('headerImageUrl renders a banner image header (replacing the wordmark)', () => {
     const html = buildEventEmailShell({ ...base, headerImageUrl: 'https://cdn.example/banner.jpg' })
-    expect(html).toContain('<img src="https://cdn.example/banner.jpg" alt="UN1T"')
-    expect(html).not.toContain('>UN1T</div>')
+    expect(html).toContain('<img src="https://cdn.example/banner.jpg" alt="UN1T Hatch Street"')
+    expect(html).not.toContain('>UN1T Hatch Street</div>')
   })
 
   it('escapes the header image url', () => {
@@ -307,7 +357,7 @@ describe('buildEventEmailShell — per-event styling', () => {
   })
 
   it('escapes the location signature line', () => {
-    expect(buildEventEmailShell({ ...base, locationName: '<i>Loc</i>' })).toContain('UN1T · &lt;i&gt;Loc&lt;/i&gt;')
+    expect(buildEventEmailShell({ ...base, locationName: '<i>Loc</i>' })).toContain('UN1T Hatch Street · &lt;i&gt;Loc&lt;/i&gt;')
   })
 })
 
@@ -340,7 +390,7 @@ describe('resolveEventEmail — precedence', () => {
     const race = { accent_hex: '#123456', hero_image_url: 'https://cdn/x.jpg' }
     const { htmlBody } = await resolveEventEmail({ db: null, kind: 'confirmation', race, contact, extras, defaults })
     expect(htmlBody).toContain('background:#123456')
-    expect(htmlBody).toContain('<img src="https://cdn/x.jpg" alt="UN1T"')
+    expect(htmlBody).toContain('<img src="https://cdn/x.jpg" alt=""')
   })
 
   it('operator subject overrides the default and is merge-tagged', async () => {
@@ -383,6 +433,27 @@ describe('resolveEventEmail — precedence', () => {
     expect(htmlBody).toContain('background:#000')
   })
 
+  it('W1.S1a: the shell carries the configured brand of the SENDING location (brandLocationId)', async () => {
+    const db = brandDb({ L_SEND: { name: 'UN1T Stillorgan', company_name: 'UN1T Stillorgan' }, L_EVENT: { name: 'Pride (host events)' } })
+    const { htmlBody } = await resolveEventEmail({ db, kind: 'confirmation', race: { location_id: 'L_EVENT' }, contact, extras, defaults, brandLocationId: 'L_SEND' })
+    expect(htmlBody).toContain('font-size:24px">UN1T Stillorgan</div>')
+    expect(htmlBody).toContain('text-align:center">UN1T Stillorgan · Stillorgan</p>')
+    expect(htmlBody).not.toContain('Pride')
+  })
+
+  it('W1.S1a: with no brandLocationId it falls back to the race sending_location_id, then location_id', async () => {
+    const db = brandDb({ L_SEND: { name: 'Hatch', company_name: 'UN1T Hatch Street' }, L_EVENT: { name: 'Northside Strength' } })
+    const viaSending = await resolveEventEmail({ db, kind: 'confirmation', race: { sending_location_id: 'L_SEND', location_id: 'L_EVENT' }, contact, extras, defaults })
+    expect(viaSending.htmlBody).toContain('font-size:24px">UN1T Hatch Street</div>')
+    const viaEvent = await resolveEventEmail({ db, kind: 'confirmation', race: { location_id: 'L_EVENT' }, contact, extras, defaults })
+    expect(viaEvent.htmlBody).toContain('font-size:24px">Northside Strength</div>')
+  })
+
+  it('W1.S1a: a caller-resolved defaults.brand wins without a lookup', async () => {
+    const { htmlBody } = await resolveEventEmail({ db: null, kind: 'confirmation', race: {}, contact, extras, defaults: { ...defaults, brand: 'Given Brand' } })
+    expect(htmlBody).toContain('font-size:24px">Given Brand</div>')
+  })
+
   it('reads the kind-specific columns (reminder ignores confirmation_* config)', async () => {
     const race = { reminder_email_subject: 'See you {{when}}', confirmation_email_subject: 'WRONG' }
     const { subject } = await resolveEventEmail({ db: null, kind: 'reminder', race, contact, extras, defaults })
@@ -411,7 +482,7 @@ describe('resolveEventEmail reproduces the default builders (unconfigured)', () 
       defaults: buildConfirmationDefaults(CONFIRM_CTX),
     })
     expect(htmlBody).toBe(buildConfirmationEmailHtml(CONFIRM_CTX))
-    expect(subject).toBe("Summer Hyrox Sim — you're in!")
+    expect(subject).toBe("Summer Hyrox Sim: you're in!")
   })
 
   it('reminder shell === buildReminderEmailHtml', async () => {

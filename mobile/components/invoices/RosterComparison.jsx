@@ -12,6 +12,7 @@ import { View, Text, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { getInvoice } from '../../lib/invoices-api'
 import { reviewComparisonView, rosterUnreadableNotice } from '../../lib/invoice-review'
+import { useLocationZoneResolver } from '../../lib/use-studio-zone'
 
 function Rows({ rows }) {
   return rows.map((r) => (
@@ -67,7 +68,9 @@ export function RosterUnreadable({ text, compact = false }) {
 }
 
 export function InvoiceRosterCheck({ invoiceId }) {
-  const [state, setState] = useState({ loading: true, view: null, error: null, notice: null })
+  // TZ.14 (D3) — the approval day reads on the invoice studio's calendar.
+  const zoneOf = useLocationZoneResolver()
+  const [state, setState] = useState({ loading: true, data: null, error: null, notice: null })
 
   useEffect(() => {
     let alive = true
@@ -77,15 +80,17 @@ export function InvoiceRosterCheck({ invoiceId }) {
         if (r?.success === false || !r?.data) {
           // Don't echo the server text: the detail route 404s a caller who
           // holds the approvals permission without being owner/master.
-          setState({ loading: false, view: null, error: 'Roster check unavailable.', notice: null })
+          setState({ loading: false, data: null, error: 'Roster check unavailable.', notice: null })
         } else {
-          setState({ loading: false, view: reviewComparisonView(r.data), error: null, notice: rosterUnreadableNotice(r.data) })
+          setState({ loading: false, data: r.data, error: null, notice: rosterUnreadableNotice(r.data) })
         }
       }, () => {
-        if (alive) setState({ loading: false, view: null, error: 'Roster check unavailable.', notice: null })
+        if (alive) setState({ loading: false, data: null, error: 'Roster check unavailable.', notice: null })
       })
     return () => { alive = false }
   }, [invoiceId])
+
+  const view = state.data ? reviewComparisonView(state.data, zoneOf(state.data.location_id)) : null
 
   if (state.loading) {
     return (
@@ -95,9 +100,9 @@ export function InvoiceRosterCheck({ invoiceId }) {
       </View>
     )
   }
-  if (!state.view && state.notice) return <RosterUnreadable text={state.notice} compact />
-  if (!state.view) {
+  if (!view && state.notice) return <RosterUnreadable text={state.notice} compact />
+  if (!view) {
     return <Text className="text-[11px] text-un1t-subtle mt-2">{state.error || 'No roster comparison available.'}</Text>
   }
-  return <RosterComparison view={state.view} compact />
+  return <RosterComparison view={view} compact />
 }

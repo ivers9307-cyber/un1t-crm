@@ -28,6 +28,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// W1.S1b — the tab title names the request HOST's organisation (mocked; the
+// per-host cache is host-brand.js's own test).
+vi.mock('@/lib/default-site-name', () => ({
+  resolveSiteNameForHost: vi.fn(async ({ host }) => (host === 'gym-a.repset.ie' ? 'Gym A & Co' : 'Repset')),
+}))
 vi.mock('@/lib/rate-limit', () => ({
   peekRateLimit: vi.fn(async () => ({ allowed: true, remaining: 20, resetAt: new Date(), retryAfterSec: 60 })),
   checkRateLimit: vi.fn(async () => ({ allowed: true, remaining: 60, resetAt: new Date(), retryAfterSec: 60 })),
@@ -407,3 +412,15 @@ describe('request shape', () => {
     expect(await res.text()).toContain('unsubscribed')
   })
 })
+
+describe('hr-emails page title (W1.S1b)', () => {
+  it('names the host\'s organisation (escaped), the platform on the CRM host, never a literal gym', async () => {
+    const tenant = await GET(new Request('https://gym-a.repset.ie/api/preferences/hr-emails?scope=nope'))
+    expect(await tenant.text()).toContain('<title>Email preferences · Gym A &amp; Co</title>')
+    const crm = await get('scope=nope')
+    const html = await crm.text()
+    expect(html).toContain('<title>Email preferences · Repset</title>')
+    expect(html).not.toMatch(/UN1T/)
+  })
+})
+

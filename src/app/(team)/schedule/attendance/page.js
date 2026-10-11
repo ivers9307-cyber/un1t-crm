@@ -12,6 +12,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import ScheduleTabs from '@/components/ScheduleTabs'
 import AttendanceReportClient from '@/components/AttendanceReportClient'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const dynamic = 'force-dynamic'
 
@@ -37,7 +38,7 @@ export default async function AttendanceReportPage() {
         shift is still in progress with no arrival yet. No-show means the shift
         ended with no arrival recorded. Arrivals never change paid hours.
       </p>
-      <AttendanceReportClient activeLocationName={user.activeLocation?.name || ''} />
+      <AttendanceReportClient activeLocationName={user.activeLocation?.name || ''} timeZone={zoneOfLocation(user.activeLocation)} />
     </div>
   )
 }

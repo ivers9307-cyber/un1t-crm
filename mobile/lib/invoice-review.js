@@ -10,6 +10,8 @@
 // payloads into strings and colours.
 
 import { contractorInvoiceLifecycle } from 'shared/contractor-invoice-review'
+import { DEFAULT_TZ } from 'shared/zoned-time'
+import { studioDateLabel } from './studio-zone'
 
 const TONE_STYLE = {
   green: { tint: '#059669', bg: 'bg-green-500/20', text: 'text-green-700' },
@@ -50,11 +52,10 @@ function euro(n) {
   return `€${Number(n).toFixed(2)}`
 }
 
-function formatDay(iso) {
-  if (!iso) return 'an unknown date'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return 'an unknown date'
-  return d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Europe/Dublin' })
+// TZ.14 (D3 = A) — the approval day on the INVOICE's studio calendar. A bare
+// date carries no zone suffix.
+function formatDay(iso, zone) {
+  return studioDateLabel(iso, zone) || 'an unknown date'
 }
 
 function figureRows(f) {
@@ -95,15 +96,18 @@ function verdictTone(cmp) {
  *   note,                    // legacy approval with no snapshot, else null
  *   current: null | { heading, rows, summary },
  * }
+ *
+ * `zone` (TZ.14): the invoice studio's timezone, from the staff session's
+ * locations (useLocationZone(data.location_id)); Europe/Dublin when absent.
  */
-export function reviewComparisonView(data) {
+export function reviewComparisonView(data, zone = DEFAULT_TZ) {
   const rc = data?.review_comparison
   if (!rc || !rc.primary) return null
   const { primary, current } = rc
   const tone = verdictTone(primary.comparison)
   return {
     heading: primary.source === 'snapshot'
-      ? `Roster vs invoice, as approved on ${formatDay(primary.as_of)}`
+      ? `Roster vs invoice, as approved on ${formatDay(primary.as_of, zone)}`
       : 'Roster vs invoice',
     rows: figureRows(primary),
     invoiced: euro(data.invoice_amount),

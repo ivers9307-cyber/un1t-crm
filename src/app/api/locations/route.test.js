@@ -138,3 +138,44 @@ describe('POST /api/locations — seeds the created row', () => {
     expect(seedLocationDefaults).not.toHaveBeenCalled()
   })
 })
+
+// TZ.2 (D1 = A, D8): the zone is any IANA zone canonicalZone() accepts, stored
+// in its canonical spelling; fixed offsets and unknown names are refused before
+// any write (mig 719's trigger is the DB-side twin of the same check).
+describe('POST /api/locations — timezone (TZ.2)', () => {
+  it('canonicalises a valid zone', async () => {
+    const res = await POST(post({ ...VALID, timezone: 'america/new_york' }))
+    expect(res.status).toBe(200)
+    expect(db.inserts[0].timezone).toBe('America/New_York')
+  })
+
+  it('stores the canonical spelling of a renamed zone (Asia/Kolkata → the runtime canonical)', async () => {
+    const res = await POST(post({ ...VALID, timezone: 'Asia/Kolkata' }))
+    expect(res.status).toBe(200)
+    expect(['Asia/Kolkata', 'Asia/Calcutta']).toContain(db.inserts[0].timezone)
+  })
+
+  it.each(['Mars/Olympus', '+05:30', 'Etc/GMT-5', 'UTC+1', 'GMT-3', '', '   '])('refuses %j with 400 and inserts nothing', async (tz) => {
+    const res = await POST(post({ ...VALID, timezone: tz }))
+    expect(res.status).toBe(400)
+    expect(db.inserts).toEqual([])
+    expect(seedLocationDefaults).not.toHaveBeenCalled()
+  })
+
+  it('names the problem in the 400', async () => {
+    const res = await POST(post({ ...VALID, timezone: 'Mars/Olympus' }))
+    expect(JSON.stringify(await res.json())).toMatch(/Choose a real timezone/)
+  })
+
+  it('defaults to Europe/Dublin only when the field is absent (the CRM forms always send it, D8)', async () => {
+    const res = await POST(post(VALID))
+    expect(res.status).toBe(200)
+    expect(db.inserts[0].timezone).toBe('Europe/Dublin')
+  })
+
+  it('passes country through unchanged next to the zone', async () => {
+    const res = await POST(post({ ...VALID, timezone: 'Australia/Perth', country: 'au' }))
+    expect(res.status).toBe(200)
+    expect(db.inserts[0]).toMatchObject({ timezone: 'Australia/Perth', country: 'AU' })
+  })
+})

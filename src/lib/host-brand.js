@@ -24,6 +24,7 @@ import { PLATFORM_NAME } from './brand-name'
 import { normalizeHost } from './brands'
 import { resolveTenantOrgId } from './tenant-domains-edge'
 import { getLocationBranding, getOrgCustomerBranding } from './location-branding'
+import { isPubliclyVisible } from './landing-page-visibility'
 
 export const HOST_BRAND_CACHE_TTL_MS = 5 * 60 * 1000 // renames and re-uploads are rare
 
@@ -37,6 +38,7 @@ const EMPTY = Object.freeze({ orgId: null, companyName: '', logoUrl: null, favic
 // Test hook — the module-level cache would otherwise leak between tests.
 export function _resetHostBrandCache() {
   cache = new Map()
+  _resetScopedBrandCaches()
 }
 
 /**
@@ -122,4 +124,151 @@ export async function resolveScopedBrandName({ host = '', locationId = null, db 
   } catch {
     return floor
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// W1.S1b — the per-LOCATION and per-ORGANISATION twins of resolveHostBrand.
+//
+// The public pages, widgets and TV boards W1.S1b sweeps know a location (a
+// landing row, an event, a kiosk token) or an organisation, not just a host.
+// They name the gym through these two, never through a fresh walk per
+// request: the live TV board polls every few seconds and a landing page is
+// anonymous traffic, so each answer is held for HOST_BRAND_CACHE_TTL_MS,
+// bounded like the host cache. Only a RESOLVED brand is cached: a failed
+// read (or an empty name, which is what getLocationBranding returns when its
+// reads error) is returned uncached, so one DB blip never pins an unbranded
+// board or footer for the whole TTL.
+// Never throws; an unresolved brand is empty strings (callers word around an
+// empty brand, they never print a literal).
+
+const MAX_CACHED_KEYS = 256
+let locationCache = new Map()
+let orgCache = new Map()
+
+const EMPTY_LOCATION = Object.freeze({ companyName: '', shortName: '', locationName: '' })
+const EMPTY_ORG = Object.freeze({ orgId: null, companyName: '', shortName: '', legalName: '', studios: Object.freeze([]) })
+
+function cachedRead(map, key, nowMs) {
+  const hit = map.get(key)
+  return hit && nowMs - hit.at < HOST_BRAND_CACHE_TTL_MS ? hit.value : undefined
+}
+
+function cachedWrite(map, key, value, nowMs) {
+  if (map.size >= MAX_CACHED_KEYS) map.clear()
+  map.set(key, { value, at: nowMs })
+  return value
+}
+
+// Test hook — both twin caches.
+export function _resetScopedBrandCaches() {
+  locationCache = new Map()
+  orgCache = new Map()
+}
+
+/**
+ * One location's brand, cached per location id: getLocationBranding's chain
+ * (company_settings → org_settings → locations.name).
+ *
+ * @param {{ locationId?: string|null, db?: object|null, nowMs?: number }} [opts]
+ * @returns {Promise<{ companyName: string, shortName: string, locationName: string }>}
+ *   companyName: the studio's configured brand ("UN1T Stillorgan").
+ *   shortName:   the wordmark (org_settings.short_name, else companyName: "UN1T").
+ *   locationName: locations.name.
+ */
+export async function resolveLocationBrand({ locationId = null, db = null, nowMs = Date.now() } = {}) {
+  if (!locationId) return EMPTY_LOCATION
+  const key = String(locationId)
+  const hit = cachedRead(locationCache, key, nowMs)
+  if (hit) return hit
+  let value = EMPTY_LOCATION
+  try {
+    const b = await getLocationBranding(db || createServerClient(), key)
+    value = Object.freeze({
+      companyName: String(b.companyName || '').trim(),
+      shortName: String(b.shortName || '').trim(),
+      locationName: String(b.locationName || '').trim(),
+    })
+  } catch {
+    value = EMPTY_LOCATION
+  }
+  // getLocationBranding swallows its own read errors and hands back an empty
+  // name, so an empty name is indistinguishable from a failure: never cache it.
+  if (!value.companyName) return value
+  return cachedWrite(locationCache, key, value, nowMs)
+}
+
+/**
+ * An organisation's site chrome for the public marketing pages, cached per
+ * org: the brand (getOrgCustomerBranding's chain), the wordmark
+ * (org_settings.short_name, else the brand), the legal holder for the
+ * copyright line (legal_trading_name → legal_entity_name → the brand), and
+ * the org's LIVE studio pages for the footer ("Studios": locations.name →
+ * /welcome/<public_path>, oldest studio first). Never another org's studio.
+ *
+ * @param {{ orgId?: string|null, db?: object|null, nowMs?: number }} [opts]
+ * @returns {Promise<{ orgId: string|null, companyName: string, shortName: string, legalName: string, studios: Array<{ name: string, href: string }> }>}
+ */
+export async function resolveOrgChrome({ orgId = null, db = null, nowMs = Date.now() } = {}) {
+  if (!orgId) return EMPTY_ORG
+  const key = String(orgId)
+  const hit = cachedRead(orgCache, key, nowMs)
+  if (hit) return hit
+  let value = EMPTY_ORG
+  // Any failed read (or no brand at all) returns what we have WITHOUT caching
+  // it: a partial chrome (no legal holder, no studios) must not stick for the TTL.
+  let failed = false
+  try {
+    const client = db || createServerClient()
+    const brand = await getOrgCustomerBranding(client, key)
+    const companyName = String(brand.companyName || '').trim()
+
+    const { data: osRows, error: osErr } = await client
+      .from('org_settings')
+      .select('short_name, legal_trading_name, legal_entity_name')
+      .eq('organization_id', key)
+      .limit(1)
+    const os = (!osErr && osRows && osRows[0]) || {}
+    const trim = (v) => (typeof v === 'string' ? v.trim() : '')
+
+    const { data: locRows, error: locErr } = await client
+      .from('locations')
+      .select('id, name')
+      .eq('organization_id', key)
+      .eq('active', true)
+      .order('created_at')
+      .limit(50)
+    const locs = (!locErr && locRows) || []
+    let studios = []
+    let pageErr = null
+    if (locs.length) {
+      const { data: pageRows, error } = await client
+        .from('landing_page_settings')
+        .select('location_id, public_path, publish_state')
+        .in('location_id', locs.map((l) => l.id))
+      pageErr = error
+      const byLocation = new Map(
+        ((!pageErr && pageRows) || [])
+          .filter((r) => r.public_path && isPubliclyVisible(r.publish_state))
+          .map((r) => [r.location_id, r.public_path]),
+      )
+      studios = locs
+        .filter((l) => byLocation.has(l.id) && trim(l.name))
+        .map((l) => Object.freeze({ name: trim(l.name), href: `/welcome/${byLocation.get(l.id)}` }))
+    }
+
+    failed = Boolean(osErr || locErr || pageErr) || !companyName
+
+    value = Object.freeze({
+      orgId: key,
+      companyName,
+      shortName: trim(os.short_name) || companyName,
+      legalName: trim(os.legal_trading_name) || trim(os.legal_entity_name) || companyName,
+      studios: Object.freeze(studios),
+    })
+  } catch {
+    value = EMPTY_ORG
+    failed = true
+  }
+  if (failed) return value
+  return cachedWrite(orgCache, key, value, nowMs)
 }

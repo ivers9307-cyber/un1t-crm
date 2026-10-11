@@ -30,6 +30,10 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => dbMock) }))
 // opening a thread; the default is "has one" (the no-number case is below).
 vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn(async () => ({ source: 'db', id: 'n1' })) }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.example' }))
+// W1.L3b — the form link is minted on the contact location's tenant host unless
+// the per-location public_base_url override is set. Defaults to the CRM host so
+// the older 'https://crm.example' assertions hold.
+vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.example') }))
 vi.mock('@/lib/cancellation-form/links', () => ({
   issueLink: vi.fn(), revokeLink: vi.fn(), latestLinkForContact: vi.fn(async () => null),
 }))
@@ -54,10 +58,11 @@ import { issueLink, revokeLink, latestLinkForContact } from '@/lib/cancellation-
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents } from '@/lib/whatsapp'
 import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 const LOC = 'c0000000-0000-0000-0000-000000000003'
 const USER = { id: 'u-1', role: 'manager', locations: [{ id: LOC }] }
-let dbMock, contactRow, templateRow, writes
+let dbMock, contactRow, templateRow, writes, publicBaseUrl
 
 function makeDb() {
   writes = []
@@ -73,7 +78,7 @@ function makeDb() {
           return Promise.resolve({ data: { id: 'x' }, error: null })
         },
         maybeSingle() {
-          if (table === 'locations') return Promise.resolve({ data: { name: 'UN1T Stillorgan', settings: { customer_agent: { cancellation_form: { whatsapp_template_name: templateRow ? templateRow.name : null } } } }, error: null })
+          if (table === 'locations') return Promise.resolve({ data: { name: 'UN1T Stillorgan', settings: { customer_agent: { cancellation_form: { whatsapp_template_name: templateRow ? templateRow.name : null, ...(publicBaseUrl ? { public_base_url: publicBaseUrl } : {}) } } } }, error: null })
           return Promise.resolve({ data: null, error: null })
         },
         then(res, rej) {
@@ -91,6 +96,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   contactRow = { id: 'c-1', name: 'Aoife Byrne', first_name: 'Aoife', email: 'a@example.com', email_status: 'active', phone: '+353871234567', wa_phone: '+353871234567', location_id: LOC, glofox_membership_plan: 'Unlimited' }
   templateRow = null
+  publicBaseUrl = null
   dbMock = makeDb()
   getCurrentUser.mockResolvedValue(USER)
   hasPermission.mockReturnValue(true)
@@ -131,6 +137,20 @@ describe('GET', () => {
 })
 
 describe('POST email', () => {
+  it("W1.L3b — the link is minted on the contact location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    issueLink.mockResolvedValueOnce({ ok: true, linkId: 'l-1', token: 'TOKEN', url: 'https://gym-a.repset.ie/cancel/TOKEN', expiresAt: '2026-10-05T00:00:00Z' })
+    expect((await post({ channel: 'email' })).status).toBe(200)
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(expect.anything(), LOC)
+    expect(issueLink).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ baseUrl: 'https://gym-a.repset.ie' }))
+    expect(sendTransactionalEmail.mock.calls[0][0].htmlBody).toContain('https://gym-a.repset.ie/cancel/TOKEN')
+  })
+  it('W1.L3b — the per-location public_base_url override still wins, and the resolver is not even consulted', async () => {
+    publicBaseUrl = 'https://forms.example'
+    expect((await post({ channel: 'email' })).status).toBe(200)
+    expect(resolveCustomerBaseUrl).not.toHaveBeenCalled()
+    expect(issueLink).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ baseUrl: 'https://forms.example' }))
+  })
   it('sends a transactional email with the link (no marketing-consent gate) and logs the activity', async () => {
     const res = await post({ channel: 'email' })
     expect(res.status).toBe(200)

@@ -2,6 +2,8 @@
 // detail page UI. Single source of truth for "what does this car
 // need before it can be marked complete?".
 
+import { instantToZonedParts, dayStartMsIn, formatInZone, DEFAULT_TZ } from '@shared/zoned-time'
+
 // Required documents for a car to be promoted to 'completed'. All
 // of these must have at least one upload before the operator can
 // hit Mark Completed (server-side check in completionGaps()). 'other'
@@ -294,18 +296,52 @@ function isInRange(iso, sinceIso) {
   return new Date(iso) >= new Date(sinceIso)
 }
 
+// TZ.17 — the 1st of a month at 00:00 in `zone`, as an ISO instant. `mo` is
+// 1-12 and may run past either end (Date.UTC-style rollover).
+function zonedMonthStartIso(y, mo, zone) {
+  const d = new Date(Date.UTC(y, mo - 1, 1))
+  return new Date(dayStartMsIn({ y: d.getUTCFullYear(), mo: d.getUTCMonth() + 1, d: 1 }, zone)).toISOString()
+}
+
+/**
+ * The year-to-date floor for the cars CSV export: 1 Jan 00:00 in the car
+ * studio's `zone` (TZ.17; it was the server clock's, UTC on Vercel).
+ * @param {number} nowMs
+ * @param {string} [zone]
+ */
+export function carsYearStartIso(nowMs, zone = DEFAULT_TZ) {
+  return zonedMonthStartIso(instantToZonedParts(nowMs, zone).y, 1, zone)
+}
+
+/**
+ * The deposit link's "expires …" text on the car note, on the car studio's
+ * clock (TZ.17). Same fields and locale as the Date#toLocaleString('en-IE')
+ * it replaces, which printed the server's clock (UTC on Vercel).
+ */
+export function depositExpiryLabel(expiresAt, zone = DEFAULT_TZ) {
+  return formatInZone(new Date(expiresAt), zone, {
+    year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric',
+  }, 'en-IE')
+}
+
 /**
  * @param {Array} cars  — every car for the location, all statuses.
- * @param {{ liveRate?: number, now?: Date }} [opts]
+ * @param {{ liveRate?: number, now?: Date, zone?: string }} [opts]
+ *   zone: the cars studio's IANA zone (TZ.17). Year, month and the 12 monthly
+ *   buckets are that studio's calendar; they were the server clock's (UTC on
+ *   Vercel), so a car completed 00:00-01:00 Irish summer time on the 1st
+ *   landed in the previous month.
  * @returns metrics object — see fields below.
  */
 export function computeReportMetrics(cars, opts = {}) {
   const list = Array.isArray(cars) ? cars : []
   const liveRate = opts.liveRate ?? null
   const now = opts.now ? new Date(opts.now) : new Date()
+  const zone = opts.zone || DEFAULT_TZ
+  const { y: nowY, mo: nowMo } = instantToZonedParts(now, zone)
 
-  const startOfYear = new Date(now.getFullYear(), 0, 1).toISOString()
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+  const startOfYear = zonedMonthStartIso(nowY, 1, zone)
+  const startOfMonth = zonedMonthStartIso(nowY, nowMo, zone)
 
   const completed = list.filter(c => c.status === 'completed')
   const active = list.filter(c => c.status === 'new' || c.status === 'pending')
@@ -385,9 +421,11 @@ export function computeReportMetrics(cars, opts = {}) {
   // render a chart + table from a single array.
   const months = []
   for (let i = 11; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    const startIso = d.toISOString()
-    const endIso = new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString()
+    // `d` is a calendar anchor (00:00 UTC on the 1st), for the key and label;
+    // the bounds are that month's local midnights in `zone`.
+    const d = new Date(Date.UTC(nowY, nowMo - 1 - i, 1))
+    const startIso = zonedMonthStartIso(nowY, nowMo - i, zone)
+    const endIso = zonedMonthStartIso(nowY, nowMo - i + 1, zone)
     const completedInMonth = completed.filter(c =>
       c.completed_at && c.completed_at >= startIso && c.completed_at < endIso)
     const refundedInMonth = list.filter(c =>
@@ -396,8 +434,8 @@ export function computeReportMetrics(cars, opts = {}) {
       && c.uk_vat_refund_received_at >= startIso
       && c.uk_vat_refund_received_at < endIso)
     months.push({
-      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
-      label: d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' }),
+      key: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`,
+      label: d.toLocaleDateString(undefined, { month: 'short', year: '2-digit', timeZone: 'UTC' }),
       completedCount: completedInMonth.length,
       revenue: Math.round(sumRevenue(completedInMonth) * 100) / 100,
       profit: Math.round(sumProfit(completedInMonth) * 100) / 100,

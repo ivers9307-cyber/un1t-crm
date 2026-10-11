@@ -7,12 +7,14 @@
 // to show it. Nothing is booked from here: a request for one of these
 // classes always goes to staff (class-booking-processor.js).
 //
-// Pure: no DB, no network, `now` is a parameter.
-import { dublinDateKey, dublinDayStartMs, dublinAddDays } from '@/lib/dublin-time'
+// Pure: no DB, no network, `now` and `zone` are parameters.
+//
+// TZ.7: the timetable is wall clock in the STUDIO's zone (the caller passes
+// its location's `locations.timezone`). Europe/Dublin output is byte-identical
+// to before (bookings-classes.tz.test.js).
+import { dateKeyIn, addDaysIn, zonedWallClockToInstant, formatInZone, DEFAULT_TZ } from '@shared/zoned-time'
 
-const DUBLIN = 'Europe/Dublin'
-const labelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: DUBLIN, weekday: 'short', day: 'numeric', month: 'short' })
-const wallFmt = new Intl.DateTimeFormat('en-GB', { timeZone: DUBLIN, hour: '2-digit', minute: '2-digit', hour12: false })
+const LABEL_OPTS = Object.freeze({ weekday: 'short', day: 'numeric', month: 'short' })
 
 // Every id this module mints starts with this, and nothing Glofox mints does
 // (its ids are 24 hex characters). The processor, the approve route and the
@@ -182,50 +184,41 @@ function isoWeekday(dateKey) {
   return js === 0 ? 7 : js
 }
 
-// UTC ms of a Europe/Dublin wall-clock time on a Dublin calendar day.
-// Midnight + minutes is an hour out on the two clock-change days (25 Oct 2026
-// has 25 hours), so read back the wall clock it landed on and correct once.
-function dublinWallClockMs(dateKey, time) {
-  const [h, mi] = time.split(':').map(Number)
-  const wanted = h * 60 + mi
-  const guess = dublinDayStartMs(dateKey) + wanted * 60_000
-  const parts = wallFmt.formatToParts(new Date(guess))
-  const gh = Number(parts.find((p) => p.type === 'hour')?.value) % 24
-  const gm = Number(parts.find((p) => p.type === 'minute')?.value)
-  return guess + (wanted - (gh * 60 + gm)) * 60_000
-}
-
 function slugForId(name) {
   return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'class'
 }
 
 /**
- * The timetable's classes for the next `days` Dublin calendar days, in the
- * public class shape. The window starts today, or on `startDate` when that is
- * later (a studio that has not opened yet shows its first week, not an empty
- * list). A class starting inside the notice window is left out: staff book
- * these by hand and need the time to do it.
+ * The timetable's classes for the next `days` calendar days in the studio's
+ * `zone`, in the public class shape. The window starts today, or on
+ * `startDate` when that is later (a studio that has not opened yet shows its
+ * first week, not an empty list). A class starting inside the notice window is
+ * left out: staff book these by hand and need the time to do it.
  */
-export function manualClassOccurrences({ slots, startDate = null, minNoticeHours = DEFAULT_MIN_NOTICE_HOURS, days = 7, now = Date.now() }) {
+export function manualClassOccurrences({ slots, startDate = null, minNoticeHours = DEFAULT_MIN_NOTICE_HOURS, days = 7, now = Date.now(), zone = DEFAULT_TZ }) {
   if (!Array.isArray(slots) || !slots.length) return []
-  const today = dublinDateKey(now)
+  const today = dateKeyIn(now, zone)
   const first = startDate && startDate > today ? startDate : today
   const earliestMs = now + Math.max(0, Number(minNoticeHours) || 0) * 3_600_000
   const span = Math.min(14, Math.max(1, Number(days) || 7))
   const out = []
   for (let n = 0; n < span; n += 1) {
-    const dateKey = dublinAddDays(first, n)
+    const dateKey = addDaysIn(first, n, zone)
     const dow = isoWeekday(dateKey)
     for (const slot of slots) {
       if (slot.dow !== dow) continue
-      const ms = dublinWallClockMs(dateKey, slot.time)
-      if (ms < earliestMs) continue
+      // TZ.17 — the canonical two-pass solver. The private one-pass correction
+      // it replaces put a 23:xx slot on the spring-forward day a day late, and
+      // on a fall-back day (01:xx happens twice in Dublin) could pick the other
+      // 01:xx from the one every booking and shift resolves to.
+      const ms = zonedWallClockToInstant(dateKey, slot.time, zone)
+      if (ms === null || ms < earliestMs) continue
       out.push({
         event_id: `${MANUAL_EVENT_PREFIX}${dateKey.replaceAll('-', '')}-${slot.time.replace(':', '')}-${slugForId(slot.name)}`,
         name: slot.name,
         starts_at: new Date(ms).toISOString(),
         day: dateKey,
-        day_label: labelFmt.format(new Date(ms)),
+        day_label: formatInZone(new Date(ms), zone, LABEL_OPTS, 'en-IE'),
         time: slot.time,
       })
     }

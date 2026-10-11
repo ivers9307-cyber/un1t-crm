@@ -9,6 +9,13 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 // src/app/api/cron/run-scheduled-reports/route.test.js; here only its verdict
 // matters.
 vi.mock('@/lib/report-recipients', () => ({ checkRateReportRecipientsForSave: vi.fn() }))
+// TZ.11a — next_run_at reads the schedule's studio zone; this file's fake DB
+// serves scheduled_reports only, so the zone read is stubbed (Dublin unless a
+// test says otherwise).
+vi.mock('@/lib/location-time', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getLocationZone: vi.fn(async () => 'Europe/Dublin'),
+}))
 vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
   return { ...actual, getCurrentUser: vi.fn() }
@@ -18,6 +25,7 @@ const { GET, POST, PATCH, DELETE } = await import('./route.js')
 const { checkRateReportRecipientsForSave } = await import('@/lib/report-recipients')
 const { getCurrentUser } = await import('@/lib/auth')
 const { createServerClient } = await import('@/lib/supabase')
+const { getLocationZone, LocationZoneReadError } = await import('@/lib/location-time')
 
 const LOC_A = 'a0000000-0000-0000-0000-000000000001'
 const LOC_B = 'b0000000-0000-0000-0000-000000000002'
@@ -370,5 +378,53 @@ describe('staff_cost recipients — external addresses must be confirmed', () =>
     const res = await PATCH(patchReq('s-cost', { email_recipients: ['owner@example.com', 'new@example.com'] }))
     expect(res.status).toBe(409)
     expect(db.writes).toEqual([])
+  })
+})
+
+describe('next_run_at on the studio clock (TZ.11a)', () => {
+  it('POST: a New York studio gets 07:00 New York; the zone is read for the schedule location', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-10-30T15:00:00Z')) // Fri 30 Oct, 11:00 EDT
+      getCurrentUser.mockResolvedValue(MANAGER)
+      getLocationZone.mockResolvedValueOnce('America/New_York')
+      const res = await POST(postReq({ ...scheduleBody('staff_hours'), frequency: 'daily', deliver_email: false, email_recipients: [] }))
+      expect(res.status).toBe(201)
+      expect(getLocationZone).toHaveBeenCalledWith(db, LOC_A)
+      expect(db.writes[0][1].next_run_at).toBe('2026-10-31T11:00:00.000Z') // Sat 07:00 EDT
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('POST: a Europe/Dublin studio keeps 07:00 UTC', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-07-01T10:00:00Z'))
+      getCurrentUser.mockResolvedValue(MANAGER)
+      const res = await POST(postReq({ ...scheduleBody('staff_hours'), frequency: 'daily', deliver_email: false, email_recipients: [] }))
+      expect(res.status).toBe(201)
+      expect(db.writes[0][1].next_run_at).toBe('2026-07-02T07:00:00.000Z')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('POST: an unreadable zone saves nothing (503)', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    getLocationZone.mockRejectedValueOnce(new LocationZoneReadError([LOC_A], new Error('connection reset')))
+    const res = await POST(postReq({ ...scheduleBody('staff_hours'), deliver_email: false, email_recipients: [] }))
+    expect(res.status).toBe(503)
+    expect(db.writes).toEqual([])
+  })
+
+  it('PATCH: a timing change reads the zone of the SCHEDULE location; a plain pause reads none', async () => {
+    getCurrentUser.mockResolvedValue(MANAGER)
+    expect((await PATCH(patchReq('s-hours', { paused: true }))).status).toBe(200)
+    expect(getLocationZone).not.toHaveBeenCalled()
+    getLocationZone.mockRejectedValueOnce(new LocationZoneReadError([LOC_A], new Error('connection reset')))
+    const res = await PATCH(patchReq('s-hours', { frequency: 'daily' }))
+    expect(res.status).toBe(503)
+    expect(getLocationZone).toHaveBeenCalledWith(db, LOC_A)
   })
 })

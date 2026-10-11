@@ -13,6 +13,7 @@ import AssistantBubble from './AssistantBubble'
 import { hasPermission } from '@/lib/permissions'
 import { isAccountTierPath } from '@/lib/account-nav'
 import { isPlatformTierPath } from '@/lib/platform-nav'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 // PERF.3 — Vercel SpeedInsights + Analytics mount in the authenticated
 // branch below (NOT the root layout) so /login and the public booking/
 // payment surfaces don't pay for the two analytics bundles pre-auth.
@@ -97,7 +98,7 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
   // Protected route but no resolved user (expired/unresolved session, or
   // a transient profile-fetch miss in getCurrentUser). Previously the
   // chrome rendered anyway with user=null, producing a dead shell —
-  // default "UN1T" logo, "Lead Management" subtitle, "User" footer and
+  // default platform-name logo, "Lead Management" subtitle, "User" footer and
   // an EMPTY nav (every permission check fails on a null user). Send them
   // to login instead, preserving where they were headed.
   useEffect(() => {
@@ -161,7 +162,7 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
             ? 'Repset · Platform'
             : isAccountTier
               ? (user?.activeOrganization?.name || 'Account')
-              : (user?.activeLocation?.name || 'UN1T')}
+              : (user?.activeLocation?.name || PLATFORM_NAME)}
         </span>
       </div>
 

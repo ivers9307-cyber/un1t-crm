@@ -9,8 +9,9 @@ import { getHostRevenue } from '@/lib/host-revenue'
 import { createServerClient } from '@/lib/supabase'
 import { HOST_EVENT_STATUS_LABEL } from '@/lib/host-events'
 import { ensureHostSlug } from '@/lib/hosts'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { logWarn } from '@/lib/log'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 import HostSubmitButton from '@/components/host/HostSubmitButton'
 import HostPayouts from '@/components/host/HostPayouts'
 import HostStatements from '@/components/host/HostStatements'
@@ -67,12 +68,16 @@ export default async function HostDashboard() {
   try {
     const { data: hostRow } = await db
       .from('event_hosts')
-      .select('id, name, slug, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb')
+      .select('id, name, slug, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb, anchor_location_id')
       .eq('id', session.host.id)
       .maybeSingle()
     if (hostRow) {
       const slug = await ensureHostSlug(db, hostRow)
-      signupUrl = `${new URL(getAppUrl()).origin}/h/${slug}`
+      // W1.L3b — the host's signup page on the tenant host of their ANCHOR
+      // location (NULL anchor → the resolver floors to the CRM host). Origin-
+      // only, as before, so a misconfigured env var can't poison the link.
+      const baseUrl = new URL(await resolveCustomerBaseUrl(db, hostRow.anchor_location_id)).origin
+      signupUrl = `${baseUrl}/h/${slug}`
       const { count } = await db
         .from('host_contacts')
         .select('*', { count: 'exact', head: true })
@@ -96,7 +101,7 @@ export default async function HostDashboard() {
   }
   const netByEvent = new Map((revenue?.perEvent || []).map((r) => [r.event_id, r]))
 
-  // Only Stripe-Connect hosts have a UN1T booking fee + a settled "net to host"
+  // Only Stripe-Connect hosts have a platform booking fee + a settled "net to host"
   // (mig 381 columns). Revolut/internal hosts collect directly, so those columns
   // are NULL (→0) and would misrepresent as "€0 net" — show them gross only.
   const isStripe = session.host.payment_provider === 'stripe_connect'
@@ -107,7 +112,9 @@ export default async function HostDashboard() {
     : isStripe
       ? [
           { label: 'Gross collected', value: formatMoney(revenue.totals.gross_cents, cur) },
-          { label: 'UN1T booking fees', value: formatMoney(revenue.totals.fee_cents, cur) },
+          // W1.S1c: the per-ticket fee is the platform's money rail (Stripe
+          // Connect application fee), so it carries the platform name.
+          { label: `${PLATFORM_NAME} booking fees`, value: formatMoney(revenue.totals.fee_cents, cur) },
           { label: 'Net to you', value: formatMoney(revenue.totals.net_to_host_cents, cur) },
           { label: 'Refunded', value: formatMoney(revenue.totals.refunded_cents, cur) },
         ]

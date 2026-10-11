@@ -16,10 +16,11 @@
 //                    ∈ (member, credit_member). Same cohort the
 //                    membership snapshot + business dashboard count as
 //                    "members". Head-only exact count (no rows moved).
-//   - bookings7d   → bookings head-count in the trailing 7-day Dublin
-//                    week window, excluding cancelled. booking_date is
-//                    Dublin wall-clock (CLAUDE.md), so the window is
-//                    derived with the dublin-time helpers, not raw Date.
+//   - bookings7d   → bookings head-count in the trailing 7-day window of
+//                    the STUDIO's calendar, excluding cancelled. booking_date
+//                    is the studio's wall clock (CLAUDE.md), so each studio's
+//                    window is its own (TZ.11a: locations.timezone), never
+//                    one shared day for the whole org.
 //   - atRiskHigh   → latest churn_radar_snapshots.high_risk per location
 //                    (mig 198). Cheap (LIMIT 1) — the live radar recompute
 //                    is a heavy per-member scan, so the weekly snapshot is
@@ -39,15 +40,16 @@
 //                     permissions against it, so it can't be cheaply or
 //                     correctly re-run per studio — hence a direct
 //                     representative head-count here instead.
-//   - integration   → whether the studio has Glofox configured
-//                     (locations.settings.glofox). A lightweight connected/
-//                     not-connected signal, NOT an error probe: this repo
-//                     has no per-location integration-HEALTH registry
-//                     (the proposal's `integrations-hub.js` does not exist),
-//                     so health-error detection is deferred to a later phase.
+//   - membershipSource → the studio's membership-source STATE from the seam
+//                     (src/lib/membership/source.js, W1.M2): none |
+//                     configured | unconfigured | unknown. It replaced
+//                     `Boolean(settings.glofox)`, which read CCF Autos'
+//                     empty slice as "connected". A failed read is
+//                     'unknown' on the card, never "no integration".
 
 import { resolveAdminOrgId } from '@/lib/org-admin'
-import { dublinDayStr, addDaysISO } from '@/lib/dublin-time'
+import { todayStrIn, addDaysISO, zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
+import { membershipSourceState } from '@/lib/membership/source'
 
 // Glofox statuses that count as an active member (same cohort as
 // membership-snapshot.js).
@@ -64,16 +66,17 @@ const PENDING_INVOICE_STATUSES = Object.freeze([
 // ---------------------------------------------------------------------------
 
 /**
- * Trailing 7-day window (inclusive) as Dublin calendar dates.
- * `bookings.booking_date` is a Dublin wall-clock DATE, so the window
- * bounds are Dublin calendar days — derived via the dublin-time
- * helpers so a US-timezone server (or BST edge) can't shift them.
+ * Trailing 7-day window (inclusive) as calendar dates in `zone` (the
+ * studio's). `bookings.booking_date` is the studio's wall-clock DATE, so
+ * the window bounds are its calendar days — derived from the zone so a
+ * US-timezone server (or a DST edge) can't shift them.
  *
  * @param {Date|number} [now=Date.now()]
+ * @param {string} [zone] canonical IANA zone (DEFAULT_TZ when omitted)
  * @returns {{ start: string, end: string }} YYYY-MM-DD bounds, inclusive.
  */
-export function dublinWeekWindow(now = Date.now()) {
-  const end = dublinDayStr(now)          // today, Dublin
+export function studioWeekWindow(now = Date.now(), zone = DEFAULT_TZ) {
+  const end = todayStrIn(zone, now instanceof Date ? now.getTime() : now) // today, local
   const start = addDaysISO(end, -6)      // 6 days earlier → 7-day inclusive span
   return { start, end }
 }
@@ -202,14 +205,14 @@ async function latestAtRiskHigh(db, locationId) {
   return data?.[0]?.high_risk || 0
 }
 
-async function countOpenApprovals(db, locationId) {
+async function countOpenApprovals(db, locationId, todayStr) {
   const [timeOff, invoices] = await Promise.all([
     db.from('time_off_requests')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
       .eq('status', 'pending')
       // LEAVE.2 — a pending request past its end_date has expired (derived).
-      .gte('end_date', dublinDayStr()),
+      .gte('end_date', todayStr),
     db.from('invoices_queue')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
@@ -223,23 +226,28 @@ async function countOpenApprovals(db, locationId) {
  * failure-isolated: any query error degrades that studio's numbers to
  * zero rather than failing the portfolio.
  */
-async function assembleStudio(db, location, window) {
+async function assembleStudio(db, location, now) {
+  // TZ.11a — the studio's own calendar: its 7-day window and its today.
+  const zone = zoneOfLocation(location)
+  const window = studioWeekWindow(now, zone)
   const base = {
     id: location.id,
     name: location.name,
     slug: location.slug || null,
-    // Cheap connected/not-connected signal (see module header).
-    integrationConnected: Boolean(location.settings?.glofox),
   }
+  // W1.M2 — resolved by the seam (never throws: a failed read is state
+  // 'unknown'), outside the counts' try so a failing count cannot blank it.
+  const membershipSource = await membershipSourceState(db, location.id)
   try {
     const [members, bookings7d, atRiskHigh, openApprovals] = await Promise.all([
       countMembers(db, location.id),
       countBookings7d(db, location.id, window),
       latestAtRiskHigh(db, location.id),
-      countOpenApprovals(db, location.id),
+      countOpenApprovals(db, location.id, window.end),
     ])
     return {
       ...base,
+      membershipSource,
       members,
       bookings7d,
       atRiskHigh,
@@ -249,6 +257,7 @@ async function assembleStudio(db, location, window) {
   } catch {
     return {
       ...base,
+      membershipSource,
       members: 0,
       bookings7d: 0,
       atRiskHigh: 0,
@@ -264,12 +273,12 @@ async function assembleStudio(db, location, window) {
  * resolveAccountScope — this only ever reads within the given org, so
  * it cannot leak another tenant's locations.
  *
- * @returns {Promise<Array<{id,name,slug,settings,organization_id}>>}
+ * @returns {Promise<Array<{id,name,slug,organization_id,membership_source,timezone}>>}
  */
 export async function fetchOrgLocations(db, orgId) {
   const { data } = await db
     .from('locations')
-    .select('id, name, slug, settings, organization_id')
+    .select('id, name, slug, organization_id, membership_source, timezone')
     .eq('organization_id', orgId)
     .eq('active', true)
     .order('name', { ascending: true })
@@ -282,15 +291,17 @@ export async function fetchOrgLocations(db, orgId) {
  * @param {object} db                       service-role Supabase client
  * @param {object} args
  * @param {{id:string,name:string,slug?:string}} args.organization
- * @param {Array<{id,name,slug,settings}>} args.locations  the org's studios
+ * @param {Array<{id,name,slug}>} args.locations  the org's studios
  * @param {Date|number} [args.now]          injectable clock (tests)
  * @returns {Promise<{organization, kpis, studios}>}
  */
 export async function assembleAccountHome(db, { organization, locations, now = Date.now() }) {
-  const window = dublinWeekWindow(now)
   const studios = await Promise.all(
-    (locations || []).map((loc) => assembleStudio(db, loc, window))
+    (locations || []).map((loc) => assembleStudio(db, loc, now))
   )
+  // The org-level label: the first studio's window (an organisation's
+  // studios normally share a zone; each studio counted its own).
+  const window = studioWeekWindow(now, zoneOfLocation((locations || [])[0]))
   const kpis = { ...aggregateOrgKpis(studios), weekWindow: window }
   return {
     organization: {

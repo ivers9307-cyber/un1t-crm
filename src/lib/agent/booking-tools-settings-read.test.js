@@ -127,3 +127,44 @@ describe('draft mode never needed credentials and is unchanged', () => {
     expectNoGlofoxCall()
   })
 })
+
+// W1.M3b — the no-credentials answer is source-aware: the seam's state for the
+// studio decides between "no booking system" (a fact) and "unavailable" (a
+// chosen system that cannot answer right now). A credentials READ error still
+// wins: it is always a blip.
+describe('noBookingSystemAnswer is source-aware (W1.M3b)', () => {
+  it('with source none the hand-off names no system', () => {
+    const a = noBookingSystemAnswer(NOT_CONFIGURED, { source: 'none', state: 'none' })
+    expect(a).toEqual({ error: 'no_booking_system', message: 'This studio has no class booking system connected — hand off to the team.' })
+    expect(a.message).not.toMatch(/Glofox/)
+  })
+  it('a chosen but unconfigured or unknown source is "unavailable", never "no system"', () => {
+    expect(noBookingSystemAnswer(NOT_CONFIGURED, { source: 'glofox', state: 'unconfigured', missing: ['API Key'] }).error).toBe('booking_system_unavailable')
+    expect(noBookingSystemAnswer(NOT_CONFIGURED, { source: 'glofox', state: 'unknown' }).error).toBe('booking_system_unavailable')
+  })
+  it('a credentials read error is unavailable whatever the state says', () => {
+    expect(noBookingSystemAnswer(UNREADABLE, { source: 'none', state: 'none' }).error).toBe('booking_system_unavailable')
+  })
+  it('no state (legacy caller) keeps the old word-for-word answers', () => {
+    expect(noBookingSystemAnswer(NOT_CONFIGURED).message).toBe('Class booking is not connected at this studio — hand off to the team.')
+  })
+})
+
+describe('the four booking tools read the studio\'s membership-source state on the no-credentials path (W1.M3b)', () => {
+  // The stub db answers every `locations` read with no row, which the seam
+  // reads as source none → the "no system" hand-off.
+  it.each(['list_upcoming_classes', 'list_my_upcoming_bookings', 'cancel_class_booking'])('%s names no system for a source-none studio', async (tool) => {
+    glofox.glofoxCredentialsForLocation.mockResolvedValue(NOT_CONFIGURED)
+    const input = tool === 'cancel_class_booking' ? { booking_id: BOOKING_ID, class_name: 'HIIT', class_time: 'Mon 7am' } : {}
+    const out = await executeBookingTool(tool, input, ctxFor('auto'))
+    expect(out).toEqual({ error: 'no_booking_system', message: 'This studio has no class booking system connected — hand off to the team.' })
+    expectNoGlofoxCall()
+  })
+  it('book_class names no system for a source-none studio', async () => {
+    glofox.glofoxCredentialsForLocation.mockResolvedValue(NOT_CONFIGURED)
+    const out = await executeBookingTool('book_class', { event_id: EVENT_ID, class_name: 'HIIT', class_time: 'Mon 7am' }, ctxFor('auto'))
+    expect(out.error).toBe('no_booking_system')
+    expect(out.message).toMatch(/no class booking system connected/)
+    expectNoGlofoxCall()
+  })
+})

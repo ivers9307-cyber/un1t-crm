@@ -1,7 +1,7 @@
 // src/lib/qualification-digest.js
 //
-// QUALS.1 — the weekly qualification digest to owners. An ARM of the daily
-// 08:00 UTC cron /api/cron/contract-reminders, with its own heartbeat row
+// QUALS.1 — the weekly qualification digest to owners. An ARM of the cron
+// /api/cron/contract-reminders, with its own heartbeat row
 // ('qualification-digest', mig 635; src/lib/cron-arm-health.js).
 //
 // WHO. Per organisation, each ACTIVE, non-tombstoned profile that is `owner`
@@ -13,12 +13,22 @@
 // another organisation's people.
 //
 // WHAT. Records of ACTIVE types that are expired, or expire within 30 days,
-// on the Dublin today (shared/qualifications.js digestRows). A missing record
+// on the organisation's today (shared/qualifications.js digestRows). TZ.8b:
+// an organisation's day is its studios' clock (locations.timezone; see
+// digestDaysByOrg), not Dublin's. A missing record
 // is not listed (it would nag forever); an archived type is not listed.
 //
-// WHEN. The cron runs daily. Each recipient gets at most one digest per
-// Dublin week per organisation, on the first run of the week with something
-// to say, normally Monday. A week with nothing due sends nothing.
+// WHEN. The arm runs on contract-reminders' hourly schedule and acts for an
+// organisation once a day, at its ANCHOR studio's daily slot,
+// DAILY_SLOTS['qualification-digest'] (src/lib/cron-daily-slot.js): 08:00 UTC
+// when the anchor is Europe/Dublin (the legacy instant, no catch-up), 08:00
+// local in any other zone. The anchor is the organisation's studio with the
+// lowest id (digestAnchorsByOrg), the same studio whose zone decides the
+// organisation's day (digestDaysByOrg), so the slot's local day IS the
+// digest's day. An organisation whose studios span zones therefore gets one
+// run a day, not one per studio. Each recipient gets at most one digest per
+// week (the organisation's week) per organisation, on the first run of the
+// week with something to say, normally Monday. A week with nothing due sends nothing.
 //
 // ONCE A WEEK, AND NEVER LOST (CLAUDE.md BAREWRITE (c)). notifyUsersOnce
 // CLAIMS (key, recipient) in push_event_sends BEFORE it sends, and that claim
@@ -41,8 +51,11 @@
 //
 // QUIET HOURS (src/lib/staff-push-hours.js): nothing is planned, so nothing is
 // claimed or stamped, unless the wall clock is inside [07:00, 22:00) at EVERY
-// studio the recipient's list covers. 08:00 UTC is inside it all year in
-// Dublin. Quiet hours gate the notice, never the state: a later run sends.
+// studio the recipient's list covers. The anchor's 08:00 is inside it at the
+// anchor (08:00/09:00 in Dublin). Quiet hours gate the notice, never the
+// state: a later run sends. (A recipient whose list covers studios more than
+// 14 hours apart is outside the band somewhere at the anchor's 08:00 every
+// day; that was as true on the old 08:00 UTC tick and is not changed here.)
 //
 // HOW. notifyUsersOnce with category 'qualification_expiry' (registered:
 // src/lib/qualification-expiry-registration.test.js): a push with the
@@ -54,7 +67,7 @@
 // failure is counted in `failed` and never costs another recipient theirs.
 
 import { notifyUsersOnce } from './push-dedup'
-import { dublinDayStr, addDaysISO } from './dublin-time'
+import { dayStrIn, addDaysISO, zoneOfLocation, DEFAULT_TZ } from './location-time'
 import { mondayOf } from './payroll'
 import { inStaffPushHours, resolveStaffTimeZone } from './staff-push-hours'
 import { isRosterableProfile } from './roster-write'
@@ -68,9 +81,9 @@ export const QUALIFICATION_DIGEST_TYPE = 'qualification_digest'
 
 const PAGE = 1000
 
-/** The WEEK key: stamped after a delivered send; one digest per recipient per org per Dublin week. */
+/** The WEEK key: stamped after a delivered send; one digest per recipient per org per (the org's) week. */
 export const digestEventKey = (organizationId, weekStart) => `qualification_digest:${organizationId}:${weekStart}`
-/** The ATTEMPT key notifyUsersOnce claims: fresh each Dublin day, so a dead attempt is retried tomorrow. */
+/** The ATTEMPT key notifyUsersOnce claims: fresh each (org) day, so a dead attempt is retried tomorrow. */
 export const digestAttemptKey = (organizationId, weekStart, todayISO) =>
   `${digestEventKey(organizationId, weekStart)}:d${todayISO}`
 
@@ -100,16 +113,50 @@ export function digestEmailHtml({ orgName = '', headline = '', rows = [] } = {})
 }
 
 /**
+ * TZ.8b — PURE. Each organisation's digest day at `nowMs`: the calendar day
+ * of its studios' zone. An organisation is one business, so one day; when its
+ * studios disagree on a zone, the studio with the lowest id decides
+ * (deterministic: the same answer every run and every instance). Every UN1T
+ * studio is Europe/Dublin, so this is dublinDayStr(nowMs) for UN1T.
+ * @param {Array<{ id: string, organization_id: string, timezone?: string|null }>} locations
+ * @param {number} nowMs
+ * @returns {Map<string, string>} organization id → 'YYYY-MM-DD'
+ */
+export function digestDaysByOrg(locations = [], nowMs = Date.now()) {
+  const out = new Map()
+  for (const [orgId, anchor] of digestAnchorsByOrg(locations)) out.set(orgId, dayStrIn(nowMs, zoneOfLocation(anchor)))
+  return out
+}
+
+/**
+ * PURE. Each organisation's ANCHOR studio: its studio with the lowest id. Its
+ * zone is the organisation's day (digestDaysByOrg) and its daily slot is when
+ * the organisation's digest runs (runQualificationDigest's isDue).
+ * @param {Array<{ id: string, organization_id: string }>} locations
+ * @returns {Map<string, object>} organization id → the anchor location row
+ */
+export function digestAnchorsByOrg(locations = []) {
+  const out = new Map()
+  const sorted = locations.filter((l) => l?.id && l.organization_id).sort((a, b) => a.id.localeCompare(b.id))
+  for (const l of sorted) {
+    if (!out.has(l.organization_id)) out.set(l.organization_id, l)
+  }
+  return out
+}
+
+/**
  * PURE. Who gets a digest this run, with what.
  * @returns {{ plans: Array<{ recipientId, organizationId, eventKey, attemptKey, rows, payload }>,
  *   recipients: number, nothing_due: number, quiet_hours: number, timezoneFallbackLocationIds: string[] }}
  */
 export function planQualificationDigests({
   locations = [], organizations = [], links = [], types = [], records = [], todayISO, nowMs,
-  windowDays = QUALIFICATION_EXPIRY_WINDOW_DAYS,
+  windowDays = QUALIFICATION_EXPIRY_WINDOW_DAYS, todayByOrg = null,
 } = {}) {
   const out = { plans: [], recipients: 0, nothing_due: 0, quiet_hours: 0, timezoneFallbackLocationIds: [] }
-  const weekStart = mondayOf(todayISO)
+  // TZ.8b — `todayByOrg` (digestDaysByOrg) gives each organisation its own
+  // day, and so its own week; `todayISO` serves any organisation it lacks.
+  const dayOf = (organizationId) => todayByOrg?.get(organizationId) ?? todayISO
   const locById = new Map(locations.filter((l) => l?.id && l.organization_id).map((l) => [l.id, l]))
   const orgNames = new Map(organizations.map((o) => [o.id, o.name]))
 
@@ -133,11 +180,13 @@ export function planQualificationDigests({
     out.recipients++
     const people = new Map()
     for (const locId of locIds) for (const [pid, name] of members.get(locId) || []) people.set(pid, name)
+    const orgToday = dayOf(organizationId)
+    const weekStart = mondayOf(orgToday)
     const rows = digestRows({
       people: [...people].map(([profile_id, full_name]) => ({ profile_id, full_name })),
       types: types.filter((t) => t.organization_id === organizationId),
       records: records.filter((r) => r.organization_id === organizationId),
-      todayISO,
+      todayISO: orgToday,
       windowDays,
     })
     if (rows.length === 0) {
@@ -165,7 +214,7 @@ export function planQualificationDigests({
       recipientId,
       organizationId,
       eventKey: digestEventKey(organizationId, weekStart),
-      attemptKey: digestAttemptKey(organizationId, weekStart, todayISO),
+      attemptKey: digestAttemptKey(organizationId, weekStart, orgToday),
       rows,
       payload: {
         title: 'Qualifications to renew',
@@ -226,26 +275,41 @@ function delivered(r) {
 
 /**
  * @param {object} db  service-role supabase client
- * @param {{ nowMs?: number }} [opts]
+ * @param {{ nowMs?: number, isDue?: (locationId: string) => boolean }} [opts]
+ *   isDue: is this studio at its daily slot this tick (the cron's claimed
+ *   slots)? Only organisations whose ANCHOR studio (digestAnchorsByOrg) is
+ *   due run; the others wait for their anchor's slot. Omitted: every
+ *   organisation (tests, a manual run).
  * @returns {Promise<{ organizations, recipients, rows, nothing_due, quiet_hours, sent, emailed, email_failed, deduped, failed, stamp_failed }>}
- *   throws when a read fails, before anything is sent
+ *   `organizations` counts the organisations that ran this tick.
+ *   Throws when a read fails, before anything is sent.
  */
-export async function runQualificationDigest(db, { nowMs = Date.now() } = {}) {
+export async function runQualificationDigest(db, { nowMs = Date.now(), isDue = null } = {}) {
   const outcome = {
     organizations: 0, recipients: 0, rows: 0, nothing_due: 0, quiet_hours: 0,
     sent: 0, emailed: 0, email_failed: 0, deduped: 0, failed: 0, stamp_failed: 0,
   }
-  const todayISO = dublinDayStr(nowMs)
-
-  const locations = await readOnce('locations', db
+  const allLocations = await readOnce('locations', db
     .from('locations')
     .select('id, name, organization_id, timezone')
     .eq('active', true)
     .eq('is_host_anchor', false))
+  // The organisations whose anchor studio is at its slot this tick: one run a
+  // day per organisation, however many zones its studios span.
+  const dueOrgs = new Set([...digestAnchorsByOrg(allLocations)]
+    .filter(([, anchor]) => !isDue || isDue(anchor.id))
+    .map(([orgId]) => orgId))
+  const locations = allLocations.filter((l) => dueOrgs.has(l.organization_id))
   const orgIds = [...new Set(locations.map((l) => l.organization_id).filter(Boolean))]
   outcome.organizations = orgIds.length
   if (orgIds.length === 0) return outcome
   const locIds = locations.map((l) => l.id)
+  // TZ.8b — each organisation's day is its studios' clock, computed per run
+  // from the rows just read (never one Dublin day for every organisation).
+  // The records read spans the latest of those days' windows; digestRows
+  // then judges each organisation on its own day.
+  const todayByOrg = digestDaysByOrg(locations, nowMs)
+  const todayISO = [...todayByOrg.values()].sort().at(-1) ?? dayStrIn(nowMs, DEFAULT_TZ)
 
   const [organizations, links, types, records] = await Promise.all([
     readOnce('organizations', db.from('organizations').select('id, name').in('id', orgIds)),
@@ -269,12 +333,12 @@ export async function runQualificationDigest(db, { nowMs = Date.now() } = {}) {
       .order('id', { ascending: true })),
   ])
 
-  const planned = planQualificationDigests({ locations, organizations, links, types, records, todayISO, nowMs })
+  const planned = planQualificationDigests({ locations, organizations, links, types, records, todayISO, nowMs, todayByOrg })
   outcome.recipients = planned.recipients
   outcome.nothing_due = planned.nothing_due
   outcome.quiet_hours = planned.quiet_hours
   if (planned.timezoneFallbackLocationIds.length) {
-    logWarn('qualification-digest', 'invalid timezone on a location: using Europe/Dublin for it', { locationIds: planned.timezoneFallbackLocationIds })
+    logWarn('qualification-digest', `invalid timezone on a location: using ${DEFAULT_TZ} for it`, { locationIds: planned.timezoneFallbackLocationIds })
   }
   if (planned.plans.length === 0) return outcome
 

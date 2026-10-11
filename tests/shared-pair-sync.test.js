@@ -12,11 +12,12 @@
 //   • src/lib/tiers.js grew three windowed-decay helpers (tierWindowMonths,
 //     shiftMonthKey, windowedMonthsHit) that shared/tiers.js never got, while
 //     BOTH files' line 1 still said "verbatim copy below line 1".
-//   • src/lib/goals.js and shared/goals.js disagree on the week/month
+//   • src/lib/goals.js and shared/goals.js disagreed on the week/month
 //     boundary (UTC vs Europe/Dublin) AND on periodEnd's arity — while
 //     src/lib/goals.js line 1 claimed a verbatim copy. Web reads
 //     `@/lib/goals`, mobile reads `shared/goals`, and they render the same
-//     member's weekly goal progress.
+//     member's weekly goal progress. (TZ.17 aligned the boundary; periodEnd
+//     still differs.)
 //   • src/lib/heart-rate.js and shared/heart-rate.js disagree on the
 //     zone LABELS ('Z1' vs 'Zone 1'), on resolveScoringConfig's return shape,
 //     and on summariseSession's internals.
@@ -189,6 +190,31 @@ const PAIRS = {
       'a gym literal; shared/ is the implementation, src/lib/brand-name.js is an `export * from` shim.',
   },
 
+  'zone-suffix.js': {
+    mode: 'reexport',
+    shared: 'shared/zone-suffix.js',
+    web: 'src/lib/record-time.js',
+    webOnly: ['formatRecordTime'],
+    why:
+      'TZ follow-up: the D3 = A "append the zone abbreviation only when the record zone is not the viewer\'s" rule ' +
+      '(needsZoneSuffix, zoneAbbreviation, zoneCity, sameZone, zoneSuffix) had two hand-written copies, the web\'s ' +
+      'src/lib/record-time.js (TZ.16) and the phone\'s mobile/lib/studio-zone.js (TZ.14). It lives once in shared/; ' +
+      'record-time.js re-exports it and keeps only its formatter (formatRecordTime), and studio-zone.js wraps it with ' +
+      'the device zone as the default viewer. Cross-named, so this entry is what makes the identity assertion run.',
+  },
+
+  'zoned-time.js': {
+    mode: 'reexport',
+    shared: 'shared/zoned-time.js',
+    web: 'src/lib/location-time.js',
+    webOnly: ['LOCATION_ZONE_CACHE_MAX', 'LocationZoneReadError', 'getLocationZone', 'getLocationZones', 'resetLocationZoneCache', 'zoneOfLocation'],
+    why:
+      'TZ.1 — THE per-location zone maths (dublin-time twins taking a zone, the SHELLY.1 wall-clock solver) lives ' +
+      'in shared/ so the phone and champ-app use the same code as the server; src/lib/location-time.js is an ' +
+      '`export * from` shim that adds the web-only DB side (a location\'s zone, bounded 60 s cache, LocationZoneReadError) and is cross-named, so ' +
+      'this entry is what makes the identity assertion run.',
+  },
+
   // ── identical: hand-maintained twins that really are twins ─────────────────
   'challenges.js': {
     mode: 'identical',
@@ -236,15 +262,15 @@ const PAIRS = {
   // ── diverged: NOT in sync, and the drift is pinned so it stays visible ─────
   'goals.js': {
     mode: 'diverged',
-    drifted: ['computeProgress', 'periodEnd', 'startOfIsoWeek', 'startOfMonth'],
+    drifted: ['periodEnd'],
     why:
-      'OPEN, deliberately not fixed here. src/lib/goals.js (PR #610) buckets weeks and months on UTC boundaries; ' +
-      'shared/goals.js (the champ-app copy landed by the Repset P1 drop) buckets them on Europe/Dublin boundaries, ' +
-      'and its periodEnd takes (period, periodStart) where the web one takes (periodStart). The web dashboard reads ' +
-      "@/lib/goals and the mobile member app reads shared/goals, so the SAME member's weekly goal progress can " +
-      'disagree around Dublin midnight on a Monday during IST — the exact hazard CLAUDE.md\'s timezone invariant ' +
-      'describes. src/lib/goals.js line 1 claimed a verbatim copy; that claim is corrected, but changing which ' +
-      'boundary the web uses moves a member-visible number and is its own decision, not a drive-by in a guard PR.',
+      'OPEN, periodEnd only. src/lib/goals.js (PR #610) and shared/goals.js (the champ-app copy landed by the ' +
+      'Repset P1 drop) used to bucket weeks and months differently (UTC on the web, Europe/Dublin on the phone), ' +
+      "so the SAME member's weekly goal progress could disagree around midnight on a Monday during IST. TZ.17 " +
+      "(⚠️, approved by Richard 11 Oct 2026) moved the web's startOfIsoWeek / startOfMonth / computeProgress onto " +
+      "the member's calendar (zone parameter, D7), byte-for-byte the shared bodies, so those three left `drifted`. " +
+      'What is left: periodEnd takes (period, periodStart) in shared and (periodStart) on the web (a stub nothing ' +
+      'in src/ calls). Re-syncing it is an API change for its callers, not a boundary fix.',
   },
   'heart-rate.js': {
     mode: 'diverged',
@@ -405,7 +431,7 @@ const COINCIDENTAL = {
   'shared/share-card.js::src/lib/challenges.js':
     '`shortName` twice — a display helper for a member name, independently written on both sides. Cosmetic, no contract.',
   'shared/dashboard-data.js::src/lib/goals.js':
-    '`startOfMonth` twice. goals.js is inside the guarded goals.js pair (mode `diverged`, and startOfMonth is one of the pinned drifted exports); dashboard-data has its own for a dashboard range.',
+    '`startOfMonth` twice. goals.js is inside the guarded goals.js pair (mode `diverged`; since TZ.17 its startOfMonth matches shared/goals.js and only periodEnd is pinned as drifted); dashboard-data has its own for a dashboard range.',
   'shared/live-view.js::src/lib/race-control.js':
     '`formatElapsed` twice, and they deliberately DISAGREE — recorded here so the disagreement is ' +
     'visible rather than latent. shared/race-control.js (which src/lib/race-control.js re-exports, ' +
@@ -422,6 +448,17 @@ const COINCIDENTAL = {
     '`isoDate` twice — a one-line YYYY-MM-DD formatter. Too small to be a contract.',
   'shared/dashboard-data.js::src/lib/schemas.js':
     '`isoDate` twice, the same one-line YYYY-MM-DD formatter as the dates.js collision above. schemas.js uses it for request validation, dashboard-data for a range label; no contract binds them.',
+  'shared/zoned-time.js::src/lib/tv-template.js':
+    '`resolveZone` twice, unrelated: tv-template (re-exporting shared/tv-template.js) merges a TV LAYOUT zone ' +
+    '(a screen region) with its pushed value; zoned-time resolves an IANA TIME zone name. Different meanings of "zone".',
+  'shared/zoned-time.js::src/lib/dublin-time.js':
+    '`addDaysISO` twice, a zone-free YYYY-MM-DD step that TZ.1 copies so shared/ (which cannot import src/lib) has it. ' +
+    'Not a coincidence but not a module pair either: dublin-time is the Dublin-only module the TZ wave retires (TZ.18b), ' +
+    'and shared/zoned-time.parity.test.js asserts the two agree on every day of 2025-2027.',
+  'shared/zoned-time.js::src/lib/tz-time.js':
+    '`DEFAULT_TZ` and `nextLocalMidnightMs` twice BY IDENTITY: tz-time is a renaming shim (`export { isValidZone as ' +
+    'isValidTz, … } from \'@shared/zoned-time\'`), so it cannot be a `reexport` pair (that mode requires every shared ' +
+    'name). The identity of every alias is asserted in the "tz-time is a renaming shim" block below.',
 }
 
 /** Every .js under a directory, recursively, excluding tests and fixtures. */
@@ -817,6 +854,23 @@ describe('the dark-canvas zone palette means the same thing on both surfaces', {
     for (const id of [0, 1, 2, 3, 4, 5, 6, '3', 'x', null, undefined]) {
       expect(w.zoneColorDark(id), `zoneColorDark(${String(id)})`).toBe(s.zoneColorDark(id))
     }
+  })
+})
+
+describe('tz-time is a renaming shim onto shared/zoned-time, not a copy (TZ.1)', { timeout: 120_000 }, () => {
+  it('every tz-time export but wallMsInTz is a shared/zoned-time binding', async () => {
+    const z = await import('../shared/zoned-time.js')
+    const t = await import('../src/lib/tz-time.js')
+    expect(t.DEFAULT_TZ).toBe(z.DEFAULT_TZ)
+    expect(t.isValidTz).toBe(z.isValidZone)
+    expect(t.resolveTz).toBe(z.resolveZone)
+    expect(t.dayStrInTz).toBe(z.strictDayStrIn)
+    expect(t.dayStartMsInTz).toBe(z.strictDayStartMsIn)
+    expect(t.nextLocalMidnightMs).toBe(z.nextLocalMidnightMs)
+    // wallMsInTz is the one wrapper (it keeps tz-time's HH:MM-only input); nothing else may appear.
+    expect(Object.keys(t).sort()).toEqual(
+      ['DEFAULT_TZ', 'dayStartMsInTz', 'dayStrInTz', 'isValidTz', 'nextLocalMidnightMs', 'resolveTz', 'wallMsInTz'],
+    )
   })
 })
 

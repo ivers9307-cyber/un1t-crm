@@ -21,12 +21,13 @@
 
 import { sendTextMessage, sendInteractiveOptions, sendTypingIndicator, sendCtaUrlMessage, splitTrailingUrl } from '@/lib/whatsapp'
 import { recordAgentDecision, compactDecisionMeta } from './decision-log'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { sendPushToRolesAtLocation, sendPushToInboxStaffAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { isWhatsAppStaffAuthored } from '@/lib/whatsapp-staff-sources'
 import { buildCachedSystem } from './prompt'
 import { getLocationBranding } from '@/lib/location-branding'
+import { resolveMembershipSource } from '@/lib/membership/source'
 import { DEFAULTS } from './settings-contract'
 import {
   shouldAgentReply,
@@ -465,15 +466,23 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   if (!conversationId || !locationId) return { handled: false, reason: 'missing_context' }
 
   const { data: loc } = await db.from('locations')
-    .select('name, settings')
+    .select('name, settings, timezone')
     .eq('id', locationId)
     .single()
   const settings = loc?.settings?.customer_agent || null
+  // TZ.5 — the studio's clock, from the row already in hand (no second read):
+  // quiet hours with no stored tz, "today" in the prompt, and every time or
+  // date the tools hand the model (toolCtx.zone). An invalid or NULL column is
+  // Europe/Dublin (zoneOfLocation warns once for an invalid one).
+  const zone = zoneOfLocation({ id: locationId, timezone: loc?.timezone })
   // Tripwire only — enabled+test_mode being live for everyone is the
   // documented invariant, not a bug. Logged once per process per location so
   // the half-configured state is greppable when an operator is surprised by it.
   warnLiveDespiteTestMode(locationId, settings)
   const branding = await getLocationBranding(db, locationId)
+  // W1.M3b — the base prompt names the studio's membership source (its app
+  // and payment page); a studio with none gets no app rules.
+  const membershipSource = await resolveMembershipSource(db, locationId)
 
   // Conversation state: kill switch + linked contact + verification.
   const nameCol = adapter.nameColumn
@@ -510,6 +519,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     senderPhone: recipient,
     lastOutboundHuman,
     now: new Date(),
+    zone,
   })
   // AGENT-REARM.1 — the cooldown released a handed-off thread: clear the
   // handoff stamp so the inbox queue and future turns agree the agent is
@@ -779,6 +789,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       locationName: loc?.name || null,
       agentName: settings?.agent_name || DEFAULTS.agent_name,
       membershipUrl: settings?.membership_signup_url || null,
+      membershipSource: { key: membershipSource.key, label: membershipSource.label },
       tone: settings?.tone || null,
       extraRules: settings?.extra_rules || null,
       knowledge: knowledge || [],
@@ -787,7 +798,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // location settings blob, NOT settings.customer_agent — the inbox
       // composer shares the same sets.
       cardSets: adapter.name === 'whatsapp' ? (loc?.settings?.wa_card_sets || []) : [],
-      today: dublinTodayStr(),
+      today: todayStrIn(zone),
       // Tell the model "already verified — don't re-ask" for a phone match OR a
       // still-fresh prior (quiz) verification, so a returning member isn't
       // re-quizzed inside the 30-day window. (Tools already honour the stored
@@ -817,6 +828,8 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // (handle changed hands) forces the customer to re-verify.
       verifiedContactId: resolvedVerifiedContactId,
       locationId,
+      // TZ.5 — the studio's zone: class labels and event "today" in the tools.
+      zone,
       channel: adapter.name,
       nameHint: (nameCol && conv?.[nameCol]) || null,
       // AGENT-HANDS.1 — booking tools read the autonomy mode +

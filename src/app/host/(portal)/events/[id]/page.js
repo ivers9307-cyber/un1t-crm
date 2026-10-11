@@ -14,6 +14,7 @@ import { createServerClient } from '@/lib/supabase'
 import { fetchEventAttendees } from '@/lib/attendee-export'
 import { loadMoveHistory } from '@/lib/registration-move-history'
 import { entryLabel } from '@/lib/registration-entry'
+import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import HostAttendeeTable from '@/components/host/HostAttendeeTable'
 import HostPromoCodes from '@/components/host/HostPromoCodes'
 import HostEventActions from '@/components/host/HostEventActions'
@@ -33,6 +34,7 @@ export default async function HostEventDetail(props) {
     .eq('id', params.id)
     .maybeSingle()
   if (!race || race.host_id !== session.host.id) notFound()
+  const brand = await resolveHostOrgBrand(db, session.host)
 
   const regs = await fetchEventAttendees(db, params.id)
   const { lastMoveByReg, movedOut } = await loadMoveHistory(db, { eventId: params.id, regIds: regs.map((r) => r.id) })
@@ -89,7 +91,7 @@ export default async function HostEventDetail(props) {
               Export CSV
             </a>
           )}
-          <HostEventActions eventId={race.id} status={race.status} hasRegistrations={regs.length > 0} />
+          <HostEventActions eventId={race.id} status={race.status} hasRegistrations={regs.length > 0} brandName={brand.name} />
         </div>
       </div>
 

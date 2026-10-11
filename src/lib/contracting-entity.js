@@ -30,6 +30,7 @@
 //      the gym's brand on a CCF Autos contract — the exact failure
 //      this helper exists to prevent. `organizations.name` IS
 //      populated for all three, so it goes ahead of the literal.
+//      W1.S1a removed that literal altogether (see below).
 //
 //   3. A countersignature label is part of the DOCUMENT, not page
 //      chrome, so it must be FROZEN, not resolved live on every
@@ -39,19 +40,18 @@
 //   org_settings.legal_entity_name (+ legal_trading_name)
 //     -> operator-configured brand (company_settings / org_settings)
 //     -> organizations.name
-//     -> DEFAULT_BRAND   (only reachable when even the org row is unreadable)
+//     -> ''   (only reachable when even the org row is unreadable)
+//
+// W1.S1a (SaaS Wave 1, the literal sweep) dropped the old last resort, a
+// fixed gym wordmark (the plan's appendix row contracting-entity.js:48,
+// "drop"). W1.B1 had already removed the brand resolver's own literal, so
+// that one only fired when the database was unreadable or absent, and in
+// that state it asserted ONE gym as the contracting party on every other
+// organisation's document: the precise failure this module exists to stop.
+// The floor is now the organisation's own name; past it the label is
+// honestly empty rather than wrong.
 
 import { getLocationBranding } from './location-branding.js'
-
-// This module's OWN last-resort label for the pure function, so a contract
-// surface never renders "For " with nothing after it. W1.B1 removed the
-// brand resolver's literal (DEFAULT_COMPANY_NAME): getLocationBranding now
-// ends in locations.name and reports '' when it cannot resolve at all, so
-// this literal no longer mirrors anything and is reached only when the db
-// is unreadable or absent. It is a Track S sweep row (W1.S1a — the plan's
-// appendix row for contracting-entity.js:48, "drop"), not a brand fallback:
-// the brand tier reads `companyNameConfigured` below.
-const DEFAULT_BRAND = 'UN1T'
 
 // The literal every contract issued BEFORE LEGALENT.1 was issued and
 // signed under. It is retired for new documents, but a document that
@@ -72,7 +72,8 @@ export const LEGACY_COUNTERSIGNATURE_ENTITY = 'UN1T Dublin Ltd'
  *                                               the brand resolver only had its
  *                                               own literal default to offer
  * @param {string|null} [opts.organizationName]  organizations.name
- * @returns {string} always a non-empty string
+ * @returns {string} '' only when nothing at all is known (W1.S1a: never a
+ *   fixed gym's name)
  */
 export function contractingEntityLabel({
   legalEntityName,
@@ -90,7 +91,7 @@ export function contractingEntityLabel({
     }
     return entity
   }
-  return brand || org || DEFAULT_BRAND
+  return brand || org || ''
 }
 
 /**
@@ -131,9 +132,10 @@ export function contractCountersignatureLabel(contract) {
  * Resolve the contracting entity for a NEW contract (issue time), a
  * contract email footer, or any other live surface.
  *
- * Never throws and never returns an empty label — a settings miss on a
- * contract surface must degrade to a weaker claim, not blank the party
- * name on a document someone is about to sign.
+ * Never throws. A settings miss on a contract surface degrades to a weaker
+ * claim (the configured brand, then the organisation's own name); the label
+ * is empty only when even the organisation row is unreadable, because past
+ * that point any name would be a guess about who is contracting (W1.S1a).
  *
  * @param {object|null} db a supabase-js client (service role)
  * @param {object} [opts]
@@ -148,7 +150,9 @@ export async function getContractingEntity(db, { organizationId = null, location
     resolvedBranding = await getLocationBranding(db, locationId)
   }
   const resolvedName = String(resolvedBranding?.companyName ?? '').trim()
-  const companyName = resolvedName || DEFAULT_BRAND
+  // W1.S1a — the wordmark is whatever the brand chain resolved; '' when it
+  // resolved nothing (no fixed gym name stands in).
+  const companyName = resolvedName
 
   // Only an OPERATOR-CONFIGURED brand may stand in for the entity. Since
   // W1.B1 getLocationBranding ends in the LOCATION'S NAME when nobody set

@@ -28,7 +28,7 @@ import { enqueueExportsForSession } from '@/lib/external-export'
 import { buildSessionPush, buildGoalPush, buildTargetHitPush, buildTierUpPush, periodKey } from '@/lib/customer-notifications'
 import { GOAL_DEFS, computeProgress, startOfMonth, startOfIsoWeek } from '@/lib/goals'
 import { tierForMonths, nextTier, tierWindowMonths, windowedMonthsHit } from '@/lib/tiers'
-import { dublinMonthStr } from '@/lib/dublin-time'
+import { getLocationZone, monthStrIn } from '@/lib/location-time'
 import { getLocationBranding } from '@/lib/location-branding'
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -600,13 +600,20 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
       .eq('is_active', true)
       .is('archived_at', null)
     if (goals && goals.length) {
+      // TZ.13 (D7) — the goal push's once-per-period key is on the member's
+      // calendar: the studio this session belongs to. An unreadable zone throws
+      // into the catch below (no celebration this session; the next one in the
+      // same period still celebrates), never a silent Dublin key.
+      const memberZone = await getLocationZone(db, session.location_id)
       // Lower bound must cover BOTH the current ISO week and the current
       // month: computeProgress filters weekly goals to the ISO-week start,
       // which can fall in the PREVIOUS month near a boundary. Fetch from
       // whichever anchor is earlier; computeProgress re-filters per goal.
+      // TZ.17 — both anchors and the per-goal sums are the member's calendar,
+      // the same one as the dedup key (they were UTC weeks and months).
       const goalRef = new Date(nowMs)
       const sinceIso = new Date(
-        Math.min(startOfIsoWeek(goalRef).getTime(), startOfMonth(goalRef).getTime())
+        Math.min(startOfIsoWeek(goalRef, memberZone).getTime(), startOfMonth(goalRef, memberZone).getTime())
       ).toISOString()
       const { data: gSessions, error: gErr } = await db
         .from('heart_rate_sessions')
@@ -618,12 +625,12 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
       for (const goal of goals) {
         const def = GOAL_DEFS[goal.kind]
         if (!def) continue
-        const { current } = computeProgress(goal, gSessions || [], new Date(nowMs))
+        const { current } = computeProgress(goal, gSessions || [], new Date(nowMs), memberZone)
         if (current < goal.target_value) continue
         await sendNudgeOnce(db, {
           contactId: session.contact_id,
           type: 'goal_complete',
-          dedupKey: `${goal.id}:${periodKey(def.period, nowMs)}`,
+          dedupKey: `${goal.id}:${periodKey(def.period, nowMs, memberZone)}`,
           payload: buildGoalPush({ goal, def }),
           module: 'live-class',
         })
@@ -641,8 +648,14 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
       .from('locations').select('settings').eq('id', session.location_id).maybeSingle()
     const target = Number(loc?.settings?.customer_agent?.monthly_points_target) || 0
     if (target > 0) {
-      const monthKey = periodKey('month', nowMs) // 'YYYY-MM'
-      const monthStartIso = startOfMonth(new Date(nowMs)).toISOString()
+      // TZ.13 (D7) — the banked month is the studio's calendar month. An
+      // unreadable zone throws into the catch below: no bank this session, the
+      // next session in the month banks it (the insert is idempotent).
+      const memberZone = await getLocationZone(db, session.location_id)
+      const monthKey = periodKey('month', nowMs, memberZone) // 'YYYY-MM'
+      // TZ.17 — the points summed are the banked month's (the member's calendar
+      // month, as monthKey); the sum started at the UTC month before.
+      const monthStartIso = startOfMonth(new Date(nowMs), memberZone).toISOString()
       const { data: monthSessions } = await db
         .from('heart_rate_sessions')
         .select('effort_points')
@@ -662,7 +675,7 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
         if (!bankErr && banked && banked.length) {
           // Tier decay (approved decision #4, default-off). When the operator
           // sets settings.scoring.tier_window_months = N, tier is derived from
-          // the DISTINCT months banked within the last N Dublin calendar months
+          // the DISTINCT months banked within the last N local calendar months
           // (inclusive of the current month) rather than the cumulative all-time
           // count. N absent/null → cumulative, so no member's tier changes until
           // an operator opts in. `newTier` reflects state after this bank;
@@ -674,7 +687,7 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
             .select('period_month')
             .eq('contact_id', session.contact_id)
           const bankedMonths = (banks || []).map((b) => b.period_month)
-          const nowMonth = dublinMonthStr(nowMs)
+          const nowMonth = monthStrIn(nowMs, memberZone)
           const monthsHit = windowedMonthsHit(bankedMonths, windowN, nowMonth)
           const priorMonths = bankedMonths.filter((p) => p !== monthKey)
           const priorHit = windowedMonthsHit(priorMonths, windowN, nowMonth)
@@ -693,7 +706,8 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
               module: 'live-class',
             })
           } else {
-            const monthLabel = MONTH_NAMES[new Date(nowMs).getUTCMonth()]
+            // TZ.17 — the banked month's name (it was the UTC month's).
+            const monthLabel = MONTH_NAMES[Number(monthKey.slice(5, 7)) - 1]
             await sendCustomerPush(
               db, session.contact_id,
               buildTargetHitPush({ monthLabel, monthsHit, next: nextTier(monthsHit) })

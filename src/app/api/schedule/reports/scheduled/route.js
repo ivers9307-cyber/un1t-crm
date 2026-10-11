@@ -10,6 +10,8 @@ import {
   adminOnlyReportRefusal, adminOnlyReportName,
 } from '@/lib/report-access'
 import { checkRateReportRecipientsForSave } from '@/lib/report-recipients'
+import { getLocationZone } from '@/lib/location-time'
+import { logError } from '@/lib/log'
 
 // STAFFCOST.1 — a schedule for a rate-bearing report (staff_cost) is owner/
 // manager/master only at its location: a head coach can neither create one,
@@ -30,6 +32,20 @@ import { checkRateReportRecipientsForSave } from '@/lib/report-recipients'
 //     confirmed_external_recipients (mig 617). A staff address without that
 //     role is refused outright; an unconfirmed external one answers 409 with
 //     the addresses to confirm, and nothing is saved.
+
+// TZ.11a — next_run_at is 07:00 on the schedule's STUDIO clock
+// (calculateNextRun). A failed zone read refuses the save rather than store a
+// run time computed on a guessed zone; nothing is written, so a retry is safe.
+const ZONE_UNREADABLE = "Could not read the studio's timezone. Try again."
+async function nextRunAt(db, locationId, frequency, dayOfWeek, dayOfMonth) {
+  try {
+    const zone = await getLocationZone(db, locationId)
+    return { nextRun: calculateNextRun(frequency, dayOfWeek, dayOfMonth, zone) }
+  } catch (err) {
+    logError('schedule-reports', 'locations.timezone unreadable; schedule not saved', { locationId, err })
+    return { response: NextResponse.json({ success: false, error: ZONE_UNREADABLE }, { status: 503 }) }
+  }
+}
 
 const ScheduledReportSchema = z.object({
   location_id: uuidLike.optional(),
@@ -206,8 +222,10 @@ export async function POST(request) {
     paused: false,
   }
 
-  // Calculate next_run_at using the shared helper
-  record.next_run_at = calculateNextRun(record.frequency, record.day_of_week, record.day_of_month)
+  // Calculate next_run_at using the shared helper, on the studio's clock
+  const next = await nextRunAt(db, locationId, record.frequency, record.day_of_week, record.day_of_month)
+  if (next.response) return next.response
+  record.next_run_at = next.nextRun
 
   const { data, error } = await db.from('scheduled_reports').insert(record).select().single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
@@ -295,7 +313,9 @@ export async function PATCH(request) {
   // A new timing, or a resume after next_run_at went by while paused, starts
   // from the next slot — never a catch-up run the moment it is resumed.
   if (touchesTiming || resuming) {
-    update.next_run_at = calculateNextRun(frequency, dayOfWeek, dayOfMonth)
+    const next = await nextRunAt(db, existing.location_id, frequency, dayOfWeek, dayOfMonth)
+    if (next.response) return next.response
+    update.next_run_at = next.nextRun
   }
 
   if (Object.keys(update).length === 0) {

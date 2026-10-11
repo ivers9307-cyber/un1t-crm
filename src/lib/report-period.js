@@ -16,7 +16,7 @@
 // PostgREST silently cuts at 1,000 rows.
 
 import { isRealCalendarDate } from '@/lib/schemas'
-import { addDaysISO } from '@/lib/dublin-time'
+import { addDaysISO } from '@shared/zoned-time'
 
 export const MAX_REPORT_DAYS = 366
 

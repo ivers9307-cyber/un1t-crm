@@ -42,6 +42,10 @@ function ctx({
   eventTypeName = 'RIDE',
   startedAt = '2026-05-08T18:00:00Z',
   endedAt = '2026-05-08T18:45:00Z',
+  // W1.S1a — what loadContextForSession resolves for a Stillorgan session:
+  // the SHORT brand for product names, the configured brand for the studio.
+  shortName = 'UN1T',
+  companyName = 'UN1T Stillorgan',
 } = {}) {
   return {
     ok: true,
@@ -73,6 +77,8 @@ function ctx({
     eventTypeName,
     contact: { id: 'c-1', name: contactName, email: 'sarah@test.com', hr_post_class_emails_enabled: true },
     unsubscribeToken,
+    shortName,
+    companyName,
   }
 }
 
@@ -117,7 +123,7 @@ describe('composeEmail', () => {
     expect(out.subject).toMatch(/peak HR/i)
   })
 
-  it('subject default: "Your <class> — N UN1T Points"', () => {
+  it('subject default: "Your <class>: N UN1T Points" (no em-dash, W1.S1a)', () => {
     // No highlight should fire — points 100, 10 prior RIDE sessions
     // also at 100 points and peak 180 (so this session's 175 doesn't
     // beat them), no streak (sessions every 3 days, not consecutive).
@@ -129,8 +135,41 @@ describe('composeEmail', () => {
       effort_points: 100, peak_hr_bpm: 180, avg_hr_bpm: 140, zones_seconds: { 5: 0 },
     }))
     const out = composeEmail(ctx({ history }), { nowMs: NOW })
-    expect(out.subject).toMatch(/RIDE/i)
-    expect(out.subject).toMatch(/100/)
+    expect(out.subject).toBe('Your RIDE: 100 UN1T Points')
+    expect(out.subject).not.toContain('—')
+  })
+
+  // W1.S1a — the email speaks in the session studio's brand: the eyebrow and
+  // the footer carry the configured brand ("UN1T Stillorgan"), the product
+  // names the SHORT brand ("UN1T Points" / "UN1T HR"), and another gym gets
+  // its own name in every one of those places.
+  it('W1.S1a: a Stillorgan session reads "UN1T Stillorgan" and "UN1T Points"', () => {
+    const out = composeEmail(ctx(), { nowMs: NOW })
+    expect(out.html).toMatch(/color:#888;">UN1T Stillorgan &middot; /)
+    expect(out.html).toContain('text-transform:uppercase;">UN1T Points</div>')
+    expect(out.html).toContain('monitor at UN1T Stillorgan. <a href')
+    expect(out.text).toContain(': 100 UN1T Points.')
+    // The copy this module writes carries no em-dashes (the highlight
+    // message itself comes from hr-analytics, the shared seam).
+    expect(out.subject).not.toContain('—')
+    expect(out.text).toContain('RIDE on Fri, 8 May, 19:00: 100 UN1T Points.')
+  })
+
+  it('W1.S1a: a second gym never reads UN1T anywhere in the email', () => {
+    const out = composeEmail(ctx({ shortName: 'Northside', companyName: 'Northside Strength' }), { nowMs: NOW })
+    for (const part of [out.subject, out.text, out.html]) expect(part).not.toContain('UN1T')
+    expect(out.html).toContain('Northside Strength &middot; ')
+    expect(out.html).toContain('>Northside Points</div>')
+    expect(out.html).toContain('monitor at Northside Strength.')
+    expect(composeEmail(ctx({ shortName: 'Northside', companyName: 'Northside Strength', history: [] }), { nowMs: NOW }).subject)
+      .toBe('Welcome to Northside HR, Sarah')
+  })
+
+  it('W1.S1a: with no brand resolved the copy degrades to bare nouns, never another gym', () => {
+    const out = composeEmail(ctx({ shortName: '', companyName: '' }), { nowMs: NOW })
+    for (const part of [out.subject, out.text, out.html]) expect(part).not.toContain('UN1T')
+    expect(out.html).toContain('>Points</div>')
+    expect(out.html).toContain('heart-rate\n      monitor. <a href')
   })
 
   it('HTML includes zone breakdown rows for each non-zero zone', () => {

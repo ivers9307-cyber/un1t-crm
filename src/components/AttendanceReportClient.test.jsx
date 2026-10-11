@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import AttendanceReportClient from './AttendanceReportClient'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn } from '@shared/zoned-time'
 import { defaultAttendancePeriod } from '@/lib/attendance-report'
 
 const ROW = {
@@ -49,7 +49,7 @@ describe('AttendanceReportClient (ATTENDREPORT.1)', () => {
       const url = new URL(fetchMock.mock.calls[0][0])
       expect({ from: url.searchParams.get('from'), to: url.searchParams.get('to') })
         .toEqual({ from: '2026-07-01', to: '2026-07-15' })
-      expect(defaultAttendancePeriod(dublinTodayStr())).toEqual({ from: '2026-07-01', to: '2026-07-15' })
+      expect(defaultAttendancePeriod(todayStrIn('Europe/Dublin'))).toEqual({ from: '2026-07-01', to: '2026-07-15' })
     } finally {
       vi.useRealTimers()
     }

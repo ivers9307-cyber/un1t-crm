@@ -5,7 +5,8 @@ import { getCurrentUser, getUserLocationIds, hasRoleAtLocation } from '@/lib/aut
 import { validateBody } from '@/lib/validate'
 import { timeOffStatusSchema, MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn } from '@/lib/location-time'
+import { studioZoneFor } from '@/lib/staff-zone'
 import {
   canDecideTimeOff, decidingLocationIds, getProfileLocationIds, getEmploymentType, ensureHolidayAllowanceRow, findLeaveClashes,
   getOrgAdminLocationIdsByProfile,
@@ -14,7 +15,7 @@ import { isExpiredPendingRequest, isTimeOffTypeAllowedFor, timeOffLeaveLabel, CO
 import {
   selfCancelMode, isOpenCancelAsk, leaveActingLocationIds, resolveLeaveCancelDeciderIds,
   cancelAskNoticeKey, reAskBlockedUntil, leaveRangeText, CLEARED_CANCEL_ASK,
-  isMissingCancelSchemaError, dublinRetryLabel,
+  isMissingCancelSchemaError, retryLabelIn,
   requesterLeaveTier, approvedLeaveGuardAllows, approvedLeaveRefusal,
 } from '@/lib/time-off-cancel'
 import { logError } from '@/lib/log'
@@ -117,7 +118,17 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: 'You can only cancel your own requests' }, { status: 403 })
   }
 
-  const today = dublinTodayStr()
+  // TZ.8b — "today" (ended, expired, an open ask) is the request's studio's
+  // day (locations.timezone), not Dublin's. An unreadable zone decides
+  // nothing: a 500, as for every other failed read here.
+  let zone
+  try {
+    zone = await studioZoneFor(db, user, existing.location_id)
+  } catch (err) {
+    logError('time-off', 'studio timezone unreadable; leave decision refused', { requestId: existing.id, err })
+    return NextResponse.json({ success: false, error: 'Could not read the studio\'s timezone. Try again.' }, { status: 500 })
+  }
+  const today = todayStrIn(zone)
 
   // LEAVECANCEL.1 — the owner's rule: a manager cancelling their OWN APPROVED
   // leave needs an owner's approval. So this PUT does not cancel it: it
@@ -133,7 +144,7 @@ export async function PUT(request, props) {
       }, { status: 409 })
     }
     if (mode === 'ask') {
-      return requestOwnLeaveCancel(db, user, existing, { today, requesterLocations, note: body.cancel_request_note })
+      return requestOwnLeaveCancel(db, user, existing, { today, zone, requesterLocations, note: body.cancel_request_note })
     }
   }
 
@@ -321,7 +332,7 @@ export async function PUT(request, props) {
 
 // LEAVECANCEL.1 — record "please cancel my approved leave" and tell whoever
 // can decide it. Nothing here touches `status`.
-async function requestOwnLeaveCancel(db, user, existing, { today, requesterLocations, note }) {
+async function requestOwnLeaveCancel(db, user, existing, { today, zone, requesterLocations, note }) {
   // Asking twice is one ask: nothing written, nobody told again. Answered in
   // the same shape as the first time (the row WITH its people).
   if (isOpenCancelAsk(existing, today)) {
@@ -337,7 +348,7 @@ async function requestOwnLeaveCancel(db, user, existing, { today, requesterLocat
   if (blockedUntil) {
     return NextResponse.json({
       success: false,
-      error: `An owner declined this less than a day ago. You can ask again after ${dublinRetryLabel(blockedUntil) || '24 hours'}, or speak to them directly.`,
+      error: `An owner declined this less than a day ago. You can ask again after ${retryLabelIn(blockedUntil, zone) || '24 hours'}, or speak to them directly.`,
       retry_after: blockedUntil,
     }, { status: 409 })
   }

@@ -12,12 +12,14 @@ vi.mock('@/lib/rate-limit', async (importOriginal) => ({
 }))
 vi.mock('@/lib/registration-move', async (importOriginal) => ({ ...(await importOriginal()), countEntryCheckins: vi.fn() }))
 vi.mock('@/lib/race-payments', () => ({ refreshRacePaymentFromProvider: vi.fn(async (_db, row) => row) }))
-vi.mock('@/lib/dublin-time', async (importOriginal) => ({ ...(await importOriginal()), dublinTodayStr: () => '2026-10-09' }))
+// TZ.9: "today" is the event studio's day at the (fake) clock, 2026-10-09 in
+// Dublin as the old dublinTodayStr mock pinned (see beforeEach).
 
 const { checkRateLimit } = await import('@/lib/rate-limit')
 const { countEntryCheckins } = await import('@/lib/registration-move')
 const { refreshRacePaymentFromProvider } = await import('@/lib/race-payments')
 const { signEntryManageToken } = await import('@/lib/entry-manage-tokens')
+const { resetLocationZoneCache } = await import('@/lib/location-time')
 const { GET } = await import('./route.js')
 
 const SECRET = 'svc-key'
@@ -32,7 +34,7 @@ const ENTRY = {
   ] },
 }
 
-function fakeDb({ entry = { data: ENTRY, error: null }, pending = { data: [], error: null } } = {}) {
+function fakeDb({ entry = { data: ENTRY, error: null }, pending = { data: [], error: null }, zoneRow = { data: null, error: null } } = {}) {
   const queries = []
   return {
     queries,
@@ -41,7 +43,7 @@ function fakeDb({ entry = { data: ENTRY, error: null }, pending = { data: [], er
       queries.push(q)
       const b = {}
       for (const n of ['select', 'eq', 'is', 'order', 'limit']) b[n] = (...a) => { q.ops.push([n, ...a]); return b }
-      const answer = () => (table === 'race_registrations' ? entry : table === 'race_payments' ? pending : { data: null, error: null })
+      const answer = () => (table === 'race_registrations' ? entry : table === 'race_payments' ? pending : table === 'locations' ? zoneRow : { data: null, error: null })
       b.maybeSingle = async () => answer()
       b.then = (res, rej) => Promise.resolve(answer()).then(res, rej)
       return b
@@ -53,12 +55,14 @@ const props = (token = signEntryManageToken({ registrationId: R1 }, SECRET)) => 
 const get = () => new Request('http://localhost/api/public/entry/x', { headers: { 'x-forwarded-for': '1.2.3.4' } })
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-10-09T12:00:00Z'))
   vi.clearAllMocks()
   vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', SECRET)
   globalThis.__db = fakeDb()
   countEntryCheckins.mockResolvedValue({ count: 0, error: null })
 })
-afterEach(() => { vi.unstubAllEnvs() })
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); resetLocationZoneCache() })
 
 describe('GET /api/public/entry/[token]', () => {
   it('a bad or expired token is a 404 with no read', async () => {
@@ -110,6 +114,25 @@ describe('GET /api/public/entry/[token]', () => {
     const { data } = await (await GET(get(), props())).json()
     expect(data.can_move).toBe(false)
     expect(data.move_blocked_reason).toMatch(/try again/i)
+  })
+  it('TZ.9: "already happened" is by the event studio\'s day; an unreadable zone hides the move', async () => {
+    // 2026-11-01T03:30Z: Dublin is Sunday 1 Nov; New York is Saturday 31 Oct 23:30.
+    vi.setSystemTime(new Date('2026-11-01T03:30:00Z'))
+    const entry = { data: { ...ENTRY, race: { ...ENTRY.race, race_date: '2026-10-31' } }, error: null }
+    globalThis.__db = fakeDb({ entry, zoneRow: { data: { id: 'L1', timezone: 'America/New_York' }, error: null } })
+    expect((await (await GET(get(), props())).json()).data.can_move).toBe(true)
+    // The page payload never carries the zone.
+    expect(JSON.stringify((await (await GET(get(), props())).json()).data.race)).not.toMatch(/timezone/)
+    resetLocationZoneCache()
+    globalThis.__db = fakeDb({ entry, zoneRow: { data: { id: 'L1', timezone: 'Europe/Dublin' }, error: null } })
+    const dub = (await (await GET(get(), props())).json()).data
+    expect(dub.can_move).toBe(false)
+    expect(dub.move_blocked_reason).toMatch(/already happened/)
+    resetLocationZoneCache()
+    globalThis.__db = fakeDb({ entry, zoneRow: { data: null, error: { message: 'down' } } })
+    const down = (await (await GET(get(), props())).json()).data
+    expect(down.can_move).toBe(false)
+    expect(down.move_blocked_reason).toMatch(/try again/i)
   })
   it('refreshes a pending date-change payment first (the checkout returns here before the webhook)', async () => {
     const pendingRow = { id: 'gp1', kind: 'move_gap', status: 'pending', payment_provider: 'stripe_connect', payment_provider_ref: 'cs_1',

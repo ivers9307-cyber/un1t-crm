@@ -79,6 +79,15 @@ describe('Save', () => {
     await screen.findByText(/^Saved /)
   })
 
+  it('saves the From address as from_email (W1.S2: the input is kept)', async () => {
+    renderEditor({ from_email: 'old@example-gym.ie' })
+    fireEvent.click(screen.getByRole('button', { name: /settings/i }))
+    fireEvent.change(await screen.findByLabelText('From address'), { target: { value: 'news@example-gym.ie' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+    await waitFor(() => expect(writes()).toHaveLength(1))
+    expect(writes()[0].body.from_email).toBe('news@example-gym.ie')
+  })
+
   it('POSTs a new campaign with its studio, and adopts the id the route returns', async () => {
     const replace = vi.spyOn(window.history, 'replaceState')
     answer = () => ({ status: 200, body: { success: true, data: { id: 'new-id', status: 'draft', location_id: 'loc-1' } } })

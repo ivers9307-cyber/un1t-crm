@@ -26,7 +26,7 @@ import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { readRegistrationForMove } from '@/lib/registration-move'
 import { createGapPayment } from '@/lib/race-gap-payment'
 import { sendGapLinkEmail } from '@/lib/race-confirmations'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -99,14 +99,15 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'already_settled', message: `This difference was already marked ${how} by ${who}.` }, { status: 409 })
   }
 
-  const appUrl = getAppUrl()
+  // W1.L3b — the customer pays and returns on the EVENT LOCATION's tenant host.
+  const baseUrl = await resolveCustomerBaseUrl(db, locationId)
   const created = await createGapPayment({
     db,
     move,
     registration,
     race,
-    returnUrl: `${appUrl}/event/${race.slug}/confirmed?registration=${registration.id}`,
-    cancelUrl: `${appUrl}/event/${race.slug}`,
+    returnUrl: `${baseUrl}/event/${race.slug}/confirmed?registration=${registration.id}`,
+    cancelUrl: `${baseUrl}/event/${race.slug}`,
   })
   if (!created.ok) {
     const [status, message] = REFUSALS[created.error] || [500, 'The link could not be created. Try again.']

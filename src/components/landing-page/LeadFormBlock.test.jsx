@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { LeadFormBlock, HeroBlock, SiteHeader } from './BlockRenderers.jsx'
+import { LeadFormBlock, HeroBlock, SiteHeader, SiteFooter, PillarsBlock } from './BlockRenderers.jsx'
 
 // Node environment, no jsdom — render to static markup. WaitlistWidget
 // is safe to render this way: it uses useState only, with no effects
@@ -85,7 +85,9 @@ describe('LeadFormBlock offer branch (HATCH-OFFER.1)', () => {
   // Regenerate deliberately, never reflexively:  UPDATE_GOLDEN=1 npx vitest run src/components/landing-page/LeadFormBlock.test.jsx
   // A diff here means the public marketing page changed for every studio.
   it('matches the committed golden HTML for the no-offer render', () => {
-    const html = renderToStaticMarkup(<LeadFormBlock block={base} publicPath="hatch-street" />)
+    // W1.S1b — UN1T's wordmark arrives as a prop (org_settings.short_name)
+    // now; with it the render is byte-identical to before the sweep.
+    const html = renderToStaticMarkup(<LeadFormBlock block={base} publicPath="hatch-street" wordmark="UN1T" />)
     const goldenPath = new URL('./__fixtures__/lead-form-no-offer.html', import.meta.url)
     if (process.env.UPDATE_GOLDEN) {
       mkdirSync(dirname(fileURLToPath(goldenPath)), { recursive: true })
@@ -173,5 +175,61 @@ describe('SiteHeader mobile fit (HEADER-FIT.1)', () => {
     const html = header()
     expect(html).toContain('Claim 3 free classes')
     expect(html).toContain('/stillorgan/events')
+  })
+})
+
+// W1.S1b — the landing chrome names the page's own brand, never a literal.
+describe('landing chrome carries the tenant brand (W1.S1b)', () => {
+  it('SiteFooter names the org, lists ITS studios and its legal holder', () => {
+    const html = renderToStaticMarkup(
+      <SiteFooter
+        brand="Gym A"
+        legalName="Gym A Trading Ltd"
+        studios={[{ name: 'Gym A North', href: '/welcome/north' }, { name: 'Gym A South', href: '/welcome/south' }]}
+      />
+    )
+    expect(html).toContain('Gym A</div>')
+    expect(html).toContain('href="/welcome/north"')
+    expect(html).toContain('Gym A South')
+    expect(html).toContain('Gym A Trading Ltd. All rights reserved.')
+    expect(html).not.toMatch(/UN1T|Stillorgan|Hatch|\/welcome\/stillorgan|\/welcome\/hatch-street/)
+  })
+
+  it('SiteFooter with no chrome names nobody (no studios column, no holder)', () => {
+    const html = renderToStaticMarkup(<SiteFooter />)
+    expect(html).not.toMatch(/UN1T|Stillorgan|Hatch/)
+    expect(html).not.toContain('Studios')
+    expect(html).toMatch(/© \d{4}\. All rights reserved\./)
+  })
+
+  it('UN1T Group\'s chrome renders the footer UN1T always had', () => {
+    const html = renderToStaticMarkup(
+      <SiteFooter
+        brand="UN1T Dublin"
+        legalName="UN1T Dublin"
+        studios={[{ name: 'UN1T Stillorgan', href: '/welcome/stillorgan' }, { name: 'UN1T Hatch Street', href: '/welcome/hatch-street' }]}
+      />
+    )
+    expect(html).toContain('uppercase mb-4">UN1T Dublin</div>')
+    expect(html).toContain('href="/welcome/stillorgan"')
+    expect(html).toContain('href="/welcome/hatch-street"')
+    expect(html).toContain('UN1T Dublin. All rights reserved.')
+  })
+
+  it('the watermark, the header fallback and "Why …" follow the wordmark prop', () => {
+    expect(renderToStaticMarkup(<LeadFormBlock block={base} publicPath="x" wordmark="GA" />)).toContain('text-[13rem]">GA</span>')
+    expect(renderToStaticMarkup(<LeadFormBlock block={base} publicPath="x" />)).not.toMatch(/UN1T/)
+    expect(renderToStaticMarkup(<SiteHeader wordmark="GA" />)).toContain('tracking-widest text-white">GA</div>')
+    expect(renderToStaticMarkup(<SiteHeader />)).not.toMatch(/UN1T/)
+    const pillars = { id: 'p', type: 'pillars', items: [{ title: 'Coaching', body: 'b' }] }
+    expect(renderToStaticMarkup(<PillarsBlock block={pillars} wordmark="GA" />)).toContain('Why GA')
+    expect(renderToStaticMarkup(<PillarsBlock block={pillars} />)).toContain('Why us')
+  })
+
+  it('a lead form with no consent label names the page\'s studio', () => {
+    const { consent_label: _c, ...noConsent } = base
+    const html = renderToStaticMarkup(<LeadFormBlock block={noConsent} publicPath="x" locationName="Gym A North" />)
+    expect(html).toContain('hear from Gym A North about the launch')
+    expect(html).not.toMatch(/UN1T|Hatch Street/)
   })
 })

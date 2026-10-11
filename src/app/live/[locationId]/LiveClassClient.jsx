@@ -10,6 +10,7 @@ import Link from 'next/link'
 import { Heart, RefreshCw, Plug, Square, Users, Tv } from 'lucide-react'
 import { zoneForBpm } from '@/lib/heart-rate'
 import { nextPollDelay, ACTIVE_POLL_MS } from '@/lib/live-poll'
+import { DEFAULT_TZ } from '@shared/zoned-time'
 import DetectedTab from './DetectedTab'
 
 // Poll cadence (active few-seconds vs idle back-off) lives in @/lib/live-poll.
@@ -21,7 +22,10 @@ const STALE_MS = 2 * 60 * 1000  // strap silent for 2min → "stale"
 //
 // LIVE-TVBTN.1 — `tvToken` (from the page: this location's oldest active
 // tv_displays token, or null) backs the "TV display" link. Null → no link.
-export default function LiveClassClient({ locationId, locationName, canMutate = false, tvToken = null }) {
+//
+// TZ.12 — `timeZone` (from the page: the location's IANA zone) is the studio
+// clock for the overnight poll back-off and the Detected tab's times.
+export default function LiveClassClient({ locationId, locationName, canMutate = false, tvToken = null, timeZone = DEFAULT_TZ }) {
   const [data, setData] = useState({ sessions: [], available_straps: [], roster: [], occurrence: null })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -62,12 +66,12 @@ export default function LiveClassClient({ locationId, locationName, canMutate = 
     async function loop() {
       const json = await poll()
       if (cancelled) return
-      handle = setTimeout(loop, json ? nextPollDelay(json) : ACTIVE_POLL_MS)
+      handle = setTimeout(loop, json ? nextPollDelay(json, new Date(), timeZone) : ACTIVE_POLL_MS)
     }
     loop()
     return () => { cancelled = true; clearTimeout(handle) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationId])
+  }, [locationId, timeZone])
 
   async function endAll() {
     if (!confirm(`End all ${data.sessions.length} active sessions?`)) return
@@ -179,7 +183,7 @@ export default function LiveClassClient({ locationId, locationName, canMutate = 
       </div>
 
       {tab === 'detected' ? (
-        <DetectedTab locationId={locationId} canClaim={canMutate} />
+        <DetectedTab locationId={locationId} canClaim={canMutate} timeZone={timeZone} />
       ) : loading && data.sessions.length === 0 ? (
         <p className="mt-10 text-center text-sm text-un1t-subtle">Loading live class…</p>
       ) : (

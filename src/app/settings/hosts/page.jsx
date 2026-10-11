@@ -17,6 +17,7 @@ import { redirect } from 'next/navigation'
 import { Store } from 'lucide-react'
 import HostsManager from '@/components/settings/HostsManager'
 import HostEventReviewQueue from '@/components/settings/HostEventReviewQueue'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,7 +37,7 @@ export default async function HostsSettingsPage() {
         </h2>
         <p className="text-sm text-un1t-subtle mt-1">
           Third-party organisers who get paid directly for their events. Connect a host to Stripe so
-          their tickets settle to their own account, with UN1T&rsquo;s booking fee kept per ticket.
+          their tickets settle to their own account, with {PLATFORM_NAME}&rsquo;s booking fee kept per ticket.
         </p>
       </div>
 

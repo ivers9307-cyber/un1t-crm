@@ -10,12 +10,13 @@
 // The link is a bearer credential (it signs the host in): it goes into the
 // email body and nowhere else. Never log it, never put it in metadata.
 //
-// Brand: the operator's organisation (getOrgCustomerBranding), floored on
-// PLATFORM_NAME, so a tenant's hosts never see another brand's name.
+// Brand (W1.S1c, as host-onboarding-email.js): the host's ORGANISATION via
+// resolveHostOrgBrand, its brand name in the sentences and subject and its
+// short name as the header wordmark, floored on PLATFORM_NAME.
 
 import { sendEmail } from './postmark'
 import { PLATFORM_NAME } from './brand-name'
-import { getOrgCustomerBranding } from './location-branding'
+import { resolveHostOrgBrand } from './host-org-brand'
 
 const escapeHtml = (s) => String(s || '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
@@ -24,18 +25,19 @@ const escapeHtml = (s) => String(s || '').replace(/[&<>"']/g, (c) => (
 /**
  * Pure HTML builder, exported so tests can lock the link + escaping without
  * sending anything.
- * @param {{ brandName?: string, url: string }} args
+ * @param {{ url: string, brand?: { name?: string, shortName?: string }|null }} args
  * @returns {string}
  */
-export function renderHostPortalAccessEmail({ brandName, url }) {
-  const brand = escapeHtml(brandName || PLATFORM_NAME)
+export function renderHostPortalAccessEmail({ url, brand: orgBrand = null }) {
+  const brand = escapeHtml(orgBrand?.name || orgBrand?.shortName || PLATFORM_NAME)
+  const wordmark = escapeHtml(orgBrand?.shortName || orgBrand?.name || PLATFORM_NAME)
   const safeUrl = escapeHtml(url)
   return `<!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111827;">
   <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
     <div style="background:#111827;padding:24px;text-align:center;">
-      <span style="color:#ffffff;font-weight:700;letter-spacing:2px;font-size:18px;">${brand}</span>
+      <span style="color:#ffffff;font-weight:700;letter-spacing:2px;font-size:18px;">${wordmark}</span>
     </div>
     <div style="padding:28px;">
       <p style="margin:0 0 12px;">Hi there,</p>
@@ -50,22 +52,25 @@ export function renderHostPortalAccessEmail({ brandName, url }) {
 </html>`
 }
 
+/** Pure. The subject line, for the host's organisation brand. */
+export function hostPortalAccessSubject(brand = null) {
+  return `Set your password for the ${brand?.name || brand?.shortName || PLATFORM_NAME} host portal`
+}
+
 /**
  * Brand + send the host-portal set-password email. Caller has already minted
  * `url` (the Supabase action link). Throws on a Postmark rejection (sendEmail's
  * contract), so the caller can refuse to report success.
- * @param {{ db: object, orgId: string, hostId: string, to: string, url: string }} args
+ * @param {{ db: object, host: { id: string, organization_id?: string }, to: string, url: string }} args
  */
-export async function sendHostPortalAccessEmail({ db, orgId, hostId, to, url }) {
-  const { companyName } = await getOrgCustomerBranding(db, orgId)
-  const brandName = (companyName || '').trim() || PLATFORM_NAME
+export async function sendHostPortalAccessEmail({ db, host, to, url }) {
+  const brand = await resolveHostOrgBrand(db, host)
   return sendEmail({
     to,
-    subject: `Set your password for the ${brandName} host portal`,
-    htmlBody: renderHostPortalAccessEmail({ brandName, url }),
-    fromName: brandName,
+    subject: hostPortalAccessSubject(brand),
+    htmlBody: renderHostPortalAccessEmail({ url, brand }),
     stream: 'outbound', // transactional, not broadcast
     tag: 'host-portal-access',
-    metadata: { host_id: hostId },
+    metadata: { host_id: host.id },
   })
 }

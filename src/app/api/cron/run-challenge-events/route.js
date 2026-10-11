@@ -1,4 +1,8 @@
-// Vercel cron — daily 08:00 UTC. Announces challenge start / end-winner /
+// Vercel cron — hourly since TZ.6; each challenge's studio acts at its daily
+// slot: 08:00 UTC for a Europe/Dublin studio (as before), 08:00 local for any
+// other zone, at most once per local day (src/lib/cron-daily-slot.js). "Today"
+// is the studio's day (for Dublin at 08:00 UTC, the UTC day it always used).
+// Announces challenge start / end-winner /
 // collective-target via push to app-linked members at the location. Idempotent
 // via the challenges.announced_* columns. Mirrors notify-streak-at-risk.
 //
@@ -14,25 +18,31 @@
 // TARGET is re-tried by the next daily run (its predicate still matches); a
 // released START is re-tried only by a same-day re-run, because START fires
 // on `starts_on === today` (widening that is a customer-facing change: see
-// the plan's open question).
+// the plan's open question). Since TZ.6 a same-day re-run of a studio whose
+// daily slot was already claimed does nothing (cron_daily_slot_claims); an
+// operator forcing one deletes that day's claim row first.
 //
 // The END retry is BOUNDED: `ends_on < today` stays true for ever, so a
 // persistent push failure used to be re-tried daily and could reach members
 // weeks after the challenge ended. END goes out only while ends_on is within
-// END_ANNOUNCE_RETRY_DAYS of today (Europe/Dublin dates); past that it is
+// END_ANNOUNCE_RETRY_DAYS of today (the studio's dates); past that it is
 // stamped WITHOUT a send and said with a logError (mirrors 1a's bounded
-// retries). Nothing is sent without a claim either way.
+// retries). Nothing is sent without a claim either way. The window is counted
+// in the challenge studio's own days (TZ.6).
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { sendCustomerPush } from '@/lib/customer-push'
 import { pushOutcome } from '@/lib/push-outcome'
 import { computeStandings, computeCollective } from '@/lib/challenges-io'
 import { windowIso } from '@/lib/challenges'
+import { getLocationZone } from '@/lib/location-time'
 import { buildChallengeStartPush, buildChallengeResultPush, buildCollectiveTargetPush } from '@/lib/challenge-notifications'
+import { getLocationBranding } from '@/lib/location-branding'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { selectAll } from '@/lib/select-all'
-import { dublinDayStr, dublinAddDays } from '@/lib/dublin-time'
+import { addDaysIn } from '@/lib/location-time'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,7 +50,7 @@ export const maxDuration = 300
 
 const MODULE = 'cron-challenge-events'
 
-/** A released END announcement is retried while ends_on >= (Dublin today - this); later it is given up. */
+/** A released END announcement is retried while ends_on >= (the studio's today - this); later it is given up. */
 export const END_ANNOUNCE_RETRY_DAYS = 2
 
 /**
@@ -136,8 +146,16 @@ export async function GET(request) {
   const db = createServerClient()
   const nowMs = Date.now()
   const stamp = new Date(nowMs).toISOString()
-  const today = stamp.slice(0, 10)
-  const endRetryFloor = dublinAddDays(dublinDayStr(nowMs), -END_ANNOUNCE_RETRY_DAYS)
+
+  // TZ.6 — which studios are at their daily slot this tick (claimed, so never
+  // twice in one local day). An unreadable zone acts for nobody.
+  const gate = await gateDailySlot(db, 'run-challenge-events', { nowMs, module: MODULE })
+  if (!gate.ok) return NextResponse.json({ ok: false, slot: gate.summary }, { status: 500 })
+  if (gate.slots.size === 0) {
+    // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ ok: !gate.faulted, slot: gate.summary, started: 0, ended: 0, targets: 0, failed: 0, gave_up: 0 }, { status: gate.faulted ? 500 : 200 })
+  }
 
   // Only challenges that still need an event: start or end not yet announced.
   // (Active-collective target checks need end-null, so they're covered.)
@@ -156,7 +174,22 @@ export async function GET(request) {
     if (ANNOUNCED.has(outcome)) bump()
     else if (FAILED.has(outcome)) failed++
   }
+  // W1.S1a — a points challenge names the studio's own product ("UN1T
+  // Points"). One lookup per location per tick, only when a collective push
+  // is built; the resolver never throws ('' = bare "Points").
+  const shortNames = new Map()
+  const shortNameFor = async (locationId) => {
+    if (!locationId) return ''
+    if (!shortNames.has(locationId)) shortNames.set(locationId, (await getLocationBranding(db, locationId)).shortName || '')
+    return shortNames.get(locationId)
+  }
   for (const ch of challenges || []) {
+    // TZ.6 — only a challenge whose studio is at its slot this tick; its "today"
+    // and END retry floor are that studio's calendar.
+    const slot = slotFor(gate.slots, ch.location_id)
+    if (!slot) continue
+    const today = slot.day
+    const endRetryFloor = addDaysIn(today, -END_ANNOUNCE_RETRY_DAYS, slot.zone)
     try {
       // START
       if (ch.starts_on === today && !ch.announced_start_at) {
@@ -169,11 +202,13 @@ export async function GET(request) {
         if (outcome === 'gave_up') gaveUp++
         else if (FAILED.has(outcome)) failed++
       } else if (ch.ends_on < today && !ch.announced_end_at) {
-        const { fromIso, toIso } = windowIso(ch)
+        // TZ.13 — the result is computed over the challenge's own studio days.
+        // An unreadable zone throws to the per-challenge catch: retried next tick.
+        const { fromIso, toIso } = windowIso(ch, await getLocationZone(db, ch.location_id))
         let payload
         if (ch.mode === 'collective') {
           const collective = await computeCollective(db, { locationId: ch.location_id, metric: ch.metric, fromIso, toIso, target: ch.target })
-          payload = buildChallengeResultPush({ challenge: ch, collective })
+          payload = buildChallengeResultPush({ challenge: ch, collective, shortName: await shortNameFor(ch.location_id) })
         } else {
           const standings = await computeStandings(db, { locationId: ch.location_id, metric: ch.metric, fromIso, toIso })
           payload = buildChallengeResultPush({ challenge: ch, winner: standings[0] || null })
@@ -183,18 +218,20 @@ export async function GET(request) {
       }
       // COLLECTIVE target reached (active, not yet announced)
       if (ch.mode === 'collective' && ch.target && !ch.announced_target_at && ch.starts_on <= today && ch.ends_on >= today) {
-        const { fromIso, toIso } = windowIso(ch)
+        const { fromIso, toIso } = windowIso(ch, await getLocationZone(db, ch.location_id))
         const collective = await computeCollective(db, { locationId: ch.location_id, metric: ch.metric, fromIso, toIso, target: ch.target })
         if (collective.total >= ch.target) {
           const ids = await tokenHolders(db, ch.location_id)
-          count(await announceOnce(db, ch, 'announced_target_at', stamp, ids, buildCollectiveTargetPush(ch)), () => targets++)
+          count(await announceOnce(db, ch, 'announced_target_at', stamp, ids, buildCollectiveTargetPush(ch, { shortName: await shortNameFor(ch.location_id) })), () => targets++)
         }
       }
     } catch (err) {
       logWarn('cron-challenge-events', 'per-challenge failed', { err, id: ch.id })
     }
   }
-  logInfo(MODULE, 'tick', { started, ended, targets, failed, gave_up: gaveUp })
-  await stampHeartbeat('run-challenge-events').catch((err) => logWarn('cron-challenge-events', 'heartbeat failed', { err }))
-  return NextResponse.json({ ok: true, started, ended, targets, failed, gave_up: gaveUp })
+  logInfo(MODULE, 'tick', { started, ended, targets, failed, gave_up: gaveUp, slot: gate.summary })
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('run-challenge-events').catch((err) => logWarn('cron-challenge-events', 'heartbeat failed', { err }))
+  }
+  return NextResponse.json({ ok: !gate.faulted, started, ended, targets, failed, gave_up: gaveUp }, { status: gate.faulted ? 500 : 200 })
 }

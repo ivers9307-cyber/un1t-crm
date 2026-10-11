@@ -96,11 +96,11 @@ function addDaysIso(iso, days) {
   return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) + days * DAY_MS).toISOString().slice(0, 10)
 }
 
-// The instant a Dublin calendar day starts, through the same wall-clock
-// conversion as every window here (no dublin-time import: this module loads
-// on the phone).
-function dayStartMs(iso) {
-  return workingWindow({ profile_id: '-', block_date: iso, start_time: '00:00:00', end_time: '00:01:00' })?.startMs ?? null
+// The instant a calendar day starts in `zone` (the target shift's studio;
+// DEFAULT_TZ when unknown), through the same wall-clock conversion as every
+// window here (no dublin-time import: this module loads on the phone).
+function dayStartMs(iso, zone) {
+  return workingWindow({ profile_id: '-', block_date: iso, start_time: '00:00:00', end_time: '00:01:00' }, zone)?.startMs ?? null
 }
 
 function joinList(items) {
@@ -364,10 +364,12 @@ export function candidateFacts({
     const busy = windows.filter(overlaps).sort((a, b) => a.startMs - b.startMs)[0] || null
     facts.free = !busy
     facts.busy = busy ? slotOf(busy, hereLocationId) : null
-    // On site the same Dublin day: a window here that runs into the target's
-    // day, so one from the night before that ends after midnight counts.
-    const dayStart = dayStartMs(target.date)
-    const dayEnd = dayStartMs(addDaysIso(target.date, 1))
+    // On site the same studio day (TZ.8a: the target's own zone): a window
+    // here that runs into the target's day, so one from the night before
+    // that ends after midnight counts.
+    const zone = candidateRow?.timezone ?? undefined
+    const dayStart = dayStartMs(target.date, zone)
+    const dayEnd = dayStartMs(addDaysIso(target.date, 1), zone)
     const sameDay = (w) => w.date === target.date || (dayStart != null && dayEnd != null && w.startMs < dayEnd && w.endMs > dayStart)
     const near = windows
       .filter((w) => !overlaps(w) && hereLocationId && w.location_id === hereLocationId && sameDay(w))
@@ -466,6 +468,9 @@ export function buildCandidates({
     start_time: block.start_time ?? null,
     end_time: block.end_time ?? null,
     shift_templates: { start_time: block.shift_templates?.start_time ?? null, end_time: block.shift_templates?.end_time ?? null },
+    // TZ.8a — the block's studio zone, so the target is read on the same
+    // clock as the reader's rows (each carries its own studio's timezone).
+    timezone: block.timezone ?? block.locations?.timezone ?? null,
   })
   const target = workingWindow(rowFor('target'))
   const shiftsBy = groupByProfile(shifts)

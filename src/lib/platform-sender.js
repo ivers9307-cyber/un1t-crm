@@ -34,6 +34,25 @@ export function parseAddressHeader(value) {
   return { name, address: m[2].trim() }
 }
 
+// FROMDOMAIN — a bare, plausible mailbox address: one `@`, no whitespace or
+// header syntax in the local part, a dotted hostname after it. Deliberately
+// narrower than RFC 5322 (no quoted local parts, no IP literals): an address
+// that fails it is never put on the wire as a From.
+const BARE_ADDRESS = /^[^\s@<>()[\]\\,;:"]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i
+
+/**
+ * The lower-cased domain of a bare address (or of the address inside a
+ * `Name <addr>` header), or null when the value is not a plausible address.
+ * Pure. `garrett@Mail.UN1TDublin.com` → `mail.un1tdublin.com`.
+ * @param {string|null|undefined} value
+ * @returns {string|null}
+ */
+export function addressDomain(value) {
+  const address = parseAddressHeader(value).address
+  if (!BARE_ADDRESS.test(address)) return null
+  return address.slice(address.lastIndexOf('@') + 1).toLowerCase()
+}
+
 // A display name that would read as address syntax (`<`, `>`, a comma, a
 // quote…) is quoted, so a brand such as "Gym A, Dublin" is one mailbox on the
 // wire rather than two; quotes and backslashes inside it are dropped rather

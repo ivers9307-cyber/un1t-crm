@@ -13,20 +13,28 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Loader2, Snowflake, AlertCircle, Play, Zap, CalendarClock, X, Activity } from 'lucide-react'
 import { slotKey } from '@/lib/class-climate'
+import { formatRecordTime, zoneCity } from '@/lib/record-time'
+import { useViewerZone } from '@/lib/use-viewer-zone'
 
 const KEY = 'class_climate'
 
-function fmtDublin(iso) {
+// TZ.16 (D3 = A) — class and history times in the studio's zone (`timezone`),
+// abbreviation only when the browser is elsewhere.
+export function fmtClassTime(iso, zone, viewerZone = null) {
   if (!iso) return ''
   try {
-    return new Date(iso).toLocaleString('en-IE', {
-      timeZone: 'Europe/Dublin', weekday: 'short', day: '2-digit', month: 'short',
+    return formatRecordTime(new Date(iso), zone, {
+      weekday: 'short', day: '2-digit', month: 'short',
       hour: '2-digit', minute: '2-digit', hour12: false,
-    })
+    }, 'en-IE', viewerZone)
   } catch { return iso }
 }
 
-export default function ClassClimateCard({ locationId, glofoxConnected, glofoxUnknown = false, devices, initialEnabled, initialConfig }) {
+// TZ.10 — `timezone` is the location's zone. The excluded-slot keys this card
+// writes ("Thu 06:00") are that studio's wall clock, and the runner matches
+// them in the same zone, so the two must agree.
+export default function ClassClimateCard({ locationId, timezone, glofoxConnected, glofoxUnknown = false, devices, initialEnabled, initialConfig }) {
+  const viewerZone = useViewerZone()
   const router = useRouter()
   const cfg0 = initialConfig || {}
   const [enabled, setEnabled] = useState(Boolean(initialEnabled))
@@ -73,7 +81,7 @@ export default function ClassClimateCard({ locationId, glofoxConnected, glofoxUn
 
   const filters = filterText.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
   const classMatches = (name) => filters.length === 0 || filters.some((f) => String(name || '').toLowerCase().includes(f))
-  const isExcluded = (iso) => excludedSlots.includes(slotKey(iso))
+  const isExcluded = (iso) => excludedSlots.includes(slotKey(iso, timezone))
 
   function toggleSlot(key) {
     if (!key) return
@@ -201,7 +209,7 @@ export default function ClassClimateCard({ locationId, glofoxConnected, glofoxUn
               {schedLoading ? 'Refreshing…' : 'Refresh'}
             </button>
           </div>
-          <p className="text-[10px] text-un1t-subtle mb-2">Click a class to exclude its weekly time slot. Times in Dublin.</p>
+          <p className="text-[10px] text-un1t-subtle mb-2">Click a class to exclude its weekly time slot. Times in {zoneCity(timezone)}.</p>
 
           {excludedSlots.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-2">
@@ -227,10 +235,10 @@ export default function ClassClimateCard({ locationId, glofoxConnected, glofoxUn
                   : willRun ? 'bg-blue-500/5' : 'opacity-40'
                 return (
                   <li key={c.glofox_event_id}>
-                    <button type="button" onClick={() => toggleSlot(slotKey(c.starts_at))}
+                    <button type="button" onClick={() => toggleSlot(slotKey(c.starts_at, timezone))}
                       title={excluded ? 'Excluded — click to include again' : 'Click to exclude this weekly time slot'}
                       className={`flex w-full items-center gap-3 text-[11px] rounded px-2 py-1 text-left hover:bg-un1t-border/30 ${cls}`}>
-                      <span className="text-un1t-subtle tabular-nums shrink-0 w-36">{fmtDublin(c.starts_at)}</span>
+                      <span className="text-un1t-subtle tabular-nums shrink-0 w-36">{fmtClassTime(c.starts_at, timezone, viewerZone)}</span>
                       <span className="text-un1t-text truncate flex-1">{c.name || 'Class'}</span>
                       {excluded
                         ? <span className="text-amber-700 shrink-0">excluded</span>
@@ -374,7 +382,7 @@ export default function ClassClimateCard({ locationId, glofoxConnected, glofoxUn
           <ul className="space-y-0.5 max-h-56 overflow-y-auto pr-1">
             {history.map((h, i) => (
               <li key={i} className="flex items-center gap-2 text-[11px]">
-                <span className="text-un1t-subtle tabular-nums shrink-0 w-36">{fmtDublin(h.fired_at)}</span>
+                <span className="text-un1t-subtle tabular-nums shrink-0 w-36">{fmtClassTime(h.fired_at, timezone, viewerZone)}</span>
                 <span className={`shrink-0 font-medium ${h.status === 'fired' ? 'text-emerald-700' : h.status === 'failed' ? 'text-red-700' : 'text-un1t-subtle'}`}>
                   {h.status === 'fired' ? '✓ on' : h.status === 'failed' ? '✗ failed' : '· skipped'}
                 </span>

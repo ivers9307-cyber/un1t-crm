@@ -21,7 +21,16 @@ import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../../lib/member/supabase'
 import { useAuth } from '../../../lib/member/contact-context'
 import Card from '../../../components/member/ui/Card'
-import { GOAL_DEFS, GOAL_KINDS, computeProgress } from 'shared/goals'
+import { goalDefs, GOAL_KINDS, computeProgress } from 'shared/goals'
+import { useMemberBrand } from '../../../lib/member/use-member-brand'
+import { useMemberZone } from '../../../lib/member/use-member-zone'
+
+// W1.S5 — goal labels name the product ("{Brand} Points this week"); the
+// shape (unit / period / suggested) is the same whatever the brand.
+function useGoalDefs() {
+  const { shortName } = useMemberBrand()
+  return goalDefs(shortName)
+}
 
 // ── Main screen ──────────────────────────────────────────────────────────────
 
@@ -248,8 +257,10 @@ function GoalCard({ goal, sessions, onUpdate, onArchive }) {
   const [editing, setEditing] = useState(false)
   const [target, setTarget] = useState(String(goal.target_value))
 
-  const def = GOAL_DEFS[goal.kind]
-  const progress = computeProgress(goal, sessions)
+  const def = useGoalDefs()[goal.kind]
+  // TZ.14 (D7) — the goal's week/month is the member's home studio calendar.
+  const tz = useMemberZone()
+  const progress = computeProgress(goal, sessions, new Date(), tz)
 
   const fillPct = Math.min(100, progress.pct * 100)
   const isComplete = progress.pct >= 1
@@ -348,15 +359,16 @@ function GoalCard({ goal, sessions, onUpdate, onArchive }) {
 // ── Add goal form ─────────────────────────────────────────────────────────────
 
 function AddGoalForm({ availableKinds, onCancel, onSubmit }) {
+  const defs = useGoalDefs()
   const fallbackKind = availableKinds[0] || GOAL_KINDS[0]
   const [kind, setKind] = useState(fallbackKind)
-  const [target, setTarget] = useState(String(GOAL_DEFS[fallbackKind]?.suggested?.[0] || 100))
+  const [target, setTarget] = useState(String(defs[fallbackKind]?.suggested?.[0] || 100))
 
-  const def = GOAL_DEFS[kind]
+  const def = defs[kind]
 
   function changeKind(k) {
     setKind(k)
-    setTarget(String(GOAL_DEFS[k]?.suggested?.[0] || 100))
+    setTarget(String(defs[k]?.suggested?.[0] || 100))
   }
 
   function handleSubmit() {
@@ -389,7 +401,7 @@ function AddGoalForm({ availableKinds, onCancel, onSubmit }) {
                 <View className="h-2 w-2 rounded-full bg-chalk" />
               )}
             </View>
-            <Text className="text-sm font-body text-chalk">{GOAL_DEFS[k].label}</Text>
+            <Text className="text-sm font-body text-chalk">{defs[k].label}</Text>
           </Pressable>
         ))}
       </View>

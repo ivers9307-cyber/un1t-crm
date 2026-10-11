@@ -668,6 +668,44 @@ describe('POST /api/contracts — CONTRACTS-VARS.2 location auto-fill variables'
 // no `warning` (nothing was attempted, so there's nothing to warn
 // about).
 
+// W1.S1a — a contract is never stored without a contracting entity. With
+// the literal floor gone, getContractingEntity answers '' when nothing is
+// configured AND the org rows cannot be read (this mock throws on
+// org_settings/organizations, i.e. a DB blip). Inserting then would freeze
+// no legal_entity_name, and contractCountersignatureLabel would countersign
+// it as the legacy pre-LEGALENT.1 entity forever.
+describe('POST /api/contracts — W1.S1a contracting entity must resolve', () => {
+  for (const draft of [false, true]) {
+    it(`unreadable org rows + no configured brand → 503, nothing inserted (${draft ? 'draft' : 'issue'})`, async () => {
+      getCurrentUser.mockResolvedValue(MASTER)
+      getLocationBranding.mockResolvedValueOnce({ companyName: '', companyNameConfigured: false, logoUrl: null, faviconUrl: null })
+      const { db, calls } = issueHappyPathMockDb()
+      createServerClient.mockReturnValue(db)
+
+      const res = await POST(issueReqFull(draft ? { save_as_draft: true } : {}))
+      const body = await res.json()
+
+      expect(res.status).toBe(503)
+      expect(body.success).toBe(false)
+      expect(body.error).toBe("Couldn't confirm the contracting company for this organisation. Nothing was issued; please try again.")
+      expect(calls.contractsInsert).toHaveLength(0)
+      expect(sendContractIssuedEmail).not.toHaveBeenCalled()
+    })
+  }
+
+  it('a resolvable entity (here the configured brand) still issues and freezes legal_entity_name', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    getLocationBranding.mockResolvedValueOnce({ companyName: 'UN1T Stillorgan', companyNameConfigured: true, logoUrl: null, faviconUrl: null })
+    const { db, calls } = issueHappyPathMockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueReqFull())
+    expect(res.status).toBe(200)
+    expect(calls.contractsInsert).toHaveLength(1)
+    expect(calls.contractsInsert[0].variables_data.legal_entity_name).toBe('UN1T Stillorgan')
+  })
+})
+
 describe('POST /api/contracts — CONTRACTS-DRAFT.1 save_as_draft', () => {
   it("inserts with status: 'draft' and returns it with no warning key", async () => {
     getCurrentUser.mockResolvedValue(MASTER)

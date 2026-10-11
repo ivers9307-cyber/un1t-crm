@@ -10,19 +10,31 @@ vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(), assertLocationAccess: vi
 vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn() }))
 vi.mock('@shared/dashboard-data', () => ({ fetchStudioContactCounts: vi.fn() }))
+// TZ.11a — the studio's zone (Dublin unless a test says otherwise).
+vi.mock('@/lib/display-zone', () => ({ displayZoneFor: vi.fn(async () => 'Europe/Dublin') }))
+// W1.M3c — the state resolver is stubbed; the payload shaping is the real one.
+vi.mock('@/lib/membership/state-for-page', async (importOriginal) => {
+  const real = await importOriginal()
+  return { ...real, membershipStateForPage: vi.fn() }
+})
 
 const { getCurrentUser, assertLocationAccess } = await import('@/lib/auth')
 const { hasPermissionForLocation } = await import('@/lib/permissions')
 const { createServerClient } = await import('@/lib/supabase')
 const { logError } = await import('@/lib/log')
 const { fetchStudioContactCounts } = await import('@shared/dashboard-data')
-const { dublinWeekStartMs } = await import('@/lib/dublin-time')
+const { weekStartMsIn } = await import('@shared/zoned-time')
+const { membershipStateForPage } = await import('@/lib/membership/state-for-page')
+const { displayZoneFor } = await import('@/lib/display-zone')
 const { GET } = await import('./route.js')
 const { NextResponse } = await import('next/server')
 
 const LOC = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 const USER = { id: 'u1' }
 const COUNTS = { newLeadsThisWeek: 3, funnel: { new_lead: 3 }, totalContacts: 9 }
+const GLOFOX_CAPS = { memberships: true, bookings: true, credits: true, invoices: true, schedule: true }
+const CONFIGURED = { source: 'glofox', state: 'configured', label: 'Glofox', capabilities: GLOFOX_CAPS }
+const CONFIGURED_PAYLOAD = { source: 'glofox', state: 'configured', label: 'Glofox', provides_memberships: true, can_manage: false }
 
 const req = (params = {}) => {
   const url = new URL('http://test/api/dashboard/studio-contacts')
@@ -37,6 +49,7 @@ beforeEach(() => {
   createServerClient.mockClear()
   logError.mockReset()
   fetchStudioContactCounts.mockReset().mockResolvedValue({ success: true, data: COUNTS })
+  membershipStateForPage.mockReset().mockResolvedValue(CONFIGURED)
 })
 
 describe('GET /api/dashboard/studio-contacts', () => {
@@ -72,12 +85,12 @@ describe('GET /api/dashboard/studio-contacts', () => {
   it('200: that ONE studio, the service-role client, the Europe/Dublin Monday', async () => {
     const res = await GET(req({ location_id: LOC }))
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ success: true, data: COUNTS })
+    expect(await res.json()).toEqual({ success: true, data: { ...COUNTS, membership_source: CONFIGURED_PAYLOAD } })
     const [db, loc, opts] = fetchStudioContactCounts.mock.calls[0]
     expect(db).toEqual({ tag: 'service-role' })
     expect(loc).toBe(LOC)
     // the call and this line run within the same Dublin week except across a Monday 00:00
-    expect(opts.weekStartIso).toBe(new Date(dublinWeekStartMs(Date.now())).toISOString())
+    expect(opts.weekStartIso).toBe(new Date(weekStartMsIn(Date.now(), 'Europe/Dublin')).toISOString())
   })
 
   it('500 on a failed read, logged, never zeros', async () => {
@@ -96,5 +109,72 @@ describe('GET /api/dashboard/studio-contacts', () => {
     expect(await res.json()).toEqual({ success: false, error: 'Could not read the contact numbers' })
     expect(logError).toHaveBeenCalledWith('dashboard.studio-contacts', 'contact counts read failed',
       { locationId: LOC, error: 'socket hang up' })
+  })
+
+  // W1.M3c — the state rides alongside the counts; the counts are never withheld.
+  it('a studio with no membership source: the same counts, plus the none state', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'none', state: 'none', label: 'No membership source', capabilities: { memberships: false } })
+    const res = await GET(req({ location_id: LOC }))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toEqual({
+      ...COUNTS,
+      membership_source: { source: 'none', state: 'none', label: 'No membership source', provides_memberships: false, can_manage: false },
+    })
+    expect(membershipStateForPage).toHaveBeenCalledWith({ tag: 'service-role' }, LOC)
+  })
+
+  it('an owner at the studio gets can_manage (the phone says "Choose one in…")', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', profileRole: 'staff', rolesByLocation: { [LOC]: 'owner' } })
+    const body = await (await GET(req({ location_id: LOC }))).json()
+    expect(body.data.membership_source.can_manage).toBe(true)
+  })
+
+  it('a failed state read is unknown on the payload, never none, and the counts still answer', async () => {
+    membershipStateForPage.mockResolvedValue({ source: null, state: 'unknown', readError: 'MEMBERSHIP_STATE_THREW', label: 'No membership source', capabilities: {} })
+    const body = await (await GET(req({ location_id: LOC }))).json()
+    expect(body.success).toBe(true)
+    expect(body.data.newLeadsThisWeek).toBe(3)
+    expect(body.data.membership_source.state).toBe('unknown')
+  })
+
+  // 2.3.x phones never read membership_source: a state read that rejects
+  // must never cost them the counts they do read.
+  it('a state read that REJECTS is still 200: every old count plus membership_source unknown', async () => {
+    membershipStateForPage.mockRejectedValue(new Error('boom'))
+    const res = await GET(req({ location_id: LOC }))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      success: true,
+      data: {
+        ...COUNTS,
+        membership_source: { source: null, state: 'unknown', label: null, provides_memberships: true, can_manage: false },
+      },
+    })
+    expect(logError).not.toHaveBeenCalled()
+  })
+
+  it('a refused caller never reaches the state read', async () => {
+    hasPermissionForLocation.mockReturnValue(false)
+    await GET(req({ location_id: LOC }))
+    expect(membershipStateForPage).not.toHaveBeenCalled()
+  })
+
+  it('TZ.11a — "this week" starts at the STUDIO\'s Monday: New York across the fall-back', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      // Mon 2 Nov 2026 03:30Z = Sun 1 Nov 22:30 EST: still the week of Mon 26 Oct in New York.
+      vi.setSystemTime(new Date('2026-11-02T03:30:00Z'))
+      displayZoneFor.mockResolvedValueOnce('America/New_York')
+      await GET(req({ location_id: LOC }))
+      expect(displayZoneFor).toHaveBeenCalledWith({ tag: 'service-role' }, USER, LOC, 'dashboard.studio-contacts')
+      expect(fetchStudioContactCounts.mock.calls[0][2].weekStartIso).toBe('2026-10-26T04:00:00.000Z') // Mon 00:00 EDT
+      // Dublin at the same instant is already Monday 2 Nov (03:30 GMT).
+      fetchStudioContactCounts.mockClear()
+      await GET(req({ location_id: LOC }))
+      expect(fetchStudioContactCounts.mock.calls[0][2].weekStartIso).toBe('2026-11-02T00:00:00.000Z')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

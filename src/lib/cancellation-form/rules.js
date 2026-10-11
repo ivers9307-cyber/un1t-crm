@@ -1,12 +1,13 @@
 // CANCEL-FORM.3 — pure submission rules for the public form. No DB, no env.
 //
-// Dates are Dublin business days as YYYY-MM-DD strings compared lexically
+// Dates are the studio's business days (its own zone, TZ.5) as YYYY-MM-DD
+// strings compared lexically
 // and advanced with addDaysISO (string arithmetic), never Date-at-midnight
 // maths, so the same submission validates identically on a Dublin laptop
 // and a UTC Vercel function (LESSONS: the roster-summary TZ bug).
 
 import { z } from 'zod'
-import { addDaysISO } from '@/lib/dublin-time'
+import { addDaysISO } from '@/lib/location-time'
 import { REASON_CODES } from './defaults'
 
 const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -37,7 +38,7 @@ export const SubmitSchema = z.discriminatedUnion('choice', [
 /**
  * The member-facing options the GET returns (bounds + labelled reasons).
  * @param {object} copy  resolveCancellationFormCopy() output
- * @param {string} today  YYYY-MM-DD in Europe/Dublin
+ * @param {string} today  YYYY-MM-DD on the studio's clock (the link location's zone)
  */
 export function formOptions(copy, today) {
   return {

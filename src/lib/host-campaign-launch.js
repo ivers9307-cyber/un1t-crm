@@ -6,7 +6,7 @@
 //
 //   1. own campaign (.eq('host_id') is the tenancy boundary) → not_found
 //   1b. trigger 'resend_missed' only: status must be 'sent' → not_sent
-//   2. sender_domain_verified + sender_email (the UN1T kill switch) → sender_not_verified
+//   2. sender_domain_verified + sender_email (the operator's kill switch) → sender_not_verified
 //   2b. postmark_stream_id for a marketing send → no_stream
 //   3. daily cap — campaigns sending/sent today (UTC) vs email_daily_send_cap → daily_cap
 //   4. recipients resolved NOW (consent + per-host suppression) → no_recipients
@@ -54,16 +54,34 @@
 
 import { resolveHostRecipients } from '@/lib/host-campaign-email'
 import { publishQueuePush, HOST_CAMPAIGNS_WORKER_PATH } from '@/lib/qstash'
+import { PLATFORM_NAME } from '@/lib/brand-name'
+import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 
 const ENQUEUE_CHUNK = 500 // rows per host_campaign_sends insert statement
 const PAGE = 1000 // 1k-row cap discipline for the existing-rows read
 
-/** User-facing refusal copy — moved from the send route unchanged. */
+/**
+ * W1.S1c — the two refusals that tell a host who to ask name the host's
+ * ORGANISATION (the gym that verifies its domain and attaches its stream),
+ * so they are a function of that brand. `brand` is resolveHostOrgBrand's
+ * `name`; it floors on the platform name, never a literal gym.
+ * @param {string} [brand]
+ */
+export function hostSetupMessages(brand) {
+  const who = String(brand || '').trim() || PLATFORM_NAME
+  return Object.freeze({
+    sender_not_verified: `Sending is not enabled. Ask ${who} to verify your sending domain.`,
+    no_stream: `Marketing sending is not set up for this host yet. Ask ${who} to attach your Postmark stream.`,
+  })
+}
+
+/** User-facing refusal copy, moved from the send route. The two setup
+ * refusals here are the brand-less floor; launchHostCampaign and the routes
+ * answer them through hostSetupMessages(brand). */
 export const LAUNCH_MESSAGES = Object.freeze({
   not_found: 'Not found',
   not_sent: 'Only a sent email can be resent.',
-  sender_not_verified: 'Sending is not enabled — ask UN1T to verify your sending domain.',
-  no_stream: 'Marketing sending is not set up for this host yet — ask UN1T to attach your Postmark stream.',
+  ...hostSetupMessages(PLATFORM_NAME),
   daily_cap: 'Daily send limit reached.',
   no_recipients: 'No emailable contacts.',
   nobody_missed: 'Everyone who can be emailed already received this.',
@@ -181,15 +199,19 @@ export async function launchHostCampaign(db, { campaignId, hostId, trigger }) {
   // from a broken From header.
   const { data: host, error: hostErr } = await db
     .from('event_hosts')
-    .select('id, sender_domain_verified, sender_email, email_daily_send_cap, postmark_stream_id')
+    .select('id, organization_id, sender_domain_verified, sender_email, email_daily_send_cap, postmark_stream_id')
     .eq('id', hostId)
     .maybeSingle()
   if (hostErr) return refuse('db_error', hostErr.message)
   if (!host) return refuse('not_found')
-  if (!host.sender_domain_verified || !host.sender_email) return refuse('sender_not_verified')
+  // The setup refusals name the host's organisation; the brand is read only
+  // on these paths (never throws, floors on the platform name).
+  const setupRefusal = async (reason) =>
+    refuse(reason, hostSetupMessages((await resolveHostOrgBrand(db, host)).name)[reason])
+  if (!host.sender_domain_verified || !host.sender_email) return setupRefusal('sender_not_verified')
 
   // HOST-CONSENT.1 — marketing needs the host's own Postmark stream.
-  if (campaign.email_type !== 'utility' && !host.postmark_stream_id) return refuse('no_stream')
+  if (campaign.email_type !== 'utility' && !host.postmark_stream_id) return setupRefusal('no_stream')
 
   // Daily cap: campaigns this host has put into flight today (UTC midnight —
   // matches the cap's plain reading, no BST wobble on the boundary). The

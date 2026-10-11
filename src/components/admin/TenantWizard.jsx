@@ -5,10 +5,13 @@
 // route, then advances by writing progress into the URL query so the
 // flow is refresh-safe and resumable.
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
+import { PLATFORM_TZ } from '@shared/zoned-time'
+import TimezoneSelect from '@/components/settings/TimezoneSelect'
+import { COUNTRY_OPTIONS, browserZone } from '@/lib/timezone-options'
 import { deriveWizardState, WIZARD_STEPS, orgAdminGrantRequest, tenantPlansHref } from '@/lib/tenant-wizard'
 import { Building2, MapPin, UserPlus, Palette, Globe, CheckCircle2 } from 'lucide-react'
 
@@ -173,6 +176,17 @@ function OrgStep({ onDone }) {
 function LocationStep({ orgId, onDone }) {
   const [name, setName] = useState('')
   const [address, setAddress] = useState('')
+  // TZ.2 (D8): the studio's timezone is chosen here, REQUIRED, pre-filled from
+  // this browser's zone and shown next to the country (with a warning when the
+  // two look mismatched: master usually creates from Dublin).
+  const [country, setCountry] = useState('IE')
+  const [timezone, setTimezone] = useState(PLATFORM_TZ)
+  const timezoneTouched = useRef(false)
+  useEffect(() => {
+    if (timezoneTouched.current) return
+    const zone = browserZone()
+    if (zone) setTimezone(zone)
+  }, [])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
@@ -180,11 +194,12 @@ function LocationStep({ orgId, onDone }) {
     e.preventDefault()
     setBusy(true)
     setError(null)
-    // Ireland-only v1 (settled): timezone/country use the route defaults.
     const json = await postJson('/api/locations', 'POST', {
       name: name.trim(),
       organization_id: orgId,
       address: address.trim() || null,
+      country,
+      timezone,
     })
     if (!json.success) {
       setError(json.error || 'Could not create the location.')
@@ -205,10 +220,26 @@ function LocationStep({ orgId, onDone }) {
           <span>Studio name</span>
           <input value={name} onChange={(e) => setName(e.target.value)} required className={inputCls()} placeholder="FitCo Ranelagh" />
         </label>
-        <label className="block text-sm mb-4 max-w-sm">
+        <label className="block text-sm mb-3 max-w-sm">
           <span>Address (optional)</span>
           <input value={address} onChange={(e) => setAddress(e.target.value)} className={inputCls()} />
         </label>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+          <div className="text-sm">
+            <label className="block">
+              <span>Country</span>
+              <select value={country} onChange={(e) => setCountry(e.target.value)} className={inputCls()}>
+                {COUNTRY_OPTIONS.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+              </select>
+            </label>
+            <p className="text-xs text-un1t-subtle mt-1">Drives the public-holiday list.</p>
+          </div>
+          <TimezoneSelect
+            value={timezone}
+            country={country}
+            onChange={(z) => { timezoneTouched.current = true; setTimezone(z) }}
+          />
+        </div>
         <PrimaryButton busy={busy}>Create location</PrimaryButton>
       </form>
     </StepCard>

@@ -28,8 +28,12 @@ const RANK = { operational: 0, degraded: 1, down: 2 }
 function worseMember(a, b) { return RANK[b] > RANK[a] ? b : a }
 
 // Default, operator-override-able copy. `ok` vs `bad` line per service.
+// W1.S1a — `brand` has no literal default: the page resolves the location's
+// configured brand (getLocationBranding) and passes it to buildStatusView as
+// `defaultBrand`; an operator override still wins. '' = no wordmark, never
+// another gym's.
 export const DEFAULT_COPY = {
-  brand: 'UN1T',
+  brand: '',
   services: {
     booking: {
       label: 'Class booking & app',
@@ -56,17 +60,17 @@ export const DEFAULT_COPY = {
     operational: {
       tag: 'All operational',
       headline: 'Everything’s running.',
-      subline: 'All services are working normally. Book your classes and train — we’ll flag anything here the moment it changes.',
+      subline: 'All services are working normally. Book your classes and train. We’ll flag anything here the moment it changes.',
     },
     degraded: {
       tag: 'Partial disruption',
       headline: 'We’re on it.',
-      subline: 'Most things are working. Some services may be slower than usual right now — the team has been alerted and is looking into it.',
+      subline: 'Most things are working. Some services may be slower than usual right now. The team has been alerted and is looking into it.',
     },
     down: {
       tag: 'Service disruption',
       headline: 'We’re on it.',
-      subline: 'One or more services are down. The team has been alerted and is working on it — thanks for your patience.',
+      subline: 'One or more services are down. The team has been alerted and is working on it. Thanks for your patience.',
     },
   },
 }
@@ -118,7 +122,7 @@ export function pruneStatusOverrides(input) {
 
 // Shallow-merge per section so a partial override (e.g. just one service line)
 // keeps every other default. overrides = locations.settings.status_page.
-function mergeCopy(overrides) {
+function mergeCopy(overrides, defaultBrand = '') {
   const o = overrides && typeof overrides === 'object' ? overrides : {}
   const services = {}
   for (const key of Object.keys(DEFAULT_COPY.services)) {
@@ -128,17 +132,20 @@ function mergeCopy(overrides) {
   for (const key of Object.keys(DEFAULT_COPY.verdict)) {
     verdict[key] = { ...DEFAULT_COPY.verdict[key], ...(o.verdict?.[key] || {}) }
   }
-  return { brand: o.brand || DEFAULT_COPY.brand, services, verdict }
+  const fallbackBrand = String(defaultBrand || '').trim() || DEFAULT_COPY.brand
+  return { brand: o.brand || fallbackBrand, services, verdict }
 }
 
 /**
  * Build the public status view from internal integration-health rows.
  * @param {Array<{key:string,status:string}>} rows  getIntegrationHealth output
  * @param {object} [overrides]  locations.settings.status_page copy overrides
+ * @param {{ defaultBrand?: string }} [opts]  W1.S1a: the location's resolved
+ *   brand, the wordmark when no operator override is set
  * @returns {{ overall, services:[{key,label,status,desc}], verdict, brand }}
  */
-export function buildStatusView(rows, overrides = {}) {
-  const copy = mergeCopy(overrides)
+export function buildStatusView(rows, overrides = {}, { defaultBrand = '' } = {}) {
+  const copy = mergeCopy(overrides, defaultBrand)
   const list = Array.isArray(rows) ? rows : []
   const byPrefix = (prefix) => list.filter((r) => String(r?.key || '').split(':')[0] === prefix)
 

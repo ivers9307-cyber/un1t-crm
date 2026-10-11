@@ -10,10 +10,11 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { Plus, Flag, ExternalLink, Users, Tag } from 'lucide-react'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
 import { ADMIN_ROLES } from '@/lib/schemas'
-import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
+import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse } from '@shared/events'
+import { eventToday } from '@/lib/event-day'
 import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
 
 export const dynamic = 'force-dynamic'
@@ -64,6 +65,7 @@ export default async function EventsIndexPage(props) {
       .select(`
         id, name, slug, race_date, start_time, capacity, capacity_mode, allowed_team_sizes,
         active, kind, shared, location_id, registration_opens_at, registration_closes_at,
+        locations:location_id ( id, timezone ),
         host:event_hosts!host_id ( id, name, organization_id ),
         waves:race_waves ( capacity ),
         registrations:race_registrations ( id, status, team:teams ( size ) )
@@ -83,6 +85,7 @@ export default async function EventsIndexPage(props) {
       .select(`
         id, name, slug, race_date, start_time, capacity, capacity_mode, allowed_team_sizes,
         active, kind, shared, location_id, registration_opens_at, registration_closes_at,
+        locations:location_id ( id, timezone ),
         host:event_hosts!host_id ( id, name, organization_id ),
         waves:race_waves ( capacity ),
         registrations:race_registrations ( id, status, team:teams ( size ) )
@@ -96,8 +99,8 @@ export default async function EventsIndexPage(props) {
     }
   }
 
-  const today = todayIsoDublin()
-  const { upcoming, past } = orderEventsForBrowse(races, today)
+  // TZ.9: upcoming by each event's own studio day (the zone rides the read).
+  const { upcoming, past } = orderEventsForBrowse(races, (e) => eventToday(e))
 
   const visible = tab === 'past' ? past : upcoming
   const tabs = [
@@ -105,12 +108,23 @@ export default async function EventsIndexPage(props) {
     { id: 'past',     label: 'Past',     count: past.length,     href: '/events?tab=past' },
   ]
 
-  let appOrigin = ''
-  try {
-    const raw = getAppUrl()
-    appOrigin = new URL(raw).origin
-  } catch {
-    appOrigin = ''
+  // W1.L3b — the copyable public link is minted on EACH EVENT's own tenant
+  // host (the list mixes the org's studios and its hosts' events, and a
+  // tenant's event must never be handed round as crm.repset.ie). Resolved once
+  // per distinct location (the resolver caches; it floors to the CRM host and
+  // never throws past it). Origin-only, so a misconfigured env var can't
+  // poison the link when it floors; '' degrades to a relative link.
+  const originByLocation = new Map()
+  for (const r of visible) {
+    const locId = r.location_id || null
+    if (originByLocation.has(locId)) continue
+    let origin = ''
+    try { origin = new URL(await resolveCustomerBaseUrl(db, locId)).origin } catch { origin = '' }
+    originByLocation.set(locId, origin)
+  }
+  const publicUrlFor = (r) => {
+    const baseUrl = originByLocation.get(r.location_id || null) || ''
+    return baseUrl ? `${baseUrl}/event/${r.slug}` : `/event/${r.slug}`
   }
 
   return (
@@ -198,7 +212,7 @@ export default async function EventsIndexPage(props) {
               </thead>
               <tbody className="divide-y divide-un1t-border">
                 {visible.map((r) => {
-                  const publicUrl = appOrigin ? `${appOrigin}/event/${r.slug}` : `/event/${r.slug}`
+                  const publicUrl = publicUrlFor(r)
                   const isRace = isRaceKind(r.kind)
                   const badge = kindBadge(r.kind || 'race')
                   const signupSummary = formatSignupSummary(r.registrations, { isRace, capacity: sumWaveCapacity(r.waves) ?? r.capacity, mode: r.capacity_mode })
@@ -297,7 +311,7 @@ export default async function EventsIndexPage(props) {
               footer row with action links spaced for tap targets. */}
           <div className="md:hidden space-y-2">
             {visible.map((r) => {
-              const publicUrl = appOrigin ? `${appOrigin}/event/${r.slug}` : `/event/${r.slug}`
+              const publicUrl = publicUrlFor(r)
               const isRace = isRaceKind(r.kind)
               const badge = kindBadge(r.kind || 'race')
               const signupSummary = formatSignupSummary(r.registrations, { isRace, capacity: sumWaveCapacity(r.waves) ?? r.capacity, mode: r.capacity_mode })

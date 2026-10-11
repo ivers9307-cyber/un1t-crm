@@ -1,22 +1,20 @@
 // src/lib/host-schedule-time.js
-// HOST-SCHEDULE.1 — Dublin wall-clock helpers for scheduled host sends.
+// HOST-SCHEDULE.1 — wall-clock helpers for scheduled host sends.
 //
 // Shared by the composer (browser) and the schedule route (server), so this
 // file is Intl-only: no supabase, no server imports. `scheduled_for` is
-// stored in UTC; the host only ever sees and picks Europe/Dublin times.
-// Hard-codes the zone like src/lib/dublin-time.js does (UN1T is Dublin-only).
+// stored in UTC; the host sees and picks times on its OWN studio clock.
 //
-// Why not import src/lib/dublin-time.js instead of duplicating dublinParts()?
-// NOT because that file is server-only — it's Intl-only too, so it would be
-// just as safe here. The real reasons: its `dublinParts` is a private,
-// unexported helper (nothing outside that file can call it), and its
-// exported label helper (`dublinTimeLabel`) doesn't apply the '24'-hour
-// normalisation this file's own `dublinParts` does (some ICU builds' en-GB
-// formatter can emit hour '24' at midnight) — the schedule panel's date/time
-// inputs need that normalisation. Don't "simplify" this file by importing
-// dublin-time.js instead; it can't do this file's job as-is.
+// TZ.9 — that clock is the host's anchor location's zone (`locations.timezone`
+// of event_hosts.anchor_location_id; the composer page resolves it and hands
+// it down). The private Dublin parts reader is gone: the maths is
+// shared/zoned-time's (instantToZonedParts / zonedWallClockToInstant), and
+// every function takes the zone, defaulting to DEFAULT_TZ (Europe/Dublin), so
+// a Dublin host's inputs, labels and stored instants are byte-identical
+// (events-races.tz.test.js, every quarter hour of 2026). The schedule route
+// only compares instants (validateScheduledFor) and needs no zone.
+import { DEFAULT_TZ, instantToZonedParts, zonedWallClockToInstant } from '@shared/zoned-time'
 
-const DUBLIN_TZ = 'Europe/Dublin'
 const MINUTE_MS = 60_000
 export const QUARTER_MS = 15 * MINUTE_MS
 /** How long the schedule panel's default stays valid after it is computed (see nextQuarterHour). */
@@ -31,24 +29,8 @@ const DAY_MS = 24 * 60 * MINUTE_MS
 export const MAX_LEAD_MS = MAX_LEAD_DAYS * DAY_MS
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] // ISO 1..7
 const pad = (n) => String(n).padStart(2, '0')
-
-const partsFmt = new Intl.DateTimeFormat('en-GB', {
-  timeZone: DUBLIN_TZ,
-  year: 'numeric', month: '2-digit', day: '2-digit',
-  hour: '2-digit', minute: '2-digit',
-  hour12: false,
-})
-const weekdayFmt = new Intl.DateTimeFormat('en-US', { timeZone: DUBLIN_TZ, weekday: 'short' })
-
-/** Europe/Dublin wall-clock parts for a UTC ms instant. */
-function dublinParts(ms) {
-  const p = {}
-  for (const { type, value } of partsFmt.formatToParts(new Date(ms))) p[type] = value
-  // 'en-GB' can emit hour '24' at midnight; normalise to 0.
-  const hour = p.hour === '24' ? 0 : Number(p.hour)
-  return { y: Number(p.year), mo: Number(p.month), d: Number(p.day), h: hour, mi: Number(p.minute) }
-}
 
 function toMs(isoOrMs) {
   if (typeof isoOrMs === 'number') return Number.isFinite(isoOrMs) ? isoOrMs : null
@@ -60,66 +42,61 @@ function toMs(isoOrMs) {
 }
 
 /**
- * UTC instant -> the { date: 'YYYY-MM-DD', time: 'HH:MM' } pair the
- * schedule panel's inputs hold, in Dublin time. Null for garbage.
- * @param {string|number} isoOrMs
+ * The composer's label for the zone it schedules in: the city part of the
+ * IANA name ("Europe/Dublin" → "Dublin", "America/New_York" → "New York").
+ * @param {string} [zone=DEFAULT_TZ]
  */
-export function isoToDublinInputs(isoOrMs) {
+export function scheduleZoneLabel(zone = DEFAULT_TZ) {
+  const z = String(zone || DEFAULT_TZ)
+  return z.slice(z.lastIndexOf('/') + 1).replace(/_/g, ' ')
+}
+
+/**
+ * UTC instant -> the { date: 'YYYY-MM-DD', time: 'HH:MM' } pair the
+ * schedule panel's inputs hold, on the host's clock. Null for garbage.
+ * @param {string|number} isoOrMs
+ * @param {string} [zone=DEFAULT_TZ]
+ */
+export function isoToZonedInputs(isoOrMs, zone = DEFAULT_TZ) {
   const ms = toMs(isoOrMs)
   if (ms == null) return null
-  const p = dublinParts(ms)
+  const p = instantToZonedParts(ms, zone)
   return { date: `${p.y}-${pad(p.mo)}-${pad(p.d)}`, time: `${pad(p.h)}:${pad(p.mi)}` }
 }
 
 /**
- * Dublin wall clock ('YYYY-MM-DD', 'HH:MM') -> UTC ISO string. Robust
- * across DST: take the naive UTC instant for the wall clock, read back what
- * Dublin wall clock that instant actually is, and correct by the observed
- * offset — then verify the correction actually landed on the wall clock
- * that was asked for. That verification matters because one correction
- * pass is NOT always exact: a wall clock that falls in the spring-forward
- * gap (e.g. 29 Mar 2026 01:30 Dublin — skipped when clocks jump straight
- * from 01:00 to 02:00) doesn't exist, and "correcting" for it resolves to
- * an instant an hour EARLY than intended (a caller asking for 01:30 would
- * silently get back an instant that reads back as 00:30 Dublin, not
- * 01:30). So after computing the corrected instant, this reads Dublin
- * wall-clock parts back off it and compares to the date/time requested;
- * a mismatch (only possible for a DST-gap time) returns null rather than
- * a wrong instant. An ambiguous fall-back wall clock (e.g. 25 Oct 2026
- * 01:30, which happens twice as clocks fall back from 02:00 to 01:00) is
- * NOT rejected this way — it resolves to the later (GMT) occurrence,
- * because the naive UTC guess for that wall clock always lands at or
- * after the transition instant. Null when either input is malformed or
- * the date does not exist.
+ * Host wall clock ('YYYY-MM-DD', 'HH:MM') -> UTC ISO string, solved by
+ * zonedWallClockToInstant and then VERIFIED: the instant must read back as
+ * the wall clock that was asked for. A wall clock in the spring-forward gap
+ * (e.g. 29 Mar 2026 01:30 Dublin, 8 Mar 2026 02:30 New York) does not exist
+ * and returns null rather than an instant an hour off. An ambiguous
+ * fall-back wall clock (25 Oct 2026 01:30 Dublin) resolves to one
+ * deterministic instant (for Dublin the later, GMT, occurrence, as before).
+ * Null when either input is malformed or the date does not exist.
  * @param {string} date
  * @param {string} time
+ * @param {string} [zone=DEFAULT_TZ]
  */
-export function dublinLocalToIso(date, time) {
+export function zonedLocalToIso(date, time, zone = DEFAULT_TZ) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date || '')
   const t = /^(\d{2}):(\d{2})$/.exec(time || '')
   if (!m || !t) return null
   const y = Number(m[1]); const mo = Number(m[2]); const d = Number(m[3])
   const h = Number(t[1]); const mi = Number(t[2])
   if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) return null
-  const guess = Date.UTC(y, mo - 1, d, h, mi, 0)
-  // Date.UTC silently rolls an impossible day (Feb 30) forward; reject that.
-  const g = new Date(guess)
-  if (g.getUTCMonth() !== mo - 1 || g.getUTCDate() !== d) return null
-  const p = dublinParts(guess)
-  const wall = Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi, 0)
-  const corrected = guess - (wall - guess)
-  // Verify: a non-existent wall clock (the DST spring-forward gap) still
-  // won't read back as what was asked for, even after the correction.
-  const check = dublinParts(corrected)
+  const ms = zonedWallClockToInstant(date, time, zone) // null for a day that does not exist (Feb 30)
+  if (ms == null) return null
+  const check = instantToZonedParts(ms, zone)
   if (check.y !== y || check.mo !== mo || check.d !== d || check.h !== h || check.mi !== mi) return null
-  return new Date(corrected).toISOString()
+  return new Date(ms).toISOString()
 }
 
 /**
  * The panel's default: the first quarter hour that is still at least
  * MIN_LEAD_MS ahead AFTER the host has had CLICK_SLACK_MS to read the panel
- * and press Confirm. Dublin's offset is a whole hour, so UTC quarter
- * boundaries are Dublin quarter boundaries.
+ * and press Confirm, on the host's clock. Every IANA offset in use is a
+ * multiple of 15 minutes, so UTC quarter boundaries are local quarter
+ * boundaries.
  *
  * Why the slack: `validateScheduledFor` rejects anything under MIN_LEAD_MS
  * ahead of the moment the request arrives. A default computed as "first
@@ -129,23 +106,26 @@ export function dublinLocalToIso(date, time) {
  * margin at CLICK_SLACK_MS; lead time from `nowMs` lands in
  * [MIN_LEAD_MS + CLICK_SLACK_MS, MIN_LEAD_MS + CLICK_SLACK_MS + QUARTER_MS).
  * @param {number} [nowMs=Date.now()]
+ * @param {string} [zone=DEFAULT_TZ]
  */
-export function nextQuarterHour(nowMs = Date.now()) {
+export function nextQuarterHour(nowMs = Date.now(), zone = DEFAULT_TZ) {
   const target = Math.ceil((nowMs + MIN_LEAD_MS + CLICK_SLACK_MS) / QUARTER_MS) * QUARTER_MS
-  return isoToDublinInputs(target)
+  return isoToZonedInputs(target, zone)
 }
 
 /**
- * 'Wed 9 Sep, 09:00' in Dublin time. Built from parts (not a locale
+ * 'Wed 9 Sep, 09:00' on the host's clock. Built from parts (not a locale
  * pattern) so it reads the same on every ICU build. '' for null/garbage.
  * @param {string|number|null|undefined} isoOrMs
+ * @param {string} [zone=DEFAULT_TZ]
  */
-export function dublinScheduleLabel(isoOrMs) {
+export function scheduleLabelIn(isoOrMs, zone = DEFAULT_TZ) {
   const ms = toMs(isoOrMs)
   if (ms == null) return ''
-  const p = dublinParts(ms)
-  return `${weekdayFmt.format(new Date(ms))} ${p.d} ${MONTHS[p.mo - 1]}, ${pad(p.h)}:${pad(p.mi)}`
+  const p = instantToZonedParts(ms, zone)
+  return `${WEEKDAYS[p.weekday - 1]} ${p.d} ${MONTHS[p.mo - 1]}, ${pad(p.h)}:${pad(p.mi)}`
 }
+
 
 /**
  * The schedule route's window check. Returns { ok:true, iso } (normalised

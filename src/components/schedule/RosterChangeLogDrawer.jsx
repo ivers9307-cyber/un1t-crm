@@ -27,7 +27,9 @@ function switchCls(on) {
   return `px-3 py-1.5 ${on ? 'bg-un1t-surface text-un1t-text font-medium' : 'text-un1t-subtle hover:text-un1t-text'} focus:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent`
 }
 
-export default function RosterChangeLogDrawer({ locationId, periodStart, periodEnd, periodLabel, rosterIds = [], onClose, restoreFocusRef }) {
+// TZ.8a — `timeZone` is the studio's locations.timezone: "told 14:02" and
+// the byline read on the studio's clock (null = DEFAULT_TZ).
+export default function RosterChangeLogDrawer({ locationId, timeZone = null, periodStart, periodEnd, periodLabel, rosterIds = [], onClose, restoreFocusRef }) {
   // Starts in `loading`, so the effect below never sets state synchronously.
   const [state, setState] = useState({ loading: true, error: null, changes: [], truncated: false })
   // SNAPSHOT.1 — 'changes' | 'compare'.
@@ -152,7 +154,7 @@ export default function RosterChangeLogDrawer({ locationId, periodStart, periodE
                     {changes.map((c) => {
                     // null = stamped, but the stamp does not mean anybody was told
                     // (stampMeansTold): no chip, rather than a time nobody was told at.
-                    const told = rosterChangeTold(c)
+                    const told = rosterChangeTold(c, timeZone)
                     return (
                       <li key={c.id} className="py-2">
                         <div className="flex items-start justify-between gap-3">
@@ -169,7 +171,7 @@ export default function RosterChangeLogDrawer({ locationId, periodStart, periodE
                             </span>
                           )}
                         </div>
-                        <div className="text-[11px] text-un1t-subtle mt-0.5">{rosterChangeByline(c)}</div>
+                        <div className="text-[11px] text-un1t-subtle mt-0.5">{rosterChangeByline(c, timeZone)}</div>
                       </li>
                     )
                   })}

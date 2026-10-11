@@ -3,6 +3,8 @@
 Scope: un1t-crm at `origin/main` (c91ae071, 9 Oct 2026), live Supabase project `iyvtbjjxdggiadzwwvdj`, Vercel project `un1t-crm`, plus champ-app and the mobile app at the shell level. Question: can a second gym be onboarded into its own segmented environment with its own connections, and what is left before that is smooth? Method: ten parallel code reviews, one per hub, against one rubric (isolation, configuration, hard-coded tenant assumptions, onboarding path, seeded defaults), with every blocker-class claim re-verified by hand, plus live DB, Supabase advisor and Vercel checks. Prior reviews were not consulted for findings.
 
 > **Status 10 Oct 2026:** Wave 0 (blockers 1–6, 9–11 and the five small holes) is delivered — see the dated block under [§3 Blockers](#blockers-fix-before-any-second-gym-has-staff-or-customers). Blockers 7 and 8 are deferred to Waves 2 and 1 as planned. The analysis below is left as written on 9 Oct.
+>
+> **Status 11 Oct 2026:** Wave 1 (identity: blocker 8, brand fallbacks, per-tenant links, seeded settings, the membership-source seam) is delivered — see "Wave 1 delivered 10–11 Oct 2026" under [§3 Blockers](#blockers-fix-before-any-second-gym-has-staff-or-customers). Blocker 7 (money) is Wave 2.
 
 ## 0. Headline
 
@@ -223,6 +225,69 @@ Open after Wave 0:
 - Kiosks: provision hatch-tv1/tv2; reimage stillorgan-tv2.
 - Follow-up chips (not blockers): `layout.js` scoping gate; policies write RLS per org; legacy-key proxy comments; remaining email lookups (incl. champ-app); climate runner device guard; the unreachable WA coexistence `account_update` handler.
 - Regression to restore: the staff `/live/[locationId]` page lost its "TV display" button with 9c (needs the location's `tv_displays` token to rebuild).
+
+#### Wave 1 delivered 10–11 Oct 2026
+
+Wave 1 (identity) closes blocker 8 and the brand, link and Glofox-dependency majors it took on (themes B, C, E and the seeding half of A). PRs are on `ivers9307-cyber/un1t-crm` unless marked champ-app; every PR title was checked against GitHub on 11 Oct. Plan and per-task detail: `docs/superpowers/plans/2026-10-10-saas-wave1-identity.md`. Migrations landed as planned: 715 (`org_settings.short_name`), 716 (`tenant_domains` platform rows), 717 (`locations.membership_source`), 718 (`tenant_email_domains.webhooks_registered_at`).
+
+| Task | PR | What landed |
+|---|---|---|
+| W1.B1 | #1989 | The brand chain is `company_settings → org_settings → locations.name`. The literal `'UN1T'` floor (`DEFAULT_COMPANY_NAME`) is gone, `org_settings.short_name` is new (mig 715), and a shared `productName` helper builds "{Brand} Points" / "{Brand} HR". |
+| W1.B2 | #1995 · champ-app #127 | The phone (`loadBrand` / `useBrand` through `/api/public/branding?location_id=`) and champ-app (`loadBrandForContact`) can read the brand. |
+| W1.L1 | #1986 | Every organisation gets `<slug>.repset.ie`: one `platform` `tenant_domains` row per org (mig 716) and the `resolveCustomerBaseUrl` resolver. |
+| W1.L2 | #1993 | The tenant-domain default allowlist covers the whole customer flow (unsubscribe, preferences, view-email, class-pay, host, embed). |
+| W1.L3a | #1996 | Marketing, sequence, host-campaign and HR email links are minted on the tenant host. |
+| W1.L3b | #2003 | Event, race, booking, class-pay, cancellation-form, host-portal and Mia links are minted on the tenant host. |
+| W1.L3c | #2009 | The host invite's set-password link is on the tenant host, after `https://*.repset.ie/**` was added to the Supabase Auth redirect allow-list. (A third L3 PR the plan did not split out.) |
+| W1.L4 | #1997 | Customer-facing metadata, site name, favicon and front page resolve by the request's host, not by one estate-wide `company_settings` row. |
+| W1.L5 | #1994 | Customer ICS files carry the tenant brand and host (UID on the tenant host, PRODID `-//Repset//Events//EN`). |
+| W1.E1 | #1987 | The `custom_email_domain` gate is reachable: add-on pins count, the wizard grants the owner `org_admin` and links the plan-pin page, and the `POSTMARK_ACCOUNT_TOKEN` env gate is documented. |
+| W1.E2 | #1998 | Before a verified domain every tenant email sends as `{Brand} <platform address>` with Reply-To = the location's address. The `'UN1T <hello@un1t.ie>'` fallback literal is removed. (It also made `campaigns.from_email` inert; #2015 restored it.) |
+| W1.E3 | #1991 | A tenant Postmark server is born with its `broadcast` stream and the six-trigger webhooks (mig 718 stamps `webhooks_registered_at`). |
+| W1.E4 | #1992 | Suppression sync and consent drift run per Postmark server, not on the global token only. |
+| W1.W1 | #1990 | Creating a location seeds `company_settings` (name, logo null, quiet hours) and `notification_config`. |
+| W1.S1a | #2014 | Customer-facing email, push and payment libs name the sending location's brand; new `{{company_name}}` merge tag. |
+| W1.S1b | #2012 | Public pages, widgets, landing pages and TV boards name the studio's or org's configured brand. |
+| W1.S1c | #2008 | The host portal and host emails carry the host's organisation brand. |
+| W1.S2 | #2004 | Staff web chrome says Repset where no org is in scope; staff copy and staff emails name the tenant brand. |
+| W1.S3 | #2000 | Mia, WhatsApp merge fields, the staff assistant and the hyrox prompts speak the tenant brand. No Meta template text changed. |
+| W1.S4 | #1999 | The `shared/` seam and its `src/lib` twins take the brand (product names, milestones). Published as an OTA. |
+| W1.S5 | #2006 | Phone screens take the tenant brand. Published as an OTA. |
+| W1.S6 | champ-app #128 | champ-app speaks the tenant brand; before sign-in it says Repset. |
+| W1.M1 | #1988 | `locations.membership_source` (mig 717: `none`, `glofox` or `un1t`), backfilled from the Glofox connection, plus the membership provider interface. Glofox implements it. |
+| W1.M2 | #2001 | A per-location "Membership source" setting (`PUT /api/locations/[id]/membership-source`, owner or master). |
+| W1.M3a | #2002 | Glofox-only web surfaces show "No membership source connected" instead of empty data. |
+| W1.M3b | #2005 | Glofox crons and Mia find their locations through `membership_source`; the backfill route bug is fixed. |
+| W1.M3c | #2007 | The phone's Studio tab and Business dashboard show the membership-source state. Published as an OTA. |
+
+Two more PRs landed in the same pass, outside the plan:
+
+| PR | What landed |
+|---|---|
+| #2013 | Settings → Email domain can adopt a domain the platform's Postmark account already holds (ADOPTDOMAIN.1). Master only, and only when no other org has claimed it. Found live when UN1T Group's `un1tdublin.com` hit "Domain already exists". |
+| #2015 | Campaigns and sequences may send from any address on the org's verified sending domain, never from an unverified one. This restores `campaigns.from_email` / `email_sequences.from_email`, which W1.E2 had made inert. |
+
+Richard's decisions for Wave 1 (as given):
+- Tenant sending domain is a paid-plan email feature.
+- Before a verified domain: platform address with the tenant's name as display name; Reply-To = the studio.
+- Brand chain `company_settings → org_settings → locations.name`; product names "{Brand} Points" (and "{Brand} HR").
+- Automatic `<slug>.repset.ie` for every org. The wildcard is live and auto-renewed by `.github/workflows/wildcard-cert.yml` (#1984).
+- Sweep everything, including champ-app.
+- Per-studio brand names.
+- "Repset" on crm.repset.ie.
+- UN1T's customer links on `un1t-group.repset.ie`.
+- Stillorgan Reply-To stays `stillorgan@un1t.com`.
+- Agent name "Mia - AI Agent" kept.
+- Campaigns send from any address on the org's verified domain.
+- Timezone is its own wave, next.
+- Membership source is a multiple choice: Glofox and none now, UN1T's home-grown source next.
+
+Open after Wave 1:
+- Richard: adopt `un1tdublin.com` in Settings → Email domain. UN1T's mail currently sends from `accounts@mail.un1tdublin.com`; the plan's "hello@un1t.ie" was only the code fallback, not the live sender.
+- The host re-invite bug (spawned as its own task; #2011 HOSTREINVITE.1, open).
+- The membership-source `'un1t'` provider (the schema already admits it; the provider module plugs into `MEMBERSHIP_SOURCES`).
+- Per-location timezone (its own wave, next).
+- Wave 2: money.
 
 ### Majors, grouped by theme
 

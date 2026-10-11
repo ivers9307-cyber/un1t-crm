@@ -17,7 +17,7 @@ import { readOfferBlock, createOffer, processOffer } from '@/lib/shift-offer-ser
 import { offerRefusal, OFFER_REFUSALS } from '@shared/offer-to-team'
 import { swapShiftHasStarted } from '@/lib/swap-cover'
 import { inStaffPushHours } from '@/lib/staff-push-hours'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -49,7 +49,8 @@ export async function POST(_request, props) {
   const nowMs = Date.now()
   const tz = block.locations?.timezone ?? null
   const started = swapShiftHasStarted({ block_date: block.block_date, start_time: block.start_time }, nowMs, tz)
-  const refusal = offerRefusal(block, { todayIso: dublinTodayStr(), started })
+  // TZ.8a — "past" on the studio's day, the clock `started` is read on.
+  const refusal = offerRefusal(block, { todayIso: todayStrIn(zoneOfLocation({ id: block.location_id, timezone: tz })), started })
   if (refusal) return NextResponse.json({ success: false, code: refusal, error: OFFER_REFUSALS[refusal] }, { status: 409 })
 
   const created = await createOffer(db, { block, actorId: user.id })

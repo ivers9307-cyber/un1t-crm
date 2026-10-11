@@ -16,17 +16,6 @@ const eur = (n) => {
   return v < 0 ? `-${abs}` : abs
 }
 
-// Dublin-hour gate for the Friday cron: vercel.json fires at both
-// 07:00 and 08:00 UTC on Fridays (see the two crons entries) because
-// a single UTC cron can't track Dublin's GMT/IST straddle — this gate
-// picks whichever firing lands in the 08:xx Dublin wall-clock hour,
-// and alreadyRanToday absorbs the other firing plus any retry/manual
-// re-fire from landing a second run the same day.
-export function shouldRunFridayCron({ dublinMinutes, alreadyRanToday }) {
-  const hour = Math.floor(dublinMinutes / 60)
-  return hour === 8 && !alreadyRanToday
-}
-
 function foundSectionHtml(found) {
   if (found.length === 0) return ''
   return `

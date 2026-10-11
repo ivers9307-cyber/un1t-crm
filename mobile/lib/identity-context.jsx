@@ -73,7 +73,7 @@ async function fetchContactRaw() {
   if (!user) return { data: null, error: null }
   return supabase
     .from('contacts')
-    .select('id, name, email, dob, gender, weight_kg, profile_setup_completed_at')
+    .select('id, name, email, dob, gender, weight_kg, profile_setup_completed_at, location_id')
     .eq('user_id', user.id)
     .maybeSingle()
 }

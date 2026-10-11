@@ -23,6 +23,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { validateAboutYou, normalizeWeightKg } from 'shared/profile-setup'
 import { crmApi } from '../../lib/member/api'
 import { PEARL } from '../../lib/member/brand' // Afterglow resting accent (chrome, not zone data)
+import { useMemberBrand } from '../../lib/member/use-member-brand'
 
 const GENDERS = [
   { key: 'female', label: 'Female' },
@@ -64,6 +65,8 @@ function ProgressDots({ step }) {
 
 export default function ProfileSetupWizard({ contact, onDone, onDismiss }) {
   const router = useRouter()
+  // W1.S5 — the studio the data flows into; bare "your studio" until it loads.
+  const { companyName } = useMemberBrand()
 
   const [step, setStep] = useState('welcome')
 
@@ -270,7 +273,7 @@ export default function ProfileSetupWizard({ contact, onDone, onDismiss }) {
 
             <Text className="text-2xl font-display-bold text-chalk">Connect your health data</Text>
             <Text className="mt-1.5 text-sm font-body leading-5 text-chalk-2">
-              Optional — link a wearable so your workouts and heart rate flow into UN1T automatically.
+              Optional — link a wearable so your workouts and heart rate flow into {companyName || 'your studio'} automatically.
               You can always do this later from your account.
             </Text>
 

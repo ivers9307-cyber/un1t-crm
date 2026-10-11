@@ -50,7 +50,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { dublinTodayStr, addDaysISO } from '@/lib/dublin-time'
+import { todayStrIn, addDaysISO, PLATFORM_TZ } from '@/lib/location-time'
 import { getLocationPlan } from '@/lib/plans'
 import { getWallet, applyWalletEntry } from '@/lib/wallet'
 import {
@@ -84,7 +84,7 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const today = dublinTodayStr()
+  const today = todayStrIn(PLATFORM_TZ) // D5: the platform billing calendar (PLATFORM_TZ)
   // Billing month = the Dublin month containing YESTERDAY (final-sweep
   // semantics on the 1st — see header).
   const yesterday = addDaysISO(today, -1)

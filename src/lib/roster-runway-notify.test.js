@@ -16,6 +16,7 @@ vi.mock('./log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() 
 const { notifyUsersAtRolesOnce } = await import('./push-dedup')
 const { fetchRosterRunways } = await import('./roster-runway-data')
 const { logWarn } = await import('./log')
+const { todayStrIn } = await import('./location-time')
 const {
   runRosterRunwayAlerts, decideRunwayPush, isInRunwaySendWindow, runwayEventKey,
   RUNWAY_NOTIFY_ROLES, RUNWAY_SEND_FROM, RUNWAY_SEND_UNTIL,
@@ -187,8 +188,12 @@ describe('runRosterRunwayAlerts', () => {
     const outcome = await runRosterRunwayAlerts(db, { nowMs: CRON_TICK })
 
     expect(db.selects).toEqual(['id, name, timezone'])
-    // "today" is the DUBLIN day of the instant, not the host's.
-    expect(fetchRosterRunways).toHaveBeenCalledWith(db, [NORTH.id, SOUTH.id], { todayIso: '2026-09-19' })
+    // TZ.8a — "today" is each studio's own day of the instant (never the
+    // host's): the zones read with the rows go to the reader, which takes the
+    // day per studio (src/lib/tz-8a.tz.test.js pins that half).
+    expect(fetchRosterRunways).toHaveBeenCalledWith(db, [NORTH.id, SOUTH.id], {
+      zones: new Map([[NORTH.id, 'Europe/Dublin'], [SOUTH.id, 'Europe/Dublin']]), nowMs: CRON_TICK,
+    })
     expect(notifyUsersAtRolesOnce).toHaveBeenCalledTimes(1)
     expect(notifyUsersAtRolesOnce).toHaveBeenCalledWith(
       db,
@@ -206,9 +211,26 @@ describe('runRosterRunwayAlerts', () => {
     expect(outcome).toEqual({ locations: 2, alerts: 1, quiet_hours: 0, sent: 2, emailed: 0, deduped: 0, failed: 0, recipients_failed: 0 })
   })
 
+  it('isDue (the cron\'s claimed daily slots): only studios at their slot are read and walked; none due reads no runways', async () => {
+    const db = makeDb([NORTH, SOUTH])
+    const outcome = await runRosterRunwayAlerts(db, { nowMs: CRON_TICK, isDue: (id) => id === SOUTH.id })
+    expect(fetchRosterRunways).toHaveBeenCalledWith(db, [SOUTH.id], { zones: new Map([[SOUTH.id, 'Europe/Dublin']]), nowMs: CRON_TICK })
+    expect(notifyUsersAtRolesOnce).not.toHaveBeenCalled() // North is unready but not at its slot this tick
+    expect(outcome).toMatchObject({ locations: 1, alerts: 0 })
+
+    fetchRosterRunways.mockClear()
+    const none = await runRosterRunwayAlerts(makeDb([NORTH, SOUTH]), { nowMs: CRON_TICK, isDue: () => false })
+    expect(fetchRosterRunways).not.toHaveBeenCalled()
+    expect(none).toEqual({ locations: 0, alerts: 0, quiet_hours: 0, sent: 0, emailed: 0, deduped: 0, failed: 0, recipients_failed: 0 })
+  })
+
   it('"today" follows Dublin across midnight: 23:30 UTC on the 19th is already the 20th there (IST)', async () => {
-    await runRosterRunwayAlerts(makeDb([NORTH]), { nowMs: Date.UTC(2026, 8, 19, 23, 30) })
-    expect(fetchRosterRunways).toHaveBeenCalledWith(expect.anything(), [NORTH.id], { todayIso: '2026-09-20' })
+    const nowMs = Date.UTC(2026, 8, 19, 23, 30)
+    await runRosterRunwayAlerts(makeDb([NORTH]), { nowMs })
+    // TZ.8a — the instant and the studio's zone travel; the reader takes the day.
+    const [, , opts] = fetchRosterRunways.mock.calls[0]
+    expect(opts).toEqual({ zones: new Map([[NORTH.id, 'Europe/Dublin']]), nowMs })
+    expect(todayStrIn(opts.zones.get(NORTH.id), opts.nowMs)).toBe('2026-09-20')
   })
 
   it('outside the band: NOTHING is sent and the dedup sender is never reached, so no key is claimed', async () => {

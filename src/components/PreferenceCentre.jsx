@@ -57,6 +57,8 @@ export default function PreferenceCentre({ token }) {
   const [error, setError] = useState(null)
   const [contact, setContact] = useState(null)
   const [lists, setLists] = useState([])
+  // W1.S1b — the organisation's brand, from the preferences payload.
+  const [brand, setBrand] = useState('')
 
   const fetchPreferences = useCallback(async () => {
     try {
@@ -65,6 +67,7 @@ export default function PreferenceCentre({ token }) {
       if (data.success) {
         setContact(data.contact)
         setLists(data.lists || [])
+        setBrand(typeof data.brand === 'string' ? data.brand : '')
       } else {
         setError('This link is no longer valid.')
       }
@@ -143,9 +146,11 @@ export default function PreferenceCentre({ token }) {
     <div className="min-h-screen bg-black text-white px-5 py-14 sm:py-20">
       <div className="w-full max-w-xl mx-auto">
         <header className="mb-10">
-          <p className="font-display font-extrabold uppercase tracking-[0.2em] text-xs text-white/40 mb-4">
-            UN1T
-          </p>
+          {brand && (
+            <p className="font-display font-extrabold uppercase tracking-[0.2em] text-xs text-white/40 mb-4">
+              {brand}
+            </p>
+          )}
           <h1 className="font-display font-extrabold uppercase tracking-wide text-3xl sm:text-4xl leading-[1.05] mb-4">
             Your preferences
           </h1>
@@ -216,7 +221,7 @@ export default function PreferenceCentre({ token }) {
             </>
           ) : (
             <p className="text-white/50 text-sm">
-              You’re unsubscribed from all UN1T marketing. Turn any switch back on above if you
+              You’re unsubscribed from all {brand ? `${brand} ` : 'our '}marketing. Turn any switch back on above if you
               change your mind.
             </p>
           )}

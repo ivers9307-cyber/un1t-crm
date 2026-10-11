@@ -1,6 +1,6 @@
 // RANGEVALID.1 — the one rule for a holiday-allowance year.
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { parseAllowanceYear, dublinYear, ALLOWANCE_YEAR_MIN, ALLOWANCE_YEAR_MAX, ALLOWANCE_YEAR_ERROR } from './allowance-year'
+import { parseAllowanceYear, allowanceYearIn, ALLOWANCE_YEAR_MIN, ALLOWANCE_YEAR_MAX, ALLOWANCE_YEAR_ERROR } from './allowance-year'
 
 afterEach(() => vi.useRealTimers())
 
@@ -23,7 +23,7 @@ describe('parseAllowanceYear (RANGEVALID.1)', () => {
     // 03:00 UTC on 1 Jan 2027 is 2027 in Dublin, still 2026 in Los Angeles.
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2027-01-01T03:00:00Z') })
     for (const raw of [null, undefined, '']) expect(parseAllowanceYear(raw)).toEqual({ year: 2027, error: null })
-    expect(dublinYear()).toBe(2027)
+    expect(allowanceYearIn()).toBe(2027)
   })
 
   it('the window is the allowances PUT\'s', () => {

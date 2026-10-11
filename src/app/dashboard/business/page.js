@@ -12,6 +12,7 @@ import { createServerClient } from '@/lib/supabase'
 import { fetchFunnelCounts, fetchAdsSummary, fetchTodayOps } from '@shared/dashboard-data'
 import { buildNeedsYouRail } from '@/lib/dashboard/business-rail'
 import { buildBusinessKpis } from '@/lib/dashboard/business-kpis'
+import { adsDayZoneForDisplay } from '@/lib/ads/account-day'
 import { computeMembershipCounts } from '@/lib/membership-snapshot'
 import { fetchMembershipFlows } from '@/lib/membership-flows'
 import { KpiCard, KpiRow, formatCurrency } from '@/components/dashboard/Cards'
@@ -23,6 +24,7 @@ import { LabourBlock } from '@/components/dashboard/LabourBlock'
 import { canSeeLabour, labourStudiosFor } from '@/lib/labour-month-model'
 import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
 import MembershipSourceGate from '@/components/MembershipSourceGate'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const dynamic = 'force-dynamic'
 
@@ -83,13 +85,15 @@ async function KpiBriefingBlock({ user, locationId }) {
   )
 }
 
-async function FunnelAdsBlock({ locationId }) {
+async function FunnelAdsBlock({ locationId, zone }) {
   const db = createServerClient()
   let data = null
   try {
     const [funnel, ads] = await Promise.all([
-      fetchFunnelCounts(db, locationId),
-      fetchAdsSummary(db, locationId),
+      fetchFunnelCounts(db, locationId, undefined, zone),
+      // TZ.11c: the 7-day window is in the ad account's zone (account-day.js),
+      // NOT the studio's.
+      adsDayZoneForDisplay(db, locationId).then((adsZone) => fetchAdsSummary(db, locationId, new Date(), adsZone)),
     ])
     data = { funnel, ads }
   } catch {
@@ -115,7 +119,7 @@ async function FunnelAdsBlock({ locationId }) {
   )
 }
 
-async function MembershipBlock({ user, locationId }) {
+async function MembershipBlock({ user, locationId, zone }) {
   const db = createServerClient()
   // W1.M3a — the trend is a count of MEMBERSHIPS, so without a membership
   // source it is a flat zero. Gated like the KPI row above; the funnel,
@@ -138,7 +142,7 @@ async function MembershipBlock({ user, locationId }) {
   try {
     const [live, flows] = await Promise.all([
       computeMembershipCounts(db, locationId),
-      fetchMembershipFlows(db, locationId, 12),
+      fetchMembershipFlows(db, locationId, 12, undefined, { zone }),
     ])
     // Falsy counts are a failure too — fall through to the error cell
     // rather than rendering nothing (JSX built after the try per the
@@ -151,11 +155,11 @@ async function MembershipBlock({ user, locationId }) {
   return <MembershipPanel live={data.live} flows={data.flows} />
 }
 
-async function TodayBlock({ locationId, locationName }) {
+async function TodayBlock({ locationId, locationName, zone }) {
   const db = createServerClient()
   let ops = null
   try {
-    const res = await fetchTodayOps(db, locationId)
+    const res = await fetchTodayOps(db, locationId, undefined, zone)
     if (!res.success) throw new Error(res.error)
     ops = res.data
   } catch {
@@ -187,6 +191,8 @@ export default async function BusinessDashboardPage() {
   // manager, and a studio's labour total can be one person's pay.
   const showLabour = canSeeLabour(user)
   const labourStudios = showLabour ? labourStudiosFor(user) : []
+  // TZ.11a — every block counts on the active studio's calendar.
+  const zone = zoneOfLocation(user.activeLocation)
 
   return (
     <>
@@ -196,18 +202,18 @@ export default async function BusinessDashboardPage() {
       <div className="grid xl:grid-cols-3 gap-4 mt-4">
         <div className="xl:col-span-2 space-y-4">
           <Suspense fallback={<BlockSkeleton lines={4} />}>
-            <FunnelAdsBlock locationId={locationId} />
+            <FunnelAdsBlock locationId={locationId} zone={zone} />
           </Suspense>
           <Suspense fallback={<BlockSkeleton lines={5} />}>
-            <MembershipBlock user={user} locationId={locationId} />
+            <MembershipBlock user={user} locationId={locationId} zone={zone} />
           </Suspense>
           {showLabour ? (
             <Suspense fallback={<BlockSkeleton lines={5} />}>
-              <LabourBlock activeLocationId={locationId} studios={labourStudios} />
+              <LabourBlock activeLocationId={locationId} studios={labourStudios} zone={zone} />
             </Suspense>
           ) : null}
           <Suspense fallback={<BlockSkeleton lines={2} />}>
-            <TodayBlock locationId={locationId} locationName={locationName} />
+            <TodayBlock locationId={locationId} locationName={locationName} zone={zone} />
           </Suspense>
         </div>
         <div className="xl:order-none order-first">

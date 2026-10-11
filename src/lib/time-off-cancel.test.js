@@ -5,7 +5,7 @@ import {
   isOpenCancelAsk, cancelAskState, selfCancelMode, canDecideLeaveCancel, leaveActingLocationIds,
   resolveLeaveCancelDeciderIds, annotateCancelAsk, cancelAskEventKey,
   cancelAskNoticeKey, reAskBlockedUntil, CLEARED_CANCEL_ASK,
-  isMissingCancelSchemaError, CANCEL_ASK_OFF, dublinRetryLabel,
+  isMissingCancelSchemaError, CANCEL_ASK_OFF, retryLabelIn,
   requesterLeaveTier, approvedLeaveGuardAllows, annotateApprovedLeaveGuard, approvedLeaveRefusal,
 } from './time-off-cancel.js'
 import { LEAVE_CANCEL_NOTICES, cancelledAtRequestText } from './time-off-cancel-copy.js'
@@ -236,16 +236,16 @@ describe('reAskBlockedUntil — one re-ask per 24h after a DECLINE (each ask not
   })
 })
 
-describe('dublinRetryLabel — "HH:MM on D Mon", Dublin wall clock, whatever the process timezone', () => {
+describe('retryLabelIn — "HH:MM on D Mon", Dublin wall clock, whatever the process timezone', () => {
   it('reads Irish summer time and winter time', () => {
-    expect(dublinRetryLabel('2026-09-22T13:30:00.000Z')).toBe('14:30 on 22 Sep')
-    expect(dublinRetryLabel('2026-12-01T14:30:00.000Z')).toBe('14:30 on 1 Dec')
+    expect(retryLabelIn('2026-09-22T13:30:00.000Z')).toBe('14:30 on 22 Sep')
+    expect(retryLabelIn('2026-12-01T14:30:00.000Z')).toBe('14:30 on 1 Dec')
     // Late evening UTC is already the next day in Dublin in summer.
-    expect(dublinRetryLabel('2026-06-30T23:30:00.000Z')).toBe('00:30 on 1 Jul')
+    expect(retryLabelIn('2026-06-30T23:30:00.000Z')).toBe('00:30 on 1 Jul')
   })
   it('null for anything unreadable', () => {
-    expect(dublinRetryLabel(null)).toBeNull()
-    expect(dublinRetryLabel('not a date')).toBeNull()
+    expect(retryLabelIn(null)).toBeNull()
+    expect(retryLabelIn('not a date')).toBeNull()
   })
 })
 

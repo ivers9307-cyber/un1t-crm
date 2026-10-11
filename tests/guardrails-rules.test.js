@@ -89,6 +89,40 @@ ruleTester.run('no-utc-today', plugin.rules['no-utc-today'], {
   ],
 })
 
+// TZ.18a — the gate around it (allowlist, shrinking baseline) is
+// scripts/check-dublin-zone.mjs, tested in tests/dublin-zone-guard.test.js.
+ruleTester.run('no-hardcoded-dublin-zone', plugin.rules['no-hardcoded-dublin-zone'], {
+  valid: [
+    "import { todayStrIn } from '@/lib/location-time'",
+    "import { PLATFORM_TZ } from '../shared/zoned-time.js'",
+    'const z = PLATFORM_TZ',
+    "const s = 'Times are shown in Europe/Dublin for this studio'", // prose, not a zone value
+    'f({ timeZone: zone })',
+    "const t = 'Europe/London'",
+    'const t = `Europe/Dublin ${x}`', // a template with expressions is not a bare zone value
+    "import x from './dublin-time-legacy-notes.js'", // only the module itself
+    "const m = require('./not-dublin-time-at-all')",
+    // TZ.18b — { literals: false } (tests): the zone may be named, imports still fail
+    { code: "f({ timeZone: 'Europe/Dublin' })", options: [{ literals: false }] },
+  ],
+  invalid: [
+    { code: "f({ timeZone: 'Europe/Dublin' })", errors: [{ messageId: 'literal' }] },
+    { code: "f({ timeZone: 'Europe/Dublin' })", options: [{ literals: true }], errors: [{ messageId: 'literal' }] },
+    { code: "import { dublinDateKey } from './dublin-time.js'", options: [{ literals: false }], errors: [{ messageId: 'import' }] },
+    { code: 'f({ timeZone: "Europe/Dublin" })', errors: [{ messageId: 'literal' }] },
+    { code: "const tz = loc.timezone || 'Europe/Dublin'", errors: [{ messageId: 'literal' }] },
+    { code: 'const tz = `Europe/Dublin`', errors: [{ messageId: 'literal' }] },
+    { code: "import { dublinTodayStr } from '@/lib/dublin-time'", errors: [{ messageId: 'import' }] },
+    { code: "import { dublinDateKey } from './dublin-time.js'", errors: [{ messageId: 'import' }] },
+    { code: "import { dublinDateKey } from 'shared/dublin-time'", errors: [{ messageId: 'import' }] },
+    { code: "import { dublinDateKey } from '../../../shared/dublin-time'", errors: [{ messageId: 'import' }] },
+    { code: "const m = await import('./dublin-time.js')", errors: [{ messageId: 'import' }] },
+    { code: "const { dublinTodayStr } = require('../lib/dublin-time')", errors: [{ messageId: 'import' }] },
+    { code: "export { dublinTodayStr } from '@/lib/dublin-time'", errors: [{ messageId: 'import' }] },
+    { code: "export * from './dublin-time'", errors: [{ messageId: 'import' }] },
+  ],
+})
+
 ruleTester.run('no-low-contrast-chip', plugin.rules['no-low-contrast-chip'], {
   valid: [
     // the light chip idiom — -700 ramp on a tint

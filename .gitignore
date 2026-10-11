@@ -36,3 +36,6 @@ mobile/google-services.json
 
 # CI-SHARD.1 — ESLint file cache (web-ci.yml restores it between runs)
 .eslintcache
+
+# Agent scratch PR bodies must never be committed (W1.S4 left one on main, 11 Oct)
+/pr-*.md

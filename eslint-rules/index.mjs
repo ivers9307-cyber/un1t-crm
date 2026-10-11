@@ -174,7 +174,7 @@ const noUtcToday = {
     docs: { description: "Disallow new Date().toISOString().slice/split — the UTC date of now; use dublinTodayStr() for a business 'today'." },
     schema: [],
     messages: {
-      utcToday: "new Date().toISOString() is the UTC date of now — during BST it differs from the Dublin date around midnight, an off-by-one for a business 'today'. Use dublinTodayStr() from @/lib/dublin-time. If you genuinely need the UTC date (filename/storage key), annotate with an eslint-disable + reason.",
+      utcToday: "new Date().toISOString() is the UTC date of now — around midnight it differs from the studio's date (an hour in Irish summer time; more in other zones), an off-by-one for a business 'today'. Use todayStrIn(zone) from @/lib/location-time (the location's zone; shared/zoned-time on the phone). If you genuinely need the UTC date (filename/storage key), annotate with an eslint-disable + reason.",
     },
   },
   create(context) {
@@ -191,6 +191,51 @@ const noUtcToday = {
         if (!dateNode.callee || dateNode.callee.name !== 'Date') return
         if (dateNode.arguments && dateNode.arguments.length > 0) return // new Date(x) — not "now"
         context.report({ node, messageId: 'utcToday' })
+      },
+    }
+  },
+}
+
+// TZ.18 — a studio's clock is its locations.timezone. A bare 'Europe/Dublin' or a
+// dublin-time import is a per-tenant decision pinned to UN1T's zone. Use
+// @/lib/location-time (zone from the location) or PLATFORM_TZ (a platform-level
+// decision). Exact-value match only: prose that mentions the zone is fine.
+// Armed by scripts/check-dublin-zone.mjs (npm run check:guardrails), which owns
+// the allowlist (TZ.18b: no baseline any more; the wave is swept); not by
+// eslint.guardrails.config.mjs, which ignores mobile/**. Option
+// `{ literals: false }` keeps only the import ban: tests may name the zone (the
+// Europe/Dublin pins), but nothing imports dublin-time outside its own tests.
+const DUBLIN_IMPORT = /(^|\/)dublin-time(\.js)?$/
+const noHardcodedDublinZone = {
+  meta: {
+    type: 'problem',
+    docs: { description: "Disallow the literal 'Europe/Dublin' and dublin-time imports outside the zone helpers." },
+    schema: [{ type: 'object', properties: { literals: { type: 'boolean' } }, additionalProperties: false }],
+    messages: {
+      literal: "'Europe/Dublin' hard-codes UN1T's zone. Use the location's zone (@/lib/location-time: getLocationZone / zoneOfLocation) or PLATFORM_TZ for a platform-level decision.",
+      import: 'dublin-time pins Europe/Dublin. Import the zone-taking twin from @/lib/location-time (web) or shared/zoned-time (phone, shared).',
+    },
+  },
+  create(context) {
+    const literals = context.options[0]?.literals !== false
+    const lit = (node, value) => {
+      if (literals && value === 'Europe/Dublin') context.report({ node, messageId: 'literal' })
+    }
+    const imp = (node, src) => {
+      if (typeof src === 'string' && DUBLIN_IMPORT.test(src)) context.report({ node, messageId: 'import' })
+    }
+    return {
+      // An import's source string is a Literal too, but '…/dublin-time' is not
+      // 'Europe/Dublin', so nothing reports twice.
+      Literal(node) { lit(node, node.value) },
+      TemplateLiteral(node) { if (node.expressions.length === 0) lit(node, node.quasis[0].value.cooked) },
+      ImportDeclaration(node) { imp(node, node.source.value) },
+      ImportExpression(node) { if (node.source.type === 'Literal') imp(node, node.source.value) },
+      ExportAllDeclaration(node) { imp(node, node.source && node.source.value) },
+      ExportNamedDeclaration(node) { if (node.source) imp(node, node.source.value) },
+      'CallExpression[callee.type="Identifier"][callee.name="require"]'(node) {
+        const a = node.arguments[0]
+        if (a && a.type === 'Literal') imp(node, a.value)
       },
     }
   },
@@ -1179,6 +1224,7 @@ export default {
     'no-uncapped-supabase-limit': noUncappedSupabaseLimit,
     'no-zulu-template-date': noZuluTemplateDate,
     'no-utc-today': noUtcToday,
+    'no-hardcoded-dublin-zone': noHardcodedDublinZone,
     'no-low-contrast-chip': noLowContrastChip,
     'no-low-contrast-accent-text': noLowContrastAccentText,
     'no-dead-un1t-token': noDeadUn1tToken,

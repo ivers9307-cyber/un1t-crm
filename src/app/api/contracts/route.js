@@ -32,12 +32,15 @@ import { contractIssueSchema } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 import {
   mergeVariables,
+  linksInTemplateOrg,
+  issuingLocationLink,
   renderTemplate,
   validateCustomVariables,
   extractPlaceholders,
   locationVariables,
 } from '@/lib/contracts'
 import { getLocationBranding } from '@/lib/location-branding'
+import { zoneOfLocation } from '@/lib/location-time'
 import { getContractingEntity } from '@/lib/contracting-entity'
 import { notifyContractIssued } from '@/lib/contracts-notify'
 import { logAuditEvent } from '@/lib/audit'
@@ -154,7 +157,7 @@ export async function POST(request) {
       id, full_name, email, role, employment_type,
       annual_salary, hourly_rate, overtime_rate, contracted_hours_per_week,
       profile_locations:profile_locations(location_id, is_default,
-        location:locations!location_id(id, organization_id, name, address, phone, email))
+        location:locations!location_id(id, organization_id, name, address, phone, email, timezone))
     `)
     .eq('id', parsed.data.profile_id)
     .maybeSingle()
@@ -169,10 +172,10 @@ export async function POST(request) {
   //     as an unknown id, before any other check reads their row, so other
   //     orgs' people cannot be probed. A null-org
   //     template (master-only) keeps its old behaviour.
-  const allLinks = recipient.profile_locations || []
-  const recipientLinks = template.organization_id
-    ? allLinks.filter(l => l?.location?.organization_id === template.organization_id)
-    : allLinks
+  //     The issue wizard previews with the same two helpers
+  //     (linksInTemplateOrg / issuingLocationLink), so its {{today}} is
+  //     rendered in the studio picked here.
+  const recipientLinks = linksInTemplateOrg(recipient.profile_locations, template)
   if (template.organization_id && recipientLinks.length === 0) {
     return NextResponse.json({ success: false, error: 'Recipient not found' }, { status: 404 })
   }
@@ -199,8 +202,7 @@ export async function POST(request) {
     }, { status: 400 })
   }
   if (!locationId) {
-    const def = recipientLinks.find(l => l.is_default) || recipientLinks[0]
-    locationId = def?.location_id || null
+    locationId = issuingLocationLink(recipient, template)?.location_id || null
   }
   if (!organizationId) {
     const link = recipientLinks.find(l => l.location_id === locationId)
@@ -219,8 +221,9 @@ export async function POST(request) {
   //     through to {} fields if an explicit request-body location_id
   //     isn't actually one of the recipient's own links — an edge case
   //     that just means fewer location vars resolve, not an error).
-  //     Branding is location -> org -> 'UN1T' inheritance (see
-  //     getLocationBranding); fetch once, reused by the render below.
+  //     Branding is company_settings -> org_settings -> locations.name
+  //     inheritance (see getLocationBranding); fetch once, reused by the
+  //     render below.
   const locationRow = recipientLinks.find(l => l.location_id === locationId)?.location || null
   const branding = await getLocationBranding(db, locationId)
   //     LEGALENT.1 — {{legal_entity_name}} is the CONTRACTING COMPANY
@@ -229,6 +232,19 @@ export async function POST(request) {
   //     against the org already established above, so a CCF Autos
   //     contract can never inherit the gym's entity.
   const entity = await getContractingEntity(db, { organizationId, locationId, branding })
+  //     W1.S1a — never issue (or draft) a contract without a contracting
+  //     entity. Since the literal sweep the resolver's floor is the org's
+  //     own name, then '' when even that row is unreadable. A row stored
+  //     without legal_entity_name reads as pre-LEGALENT.1 to
+  //     contractCountersignatureLabel and would countersign as the legacy
+  //     entity on every surface and the archived PDF, for good. Refuse
+  //     before any insert; the operator retries.
+  if (!String(entity?.label || '').trim()) {
+    return NextResponse.json({
+      success: false,
+      error: "Couldn't confirm the contracting company for this organisation. Nothing was issued; please try again.",
+    }, { status: 503 })
+  }
   const locVars = locationVariables({ location: locationRow, branding, entity })
 
   // 4. Validate custom variables required by the template.
@@ -248,7 +264,9 @@ export async function POST(request) {
   //    signature stays profile/custom) so a same-named custom variable
   //    can still override a location auto-fill if a template ever
   //    declares one.
-  const merged = mergeVariables(recipient, { ...locVars, ...parsed.data.variables })
+  //    TZ.8b — {{today}} is the issuing studio's day (the location row
+  //    embedded above carries its timezone).
+  const merged = mergeVariables(recipient, { ...locVars, ...parsed.data.variables }, { zone: zoneOfLocation(locationRow) })
   let bodyRendered = renderTemplate(template.body_markdown, merged)
 
   // 5a. CONTRACT-VARS.1 — reject if any placeholder remains in the

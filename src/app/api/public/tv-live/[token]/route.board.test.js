@@ -36,7 +36,7 @@ const TOKEN = 'tok-1'
 // paging loop is exercised for real. The session rows carry the running
 // aggregate columns the route renders from. The token resolves through an
 // active tv_displays row to loc-1.
-function makeDb({ samples, sessions }) {
+function makeDb({ samples, sessions, location = { id: 'loc-1', name: 'Stillorgan' } }) {
   function hrSamplesQuery() {
     const chain = {
       select: () => chain,
@@ -71,7 +71,7 @@ function makeDb({ samples, sessions }) {
         return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { location_id: 'loc-1', active: true }, error: null }) }) }) }
       }
       if (table === 'locations') {
-        return { select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: { id: 'loc-1', name: 'Stillorgan' }, error: null }) }) }) }
+        return { select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: location, error: null }) }) }) }
       }
       if (table === 'ble_bridges') {
         return { select: () => ({ eq: () => Promise.resolve({ data: [], error: null }) }) }
@@ -206,5 +206,15 @@ describe('GET /api/public/tv-live/[token] — board payload', () => {
     expect(ids).toContain('shown')
     expect(ids).toContain('anon')      // anonymous walk-in unaffected
     expect(ids).not.toContain('hidden') // opted-out member dropped
+  })
+})
+
+describe('GET /api/public/tv-live/[token] — TZ.12 board zone', () => {
+  it("carries the token's location zone; a row with no timezone is Europe/Dublin", async () => {
+    const ny = await (await callRoute(makeDb({ samples: [], location: { id: 'loc-1', name: 'NY', timezone: 'America/New_York' } }))).json()
+    expect(ny.timezone).toBe('America/New_York')
+    expect(ny.location).toEqual({ id: 'loc-1', name: 'NY' })
+    const dub = await (await callRoute(makeDb({ samples: [] }))).json()
+    expect(dub.timezone).toBe('Europe/Dublin')
   })
 })

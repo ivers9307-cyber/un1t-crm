@@ -8,6 +8,8 @@ import { withSendMarker } from './postmark-send-marker'
 // can read them without a cycle; both stay exported from here for callers.
 import { getDefaultMailboxAddress, getLocationInboxReplyTo as resolveInboxReplyTo } from './postmark-reply-to'
 import { wireFrom, resolvedFromOf, platformFromAddress, parseAddressHeader } from './platform-sender'
+import { withRequestedFrom } from './from-address'
+import { instantToZonedParts, DEFAULT_TZ } from './location-time'
 
 export { getDefaultMailboxAddress }
 
@@ -519,6 +521,12 @@ export function applyMergeTags(html, contact, extras = {}) {
     // Now reads pipeline_stage_slug (CLASSIFY.2).
     '{{lead_status}}': stageLabel,
     '{{location_name}}': extras.location_name || '',
+    // W1.S1a — the SENDING location's configured brand (getLocationBranding
+    // .companyName: company_settings -> org_settings -> locations.name), so
+    // shipped copy says "Welcome to {{company_name}}" instead of naming one
+    // gym. Lowercase like every tag here. Empty when the caller did not
+    // resolve it.
+    '{{company_name}}': extras.company_name || '',
     '{{unsubscribe_url}}': extras.unsubscribe_url || '',
     '{{preference_url}}': extras.preference_url || '',
     // STARTPREFILL.1 — a capability token the /start funnel exchanges for this
@@ -529,7 +537,10 @@ export function applyMergeTags(html, contact, extras = {}) {
     // identity. Empty when the caller did not mint one — the link then still
     // works, just without the prefill.
     '{{booking_token}}': extras.booking_token || '',
-    '{{current_year}}': new Date().getFullYear().toString(),
+    // TZ.17 — the year on the SENDING studio's calendar (`extras.zone`, else
+    // Europe/Dublin). It was the host clock's (UTC on Vercel). Europe/Dublin is
+    // on GMT at New Year, so for a Dublin studio the year is unchanged.
+    '{{current_year}}': String(instantToZonedParts(Date.now(), extras.zone || DEFAULT_TZ).y),
     // PASSCODEREAD.1 — retired: always empty, never reads the column.
     '{{glofox_passcode}}': '',
     // PAYLINK.7 — the overdue-payment reminder's pay link, resolved by the
@@ -916,8 +927,12 @@ export async function sendMarketingEmail({
   // the wire; the address is the resolver's (see sendEmail).
   from,
   // W1.E2 — a display name alone (a sequence's from_name). Rides the
-  // resolver's address; the sequence's from_email is never the address.
+  // resolved address.
   fromName,
+  // FROMDOMAIN — a REQUESTED address (a sequence's from_email). Used only
+  // when it is on the org's verified sending domain (pickFromAddress in
+  // src/lib/from-address.js); otherwise the resolver's own address goes out.
+  fromEmail,
   sourceType = 'sequence', sequenceId = null, sequenceStepId = null,
 }) {
   // EMAIL-INBOX.1 — marketing sends default their Reply-To to the
@@ -933,7 +948,10 @@ export async function sendMarketingEmail({
   // the email_sends insert. Global default when no live tenant domain
   // exists (every org today) → byte-identical send + honest from_email.
   const db = (contactId || locationId) ? createServerClient() : null
-  const sender = locationId ? await resolveEmailSender(db, locationId) : null
+  // FROMDOMAIN — the requested address replaces the resolver's only when it
+  // is on the org's verified domain; with no location there is no sender and
+  // no verified domain, so nothing changes.
+  const sender = locationId ? withRequestedFrom(await resolveEmailSender(db, locationId), fromEmail) : null
 
   const result = await sendEmail({
     to,

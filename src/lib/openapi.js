@@ -25,6 +25,7 @@ import {
   giversEnquirySchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
+import { PLATFORM_NAME } from './brand-name.js'
 import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
 import { WindowBase } from '@/lib/schedule/windows'
 import { AvailabilityPutSchema } from '@/lib/availability-server'
@@ -326,7 +327,7 @@ registry.registerPath({
   path: '/api/unsubscribe/host/{token}',
   tags: ['Public'],
   summary: 'One-click unsubscribe from a host\'s marketing list (RFC 8058)',
-  description: 'Anonymous. `token` is the HMAC host-unsubscribe token from a host campaign footer (pins host + contact). Writes a per-host suppression only — UN1T marketing consent is untouched (HOST-CONSENT.1). Body ignored. A repeat click is a 200 no-op. Invalid tokens spend a per-IP budget. A GET on this same path (a mail client rendering the List-Unsubscribe URL as a link) 302-redirects to the `/unsubscribe/host/{token}` landing page instead of 405ing. Unlike the sibling `/api/unsubscribe/{token}` (which redirects to a non-destructive preference centre), that landing page performs the unsubscribe on the GET itself.',
+  description: 'Anonymous. `token` is the HMAC host-unsubscribe token from a host campaign footer (pins host + contact). Writes a per-host suppression only — the organisation\'s marketing consent is untouched (HOST-CONSENT.1). Body ignored. A repeat click is a 200 no-op. Invalid tokens spend a per-IP budget. A GET on this same path (a mail client rendering the List-Unsubscribe URL as a link) 302-redirects to the `/unsubscribe/host/{token}` landing page instead of 405ing. Unlike the sibling `/api/unsubscribe/{token}` (which redirects to a non-destructive preference centre), that landing page performs the unsubscribe on the GET itself.',
   request: { params: z.object({ token: z.string().min(1) }) },
   responses: {
     200: { description: 'Unsubscribed from the host (or already unsubscribed)' },
@@ -4879,7 +4880,7 @@ registry.registerPath({
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Provision the org\'s Postmark server + sending domain (organisation admins only)',
-  description: 'Initiate: creates the org\'s dedicated Postmark server (via the Account API) and its sending domain, persists ids/token, and returns the DNS records to add — NEVER the server token. Gated by the custom_email_domain plan add-on (403 if the org\'s plan lacks it). Idempotent: a re-post for an already-provisioned org re-reads Postmark, never spawning a second server. A foreign org answers 404, not 403. 503 when POSTMARK_ACCOUNT_TOKEN is unset. A failed read of the stored state answers 502 and creates nothing.',
+  description: 'Initiate: creates the org\'s dedicated Postmark server (via the Account API) and its sending domain, persists ids/token, and returns the DNS records to add — NEVER the server token. Gated by the custom_email_domain plan add-on (403 if the org\'s plan lacks it). Idempotent: a re-post for an already-provisioned org re-reads Postmark, never spawning a second server. A foreign org answers 404, not 403. 503 when POSTMARK_ACCOUNT_TOKEN is unset. A failed read of the stored state answers 502 and creates nothing. When Postmark answers "Domain already exists" (domains are account-level), a platform master adopts the existing account domain if no other organisation holds it; anyone else gets a 409.',
   request: {
     body: {
       content: {
@@ -4899,6 +4900,7 @@ registry.registerPath({
     400: { description: 'Invalid sending domain', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — organisation admins only, or the add-on is not on the plan', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The domain is already a Domain in the platform\'s Postmark account and this caller may not adopt it (not a platform master, or another organisation holds it) — use a subdomain', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Postmark could not provision the server/domain', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'Provisioning not configured on this deployment', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -4952,7 +4954,7 @@ registry.registerPath({
             address: z.string().max(300).nullish(),
             phone: z.string().max(50).nullish(),
             email: z.string().email().nullish(),
-            timezone: z.string().max(64).optional(),
+            timezone: z.string().max(64).optional().openapi({ description: 'TZ.2: the studio\'s IANA timezone (any zone, e.g. Europe/Dublin, America/New_York), stored in its canonical spelling. Fixed offsets (+05:30, Etc/GMT-5, UTC+1) and unknown names are refused with 400. Omitted = Europe/Dublin; the CRM forms always send the zone the creator chose. Changed later only through the service role (no client UPDATE since mig 719).' }),
             country: z.string().length(2).optional(),
             active: z.boolean().optional(),
             monthly_contractor_budget_eur: z.number().min(0).nullish(),
@@ -4969,6 +4971,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Location created and seeded' },
+    400: { description: 'Validation failed (e.g. a timezone that is not an IANA zone, or a fixed offset)', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — master only', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Slug already exists', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Location created but seeding failed (safe to re-run)', content: { 'application/json': { schema: ErrorResponse } } },
@@ -5013,7 +5016,7 @@ registry.registerPath({
   tags: ['Communications'],
   security: [{ CookieAuth: [] }],
   summary: 'Send-time quiet window for a location',
-  description: 'Returns { enabled, start_hour, end_hour, default_start_hour, default_end_hour, can_edit } (company_settings.send_quiet_hours_*, mig 514; defaults enabled=true, 21:00 to 08:00 Europe/Dublin). ADVISORY on every MANUAL path: the composers warn when a send would land inside the window and offer the next slot outside it, and nothing an operator sends by hand is clamped, deferred or blocked. One automated reader DEFERS (SEQ-QUIET.1): the sequence runner falls back to this window for a sequence that has no send_window of its own, since no operator is watching a cron tick to read a warning. A sequence-level send_window still wins outright and the two are never merged. A location with no company_settings row returns the defaults rather than 404.',
+  description: 'Returns { enabled, start_hour, end_hour, default_start_hour, default_end_hour, can_edit, timezone } (company_settings.send_quiet_hours_*, mig 514; defaults enabled=true, 21:00 to 08:00). The hours are the location\'s wall clock; `timezone` is its IANA zone (locations.timezone, TZ.4). ADVISORY on every MANUAL path: the composers warn when a send would land inside the window and offer the next slot outside it, and nothing an operator sends by hand is clamped, deferred or blocked. One automated reader DEFERS (SEQ-QUIET.1): the sequence runner falls back to this window for a sequence that has no send_window of its own, since no operator is watching a cron tick to read a warning. A sequence-level send_window still wins outright and the two are never merged. A location with no company_settings row returns the defaults rather than 404.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Current quiet-hours setting' },
@@ -5027,7 +5030,7 @@ registry.registerPath({
   tags: ['Communications'],
   security: [{ CookieAuth: [] }],
   summary: 'Save the send-time quiet window (owner or master)',
-  description: 'Hours are 0-23, Europe/Dublin wall clock. The window is half-open [start, end): start_hour > end_hour wraps past midnight (the default 21 to 8 does). start_hour must differ from end_hour — switch enabled off instead of setting a zero-length window.',
+  description: 'Hours are 0-23, the location\'s wall clock (its locations.timezone). The window is half-open [start, end): start_hour > end_hour wraps past midnight (the default 21 to 8 does). start_hour must differ from end_hour — switch enabled off instead of setting a zero-length window.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ enabled: z.boolean(), start_hour: z.number().int().min(0).max(23), end_hour: z.number().int().min(0).max(23) }).openapi('SendQuietHoursSave') } } },
@@ -6017,6 +6020,7 @@ registry.registerPath({
   tags: ['Marketing'],
   security: [{ BearerAuth: [] }, { CookieAuth: [] }],
   summary: 'Create an email campaign (draft)',
+  description: 'FROMDOMAIN: any valid from_email is stored as given, but it is SENT only when its domain equals the org\'s verified sending domain (a live tenant email domain; exact, case-insensitive, a subdomain does not match); otherwise the email goes out from the resolved sender (the org\'s verified From, or the platform address before one). When the body carries a from_email the response adds from_address: { requested, sends_as, on_verified_domain, verified_domain }.',
   request: { body: { content: { 'application/json': { schema: CampaignCreate } } } },
   responses: { 200: { description: 'Campaign created' } },
 })
@@ -6069,7 +6073,7 @@ registry.registerPath({
   tags: ['Marketing'],
   security: [{ CookieAuth: [] }],
   summary: 'Create a draft email campaign (campaign editor)',
-  description: 'created_by is the caller and status is draft; neither is read from the body.',
+  description: 'created_by is the caller and status is draft; neither is read from the body. FROMDOMAIN: any valid from_email is stored as given, but it is SENT only when its domain equals the org\'s verified sending domain (a live tenant email domain; exact, case-insensitive, a subdomain does not match); otherwise the email goes out from the resolved sender (the org\'s verified From, or the platform address before one). When the body carries a from_email the response adds from_address: { requested, sends_as, on_verified_domain, verified_domain }.',
   request: { body: { content: { 'application/json': { schema: SessionCampaignCreate } } } },
   responses: {
     200: { description: 'Draft created: { id, status, location_id }' },
@@ -6092,7 +6096,7 @@ registry.registerPath({
   tags: ['Marketing'],
   security: [{ CookieAuth: [] }],
   summary: 'Save the content of a draft or scheduled campaign',
-  description: 'Writes only the content fields sent; never created_by, status, scheduled_at or location_id.',
+  description: 'Writes only the content fields sent; never created_by, status, scheduled_at or location_id. FROMDOMAIN: any valid from_email is stored as given, but it is SENT only when its domain equals the org\'s verified sending domain (a live tenant email domain; exact, case-insensitive, a subdomain does not match); otherwise the email goes out from the resolved sender (the org\'s verified From, or the platform address before one). When the body carries a from_email the response adds from_address: { requested, sends_as, on_verified_domain, verified_domain }.',
   request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: SessionCampaignContent } } } },
   responses: {
     200: { description: 'Saved' },
@@ -8284,7 +8288,7 @@ registry.registerPath({
   path: '/api/accounting/event-fees',
   tags: ['Accounting'],
   security: [{ CookieAuth: [] }],
-  summary: 'Org-wide event booking fees (per-ticket fee UN1T earned on host events)',
+  summary: `Org-wide event booking fees (per-ticket fee ${PLATFORM_NAME} earned on host events)`,
   description: 'Rollup of race_payments.application_fee_cents across ALL of the session org\'s event hosts, settled (completed/refunded) payments only: grand total, per-host breakdown, per-month buckets. Organisation admins of the active organisation only (a master, or an org_admin grant; C18).',
   responses: {
     200: { description: 'Total + per-host + per-month fee rollup', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
@@ -8441,7 +8445,7 @@ registry.registerPath({
   tags: ['Dashboard'],
   security: [{ CookieAuth: [] }],
   summary: 'Business dashboard blocks as JSON',
-  description: 'Every block of the /dashboard/business command centre in one payload — KPI briefing, acquisition funnel, ads-7d, membership live + 12-month trend, today-ops strip, and the "Needs you" rail. Per-block failure isolation: a failed block returns null under its key (rail: null = failed, [] = nothing waiting). Session cookie (web) or Supabase JWT Bearer + x-active-location (mobile app). Requires the dashboard_business permission.',
+  description: 'Every block of the /dashboard/business command centre in one payload — KPI briefing, acquisition funnel, ads-7d, membership live + 12-month trend, today-ops strip, and the "Needs you" rail. Per-block failure isolation: a failed block returns null under its key (rail: null = failed, [] = nothing waiting). W1.M3c: `membership_source` ({ source, state: none|configured|unconfigured|unknown, label, missing?, provides_memberships, can_manage }) rides alongside the blocks; the phone shows a state card instead of the KPI row and membership section when the state is not configured (a failed state read is unknown, never none). Session cookie (web) or Supabase JWT Bearer + x-active-location (mobile app). Requires the dashboard_business permission.',
   responses: {
     200: { description: 'Dashboard blocks', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BusinessDashboardResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
@@ -8458,7 +8462,7 @@ registry.registerPath({
   description: 'CONTACTREADSCOPE.1a — new leads this week (joined_at since the Europe/Dublin Monday), the funnel by pipeline_stage_slug and the contact total, for the phone Studio dashboard. Requires dashboard_studio AT location_id (not Contacts: these are counts). Scoped by assertLocationAccess. A failed read is a logged 500, never zeros or a partial funnel. Session cookie (web) or Supabase JWT Bearer + x-active-location (mobile app).',
   request: { query: z.object({ location_id: uuidLike }) },
   responses: {
-    200: { description: 'Contact numbers: { newLeadsThisWeek, funnel, totalContacts }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('StudioContactNumbersResponse') } } },
+    200: { description: 'Contact numbers: { newLeadsThisWeek, funnel, totalContacts, membership_source } (W1.M3c: the studio membership-source state, server-judged)', content: { 'application/json': { schema: z.object({}).passthrough().openapi('StudioContactNumbersResponse') } } },
     400: { description: 'location_id missing or malformed', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'No access to the studio, or no dashboard_studio there', content: { 'application/json': { schema: ErrorResponse } } },
@@ -9054,6 +9058,109 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — role/location gate', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Unknown provider or location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// W1.M2 — the per-location membership source (locations.membership_source,
+// mig 717). The only DIRECT writer of the column; the Glofox connect/
+// disconnect flip in PUT/DELETE …/integrations/glofox is the other, owner/
+// master only.
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/membership-source',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Set which system is the membership source at a location (owner or master)',
+  description:
+    'Writes locations.membership_source (mig 717: none | glofox | un1t). The Zod enum admits every CHECK value, ' +
+    'but a key with NO registered provider module (today `un1t`, the home-grown source still to land) answers ' +
+    '400 with code `not_available_yet` and writes nothing — the registry in src/lib/membership/source.js decides, ' +
+    'not the CHECK. Gate: membership (404, a detail route never confirms an id) then owner-or-master AT the ' +
+    'target location (403 for a manager). Switching to `none` never deletes a credential: when an active glofox ' +
+    'channel_connections row exists the response carries `warning: "glofox_credentials_kept"` (Disconnect in the ' +
+    'Integrations hub is the explicit path). Selecting the value already set is a no-op 200. Every real change ' +
+    'writes an audit_events row (location.membership_source_changed). The only DIRECT writer of the column; the other ' +
+    'is the Glofox connect/disconnect flip: an OWNER or MASTER saving complete Glofox credentials through ' +
+    'PUT /api/locations/{id}/integrations/glofox selects it when the studio is on `none`, and their DELETE there clears it ' +
+    '(a manager may still save or delete the credentials, which never moves the column). ' +
+    'Response data is membershipSourceState(): { source, state: none|configured|unconfigured|unknown, missing?, readError?, previous }.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ membership_source: z.enum(['none', 'glofox', 'un1t']) }).openapi('MembershipSourceSave') } } },
+  },
+  responses: {
+    200: { description: 'Saved (or already set) — the resolved membership-source state, plus `warning` when Glofox credentials were kept', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'Not a CHECK value, or `not_available_yet` (no provider registered for that key)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or master at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// TZ.3 — changing an existing location's timezone (D2 = A: owners and master,
+// any time, after the preflight counts and a typed-name confirm). The only
+// writer of locations.timezone after creation (mig 719 revoked the client UPDATE).
+const TimezonePreflightCounts = z.object({
+  bookings: z.number().int().nullable(),
+  shift_blocks: z.number().int().nullable(),
+  race_events: z.number().int().nullable(),
+  hyrox_blocks: z.number().int().nullable(),
+  pending_enrolments: z.number().int().nullable(),
+  sonos_schedules: z.number().int().nullable(),
+  shelly_devices: z.number().int().nullable(),
+  drip_broadcasts: z.number().int().nullable(),
+}).openapi('TimezonePreflightCounts')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/timezone',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Preflight for changing a location\'s timezone (owner or master)',
+  description:
+    'Counts what has future wall-clock meaning at the location, judged against TODAY IN ITS CURRENT ZONE: future ' +
+    'bookings and shift blocks, upcoming race events, running Hyrox blocks, pending sequence steps (active enrolments ' +
+    'with next_step_at in the future), enabled Sonos schedules, scheduled Shelly devices, and scheduled or sending ' +
+    'WhatsApp drip broadcasts. A count that could not be read is null and named in `unknown` (never 0). ' +
+    '`hasFutureData` is true if any count is above 0, false only if every count answered 0, else null. Nothing is ' +
+    'refused for having future data (D2 = A). Gate: membership (404) then owner-or-master AT the location (403).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ location: { id, name, timezone }, today, future, unknown, hasFutureData }', content: { 'application/json': { schema: SuccessResponse(z.object({ future: TimezonePreflightCounts }).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden: owner or master at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The location could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/timezone',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Change a location\'s timezone (owner or master, typed-name confirm)',
+  description:
+    'Sets locations.timezone to a canonical IANA zone (canonicalZone; fixed offsets and unknown names are 400 ' +
+    '`invalid_timezone`, as is the mig 719 trigger refusing it, 22023). `confirm_name` must be the location\'s name ' +
+    '(surrounding spaces ignored, case-sensitive) or 400 `confirm_mismatch`. The same zone in any spelling is a no-op ' +
+    '200 (`changed: false`): nothing written or logged. A change: wall-clock rows keep their LOCAL meaning (09:00 stays ' +
+    '09:00 in the new zone); stored instants and calendar keys are not rewritten; pending sequence steps are re-clamped ' +
+    'by the next scheduler pass; unfinished WhatsApp broadcasts whose send_window_tz is the OLD zone follow the new one ' +
+    '(ones set to another zone are listed in `broadcasts.kept`; a failed follow is `warning: "broadcasts_not_followed"`, ' +
+    'never an undo); the instance zone cache is dropped; one audit_events row (location.timezone_changed) records from, ' +
+    'to and the preflight counts. Gate: membership (404) then owner-or-master AT the location (403).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ timezone: z.string().max(64), confirm_name: z.string().max(200) }).openapi('LocationTimezoneChange') } } },
+  },
+  responses: {
+    200: { description: '{ timezone, previous, changed, future?, unknown?, broadcasts?: { followed, kept } }, plus `warning` when broadcasts did not follow', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'Invalid body, `invalid_timezone`, or `confirm_mismatch`', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden: owner or master at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The location could not be read or written', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

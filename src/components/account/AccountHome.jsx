@@ -33,15 +33,23 @@ function AttentionPill({ attention }) {
   )
 }
 
-function IntegrationChip({ connected }) {
-  // Informational only — a studio with no Glofox (e.g. a placeholder
-  // location) is "not connected", not an error, so no alarming tone.
-  const cls = connected
-    ? 'bg-teal-500/10 text-teal-700'
-    : 'bg-un1t-border/40 text-un1t-subtle'
+// W1.M2 — the studio's membership-source STATE (src/lib/membership/source.js):
+// none | configured | unconfigured | unknown. Informational: a studio with no
+// source (a lead-only gym) is not an error, so no alarming tone; a failed
+// read says "Could not load" rather than pretending "no source".
+const MEMBERSHIP_CHIP = {
+  configured: { cls: 'bg-teal-500/10 text-teal-700', label: (s) => s.source === 'glofox' ? 'Glofox' : s.source },
+  unconfigured: { cls: 'bg-amber-500/10 text-amber-700', label: (s) => `${s.source === 'glofox' ? 'Glofox' : s.source}: incomplete` },
+  unknown: { cls: 'bg-amber-500/10 text-amber-700', label: () => 'Could not load' },
+  none: { cls: 'bg-un1t-border/40 text-un1t-subtle', label: () => 'No membership source' },
+}
+
+function IntegrationChip({ membershipSource }) {
+  const state = membershipSource?.state || 'none'
+  const chip = MEMBERSHIP_CHIP[state] || MEMBERSHIP_CHIP.none
   return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>
-      {connected ? 'Glofox' : 'No integration'}
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${chip.cls}`}>
+      {chip.label(membershipSource || {})}
     </span>
   )
 }
@@ -133,7 +141,7 @@ export default function AccountHome({ data, activeLocationId }) {
                   <h3 className="text-base font-semibold text-un1t-text truncate">{s.name}</h3>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
                     <AttentionPill attention={s.attention} />
-                    <IntegrationChip connected={s.integrationConnected} />
+                    <IntegrationChip membershipSource={s.membershipSource} />
                   </div>
                 </div>
               </div>

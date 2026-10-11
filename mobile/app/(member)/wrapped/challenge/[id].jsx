@@ -32,6 +32,8 @@ import { supabase } from '../../../../lib/member/supabase'
 import { PEARL, VOLT } from '../../../../lib/member/brand'
 import { challengeWrappedModel, challengeWindowMs } from 'shared/challenge-wrapped'
 import { inbodyBookend } from 'shared/inbody'
+import { useMemberBrand } from '../../../../lib/member/use-member-brand'
+import { useMemberZone } from '../../../../lib/member/use-member-zone'
 
 // Keep the pearl flood dark enough that chalk type always passes contrast.
 const SCRIM = 'rgba(19,19,22,0.62)'
@@ -141,6 +143,11 @@ export default function ChallengeWrapped() {
 
   const router = useRouter()
   const { width } = useWindowDimensions()
+  // W1.S5 — share copy carries the studio's short brand + product name.
+  const { shortName, productNames } = useMemberBrand()
+  // TZ.14 — the challenge window on its studio's calendar; RLS shows a member
+  // only their own studio's challenges, so that is the member's zone (D7).
+  const tz = useMemberZone()
 
   const [model, setModel] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -178,7 +185,7 @@ export default function ChallengeWrapped() {
           .eq('id', id)
           .maybeSingle()
         if (chErr) throw chErr
-        const win = challengeWindowMs(ch)
+        const win = challengeWindowMs(ch, tz)
         if (!ch || !win) { if (!cancelled) { setLoadError(true); setLoading(false) } return }
 
         // 2) Own sessions overlapping the window (RLS-scoped to the member).
@@ -212,7 +219,9 @@ export default function ChallengeWrapped() {
           rank: rankParam,
           count: countParam,
           bookend,
-        })
+          // No shortName: the model's metricLabel is never rendered here, and
+          // passing it would make the [id]-only effect read a stale brand.
+        }, tz)
         setModel(m)
       } catch {
         if (!cancelled) setLoadError(true)
@@ -223,9 +232,10 @@ export default function ChallengeWrapped() {
     if (id) load()
     else { setLoadError(true); setLoading(false) }
     return () => { cancelled = true }
-    // rank/count come from immutable route params; id drives the load.
+    // rank/count come from immutable route params; id (and the member's
+    // zone, TZ.14) drive the load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id])
+  }, [id, tz])
 
   // Kick the wash-in + reveal once data + motion pref are ready.
   useEffect(() => {
@@ -240,8 +250,8 @@ export default function ChallengeWrapped() {
   function handleShare() {
     if (!model?.hasContent) return
     const bits = [
-      `I finished the ${model.name} challenge at UN1T 💪`,
-      `${model.classes} ${model.classes === 1 ? 'class' : 'classes'} · ${model.points.toLocaleString()} UN1T Points`,
+      `I finished the ${model.name} challenge${shortName ? ` at ${shortName}` : ''} 💪`,
+      `${model.classes} ${model.classes === 1 ? 'class' : 'classes'} · ${model.points.toLocaleString()} ${productNames.points}`,
     ]
     if (model.rank) bits.push(`Finished #${model.rank}${model.count ? ` of ${model.count}` : ''}`)
     if (model.inbody) {

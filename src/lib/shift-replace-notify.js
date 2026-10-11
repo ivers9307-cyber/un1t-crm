@@ -53,7 +53,7 @@
 import { notifyRosterChanges } from './roster-change-notify'
 import { inStaffPushHours } from './staff-push-hours'
 import { swapShiftHasStarted } from './swap-cover'
-import { dublinTodayStr } from './dublin-time'
+import { addDaysISO, todayStrIn, resolveZone } from './location-time'
 import { logError, logWarn } from './log'
 import {
   netReplaceChanges, replacePileKey, bandSeenBetween, REPLACE_VIA, REPLACE_UNDONE_REASON, REPLACE_STARTED_REASON, REPLACE_DELETED_REASON, REPLACE_NOTICE_ROUTE_OWNS_MS, REPLACE_NOTICE_MAX_AGE_MS,
@@ -69,26 +69,57 @@ const HELD_LIMIT = 500
 
 const iso = (ms) => new Date(ms).toISOString()
 
-export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = dublinTodayStr() } = {}) {
+// TZ.8a — "today or later" is each row's STUDIO day. The read cannot know
+// the studios before it runs, so without a pinned `todayStr` it starts at
+// the earliest day any zone can be in (the UTC day before), and each row is
+// then held to its own studio's day once the zones are read. `todayStr`
+// pins one day for every row (tests).
+export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = null } = {}) {
   const stats = { rows: 0, groups: 0, told: 0, silent: 0, started: 0, gone: 0, quiet: 0, fresh: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 }
-  let rows
+  const readFrom = todayStr || addDaysISO(new Date(nowMs).toISOString().slice(0, 10), -1)
+  let read
   try {
     const { data, error } = await db.from('roster_change_log')
       .select(HELD_SELECT)
       .is('notified_at', null)
       .eq('details->>via', REPLACE_VIA)
       .gte('created_at', iso(nowMs - REPLACE_NOTICE_MAX_AGE_MS))
-      .gte('block_date', todayStr)
+      .gte('block_date', readFrom)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
       .limit(HELD_LIMIT)
     if (error) throw new Error(error.message)
-    rows = data || []
+    read = data || []
   } catch (e) {
     logError('shift-replace-notify', 'could not read held replace notices; the next tick retries', { err: e?.message })
     stats.errors++
     return stats
   }
+  if (!read.length) return stats
+
+  // The studios' zones, read once: the band, "started" and "today" are all
+  // judged on each studio's clock. An unreadable table skips this tick (an
+  // arm error; the rows stay held), never a guessed zone: a wrong "started"
+  // would stamp a notice away for good.
+  const tzById = new Map()
+  try {
+    const ids = [...new Set(read.map((r) => r.location_id).filter(Boolean))]
+    const { data, error } = await db.from('locations').select('id, timezone').in('id', ids)
+    if (error) throw new Error(error.message)
+    for (const l of data || []) tzById.set(l.id, l.timezone)
+  } catch (e) {
+    logError('shift-replace-notify', 'studio timezones unreadable; held notices wait for the next tick', { err: e?.message })
+    stats.errors++
+    return stats
+  }
+  const tzOf = (locationId) => tzById.get(locationId) ?? null
+  const dayOf = new Map()
+  const todayAt = (locationId) => {
+    if (todayStr) return todayStr
+    if (!dayOf.has(locationId)) dayOf.set(locationId, todayStrIn(resolveZone(tzOf(locationId)), nowMs))
+    return dayOf.get(locationId)
+  }
+  const rows = read.filter((r) => String(r.block_date) >= todayAt(r.location_id))
   stats.rows = rows.length
   if (!rows.length) return stats
 
@@ -99,17 +130,6 @@ export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = dub
   const settled = rows.filter((r) => !freshPiles.has(replacePileKey(r)))
   if (!settled.length) return stats
 
-  const tzById = new Map()
-  try {
-    const ids = [...new Set(settled.map((r) => r.location_id).filter(Boolean))]
-    const { data, error } = await db.from('locations').select('id, timezone').in('id', ids)
-    if (error) throw new Error(error.message)
-    for (const l of data || []) tzById.set(l.id, l.timezone)
-  } catch (e) {
-    logWarn('shift-replace-notify', 'studio timezones unreadable; using Europe/Dublin', { err: e?.message })
-  }
-
-  const tzOf = (locationId) => tzById.get(locationId) ?? null
   // Review 1 — a row that may already have been told (made in band, or
   // around since an in-band tick) keeps its pile out of the silent path.
   const mayHaveBeenTold = (r) => bandSeenBetween(Date.parse(r.created_at), nowMs, tzOf(r.location_id))
@@ -145,7 +165,7 @@ export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = dub
     // nothing here (markNotified: false): the arm stamps exactly its OWN rows
     // below, so it can count a lost stamp and never stamps another writer's.
     const res = await notifyRosterChanges(db, {
-      locationId: g.locationId, actorId: g.actorId, changes: g.changes, todayStr, markNotified: false,
+      locationId: g.locationId, actorId: g.actorId, changes: g.changes, todayStr: todayAt(g.locationId), markNotified: false,
     })
     stats.groups++
     for (const [coachId, rowIds] of g.rowIdsByCoach) {

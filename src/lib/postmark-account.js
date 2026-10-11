@@ -69,7 +69,14 @@ async function accountRequest(method, path, body) {
     // status-based message below.
   }
   if (!res.ok) {
-    throw new Error(`Postmark account API error: ${json?.Message || `HTTP ${res.status}`}`)
+    const err = new Error(`Postmark account API error: ${json?.Message || `HTTP ${res.status}`}`)
+    // Structured copies so a caller can branch on WHICH refusal it was
+    // (isDomainAlreadyExistsError) without re-parsing the message. Neither
+    // carries the token: both come off Postmark's response body.
+    err.status = res.status
+    err.postmarkErrorCode = json?.ErrorCode ?? null
+    err.postmarkMessage = json?.Message || null
+    throw err
   }
   return json || {}
 }
@@ -165,6 +172,49 @@ export async function createTenantServer(orgName) {
 export async function createTenantDomain(name) {
   const json = await accountRequest('POST', '/domains', { Name: name })
   return shapeDomainResponse(json)
+}
+
+/**
+ * True when an account-API error is Postmark refusing POST /domains because a
+ * domain of that name is already in the account ("Domain already exists.").
+ * Domains are ACCOUNT resources and a name exists once per account, so this is
+ * what a second registration of the same domain (or of the platform's own
+ * domain) answers. Judged on Postmark's Message, falling back to the thrown
+ * message. Pure.
+ * @param {unknown} e
+ * @returns {boolean}
+ */
+export function isDomainAlreadyExistsError(e) {
+  const text = String(e?.postmarkMessage || e?.message || '')
+  return /domain already exists/i.test(text)
+}
+
+// GET /domains pages at most 500 per call (Postmark's cap for `count`).
+const DOMAIN_LIST_PAGE = 500
+// Guard against a misbehaving TotalCount: 100 pages = 50,000 domains.
+const DOMAIN_LIST_MAX_PAGES = 100
+
+/**
+ * Find an account-level domain by name: GET /domains?count=&offset=, paged
+ * until TotalCount is reached or a page comes back short. Names compare
+ * case-insensitively. Returns the list entry ({ ID, Name, … }) or null.
+ * @param {string} name
+ * @returns {Promise<{ ID: number, Name: string }|null>}
+ */
+export async function findTenantDomainByName(name) {
+  const wanted = String(name || '').trim().toLowerCase()
+  if (!wanted) return null
+  for (let page = 0; page < DOMAIN_LIST_MAX_PAGES; page++) {
+    const offset = page * DOMAIN_LIST_PAGE
+    const json = await accountRequest('GET', `/domains?count=${DOMAIN_LIST_PAGE}&offset=${offset}`)
+    const domains = Array.isArray(json.Domains) ? json.Domains : []
+    const hit = domains.find((d) => String(d?.Name || '').trim().toLowerCase() === wanted)
+    if (hit) return hit
+    const total = Number(json.TotalCount)
+    if (domains.length < DOMAIN_LIST_PAGE) return null
+    if (Number.isFinite(total) && offset + domains.length >= total) return null
+  }
+  return null
 }
 
 /** GET /domains/{id} — current domain details (verification booleans + DNS values). */

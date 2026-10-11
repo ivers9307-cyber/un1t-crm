@@ -10,6 +10,7 @@ import { api } from '../../lib/member/api'
 import Card from './ui/Card'
 import ErrorRetry from './ErrorRetry'
 import { PEARL } from '../../lib/member/brand'
+import { useMemberBrand } from '../../lib/member/use-member-brand'
 
 const METAL = ['#e8b931', '#c2c8ce', '#c77b3a']
 
@@ -119,6 +120,7 @@ function WindowToggle({ value, onChange }) {
 }
 
 export default function BoardsPanel() {
+  const { productNames } = useMemberBrand()
   const [window, setWindow] = useState('week')
   const [loading, setLoading] = useState(true)
   const [rows, setRows] = useState([])
@@ -180,7 +182,7 @@ export default function BoardsPanel() {
                 <Text className="text-base font-display text-chalk" numberOfLines={1}>
                   {meta.header}
                 </Text>
-                <Text className="text-xs font-body text-chalk-2">UN1T Points</Text>
+                <Text className="text-xs font-body text-chalk-2">{productNames.points}</Text>
               </View>
             </View>
             {me?.rank && (

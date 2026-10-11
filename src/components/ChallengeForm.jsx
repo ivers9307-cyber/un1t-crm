@@ -10,6 +10,7 @@
 import { useState } from 'react'
 import { AlertCircle, Loader2, Save } from 'lucide-react'
 import { challengePhase } from '@/lib/challenges'
+import { useLocationBrand } from './use-location-brand'
 
 const inputCls =
   'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text disabled:opacity-50'
@@ -19,14 +20,17 @@ const MODES = [
   { value: 'collective', label: 'Collective goal' },
 ]
 
-const METRICS = [
-  { value: 'points',         label: 'UN1T Points' },
+// W1.S2 — the points metric is named after the studio's brand ("{Brand} Points").
+const metricOptions = (pointsName) => [
+  { value: 'points',         label: pointsName },
   { value: 'classes',        label: 'Classes' },
   { value: 'z4plus_minutes', label: 'Z4+ minutes' },
 ]
 
 export default function ChallengeForm({ challenge, locationId, onSaved }) {
   const isEditing = !!challenge
+  const { productNames } = useLocationBrand(locationId)
+  const METRICS = metricOptions(productNames.points)
 
   // Post-start lock: mode/metric/dates become read-only once the
   // challenge has started (API enforces this; UI mirrors it).

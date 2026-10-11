@@ -40,6 +40,7 @@ import { logWarn } from '@/lib/log'
 import { isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { signStartPrefillToken } from '@/lib/start-prefill-token'
 import { getLocationBranding } from '@/lib/location-branding'
+import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { paymentFromEnrollment, paymentCtaHtml, payAmountPhrase, dunningPresendGate } from '@/lib/dunning-payment'
@@ -281,10 +282,11 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // unsubscribe link, appendUnsubscribeFooter skips it so recipients
   // don't see two "Unsubscribe" links.
   // COMMSFIX.E.4 — {{location_name}} renders in sequence EMAIL steps as
-  // it already does in SMS steps (six shipped templates sign off 'UN1T
-  // {{location_name}}'; without it rendered 'UN1T ' with a trailing
-  // space). locationName is resolved above from the same location row
-  // the bundle gate fetched.
+  // it already does in SMS steps. locationName is resolved above from the
+  // same location row the bundle gate fetched.
+  // W1.S1a — {{company_name}} is the sequence location's configured brand
+  // (getLocationBranding never throws; '' when unresolved), resolved below
+  // once the send is certain.
   // W1.L3a — the unsubscribe + preference links are minted on the SEQUENCE
   // LOCATION's tenant host (resolveCustomerBaseUrl floors to the CRM host and
   // never throws past it), so a second gym's leads never see crm.repset.ie.
@@ -328,9 +330,15 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // on which run's amount they're quoting.
   const payment = paymentFromEnrollment(enrollment)
   const payPhrase = payAmountPhrase(payment)
-  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName, pay_amount_phrase: payPhrase })
+  const { companyName } = await getLocationBranding(db, sequence?.location_id)
+  // TZ.17 — {{current_year}} on the sequence studio's calendar. Text only, so
+  // an unreadable zone falls back to Europe/Dublin rather than hold the email.
+  const mergeZone = await getLocationZone(db, sequence?.location_id).catch(() => DEFAULT_TZ)
+  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName, company_name: companyName || '', pay_amount_phrase: payPhrase, zone: mergeZone })
   const merged = applyMergeTags(html, contact, {
+    zone: mergeZone,
     location_name: locationName,
+    company_name: companyName || '',
     booking_token: bookingToken,
     unsubscribe_url: unsubscribeUrl,
     // Derived from the unsubscribe URL because both endpoints resolve the same
@@ -353,10 +361,12 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // 8058 List-Unsubscribe one-click headers). unsubscribeUrl is passed
   // through so sendEmail adds those headers alongside the visible footer.
   // SEQSENDER.1 (mig 555) / W1.E2 — a sequence may name its own sender, and
-  // that name is a DISPLAY NAME: the address on the wire is the resolver's
-  // (the platform address with the studio's brand before a verified domain,
-  // the org's verified From after), so sequence.from_email is never sent.
-  // from_name NULL (every pre-existing sequence) → the resolver's own name.
+  // that name is a DISPLAY NAME on the resolved address (the platform address
+  // with the studio's brand before a verified domain, the org's verified From
+  // after). from_name NULL (every pre-existing sequence) → the resolver's own
+  // name. FROMDOMAIN — sequence.from_email is the address only when it is on
+  // the org's VERIFIED sending domain (sendMarketingEmail → pickFromAddress);
+  // any other value is ignored and the resolver's address goes out.
   const result = await sendMarketingEmail({
     to: contact.email,
     subject: mergedSubject,
@@ -366,6 +376,7 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
     tag: `seq-${sequence.id}`,
     unsubscribeUrl,
     fromName: sequence.from_name || undefined,
+    fromEmail: sequence.from_email || undefined,
     // NULL keeps EMAIL-INBOX.1's default (the location's unified-inbox address).
     replyTo: sequence.reply_to || undefined,
     sourceType: 'sequence',

@@ -16,11 +16,13 @@
 //   • leave covers the person, so the queue is requests filed at the active
 //     studio OR by anyone who belongs to it (leaveScopeOrFilter);
 //   • a pending request whose end_date has passed has EXPIRED (derived, not
-//     stored) and is not in the queue or the count.
+//     stored) and is not in the queue or the count. TZ.8b: "passed" is the
+//     active studio's day.
 // Each item also carries the shift-clash count (LEAVE.1) as `warning`.
 
 import { viewerActiveLocationId } from '../registry'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn } from '@/lib/location-time'
+import { staffZoneOfUser } from '@/lib/staff-zone'
 import { getLocationMemberIds, leaveScopeOrFilter, countLeaveClashes } from '@/lib/time-off-leave'
 import { timeOffLeaveLabel, leaveClashLabel } from '@shared/time-off'
 
@@ -39,7 +41,9 @@ export const timeOffProvider = {
   async fetchPending(db, user) {
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return { count: 0, items: [] }
-    const today = dublinTodayStr()
+    // TZ.8b — "expired" is judged on the active studio's day (the queue IS
+    // that studio's), not Dublin's.
+    const today = todayStrIn(staffZoneOfUser(user))
 
     const q = db
       .from('time_off_requests')
@@ -87,7 +91,7 @@ export const timeOffProvider = {
       .select('*', { count: 'exact', head: true })
       .or(await scopeFilter(db, activeId))
       .eq('status', 'pending')
-      .gte('end_date', dublinTodayStr())
+      .gte('end_date', todayStrIn(staffZoneOfUser(user)))
     const { count, error } = await q
     if (error) throw new Error(`time_off_requests count: ${error.message}`)
     return count || 0

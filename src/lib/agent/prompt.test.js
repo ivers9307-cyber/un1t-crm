@@ -495,3 +495,38 @@ describe('overdue payment reminders section', () => {
     expect(out).toMatch(/anything else about billing\/invoices, hand off/i)
   })
 })
+
+// W1.M3b — the base prompt is rendered for the studio's membership source.
+describe('renderCustomerAgentBasePrompt (W1.M3b)', () => {
+  it('the default render IS the Glofox prompt UN1T ran before the seam (CUSTOMER_AGENT_BASE_PROMPT)', async () => {
+    const { renderCustomerAgentBasePrompt, GLOFOX_PROMPT_SOURCE } = await import('./prompt')
+    expect(renderCustomerAgentBasePrompt()).toBe(CUSTOMER_AGENT_BASE_PROMPT)
+    expect(renderCustomerAgentBasePrompt(GLOFOX_PROMPT_SOURCE)).toBe(CUSTOMER_AGENT_BASE_PROMPT)
+    expect(CUSTOMER_AGENT_BASE_PROMPT).toContain('opens a secure Glofox payment page, plus the option to update the card on file in the Glofox app.')
+    expect(CUSTOMER_AGENT_BASE_PROMPT).toContain('so the team checks Glofox.')
+    expect(CUSTOMER_AGENT_BASE_PROMPT).toContain('If there is no pay_link, point them to updating their card in the Glofox app. If that also fails for them, hand off.')
+    expect(CUSTOMER_AGENT_BASE_PROMPT).toContain('say the secure link or the Glofox app is the only place to enter them')
+  })
+  it('another provider is named by its label', async () => {
+    const { renderCustomerAgentBasePrompt } = await import('./prompt')
+    const p = renderCustomerAgentBasePrompt({ key: 'un1t', label: 'Repset' })
+    expect(p).toContain('opens a secure Repset payment page, plus the option to update the card on file in the Repset app.')
+    expect(p).toContain('updating their card in the Repset app')
+    expect(p).not.toContain('Glofox')
+  })
+  it('a studio with NO membership source gets no app rules and never says Glofox', async () => {
+    const { renderCustomerAgentBasePrompt } = await import('./prompt')
+    const p = renderCustomerAgentBasePrompt({ key: 'none', label: 'No membership source' })
+    expect(p).not.toContain('Glofox')
+    expect(p).not.toContain('No membership source')
+    expect(p).toContain('opens a secure payment page. If KNOWLEDGE')
+    expect(p).toContain('If there is no pay_link, hand off.')
+    expect(p).not.toContain('updating their card')
+    expect(p).toContain('say the secure link is the only place to enter them')
+    expect(p).toContain('so the team checks the payment.')
+  })
+  it('buildCustomerSystemPrompt threads membershipSource into the stable prefix; absent → the Glofox default', () => {
+    expect(buildCustomerSystemPrompt({ membershipSource: { key: 'none', label: 'No membership source' } })).not.toContain('Glofox')
+    expect(buildCustomerSystemPrompt({})).toContain(CUSTOMER_AGENT_BASE_PROMPT)
+  })
+})

@@ -34,10 +34,11 @@
 // increment_email_conversation_unread RPC, and the RLS/realtime entries.
 
 import { NextResponse } from 'next/server'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 export const GONE_MESSAGE =
   'This endpoint has been retired. The email inbox is a ticket queue now — ' +
-  'update the UN1T app to the latest version to keep working email, or use ' +
+  `update the ${PLATFORM_NAME} app to the latest version to keep working email, or use ` +
   'Communications → Tickets on the web.'
 
 /**

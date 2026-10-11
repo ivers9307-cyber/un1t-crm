@@ -17,6 +17,17 @@
 // (mobile) — getCurrentUser handles both. Gate matches the web page:
 // hasPermission(user, 'dashboard_business') — the same top-level
 // permission key that shows/hides the mobile segment.
+//
+// W1.M3c — `membership_source` ({ source, state, label, missing?,
+// provides_memberships, can_manage }; membershipStatePayload) rides
+// ALONGSIDE the blocks. The web page gates its KPI row and membership
+// trend on the same state (W1.M3a); the phone (2.4.0 bundles) reads this
+// key and draws the state card instead of the Glofox-derived numbers when
+// the state is not 'configured'. The blocks are still computed and keep
+// their shape, so an older bundle that never reads the key renders exactly
+// what it did before, and a configured studio (Stillorgan) is unchanged.
+// membershipStateForPage never throws (a failed read is 'unknown'), and the
+// route catches it to 'unknown' anyway: the key can never 500 the blocks.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
@@ -24,8 +35,11 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { fetchFunnelCounts, fetchAdsSummary, fetchTodayOps } from '@shared/dashboard-data'
 import { buildBusinessKpis } from '@/lib/dashboard/business-kpis'
+import { adsDayZoneForDisplay } from '@/lib/ads/account-day'
 import { buildNeedsYouRail } from '@/lib/dashboard/business-rail'
 import { computeMembershipCounts, fetchMembershipTrend } from '@/lib/membership-snapshot'
+import { membershipStateForPage, membershipStatePayload, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -36,11 +50,11 @@ export const maxDuration = 60
 
 // Membership block semantics match the page's MembershipBlock: a throw
 // OR falsy live counts = failure (null), never a fake-zero panel.
-async function membershipBlock(db, locationId) {
+async function membershipBlock(db, locationId, zone) {
   try {
     const [live, trend] = await Promise.all([
       computeMembershipCounts(db, locationId),
-      fetchMembershipTrend(db, locationId, 12),
+      fetchMembershipTrend(db, locationId, 12, { zone }),
     ])
     if (!live) return null
     return { live, trend }
@@ -72,13 +86,22 @@ export async function GET() {
   if (guard) return guard
 
   const db = createServerClient()
-  const [kpis, funnel, ads, membership, today, rail] = await Promise.all([
-    buildBusinessKpis(db, user, locationId), // null on failure by contract
-    blockData(fetchFunnelCounts(db, locationId)),
-    blockData(fetchAdsSummary(db, locationId)),
-    membershipBlock(db, locationId),
-    blockData(fetchTodayOps(db, locationId)),
+  // TZ.11a — the active studio's calendar (its row already carries timezone).
+  const zone = zoneOfLocation(user.activeLocation)
+  const now = new Date()
+  const [kpis, funnel, ads, membership, today, rail, sourceState] = await Promise.all([
+    buildBusinessKpis(db, user, locationId, now.getTime()), // null on failure by contract
+    blockData(fetchFunnelCounts(db, locationId, now, zone)),
+    // TZ.11c: the 7-day window is in the ad account's zone (account-day.js),
+    // NOT the studio's.
+    blockData(adsDayZoneForDisplay(db, locationId).then((adsZone) => fetchAdsSummary(db, locationId, now, adsZone))),
+    membershipBlock(db, locationId, zone),
+    blockData(fetchTodayOps(db, locationId, now, zone)),
     buildNeedsYouRail(db, user, locationId).then(rows => rows, () => null),
+    // Belt and braces: membershipStateForPage is built never to throw, but a
+    // rejection here must never 500 the route for 2.3.x phones that never
+    // read the key.
+    membershipStateForPage(db, locationId).catch(() => ({ source: null, state: 'unknown' })),
   ])
 
   return NextResponse.json({
@@ -91,6 +114,9 @@ export async function GET() {
       membership,
       today,
       rail,
+      membership_source: membershipStatePayload(sourceState, {
+        canManage: canManageMembershipSource(user, locationId),
+      }),
     },
   })
 }

@@ -3,7 +3,7 @@
 // writes) so several tests assert not just the status code but which
 // downstream calls did or didn't happen.
 //
-// @/lib/equipment and @/lib/dublin-time are left un-mocked — they're
+// @/lib/equipment and the zone maths are left un-mocked — they're
 // pure — so rollForward's RangeError guard and validateResults'
 // missing/failed split are exercised for real, not stubbed to always
 // pass.
@@ -53,7 +53,7 @@ import { getInspection, updateInspection, updateEquipment } from '@/lib/equipmen
 import { insertIssueWithAttachments } from '@/lib/issues'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { rollForward } from '@/lib/equipment'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn } from '@shared/zoned-time'
 
 const ctx = { params: { id: 'insp-1' } }
 
@@ -139,7 +139,7 @@ describe('POST /api/equipment/inspections/[id]/submit', () => {
     expect(insertIssueWithAttachments).not.toHaveBeenCalled()
     expect(body.data.issueId).toBeNull()
 
-    const expectedNextDue = rollForward({ dueOn: '2026-07-28', intervalWeeks: 4, today: dublinTodayStr() })
+    const expectedNextDue = rollForward({ dueOn: '2026-07-28', intervalWeeks: 4, today: todayStrIn('Europe/Dublin') })
     const equipPatch = updateEquipment.mock.calls.at(-1)[2]
     expect(equipPatch.next_due_on).toBe(expectedNextDue)
 

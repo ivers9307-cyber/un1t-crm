@@ -2,7 +2,8 @@
 // coaches (tap a coach → parent opens an action sheet), and "+ Add coach".
 import { View, Text, Pressable } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { timeRange, dublinTodayIso } from '../../lib/dates'
+import { timeRange, studioTodayIso } from '../../lib/dates'
+import { useStudioZone } from '../../lib/use-studio-zone'
 import { effShiftStart, effShiftEnd, initials } from '../../lib/schedule-team'
 import { blockFillState, emptyBlockText, liveBlockAssignments, assignmentWindow } from '../../lib/schedule-manage'
 import { briefingOf } from 'shared/shift-briefing'
@@ -20,7 +21,9 @@ export default function BlockCard({ block, busy, onAddCoach, onCoachPress, offer
   const tpl = block.shift_templates
   // Live coaches only: a cancelled row is a tombstone, not someone on the shift.
   const coaches = liveBlockAssignments(block)
-  const fill = blockFillState(block, dublinTodayIso())
+  // TZ.14 — Manage mode shows the active studio's blocks: its calendar's today.
+  const tz = useStudioZone()
+  const fill = blockFillState(block, studioTodayIso(tz))
   const briefing = briefingOf(block)
   return (
     <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 mb-2">

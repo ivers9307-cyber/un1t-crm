@@ -1,3 +1,4 @@
+import { cache } from 'react'
 import { headers } from 'next/headers'
 import UnsubscribePage from '@/components/UnsubscribePage'
 import { resolveScopedBrandName } from '@/lib/host-brand'
@@ -15,12 +16,16 @@ export const dynamic = 'force-dynamic'
 // only when it is a UUID (the API route's gate) AND the location belongs to
 // the host's organisation, or the host has no organisation (a CRM-host link,
 // where every link was minted before W1.L3). A non-UUID costs no read.
+// W1.S1b — the page header names the same brand as the tab; React-cached so
+// the metadata and the render share one resolution per request.
+const scopedBrand = cache((host, l) => resolveScopedBrandName({
+  host,
+  locationId: typeof l === 'string' ? l : null,
+}))
+
 export async function generateMetadata(props) {
   const searchParams = await props.searchParams
-  const brand = await resolveScopedBrandName({
-    host: (await headers()).get('host'),
-    locationId: typeof searchParams?.l === 'string' ? searchParams.l : null,
-  })
+  const brand = await scopedBrand((await headers()).get('host'), searchParams?.l)
   return { title: `Unsubscribe — ${brand}` }
 }
 
@@ -39,11 +44,13 @@ export default async function Unsubscribe(props) {
   // list saw a number well under reality. UNSUBAUTO.1 multiplies page-path
   // opt-outs, which multiplies the undercount with them.
   const searchParams = await props.searchParams;
+  const brandName = await scopedBrand((await headers()).get('host'), searchParams?.l)
   return (
     <UnsubscribePage
       token={params.token}
       locationId={searchParams?.l || null}
       campaignId={searchParams?.c || null}
+      brandName={brandName}
     />
   )
 }

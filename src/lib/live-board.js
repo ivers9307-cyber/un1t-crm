@@ -15,7 +15,7 @@ import { zoneForBpm } from '@/lib/heart-rate'
 import { isBridgeOnline, latestBridgeSeenMs, maskStrapLabel } from '@/lib/bridge-samples'
 import { getAvailableStraps } from '@/lib/live-class'
 import { resolveCurrentClassForTv } from '@/lib/class-occurrences'
-import { dublinTimeLabel } from '@/lib/dublin-time'
+import { zoneOfLocation, timeLabelIn } from '@/lib/location-time'
 import { selectAll } from '@/lib/select-all'
 
 const RECENT_BPM_WINDOW_MS = 30 * 1000   // moving-avg window for "current"
@@ -26,12 +26,17 @@ const STALE_AFTER_MS = 2 * 60 * 1000     // strap silent for 2min → flag
  *
  * @param {object} db        service-role Supabase client
  * @param {object} opts
- * @param {{ id: string, name: string }} opts.location  the resolved location row
+ * @param {{ id: string, name: string, timezone?: string|null }} opts.location  the resolved location row
  * @param {number} [opts.nowMs]
- * @returns {Promise<object>} the JSON body ({ ok, server_time, location, bridge, sessions, available_straps, timer, current_class })
+ * @returns {Promise<object>} the JSON body ({ ok, server_time, timezone, location, bridge, sessions, available_straps, timer, current_class })
  */
 export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }) {
   const locationId = location.id
+  // TZ.12 — the board tells its own studio's time: the class label below, and
+  // `timezone` in the payload for the TV's header clock and overnight poll
+  // back-off. The caller's location row carries `timezone` (no extra read); a
+  // missing/NULL/invalid value is Europe/Dublin (zoneOfLocation warns once).
+  const zone = zoneOfLocation(location)
 
   // Bridge liveness for the TV connection dot. Keyed off last_seen_at
   // freshness, not the status column — a Pi that loses power can't send
@@ -96,13 +101,14 @@ export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }
 
   const liveClass = await resolveCurrentClassForTv(db, { locationId, nowMs })
   const currentClass = liveClass
-    ? { class_name: liveClass.class_name, program: liveClass.program, starts_at: liveClass.starts_at, starts_at_label: dublinTimeLabel(liveClass.starts_at), glofox_event_id: liveClass.glofox_event_id }
+    ? { class_name: liveClass.class_name, program: liveClass.program, starts_at: liveClass.starts_at, starts_at_label: timeLabelIn(liveClass.starts_at, zone), glofox_event_id: liveClass.glofox_event_id }
     : null
 
   if (!sessions || sessions.length === 0) {
     return {
       ok: true,
       server_time: new Date().toISOString(),
+      timezone: zone,
       location: { id: location.id, name: location.name },
       bridge,
       sessions: [],
@@ -202,6 +208,7 @@ export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }
   return {
     ok: true,
     server_time: new Date().toISOString(),
+    timezone: zone,
     location: { id: location.id, name: location.name },
     bridge,
     sessions: tiles,

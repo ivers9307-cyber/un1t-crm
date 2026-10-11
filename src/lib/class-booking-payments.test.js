@@ -3,8 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const createPayment = vi.fn(async () => ({ providerRef: 'ord_1', checkoutToken: 'tok', checkoutUrl: 'https://pay/x', state: 'pending', amountCents: 2900 }))
 vi.mock('./payments', () => ({ paymentsFor: () => ({ createPayment }) }))
 vi.mock('./app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
+// W1.L3b — the /class-pay/ return lands on the booking location's tenant host.
+const resolveCustomerBaseUrl = vi.fn(async () => 'https://crm.test')
+vi.mock('./tenant-host', () => ({ resolveCustomerBaseUrl: (...a) => resolveCustomerBaseUrl(...a) }))
+vi.mock('./location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Stillorgan', shortName: 'UN1T', locationName: 'UN1T Stillorgan' })) }))
 
-import { createClassBookingPayment, markClassBookingPaymentStatus } from './class-booking-payments'
+import { createClassBookingPayment, markClassBookingPaymentStatus, classBookingPaymentDescription } from './class-booking-payments'
+import { getLocationBranding } from './location-branding'
 
 function makeDb(updates) {
   return {
@@ -19,15 +24,33 @@ function makeDb(updates) {
 const location = { id: 'loc1', settings: { payments: { provider: 'revolut' } } }
 const request = { id: 'req1', location_id: 'loc1', customer_email: 'a@b.com', customer_name: 'A B', class_name: 'HIIT' }
 
-beforeEach(() => { createPayment.mockClear() })
+beforeEach(() => { createPayment.mockClear(); resolveCustomerBaseUrl.mockClear() })
 
 describe('createClassBookingPayment', () => {
+  it("W1.L3b — the return URL is /class-pay/<id> on the booking location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const db = makeDb([])
+    await createClassBookingPayment({ db, request, location, amountCents: 2900, currency: 'EUR' })
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, 'loc1')
+    expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({ returnUrl: 'https://gym-a.repset.ie/class-pay/req1' }))
+  })
   it('charges the server amount and persists provider refs on the row', async () => {
     const updates = []
     const res = await createClassBookingPayment({ db: makeDb(updates), request, location, amountCents: 2900, currency: 'EUR' })
     expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({ amountCents: 2900, currency: 'EUR', connectedAccountId: null }))
     expect(res.checkout).toEqual(expect.objectContaining({ token: 'tok', provider: 'revolut' }))
     expect(updates.some((u) => u.payment_provider_ref === 'ord_1' && u.payment_status === 'pending')).toBe(true)
+  })
+
+  it('W1.S1a: the checkout description names the booking location brand, with no em-dash', async () => {
+    await createClassBookingPayment({ db: makeDb([]), request, location, amountCents: 2900, currency: 'EUR' })
+    expect(getLocationBranding).toHaveBeenCalledWith(expect.anything(), 'loc1')
+    expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({ description: 'UN1T Stillorgan intro: HIIT' }))
+  })
+
+  it('W1.S1a: an unresolved brand never borrows another gym', () => {
+    expect(classBookingPaymentDescription('', 'HIIT')).toBe('Intro class: HIIT')
+    expect(classBookingPaymentDescription('Northside Strength', '')).toBe('Northside Strength intro: class')
   })
 
   it('charges stripe with the connected account and persists it on the row', async () => {

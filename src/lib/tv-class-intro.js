@@ -1,6 +1,8 @@
 // Pure trigger for the studio TV class-start intro card. No DOM/IO.
 // The TV page passes the live class + the last-played key + the server clock.
 
+import { DEFAULT_TZ, formatInZone } from '@shared/zoned-time'
+
 export const INTRO_WINDOW_MS = 120_000  // only fire within 2 min of scheduled start
 export const INTRO_DURATION_MS = 8_000  // how long the card holds before dissolving
 
@@ -72,10 +74,12 @@ export function isIntroPreview(search) {
  * so the card renders on demand for QA on any TV. Same shape the live feed
  * emits (glofox_event_id / starts_at / class_name / starts_at_label / program).
  */
-export function demoIntroClass(nowMs = Date.now()) {
+export function demoIntroClass(nowMs = Date.now(), zone = DEFAULT_TZ) {
+  // TZ.12 — the label is the board's studio clock (`zone`, the TV's location
+  // zone), with the exact options the Dublin-only version used.
   let label = ''
   try {
-    label = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit' }).format(nowMs)
+    label = formatInZone(nowMs, zone, { hour: '2-digit', minute: '2-digit' }, 'en-GB')
   } catch { label = '' }
   return {
     glofox_event_id: 'preview',

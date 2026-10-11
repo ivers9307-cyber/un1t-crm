@@ -109,7 +109,7 @@ export default function EventWaitlistForm({ slug, allowedTeamSizes, sizeLabel = 
         <span>
           {hostName
             ? `Yes, send me emails from ${hostName} about their events, and promotional updates from ${organizationName || 'the studio'} via email, SMS or WhatsApp. You can leave either list at any time. Event-related notifications are sent regardless.`
-            : 'Yes, send me UN1T promotional updates and offers via email, SMS or WhatsApp. You can unsubscribe at any time. Event-related notifications are sent regardless.'}
+            : `Yes, send me ${organizationName ? `${organizationName} ` : ''}promotional updates and offers via email, SMS or WhatsApp. You can unsubscribe at any time. Event-related notifications are sent regardless.`}
         </span>
       </label>
       {error && (

@@ -40,6 +40,7 @@ import { uuidLike } from '@/lib/schemas'
 import { geofenceFromLocationSettings, geofenceIsConfigured } from '@/lib/geofence-attendance'
 import { resolveScheduledAt, decideGeofenceStamp } from '@/lib/staff-attendance'
 import { logWarn } from '@/lib/log'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -104,7 +105,8 @@ export async function POST(request) {
     // 404 not 403 — don't advertise which locations have the feature.
     return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
   }
-  const locationTz = location.timezone || 'Europe/Dublin'
+  // TZ.8b — the studio's zone, resolved and validated (DEFAULT_TZ for none).
+  const locationTz = zoneOfLocation(location)
 
   const { data: link, error: linkErr } = await db
     .from('profile_locations')

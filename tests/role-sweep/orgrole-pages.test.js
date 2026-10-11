@@ -30,8 +30,12 @@ vi.mock('@/components/settings/HostDetail', () => ({
   default: ({ canBackfill }) => `HOST-DETAIL canBackfill=${String(canBackfill)}`,
 }))
 vi.mock('next/link', () => ({ default: ({ children }) => children }))
+// W1.S2 — the host detail page resolves the studio brand for its card; the
+// gate under test sits before it, so the brand read is stubbed.
+vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'Studio' })) }))
 
 import { getCurrentUser } from '@/lib/auth'
+import { createServerClient } from '@/lib/supabase'
 import { person, MASTER as MASTER_BASE, ORG, LOC_A, LOC_B } from '../helpers/role-sweep-callers.js'
 import BillingPage from '@/app/settings/billing/page.js'
 import UsagePage from '@/app/settings/usage/page.js'
@@ -91,6 +95,9 @@ describe('/settings/hosts/[id] — the Postmark back-fill control', () => {
     '%s → canBackfill %s',
     async (who, can) => {
       getCurrentUser.mockResolvedValue(CALLERS[who])
+      // Past its role gate the page reads the brand (stubbed above) with a
+      // service-role client; hand it one for this render only.
+      createServerClient.mockReturnValueOnce({})
       const { html } = await outcome(HostDetailPage, { params: Promise.resolve({ id: 'host-1' }) })
       expect(html).toContain(`HOST-DETAIL canBackfill=${can}`)
     },

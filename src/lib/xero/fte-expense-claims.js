@@ -18,6 +18,7 @@
 // THAT as the primary draft, with individual receipts as supporting
 // attachments — the right end state but not blocking for v1.
 
+import { PLATFORM_NAME } from '@/lib/brand-name'
 import { createServerClient } from '@/lib/supabase'
 import { resolvePostmarkToken } from '@/lib/postmark-token'
 import { platformFromHeader } from '@/lib/platform-sender'
@@ -190,7 +191,7 @@ export async function sendFteExpenseClaimBillEmail(claimId) {
   `).join('')
 
   const htmlBody = `
-    <p>Approved FTE expense claim forwarded from UN1T CRM.</p>
+    <p>Approved FTE expense claim forwarded from ${PLATFORM_NAME}.</p>
     <ul>
       <li>Employee: <strong>${escapeHtml(employeeName)}</strong></li>
       <li>Period: <strong>${escapeHtml(periodLbl)}</strong></li>

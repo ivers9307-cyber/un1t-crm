@@ -44,7 +44,8 @@
 // KNOWN LIMIT: a coach whose studios straddle 07:00 in different timezones is
 // sent to the in-band studios and left owed for the rest; each later tick
 // re-sends under a new retry key until every studio is in band (or the retry
-// cap gives up). Every studio is Europe/Dublin today, so this cannot happen yet.
+// cap gives up). Every UN1T studio is Europe/Dublin today, so it cannot happen
+// there yet.
 
 import { sendPushOnce } from '@/lib/push-dedup'
 import { inStaffPushHours, resolveStaffTimeZone } from '@/lib/staff-push-hours'
@@ -52,7 +53,7 @@ import { RUNWAY_NOTIFY_ROLES } from '@/lib/roster-runway-notify'
 import { diffAvailability, sameAvailability, describeRule } from '@shared/availability'
 import { logWarn, logError } from '@/lib/log'
 import { escapeLikePattern } from '@/lib/like-escape'
-import { dublinDayStr } from '@/lib/dublin-time'
+import { dayStrIn } from '@/lib/location-time'
 
 export const AVAILABILITY_NOTIFY_ROLES = RUNWAY_NOTIFY_ROLES
 export const AVAILABILITY_NOTICE_MAX_AGE_MS = 24 * 60 * 60 * 1000
@@ -81,7 +82,8 @@ function listRules(rules, max = 3) {
 /** The push text. Pure. */
 export function availabilityNoticeText({ coachName, before, after, fromIso = null }) {
   const name = (typeof coachName === 'string' && coachName.trim()) || 'A coach'
-  // fromIso = the save's Dublin day: only what changes from that day on is news.
+  // fromIso = the save's day at the coach's studios (TZ.8a; see
+  // deliverAvailabilityNotice): only what changes from that day on is news.
   const { added, removed } = diffAvailability(before, after, { fromIso })
   const parts = []
   if (added.length) parts.push(`now unavailable ${listRules(added)}`)
@@ -200,7 +202,12 @@ export async function deliverAvailabilityNotice(db, change, { nowMs = Date.now()
     if (recipients.length > 0) {
       // A failed name read only costs the name ("A coach"), never the notice.
       const { data: person } = await db.from('profiles').select('full_name').eq('id', change.profile_id).maybeSingle()
-      const fromIso = Number.isFinite(createdMs) ? dublinDayStr(createdMs) : null
+      // TZ.8a — the save's day on the coach's studios' clocks: the EARLIEST
+      // of them when they differ (it clips the least, so nothing that is news
+      // at any of the studios is cut). One zone: that studio's day.
+      const fromIso = Number.isFinite(createdMs)
+        ? studios.map((st) => dayStrIn(createdMs, resolveStaffTimeZone(st.timezone).timeZone)).sort()[0]
+        : null
       const { title, body } = availabilityNoticeText({ coachName: person?.full_name, before: change.before, after: change.after, fromIso })
       const r = await sendPushOnce(db, eventKey || availabilityEventKey(change.id), recipients, {
         title,

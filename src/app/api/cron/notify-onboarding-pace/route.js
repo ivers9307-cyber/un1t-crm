@@ -1,5 +1,8 @@
 // PULSE-90.3 — Vercel cron, daily ~10:30 UTC (offset from the streak 11:00 /
 // winback 10:00 crons so the three engagement pushes don't stack).
+// TZ.6 — the schedule is hourly (30 * * * *); each location acts at its daily
+// slot: 10:30 UTC for a Europe/Dublin studio (as before), 10:30 local for any
+// other zone, at most once per local day (src/lib/cron-daily-slot.js).
 //
 // Pushes a purely motivational first-90-days pace nudge to new members who are
 // falling off the 9-classes-in-6-weeks track. Selection is compute-on-read via
@@ -24,6 +27,8 @@ import { loadJourneyLane } from '@/lib/onboarding-journey-data'
 import { buildOnboardingPacePush } from '@/lib/onboarding-journey'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -59,20 +64,25 @@ export async function GET(request) {
   const db = createServerClient()
   const nowMs = Date.now()
 
+  // TZ.6 — which locations are at their daily slot this tick (claimed, so
+  // never twice in one local day). An unreadable zone acts for nobody.
+  const gate = await gateDailySlot(db, 'notify-onboarding-pace', { nowMs, module: 'cron-onboarding-pace' })
+  if (!gate.ok) return NextResponse.json({ ok: false, slot: gate.summary }, { status: 500 })
+  if (gate.slots.size === 0) {
+    // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ ok: !gate.faulted, slot: gate.summary, locations: 0, candidates: 0, nudged: 0 }, { status: gate.faulted ? 500 : 200 })
+  }
+
   // Live locations = Glofox-connected (attendance data only exists there); same
-  // filter sync-class-occurrences uses. A location with no Glofox creds has no
-  // class_bookings to pace against.
-  const { data: locs, error: locErr } = await db
-    .from('locations')
-    .select('id, settings')
-    .filter('settings', 'cs', JSON.stringify({ glofox: {} }))
+  // discovery sync-class-occurrences uses. W1.M3b: through the membership seam
+  // (membership_source = 'glofox' and configured), never the settings slice. A
+  // location with no membership source has no class_bookings to pace against.
+  // A failed seam read is a 500 with no heartbeat.
+  const { eligible: liveLocations, skipped, error: locErr } = await locationsWithSource(db, 'glofox', { module: 'cron-onboarding-pace' })
   if (locErr) {
     return NextResponse.json({ ok: false, error: locErr.message }, { status: 500 })
   }
-  const liveLocations = (locs || []).filter((l) => {
-    const g = l.settings?.glofox || {}
-    return g.branch_id && g.api_key && g.api_token
-  })
 
   let candidates = 0
   let nudged = 0
@@ -80,6 +90,7 @@ export async function GET(request) {
   let reachabilityFailed = 0
 
   for (const loc of liveLocations) {
+    if (!slotFor(gate.slots, loc.id)) continue // TZ.6: not this location's slot
     let lane
     try {
       const res = await loadJourneyLane(db, loc.id, nowMs)
@@ -118,12 +129,19 @@ export async function GET(request) {
     }
   }
 
+  // The skip split rides on the stamp's last_outcome, so an `unknown` location
+  // (credentials unreadable at discovery) never reads as a healthy quiet tick.
+  const skipCounts = skippedSummary(skipped)
   logInfo('cron-onboarding-pace', 'tick', {
-    locations: liveLocations.length, candidates, nudged, failed, reachability_failed: reachabilityFailed,
+    locations: liveLocations.length, locations_skipped: skipped.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
   })
-  await stampHeartbeat('notify-onboarding-pace').catch((err) =>
-    logWarn('cron-onboarding-pace', 'heartbeat failed', { err }))
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('notify-onboarding-pace', {
+      locations: liveLocations.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
+    }).catch((err) =>
+      logWarn('cron-onboarding-pace', 'heartbeat failed', { err }))
+  }
   return NextResponse.json({
-    ok: true, locations: liveLocations.length, candidates, nudged, failed, reachability_failed: reachabilityFailed,
-  })
+    ok: !gate.faulted, locations: liveLocations.length, locations_skipped: skipped.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
+  }, { status: gate.faulted ? 500 : 200 })
 }

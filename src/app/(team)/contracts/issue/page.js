@@ -14,6 +14,7 @@ import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
 import { canManageContractsSomewhere } from '@/lib/contract-gates'
 import ContractIssueWizard from '@/components/ContractIssueWizard'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const dynamic = 'force-dynamic'
 
@@ -33,6 +34,11 @@ export default async function IssueContractPage(props) {
   const locationOrgs = Object.fromEntries(
     (user.locations || []).filter((l) => l?.id && l.organization_id).map((l) => [l.id, l.organization_id]),
   )
+  // TZ follow-up — the same studios' zones (session data, no query), so the
+  // wizard previews {{today}} in the issuing studio's zone, never the browser's.
+  const locationZones = Object.fromEntries(
+    (user.locations || []).filter((l) => l?.id).map((l) => [l.id, zoneOfLocation(l)]),
+  )
 
   return (
     <div className="p-6 md:p-8 max-w-3xl">
@@ -43,7 +49,7 @@ export default async function IssueContractPage(props) {
       <p className="text-sm text-un1t-subtle mb-6">
         Pick a recipient and template, fill any custom variables, countersign, and send.
       </p>
-      <ContractIssueWizard issuerName={user.full_name} fromContractId={fromContractId} locationOrgs={locationOrgs} />
+      <ContractIssueWizard issuerName={user.full_name} fromContractId={fromContractId} locationOrgs={locationOrgs} locationZones={locationZones} />
     </div>
   )
 }

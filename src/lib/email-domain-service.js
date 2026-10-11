@@ -10,10 +10,13 @@
 // token the moment they are minted).
 
 import { resolveAdminOrgId } from '@/lib/org-admin'
-import { logWarn, logError } from '@/lib/log'
+import { logInfo, logWarn, logError } from '@/lib/log'
+import { escapeLikePattern } from '@/lib/like-escape'
 import {
   createTenantServer,
   createTenantDomain,
+  findTenantDomainByName,
+  isDomainAlreadyExistsError,
   getTenantDomain,
   verifyTenantDomainDkim,
   verifyTenantReturnPath,
@@ -132,6 +135,75 @@ async function ensureServerWebhooksRecorded(db, orgId, row) {
   return { row: stamped, error: null }
 }
 
+// ADOPTDOMAIN.1 — what an operator reads when the sending domain is already a
+// Domain in the platform's Postmark account and this caller may not take it
+// over. Operator-neutral: it never says whose it is.
+export const EMAIL_DOMAIN_TAKEN_CODE = 'EMAIL_DOMAIN_TAKEN'
+export function emailDomainTakenMessage(domain) {
+  return `This domain is already registered on the platform. Use a subdomain such as mail.${domain}, or contact support.`
+}
+function domainTakenError(domain) {
+  const err = new Error(emailDomainTakenMessage(domain))
+  err.code = EMAIL_DOMAIN_TAKEN_CODE
+  return err
+}
+export const EMAIL_DOMAIN_CLAIM_CHECK_FAILED = 'Could not check whether this domain is already in use, so nothing was changed. Try again.'
+
+/**
+ * ADOPTDOMAIN.1 — is this Postmark domain (by id or by name) already held by
+ * ANOTHER organisation's tenant_email_domains row? A failed read throws
+ * (fails closed): an unanswered question is never "unclaimed".
+ */
+async function domainClaimedByAnotherOrg(db, orgId, sendingDomain, postmarkDomainId) {
+  const byId = await db
+    .from('tenant_email_domains')
+    .select('organization_id')
+    .eq('postmark_domain_id', postmarkDomainId)
+    .neq('organization_id', orgId)
+    .limit(1)
+  // sending_domain is stored sanitized lower-case, but compare
+  // case-insensitively anyway; escaped so `_`/`%` are not wildcards.
+  const byName = await db
+    .from('tenant_email_domains')
+    .select('organization_id')
+    .ilike('sending_domain', escapeLikePattern(sendingDomain))
+    .neq('organization_id', orgId)
+    .limit(1)
+  if (byId.error || byName.error) {
+    logError('tenant-email-domain', 'domain claim check failed', {
+      orgId, err: byId.error?.message || byName.error?.message,
+    })
+    throw new Error(EMAIL_DOMAIN_CLAIM_CHECK_FAILED)
+  }
+  return (byId.data?.length || 0) > 0 || (byName.data?.length || 0) > 0
+}
+
+/**
+ * ADOPTDOMAIN.1 — Postmark refused POST /domains with "Domain already exists"
+ * (a domain name exists once per Postmark ACCOUNT, and the account is the
+ * platform's). Adopt the existing account domain, but ONLY when it is safe:
+ *   (a) the caller is a platform MASTER — the platform owns the account, and
+ *       a tenant adopting a domain someone else verified could send as it;
+ *   (b) no OTHER organisation's row holds that sending_domain or
+ *       postmark_domain_id.
+ * Anything else refuses with the operator-neutral EMAIL_DOMAIN_TAKEN error.
+ * A domain the list does not show (a race, a stale account) rethrows the
+ * original Postmark error unchanged.
+ * @returns {Promise<object>} the shaped domain (as getTenantDomain)
+ */
+async function adoptExistingAccountDomain(db, { orgId, sendingDomain, isMaster, originalError }) {
+  if (!isMaster) throw domainTakenError(sendingDomain)
+  const existing = await findTenantDomainByName(sendingDomain)
+  if (!existing?.ID) throw originalError
+  if (await domainClaimedByAnotherOrg(db, orgId, sendingDomain, existing.ID)) {
+    throw domainTakenError(sendingDomain)
+  }
+  const shaped = await getTenantDomain(existing.ID)
+  if (!shaped.id) throw new Error('Postmark did not return a domain id.')
+  logInfo('tenant-email-domain', 'adopted an existing Postmark account domain', { orgId, domainId: shaped.id })
+  return shaped
+}
+
 /**
  * Provision (or idempotently re-read) an org's Postmark server + sending
  * domain. IDEMPOTENT: a fully-provisioned org never spawns a second server
@@ -148,9 +220,11 @@ async function ensureServerWebhooksRecorded(db, orgId, row) {
  * @param {string} [args.fromLocal]   - local-part (default 'hello')
  * @param {string} [args.fromName]
  * @param {string} [args.createdBy]
+ * @param {boolean} [args.isMaster] - platform master: may adopt a domain the
+ *   platform's Postmark account already holds (ADOPTDOMAIN.1)
  * @returns {Promise<object>} the persisted row (raw — caller redacts)
  */
-export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, fromLocal, fromName, createdBy }) {
+export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, fromLocal, fromName, createdBy, isMaster = false }) {
   let row = await loadEmailDomainRow(db, orgId)
 
   // Already fully provisioned → idempotent re-read, no new Postmark resources
@@ -182,13 +256,21 @@ export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, 
   const hooks = await ensureServerWebhooksRecorded(db, orgId, row)
   row = hooks.row
 
-  // Step 2 — domain. Reuse an existing domain id, else create it.
-  const fromEmail = `${fromLocal || 'hello'}@${sendingDomain}`
+  // Step 2 — domain. Reuse an existing domain id, else create it; when the
+  // account already holds that name, adopt it if that is safe (ADOPTDOMAIN.1).
+  // Addresses are case-insensitive; store (and display) them lower-case.
+  const local = String(fromLocal || '').trim().toLowerCase() || 'hello'
+  const fromEmail = `${local}@${String(sendingDomain).toLowerCase()}`
   let shaped
   if (row.postmark_domain_id) {
     shaped = await getTenantDomain(row.postmark_domain_id)
   } else {
-    shaped = await createTenantDomain(sendingDomain)
+    try {
+      shaped = await createTenantDomain(sendingDomain)
+    } catch (e) {
+      if (!isDomainAlreadyExistsError(e)) throw e
+      shaped = await adoptExistingAccountDomain(db, { orgId, sendingDomain, isMaster, originalError: e })
+    }
     if (!shaped.id) throw new Error('Postmark did not return a domain id.')
   }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderCoverageReportHtml, shouldRunFridayCron, sendCoverageReportForOrg } from './report-email'
+import { renderCoverageReportHtml, sendCoverageReportForOrg } from './report-email'
 
 const sendOpsAlert = vi.fn(async () => ({ channel: 'email', recipients: 2 }))
 vi.mock('@/lib/ops-alerts', () => ({ sendOpsAlert: (...args) => sendOpsAlert(...args) }))
@@ -53,15 +53,6 @@ describe('renderCoverageReportHtml', () => {
     expect(html).toContain('reconnect required')
     expect(html).toContain('Current')
     expect(html).toMatch(/anomal/i)
-  })
-})
-
-describe('shouldRunFridayCron', () => {
-  it('runs only in the 08:xx Dublin hour and only once per day', () => {
-    expect(shouldRunFridayCron({ dublinMinutes: 8 * 60 + 5, alreadyRanToday: false })).toBe(true)
-    expect(shouldRunFridayCron({ dublinMinutes: 7 * 60 + 5, alreadyRanToday: false })).toBe(false)
-    expect(shouldRunFridayCron({ dublinMinutes: 9 * 60, alreadyRanToday: false })).toBe(false)
-    expect(shouldRunFridayCron({ dublinMinutes: 8 * 60 + 5, alreadyRanToday: true })).toBe(false)
   })
 })
 

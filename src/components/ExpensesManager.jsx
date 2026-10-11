@@ -10,7 +10,7 @@
 // lifecycle label (EXPENSELIFE.1).
 
 import { useEffect, useMemo, useState } from 'react'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, resolveZone } from '@/lib/location-time'
 import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS } from '@/lib/fte-expenses'
 import { expenseClaimLifecycle } from '@shared/accountant-queue-lifecycle'
 import {
@@ -333,7 +333,7 @@ function ClaimDetail({ claimId, canEdit, canSubmit, canRevoke, canApprove, onCha
       <div className="flex flex-wrap items-center gap-2 pt-2">
         {canEdit && (
           addingItem ? (
-            <AddItemForm claimId={claimId} onCancel={() => setAddingItem(false)} onSaved={() => { setAddingItem(false); load(); onChange?.() }} />
+            <AddItemForm claimId={claimId} timeZone={resolveZone(claim.location?.timezone)} onCancel={() => setAddingItem(false)} onSaved={() => { setAddingItem(false); load(); onChange?.() }} />
           ) : (
             <button onClick={() => setAddingItem(true)} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-medium hover:bg-un1t-accent">
               <Plus size={12} /> Add item
@@ -470,8 +470,9 @@ function NewClaimModal({ locations, onClose, onCreated }) {
 // -------------------------------------------------------------------
 // Add item form — inline under a claim. Multipart upload.
 // -------------------------------------------------------------------
-function AddItemForm({ claimId, onCancel, onSaved }) {
-  const today = dublinTodayStr()
+function AddItemForm({ claimId, timeZone, onCancel, onSaved }) {
+  // TZ.8b — the item date defaults to the claim's studio's today.
+  const today = todayStrIn(timeZone)
   const [form, setForm] = useState({
     expense_date: today, category: 'travel', vendor: '', description: '',
     amount: '', vat_amount: '', receipt: null,

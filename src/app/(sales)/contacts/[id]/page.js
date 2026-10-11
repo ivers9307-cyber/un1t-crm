@@ -4,7 +4,7 @@ import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Mail, MessageSquare, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, getLocationZone, getLocationZones, DEFAULT_TZ } from '@/lib/location-time'
 import { canViewContact } from '@/lib/contact-crossovers'
 import { canLoadContactConsultations, contactChannelFlags, contactActionGates, contactWorkGates } from '@/lib/contact-page-gates'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
@@ -38,6 +38,7 @@ import ConsultationsList from '@/components/ConsultationsList'
 import SendKudosCard from '@/components/SendKudosCard'
 import ProgressPhotos from '@/components/ProgressPhotos'
 import InBodyProgress from '@/components/InBodyProgress'
+import { viewerZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
 
@@ -282,6 +283,9 @@ export default async function ContactDetailPage(props) {
     }))
     const signedPhotos = photos.filter((p) => p.url)
 
+    // TZ.13 — a new consultation defaults to today in the contact's home
+    // studio zone. Display default only, so an unreadable zone falls back.
+    const consultZone = await getLocationZone(db, contact.location_id).catch(() => DEFAULT_TZ)
     consultationsTab = (
       <div className="space-y-5">
         <SendKudosCard contactId={contact.id} />
@@ -291,6 +295,7 @@ export default async function ContactDetailPage(props) {
           consultations={consultations}
           coaches={coaches}
           currentUserId={user.id}
+          zone={consultZone}
         />
         <ProgressPhotos contactId={contact.id} photos={signedPhotos} />
         <InBodyProgress scans={inbodyScans} contactId={contact.id} />
@@ -298,9 +303,18 @@ export default async function ContactDetailPage(props) {
     )
   }
 
-  const today = dublinTodayStr()
-  const upcomingBookings = bookings.filter(b => b.booking_date >= today && b.status === 'confirmed')
-  const pastBookings = bookings.filter(b => b.booking_date < today || b.status !== 'confirmed')
+  // TZ.7: each booking's date is its own studio's calendar day (a contact can
+  // book at more than one), falling back to the contact's studio. One batched
+  // zone read; display only, so an unreadable zone splits on the default day.
+  const bookingZones = await getLocationZones(db, [contact.location_id, ...bookings.map((b) => b.location_id)])
+    .catch(() => new Map())
+  const nowMs = Date.now()
+  const contactZone = bookingZones.get(contact.location_id) || DEFAULT_TZ
+  // The contact's own studio day (the needs-attention chips below).
+  const today = todayStrIn(contactZone, nowMs)
+  const todayFor = (b) => todayStrIn(bookingZones.get(b.location_id) || contactZone, nowMs)
+  const upcomingBookings = bookings.filter(b => b.booking_date >= todayFor(b) && b.status === 'confirmed')
+  const pastBookings = bookings.filter(b => b.booking_date < todayFor(b) || b.status !== 'confirmed')
 
   // Build unified timeline from notes + activities, sorted by date
   // (DRAWER.1 — the merge moved to contact-view so the drawer shares it).
@@ -365,6 +379,10 @@ export default async function ContactDetailPage(props) {
         journey={journey}
         attention={attention}
         nextClassAt={nextClassAt}
+        // TZ.16 — the contact's studio zone (TZ.7's read above) for the
+        // next-class chip; the viewer's active studio decides the suffix.
+        timezone={contactZone}
+        viewerZone={viewerZoneOf(user)}
         canToggleExempt={actions.canToggleExempt}
         actionGates={work}
         cancellationLink={cancellationLink}

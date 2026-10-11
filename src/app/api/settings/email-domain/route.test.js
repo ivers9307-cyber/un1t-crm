@@ -127,6 +127,53 @@ describe('POST /api/settings/email-domain', () => {
   })
 })
 
+// ADOPTDOMAIN.1 — only a platform master may adopt a domain the platform's
+// Postmark account already holds; the route says which caller this is, from
+// the PROFILE role, and answers the operator-neutral refusal as a 409.
+describe('POST /api/settings/email-domain — adopting an existing account domain (ADOPTDOMAIN.1)', () => {
+  it('passes isMaster: true for a platform master', async () => {
+    getCurrentUser.mockResolvedValue({ ...master, isMaster: true, profileRole: 'master' })
+    provisionEmailDomain.mockResolvedValue({ organization_id: 'org-a', status: 'live' })
+    const res = await POST(postReq({ domain: 'gyma.com', from_local: 'Sales' }))
+    expect(res.status).toBe(200)
+    expect(provisionEmailDomain).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ isMaster: true, fromLocal: 'sales' }))
+  })
+
+  it('passes isMaster: false for an org admin who is not a master', async () => {
+    getCurrentUser.mockResolvedValue({ ...ownerA, profileRole: 'owner' })
+    provisionEmailDomain.mockResolvedValue({ organization_id: 'org-a', status: 'verifying' })
+    await POST(postReq({ domain: 'gyma.com' }))
+    expect(provisionEmailDomain).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ isMaster: false }))
+  })
+
+  it('answers the refusal as a 409 with the operator-neutral message, and stamps last_error', async () => {
+    const actual = await vi.importActual('@/lib/email-domain-service')
+    const taken = new Error(actual.emailDomainTakenMessage('gyma.com'))
+    taken.code = actual.EMAIL_DOMAIN_TAKEN_CODE
+    provisionEmailDomain.mockRejectedValue(taken)
+    const updates = []
+    createServerClient.mockReturnValue({
+      from: () => ({ update: (patch) => { updates.push(patch); return { eq: () => Promise.resolve({ error: null }) } } }),
+    })
+    getCurrentUser.mockResolvedValue({ ...ownerA, profileRole: 'owner' })
+    const res = await POST(postReq({ domain: 'gyma.com' }))
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error).toBe('This domain is already registered on the platform. Use a subdomain such as mail.gyma.com, or contact support.')
+    expect(updates[0].last_error).toBe(body.error)
+  })
+
+  it('any other provisioning failure is still a 502', async () => {
+    provisionEmailDomain.mockRejectedValue(new Error('Postmark account API error: Invalid domain name.'))
+    createServerClient.mockReturnValue({
+      from: () => ({ update: () => ({ eq: () => Promise.resolve({ error: null }) }) }),
+    })
+    getCurrentUser.mockResolvedValue(ownerA)
+    const res = await POST(postReq({ domain: 'gyma.com' }))
+    expect(res.status).toBe(502)
+  })
+})
+
 describe('GET /api/settings/email-domain — a failed read (CHANNELREAD.1)', () => {
   it('500s instead of answering "not configured"', async () => {
     getCurrentUser.mockResolvedValue(ownerA)

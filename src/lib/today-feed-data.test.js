@@ -178,3 +178,35 @@ describe('fetchLocationTodayFeed (morning-briefing cron) — same predicate', ()
     expect(rows.find((r) => r.id === 'whatsapp')?.count).toBe(2)
   })
 })
+
+// TZ.17 ⚠️ — "today" (bookings today, tasks due) is the studio's day. It was
+// the host clock's (UTC on Vercel): from 00:00 to 01:00 Irish summer time the
+// feed showed yesterday's bookings.
+describe('TZ.17 the feed day is the studio day', () => {
+  function bookingsDb() {
+    const seen = []
+    const bookings = { select: () => bookings, eq: (c, v) => { if (c === 'booking_date') seen.push(v); return bookings }, neq: () => bookings, order: () => Promise.resolve({ data: [], error: null }) }
+    return { seen, db: makeDb({ bookings }) }
+  }
+  beforeEach(() => { hasPermission.mockImplementation((_u, key) => key === 'bookings') })
+
+  it('Dublin at 00:30 IST on 2 Jul asks for 2 Jul (the UTC host said 1 Jul)', async () => {
+    const { db, seen } = bookingsDb()
+    await fetchTodayFeed(db, { id: 'u1' }, LOC, { nowMs: Date.parse('2026-07-01T23:30:00Z'), zone: 'Europe/Dublin' })
+    expect(seen).toEqual(['2026-07-02'])
+  })
+  it('a New York studio at 23:30 EDT on 1 Jul asks for 1 Jul', async () => {
+    const { db, seen } = bookingsDb()
+    await fetchTodayFeed(db, { id: 'u1' }, LOC, { nowMs: Date.parse('2026-07-02T03:30:00Z'), zone: 'America/New_York' })
+    expect(seen).toEqual(['2026-07-01'])
+  })
+  it('the briefing feed takes the slot zone, and an unreadable zone omits the day rows (never a guessed day)', async () => {
+    const { db, seen } = bookingsDb()
+    await fetchLocationTodayFeed(db, LOC, Date.parse('2026-07-01T23:30:00Z'), { zone: 'Europe/Dublin' })
+    expect(seen).toEqual(['2026-07-02'])
+    const b = bookingsDb()
+    const broken = { from: (t) => (t === 'locations' ? { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'down' } }) }) }) } : b.db.from(t)) }
+    await fetchLocationTodayFeed(broken, 'loc-unreadable', Date.parse('2026-07-01T23:30:00Z'))
+    expect(b.seen).toEqual([]) // no bookings read on a guessed day
+  })
+})

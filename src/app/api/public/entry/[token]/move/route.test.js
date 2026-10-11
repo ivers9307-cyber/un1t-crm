@@ -18,12 +18,16 @@ vi.mock('@/lib/registration-move', async (importOriginal) => ({
   moveLocationIds: vi.fn(),
 }))
 vi.mock('@/lib/race-gap-payment', () => ({ createGapPayment: vi.fn(), closeCustomerGapLinks: vi.fn(async () => {}) }))
-vi.mock('@/lib/dublin-time', async (importOriginal) => ({ ...(await importOriginal()), dublinTodayStr: () => '2026-10-09' }))
+// TZ.9: "today" is the event studio's day at the (fake) clock, 2026-10-09 in
+// Dublin as the old dublinTodayStr mock pinned (see beforeEach).
+// W1.L3b — the checkout returns to this page on the event location's tenant host.
+vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
 
 const { checkRateLimit } = await import('@/lib/rate-limit')
 const { readRegistrationForMove, checkMove, moveRegistration, moveLocationIds } = await import('@/lib/registration-move')
 const { createGapPayment, closeCustomerGapLinks } = await import('@/lib/race-gap-payment')
 const { signEntryManageToken } = await import('@/lib/entry-manage-tokens')
+const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
 const { POST } = await import('./route.js')
 
 const SECRET = 'svc-key'
@@ -49,6 +53,8 @@ const checked = (gap) => ({ ok: true, registration: REG, targetEvent: { id: E2 }
 const CUSTOMER = { type: 'customer', id: 'k1', name: 'Aoife Byrne' }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-10-09T12:00:00Z'))
   vi.clearAllMocks()
   vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', SECRET)
   vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.test')
@@ -58,14 +64,14 @@ beforeEach(() => {
   moveRegistration.mockResolvedValue({ ok: true, move: { id: 'mv1' }, registration: { id: R1, race_event_id: E2, wave_id: W9 }, notified: true })
   createGapPayment.mockResolvedValue({ ok: true, payment: { id: 'gp1' }, checkoutUrl: 'https://crm.test/event-pay/gp1', reused: false })
 })
-afterEach(() => { vi.unstubAllEnvs() })
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers() })
 
 describe('POST /api/public/entry/[token]/move — the token', () => {
   it.each([
     ['garbage', 'not-a-token'],
     ['a forged signature', `${tokenFor().split('.')[0]}.AAAA`],
     ['another secret', signEntryManageToken({ registrationId: R1 }, 'other')],
-    ['an expired token', signEntryManageToken({ registrationId: R1 }, SECRET, { nowMs: Date.now() - 91 * 24 * 3600 * 1000 })],
+    ['an expired token', signEntryManageToken({ registrationId: R1 }, SECRET, { nowMs: Date.parse('2026-10-09T12:00:00Z') - 91 * 24 * 3600 * 1000 })],
   ])('%s is a 404 with no read', async (_w, token) => {
     const res = await POST(post(BODY), props(token))
     expect(res.status).toBe(404)
@@ -172,6 +178,17 @@ describe('POST /api/public/entry/[token]/move — dearer pays first', () => {
       returnUrl: `https://crm.test/event/entry/${token}`,
       cancelUrl: `https://crm.test/event/entry/${token}`,
     })
+  })
+  it("W1.L3b — the return page is this entry's page on the event location's tenant host", async () => {
+    checkMove.mockResolvedValue(checked(1000))
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const token = tokenFor()
+    expect((await POST(post(BODY), props(token))).status).toBe(200)
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(expect.anything(), 'L1')
+    expect(createGapPayment).toHaveBeenCalledWith(expect.objectContaining({
+      returnUrl: `https://gym-a.repset.ie/event/entry/${token}`,
+      cancelUrl: `https://gym-a.repset.ie/event/entry/${token}`,
+    }))
   })
   it.each([
     ['no_email', 400], ['host_not_ready', 409], ['provider_failed', 502], ['write_failed', 500], ['already_settled', 409],

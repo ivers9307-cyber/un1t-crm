@@ -31,6 +31,7 @@ import {
   resolveEmailDomainOrgId,
   loadEmailDomainRow,
   provisionEmailDomain,
+  EMAIL_DOMAIN_TAKEN_CODE,
 } from '@/lib/email-domain-service'
 import { logError } from '@/lib/log'
 
@@ -146,6 +147,10 @@ export async function POST(request) {
       fromLocal,
       fromName: body.from_name || null,
       createdBy: user.id,
+      // ADOPTDOMAIN.1 — only a platform master may adopt a domain the
+      // platform's Postmark account already holds. The PROFILE role, never
+      // the active-studio role.
+      isMaster: Boolean(user.isMaster || user.profileRole === 'master'),
     })
   } catch (e) {
     logError('tenant-email-domain', 'provision failed', { orgId, err: e?.message })
@@ -157,7 +162,9 @@ export async function POST(request) {
     } catch { /* ignore */ }
     return NextResponse.json(
       { success: false, error: e?.message || 'Could not provision the sending domain.' },
-      { status: 502 }
+      // A domain the platform already holds is a conflict the operator
+      // resolves (a subdomain), not an upstream failure.
+      { status: e?.code === EMAIL_DOMAIN_TAKEN_CODE ? 409 : 502 }
     )
   }
 

@@ -373,3 +373,29 @@ describe('/settings/locations/[id] — the location prop carries no AC credentia
     }
   })
 })
+
+// W1.M3a — the gate on every Glofox-only surface links a 'none' studio's
+// owner to membershipSettingsHref(). That URL must land on THIS page's
+// Integrations section with the Membership source card (W1.M2), and never
+// on the bare-Integrations redirect to the hub, which has no such card.
+describe('/settings/locations/[id] — membershipSettingsHref lands on the Membership source card', () => {
+  const owner = () => user({ role: 'owner', rolesByLocation: { [LOC_B]: 'owner' }, locations: [{ id: LOC_B }] })
+
+  it("a 'none' studio: the href's query renders LocationIntegrations with the resolved state, no redirect", async () => {
+    const { membershipSettingsHref } = await import('@/lib/membership/state-for-page')
+    const href = new URL(membershipSettingsHref(LOC_B), 'http://localhost')
+    expect(href.pathname).toBe(`/settings/locations/${LOC_B}`)
+    getCurrentUser.mockResolvedValue(owner())
+    createServerClient.mockReturnValue(makeDb({
+      location: { id: LOC_B, organization_id: ORG_B, name: 'Someone else', features: {}, settings: {}, membership_source: 'none' },
+    }))
+    const tree = await EditLocationPage({
+      params: Promise.resolve({ id: LOC_B }),
+      searchParams: Promise.resolve(Object.fromEntries(href.searchParams)),
+    })
+    expect(redirect).not.toHaveBeenCalled()
+    const el = findElement(tree, 'LocationIntegrations')
+    expect(el).toBeTruthy()
+    expect(el.props.membershipSource).toMatchObject({ source: 'none', state: 'none' })
+  })
+})

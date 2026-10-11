@@ -1,8 +1,11 @@
 // src/lib/roster-compare-format.js
 // SNAPSHOT.1 — the words for the "Published vs now" view. PURE and client-safe:
-// no imports and no IO. Calendar dates are built from their parts (the host
-// zone cannot move them); publish instants are read in Europe/Dublin through
-// Intl's NUMERIC parts, which do not vary with the ICU month-name data.
+// no IO; the one import is the pure zone maths. Calendar dates are built from
+// their parts (the host zone cannot move them); publish instants are read in
+// the STUDIO's zone (TZ.8a: the roster's locations.timezone, DEFAULT_TZ when
+// not given) through Intl's NUMERIC parts, which do not vary with the ICU
+// month-name data.
+import { instantToZonedParts, resolveZone, DEFAULT_TZ } from '@shared/zoned-time'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -40,22 +43,18 @@ export function periodLabel(start, end) {
   return start === end ? dayLabel(start) : `${dayLabel(start)} – ${dayLabel(end)}`
 }
 
-const DUBLIN_PARTS = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Europe/Dublin', year: 'numeric', month: '2-digit', day: '2-digit',
-  hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-})
+const pad2 = (n) => String(n).padStart(2, '0')
 
-function dublinParts(iso) {
+function zonedParts(iso, zone) {
   const ms = Date.parse(iso || '')
   if (!Number.isFinite(ms)) return null
-  const p = {}
-  for (const { type, value } of DUBLIN_PARTS.formatToParts(new Date(ms))) p[type] = value
-  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour === '24' ? '00' : p.hour}:${p.minute}` }
+  const p = instantToZonedParts(ms, resolveZone(zone))
+  return { date: p.dateKey, time: `${pad2(p.h)}:${pad2(p.mi)}` }
 }
 
-/** A publish instant as the studio reads it: 'Sat 12 Sep, 14:02'. */
-export function publishedLabel(iso) {
-  const p = dublinParts(iso)
+/** A publish instant as the studio reads it, in its zone: 'Sat 12 Sep, 14:02'. */
+export function publishedLabel(iso, zone = DEFAULT_TZ) {
+  const p = zonedParts(iso, zone)
   return p ? `${dayLabel(p.date)}, ${p.time}` : ''
 }
 
@@ -126,22 +125,22 @@ export function blockChangeNotes(b) {
 }
 
 /** Why there is nothing to compare: no backfill (SNAPSHOT.1 D11), or a baseline outside the window (review 3). */
-export function missingSnapshotMessage({ missing_reason: reason, snapshots_began_at: beganAt } = {}) {
+export function missingSnapshotMessage({ missing_reason: reason, snapshots_began_at: beganAt, timezone } = {}) {
   if (reason === 'outside_window') {
     return 'This publish does not cover the days on screen, so there is nothing to compare here.'
   }
   if (reason === 'not_saved') {
     return 'The record of this publish could not be saved at the time, so there is nothing to compare it with. The next publish of this period will be recorded.'
   }
-  const began = dublinParts(beganAt)
+  const began = zonedParts(beganAt, timezone)
   if (began) {
     return `Published vs now is available for rosters published from ${dayLabel(began.date)}. This roster was published before then.`
   }
   return 'Published vs now starts with the next publish at this studio. Rosters published before it have no record of what was published.'
 }
 
-export function publishOptionLabel(p, rosterId) {
-  const base = `${publishedLabel(p.published_at)} · ${periodLabel(p.period_start, p.period_end)}`
+export function publishOptionLabel(p, rosterId, zone = DEFAULT_TZ) {
+  const base = `${publishedLabel(p.published_at, zone)} · ${periodLabel(p.period_start, p.period_end)}`
   return p.roster_id === rosterId ? `${base} (this roster)` : base
 }
 

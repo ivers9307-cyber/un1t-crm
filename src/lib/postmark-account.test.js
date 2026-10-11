@@ -16,6 +16,8 @@ import {
   shapeDomainResponse,
   domainIsFullyVerified,
   sanitizeSendingDomain,
+  isDomainAlreadyExistsError,
+  findTenantDomainByName,
   ensureTenantServerStreams,
   ensureTenantServerWebhooks,
   WEBHOOK_TRIGGERS,
@@ -154,6 +156,74 @@ describe('createTenantDomain / getTenantDomain / verify*', () => {
     let err
     try { await createTenantDomain('mail.gymx.com') } catch (e) { err = e }
     expect(err.message).toContain('Domain already exists.')
+    expect(err.message).not.toContain(TOKEN)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────
+// ADOPTDOMAIN.1 — "Domain already exists" + finding the account domain
+// ─────────────────────────────────────────────────────────────
+
+describe('ADOPTDOMAIN.1 isDomainAlreadyExistsError', () => {
+  it('recognises the refusal from a real createTenantDomain call, with structured fields', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ErrorCode: 505, Message: 'Domain already exists.' }, 422))
+    let err
+    try { await createTenantDomain('gymx.example') } catch (e) { err = e }
+    expect(err.status).toBe(422)
+    expect(err.postmarkErrorCode).toBe(505)
+    expect(err.postmarkMessage).toBe('Domain already exists.')
+    expect(isDomainAlreadyExistsError(err)).toBe(true)
+    expect(JSON.stringify({ ...err, message: err.message })).not.toContain(TOKEN)
+  })
+  it('falls back to the message, and is false for any other refusal', () => {
+    expect(isDomainAlreadyExistsError(new Error('Postmark account API error: Domain already exists.'))).toBe(true)
+    expect(isDomainAlreadyExistsError(new Error('Postmark account API error: Invalid domain name.'))).toBe(false)
+    expect(isDomainAlreadyExistsError(new Error('Postmark account API error: HTTP 500'))).toBe(false)
+    expect(isDomainAlreadyExistsError(null)).toBe(false)
+  })
+})
+
+describe('ADOPTDOMAIN.1 findTenantDomainByName', () => {
+  const page = (from, n) => Array.from({ length: n }, (_, i) => ({ ID: from + i, Name: `d${from + i}.example` }))
+
+  it('pages GET /domains with count/offset and matches the name case-insensitively', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ TotalCount: 501, Domains: page(1, 500) }))
+      .mockResolvedValueOnce(jsonResponse({ TotalCount: 501, Domains: [{ ID: 9001, Name: 'GymX.Example' }] }))
+    const hit = await findTenantDomainByName('gymx.example')
+    expect(hit).toEqual({ ID: 9001, Name: 'GymX.Example' })
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+      'https://api.postmarkapp.com/domains?count=500&offset=0',
+      'https://api.postmarkapp.com/domains?count=500&offset=500',
+    ])
+    expect(fetchMock.mock.calls[0][1].method).toBe('GET')
+    expect(fetchMock.mock.calls[0][1].headers['X-Postmark-Account-Token']).toBe(TOKEN)
+  })
+
+  it('stops at the first page that holds it', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ TotalCount: 900, Domains: [...page(1, 499), { ID: 77, Name: 'gymx.example' }] }))
+    expect((await findTenantDomainByName('gymx.example')).ID).toBe(77)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns null once the account is exhausted (short page or TotalCount reached)', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ TotalCount: 3, Domains: page(1, 3) }))
+    expect(await findTenantDomainByName('gymx.example')).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    fetchMock.mockReset()
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ TotalCount: 1000, Domains: page(1, 500) }))
+      .mockResolvedValueOnce(jsonResponse({ TotalCount: 1000, Domains: page(501, 500) }))
+    expect(await findTenantDomainByName('gymx.example')).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('surfaces a failed list as an error, never the token', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ErrorCode: 10, Message: 'Bad or missing API token' }, 401))
+    let err
+    try { await findTenantDomainByName('gymx.example') } catch (e) { err = e }
+    expect(err.message).toBe('Postmark account API error: Bad or missing API token')
     expect(err.message).not.toContain(TOKEN)
   })
 })

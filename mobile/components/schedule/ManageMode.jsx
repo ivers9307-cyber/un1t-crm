@@ -25,7 +25,8 @@ import {
   adjustTargetFor, rosterKey, rosterLoadOutcome, staffLoadOutcome, isCurrentLoad,
   coachPressActions, replacePickerTitle, replaceResultAlert,
 } from '../../lib/schedule-manage'
-import { dublinTodayIso } from '../../lib/dates'
+import { studioTodayIso } from '../../lib/dates'
+import { zoneOfLocationRow } from '../../lib/studio-zone'
 import BlockCard from './BlockCard'
 import CoachPickerSheet from './CoachPickerSheet'
 
@@ -243,7 +244,7 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
     Alert.alert(
       assignment.profiles?.full_name || 'Coach',
       `${block.shift_templates?.name || 'Shift'} · ${block.block_date}`,
-      [...coachPressActions(block, dublinTodayIso()).map((k) => buttons[k]), { text: 'Cancel', style: 'cancel' }],
+      [...coachPressActions(block, studioTodayIso(zoneOfLocationRow(activeLocation))).map((k) => buttons[k]), { text: 'Cancel', style: 'cancel' }],
     )
   }
 
@@ -294,7 +295,7 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
   // REPLACE.1b — the offer line opens its state and "Withdraw offer".
   function onOfferPress(block, offer) {
     if (!offer) return
-    Alert.alert(block.shift_templates?.name || 'Offered shift', blockOfferControl(block, offer, dublinTodayIso()).label, [
+    Alert.alert(block.shift_templates?.name || 'Offered shift', blockOfferControl(block, offer, studioTodayIso(zoneOfLocationRow(activeLocation))).label, [
       { text: 'Close', style: 'cancel' },
       { text: 'Withdraw offer', style: 'destructive', onPress: async () => {
         setBusyId(block.id)
@@ -344,7 +345,7 @@ export default function ManageMode({ activeLocation, weekStart, weekEnd, selecte
       ) : dayBlocks.map((b) => (
         <BlockCard key={b.id} block={b} busy={busyId === b.id}
           onAddCoach={() => openPicker(b)} onCoachPress={(a) => onCoachPress(b, a)}
-          offerControl={blockOfferControl(b, offers[b.id] ?? null, dublinTodayIso())}
+          offerControl={blockOfferControl(b, offers[b.id] ?? null, studioTodayIso(zoneOfLocationRow(activeLocation)))}
           onOffer={() => offerToTeam(b)} onOfferPress={() => onOfferPress(b, offers[b.id])} />
       ))}
 

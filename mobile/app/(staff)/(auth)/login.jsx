@@ -128,7 +128,7 @@ export default function Login() {
       <TextInput
         value={email}
         onChangeText={setEmail}
-        placeholder="you@un1t.ie"
+        placeholder="you@example.com"
         placeholderTextColor="#94A3B8"
         autoCapitalize="none"
         autoCorrect={false}

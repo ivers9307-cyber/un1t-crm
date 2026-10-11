@@ -28,9 +28,9 @@
 // row never stops a round.
 
 import { sendTransactionalEmail } from './postmark'
-import { formatWeekdayLongDateInTZ } from './dates'
 import { getAppUrl } from './app-url'
-import { buildEventEmailShell, resolveEventEmail, escapeHtml } from './event-email'
+import { resolveCustomerBaseUrl } from './tenant-host'
+import { buildEventEmailShell, resolveEventEmail, resolveEventBrand, escapeHtml } from './event-email'
 import { resolveEventCommsLocation, pickAudienceVenueName } from './event-comms-location'
 import { checkTransactionalConsent, transactionalWhatsappSuppression } from './transactional-consent'
 import { maybeSendBookingWhatsappConfirm } from './automations/booking-whatsapp-confirm'
@@ -39,7 +39,7 @@ import { resolveMasterLocationId } from './host-events'
 import { loadForMode } from './event-signups'
 import { LIVE_REGISTRATION_STATUSES } from './audience-filter'
 import { isWhatsAppNumberMissing } from './whatsapp-number-missing'
-import { dublinTodayStr } from './dublin-time'
+import { eventToday, earliestLocalToday, eventDateLong } from './event-day'
 import { signWaitlistClaimToken, verifyWaitlistClaimToken, waitlistTokenSecret } from './event-waitlist-tokens'
 import { logError, logWarn } from './log'
 
@@ -57,14 +57,15 @@ const ID_CHUNK = 100
 export const WAITLIST_ROW_COLUMNS =
   'id, race_event_id, location_id, contact_id, name, email, phone, headcount, status, source, last_offered_at, offer_count, claimed_registration_id, removed_by_name, created_at'
 
-/** The event columns the offer round and the join need. */
+/** The event columns the offer round and the join need. TZ.9: the locations
+ *  embed carries `timezone`, the event's studio clock (event-day.js). */
 export const WAITLIST_EVENT_COLUMNS = `
   id, name, slug, kind, race_date, capacity_mode, active, status,
   location_id, host_id, sending_location_id,
   registration_opens_at, registration_closes_at,
   venue_name, accent_hex, hero_image_url,
   waitlist_email_subject, waitlist_email_intro,
-  locations:location_id ( id, name, is_host_anchor, organization_id ),
+  locations:location_id ( id, name, is_host_anchor, organization_id, timezone ),
   waves:race_waves ( id, capacity )
 `
 
@@ -151,15 +152,20 @@ export async function loadEventHasRoom(db, event) {
   return { hasRoom: eventHasRoom(event, data), error: null }
 }
 
-/** The offer link: the event's normal signup page, carrying the claim token. */
-export function waitlistClaimUrl(slug, waitlistId, now = Date.now()) {
+/**
+ * The offer link: the event's normal signup page, carrying the claim token.
+ * W1.L3b — `baseUrl` is the EVENT LOCATION's tenant host (sendWaitlistOffer
+ * resolves it); without one it floors to the CRM host as before.
+ */
+export function waitlistClaimUrl(slug, waitlistId, now = Date.now(), handed = null) {
   const token = signWaitlistClaimToken({ waitlistId, now }, waitlistTokenSecret())
-  return `${getAppUrl()}/event/${encodeURIComponent(slug)}?wl=${encodeURIComponent(token)}`
+  const baseUrl = (typeof handed === 'string' && handed.replace(/\/+$/, '')) || getAppUrl()
+  return `${baseUrl}/event/${encodeURIComponent(slug)}?wl=${encodeURIComponent(token)}`
 }
 
+// The stored calendar day, in words (TZ.9: zone-free, the same text in every studio).
 function fmtDate(dateStr) {
-  if (!dateStr) return ''
-  return formatWeekdayLongDateInTZ(dateStr) || dateStr
+  return eventDateLong(dateStr)
 }
 
 function firstNameOf(name) {
@@ -201,6 +207,7 @@ export function buildWaitlistJoinedEmail(ctx, race = {}) {
     infoRows: infoRowsFor(ctx),
     footerHtml: `If a spot opens, we'll email you (and WhatsApp you if you gave a number). The first to book gets it, so it's worth acting quickly.`,
     locationName: ctx.locationName,
+    brand: ctx.brand || '',
   })
   return { subject, htmlBody }
 }
@@ -249,9 +256,10 @@ export async function sendWaitlistJoinedEmail(db, { race, row }) {
     // Recoverable: the page already told them they are on the list.
     const gate = await checkTransactionalConsent({ db, contactId: row.contact_id, channel: 'email', module: 'event-waitlist', meta: { waitlistId: row.id } })
     if (!gate.allowed) return `skipped:${gate.reason}`
-    const ctx = contextFor(race, row)
-    const { subject, htmlBody } = buildWaitlistJoinedEmail(ctx, race)
     const locationId = await commsLocationIdFor(db, race, { waitlistId: row.id })
+    // W1.S1a — the shell carries the SENDING location's brand.
+    const ctx = { ...contextFor(race, row), brand: await resolveEventBrand(db, {}, locationId) }
+    const { subject, htmlBody } = buildWaitlistJoinedEmail(ctx, race)
     await sendTransactionalEmail({ to: row.email, subject, htmlBody, contactId: row.contact_id || null, locationId, tag: 'event-waitlist-joined' })
     return 'sent'
   } catch (e) {
@@ -408,7 +416,11 @@ export async function sendWaitlistOffer(db, { race, row, now = Date.now(), comms
   const out = { email: 'skipped:no_email', whatsapp: 'skipped:no_phone' }
   let claimUrl
   try {
-    claimUrl = waitlistClaimUrl(race.slug, row.id, now)
+    // W1.L3b — both legs (email + the WhatsApp body param) carry the link on
+    // the event location's tenant host; the resolver floors to the CRM host
+    // and never throws past it, so this try fails exactly as it did before.
+    const baseUrl = await resolveCustomerBaseUrl(db, race?.location_id || null)
+    claimUrl = waitlistClaimUrl(race.slug, row.id, now, baseUrl)
   } catch (e) {
     logError('event-waitlist', 'claim link could not be built; offer not sent', { err: e, waitlistId: row.id })
     return { email: 'failed', whatsapp: 'failed' }
@@ -425,8 +437,8 @@ export async function sendWaitlistOffer(db, { race, row, now = Date.now(), comms
       } else {
         const contact = { first_name: ctx.firstName, name: row.name || '', email: row.email, phone: '' }
         const extras = { event_name: ctx.eventName, when: ctx.dateLabel, location: ctx.locationName, claim_url: claimUrl }
-        const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'waitlist', race, contact, extras, defaults: buildWaitlistOfferDefaults(ctx) })
         const locationId = commsLocationId || await commsLocationIdFor(db, race, { waitlistId: row.id })
+        const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'waitlist', race, contact, extras, defaults: buildWaitlistOfferDefaults(ctx), brandLocationId: locationId })
         await sendTransactionalEmail({ to: row.email, subject, htmlBody, contactId: row.contact_id || null, locationId, tag: 'event-waitlist-offer' })
         out.email = 'sent'
       }
@@ -509,18 +521,21 @@ async function readActiveRows(db, eventId) {
 }
 
 /**
- * Claimed rows of events still ahead (race_date today or later), with their
- * registration, so the round can re-open a claim whose booking fell through.
- * Bounded by the event date: past events' claims are history and never read.
+ * Claimed rows of events still ahead (race_date `floorStr` or later), with
+ * their registration, so the round can re-open a claim whose booking fell
+ * through. Bounded by the event date: past events' claims are history and
+ * never read. TZ.9: without a pinned today the floor is the earliest studio
+ * day (earliestLocalToday), and the round judges each event on its own day,
+ * so a claim of an event that is past at its studio is read but never used.
  */
-async function readUpcomingClaimedRows(db, eventId, todayStr) {
+async function readUpcomingClaimedRows(db, eventId, floorStr) {
   const rows = []
   for (let from = 0; ; from += PAGE) {
     let q = db
       .from('event_waitlist')
       .select(`${WAITLIST_ROW_COLUMNS}, race:race_events!inner ( race_date ), registration:claimed_registration_id ( id, status, race_event_id )`)
       .eq('status', 'claimed')
-      .gte('race.race_date', todayStr)
+      .gte('race.race_date', floorStr)
     if (eventId) q = q.eq('race_event_id', eventId)
     const { data, error } = await q.order('id', { ascending: true }).range(from, from + PAGE - 1)
     if (error) return { rows: null, error }
@@ -596,17 +611,19 @@ async function readEvents(db, ids) {
  *
  * @param {object} db  service-role client
  * @param {{ now?: number, todayStr?: string, eventId?: string, force?: boolean }} [opts]
+ *   todayStr pins one YYYY-MM-DD "today" for every event (tests); omitted, each
+ *   event is judged on its own studio's day at `now` (TZ.9, event-day.js).
  *   eventId limits the round to one event (staff / host "Offer now");
  *   force (only with "Offer now") ignores the 24 h rule for every row still on
  *   the list, never-offered and already-offered alike. The cron never forces.
  * @returns {Promise<{ events: number, offered: number, expired: number, skipped: number, failed: number, no_room: number, claimed: number, reopened: number }>}
  */
-export async function runWaitlistOffers(db, { now = Date.now(), todayStr = dublinTodayStr(), eventId = null, force = false } = {}) {
+export async function runWaitlistOffers(db, { now = Date.now(), todayStr = null, eventId = null, force = false } = {}) {
   const counts = { events: 0, offered: 0, expired: 0, skipped: 0, failed: 0, no_room: 0, claimed: 0, reopened: 0 }
 
   const { rows: activeRows, error: rowsErr } = await readActiveRows(db, eventId)
   if (rowsErr) throw new Error(`event_waitlist read failed: ${rowsErr.message || rowsErr}`)
-  const { rows: claimedRows, error: claimedErr } = await readUpcomingClaimedRows(db, eventId, todayStr)
+  const { rows: claimedRows, error: claimedErr } = await readUpcomingClaimedRows(db, eventId, todayStr || earliestLocalToday(now))
   if (claimedErr) throw new Error(`event_waitlist claimed read failed: ${claimedErr.message || claimedErr}`)
   if (!activeRows.length && !claimedRows.length) return counts
 
@@ -625,9 +642,10 @@ export async function runWaitlistOffers(db, { now = Date.now(), todayStr = dubli
     const race = events.get(raceEventId)
     if (!race) { counts.skipped += group.active.length; continue }
 
-    // 1. The event date passed: the list is over. A NULL race_date never
-    // matches, so such an event's rows never expire (see the header).
-    if (race.race_date && race.race_date < todayStr) {
+    // 1. The event date passed (at the event's studio): the list is over. A
+    // NULL race_date never matches, so such an event's rows never expire (see
+    // the header).
+    if (race.race_date && race.race_date < (todayStr || eventToday(race, now))) {
       if (!group.active.length) continue
       const { data, error } = await db
         .from('event_waitlist')

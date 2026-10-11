@@ -1,8 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
+import { PLATFORM_TZ } from '@shared/zoned-time'
+import TimezoneSelect from '@/components/settings/TimezoneSelect'
+import TimezoneChangeDialog from '@/components/settings/TimezoneChangeDialog'
+import { COUNTRY_OPTIONS, browserZone, countryZoneMismatch, zoneOffsetLabel } from '@/lib/timezone-options'
 
 export default function LocationForm({ location, callerRole = 'owner', organizations = [], showEmailTab = false }) {
   const router = useRouter()
@@ -18,7 +22,21 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   const [address, setAddress] = useState(location?.address || '')
   const [phone, setPhone] = useState(location?.phone || '')
   const [email, setEmail] = useState(location?.email || '')
-  const [timezone, setTimezone] = useState(location?.timezone || 'Europe/Dublin')
+  // TZ.2 — creation: the zone is REQUIRED and pre-filled from the creating
+  // browser's zone (D8), shown next to the country. Edit: shown read-only;
+  // no client may write locations.timezone since mig 719. TZ.3: "Change
+  // timezone" opens <TimezoneChangeDialog>, which runs the preflight and
+  // saves through PUT /api/locations/[id]/timezone (D2 = A: any time, with
+  // the counts shown and the location name typed to confirm).
+  const [timezone, setTimezone] = useState(location?.timezone || PLATFORM_TZ)
+  const [changingTimezone, setChangingTimezone] = useState(false)
+  const [timezoneNotice, setTimezoneNotice] = useState(null)
+  const timezoneTouched = useRef(false)
+  useEffect(() => {
+    if (isEditing || timezoneTouched.current) return
+    const zone = browserZone()
+    if (zone) setTimezone(zone)
+  }, [isEditing])
   const [country, setCountry] = useState(location?.country || 'IE')
   const [active, setActive] = useState(location?.active !== false)
   // Organization (mig 079) — required for new locations. Shown read-only
@@ -107,7 +125,8 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
         address: address || null,
         phone: phone || null,
         email: email || null,
-        timezone,
+        // TZ.2 — timezone is DELIBERATELY absent: mig 719 revoked the client
+        // UPDATE on it, and naming it here would fail the WHOLE update (42501).
         country,
         active,
         // SECFIX.3b — organization_id is NOT sent: the org is read-only here,
@@ -172,7 +191,16 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
     router.refresh()
   }
 
+  function handleTimezoneChanged(data) {
+    setChangingTimezone(false)
+    if (!data?.changed) return
+    setTimezone(data.timezone)
+    setTimezoneNotice(timezoneChangeNotice(data))
+    router.refresh()
+  }
+
   return (
+    <>
     <form onSubmit={handleSubmit} className="space-y-6">
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3">
@@ -216,7 +244,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
             required
             value={name}
             onChange={e => setName(e.target.value)}
-            placeholder="UN1T Dublin City"
+            placeholder="e.g. Dublin City"
             className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
           />
         </div>
@@ -259,42 +287,29 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
           <div>
             <label className="block text-sm mb-1.5">Country</label>
             <select
+              aria-label="Country"
               value={country}
               onChange={e => setCountry(e.target.value)}
               className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
             >
-              <option value="IE">Ireland (IE)</option>
-              <option value="GB">United Kingdom (GB)</option>
-              <option value="DE">Germany (DE)</option>
-              <option value="AU">Australia (AU)</option>
-              <option value="KW">Kuwait (KW)</option>
-              <option value="MT">Malta (MT)</option>
-              <option value="EG">Egypt (EG)</option>
-              <option value="CY">Cyprus (CY)</option>
+              {COUNTRY_OPTIONS.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
             </select>
             <p className="text-xs text-un1t-muted mt-1">Drives the public-holiday list on the schedule. All listed countries have built-in holidays through 2030.</p>
           </div>
-          <div>
-            <label className="block text-sm mb-1.5">Timezone</label>
-            <select
+          {isEditing ? (
+            <TimezoneReadOnly
+              timezone={timezone}
+              country={country}
+              notice={timezoneNotice}
+              onChangeClick={() => { setTimezoneNotice(null); setChangingTimezone(true) }}
+            />
+          ) : (
+            <TimezoneSelect
               value={timezone}
-              onChange={e => setTimezone(e.target.value)}
-              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
-            >
-              <option value="Europe/Dublin">Europe/Dublin</option>
-              <option value="Europe/London">Europe/London</option>
-              <option value="Europe/Berlin">Europe/Berlin</option>
-              <option value="Europe/Malta">Europe/Malta</option>
-              <option value="Asia/Nicosia">Asia/Nicosia (Cyprus)</option>
-              <option value="Africa/Cairo">Africa/Cairo</option>
-              <option value="Asia/Kuwait">Asia/Kuwait</option>
-              <option value="Australia/Sydney">Australia/Sydney</option>
-              <option value="Australia/Melbourne">Australia/Melbourne</option>
-              <option value="Australia/Brisbane">Australia/Brisbane</option>
-              <option value="Australia/Perth">Australia/Perth</option>
-              <option value="Australia/Adelaide">Australia/Adelaide</option>
-            </select>
-          </div>
+              country={country}
+              onChange={z => { timezoneTouched.current = true; setTimezone(z) }}
+            />
+          )}
         </div>
 
         {isEditing && (
@@ -406,6 +421,61 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
         </button>
       </div>
     </form>
+    {/* TZ.3 — outside the <form>: the dialog has its own form, and nested
+        forms are invalid. Mounted only while open, so each opening runs a
+        fresh preflight. The name to type is the SAVED one (the server checks
+        against the row, not an unsaved edit). */}
+    {isEditing && changingTimezone && (
+      <TimezoneChangeDialog
+        location={{ id: location.id, name: location.name, timezone }}
+        country={country}
+        onClose={() => setChangingTimezone(false)}
+        onChanged={handleTimezoneChanged}
+      />
+    )}
+    </>
   )
 }
 
+// What to tell the owner after a change (TZ.3). Broadcasts that kept their own
+// zone are named; a broadcast follow that failed is said plainly.
+function timezoneChangeNotice(data) {
+  const parts = [`Timezone changed to ${String(data.timezone).replace(/_/g, ' ')}.`]
+  const kept = data.broadcasts?.kept || []
+  if (data.warning === 'broadcasts_not_followed') {
+    parts.push('Some WhatsApp drip broadcasts could not be moved to the new timezone. Check their send windows.')
+  }
+  if (kept.length > 0) {
+    const who = kept.length === 1 ? 'One broadcast keeps its' : `${kept.length} broadcasts keep their`
+    parts.push(`${who} own timezone: ${kept.map((b) => b.name || 'Untitled').join(', ')}.`)
+  }
+  return parts.join(' ')
+}
+
+// TZ.2 — an existing location's zone, read-only here. TZ.3: the button opens
+// the change dialog (preflight, typed-name confirm, service-role route), so no
+// path saves a zone unvalidated.
+function TimezoneReadOnly({ timezone, country, notice, onChangeClick }) {
+  const offset = zoneOffsetLabel(timezone)
+  const hint = countryZoneMismatch(country, timezone)
+  return (
+    <div>
+      <span className="block text-sm mb-1.5">Timezone</span>
+      <div
+        aria-label="Timezone"
+        className="w-full bg-un1t-bg/60 border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-subtle"
+      >
+        {timezone.replace(/_/g, ' ')}{offset ? ` (${offset})` : ''}
+      </div>
+      <button
+        type="button"
+        onClick={onChangeClick}
+        className="mt-2 text-xs text-un1t-subtle border border-un1t-border rounded-md px-2.5 py-1 hover:text-un1t-text"
+      >
+        Change timezone
+      </button>
+      {notice && <p role="status" className="text-xs text-un1t-subtle mt-1">{notice}</p>}
+      {hint && <p role="status" className="text-xs text-amber-700 mt-1">{hint}</p>}
+    </div>
+  )
+}

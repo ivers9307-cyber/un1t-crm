@@ -7,6 +7,7 @@ import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-for
 import { defaultHoldingMessage, defaultWelcomeGreeting } from '@/lib/agent/default-copy'
 import { productName } from '@/lib/brand-name'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
+import { zoneCity } from '@/lib/record-time'
 
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
 // Instagram agent. Manager+ only. Two parts: behaviour settings + the
@@ -142,7 +143,9 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
         welcome_greeting: settings.welcome_greeting || null,
         link_button_text: (settings.link_button_text || '').trim() || null,
         quiet_hours: settings.quiet_hours?.start && settings.quiet_hours?.end
-          ? { start: settings.quiet_hours.start, end: settings.quiet_hours.end, tz: settings.quiet_hours.tz || 'Europe/Dublin' }
+          // TZ.5 — no zone is written when none was stored: null means the
+          // studio's own zone (locations.timezone), read at decision time.
+          ? { start: settings.quiet_hours.start, end: settings.quiet_hours.end, tz: settings.quiet_hours.tz || null }
           : null,
         booking_mode: settings.booking_mode === 'draft' ? 'draft' : 'auto',
         agent_name: (settings.agent_name || '').trim() || null,
@@ -632,7 +635,7 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
             <input type="time" className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text"
               value={settings.quiet_hours?.end || ''}
               onChange={e => setField('quiet_hours', { ...(settings.quiet_hours || {}), end: e.target.value })} />
-            <span className="text-xs text-un1t-muted">Europe/Dublin — agent stays quiet, a human replies.</span>
+            <span className="text-xs text-un1t-muted">{settings.quiet_hours?.tz || location?.timezone || "the studio's timezone"} — agent stays quiet, a human replies.</span>
           </div>
         </div>
 
@@ -942,7 +945,8 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
                 Last run {new Date(checkinStats.last_run.at).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}
                 {checkinStats.last_run.checkins
                   ? ` — ${(checkinStats.last_run.checkins.freeform || 0) + (checkinStats.last_run.checkins.templates || 0)} sent · ${checkinStats.last_run.checkins.skipped || 0} skipped${describeCheckinReasons(checkinStats.last_run.checkins)}`
-                  : ' — no check-in summary yet (runs every 15 min, 9:00–20:00 Dublin)'}
+                  // TZ.16 — the window is the studio's own clock (TZ.5): name its zone.
+                  : ` — no check-in summary yet (runs every 15 min, 9:00–20:00 ${location?.timezone ? zoneCity(location.timezone) : 'studio time'})`}
               </p>
             )}
             {checkinStats.last_run?.day && (

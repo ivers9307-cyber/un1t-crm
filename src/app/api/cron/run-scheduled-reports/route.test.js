@@ -10,6 +10,12 @@ vi.mock('@/lib/postmark', () => ({ sendTransactionalEmail: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn() }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.example' }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+// TZ.6 — this file's subject is the recipients rule, not the daily-slot gate:
+// every location is due.
+vi.mock('@/lib/cron-daily-slot', async (importOriginal) => ({
+  ...(await importOriginal()),
+  gateDailySlot: (await import('@/lib/cron-daily-slot.test-helpers')).openGate,
+}))
 vi.mock('@/lib/report-generator', async () => {
   const actual = await vi.importActual('@/lib/report-generator')
   return { ...actual, generateReport: vi.fn() }
@@ -49,6 +55,7 @@ function makeDb(tables, { failTable } = {}) {
         not() { return b },
         lte() { return b },
         eq(col, v) { preds.push(r => r[col] === v); return b },
+        in(col, vs) { preds.push(r => vs.includes(r[col])); return b },
         ilike(col, pattern) { preds.push(r => ilikeMatches(pattern, r[col])); return b },
         update(p) { op = 'update'; payload = p; return b },
         maybeSingle() {

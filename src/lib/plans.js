@@ -14,7 +14,7 @@
 
 import { METER_KEYS } from '@shared/plans'
 import { BUNDLE_KEYS } from '@shared/permission-bundles'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, PLATFORM_TZ } from '@/lib/location-time'
 
 /**
  * Pure: pick the version of a plan active on a given date — the row
@@ -22,8 +22,9 @@ import { dublinTodayStr } from '@/lib/dublin-time'
  * FUTURE effective_from are scheduled, not active.
  *
  * @param {Array<{ effective_from: string }>} versions - any order
- * @param {string} onDate - 'YYYY-MM-DD' (Dublin business date — use
- *   dublinTodayStr() for "today", never a UTC-derived date string)
+ * @param {string} onDate - 'YYYY-MM-DD' (a date on the platform billing
+ *   calendar — todayStrIn(PLATFORM_TZ) for "today" (D5), never a
+ *   UTC-derived date string)
  * @returns {object|null} the active version row, or null if none is
  *   effective yet (all future, or empty list)
  */
@@ -90,11 +91,11 @@ function toNonNegativeNumber(value) {
  *
  * @param {object} db - service-role client
  * @param {string} planId
- * @param {string} [onDate] - 'YYYY-MM-DD'; defaults to the Dublin
- *   business today (repo TZ convention — see CLAUDE.md)
+ * @param {string} [onDate] - 'YYYY-MM-DD'; defaults to today on the
+ *   platform billing calendar (D5: PLATFORM_TZ)
  * @returns {Promise<object|null>}
  */
-export async function getActivePlanVersion(db, planId, onDate = dublinTodayStr()) {
+export async function getActivePlanVersion(db, planId, onDate = todayStrIn(PLATFORM_TZ)) { // D5: the platform billing calendar (PLATFORM_TZ)
   const { data, error } = await db
     .from('plan_versions')
     .select('*')
@@ -192,10 +193,10 @@ export async function locationHasPlanFeature(db, locationId, key) {
  *
  * @param {object} db - service-role client
  * @param {string} key - a shared/plans.js FEATURE_KEYS entry
- * @param {string} [onDate] - 'YYYY-MM-DD' Dublin business date
+ * @param {string} [onDate] - 'YYYY-MM-DD' on the platform billing calendar (D5)
  * @returns {Promise<Array<{ id: string, slug: string, name: string, kind: 'tier'|'addon' }>>}
  */
-export async function plansGrantingFeature(db, key, onDate = dublinTodayStr()) {
+export async function plansGrantingFeature(db, key, onDate = todayStrIn(PLATFORM_TZ)) { // D5: the platform billing calendar (PLATFORM_TZ)
   if (!db || !key) return []
   try {
     const { data, error } = await db

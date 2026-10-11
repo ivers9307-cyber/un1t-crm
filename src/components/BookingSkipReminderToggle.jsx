@@ -15,11 +15,13 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Bell, BellOff } from 'lucide-react'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, DEFAULT_TZ } from '@shared/zoned-time'
 
 const SKIP_FAILED = 'Could not change the reminder setting. Try again.'
 
-export default function BookingSkipReminderToggle({ bookingId, skipReminder, reminderSentAt, bookingDate }) {
+// `zone` is the booking's studio zone (TZ.7): booking_date is that studio's
+// calendar day, so "past" is judged on its clock.
+export default function BookingSkipReminderToggle({ bookingId, skipReminder, reminderSentAt, bookingDate, zone = DEFAULT_TZ }) {
   const [skip, setSkip] = useState(!!skipReminder)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -32,7 +34,7 @@ export default function BookingSkipReminderToggle({ bookingId, skipReminder, rem
 
   // Hide for past bookings — the time has gone, reminders aren't
   // relevant. Cleaner than showing a no-op control.
-  const today = dublinTodayStr()
+  const today = todayStrIn(zone)
   if (bookingDate && bookingDate < today) return null
 
   async function toggle() {

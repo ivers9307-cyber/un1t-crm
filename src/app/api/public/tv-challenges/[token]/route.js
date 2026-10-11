@@ -15,6 +15,8 @@ import { createServerClient } from '@/lib/supabase'
 import { computeStandings, computeCollective } from '@/lib/challenges-io'
 import { challengePhase, windowIso } from '@/lib/challenges'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { resolveLocationBrand } from '@/lib/host-brand'
+import { zoneOfLocation, monthStartMsIn } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -54,9 +56,10 @@ export async function GET(request, props) {
     return NextResponse.json({ ok: false, error: 'Not found' }, { status: 404, headers: NO_STORE })
   }
 
+  // TZ.12 — `timezone` rides the same read, for the board's header clock.
   const { data: location } = await db
     .from('locations')
-    .select('id, name')
+    .select('id, name, timezone')
     .eq('id', display.location_id)
     .single()
   if (!location) {
@@ -71,10 +74,13 @@ export async function GET(request, props) {
     .select('id, name, mode, metric, starts_on, ends_on, target')
     .eq('location_id', locationId).order('ends_on', { ascending: true })
 
+  // TZ.13 — every challenge here is this location's, so its window is this
+  // location's local days.
+  const zone = zoneOfLocation(location)
   const challenges = []
   for (const ch of defs || []) {
-    if (challengePhase(ch, nowMs) !== 'active') continue
-    const { fromIso, toIso } = windowIso(ch)
+    if (challengePhase(ch, nowMs, zone) !== 'active') continue
+    const { fromIso, toIso } = windowIso(ch, zone)
     // DECISION #1 (mig 348) — this is a PUBLIC render surface, so exclude
     // members who opted out of the leaderboard. They still score for
     // themselves and can still win (the run-challenge-events cron computes
@@ -88,13 +94,23 @@ export async function GET(request, props) {
     }
   }
 
-  const d = new Date(nowMs)
-  const monthFrom = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString()
+  // TZ.17 — the monthly gym board starts on the studio's 1st at local midnight
+  // (it started at 00:00 UTC, so from 00:00 to 01:00 Irish summer time on the
+  // 1st the board still showed last month, and 00:xx sessions on the 1st were
+  // never counted).
+  const monthFrom = new Date(monthStartMsIn(nowMs, zone)).toISOString()
   const gym = await computeStandings(db, { locationId, metric: 'points', fromIso: monthFrom, toIso: new Date(nowMs).toISOString(), excludeOptedOut: true })
+
+  // W1.S1b — the studio's brand for "{Brand} Points" and the tab title
+  // (per-location cache, host-brand.js; this board polls).
+  const brand = await resolveLocationBrand({ locationId, db, nowMs })
 
   return NextResponse.json({
     ok: true, server_time: new Date().toISOString(),
+    // TZ.12 — the studio's zone (missing/invalid → Europe/Dublin, warned once).
+    timezone: zone,
     location: { id: location.id, name: location.name },
+    brand: { name: brand.companyName, short_name: brand.shortName },
     challenges, gymBoard: project(gym),
   }, { headers: NO_STORE })
 }

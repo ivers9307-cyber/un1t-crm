@@ -41,8 +41,8 @@ import { readRegistrationForMove, checkMove, moveRegistration, moveLocationIds }
 import { entryLeadName } from '@/lib/registration-entry'
 import { entryMoveBlock, customerMoveMessage, CUSTOMER_MOVE_STATUS } from '@/lib/registration-move-public'
 import { createGapPayment, closeCustomerGapLinks } from '@/lib/race-gap-payment'
-import { dublinTodayStr } from '@/lib/dublin-time'
-import { getAppUrl } from '@/lib/app-url'
+import { eventToday } from '@/lib/event-day'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -94,7 +94,8 @@ export async function POST(request, props) {
 
   // Unpaid, cancelled, past: refused before any rule runs. A check-in is
   // the rules' own checked_in below (they read it fresh).
-  const block = entryMoveBlock({ registration: reg, checkinCount: 0, today: dublinTodayStr() })
+  // TZ.9: "past" by the entry's own event's studio day.
+  const block = entryMoveBlock({ registration: reg, checkinCount: 0, today: eventToday(reg.race) })
   if (block) return refusal(block.code)
 
   const allowedLocationIds = await entryOrganisationLocations(db, reg)
@@ -125,8 +126,10 @@ export async function POST(request, props) {
     return NextResponse.json({ success: true, data: { moved: true, registration: moved.registration, notified: moved.notified === true } })
   }
 
-  // Dearer: pay first. The checkout returns to this same page.
-  const pageUrl = `${getAppUrl()}/event/entry/${token}`
+  // Dearer: pay first. The checkout returns to this same page — on the EVENT
+  // LOCATION's tenant host (W1.L3b; the resolver floors to the CRM host).
+  const baseUrl = await resolveCustomerBaseUrl(db, reg.race?.location_id || null)
+  const pageUrl = `${baseUrl}/event/entry/${token}`
   const created = await createGapPayment({
     db,
     registration: checked.registration,

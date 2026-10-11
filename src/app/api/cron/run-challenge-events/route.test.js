@@ -13,7 +13,8 @@ let releaseError = null
 function makeBuilder(table) {
   const state = { eqs: {}, is: {} }
   const b = {}
-  for (const m of ['or', 'order', 'range']) b[m] = () => b
+  // TZ.13 — getLocationZone reads the challenge's studio zone with maybeSingle().
+  for (const m of ['or', 'order', 'range', 'maybeSingle']) b[m] = () => b
   b.select = () => { state.selected = true; return b }
   b.eq = (c, v) => { state.eqs[c] = v; return b }
   b.is = (c, v) => { state.is[c] = v; return b }
@@ -36,6 +37,7 @@ function makeBuilder(table) {
       }
     } else if (table === 'challenges') out = { data: challengeRows.map((r) => ({ ...r })), error: null }
     else if (table === 'champ_push_tokens') out = { data: tokenRows, error: null }
+    else if (table === 'locations') out = { data: { id: state.eqs.id, timezone: 'Europe/Dublin' }, error: null }
     else out = { data: [], error: null }
     return Promise.resolve(out).then(res, rej)
   }
@@ -45,8 +47,15 @@ const fakeDb = { from: (t) => makeBuilder(t) }
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
+vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Stillorgan', shortName: 'UN1T', locationName: 'UN1T Stillorgan' })) }))
 vi.mock('@/lib/customer-push', () => ({ sendCustomerPush: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+// TZ.6 — this file's subject is the announcement claims, not the daily-slot
+// gate: every studio is due on every run (route.tz6.test.js covers the gate).
+vi.mock('@/lib/cron-daily-slot', async (importOriginal) => ({
+  ...(await importOriginal()),
+  gateDailySlot: (await import('@/lib/cron-daily-slot.test-helpers')).openGate,
+}))
 vi.mock('@/lib/challenges-io', () => ({ computeStandings: vi.fn(async () => []), computeCollective: vi.fn(async () => ({ total: 0, target: 10, pct: 0 })) }))
 
 const { GET, END_ANNOUNCE_RETRY_DAYS } = await import('./route.js')

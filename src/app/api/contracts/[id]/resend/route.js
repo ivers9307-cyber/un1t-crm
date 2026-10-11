@@ -18,6 +18,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { canManageContractsInOrg, canManageContractsSomewhere } from '@/lib/contract-gates'
 import { sendContractIssuedEmail } from '@/lib/contracts-email'
 import { sendPush } from '@/lib/push'
+import { contractPushSender, contractPushBody } from '@/lib/contracts-notify'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
@@ -71,9 +72,13 @@ export async function POST(request, props) {
   try {
     await sendPush([contract.profile_id], {
       title: 'Contract awaiting signature',
-      body: contract.template?.name
-        ? `${user.full_name || 'UN1T'} sent you a reminder to sign "${contract.template.name}".`
-        : `${user.full_name || 'UN1T'} sent you a reminder to sign your contract.`,
+      // W1.S1a — the sender is the staff member, else the contract
+      // location's configured brand; never a fixed gym's name.
+      body: contractPushBody({
+        sender: await contractPushSender(db, user.full_name, contract.location_id),
+        templateName: contract.template?.name,
+        kind: 'reminder',
+      }),
       category: 'contract_issued',
       data: {
         type: 'contract_issued',

@@ -19,11 +19,16 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/contracts-email', () => ({ sendContractIssuedEmail: vi.fn(async () => ({ ok: true })) }))
 vi.mock('@/lib/push', () => ({ sendPush: vi.fn(async () => {}) }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
+// W1.S1a — the push names the contract location's brand when the staff
+// member has no name on file.
+vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Stillorgan', shortName: 'UN1T', locationName: 'UN1T Stillorgan' })) }))
 
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { sendContractIssuedEmail } from '@/lib/contracts-email'
+import { sendPush } from '@/lib/push'
+import { getLocationBranding } from '@/lib/location-branding'
 
 const ORG_A = 'org-a'
 const ORG_B = 'org-b'
@@ -144,6 +149,19 @@ describe('POST /api/contracts/[id]/resend', () => {
     expect(sendContractIssuedEmail).toHaveBeenCalledWith(expect.objectContaining({
       recipient: { full_name: 'Jane Doe', email: 'jane@example.com' },
     }))
+  })
+
+  it('W1.S1a: the reminder push names the staff member, else the contract location brand', async () => {
+    getCurrentUser.mockResolvedValue({ ...ownerOfAUser, full_name: 'Boss Person' })
+    createServerClient.mockReturnValue(mockDb({ contract: contractFixture() }).db)
+    await POST(FAKE_REQUEST, { params: { id: 'c1' } })
+    expect(sendPush.mock.calls.at(-1)[1].body).toBe('Boss Person sent you a reminder to sign "FTE Contract".')
+
+    getCurrentUser.mockResolvedValue({ ...ownerOfAUser, full_name: null })
+    createServerClient.mockReturnValue(mockDb({ contract: contractFixture() }).db)
+    await POST(FAKE_REQUEST, { params: { id: 'c1' } })
+    expect(getLocationBranding).toHaveBeenCalledWith(expect.anything(), LOC_A1)
+    expect(sendPush.mock.calls.at(-1)[1].body).toBe('UN1T Stillorgan sent you a reminder to sign "FTE Contract".')
   })
 
   it('also re-sends for a viewed contract (master caller)', async () => {

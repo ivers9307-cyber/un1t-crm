@@ -6,9 +6,11 @@ vi.mock('@/lib/transactional-consent', async (importOriginal) => ({
   loadTransactionalConsent: vi.fn(async () => ({ contact: { id: 'c1', email_status: 'active', contact_preferences: { email_administrative: true } }, unreadable: false })),
 }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Hatch Street', shortName: 'UN1T', locationName: 'Hatch Street' })) }))
 
 import { sendTransactionalEmail, getLocationInboxReplyTo } from '@/lib/postmark'
 import { loadTransactionalConsent } from '@/lib/transactional-consent'
+import { getLocationBranding } from '@/lib/location-branding'
 import {
   sendManualBookingConfirmEmail,
   manualConfirmEmailFromBlocks,
@@ -110,6 +112,17 @@ describe('sendManualBookingConfirmEmail', () => {
     loadTransactionalConsent.mockResolvedValueOnce({ contact: null, unreadable: true })
     expect(await sendManualBookingConfirmEmail({}, args)).toEqual({ sent: false, channel: 'email', reason: 'consent_unreadable' })
     expect(sendTransactionalEmail).not.toHaveBeenCalled()
+  })
+
+  it('W1.S1a: a missing studio name resolves the location name, never a fixed gym', async () => {
+    await sendManualBookingConfirmEmail({}, { ...args, studioName: '' })
+    expect(getLocationBranding).toHaveBeenCalledWith({}, 'L1')
+    expect(sendTransactionalEmail.mock.calls[0][0].subject).toBe('You are booked in at Hatch Street')
+  })
+
+  it('W1.S1a: a studio name in hand is used as is, with no lookup', async () => {
+    await sendManualBookingConfirmEmail({}, args)
+    expect(getLocationBranding).not.toHaveBeenCalled()
   })
 
   it('a sender failure never throws: reason send_error', async () => {

@@ -37,7 +37,13 @@ vi.mock('@/lib/consent-token-guard', async () => {
   }
 })
 
-import { PUT } from './route'
+// W1.S1b — the org brand for the page header rides the GET payload.
+vi.mock('@/lib/host-brand', () => ({
+  resolveOrgChrome: vi.fn(async ({ orgId }) => ({ orgId, companyName: orgId ? 'Gym A' : '', shortName: '', legalName: '', studios: [] })),
+}))
+
+import { PUT, GET } from './route'
+import { resolveOrgChrome } from '@/lib/host-brand'
 import { createServerClient } from '@/lib/supabase'
 import { suppressAtPostmark, unsuppressAtPostmark } from '@/lib/postmark-suppressions'
 import { serverTokenForLocation } from '@/lib/postmark-server-for-location'
@@ -204,3 +210,28 @@ describe('PUT /api/preferences/[token] — Postmark suppression (PMSUPP.1)', () 
     expect(unsuppressAtPostmark).not.toHaveBeenCalled()
   })
 })
+
+describe('GET /api/preferences/[token] — the brand (W1.S1b)', () => {
+  const get = () => GET(req(), { params: Promise.resolve({ token: TOKEN }) })
+
+  it('names the organisation the contact\'s lists belong to, and every list by its studio name', async () => {
+    createServerClient.mockReturnValue(makeDb({ locRow: [
+      { location_id: LOCATION, email_marketing: true, sms_marketing: false, whatsapp_marketing: true, locations: { name: 'Gym A North', organization_id: 'org-a' } },
+    ] }))
+    const body = await (await get()).json()
+    expect(body.brand).toBe('Gym A')
+    expect(resolveOrgChrome).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org-a' }))
+    expect(body.lists.map((l) => l.locationName)).toEqual(['Gym A North'])
+  })
+
+  it('no lists → an empty brand and no literal gym anywhere in the payload', async () => {
+    createServerClient.mockReturnValue(makeDb({ locRow: [
+      { location_id: LOCATION, email_marketing: true, sms_marketing: false, whatsapp_marketing: true, locations: null },
+    ] }))
+    const body = await (await get()).json()
+    expect(body.brand).toBe('')
+    expect(body.lists[0].locationName).toBe('')
+    expect(JSON.stringify(body)).not.toMatch(/UN1T/)
+  })
+})
+

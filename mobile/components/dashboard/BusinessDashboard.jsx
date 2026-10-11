@@ -17,12 +17,20 @@
 //
 // Gated by permissions.dashboard_business (top-level key, shared with
 // the web page; segment filtering happens in (tabs)/index.jsx).
+//
+// W1.M3c — the headline KPI row and the Membership section are
+// Glofox-derived. The route carries the studio's membership state
+// (server-judged); businessMembershipView() decides, and when the source is
+// not configured ONE state card stands in for both instead of zeros. A
+// failed state read shows the retry copy, never "No membership source".
+// Stillorgan (configured) renders exactly as before.
 
 import { View, Text, Pressable, ActivityIndicator } from 'react-native'
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { fetchBusinessCommandCentre } from '../../lib/dashboard-api'
+import { businessMembershipView } from '../../lib/membership-source-copy'
 import { KpiCard, KpiRow, SectionHeader, formatCurrency } from './cards'
 
 // ---------------------------------------------------------------------------
@@ -214,6 +222,20 @@ function NeedsYouRail({ rows, onNavigate }) {
   )
 }
 
+// W1.M3c — the membership-source state card (copy from
+// lib/membership-source-copy.js; this only renders it).
+function MembershipSourceCard({ card }) {
+  return (
+    <View
+      className="bg-un1t-surface border border-un1t-border rounded-2xl px-4 py-3 mb-3"
+      accessibilityRole="summary"
+    >
+      <Text className="text-sm font-semibold text-un1t-text">{card.title}</Text>
+      <Text className="text-xs text-un1t-muted mt-1">{card.body}</Text>
+    </View>
+  )
+}
+
 // A titled panel card (funnel / ads containers on web).
 function PanelCard({ title, children }) {
   return (
@@ -273,11 +295,19 @@ export default function BusinessDashboard({ refreshKey }) {
   }
 
   const { locationName, kpis, funnel, ads, membership, today, rail } = data
+  // W1.M3c — numbers or the state card (lib/membership-source-copy.js decides).
+  const sourceView = businessMembershipView(data.membershipSource)
 
   return (
     <View>
-      {/* Briefing + headline KPIs */}
-      {kpis ? (
+      {/* Briefing + headline KPIs. The briefing line is source-independent;
+          the four KPIs render only for a configured membership source. */}
+      {!sourceView.showNumbers ? (
+        <>
+          {kpis ? <BriefingLine text={kpis.briefing} /> : <BlockError label="Briefing" />}
+          <MembershipSourceCard card={sourceView.card} />
+        </>
+      ) : kpis ? (
         <>
           <BriefingLine text={kpis.briefing} />
           <KpiRow>
@@ -335,8 +365,9 @@ export default function BusinessDashboard({ refreshKey }) {
           : <Text className="text-xs text-un1t-muted">Ads couldn&apos;t load — pull to refresh.</Text>}
       </PanelCard>
 
-      {/* Membership — live breakdown + 12-month trend */}
-      {membership ? (
+      {/* Membership — live breakdown + 12-month trend. Not configured: the
+          state card above already says why, so nothing renders here. */}
+      {!sourceView.showNumbers ? null : membership ? (
         <>
           <SectionHeader title="Membership" />
           <KpiRow>

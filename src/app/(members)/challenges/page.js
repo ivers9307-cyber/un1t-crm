@@ -10,6 +10,7 @@ import { useRouter } from 'next/navigation'
 import { Plus, Trophy, Pencil, Trash2, Loader2 } from 'lucide-react'
 import ChallengeForm from '@/components/ChallengeForm'
 import { challengePhase } from '@/lib/challenges'
+import { productName } from '@/lib/brand-name'
 
 // Human-readable labels for the stored enum values.
 const MODE_LABEL = {
@@ -17,10 +18,13 @@ const MODE_LABEL = {
   collective: 'Collective goal',
 }
 
-const METRIC_LABEL = {
-  points:         'UN1T Points',
-  classes:        'Classes',
-  z4plus_minutes: 'Z4+ minutes',
+// W1.S1b — "{Brand} Points" for the challenge's own studio (the GET payload's
+// `brands` map of short names), never a literal gym.
+function metricLabel(metric, brandShort) {
+  if (metric === 'points') return productName(brandShort, 'points')
+  if (metric === 'classes') return 'Classes'
+  if (metric === 'z4plus_minutes') return 'Z4+ minutes'
+  return metric
 }
 
 const PHASE_ORDER  = ['active', 'upcoming', 'ended']
@@ -39,6 +43,7 @@ export default function ChallengesPage() {
   const [modal,       setModal]       = useState(null)  // null | 'new' | { editing: challenge }
   const [deleting,    setDeleting]    = useState(null)  // id being deleted
   const [deleteError, setDeleteError] = useState(null)
+  const [brands,      setBrands]      = useState({})    // location_id → short brand (W1.S1b)
 
   // --- fetch ---
   const load = useCallback(async () => {
@@ -55,6 +60,7 @@ export default function ChallengesPage() {
         return
       }
       setChallenges(json.data || [])
+      setBrands(json.brands && typeof json.brands === 'object' ? json.brands : {})
     } catch (e) {
       setLoadError(e.message || 'Network error')
     }
@@ -236,7 +242,7 @@ export default function ChallengesPage() {
                       </td>
                       {/* Metric */}
                       <td className="p-3 text-un1t-subtle text-xs">
-                        {METRIC_LABEL[c.metric] || c.metric}
+                        {metricLabel(c.metric, brands[c.location_id])}
                       </td>
                       {/* Dates */}
                       <td className="p-3 text-un1t-subtle text-xs whitespace-nowrap">

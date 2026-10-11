@@ -38,6 +38,7 @@ import SendQuietHoursCard from '@/components/settings/SendQuietHoursCard'
 import EmailCopyCard from '@/components/settings/EmailCopyCard'
 import EmailSpamFilterCard from '@/components/settings/EmailSpamFilterCard'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
+import { membershipSourceState } from '@/lib/membership/source'
 
 export const dynamic = 'force-dynamic'
 
@@ -125,7 +126,10 @@ export default async function EditLocationPage(props) {
   //
   // Pull the Xero connection row (if any) and a sample car for the BCA
   // template preview. Both feed into LocationIntegrations.
-  const [{ data: org }, { data: xeroConnection, error: xeroErr }, { data: sampleBcaCar }] = await Promise.all([
+  // W1.M2 — the membership-source STATE for the Integrations card and the
+  // Glofox tab's dot (none | configured | unconfigured | unknown), resolved
+  // by the seam here because a client component cannot ask it.
+  const [{ data: org }, { data: xeroConnection, error: xeroErr }, { data: sampleBcaCar }, membershipSource] = await Promise.all([
     location.organization_id
       ? db.from('organizations').select('*').eq('id', location.organization_id).maybeSingle()
       : Promise.resolve({ data: null }),
@@ -150,6 +154,7 @@ export default async function EditLocationPage(props) {
           .limit(1)
           .maybeSingle()
       : Promise.resolve({ data: null }),
+    membershipSourceState(db, location.id),
   ])
 
   // CHANNELREAD.1 — a failed xero_connections read is not "not connected":
@@ -390,6 +395,7 @@ export default async function EditLocationPage(props) {
           xeroReadFailed={Boolean(xeroErr)}
           user={user}
           sampleBcaCar={sampleBcaCar || null}
+          membershipSource={membershipSource}
         />
       )}
     </div>

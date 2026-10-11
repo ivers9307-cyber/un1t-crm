@@ -1,5 +1,16 @@
 // AGENT-EVENTS.1 — pure shapers for the race/events agent tools.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+// W1.L3b — the list_upcoming_events site hands resolveCustomerBaseUrl's result
+// straight into shapeEventsForAgent as an argument, so a source guard cannot
+// see a revert to getAppUrl(). Mock the resolver (defaulting to the real one,
+// so every other test is unchanged) and assert the executor uses it.
+const { resolveCustomerBaseUrlMock } = vi.hoisted(() => ({ resolveCustomerBaseUrlMock: vi.fn() }))
+vi.mock('@/lib/tenant-host', async (importOriginal) => {
+  const actual = await importOriginal()
+  resolveCustomerBaseUrlMock.mockImplementation(actual.resolveCustomerBaseUrl)
+  return { ...actual, resolveCustomerBaseUrl: resolveCustomerBaseUrlMock }
+})
 import {
   EVENT_TOOLS,
   formatEventPrice,
@@ -58,7 +69,9 @@ describe('shapeEventsForAgent', () => {
     expect(out[0].kind).toBe('race')
     expect(out[0].date).toMatch(/Sat 20 Jun/)
     expect(out[0].price).toBe('Free')
-    expect(out[0].signup_url).toBe('https://crm.example.com/race/summer-hyrox')
+    // W1.L3b — the CANONICAL /event/ path: /race/ is only a next.config alias
+    // on the CRM host and is not served on a tenant host.
+    expect(out[0].signup_url).toBe('https://crm.example.com/event/summer-hyrox')
     // CAPACITY-SECRECY.1 — full/limited booleans only, never a count.
     expect(out[0].waves).toEqual([
       { wave_id: 'w1', time: '09:00', label: 'Wave 1' },
@@ -229,5 +242,38 @@ describe('executeEventTool · identity gates', () => {
       res = { error: null }   // got past the identity gate, then hit unstubbed IO
     }
     expect(res.error).not.toBe('not_verified')
+  })
+})
+
+describe('executeEventTool · list_upcoming_events signup link host (W1.L3b)', () => {
+  function listDb(events) {
+    return {
+      from(table) {
+        const b = {
+          select() { return b }, eq() { return b }, gte() { return b },
+          in() { return b }, not() { return b }, order() { return b }, limit() { return b },
+          then(resolve) {
+            resolve({ data: table === 'race_events' ? events : [], error: null })
+          },
+        }
+        return b
+      },
+    }
+  }
+
+  it("mints the signup_url on the conversation location's tenant host", async () => {
+    resolveCustomerBaseUrlMock.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const db = listDb([{
+      id: 'e1', name: 'Hyrox Sim', kind: 'race', slug: 'stillorgan-jun20-0900',
+      description: null, race_date: '2099-06-20', active: true,
+      registration_opens_at: null, registration_closes_at: null,
+      member_pricing_enabled: false, member_fee_cents: null, non_member_fee_cents: null, members_only: false,
+      waves: [{ id: 'w1', start_time: '09:00:00', capacity: 20, label: 'Wave 1' }],
+    }])
+    const ctx = { db, locationId: 'loc-a', contactId: null, verifiedContactId: null, channel: 'whatsapp' }
+    const res = await executeEventTool('list_upcoming_events', {}, ctx)
+    expect(resolveCustomerBaseUrlMock).toHaveBeenCalledWith(db, ctx.locationId)
+    expect(res.events).toHaveLength(1)
+    expect(res.events[0].signup_url).toBe('https://gym-a.repset.ie/event/stillorgan-jun20-0900')
   })
 })

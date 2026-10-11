@@ -58,6 +58,8 @@ function routeFor(cfg = {}) {
       if (cfg.hostReadErr) return { data: null, error: cfg.hostReadErr }
       return { data: cfg.host === undefined ? HOST_ROW : cfg.host, error: null }
     }
+    // W1.S1c — the host's organisation brand, for the setup refusals.
+    if (state.table === 'org_settings') return { data: cfg.orgSettings || [], error: null }
     return {}
   }
 }
@@ -161,6 +163,18 @@ describe('POST /api/host/emails/[id]/schedule', () => {
     const res = await POST(req({ scheduled_for: IN_30_MIN() }), props)
     expect(res.status).toBe(409)
     expect((await res.json()).error).toMatch(/not enabled/)
+  })
+
+  it("W1.S1c: the setup refusal names the host's organisation, never a literal gym", async () => {
+    getCurrentHost.mockResolvedValue({ host: { id: HOST_ID, organization_id: 'org-schedule-1' } })
+    const { db } = makeDb(routeFor({
+      host: { ...HOST_ROW, sender_domain_verified: false },
+      orgSettings: [{ company_name: 'Pulse Gym', short_name: null }],
+    }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ scheduled_for: IN_30_MIN() }), props)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('Sending is not enabled. Ask Pulse Gym to verify your sending domain.')
   })
 
   it('409s a marketing campaign with no host stream; utility passes', async () => {

@@ -1,7 +1,7 @@
 // PHASE2 stage C — champ's MonthWrappedGate, ported from
 // champ-app/mobile/app/_layout.jsx into the (member) tree. Auto-presents
 // the "Monthly Wrapped" month-end story once per month, at the start of a
-// new Dublin month, when last month has content and hasn't been seen.
+// new month on the member's home studio calendar (TZ.14, D7), when last month has content and hasn't been seen.
 // Mirrors ProfileSetupGate: an auth-context-consuming, render-null
 // side-effect component, mounted by app/(member)/_layout.jsx. Runs at
 // most once per app launch (presentedRef) and DEFERS to the
@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'expo-router'
 import { useAuth } from '../../lib/member/contact-context'
+import { useMemberZoneState } from '../../lib/member/use-member-zone'
 import { getDismissedAtMs } from '../../lib/member/profile-setup-dismissal'
 import { hasSeenMonthRecap } from '../../lib/member/recap-seen'
 import { supabase } from '../../lib/member/supabase'
@@ -20,6 +21,9 @@ import { monthWrappedModel, monthWrappedKey } from 'shared/month-wrapped'
 
 export default function MonthWrappedGate() {
   const { contact, loading } = useAuth()
+  // TZ.14 — wait for the member's zone: the seen key is a month on their
+  // studio's calendar, and the fallback clock must not decide it.
+  const { zone: tz, loading: tzLoading } = useMemberZoneState()
   const router = useRouter()
   const [dismissedAtMs, setDismissedAtMs] = useState(undefined) // undefined = not loaded yet
   const presentedRef = useRef(false)
@@ -27,7 +31,7 @@ export default function MonthWrappedGate() {
   useEffect(() => { getDismissedAtMs().then((v) => setDismissedAtMs(v)) }, [])
 
   useEffect(() => {
-    if (loading || dismissedAtMs === undefined || !contact?.id || presentedRef.current) return
+    if (loading || tzLoading || dismissedAtMs === undefined || !contact?.id || presentedRef.current) return
     // Defer to profile setup: if the wizard will present this launch, skip the
     // wrapped auto-present (don't set presentedRef, so it can still fire once
     // the profile is completed/dismissed and the status flips).
@@ -40,7 +44,7 @@ export default function MonthWrappedGate() {
         // "seen" flag FIRST — the common path (recap already seen this month)
         // must cost ZERO session reads on launch (champ re-audit A5).
         const nowMs = Date.now()
-        if (await hasSeenMonthRecap(monthWrappedKey(nowMs))) {
+        if (await hasSeenMonthRecap(monthWrappedKey(nowMs, tz))) {
           // Seen stays seen for the rest of the month — done for this launch.
           presentedRef.current = true
           return
@@ -85,7 +89,7 @@ export default function MonthWrappedGate() {
         if (cancelled) return
         // Same nowMs as the seen pre-check, so the model's monthKey is
         // guaranteed to be the key we just confirmed unseen.
-        const model = monthWrappedModel(monthlyRecap(all, nowMs, 6), personalRecords(all), nowMs)
+        const model = monthWrappedModel(monthlyRecap(all, nowMs, 6, tz), personalRecords(all, tz), nowMs, tz)
         if (!model?.hasContent) return // nothing to celebrate — never present empty
         if (cancelled) return
         router.push('/wrapped/month')
@@ -95,7 +99,7 @@ export default function MonthWrappedGate() {
     })()
 
     return () => { cancelled = true }
-  }, [loading, contact, dismissedAtMs, router])
+  }, [loading, tzLoading, tz, contact, dismissedAtMs, router])
 
   return null
 }

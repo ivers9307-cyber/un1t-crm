@@ -12,7 +12,7 @@
 // connections decide "healthy"; spend and backlog are information and
 // render "unavailable" (null, never 0).
 
-import { dublinMonthStartStr } from '@/lib/usage-caps'
+import { platformMonthStartStr } from '@/lib/usage-caps'
 import { logError } from '@/lib/log'
 
 /** The reads, in the order the page names them. */
@@ -79,7 +79,7 @@ export function shapeTenantHealth({ locations, heartbeats, connections, rollups,
  * @returns {Promise<{ orgs: Array, unreadable: string[] }>} unreadable ⊆ HEALTH_SIGNALS
  */
 export async function getTenantHealth(db) {
-  const monthStart = dublinMonthStartStr()
+  const monthStart = platformMonthStartStr()
   const [locRes, hbRes, connRes, rollRes, campRes] = await Promise.all([
     db.from('locations')
       .select('id, name, organization_id, organizations(name)')

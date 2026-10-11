@@ -9,6 +9,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import RaceControlPanel from '@/components/RaceControlPanel'
+import { getLocationBranding } from '@/lib/location-branding'
 
 export const dynamic = 'force-dynamic'
 
@@ -40,6 +41,9 @@ export default async function RaceControlPage(props) {
     redirect(`/events/${params.id}/edit`)
   }
 
+  // W1.S2 — the event location's brand labels verified members on the board.
+  const { companyName: brand } = await getLocationBranding(db, race.location_id)
+
   return (
     <div className="p-4 sm:p-6 max-w-7xl">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -62,7 +66,7 @@ export default async function RaceControlPage(props) {
           </Link>
         )}
       </div>
-      <RaceControlPanel raceId={race.id} />
+      <RaceControlPanel raceId={race.id} brand={brand} />
     </div>
   )
 }

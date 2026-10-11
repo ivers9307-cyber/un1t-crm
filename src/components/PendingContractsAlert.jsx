@@ -89,6 +89,10 @@ export default function PendingContractsAlert() {
   const top = pending[0]
   const signHref = `/account/contracts/${top.id}`
   const count = pending.length
+  // W1.S2 — name the issuer frozen on the document(s); when the pending set
+  // spans more than one entity, say "your employer" rather than pick one.
+  const issuers = [...new Set(pending.map((p) => p.issuer).filter(Boolean))]
+  const issuer = issuers.length === 1 ? issuers[0] : 'Your employer'
 
   return (
     <>
@@ -111,8 +115,8 @@ export default function PendingContractsAlert() {
                 </h2>
                 <p className="text-xs text-un1t-subtle mt-1">
                   {count === 1
-                    ? 'UN1T Dublin needs your signature on this document.'
-                    : 'UN1T Dublin needs your signature on these documents.'}
+                    ? `${issuer} needs your signature on this document.`
+                    : `${issuer} needs your signature on these documents.`}
                 </p>
               </div>
               <button

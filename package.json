@@ -24,7 +24,8 @@
     "check:ota-fleet": "node scripts/check-ota-fleet.mjs",
     "check:dependency-audit": "npm audit --omit=dev --audit-level=high --json | node scripts/check-dependency-audit.mjs .audit-allowlist.json 'web runtime deps'",
     "check:dependency-audit:mobile": "cd mobile && npm audit --audit-level=high --package-lock-only --json | node ../scripts/check-dependency-audit.mjs .audit-allowlist.json 'mobile deps (whole tree)'",
-    "check:guardrails": "eslint --config eslint.guardrails.config.mjs 'src/**/*.{js,jsx}' 'shared/**/*.js' 'tests/**/*.js'",
+    "check:guardrails": "eslint --config eslint.guardrails.config.mjs 'src/**/*.{js,jsx}' 'shared/**/*.js' 'tests/**/*.js' && node scripts/check-dublin-zone.mjs",
+    "check:dublin-zone": "node scripts/check-dublin-zone.mjs",
     "check:select-columns": "node scripts/check-select-columns.mjs",
     "check:rpc-names": "node scripts/check-rpc-names.mjs",
     "changelog": "node scripts/changelog.mjs",
@@ -62,7 +63,7 @@
     "react-markdown": "^10.1.0",
     "recharts": "^3.10.1",
     "sanitize-html": "^2.17.7",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "stripe": "^22.6.2",
     "undici": "^8.11.2",
     "zod": "^4.6.5"

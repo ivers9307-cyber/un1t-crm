@@ -20,7 +20,7 @@ import QRCode from 'qrcode'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -49,14 +49,15 @@ export async function GET(_request, props) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
 
-  // Build the public signup URL. Origin-only from getAppUrl so a
-  // misconfigured env var (full URL with path/query pasted in) can't
-  // poison the QR target — same defensive pattern as the events index
-  // public-link rendering.
+  // Build the public signup URL on the EVENT LOCATION's tenant host (W1.L3b;
+  // the customer scans this, so it must be their studio's host). Origin-only
+  // so a misconfigured env var (full URL with path/query pasted in) can't
+  // poison the QR target when the resolver floors — same defensive pattern
+  // as the events index public-link rendering.
   let publicUrl
   try {
-    const origin = new URL(getAppUrl()).origin
-    publicUrl = `${origin}/event/${event.slug}`
+    const baseUrl = new URL(await resolveCustomerBaseUrl(db, event.location_id)).origin
+    publicUrl = `${baseUrl}/event/${event.slug}`
   } catch (e) {
     return NextResponse.json({
       success: false,

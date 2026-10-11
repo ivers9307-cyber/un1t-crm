@@ -13,8 +13,9 @@
 
 import { useState } from 'react'
 import { readVisitOrigin } from '@/lib/visit-origin'
+import { leadFormConsentDefault } from '@/lib/landing-page-blocks'
 
-export default function WaitlistWidget({ publicPath, campaign, buttonLabel, successMessage, consentLabel }) {
+export default function WaitlistWidget({ publicPath, campaign, buttonLabel, successMessage, consentLabel, brandName = '' }) {
   const [form, setForm] = useState({ first_name: '', email: '', phone: '', consent: false })
   const [status, setStatus] = useState('idle') // idle | submitting | done | error
   const [error, setError] = useState(null)
@@ -87,7 +88,7 @@ export default function WaitlistWidget({ publicPath, campaign, buttonLabel, succ
           className="mt-0.5 shrink-0 w-4 h-4 rounded accent-white cursor-pointer"
         />
         <span>
-          {consentLabel || 'I’d like to hear from UN1T about the Hatch Street launch and offers by email, SMS and WhatsApp. I can opt out anytime.'}{' '}
+          {consentLabel || leadFormConsentDefault(brandName)}{' '}
           <a href="/privacy" target="_blank" rel="noreferrer" className="underline hover:text-white">Privacy</a>
         </span>
       </label>

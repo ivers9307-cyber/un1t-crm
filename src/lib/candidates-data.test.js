@@ -35,6 +35,8 @@ const BLOCK = {
   shift_templates: { name: 'Midday Strength', start_time: '10:00:00', end_time: '12:00:00' },
   // con's cancelled tombstone does not hold the seat (ROSTER-FIX.1 D4).
   shift_assignments: [{ profile_id: 'onblk', status: 'scheduled' }, { profile_id: 'con', status: 'cancelled' }],
+  // TZ.8a — the studio zone rides on the block (every caller's select embeds it).
+  locations: { timezone: 'Europe/Dublin' },
 }
 const SHIFTS = [{
   profile_id: 'ann', block_id: 'x1', block_date: '2026-09-21', location_id: 'loc2', location_name: 'Studio South', name: 'Class',
