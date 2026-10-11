@@ -6,6 +6,7 @@ import { resolveSequenceGraph } from '@/lib/sequences/graph/persist'
 import SequenceFlowBuilder from '@/components/sequences/SequenceFlowBuilder'
 import AutomationPerformance from '@/components/automations/AutomationPerformance'
 import { logError } from '@/lib/log'
+import { zoneOfLocation } from '@/lib/location-time'
 import { uuidLike } from '@/lib/schemas'
 import { SEQUENCE_BUILDER_PAGE_SELECT, toBuilderSequence, toPerformanceSteps } from '@/lib/sequences/builder-shape'
 
@@ -69,6 +70,9 @@ export default async function SequenceBuilderPage(props) {
         sequence={builderSequence}
         isDraft={sequence.draft_graph != null}
         isPublished={sequence.graph != null}
+        // TZ.4 — the sequence studio's zone (off the user object; access is
+        // proved above). Display only: the audience builder's "today".
+        locationTimeZone={zoneOfLocation((user.locations || []).find((l) => l.id === sequence.location_id) || null)}
       />
       {/* GATES-2 — Resume/Exit call the enrolment routes (`email` at the
           sequence's studio); a whatsapp-only builder is not offered them. */}

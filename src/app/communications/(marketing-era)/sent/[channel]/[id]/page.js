@@ -27,6 +27,7 @@
 // them is linked from notification email, so a 404 was never an option.
 
 import { notFound, redirect } from 'next/navigation'
+import { zoneOfLocation } from '@/lib/location-time'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
@@ -69,6 +70,13 @@ export default async function SendDetailPage(props) {
 
   if (channel === 'whatsapp') return renderWhatsapp(db, user, id)
   return renderEmail(db, user, id, searchParams)
+}
+
+// TZ.4 — the row's studio zone, off the user object (every location the user
+// can open carries `timezone`; gateRow has already proved access). Display
+// only: the audience builder's "today" default.
+function zoneOfUserLocation(user, locationId) {
+  return zoneOfLocation((user.locations || []).find((l) => l.id === locationId) || null)
 }
 
 // PAGEGATES.1 — membership 404s (as before); the channel permission is
@@ -139,6 +147,7 @@ async function renderWhatsapp(db, user, id) {
       broadcast={broadcast}
       templates={templates || []}
       locationId={broadcast.location_id}
+      locationTimeZone={zoneOfUserLocation(user, broadcast.location_id)}
       userId={user.id}
       failedRecipients={failedRecipients || []}
       stats={stats}
@@ -181,6 +190,7 @@ async function renderEmail(db, user, id, searchParams) {
       <CampaignEditor
         campaign={campaign}
         locationId={campaign.location_id || user.activeLocation?.id}
+        locationTimeZone={zoneOfUserLocation(user, campaign.location_id || user.activeLocation?.id)}
         userId={user.id}
       />
     )

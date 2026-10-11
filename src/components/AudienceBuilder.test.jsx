@@ -378,6 +378,34 @@ describe('AudienceBuilder — date rows are born saveable (P1.4)', () => {
   })
 })
 
+// ── TZ.4 — "today" for a new date row is the STUDIO's calendar day ─────────
+describe('AudienceBuilder — the date default is the studio day (TZ.4)', () => {
+  afterEach(() => vi.useRealTimers())
+  function seedDate(timeZone) {
+    const onChange = vi.fn()
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'gender', op: 'eq', value: 'male' }] }}
+        onChange={onChange}
+        audienceCount={null}
+        {...(timeZone ? { timeZone } : {})}
+      />
+    )
+    fireEvent.change(rowSelects(container)[0], { target: { value: 'created_at' } })
+    const value = onChange.mock.calls.at(-1)[0].filters[0].value
+    cleanup()
+    return value
+  }
+
+  it('at 22:00 EDT on 30 Jun a New York studio seeds 30 Jun; Dublin (and no zone) seeds 1 Jul', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-07-01T02:00:00Z'))
+    expect(seedDate('America/New_York')).toBe('2026-06-30')
+    expect(seedDate('Europe/Dublin')).toBe('2026-07-01')
+    expect(seedDate(null)).toBe('2026-07-01')
+  })
+})
+
 // ── GAPS-P1.3 — engagement fields the builder was missing ─────────────────
 //
 // New audience fields go in BOTH registries: AUDIENCE_FIELDS (the server

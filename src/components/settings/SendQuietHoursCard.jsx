@@ -19,6 +19,7 @@
 import { useEffect, useState } from 'react'
 import { Moon, Loader2, Check, AlertTriangle } from 'lucide-react'
 import { DEFAULT_SEND_QUIET_HOURS } from '@/lib/send-quiet-hours'
+import { DEFAULT_TZ } from '@shared/zoned-time'
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
 const hhmm = (h) => `${String(h).padStart(2, '0')}:00`
@@ -33,6 +34,8 @@ export default function SendQuietHoursCard({ locationId }) {
   const [saved, setSaved] = useState(null)
   const [saving, setSaving] = useState(false)
   const [savedFlash, setSavedFlash] = useState(false)
+  // TZ.4 — the hours are this location's wall clock; the GET says which zone.
+  const [timezone, setTimezone] = useState(DEFAULT_TZ)
 
   useEffect(() => {
     let cancelled = false
@@ -50,6 +53,7 @@ export default function SendQuietHoursCard({ locationId }) {
           setEndHour(j.data.end_hour)
           setSaved({ enabled: j.data.enabled, startHour: j.data.start_hour, endHour: j.data.end_hour })
           setCanEdit(!!j.data.can_edit)
+          if (j.data.timezone) setTimezone(j.data.timezone)
         }
       } catch (e) {
         if (!cancelled) setError(e.message || 'Network error')
@@ -115,7 +119,7 @@ export default function SendQuietHoursCard({ locationId }) {
             composer says so and offers the next slot outside it. Nothing you
             send by hand is blocked or rescheduled. Automated sequence steps
             are different: a sequence with no send window of its own waits
-            until the window ends. Times are Europe/Dublin.
+            until the window ends. Times are {timezone}.
           </p>
         </div>
         {canEdit && (

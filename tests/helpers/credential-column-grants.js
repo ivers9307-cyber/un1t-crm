@@ -12,13 +12,15 @@ export const CREDENTIAL_COLUMN_GRANTS = Object.freeze({
   // object already serve every staff member) + organization_id, which the
   // organisations/contracts/storage policies join on.
   // update = exactly what LocationForm (edit) and CarDepositSettings write.
+  // TZ.2 (mig 719) revoked UPDATE (timezone): the zone is written only by the
+  // service role (POST /api/locations, then TZ.3's preflighted route).
   locations: Object.freeze({
     select: Object.freeze(['id', 'name', 'slug', 'address', 'phone', 'email', 'timezone', 'active',
       'created_at', 'updated_at', 'country', 'features', 'organization_id', 'is_host_anchor',
       // W1.M1 (mig 717): the membership source is public identity, not a
       // credential; the phone's Studio tab and the browser gate on it.
       'membership_source']),
-    update: Object.freeze(['name', 'slug', 'address', 'phone', 'email', 'timezone', 'country', 'active',
+    update: Object.freeze(['name', 'slug', 'address', 'phone', 'email', 'country', 'active',
       'monthly_contractor_budget_eur', 'invoices_inbound_slug', 'updated_at', 'car_deposit_default_amount',
       'car_deposit_terms', 'car_deposit_terms_version', 'car_deposit_receipt_sms_enabled']),
     withheld: Object.freeze(['settings', 'sensibo_api_key', 'thinq_pat', 'thinq_client_id', 'thinq_country_code',

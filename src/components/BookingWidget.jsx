@@ -33,6 +33,7 @@ import { Clock, MapPin, ChevronLeft, ChevronRight, Check, AlertCircle, Globe } f
 // roster.js docstring for the full incident reasoning.
 import { formatDate } from '@/lib/roster'
 import { PLATFORM_NAME } from '@/lib/brand-name'
+import { resolveZone } from '@shared/zoned-time'
 
 export default function BookingWidget({ slug }) {
   const [event, setEvent] = useState(null)
@@ -64,17 +65,12 @@ export default function BookingWidget({ slug }) {
   // their own standalone signup widget at /race/[slug] and don't
   // share UI with the booking flow.)
 
-  // Detected timezone — surfaces on the calendar pane so customers
-  // know what zone the slot times are in (matches the Calendly
-  // pattern). Fallback to "Europe/Dublin" if Intl can't resolve.
-  const [viewerTimezone, setViewerTimezone] = useState('')
-  useEffect(() => {
-    try {
-      setViewerTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Dublin')
-    } catch {
-      setViewerTimezone('Europe/Dublin')
-    }
-  }, [])
+  // The zone the slot times are in — surfaces on the calendar pane so
+  // customers know (matches the Calendly pattern). TZ.7: slots are the
+  // STUDIO's wall clock and are never converted, so this names the studio's
+  // zone (the event's location, already in the GET payload), not the
+  // visitor's browser zone, which was wrong for anyone booking from abroad.
+  const studioTimezone = resolveZone(event?.locations?.timezone)
 
   // Load event details
   useEffect(() => {
@@ -408,7 +404,7 @@ export default function BookingWidget({ slug }) {
                   slot times are in. */}
               <div className="mt-5 pt-4 border-t border-gray-100 flex items-center gap-2 text-xs text-gray-500">
                 <Globe size={12} className="text-gray-400" />
-                <span>Times shown in <span className="text-gray-700 font-medium">{viewerTimezone || 'Europe/Dublin'}</span></span>
+                <span>Times shown in <span className="text-gray-700 font-medium">{studioTimezone}</span></span>
               </div>
             </>
           )}
