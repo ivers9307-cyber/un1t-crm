@@ -1,7 +1,7 @@
 // src/lib/qualification-digest.js
 //
-// QUALS.1 — the weekly qualification digest to owners. An ARM of the daily
-// 08:00 UTC cron /api/cron/contract-reminders, with its own heartbeat row
+// QUALS.1 — the weekly qualification digest to owners. An ARM of the cron
+// /api/cron/contract-reminders, with its own heartbeat row
 // ('qualification-digest', mig 635; src/lib/cron-arm-health.js).
 //
 // WHO. Per organisation, each ACTIVE, non-tombstoned profile that is `owner`
@@ -18,7 +18,15 @@
 // digestDaysByOrg), not Dublin's. A missing record
 // is not listed (it would nag forever); an archived type is not listed.
 //
-// WHEN. The cron runs daily. Each recipient gets at most one digest per
+// WHEN. The arm runs on contract-reminders' hourly schedule and acts for an
+// organisation once a day, at its ANCHOR studio's daily slot,
+// DAILY_SLOTS['qualification-digest'] (src/lib/cron-daily-slot.js): 08:00 UTC
+// when the anchor is Europe/Dublin (the legacy instant, no catch-up), 08:00
+// local in any other zone. The anchor is the organisation's studio with the
+// lowest id (digestAnchorsByOrg), the same studio whose zone decides the
+// organisation's day (digestDaysByOrg), so the slot's local day IS the
+// digest's day. An organisation whose studios span zones therefore gets one
+// run a day, not one per studio. Each recipient gets at most one digest per
 // week (the organisation's week) per organisation, on the first run of the
 // week with something to say, normally Monday. A week with nothing due sends nothing.
 //
@@ -43,8 +51,11 @@
 //
 // QUIET HOURS (src/lib/staff-push-hours.js): nothing is planned, so nothing is
 // claimed or stamped, unless the wall clock is inside [07:00, 22:00) at EVERY
-// studio the recipient's list covers. 08:00 UTC is inside it all year in
-// Dublin. Quiet hours gate the notice, never the state: a later run sends.
+// studio the recipient's list covers. The anchor's 08:00 is inside it at the
+// anchor (08:00/09:00 in Dublin). Quiet hours gate the notice, never the
+// state: a later run sends. (A recipient whose list covers studios more than
+// 14 hours apart is outside the band somewhere at the anchor's 08:00 every
+// day; that was as true on the old 08:00 UTC tick and is not changed here.)
 //
 // HOW. notifyUsersOnce with category 'qualification_expiry' (registered:
 // src/lib/qualification-expiry-registration.test.js): a push with the
@@ -113,9 +124,22 @@ export function digestEmailHtml({ orgName = '', headline = '', rows = [] } = {})
  */
 export function digestDaysByOrg(locations = [], nowMs = Date.now()) {
   const out = new Map()
+  for (const [orgId, anchor] of digestAnchorsByOrg(locations)) out.set(orgId, dayStrIn(nowMs, zoneOfLocation(anchor)))
+  return out
+}
+
+/**
+ * PURE. Each organisation's ANCHOR studio: its studio with the lowest id. Its
+ * zone is the organisation's day (digestDaysByOrg) and its daily slot is when
+ * the organisation's digest runs (runQualificationDigest's isDue).
+ * @param {Array<{ id: string, organization_id: string }>} locations
+ * @returns {Map<string, object>} organization id → the anchor location row
+ */
+export function digestAnchorsByOrg(locations = []) {
+  const out = new Map()
   const sorted = locations.filter((l) => l?.id && l.organization_id).sort((a, b) => a.id.localeCompare(b.id))
   for (const l of sorted) {
-    if (!out.has(l.organization_id)) out.set(l.organization_id, dayStrIn(nowMs, zoneOfLocation(l)))
+    if (!out.has(l.organization_id)) out.set(l.organization_id, l)
   }
   return out
 }
@@ -251,20 +275,31 @@ function delivered(r) {
 
 /**
  * @param {object} db  service-role supabase client
- * @param {{ nowMs?: number }} [opts]
+ * @param {{ nowMs?: number, isDue?: (locationId: string) => boolean }} [opts]
+ *   isDue: is this studio at its daily slot this tick (the cron's claimed
+ *   slots)? Only organisations whose ANCHOR studio (digestAnchorsByOrg) is
+ *   due run; the others wait for their anchor's slot. Omitted: every
+ *   organisation (tests, a manual run).
  * @returns {Promise<{ organizations, recipients, rows, nothing_due, quiet_hours, sent, emailed, email_failed, deduped, failed, stamp_failed }>}
- *   throws when a read fails, before anything is sent
+ *   `organizations` counts the organisations that ran this tick.
+ *   Throws when a read fails, before anything is sent.
  */
-export async function runQualificationDigest(db, { nowMs = Date.now() } = {}) {
+export async function runQualificationDigest(db, { nowMs = Date.now(), isDue = null } = {}) {
   const outcome = {
     organizations: 0, recipients: 0, rows: 0, nothing_due: 0, quiet_hours: 0,
     sent: 0, emailed: 0, email_failed: 0, deduped: 0, failed: 0, stamp_failed: 0,
   }
-  const locations = await readOnce('locations', db
+  const allLocations = await readOnce('locations', db
     .from('locations')
     .select('id, name, organization_id, timezone')
     .eq('active', true)
     .eq('is_host_anchor', false))
+  // The organisations whose anchor studio is at its slot this tick: one run a
+  // day per organisation, however many zones its studios span.
+  const dueOrgs = new Set([...digestAnchorsByOrg(allLocations)]
+    .filter(([, anchor]) => !isDue || isDue(anchor.id))
+    .map(([orgId]) => orgId))
+  const locations = allLocations.filter((l) => dueOrgs.has(l.organization_id))
   const orgIds = [...new Set(locations.map((l) => l.organization_id).filter(Boolean))]
   outcome.organizations = orgIds.length
   if (orgIds.length === 0) return outcome

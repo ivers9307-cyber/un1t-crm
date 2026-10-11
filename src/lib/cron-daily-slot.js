@@ -82,6 +82,16 @@ const CLAIM_BATCH = 500 // rows per upsert: the RETURNING set stays under the 1k
  * for non-legacy zones); `weekday` is ISO (1 = Monday); `anchor: 'local'` means
  * the legacy schedule was already local wall clock. The minute is vercel.json's
  * (the gate works per hour).
+ *
+ * `rides` names the cron whose hourly schedule (and vercel.json entry) an ARM
+ * runs on. An arm has its own slot key, so it claims independently of its host
+ * (the claim PK is cron_name + scope + slot_day) and of any other arm, and its
+ * own heartbeat row (cron-arm-health.js) stamps only on a tick that took one
+ * of ITS slots. TZ follow-up (Richard, card 11 Oct: "08:00 local, Dublin
+ * unchanged"): the roster-runway and qualification-digest arms of
+ * contract-reminders, which until then ran on the 08:00 UTC tick for every
+ * studio (03:00/04:00 in New York, inside the staff quiet band, so a New York
+ * owner's digest was held every day).
  */
 export const DAILY_SLOTS = Object.freeze({
   'equipment-inspection-reminder': Object.freeze({ hour: 6 }),
@@ -90,6 +100,8 @@ export const DAILY_SLOTS = Object.freeze({
   'churn-radar-digest': Object.freeze({ hour: 7, weekday: 1 }),
   'run-scheduled-reports': Object.freeze({ hour: 7 }),
   'contract-reminders': Object.freeze({ hour: 8 }),
+  'roster-runway': Object.freeze({ hour: 8, rides: 'contract-reminders' }),
+  'qualification-digest': Object.freeze({ hour: 8, rides: 'contract-reminders' }),
   'run-challenge-events': Object.freeze({ hour: 8 }),
   'receipt-coverage-weekly': Object.freeze({ hour: 8, weekday: 5, anchor: 'local' }),
   'event-reminders': Object.freeze({ hour: 9 }),

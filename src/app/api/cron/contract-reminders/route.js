@@ -29,10 +29,20 @@
 // TZ.6 — the schedule is hourly. The contract half acts for each contract's
 // location at its daily slot: 08:00 UTC for a Europe/Dublin studio (as before),
 // 08:00 local for any other zone, at most once per local day
-// (src/lib/cron-daily-slot.js). The two arms are platform jobs that already
-// judge studio time themselves: they run on the 08:00 UTC tick only, exactly
-// as before (TZ.8a sweeps their insides), so their own heartbeat rows keep
-// their daily clock.
+// (src/lib/cron-daily-slot.js).
+//
+// TZ follow-up (Richard, card 11 Oct: "08:00 local, Dublin unchanged") — the
+// two arms have daily slots of their OWN, DAILY_SLOTS['roster-runway'] and
+// DAILY_SLOTS['qualification-digest'] (rides: 'contract-reminders'), claimed
+// independently of the contract half and of each other. The runway acts for
+// each studio at that studio's slot; the digest for each organisation at its
+// anchor studio's slot (the lowest id, qualification-digest.js
+// digestAnchorsByOrg). A Europe/Dublin studio keeps the legacy 08:00 UTC
+// instant with no catch-up, so UN1T is byte-identical: a failed or skipped
+// slot pages (the arm's row goes stale), it is never sent late or twice. Each
+// arm's heartbeat row stamps only on a tick that took one of ITS slots with no
+// fault (slotTickStampable) and a clean arm outcome; the 'none' scope is due
+// at 08:00 UTC, so both rows keep their daily clock.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
@@ -55,8 +65,51 @@ export const maxDuration = 300
 
 const PAGE = 1000
 const MAX_REMINDERS = 2
-/** The arms ride the cron's legacy tick: 08:00 UTC, as on the old daily schedule. */
-const ARMS_UTC_HOUR = 8
+const MODULE = 'cron-contract-reminders'
+
+/**
+ * One arm on its own daily slot. Gate (claim this tick's due studios under the
+ * arm's OWN slot key), run the arm for those studios only, then stamp the
+ * arm's OWN heartbeat row, under its own .catch, only when the tick took a
+ * slot with no gate fault AND the arm returned a clean outcome. Never throws.
+ *
+ * @returns {Promise<{ outcome: object, failed: 0|1, faulted: boolean }>}
+ *   outcome: the arm's own, or { skipped } (no slot due: a quiet hourly tick),
+ *   or { error } (the arm threw, or the gate could not read the zones).
+ *   failed: 1 when the arm threw or its gate faulted (claim write or zone read).
+ *   faulted: the gate faulted (the response answers 500, as every gated cron).
+ */
+async function runArmOnSlot(db, nowMs, { slotName, run, healthy, heartbeat, label, failMessage }) {
+  const gate = await gateDailySlot(db, slotName, { nowMs, module: MODULE })
+  if (!gate.ok) {
+    return { outcome: { error: `${label}: studio zones unreadable, no studio acts this tick`, slot: gate.summary }, failed: 1, faulted: true }
+  }
+  if (gate.slots.size === 0) {
+    // Nothing claimed: a quiet hourly tick (or a claim write that failed for
+    // every due studio, which gate.faulted reports). Not a run: no stamp.
+    return { outcome: { skipped: 'no studio at its daily slot', slot: gate.summary }, failed: gate.faulted ? 1 : 0, faulted: gate.faulted }
+  }
+  let outcome
+  let failed = gate.faulted ? 1 : 0
+  try {
+    outcome = await run(db, { nowMs, isDue: (locationId) => !!slotFor(gate.slots, locationId) })
+  } catch (err) {
+    failed = 1
+    logError(MODULE, `${label} arm threw`, { err })
+    outcome = { error: err?.message || failMessage }
+  }
+  // Stamped HERE, before the contract half, so a contract crash (which
+  // answers nothing and stamps nothing, as always) cannot cost a clean arm
+  // its stamp; its own catch, so the stamp can never cost the contract half
+  // anything. Only a tick that took one of this arm's slots with no gate
+  // fault (slotTickStampable), and an outcome that is not a throw or an
+  // { error } (src/lib/cron-arm-health.js): a day with nothing to say stamps.
+  if (slotTickStampable(gate) && failed === 0 && healthy(outcome)) {
+    await stampHeartbeat(heartbeat, outcome).catch((err) =>
+      logWarn(MODULE, `${heartbeat} heartbeat failed`, { err }))
+  }
+  return { outcome, failed, faulted: gate.faulted }
+}
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -66,75 +119,49 @@ export async function GET(request) {
 
   const db = createServerClient()
   const now = new Date()
-  const armsTick = now.getUTCHours() === ARMS_UTC_HOUR
+  const nowMs = now.getTime()
 
-  // RUNWAY.1 — second arm: the daily roster-runway push (one per location per
-  // week per severity; src/lib/roster-runway-notify.js). It rides this cron
-  // because both are once-a-day staff nudges and 08:00 UTC is 08:00/09:00 in
-  // Dublin, a civil hour to tell a manager next week is not built; the roster
-  // cron (extend-roster-horizon) runs at 03:20 UTC, which is not. (The arm
-  // also refuses to send outside 07:00-22:00 studio time on its own, so moving
-  // this cron cannot push at night.)
+  // RUNWAY.1 — first arm: the daily roster-runway push (one per location per
+  // week per severity; src/lib/roster-runway-notify.js), at each studio's own
+  // 08:00 slot. It rides this cron because both are once-a-day staff nudges;
+  // the roster cron (extend-roster-horizon) runs at 03:20 UTC, not a civil
+  // hour. (The arm also refuses to send outside 07:00-22:00 studio time on
+  // its own, so moving this cron cannot push at night.)
   //
   // Isolated BOTH ways. It runs FIRST, so nothing the contract half does can
   // cost it its run; and it is wrapped, so its own failure is logged, rides in
   // last_outcome.runway, is counted in runway_arm_failed, and never costs the
   // contract reminders their run or their heartbeat (the same partial-failure
-  // posture as extend-roster-horizon).
-  let runway = { skipped: 'not the 08:00 UTC tick' }
-  let runwayArmFailed = 0
-  if (armsTick) {
-    try {
-      runway = await runRosterRunwayAlerts(db)
-    } catch (err) {
-      runwayArmFailed = 1
-      logError('cron-contract-reminders', 'roster runway arm threw', { err })
-      runway = { error: err?.message || 'runway arm failed' }
-    }
-  }
+  // posture as extend-roster-horizon). HEARTBEAT.1: its OWN row,
+  // 'roster-runway' (mig 633); runway_arm_failed rides in the
+  // contract-reminders row's last_outcome, which the health-check never reads,
+  // so the arm's row goes STALE instead.
+  const runwayArm = await runArmOnSlot(db, nowMs, {
+    slotName: 'roster-runway', run: runRosterRunwayAlerts, healthy: runwayArmHealthy,
+    heartbeat: ROSTER_RUNWAY_HEARTBEAT, label: 'roster runway', failMessage: 'runway arm failed',
+  })
+  const runway = runwayArm.outcome
+  const runwayArmFailed = runwayArm.failed
 
-  // HEARTBEAT.1 — the runway arm's OWN heartbeat row ('roster-runway', mig
-  // 633). runway_arm_failed rides in the contract-reminders row's last_outcome,
-  // which the health-check never reads; this row goes STALE instead. Stamped
-  // HERE, before the contract half, so a contract crash (which answers nothing
-  // and stamps nothing, as always) cannot cost a clean runway run its stamp;
-  // its own catch, so the stamp can never cost the contract half anything.
-  // Only when the arm returned an outcome and did not throw
-  // (src/lib/cron-arm-health.js): a day with nothing to announce stamps.
-  if (armsTick && runwayArmFailed === 0 && runwayArmHealthy(runway)) {
-    await stampHeartbeat(ROSTER_RUNWAY_HEARTBEAT, runway).catch((err) =>
-      logWarn('cron-contract-reminders', 'roster-runway heartbeat failed', { err }))
-  }
-
-  // QUALS.1 — third arm: the weekly qualification digest to owners
-  // (src/lib/qualification-digest.js). Runs every day; each owner hears at
-  // most once per Dublin week, on the first run with something expired or
-  // expiring (a week stamp in push_event_sends, written AFTER the send),
-  // inside 07:00-22:00 studio time. Isolated both ways, like the runway arm:
-  // its own try/catch, and its own heartbeat row ('qualification-digest', mig
-  // 635) stamped under its own .catch BEFORE the contract half runs, so a
-  // contract crash cannot cost a clean digest its stamp. Only a returned
-  // outcome with no { error } stamps.
-  let qualifications = { skipped: 'not the 08:00 UTC tick' }
-  let qualificationArmFailed = 0
-  if (armsTick) {
-    try {
-      qualifications = await runQualificationDigest(db)
-    } catch (err) {
-      qualificationArmFailed = 1
-      logError('cron-contract-reminders', 'qualification digest arm threw', { err })
-      qualifications = { error: err?.message || 'qualification digest arm failed' }
-    }
-  }
-  if (armsTick && qualificationArmFailed === 0 && qualificationDigestArmHealthy(qualifications)) {
-    await stampHeartbeat(QUALIFICATION_DIGEST_HEARTBEAT, qualifications).catch((err) =>
-      logWarn('cron-contract-reminders', 'qualification-digest heartbeat failed', { err }))
-  }
+  // QUALS.1 — second arm: the weekly qualification digest to owners
+  // (src/lib/qualification-digest.js), at each organisation's anchor studio's
+  // 08:00 slot. Each owner hears at most once per (the organisation's) week,
+  // on the first run with something expired or expiring (a week stamp in
+  // push_event_sends, written AFTER the send), inside 07:00-22:00 studio
+  // time. Isolated both ways, like the runway arm, with its own heartbeat row
+  // ('qualification-digest', mig 635).
+  const qualificationArm = await runArmOnSlot(db, nowMs, {
+    slotName: 'qualification-digest', run: runQualificationDigest, healthy: qualificationDigestArmHealthy,
+    heartbeat: QUALIFICATION_DIGEST_HEARTBEAT, label: 'qualification digest', failMessage: 'qualification digest arm failed',
+  })
+  const qualifications = qualificationArm.outcome
+  const qualificationArmFailed = qualificationArm.failed
+  const armsFaulted = runwayArm.faulted || qualificationArm.faulted
 
   // TZ.6 — which locations are at their daily slot this tick (claimed, so
   // never twice in one local day). An unreadable zone acts for nobody; a tick
   // with no slot due reads no contracts.
-  const gate = await gateDailySlot(db, 'contract-reminders', { nowMs: now.getTime(), module: 'cron-contract-reminders' })
+  const gate = await gateDailySlot(db, 'contract-reminders', { nowMs, module: MODULE })
   if (!gate.ok) {
     return NextResponse.json({ success: false, slot: gate.summary, runway, qualifications }, { status: 500 })
   }
@@ -261,5 +288,8 @@ export async function GET(request) {
       logWarn('cron-contract-reminders', 'heartbeat failed', { err }))
   }
 
-  return NextResponse.json({ success: !gate.faulted, ...outcome }, { status: gate.faulted ? 500 : 200 })
+  // A gate fault, the contract half's or an arm's, answers 500 (every gated
+  // cron does). It costs no other half its run or its stamp.
+  const faulted = gate.faulted || armsFaulted
+  return NextResponse.json({ success: !faulted, ...outcome }, { status: faulted ? 500 : 200 })
 }
