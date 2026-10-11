@@ -71,7 +71,6 @@ src/app/api/dashboard/studio-contacts/route.js
 src/app/api/equipment/due/route.js
 src/app/api/equipment/inspections/[id]/submit/route.js
 src/app/api/equipment/route.js
-src/app/api/locations/route.js
 src/app/api/public/cancellation-form/[token]/route.js
 src/app/api/public/entry/[token]/move-options/route.js
 src/app/api/public/entry/[token]/move/route.js
@@ -107,7 +106,6 @@ src/components/ConsultationForm.jsx
 src/components/DealCard.jsx
 src/components/ExpensesManager.jsx
 src/components/InvoicesManager.jsx
-src/components/LocationForm.jsx
 src/components/OfferSalesList.jsx
 src/components/OrderDetail.jsx
 src/components/OrdersTable.jsx
@@ -147,7 +145,6 @@ src/lib/bridge-samples.js
 src/lib/cancellation-form/rules.js
 src/lib/candidates-data.js
 src/lib/challenges.js
-src/lib/checklist-instances.js
 src/lib/class-booking-processor.js
 src/lib/class-climate.js
 src/lib/class-occurrences.js
