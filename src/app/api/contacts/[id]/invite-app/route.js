@@ -14,10 +14,9 @@
 //     so this is safe).
 //   - If a Supabase auth user already exists for the email but
 //     isn't yet linked to this contact, the invite call returns
-//     "user already exists". We swallow that and instead trigger
-//     a fresh magic-link send via signInWithOtp (admin pathway:
-//     same primitive, but doesn't require an admin role on the
-//     auth side because it's just sending a magic link).
+//     "user already exists". We then email a prompt to the member
+//     app's sign-in page (APPINVITE.1, member-app-sign-in-email.js);
+//     the member requests their own link there, in their own browser.
 //
 // Permission gate: master, owner, or manager. Head_coach and below
 // don't get to invite customers — keeps the surface tight.
@@ -30,6 +29,7 @@ import { logInfo, logError } from '@/lib/log'
 // NEXT_PUBLIC_CHAMP_APP_URL, never this repo's NEXT_PUBLIC_APP_URL. One
 // accessor so the three copies of the literal stop drifting apart.
 import { getMemberAppUrl } from '@/lib/app-url'
+import { sendMemberAppSignInEmail } from '@/lib/member-app-sign-in-email'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -51,7 +51,7 @@ export async function POST(_request, props) {
 
   const { data: contact, error: lookupErr } = await db
     .from('contacts')
-    .select('id, name, email, location_id, user_id')
+    .select('id, name, first_name, email, location_id, user_id')
     .eq('id', params.id)
     .single()
   if (lookupErr || !contact) {
@@ -100,23 +100,31 @@ export async function POST(_request, props) {
     // link via the password-recovery primitive — same end-user
     // experience, just doesn't error on existing accounts.
     if (/already (registered|exists|been registered)/i.test(inviteErr.message || '')) {
-      const { error: linkErr } = await db.auth.admin.generateLink({
-        type: 'magiclink',
-        email: contact.email,
-        options: { redirectTo },
-      })
-      if (linkErr) {
-        logError('contact-invite-app', 'magic link fallback failed', { err: linkErr })
-        return NextResponse.json({ success: false, error: linkErr.message }, { status: 400 })
+      // APPINVITE.1 — this branch used to call admin.generateLink and report
+      // "Sign-in link sent": generateLink only MINTS a link, Supabase sends
+      // nothing, so the member got no email. A server-minted link also could
+      // not complete the app's PKCE sign-in (see member-app-sign-in-email.js),
+      // so we email a prompt to the app's sign-in page instead, where the
+      // member requests their own link. Success only once Postmark accepts it.
+      try {
+        await sendMemberAppSignInEmail(db, {
+          contact,
+          signInUrl: `${getMemberAppUrl()}/login`,
+        })
+      } catch (err) {
+        logError('contact-invite-app', 'sign-in prompt email failed', { contactId: contact.id, err: err?.message })
+        return NextResponse.json({
+          success: false,
+          error: 'The sign-in email could not be sent. Try again shortly.',
+        }, { status: 502 })
       }
-      logInfo('contact-invite-app', 're-sent magic link to existing user', {
+      logInfo('contact-invite-app', 'sent sign-in prompt to existing user', {
         contactId: contact.id,
-        email: contact.email,
       })
       return NextResponse.json({
         success: true,
-        kind: 'magic_link_resent',
-        message: 'Sign-in link sent. Check inbox.',
+        kind: 'sign_in_prompt_sent',
+        message: 'Sign-in email sent. They sign in at the app with this email address.',
       })
     }
     logError('contact-invite-app', 'invite failed', { err: inviteErr })
