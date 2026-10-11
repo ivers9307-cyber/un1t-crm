@@ -19,7 +19,7 @@
 import { renderCoverageReportHtml, sendCoverageReportForOrg } from './report-email'
 import { getAppUrl } from '@/lib/app-url'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
 import { logError } from '@/lib/log'
 
 const CHUNK = 300 // house cap for .in()/bulk payloads (cf. coverage.js/statuses.js)
@@ -67,7 +67,7 @@ async function reportAlreadySent(db, sinceIso) {
 async function loadConnections(db) {
   const { data, error } = await db
     .from('xero_connections')
-    .select('location_id, location:location_id(id, name, organization_id)')
+    .select('location_id, location:location_id(id, name, organization_id, timezone)')
     .order('location_id') // deterministic: a multi-location org's bucket takes its first location for attribution
   if (error) throw new Error(`connections load failed: ${error.message}`)
   return data || []
@@ -215,9 +215,12 @@ export async function maybeFinalizeWeekly(db) {
     const sections = []
     const errors = []
     let allClean = true
+    // TZ.11c: each organisation's report is dated in its own studio's zone.
+    const zoneByLocation = new Map()
 
     for (const conn of connections) {
       const locationId = conn.location_id
+      if (conn.location) zoneByLocation.set(locationId, zoneOfLocation(conn.location))
       const locationName = conn.location?.name || locationId
       // null when the location row is missing or unassigned — such an
       // error is platform-level and is shown to every organisation.
@@ -292,7 +295,6 @@ export async function maybeFinalizeWeekly(db) {
     // Send every bucket and collect failures: a tenant whose report went
     // out must not be mailed again next tick because another tenant's
     // delivery failed.
-    const dateStr = dublinTodayStr()
     const failedOrgs = []
     let delivered = 0
     for (const bucket of byOrg.values()) {
@@ -304,6 +306,10 @@ export async function maybeFinalizeWeekly(db) {
         allClean = false // a location nobody was told about is not a healthy cycle
         continue
       }
+      // A label only: the day in the bucket's attribution location's zone
+      // (one location = one Xero org; an org spanning zones takes its first
+      // location's, the same location that attributes the send).
+      const dateStr = todayStrIn(zoneByLocation.get(bucket.locationId) ?? DEFAULT_TZ)
       const html = renderCoverageReportHtml({ appUrl: getAppUrl(), dateStr, sections: bucket.sections, errors: bucket.errors })
       try {
         await sendCoverageReportForOrg({ db, organizationId: bucket.organizationId, locationId: bucket.locationId, html, dateStr })
