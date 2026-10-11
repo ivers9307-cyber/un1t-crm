@@ -10,8 +10,9 @@
 //     payload measured in hundreds of KB on a studio with history, fetched
 //     to answer a yes/no question. This route answers it in one row per
 //     race, no embeds beyond a wave start time.
-//   - The "today" boundary is Europe/Dublin, and it is computed HERE, on the
-//     server, via todayIsoDublin(). A phone's clock and timezone belong to
+//   - The "today" boundary is the STUDIO's (its locations.timezone, TZ.9;
+//     Europe/Dublin for every UN1T studio), and it is computed HERE, on the
+//     server, via todayIsoIn(zone). A phone's clock and timezone belong to
 //     whoever is holding it — an operator whose device is still on holiday
 //     time, or a tablet that never left UTC, must not get a different answer
 //     about the studio's day than the person standing next to them. Mobile
@@ -30,7 +31,8 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { todayIsoDublin } from '@shared/events'
+import { todayIsoIn } from '@shared/events'
+import { getLocationZone } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -90,6 +92,14 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
+  // TZ.9 — the studio's day. An unreadable zone is a failed read like any
+  // other here (500), never a guessed day.
+  let zone
+  try {
+    zone = await getLocationZone(db, locationId)
+  } catch (err) {
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 })
+  }
   const { data, error } = await db
     .from('race_events')
     .select('id, name, slug, race_date, waves:race_waves ( start_time )')
@@ -103,7 +113,7 @@ export async function GET(request) {
     // registrations to control, so neither belongs on race day.
     .eq('active', true)
     .eq('status', 'published')
-    .eq('race_date', todayIsoDublin())
+    .eq('race_date', todayIsoIn(zone))
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 

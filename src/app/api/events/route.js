@@ -25,7 +25,8 @@ import { validateBody } from '@/lib/validate'
 import { ADMIN_ROLES, uuidLike } from '@/lib/schemas'
 import { eventSlug, uniqueEventSlug } from '@/lib/event-slug'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
-import { isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
+import { isRaceKind, orderEventsForBrowse } from '@shared/events'
+import { eventToday } from '@/lib/event-day'
 import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
 
 export const runtime = 'nodejs'
@@ -160,6 +161,7 @@ export async function GET(request) {
     .select(`
       id, name, slug, race_date, start_time, capacity, capacity_mode,
       active, kind, shared, location_id,
+      locations:location_id ( id, timezone ),
       host:event_hosts!host_id ( id, name, organization_id ),
       waves:race_waves ( capacity ),
       registrations:race_registrations ( id, status, team:teams ( size ) )
@@ -185,6 +187,7 @@ export async function GET(request) {
       .select(`
         id, name, slug, race_date, start_time, capacity, capacity_mode,
         active, kind, shared, location_id,
+        locations:location_id ( id, timezone ),
         host:event_hosts!host_id ( id, name, organization_id ),
         waves:race_waves ( capacity ),
         registrations:race_registrations ( id, status, team:teams ( size ) )
@@ -198,6 +201,9 @@ export async function GET(request) {
     }
   }
 
+  // TZ.9: each event is upcoming by its OWN studio's day (the list mixes the
+  // active studio, shared siblings and host anchors); the zone rides the read.
+  const todayById = new Map(rows.map((r) => [r.id, eventToday(r)]))
   const shaped = rows.map((r) => {
     const isRace = isRaceKind(r.kind)
     return {
@@ -221,7 +227,7 @@ export async function GET(request) {
   // Upcoming first (nearest date asc), then past (most recent desc). Stamp
   // is_upcoming so the client can render a "Past" divider without doing its
   // own timezone-sensitive date math.
-  const { upcoming, past } = orderEventsForBrowse(shaped, todayIsoDublin())
+  const { upcoming, past } = orderEventsForBrowse(shaped, (e) => todayById.get(e.id))
   const ordered = [
     ...upcoming.map((e) => ({ ...e, is_upcoming: true })),
     ...past.map((e) => ({ ...e, is_upcoming: false })),
