@@ -16,6 +16,8 @@ import { FileText, ChevronRight } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { getContractingEntity } from '@/lib/contracting-entity'
+import { contractZone, contractDay } from '@/lib/contract-display-time'
+import { viewerZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,14 +29,6 @@ const STATUS_BADGE = {
   revoked:  { label: 'Withdrawn', class: 'bg-gray-500/15 text-gray-600' },
 }
 
-function fmtDate(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleDateString('en-IE', {
-    timeZone: 'Europe/Dublin',
-    day: 'numeric', month: 'short', year: 'numeric',
-  })
-}
-
 export default async function MyContractsPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
@@ -44,7 +38,8 @@ export default async function MyContractsPage() {
     .from('contracts')
     .select(`
       id, status, issued_at, signed_at,
-      template:contract_templates!template_id (name)
+      template:contract_templates!template_id (name),
+      location:locations!location_id ( id, timezone )
     `)
     .eq('profile_id', user.id)
     .neq('status', 'draft')
@@ -55,6 +50,9 @@ export default async function MyContractsPage() {
   const { label: issuer } = await getContractingEntity(db, { locationId: user.activeLocation?.id })
 
   const rows = contracts || []
+  // TZ.16 (D3 = A) — each contract's dates in its studio's zone.
+  const viewerZone = viewerZoneOf(user)
+  const fmtDate = (r, iso) => contractDay(iso, contractZone(r, user), viewerZone)
   const pending = rows.filter(r => r.status === 'issued' || r.status === 'viewed')
   const archive = rows.filter(r => r.status !== 'issued' && r.status !== 'viewed')
 
@@ -81,7 +79,7 @@ export default async function MyContractsPage() {
               <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">
                 Action required ({pending.length})
               </h3>
-              <ContractList rows={pending} />
+              <ContractList rows={pending} fmtDate={fmtDate} />
             </section>
           )}
           {archive.length > 0 && (
@@ -89,7 +87,7 @@ export default async function MyContractsPage() {
               <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">
                 Archive
               </h3>
-              <ContractList rows={archive} />
+              <ContractList rows={archive} fmtDate={fmtDate} />
             </section>
           )}
         </>
@@ -98,7 +96,7 @@ export default async function MyContractsPage() {
   )
 }
 
-function ContractList({ rows }) {
+function ContractList({ rows, fmtDate }) {
   return (
     <div className="space-y-2">
       {rows.map(r => {
@@ -113,8 +111,8 @@ function ContractList({ rows }) {
               <div className="min-w-0 flex-1">
                 <div className="font-medium text-un1t-text">{r.template?.name || 'Contract'}</div>
                 <div className="text-[11px] text-un1t-subtle mt-0.5">
-                  Issued {fmtDate(r.issued_at)}
-                  {r.signed_at && ` · Signed ${fmtDate(r.signed_at)}`}
+                  Issued {fmtDate(r, r.issued_at)}
+                  {r.signed_at && ` · Signed ${fmtDate(r, r.signed_at)}`}
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">

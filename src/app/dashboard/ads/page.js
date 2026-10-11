@@ -26,6 +26,7 @@ import AdsPerAdTable from '@/components/dashboard/AdsPerAdTable'
 import AdsTrendChart from '@/components/dashboard/AdsTrendChartLazy'
 import AdsRefreshButton from '@/components/dashboard/AdsRefreshButton'
 import AdsFunnelPanel from '@/components/dashboard/AdsFunnelPanel'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const dynamic = 'force-dynamic'
 
@@ -75,7 +76,7 @@ export default async function AdsDashboardPage() {
       </div>
       <div className="flex items-center justify-between gap-3 mb-5">
         <p className="text-sm text-un1t-subtle">Last 30 days</p>
-        <AdsRefreshButton locationId={locationId} lastSyncedAt={lastSynced} />
+        <AdsRefreshButton locationId={locationId} timezone={zoneOfLocation(user.activeLocation)} lastSyncedAt={lastSynced} />
       </div>
 
       {erroringAccount && (

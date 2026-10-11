@@ -43,6 +43,7 @@ import PipelineViewSwitcher from '@/components/PipelineViewSwitcher'
 import { splitStagesByFunnel } from '@/lib/pipeline-classifier'
 import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
 import Link from 'next/link'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const dynamic = 'force-dynamic'
 
@@ -198,6 +199,8 @@ export default async function PipelinePage(props) {
         view={view}
         manual={manual}
         locationId={locationId}
+        // TZ.16 — the board's studio zone: every deal on it is this studio's.
+        timezone={zoneOfLocation(user.activeLocation)}
         // C146 TASKSNEEDCONTACTS.1 — the cards' and drawer's Task item is a
         // browser `activities` insert at this studio; since mig 700 it needs
         // Contacts here (web or phone).

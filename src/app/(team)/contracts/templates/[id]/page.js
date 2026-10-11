@@ -14,17 +14,10 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { canManageContractsInOrg, canManageContractsSomewhere } from '@/lib/contract-gates'
 import ContractTemplateForm from '@/components/ContractTemplateForm'
+import { contractStamp } from '@/lib/contract-display-time'
+import { viewerZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
-
-function fmtDate(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleString('en-IE', {
-    timeZone: 'Europe/Dublin',
-    day: 'numeric', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  })
-}
 
 export default async function EditTemplatePage(props) {
   const params = await props.params;
@@ -51,6 +44,9 @@ export default async function EditTemplatePage(props) {
   const { data: template } = await templateQuery.maybeSingle()
   if (!template) notFound()
   if (!canManageContractsInOrg(user, template.organization_id)) notFound()
+  // TZ.16 (D3 = A) — a template belongs to the organisation, not a studio, so
+  // its version dates read in the viewer's own active studio zone (VIEW-fmt).
+  const viewerZone = viewerZoneOf(user)
 
   // CONTRACTS-TPLVER.1 — server-side fetch, same createServerClient
   // pattern as the template fetch above. This is a service-role page
@@ -90,7 +86,7 @@ export default async function EditTemplatePage(props) {
               >
                 <summary className="px-4 py-3 text-sm cursor-pointer hover:bg-un1t-border/30 flex items-center gap-3">
                   <span className="text-xs uppercase tracking-wider text-un1t-muted w-10 shrink-0">v{v.version}</span>
-                  <span className="text-un1t-text flex-1">{fmtDate(v.created_at)}</span>
+                  <span className="text-un1t-text flex-1">{contractStamp(v.created_at, viewerZone, viewerZone)}</span>
                   <span className="text-xs text-un1t-subtle">{v.changed_by_profile?.full_name || 'Unknown'}</span>
                 </summary>
                 <div className="px-4 py-4 bg-un1t-bg/50">

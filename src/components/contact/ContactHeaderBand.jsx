@@ -12,7 +12,7 @@ import PersonActionBar from '@/components/PersonActionBar'
 // HOST-MASTER.6 — "No auto-enrol" chip + Manager+ toggle (client component).
 import AutomationsExemptToggle from '@/components/AutomationsExemptToggle'
 import { formatLastSeen } from '@/lib/person-view'
-import { formatMoney, formatDate } from './format'
+import { formatMoney, formatDate, nextClassLabel } from './format'
 
 // PULSE-90.4 — first-90-days journey status chips. Light-theme contrast
 // recipe (bg-<c>-500/10 text-<c>-700 — never the -300/-400 ramp).
@@ -92,7 +92,10 @@ function StatTile({ label, value, tone = 'default' }) {
 // `manual` defaults FALSE — Cold shown — so a caller that cannot resolve the
 // contact's board keeps exactly today's behaviour. A failed lookup must never
 // remove an operator action; an inert button beats a missing one.
-export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null, canToggleExempt = false, cancellationLink = null, manual = false, actionGates = null }) {
+// TZ.16 (D3 = A) — `timezone` is the contact's studio zone and `viewerZone` the
+// viewer's active studio (a server render cannot see the browser): the
+// next-class chip names the zone only when the two differ.
+export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null, timezone = null, viewerZone = null, canToggleExempt = false, cancellationLink = null, manual = false, actionGates = null }) {
   // CANCEL-FORM.4 — latest issued form link → one chip (sent / opened / submitted).
   const cancelChip = cancellationLinkChip(cancellationLink)
   const funnel = BADGE_SLUGS.has(contact.pipeline_stage_slug)
@@ -184,7 +187,7 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
             ))}
             {funnel && nextClassAt && (
               <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700">
-                Next: {new Date(nextClassAt).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' })}
+                Next: {nextClassLabel(nextClassAt, timezone, viewerZone)}
               </span>
             )}
             {funnel && contact.trial_credits_remaining != null && (
