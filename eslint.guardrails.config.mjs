@@ -445,6 +445,10 @@ const config = [
       'src/app/api/host/events/[[]id]/waitlist/**',
       'src/app/api/public/events/[[]slug]/waitlist/**',
       'src/app/api/cron/event-waitlist-offers/**',
+      // TZ.3 — the timezone change: born clean; the locations write reads its
+      // error and the rows it touched, the broadcast follow reads its error.
+      'src/app/api/locations/[[]id]/timezone/**',
+      'src/lib/timezone-change.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
