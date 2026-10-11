@@ -20,6 +20,8 @@ import { formatFullDateTimeInTZ } from './dates.js'
 import { getLocationBranding } from './location-branding.js'
 import { getContractingEntity } from './contracting-entity.js'
 import { getAppUrl } from './app-url.js'
+import { getLocationZone, DEFAULT_TZ } from './location-time.js'
+import { logWarn } from './log.js'
 
 // URLSEAM.1 — every link in these emails (/account/contracts/<id>,
 // /contracts/<id>, /privacy) is served by THIS deployment, so the base is
@@ -42,6 +44,15 @@ const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
  * contract notification; the email template degrades to no wordmark
  * (W1.S1a: never a fixed gym's name).
  */
+async function contractZone(contract) {
+  try {
+    return await getLocationZone(createServerClient(), contract?.location_id || null)
+  } catch (err) {
+    logWarn('contracts', 'locations.timezone unreadable; the signed-on time prints in DEFAULT_TZ', { contractId: contract?.id, err: err?.message || String(err) })
+    return DEFAULT_TZ
+  }
+}
+
 async function getBranding(contract) {
   const locationId = contract?.location_id || null
   let db = null
@@ -238,8 +249,12 @@ export async function sendContractReminderEmail({ contract, recipient, templateN
  *
  * @param {Buffer|Uint8Array|null} [args.pdfBuffer] optional signed PDF
  */
-export async function sendContractSignedEmails({ contract, recipient, issuer, templateName, pdfBuffer = null }) {
+export async function sendContractSignedEmails({ contract, recipient, issuer, templateName, pdfBuffer = null, zone = null }) {
   const branding = await getBranding(contract)
+  // TZ.8b — "signed on …" is the contract's studio wall clock. The sign route
+  // passes the zone it already resolved; otherwise read it (display only: an
+  // unreadable zone prints DEFAULT_TZ rather than losing the confirmation).
+  const signedZone = zone || await contractZone(contract)
   const recipientUrl = `${getAppUrl()}/account/contracts/${contract.id}`
   const issuerUrl = `${getAppUrl()}/contracts/${contract.id}`
   const results = { recipient: null, issuer: null }
@@ -275,7 +290,7 @@ export async function sendContractSignedEmails({ contract, recipient, issuer, te
         <a href="${recipientUrl}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;">View signed contract</a>
       </p>
       <p style="font-size:12px;color:#6b7280;">For your records, the contract was signed
-      on ${formatFullDateTimeInTZ(contract.signed_at || new Date())}.</p>`
+      on ${formatFullDateTimeInTZ(contract.signed_at || new Date(), signedZone)}.</p>`
     try {
       await sendEmail({
         to: recipient.email,

@@ -1,8 +1,9 @@
 // EQUIP-MAINT.3 — decision logic for the two inspection crons.
 //
-// Pure: no DB, no clock, no push. `today` is always passed in as a
-// Dublin calendar string (YYYY-MM-DD) so every branch is testable and
-// nothing depends on the server's timezone.
+// Pure: no DB, no clock, no push. `today` is always passed in as the
+// location's own calendar day (YYYY-MM-DD; TZ.6/TZ.8b: the daily-slot gate's
+// day in locations.timezone) so every branch is testable and nothing depends
+// on the server's timezone.
 
 import { dowOf } from './equipment-dates.js'
 

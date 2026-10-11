@@ -120,6 +120,36 @@ describe('GET /api/attendance — the query (D6)', () => {
     expect(op(q, 'lte', 'block.block_date')).toEqual(['lte', 'block.block_date', '2026-07-15'])
   })
 
+  it('TZ.8b: the default window is the STUDIO\'s day: a New York studio across both US DST changes', async () => {
+    getCurrentUser.mockResolvedValue({ ...MANAGER, activeLocation: { id: LOC, name: 'Studio One', timezone: 'America/New_York' } })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    for (const [iso, to, from] of [
+      ['2026-07-15T03:30:00Z', '2026-07-14', '2026-06-30'], // 23:30 EDT on 14 Jul (Dublin: 15 Jul)
+      ['2026-11-01T04:30:00Z', '2026-11-01', '2026-10-18'], // 00:30 EDT on the fall-back day
+      ['2026-11-02T04:30:00Z', '2026-11-01', '2026-10-18'], // 23:30 EST, still 1 Nov (a 25-hour day)
+      ['2026-03-08T04:59:00Z', '2026-03-07', '2026-02-21'], // 23:59 EST before spring-forward
+    ]) {
+      vi.setSystemTime(new Date(iso))
+      const db = fakeDb({ location: { ...LOCATION, timezone: 'America/New_York' } })
+      createServerClient.mockReturnValue(db)
+      expect((await GET(get())).status).toBe(200)
+      const [q] = listQueries(db, 'shift_assignments')
+      expect(op(q, 'lte', 'block.block_date'), iso).toEqual(['lte', 'block.block_date', to])
+      expect(op(q, 'gte', 'block.block_date'), iso).toEqual(['gte', 'block.block_date', from])
+    }
+  })
+
+  it('TZ.8b: a Dublin studio keeps the Dublin day (00:30 IST on 15 Jul)', async () => {
+    getCurrentUser.mockResolvedValue({ ...MANAGER, activeLocation: { id: LOC, name: 'Studio One', timezone: 'Europe/Dublin' } })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-07-14T23:30:00Z'))
+    const db = fakeDb()
+    createServerClient.mockReturnValue(db)
+    expect((await GET(get())).status).toBe(200)
+    const [q] = listQueries(db, 'shift_assignments')
+    expect(op(q, 'lte', 'block.block_date')).toEqual(['lte', 'block.block_date', '2026-07-15'])
+  })
+
   it('reads the active studio only, live shifts only, and one coach when asked', async () => {
     const UUID = 'c0000000-0000-0000-0000-000000000001'
     const db = fakeDb()

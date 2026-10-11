@@ -33,7 +33,8 @@
 // CATEGORY_BUNDLES.time_off_cancellations (bundle_team, as time_off).
 
 import { viewerActiveLocationId, canApproveAtActiveLocation } from '../registry'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn } from '@/lib/location-time'
+import { staffZoneOfUser } from '@/lib/staff-zone'
 import { getLocationMemberIds, leaveScopeOrFilter } from '@/lib/time-off-leave'
 import { applyOpenCancelAskFilter, LEAVE_CANCEL_DECIDER_ROLES, isMissingCancelSchemaError } from '@/lib/time-off-cancel'
 import { logError } from '@/lib/log'
@@ -88,7 +89,7 @@ export const timeOffCancellationsProvider = {
         `)
         .or(await scopeFilter(db, activeId))
         .neq('profile_id', user.id),
-      dublinTodayStr(),
+      todayStrIn(staffZoneOfUser(user)), // TZ.8b: the active studio's day
     )
       .order('cancel_requested_at', { ascending: true })
       .limit(50)
@@ -121,7 +122,7 @@ export const timeOffCancellationsProvider = {
         .select('*', { count: 'exact', head: true })
         .or(await scopeFilter(db, activeId))
         .neq('profile_id', user.id),
-      dublinTodayStr(),
+      todayStrIn(staffZoneOfUser(user)), // TZ.8b: the active studio's day
     )
     const { count, error } = await q
     if (error && missingSchema(error, 'count')) return 0

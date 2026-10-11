@@ -90,7 +90,7 @@ function checkToolPermission(toolName, role) {
 // see route.test.js for the regression guards.
 export async function executeTool(toolName, input, context) {
   const db = createServerClient()
-  const { locationId, role, userId } = context
+  const { locationId, role, userId, timeZone } = context
 
   // Server-side permission check
   if (!checkToolPermission(toolName, role)) {
@@ -330,7 +330,8 @@ export async function executeTool(toolName, input, context) {
     case 'get_holiday_allowance': {
       // RANGEVALID.1 — the model supplies the year: the allowances route's rule,
       // before any read ('abc' used to answer the 20-day default for year 'abc').
-      const { year, error: yearError } = parseAllowanceYear(input.year)
+      // TZ.8b — "this year" is the active studio's calendar year.
+      const { year, error: yearError } = parseAllowanceYear(input.year, timeZone)
       if (yearError) return { error: yearError }
       // Staff can only check their own allowance
       const profileId = input.profile_id || userId
@@ -499,6 +500,8 @@ export async function POST(request) {
     userId: user.id,
     locationId: user.activeLocation?.id || null,
     locationName: user.activeLocation?.name || 'Unknown',
+    // TZ.8b — the active studio's clock, for tools that judge "this year".
+    timeZone: zoneOfLocation(user.activeLocation),
     // Client-supplied — sanitise before it lands in the system prompt below
     // (single line, length-capped) so a crafted value can't inject instructions.
     currentPage: String(clientContext?.currentPage || '/').split('\n')[0].slice(0, 120),
@@ -553,6 +556,7 @@ export async function POST(request) {
     locationId: userContext.locationId,
     userId: userContext.userId,
     role: userContext.role,
+    timeZone: userContext.timeZone,
   }
 
   // ── Streaming path (ASSIST-STREAM.1) ────────────────────────────────
@@ -705,6 +709,7 @@ export async function POST(request) {
             locationId: userContext.locationId,
             userId: userContext.userId,
             role: userContext.role,
+            timeZone: userContext.timeZone,
           })
           toolResults.push({
             type: 'tool_result',

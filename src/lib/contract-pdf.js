@@ -42,6 +42,7 @@
 import React from 'react'
 import { Document, Page, Text, View, StyleSheet, renderToBuffer } from '@react-pdf/renderer'
 import { formatFullDateTimeInTZ } from './dates.js'
+import { DEFAULT_TZ } from '@shared/zoned-time'
 
 const el = React.createElement
 
@@ -251,8 +252,16 @@ function blockNode(block, i) {
   return el(Text, { key, style: styles.paragraph }, runNodes(block.runs, key))
 }
 
-function signatureColumn({ label, name, timestamp, ip }) {
-  const when = formatFullDateTimeInTZ(timestamp, 'Europe/Dublin')
+/**
+ * TZ.8b — a signature's timestamp as the PDF prints it: the contract's
+ * studio wall clock (DEFAULT_TZ when the caller has none). '' if unreadable.
+ */
+export function signatureWhen(timestamp, zone = DEFAULT_TZ) {
+  return formatFullDateTimeInTZ(timestamp, zone)
+}
+
+function signatureColumn({ label, name, timestamp, ip, zone }) {
+  const when = signatureWhen(timestamp, zone)
   return el(
     View,
     { style: styles.sigCol },
@@ -268,8 +277,8 @@ function signatureColumn({ label, name, timestamp, ip }) {
  *
  * Visually approximates the web render (ContractBody + the dual
  * signature block on /admin/contracts/[id] and /account/contracts/[id]):
- * serif body, two signature columns, italic typed names, Dublin
- * timestamps, the recipient's IP under their signature.
+ * serif body, two signature columns, italic typed names, timestamps on
+ * the studio's clock (`zone`), the recipient's IP under their signature.
  *
  * Never called for an unsigned contract in practice, but every field is
  * optional so a partially-populated row degrades to a blank cell rather
@@ -297,6 +306,8 @@ function signatureColumn({ label, name, timestamp, ip }) {
  *   frozen entity), which is exactly what the web pages and the mobile screen
  *   render, so the four can never diverge. Omitted -> falls back to the brand,
  *   i.e. the pre-LEGALENT.1 behaviour.
+ * @param {string} [args.zone] TZ.8b — the contract's studio zone for the two
+ *   signature timestamps (DEFAULT_TZ when omitted).
  * @returns {Promise<Buffer>}
  */
 export async function renderContractPdf({
@@ -309,6 +320,7 @@ export async function renderContractPdf({
   templateName,
   companyName,
   contractingEntity,
+  zone = DEFAULT_TZ,
 } = {}) {
   const blocks = parseContractBlocks(bodyRendered)
   // W1.S1a — the running header is the location's resolved brand; on a
@@ -335,12 +347,13 @@ export async function renderContractPdf({
       el(
         View,
         { style: styles.sigWrap, wrap: false },
-        signatureColumn({ label: `For ${entity}`, name: issuerSignature, timestamp: issuedAt }),
+        signatureColumn({ label: `For ${entity}`, name: issuerSignature, timestamp: issuedAt, zone }),
         signatureColumn({
           label: 'Employee / Contractor',
           name: recipientSignature,
           timestamp: signedAt,
           ip: signedIp,
+          zone,
         })
       ),
       el(Text, {

@@ -18,7 +18,7 @@ import TypesTab from './TypesTab'
 import EquipmentTab from './EquipmentTab'
 import LogTab from './LogTab'
 
-export default function MaintenanceView({ canAdmin }) {
+export default function MaintenanceView({ canAdmin, timeZone }) {
   const TABS = [
     { key: 'due', label: 'Due' },
     ...(canAdmin ? [
@@ -59,7 +59,7 @@ export default function MaintenanceView({ canAdmin }) {
       </div>
 
       {tab === 'due' && <DueTab />}
-      {canAdmin && tab === 'equipment' && <EquipmentTab />}
+      {canAdmin && tab === 'equipment' && <EquipmentTab timeZone={timeZone} />}
       {canAdmin && tab === 'types' && <TypesTab />}
       {canAdmin && tab === 'log' && <LogTab />}
     </div>
