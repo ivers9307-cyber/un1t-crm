@@ -20,6 +20,7 @@
 import { sendTransactionalEmail, applyMergeTags } from './postmark'
 import { logTransactionalWalletState } from './wallet-enforcement'
 import { logWarn } from './log'
+import { getLocationBranding } from './location-branding'
 import { transactionalEmailSuppression, transactionalWhatsappSuppression } from '@/lib/transactional-consent'
 import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
 
@@ -55,9 +56,26 @@ export function fmtBookingTime(dateStr, timeStr) {
   }
 }
 
+/**
+ * W1.S1a — the location merge tags a booking email resolves: {{location_name}}
+ * (the sending location's own name) and {{company_name}} (its configured
+ * brand: company_settings -> org_settings -> locations.name). The template
+ * editor offers both; before this they rendered blank on booking
+ * confirmations and event reminders. getLocationBranding never throws.
+ * Shared with event-reminders.js.
+ * @param {object} db
+ * @param {string|null} locationId  the event type's location (the sender)
+ * @returns {Promise<{ location_name: string, company_name: string }>}
+ */
+export async function bookingLocationMergeExtras(db, locationId) {
+  const { locationName, companyName } = await getLocationBranding(db, locationId)
+  return { location_name: locationName || '', company_name: companyName || '' }
+}
+
 function applyMergeTagsWithExtras(html, contact, extras) {
   let out = applyMergeTags(html, contact, {
     location_name: extras.location_name || '',
+    company_name: extras.company_name || '',
   })
   out = out.replaceAll('{{event_name}}', extras.event_name || '')
   out = out.replaceAll('{{event_time}}', extras.event_time || '')
@@ -182,6 +200,7 @@ async function sendEmailConfirmation(db, booking, ctx) {
   }
 
   const extras = {
+    ...(await bookingLocationMergeExtras(db, ctx.locationId)),
     event_name: ctx.eventName,
     event_time: fmtBookingTime(booking.booking_date, booking.start_time),
   }

@@ -82,6 +82,7 @@ import { resolveAbPhase, assignAbVariants, clampAbTestPct, decideAbOutcome, subj
 import { frequencyCapFromLocationSettings, capCutoffIso, stampMarketingTouch, CAMPAIGN_CAP_SKIP_AFTER_MS } from './frequency-cap.js'
 import { loadNonOpenerContactIds } from './campaign-resend.js'
 import { resolveCustomerBaseUrl } from './tenant-host.js'
+import { getLocationBranding } from './location-branding.js'
 import { logInfo } from './log.js'
 import { buildCampaignViewUrl, prependViewInBrowserLink, fetchLocationEmailCopy } from './campaign-web-view.js'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
@@ -782,6 +783,11 @@ export async function tickCampaignSend(db, campaign) {
     await resolveEmailSender(db, campaign.location_id),
     campaign.from_email,
   )
+  // W1.S1a — {{company_name}}: the campaign location's configured brand,
+  // resolved once per batch (getLocationBranding never throws; '' when
+  // unresolved). Same extras on the body, the preheader and the subject.
+  const { companyName: campaignBrand } = await getLocationBranding(db, campaign.location_id)
+  const companyName = campaignBrand || ''
 
   const emailBatch = queuedRows.map(row => {
     const contact = row.contact
@@ -805,6 +811,7 @@ export async function tickCampaignSend(db, campaign) {
 
     const merged = applyMergeTags(campaign.html_content, contact, {
       location_name: campaign.locations?.name || '',
+      company_name: companyName,
       unsubscribe_url: unsubscribeUrl,
       preference_url: preferenceUrl,
     })
@@ -819,7 +826,7 @@ export async function tickCampaignSend(db, campaign) {
     // the editor but never used at send time. Inject it as a standard
     // hidden preheader, first thing inside the body, merge tags applied.
     const previewText = campaign.preview_text
-      ? applyMergeTags(campaign.preview_text, contact, { location_name: campaign.locations?.name || '' })
+      ? applyMergeTags(campaign.preview_text, contact, { location_name: campaign.locations?.name || '', company_name: companyName })
       : null
     // WEBVIEW.1 — "view in browser", inserted AFTER the plain-text part is
     // derived (the text alternative is never clipped, so it does not need the
@@ -855,6 +862,7 @@ export async function tickCampaignSend(db, campaign) {
       // 'News from ' while the identical tag in the body rendered correctly.
       subject: applyMergeTags(rawSubject, contact, {
         location_name: campaign.locations?.name || '',
+        company_name: companyName,
         unsubscribe_url: unsubscribeUrl,
         preference_url: preferenceUrl,
       }),

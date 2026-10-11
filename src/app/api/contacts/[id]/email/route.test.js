@@ -47,9 +47,11 @@ vi.mock('@/lib/permissions', () => {
 })
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Stillorgan', shortName: 'UN1T', locationName: 'Stillorgan' })) }))
 
-vi.mock('@/lib/postmark', () => ({
-  applyMergeTags: (s) => s,
+// W1.S1a — the merge runs for real so {{company_name}} is observable.
+vi.mock('@/lib/postmark', async (importOriginal) => ({
+  applyMergeTags: (await importOriginal()).applyMergeTags,
   sendTransactionalEmail: vi.fn(() => Promise.resolve({ messageId: 'pm-1' })),
 }))
 
@@ -184,6 +186,16 @@ describe('POST /api/contacts/[id]/email', () => {
     })
     expect(db.__calls.activityInsert).toHaveLength(1)
     expect(db.__calls.activityInsert[0].type).toBe('email_sent')
+  })
+
+  it('W1.S1a: renders {{company_name}} as the contact location brand in subject and body', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
+    createServerClient.mockReturnValue(mockDb({ contact: CONTACT }))
+    const res = await POST(req({ subject: 'From {{company_name}}', body: 'Hi {{first_name}}, {{company_name}} here.' }), { params: { id: 'c1' } })
+    expect(res.status).toBe(200)
+    const call = sendTransactionalEmail.mock.calls[0][0]
+    expect(call.subject).toBe('From UN1T Stillorgan')
+    expect(call.htmlBody || call.textBody || '').toContain('Hi Sarah, UN1T Stillorgan here.')
   })
 
   it('rejects an empty subject (schema)', async () => {

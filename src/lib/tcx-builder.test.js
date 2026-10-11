@@ -41,6 +41,12 @@ describe('buildTcx', () => {
     expect(xml).toContain('<HeartRateBpm><Value>240</Value>')
   })
 
+  it('W1.S1a: the default title is brand-neutral', () => {
+    const xml = buildTcx({ session, samples })
+    expect(xml).toContain('HR session')
+    expect(xml).not.toContain('UN1T')
+  })
+
   it('escapes XML metacharacters in the title', () => {
     const xml = buildTcx({ session, samples, title: 'My <ride> & "fun"' })
     expect(xml).toContain('My &lt;ride&gt; &amp; &quot;fun&quot;')

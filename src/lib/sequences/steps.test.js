@@ -968,6 +968,24 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     )
   })
 
+  // W1.S1a — {{company_name}} renders the sequence location's configured
+  // brand (getLocationBranding, mocked above as 'UN1T'), on the subject AND
+  // the body, so the shipped templates' "Welcome to {{company_name}}" names
+  // the sending studio's brand, never a fixed gym.
+  it('W1.S1a — {{company_name}} renders the location brand on subject and body', async () => {
+    const { getLocationBranding } = await import('@/lib/location-branding')
+    getLocationBranding.mockResolvedValueOnce({ companyName: 'UN1T Stillorgan', shortName: 'UN1T', locationName: 'Stillorgan' })
+    const db = emailDb()
+    await steps.sendEmailStep(db, { enrollment: { id: 'e9' }, step, sequence, contact: consentedContact })
+    expect(getLocationBranding).toHaveBeenCalledWith(db, sequence.location_id)
+    for (const content of [step.subject, step.html_content]) {
+      expect(pm.applyMergeTags).toHaveBeenCalledWith(
+        content, consentedContact,
+        expect.objectContaining({ company_name: 'UN1T Stillorgan', location_name: 'Stillorgan' }),
+      )
+    }
+  })
+
   // SEQSENDER.1 (mig 555) — a sequence may name its own sender.
   it('SEQSENDER.1 — sends with no `from` when the sequence names no sender (every pre-existing sequence)', async () => {
     const db = emailDb()

@@ -608,3 +608,39 @@ describe('FLOW-DELAY.1 — the timing guard walk is valid for this catalog', () 
     }
   })
 })
+
+// W1.S1a — the shipped templates carry no gym's name: the brand rows read
+// {{company_name}} (the sending location's configured brand) and the sign-offs
+// read {{location_name}} alone (location names already carry the brand, so
+// "UN1T {{location_name}}" rendered "UN1T UN1T Stillorgan").
+describe('W1.S1a — templates speak the sending location brand', () => {
+  const emailSteps = SEQUENCE_TEMPLATES.flatMap((t) => t.steps.filter((s) => s.step_type === 'email').map((s) => ({ id: t.id, s })))
+  const contact = { first_name: 'Ann', name: 'Ann Byrne', email: 'ann@example.com' }
+
+  it('no email step names a fixed gym', () => {
+    for (const { id, s } of emailSteps) {
+      expect(`${s.subject || ''} ${s.html_content || ''}`, id).not.toMatch(/UN1T|un1tdublin/i)
+    }
+  })
+
+  it('a second gym reads its own brand and studio, with no tag left behind', () => {
+    for (const { id, s } of emailSteps) {
+      const extras = { company_name: 'Northside Strength', location_name: 'Northside Dublin 8' }
+      const out = `${applyMergeTags(s.subject || '', contact, extras)} ${applyMergeTags(s.html_content || '', contact, extras)}`
+      expect(out, id).not.toContain('{{company_name}}')
+      expect(out, id).not.toContain('{{location_name}}')
+    }
+    const branded = emailSteps.filter(({ s }) => (s.subject || '').includes('{{company_name}}'))
+    expect(branded.length).toBeGreaterThan(5)
+    expect(applyMergeTags('Welcome to {{company_name}}, {{first_name}}', contact, { company_name: 'UN1T Stillorgan' }))
+      .toBe('Welcome to UN1T Stillorgan, Ann')
+  })
+
+  it('the sign-off is the studio name once, not the brand twice', () => {
+    const signed = emailSteps.filter(({ s }) => (s.html_content || '').includes('<p>{{location_name}}</p>'))
+    expect(signed.length).toBeGreaterThan(10)
+    const out = applyMergeTags(signed[0].s.html_content, contact, { location_name: 'UN1T Stillorgan', company_name: 'UN1T Stillorgan' })
+    expect(out).toContain('<p>UN1T Stillorgan</p>')
+    expect(out).not.toContain('UN1T UN1T')
+  })
+})

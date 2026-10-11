@@ -311,8 +311,13 @@ export async function renderContractPdf({
   contractingEntity,
 } = {}) {
   const blocks = parseContractBlocks(bodyRendered)
-  const company = companyName || 'UN1T'
-  const entity = String(contractingEntity ?? '').trim() || company
+  // W1.S1a — the running header is the location's resolved brand; on a
+  // branding blip at sign time it falls back to the contracting entity, so
+  // the stored PDF never carries a blank header/author (and never a fixed
+  // gym's name).
+  const brand = String(companyName ?? '').trim()
+  const entity = String(contractingEntity ?? '').trim() || brand
+  const company = brand || entity
 
   const doc = el(
     Document,

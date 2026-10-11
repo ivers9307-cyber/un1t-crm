@@ -5,6 +5,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-signing-secret'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// W1.S1a — {{company_name}} renders the campaign location's brand here too.
+vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Stillorgan', shortName: 'UN1T', locationName: 'UN1T Stillorgan' })) }))
 
 import { createServerClient } from '@/lib/supabase'
 import { GET } from './route'
@@ -59,6 +61,12 @@ describe('serving a sent campaign', () => {
     expect(body).not.toContain('{{first_name}}')
     expect(body).not.toContain('{{email}}')
     expect(body).toContain('Hi , we hold .')
+  })
+
+  it('W1.S1a: renders {{company_name}} as the campaign location brand (a sender property, not PII)', async () => {
+    createServerClient.mockReturnValue(makeDb({ ...SENT, html_content: '<html><body><p>From {{company_name}}</p></body></html>' }).db)
+    const body = await (await GET(req(), props(TOKEN))).text()
+    expect(body).toContain('<p>From UN1T Stillorgan</p>')
   })
 
   it('serves a campaign still sending, because the link is already in inboxes', async () => {

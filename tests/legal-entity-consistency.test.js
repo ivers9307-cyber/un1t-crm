@@ -228,6 +228,33 @@ describe('the signed PDF countersigns with the entity, not the brand', () => {
     vi.resetModules()
   })
 
+  // W1.S1a — a branding blip at sign time (no brand resolved) must not store
+  // a PDF with a blank running header or author: they fall back to the
+  // contracting entity, never to a fixed gym's name.
+  it('with no brand the header and author fall back to the entity', async () => {
+    const captured = []
+    vi.doMock('@react-pdf/renderer', () => ({
+      Document: 'Document', Page: 'Page', Text: 'Text', View: 'View',
+      StyleSheet: { create: (s) => s },
+      renderToBuffer: (doc) => { captured.push(doc); return Promise.resolve(Buffer.from('%PDF-')) },
+    }))
+    const { renderContractPdf } = await import('../src/lib/contract-pdf.js')
+    await renderContractPdf({ bodyRendered: '# A', issuerSignature: 'I', companyName: '  ', contractingEntity: 'AN-ENTITY-ONLY' })
+    const strings = []
+    const walkTree = (node) => {
+      if (node == null || node === false) return
+      if (typeof node === 'string') { strings.push(node); return }
+      if (Array.isArray(node)) { node.forEach(walkTree); return }
+      if (node.props) walkTree(node.props.children)
+    }
+    walkTree(captured[0])
+    expect(captured[0].props.author).toBe('AN-ENTITY-ONLY')
+    expect(strings).toContain('AN-ENTITY-ONLY')
+    expect(strings).toContain('For AN-ENTITY-ONLY')
+    vi.doUnmock('@react-pdf/renderer')
+    vi.resetModules()
+  })
+
   it('the PDF label and the page label are the same string for one contract', () => {
     // Not a source grep: both sides are computed here from one row, so
     // a future edit that gives either surface its own resolver breaks
@@ -371,9 +398,14 @@ describe('contractingEntityLabel', () => {
       .toBe('UN1T Dublin')
   })
 
-  it('is never empty', () => {
-    expect(contractingEntityLabel()).toBe('UN1T')
-    expect(contractingEntityLabel({ legalEntityName: '   ', companyName: '  ' })).toBe('UN1T')
+  // W1.S1a — the floor is the organisation's own name; past it the label is
+  // empty, never a fixed gym's wordmark (which was this function's last
+  // resort until the literal sweep, and which asserted ONE gym as the
+  // contracting party on every other organisation's document).
+  it('floors on the org name, then on nothing: never a fixed gym name', () => {
+    expect(contractingEntityLabel({ organizationName: 'UN1T Group' })).toBe('UN1T Group')
+    expect(contractingEntityLabel()).toBe('')
+    expect(contractingEntityLabel({ legalEntityName: '   ', companyName: '  ' })).toBe('')
   })
 })
 
@@ -445,11 +477,9 @@ describe('getContractingEntity', () => {
     expect(out.label).not.toBe('UN1T')
     expect(out.label).toBe('CCF Autos')
     // Since W1.B1 the brand resolver returns '' here (no configured name,
-    // and this fixture's locations row carries no name); the WORDMARK field
-    // then re-applies contracting-entity's own last-resort literal, which
-    // W1.S1a removes. The point of this test is that the ENTITY label
-    // never inherits it.
-    expect(out.companyName).toBe('UN1T')
+    // and this fixture's locations row carries no name), and since W1.S1a
+    // the wordmark field no longer re-applies a fixed gym literal on top.
+    expect(out.companyName).toBe('')
     expect(out.entityName).toBeNull()
   })
 
@@ -464,14 +494,25 @@ describe('getContractingEntity', () => {
     expect(out.label).toBe('Givers Consultancy')
   })
 
-  it('never throws and never returns an empty label', async () => {
-    // A contract surface must render a party name even when every
-    // lookup is unavailable — a blank "For " on a document someone is
-    // about to sign is worse than an under-specified one.
+  // W1.S1a — when every lookup is unavailable there is no honest name to
+  // give: the old last resort was a fixed gym's wordmark, i.e. a WRONG
+  // counterparty on any other organisation's document. The new floor is
+  // the org's own name (above); past it, empty.
+  it('never throws, and with nothing readable floors on empty rather than a fixed gym', async () => {
     const exploding = { from() { throw new Error('db down') } }
     await expect(getContractingEntity(exploding, { organizationId: 'org-1' })).resolves
-      .toMatchObject({ label: 'UN1T' })
-    await expect(getContractingEntity(null, {})).resolves.toMatchObject({ label: 'UN1T' })
+      .toMatchObject({ label: '', companyName: '' })
+    await expect(getContractingEntity(null, {})).resolves.toMatchObject({ label: '', companyName: '' })
+  })
+
+  it('W1.S1a: an unconfigured org whose org row reads floors on organizations.name', async () => {
+    const db = makeDb({
+      locations: [{ organization_id: 'org-u' }],
+      company_settings: [],
+      org_settings: [],
+      organizations: [{ name: 'UN1T Group' }],
+    })
+    await expect(getContractingEntity(db, { locationId: 'loc-u' })).resolves.toMatchObject({ label: 'UN1T Group' })
   })
 })
 

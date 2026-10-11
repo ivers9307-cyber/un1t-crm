@@ -43,6 +43,9 @@ export const MERGE_TAGS = Object.freeze([
   { tag: '{{phone}}', name: 'Phone', description: "Contact's phone number", offered: true },
   { tag: '{{pipeline_stage}}', name: 'Pipeline Stage', description: 'Their stage in the pipeline', offered: true },
   { tag: '{{location_name}}', name: 'Location', description: 'Your location name', offered: true },
+  // W1.S1a — the sending location's configured brand (Settings → Branding;
+  // falls back to the organisation's brand, then the location's name).
+  { tag: '{{company_name}}', name: 'Brand', description: 'Your brand name, as set in Branding', offered: true },
   { tag: '{{unsubscribe_url}}', name: 'Unsubscribe', description: 'Unsubscribe link', offered: true },
   { tag: '{{preference_url}}', name: 'Preferences', description: 'Preference centre link', offered: true },
   { tag: '{{current_year}}', name: 'Year', description: 'Current year', offered: true },
