@@ -120,4 +120,32 @@ describe('brand (W1.B2)', () => {
     expect(brandFromApi({ company_name: 'Solo Gym' }).productNames.points).toBe('Solo Gym Points')
     expect(brandFromApi(null)).toEqual(EMPTY_BRAND)
   })
+
+  // TZ.14 — the brand carries the studio's timezone (D7: the member's clock).
+  it('carries the studio timezone the route answers', async () => {
+    api.mockResolvedValueOnce({ success: true, data: { company_name: 'Gym NY', timezone: 'America/New_York' } })
+    expect((await loadBrand('loc-ny')).timezone).toBe('America/New_York')
+    expect(JSON.parse(store.get('brand:loc-ny')).timezone).toBe('America/New_York')
+    // A cold start from storage keeps it.
+    _resetBrandCache()
+    api.mockRejectedValueOnce(new Error('offline'))
+    expect((await loadBrand('loc-ny')).timezone).toBe('America/New_York')
+  })
+
+  it('a route without the field (an older server), an invalid zone, or a failed load answer timezone null', async () => {
+    expect((await loadBrand('loc-1')).timezone).toBe(null)
+    expect(brandFromApi({ company_name: 'X', timezone: '+05:00' }).timezone).toBe(null)
+    expect(brandFromApi({ company_name: 'X', timezone: 42 }).timezone).toBe(null)
+    expect(EMPTY_BRAND.timezone).toBe(null)
+    api.mockRejectedValueOnce(new Error('offline'))
+    expect((await loadBrand('loc-5')).timezone).toBe(null)
+  })
+
+  it('a brand stored before TZ.14 (no timezone) still loads, with timezone null', async () => {
+    store.set('brand:loc-old', JSON.stringify({ companyName: 'Old', shortName: 'Old', logoUrl: null, productNames: { points: 'Old Points', hr: 'Old HR' }, pointsUnit: 'Old' }))
+    api.mockRejectedValueOnce(new Error('offline'))
+    const b = await loadBrand('loc-old')
+    expect(b.companyName).toBe('Old')
+    expect(b.timezone).toBe(null)
+  })
 })

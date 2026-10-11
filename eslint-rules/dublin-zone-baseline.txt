@@ -11,16 +11,6 @@
 # snapshot (dublin-zone-baseline.tz18a-snapshot.txt), or when this list is not
 # sorted. One path per line, sorted, so parallel sweeps that delete different
 # lines merge cleanly. TZ.18b deletes this file once it is empty.
-mobile/app/(member)/(tabs)/home.jsx
-mobile/app/(member)/(tabs)/sessions.jsx
-mobile/app/(member)/sessions/[id].jsx
-mobile/app/(staff)/contracts/[id].jsx
-mobile/app/(staff)/contracts/index.jsx
-mobile/app/(staff)/policies/[slug].jsx
-mobile/app/(staff)/policies/index.jsx
-mobile/components/AcDeviceList.jsx
-mobile/lib/dates.js
-mobile/lib/invoice-review.js
 src/app/(team)/contracts/[id]/page.js
 src/app/(team)/contracts/page.js
 src/app/(team)/contracts/templates/[id]/page.js

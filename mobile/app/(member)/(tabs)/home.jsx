@@ -20,6 +20,8 @@ import { useFocusEffect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/member/contact-context'
 import { useMemberBrand } from '../../../lib/member/use-member-brand'
+import { useMemberZone } from '../../../lib/member/use-member-zone'
+import { lastWeekWindow, thisWeekStartMs, mostFrequentWeekday } from '../../../lib/member/member-zone'
 import { supabase } from '../../../lib/member/supabase'
 import { api } from '../../../lib/member/api'
 import { crmApi } from '../../../lib/member/api'
@@ -32,7 +34,6 @@ import { shapeJourneyCard } from 'shared/onboarding-journey'
 import { sourceLabel, durationMinutes, sessionDate } from 'shared/format'
 import { weeklyStreak } from 'shared/hr-analytics'
 import { isBurn } from 'shared/heart-rate'
-import { dublinDateKey, dublinWeekStartMs, DUBLIN_DAY_MS } from 'shared/dublin-time'
 import ProfileCompletionPrompt from '../../../components/member/ProfileCompletionPrompt'
 import AppleHealthResyncCard from '../../../components/member/AppleHealthResyncCard'
 import { accentFromSessions, hardestZone, PEARL } from '../../../lib/member/brand'
@@ -52,6 +53,10 @@ export default function Home() {
   const router = useRouter()
   const firstName = contact?.name?.split(' ')[0] || 'there'
   const reduceMotion = useReduceMotion()
+  // TZ.14 (D7) — the member's home studio's clock: the digest week, the streak
+  // weeks, the pips and the usual-day prompt. Europe/Dublin until the brand
+  // lands (and for every UN1T member, whose studios are all Dublin).
+  const tz = useMemberZone()
 
   const [loading, setLoading] = useState(true)
   const [sessions, setSessions] = useState([])
@@ -75,9 +80,16 @@ export default function Home() {
   const [error, setError] = useState(null)
   const initialisedRef = useRef(false)
   const loadingRef = useRef(false)
+  // TZ.14 — a non-Dublin member's zone lands with the brand, possibly while a
+  // load (run on the Dublin fallback) is in flight; that load's finally sees
+  // the newer zone and runs the current load once more. A Dublin member's zone
+  // never changes, so this never fires for them.
+  const zoneRef = useRef(tz)
+  const loadRef = useRef(null)
 
   const load = useCallback(async () => {
     if (!contact?.id) { setLoading(false); return }
+    const loadZone = tz
     if (loadingRef.current) return
     loadingRef.current = true
     // Spinner only on the FIRST load — focus refetches are silent so returning
@@ -118,11 +130,9 @@ export default function Home() {
     // seen this ISO week; otherwise null → the card simply doesn't render.
     const digestP = (async () => {
       const nowMs = Date.now()
-      // Last completed Dublin week window (half-open UTC ms). Re-derive last
-      // week's Monday through dublinWeekStartMs so a DST week stays exact.
-      const thisWeekStartMs = dublinWeekStartMs(nowMs)
-      const lastWeekStartIso = new Date(dublinWeekStartMs(thisWeekStartMs - DUBLIN_DAY_MS)).toISOString()
-      const thisWeekStartIso = new Date(thisWeekStartMs).toISOString()
+      // Last completed week on the member's studio calendar (half-open UTC
+      // ms); lastWeekWindow re-derives last week's Monday so a DST week stays exact.
+      const { lastWeekStartIso, thisWeekStartIso } = lastWeekWindow(nowMs, loadZone)
 
       const [{ data: rows }, board] = await Promise.all([
         supabase
@@ -142,7 +152,7 @@ export default function Home() {
         ? { rank: board.me.rank, of: board.rows.length }
         : null
 
-      const model = weekDigestModel(rows || [], nowMs, { leagueFinish })
+      const model = weekDigestModel(rows || [], nowMs, { leagueFinish }, loadZone)
       if (!model.hasContent) return null // never show an empty recap
       if (await hasSeenWeekDigest(model.weekKey)) return null // once per ISO week
       return model
@@ -254,7 +264,7 @@ export default function Home() {
       setTotalRules(safeTotal)
       // Weeks-based streak (consecutive weeks with >=1 session) — this is the
       // habit metric the hero leads with, and it stays visible even at zero.
-      setStreak(weeklyStreak(streakRows || []))
+      setStreak(weeklyStreak(streakRows || [], {}, loadZone))
       setLatestKudos((kudosRows && kudosRows[0]) || null)
 
       // Await the teasers (kicked off above, concurrent with this batch) and set
@@ -273,8 +283,14 @@ export default function Home() {
     } finally {
       loadingRef.current = false
       setLoading(false)
+      if (zoneRef.current !== loadZone) loadRef.current?.()
     }
-  }, [contact?.id])
+  }, [contact?.id, tz])
+
+  useEffect(() => {
+    zoneRef.current = tz
+    loadRef.current = load
+  }, [tz, load])
 
   useFocusEffect(
     useCallback(() => {
@@ -313,8 +329,8 @@ export default function Home() {
 
   // "What's next" — one best-effort prompt, picked from richest to weakest.
   const whatsNext = useMemo(
-    () => pickWhatsNext({ tierStatus, teaserChallenge, sessions, streak }),
-    [tierStatus, teaserChallenge, sessions, streak],
+    () => pickWhatsNext({ tierStatus, teaserChallenge, sessions, streak, tz }),
+    [tierStatus, teaserChallenge, sessions, streak, tz],
   )
 
   // First-6-weeks journey card props — null means "render nothing" (not a new
@@ -332,11 +348,11 @@ export default function Home() {
 
   // This week's sessions as pips, each in that session's hardest-zone colour.
   const weekPips = useMemo(() => {
-    const weekStart = dublinWeekStartMs(Date.now())
+    const weekStart = thisWeekStartMs(Date.now(), tz)
     return (accentSessions || [])
       .filter((s) => Date.parse(s.started_at) >= weekStart)
       .map((s) => zoneColorDark(hardestZone(s.zones_seconds)) || PEARL)
-  }, [accentSessions])
+  }, [accentSessions, tz])
 
   // Dismiss the weekly digest: mark the ISO week seen (so it never re-appears
   // this week) and hide it now. Best-effort persist; the local hide is immediate.
@@ -399,7 +415,7 @@ export default function Home() {
         )}
 
         {/* Weekly digest — dismissible "Your week" recap of the week that just
-            ended, at the start of a new Dublin week. NOT a takeover (weekly
+            ended, at the start of a new studio week. NOT a takeover (weekly
             cadence is too frequent); hidden mid-class so it never competes with
             the live banner. Sits above the tier hero as the "close the loop"
             moment when the member opens the app on a fresh week. */}
@@ -485,7 +501,7 @@ export default function Home() {
 // Returns one prompt object { icon, title, subtitle, onPress? } or null.
 // Order: soonest-ending active challenge → points-to-monthly-target →
 // "you usually train <weekday>" → generic. Exported for unit reuse if needed.
-export function pickWhatsNext({ tierStatus, teaserChallenge, sessions, streak }, nowMs = Date.now()) {
+export function pickWhatsNext({ tierStatus, teaserChallenge, sessions, streak, tz }, nowMs = Date.now()) {
   // a) A challenge ending soon (within 10 days).
   if (teaserChallenge?.endsOn) {
     const daysLeft = daysUntil(teaserChallenge.endsOn, nowMs)
@@ -510,7 +526,7 @@ export function pickWhatsNext({ tierStatus, teaserChallenge, sessions, streak },
   }
 
   // c) "You usually train <weekday>" — the member's most-frequent training day.
-  const usualDay = mostFrequentWeekday(sessions)
+  const usualDay = mostFrequentWeekday(sessions, tz)
   if (usualDay) {
     return {
       icon: 'calendar-outline',
@@ -537,25 +553,6 @@ function daysUntil(isoDate, nowMs) {
   if (!Number.isFinite(t)) return null
   const today = Date.parse(`${new Date(nowMs).toISOString().slice(0, 10)}T00:00:00Z`)
   return Math.round((t - today) / (24 * 3600 * 1000))
-}
-
-function mostFrequentWeekday(sessions) {
-  const counts = new Array(7).fill(0)
-  let any = false
-  for (const s of sessions || []) {
-    const iso = s.started_at || s.ended_at
-    if (!iso) continue
-    // Dublin calendar day → weekday name.
-    const [y, m, d] = dublinDateKey(iso).split('-').map(Number)
-    const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay()
-    counts[dow]++
-    any = true
-  }
-  if (!any) return null
-  let bestIdx = 0
-  for (let i = 1; i < 7; i++) if (counts[i] > counts[bestIdx]) bestIdx = i
-  if (counts[bestIdx] < 2) return null // need a real pattern
-  return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][bestIdx]
 }
 
 // ── Live-now banner ──────────────────────────────────────────────
@@ -742,6 +739,7 @@ function WhatsNextCard({ prompt, accent = PEARL, onPress }) {
 // ── Coach kudos (most recent shout-out) ──────────────────────────
 
 function CoachKudosCard({ kudos, accent = PEARL, onPress }) {
+  const tz = useMemberZone()
   const v = toKudosView(kudos)
   const unseen = isUnseen(kudos)
   return (
@@ -780,7 +778,7 @@ function CoachKudosCard({ kudos, accent = PEARL, onPress }) {
               <Text className="text-xs font-body-medium text-chalk-2 flex-1" numberOfLines={1}>
                 — {v.senderName}
               </Text>
-              <Text className="text-xs text-chalk-3">{kudosRelativeTime(v.createdAt)}</Text>
+              <Text className="text-xs text-chalk-3">{kudosRelativeTime(v.createdAt, Date.now(), tz)}</Text>
             </View>
           </View>
         </View>
@@ -791,7 +789,7 @@ function CoachKudosCard({ kudos, accent = PEARL, onPress }) {
 
 // ── Weekly digest ("Your week") ──────────────────────────────────
 //
-// Dismissible in-app recap of the LAST completed Dublin week: classes, UN1T
+// Dismissible in-app recap of the LAST completed studio week: classes, UN1T
 // Points, Burn count, and (if the member has friends) their friends-league
 // finish, plus a light nudge into the new week. Iron card with an earned-
 // accent header and a dismiss (X). Pure presentational — the model + seen-gate
@@ -878,9 +876,10 @@ function WeekStat({ value, label, dim = false }) {
 // ── 4. Latest session ────────────────────────────────────────────
 
 function LatestSessionCard({ session, onPress }) {
+  const tz = useMemberZone()
   const dur = durationMinutes(session.started_at, session.ended_at)
   const label = sourceLabel(session.source)
-  const date = sessionDate(session.started_at)
+  const date = sessionDate(session.started_at, tz)
   const inProgress = !session.ended_at
   const burn = !inProgress && isBurn(session.zones_seconds)
 
@@ -964,9 +963,10 @@ function RecentSessionsCard({ sessions, onSessionPress, onSeeAll }) {
 }
 
 function SessionItem({ session, onPress }) {
+  const tz = useMemberZone()
   const dur = durationMinutes(session.started_at, session.ended_at)
   const label = sourceLabel(session.source)
-  const date = sessionDate(session.started_at)
+  const date = sessionDate(session.started_at, tz)
 
   return (
     <Pressable
@@ -1083,6 +1083,7 @@ function lucideToIonicon(iconName) {
 function GoalsCard({ goals, sessions }) {
   // W1.S5 — goal labels name the product ("{Brand} Points this week").
   const { shortName } = useMemberBrand()
+  const tz = useMemberZone()
   const defs = goalDefs(shortName)
   const router = useRouter()
   const hasGoals = (goals || []).length > 0
@@ -1105,7 +1106,7 @@ function GoalsCard({ goals, sessions }) {
         <View className="mt-3 gap-3">
           {goals.slice(0, 2).map((g) => {
             const def = defs[g.kind]
-            const p = computeProgress(g, sessions)
+            const p = computeProgress(g, sessions, new Date(), tz)
             return (
               <GoalRow key={g.id} label={def?.label || g.kind} progress={p} />
             )

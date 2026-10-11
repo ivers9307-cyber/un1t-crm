@@ -15,7 +15,8 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { fetchPersonalDashboard } from '../../lib/dashboard-api'
 // ROSTER-FIX.7h — "today" on a roster is the STUDIO's day. See dates.js.
-import { dublinTodayIso } from '../../lib/dates'
+import { studioTodayIso } from '../../lib/dates'
+import { useStudioZone } from '../../lib/use-studio-zone'
 import { pickLocationColor } from 'shared/location-colors'
 import { buildMonthMatrix, shiftDurationHours, effectiveShiftStart, effectiveShiftEnd } from 'shared/roster-month'
 import { groupTeamShiftsByCoach, coachSpanLabel } from 'shared/team-today'
@@ -78,12 +79,13 @@ function isoDate(d) {
   return `${y}-${m}-${day}`
 }
 
-function buildWeek(weekStartIso, shifts) {
+function buildWeek(weekStartIso, shifts, tz) {
   const start = new Date(weekStartIso + 'T00:00:00')
-  // ROSTER-FIX.7h — the highlighted day is Dublin's, not the handset's.
+  // ROSTER-FIX.7h — the highlighted day is the studio's, not the handset's.
   // isoDate(new Date()) asked the device, so a phone left on a US timezone put
-  // the "today" ring on the wrong column of the Home hero.
-  const todayIso = dublinTodayIso()
+  // the "today" ring on the wrong column of the Home hero. TZ.14: the active
+  // studio's zone, no longer a hard-coded Dublin.
+  const todayIso = studioTodayIso(tz)
   const days = []
   for (let i = 0; i < 7; i++) {
     const d = new Date(start)
@@ -118,7 +120,8 @@ function rangeLabelFor(startIso, endIso) {
 // location chip; only shown for staff assigned to 2+ locations so
 // single-location users don't see redundant chrome.
 function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftPress }) {
-  const days = buildWeek(startIso, shifts || [])
+  const tz = useStudioZone()
+  const days = buildWeek(startIso, shifts || [], tz)
   return (
     <View className="bg-un1t-surface border border-un1t-border rounded-2xl mb-3 overflow-hidden">
       <View className="px-4 pt-3 pb-2 flex-row items-baseline justify-between">
@@ -409,6 +412,8 @@ function RosterToggle({ value, onChange }) {
 
 export default function PersonalDashboard({ refreshKey }) {
   const { profile, activeLocation, locations } = useAuth()
+  // TZ.14 — "today" on the active studio's calendar (the server's day, TZ.8a).
+  const tz = useStudioZone()
   // AVAIL.3 — the Today shortcut: "Request time off", or My availability for a contractor.
   const requestEntry = leaveRequestEntry(profile?.employment_type)
   const router = useRouter()
@@ -510,10 +515,10 @@ export default function PersonalDashboard({ refreshKey }) {
   const loadOnToday = useCallback(async () => {
     const locationId = activeLocation?.id
     if (!locationId || !profile) { setOnToday([]); return }
-    // ROSTER-FIX.7h — Dublin's day: shift_date is Dublin wall-clock, so a
+    // ROSTER-FIX.7h — the studio's day: shift_date is studio wall-clock, so a
     // device-day query asked "On with you today" about the wrong date and could
     // show an empty rota to a coach who had colleagues in.
-    const today = dublinTodayIso()
+    const today = studioTodayIso(tz)
     try {
       const res = await getTeamShifts({ locationId, startDate: today, endDate: today })
       const others = (res.success ? (res.data || []) : [])
@@ -522,7 +527,7 @@ export default function PersonalDashboard({ refreshKey }) {
     } catch {
       setOnToday([])
     }
-  }, [activeLocation, profile])
+  }, [activeLocation, profile, tz])
 
   useEffect(() => {
     setLoading(true)
@@ -779,10 +784,10 @@ export default function PersonalDashboard({ refreshKey }) {
   // missed. This hand-rolled formatter asked the HANDSET for today, and
   // buildMonthMatrix turns it into both `isToday` and `isPast` — so a phone
   // left on a US timezone rang the wrong cell of the month roster AND shaded
-  // the wrong days as gone. shift_date is Dublin wall-clock like everywhere
-  // else, so it goes through dublinTodayIso() with the hero ring and the
+  // the wrong days as gone. shift_date is studio wall-clock like everywhere
+  // else, so it goes through studioTodayIso() with the hero ring and the
   // "On with you today" query.
-  const todayIso = dublinTodayIso()
+  const todayIso = studioTodayIso(tz)
   // COVERLOOP.2 — join my posted swaps onto the roster rows so a shift with an
   // open swap carries open_swap_status (the chip, and the no-second-post guard).
   const monthMatrix = (monthShifts && monthStartIso && monthEndIso)

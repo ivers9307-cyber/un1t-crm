@@ -23,6 +23,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { productName, pointsUnit } from 'shared/brand-name'
+import { canonicalZone } from 'shared/zoned-time'
 import { api } from './api'
 
 const STORAGE_PREFIX = 'brand:'
@@ -34,6 +35,9 @@ export const EMPTY_BRAND = Object.freeze({
   logoUrl: null,
   productNames: Object.freeze({ points: productName('', 'points'), hr: productName('', 'hr') }),
   pointsUnit: pointsUnit(''),
+  // TZ.14 — the studio's IANA zone, or null when unknown (older server, failed
+  // load). Consumers resolve null to the platform default (resolveZone).
+  timezone: null,
 })
 
 /** @param {string} locationId */
@@ -46,7 +50,7 @@ export function brandStorageKey(locationId) {
  * product names from the short brand when the route omits them (a phone
  * ahead of its server), the same way the route builds them.
  * @param {object|null} data  /api/public/branding `data`
- * @returns {{ companyName: string, shortName: string, logoUrl: string|null, productNames: { points: string, hr: string }, pointsUnit: string }}
+ * @returns {{ companyName: string, shortName: string, logoUrl: string|null, productNames: { points: string, hr: string }, pointsUnit: string, timezone: string|null }}
  */
 export function brandFromApi(data) {
   if (!data || typeof data !== 'object') return EMPTY_BRAND
@@ -62,6 +66,9 @@ export function brandFromApi(data) {
       hr: given.hr || productName(shortName, 'hr'),
     },
     pointsUnit: data.points_unit || pointsUnit(shortName),
+    // TZ.14 — the studio's zone (the member's clock, D7). A valid IANA name or
+    // null: an older server omits it, and a phone never trusts a raw string.
+    timezone: (typeof data.timezone === 'string' && canonicalZone(data.timezone)) || null,
   }
 }
 
@@ -92,6 +99,7 @@ async function readStored(locationId) {
       logo_url: parsed.logoUrl,
       product_names: parsed.productNames,
       points_unit: parsed.pointsUnit,
+      timezone: parsed.timezone,
     }) : null
   } catch {
     // Storage is a convenience, never a dependency.

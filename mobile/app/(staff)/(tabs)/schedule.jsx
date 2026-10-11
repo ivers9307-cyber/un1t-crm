@@ -22,8 +22,9 @@ import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
 import {
   weekStart, addDays, daysOfWeek, isoDate, parseIsoDate, DAY_LABELS,
-  shortDate, timeRange, hoursBetween, dublinTodayIso,
+  shortDate, timeRange, hoursBetween, studioTodayIso,
 } from '../../../lib/dates'
+import { zoneOfLocationRow } from '../../../lib/studio-zone'
 import {
   getMyShifts, getTeamShifts, getMyTimeOff, createSwapRequest, adjustShiftAssignment,
   cancelTimeOffRequest,
@@ -708,7 +709,7 @@ export default function Schedule() {
               anchor={anchor}
               shiftsByDate={shiftsByDate}
               timeOff={view === 'team' ? [] : timeOff}
-              todayIso={dublinTodayIso()}
+              todayIso={studioTodayIso(zoneOfLocationRow(activeLocation))}
               canAdjust={canAdjust}
               openAdjust={setAdjustingShift}
               requestSwap={requestSwapForShift}
