@@ -24,6 +24,8 @@ import ContactComposer from '@/components/ContactComposer'
 import ContactTimeline from '@/components/contact/ContactTimeline'
 import { mergeTimeline, deriveNeedsAttention } from '@/lib/contact-view'
 import { nextBookedClass } from '@/lib/pipeline-classifier'
+import { nextClassLabel } from '@/components/contact/format'
+import { useViewerZone } from '@/lib/use-viewer-zone'
 
 const TONE_CHIP = {
   danger: 'bg-red-500/10 text-red-700',
@@ -69,7 +71,10 @@ function DetailRow({ label, value, href = null }) {
 // C146 TASKSNEEDCONTACTS.1 — `canTask` comes down from the pipeline page
 // through KanbanBoard (canWriteActivitiesAt at the board's studio); false drops
 // the Task item. Defaults true, like DealCard's.
-export default function ContactDrawer({ contactId, columnContactIds = [], locationId, onNavigate, onClose, manual = false, canTask = true }) {
+// TZ.16 (D3 = A) — `timezone` is the board's studio zone (the chip matches the
+// card it was opened from).
+export default function ContactDrawer({ contactId, columnContactIds = [], locationId, timezone = null, onNavigate, onClose, manual = false, canTask = true }) {
+  const viewerZone = useViewerZone()
   const [bundle, setBundle] = useState(null)
   const [error, setError] = useState(null)
 
@@ -209,7 +214,7 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
                   ))}
                   {funnel && nextClassAt && (
                     <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700">
-                      Next: {new Date(nextClassAt).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' })}
+                      Next: {nextClassLabel(nextClassAt, timezone, viewerZone)}
                     </span>
                   )}
                   {funnel && contact.trial_credits_remaining != null && (

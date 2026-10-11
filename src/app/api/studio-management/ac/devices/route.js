@@ -17,6 +17,7 @@
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { resolveAcAllowlist, filterAcDevices } from '@shared/permissions'
+import { displayZoneFor } from '@/lib/display-zone'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -61,6 +62,9 @@ export const GET = withAuth(
       visible = filterAcDevices(resolved, visible)
     }
 
-    return NextResponse.json({ success: true, data: visible })
+    // TZ.16 — the studio's zone, so the panel can say "as of HH:MM" on the
+    // studio's clock (display only: an unreadable zone falls back, logged).
+    const timezone = await displayZoneFor(db, user, locationId, 'ac')
+    return NextResponse.json({ success: true, data: visible, timezone })
   }
 )

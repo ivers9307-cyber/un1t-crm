@@ -53,7 +53,7 @@ function sortColumn(deals) {
 // FEAT-PIPELINE-LAZY.1 — the server ships only the first page per column plus a
 // per-stage total count; each column lazily fetches more via /api/pipeline/deals
 // so the client never receives all (≤10k) open deals at once.
-export default function KanbanBoard({ initialStages, initialDeals, stageCounts = {}, view = 'active', manual = false, locationId, canTask = true }) {
+export default function KanbanBoard({ initialStages, initialDeals, stageCounts = {}, view = 'active', manual = false, locationId, timezone = null, canTask = true }) {
   // Accumulated deals per column, seeded from the server's first page.
   const [columnDeals, setColumnDeals] = useState(() => {
     const m = {}
@@ -232,7 +232,7 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
                     onDragEnd={manual ? () => { setDragDealId(null); setDropStageId(null) } : undefined}
                     className={manual ? 'cursor-grab active:cursor-grabbing' : undefined}
                   >
-                    <DealCard deal={deal} locationId={locationId} stageName={stage.name} onOpenContact={openContact} manual={manual} canTask={canTask} />
+                    <DealCard deal={deal} locationId={locationId} timezone={timezone} stageName={stage.name} onOpenContact={openContact} manual={manual} canTask={canTask} />
                   </div>
                 ))}
                 {hasMore && (
@@ -255,6 +255,7 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
             contactId={openContactId}
             columnContactIds={columnContactIds}
             locationId={locationId}
+            timezone={timezone}
             // WAITLIST.6 — the drawer's Cold item is derived-board-only, and
             // the board it opened from is the honest answer to "which board?"
             // (a card can only be dragged out of the board it is drawn on).

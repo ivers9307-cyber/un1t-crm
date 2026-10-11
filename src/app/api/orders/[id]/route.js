@@ -31,6 +31,7 @@ import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAt
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { displayZoneFor } from '@/lib/display-zone'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -132,10 +133,15 @@ export async function GET(_request, props) {
     if (car) source = { kind: 'car_deposit', car }
   }
 
+  // TZ.16 — the order's studio zone, so the page shows every stamp on that
+  // studio's clock (display only: an unreadable zone falls back, logged).
+  const timezone = await displayZoneFor(db, user, order.location_id, 'orders')
+
   return NextResponse.json({
     success: true,
     data: {
       order,
+      timezone,
       retry_chain: chain || [],
       events: events || [],
       source,

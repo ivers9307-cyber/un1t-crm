@@ -28,3 +28,16 @@ export async function displayZoneFor(db, user, locationId, module) {
     return DEFAULT_TZ
   }
 }
+
+/**
+ * TZ.16 (D3 = A) — the viewer's zone on a SERVER render, for formatRecordTime's
+ * suffix rule (src/lib/record-time.js). The server cannot see the browser's
+ * zone, so it uses the viewer's active studio, which is where staff work: a
+ * Dublin manager on a Dublin record sees no suffix, on a New York record "EST".
+ * No active location → null (unknown viewer: no suffix, today's text).
+ * @param {{ activeLocation?: { id?: string, timezone?: string|null } }|null|undefined} user
+ * @returns {string|null}
+ */
+export function viewerZoneOf(user) {
+  return user?.activeLocation ? zoneOfLocation(user.activeLocation) : null
+}

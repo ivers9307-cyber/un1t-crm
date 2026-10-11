@@ -26,6 +26,7 @@ import {
   fileForwardedAttachments,
 } from '@/lib/email-forward-server'
 import { MAX_OUTBOUND_ATTACHMENTS } from '@/lib/email-outbound-attachments'
+import { displayZoneFor } from '@/lib/display-zone'
 import { loadConversationForUser, loadOwnAddresses, conversationMergedAway , loadSignatureContext } from '../../_conversation'
 
 // POST /api/email/conversations/[id]/forward — pass one message on the conversation to
@@ -278,10 +279,13 @@ export async function POST(request, props) {
   // null → the plain in-note path below, unchanged.
   const sigCtx = await loadSignatureContext(db, conversation.location_id)
   const richSig = resolveSendSignature(user, sigCtx)
-  const unsignedText = buildForwardText({ note, message: source })
+  // TZ.16 — the quoted Date line on the mailbox studio's clock (display only:
+  // an unreadable zone falls back to the default, logged, never blocks a send).
+  const zone = await displayZoneFor(db, user, conversation.location_id, 'mail')
+  const unsignedText = buildForwardText({ note, message: source, zone })
   const outboundText = richSig
     ? appendSignature(unsignedText, richSig.text)
-    : buildForwardText({ note: appendSignature(note, user.email_signature), message: source })
+    : buildForwardText({ note: appendSignature(note, user.email_signature), message: source, zone })
   const subject = forwardSubject(source.subject || conversation.subject)
 
   // No threading headers, deliberately. In-Reply-To pointing at the member's

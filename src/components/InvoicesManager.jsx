@@ -22,6 +22,8 @@ import {
 import { recentMonthOptions, defaultMonthKey, periodLabel } from '@/lib/contractor-invoices'
 import { contractorInvoiceLifecycle } from '@shared/contractor-invoice-review'
 import { hasPermission } from '@/lib/permissions'
+import { formatRecordTime } from '@/lib/record-time'
+import { useViewerZone } from '@/lib/use-viewer-zone'
 
 // Approver = master/owner by default, OR anyone explicitly granted the
 // approvals_contractor_invoices key. Mirrors the authoritative predicate
@@ -154,6 +156,7 @@ export default function InvoicesManager({ user }) {
         <InvoiceDetailModal
           invoiceId={selectedId}
           reviewerMode={reviewerMode}
+          zone={user?.activeLocation?.timezone || null}
           onClose={() => setSelectedId(null)}
           onChanged={() => { fetchList(); }}
         />
@@ -416,7 +419,7 @@ function StatusLabel({ status, lifecycle }) {
 
 // ── Detail modal ──────────────────────────────────────────────────
 
-function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
+function InvoiceDetailModal({ invoiceId, reviewerMode, zone = null, onClose, onChanged }) {
   const [data, setData] = useState(null)
   const [pdfUrl, setPdfUrl] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -569,6 +572,7 @@ function InvoiceDetailModal({ invoiceId, reviewerMode, onClose, onChanged }) {
                   <ReviewComparison
                     comparison={data.review_comparison}
                     invoiced={Number(data.invoice_amount)}
+                    zone={zone}
                   />
                 )}
                 {reviewerMode && <RosterCheckNotes data={data} />}
@@ -743,10 +747,11 @@ function Row({ label, value, sub, emphasize = false }) {
 // selectReviewComparison(): before approval the live roster; after
 // approval the SNAPSHOT saved at approval ("as approved on <date>"),
 // plus the live roster as a secondary line only when it has drifted.
-function ReviewComparison({ comparison, invoiced }) {
+function ReviewComparison({ comparison, invoiced, zone = null }) {
+  const viewerZone = useViewerZone()
   const { primary, current, snapshot_missing: snapshotMissing } = comparison
   const heading = primary.source === 'snapshot'
-    ? `Schedule vs invoice, as approved on ${formatDay(primary.as_of)}`
+    ? `Schedule vs invoice, as approved on ${formatDay(primary.as_of, zone, viewerZone)}`
     : 'Schedule vs invoice'
   return (
     <div>
@@ -875,9 +880,12 @@ function DiffRow({ comparison }) {
   )
 }
 
-function formatDay(iso) {
+// TZ.16 (D3 = A) — the approval day in the studio's zone (the viewer's active
+// studio, `user.activeLocation.timezone`), abbreviation only when the browser
+// is elsewhere.
+export function formatDay(iso, zone, viewerZone = null) {
   if (!iso) return 'an unknown date'
-  return new Date(iso).toLocaleDateString('en-IE', { dateStyle: 'medium', timeZone: 'Europe/Dublin' })
+  return formatRecordTime(new Date(iso), zone, { dateStyle: 'medium' }, 'en-IE', viewerZone)
 }
 
 function timeAgo(iso) {
