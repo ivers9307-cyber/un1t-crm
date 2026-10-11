@@ -5,6 +5,7 @@
 // auto-reply.js; the webhook owns the trigger.
 
 import { HANDOFF_PREFIX, OPTIONS_PREFIX, SKIP_PREFIX } from './prompt'
+import { DEFAULT_TZ } from '@/lib/location-time'
 
 export const AGENT_MESSAGE_SOURCE = 'agent'
 // W1.S3 — the holding message is a function of the location's brand
@@ -81,15 +82,18 @@ function parseHHMM(s) {
 /**
  * Is `now` within the configured quiet-hours window? Handles overnight
  * ranges (e.g. 21:00 → 07:00). Returns false if config is incomplete.
+ * TZ.5 — the window is read in `quiet.tz` when one is stored, else in the
+ * studio's own zone (it used to fall back to Europe/Dublin for everyone).
  * @param {Date} now
- * @param {{start?:string,end?:string,tz?:string}|null} quiet
+ * @param {{start?:string,end?:string,tz?:string|null}|null} quiet
+ * @param {string} [zone] the location's IANA zone
  */
-export function isWithinQuietHours(now, quiet) {
+export function isWithinQuietHours(now, quiet, zone = DEFAULT_TZ) {
   if (!quiet || !quiet.start || !quiet.end) return false
   const start = parseHHMM(quiet.start)
   const end = parseHHMM(quiet.end)
   if (start == null || end == null || start === end) return false
-  const cur = minutesOfDayInTz(now, quiet.tz || 'Europe/Dublin')
+  const cur = minutesOfDayInTz(now, quiet.tz || zone)
   if (cur == null) return false
   if (start < end) return cur >= start && cur < end      // same-day window
   return cur >= start || cur < end                        // overnight wrap
@@ -105,6 +109,7 @@ export function isWithinQuietHours(now, quiet) {
  * @param {object}      args.message       { type, body }
  * @param {string}      args.senderPhone
  * @param {Date}        [args.now]
+ * @param {string}      [args.zone]    the location's IANA zone (quiet hours, TZ.5)
  */
 // AGENT-REARM.1 — default hours before a handed-off thread auto-releases
 // back to the agent when nobody resolved it. 0/null = never.
@@ -243,7 +248,7 @@ export function warnLiveDespiteTestMode(locationId, settings) {
 // a "sent a photo / voice / attachment" page.
 const IGNORABLE_MESSAGE_TYPES = new Set(['reaction'])
 
-export function shouldAgentReply({ settings, conversation, message, senderPhone, lastOutboundHuman = false, now = new Date() }) {
+export function shouldAgentReply({ settings, conversation, message, senderPhone, lastOutboundHuman = false, now = new Date(), zone = DEFAULT_TZ }) {
   const s = settings || {}
   const { enabled, testMode } = resolveAgentGate(s)
   if (!enabled && !testMode) return { reply: false, reason: 'disabled' }
@@ -284,7 +289,7 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
     }
   }
 
-  if (isWithinQuietHours(now, s.quiet_hours)) {
+  if (isWithinQuietHours(now, s.quiet_hours, zone)) {
     return { reply: false, reason: 'quiet_hours' }
   }
 
