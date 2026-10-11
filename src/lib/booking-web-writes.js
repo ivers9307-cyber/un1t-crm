@@ -1,5 +1,6 @@
 // C134 WEBBOOKINGWRITES.1 — the gate shared by the web booking writes
-// (POST /api/bookings/[id]/status and /skip-reminder).
+// (POST /api/bookings/[id]/status and /skip-reminder, and, per booking, the
+// BOOKINGOUTCOME.1 bulk POST /api/bookings/outcomes via judgeBookingForWebWrite).
 //
 // /bookings and a booking type's page used to write `bookings` through the
 // BROWSER client, so RLS judged the write, and the bookings write policies
@@ -23,6 +24,23 @@ export function bookingsWriteForbiddenAnywhere(user) {
 }
 
 /**
+ * Judge a booking row already in hand ({ location_id, event_types?: { location_id } }).
+ * The rule loadBookingForWebWrite applies after its read, shared with the bulk
+ * outcomes route (POST /api/bookings/outcomes), which reads many at once.
+ * Returns { refused: 'not_found' | 'forbidden' } or { locationId } to act at.
+ * A missing row, a row with no studio, and a studio the user is not a member
+ * of are all 'not_found' (ids are not enumerable).
+ */
+export function judgeBookingForWebWrite(user, booking) {
+  const locationId = booking?.location_id || booking?.event_types?.location_id || null
+  // No studio to judge at: refused like a missing row (fail closed).
+  if (!booking || !locationId) return { refused: 'not_found' }
+  if (assertLocationAccessOr404(user, locationId)) return { refused: 'not_found' }
+  if (!hasPermissionForLocation(user, locationId, 'bookings')) return { refused: 'forbidden' }
+  return { locationId }
+}
+
+/**
  * Read the booking and decide. Returns { response } to send as-is, or
  * { booking, locationId } to act on.
  *
@@ -38,11 +56,8 @@ export async function loadBookingForWebWrite(db, user, id) {
   if (error) {
     return { response: NextResponse.json({ success: false, error: 'Could not read the booking' }, { status: 500 }) }
   }
-  const locationId = booking?.location_id || booking?.event_types?.location_id || null
-  // No studio to judge at: refused like a missing row (fail closed).
-  if (!booking || !locationId) return { response: notFound() }
-  const guard = assertLocationAccessOr404(user, locationId)
-  if (guard) return { response: guard }
-  if (!hasPermissionForLocation(user, locationId, 'bookings')) return { response: forbidden() }
-  return { booking, locationId }
+  const judged = judgeBookingForWebWrite(user, booking)
+  if (judged.refused === 'not_found') return { response: notFound() }
+  if (judged.refused) return { response: forbidden() }
+  return { booking, locationId: judged.locationId }
 }

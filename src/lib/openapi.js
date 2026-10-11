@@ -542,6 +542,37 @@ registry.registerPath({
     500: bookingWriteErr('The booking could not be read or written'),
   },
 })
+// BOOKINGOUTCOME.1 — "Mark all as showed" on /bookings?filter=needs_outcome.
+registry.registerPath({
+  method: 'post',
+  path: '/api/bookings/outcomes',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Record an outcome (showed or no-show) on many bookings at once',
+  description: "Each booking is judged like POST /api/bookings/{id}/status: membership at its studio (its location_id, else its booking type's; a miss is skipped as not_found) and the web bookings permission there (forbidden). Only a booking still 'confirmed' whose end (booking_date + end_time, a wall clock in its studio's zone) has passed is accepted; the rest are skipped with a reason (not_confirmed, not_ended, bad_time). The write is one compare-and-swap on status 'confirmed'; an accepted booking that changed underneath is skipped as changed.",
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      booking_ids: z.array(uuidLike).min(1).max(200),
+      status: z.enum(['completed', 'no_show']),
+    }) } } },
+  },
+  responses: {
+    200: { description: 'Per-id results', content: { 'application/json': { schema: z.object({
+      success: z.literal(true),
+      data: z.object({
+        updated: z.array(uuidLike),
+        skipped: z.array(z.object({
+          id: uuidLike,
+          reason: z.enum(['not_found', 'forbidden', 'not_confirmed', 'not_ended', 'bad_time', 'changed']),
+        })),
+      }),
+    }) } } },
+    400: bookingWriteErr('Validation failed (1 to 200 ids; status completed or no_show)'),
+    401: bookingWriteErr('Unauthorized'),
+    403: bookingWriteErr('No web bookings permission at any studio'),
+    500: bookingWriteErr('The bookings or a studio time zone could not be read, or the write failed'),
+  },
+})
 registry.registerPath({
   method: 'post',
   path: '/api/bookings/{id}/skip-reminder',
