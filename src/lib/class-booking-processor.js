@@ -16,12 +16,22 @@ import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/a
 import { sendCtwaConversion, sendWebsiteConversion } from '@/lib/meta-capi'
 import { isManualEventId } from '@/lib/manual-timetable'
 import { logWarn } from '@/lib/log'
+import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 
-const labelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
-function classLabel(startsAt) {
+// TZ.7: the class's start (an instant, from Glofox or the studio's timetable)
+// labelled on the STUDIO's clock, for the approval card and the customer's
+// WhatsApp confirmation. Same Intl options as before, so a Dublin studio's
+// text is byte-identical.
+const LABEL_OPTS = Object.freeze({ weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
+export function classLabel(startsAt, zone = DEFAULT_TZ) {
   if (!startsAt) return 'your class'
   const d = new Date(startsAt)
-  return isNaN(d.getTime()) ? 'your class' : labelFmt.format(d)
+  return isNaN(d.getTime()) ? 'your class' : formatInZone(d, zone, LABEL_OPTS, 'en-IE')
+}
+// Display only: an unreadable zone labels in DEFAULT_TZ rather than failing a
+// booking or a review card over a label.
+function requestZone(db, request) {
+  return getLocationZone(db, request?.location_id).catch(() => DEFAULT_TZ)
 }
 const MAX_ATTEMPTS = CLASS_BOOKING_MAX_ATTEMPTS // one constant with the queue and the card copy
 
@@ -70,6 +80,7 @@ async function readCredits(creds, memberId) {
 // rows stuck in 'processing' past the attempt cap.
 export async function routeToReview(db, request, reason, { personContactIds = null, executingContactId = null, electedMemberId = null, creditUnreadAccounts = null, trialGrant = null } = {}) {
   let approvalId = null
+  const zone = await requestZone(db, request)
   // A row that ALREADY names a card keeps it while that card is still pending
   // — never file a second one for the same booking. The person-wide lookup
   // below would usually find it too, but only by (contact, event), so a card
@@ -126,7 +137,7 @@ export async function routeToReview(db, request, reason, { personContactIds = nu
       const { data: amr } = await db.from('agent_membership_requests').insert({
         location_id: request.location_id, contact_id: request.contact_id, kind: 'class_booking', status: 'pending',
         details: {
-          event_id: request.glofox_event_id, class_name: request.class_name, class_time: classLabel(request.starts_at),
+          event_id: request.glofox_event_id, class_name: request.class_name, class_time: classLabel(request.starts_at, zone),
           // ISO start for the mobile queue's countdown chip (class_time is a label).
           starts_at: request.starts_at || null,
           mode: 'draft', source: 'start_funnel', reason,
@@ -183,7 +194,7 @@ export async function routeToReview(db, request, reason, { personContactIds = nu
       locationId: request.location_id,
       kind: 'class_booking',
       customerName: request.customer_name,
-      summary: [request.class_name, classLabel(request.starts_at), `needs review: ${reason}`].filter(Boolean).join(' · '),
+      summary: [request.class_name, classLabel(request.starts_at, zone), `needs review: ${reason}`].filter(Boolean).join(' · '),
     })
   } catch (e) { logWarn('cbp', 'approval notify failed', { err: e }) }
   return { outcome: 'needs_review', detail: reason }
@@ -575,7 +586,8 @@ export async function processClassBookingRequest(db, request) {
   // the real booking (null on the already-booked re-run path).
   await setStatus(db, request.id, { status: 'booked', last_error: null, glofox_booking_id: bookingId })
   try {
-    await maybeSendBookingWhatsappConfirm({ db, locationId: request.location_id, contact, templateName: CLASS_CONFIRM_TEMPLATE, bodyParams: [firstName, request.class_name || 'your class', classLabel(request.starts_at)] })
+    const zone = await requestZone(db, request)
+    await maybeSendBookingWhatsappConfirm({ db, locationId: request.location_id, contact, templateName: CLASS_CONFIRM_TEMPLATE, bodyParams: [firstName, request.class_name || 'your class', classLabel(request.starts_at, zone)] })
   } catch (e) { logWarn('cbp', 'class confirm failed', { err: e }) }
   // CTWA attribution: a confirmed booking is the conversion the ad campaign
   // optimises on. No-ops unless the contact carries a ctwa_clid and the

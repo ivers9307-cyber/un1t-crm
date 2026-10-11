@@ -14,15 +14,17 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 // the operator side; the public surface is just /book/[slug] with
 // its API at /api/public/bookings/[slug]).
 //
-// TIMEZONE NOTES (incident 2026-05-11): all date comparisons in
-// this route are in Europe/Dublin local time, NOT server (UTC) time.
-//   - "today" / "max date" use dublinTodayStr() so a customer
-//     booking just after Dublin midnight (= UTC 23:00 prev day)
-//     doesn't see yesterday treated as today.
-//   - The current-day past-time filter uses dublinNowMinutes()
+// TIMEZONE NOTES (incident 2026-05-11; TZ.7): all date comparisons in
+// this route are in the STUDIO's local time (the event type's
+// locations.timezone; Europe/Dublin for every UN1T studio), NOT server
+// (UTC) time.
+//   - "today" / "max date" use todayStrIn(zone) so a customer
+//     booking just after local midnight (= UTC 23:00 prev day in
+//     Irish summer time) doesn't see yesterday treated as today.
+//   - The current-day past-time filter uses nowMinutesIn(zone)
 //     because slot.start strings in availability JSON are stored
-//     as Dublin local times. Comparing them to UTC clock time
-//     would (in BST) leak slots that are already past in Dublin.
+//     as studio-local times. Comparing them to UTC clock time
+//     would (in BST) leak slots that are already past locally.
 //   - The day-of-week lookup parses the input date string as UTC
 //     midnight + getUTCDay() so the weekday is stable regardless
 //     of where the route runs (Vercel UTC or local dev machine).
@@ -50,7 +52,7 @@ export async function GET(request, props) {
 
   // Get event type
   const { data: event, error: eventErr } = await db.from('event_types')
-    .select('id, duration_minutes, availability, buffer_minutes, max_advance_days')
+    .select('id, duration_minutes, availability, buffer_minutes, max_advance_days, location_id, locations:location_id ( timezone )')
     .eq('slug', params.slug)
     .eq('active', true)
     .single()
@@ -63,7 +65,7 @@ export async function GET(request, props) {
   // generation, booked/blocked subtraction, today's past-time filter)
   // was extracted verbatim to src/lib/booking-slots.js so the customer
   // agent's consultation tools share the exact logic. Behaviour here
-  // is unchanged; see the lib for the Dublin-time incident notes.
+  // is unchanged; see the lib for the local-time incident notes.
   const available = await computeAvailableSlots(db, event, date)
 
   return NextResponse.json({ success: true, data: { date, slots: available } })

@@ -22,13 +22,14 @@ import { sendTransactionalEmail, getLocationInboxReplyTo } from '@/lib/postmark'
 import { transactionalEmailSuppression, loadTransactionalConsent } from '@/lib/transactional-consent'
 import { logWarn } from '@/lib/log'
 import { getLocationBranding } from '@/lib/location-branding'
+import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 
 /**
  * Email the customer that staff have booked them in.
  * @returns {Promise<{ sent: boolean, channel: 'email', reason?: string }>}
  *   reasons: no_email, email_blocked, consent_unreadable, send_error
  */
-export async function sendManualBookingConfirmEmail(db, { locationId, contact, className, startsAt, blocks, studioName, address, requestId = null }) {
+export async function sendManualBookingConfirmEmail(db, { locationId, contact, className, startsAt, blocks, studioName, address, zone = null, requestId = null }) {
   const email = typeof contact?.email === 'string' ? contact.email.trim() : ''
   if (!email) return { sent: false, channel: 'email', reason: 'no_email' }
   // The gate reads preferences the caller's select may not carry; load them.
@@ -46,10 +47,14 @@ export async function sendManualBookingConfirmEmail(db, { locationId, contact, c
     const branding = await getLocationBranding(db, locationId)
     studio = branding.locationName || branding.companyName || ''
   }
+  // TZ.7: {class_time} on the studio's clock. The caller passes the zone of
+  // the location row it already read; otherwise read it. Display only, so an
+  // unreadable zone labels in DEFAULT_TZ rather than losing the email.
+  const tz = zone || await getLocationZone(db, locationId).catch(() => DEFAULT_TZ)
   const vars = {
     first_name: contact.first_name || (contact.name ? String(contact.name).split(' ')[0] : ''),
     class_name: className || 'your class',
-    class_time: formatClassTime(startsAt),
+    class_time: formatClassTime(startsAt, tz),
     studio_name: studio,
     address: address || '',
   }

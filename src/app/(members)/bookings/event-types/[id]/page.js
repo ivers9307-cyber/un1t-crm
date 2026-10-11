@@ -4,7 +4,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { redirect } from 'next/navigation'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import Link from 'next/link'
 import { ArrowLeft, Edit } from 'lucide-react'
 import EventActions from '@/components/EventActions'
@@ -50,7 +50,10 @@ export default async function BookingTypeDetailPage(props) {
     .order('start_time', { ascending: true })
   const bookings = bookingRows || []
 
-  const upcoming = bookings.filter(b => b.status === 'confirmed' && b.booking_date >= dublinTodayStr())
+  // TZ.7: booking_date is the booking type's studio's calendar day. Display
+  // only: an unreadable zone splits on the default zone's day.
+  const today = todayStrIn(await getLocationZone(db, event.location_id).catch(() => DEFAULT_TZ))
+  const upcoming = bookings.filter(b => b.status === 'confirmed' && b.booking_date >= today)
 
   // ROLEUI.1 — Edit and Delete show exactly when /api/bookings/event-types/[id]
   // would act: a master, or MANAGER_ROLES at THIS booking type's location.
