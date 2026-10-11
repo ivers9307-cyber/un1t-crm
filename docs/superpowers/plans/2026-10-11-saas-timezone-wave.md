@@ -929,7 +929,9 @@ The last assertion's number is set to the generated count in this PR. Every swee
 
 - [ ] **Step 6:** `npx vitest run --maxWorkers=2 tests/guardrails-rules.test.js tests/dublin-zone-baseline.test.js && npm run check:guardrails` → PASS. PR ritual. Changelog: `TZ.18a — guardrail bans new 'Europe/Dublin' literals and dublin-time imports; a baseline of today's files only shrinks`.
 
-**How every sweep uses it (Step 1 of TZ.4–TZ.17):** delete the task's files from `dublin-zone-baseline.json`, lower the count, and run `npm run check:guardrails`. It FAILS and lists exactly the lines the appendix section names. That failure, plus the two tests in "The two tests every sweep task writes first", is the test-first step. Class-c sites in those files change `'Europe/Dublin'` to `PLATFORM_TZ` and class-d sites to the provider's zone. Neither changes behaviour.
+**As built (TZ.18a, supersedes Steps 3-5 where they differ):** the baseline is `eslint-rules/dublin-zone-baseline.txt` (one path per line, sorted, `#` header; 210 files), not JSON, so parallel sweeps that delete different lines never conflict. There is no count to lower: shrink-only is enforced by `eslint-rules/dublin-zone-baseline.tz18a-snapshot.txt` (frozen, never edited; the baseline must stay a subset of it). The gate is `scripts/check-dublin-zone.mjs`, chained onto `npm run check:guardrails` (also `npm run check:dublin-zone`), not a block in `eslint.guardrails.config.mjs`: it lints `src/`, `shared/` and `mobile/` with `noInlineConfig`, holds the allowlist with reasons, and fails on a stale baseline line.
+
+**How every sweep uses it (Step 1 of TZ.4–TZ.17):** delete the task's lines from `eslint-rules/dublin-zone-baseline.txt` (nothing else in that file or the snapshot) and run `npm run check:guardrails`. It FAILS and lists exactly the lines the appendix section names. That failure, plus the two tests in "The two tests every sweep task writes first", is the test-first step. Class-c sites in those files change `'Europe/Dublin'` to `PLATFORM_TZ` and class-d sites to the provider's zone. Neither changes behaviour.
 
 
 ---
@@ -1141,7 +1143,7 @@ Test it: `countryZoneMismatch('AU','Europe/Dublin')` warns; `('AU','Australia/Pe
 ## Track S — The sweeps (mechanical, driven by Appendix A; one PR each)
 
 **Common shape of every sweep PR** (each task lists only what is specific to it):
-1. Remove the task's files from `eslint-rules/dublin-zone-baseline.json` and lower the count. `npm run check:guardrails` → FAIL on exactly the appendix lines.
+1. Delete the task's lines from `eslint-rules/dublin-zone-baseline.txt` (never edit the snapshot). `npm run check:guardrails` → FAIL on exactly the appendix lines.
 2. Freeze each changed function's current body into `<area>.legacy-dublin.test-helpers.js`. Write `<area>.tz.test.js` from the template: Dublin byte-identical to the frozen copy, plus `America/New_York` across both 2026 DST edges with the task's specific assertions below. `npx vitest run --maxWorkers=2 <area>.tz.test.js` → FAIL.
 3. Apply the appendix rule per row:
    - `LZ-*` → the `*In` twin with the location's zone. Get the zone from the row in scope (`zoneOfLocation(row.locations)` when the select already embeds `locations(timezone)`; otherwise add `timezone` to that embed, never a second query per row), from `getLocationZone(db, id)`, or from `getLocationZones` for a fan-out.
@@ -1522,7 +1524,7 @@ select pg_get_expr(polqual, polrelid) from pg_policy where polname = 'challenges
 
 **Files:** `eslint.guardrails.config.mjs`, `eslint-rules/dublin-zone-baseline.json` (deleted), `tests/dublin-zone-baseline.test.js` (deleted), every `*.legacy-dublin.test-helpers.js` and the `<area>.tz.test.js` cases that import them (the byte-identity half is retired; the NY half stays), `shared/events.js` (`todayIsoDublin` alias deleted), `CLAUDE.md`.
 
-- [ ] **Step 1:** `jq length eslint-rules/dublin-zone-baseline.json` is 0. If it is not, a sweep is unfinished: stop.
+- [ ] **Step 1:** `grep -cv '^#' eslint-rules/dublin-zone-baseline.txt` is 0 (then delete it, the `.tz18a-snapshot.txt` and `scripts/check-dublin-zone.mjs`'s baseline handling). If it is not, a sweep is unfinished: stop.
 - [ ] **Step 2:** delete the baseline and its test; the config block keeps only `DUBLIN_ZONE_ALLOW`. `npm run check:guardrails` → PASS.
 - [ ] **Step 3:** CLAUDE.md "Timezones" bullet (`:77`) becomes:
 
