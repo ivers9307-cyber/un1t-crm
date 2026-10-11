@@ -42,6 +42,7 @@ import {
   QUIET_HOURS_COLUMNS,
   DEFAULT_SEND_QUIET_HOURS,
 } from '@/lib/send-quiet-hours'
+import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -98,7 +99,13 @@ export async function GET(_request, props) {
   // send-quiet-hours.js is the whole point, so a missing row cannot silently
   // mean "no quiet hours".
   const row = (!error && data && data[0]) || null
-  return NextResponse.json({ success: true, data: shape(row, canEditQuietHours(user, locationId)) })
+  // TZ.4 — the window is the studio's wall clock, so the card and the
+  // composers' advisory need its zone. Display-only: a failed zone read falls
+  // back to DEFAULT_TZ explicitly rather than failing the settings card (the
+  // sequence runner, which DEFERS on this window, reads the zone itself and
+  // never guesses).
+  const timezone = await getLocationZone(db, locationId).catch(() => DEFAULT_TZ)
+  return NextResponse.json({ success: true, data: { ...shape(row, canEditQuietHours(user, locationId)), timezone } })
 }
 
 export async function PUT(request, props) {

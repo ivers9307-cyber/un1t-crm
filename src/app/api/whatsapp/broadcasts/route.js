@@ -6,6 +6,7 @@ import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/perm
 import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema, url, timeOfDay } from '@/lib/schemas'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
+import { canonicalZone, isValidZone, getLocationZone, LocationZoneReadError } from '@/lib/location-time'
 
 const BroadcastCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -20,7 +21,11 @@ const BroadcastCreateSchema = z.object({
   per_tick_max: z.number().int().positive().max(5000).optional(),
   send_window_start: timeOfDay.optional(),
   send_window_end: timeOfDay.optional(),
-  send_window_tz: z.string().max(64).optional(),
+  // TZ.4 — an IANA zone (fixed offsets refused). Omitted, a drip's window is
+  // the studio's own zone (locations.timezone), read below. The row keeps its
+  // OWN copy: a later change to the studio's zone does not move a drip that
+  // is already running (the cron reads whatsapp_broadcasts.send_window_tz).
+  send_window_tz: z.string().max(64).refine(isValidZone, { message: 'send_window_tz must be an IANA timezone, e.g. Europe/Dublin' }).optional(),
   // AGENT-TAKEOVER — operator will handle replies on a bulk send, so pause Mia
   // on each recipient thread. (A single-recipient send pauses automatically.)
   handle_replies_manually: z.boolean().optional(),
@@ -115,6 +120,24 @@ export async function POST(request) {
   }
 
   const isDrip = body.delivery_mode === 'drip'
+  // TZ.4 — a drip window with no zone of its own takes the studio's. A failed
+  // read is refused rather than stored as a guessed Dublin window.
+  let sendWindowTz = null
+  if (isDrip) {
+    if (body.send_window_tz) {
+      sendWindowTz = canonicalZone(body.send_window_tz)
+      if (!sendWindowTz) {
+        return NextResponse.json({ success: false, error: 'send_window_tz must be an IANA timezone, e.g. Europe/Dublin' }, { status: 400 })
+      }
+    } else {
+      try {
+        sendWindowTz = await getLocationZone(db, locationId)
+      } catch (e) {
+        if (!(e instanceof LocationZoneReadError)) throw e
+        return NextResponse.json({ success: false, error: "Could not read the studio's timezone. Try again." }, { status: 503 })
+      }
+    }
+  }
   // WA-SCHEDULE — 'scheduled' requires a scheduled_at; otherwise it'd sit
   // invisible to the cron (which picks up status='scheduled' AND
   // scheduled_at <= now). A scheduled drip starts (status→'sending') when the
@@ -141,7 +164,7 @@ export async function POST(request) {
       per_tick_max: body.per_tick_max ?? null,
       send_window_start: body.send_window_start || '09:00',
       send_window_end: body.send_window_end || '20:00',
-      send_window_tz: body.send_window_tz || 'Europe/Dublin',
+      send_window_tz: sendWindowTz,
     } : {}),
     location_id: locationId,
     created_by: user.id,

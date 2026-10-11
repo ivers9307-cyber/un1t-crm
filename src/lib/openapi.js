@@ -5016,7 +5016,7 @@ registry.registerPath({
   tags: ['Communications'],
   security: [{ CookieAuth: [] }],
   summary: 'Send-time quiet window for a location',
-  description: 'Returns { enabled, start_hour, end_hour, default_start_hour, default_end_hour, can_edit } (company_settings.send_quiet_hours_*, mig 514; defaults enabled=true, 21:00 to 08:00 Europe/Dublin). ADVISORY on every MANUAL path: the composers warn when a send would land inside the window and offer the next slot outside it, and nothing an operator sends by hand is clamped, deferred or blocked. One automated reader DEFERS (SEQ-QUIET.1): the sequence runner falls back to this window for a sequence that has no send_window of its own, since no operator is watching a cron tick to read a warning. A sequence-level send_window still wins outright and the two are never merged. A location with no company_settings row returns the defaults rather than 404.',
+  description: 'Returns { enabled, start_hour, end_hour, default_start_hour, default_end_hour, can_edit, timezone } (company_settings.send_quiet_hours_*, mig 514; defaults enabled=true, 21:00 to 08:00). The hours are the location\'s wall clock; `timezone` is its IANA zone (locations.timezone, TZ.4). ADVISORY on every MANUAL path: the composers warn when a send would land inside the window and offer the next slot outside it, and nothing an operator sends by hand is clamped, deferred or blocked. One automated reader DEFERS (SEQ-QUIET.1): the sequence runner falls back to this window for a sequence that has no send_window of its own, since no operator is watching a cron tick to read a warning. A sequence-level send_window still wins outright and the two are never merged. A location with no company_settings row returns the defaults rather than 404.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Current quiet-hours setting' },
@@ -5030,7 +5030,7 @@ registry.registerPath({
   tags: ['Communications'],
   security: [{ CookieAuth: [] }],
   summary: 'Save the send-time quiet window (owner or master)',
-  description: 'Hours are 0-23, Europe/Dublin wall clock. The window is half-open [start, end): start_hour > end_hour wraps past midnight (the default 21 to 8 does). start_hour must differ from end_hour — switch enabled off instead of setting a zero-length window.',
+  description: 'Hours are 0-23, the location\'s wall clock (its locations.timezone). The window is half-open [start, end): start_hour > end_hour wraps past midnight (the default 21 to 8 does). start_hour must differ from end_hour — switch enabled off instead of setting a zero-length window.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ enabled: z.boolean(), start_hour: z.number().int().min(0).max(23), end_hour: z.number().int().min(0).max(23) }).openapi('SendQuietHoursSave') } } },

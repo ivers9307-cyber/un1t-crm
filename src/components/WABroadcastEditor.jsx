@@ -21,7 +21,7 @@ import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
 
 const nf = (n) => Number(n || 0).toLocaleString()
 
-export default function WABroadcastEditor({ broadcast, templates, locationId, userId, failedRecipients = [], stats = null, dripProgress = null }) {
+export default function WABroadcastEditor({ broadcast, templates, locationId, locationTimeZone = null, userId, failedRecipients = [], stats = null, dripProgress = null }) {
   const router = useRouter()
   const isSent = broadcast?.status === 'sent'
   const isCancelled = broadcast?.status === 'cancelled'
@@ -746,6 +746,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                 filter={audienceFilter}
                 onChange={setAudienceFilter}
                 locationId={locationId}
+                timeZone={locationTimeZone}
               />
               <AudienceCount
                 className="mt-3"

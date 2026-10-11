@@ -34,21 +34,23 @@ import UnifiedSendComposer from './UnifiedSendComposer.jsx'
 const TEMPLATES = [{ id: 't1', name: 'promo', language: 'en', status: 'APPROVED', components: [{ type: 'BODY', text: 'Hello there' }] }]
 let posts = []
 let sendAnswer = null
+let createdTz = undefined // TZ.4: the zone the route stored on the broadcast
 
 beforeEach(() => {
   posts = []
+  createdTz = undefined
   sendAnswer = { ok: true, body: { success: true, status: 'sending', mode: 'drip', sent: 0, failed: 0, total: 0 } }
   vi.stubGlobal('fetch', vi.fn(async (url, init) => {
     posts.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : null })
     if (String(url).endsWith('/send')) return { ok: sendAnswer.ok, status: sendAnswer.ok ? 200 : 400, json: async () => sendAnswer.body }
-    if (String(url) === '/api/whatsapp/broadcasts') return { ok: true, json: async () => ({ success: true, broadcast: { id: 'wb-1' } }) }
+    if (String(url) === '/api/whatsapp/broadcasts') return { ok: true, json: async () => ({ success: true, broadcast: { id: 'wb-1', ...(createdTz ? { send_window_tz: createdTz } : {}) } }) }
     return { ok: true, json: async () => ({ success: true, segments: [] }) }
   }))
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
-async function startDrip() {
-  render(<UnifiedSendComposer locationId="loc-1" channels={['whatsapp']} templates={TEMPLATES} />)
+async function startDrip(props = {}) {
+  render(<UnifiedSendComposer locationId="loc-1" channels={['whatsapp']} templates={TEMPLATES} {...props} />)
   fireEvent.change(screen.getByDisplayValue('Choose a template…'), { target: { value: 't1' } })
   fireEvent.click(screen.getByRole('button', { name: /^Drip$/ }))
   const start = await waitFor(() => {
@@ -74,5 +76,23 @@ describe('UnifiedSendComposer — a send-now drip is started through /send (GATE
     await startDrip()
     await waitFor(() => expect(screen.getByText('Template not approved by Meta')).toBeTruthy())
     expect(screen.queryByText('Drip started')).toBeNull()
+  })
+})
+
+describe('UnifiedSendComposer — TZ.4 the drip window is the studio clock', () => {
+  it('a Dublin studio reads exactly as before', async () => {
+    createdTz = 'Europe/Dublin'
+    await startDrip({ locationTimeZone: 'Europe/Dublin' })
+    expect(screen.getByText(/Europe\/Dublin time\. The drip pauses overnight/)).toBeTruthy()
+    await waitFor(() => expect(screen.getByText(/\(Europe\/Dublin\)/)).toBeTruthy())
+  })
+
+  it("a New York studio names New York, and the create leaves the zone to the route (the studio's own)", async () => {
+    createdTz = 'America/New_York'
+    await startDrip({ locationTimeZone: 'America/New_York' })
+    expect(screen.getByText(/America\/New_York time\. The drip pauses overnight/)).toBeTruthy()
+    await waitFor(() => expect(screen.getByText(/\(America\/New_York\)/)).toBeTruthy())
+    const create = posts.find((p) => p.url === '/api/whatsapp/broadcasts')
+    expect(create.body).not.toHaveProperty('send_window_tz')
   })
 })

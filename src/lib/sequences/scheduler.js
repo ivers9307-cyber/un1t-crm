@@ -20,6 +20,7 @@ import { createServerClient } from '@/lib/supabase'
 import { logWarn, logInfo } from '@/lib/log'
 import { getLocationFrequencyCap, FrequencyCapDeferral } from '@/lib/frequency-cap'
 import { nextAcceptableSend, QUIET_HOURS_COLUMNS } from '@/lib/send-quiet-hours'
+import { DEFAULT_TZ, resolveZone, instantToZonedParts, getLocationZone, LocationZoneReadError } from '@/lib/location-time'
 import { evaluateSequenceAudience } from './audience.js'
 import {
   sendEmailStep,
@@ -91,38 +92,32 @@ export function nextStepDelayMs(step) {
  * sequence's send window. Returns the original timestamp if no
  * window configured or already inside the window.
  *
- * Window is interpreted in Europe/Dublin local time. skip_days
- * uses 0=Sunday … 6=Saturday convention (JavaScript getDay()).
+ * TZ.4: the window is the wall clock of the SEQUENCE's location
+ * (`zone`, its locations.timezone; default Europe/Dublin, byte-identical to
+ * the pre-TZ.4 Dublin-only clamp). skip_days uses 0=Sunday … 6=Saturday
+ * convention (JavaScript getDay()).
  *
  * @param {Date} candidate
  * @param {object|null} window  { start_hour, end_hour, skip_days }
+ * @param {string} [zone]  the sequence location's IANA zone
  * @returns {Date}
  */
-export function clampToSendWindow(candidate, window) {
+export function clampToSendWindow(candidate, window, zone = DEFAULT_TZ) {
   if (!window) return candidate
   const startH = Number.isFinite(window.start_hour) ? window.start_hour : null
   const endH = Number.isFinite(window.end_hour) ? window.end_hour : null
   const skipDays = Array.isArray(window.skip_days) ? window.skip_days.map(Number) : []
   if (startH == null && endH == null && skipDays.length === 0) return candidate
+  const tz = resolveZone(zone)
 
   // Iterate at most ~14 days forward — operators won't configure
   // an empty window in practice, but bound it defensively.
   let attempt = new Date(candidate.getTime())
   for (let i = 0; i < 14 * 24; i++) {
-    // Use Intl to get the local hour + dow in Europe/Dublin without
-    // fighting Date's local-tz coupling. getParts gives strings.
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Dublin',
-      hour: 'numeric',
-      hourCycle: 'h23',
-      weekday: 'short',
-    }).formatToParts(attempt)
-    const hourStr = parts.find((p) => p.type === 'hour')?.value || '0'
-    const dowStr = parts.find((p) => p.type === 'weekday')?.value || ''
-    const localHour = Number(hourStr) || 0
-    // Map en-GB short weekday to 0-6 (Sun=0).
-    const DOW_MAP = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
-    const localDow = DOW_MAP[dowStr] ?? 0
+    // Local hour + day of week in the location's zone (shared/zoned-time:
+    // weekday is ISO 1=Mon … 7=Sun, so % 7 maps it onto getDay()'s Sun=0).
+    const { h: localHour, weekday } = instantToZonedParts(attempt, tz)
+    const localDow = weekday % 7
 
     const dayOk = !skipDays.includes(localDow)
     let hourOk = true
@@ -342,7 +337,9 @@ export async function isGoalMet({ db, contact, goalConfig, enrolledAt = null }) 
  */
 export async function runSequences({ now = new Date() } = {}) {
   const db = createServerClient()
-  const stats = { picked: 0, sent: 0, completed: 0, errored: 0, paused: 0, skipped: 0, deferred: 0 }
+  // TZ.4 — zone_unavailable: enrolments left untouched this tick because their
+  // studio's timezone could not be read (see the block before the dispatch).
+  const stats = { picked: 0, sent: 0, completed: 0, errored: 0, paused: 0, skipped: 0, deferred: 0, zone_unavailable: 0 }
 
   // FREQ-CAP.1 — the marketing frequency-cap setting is per LOCATION;
   // resolve it once per location per tick (a 100-enrolment batch is
@@ -532,6 +529,29 @@ export async function runSequences({ now = new Date() } = {}) {
         )
       }
 
+      // TZ.4 — the send window and the quiet-hours fallback below are the
+      // wall clock of the SEQUENCE's studio, so read its zone now, BEFORE the
+      // step dispatches: a read failing after a send would route to the error
+      // path, which leaves the cursor behind and re-sends the step 30 minutes
+      // later. A failed read (LocationZoneReadError) is a DB outage, never a
+      // reason to guess Dublin: the enrolment is skipped this tick with
+      // nothing sent and no error_count, and the claim lease above
+      // (CLAIM_LEASE_MS) brings it back on a later tick. Test enrolments never
+      // clamp, so they need no zone.
+      let zone = null
+      if (enrollment.metadata?.test !== true) {
+        try {
+          zone = await getLocationZone(db, sequence.location_id)
+        } catch (e) {
+          if (!(e instanceof LocationZoneReadError)) throw e
+          logWarn('sequences', 'studio timezone unreadable; enrolment skipped this tick, nothing sent', {
+            enrollmentId: enrollment.id, sequenceId: sequence.id, locationId: sequence.location_id,
+          })
+          stats.zone_unavailable++
+          continue
+        }
+      }
+
       // Branch by step type.
       let sendId = null
       // Mig 091: a branch step jumps the cursor instead of advancing
@@ -647,9 +667,9 @@ export async function runSequences({ now = new Date() } = {}) {
         if (isTest) {
           clamped = rawNext
         } else if (hasSendWindow(sequence.send_window)) {
-          clamped = clampToSendWindow(rawNext, sequence.send_window)
+          clamped = clampToSendWindow(rawNext, sequence.send_window, zone)
         } else {
-          clamped = nextAcceptableSend(rawNext, await quietHoursFor(sequence.location_id))
+          clamped = nextAcceptableSend(rawNext, await quietHoursFor(sequence.location_id), zone)
         }
         nextFireAt = clamped.toISOString()
       }

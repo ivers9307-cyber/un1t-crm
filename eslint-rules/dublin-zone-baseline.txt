@@ -87,7 +87,6 @@ src/app/api/schedule/time-off/route.js
 src/app/api/schedule/week-cost/route.js
 src/app/api/shelly/devices/[id]/energy/route.js
 src/app/api/sonos/schedules/[id]/run-now/route.js
-src/app/api/whatsapp/broadcasts/route.js
 src/app/communications/(marketing-era)/list-health/page.js
 src/app/dashboard/today/page.js
 src/app/live/[locationId]/DetectedTab.jsx
@@ -96,7 +95,6 @@ src/app/settings/customer-agent/CustomerAgentClient.jsx
 src/app/welcome/[location]/status/page.js
 src/components/AcControlPanel.jsx
 src/components/AttendanceReportClient.jsx
-src/components/AudienceBuilder.jsx
 src/components/AuditLogTable.jsx
 src/components/CalendarFeedCard.jsx
 src/components/ConsultationForm.jsx
@@ -112,7 +110,6 @@ src/components/automations/BathroomClimateCard.jsx
 src/components/automations/ClassClimateCard.jsx
 src/components/automations/ShellyDeviceCard.jsx
 src/components/automations/SonosScheduleClient.jsx
-src/components/communications/UnifiedSendComposer.jsx
 src/components/contact/ContactDrawer.jsx
 src/components/contact/ContactHeaderBand.jsx
 src/components/dashboard/AdsRefreshButton.jsx
@@ -188,9 +185,6 @@ src/lib/roster-runway-notify.js
 src/lib/roster-staffing.js
 src/lib/sale-offers.js
 src/lib/schedule/desired-state.js
-src/lib/send-quiet-hours.js
-src/lib/sequences/cron-triggers.js
-src/lib/sequences/scheduler.js
 src/lib/shelly/reconcile.js
 src/lib/shift-reminders.js
 src/lib/shift-replace-notify.js
