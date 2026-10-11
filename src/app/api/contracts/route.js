@@ -32,6 +32,8 @@ import { contractIssueSchema } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 import {
   mergeVariables,
+  linksInTemplateOrg,
+  issuingLocationLink,
   renderTemplate,
   validateCustomVariables,
   extractPlaceholders,
@@ -170,10 +172,10 @@ export async function POST(request) {
   //     as an unknown id, before any other check reads their row, so other
   //     orgs' people cannot be probed. A null-org
   //     template (master-only) keeps its old behaviour.
-  const allLinks = recipient.profile_locations || []
-  const recipientLinks = template.organization_id
-    ? allLinks.filter(l => l?.location?.organization_id === template.organization_id)
-    : allLinks
+  //     The issue wizard previews with the same two helpers
+  //     (linksInTemplateOrg / issuingLocationLink), so its {{today}} is
+  //     rendered in the studio picked here.
+  const recipientLinks = linksInTemplateOrg(recipient.profile_locations, template)
   if (template.organization_id && recipientLinks.length === 0) {
     return NextResponse.json({ success: false, error: 'Recipient not found' }, { status: 404 })
   }
@@ -200,8 +202,7 @@ export async function POST(request) {
     }, { status: 400 })
   }
   if (!locationId) {
-    const def = recipientLinks.find(l => l.is_default) || recipientLinks[0]
-    locationId = def?.location_id || null
+    locationId = issuingLocationLink(recipient, template)?.location_id || null
   }
   if (!organizationId) {
     const link = recipientLinks.find(l => l.location_id === locationId)

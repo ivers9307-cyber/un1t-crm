@@ -15,7 +15,7 @@ import { createServerClient } from '@/lib/supabase'
 import { canManageContractsInOrg, canManageContractsSomewhere } from '@/lib/contract-gates'
 import ContractTemplateForm from '@/components/ContractTemplateForm'
 import { contractStamp } from '@/lib/contract-display-time'
-import { viewerZoneOf } from '@/lib/display-zone'
+import { viewerZoneOf, templatePreviewZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
 
@@ -69,7 +69,8 @@ export default async function EditTemplatePage(props) {
       </Link>
       <h2 className="text-2xl font-bold mt-1 mb-1">{template.name}</h2>
       <p className="text-xs text-un1t-subtle mb-6">Version {template.version}{template.active ? '' : ' · archived'}</p>
-      <ContractTemplateForm initial={template} isEdit />
+      {/* TZ follow-up — the preview's {{today}} is a studio of the template's org's day. */}
+      <ContractTemplateForm initial={template} isEdit previewZone={templatePreviewZoneOf(user, template.organization_id)} />
 
       <section className="mt-10">
         <h3 className="text-xs uppercase tracking-wider text-un1t-subtle font-semibold mb-3">History</h3>

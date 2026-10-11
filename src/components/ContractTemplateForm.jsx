@@ -50,7 +50,7 @@ const PROFILE_VAR_HELP = [
   { group: 'Compensation', key: 'overtime_rate',           sample: '€42',      desc: 'Overtime / premium rate.' },
   { group: 'Compensation', key: 'overtime_rate_raw',       sample: '42',       desc: 'Raw numeric.' },
   { group: 'Compensation', key: 'contracted_hours_per_week', sample: '37.5',   desc: 'Contracted weekly hours.' },
-  { group: 'Dates',    key: 'today',               sample: '2026-05-08',                      desc: 'Today\'s date in ISO format. Auto-filled.' },
+  { group: 'Dates',    key: 'today',               sample: '2026-05-08',                      desc: 'Today\'s date at the issuing studio, in ISO format. Auto-filled.' },
   // CONTRACTS-VARS.2 — resolved server-side at issue time from the
   // recipient's location (public.locations) + getLocationBranding().
   // Omitted entirely from the merged map when the field isn't set on
@@ -64,7 +64,10 @@ const PROFILE_VAR_HELP = [
   { group: 'Location', key: 'legal_entity_name',   sample: 'Example Fitness Ltd (trading as Example Gym)', desc: 'The contracting COMPANY. Set it on Settings → Organisation → legal entity; falls back to the brand name if unset. Use this, not company_name, in a party clause.' },
 ]
 
-export default function ContractTemplateForm({ initial, isEdit = false }) {
+// TZ follow-up — `previewZone` is the zone the preview's {{today}} renders
+// in, chosen on the server (templatePreviewZoneOf: a studio of the template's
+// org); never the browser's. Omitted = DEFAULT_TZ, as profileVariables does.
+export default function ContractTemplateForm({ initial, isEdit = false, previewZone }) {
   const router = useRouter()
   const [name, setName] = useState(initial?.name || '')
   const [description, setDescription] = useState(initial?.description || '')
@@ -84,9 +87,9 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
     for (const v of (vars || [])) {
       sampleCustom[v.key] = `[${v.label}]`
     }
-    const merged = { ...profileVariables(SAMPLE_PROFILE), ...sampleCustom }
+    const merged = { ...profileVariables(SAMPLE_PROFILE, { zone: previewZone }), ...sampleCustom }
     return renderTemplate(body, merged)
-  }, [body, vars])
+  }, [body, vars, previewZone])
 
   function addVar() {
     setVars(v => [...v, { key: '', label: '', type: 'text', required: false, default: '' }])
