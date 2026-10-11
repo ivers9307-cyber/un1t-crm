@@ -17,6 +17,8 @@ import { supabase } from '../../../lib/member/supabase'
 import { api } from '../../../lib/member/api'
 import { hasSeenRecap, clearRecapSeen } from '../../../lib/member/recap-seen'
 import { useMemberBrand } from '../../../lib/member/use-member-brand'
+import { useMemberZone } from '../../../lib/member/use-member-zone'
+import { memberClockLabel } from '../../../lib/member/member-zone'
 import Card from '../../../components/member/ui/Card'
 import Button from '../../../components/member/ui/Button'
 import HrChart from '../../../components/member/HrChart'
@@ -140,6 +142,8 @@ export default function SessionDetail() {
   const router = useRouter()
   // W1.S5 — the share sheet's title carries the studio's short brand.
   const { shortName } = useMemberBrand()
+  // TZ.14 (D7) — date and start time on the member's home studio clock.
+  const tz = useMemberZone()
 
   const [report, setReport] = useState(null)
   const [session, setSession] = useState(null)   // from report.session
@@ -299,10 +303,8 @@ export default function SessionDetail() {
   const pace         = formatPace(s.avg_pace_sec_per_km)
 
   const dur = durationMinutes(startedAt, endedAt)
-  const date = sessionDate(startedAt)
-  const startTime = startedAt
-    ? new Intl.DateTimeFormat('en-IE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Dublin' }).format(new Date(startedAt))
-    : null
+  const date = sessionDate(startedAt, tz)
+  const startTime = memberClockLabel(startedAt, tz)
   const breakdown = summary.zones || []   // pre-built [{ id, name, color, seconds, percent }]
   const comparisons = report.comparisons || {}
   const burn = summary.burn === true

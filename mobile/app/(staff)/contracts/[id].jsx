@@ -16,6 +16,8 @@ import Markdown from 'react-native-markdown-display'
 import { Ionicons } from '@expo/vector-icons'
 import { useLocalSearchParams } from 'expo-router'
 import { useAuth } from '../../../lib/auth-context'
+import { useLocationZone } from '../../../lib/use-studio-zone'
+import { studioDateTimeLabel } from '../../../lib/studio-zone'
 import { useBrand } from '../../../lib/use-brand'
 import { getContract, signContract, declineContract } from '../../../lib/contracts-api'
 
@@ -60,14 +62,6 @@ const STATUS_LABEL = {
   revoked:  'Withdrawn',
 }
 
-function fmtDate(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleString('en-IE', {
-    timeZone: 'Europe/Dublin',
-    day: 'numeric', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  })
-}
 
 export default function ContractDetail() {
   const { id } = useLocalSearchParams()
@@ -78,6 +72,10 @@ export default function ContractDetail() {
   // useBrand falls back to the active location while the contract is still
   // null; bare "Your studio" until it loads, never a gym literal.
   const { companyName } = useBrand(contract?.location_id)
+  // TZ.14 (D3) — issued/signed times in the issuing studio's zone, with the
+  // zone's abbreviation when it is not this phone's.
+  const tz = useLocationZone(contract?.location_id)
+  const fmtDate = (iso) => studioDateTimeLabel(iso, tz)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [signature, setSignature] = useState('')

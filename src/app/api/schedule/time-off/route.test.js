@@ -457,6 +457,65 @@ describe('GET /api/schedule/time-off — role per studio (SCHEDROLES.1)', () => 
     }
   })
 
+  it('TZ.8b: "expired" is the day of the studio looked at (else the active one), across US DST', async () => {
+    const ny = (active) => ({
+      ...mixed(active),
+      activeLocation: { id: active, timezone: active === 'loc-1' ? 'America/New_York' : 'Europe/Dublin' },
+      locations: [{ id: 'loc-1', timezone: 'America/New_York' }, { id: 'loc-2', timezone: 'Europe/Dublin' }],
+    })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      for (const [iso, nyDay, dubDay] of [
+        ['2026-09-17T03:30:00Z', '2026-09-16', '2026-09-17'], // 23:30 EDT / 04:30 IST
+        ['2026-11-02T04:30:00Z', '2026-11-01', '2026-11-02'], // 23:30 EST on the 25-hour fall-back day
+        ['2026-03-08T04:30:00Z', '2026-03-07', '2026-03-08'], // 23:30 EST before spring-forward
+      ]) {
+        vi.setSystemTime(new Date(iso))
+        getCurrentUser.mockResolvedValue(ny('loc-2'))
+        let { db, calls } = listDb()
+        createServerClient.mockReturnValue(db)
+        await GET(getReq('?location_id=loc-1&status=pending')) // a New York studio, looked at from Dublin
+        expect(calls, iso).toContainEqual(['gte', 'end_date', nyDay])
+        ;({ db, calls } = listDb())
+        createServerClient.mockReturnValue(db)
+        await GET(getReq('?status=expired')) // no location_id: the active (Dublin) studio's day
+        expect(calls, iso).toContainEqual(['lt', 'end_date', dubDay])
+        getCurrentUser.mockResolvedValue(ny('loc-1'))
+        ;({ db, calls } = listDb())
+        createServerClient.mockReturnValue(db)
+        await GET(getReq('?status=expired'))
+        expect(calls, iso).toContainEqual(['lt', 'end_date', nyDay])
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('TZ.8b: a studio the session does not hold is read; an unreadable zone is a 500, never a guessed day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-17T03:30:00Z'))
+    try {
+      const master = { id: 'boss', role: 'master', profileRole: 'master', activeLocation: { id: 'loc-2', timezone: 'Europe/Dublin' }, locations: [{ id: 'loc-2', timezone: 'Europe/Dublin' }], rolesByLocation: {} }
+      getCurrentUser.mockResolvedValue(master)
+      let db = fakeDb((q) => {
+        if (q.table === 'locations') return { data: { id: 'loc-9', timezone: 'America/New_York' }, error: null }
+        if (q.table === 'profile_locations') return { data: [], error: null }
+        return { data: [], error: null }
+      })
+      createServerClient.mockReturnValue(db)
+      expect((await GET(getReq('?location_id=loc-9&status=pending'))).status).toBe(200)
+      expect(queriesOf(db, 'time_off_requests')[0].calls).toContainEqual(['gte', 'end_date', '2026-09-16'])
+
+      db = fakeDb((q) => (q.table === 'locations' ? { data: null, error: { message: 'down' } } : { data: [], error: null }))
+      createServerClient.mockReturnValue(db)
+      const res = await GET(getReq('?location_id=loc-8&status=pending'))
+      expect(res.status).toBe(500)
+      expect(queriesOf(db, 'time_off_requests')).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('annotates expired rows and, with with_clashes=1, the clash count', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-09-17T10:00:00Z'))

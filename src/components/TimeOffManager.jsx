@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { CalendarOff, CalendarX, Plus, Check, X, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { timeOffTypesFor, defaultTimeOffTypeFor, leaveClashLabel, leaveClashPrompt, canRequestTimeOff, AVAILABILITY_INSTEAD } from '@shared/time-off'
 import { Modal, Button } from '@/components/ui'
 // LEAVECANCEL.1 — shared with the dashboard's My requests card.
@@ -778,6 +778,9 @@ function TimeOffFormModal({ user, canRecordForOthers = false, allowance, onClose
 
   const subject = subjectId ? staff.find((p) => p.id === subjectId) || null : null
   const onBehalf = !!subject
+  // TZ.8b — the earliest day you may ask for is the studio's today (the form
+  // files at the active studio), not Dublin's.
+  const studioToday = todayStrIn(zoneOfLocation(user.activeLocation))
   // LEAVE.3 — the menu follows the PERSON the leave is for. AVAIL.3: a
   // contractor has no types left ("unavailable" moved into availability), so
   // the form shows AVAILABILITY_INSTEAD in place of itself. The server
@@ -944,7 +947,7 @@ function TimeOffFormModal({ user, canRecordForOthers = false, allowance, onClose
                   setStartDate(e.target.value)
                   if (!endDate || e.target.value > endDate) setEndDate(e.target.value)
                 }}
-                min={onBehalf ? undefined : dublinTodayStr()}
+                min={onBehalf ? undefined : studioToday}
                 className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
             </div>
@@ -955,7 +958,7 @@ function TimeOffFormModal({ user, canRecordForOthers = false, allowance, onClose
                 required
                 value={endDate}
                 onChange={e => setEndDate(e.target.value)}
-                min={startDate || (onBehalf ? undefined : dublinTodayStr())}
+                min={startDate || (onBehalf ? undefined : studioToday)}
                 className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
             </div>

@@ -18,6 +18,8 @@ import {
   turnOffAcDevice,
   extendAcDevice,
 } from '../lib/studio-mgmt-api'
+import { useLocationZone } from '../lib/use-studio-zone'
+import { studioTimeLabel } from '../lib/studio-zone'
 
 const POLL_INTERVAL_MS = 30_000
 
@@ -58,14 +60,12 @@ function useForegroundPoll(load, deps) {
  * comes from ac_devices.last_state — refreshed by the
  * ac-external-rule cron every 5 min and written immediately on every
  * CRM-initiated change — so it must not be labelled "Live".
+ *
+ * TZ.14 (D3) — the studio's clock, with its zone abbreviation when it is not
+ * this phone's (studioTimeLabel).
  */
-function asOfLabel(iso) {
-  if (!iso) return null
-  const t = new Date(iso)
-  if (Number.isNaN(t.getTime())) return null
-  return t.toLocaleTimeString('en-IE', {
-    hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Dublin',
-  })
+function asOfLabel(iso, tz) {
+  return studioTimeLabel(iso, tz)
 }
 
 export default function AcDeviceList({ locationId }) {
@@ -167,6 +167,7 @@ function groupDevicesMobile(devices) {
 // ── DeviceCard ────────────────────────────────────────────────────
 
 function DeviceCard({ device, locationId }) {
+  const tz = useLocationZone(locationId)
   const [state, setState] = useState(null)     // { state, active_session }
   const [stateError, setStateError] = useState(null)
   const [busy, setBusy] = useState(null)       // 'on' | 'off' | 'extend'
@@ -356,7 +357,7 @@ function DeviceCard({ device, locationId }) {
                 {/* Not "Live" — the last observed reading, not a fresh
                     vendor call. When it was taken is the difference
                     between "the AC is off" and "it was off 5 min ago". */}
-                {asOfLabel(state.state_as_of) ? ` · as of ${asOfLabel(state.state_as_of)}` : ''}
+                {asOfLabel(state.state_as_of, tz) ? ` · as of ${asOfLabel(state.state_as_of, tz)}` : ''}
               </Text>
             </View>
           )}

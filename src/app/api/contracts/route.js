@@ -38,6 +38,7 @@ import {
   locationVariables,
 } from '@/lib/contracts'
 import { getLocationBranding } from '@/lib/location-branding'
+import { zoneOfLocation } from '@/lib/location-time'
 import { getContractingEntity } from '@/lib/contracting-entity'
 import { notifyContractIssued } from '@/lib/contracts-notify'
 import { logAuditEvent } from '@/lib/audit'
@@ -154,7 +155,7 @@ export async function POST(request) {
       id, full_name, email, role, employment_type,
       annual_salary, hourly_rate, overtime_rate, contracted_hours_per_week,
       profile_locations:profile_locations(location_id, is_default,
-        location:locations!location_id(id, organization_id, name, address, phone, email))
+        location:locations!location_id(id, organization_id, name, address, phone, email, timezone))
     `)
     .eq('id', parsed.data.profile_id)
     .maybeSingle()
@@ -262,7 +263,9 @@ export async function POST(request) {
   //    signature stays profile/custom) so a same-named custom variable
   //    can still override a location auto-fill if a template ever
   //    declares one.
-  const merged = mergeVariables(recipient, { ...locVars, ...parsed.data.variables })
+  //    TZ.8b — {{today}} is the issuing studio's day (the location row
+  //    embedded above carries its timezone).
+  const merged = mergeVariables(recipient, { ...locVars, ...parsed.data.variables }, { zone: zoneOfLocation(locationRow) })
   let bodyRendered = renderTemplate(template.body_markdown, merged)
 
   // 5a. CONTRACT-VARS.1 — reject if any placeholder remains in the

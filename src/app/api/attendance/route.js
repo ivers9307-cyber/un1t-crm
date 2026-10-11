@@ -17,8 +17,9 @@
 //
 // ATTENDREPORT.1 (follow-ups C4):
 //   - from/to must be real dates, to on or after from, at most 366 days
-//     (reportPeriodError); the defaults are the DUBLIN day (dublinTodayStr),
-//     never the server's UTC day. All refused before any read.
+//     (reportPeriodError); the defaults are the STUDIO's day (TZ.8b:
+//     todayStrIn of locations.timezone), never the server's UTC day. All
+//     refused before any read.
 //   - every assignment is read (.range() pages ordered by id: PostgREST returns
 //     at most 1,000 rows, silently), and the events read goes in chunks of 100
 //     ids (a year of ids on one URL was ~32KB).
@@ -30,7 +31,7 @@
 //
 // Query params:
 //   from        YYYY-MM-DD (default: 14 days before `to`)
-//   to          YYYY-MM-DD (default: today in Dublin)
+//   to          YYYY-MM-DD (default: today at the studio)
 //   profile_id  uuid (optional: one coach)
 //
 // Returns:
@@ -39,9 +40,8 @@
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
-import { dublinTodayStr } from '@/lib/dublin-time'
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
-import { resolveTz } from '@/lib/tz-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { logError } from '@/lib/log'
 import { parseAttendanceQuery, buildAttendanceReport } from '@/lib/attendance-report'
 
@@ -64,8 +64,11 @@ const failed = () => NextResponse.json({ success: false, error: LOAD_FAILED }, {
 
 export const GET = withAuth(
   { permission: 'attendance_reports', location: true },
-  async ({ db, locationId, request }) => {
-    const query = parseAttendanceQuery(new URL(request.url).searchParams, dublinTodayStr())
+  async ({ db, user, locationId, request }) => {
+    // TZ.8b — the default window ends on the studio's own day. withAuth's
+    // locationId IS the active studio, whose timezone the session carries,
+    // so the query is still checked before any read.
+    const query = parseAttendanceQuery(new URL(request.url).searchParams, todayStrIn(zoneOfLocation(user.activeLocation)))
     if (query.error) return NextResponse.json({ success: false, error: query.error }, { status: 400 })
     const { from, to, profileId } = query
 
@@ -80,7 +83,7 @@ export const GET = withAuth(
       return failed()
     }
     if (!location) return NextResponse.json({ success: false, error: 'location_not_found' }, { status: 404 })
-    const tz = resolveTz(location.timezone)
+    const tz = zoneOfLocation(location)
 
     let assignments
     try {

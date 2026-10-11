@@ -5,7 +5,9 @@ import { getCurrentUser, getUserLocationIds, assertLocationAccess, hasRoleAtLoca
 import { validateBody, uuidLike } from '@/lib/validate'
 import { timeOffTypeSchema, MANAGER_ROLES, realIsoDate, isRealCalendarDate } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn } from '@/lib/location-time'
+import { studioZoneFor, staffZoneOfUser } from '@/lib/staff-zone'
+import { displayZonesFor } from '@/lib/display-zone'
 import { rangeQueryError } from '@/lib/report-period'
 import {
   getLocationMemberIds, getProfileLocationIds, leaveScopeOrFilter, canDecideTimeOff,
@@ -112,7 +114,16 @@ export async function GET(request) {
   // LEAVE.2 — a pending request whose last day has passed is EXPIRED
   // (derived, not stored — see isExpiredPendingRequest). `pending` therefore
   // means "still decidable" and drops them; `expired` asks for exactly them.
-  const today = dublinTodayStr()
+  // TZ.8b — "today" is the day of the studio being looked at (location_id),
+  // else the caller's active studio: one day for the whole list, so the
+  // filter and each row's derived status agree. An unreadable zone is a 500.
+  let today
+  try {
+    today = todayStrIn(locationId ? await studioZoneFor(db, user, locationId) : staffZoneOfUser(user))
+  } catch (err) {
+    logError('time-off', 'studio timezone unreadable; leave list refused', { locationId, err })
+    return NextResponse.json({ success: false, error: 'Could not read the studio\'s timezone. Try again.' }, { status: 500 })
+  }
   if (status === 'expired') {
     filters.push((q) => q.eq('status', 'pending').lt('end_date', today))
   } else if (status === 'pending') {
@@ -221,6 +232,11 @@ export async function GET(request) {
   }
   const ownStudios = getUserLocationIds(user)
   const nowMs = Date.now()
+  // TZ.8b — the "ask again after 14:30 on 22 Sep" words are the request's
+  // studio's wall clock. Only a declined ask can carry them, so only those
+  // rows' studios are resolved (display: an unreadable zone falls back to DEFAULT_TZ).
+  const labelZones = cancelSchemaMissing ? new Map() : await displayZonesFor(
+    db, user, rows.filter((r) => r.cancel_decision === 'rejected' && r.cancel_decided_at).map((r) => r.location_id), 'time-off')
   rows = rows.map((r) => {
     const isOwn = r.profile_id === user.id
     const studios = isOwn ? ownStudios : studiosByProfile.get(r.profile_id) || []
@@ -231,7 +247,7 @@ export async function GET(request) {
     }, r, studios)
     return {
       ...r,
-      ...(cancelSchemaMissing ? CANCEL_ASK_OFF : annotateCancelAsk(r, user, today, studios, nowMs)),
+      ...(cancelSchemaMissing ? CANCEL_ASK_OFF : annotateCancelAsk(r, user, today, studios, nowMs, labelZones.get(r.location_id))),
       ...annotateApprovedLeaveGuard(r, user, studios, tier),
     }
   })
@@ -532,9 +548,17 @@ async function approveRecordedLeave(db, user, created, { type, employmentType })
     }, { status: 500 })
   }
 
-  const today = dublinTodayStr()
+  // TZ.8b — "from today on" is each row's studio's day. Advisory, like the
+  // lookup itself: an unreadable zone reports no clashes for that row.
   const clashes = []
   for (const row of approved) {
+    let today
+    try {
+      today = todayStrIn(await studioZoneFor(db, user, row.location_id))
+    } catch (err) {
+      console.error('[time-off] clash lookup skipped: studio timezone unreadable', err?.message)
+      continue
+    }
     const { clashes: found, error: clashError } = await findLeaveClashes(db, row, today)
     if (clashError) console.error('[time-off] clash lookup failed', clashError.message)
     clashes.push(...(found || []))
@@ -606,7 +630,15 @@ async function previewOwnLeave(user, searchParams) {
   })
   if (daysError) return NextResponse.json({ success: false, error: daysError.message }, { status: 500 })
 
-  const { shifts, error: shiftsError } = await findOwnPublishedShifts(db, user.id, start, end, dublinTodayStr())
+  // TZ.8b — "from today on" is the day of the studio the leave is filed at.
+  let today
+  try {
+    today = todayStrIn(await studioZoneFor(db, user, locationId))
+  } catch (err) {
+    logError('time-off', 'studio timezone unreadable; leave preview refused', { locationId, err })
+    return NextResponse.json({ success: false, error: 'Could not read the studio\'s timezone. Try again.' }, { status: 500 })
+  }
+  const { shifts, error: shiftsError } = await findOwnPublishedShifts(db, user.id, start, end, today)
   if (shiftsError) return NextResponse.json({ success: false, error: shiftsError.message }, { status: 500 })
 
   return NextResponse.json({

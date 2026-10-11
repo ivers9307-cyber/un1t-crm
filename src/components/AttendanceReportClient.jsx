@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Download, RefreshCw } from 'lucide-react'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn } from '@/lib/location-time'
 import { defaultAttendancePeriod, attendanceCsv } from '@/lib/attendance-report'
 
 const STATUS_META = {
@@ -21,10 +21,12 @@ const STATUS_META = {
   pending:  { label: 'Pending', cls: 'bg-neutral-100 text-neutral-700 border-neutral-200' },
 }
 
-export default function AttendanceReportClient({ activeLocationName }) {
-  // One Dublin day for both ends (the old `from` was the UTC day).
-  const [from, setFrom] = useState(() => defaultAttendancePeriod(dublinTodayStr()).from)
-  const [to, setTo]     = useState(() => defaultAttendancePeriod(dublinTodayStr()).to)
+export default function AttendanceReportClient({ activeLocationName, timeZone }) {
+  // One studio day for both ends (the old `from` was the UTC day). TZ.8b:
+  // `timeZone` is the active studio's (the page resolves it); the route's
+  // default window is the same day.
+  const [from, setFrom] = useState(() => defaultAttendancePeriod(todayStrIn(timeZone)).from)
+  const [to, setTo]     = useState(() => defaultAttendancePeriod(todayStrIn(timeZone)).to)
   const [statusFilter, setStatusFilter] = useState('all') // all | on_time | late | no_show | pending
   const [profileFilter, setProfileFilter] = useState('') // free-text search by name
   const [data, setData] = useState(null)

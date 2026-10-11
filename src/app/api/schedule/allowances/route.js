@@ -6,6 +6,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, days , MANAGER_ROLES} from '@/lib/schemas'
 import { getEmploymentType, getLeaveEntitlement, getPendingHolidayDays } from '@/lib/time-off-leave'
 import { ALLOWANCE_YEAR_MIN, ALLOWANCE_YEAR_MAX, parseAllowanceYear } from '@/lib/allowance-year'
+import { staffZoneOfUser } from '@/lib/staff-zone'
 
 // ROSTER-FIX.2 — a profile is in scope when it shares a location with the
 // caller (master = everywhere). Detail-style 404 on miss so a cross-tenant
@@ -43,10 +44,11 @@ export async function GET(request) {
 
   const { searchParams } = new URL(request.url)
   const profileId = searchParams.get('profile_id') || user.id
-  // RANGEVALID.1 — a four-digit year in the PUT's window, before any read, and
-  // "this year" is Dublin's. It went to .eq('year', …) as given: 'abc' came back
+  // RANGEVALID.1 — a four-digit year in the PUT's window, before any read. It went to .eq('year', …) as given: 'abc' came back
   // as Postgres's own text, 99999 as a made-up entitlement.
-  const { year, error: yearError } = parseAllowanceYear(searchParams.get('year'))
+  // TZ.8b — "this year" is the caller's active studio's calendar year (the
+  // leave year turns at that studio's midnight), not Dublin's.
+  const { year, error: yearError } = parseAllowanceYear(searchParams.get('year'), staffZoneOfUser(user))
   if (yearError) return NextResponse.json({ success: false, error: yearError }, { status: 400 })
   const db = createServerClient()
 

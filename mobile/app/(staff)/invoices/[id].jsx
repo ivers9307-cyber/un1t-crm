@@ -15,11 +15,14 @@ import { getInvoice, getInvoicePdfUrl, revokeInvoice, approveInvoice, declineInv
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 import { RosterComparison, RosterUnreadable } from '../../../components/invoices/RosterComparison'
 import { invoiceStatusBadge, reviewComparisonView, rosterUnreadableNotice } from '../../../lib/invoice-review'
+import { useLocationZoneResolver } from '../../../lib/use-studio-zone'
 
 export default function InvoiceDetailScreen() {
   const { id } = useLocalSearchParams()
   const router = useRouter()
   const [data, setData] = useState(null)
+  // TZ.14 (D3) — the approval day reads on the invoice studio's calendar.
+  const zoneOf = useLocationZoneResolver()
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
@@ -126,7 +129,7 @@ export default function InvoiceDetailScreen() {
   // INVOICEREVIEW.2 — honest lifecycle label (queued / sent to Xero / paid)
   // and the roster comparison, both computed server-side.
   const status = invoiceStatusBadge(data)
-  const comparison = reviewComparisonView(data)
+  const comparison = reviewComparisonView(data, zoneOf(data.location_id))
   // D4 UINITS.1 — no comparison because the roster could not be read: say so.
   const rosterNotice = rosterUnreadableNotice(data)
 

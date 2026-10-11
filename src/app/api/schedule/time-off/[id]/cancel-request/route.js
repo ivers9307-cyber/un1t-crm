@@ -23,7 +23,9 @@ import { getCurrentUser, getUserLocationIds, hasRoleAtLocation } from '@/lib/aut
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn } from '@/lib/location-time'
+import { studioZoneFor } from '@/lib/staff-zone'
+import { logError } from '@/lib/log'
 import { getProfileLocationIds } from '@/lib/time-off-leave'
 import { timeOffLeaveLabel } from '@shared/time-off'
 import {
@@ -105,7 +107,15 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Only an owner can approve or decline the cancellation of approved leave' }, { status: 403 })
   }
 
-  const today = dublinTodayStr()
+  // TZ.8b — "still open" (the leave not yet over) is judged on the request's
+  // studio's day. An unreadable zone decides nothing.
+  let today
+  try {
+    today = todayStrIn(await studioZoneFor(db, user, existing.location_id))
+  } catch (err) {
+    logError('time-off', 'studio timezone unreadable; cancellation decision refused', { requestId: existing.id, err })
+    return NextResponse.json({ success: false, error: 'Could not read the studio\'s timezone. Try again.' }, { status: 500 })
+  }
   if (!isOpenCancelAsk(existing, today)) {
     const ended = existing.status === 'approved' && existing.cancel_requested_at && !existing.cancel_decided_at
     return NextResponse.json({

@@ -15,14 +15,12 @@ import {
 import { Ionicons } from '@expo/vector-icons'
 import { useLocalSearchParams, useFocusEffect, Stack, useRouter } from 'expo-router'
 import { listPolicies, startPolicyView, endPolicyView } from '../../../lib/policies-api'
+import { dateOnlyLabel } from '../../../lib/studio-zone'
 
-function fmtDate(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleDateString('en-IE', {
-    timeZone: 'Europe/Dublin',
-    day: 'numeric', month: 'short', year: 'numeric',
-  })
-}
+// TZ.14 — effective_date is a Postgres `date`, not an instant: formatted in
+// UTC (dateOnlyLabel), never a studio zone, which would show the previous day
+// in any zone behind UTC. Same text as before in Dublin.
+const fmtDate = dateOnlyLabel
 
 // Mirror src/lib/policies.js#detectSectionHeadings exactly so the
 // dwell keys reported to the server match what the admin report

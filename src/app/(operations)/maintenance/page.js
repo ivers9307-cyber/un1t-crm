@@ -12,6 +12,7 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import MaintenanceView from '@/components/maintenance/MaintenanceView'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,5 +24,6 @@ export default async function MaintenancePage() {
   const canInspect = hasPermission(user, 'equipment_inspect')
   if (!canAdmin && !canInspect) redirect('/dashboard')
 
-  return <MaintenanceView canAdmin={canAdmin} />
+  // TZ.8b — "due today" is the active studio's day.
+  return <MaintenanceView canAdmin={canAdmin} timeZone={zoneOfLocation(user.activeLocation)} />
 }

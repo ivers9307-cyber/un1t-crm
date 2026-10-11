@@ -10,7 +10,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn } from '@/lib/location-time'
+import { studioZoneFor } from '@/lib/staff-zone'
 import { QualificationRecordCreateSchema } from '@/lib/qualifications-schemas'
 import { QUAL_MANAGER_ROLES, loadQualificationsPage, createQualificationRecord } from '@/lib/qualifications-server'
 
@@ -29,7 +30,15 @@ export async function GET(request) {
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
 
-  return send(await loadQualificationsPage(createServerClient(), { user, locationId, today: dublinTodayStr() }))
+  // TZ.8b — expired / expiring is judged on the studio's own day.
+  const db = createServerClient()
+  let today
+  try {
+    today = todayStrIn(await studioZoneFor(db, user, locationId))
+  } catch {
+    return NextResponse.json({ success: false, error: 'Could not read the studio\'s timezone. Try again.' }, { status: 500 })
+  }
+  return send(await loadQualificationsPage(db, { user, locationId, today }))
 }
 
 export async function POST(request) {

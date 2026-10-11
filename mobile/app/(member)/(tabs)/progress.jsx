@@ -23,6 +23,7 @@ import { Ionicons } from '@expo/vector-icons'
 import Svg, { Rect, Polyline } from 'react-native-svg'
 import { supabase } from '../../../lib/member/supabase'
 import { useMemberBrand } from '../../../lib/member/use-member-brand'
+import { useMemberZone } from '../../../lib/member/use-member-zone'
 import Card from '../../../components/member/ui/Card'
 import ErrorRetry from '../../../components/member/ErrorRetry'
 import {
@@ -141,26 +142,28 @@ export function ProgressScreen({ focus = 'trends', showHeader = true } = {}) {
   const earned = useMemo(() => accentFromSessions(sessions, Date.now()), [sessions])
   // W1.S5 — milestone labels carry the studio brand + product name.
   const { companyName, shortName } = useMemberBrand()
+  // TZ.14 (D7) — streak, heatmap, records and milestones on the member's home studio clock.
+  const tz = useMemberZone()
 
   const data = useMemo(() => {
     const now = Date.now()
     return {
       weeks: weeklyBuckets(sessions, now, 12),
       recap: monthlyRecap(sessions, now, 6),
-      records: personalRecords(sessions),
+      records: personalRecords(sessions, tz),
       // Two windows for the activity calendar: 12 weeks (default, reads cleanly
       // on phone) and a full year (52 weeks) behind a toggle — the "look how
       // far I've come" view. Same accent-intensity encoding; year mode scrolls.
-      calendar: activityCalendar(sessions, now, 84),
-      calendarYear: activityCalendar(sessions, now, 364),
-      milestones: lifetimeMilestones(sessions, now, { brand: companyName, shortName }),
-      streak: currentStreak(sessions, now),
+      calendar: activityCalendar(sessions, now, 84, tz),
+      calendarYear: activityCalendar(sessions, now, 364, tz),
+      milestones: lifetimeMilestones(sessions, now, { brand: companyName, shortName }, tz),
+      streak: currentStreak(sessions, now, tz),
       pointsTrend: trendDelta(sessions, 'effort_points', now),
       lifetimePoints: (sessions || []).reduce(
         (acc, s) => acc + (Number.isFinite(s.effort_points) ? s.effort_points : 0), 0,
       ),
     }
-  }, [sessions, companyName, shortName])
+  }, [sessions, companyName, shortName, tz])
 
   if (loading) {
     return (

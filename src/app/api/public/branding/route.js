@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getLocationBranding } from '@/lib/location-branding'
+import { getLocationZone } from '@/lib/location-time'
 import { productName, pointsUnit } from '@/lib/brand-name'
 import { resolveHostBrand } from '@/lib/host-brand'
 import { PLATFORM_SITE_NAME } from '@/lib/default-site-name'
@@ -26,7 +27,15 @@ export async function GET(request) {
   if (!limit.allowed) return rateLimitResponse(limit)
 
   if (locationId) {
-    const b = await getLocationBranding(db, locationId)
+    // TZ.14 — the studio's timezone rides the brand: the phone's member
+    // screens keep a member's streaks, weeks and months on their home studio's
+    // clock (D7). Public and not sensitive (it is any visitor's own wall
+    // clock). Display-grade: an unreadable row answers null, and the phone
+    // falls back to Europe/Dublin rather than losing the brand.
+    const [b, timezone] = await Promise.all([
+      getLocationBranding(db, locationId),
+      getLocationZone(db, locationId).catch(() => null),
+    ])
     // W1.B2 — the phone's brand source. `short_name` is the wordmark the
     // product names are built from (org_settings.short_name, mig 715; falls
     // back to the brand), and `product_names` ships them ready-made so a
@@ -41,6 +50,7 @@ export async function GET(request) {
         short_name: b.shortName,
         product_names: { points: productName(b.shortName, 'points'), hr: productName(b.shortName, 'hr') },
         points_unit: pointsUnit(b.shortName),
+        timezone,
       },
     })
   }
