@@ -28,7 +28,8 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn } from '@/lib/location-time'
+import { readStaffHomeZone } from '@/lib/staff-zone'
 import { tokenFromFeedFile } from '@/lib/calendar-feed-token'
 import { buildStaffShiftFeed, feedWindow } from '@/lib/staff-calendar-feed'
 import {
@@ -66,7 +67,11 @@ export async function GET(request, props) {
   if (!limit.allowed) return rateLimitResponse(limit)
 
   const nowMs = Date.now()
-  const { rows, locationsById, error } = await loadFeedShifts(db, resolved.feed.profile_id, feedWindow(dublinTodayStr()))
+  // TZ.8a — the window is centred on the person's home-studio day (their
+  // default studio; src/lib/staff-zone.js). Each event's times stay in its
+  // own studio's zone (buildStaffShiftFeed).
+  const homeZone = await readStaffHomeZone(db, resolved.feed.profile_id)
+  const { rows, locationsById, error } = await loadFeedShifts(db, resolved.feed.profile_id, feedWindow(todayStrIn(homeZone, nowMs)))
   if (error) return unavailable()
 
   const body = buildStaffShiftFeed({ rows, locationsById, generatedAtMs: nowMs })

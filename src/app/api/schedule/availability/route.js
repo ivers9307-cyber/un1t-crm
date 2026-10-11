@@ -21,7 +21,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, uuidLike, isRealCalendarDate } from '@/lib/schemas'
-import { dublinTodayStr, addDaysISO } from '@/lib/dublin-time'
+import { todayStrIn, addDaysISO } from '@/lib/location-time'
+import { staffZoneOfUser } from '@/lib/staff-zone'
 import {
   AvailabilityPutSchema, AVAILABILITY_RANGE_MAX_DAYS, readOwnAvailability, saveOwnAvailability,
   readStudioAvailability, isAvailabilityInputError, readKnownDatedKeys,
@@ -44,7 +45,9 @@ export async function GET(request) {
   const db = createServerClient()
 
   if (!locationId) {
-    const { data, error } = await readOwnAvailability(db, user.id, dublinTodayStr())
+    // TZ.8a — the person's own rules, judged on their active studio's day
+    // (src/lib/staff-zone.js): the same day the editor page renders with.
+    const { data, error } = await readOwnAvailability(db, user.id, todayStrIn(staffZoneOfUser(user)))
     if (error) {
       logError('api/schedule/availability', 'own read failed', { err: error.message })
       return bad('Could not load your availability', 500)
@@ -82,7 +85,8 @@ export async function PUT(request) {
   const v = await validateBody(request, AvailabilityPutSchema)
   if (!v.ok) return v.response
 
-  const todayIso = dublinTodayStr()
+  // TZ.8a — the person's active studio's day (src/lib/staff-zone.js).
+  const todayIso = todayStrIn(staffZoneOfUser(user))
   const input = normaliseAvailability(v.data)
   const db = createServerClient()
 

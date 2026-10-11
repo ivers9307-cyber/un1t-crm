@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, getLocationZone } from '@/lib/location-time'
 import { validateBody } from '@/lib/validate'
 import { timeOfDay, hexColor , MANAGER_ROLES} from '@/lib/schemas'
 import { WEEKDAY_CODES, generateBlocksForTemplate, liveAssignments } from '@/lib/roster'
@@ -15,6 +15,7 @@ import {
 import { SHIFT_KINDS } from '@shared/shift-kind'
 import { resolveTemplateKindWrite } from '@/lib/shift-template-kind'
 import { toHms } from '@/lib/block-edit'
+import { logError } from '@/lib/log'
 
 const TemplateUpdateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -73,10 +74,9 @@ const TemplateUpdateSchema = z.object({
 //     their minimum; staffing never reads a past block, and it reads kind
 //     through the template, so an admin block's stale minimum is inert.
 //
-// Today is computed in UTC because shift_blocks.block_date is a
-// calendar date with no TZ. Comparing block_date >= today_utc gives
-// the right "future" boundary for the day the operator is in
-// (within ±1 day, acceptable for this surface).
+// Today is the STUDIO's day (TZ.8a: the template's locations.timezone):
+// shift_blocks.block_date is a wall-clock calendar date in that zone, so
+// block_date >= today is the "future" boundary at that studio.
 export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
@@ -126,7 +126,15 @@ export async function PUT(request, props) {
   Object.assign(updates, kindWrite.patch)
   const priorDays = new Set(priorTemplate.days_of_week || [])
 
-  const today = dublinTodayStr()
+  // TZ.8a — "future" is the studio's day (the template's location zone).
+  // Read before any write: an unreadable zone refuses the edit, never guesses.
+  let today
+  try {
+    today = todayStrIn(await getLocationZone(db, locationId))
+  } catch (e) {
+    logError('api/schedule/templates', 'studio timezone unreadable; template not changed', { locationId, err: e?.message })
+    return NextResponse.json({ success: false, error: 'Could not read the studio clock. Nothing was changed; try again.' }, { status: 503 })
+  }
   const changingTimes = Object.prototype.hasOwnProperty.call(updates, 'start_time')
     || Object.prototype.hasOwnProperty.call(updates, 'end_time')
   const changingDays = Object.prototype.hasOwnProperty.call(updates, 'days_of_week')
@@ -505,9 +513,18 @@ export async function DELETE(request, props) {
   // SHIFTTPL.1 — the clean-up the PUT path has always done. Best-effort: the
   // template IS deactivated either way, and refusing to say so because the
   // tidy-up failed would be the louder failure.
-  const cleared = await clearEmptyFutureBlocks(db, {
-    templateId: params.id, locationId, today: dublinTodayStr(),
-  })
+  // TZ.8a — "future" is the studio's day. An unreadable zone skips the
+  // tidy-up (the template stays deactivated) rather than guess the day.
+  let studioToday = null
+  let zoneErr = null
+  try {
+    studioToday = todayStrIn(await getLocationZone(db, locationId))
+  } catch (e) {
+    zoneErr = e
+  }
+  const cleared = studioToday
+    ? await clearEmptyFutureBlocks(db, { templateId: params.id, locationId, today: studioToday })
+    : { error: { message: `the studio clock could not be read (${zoneErr?.message || 'unknown error'})` }, publishedEmptiesKept: 0 }
   if (cleared.error) {
     return NextResponse.json({
       success: true,

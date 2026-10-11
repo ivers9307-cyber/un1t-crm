@@ -1804,6 +1804,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange, fo
       {changeLog && (
         <RosterChangeLogDrawer
           locationId={locationId}
+          timeZone={user.activeLocation?.timezone ?? null}
           periodStart={changeLog.start}
           periodEnd={changeLog.end}
           periodLabel={changeLog.label}

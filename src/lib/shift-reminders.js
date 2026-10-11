@@ -10,7 +10,7 @@
 //     day (morning + evening) is two. Only the run's FIRST shift carries the
 //     reminder, timed by that shift's start; the message describes the run.
 //   - QUIET HOURS, A HARD RULE: a reminder is only ever SENT while the wall
-//     clock (location time, Europe/Dublin today) is inside [07:00, 22:00):
+//     clock (the studio's locations.timezone) is inside [07:00, 22:00):
 //     NO_REMINDER_BEFORE / NO_REMINDER_FROM. Outside that band nothing is due,
 //     full stop, whatever the reason the reminder is late (published at 23:30,
 //     a send failing and retrying, a ledger outage ending, mig 619 applied at
@@ -62,7 +62,7 @@
 // timing table in shift-reminders.test.js can pin it, DST days included.
 
 import { localToUtc } from './push-reminders'
-import { addDaysISO, dublinDayStr } from './dublin-time'
+import { addDaysISO, dayStrIn, resolveZone } from './location-time'
 import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 import { fetchApiShiftRows } from './roster-read'
 import { notifyUsers } from './notify'
@@ -347,8 +347,9 @@ function latestEndLabel(run) {
  *   "3 shifts tomorrow from 05:45"
  *   "Tomorrow 05:45 to 10:30 at Studio North: Early Morning, Morning 8am, Morning 9:15 · with Bo and Sam"
  *
- * "today"/"tomorrow" is computed from the run's date against the Dublin day of
- * `nowMs`, not from the reminder kind: an evening-before reminder for an 08:30
+ * "today"/"tomorrow" is computed from the run's date against the day of
+ * `nowMs` at the run's FIRST studio (`zone`, TZ.8a; DEFAULT_TZ when not
+ * given), not from the reminder kind: an evening-before reminder for an 08:30
  * shift that could not go until 07:00 on the day must say "today". Studios are named in the order they
  * are worked. `coNames` are the colleagues on the FIRST shift only.
  *
@@ -356,11 +357,11 @@ function latestEndLabel(run) {
  * MAX_CO_NAMES; shift names give way to "+N more" from the end (never below
  * one), then colleagues (to none), then the body is cut with an ellipsis.
  */
-export function buildShiftReminderMessage({ run, nameByLocation = {}, coNames = [], nowMs }) {
+export function buildShiftReminderMessage({ run, nameByLocation = {}, coNames = [], nowMs, zone }) {
   const first = run[0]
   const start = hhmm(effectiveShiftStart(first))
   const end = latestEndLabel(run)
-  const today = dublinDayStr(nowMs)
+  const today = dayStrIn(nowMs, resolveZone(zone))
   const dayWord = first.shift_date === today
     ? 'today'
     : first.shift_date === addDaysISO(today, 1) ? 'tomorrow' : `on ${first.shift_date}`
@@ -474,8 +475,14 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
     return summary
   }
 
-  const today = dublinDayStr(nowMs)
-  const tomorrow = addDaysISO(today, 1)
+  // TZ.8a — "today and tomorrow" is per studio: each studio's own day of
+  // `nowMs`. One read spans the earliest studio's today to the latest
+  // studio's tomorrow (whole dates, so every run is complete); for a single
+  // zone that is exactly its today..tomorrow. The leave and availability
+  // reads span the same dates.
+  const studioDays = [...new Set(Object.values(tzByLocation).map((tz) => dayStrIn(nowMs, tz)))].sort()
+  const today = studioDays[0]
+  const tomorrow = addDaysISO(studioDays[studioDays.length - 1], 1)
   const nameByLocation = Object.fromEntries(locations.map((l) => [l.id, l.name || '']))
 
   // Two days across the estate is tens of rows, far under the 1,000-row cap
@@ -516,7 +523,9 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
   // Fails OPEN like the leave read: a coach is reminded rather than missed.
   const { rows: availRows, error: availErr } = await readAvailabilityLeave(db, { profileIds, startDate: today, endDate: tomorrow })
   if (availErr) logWarn('shift-reminders', 'availability read failed — reminding without the availability check', { err: availErr })
-  onLeave = leaveKeysFor([...(leaveErr ? [] : (leaveRows || [])), ...(availRows || [])], [today, tomorrow])
+  const leaveDays = []
+  for (let d = today; d <= tomorrow; d = addDaysISO(d, 1)) leaveDays.push(d)
+  onLeave = leaveKeysFor([...(leaveErr ? [] : (leaveRows || [])), ...(availRows || [])], leaveDays)
 
   const timeDue = dueShiftReminders(rows, { nowMs, tzByLocation, onLeave })
   if (timeDue.length === 0) return summary
@@ -562,6 +571,7 @@ export async function runShiftReminders(db, { nowMs = Date.now(), locations = []
       nameByLocation,
       coNames: coRosteredFirstNames(s, rows, onLeave), // the FIRST shift's colleagues only
       nowMs,
+      zone: tzByLocation[s.location_id] || DEFAULT_TZ, // TZ.8a — "today" at the run's first studio
     })
     let result = null
     try {

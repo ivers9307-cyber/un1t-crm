@@ -12,7 +12,7 @@ import { readRoleRecipientIds, roleRecipientIdsFromLinks } from './push'
 import { notifyUsersOnce } from './push-dedup'
 import { MANAGER_ROLES } from './schemas'
 import { logWarn, logError } from './log'
-import { resolveStaffTimeZone } from './staff-push-hours'
+import { resolveStaffTimeZone, STAFF_PUSH_DEFAULT_TZ as DEFAULT_TZ } from './staff-push-hours'
 import {
   openPoolRecipients, openPoolPayload,
   coverSweepAction, coverNudgePayload, swapExpiryNotices, swapExpiryNote, deferredExpiryNoticeDue,
@@ -187,17 +187,20 @@ const delivered = (r) => ((r?.sent || 0) + (r?.emailed || 0)) > 0
 /**
  * locations.timezone for the studios the sweep is about to act on: the zone
  * the shift start AND the quiet-hours band are judged in. Never throws. A
- * studio whose timezone is empty or invalid is Europe/Dublin (resolved by the
+ * studio whose timezone is empty or invalid is DEFAULT_TZ (resolved by the
  * shared staff-push-hours rule) and is warned about ONCE per sweep, however
- * many swaps it has; a NULL timezone is the Dublin default, silently. An unreadable table is Europe/Dublin for everyone, logged.
+ * many swaps it has; a NULL timezone is the default, silently.
+ * TZ.8a — an UNREADABLE table returns null: the sweep skips this pass (an
+ * arm error, retried next tick) rather than judge a studio's shift start on
+ * a guessed zone.
  */
 async function studioTimezones(db, locationIds) {
   const zones = new Map()
   if (!locationIds.length) return zones
   const { data, error } = await db.from('locations').select('id, timezone').in('id', locationIds)
   if (error) {
-    logWarn('swap-cover', 'sweep could not read studio timezones; using Europe/Dublin', { err: error.message })
-    return zones
+    logError('swap-cover', 'sweep could not read studio timezones; skipping this pass, the next tick retries', { err: error.message })
+    return null
   }
   for (const row of data || []) zones.set(row.id, row.timezone)
   for (const id of locationIds) {
@@ -205,7 +208,7 @@ async function studioTimezones(db, locationIds) {
     // silently; an empty or invalid value is Dublin with one warning.
     const tz = zones.get(id)
     if (resolveStaffTimeZone(tz).warn) {
-      logWarn('swap-cover', 'studio timezone is empty or invalid; using Europe/Dublin', { locationId: id, timezone: tz })
+      logWarn('swap-cover', `studio timezone is empty or invalid; using ${DEFAULT_TZ}`, { locationId: id, timezone: tz })
     }
   }
   return zones
@@ -274,6 +277,10 @@ export async function runSwapCoverSweep(db, { nowMs = Date.now() } = {}) {
     ...[...swaps, ...closed].map((s) => s.location_id),
     ...swaps.map(swapTargetShiftLocationId),
   ].filter(Boolean))])
+  if (!zones) {
+    stats.errors++
+    return stats
+  }
 
   // PASS 1 — open swaps.
   for (const swap of swaps) {

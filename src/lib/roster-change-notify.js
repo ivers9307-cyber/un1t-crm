@@ -15,7 +15,7 @@
 
 import { notifyUsers } from './notify'
 import { logWarn } from './log'
-import { dublinTodayStr } from './dublin-time'
+import { todayStrIn, getLocationZone } from './location-time'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -125,7 +125,9 @@ async function markNotified(db, { locationId, coachId, blockIds }) {
  * @param {string} opts.locationId
  * @param {string} opts.actorId      the manager making the change
  * @param {Array<{coachId: string, blockId: string, blockDate: string, action: string, startTime?: string|null}>} opts.changes
- * @param {string} [opts.todayStr]   YYYY-MM-DD (Dublin); injectable for tests
+ * @param {string} [opts.todayStr]   YYYY-MM-DD; defaults to the STUDIO's day
+ *   (TZ.8a: the location's timezone). Injectable for tests. An unreadable
+ *   zone sends and stamps NOTHING (logged): a later sender retries.
  * @param {boolean} [opts.markNotified=true]  REPLACE.1a review 1 — false: send
  *   exactly as usual but stamp NOTHING; the caller reads `byCoach` and stamps
  *   its own rows (the held replace-notice arm stamps by row id).
@@ -136,8 +138,16 @@ async function markNotified(db, { locationId, coachId, blockIds }) {
  *   'past' | 'opted_out' | 'undelivered' | 'failed'.
  */
 export async function notifyRosterChanges(db, { locationId, actorId, changes, todayStr, markNotified: stamp = true } = {}) {
-  const today = todayStr || dublinTodayStr()
   const result = { notified: 0, skippedSelf: 0, skippedPast: 0, undelivered: 0, optedOut: 0, failed: 0, stampFailed: 0, byCoach: {} }
+  let today = todayStr
+  if (!today) {
+    try {
+      today = todayStrIn(await getLocationZone(db, locationId))
+    } catch (e) {
+      logWarn('roster-change-notify', 'studio timezone unreadable; nothing sent or stamped, a later sender retries', { locationId, err: e?.message })
+      return result
+    }
+  }
   const stampRows = async (coachId, blockIds) => {
     if (!stamp) return
     const { error } = await markNotified(db, { locationId, coachId, blockIds })

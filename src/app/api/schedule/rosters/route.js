@@ -46,6 +46,7 @@ import {
 } from '@/lib/roster-publish'
 import { sendOverBudgetApprovalEmail } from '@/lib/roster-email'
 import { notifyStaffOfPublish, publishNotifyRowsForBlocks, renotifyChangedCoaches } from '@/lib/roster-notify'
+import { sessionStudioZone } from '@/lib/staff-zone'
 import { logWarn, logError } from '@/lib/log'
 import { writePublishSnapshot } from '@/lib/roster-snapshot'
 
@@ -527,7 +528,11 @@ export async function POST(request) {
     // helper). Log-only on failure, deliberately NOT added to
     // supersedeWarning — the operator has nothing to act on.
     if (trimmed.length > 0) {
-      const remnants = await supersedeEmptyTrimmedRosters(db, { newRosterId: roster.id, trimmed })
+      const remnants = await supersedeEmptyTrimmedRosters(db, {
+        newRosterId: roster.id, trimmed, locationId: location_id,
+        // TZ.8a — the studio's own day; its row rides on the session (null: read).
+        timeZone: sessionStudioZone(user, location_id),
+      })
       if (remnants.warning) {
         logWarn('rosters', 'trimmed roster could not be superseded or shrunk', { err: remnants.warning, roster_id: roster.id })
       }
