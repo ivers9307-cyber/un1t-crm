@@ -8,6 +8,7 @@ import { createServerClient } from '@/lib/supabase'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import UnifiedSendComposer from '@/components/communications/UnifiedSendComposer'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const dynamic = 'force-dynamic'
 
@@ -58,7 +59,7 @@ export default async function SendPage(props) {
         <h1 className="text-xl font-semibold text-un1t-text mt-1">Send a message</h1>
         <p className="text-sm text-un1t-subtle">Pick who, write once, send now or schedule.</p>
       </div>
-      <UnifiedSendComposer locationId={locationId} channels={channels} templates={templates} initialAudienceFilter={initialAudienceFilter} initialSegmentId={initialSegmentId} />
+      <UnifiedSendComposer locationId={locationId} locationTimeZone={zoneOfLocation(user.activeLocation)} channels={channels} templates={templates} initialAudienceFilter={initialAudienceFilter} initialSegmentId={initialSegmentId} />
     </div>
   )
 }

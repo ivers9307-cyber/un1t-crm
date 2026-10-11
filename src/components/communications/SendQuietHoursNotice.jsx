@@ -22,11 +22,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Clock } from 'lucide-react'
 import { evaluateSendTime } from '@/lib/send-quiet-hours'
+import { DEFAULT_TZ } from '@shared/zoned-time'
 
 /**
  * Fetch a location's quiet-hours config.
  *
- * Returns `{ config, loaded }`. `config` is null until the fetch settles and
+ * Returns `{ config, loaded, zone }`. `zone` is the location's IANA zone from
+ * the route (TZ.4), DEFAULT_TZ until it arrives or if the fetch fails.
+ * `config` is null until the fetch settles and
  * stays null if it fails, which normalizeQuietHours reads as "use the default
  * window" — a failed settings lookup must not mean "no quiet hours". `loaded`
  * only exists so the notice does not flash for a location that has switched
@@ -35,6 +38,7 @@ import { evaluateSendTime } from '@/lib/send-quiet-hours'
 export function useSendQuietHours(locationId) {
   const [config, setConfig] = useState(null)
   const [loaded, setLoaded] = useState(false)
+  const [zone, setZone] = useState(DEFAULT_TZ)
 
   useEffect(() => {
     if (!locationId) { setLoaded(true); return }
@@ -50,6 +54,7 @@ export function useSendQuietHours(locationId) {
             startHour: json.data.start_hour,
             endHour: json.data.end_hour,
           })
+          if (json.data.timezone) setZone(json.data.timezone)
         }
       } catch {
         // Swallow: config stays null, the code-side default applies.
@@ -60,7 +65,7 @@ export function useSendQuietHours(locationId) {
     return () => { alive = false }
   }, [locationId])
 
-  return { config, loaded }
+  return { config, loaded, zone }
 }
 
 /**
@@ -90,14 +95,14 @@ function useTick() {
  * @param {string} [props.className]
  */
 export default function SendQuietHoursNotice({ locationId, at = null, onSuggest, className = '' }) {
-  const { config, loaded } = useSendQuietHours(locationId)
+  const { config, loaded, zone } = useSendQuietHours(locationId)
   // One clock for both modes: "send now" IS `now`, and a scheduled time still
   // needs it for the relative wording ("tonight" / "tomorrow").
   const now = useTick()
 
   const verdict = useMemo(
-    () => evaluateSendTime({ at: at ?? now, now, config }),
-    [at, now, config],
+    () => evaluateSendTime({ at: at ?? now, now, config, zone }),
+    [at, now, config, zone],
   )
 
   if (!loaded || !verdict.quiet) return null
