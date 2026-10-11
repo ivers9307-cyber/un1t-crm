@@ -21,7 +21,7 @@ vi.mock('@/lib/membership/source', () => ({
 }))
 
 import {
-  dublinWeekWindow,
+  studioWeekWindow,
   aggregateOrgKpis,
   rollupAttention,
   resolveAccountScope,
@@ -29,7 +29,10 @@ import {
   MEMBER_STATUSES,
 } from './account-home.js'
 
-describe('dublinWeekWindow', () => {
+// TZ.18b: the Dublin-named alias is gone; pin studioWeekWindow on Europe/Dublin.
+const dublinWeekWindow = (now) => studioWeekWindow(now, 'Europe/Dublin')
+
+describe('studioWeekWindow (Europe/Dublin)', () => {
   it('is a 7-day inclusive window ending today (Dublin)', () => {
     // 2026-07-20 12:00 UTC — squarely inside a Dublin day.
     const now = Date.parse('2026-07-20T12:00:00Z')

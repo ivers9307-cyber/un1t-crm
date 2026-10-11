@@ -35,11 +35,10 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 // SWAPS.2 — the leave / clash reads are unit-tested in swap-conflicts.test.js;
 // here only what the route does with the answer matters.
 vi.mock('@/lib/swap-conflicts', () => ({ findSwapConflicts: vi.fn(async () => []) }))
-// SWAPNOTIFY.1 — the route now decides "draft or past shift" itself, so
-// dublinTodayStr has to be pinned rather than read off the real clock. Tests
-// that care about the boundary pass block dates far outside this value
-// (2099 / 2000) so the exact pin never matters to them.
-vi.mock('@/lib/dublin-time', () => ({ dublinTodayStr: vi.fn(() => '2026-06-15') }))
+// SWAPNOTIFY.1 — the route decides "draft or past shift" itself, on the
+// shift's own studio day (TZ.8a: todayStrIn of its location zone, the real
+// clock). Tests that care about the boundary pass block dates far outside
+// today (2099 / 2000), so the real date never matters to them.
 // SWAPNOTIFY.1 — dispatchSwapNotifications now runs inside after() rather
 // than as an un-awaited promise. Mock next/server partially (keep the real
 // NextResponse) so after() runs its callback synchronously in tests.

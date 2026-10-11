@@ -15,7 +15,6 @@ const h = vi.hoisted(() => ({
   today: '2026-08-04',
 }))
 
-vi.mock('@/lib/dublin-time', () => ({ dublinTodayStr: () => h.today }))
 // TZ.6 — this file's subject is not the daily-slot gate: every location is due,
 // on the pinned "today" (route.tz6.test.js covers the gate).
 vi.mock('@/lib/cron-daily-slot', async (importOriginal) => ({

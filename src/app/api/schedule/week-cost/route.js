@@ -39,7 +39,7 @@ import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLo
 import { uuidLike, realIsoDate, MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import { computeWeeklyFteHours } from '@/lib/roster-week-cost'
 import { mondayOf } from '@/lib/payroll'
-import { addDaysISO } from '@/lib/dublin-time'
+import { addDaysISO } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

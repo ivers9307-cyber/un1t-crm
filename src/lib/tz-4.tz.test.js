@@ -2,15 +2,16 @@
 // anniversary/birthday day are judged on the sequence's STUDIO clock
 // (locations.timezone) instead of a hard-coded Europe/Dublin.
 //
-//   • Europe/Dublin: byte-identical to the FROZEN pre-change bodies
-//     (tz-4.legacy-dublin.test-helpers.js), over every half-hour of 2026, every
-//     quarter-hour of the weeks around both 2026 EU DST changes, and every
-//     quiet-hours end hour.
+//   • Europe/Dublin: TZ.4 proved it byte-identical to a frozen copy of the
+//     pre-change bodies (every half-hour of 2026, every quarter-hour of the
+//     weeks around both EU DST changes, every quiet-hours end hour); that sweep
+//     was retired in TZ.18b. Dublin is now pinned by fixed values around both
+//     2026 EU DST changes; zoned-time ≡ dublin-time stays proven by
+//     shared/zoned-time.parity.test.js.
 //   • America/New_York: follows New York across both 2026 US DST changes.
 process.env.TZ = 'America/Los_Angeles' // host zone is none of the zones under test: proves nothing reads the host clock
 import { describe, it, expect } from 'vitest'
 
-const L = await import('./tz-4.legacy-dublin.test-helpers.js')
 const { nextAcceptableSend, evaluateSendTime } = await import('./send-quiet-hours.js')
 const { clampToSendWindow } = await import('./sequences/scheduler.js')
 const { isInsideSendWindow, anniversaryOccurrenceYear, birthdayTargetMonthDay } = await import('./sequences/cron-triggers.js')
@@ -19,150 +20,112 @@ const D = 'Europe/Dublin'
 const NY = 'America/New_York'
 // US DST 2026: spring forward Sun 8 Mar 02:00 → 03:00; fall back Sun 1 Nov 02:00 → 01:00.
 // EU DST 2026: spring forward Sun 29 Mar 01:00 UTC; fall back Sun 25 Oct 01:00 UTC.
-const SAMPLES = [
-  '2026-03-07T04:30:00Z', '2026-03-08T06:59:00Z', '2026-03-08T07:00:00Z', // NY around spring-forward
-  '2026-03-28T23:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', // Dublin around spring-forward
-  '2026-10-24T23:30:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z', // Dublin around fall-back
-  '2026-11-01T04:59:00Z', '2026-11-01T05:00:00Z', '2026-11-01T06:00:00Z', // NY around fall-back
-  '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-12-31T23:30:00Z', // month/year edges
-].map(Date.parse)
-
-const HOUR = 3600_000
-const range = (fromIso, toIso, stepMs) => {
-  const out = []
-  for (let t = Date.parse(fromIso); t < Date.parse(toIso); t += stepMs) out.push(t)
-  return out
-}
-const YEAR_HALF_HOURS = range('2026-01-01T00:00:00Z', '2027-01-01T00:00:00Z', HOUR / 2)
-const YEAR_3H = range('2026-01-01T00:00:00Z', '2027-01-01T00:00:00Z', 3 * HOUR)
-// The weeks around both EU changes, every quarter-hour.
-const DST_WEEKS = [
-  ...range('2026-03-26T00:00:00Z', '2026-04-02T00:00:00Z', HOUR / 4),
-  ...range('2026-10-22T00:00:00Z', '2026-10-29T00:00:00Z', HOUR / 4),
-]
-// The frozen legacy clamp builds an Intl formatter per hour it steps, so the
-// full-year sweeps take seconds, not milliseconds.
-const SWEEP_TIMEOUT = 120_000
 const iso = (d) => (Number.isFinite(d.getTime()) ? d.toISOString() : 'Invalid')
 
-const QUIET_CONFIGS = [
-  null, // the code-side default, 21 → 8
-  { enabled: false },
-  { enabled: true, startHour: 22, endHour: 7 },
-  { enabled: true, startHour: 0, endHour: 6 }, // same-day window
-  { enabled: true, startHour: 23, endHour: 1 }, // ends inside the EU gap hour on 29 Mar
-  { enabled: true, startHour: 20, endHour: 2 }, // ends on the EU overlap hour on 25 Oct
-]
+// ── Europe/Dublin pinned values ─────────────────────────────────────────────
 
-// ── Europe/Dublin is byte-identical ─────────────────────────────────────────
-
-describe('TZ.4 Europe/Dublin is byte-identical: send quiet hours', () => {
-  it('nextAcceptableSend: every half-hour of 2026, every config', () => {
-    const diffs = []
-    for (const cfg of QUIET_CONFIGS) {
-      for (const t of YEAR_HALF_HOURS) {
-        const a = iso(nextAcceptableSend(t, cfg, D))
-        if (a !== iso(L.nextAcceptableSendLegacy(t, cfg))) diffs.push(`${JSON.stringify(cfg)} ${new Date(t).toISOString()}`)
-      }
-    }
-    expect(diffs).toEqual([])
-  }, SWEEP_TIMEOUT)
-
-  it('nextAcceptableSend: every quarter-hour of the DST weeks, every end hour 0-23', () => {
-    const diffs = []
-    for (let end = 0; end < 24; end++) {
-      const cfg = { enabled: true, startHour: (end + 13) % 24, endHour: end }
-      for (const t of DST_WEEKS) {
-        if (iso(nextAcceptableSend(t, cfg, D)) !== iso(L.nextAcceptableSendLegacy(t, cfg))) diffs.push(`${end} ${new Date(t).toISOString()}`)
-      }
-    }
-    expect(diffs).toEqual([])
-  }, SWEEP_TIMEOUT)
+describe('TZ.4 Europe/Dublin pinned values: send quiet hours', () => {
+  it.each([
+    // [config, at, next acceptable send]
+    [null, '2026-01-15T22:00:00Z', '2026-01-16T08:00:00.000Z'], // default 21 → 8, winter (GMT)
+    [null, '2026-01-15T12:00:00Z', '2026-01-15T12:00:00.000Z'], // outside the window: unchanged
+    [null, '2026-07-01T20:30:00Z', '2026-07-02T07:00:00.000Z'], // summer: 08:00 IST
+    [null, '2026-03-28T23:30:00Z', '2026-03-29T07:00:00.000Z'], // across the spring-forward
+    [null, '2026-10-24T23:30:00Z', '2026-10-25T08:00:00.000Z'], // across the fall-back
+    [{ enabled: false }, '2026-01-15T22:00:00Z', '2026-01-15T22:00:00.000Z'],
+    [{ enabled: true, startHour: 23, endHour: 1 }, '2026-03-28T23:30:00Z', '2026-03-29T01:00:00.000Z'], // ends in the gap hour → 02:00 IST
+    [{ enabled: true, startHour: 20, endHour: 2 }, '2026-10-25T00:30:00Z', '2026-10-25T02:00:00.000Z'], // ends after the repeated hour
+    [{ enabled: true, startHour: 0, endHour: 6 }, '2026-03-29T00:30:00Z', '2026-03-29T05:00:00.000Z'], // same-day window
+  ])('nextAcceptableSend %j at %s', (cfg, at, expected) => {
+    expect(iso(nextAcceptableSend(at, cfg, D))).toBe(expected)
+  })
 
   it('omitting the zone is Europe/Dublin', () => {
-    for (const t of SAMPLES) expect(iso(nextAcceptableSend(t, null))).toBe(iso(L.nextAcceptableSendLegacy(t, null)))
+    expect(iso(nextAcceptableSend('2026-07-01T20:30:00Z', null))).toBe('2026-07-02T07:00:00.000Z')
+    expect(iso(nextAcceptableSend('2026-10-24T23:30:00Z', null))).toBe('2026-10-25T08:00:00.000Z')
   })
 
-  it.each(SAMPLES.map((t) => [new Date(t).toISOString(), t]))('evaluateSendTime %s', (_label, t) => {
-    for (const cfg of QUIET_CONFIGS) {
-      for (const nowMs of [t, t - 3 * HOUR, t - 30 * HOUR, t - 72 * HOUR]) {
-        expect(evaluateSendTime({ at: t, now: nowMs, config: cfg, zone: D }))
-          .toStrictEqual(L.evaluateSendTimeLegacy({ at: t, now: nowMs, config: cfg }))
-      }
+  it('evaluateSendTime (default window), explicit zone and default', () => {
+    for (const [at, now, expected] of [
+      ['2026-01-15T22:00:00Z', '2026-01-15T19:00:00Z', {
+        enabled: true, quiet: true, timeLabel: '22:00', whenLabel: '22:00 tonight', windowLabel: '21:00 to 08:00',
+        nextSlot: new Date('2026-01-16T08:00:00.000Z'), nextSlotIso: '2026-01-16T08:00:00.000Z', nextSlotLabel: '08:00 tomorrow',
+      }],
+      ['2026-03-29T00:30:00Z', '2026-03-28T21:30:00Z', {
+        enabled: true, quiet: true, timeLabel: '00:30', whenLabel: '00:30 tomorrow', windowLabel: '21:00 to 08:00',
+        nextSlot: new Date('2026-03-29T07:00:00.000Z'), nextSlotIso: '2026-03-29T07:00:00.000Z', nextSlotLabel: '08:00 tomorrow',
+      }],
+      ['2026-10-25T00:30:00Z', '2026-10-22T00:30:00Z', {
+        enabled: true, quiet: true, timeLabel: '01:30', whenLabel: '01:30 on Sun 25 Oct', windowLabel: '21:00 to 08:00',
+        nextSlot: new Date('2026-10-25T08:00:00.000Z'), nextSlotIso: '2026-10-25T08:00:00.000Z', nextSlotLabel: '08:00 on Sun 25 Oct',
+      }],
+      ['2026-07-01T12:00:00Z', '2026-07-01T09:00:00Z', {
+        enabled: true, quiet: false, timeLabel: '13:00', whenLabel: '13:00 today', windowLabel: '21:00 to 08:00',
+        nextSlot: null, nextSlotIso: null, nextSlotLabel: null,
+      }],
+    ]) {
+      expect(evaluateSendTime({ at, now, config: null, zone: D })).toStrictEqual(expected)
+      expect(evaluateSendTime({ at, now, config: null })).toStrictEqual(expected)
     }
   })
 
-  it('evaluateSendTime: every half-hour of 2026 (default window; now = 3h earlier) and the DST weeks', () => {
-    const diffs = []
-    for (const t of [...YEAR_HALF_HOURS, ...DST_WEEKS]) {
-      const a = evaluateSendTime({ at: t, now: t - 3 * HOUR, config: null, zone: D })
-      const b = L.evaluateSendTimeLegacy({ at: t, now: t - 3 * HOUR, config: null })
-      if (JSON.stringify(a) !== JSON.stringify(b)) diffs.push(new Date(t).toISOString())
-    }
-    expect(diffs).toEqual([])
-    // and the inert shapes
-    expect(evaluateSendTime({ at: null, now: 0, config: null, zone: D })).toStrictEqual(L.evaluateSendTimeLegacy({ at: null, now: 0, config: null }))
-    expect(evaluateSendTime({ at: 'garbage', config: null })).toStrictEqual(L.evaluateSendTimeLegacy({ at: 'garbage', config: null }))
-  }, SWEEP_TIMEOUT)
-})
-
-const WINDOWS = [
-  { start_hour: 9, end_hour: 17, skip_days: [0, 6] },
-  { start_hour: 8, end_hour: 20, skip_days: [] },
-  { start_hour: null, end_hour: null, skip_days: [0] },
-  { start_hour: 1, end_hour: 3, skip_days: [] }, // straddles both EU change hours
-  { start_hour: 10 },
-  null,
-  {},
-]
-
-describe('TZ.4 Europe/Dublin is byte-identical: sequence send window', () => {
-  it('clampToSendWindow: every 3h of 2026 and every quarter-hour of the DST weeks, every window', () => {
-    const diffs = []
-    for (const w of WINDOWS) {
-      for (const t of [...YEAR_3H, ...DST_WEEKS]) {
-        const a = clampToSendWindow(new Date(t), w, D).toISOString()
-        if (a !== L.clampToSendWindowLegacy(new Date(t), w).toISOString()) diffs.push(`${JSON.stringify(w)} ${new Date(t).toISOString()}`)
-      }
-    }
-    expect(diffs).toEqual([])
-  }, SWEEP_TIMEOUT)
-
-  it('omitting the zone is Europe/Dublin (clamp and isInsideSendWindow)', () => {
-    for (const t of SAMPLES) {
-      for (const w of WINDOWS) {
-        const legacy = L.clampToSendWindowLegacy(new Date(t), w)
-        expect(clampToSendWindow(new Date(t), w).toISOString()).toBe(legacy.toISOString())
-        if (w && Object.keys(w).length) {
-          expect(isInsideSendWindow(new Date(t), w)).toBe(legacy.getTime() === t)
-          expect(isInsideSendWindow(new Date(t), w, D)).toBe(legacy.getTime() === t)
-        }
-      }
-    }
+  it('evaluateSendTime: the inert shapes', () => {
+    const inert = { enabled: true, quiet: false, timeLabel: null, whenLabel: null, windowLabel: '21:00 to 08:00', nextSlot: null, nextSlotIso: null, nextSlotLabel: null }
+    expect(evaluateSendTime({ at: null, now: 0, config: null, zone: D })).toStrictEqual(inert)
+    expect(evaluateSendTime({ at: 'garbage', config: null })).toStrictEqual(inert)
   })
 })
 
-describe('TZ.4 Europe/Dublin is byte-identical: anniversary year and birthday day', () => {
-  it('every half-hour of 2026, days_after 0, 1, 7, 30, 200', () => {
-    const diffs = []
-    for (const t of YEAR_HALF_HOURS) {
-      if (anniversaryOccurrenceYear(t, D) !== L.anniversaryOccurrenceYearLegacy(t)) diffs.push(`year ${t}`)
-      for (const n of [0, 1, 7, 30, 200]) {
-        if (birthdayTargetMonthDay(t, n, D) !== L.birthdayTargetMonthDayLegacy(t, n)) diffs.push(`${n} ${new Date(t).toISOString()}`)
-      }
-    }
-    expect(diffs).toEqual([])
-  }, SWEEP_TIMEOUT)
+describe('TZ.4 Europe/Dublin pinned values: sequence send window', () => {
+  const WEEKDAYS_9_17 = { start_hour: 9, end_hour: 17, skip_days: [0, 6] }
+  const ONE_TO_THREE = { start_hour: 1, end_hour: 3, skip_days: [] } // straddles both EU change hours
+  const NO_SUNDAYS = { start_hour: null, end_hour: null, skip_days: [0] }
 
-  it('pins the two EU DST days (the legacy answer, an hour-off instant included)', () => {
+  it.each([
+    // [window, at, clamped, inside]
+    [WEEKDAYS_9_17, '2026-01-16T18:00:00Z', '2026-01-19T09:00:00.000Z', false], // Fri evening → Mon 09:00 GMT
+    [WEEKDAYS_9_17, '2026-07-03T07:30:00Z', '2026-07-03T08:30:00.000Z', false], // 08:30 IST → 09:30 IST
+    [WEEKDAYS_9_17, '2026-03-28T23:30:00Z', '2026-03-30T08:30:00.000Z', false], // weekend across the spring-forward
+    [WEEKDAYS_9_17, '2026-10-24T23:30:00Z', '2026-10-26T09:30:00.000Z', false], // weekend across the fall-back
+    [ONE_TO_THREE, '2026-03-28T23:30:00Z', '2026-03-29T01:30:00.000Z', false],
+    [ONE_TO_THREE, '2026-03-29T01:30:00Z', '2026-03-29T01:30:00.000Z', true], // 02:30 IST
+    [ONE_TO_THREE, '2026-10-25T00:30:00Z', '2026-10-25T00:30:00.000Z', true], // the first 01:30 (IST)
+    [ONE_TO_THREE, '2026-10-25T03:30:00Z', '2026-10-26T01:30:00.000Z', false],
+    [NO_SUNDAYS, '2026-03-29T01:30:00Z', '2026-03-29T23:30:00.000Z', false], // Sunday → Monday 00:30 IST
+    [NO_SUNDAYS, '2026-10-25T00:30:00Z', '2026-10-26T00:30:00.000Z', false], // Sunday → Monday 00:30 GMT
+  ])('%j at %s', (w, at, clamped, inside) => {
+    expect(clampToSendWindow(new Date(at), w, D).toISOString()).toBe(clamped)
+    expect(clampToSendWindow(new Date(at), w).toISOString()).toBe(clamped) // zone omitted = Dublin
+    expect(isInsideSendWindow(new Date(at), w, D)).toBe(inside)
+    expect(isInsideSendWindow(new Date(at), w)).toBe(inside)
+  })
+
+  it('no window (null / {}) leaves the instant alone', () => {
+    for (const w of [null, {}]) {
+      expect(clampToSendWindow(new Date('2026-03-29T01:30:00Z'), w, D).toISOString()).toBe('2026-03-29T01:30:00.000Z')
+    }
+  })
+})
+
+describe('TZ.4 Europe/Dublin pinned values: anniversary year and birthday day', () => {
+  it.each([
+    // [at, year, birthday days_after 0 / 1 / 7 / 30]
+    ['2026-12-31T23:59:00Z', '2026', ['12-31', '12-30', '12-24', '12-01']],
+    ['2027-01-01T00:00:00Z', '2027', ['01-01', '12-31', '12-25', '12-02']], // GMT: Dublin midnight = UTC midnight
+    ['2026-06-30T23:30:00Z', '2026', ['07-01', '06-30', '06-24', '06-01']], // IST: already 1 July
+    ['2026-03-29T00:30:00Z', '2026', ['03-29', '03-28', '03-22', '02-27']],
+    ['2026-10-25T00:30:00Z', '2026', ['10-25', '10-24', '10-18', '09-25']],
+  ])('%s', (at, year, days) => {
+    const t = Date.parse(at)
+    expect(anniversaryOccurrenceYear(t, D)).toBe(year)
+    expect([0, 1, 7, 30].map((n) => birthdayTargetMonthDay(t, n, D))).toEqual(days)
+  })
+
+  it('pins the two EU DST days (an hour-off instant included)', () => {
     // 00:30 IST on Mon 30 Mar = 23:30Z Sun: 24h earlier is 23:30 GMT on Sat 28 Mar.
-    const t = Date.parse('2026-03-29T23:30:00Z')
-    expect(birthdayTargetMonthDay(t, 1, D)).toBe('03-28')
-    expect(birthdayTargetMonthDay(t, 1, D)).toBe(L.birthdayTargetMonthDayLegacy(t, 1))
+    expect(birthdayTargetMonthDay(Date.parse('2026-03-29T23:30:00Z'), 1, D)).toBe('03-28')
     // 23:30 GMT on Sun 25 Oct: 24h earlier is 00:30 IST on Sun 25 Oct.
-    const u = Date.parse('2026-10-25T23:30:00Z')
-    expect(birthdayTargetMonthDay(u, 1, D)).toBe('10-25')
-    expect(birthdayTargetMonthDay(u, 1, D)).toBe(L.birthdayTargetMonthDayLegacy(u, 1))
+    expect(birthdayTargetMonthDay(Date.parse('2026-10-25T23:30:00Z'), 1, D)).toBe('10-25')
   })
 })
 

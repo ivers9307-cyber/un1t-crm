@@ -9,7 +9,7 @@
 // Vercel runs in UTC — between midnight and 01:00 Dublin during BST the server
 // is still on yesterday, so the month grid highlighted the wrong cell and
 // "on with you today" listed yesterday's shifts. CLAUDE.md's rule is
-// dublinTodayStr() for a business today, and the guardrails lint rule only
+// todayStrIn(zone) for a business today, and the guardrails lint rule only
 // catches the `new Date().toISOString().slice(…)` spelling, not this one
 // (local getters on a UTC box).
 //
@@ -20,7 +20,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { stripComments } from './helpers/js-code.js'
-import { dublinTodayStr } from '../src/lib/dublin-time.js'
+import { todayStrIn } from '../shared/zoned-time.js'
 
 const PAGE = path.resolve(import.meta.dirname, '../src/app/dashboard/today/page.js')
 const source = readFileSync(PAGE, 'utf8')
@@ -71,9 +71,9 @@ describe('/dashboard/today — "today" is a Dublin day', () => {
     expect(code).toMatch(/fetchPersonalDashboardData\(\s*db\s*,\s*user\.id\s*,\s*user\.activeLocation\?\.id\s*,\s*\{\s*todayIso\s*\}\s*\)/)
   })
 
-  it('dublinTodayStr really answers a Dublin calendar day', () => {
-    expect(dublinTodayStr()).toMatch(/^\d{4}-\d{2}-\d{2}$/)
-    expect(dublinTodayStr()).toBe(
+  it('todayStrIn(Europe/Dublin) really answers a Dublin calendar day', () => {
+    expect(todayStrIn('Europe/Dublin')).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(todayStrIn('Europe/Dublin')).toBe(
       new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Dublin', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()),
     )
   })

@@ -33,7 +33,7 @@
 // though today's N is tiny.
 
 import { todayStrIn, dayStrIn, addDaysISO, PLATFORM_TZ } from '@/lib/location-time'
-import { dublinMonthStartStr } from '@/lib/usage-caps'
+import { platformMonthStartStr } from '@/lib/usage-caps'
 import { resolveAllowances, pickActiveVersion } from '@/lib/plans'
 import { assembleIntegrationsHub } from '@/lib/integrations-hub'
 import { logError } from '@/lib/log'
@@ -340,7 +340,7 @@ async function tryAssembleHub(db, locations) {
  *   today, injectable for tests
  */
 export async function getTenantsRoster(db, { today = todayStrIn(PLATFORM_TZ) } = {}) { // D5: the platform billing calendar (PLATFORM_TZ)
-  const monthStart = dublinMonthStartStr(today)
+  const monthStart = platformMonthStartStr(today)
   const overFetchFrom = addDaysISO(monthStart, -1)
 
   const [orgsRes, locsRes, pinsRes, walletsRes] = await Promise.all([
@@ -477,7 +477,7 @@ export async function getTenantDetail(db, orgId, { today = todayStrIn(PLATFORM_T
   if (orgErr) throw new Error(`admin-tenants organization: ${orgErr.message}`)
   if (!org) return null
 
-  const monthStart = dublinMonthStartStr(today)
+  const monthStart = platformMonthStartStr(today)
   const overFetchFrom = addDaysISO(monthStart, -1)
 
   const { data: locsData, error: locsErr } = await db

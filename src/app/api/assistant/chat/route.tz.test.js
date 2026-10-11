@@ -1,5 +1,7 @@
 // route.tz.test.js — TZ.5. The staff assistant's "Today" is the active
-// location's day, not Dublin's. Dublin unchanged.
+// location's day, not Dublin's. The Dublin byte-identity sweep ran in TZ.5 and
+// was retired in TZ.18b: Europe/Dublin is pinned by fixed values below, and
+// zoned-time ≡ dublin-time stays proven by shared/zoned-time.parity.test.js.
 process.env.TZ = 'America/Los_Angeles' // neither zone under test
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -17,7 +19,6 @@ vi.mock('@/lib/anthropic', () => ({
 const { POST } = await import('./route.js')
 const { getCurrentUser } = await import('@/lib/auth')
 const { anthropicMessages } = await import('@/lib/anthropic')
-const { dublinTodayStrLegacyDublin } = await import('@/lib/agent/agent-zone.legacy-dublin.test-helpers.js')
 
 const userAt = (timezone) => ({
   id: 'u1', full_name: 'Test Manager', role: 'manager', permissions: {},
@@ -39,13 +40,20 @@ beforeEach(() => {
 })
 afterEach(() => { vi.useRealTimers() })
 
-describe('TZ.5 Europe/Dublin is byte-identical', () => {
-  it.each(['2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', '2026-07-01T23:30:00Z', '2026-10-24T23:30:00Z', '2026-10-25T01:00:00Z', '2026-12-31T23:30:00Z'])('%s', async (iso) => {
+describe('TZ.5 Europe/Dublin pinned values', () => {
+  it.each([
+    ['2026-03-28T23:30:00Z', '2026-03-28'], // 23:30 GMT, eve of the spring-forward
+    ['2026-03-29T23:30:00Z', '2026-03-30'], // 00:30 IST, after it
+    ['2026-07-01T23:30:00Z', '2026-07-02'], // summer: 00:30 IST
+    ['2026-10-24T23:30:00Z', '2026-10-25'], // 00:30 IST, before the fall-back
+    ['2026-10-25T23:30:00Z', '2026-10-25'], // 23:30 GMT, after it
+    ['2026-12-31T23:30:00Z', '2026-12-31'], // winter: 23:30 GMT
+  ])('%s -> %s', async (iso, day) => {
     vi.setSystemTime(new Date(iso))
     getCurrentUser.mockResolvedValue(userAt('Europe/Dublin'))
-    expect(await todayLine()).toBe(dublinTodayStrLegacyDublin())
+    expect(await todayLine()).toBe(day)
     getCurrentUser.mockResolvedValue(userAt(null)) // a NULL column is Dublin
-    expect(await todayLine()).toBe(dublinTodayStrLegacyDublin())
+    expect(await todayLine()).toBe(day)
   })
 })
 

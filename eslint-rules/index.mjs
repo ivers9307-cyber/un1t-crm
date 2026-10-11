@@ -174,7 +174,7 @@ const noUtcToday = {
     docs: { description: "Disallow new Date().toISOString().slice/split — the UTC date of now; use dublinTodayStr() for a business 'today'." },
     schema: [],
     messages: {
-      utcToday: "new Date().toISOString() is the UTC date of now — during BST it differs from the Dublin date around midnight, an off-by-one for a business 'today'. Use todayStrIn(zone) from @/lib/location-time (the location's zone; dublin-time is legacy, TZ.18). If you genuinely need the UTC date (filename/storage key), annotate with an eslint-disable + reason.",
+      utcToday: "new Date().toISOString() is the UTC date of now — around midnight it differs from the studio's date (an hour in Irish summer time; more in other zones), an off-by-one for a business 'today'. Use todayStrIn(zone) from @/lib/location-time (the location's zone; shared/zoned-time on the phone). If you genuinely need the UTC date (filename/storage key), annotate with an eslint-disable + reason.",
     },
   },
   create(context) {
@@ -201,23 +201,25 @@ const noUtcToday = {
 // @/lib/location-time (zone from the location) or PLATFORM_TZ (a platform-level
 // decision). Exact-value match only: prose that mentions the zone is fine.
 // Armed by scripts/check-dublin-zone.mjs (npm run check:guardrails), which owns
-// the allowlist and the shrinking baseline of files the timezone wave has yet
-// to sweep; not by eslint.guardrails.config.mjs, which cannot fail on a stale
-// ignore entry and ignores mobile/**.
+// the allowlist (TZ.18b: no baseline any more; the wave is swept); not by
+// eslint.guardrails.config.mjs, which ignores mobile/**. Option
+// `{ literals: false }` keeps only the import ban: tests may name the zone (the
+// Europe/Dublin pins), but nothing imports dublin-time outside its own tests.
 const DUBLIN_IMPORT = /(^|\/)dublin-time(\.js)?$/
 const noHardcodedDublinZone = {
   meta: {
     type: 'problem',
     docs: { description: "Disallow the literal 'Europe/Dublin' and dublin-time imports outside the zone helpers." },
-    schema: [],
+    schema: [{ type: 'object', properties: { literals: { type: 'boolean' } }, additionalProperties: false }],
     messages: {
       literal: "'Europe/Dublin' hard-codes UN1T's zone. Use the location's zone (@/lib/location-time: getLocationZone / zoneOfLocation) or PLATFORM_TZ for a platform-level decision.",
       import: 'dublin-time pins Europe/Dublin. Import the zone-taking twin from @/lib/location-time (web) or shared/zoned-time (phone, shared).',
     },
   },
   create(context) {
+    const literals = context.options[0]?.literals !== false
     const lit = (node, value) => {
-      if (value === 'Europe/Dublin') context.report({ node, messageId: 'literal' })
+      if (literals && value === 'Europe/Dublin') context.report({ node, messageId: 'literal' })
     }
     const imp = (node, src) => {
       if (typeof src === 'string' && DUBLIN_IMPORT.test(src)) context.report({ node, messageId: 'import' })

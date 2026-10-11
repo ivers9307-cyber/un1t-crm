@@ -3,10 +3,10 @@
 // each studio's own timezone. Shelly already did (SHELLY.1/.2); its files only
 // changed imports.
 //
-// Pinned against the FROZEN pre-change bodies (climate-sonos.legacy-dublin.
-// test-helpers.js):
-//   • Europe/Dublin: identical, every quarter-hour of 2026 plus every minute of
-//     both EU change days (and the 2026 sample instants of the house template).
+//   • Europe/Dublin: pinned by fixed values around both 2026 EU DST changes.
+//     The byte-identity sweep against a frozen pre-change copy ran in TZ.10
+//     and was retired in TZ.18b; zoned-time ≡ dublin-time stays proven by
+//     shared/zoned-time.parity.test.js.
 //   • America/New_York: the studio's own clock across both 2026 US DST changes.
 //   • A failed locations.timezone read skips the location for the tick, logged,
 //     before ANY device call. Never a guessed zone.
@@ -15,7 +15,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 
-const L = await import('./climate-sonos.legacy-dublin.test-helpers.js')
 const { planAction } = await import('./sonos/groups.js')
 const { runSonosReconcile } = await import('./sonos/reconcile.js')
 const { resolveServeWindows, resolveDayWindows, desiredState } = await import('./schedule/desired-state.js')
@@ -30,36 +29,6 @@ const D = 'Europe/Dublin'
 const NY = 'America/New_York'
 // US DST 2026: spring forward Sun 8 Mar 02:00 → 03:00; fall back Sun 1 Nov 02:00 → 01:00.
 // EU DST 2026: spring forward Sun 29 Mar 01:00Z; fall back Sun 25 Oct 01:00Z.
-const SAMPLES = [
-  '2026-03-07T04:30:00Z', '2026-03-08T06:59:00Z', '2026-03-08T07:00:00Z',
-  '2026-03-28T23:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z',
-  '2026-10-24T23:30:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z',
-  '2026-11-01T04:59:00Z', '2026-11-01T05:00:00Z', '2026-11-01T06:00:00Z',
-  '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-12-31T23:30:00Z',
-].map(Date.parse)
-
-// Every quarter-hour of 2026 (the cheap checks), and a lighter set for the
-// ones that resolve whole schedules: every hour of 2026, every quarter-hour of
-// the two EU change weekends, every minute of both change nights.
-const quarterHours = []
-for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 15 * 60_000) quarterHours.push(t)
-const changeNights = []
-for (const day of [Date.UTC(2026, 2, 28, 22), Date.UTC(2026, 9, 24, 22)]) {
-  for (let t = day; t < day + 6 * 3600_000; t += 60_000) changeNights.push(t)
-}
-const instants = [...quarterHours, ...changeNights, ...SAMPLES]
-const scheduleInstants = (() => {
-  const out = []
-  for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 3600_000) out.push(t)
-  for (const from of [Date.UTC(2026, 2, 27), Date.UTC(2026, 9, 23)]) {
-    for (let t = from; t < from + 4 * 864e5; t += 15 * 60_000) out.push(t)
-  }
-  return [...out, ...changeNights, ...SAMPLES]
-})()
-const SLOW = 60_000
-const days2026 = []
-for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 864e5) days2026.push(new Date(t).toISOString().slice(0, 10))
-
 // Windows that exercise every boundary class: plain, overnight, a 23:xx edge
 // (the SHELLY.2 class), a 00:00 start, and an overnight span into 01:30.
 const WINDOWS = [
@@ -73,71 +42,125 @@ const schedule = (over = {}) => ({
   windows: WINDOWS, override: null, last_applied: null, last_state: null, ...over,
 })
 
-describe('TZ.10 Europe/Dublin is byte-identical', () => {
-  it('the engine: serve windows over every 2026 day', () => {
-    const device = { enabled: true, schedule_mode: 'fixed', fixed_windows: WINDOWS }
-    for (const day of days2026) {
-      for (const tz of [D, undefined, null, '']) {
-        expect(resolveServeWindows(device, day, [], tz)).toStrictEqual(L.resolveServeWindowsLegacy(device, day, [], tz))
-        expect(resolveDayWindows(device, day, [], tz)).toStrictEqual(L.resolveDayWindowsLegacy(device, day, [], tz))
-      }
-    }
-  }, SLOW)
+const fixedDevice = { enabled: true, schedule_mode: 'fixed', fixed_windows: WINDOWS }
+const spans = (ws) => ws.map((w) => [new Date(w.on_at).toISOString(), new Date(w.off_at).toISOString(), w.source?.favorite_id])
+const iso = (t) => new Date(t).toISOString()
 
-  it('the engine moved imports only: identical in New York too', { timeout: SLOW }, () => {
-    const device = { enabled: true, schedule_mode: 'fixed', fixed_windows: WINDOWS }
-    for (const day of days2026) {
-      expect(resolveServeWindows(device, day, [], NY)).toStrictEqual(L.resolveServeWindowsLegacy(device, day, [], NY))
+describe('TZ.10 Europe/Dublin pinned values', () => {
+  it('the engine: serve windows on both DST weekends and an ordinary summer/winter day (zone omitted = Dublin)', () => {
+    const SAT_SPRING = ['2026-03-28T22:00:00.000Z', '2026-03-29T01:00:00.000Z', 'fv-2'] // 22:00 GMT → 02:00 IST
+    const SAT_FALL = ['2026-10-24T21:00:00.000Z', '2026-10-25T02:00:00.000Z', 'fv-2'] //  22:00 IST → 02:00 GMT
+    const cases = [
+      ['2026-03-28', [SAT_SPRING]],
+      ['2026-03-29', [SAT_SPRING, ['2026-03-29T22:15:00.000Z', '2026-03-29T22:45:00.000Z', 'fv-3']]],
+      ['2026-10-24', [SAT_FALL]],
+      ['2026-10-25', [SAT_FALL, ['2026-10-25T23:15:00.000Z', '2026-10-25T23:45:00.000Z', 'fv-3']]],
+      ['2026-07-01', [['2026-06-30T23:00:00.000Z', '2026-07-01T00:30:00.000Z', 'fv-4'], ['2026-07-01T05:00:00.000Z', '2026-07-01T20:30:00.000Z', 'fv-1']]],
+      ['2026-12-30', [['2026-12-30T00:00:00.000Z', '2026-12-30T01:30:00.000Z', 'fv-4'], ['2026-12-30T06:00:00.000Z', '2026-12-30T21:30:00.000Z', 'fv-1']]],
+    ]
+    for (const [day, want] of cases) {
+      for (const tz of [D, undefined, null, '']) expect(spans(resolveServeWindows(fixedDevice, day, [], tz))).toEqual(want)
     }
-    for (const t of SAMPLES) {
-      const day = dayStrIn(t, NY)
-      expect(desiredState(device, t, day, [], NY)).toBe(L.desiredStateLegacy(device, t, day, [], NY))
-    }
+    // The day's own windows (no spill from the night before).
+    expect(spans(resolveDayWindows(fixedDevice, '2026-03-29', [], D))).toEqual([['2026-03-29T22:15:00.000Z', '2026-03-29T22:45:00.000Z', 'fv-3']])
+    expect(spans(resolveDayWindows(fixedDevice, '2026-10-25', [], D))).toEqual([['2026-10-25T23:15:00.000Z', '2026-10-25T23:45:00.000Z', 'fv-3']])
+    expect(spans(resolveDayWindows(fixedDevice, '2026-10-24', [], undefined))).toEqual([SAT_FALL])
   })
 
-  it('planAction with the Dublin day and zone = the old Dublin-only planAction', () => {
-    const states = [
-      schedule(),
-      schedule({ last_applied: { window_on_at: 0, action: 'open' } }),
-      schedule({ override: { state: 'off', until: '2026-07-01T00:00:00Z' } }),
-    ]
-    for (const t of scheduleInstants) {
-      for (const s of states) {
-        expect(planAction(s, t, dayStrIn(t, D), D)).toStrictEqual(L.planActionLegacy(s, t, L.sonosDateStrLegacy(t)))
-      }
+  it('planAction with the Dublin day and zone', () => {
+    const plan = (s, at) => {
+      const t = Date.parse(at)
+      const a = planAction(s, t, dayStrIn(t, D), D)
+      return a && { ...a, windowOnAt: iso(a.windowOnAt) }
     }
-  }, SLOW)
+    const applied = schedule({ last_applied: { window_on_at: 0, action: 'open' } })
+    const overridden = schedule({ override: { state: 'off', until: '2026-07-01T00:00:00Z' } })
+    // Spring-forward night: the Saturday window is open at 01:30 IST, closed by 02:30 IST.
+    expect(plan(schedule(), '2026-03-29T00:30:00Z')).toEqual({ action: 'open', windowOnAt: '2026-03-28T22:00:00.000Z', volume: 20, favoriteId: 'fv-2' })
+    expect(plan(schedule(), '2026-03-29T01:30:00Z')).toBeNull()
+    expect(plan(applied, '2026-03-29T01:30:00Z')).toEqual({ action: 'close', windowOnAt: '1970-01-01T00:00:00.000Z' })
+    expect(plan(overridden, '2026-03-29T00:30:00Z')).toBeNull()
+    // Sunday 23:15 IST.
+    expect(plan(schedule(), '2026-03-29T22:30:00Z')).toEqual({ action: 'open', windowOnAt: '2026-03-29T22:15:00.000Z', volume: 25, favoriteId: 'fv-3' })
+    // Fall-back night: still open at 01:30 GMT, closed at 02:30 GMT.
+    expect(plan(schedule(), '2026-10-25T01:30:00Z')).toEqual({ action: 'open', windowOnAt: '2026-10-24T21:00:00.000Z', volume: 20, favoriteId: 'fv-2' })
+    expect(plan(applied, '2026-10-25T02:30:00Z')).toEqual({ action: 'close', windowOnAt: '1970-01-01T00:00:00.000Z' })
+    // Ordinary summer (06:00 IST) and winter (06:00 GMT) weekday opens.
+    expect(plan(schedule(), '2026-07-01T05:00:00Z')).toEqual({ action: 'open', windowOnAt: '2026-07-01T05:00:00.000Z', volume: 35, favoriteId: 'fv-1' })
+    expect(plan(schedule(), '2026-07-01T20:30:00Z')).toBeNull() // 21:30 IST: closed
+    expect(plan(schedule(), '2026-12-30T06:00:00Z')).toEqual({ action: 'open', windowOnAt: '2026-12-30T06:00:00.000Z', volume: 35, favoriteId: 'fv-1' })
+  })
 
   it('the Sonos health check and its labels', () => {
     const s = schedule({ last_state: { at: '2026-03-29T00:30:00.000Z', playback_state: 'PLAYBACK_STATE_PLAYING' } })
-    for (const t of scheduleInstants) expect(scheduleHealth(s, t, D)).toStrictEqual(L.scheduleHealthLegacy(s, t))
-    for (const t of instants) expect(fmtScheduleTime(t, D)).toBe(L.fmtDublinLegacy(t))
-    for (const v of [null, '', 'not a date']) expect(fmtScheduleTime(v, D)).toBe(L.fmtDublinLegacy(v))
-  }, SLOW)
+    expect(scheduleHealth(s, Date.parse('2026-03-29T00:30:00Z'), D)).toStrictEqual({ tone: 'green', label: 'Playing', detail: 'Last acted Sun, 29 Mar, 00:30 (Sonos reports playing).' })
+    expect(scheduleHealth(s, Date.parse('2026-03-29T01:30:00Z'), D)).toMatchObject({ tone: 'grey', label: 'Last acted Sun, 29 Mar, 00:30' })
+    expect(scheduleHealth(s, Date.parse('2026-03-29T22:20:00Z'), D)).toStrictEqual({ tone: 'amber', label: 'Window just opened', detail: 'Opened at Sun, 29 Mar, 23:15 — waiting for the per-minute cron to apply it.' })
+    expect(scheduleHealth(s, Date.parse('2026-03-29T22:30:00Z'), D)).toMatchObject({ tone: 'red', detail: expect.stringContaining('opened at Sun, 29 Mar, 23:15') })
+    expect(scheduleHealth(s, Date.parse('2026-10-25T01:00:00Z'), D)).toMatchObject({ tone: 'red', detail: expect.stringContaining('opened at Sat, 24 Oct, 22:00') })
+    expect(scheduleHealth(s, Date.parse('2026-07-01T12:00:00Z'), D)).toMatchObject({ tone: 'red', detail: expect.stringContaining('opened at Wed, 01 Jul, 06:00') })
+    expect(fmtScheduleTime(Date.parse('2026-03-29T00:59:00Z'), D)).toBe('Sun, 29 Mar, 00:59')
+    expect(fmtScheduleTime(Date.parse('2026-03-29T01:00:00Z'), D)).toBe('Sun, 29 Mar, 02:00')
+    expect(fmtScheduleTime('2026-10-25T00:30:00Z', D)).toBe('Sun, 25 Oct, 01:30') // IST
+    expect(fmtScheduleTime('2026-10-25T01:30:00Z', D)).toBe('Sun, 25 Oct, 01:30') // GMT
+    expect(fmtScheduleTime('2026-07-01T23:30:00Z', D)).toBe('Thu, 02 Jul, 00:30')
+    expect(fmtScheduleTime('2026-12-31T23:30:00Z', D)).toBe('Thu, 31 Dec, 23:30')
+    expect(fmtScheduleTime(null, D)).toBe('')
+    expect(fmtScheduleTime('', D)).toBe('')
+    expect(fmtScheduleTime('not a date', D)).toBe('Invalid Date')
+  })
 
-  it('"off until midnight" lands on the same instant', () => {
-    for (const t of instants) expect(untilMidnightTonightIso(D, t)).toBe(L.untilMidnightTonightIsoLegacy(t))
-  }, SLOW)
+  it('"off until midnight" is the next Dublin midnight across both changes', () => {
+    const mid = (at) => untilMidnightTonightIso(D, Date.parse(at))
+    expect(mid('2026-03-28T23:30:00Z')).toBe('2026-03-29T00:00:00.000Z') // Sat 23:30 GMT
+    expect(mid('2026-03-29T01:00:00Z')).toBe('2026-03-29T23:00:00.000Z') // Sun 02:00 IST → Mon 00:00 IST
+    expect(mid('2026-03-29T23:00:00Z')).toBe('2026-03-30T23:00:00.000Z') // Mon 00:00 IST
+    expect(mid('2026-10-24T22:59:00Z')).toBe('2026-10-24T23:00:00.000Z') // Sat 23:59 IST
+    expect(mid('2026-10-24T23:00:00Z')).toBe('2026-10-26T00:00:00.000Z') // Sun 00:00 IST → Mon 00:00 GMT (25-hour day)
+    expect(mid('2026-07-01T12:00:00Z')).toBe('2026-07-01T23:00:00.000Z')
+    expect(mid('2026-12-31T23:30:00Z')).toBe('2027-01-01T00:00:00.000Z')
+  })
 
   it('the class-climate slot key', () => {
-    for (const t of instants) {
-      expect(slotKey(t, D)).toBe(L.slotKeyLegacy(t))
-      expect(slotKey(new Date(t).toISOString(), D)).toBe(L.slotKeyLegacy(new Date(t).toISOString()))
-    }
-    for (const v of [null, '', 'garbage', undefined]) expect(slotKey(v, D)).toBe(L.slotKeyLegacy(v))
-  }, SLOW)
+    expect(slotKey(Date.parse('2026-03-29T00:59:00Z'), D)).toBe('Sun 00:59')
+    expect(slotKey('2026-03-29T01:00:00Z', D)).toBe('Sun 02:00')
+    expect(slotKey('2026-10-25T00:30:00Z', D)).toBe('Sun 01:30') // IST
+    expect(slotKey('2026-10-25T01:30:00Z', D)).toBe('Sun 01:30') // GMT
+    expect(slotKey('2026-07-01T23:30:00Z', D)).toBe('Thu 00:30')
+    expect(slotKey('2026-12-31T23:30:00Z', D)).toBe('Thu 23:30')
+    for (const v of [null, '', 'garbage', undefined]) expect(slotKey(v, D)).toBeNull()
+  })
 
   it('the fleet alert class label stays on the platform clock', () => {
-    for (const t of instants) {
-      const occ = { name: 'CONVOY', starts_at: new Date(t).toISOString() }
-      expect(describeClass(occ)).toBe(L.describeClassLegacy(occ))
-    }
-    expect(describeClass({ program: 'Hyrox' })).toBe(L.describeClassLegacy({ program: 'Hyrox' }))
-  }, SLOW)
+    const at = (t) => describeClass({ name: 'CONVOY', starts_at: t })
+    expect(at('2026-03-29T00:59:00Z')).toBe('CONVOY 00:59')
+    expect(at('2026-03-29T01:00:00Z')).toBe('CONVOY 02:00')
+    expect(at('2026-10-25T00:30:00Z')).toBe('CONVOY 01:30')
+    expect(at('2026-10-25T01:30:00Z')).toBe('CONVOY 01:30')
+    expect(at('2026-07-01T23:30:00Z')).toBe('CONVOY 00:30')
+    expect(at('2026-12-31T23:30:00Z')).toBe('CONVOY 23:30')
+    expect(describeClass({ program: 'Hyrox' })).toBe('Hyrox')
+  })
 })
 
 describe('TZ.10 America/New_York follows New York across DST', () => {
   const nyWin = { days: [1, 2, 3, 4, 5, 6, 7], on: '06:00', off: '22:00', volume: 30, favorite_id: 'fv' }
+
+  it('the engine: the house windows resolve on New York\'s clock across both US DST weekends', () => {
+    const SAT_SPRING = ['2026-03-08T03:00:00.000Z', '2026-03-08T06:00:00.000Z', 'fv-2'] // 22:00 EST → 02:00 EDT
+    const SAT_FALL = ['2026-11-01T02:00:00.000Z', '2026-11-01T07:00:00.000Z', 'fv-2'] //  22:00 EDT → 02:00 EST
+    expect(spans(resolveServeWindows(fixedDevice, '2026-03-07', [], NY))).toEqual([SAT_SPRING])
+    expect(spans(resolveServeWindows(fixedDevice, '2026-03-08', [], NY))).toEqual([SAT_SPRING, ['2026-03-09T03:15:00.000Z', '2026-03-09T03:45:00.000Z', 'fv-3']])
+    expect(spans(resolveServeWindows(fixedDevice, '2026-10-31', [], NY))).toEqual([SAT_FALL])
+    expect(spans(resolveServeWindows(fixedDevice, '2026-11-01', [], NY))).toEqual([SAT_FALL, ['2026-11-02T04:15:00.000Z', '2026-11-02T04:45:00.000Z', 'fv-3']])
+    expect(spans(resolveServeWindows(fixedDevice, '2026-07-01', [], NY))).toEqual([['2026-07-01T04:00:00.000Z', '2026-07-01T05:30:00.000Z', 'fv-4'], ['2026-07-01T10:00:00.000Z', '2026-07-02T01:30:00.000Z', 'fv-1']])
+    const state = (at) => { const t = Date.parse(at); return desiredState(fixedDevice, t, dayStrIn(t, NY), [], NY) }
+    expect(state('2026-03-08T03:30:00Z')).toBe('on') //  Sat 22:30 EST
+    expect(state('2026-03-08T07:30:00Z')).toBe('off') // Sun 03:30 EDT
+    expect(state('2026-11-01T05:30:00Z')).toBe('on') //  Sun 01:30 EDT (before the fall-back)
+    expect(state('2026-11-01T12:00:00Z')).toBe('off') // Sun 07:00 EST
+    expect(state('2026-07-01T04:30:00Z')).toBe('on') //  Wed 00:30 EDT
+  })
 
   it('a 06:00–22:00 window on Sun 8 Mar 2026 (spring forward) is 10:00Z → 02:00Z', () => {
     const w = resolveDayWindows({ enabled: true, schedule_mode: 'fixed', fixed_windows: [nyWin] }, '2026-03-08', [], NY)
@@ -161,7 +184,7 @@ describe('TZ.10 America/New_York follows New York across DST', () => {
     // 07:30Z = 03:30 EDT: closed in New York, though 07:30 is inside 06:00–22:00 in Dublin.
     const early = Date.parse('2026-03-08T07:30:00Z')
     expect(planAction(s, early, dayStrIn(early, NY), NY)).toBeNull()
-    expect(L.planActionLegacy(s, early, L.sonosDateStrLegacy(early))).not.toBeNull()
+    expect(planAction(s, early, dayStrIn(early, D), D)).not.toBeNull() // 07:30 GMT in Dublin
   })
 
   it('a 23:15–23:45 Sunday window (the SHELLY.2 23:xx class) resolves on the right NY day', () => {
@@ -280,18 +303,18 @@ describe('TZ.10 runSonosReconcile acts per location zone', () => {
     expect(db.zoneReads).toEqual([['loc-ny', 'loc-dub']])
   })
 
-  it('the old Dublin-only day would not have opened New York', () => {
+  it('the Dublin day (Sunday) would not have opened the Saturday window', () => {
     const ny = schedule({ windows: [satEvening] })
-    expect(L.planActionLegacy(ny, t, L.sonosDateStrLegacy(t))).toBeNull()
+    expect(planAction(ny, t, dayStrIn(t, D), D)).toBeNull()
   })
 
-  it('a Dublin studio sees exactly the old plan', async () => {
+  it('a Dublin studio opens on Dublin\'s clock', async () => {
     const mon = Date.parse('2026-08-24T05:00:00Z') // Mon 06:00 IST
     const s = schedule({ location_id: 'loc-dub', windows: [WINDOWS[0]] })
     const db = makeDb([s], { zones: { 'loc-dub': D } })
     await runSonosReconcile(db, deps(mon))
     expect(db.updates[0].patch.last_applied).toMatchObject({ window_on_at: mon, action: 'open' })
-    expect(L.planActionLegacy(s, mon, L.sonosDateStrLegacy(mon))).toMatchObject({ action: 'open', windowOnAt: mon })
+    expect(planAction(s, mon, dayStrIn(mon, D), D)).toMatchObject({ action: 'open', windowOnAt: mon })
   })
 
   it('a failed timezone read skips every location this tick, logged, with NO device call', async () => {

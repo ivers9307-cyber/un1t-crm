@@ -1,56 +1,52 @@
 // TZ.14 — member screens take the member's HOME studio zone (D7 = A).
+//
+// The Europe/Dublin byte-identity sweep against a frozen pre-change copy ran in
+// TZ.14 and was retired in TZ.18b: Dublin is pinned below by fixed values, and
+// zoned-time ≡ dublin-time stays proven by shared/zoned-time.parity.test.js.
 process.env.TZ = 'America/Los_Angeles' // neither zone under test
 import { describe, it, expect } from 'vitest'
 
 const M = await import('./member-zone.js')
-const L = await import('../tz14-screens.legacy-dublin.test-helpers.js')
 
 const DUB = 'Europe/Dublin'
 const NY = 'America/New_York'
-const SAMPLES = [
-  '2026-03-07T04:30:00Z', '2026-03-08T06:59:00Z', '2026-03-08T07:00:00Z',
-  '2026-03-28T23:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z',
-  '2026-10-24T23:30:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z',
-  '2026-11-01T04:59:00Z', '2026-11-01T05:00:00Z', '2026-11-01T06:00:00Z',
-  '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-12-31T23:30:00Z',
-]
-const HOURS_2026 = []
-for (let ms = Date.UTC(2026, 0, 1); ms < Date.UTC(2027, 0, 1); ms += 3 * 3_600_000 + 30 * 60_000) HOURS_2026.push(ms)
+// EU DST 2026: spring forward Sun 29 Mar 01:00Z; fall back Sun 25 Oct 01:00Z.
+const P = ['2026-01-15T14:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', '2026-07-01T23:30:00Z', '2026-10-25T00:30:00Z', '2026-10-25T01:30:00Z']
 
-describe('TZ.14 Europe/Dublin is byte-identical', () => {
-  it('Home digest window (last completed week)', () => {
-    for (const ms of [...SAMPLES.map(Date.parse), ...HOURS_2026]) {
-      expect(M.lastWeekWindow(ms, DUB)).toStrictEqual(L.lastWeekWindowLegacy(ms))
-    }
-  })
-  it('Home this-week pips start', () => {
-    for (const ms of [...SAMPLES.map(Date.parse), ...HOURS_2026]) {
-      expect(M.thisWeekStartMs(ms, DUB)).toBe(L.thisWeekStartMsLegacy(ms))
-    }
-  })
-  it('"You usually train on …"', () => {
-    // Sessions straddling Dublin midnight in both seasons.
-    const sets = [
-      ['2026-10-24T23:30:00Z', '2026-10-31T23:30:00Z', '2026-11-07T23:30:00Z'],
-      ['2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-07-07T23:00:00Z'],
-      SAMPLES,
-      [],
-      ['2026-01-05T10:00:00Z'],
-    ]
-    for (const isos of sets) {
-      const sessions = isos.map((started_at) => ({ started_at }))
-      expect(M.mostFrequentWeekday(sessions, DUB)).toBe(L.mostFrequentWeekdayLegacy(sessions))
-    }
-  })
-  it('session start time', () => {
-    for (const ms of [...SAMPLES.map(Date.parse), ...HOURS_2026]) {
-      const iso = new Date(ms).toISOString()
-      expect(M.memberClockLabel(iso, DUB)).toBe(L.memberClockLabelLegacy(iso))
-    }
-    expect(M.memberClockLabel(null, DUB)).toBe(L.memberClockLabelLegacy(null))
+describe('TZ.14 Europe/Dublin pinned values', () => {
+  it('Home digest window (last completed week), across both EU clock changes', () => {
+    const w = (iso, zone) => { const { thisWeekStartIso, lastWeekStartIso } = M.lastWeekWindow(Date.parse(iso), zone); return [lastWeekStartIso, thisWeekStartIso] }
+    // The week of the spring-forward Sunday is 167 hours; of the fall-back Sunday, 169.
+    expect(w('2026-03-30T12:00:00Z', DUB)).toEqual(['2026-03-23T00:00:00.000Z', '2026-03-29T23:00:00.000Z'])
+    expect(w('2026-10-26T12:00:00Z', DUB)).toEqual(['2026-10-18T23:00:00.000Z', '2026-10-26T00:00:00.000Z'])
+    expect(w('2026-07-15T12:00:00Z', DUB)).toEqual(['2026-07-05T23:00:00.000Z', '2026-07-12T23:00:00.000Z'])
+    expect(w('2026-01-15T12:00:00Z', DUB)).toEqual(['2026-01-05T00:00:00.000Z', '2026-01-12T00:00:00.000Z'])
   })
   it('the default zone is Dublin', () => {
-    expect(M.lastWeekWindow(Date.parse(SAMPLES[0]))).toStrictEqual(L.lastWeekWindowLegacy(Date.parse(SAMPLES[0])))
+    expect(M.lastWeekWindow(Date.parse('2026-03-30T12:00:00Z'))).toStrictEqual(M.lastWeekWindow(Date.parse('2026-03-30T12:00:00Z'), DUB))
+    expect(M.lastWeekWindow(Date.parse('2026-03-30T12:00:00Z')).thisWeekStartMs).toBe(Date.parse('2026-03-29T23:00:00Z'))
+  })
+  it('Home this-week pips start: the week turns at Dublin Monday midnight', () => {
+    const s = (iso) => new Date(M.thisWeekStartMs(Date.parse(iso), DUB)).toISOString()
+    expect(s('2026-03-29T22:59:00Z')).toBe('2026-03-23T00:00:00.000Z') // 23:59 IST Sun
+    expect(s('2026-03-29T23:00:00Z')).toBe('2026-03-29T23:00:00.000Z') // 00:00 IST Mon
+    expect(s('2026-10-25T23:59:00Z')).toBe('2026-10-18T23:00:00.000Z') // 23:59 GMT Sun
+    expect(s('2026-10-26T00:00:00Z')).toBe('2026-10-26T00:00:00.000Z') // 00:00 GMT Mon
+    expect(s('2026-07-15T12:00:00Z')).toBe('2026-07-12T23:00:00.000Z')
+    expect(s('2026-01-15T12:00:00Z')).toBe('2026-01-12T00:00:00.000Z')
+  })
+  it('"You usually train on …" counts the Dublin weekday', () => {
+    const f = (isos) => M.mostFrequentWeekday(isos.map((started_at) => ({ started_at })), DUB)
+    // 23:30Z on 24 Oct is 00:30 IST Sunday; on 31 Oct / 7 Nov it is 23:30 GMT Saturday.
+    expect(f(['2026-10-24T23:30:00Z', '2026-10-31T23:30:00Z', '2026-11-07T23:30:00Z'])).toBe('Saturday')
+    // 23:00Z on 30 Jun / 7 Jul is 00:00 IST Wednesday.
+    expect(f(['2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-07-07T23:00:00Z'])).toBe('Wednesday')
+    expect(f([])).toBeNull()
+    expect(f(['2026-01-05T10:00:00Z'])).toBeNull()
+  })
+  it('session start time', () => {
+    expect(P.map((iso) => M.memberClockLabel(iso, DUB))).toEqual(['14:30', '00:59', '02:00', '00:30', '01:30', '01:30'])
+    expect(M.memberClockLabel(null, DUB)).toBeNull()
   })
 })
 

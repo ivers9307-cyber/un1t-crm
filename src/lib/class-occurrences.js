@@ -7,7 +7,7 @@
 // does the IO (fetch + upsert).
 
 import { fetchUpcomingEvents, fetchGlofoxTrainers, fetchMemberResult, glofoxDisplayName } from '@/lib/glofox'
-import { dublinTimeLabel } from '@/lib/dublin-time'
+import { timeLabelIn, PLATFORM_TZ } from '@/lib/location-time'
 import { logWarn, logError } from '@/lib/log'
 
 export const DEFAULT_CLASS_MINUTES = 60
@@ -158,7 +158,9 @@ const TRAINER_LOOKUP_WINDOW_MIN = 15
  */
 export function isTrainerLookupTick(nowMs) {
   if (!Number.isFinite(nowMs)) return false
-  const label = dublinTimeLabel(new Date(nowMs).toISOString()) // 'HH:MM', Dublin
+  // An ops throttle on one shared Glofox lookup, not a studio decision: the
+  // platform clock (PLATFORM_TZ, Europe/Dublin), whatever the location's zone.
+  const label = timeLabelIn(new Date(nowMs).toISOString(), PLATFORM_TZ) // 'HH:MM', platform clock
   if (!label) return false
   const [h, m] = label.split(':').map(Number)
   return h === TRAINER_LOOKUP_DUBLIN_HOUR && m < TRAINER_LOOKUP_WINDOW_MIN

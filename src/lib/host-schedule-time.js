@@ -126,12 +126,6 @@ export function scheduleLabelIn(isoOrMs, zone = DEFAULT_TZ) {
   return `${WEEKDAYS[p.weekday - 1]} ${p.d} ${MONTHS[p.mo - 1]}, ${pad(p.h)}:${pad(p.mi)}`
 }
 
-/** @deprecated TZ.9: isoToZonedInputs(isoOrMs, zone). Europe/Dublin; TZ.18b deletes it. */
-export const isoToDublinInputs = (isoOrMs) => isoToZonedInputs(isoOrMs, DEFAULT_TZ)
-/** @deprecated TZ.9: zonedLocalToIso(date, time, zone). Europe/Dublin; TZ.18b deletes it. */
-export const dublinLocalToIso = (date, time) => zonedLocalToIso(date, time, DEFAULT_TZ)
-/** @deprecated TZ.9: scheduleLabelIn(isoOrMs, zone). Europe/Dublin (HostEmailReport, TZ.16's row); TZ.18b deletes it. */
-export const dublinScheduleLabel = (isoOrMs) => scheduleLabelIn(isoOrMs, DEFAULT_TZ)
 
 /**
  * The schedule route's window check. Returns { ok:true, iso } (normalised

@@ -29,7 +29,7 @@ import {
   syncOccurrencesForLocation,
 } from './class-occurrences.js'
 import { logError } from '@/lib/log'
-import { dublinDateKey } from '@/lib/dublin-time'
+import { dateKeyIn } from '@shared/zoned-time'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const NOW = Date.parse('2026-08-04T10:00:00.000Z')
@@ -317,7 +317,7 @@ describe('isTrainerLookupTick', () => {
   it('exactly one */15 tick per Dublin day lands in the window, every day of 2026 (both DST days included)', () => {
     const perDay = new Map()
     for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 15 * 60_000) {
-      const key = dublinDateKey(t + 25_000) // stamps land ~25 s after the minute
+      const key = dateKeyIn(t + 25_000, 'Europe/Dublin') // stamps land ~25 s after the minute
       if (!perDay.has(key)) perDay.set(key, 0)
       if (isTrainerLookupTick(t + 25_000)) perDay.set(key, perDay.get(key) + 1)
     }

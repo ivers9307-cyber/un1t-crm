@@ -24,9 +24,9 @@ import { todayStrIn, PLATFORM_TZ } from '@/lib/location-time'
 /**
  * First day of the billing month containing `todayStr` (default: today on
  * the platform billing calendar). D5: the platform billing calendar
- * (PLATFORM_TZ), so the name keeps "dublin".
+ * (PLATFORM_TZ), the same for every tenant (was platformMonthStartStr; TZ.18b).
  */
-export function dublinMonthStartStr(todayStr = todayStrIn(PLATFORM_TZ)) {
+export function platformMonthStartStr(todayStr = todayStrIn(PLATFORM_TZ)) {
   return `${todayStr.slice(0, 7)}-01`
 }
 
@@ -83,7 +83,7 @@ export async function getAiCapStatus({ organizationId, locationId }, { db } = {}
 
     const { data: spend, error } = await client.rpc('org_ai_spend_month_cents', {
       p_org: orgId,
-      p_month_start: dublinMonthStartStr(),
+      p_month_start: platformMonthStartStr(),
     })
     if (error) return { capped: false, organizationId: orgId }
 
@@ -117,7 +117,7 @@ export async function getEmailCapStatus({ organizationId, locationId }, { db } =
 
     const { data: sends, error } = await client.rpc('org_email_sends_month', {
       p_org: orgId,
-      p_month_start: dublinMonthStartStr(),
+      p_month_start: platformMonthStartStr(),
     })
     if (error) return { capped: false, organizationId: orgId }
 

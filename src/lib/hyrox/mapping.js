@@ -17,9 +17,6 @@ export function zonedDateStr(iso, zone = DEFAULT_TZ) {
   return dateKeyIn(d, zone)
 }
 
-/** @deprecated TZ.9: zonedDateStr(iso, zone). Europe/Dublin; TZ.18b deletes it. */
-export const dublinDateStr = (iso) => zonedDateStr(iso, DEFAULT_TZ)
-
 /** ISO weekday 1..7 (Mon..Sun) for a YYYY-MM-DD string (pure calendar math). */
 export function isoWeekdayOf(ymd) {
   const [y, m, day] = ymd.split('-').map(Number)
@@ -32,9 +29,6 @@ export function zonedWeekday(iso, zone = DEFAULT_TZ) {
   const ymd = zonedDateStr(iso, zone)
   return ymd ? isoWeekdayOf(ymd) : null
 }
-
-/** @deprecated TZ.9: zonedWeekday(iso, zone). Europe/Dublin; TZ.18b deletes it. */
-export const dublinWeekday = (iso) => zonedWeekday(iso, DEFAULT_TZ)
 
 /** Whole-day difference b - a between two YYYY-MM-DD strings. */
 export function daysBetween(a, b) {

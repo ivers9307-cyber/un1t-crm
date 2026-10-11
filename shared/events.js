@@ -52,14 +52,6 @@ export function todayIsoIn(zone = DEFAULT_TZ, nowMs = Date.now()) {
 }
 
 /**
- * @deprecated TZ.9: use todayIsoIn(zone). Today in DEFAULT_TZ (Europe/Dublin),
- * kept for any caller not yet swept; TZ.18b deletes it.
- */
-export function todayIsoDublin() {
-  return todayIsoIn(DEFAULT_TZ)
-}
-
-/**
  * Split events into upcoming vs past against a YYYY-MM-DD "today" and
  * sort each block for a browse list: upcoming ascending (nearest first),
  * past descending (most recent first). An event with no race_date counts

@@ -18,7 +18,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { todayStrIn, PLATFORM_TZ } from '@/lib/location-time'
-import { capNoticeDecision, dublinMonthStartStr } from '@/lib/usage-caps'
+import { capNoticeDecision, platformMonthStartStr } from '@/lib/usage-caps'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { logWarn } from '@/lib/log'
 
@@ -66,7 +66,7 @@ export async function GET(request) {
 
 async function sendCapNotices(db, todayStr) {
   const month = todayStr.slice(0, 7)
-  const monthStart = dublinMonthStartStr(todayStr)
+  const monthStart = platformMonthStartStr(todayStr)
 
   const { data: orgs } = await db
     .from('org_settings')

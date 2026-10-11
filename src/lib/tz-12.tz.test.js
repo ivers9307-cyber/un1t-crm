@@ -4,9 +4,11 @@
 // the TV's current-class label, the intro-card preview label and the coach
 // board's Detected-tab visit times.
 //
-//   • Europe/Dublin: byte-identical to the FROZEN pre-change bodies
-//     (tz-12.legacy-dublin.test-helpers.js), over every half-hour of 2026 and
-//     every quarter-hour of the weeks around both 2026 EU DST changes.
+//   • Europe/Dublin: TZ.12 proved it byte-identical to a frozen copy of the
+//     pre-change bodies (every half-hour of 2026, every quarter-hour of the
+//     weeks around both EU DST changes); that sweep was retired in TZ.18b.
+//     Dublin is now pinned by fixed values around both 2026 EU DST changes;
+//     zoned-time ≡ dublin-time stays proven by shared/zoned-time.parity.test.js.
 //   • America/New_York: follows New York across both 2026 US DST changes.
 //
 // The board CLOCKS (host-zone getters before TZ.12) are pinned by
@@ -24,7 +26,6 @@ vi.mock('@/lib/live-class', () => ({ getAvailableStraps: vi.fn(() => Promise.res
 vi.mock('@/lib/class-occurrences', () => ({ resolveCurrentClassForTv: vi.fn(() => Promise.resolve(null)) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
 
-const L = await import('./tz-12.legacy-dublin.test-helpers.js')
 const { isOvernight, nextPollDelay, ACTIVE_POLL_MS, IDLE_POLL_MS } = await import('./live-poll.js')
 const { demoIntroClass } = await import('./tv-class-intro.js')
 const { visitTimeLabel } = await import('./tv-board-time.js')
@@ -39,70 +40,62 @@ const D = 'Europe/Dublin'
 const NY = 'America/New_York'
 // US DST 2026: spring forward Sun 8 Mar 02:00 → 03:00; fall back Sun 1 Nov 02:00 → 01:00.
 // EU DST 2026: spring forward Sun 29 Mar 01:00 UTC; fall back Sun 25 Oct 01:00 UTC.
-const SAMPLES = [
-  '2026-03-07T04:30:00Z', '2026-03-08T06:59:00Z', '2026-03-08T07:00:00Z', // NY around spring-forward
-  '2026-03-28T23:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', // Dublin around spring-forward
-  '2026-10-24T23:30:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z', // Dublin around fall-back
-  '2026-11-01T04:59:00Z', '2026-11-01T05:00:00Z', '2026-11-01T06:00:00Z', // NY around fall-back
-  '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-12-31T23:30:00Z', // month/year edges
-].map(Date.parse)
 
-const HOUR = 3600_000
-const range = (fromIso, toIso, stepMs) => {
-  const out = []
-  for (let t = Date.parse(fromIso); t < Date.parse(toIso); t += stepMs) out.push(t)
-  return out
-}
-const SWEEP = [
-  ...SAMPLES,
-  ...range('2026-01-01T00:00:00Z', '2027-01-01T00:00:00Z', HOUR / 2),
-  ...range('2026-03-26T00:00:00Z', '2026-04-02T00:00:00Z', HOUR / 4),
-  ...range('2026-10-22T00:00:00Z', '2026-10-29T00:00:00Z', HOUR / 4),
-]
-// The legacy bodies build an Intl formatter per call, so the sweeps take a few seconds.
-const SWEEP_TIMEOUT = 120_000
 const IDLE = { sessions: [], available_straps: [], timer: null, current_class: null, occurrence: null }
 
-// ── Europe/Dublin is byte-identical ─────────────────────────────────────────
+// ── Europe/Dublin pinned values ─────────────────────────────────────────────
 
-describe('TZ.12 Europe/Dublin is byte-identical', () => {
-  it('isOvernight + nextPollDelay (idle and active payloads), explicit zone and default', () => {
-    for (const ms of SWEEP) {
-      const now = new Date(ms)
-      const legacy = L.isOvernightLegacy(now)
-      expect(isOvernight(now, D)).toBe(legacy)
-      expect(isOvernight(now)).toBe(legacy)
-      expect(nextPollDelay(IDLE, now, D)).toBe(L.nextPollDelayLegacy(IDLE, now))
-      expect(nextPollDelay(IDLE, now)).toBe(L.nextPollDelayLegacy(IDLE, now))
-      expect(nextPollDelay({ sessions: [{ id: 's' }] }, now, D)).toBe(L.nextPollDelayLegacy({ sessions: [{ id: 's' }] }, now))
-      expect(nextPollDelay(null, now, D)).toBe(L.nextPollDelayLegacy(null, now))
-    }
-  }, SWEEP_TIMEOUT)
+describe('TZ.12 Europe/Dublin pinned values', () => {
+  // [instant, overnight (22:00-06:00 Dublin), Dublin wall clock HH:MM, Detected-tab label]
+  const PINS = [
+    ['2026-01-15T05:59:00Z', true, '05:59', 'Thu, 15 Jan, 05:59'], // winter (GMT)
+    ['2026-01-15T06:00:00Z', false, '06:00', 'Thu, 15 Jan, 06:00'],
+    ['2026-01-15T22:00:00Z', true, '22:00', 'Thu, 15 Jan, 22:00'],
+    ['2026-07-01T04:59:00Z', true, '05:59', 'Wed, 1 Jul, 05:59'], // summer (IST)
+    ['2026-07-01T05:00:00Z', false, '06:00', 'Wed, 1 Jul, 06:00'],
+    ['2026-07-01T21:00:00Z', true, '22:00', 'Wed, 1 Jul, 22:00'],
+    ['2026-03-29T00:59:00Z', true, '00:59', 'Sun, 29 Mar, 00:59'], // spring-forward
+    ['2026-03-29T01:00:00Z', true, '02:00', 'Sun, 29 Mar, 02:00'],
+    ['2026-03-29T05:00:00Z', false, '06:00', 'Sun, 29 Mar, 06:00'],
+    ['2026-10-25T00:59:00Z', true, '01:59', 'Sun, 25 Oct, 01:59'], // fall-back
+    ['2026-10-25T01:00:00Z', true, '01:00', 'Sun, 25 Oct, 01:00'],
+    ['2026-10-25T05:59:00Z', true, '05:59', 'Sun, 25 Oct, 05:59'],
+    ['2026-10-25T06:00:00Z', false, '06:00', 'Sun, 25 Oct, 06:00'],
+  ]
 
-  it('demoIntroClass (the intro-card preview label), explicit zone and default', () => {
-    for (const ms of SWEEP) {
-      expect(demoIntroClass(ms, D)).toStrictEqual(L.demoIntroClassLegacy(ms))
-      expect(demoIntroClass(ms)).toStrictEqual(L.demoIntroClassLegacy(ms))
-    }
-  }, SWEEP_TIMEOUT)
+  it.each(PINS)('%s: isOvernight + nextPollDelay, explicit zone and default', (iso, overnight) => {
+    const now = new Date(iso)
+    expect(isOvernight(now, D)).toBe(overnight)
+    expect(isOvernight(now)).toBe(overnight)
+    expect(nextPollDelay(IDLE, now, D)).toBe(overnight ? IDLE_POLL_MS : ACTIVE_POLL_MS)
+    expect(nextPollDelay(IDLE, now)).toBe(overnight ? IDLE_POLL_MS : ACTIVE_POLL_MS)
+    expect(nextPollDelay({ sessions: [{ id: 's' }] }, now, D)).toBe(ACTIVE_POLL_MS) // an active board never backs off
+    expect(nextPollDelay(null, now, D)).toBe(ACTIVE_POLL_MS) // no payload yet counts as active
+  })
 
-  it('visitTimeLabel (the Detected tab), incl. empty and unparseable values', () => {
-    for (const ms of SWEEP) {
-      const iso = new Date(ms).toISOString()
-      expect(visitTimeLabel(iso, D)).toBe(L.formatDateTimeLegacy(iso))
-      expect(visitTimeLabel(iso)).toBe(L.formatDateTimeLegacy(iso))
+  it.each(PINS)('%s: demoIntroClass and visitTimeLabel, explicit zone and default', (iso, _overnight, hhmm, visit) => {
+    const ms = Date.parse(iso)
+    for (const v of [demoIntroClass(ms, D), demoIntroClass(ms)]) {
+      expect(v).toStrictEqual({ glofox_event_id: 'preview', starts_at: new Date(ms).toISOString(), class_name: 'STRENGTH', starts_at_label: hhmm, program: 'Preview' })
     }
-    for (const v of [null, undefined, '', 'not-a-date']) {
-      expect(visitTimeLabel(v, D)).toBe(L.formatDateTimeLegacy(v))
-    }
-  }, SWEEP_TIMEOUT)
+    expect(visitTimeLabel(iso, D)).toBe(visit)
+    expect(visitTimeLabel(iso)).toBe(visit)
+  })
+
+  it('visitTimeLabel: empty values are blank, an unparseable value is shown raw', () => {
+    for (const v of [null, undefined, '']) expect(visitTimeLabel(v, D)).toBe('')
+    expect(visitTimeLabel('not-a-date', D)).toBe('not-a-date')
+  })
 
   it('the TV current-class label, through buildLiveBoardPayload', async () => {
-    for (const ms of SAMPLES) {
-      const startsAt = new Date(ms).toISOString()
+    for (const [startsAt, label] of [
+      ['2026-01-15T18:00:00Z', '18:00'], ['2026-07-03T17:00:00Z', '18:00'],
+      ['2026-03-29T01:00:00Z', '02:00'], ['2026-10-25T00:59:00Z', '01:59'], ['2026-10-25T01:00:00Z', '01:00'],
+      ['2026-06-30T23:00:00Z', '00:00'],
+    ]) {
       resolveCurrentClassForTv.mockResolvedValueOnce({ class_name: 'WOD', program: 'HIIT', starts_at: startsAt, glofox_event_id: 'e1' })
-      const body = await buildLiveBoardPayload(boardDb(), { location: { id: 'loc-1', name: 'Studio', timezone: D }, nowMs: ms })
-      expect(body.current_class.starts_at_label).toBe(L.currentClassLabelLegacy(startsAt))
+      const body = await buildLiveBoardPayload(boardDb(), { location: { id: 'loc-1', name: 'Studio', timezone: D }, nowMs: Date.parse(startsAt) })
+      expect(body.current_class.starts_at_label).toBe(label)
       expect(body.timezone).toBe(D)
     }
   })
@@ -174,8 +167,8 @@ describe('TZ.12 America/New_York follows New York across DST', () => {
     expect(ny.state).toBe('service_down')
     expect(dublin.quiet).toBe(true)
     expect(ny.quiet).toBe(false)
-    // The default (no zone) is the pre-TZ.12 Dublin night.
-    expect(gradeDevice(device, null, nowMs, fleetRow, null).quiet).toBe(L.isOvernightLegacy(new Date(nowMs)))
+    // The default (no zone) is the pre-TZ.12 Dublin night: 22:30 Dublin is quiet.
+    expect(gradeDevice(device, null, nowMs, fleetRow, null).quiet).toBe(true)
   })
 })
 

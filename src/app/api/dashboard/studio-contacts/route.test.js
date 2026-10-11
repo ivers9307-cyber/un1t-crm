@@ -23,7 +23,7 @@ const { hasPermissionForLocation } = await import('@/lib/permissions')
 const { createServerClient } = await import('@/lib/supabase')
 const { logError } = await import('@/lib/log')
 const { fetchStudioContactCounts } = await import('@shared/dashboard-data')
-const { dublinWeekStartMs } = await import('@/lib/dublin-time')
+const { weekStartMsIn } = await import('@shared/zoned-time')
 const { membershipStateForPage } = await import('@/lib/membership/state-for-page')
 const { displayZoneFor } = await import('@/lib/display-zone')
 const { GET } = await import('./route.js')
@@ -90,7 +90,7 @@ describe('GET /api/dashboard/studio-contacts', () => {
     expect(db).toEqual({ tag: 'service-role' })
     expect(loc).toBe(LOC)
     // the call and this line run within the same Dublin week except across a Monday 00:00
-    expect(opts.weekStartIso).toBe(new Date(dublinWeekStartMs(Date.now())).toISOString())
+    expect(opts.weekStartIso).toBe(new Date(weekStartMsIn(Date.now(), 'Europe/Dublin')).toISOString())
   })
 
   it('500 on a failed read, logged, never zeros', async () => {

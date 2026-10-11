@@ -5,7 +5,7 @@ import { runAgentFollowups, runFirstClassCheckins } from '@/lib/agent/followups'
 import { runHandoffSlaSweep, runHandoffAutoResolve } from '@/lib/agent/handoff-sla'
 import { runApprovalsSlaSweep } from '@/lib/agent/approvals-sla'
 import { rollupCheckinDay } from '@/lib/agent/checkin-day-rollup'
-import { dublinDayStr } from '@/lib/dublin-time'
+import { dayStrIn, PLATFORM_TZ } from '@/lib/location-time'
 import { logError } from '@/lib/log'
 
 // AGENT-FOLLOWUP.1 — every 15 min (vercel.json): run Mia's proactive
@@ -87,7 +87,9 @@ export async function GET(request) {
     carryFailed = true
     logError('cron-agent-followups', 'checkins_day read failed; today restarts flagged carry_failed', { err: e })
   }
-  const checkinsDay = rollupCheckinDay(prevDay, checkins, { day: dublinDayStr(Date.now()), carryFailed })
+  // TZ.18b — the check-in rollup is ONE platform-wide heartbeat row across every
+  // studio, so its day key is the platform calendar's (PLATFORM_TZ, D4), not a studio's.
+  const checkinsDay = rollupCheckinDay(prevDay, checkins, { day: dayStrIn(Date.now(), PLATFORM_TZ), carryFailed })
   await stampHeartbeat('agent-followups', { followups: results, checkins, checkins_day: checkinsDay, handoffSla, autoResolve, approvalsSla })
   return NextResponse.json({ success: true, results, checkins, handoffSla, autoResolve, approvalsSla })
 }
