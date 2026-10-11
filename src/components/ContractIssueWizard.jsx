@@ -19,6 +19,7 @@ import { ChevronRight, ChevronLeft, FileText, AlertCircle, Info, Search } from '
 import {
   renderTemplate, profileVariables, unresolvedPlaceholders, unresolvedPlaceholdersUnion,
   eligibleTemplatesFor, recipientsForTemplate, extractPlaceholders, customVariablesFrom, LOCATION_VAR_KEYS,
+  issuingZone,
 } from '@/lib/contracts'
 import ContractBody from '@/components/ContractBody'
 
@@ -38,11 +39,18 @@ const LOCATION_VAR_PREVIEW = {
   company_name: '[company name]',
 }
 
+const NO_ZONES = Object.freeze({})
+
 // C140 CONTRACTRECIPIENT.1 (folds C138 d) — `locationOrgs` is the issuer's own
 // { location_id: organization_id } (from the host page). The recipient list
 // narrows to the chosen template's org and the template list to orgs every
 // selected person belongs to, the rule POST /api/contracts enforces.
-export default function ContractIssueWizard({ issuerName, fromContractId, locationOrgs = {} }) {
+//
+// TZ follow-up — `locationZones` is the issuer's own { location_id: zone },
+// built on the server from their studios. Each preview renders {{today}} in
+// the zone of the studio POST /api/contracts will issue at (issuingZone, the
+// route's own rule), so the preview shows the date the stored body gets.
+export default function ContractIssueWizard({ issuerName, fromContractId, locationOrgs = {}, locationZones = NO_ZONES }) {
   const router = useRouter()
   const [step, setStep] = useState(1)
   const [staff, setStaff] = useState([])
@@ -264,16 +272,21 @@ export default function ContractIssueWizard({ issuerName, fromContractId, locati
   // CONTRACTS-BULK.1 — one rendered preview per selected recipient
   // (custom `vars` are shared; profile auto-fills are per-recipient).
   // Location vars still get the bracketed stand-in — see
-  // LOCATION_VAR_PREVIEW above.
+  // LOCATION_VAR_PREVIEW above. {{today}} is the issuing studio's day,
+  // per recipient (two recipients can be issued at different studios).
   const previews = useMemo(() => {
     if (!template) return []
     return recipients.map(r => ({
       profileId: r.id,
       recipient: r,
       name: r.full_name,
-      text: renderTemplate(template.body_markdown, { ...profileVariables(r), ...LOCATION_VAR_PREVIEW, ...vars }),
+      text: renderTemplate(template.body_markdown, {
+        ...profileVariables(r, { zone: issuingZone(r, template, { locationOrgs, locationZones }) }),
+        ...LOCATION_VAR_PREVIEW,
+        ...vars,
+      }),
     }))
-  }, [template, recipients, vars])
+  }, [template, recipients, vars, locationOrgs, locationZones])
 
   // Back-compat: the single-recipient preview. previews[0] is exactly
   // what the old `preview` memo produced when there was one recipient
