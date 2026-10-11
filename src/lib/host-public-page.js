@@ -39,7 +39,7 @@ export function hostPageCopy(host) {
 
 /**
  * HOST-EVENTS-PAGE.2 — the events a host's public page lists, nearest first:
- * every one dated `today` (YYYY-MM-DD, Europe/Dublin) or later, INCLUDING
+ * every one dated `today` (YYYY-MM-DD, the host anchor studio's day, TZ.9) or later, INCLUDING
  * those whose registration window has closed (the card says "Registration
  * closed" and does not link to the buy page). Past events are dropped.
  */

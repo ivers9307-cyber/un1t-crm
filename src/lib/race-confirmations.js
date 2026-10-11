@@ -16,7 +16,7 @@
 // duplicate messages.
 
 import { sendTransactionalEmail } from './postmark'
-import { formatWeekdayLongDateInTZ } from './dates'
+import { eventDateLong } from './event-day'
 import { getAppUrl } from './app-url'
 import { signCheckinToken } from './event-checkin-tokens'
 import { buildEventEmailShell, resolveEventEmail, resolveEventBrand } from './event-email'
@@ -29,9 +29,10 @@ import { entryLeadEmail, GAP_PAYMENT_KIND } from './registration-entry'
 import { entryManageUrl } from './entry-manage-tokens'
 import { resolveCustomerBaseUrl } from './tenant-host'
 
+// The stored calendar day, in words. TZ.9: zone-free (event-day.js), so the
+// studio's own day in every zone; the same text as the old Dublin rendering.
 function fmtRaceDate(dateStr) {
-  if (!dateStr) return ''
-  return formatWeekdayLongDateInTZ(dateStr) || dateStr
+  return eventDateLong(dateStr)
 }
 
 function fmtMoney(cents, currency = 'EUR') {

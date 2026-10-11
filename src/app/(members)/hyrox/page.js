@@ -13,6 +13,7 @@ import { redirect } from 'next/navigation'
 import { resolveHyroxSettings } from '@/lib/hyrox/settings'
 import { logError } from '@/lib/log'
 import { weekNoFor, slotFor } from '@/lib/hyrox/mapping'
+import { zoneOfLocation } from '@/lib/location-time'
 import HyroxPlanner from './HyroxPlanner'
 
 export const dynamic = 'force-dynamic'
@@ -75,8 +76,10 @@ export default async function HyroxAdmin() {
       .limit(1)
     const startsAt = nextClasses?.[0]?.starts_at
     if (startsAt) {
-      const wk = weekNoFor(block.starts_on, startsAt, block.weeks)
-      const slot = slotFor(block.session_weekdays || [], startsAt)
+      // TZ.9: by the block studio's day (the active location's clock).
+      const zone = zoneOfLocation(user.activeLocation)
+      const wk = weekNoFor(block.starts_on, startsAt, block.weeks, zone)
+      const slot = slotFor(block.session_weekdays || [], startsAt, zone)
       nextUpId = (sessions || []).find((s) => s.week_no === wk && s.slot === slot)?.id || null
     }
   }
