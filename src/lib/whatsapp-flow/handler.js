@@ -6,6 +6,8 @@
 import { computeAvailableSlots } from '@/lib/booking-slots.js'
 import { listPublicClasses } from '@/lib/public-classes.js'
 import { SCREEN, dayScreen, slotScreen, detailsScreen, confirmScreen } from './screens.js'
+import { formatInZone, getLocationZone, LocationZoneReadError, DEFAULT_TZ } from '@/lib/location-time'
+import { logWarn } from '@/lib/log'
 
 const PING = { data: { status: 'active' } }
 
@@ -16,12 +18,27 @@ async function resolveConsultEvent(db, locationId, config) {
   return event
 }
 
-function dayLabel(iso) {
-  return new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short' })
-    .format(new Date(`${iso}T12:00:00Z`))
+// TZ.5 — a day key ('YYYY-MM-DD') is a calendar date with no instant in it, so
+// its title is labelled in UTC from a noon-UTC anchor: the date itself, in any
+// zone (byte-identical to the old Dublin label for that anchor).
+export function dayLabel(iso) {
+  return formatInZone(new Date(`${iso}T12:00:00Z`), 'UTC', { weekday: 'short', day: 'numeric', month: 'short' })
 }
-function timeLabel(iso) {
-  return new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit' }).format(new Date(iso))
+// TZ.5 — a class start is an instant: shown on the studio's own clock.
+export function timeLabel(iso, zone = DEFAULT_TZ) {
+  return formatInZone(new Date(iso), zone, { hour: '2-digit', minute: '2-digit' })
+}
+
+// The Flow's data exchange is a live answer to Meta, so a failed zone read
+// still answers: on DEFAULT_TZ, explicitly, with a warning (never silently).
+async function flowZone(db, locationId) {
+  try {
+    return await getLocationZone(db, locationId)
+  } catch (e) {
+    if (!(e instanceof LocationZoneReadError)) throw e
+    logWarn('whatsapp-flow', 'location zone unreadable; slot times shown on the platform zone', { locationId, err: e.cause || e })
+    return DEFAULT_TZ
+  }
 }
 
 // The Flow is class-only (the PATH class/consult chooser was removed — STARTFLOW.2).
@@ -56,9 +73,10 @@ export async function handleDataExchange(db, { decryptedBody, contact, locationI
       return slotScreen({ day: data.day, path, slots: slots.map((s) => ({ id: `${event.id}|${data.day}|${s.start}|${s.end}`, title: s.start })) })
     }
     const classes = (await listPublicClasses(db, locationId)).filter((c) => c.starts_at.slice(0, 10) === data.day)
+    const zone = await flowZone(db, locationId)
     // Capacity / spaces-left is deliberately NOT shown to customers — matches the
     // /start class-picker decision (PR #710: "removed the X-left badge"). Time + name only.
-    return slotScreen({ day: data.day, path, slots: classes.map((c) => ({ id: `${c.event_id}|${c.starts_at}|${c.name}`, title: `${timeLabel(c.starts_at)} ${c.name}` })) })
+    return slotScreen({ day: data.day, path, slots: classes.map((c) => ({ id: `${c.event_id}|${c.starts_at}|${c.name}`, title: `${timeLabel(c.starts_at, zone)} ${c.name}` })) })
   }
 
   if (screen === SCREEN.SLOT) {

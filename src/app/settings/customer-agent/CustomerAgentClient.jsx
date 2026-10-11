@@ -142,7 +142,9 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
         welcome_greeting: settings.welcome_greeting || null,
         link_button_text: (settings.link_button_text || '').trim() || null,
         quiet_hours: settings.quiet_hours?.start && settings.quiet_hours?.end
-          ? { start: settings.quiet_hours.start, end: settings.quiet_hours.end, tz: settings.quiet_hours.tz || 'Europe/Dublin' }
+          // TZ.5 — no zone is written when none was stored: null means the
+          // studio's own zone (locations.timezone), read at decision time.
+          ? { start: settings.quiet_hours.start, end: settings.quiet_hours.end, tz: settings.quiet_hours.tz || null }
           : null,
         booking_mode: settings.booking_mode === 'draft' ? 'draft' : 'auto',
         agent_name: (settings.agent_name || '').trim() || null,
@@ -632,7 +634,7 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
             <input type="time" className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text"
               value={settings.quiet_hours?.end || ''}
               onChange={e => setField('quiet_hours', { ...(settings.quiet_hours || {}), end: e.target.value })} />
-            <span className="text-xs text-un1t-muted">Europe/Dublin — agent stays quiet, a human replies.</span>
+            <span className="text-xs text-un1t-muted">{settings.quiet_hours?.tz || location?.timezone || "the studio's timezone"} — agent stays quiet, a human replies.</span>
           </div>
         </div>
 
