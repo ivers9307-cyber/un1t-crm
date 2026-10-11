@@ -84,7 +84,7 @@ const BASE_SCHEMA = `
   -- Prod column order (information_schema.columns, 28 Sep 2026).
   CREATE TABLE public.locations (
     id uuid PRIMARY KEY, name text NOT NULL, slug text, address text, phone text, email text,
-    timezone text, active boolean DEFAULT true, settings jsonb DEFAULT '{}'::jsonb,
+    timezone text DEFAULT 'Europe/Dublin', active boolean DEFAULT true, settings jsonb DEFAULT '{}'::jsonb,
     created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(), country character(2),
     features jsonb, car_deposit_default_amount numeric(10,2), car_deposit_terms text,
     car_deposit_terms_version integer DEFAULT 1, car_deposit_whatsapp_template_id uuid,
@@ -307,11 +307,22 @@ async function boot({ migrate = false } = {}) {
   }
 }
 
-/** Every `GRANT <priv> (cols) ON public.<table> TO authenticated` column list in 648 + the later migrations. */
+/**
+ * The `<priv>` column list authenticated holds on public.<table> after 648 + the
+ * later migrations, replayed in file order: `GRANT <priv> (cols) … TO
+ * authenticated;` adds, `REVOKE <priv> (cols) … FROM authenticated;` removes
+ * (TZ.2's mig 719 revokes UPDATE (timezone)).
+ */
 function grantedColumns(table, priv, files = [MIG_648, ...LATER_MIGRATIONS.map((m) => m.sql)]) {
-  const re = new RegExp(`^GRANT ${priv} \\(([^)]*)\\) ON public\\.${table} TO authenticated;`, 'gm')
+  const re = new RegExp(`^(GRANT|REVOKE) ${priv} \\(([^)]*)\\) ON public\\.${table} (?:TO|FROM) authenticated;`, 'gm')
   const out = []
-  for (const sql of files) for (const m of sqlCode(sql).matchAll(re)) out.push(...m[1].split(',').map((c) => c.trim()))
+  for (const sql of files) {
+    for (const m of sqlCode(sql).matchAll(re)) {
+      const cols = m[2].split(',').map((c) => c.trim())
+      if (m[1] === 'GRANT') out.push(...cols)
+      else for (const c of cols) while (out.includes(c)) out.splice(out.indexOf(c), 1)
+    }
+  }
   return out
 }
 
@@ -504,11 +515,17 @@ describe('after 648 — people', () => {
 
   // Owner (the two browser forms)
   it("owner: LocationForm's edit (update + select id) still works", async () => {
+    // TZ.2 (mig 719): the edit payload no longer carries timezone.
     const rows = await asUser(OWNER, `UPDATE public.locations SET name = 'Studio A2', slug = 'studio-a2', address = NULL,
-      phone = NULL, email = NULL, timezone = 'Europe/Dublin', country = 'IE', active = true,
+      phone = NULL, email = NULL, country = 'IE', active = true,
       monthly_contractor_budget_eur = 100, invoices_inbound_slug = NULL, updated_at = now()
       WHERE id = $1 RETURNING id`, [LOC_A])
     expect(rows).toEqual([{ id: LOC_A }])
+  })
+
+  it('owner: the timezone is no longer writable from a client session (mig 719)', async () => {
+    await expect(asUser(OWNER, `UPDATE public.locations SET timezone = 'Europe/London' WHERE id = $1 RETURNING id`, [LOC_A]))
+      .rejects.toThrow(DENIED)
   })
 
   it("owner: CarDepositSettings' update still works", async () => {
