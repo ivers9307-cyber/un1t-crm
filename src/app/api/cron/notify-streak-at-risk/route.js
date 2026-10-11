@@ -1,4 +1,10 @@
-// Vercel cron — daily 11:00 UTC (~midday Dublin).
+// Vercel cron — hourly (TZ.6); acts for each member's home studio at its daily
+// slot: 11:00 UTC for a Europe/Dublin studio (as before, ~midday Dublin), 11:00
+// local for any other zone (src/lib/cron-daily-slot.js, at most once per studio
+// per local day). "Yesterday" and the daily key are the studio's: for a Dublin
+// studio, exactly the UTC-day window and UTC date the cron always used (the
+// slot is 11:00 UTC, where the two calendars agree); for any other zone, its
+// local day. (streakAtRisk itself still counts Dublin days: TZ.13's.)
 // Pushes a loss-aversion nudge to members whose streak (>= MIN_STREAK days,
 // ending YESTERDAY) will break unless they train today. Idempotent per member
 // per day via customer_engagement_nudges. Reachable members only (push token).
@@ -20,6 +26,8 @@ import { sendNudgeOnce, readReachableContacts, nudgeFailed } from '@/lib/custome
 import { streakAtRisk, buildStreakAtRiskPush } from '@/lib/customer-notifications'
 import { logError, logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { gateDailySlot, scopeOf, readContactHomes, slotTickStampable } from '@/lib/cron-daily-slot'
+import { dayStartMsIn, addDaysIn } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -38,47 +46,85 @@ export async function GET(request) {
   const db = createServerClient()
   const nowMs = Date.now()
   const DAY = 24 * 3600 * 1000
-  const n = new Date(nowMs)
-  const todayMs = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate())
-  const todayIso = new Date(todayMs).toISOString()
-  const yestIso = new Date(todayMs - DAY).toISOString()
-  const dedupKey = new Date(todayMs).toISOString().slice(0, 10) // YYYY-MM-DD
+
+  // TZ.6 — which home studios are at their daily slot this tick (claimed, so
+  // never twice in one local day). An unreadable zone acts for nobody.
+  const gate = await gateDailySlot(db, 'notify-streak-at-risk', { nowMs, module: 'cron-streak-risk' })
+  if (!gate.ok) return NextResponse.json({ ok: false, slot: gate.summary }, { status: 500 })
+  if (gate.slots.size === 0) {
+    // A quiet tick (no slot taken) never stamps; the row keeps the legacy clock.
+    // A faulted one (claim write failed) answers 500: the slot is skipped and pages.
+    return NextResponse.json({ ok: !gate.faulted, slot: gate.summary, candidates: 0, nudged: 0 }, { status: gate.faulted ? 500 : 200 })
+  }
+
+  // One "yesterday" window per calendar among the due studios. A legacy
+  // (Dublin, UTC-hour) slot keeps the UTC-midnight window and UTC date it has
+  // always used; any other zone uses its own local midnights.
+  const windows = new Map() // calendar zone → { todayMs, yestMs, dedupKey, scopes:Set }
+  for (const [scope, slot] of gate.slots) {
+    const cal = slot.legacy ? 'UTC' : slot.zone // a legacy slot's day is also the UTC day
+    if (!windows.has(cal)) {
+      windows.set(cal, {
+        todayMs: dayStartMsIn(slot.day, cal),
+        yestMs: dayStartMsIn(addDaysIn(slot.day, -1, cal), cal),
+        dedupKey: slot.day,
+        scopes: new Set(),
+      })
+    }
+    windows.get(cal).scopes.add(scope)
+  }
 
   // 1. Candidates = contacts who trained YESTERDAY (only they can have a streak
-  //    "ending yesterday"). Paginate defensively.
-  const candidateIds = new Set()
+  //    "ending yesterday"), per window. Paginate defensively.
+  const candidateWindow = new Map() // contact_id → window
   let candidatesUnread = 0
-  for (let from = 0; ; from += PAGE) {
-    const { data: rows, error } = await db
-      .from('heart_rate_sessions')
-      .select('contact_id')
-      .not('contact_id', 'is', null)
-      .not('ended_at', 'is', null)
-      .gte('started_at', yestIso)
-      .lt('started_at', todayIso)
-      .order('contact_id', { ascending: true })
-      .range(from, from + PAGE - 1)
-    if (error) {
-      // The members already read are still nudged; the rest are not seen.
-      candidatesUnread = 1
-      logError('cron-streak-risk', 'candidate read failed; members past this page not seen this run', { from, err: error })
-      break
+  for (const w of windows.values()) {
+    const todayIso = new Date(w.todayMs).toISOString()
+    const yestIso = new Date(w.yestMs).toISOString()
+    for (let from = 0; ; from += PAGE) {
+      const { data: rows, error } = await db
+        .from('heart_rate_sessions')
+        .select('contact_id')
+        .not('contact_id', 'is', null)
+        .not('ended_at', 'is', null)
+        .gte('started_at', yestIso)
+        .lt('started_at', todayIso)
+        .order('contact_id', { ascending: true })
+        .range(from, from + PAGE - 1)
+      if (error) {
+        // The members already read are still nudged; the rest are not seen.
+        candidatesUnread = 1
+        logError('cron-streak-risk', 'candidate read failed; members past this page not seen this run', { from, err: error })
+        break
+      }
+      for (const r of rows || []) if (!candidateWindow.has(r.contact_id)) candidateWindow.set(r.contact_id, w)
+      if (!rows || rows.length < PAGE) break
     }
-    for (const r of rows || []) candidateIds.add(r.contact_id)
-    if (!rows || rows.length < PAGE) break
+  }
+
+  // TZ.6 — keep a candidate only when their home studio is due in the window
+  // that found them. An unreadable home is skipped, never guessed.
+  const { homes, unread: homesUnread } = candidateWindow.size
+    ? await readContactHomes(db, [...candidateWindow.keys()], 'cron-streak-risk')
+    : { homes: new Map(), unread: 0 }
+  const candidateIds = new Set()
+  for (const [cid, w] of candidateWindow) {
+    if (homes.has(cid) && w.scopes.has(scopeOf(homes.get(cid)))) candidateIds.add(cid)
   }
   if (candidateIds.size === 0) {
-    if (candidatesUnread) {
-      return NextResponse.json({ ok: false, candidates: 0, nudged: 0, candidates_unread: 1 }, { status: 500 })
+    if (candidatesUnread || homesUnread) {
+      return NextResponse.json({ ok: false, candidates: 0, nudged: 0, candidates_unread: candidatesUnread, homes_unread: homesUnread, slot: gate.summary }, { status: 500 })
     }
+    if (!slotTickStampable(gate)) return NextResponse.json({ ok: false, candidates: 0, nudged: 0, slot: gate.summary }, { status: 500 })
     await stampHeartbeat('notify-streak-at-risk').catch(() => {})
-    return NextResponse.json({ ok: true, candidates: 0, nudged: 0 })
+    return NextResponse.json({ ok: true, candidates: 0, nudged: 0, slot: gate.summary })
   }
 
   const ids = [...candidateIds]
 
-  // 2. Their last-10-day sessions (for streak computation), batched.
-  const sinceIso = new Date(todayMs - 10 * DAY).toISOString()
+  // 2. Their last-10-day sessions (for streak computation), batched. The
+  //    floor is the earliest window's (one window for Dublin: as before).
+  const sinceIso = new Date(Math.min(...[...windows.values()].map((w) => w.todayMs)) - 10 * DAY).toISOString()
   const byContact = new Map()
   const unread = new Set()
   const readHistory = (chunk) => db
@@ -109,11 +155,12 @@ export async function GET(request) {
   for (const cid of ids) {
     if (unread.has(cid)) continue
     const streak = streakAtRisk(byContact.get(cid) || [], nowMs, MIN_STREAK)
-    if (streak > 0) atRisk.push({ cid, streak })
+    if (streak > 0) atRisk.push({ cid, streak, dedupKey: candidateWindow.get(cid).dedupKey }) // YYYY-MM-DD
   }
-  const readFailed = candidatesUnread > 0 || unread.size > 0
+  // A gate fault (a claim write failed) also withholds the stamp: those slots were skipped.
+  const readFailed = candidatesUnread > 0 || unread.size > 0 || homesUnread > 0 || !slotTickStampable(gate)
   if (atRisk.length === 0) {
-    const summary = { candidates: ids.length, at_risk: 0, nudged: 0, history_unread: unread.size, candidates_unread: candidatesUnread }
+    const summary = { candidates: ids.length, at_risk: 0, nudged: 0, history_unread: unread.size, candidates_unread: candidatesUnread, homes_unread: homesUnread, slot: gate.summary }
     if (readFailed) return NextResponse.json({ ok: false, ...summary }, { status: 500 })
     await stampHeartbeat('notify-streak-at-risk').catch(() => {})
     return NextResponse.json({ ok: true, ...summary })
@@ -127,7 +174,7 @@ export async function GET(request) {
   // 5. Claim (idempotent) + push, released if nothing reached them.
   let nudged = 0
   let failed = 0
-  for (const { cid, streak } of atRisk) {
+  for (const { cid, streak, dedupKey } of atRisk) {
     if (!reachable.has(cid)) continue
     const { status } = await sendNudgeOnce(db, {
       contactId: cid, type: 'streak_at_risk', dedupKey,
@@ -139,7 +186,7 @@ export async function GET(request) {
 
   const summary = {
     candidates: ids.length, at_risk: atRisk.length, nudged, failed, reachability_failed: reachabilityFailed,
-    history_unread: unread.size, candidates_unread: candidatesUnread,
+    history_unread: unread.size, candidates_unread: candidatesUnread, homes_unread: homesUnread, slot: gate.summary,
   }
   logInfo('cron-streak-risk', 'tick', summary)
   if (readFailed) return NextResponse.json({ ok: false, ...summary }, { status: 500 })

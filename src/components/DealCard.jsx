@@ -14,6 +14,8 @@
 import { User, Clock } from 'lucide-react'
 import PersonActionBar from './PersonActionBar'
 import { personActionsFor } from '@/lib/activity-write-gate'
+import { nextClassLabel } from '@/components/contact/format'
+import { useViewerZone } from '@/lib/use-viewer-zone'
 
 // PIPE-AGE.1 footer tones — colour keys on the server-derived
 // deal.age.tone (time in stage, falling back to time in pipeline).
@@ -65,7 +67,10 @@ const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_d
 // canWriteActivitiesAt at the board's studio) drops the Task item where the
 // person cannot read Contacts. Defaults true so a caller that does not judge
 // it keeps today's menu; the pipeline page always passes it.
-export default function DealCard({ deal, locationId, stageName, onOpenContact, manual = false, canTask = true }) {
+// TZ.16 (D3 = A) — `timezone` is the board's studio zone; the next-class chip
+// reads in it, with the abbreviation only when the viewer's browser is elsewhere.
+export default function DealCard({ deal, locationId, timezone = null, stageName, onOpenContact, manual = false, canTask = true }) {
+  const viewerZone = useViewerZone()
   const contact = deal.contacts || {}
   const borderColor = statusColors[contact.pipeline_stage_slug] || 'border-l-blue-500'
 
@@ -131,7 +136,7 @@ export default function DealCard({ deal, locationId, stageName, onOpenContact, m
         {BADGE_SLUGS.has(contact.pipeline_stage_slug) && (
           contact.next_class_at ? (
             <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 bg-emerald-500/10 rounded text-emerald-700">
-              Next: {new Date(contact.next_class_at).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' })}
+              Next: {nextClassLabel(contact.next_class_at, timezone, viewerZone)}
             </span>
           ) : (
             <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/10 rounded text-red-700">

@@ -17,6 +17,7 @@ import { loadHostCampaignStats, ZERO_STATS } from '@/lib/host-campaign-stats'
 import { deriveOutcome, outcomeAt, failureCopy } from '@/lib/host-campaign-outcome'
 import { resolveMissedRecipients } from '@/lib/host-campaign-launch'
 import { logError } from '@/lib/log'
+import { displayZoneFor } from '@/lib/display-zone'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -37,6 +38,12 @@ const SEND_COLUMNS =
 function recipientName(contact) {
   const c = contact || {}
   return [c.first_name, c.last_name].filter(Boolean).join(' ') || c.name || ''
+}
+
+async function hostDisplayZone(db, hostId) {
+  const { data, error } = await db.from('event_hosts').select('anchor_location_id').eq('id', hostId).maybeSingle()
+  if (error) logError('host-campaigns', 'host anchor unreadable; report on the default zone', { host_id: hostId, error: error.message })
+  return displayZoneFor(db, null, data?.anchor_location_id || null, 'host-campaigns')
 }
 
 export async function GET(_request, props) {
@@ -107,5 +114,11 @@ export async function GET(_request, props) {
     if (!page || page.length < PAGE) break
   }
 
-  return NextResponse.json({ success: true, data: { campaign: { ...campaign, stats, missed_count: missedCount }, recipients } })
+  // TZ.16 — the host's studio zone (its anchor location, where its events
+  // live; the composer schedules in the same one, TZ.9), so the report shows
+  // every stamp on the host's clock. Display only: an unreadable zone falls
+  // back to the default, logged.
+  const timezone = await hostDisplayZone(db, session.host.id)
+
+  return NextResponse.json({ success: true, data: { campaign: { ...campaign, stats, missed_count: missedCount }, recipients, timezone } })
 }

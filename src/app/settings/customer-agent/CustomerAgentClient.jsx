@@ -7,6 +7,7 @@ import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-for
 import { defaultHoldingMessage, defaultWelcomeGreeting } from '@/lib/agent/default-copy'
 import { productName } from '@/lib/brand-name'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
+import { zoneCity } from '@/lib/record-time'
 
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
 // Instagram agent. Manager+ only. Two parts: behaviour settings + the
@@ -944,7 +945,8 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
                 Last run {new Date(checkinStats.last_run.at).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}
                 {checkinStats.last_run.checkins
                   ? ` — ${(checkinStats.last_run.checkins.freeform || 0) + (checkinStats.last_run.checkins.templates || 0)} sent · ${checkinStats.last_run.checkins.skipped || 0} skipped${describeCheckinReasons(checkinStats.last_run.checkins)}`
-                  : ' — no check-in summary yet (runs every 15 min, 9:00–20:00 Dublin)'}
+                  // TZ.16 — the window is the studio's own clock (TZ.5): name its zone.
+                  : ` — no check-in summary yet (runs every 15 min, 9:00–20:00 ${location?.timezone ? zoneCity(location.timezone) : 'studio time'})`}
               </p>
             )}
             {checkinStats.last_run?.day && (

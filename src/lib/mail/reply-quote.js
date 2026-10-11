@@ -11,6 +11,7 @@
 // too, for the same reason.
 
 import { forwardedBody, FORWARD_TRUNCATED_NOTE } from '@/lib/email-forward'
+import { resolveZone, DEFAULT_TZ } from '@shared/zoned-time'
 
 // Postmark mints the RFC Message-ID of everything it sends as
 // <{MessageID}@mtasv.net>. Evidence: Richard's Gmail reply of 2026-09-07 had
@@ -82,17 +83,20 @@ export function replyThreadingHeaders(message) {
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 /**
- * "Mon 7 Sep 2026 at 13:34" in Europe/Dublin, the form Gmail writes.
- * Assembled from numeric parts so the month never renders as "Sept" (en-IE
- * and en-GB both do in current ICU) and so the output is the same under any
- * TZ a test runs in.
+ * "Mon 7 Sep 2026 at 13:34" on the mailbox studio's clock (TZ.16: `zone`,
+ * DEFAULT_TZ when none is given), the form Gmail writes. Assembled from
+ * numeric parts so the month never renders as "Sept" (en-IE and en-GB both do
+ * in current ICU) and so the output is the same under any TZ a test runs in.
+ * No abbreviation: the reader is the reply's recipient, not a staff viewer.
+ * @param {string|null} iso
+ * @param {string} [zone=DEFAULT_TZ]
  */
-export function attributionStamp(iso) {
+export function attributionStamp(iso, zone = DEFAULT_TZ) {
   if (!iso) return ''
   const t = Date.parse(iso)
   if (!Number.isFinite(t)) return ''
   const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'numeric', year: 'numeric',
+    timeZone: resolveZone(zone), weekday: 'short', day: 'numeric', month: 'numeric', year: 'numeric',
     hour: '2-digit', minute: '2-digit', hour12: false,
   }).formatToParts(new Date(t))
   const get = (type) => parts.find(p => p.type === type)?.value || ''
@@ -124,10 +128,11 @@ function whoWrote(anchor, { conversation, mailbox }) {
 /**
  * "On Mon 7 Sep 2026 at 13:34, Richard Ivers <richard@…> wrote:"
  * @param {object} anchor
- * @param {{ conversation: object|null, mailbox: object|null }} ctx
+ * @param {{ conversation: object|null, mailbox: object|null, zone?: string }} ctx
+ *   zone: the mailbox studio's zone (TZ.16; DEFAULT_TZ when absent)
  */
 export function attributionLine(anchor, ctx) {
-  const stamp = attributionStamp(anchor?.sent_at || anchor?.created_at)
+  const stamp = attributionStamp(anchor?.sent_at || anchor?.created_at, ctx?.zone)
   const who = whoWrote(anchor, ctx || {})
   return stamp ? `On ${stamp}, ${who} wrote:` : `${who} wrote:`
 }
@@ -148,11 +153,11 @@ export function quotedTextBlock(anchor) {
  * The whole text part: signed words, blank line, attribution, quote, and the
  * truncation note (unquoted) when the cap bit. No anchor → the signed text.
  */
-export function buildReplyText({ signedText, anchor, conversation, mailbox }) {
+export function buildReplyText({ signedText, anchor, conversation, mailbox, zone }) {
   const words = typeof signedText === 'string' ? signedText : ''
   if (!anchor) return words
   const { text, truncated } = quotedTextBlock(anchor)
-  const parts = [words.replace(/\s+$/, ''), '', attributionLine(anchor, { conversation, mailbox }), text]
+  const parts = [words.replace(/\s+$/, ''), '', attributionLine(anchor, { conversation, mailbox, zone }), text]
   if (truncated) parts.push('', FORWARD_TRUNCATED_NOTE)
   return parts.join('\n')
 }
@@ -172,13 +177,13 @@ export function escapeHtml(s) {
  * escaped plain text. type="cite" is what Apple Mail folds; Gmail folds a
  * trailing blockquote it recognises as the previous message.
  */
-export function buildReplyHtml({ bodyHtml, anchor, conversation, mailbox }) {
+export function buildReplyHtml({ bodyHtml, anchor, conversation, mailbox, zone }) {
   const body = typeof bodyHtml === 'string' ? bodyHtml : ''
   if (!anchor) return body
   const { text, truncated } = forwardedBody(anchor)
   const quoted = escapeHtml(text || NO_TEXT) + (truncated ? `\n\n${escapeHtml(FORWARD_TRUNCATED_NOTE)}` : '')
   return body
-    + `<div style="margin-top:12px;color:#5f6368;font-size:13px">${escapeHtml(attributionLine(anchor, { conversation, mailbox }))}</div>`
+    + `<div style="margin-top:12px;color:#5f6368;font-size:13px">${escapeHtml(attributionLine(anchor, { conversation, mailbox, zone }))}</div>`
     + '<blockquote type="cite" style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex;color:#5f6368">'
     + `<div style="white-space:pre-wrap">${quoted}</div></blockquote>`
 }

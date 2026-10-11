@@ -12,6 +12,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getIntegrationHealth } from '@/lib/integration-health'
 import { buildStatusView } from '@/lib/status-page'
 import { getLocationBranding } from '@/lib/location-branding'
+import { zoneOfLocation } from '@/lib/location-time'
+import { formatRecordTime } from '@/lib/record-time'
 
 // Rendered per request: the root layout reads the Host header (W1.L4), which
 // is a dynamic API, so the former `revalidate = 60` ISR shell no longer
@@ -50,7 +52,7 @@ async function loadLocation(path) {
     const db = createServerClient()
     const { data } = await db
       .from('landing_page_settings')
-      .select('location_id, locations:location_id ( id, name, settings )')
+      .select('location_id, locations:location_id ( id, name, settings, timezone )')
       .eq('public_path', path)
       .maybeSingle()
     return data?.locations || null
@@ -85,7 +87,9 @@ export default async function StatusPage(props) {
   const { companyName } = await getLocationBranding(db, loc.id)
   const view = buildStatusView(rows, overrides, { defaultBrand: companyName })
 
-  const updated = new Date().toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Dublin' })
+  // TZ.16 — the studio's own clock. A public page has no staff viewer to
+  // compare zones with, so no abbreviation.
+  const updated = formatRecordTime(new Date(), zoneOfLocation(loc), { hour: '2-digit', minute: '2-digit' }, 'en-IE')
 
   return (
     <div className="us-root" data-st={view.overall}>

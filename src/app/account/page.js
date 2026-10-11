@@ -24,6 +24,7 @@ import PasswordChangeForm from '@/components/PasswordChangeForm'
 import StudioPinSettings from '@/components/StudioPinSettings'
 import CalendarFeedCard from '@/components/CalendarFeedCard'
 import { getLocationBranding } from '@/lib/location-branding'
+import { viewerZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
 
@@ -108,7 +109,7 @@ export default async function AccountPage() {
       </div>
 
       <div className="mt-8">
-        <CalendarFeedCard />
+        <CalendarFeedCard timezone={viewerZoneOf(user)} />
       </div>
 
       <div className="mt-8 pt-6 border-t border-un1t-border">

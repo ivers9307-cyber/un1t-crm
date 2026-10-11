@@ -59,9 +59,11 @@ export function sameZone(a, b) {
 
 const LETTERED = /^[A-Z]{2,5}$/
 // en-US names the US zones (EST/EDT), en-GB the UK one (BST), en-IE Ireland's
-// summer time (IST); the first LETTERED answer wins, else the offset form
-// ("GMT+11"), else the zone's city, so the suffix is never silently empty.
-const ABBREV_LOCALES = ['en-US', 'en-GB', 'en-IE']
+// summer time (IST), en-AU Australia's (AEST); the first LETTERED answer wins,
+// else the offset form ("GMT+4"), else the zone's city, so the suffix is never
+// silently empty. Same locale order as the web's src/lib/record-time.js
+// (TZ.16), so a record reads the same abbreviation on both.
+const ABBREV_LOCALES = ['en-US', 'en-GB', 'en-IE', 'en-AU']
 /** Short name of `zone` at `instant`: 'EST', 'IST', 'BST', 'GMT+11', or the city. */
 export function zoneAbbrev(instant, zone) {
   let offsetForm = ''

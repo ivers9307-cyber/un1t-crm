@@ -219,9 +219,12 @@ async function sendReminderEmail({ db, ev, reg, offset, whenLabel, locationName,
  * @param {string} [args.todayStr]  one YYYY-MM-DD "today" for EVERY event (tests,
  *   a pinned replay). Omitted (the cron): each event's own studio day (TZ.9).
  * @param {number} [args.nowMs]  the instant "today" is read at; defaults to now
+ * @param {(locationId: string|null) => boolean} [args.isDue]  TZ.6: the cron's
+ *   daily-slot gate. An event whose location is not at its slot this tick is
+ *   skipped (the hourly cron reaches it at that location's own slot).
  * @returns {Promise<{events:number, sent:number, skipped:number}>}
  */
-export async function runEventReminders({ db, todayStr, nowMs = Date.now() } = {}) {
+export async function runEventReminders({ db, todayStr, nowMs = Date.now(), isDue } = {}) {
   const result = { events: 0, sent: 0, skipped: 0 }
   if (!db) return result
 
@@ -256,6 +259,7 @@ export async function runEventReminders({ db, todayStr, nowMs = Date.now() } = {
   const checkinSecret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
 
   for (const ev of events) {
+    if (isDue && !isDue(ev.location_id || null)) continue // TZ.6: not this location's slot
     const offset = reminderOffsetForDate(ev.race_date, todayStr || eventToday(ev, nowMs))
     if (!offset) continue
     result.events++

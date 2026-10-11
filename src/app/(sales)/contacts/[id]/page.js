@@ -38,6 +38,7 @@ import ConsultationsList from '@/components/ConsultationsList'
 import SendKudosCard from '@/components/SendKudosCard'
 import ProgressPhotos from '@/components/ProgressPhotos'
 import InBodyProgress from '@/components/InBodyProgress'
+import { viewerZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
 
@@ -378,6 +379,10 @@ export default async function ContactDetailPage(props) {
         journey={journey}
         attention={attention}
         nextClassAt={nextClassAt}
+        // TZ.16 — the contact's studio zone (TZ.7's read above) for the
+        // next-class chip; the viewer's active studio decides the suffix.
+        timezone={contactZone}
+        viewerZone={viewerZoneOf(user)}
         canToggleExempt={actions.canToggleExempt}
         actionGates={work}
         cancellationLink={cancellationLink}

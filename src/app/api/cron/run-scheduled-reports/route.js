@@ -7,6 +7,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logError, logWarn } from '@/lib/log'
 import { isRateReportType } from '@/lib/report-access'
 import { filterRateReportRecipients } from '@/lib/report-recipients'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 import { getLocationZones, DEFAULT_TZ } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
@@ -16,6 +17,12 @@ export const dynamic = 'force-dynamic'
  * GET /api/cron/run-scheduled-reports
  * Called by Vercel Cron (or manually) to execute any scheduled reports that are due.
  * Secured by CRON_SECRET header check.
+ *
+ * TZ.6 — the schedule is hourly. A schedule's location runs its due reports
+ * (next_run_at <= now, unchanged) at its daily slot: 07:00 UTC for a
+ * Europe/Dublin studio (as before), 07:00 local for any other zone, once per
+ * local day (src/lib/cron-daily-slot.js). Computing next_run_at in the
+ * studio's zone is TZ.11a's.
  */
 export async function GET(request) {
   // Verify the request is from Vercel Cron or an authorized caller
@@ -28,6 +35,16 @@ export async function GET(request) {
 
   const db = createServerClient()
   const now = new Date().toISOString()
+
+  // TZ.6 — which locations are at their daily slot this tick (claimed, so
+  // never twice in one local day). An unreadable zone acts for nobody.
+  const gate = await gateDailySlot(db, 'run-scheduled-reports', { nowMs: Date.parse(now), module: 'run-scheduled-reports' })
+  if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
+  if (gate.slots.size === 0) {
+    // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ success: !gate.faulted, message: 'No location at its daily slot', processed: 0, slot: gate.summary }, { status: gate.faulted ? 500 : 200 })
+  }
 
   // Find all active scheduled reports where next_run_at <= now
   const { data: dueReports, error: fetchError } = await db.from('scheduled_reports')
@@ -45,11 +62,13 @@ export async function GET(request) {
   // .eq('paused', false) on purpose: `select('*')` still works if this code
   // deploys before mig 617 adds the column, where a filter on it would 400
   // and stop EVERY schedule. A row without the field is not paused.
-  const runnable = (dueReports || []).filter(r => r.paused !== true)
+  const runnable = (dueReports || []).filter(r => r.paused !== true && slotFor(gate.slots, r.location_id))
 
   if (runnable.length === 0) {
-    await stampHeartbeat('run-scheduled-reports')
-    return NextResponse.json({ success: true, message: 'No reports due', processed: 0 })
+    if (slotTickStampable(gate)) {
+      await stampHeartbeat('run-scheduled-reports')
+    }
+    return NextResponse.json({ success: !gate.faulted, message: 'No reports due', processed: 0 }, { status: gate.faulted ? 500 : 200 })
   }
 
   // TZ.11a — each schedule's period and next run are its studio's calendar.
@@ -199,11 +218,13 @@ export async function GET(request) {
 
   // Heartbeat after the loop — even if individual reports errored, the cron
   // tick itself ran end-to-end. Per-report errors are surfaced in `results`.
-  await stampHeartbeat('run-scheduled-reports')
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('run-scheduled-reports')
+  }
 
   return NextResponse.json({
-    success: true,
+    success: !gate.faulted,
     processed: results.length,
     results,
-  })
+  }, { status: gate.faulted ? 500 : 200 })
 }

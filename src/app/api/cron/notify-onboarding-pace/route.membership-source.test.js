@@ -8,6 +8,11 @@ vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/onboarding-journey-data', () => ({ loadJourneyLane: vi.fn(async () => ({ lane: [] })) }))
 vi.mock('@/lib/customer-nudge-claim', () => ({ sendNudgeOnce: vi.fn(), readReachableContacts: vi.fn(), nudgeFailed: vi.fn() }))
+// TZ.6 — this file's subject is discovery, not the daily-slot gate: every location is due.
+vi.mock('@/lib/cron-daily-slot', async (importOriginal) => ({
+  ...(await importOriginal()),
+  gateDailySlot: (await import('@/lib/cron-daily-slot.test-helpers')).openGate,
+}))
 vi.mock('@/lib/glofox', async (importOriginal) => ({
   ...(await importOriginal()),
   glofoxCredentialsForLocation: vi.fn(async () => ({ branchId: 'b', apiKey: 'k', apiToken: 't', readError: null })),

@@ -8,6 +8,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import OfferSalesList from '@/components/OfferSalesList'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,6 +45,7 @@ export default async function OfferSalesPage() {
       <OfferSalesList
         pending={rows.filter((r) => !r.fulfilled_at)}
         fulfilled={rows.filter((r) => r.fulfilled_at).slice(0, 10)}
+        timezone={zoneOfLocation(user.activeLocation)}
       />
     </div>
   )

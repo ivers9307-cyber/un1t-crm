@@ -97,7 +97,8 @@ describe('TZ.14 D3: the abbreviation appears only when the record zone is not th
   })
   it('London summer is BST; a zone with no letters keeps its offset', () => {
     expect(Z.zoneAbbrev('2026-07-15T08:00:00Z', 'Europe/London')).toBe('BST')
-    expect(Z.zoneAbbrev('2026-07-15T08:00:00Z', 'Australia/Sydney')).toMatch(/^GMT\+10$/)
+    expect(Z.zoneAbbrev('2026-07-15T08:00:00Z', 'Australia/Sydney')).toBe('AEST')
+    expect(Z.zoneAbbrev('2026-07-15T08:00:00Z', 'Asia/Tokyo')).toBe('GMT+9')
   })
   it('a date-only label never carries a suffix', () => {
     expect(Z.studioDateLabel('2026-12-15T14:00:00Z', NY)).toBe('15 Dec 2026')
