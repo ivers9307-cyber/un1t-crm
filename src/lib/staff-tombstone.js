@@ -16,9 +16,9 @@
 //     layer for any login we could not ban. The function copies the role to
 //     `deleted_role` and sets `role` to the floor ('staff'). Role HISTORY is
 //     roleAtDeletion(), never `role`.
-//   • "UPCOMING" means NOT STARTED. A shift that has started today (Dublin
-//     wall clock) is history and stays; the summary lists those separately as
-//     kept_today_shifts.
+//   • "UPCOMING" means NOT STARTED. A shift that has started (on its own
+//     studio's wall clock, locations.timezone; TZ.15 mig 721) is history and
+//     stays; the summary lists those separately as kept_today_shifts.
 //
 // THE RULE FOR READERS: a tombstone is always active=false (DB CHECK), has no
 // profile_locations and no tokens. So `.eq('active', true)` readers and
