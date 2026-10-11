@@ -26,6 +26,8 @@ import { syncOrderFromCarDeposit } from '@/lib/orders'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
+import { depositExpiryLabel } from '@/lib/cars'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -49,7 +51,7 @@ export async function POST(request, props) {
   const db = createServerClient()
   const { data: car } = await db
     .from('cars')
-    .select('*, locations(id, name, car_deposit_default_amount)')
+    .select('*, locations(id, name, car_deposit_default_amount, timezone)')
     .eq('id', params.id)
     .single()
   if (!car) return NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 })
@@ -130,8 +132,10 @@ export async function POST(request, props) {
   // the link back later (testing, manual reshare, etc.). Best-effort —
   // a notes-table failure shouldn't fail the issue flow itself.
   try {
+    // TZ.17 — the expiry on the car studio's clock (it was the server's: UTC on
+    // Vercel, an hour behind Dublin in summer).
     const expiryHint = expiresAt
-      ? ` (expires ${new Date(expiresAt).toLocaleString('en-IE')})`
+      ? ` (expires ${depositExpiryLabel(expiresAt, zoneOfLocation(car.locations))})`
       : ''
     await db.from('car_notes').insert({
       car_id: car.id,

@@ -17,6 +17,7 @@ import { buildCachedSystem, SKIP_PREFIX } from './prompt'
 import { formatHistoryForClaude, isSkipResponse, parseAgentResponse } from './core'
 import { formatNextClass } from './account-tools'
 import { getLocationBranding } from '@/lib/location-branding'
+import { instantToZonedParts, zoneOfLocation } from '@/lib/location-time'
 import { resolveMembershipSource } from '@/lib/membership/source'
 import { anthropicMessages } from '@/lib/anthropic'
 
@@ -112,6 +113,21 @@ export function sanitizeSuggestion(text) {
   return s || null
 }
 
+const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+/**
+ * TZ.17 — "today" for the prompt, in Date#toDateString's exact shape
+ * ('Sun Oct 11 2026') but on the studio's calendar. It was the host clock's
+ * (`new Date().toDateString()`, UTC on Vercel), so from 00:00 to 01:00 Irish
+ * summer time Mia was told it was still yesterday.
+ * @param {number} nowMs
+ * @param {string} zone IANA zone
+ */
+export function zonedDateString(nowMs, zone) {
+  const p = instantToZonedParts(nowMs, zone)
+  return `${WD[p.weekday - 1]} ${MON[p.mo - 1]} ${String(p.d).padStart(2, '0')} ${String(p.y).padStart(4, '0')}`
+}
+
 // One short proactive message in Mia's voice, given the thread + an
 // instruction. Mirrors followups.js composeAgentText verbatim (same
 // model/max_tokens/system-cache shape) — see file header. Returns
@@ -128,7 +144,7 @@ export async function composeAgentText(location, settings, historyRows, instruct
     membershipSource, // W1.M3b — null renders the Glofox default
     tone: settings?.tone || null,
     extraRules: settings?.extra_rules || null,
-    today: new Date().toDateString(),
+    today: zonedDateString(Date.now(), zoneOfLocation(location)),
   })
   const messages = [
     ...formatHistoryForClaude(historyRows || []),
@@ -172,7 +188,7 @@ export async function composeApprovalSuggestion(db, row, { signal } = {}) {
   if (!row?.location_id) return { error: 'no_location' }
 
   const { data: location } = await db.from('locations')
-    .select('id, name, settings')
+    .select('id, name, settings, timezone')
     .eq('id', row.location_id)
     .maybeSingle()
   if (!location) return { error: 'location_not_found' }
@@ -198,7 +214,8 @@ export async function composeApprovalSuggestion(db, row, { signal } = {}) {
     if (contact) {
       ctx.firstName = contact.first_name || (contact.name ? contact.name.split(' ')[0] : null)
       ctx.membershipStatus = contact.glofox_membership_state || null
-      const next = formatNextClass(contact.recent_bookings)
+      // TZ.17 — the class time on the studio's clock (it was the default zone).
+      const next = formatNextClass(contact.recent_bookings, new Date(), zoneOfLocation(location))
       if (next.found) {
         ctx.nextClassName = next.class_name
         ctx.nextClassTime = next.class_time

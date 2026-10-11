@@ -34,7 +34,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { logWarn, logError } from '@/lib/log'
-import { dayStrIn, todayStrIn, DAY_MS, DEFAULT_TZ, getLocationZones, LocationZoneReadError } from '@/lib/location-time'
+import { dayStrIn, todayStrIn, DAY_MS, DEFAULT_TZ, getLocationZones, LocationZoneReadError, zonedWallClockToInstant } from '@/lib/location-time'
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { contactMatchesSequenceAudience } from './audience.js'
 import { enrolContacts } from './enrol.js'
@@ -62,14 +62,16 @@ export { ANNIVERSARY_FROM_FIELDS }
  * booking — even if it's already completed or exited — won't be
  * re-enrolled. Different bookings get separate enrolments.
  *
- * Timezone note: booking_date + start_time are stored as a naïve
- * date + time pair. We compose them and treat the result as UTC.
- * The studio is in Dublin (UTC in winter, UTC+1 in summer), so
- * around DST transitions the comparison can drift by up to an
- * hour — the 1-hour tolerance window absorbs that. operators
- * configure hours_before in coarse units (24h, 2h, etc.) so a
- * ±1h fire-time error is acceptable for "send roughly N hours
- * before the event".
+ * Timezone (TZ.17): booking_date + start_time are the studio's wall
+ * clock (CLAUDE.md), so they become an instant through
+ * zonedWallClockToInstant in the sequence studio's zone, and the
+ * booking_date pre-filter is that studio's calendar days. Until TZ.17
+ * the pair was read as UTC, which in Irish summer time put every
+ * booking an hour late (the ±1h tolerance hid it) and could miss a
+ * 00:xx booking from the UTC-date pre-filter. Exactly-once is unchanged:
+ * the dedup below is on (sequence, contact, booking) across every
+ * enrolment status, so a booking the old window already enrolled is
+ * skipped by the new one, whatever the overlap on the deploy day.
  *
  * @returns {Promise<{fired: number, skipped: number, errored: number}>}
  */
@@ -85,7 +87,12 @@ export async function runEventReminderTriggers() {
   if (!sequences?.length) return stats
 
   const now = Date.now()
-  const TOLERANCE_MS = 60 * 60 * 1000  // ±1h — see TZ note above
+  const TOLERANCE_MS = 60 * 60 * 1000  // ±1h — the cron's tick slack, not a zone fudge
+
+  // TZ.17 — every sequence's studio zone, read once (an unreadable zone skips
+  // the tick: a reminder on a guessed clock fires at the wrong hour).
+  const zones = await sequenceZones(db, sequences, 'event_reminder')
+  if (!zones) { stats.errored += sequences.length; return stats }
 
   for (const seq of sequences) {
     // CRONISO.1 — per-sequence isolation. See the module header.
@@ -98,9 +105,8 @@ export async function runEventReminderTriggers() {
         continue
       }
 
-      const targetMs = now + hoursBefore * 3600_000
-      const lo = new Date(targetMs - TOLERANCE_MS)
-      const hi = new Date(targetMs + TOLERANCE_MS)
+      const zone = zoneOfSequence(zones, seq)
+      const { loMs, hiMs, loDay, hiDay } = eventReminderWindow(now, hoursBefore, zone, TOLERANCE_MS)
 
       // Wide date filter then exact in-window check below — the date
       // filter is just to avoid pulling the entire bookings table.
@@ -109,8 +115,8 @@ export async function runEventReminderTriggers() {
         .select('id, contact_id, booking_date, start_time, event_type_id')
         .eq('location_id', seq.location_id)
         .eq('status', 'confirmed')
-        .gte('booking_date', lo.toISOString().slice(0, 10))
-        .lte('booking_date', hi.toISOString().slice(0, 10))
+        .gte('booking_date', loDay)
+        .lte('booking_date', hiDay)
       // This read used to drop its error on the floor: a failed lookup
       // produced `undefined` bookings and read as "nothing due", so a
       // broken reminder sweep looked identical to a quiet one.
@@ -118,8 +124,8 @@ export async function runEventReminderTriggers() {
 
       for (const booking of (bookings || [])) {
         if (!booking.contact_id) continue
-        const bookingMs = new Date(`${booking.booking_date}T${booking.start_time}Z`).getTime() // eslint-disable-line guardrails/no-zulu-template-date -- reminder window-match against now-based bounds; left by the #650 verification, reminder-timing reviewed separately
-        if (bookingMs < lo.getTime() || bookingMs > hi.getTime()) continue
+        const bookingMs = zonedWallClockToInstant(booking.booking_date, booking.start_time, zone)
+        if (bookingMs === null || bookingMs < loMs || bookingMs > hiMs) continue
 
         // Optional event_type_id scope — empty means "any event type".
         if (cfg.event_type_id && cfg.event_type_id !== booking.event_type_id) continue
@@ -161,6 +167,19 @@ export async function runEventReminderTriggers() {
   }
 
   return stats
+}
+
+/**
+ * TZ.17 — the event_reminder match window: instants [loMs, hiMs] around
+ * now + hoursBefore, and the studio-calendar days that bound the
+ * booking_date pre-filter. Pure.
+ * @returns {{ loMs: number, hiMs: number, loDay: string, hiDay: string }}
+ */
+export function eventReminderWindow(nowMs, hoursBefore, zone, toleranceMs = 60 * 60 * 1000) {
+  const targetMs = nowMs + hoursBefore * 3600_000
+  const loMs = targetMs - toleranceMs
+  const hiMs = targetMs + toleranceMs
+  return { loMs, hiMs, loDay: dayStrIn(loMs, zone), hiDay: dayStrIn(hiMs, zone) }
 }
 
 // ── TZ.4: each sequence's studio zone ───────────────────────────

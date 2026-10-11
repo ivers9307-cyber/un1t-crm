@@ -609,9 +609,11 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
       // month: computeProgress filters weekly goals to the ISO-week start,
       // which can fall in the PREVIOUS month near a boundary. Fetch from
       // whichever anchor is earlier; computeProgress re-filters per goal.
+      // TZ.17 — both anchors and the per-goal sums are the member's calendar,
+      // the same one as the dedup key (they were UTC weeks and months).
       const goalRef = new Date(nowMs)
       const sinceIso = new Date(
-        Math.min(startOfIsoWeek(goalRef).getTime(), startOfMonth(goalRef).getTime())
+        Math.min(startOfIsoWeek(goalRef, memberZone).getTime(), startOfMonth(goalRef, memberZone).getTime())
       ).toISOString()
       const { data: gSessions, error: gErr } = await db
         .from('heart_rate_sessions')
@@ -623,7 +625,7 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
       for (const goal of goals) {
         const def = GOAL_DEFS[goal.kind]
         if (!def) continue
-        const { current } = computeProgress(goal, gSessions || [], new Date(nowMs))
+        const { current } = computeProgress(goal, gSessions || [], new Date(nowMs), memberZone)
         if (current < goal.target_value) continue
         await sendNudgeOnce(db, {
           contactId: session.contact_id,
@@ -651,7 +653,9 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
       // next session in the month banks it (the insert is idempotent).
       const memberZone = await getLocationZone(db, session.location_id)
       const monthKey = periodKey('month', nowMs, memberZone) // 'YYYY-MM'
-      const monthStartIso = startOfMonth(new Date(nowMs)).toISOString()
+      // TZ.17 — the points summed are the banked month's (the member's calendar
+      // month, as monthKey); the sum started at the UTC month before.
+      const monthStartIso = startOfMonth(new Date(nowMs), memberZone).toISOString()
       const { data: monthSessions } = await db
         .from('heart_rate_sessions')
         .select('effort_points')
@@ -702,7 +706,8 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
               module: 'live-class',
             })
           } else {
-            const monthLabel = MONTH_NAMES[new Date(nowMs).getUTCMonth()]
+            // TZ.17 — the banked month's name (it was the UTC month's).
+            const monthLabel = MONTH_NAMES[Number(monthKey.slice(5, 7)) - 1]
             await sendCustomerPush(
               db, session.contact_id,
               buildTargetHitPush({ monthLabel, monthsHit, next: nextTier(monthsHit) })

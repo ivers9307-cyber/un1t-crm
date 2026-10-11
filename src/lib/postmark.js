@@ -9,6 +9,7 @@ import { withSendMarker } from './postmark-send-marker'
 import { getDefaultMailboxAddress, getLocationInboxReplyTo as resolveInboxReplyTo } from './postmark-reply-to'
 import { wireFrom, resolvedFromOf, platformFromAddress, parseAddressHeader } from './platform-sender'
 import { withRequestedFrom } from './from-address'
+import { instantToZonedParts, DEFAULT_TZ } from './location-time'
 
 export { getDefaultMailboxAddress }
 
@@ -536,7 +537,10 @@ export function applyMergeTags(html, contact, extras = {}) {
     // identity. Empty when the caller did not mint one — the link then still
     // works, just without the prefill.
     '{{booking_token}}': extras.booking_token || '',
-    '{{current_year}}': new Date().getFullYear().toString(),
+    // TZ.17 — the year on the SENDING studio's calendar (`extras.zone`, else
+    // Europe/Dublin). It was the host clock's (UTC on Vercel). Europe/Dublin is
+    // on GMT at New Year, so for a Dublin studio the year is unchanged.
+    '{{current_year}}': String(instantToZonedParts(Date.now(), extras.zone || DEFAULT_TZ).y),
     // PASSCODEREAD.1 — retired: always empty, never reads the column.
     '{{glofox_passcode}}': '',
     // PAYLINK.7 — the overdue-payment reminder's pay link, resolved by the

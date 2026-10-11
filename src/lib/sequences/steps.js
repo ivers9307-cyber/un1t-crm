@@ -40,6 +40,7 @@ import { logWarn } from '@/lib/log'
 import { isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { signStartPrefillToken } from '@/lib/start-prefill-token'
 import { getLocationBranding } from '@/lib/location-branding'
+import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { paymentFromEnrollment, paymentCtaHtml, payAmountPhrase, dunningPresendGate } from '@/lib/dunning-payment'
@@ -330,8 +331,12 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   const payment = paymentFromEnrollment(enrollment)
   const payPhrase = payAmountPhrase(payment)
   const { companyName } = await getLocationBranding(db, sequence?.location_id)
-  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName, company_name: companyName || '', pay_amount_phrase: payPhrase })
+  // TZ.17 — {{current_year}} on the sequence studio's calendar. Text only, so
+  // an unreadable zone falls back to Europe/Dublin rather than hold the email.
+  const mergeZone = await getLocationZone(db, sequence?.location_id).catch(() => DEFAULT_TZ)
+  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName, company_name: companyName || '', pay_amount_phrase: payPhrase, zone: mergeZone })
   const merged = applyMergeTags(html, contact, {
+    zone: mergeZone,
     location_name: locationName,
     company_name: companyName || '',
     booking_token: bookingToken,

@@ -12,11 +12,12 @@
 //   • src/lib/tiers.js grew three windowed-decay helpers (tierWindowMonths,
 //     shiftMonthKey, windowedMonthsHit) that shared/tiers.js never got, while
 //     BOTH files' line 1 still said "verbatim copy below line 1".
-//   • src/lib/goals.js and shared/goals.js disagree on the week/month
+//   • src/lib/goals.js and shared/goals.js disagreed on the week/month
 //     boundary (UTC vs Europe/Dublin) AND on periodEnd's arity — while
 //     src/lib/goals.js line 1 claimed a verbatim copy. Web reads
 //     `@/lib/goals`, mobile reads `shared/goals`, and they render the same
-//     member's weekly goal progress.
+//     member's weekly goal progress. (TZ.17 aligned the boundary; periodEnd
+//     still differs.)
 //   • src/lib/heart-rate.js and shared/heart-rate.js disagree on the
 //     zone LABELS ('Z1' vs 'Zone 1'), on resolveScoringConfig's return shape,
 //     and on summariseSession's internals.
@@ -248,15 +249,15 @@ const PAIRS = {
   // ── diverged: NOT in sync, and the drift is pinned so it stays visible ─────
   'goals.js': {
     mode: 'diverged',
-    drifted: ['computeProgress', 'periodEnd', 'startOfIsoWeek', 'startOfMonth'],
+    drifted: ['periodEnd'],
     why:
-      'OPEN, deliberately not fixed here. src/lib/goals.js (PR #610) buckets weeks and months on UTC boundaries; ' +
-      'shared/goals.js (the champ-app copy landed by the Repset P1 drop) buckets them on Europe/Dublin boundaries, ' +
-      'and its periodEnd takes (period, periodStart) where the web one takes (periodStart). The web dashboard reads ' +
-      "@/lib/goals and the mobile member app reads shared/goals, so the SAME member's weekly goal progress can " +
-      'disagree around Dublin midnight on a Monday during IST — the exact hazard CLAUDE.md\'s timezone invariant ' +
-      'describes. src/lib/goals.js line 1 claimed a verbatim copy; that claim is corrected, but changing which ' +
-      'boundary the web uses moves a member-visible number and is its own decision, not a drive-by in a guard PR.',
+      'OPEN, periodEnd only. src/lib/goals.js (PR #610) and shared/goals.js (the champ-app copy landed by the ' +
+      'Repset P1 drop) used to bucket weeks and months differently (UTC on the web, Europe/Dublin on the phone), ' +
+      "so the SAME member's weekly goal progress could disagree around midnight on a Monday during IST. TZ.17 " +
+      "(⚠️, approved by Richard 11 Oct 2026) moved the web's startOfIsoWeek / startOfMonth / computeProgress onto " +
+      "the member's calendar (zone parameter, D7), byte-for-byte the shared bodies, so those three left `drifted`. " +
+      'What is left: periodEnd takes (period, periodStart) in shared and (periodStart) on the web (a stub nothing ' +
+      'in src/ calls). Re-syncing it is an API change for its callers, not a boundary fix.',
   },
   'heart-rate.js': {
     mode: 'diverged',
@@ -417,7 +418,7 @@ const COINCIDENTAL = {
   'shared/share-card.js::src/lib/challenges.js':
     '`shortName` twice — a display helper for a member name, independently written on both sides. Cosmetic, no contract.',
   'shared/dashboard-data.js::src/lib/goals.js':
-    '`startOfMonth` twice. goals.js is inside the guarded goals.js pair (mode `diverged`, and startOfMonth is one of the pinned drifted exports); dashboard-data has its own for a dashboard range.',
+    '`startOfMonth` twice. goals.js is inside the guarded goals.js pair (mode `diverged`; since TZ.17 its startOfMonth matches shared/goals.js and only periodEnd is pinned as drifted); dashboard-data has its own for a dashboard range.',
   'shared/live-view.js::src/lib/race-control.js':
     '`formatElapsed` twice, and they deliberately DISAGREE — recorded here so the disagreement is ' +
     'visible rather than latent. shared/race-control.js (which src/lib/race-control.js re-exports, ' +

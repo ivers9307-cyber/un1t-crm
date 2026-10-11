@@ -177,7 +177,7 @@ export async function GET(request) {
     // features (TENANT.8 item 3b) — feeds the location bundle/feature
     // gate (isFeatureEnabledAtLocation(campaign.locations, 'email'))
     // inside tickCampaignSend.
-    .select('*, locations(name, slug, email_inbox_reply_to, settings, features)')
+    .select('*, locations(name, slug, email_inbox_reply_to, settings, features, timezone)')
     .in('status', ['queued', 'sending'])
     .order('updated_at', { ascending: true })
     .limit(FAIR_PICK_WINDOW)

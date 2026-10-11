@@ -53,10 +53,11 @@ export async function GET(request) {
   }
 
   const DAY = 24 * 3600 * 1000
-  const n = new Date(nowMs)
-  // The candidate window only bounds the read (attendanceDrop measures from nowMs).
-  const todayMs = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate())
-  const since84Iso = new Date(todayMs - 84 * DAY).toISOString()
+  // The read floor is attendanceDrop's own: its windows are rolling multiples
+  // of 24h back from nowMs, not calendar days, so no zone moves them. TZ.17:
+  // it was 84 days before UTC midnight, a calendar floor that only ever read a
+  // few hours more than attendanceDrop looks at (who is picked is unchanged).
+  const since84Iso = new Date(nowMs - 84 * DAY).toISOString()
 
   // 1. Candidates = contacts with >= 1 ended session in the last 84 days.
   const candidateIds = new Set()

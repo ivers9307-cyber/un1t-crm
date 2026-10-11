@@ -29,6 +29,13 @@ export function timeLabel(iso, zone = DEFAULT_TZ) {
   return formatInZone(new Date(iso), zone, { hour: '2-digit', minute: '2-digit' })
 }
 
+// TZ.17 — a public class's calendar day is the studio's (`day`, rendered in the
+// studio's zone by public-classes). The UTC fallback only serves a shape with no
+// `day` (none in production: every listPublicClasses row carries one).
+export function flowClassDay(c) {
+  return c.day || c.starts_at.slice(0, 10)
+}
+
 // The Flow's data exchange is a live answer to Meta, so a failed zone read
 // still answers: on DEFAULT_TZ, explicitly, with a warning (never silently).
 async function flowZone(db, locationId) {
@@ -54,7 +61,10 @@ async function classDayScreen(db, locationId) {
   const classes = await listPublicClasses(db, locationId)
   const seen = new Map()
   for (const c of classes) {
-    const day = c.starts_at.slice(0, 10)
+    // TZ.17 — `c.day` is the class's day on the studio's own calendar
+    // (public-classes, TZ.7). `starts_at.slice(0, 10)` was its UTC day, which
+    // put a 00:30 Dublin summer class under the previous day.
+    const day = flowClassDay(c)
     if (!seen.has(day)) seen.set(day, { id: day, title: dayLabel(day) })
   }
   return dayScreen([...seen.values()], 'class')
@@ -72,7 +82,7 @@ export async function handleDataExchange(db, { decryptedBody, contact, locationI
       const slots = await computeAvailableSlots(db, event, data.day)
       return slotScreen({ day: data.day, path, slots: slots.map((s) => ({ id: `${event.id}|${data.day}|${s.start}|${s.end}`, title: s.start })) })
     }
-    const classes = (await listPublicClasses(db, locationId)).filter((c) => c.starts_at.slice(0, 10) === data.day)
+    const classes = (await listPublicClasses(db, locationId)).filter((c) => flowClassDay(c) === data.day)
     const zone = await flowZone(db, locationId)
     // Capacity / spaces-left is deliberately NOT shown to customers — matches the
     // /start class-picker decision (PR #710: "removed the X-left badge"). Time + name only.

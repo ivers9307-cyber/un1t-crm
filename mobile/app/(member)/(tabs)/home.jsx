@@ -26,6 +26,7 @@ import { crmApi } from '../../../lib/member/api'
 import Card from '../../../components/member/ui/Card'
 import ErrorRetry from '../../../components/member/ErrorRetry'
 import JourneyCard from '../../../components/member/JourneyCard'
+import { challengeDaysLeft } from '../../../lib/member/challenge-countdown'
 import ZoneBar from '../../../components/member/ui/ZoneBar'
 import { goalDefs, computeProgress } from 'shared/goals'
 import { shapeJourneyCard } from 'shared/onboarding-journey'
@@ -485,10 +486,10 @@ export default function Home() {
 // Returns one prompt object { icon, title, subtitle, onPress? } or null.
 // Order: soonest-ending active challenge → points-to-monthly-target →
 // "you usually train <weekday>" → generic. Exported for unit reuse if needed.
-export function pickWhatsNext({ tierStatus, teaserChallenge, sessions, streak }, nowMs = Date.now()) {
+export function pickWhatsNext({ tierStatus, teaserChallenge, sessions, streak, tz }, nowMs = Date.now()) {
   // a) A challenge ending soon (within 10 days).
   if (teaserChallenge?.endsOn) {
-    const daysLeft = daysUntil(teaserChallenge.endsOn, nowMs)
+    const daysLeft = daysUntil(teaserChallenge.endsOn, nowMs, tz)
     if (daysLeft != null && daysLeft >= 0 && daysLeft <= 10) {
       return {
         icon: 'trophy-outline',
@@ -530,13 +531,10 @@ export function pickWhatsNext({ tierStatus, teaserChallenge, sessions, streak },
   return null
 }
 
-function daysUntil(isoDate, nowMs) {
-  if (!isoDate) return null
-  // isoDate is a plain 'YYYY-MM-DD'; compare at UTC midnight to avoid tz drift.
-  const t = Date.parse(`${isoDate}T00:00:00Z`)
-  if (!Number.isFinite(t)) return null
-  const today = Date.parse(`${new Date(nowMs).toISOString().slice(0, 10)}T00:00:00Z`)
-  return Math.round((t - today) / (24 * 3600 * 1000))
+function daysUntil(isoDate, nowMs, tz) {
+  // TZ.17 — "today" is the member's studio day (it was the UTC day); the
+  // zone is Europe/Dublin until the screen passes the member's own.
+  return challengeDaysLeft(isoDate, nowMs, tz)
 }
 
 function mostFrequentWeekday(sessions) {

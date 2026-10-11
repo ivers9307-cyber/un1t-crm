@@ -22,15 +22,19 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AlertCircle } from 'lucide-react'
 import { Button, Field } from '@/components/ui'
-import { todayStrIn, DEFAULT_TZ } from '@shared/zoned-time'
+import { todayStrIn, dayStrIn, DEFAULT_TZ } from '@shared/zoned-time'
 
 // timestamptz → "YYYY-MM-DD" for a <input type="date"> default. A new
-// consultation defaults to today in the contact's studio zone (TZ.13).
-function toDateInput(iso, zone) {
+// consultation defaults to today in the contact's studio zone (TZ.13); an
+// existing one shows its day in that zone too (TZ.17: it was its UTC day, so a
+// consultation at 00:30 Dublin summer time showed as the day before). Rows this
+// form saved are anchored at 12:00 UTC, which is the same day in every zone
+// from UTC-12 to UTC+11, Dublin included.
+export function toDateInput(iso, zone = DEFAULT_TZ) {
   if (!iso) return todayStrIn(zone)
   const d = new Date(iso)
   if (!Number.isFinite(d.getTime())) return todayStrIn(zone)
-  return d.toISOString().slice(0, 10)
+  return dayStrIn(d, zone)
 }
 
 export default function ConsultationForm({
