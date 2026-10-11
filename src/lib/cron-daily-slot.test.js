@@ -24,6 +24,9 @@ const LEGACY_SCHEDULE = {
   'churn-radar-digest': [0, 7, 1],
   'run-scheduled-reports': [0, 7, null],
   'contract-reminders': [0, 8, null],
+  // The arms of contract-reminders: they ran on its 08:00 UTC tick.
+  'roster-runway': [0, 8, null],
+  'qualification-digest': [0, 8, null],
   'run-challenge-events': [0, 8, null],
   'receipt-coverage-weekly': 'friday-08-dublin', // 0 7 * * 5 + 0 8 * * 5, Dublin-hour gate
   'event-reminders': [0, 9, null],
@@ -76,9 +79,23 @@ describe('TZ.6 slot table', () => {
   it('vercel.json runs every converted cron hourly at its legacy minute, once', async () => {
     const { readFileSync } = await import('node:fs')
     const crons = JSON.parse(readFileSync(new URL('../../vercel.json', import.meta.url), 'utf8')).crons
-    for (const cron of Object.keys(DAILY_SLOTS)) {
-      const entries = crons.filter((c) => c.path === `/api/cron/${cron}`)
+    for (const [cron, slot] of Object.entries(DAILY_SLOTS)) {
+      const entries = crons.filter((c) => c.path === `/api/cron/${slot.rides || cron}`)
       expect(entries.map((e) => e.schedule), cron).toEqual([`${minuteOf(cron)} * * * *`])
+    }
+  })
+
+  it('an ARM rides a converted cron at the same hour, and has no vercel.json entry of its own', async () => {
+    const { readFileSync } = await import('node:fs')
+    const crons = JSON.parse(readFileSync(new URL('../../vercel.json', import.meta.url), 'utf8')).crons
+    const arms = Object.entries(DAILY_SLOTS).filter(([, slot]) => slot.rides)
+    expect(arms.map(([cron]) => cron).sort()).toEqual(['qualification-digest', 'roster-runway'])
+    for (const [cron, slot] of arms) {
+      const host = DAILY_SLOTS[slot.rides]
+      expect(host, cron).toBeTruthy()
+      expect(host.rides, cron).toBeUndefined()
+      expect(slot.hour, cron).toBe(host.hour)
+      expect(crons.filter((c) => c.path === `/api/cron/${cron}`), cron).toEqual([])
     }
   })
 })
@@ -168,6 +185,21 @@ describe('TZ.6 the claim: never twice for one location on one local day', () => 
     const nowMs = at('2026-07-01T10:00:00Z')
     expect(slotFor((await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs })).slots, DUB.id)).toBeTruthy()
     expect(slotFor((await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: nowMs + 60_000 })).slots, DUB.id)).toBeUndefined()
+  })
+
+  it('an arm claims independently of its host cron and of the other arm (same hour, same location, same day)', async () => {
+    const t = slotTables({ locations: [DUB, NY] })
+    const nowMs = at('2026-07-01T08:00:00Z')
+    for (const cron of ['contract-reminders', 'roster-runway', 'qualification-digest']) {
+      expect(slotFor((await gateDailySlot({ from: t.from }, cron, { nowMs })).slots, DUB.id), cron).toBeTruthy()
+    }
+    // A second invocation of the same hour acts for none of the three.
+    for (const cron of ['contract-reminders', 'roster-runway', 'qualification-digest']) {
+      expect((await gateDailySlot({ from: t.from }, cron, { nowMs: nowMs + 60_000 })).slots.size, cron).toBe(0)
+    }
+    expect([...t.claims.keys()].filter((k) => k.includes('|loc-dub|')).sort()).toEqual([
+      'contract-reminders|loc-dub|2026-07-01', 'qualification-digest|loc-dub|2026-07-01', 'roster-runway|loc-dub|2026-07-01',
+    ])
   })
 
   it('claims are per cron: one cron claiming a day does not block another', async () => {
