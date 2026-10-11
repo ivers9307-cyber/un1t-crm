@@ -49,8 +49,8 @@ import { registryRowFromLegacy } from '@/lib/connection-registry'
 import { EXPIRY_SOON_DAYS } from '@/lib/connection-health'
 import { getSendBudget, tierDailyLimit } from '@/lib/whatsapp-budget'
 import { resolveAllowances } from '@/lib/plans'
-import { currentPeriodStart, nextPeriodStart } from '@/lib/wallet'
-import { addDaysISO, dublinDayStr } from '@/lib/dublin-time'
+import { currentPeriodStart, nextPeriodStart, walletResetNote } from '@/lib/wallet'
+import { addDaysISO, dayStrIn, zoneOfLocation, PLATFORM_TZ } from '@/lib/location-time'
 import { METERS, METER_KEYS } from '@shared/plans'
 
 export { EXPIRY_SOON_DAYS }
@@ -381,7 +381,7 @@ export function calendarDaysBetween(fromStr, toStr) {
 
 /**
  * The date the current wallet credit expires: the LAST day of the
- * Dublin month containing todayStr (the monthly-reset cron zeroes the
+ * billing month (D5: the platform billing calendar, PLATFORM_TZ) containing todayStr (the monthly-reset cron zeroes the
  * balance at the next period start — see src/lib/wallet.js). Pure.
  */
 export function billingExpiresOn(todayStr) {
@@ -740,6 +740,9 @@ async function assembleBillingStrip(db, locs, todayStr) {
         balanceCents,
         periodStart: wallet?.period_start || monthStart,
         expiresOn,
+        // TZ.11a / D5 — the reset (00:00 Irish time on the 1st) on this
+        // studio's clock; null on the platform's own zone.
+        resetsNote: walletResetNote(todayStr, zoneOfLocation(loc)),
         lapseWarning: walletLapseWarning({ balanceCents, todayStr, expiresOn }),
       },
       meters: buildBillingMeters(resolved, usage, drawsByLoc[loc.id] || {}),
@@ -1288,7 +1291,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
   // see billing for (`billingFor`); the rest get no row and no plan read.
   // Omitted (the master tenants console) = every location.
   const billingLocs = typeof billingFor === 'function' ? locs.filter((l) => billingFor(l)) : locs
-  const billing = await assembleBillingStrip(db, billingLocs, dublinDayStr(now))
+  const billing = await assembleBillingStrip(db, billingLocs, dayStrIn(now, PLATFORM_TZ)) // D5: the platform billing calendar (PLATFORM_TZ)
 
   return {
     generatedAt: now.toISOString(),

@@ -14,6 +14,10 @@
 
 import { upcomingWeeksBounds, summariseShifts, effectiveShiftStart, effectiveShiftEnd } from './roster-month.js'
 import { pctDelta, sumCampaignRows, shapeFunnel, FUNNEL_SLUGS } from './dashboard-metrics.js'
+// TZ.11a — the studio calendar for the server-run fetchers. A static import is
+// safe on the phone: zoned-time builds every formatter lazily, so importing it
+// constructs no Intl object (a Hermes build without full ICU loads it fine).
+import { dateKeyIn, monthStartMsIn, dayRangeMsIn, weekStartMsIn, addDaysIn, DEFAULT_TZ } from './zoned-time.js'
 
 // ROSTER-FIX.1 — "this assignment still puts a coach on the block".
 // Inlined rather than imported: `shared/` is the mobile seam and cannot
@@ -28,9 +32,10 @@ const isLiveRow = (a) => a?.status !== 'cancelled'
 // A4 REVENUEMTD.1: on a staff phone in Ireland, local IS Dublin, which is what
 // the phone-run fetchers want (fetchPersonalDashboardData's fallback). On the
 // server local is UTC (Vercel), so a server-run fetcher must never use these:
-// it loads the Dublin calendar with loadDublinTime() instead (pinned in
-// dashboard-data.test.js), or takes its window from the caller
-// (fetchStudioContactCounts, whose route computes the Dublin Monday).
+// it takes the studio's zone (TZ.11a: the `zone` argument, DEFAULT_TZ when
+// omitted) and uses ./zoned-time.js (pinned in dashboard-data.test.js), or
+// takes its window from the caller (fetchStudioContactCounts, whose route
+// computes the studio's Monday).
 // ============================================================
 
 export function isoDate(d) {
@@ -53,14 +58,13 @@ export function startOfMonth(d = new Date()) {
   return new Date(d.getFullYear(), d.getMonth(), 1)
 }
 
-// A4 REVENUEMTD.1 — the Europe/Dublin calendar, for the fetchers that run on
-// the SERVER: fetchTodayOps, fetchRevenueMTD, fetchFunnelCounts and
-// fetchAdsSummary (the Business dashboard, on web and, via
-// /api/dashboard/business, on the phone). Loaded on first use, never at module
-// scope: the staff app imports this module, and a Hermes build without full
-// ICU throws on the timeZone formatters dublin-time.js builds at import
-// (mobile/lib/dates.js, ROSTER-FIX.7f). The phone never calls those four, so it
-// never loads it.
+// A4 REVENUEMTD.1 — the Europe/Dublin calendar, now for fetchAdsSummary only
+// (ad_insights_daily.date; its zone is TZ.11c's: the ad account's). Loaded on
+// first use, never at module scope: the staff app imports this module, and a
+// Hermes build without full ICU throws on the timeZone formatters
+// dublin-time.js builds at import (mobile/lib/dates.js, ROSTER-FIX.7f). The
+// phone never calls it, so it never loads it. TZ.11a moved fetchTodayOps,
+// fetchRevenueMTD and fetchFunnelCounts to the studio's zone (./zoned-time.js).
 function loadDublinTime() {
   return import('./dublin-time.js')
 }
@@ -155,8 +159,8 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
   if (!profileId) return { success: false, error: 'No profile' }
 
   // A4 REVENUEMTD.1 — whose "today"? This runs in two places. The web Today
-  // page runs it on the SERVER (UTC on Vercel) and passes its Dublin today
-  // (dublinTodayStr); without that, from 00:00 to 01:00 Dublin on a summer
+  // page runs it on the SERVER (UTC on Vercel) and passes its studio's today
+  // (TZ.11a: todayStrIn of the active location's zone); without that, from 00:00 to 01:00 Dublin on a summer
   // Monday "This week" was last week. The phone passes nothing and keeps its
   // device day: Dublin for staff in Ireland, and no Intl, which a Hermes build
   // without full ICU cannot construct (mobile/lib/dates.js, ROSTER-FIX.7f).
@@ -520,28 +524,29 @@ export async function paginatedSumCents(supabase, filters) {
 // Revenue MTD from PAID invoices only (glofox_invoices is stale for
 // anything else — mig 324's daily reconcile keeps statuses honest).
 // Delta compares against the same day-window of last month.
-// A4 REVENUEMTD.1 — both windows are Europe/Dublin calendar days, as half-open
-// UTC ranges over invoice_date (timestamptz, mig 140):
-//   this month  [1st 00:00 Dublin, …)
-//   last month  [its 1st 00:00 Dublin, 00:00 Dublin the day after the same
+// A4 REVENUEMTD.1 — both windows are the STUDIO's calendar days (TZ.11a:
+// `zone`, DEFAULT_TZ when omitted), as half-open UTC ranges over invoice_date
+// (timestamptz, mig 140):
+//   this month  [1st 00:00 local, …)
+//   last month  [its 1st 00:00 local, 00:00 local the day after the same
 //               day-of-month), the same day clamped to last month's length.
 // They were the server's local midnights (UTC on Vercel): from 00:00 to 01:00
 // Dublin on the 1st in summer "MTD" was the whole previous month, and a
 // payment in that hour never counted in its own month. And with no clamp, on
 // the 31st after a 30-day month "last month" ran on into this one.
-export async function fetchRevenueMTD(supabase, locationId, now = new Date()) {
-  const { dublinDateKey, dublinMonthStartMs, dublinDayRangeMs } = await loadDublinTime()
+export async function fetchRevenueMTD(supabase, locationId, now = new Date(), zone = DEFAULT_TZ) {
   const nowMs = now.getTime()
-  const [y, m, d] = dublinDateKey(nowMs).split('-').map(Number)
-  const monthStartIso = new Date(dublinMonthStartMs(nowMs)).toISOString()
+  const [y, m, d] = dateKeyIn(nowMs, zone).split('-').map(Number)
+  const monthStartIso = new Date(monthStartMsIn(nowMs, zone)).toISOString()
   const prevY = m === 1 ? y - 1 : y
   const prevM = m === 1 ? 12 : m - 1
   // Day 0 of this month is the last day of the previous one.
   const daysInPrev = new Date(Date.UTC(y, m - 1, 0)).getUTCDate()
   const pad = (n) => String(n).padStart(2, '0')
-  const prevRange = dublinDayRangeMs(
+  const prevRange = dayRangeMsIn(
     `${prevY}-${pad(prevM)}-01`,
     `${prevY}-${pad(prevM)}-${pad(Math.min(d, daysInPrev))}`,
+    zone,
   )
   const prevStartIso = new Date(prevRange.startMs).toISOString()
   const prevEndIso = new Date(prevRange.endMs).toISOString()
@@ -593,11 +598,10 @@ export async function fetchArrearsSummary(supabase, locationId) {
 // Current funnel stage counts + this-month entered/converted.
 // entered uses joined_at (lead_created_at is import-poisoned);
 // conversions use converted_at (mig 350).
-export async function fetchFunnelCounts(supabase, locationId, now = new Date()) {
-  // A4 REVENUEMTD.1 — the same Dublin month as Revenue MTD (was the server's
-  // local month: UTC on Vercel).
-  const { dublinMonthStartMs } = await loadDublinTime()
-  const monthStartIso = new Date(dublinMonthStartMs(now.getTime())).toISOString()
+export async function fetchFunnelCounts(supabase, locationId, now = new Date(), zone = DEFAULT_TZ) {
+  // A4 REVENUEMTD.1 — the same studio month as Revenue MTD (was the server's
+  // local month: UTC on Vercel). TZ.11a: the studio's zone.
+  const monthStartIso = new Date(monthStartMsIn(now.getTime(), zone)).toISOString()
 
   // All 7 head-counts are independent — run them in one Promise.all.
   const results = await Promise.all([
@@ -676,25 +680,23 @@ export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
 }
 
 // Today's operations strip. Labour reuses the existing week window.
-export async function fetchTodayOps(supabase, locationId, now = new Date()) {
-  // DUBLINDAY.1 — "today" and "this week" are Europe/Dublin calendar days.
-  // They were the SERVER's local days (isoDate/startOfWeek read local time),
-  // and both callers run on Vercel in UTC: from 00:00 to 01:00 Dublin in
-  // summer the strip showed YESTERDAY's bookings, classes and staff, and on a
-  // Monday in that hour it costed LAST week's labour.
-  // Loaded lazily through loadDublinTime (see there): this function only ever
-  // runs on the server, so the phone never loads it.
-  const { dublinDateKey, dublinDayRangeMs, dublinWeekStartMs, dublinAddDays } = await loadDublinTime()
+export async function fetchTodayOps(supabase, locationId, now = new Date(), zone = DEFAULT_TZ) {
+  // DUBLINDAY.1 — "today" and "this week" are the STUDIO's calendar days
+  // (TZ.11a: `zone`, DEFAULT_TZ when omitted). They were the SERVER's local
+  // days (isoDate/startOfWeek read local time), and both callers run on Vercel
+  // in UTC: from 00:00 to 01:00 Dublin in summer the strip showed YESTERDAY's
+  // bookings, classes and staff, and on a Monday in that hour it costed LAST
+  // week's labour.
   const nowMs = now.getTime()
-  const todayIso = dublinDateKey(nowMs)
+  const todayIso = dateKeyIn(nowMs, zone)
   // class_occurrences (mig 284) has no date column — it stores starts_at
-  // (timestamptz). Count today's classes over the Dublin day as a half-open
-  // UTC window [00:00 Dublin, next 00:00 Dublin), and exclude cancelled
+  // (timestamptz). Count today's classes over the local day as a half-open
+  // UTC window [00:00 local, next 00:00 local), and exclude cancelled
   // occurrences (cancelled_at, mig 344 — live reads always filter
   // .is('cancelled_at', null)).
-  const { startMs: dayStartMs, endMs: dayEndMs } = dublinDayRangeMs(todayIso, todayIso)
-  const weekStartIso = dublinDateKey(dublinWeekStartMs(nowMs))
-  const weekEndIso = dublinAddDays(weekStartIso, 6)
+  const { startMs: dayStartMs, endMs: dayEndMs } = dayRangeMsIn(todayIso, todayIso, zone)
+  const weekStartIso = dateKeyIn(weekStartMsIn(nowMs, zone), zone)
+  const weekEndIso = addDaysIn(weekStartIso, 6, zone)
 
   // All four queries are independent — run them in one Promise.all.
   const [

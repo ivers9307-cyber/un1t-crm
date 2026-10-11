@@ -13,10 +13,11 @@ import { loadLabourMonth } from '@/lib/labour-month-data'
 import { LabourPanel } from './LabourPanel'
 import { BlockError } from './BusinessBlocks'
 
-export async function LabourBlock({ activeLocationId, studios, nowMs = Date.now() }) {
+export async function LabourBlock({ activeLocationId, studios, zone, nowMs = Date.now() }) {
   let vm = null
   try {
-    const res = await loadLabourMonth(createServerClient(), { activeLocationId, studios, nowMs })
+    // TZ.11a — `zone`: the active studio's (its calendar month).
+    const res = await loadLabourMonth(createServerClient(), { activeLocationId, studios, nowMs, zone })
     vm = res?.data ?? null
   } catch {
     vm = null

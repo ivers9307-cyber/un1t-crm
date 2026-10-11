@@ -59,7 +59,9 @@ describe('/dashboard/business — membership trend gate (W1.M3a)', () => {
     membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS })
     const html = await renderMembershipBlock()
     expect(computeMembershipCounts).toHaveBeenCalledWith(expect.anything(), LOC)
-    expect(fetchMembershipFlows).toHaveBeenCalledWith(expect.anything(), LOC, 12)
+    // TZ.11a — the flows are bucketed on the active studio's calendar (no
+    // timezone on this user's location: the Dublin floor).
+    expect(fetchMembershipFlows).toHaveBeenCalledWith(expect.anything(), LOC, 12, undefined, { zone: 'Europe/Dublin' })
     expect(html).toContain('membership-panel:412')
     expect(html).not.toContain('No membership source connected')
   })
@@ -129,5 +131,14 @@ describe('/dashboard/business — KPI row gate (W1.M3a review)', () => {
     const html = await renderBlock('KpiBriefingBlock')
     expect(html).toContain('Headline numbers')
     expect(html).not.toContain('No membership source connected')
+  })
+})
+
+describe('/dashboard/business — the active studio zone (TZ.11a)', () => {
+  it('a New York studio buckets its membership flows on New York months', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', profileRole: 'staff', rolesByLocation: { [LOC]: 'owner' }, activeLocation: { id: LOC, name: 'Studio', timezone: 'America/New_York' }, locations: [] })
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS })
+    await renderMembershipBlock()
+    expect(fetchMembershipFlows).toHaveBeenCalledWith(expect.anything(), LOC, 12, undefined, { zone: 'America/New_York' })
   })
 })

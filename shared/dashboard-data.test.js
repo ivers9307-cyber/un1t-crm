@@ -1046,12 +1046,20 @@ describe('dashboard-data stays loadable on the phone, and the server reads Dubli
     expect(code).toMatch(/import\(\s*['"]\.\/dublin-time\.js['"]\s*\)/)
   })
 
-  it.each(['fetchTodayOps', 'fetchRevenueMTD', 'fetchFunnelCounts', 'fetchAdsSummary'])(
+  // TZ.11a — three of them moved from loadDublinTime() to the studio's zone
+  // (a static ./zoned-time.js import, which builds no Intl object at import);
+  // fetchAdsSummary keeps the Dublin day until TZ.11c gives it the ad account's.
+  it.each([
+    ['fetchTodayOps', /\b(dateKeyIn|dayRangeMsIn|weekStartMsIn)\([^;]*\bzone\b/],
+    ['fetchRevenueMTD', /\b(dateKeyIn|monthStartMsIn)\([^;]*\bzone\b/],
+    ['fetchFunnelCounts', /\bmonthStartMsIn\([^;]*\bzone\b/],
+    ['fetchAdsSummary', /loadDublinTime\(\)/],
+  ])(
     '%s (server-run) builds no window from the local calendar',
-    (name) => {
+    (name, calendar) => {
       const b = body(name)
       expect(b.length, `${name} not found`).toBeGreaterThan(50)
-      expect(b).toMatch(/loadDublinTime\(\)/)
+      expect(b).toMatch(calendar)
       expect(b).not.toMatch(/\b(startOfMonth|startOfWeek|endOfWeek|isoDate)\(/)
       expect(b).not.toMatch(/\.(setHours|setDate|getDate|getDay|getMonth|getFullYear)\(/)
     },

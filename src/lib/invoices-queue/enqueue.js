@@ -28,7 +28,7 @@
 // keeps the existing /invoices UI working unchanged.
 
 import { createServerClient } from '@/lib/supabase'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { getLocationZone, todayStrIn } from '@/lib/location-time'
 
 const STORAGE_BUCKETS = Object.freeze({
   supplier_email: 'inbound-invoices',
@@ -119,10 +119,12 @@ async function resolveAttachmentMeta(db, bucket, path) {
  * the claim got stuck in 'awaiting_accountant_review' with nothing
  * for the bookkeeper to act on.
  */
-function syntheticFieldsForReceiptlessItem(item) {
+function syntheticFieldsForReceiptlessItem(item, todayStr) {
   const amount = Number(item.amount) || 0
   const supplier = (item.vendor && String(item.vendor).trim()) || 'Mileage / cash expense'
-  const invoiceDate = item.expense_date || dublinTodayStr()
+  // TZ.11a — no typed date: the bill is dated the claim studio's today (its
+  // Xero org's calendar: one location = one Xero organisation).
+  const invoiceDate = item.expense_date || todayStr
   // Synthetic invoice number — stable + unique within Xero, with
   // an EXP- prefix so the bookkeeper can tell it's a synthesised
   // reference (not a real invoice number).
@@ -187,6 +189,19 @@ export async function enqueueFromFteExpenseClaim(claimId) {
     return { ok: true, queueIds: [] }
   }
 
+  // TZ.11a — the studio's today, read only when a receiptless item has no
+  // date of its own. It becomes the Xero bill date, so a failed read enqueues
+  // nothing (the caller reports the error; a retry is safe) rather than date
+  // a bill on a guessed zone.
+  let todayStr = null
+  if (items.some((it) => !it.receipt_path && !it.expense_date)) {
+    try {
+      todayStr = todayStrIn(await getLocationZone(db, claim.location_id))
+    } catch (err) {
+      return { ok: false, error: `Studio timezone lookup failed: ${err?.message || String(err)}` }
+    }
+  }
+
   // RECEIPTLESS-EXPENSE-QUEUE — queue ALL items. Items with
   // receipts go through the normal Analyse → Send flow; receiptless
   // items land pre-extracted (from the typed item data) so the
@@ -227,7 +242,7 @@ export async function enqueueFromFteExpenseClaim(claimId) {
       status: 'extracted',
       extracted_at: new Date().toISOString(),
       extraction_confidence: 'high', // it's not OCR'd, it's the submitter's typed data
-      extracted_fields: syntheticFieldsForReceiptlessItem(it),
+      extracted_fields: syntheticFieldsForReceiptlessItem(it, todayStr),
     }
   })
 

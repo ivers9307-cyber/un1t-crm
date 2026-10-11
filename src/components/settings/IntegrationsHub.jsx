@@ -331,6 +331,8 @@ function BillingStripRow({ row, locationName, showLocation, canManageBilling = f
         <div className="text-[10px] uppercase tracking-wider text-un1t-muted">Wallet</div>
         <div className="text-sm font-semibold text-un1t-text tabular-nums mt-1">{fmtEurCents(wallet.balanceCents)}</div>
         <p className="text-xs text-un1t-muted mt-0.5">expires {fmtDate(wallet.expiresOn)}</p>
+        {/* TZ.11a / D5 — the reset on the studio's clock, only when it differs. */}
+        {wallet.resetsNote && <p className="text-xs text-un1t-muted mt-0.5">{wallet.resetsNote}</p>}
         {wallet.lapseWarning && (
           <p className="text-xs text-amber-700 bg-amber-500/10 rounded px-2 py-1 mt-1.5">
             {fmtEurCents(wallet.balanceCents)} unused credit expires with the monthly reset.

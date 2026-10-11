@@ -38,6 +38,7 @@ import { buildBusinessKpis } from '@/lib/dashboard/business-kpis'
 import { buildNeedsYouRail } from '@/lib/dashboard/business-rail'
 import { computeMembershipCounts, fetchMembershipTrend } from '@/lib/membership-snapshot'
 import { membershipStateForPage, membershipStatePayload, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -48,11 +49,11 @@ export const maxDuration = 60
 
 // Membership block semantics match the page's MembershipBlock: a throw
 // OR falsy live counts = failure (null), never a fake-zero panel.
-async function membershipBlock(db, locationId) {
+async function membershipBlock(db, locationId, zone) {
   try {
     const [live, trend] = await Promise.all([
       computeMembershipCounts(db, locationId),
-      fetchMembershipTrend(db, locationId, 12),
+      fetchMembershipTrend(db, locationId, 12, { zone }),
     ])
     if (!live) return null
     return { live, trend }
@@ -84,12 +85,15 @@ export async function GET() {
   if (guard) return guard
 
   const db = createServerClient()
+  // TZ.11a — the active studio's calendar (its row already carries timezone).
+  const zone = zoneOfLocation(user.activeLocation)
+  const now = new Date()
   const [kpis, funnel, ads, membership, today, rail, sourceState] = await Promise.all([
-    buildBusinessKpis(db, user, locationId), // null on failure by contract
-    blockData(fetchFunnelCounts(db, locationId)),
+    buildBusinessKpis(db, user, locationId, now.getTime()), // null on failure by contract
+    blockData(fetchFunnelCounts(db, locationId, now, zone)),
     blockData(fetchAdsSummary(db, locationId)),
-    membershipBlock(db, locationId),
-    blockData(fetchTodayOps(db, locationId)),
+    membershipBlock(db, locationId, zone),
+    blockData(fetchTodayOps(db, locationId, now, zone)),
     buildNeedsYouRail(db, user, locationId).then(rows => rows, () => null),
     // Belt and braces: membershipStateForPage is built never to throw, but a
     // rejection here must never 500 the route for 2.3.x phones that never

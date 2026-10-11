@@ -1,7 +1,8 @@
 // Shared report generation logic — used by both manual generate and cron scheduler
 import { createServerClient } from '@/lib/supabase'
 import { computeWeeklyCost, implicitHourlyRate, mondayOf, shiftHours } from '@/lib/payroll'
-import { isLiveAssignment, formatDate } from '@/lib/roster'
+import { isLiveAssignment } from '@/lib/roster'
+import { todayStrIn, addDaysISO, zonedWallClockToInstant, instantToZonedParts, canonicalZone, resolveZone, PLATFORM_TZ } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 import { roleAtDeletion } from '@/lib/staff-tombstone'
 import { reportPeriodError, eachReportDay } from '@/lib/report-period'
@@ -569,82 +570,102 @@ export async function generateReport({ report_type, period_start, period_end, lo
   return { success: true, data: saved }
 }
 
+// TZ.11a — whose clock? A schedule's periods and runs are its STUDIO's
+// calendar (`zone`: the schedule's location_id zone; every production caller
+// passes it). Before TZ.11a both helpers read the HOST's local getters, which
+// are UTC on Vercel. A caller that passes no zone keeps exactly that (the
+// host's zone), so the signatures stay backward-compatible.
+const hostZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+const scheduleZone = (zone) => (zone ? resolveZone(zone) : hostZone())
+
+// TZ.6 / D6 = B — a Europe/Dublin schedule keeps its legacy 07:00 **UTC**
+// (src/lib/cron-daily-slot.js LEGACY_UTC_ANCHORED: the zone those UTC hours
+// were chosen for), so UN1T's reports go out exactly when they always did,
+// and the hourly cron's Dublin slot (07:00 UTC) meets them. Every other zone
+// runs at 07:00 local. Compared through canonicalZone().
+const keepsUtcRunClock = (zone) => !!zone && canonicalZone(zone) === PLATFORM_TZ
+
 /**
  * Calculate the period dates for a scheduled report based on frequency.
  * Daily = yesterday, weekly = last 7 days, fortnightly = last 14 days,
- * monthly = last calendar month. All boundaries inclusive.
+ * monthly = last calendar month. All boundaries inclusive, all calendar days
+ * in `zone`.
  *
- * ROSTER-FIX.5 — boundaries are now formatted from LOCAL calendar components
- * (formatDate), not toISOString(). The old UTC formatting was the classic
- * CLAUDE.md trap: `new Date(y, m - 1, 1)` is LOCAL midnight, so under any
- * offset east of UTC (Dublin BST = +1) toISOString() rolled it back a day and
- * every monthly report covered 31 Mar - 29 Apr instead of 1 - 30 Apr. It also
- * removes the old "don't move the cron earlier than 01:00 UTC" caveat: local
- * components mean the period is the operator's yesterday at any run hour.
+ * ROSTER-FIX.5 — boundaries are calendar-day strings, never toISOString() of
+ * a local midnight (under any offset east of UTC that rolled back a day and
+ * every monthly report covered 31 Mar - 29 Apr instead of 1 - 30 Apr).
+ *
+ * @param {string} frequency
+ * @param {string} [zone] the schedule's location zone (omitted: host clock)
+ * @param {number} [nowMs]
  */
-export function calculatePeriodForSchedule(frequency) {
-  const now = new Date()
+export function calculatePeriodForSchedule(frequency, zone, nowMs = Date.now()) {
+  const today = todayStrIn(scheduleZone(zone), nowMs)
 
   // period_end is always yesterday, local.
-  const yesterday = new Date(now)
-  yesterday.setDate(yesterday.getDate() - 1)
+  const yesterday = addDaysISO(today, -1)
 
   // A daily report covers ONE day. It used to fall through to the 7-day
   // default, so a schedule labelled "daily" re-reported the same week every
   // morning.
   if (frequency === 'daily') {
-    const day = formatDate(yesterday)
-    return { period_start: day, period_end: day }
+    return { period_start: yesterday, period_end: yesterday }
   }
 
   if (frequency === 'monthly') {
-    // Previous full calendar month.
-    const first = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-    const last = new Date(now.getFullYear(), now.getMonth(), 0)
-    return { period_start: formatDate(first), period_end: formatDate(last) }
+    // Previous full calendar month: its 1st, and day 0 of this month.
+    const [y, m] = today.split('-').map(Number)
+    const prevY = m === 1 ? y - 1 : y
+    const prevM = m === 1 ? 12 : m - 1
+    const pad = (n) => String(n).padStart(2, '0')
+    const lastDay = new Date(Date.UTC(y, m - 1, 0)).getUTCDate()
+    return { period_start: `${prevY}-${pad(prevM)}-01`, period_end: `${prevY}-${pad(prevM)}-${pad(lastDay)}` }
   }
 
   // weekly (and the fallback) = 7 days, fortnightly = 14 — both ending
   // yesterday, inclusive.
   const span = frequency === 'fortnightly' ? 13 : 6
-  const start = new Date(yesterday)
-  start.setDate(start.getDate() - span)
-  return { period_start: formatDate(start), period_end: formatDate(yesterday) }
+  return { period_start: addDaysISO(yesterday, -span), period_end: yesterday }
 }
 
 /**
- * Calculate the next run date after execution. Always 07:00 local on the
- * target day; null for 'once' (nothing to advance to) and for a
- * weekly/fortnightly schedule with no weekday set. A monthly schedule always
- * returns a date: no day_of_month means the 1st, and a day past the target
- * month's end is clamped to its last day.
+ * Calculate the next run date after execution. Always 07:00 on the target
+ * day, on the schedule's run clock: 07:00 local in `zone`, except a
+ * Europe/Dublin schedule, which keeps 07:00 UTC (TZ.6, see keepsUtcRunClock).
+ * null for 'once' (nothing to advance to) and for a weekly/fortnightly
+ * schedule with no weekday set. A monthly schedule always returns a date: no
+ * day_of_month means the 1st, and a day past the target month's end is
+ * clamped to its last day.
  *
  * `dayOfWeek` is a JS weekday (0=Sunday) — see src/lib/report-schedule-days.js
  * and mig 601. The UI converts; nothing else may.
+ *
+ * @param {string} frequency
+ * @param {number|null} [dayOfWeek]
+ * @param {number|null} [dayOfMonth]
+ * @param {string} [zone] the schedule's location zone (omitted: host clock)
+ * @param {number} [nowMs]
  */
-export function calculateNextRun(frequency, dayOfWeek, dayOfMonth) {
-  const now = new Date()
+export function calculateNextRun(frequency, dayOfWeek, dayOfMonth, zone, nowMs = Date.now()) {
+  const clock = keepsUtcRunClock(zone) ? 'UTC' : scheduleZone(zone)
+  const today = todayStrIn(clock, nowMs)
+  const at0700 = (dateStr) => new Date(zonedWallClockToInstant(dateStr, '07:00', clock)).toISOString()
 
   // ROSTER-FIX.5 — 'daily' returned null, so /api/cron/run-scheduled-reports
   // left next_run_at where it was: a daily schedule ran once and then either
   // stalled or re-fired every tick.
   if (frequency === 'daily') {
-    const target = new Date(now)
-    target.setDate(target.getDate() + 1)
-    target.setHours(7, 0, 0, 0)
-    return target.toISOString()
+    return at0700(addDaysISO(today, 1))
   }
 
   if ((frequency === 'weekly' || frequency === 'fortnightly') && dayOfWeek != null) {
-    const target = new Date(now)
-    const diff = (dayOfWeek - target.getDay() + 7) % 7
+    const todayDow = instantToZonedParts(nowMs, clock).weekday % 7 // ISO 7 (Sunday) → JS 0
+    const diff = (dayOfWeek - todayDow + 7) % 7
     // diff === 0 means today IS the target weekday, and the run that just
     // happened is why we are here — so the next one is a whole week out, never
     // today. Fortnightly is then that occurrence plus another week.
     const next = diff === 0 ? 7 : diff
-    target.setDate(target.getDate() + next + (frequency === 'fortnightly' ? 7 : 0))
-    target.setHours(7, 0, 0, 0)
-    return target.toISOString()
+    return at0700(addDaysISO(today, next + (frequency === 'fortnightly' ? 7 : 0)))
   }
 
   if (frequency === 'monthly') {
@@ -657,16 +678,16 @@ export function calculateNextRun(frequency, dayOfWeek, dayOfMonth) {
     // so this is the DEFAULT monthly schedule, not an edge case. The 1st is
     // the sane default for "monthly".
     //
-    // And 31 overflowed. `new Date(y, m, 31)` for a 30-day month rolls into
-    // the NEXT month, so a schedule set to the 31st landed on 1 July instead
-    // of 30 June — two months out, not one, and it drifts further every time
-    // it fires. Clamp to the target month's last day; `new Date(y, m + 2, 0)`
-    // is day zero of the month after the target, i.e. the target's last day.
+    // And 31 overflowed into the month after. Clamp to the target month's
+    // last day (day 0 of the month after the target).
+    const [y, m] = today.split('-').map(Number)
+    const targetY = m === 12 ? y + 1 : y
+    const targetM = m === 12 ? 1 : m + 1
     const requested = Number(dayOfMonth) > 0 ? Math.floor(Number(dayOfMonth)) : 1
-    const lastDayOfTargetMonth = new Date(now.getFullYear(), now.getMonth() + 2, 0).getDate()
+    const lastDayOfTargetMonth = new Date(Date.UTC(targetY, targetM, 0)).getUTCDate()
     const day = Math.min(requested, lastDayOfTargetMonth)
-    const target = new Date(now.getFullYear(), now.getMonth() + 1, day, 7, 0, 0)
-    return target.toISOString()
+    const pad = (n) => String(n).padStart(2, '0')
+    return at0700(`${targetY}-${pad(targetM)}-${pad(day)}`)
   }
 
   return null // 'once' — no next run
