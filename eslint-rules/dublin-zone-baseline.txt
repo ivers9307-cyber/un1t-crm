@@ -83,8 +83,6 @@ src/app/api/schedule/time-off/[id]/route.js
 src/app/api/schedule/time-off/[id]/unassign-clashes/route.js
 src/app/api/schedule/time-off/route.js
 src/app/api/schedule/week-cost/route.js
-src/app/api/shelly/devices/[id]/energy/route.js
-src/app/api/sonos/schedules/[id]/run-now/route.js
 src/app/communications/(marketing-era)/list-health/page.js
 src/app/dashboard/today/page.js
 src/app/live/[locationId]/DetectedTab.jsx
@@ -105,8 +103,6 @@ src/components/TasksPage.jsx
 src/components/TimeOffManager.jsx
 src/components/automations/BathroomClimateCard.jsx
 src/components/automations/ClassClimateCard.jsx
-src/components/automations/ShellyDeviceCard.jsx
-src/components/automations/SonosScheduleClient.jsx
 src/components/contact/ContactDrawer.jsx
 src/components/contact/ContactHeaderBand.jsx
 src/components/dashboard/AdsRefreshButton.jsx
@@ -126,7 +122,6 @@ src/lib/block-edit-notify.js
 src/lib/block-edit.js
 src/lib/candidates-data.js
 src/lib/challenges.js
-src/lib/class-climate.js
 src/lib/class-occurrences.js
 src/lib/contract-pdf.js
 src/lib/contracts.js
@@ -136,7 +131,6 @@ src/lib/email-forward.js
 src/lib/equipment-dates.js
 src/lib/event-attendee-reminders.js
 src/lib/event-waitlist.js
-src/lib/fleet-health.js
 src/lib/host-move-session.js
 src/lib/host-schedule-time.js
 src/lib/hr-analytics.js
@@ -173,11 +167,8 @@ src/lib/roster-runway-data.js
 src/lib/roster-runway-notify.js
 src/lib/roster-staffing.js
 src/lib/sale-offers.js
-src/lib/schedule/desired-state.js
-src/lib/shelly/reconcile.js
 src/lib/shift-reminders.js
 src/lib/shift-replace-notify.js
-src/lib/sonos/reconcile.js
 src/lib/staff-calendar-feed.js
 src/lib/staff-push-hours.js
 src/lib/time-off-cancel.js

@@ -44,8 +44,8 @@ import { useEffect, useState } from 'react'
 import { AlertCircle, ChevronDown, ChevronRight, Play, Trash2 } from 'lucide-react'
 import { Button, Card } from '@/components/ui'
 import { formatRelative } from '@/lib/dates'
-import { addDaysISO } from '@/lib/dublin-time'
-import { dayStrInTz, DEFAULT_TZ } from '@/lib/tz-time'
+// @shared/zoned-time (a client component; location-time carries the DB side).
+import { addDaysISO, strictDayStrIn as dayStrInTz, DEFAULT_TZ } from '@shared/zoned-time'
 import { deviceHealth, HEALTH_TONE_CLASSES } from '@/lib/shelly/device-health'
 // The ENGINE's own answer to "is this override live", not a second copy of the
 // same comparison — a planner that stopped honouring an override and a card

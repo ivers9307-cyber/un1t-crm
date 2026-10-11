@@ -6,6 +6,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { logError } from '@/lib/log'
+import { zoneOfLocation } from '@/lib/location-time'
 import { canCloneSequenceAt } from '@/lib/sequence-access'
 import { AUTOMATIONS } from '@/lib/automations/registry'
 import { readGlofoxAutomationStatus } from '@/lib/automations/glofox-status'
@@ -151,6 +152,7 @@ export default async function AutomationsPage() {
             <AutomationsView locationId={location?.id || null} locationName={location?.name || ''} cards={cards} />
             <ClassClimateCard
               locationId={location?.id || null}
+              timezone={zoneOfLocation(location)}
               glofoxConnected={glofox?.connected === true}
               glofoxUnknown={glofox?.known === false}
               devices={climateDevices}
@@ -159,6 +161,7 @@ export default async function AutomationsPage() {
             />
             <BathroomClimateCard
               locationId={location?.id || null}
+              timezone={zoneOfLocation(location)}
               glofoxConnected={glofox?.connected === true}
               glofoxUnknown={glofox?.known === false}
               devices={climateDevices}
