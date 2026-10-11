@@ -134,7 +134,7 @@ describe('HostEmailReport (render)', () => {
     expect(screen.queryByText(/Scheduled for/)).toBeNull()
   })
 
-  it('scheduled_for renders "Scheduled for <dublinScheduleLabel>"', async () => {
+  it('scheduled_for renders "Scheduled for <scheduleLabelIn>"', async () => {
     mockFetchOnce({
       ok: true,
       status: 200,

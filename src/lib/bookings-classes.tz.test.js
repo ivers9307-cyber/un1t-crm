@@ -1,10 +1,10 @@
 // bookings-classes.tz.test.js — TZ.7: booking slots, public classes, the
 // manual timetable and booking copy take the STUDIO's zone.
 //
-// Two halves, as every sweep: (1) Europe/Dublin is byte-identical to the
-// frozen pre-change code (bookings-classes.legacy-dublin.test-helpers.js) over
-// the DST-edge samples and every day/hour of 2026; (2) America/New_York follows
-// New York's clock across both 2026 US DST changes.
+// America/New_York follows New York's clock across both 2026 US DST changes.
+// The Dublin byte-identity sweep ran in TZ.7 and was retired in TZ.18b:
+// Europe/Dublin is pinned by fixed values below, and zoned-time ≡ dublin-time
+// stays proven by shared/zoned-time.parity.test.js.
 process.env.TZ = 'America/Los_Angeles' // host zone is neither zone under test
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
@@ -16,7 +16,6 @@ vi.mock('@/lib/glofox', () => ({
   fetchUpcomingEvents: vi.fn(async () => ({ ok: true, events: [] })),
 }))
 
-const LEGACY = await import('./bookings-classes.legacy-dublin.test-helpers.js')
 const { computeAvailableSlots, computeAvailableDays } = await import('./booking-slots.js')
 const { fmtBookingTime } = await import('./booking-confirmations.js')
 const { bookingWallClockToMs } = await import('./bridge-samples.js')
@@ -32,25 +31,6 @@ const DUB = 'Europe/Dublin'
 const NY = 'America/New_York'
 // US DST 2026: spring forward Sun 8 Mar 02:00 → 03:00; fall back Sun 1 Nov 02:00 → 01:00.
 // EU DST 2026: spring forward Sun 29 Mar 01:00 UTC; fall back Sun 25 Oct 01:00 UTC.
-const SAMPLES = [
-  '2026-03-07T04:30:00Z', '2026-03-08T06:59:00Z', '2026-03-08T07:00:00Z', // NY around spring-forward
-  '2026-03-28T23:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', // Dublin around spring-forward
-  '2026-10-24T23:30:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z', // Dublin around fall-back
-  '2026-11-01T04:59:00Z', '2026-11-01T05:00:00Z', '2026-11-01T06:00:00Z', // NY around fall-back
-  '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-12-31T23:30:00Z', // month/year edges
-]
-const DAYS_2026 = (() => {
-  const out = []
-  for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 86_400_000) out.push(new Date(t).toISOString().slice(0, 10))
-  return out
-})()
-const HOURS_2026 = (() => {
-  const out = []
-  for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 3_600_000) out.push(t)
-  return out
-})()
-const addDays = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10)
-
 // Every bookings/blocked_times read answers empty; the slot list is then the
 // availability window minus the past.
 function emptyDb() {
@@ -69,106 +49,124 @@ afterEach(() => {
   resetLocationZoneCache()
 })
 
-describe('TZ.7 Europe/Dublin is byte-identical', () => {
-  describe('booking-slots: computeAvailableSlots / computeAvailableDays', () => {
-    it.each(SAMPLES)('%s', async (iso) => {
-      vi.useFakeTimers({ toFake: ['Date'] })
-      vi.setSystemTime(new Date(iso))
-      const event = eventIn(DUB)
-      const nowDay = iso.slice(0, 10)
-      for (const date of [addDays(nowDay, -1), nowDay, addDays(nowDay, 1), addDays(nowDay, 2), addDays(nowDay, 3)]) {
-        expect(await computeAvailableSlots(emptyDb(), event, date)).toStrictEqual(await LEGACY.computeAvailableSlotsLegacyDublin(emptyDb(), event, date))
-      }
-      expect(await computeAvailableDays(emptyDb(), event, { days: 5 })).toStrictEqual(await LEGACY.computeAvailableDaysLegacyDublin(emptyDb(), event, { days: 5 }))
-    })
+describe('TZ.7 Europe/Dublin pinned values', () => {
+  const at = (iso) => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(iso)) }
 
-    it('an event type with no location (no embed, no id) is Dublin, as before', async () => {
-      const event = { ...eventIn(DUB), location_id: undefined, locations: undefined }
-      vi.useFakeTimers({ toFake: ['Date'] })
-      vi.setSystemTime(new Date('2026-07-01T13:30:00Z'))
-      expect(await computeAvailableSlots(emptyDb(), event, '2026-07-01')).toStrictEqual(await LEGACY.computeAvailableSlotsLegacyDublin(emptyDb(), event, '2026-07-01'))
-    })
+  it('computeAvailableSlots: Dublin\'s clock decides what is past, on both DST Sundays', async () => {
+    const hourly = eventIn(DUB, { duration_minutes: 60, availability: everyDay({ start: '09:00', end: '11:00' }) })
+    const both = [{ start: '09:00', end: '10:00' }, { start: '10:00', end: '11:00' }]
+    const late = [{ start: '10:00', end: '11:00' }]
+    at('2026-03-29T07:30:00Z') // 08:30 IST, spring-forward day
+    expect(await computeAvailableSlots(emptyDb(), hourly, '2026-03-29')).toStrictEqual(both)
+    at('2026-03-29T08:30:00Z') // 09:30 IST
+    expect(await computeAvailableSlots(emptyDb(), hourly, '2026-03-29')).toStrictEqual(late)
+    at('2026-10-25T08:30:00Z') // 08:30 GMT, fall-back day
+    expect(await computeAvailableSlots(emptyDb(), hourly, '2026-10-25')).toStrictEqual(both)
+    at('2026-10-25T09:30:00Z') // 09:30 GMT
+    expect(await computeAvailableSlots(emptyDb(), hourly, '2026-10-25')).toStrictEqual(late)
+    at('2026-07-01T08:30:00Z') // 09:30 IST
+    expect(await computeAvailableSlots(emptyDb(), hourly, '2026-07-01')).toStrictEqual(late)
+    at('2026-12-01T09:30:00Z') // 09:30 GMT
+    expect(await computeAvailableSlots(emptyDb(), hourly, '2026-12-01')).toStrictEqual(late)
   })
 
-  it('booking-slots day labels, booking-confirmations fmtBookingTime: every day of 2026', () => {
-    for (const d of DAYS_2026) {
-      for (const t of ['00:30:00', '17:00:00', '', null]) expect(fmtBookingTime(d, t)).toBe(LEGACY.fmtBookingTimeLegacyDublin(d, t))
-    }
-    expect(fmtBookingTime('', '09:00')).toBe(LEGACY.fmtBookingTimeLegacyDublin('', '09:00'))
+  it('computeAvailableDays: "today" is the Dublin day', async () => {
+    at('2026-03-28T22:30:00Z') // 22:30 GMT Sat: today still has slots
+    expect(await computeAvailableDays(emptyDb(), eventIn(DUB), { days: 3 })).toStrictEqual([
+      { date: '2026-03-28', label: 'Sat, 28 Mar' }, { date: '2026-03-29', label: 'Sun, 29 Mar' }, { date: '2026-03-30', label: 'Mon, 30 Mar' },
+    ])
+    at('2026-03-28T23:30:00Z') // 23:30 GMT Sat: the last slot is past
+    expect(await computeAvailableDays(emptyDb(), eventIn(DUB), { days: 3 })).toStrictEqual([
+      { date: '2026-03-29', label: 'Sun, 29 Mar' }, { date: '2026-03-30', label: 'Mon, 30 Mar' },
+    ])
+    at('2026-10-24T23:30:00Z') // 00:30 IST Sun 25 Oct
+    expect(await computeAvailableDays(emptyDb(), eventIn(DUB), { days: 3 })).toStrictEqual([
+      { date: '2026-10-25', label: 'Sun, 25 Oct' }, { date: '2026-10-26', label: 'Mon, 26 Oct' }, { date: '2026-10-27', label: 'Tue, 27 Oct' },
+    ])
   })
 
-  it('bridge-samples bookingWallClockToMs: every day of 2026 at every DST-edge time', () => {
-    const times = ['00:00', '00:30', '00:59', '01:00', '01:30', '01:59', '02:00', '02:30', '06:00:30', '12:00', '23:30', '23:59:59']
-    for (const d of DAYS_2026) for (const t of times) {
-      expect(bookingWallClockToMs(d, t, DUB)).toBe(LEGACY.dublinWallClockToMsLegacyDublin(d, t))
-    }
+  it('an event type with no location (no embed, no id) is Dublin', async () => {
+    const event = { ...eventIn(DUB), location_id: undefined, locations: undefined }
+    at('2026-07-01T13:30:00Z') // 14:30 IST
+    const slots = await computeAvailableSlots(emptyDb(), event, '2026-07-01')
+    expect(slots).toHaveLength(18)
+    expect(slots[0]).toStrictEqual({ start: '15:00', end: '15:30' })
+    expect(slots.at(-1)).toStrictEqual({ start: '23:30', end: '24:00' })
+  })
+
+  it('fmtBookingTime is the stored date and time (zone-free)', () => {
+    expect(fmtBookingTime('2026-03-29', '00:30:00')).toBe('Sun, 29 Mar, 00:30')
+    expect(fmtBookingTime('2026-10-25', '17:00:00')).toBe('Sun, 25 Oct, 17:00')
+    expect(fmtBookingTime('2026-07-01', '')).toBe('Wed, 1 Jul')
+    expect(fmtBookingTime('2026-12-31', null)).toBe('Thu, 31 Dec')
+    expect(fmtBookingTime('', '09:00')).toBe('')
+  })
+
+  it('bookingWallClockToMs: Dublin wall clock across both DST changes (zone omitted = Dublin)', () => {
+    const wc = (d, t) => new Date(bookingWallClockToMs(d, t, DUB)).toISOString()
+    expect(wc('2026-03-29', '00:30')).toBe('2026-03-29T00:30:00.000Z') // GMT
+    expect(wc('2026-03-29', '01:30')).toBe('2026-03-29T00:30:00.000Z') // the skipped hour
+    expect(wc('2026-03-29', '02:30')).toBe('2026-03-29T01:30:00.000Z') // IST
+    expect(wc('2026-10-25', '00:30')).toBe('2026-10-24T23:30:00.000Z') // IST
+    expect(wc('2026-10-25', '01:30')).toBe('2026-10-25T01:30:00.000Z') // the repeated hour: GMT
+    expect(wc('2026-10-25', '02:30')).toBe('2026-10-25T02:30:00.000Z') // GMT
+    expect(wc('2026-07-01', '23:59:59')).toBe('2026-07-01T22:59:59.000Z')
+    expect(wc('2026-12-01', '09:00')).toBe('2026-12-01T09:00:00.000Z')
+    expect(bookingWallClockToMs('2026-07-01', '09:00')).toBe(Date.parse('2026-07-01T08:00:00Z'))
     for (const [d, t] of [['not-a-date', '06:00'], ['2026-06-18', '6pm'], [null, null], ['2026-06-18', '']]) {
       expect(bookingWallClockToMs(d, t, DUB)).toBeNaN()
-      expect(LEGACY.dublinWallClockToMsLegacyDublin(d, t)).toBeNaN()
     }
   })
 
-  it('class-booking-processor classLabel, manual confirm formatClassTime, public-classes shapePublicClass: every hour of 2026', () => {
-    for (const ms of [...HOURS_2026, ...SAMPLES.map(Date.parse)]) {
-      const iso = new Date(ms).toISOString()
-      expect(classLabel(iso, DUB)).toBe(LEGACY.classLabelLegacyDublin(iso))
-      expect(formatClassTime(iso, DUB)).toBe(LEGACY.formatClassTimeLegacyDublin(iso))
-      const e = { _id: 'e1', name: 'S&C', time_start: ms / 1000 }
-      expect(shapePublicClass(e, DUB)).toStrictEqual(LEGACY.shapePublicClassLegacyDublin(e))
+  it('classLabel, manual confirm formatClassTime, shapePublicClass: Dublin wall clock across both DST changes', () => {
+    const cases = [
+      ['2026-03-29T00:59:00Z', 'Sun, 29 Mar, 00:59', 'Sunday 29 March at 00:59', '2026-03-29', 'Sun, 29 Mar', '00:59'],
+      ['2026-03-29T01:00:00Z', 'Sun, 29 Mar, 02:00', 'Sunday 29 March at 02:00', '2026-03-29', 'Sun, 29 Mar', '02:00'],
+      ['2026-10-25T00:30:00Z', 'Sun, 25 Oct, 01:30', 'Sunday 25 October at 01:30', '2026-10-25', 'Sun, 25 Oct', '01:30'], // IST
+      ['2026-10-25T01:30:00Z', 'Sun, 25 Oct, 01:30', 'Sunday 25 October at 01:30', '2026-10-25', 'Sun, 25 Oct', '01:30'], // GMT
+      ['2026-07-01T18:30:00Z', 'Wed, 1 Jul, 19:30', 'Wednesday 1 July at 19:30', '2026-07-01', 'Wed, 1 Jul', '19:30'],
+      ['2026-12-31T23:30:00Z', 'Thu, 31 Dec, 23:30', 'Thursday 31 December at 23:30', '2026-12-31', 'Thu, 31 Dec', '23:30'],
+    ]
+    for (const [iso, label, copy, day, dayLabel, time] of cases) {
+      expect(classLabel(iso, DUB)).toBe(label)
+      expect(formatClassTime(iso, DUB)).toBe(copy)
+      expect(shapePublicClass({ _id: 'e1', name: 'S&C', time_start: Date.parse(iso) / 1000 }, DUB)).toStrictEqual({
+        event_id: 'e1', name: 'S&C', starts_at: new Date(iso).toISOString(), day, day_label: dayLabel, time,
+      })
     }
     for (const bad of [null, '', 'soon']) {
-      expect(classLabel(bad, DUB)).toBe(LEGACY.classLabelLegacyDublin(bad))
-      expect(formatClassTime(bad, DUB)).toBe(LEGACY.formatClassTimeLegacyDublin(bad))
+      expect(classLabel(bad, DUB)).toBe('your class')
+      expect(formatClassTime(bad, DUB)).toBe('')
     }
   })
 
-  it('the defaults (no zone passed) are Dublin, as before', () => {
+  it('the defaults (no zone passed) are Dublin', () => {
     const iso = '2026-07-01T18:30:00Z'
-    expect(classLabel(iso)).toBe(LEGACY.classLabelLegacyDublin(iso))
-    expect(formatClassTime(iso)).toBe(LEGACY.formatClassTimeLegacyDublin(iso))
-    expect(shapePublicClass({ _id: 'e', time_start: Date.parse(iso) / 1000 })).toStrictEqual(LEGACY.shapePublicClassLegacyDublin({ _id: 'e', time_start: Date.parse(iso) / 1000 }))
-    expect(bookingWallClockToMs('2026-07-01', '09:00')).toBe(LEGACY.dublinWallClockToMsLegacyDublin('2026-07-01', '09:00'))
+    expect(classLabel(iso)).toBe('Wed, 1 Jul, 19:30')
+    expect(formatClassTime(iso)).toBe('Wednesday 1 July at 19:30')
+    expect(shapePublicClass({ _id: 'e', time_start: Date.parse(iso) / 1000 })).toMatchObject({ day: '2026-07-01', time: '19:30' })
     expect(classTimeLabel(iso)).toBe('7:30pm')
   })
 
-  describe('manual-timetable manualClassOccurrences', () => {
-    // TZ.17 ⚠️ (approved 11 Oct 2026) moved exactly two Dublin slots onto the
-    // canonical solver: 23:xx on the spring-forward Sunday (no longer a day
-    // late) and 01:xx on the fall-back Sunday (now the GMT 01:xx, like every
-    // booking and shift). Pinned in src/lib/tz-17.dublin.test.js; the rest of
-    // the timetable stays byte-identical to the TZ.7 freeze.
-    const TZ17_MOVED = new Set(['2026-03-29|23:30', '2026-10-25|01:30'])
-    const unmoved = (list) => list.filter((c) => !TZ17_MOVED.has(`${c.day}|${c.time}`))
-    const { slots } = parseManualTimetable([
-      'Mon-Sun 00:30 Early',
-      'Mon-Sun 01:30 Edge',
-      'Mon-Sun 06:15 Strength',
-      'Mon-Sun 12:00 Noon',
-      'Mon-Sun 18:00 Conditioning',
-      'Mon-Sun 23:30 Late',
-    ].join('\n'))
-    it.each(SAMPLES)('%s', (iso) => {
-      const now = Date.parse(iso)
-      for (const args of [
-        { slots, now, minNoticeHours: 0, days: 14 },
-        { slots, now, minNoticeHours: 12, days: 7 },
-        { slots, now, minNoticeHours: 0, days: 3, startDate: iso.slice(0, 10) },
-        { slots, now, minNoticeHours: 0, days: 3, startDate: addDays(iso.slice(0, 10), 5) },
-      ]) {
-        expect(unmoved(manualClassOccurrences({ ...args, zone: DUB }))).toStrictEqual(unmoved(LEGACY.manualClassOccurrencesLegacyDublin(args)))
-      }
-    })
-    it('every day of 2026 at local noon, two weeks ahead', () => {
-      for (const d of DAYS_2026) {
-        const now = Date.parse(`${d}T11:00:00Z`)
-        const args = { slots, now, minNoticeHours: 0, days: 14 }
-        expect(unmoved(manualClassOccurrences({ ...args, zone: DUB }))).toStrictEqual(unmoved(LEGACY.manualClassOccurrencesLegacyDublin(args)))
-      }
-    })
-    it('no zone passed is Dublin', () => {
-      const args = { slots, now: Date.parse('2026-10-24T23:30:00Z'), minNoticeHours: 0, days: 14 }
-      expect(unmoved(manualClassOccurrences(args))).toStrictEqual(unmoved(LEGACY.manualClassOccurrencesLegacyDublin(args)))
-    })
+  it('manualClassOccurrences: a 09:00 class follows Dublin across both DST weekends (zone omitted = Dublin)', () => {
+    // The two slots TZ.17 moved (23:xx spring-forward Sunday, 01:xx fall-back
+    // Sunday) are pinned in src/lib/tz-17.dublin.test.js.
+    const { slots } = parseManualTimetable('Mon-Sun 09:00 Strength')
+    const starts = (now, zone) => manualClassOccurrences({ slots, now: Date.parse(now), minNoticeHours: 0, days: 3, ...(zone ? { zone } : {}) })
+    expect(starts('2026-03-28T05:00:00Z', DUB).map((c) => [c.starts_at, c.day, c.day_label, c.time])).toEqual([
+      ['2026-03-28T09:00:00.000Z', '2026-03-28', 'Sat, 28 Mar', '09:00'], // GMT
+      ['2026-03-29T08:00:00.000Z', '2026-03-29', 'Sun, 29 Mar', '09:00'], // IST
+      ['2026-03-30T08:00:00.000Z', '2026-03-30', 'Mon, 30 Mar', '09:00'],
+    ])
+    expect(starts('2026-10-24T05:00:00Z', DUB).map((c) => c.starts_at)).toEqual([
+      '2026-10-24T08:00:00.000Z', '2026-10-25T09:00:00.000Z', '2026-10-26T09:00:00.000Z',
+    ])
+    expect(starts('2026-10-24T05:00:00Z')).toStrictEqual(starts('2026-10-24T05:00:00Z', DUB))
+    expect(starts('2026-10-24T05:00:00Z', DUB)[0].event_id).toBe('manual-20261024-0900-strength')
+    const notice = parseManualTimetable('Mon-Sun 00:30 Early\nMon-Sun 18:00 Conditioning').slots
+    // 13:00 IST with 12h notice over two days: only Thursday's 18:00 is far enough out.
+    expect(manualClassOccurrences({ slots: notice, now: Date.parse('2026-07-01T12:00:00Z'), minNoticeHours: 12, days: 2, zone: DUB })
+      .map((c) => [c.starts_at, c.time])).toEqual([['2026-07-02T17:00:00.000Z', '18:00']])
   })
 })
 
@@ -185,10 +183,10 @@ describe('TZ.7 America/New_York follows New York across DST', () => {
   ])('%s: at 09:30 New York the 09:00 slot is past and the 10:00 slot is open', async (_label, iso, date) => {
     const nowMs = Date.parse(iso)
     expect(await computeAvailableSlots(emptyDb(), nyEvent, date, { nowMs })).toEqual([{ start: '10:00', end: '11:00' }])
-    // The same instants for a Dublin studio are still byte-identical to legacy.
+    // The same instants are 14:30 in Dublin: both slots are past there.
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(iso))
-    expect(await computeAvailableSlots(emptyDb(), dubEvent, date)).toStrictEqual(await LEGACY.computeAvailableSlotsLegacyDublin(emptyDb(), dubEvent, date))
+    expect(await computeAvailableSlots(emptyDb(), dubEvent, date)).toStrictEqual([])
   })
 
   it('the bookable "today" flips at New York midnight, not Dublin midnight', async () => {

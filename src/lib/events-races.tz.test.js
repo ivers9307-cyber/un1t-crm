@@ -3,10 +3,10 @@
 // (race_events.location_id; a host event's location is the host's anchor;
 // hyrox_blocks.location_id), not Europe/Dublin.
 //
-// Two halves, as every sweep: (1) Europe/Dublin is byte-identical to the
-// frozen pre-change code (events-races.legacy-dublin.test-helpers.js) over the
-// DST-edge samples and every day/hour of 2026; (2) America/New_York follows
-// New York's clock across both 2026 US DST changes.
+// America/New_York follows New York's clock across both 2026 US DST changes.
+// The Dublin byte-identity sweep ran in TZ.9 and was retired in TZ.18b:
+// Europe/Dublin is pinned by fixed values below, and zoned-time ≡ dublin-time
+// stays proven by shared/zoned-time.parity.test.js.
 process.env.TZ = 'America/Los_Angeles' // host zone is neither zone under test
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
@@ -30,8 +30,7 @@ vi.mock('@/lib/host-contact-list', () => ({ addEventAttendeesToHostList: vi.fn(a
 vi.mock('@/lib/hyrox/expand-plan', async (importOriginal) => ({ ...(await importOriginal()), weeksNeedingExpansion: vi.fn(() => []) }))
 vi.mock('@/lib/push', () => ({ sendPush: vi.fn(async () => ({ sent: 1, failed: 0 })), readRoleRecipientIds: vi.fn(async () => ({ ids: new Set(['p1']), error: null })) }))
 
-const LEGACY = await import('./events-races.legacy-dublin.test-helpers.js')
-const { todayIsoIn, todayIsoDublin, orderEventsForBrowse } = await import('@shared/events')
+const { todayIsoIn, orderEventsForBrowse } = await import('@shared/events')
 const { eventZone, eventToday, earliestLocalToday, eventDateLong } = await import('./event-day.js')
 const { runEventReminders, reminderTimeLabel } = await import('./event-attendee-reminders.js')
 const { runWaitlistOffers } = await import('./event-waitlist.js')
@@ -51,23 +50,14 @@ const DUB = 'Europe/Dublin'
 const NY = 'America/New_York'
 // US DST 2026: spring forward Sun 8 Mar 02:00 → 03:00; fall back Sun 1 Nov 02:00 → 01:00.
 // EU DST 2026: spring forward Sun 29 Mar 01:00 UTC; fall back Sun 25 Oct 01:00 UTC.
-const SAMPLES = [
-  '2026-03-07T04:30:00Z', '2026-03-08T06:59:00Z', '2026-03-08T07:00:00Z', // NY around spring-forward
-  '2026-03-28T23:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', // Dublin around spring-forward
-  '2026-10-24T23:30:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z', // Dublin around fall-back
-  '2026-11-01T04:59:00Z', '2026-11-01T05:00:00Z', '2026-11-01T06:00:00Z', // NY around fall-back
-  '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-12-31T23:30:00Z', // month/year edges
+// Dublin's day at instants where it differs from the UTC day (both EU DST
+// changes, a summer month edge) and an ordinary winter instant where it does not.
+const DUBLIN_TODAY = [
+  ['2026-03-29T23:30:00Z', '2026-03-30'], // 00:30 IST, the night after the spring-forward
+  ['2026-10-24T23:30:00Z', '2026-10-25'], // 00:30 IST, the night of the fall-back
+  ['2026-06-30T23:00:00Z', '2026-07-01'], // 00:00 IST
+  ['2026-12-31T23:30:00Z', '2026-12-31'], // 23:30 GMT
 ]
-const DAYS_2026 = (() => {
-  const out = []
-  for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 86_400_000) out.push(new Date(t).toISOString().slice(0, 10))
-  return out
-})()
-const HOURS_2026 = (() => {
-  const out = []
-  for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 3_600_000) out.push(t)
-  return out
-})()
 const addDays = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10)
 const loc = (zone, id = zone === NY ? 'L-ny' : 'L-dub') => ({ id, name: 'Studio', is_host_anchor: false, organization_id: 'o1', timezone: zone })
 
@@ -93,14 +83,6 @@ function remindersDb(events) {
     if (q.table === 'event_reminder_sends') return { data: [], error: null }
     return { data: null, error: null }
   })
-}
-// The pre-TZ.9 "today" (dublin-time's dublinTodayStr) at an instant.
-function legacyTodayAt(ms) {
-  vi.useFakeTimers({ toFake: ['Date'] })
-  vi.setSystemTime(new Date(ms))
-  const today = LEGACY.dublinTodayLegacyDublin()
-  vi.useRealTimers()
-  return today
 }
 const pushedFor = () => sendCustomerPush.mock.calls.map(([, contactId, p]) => `${contactId}:${p.data.reminder_offset}`).sort()
 
@@ -138,163 +120,157 @@ function moveDb({ events, source }) {
   })
 }
 
-describe('TZ.9 Europe/Dublin is byte-identical', () => {
-  it.each(SAMPLES)('shared/events today, the event day and the move rule at %s', async (iso) => {
+describe('TZ.9 Europe/Dublin pinned values', () => {
+  it.each([
+    ['2026-03-28T23:30:00Z', '2026-03-28'], // 23:30 GMT, eve of the spring-forward
+    ...DUBLIN_TODAY,
+    ['2026-10-25T23:30:00Z', '2026-10-25'], // 23:30 GMT, after the fall-back
+  ])('shared/events today and the event day at %s is %s (no location = Dublin)', (iso, day) => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(iso))
-    const legacyToday = LEGACY.todayIsoDublinLegacyDublin()
-    expect(todayIsoIn(DUB)).toBe(legacyToday)
-    expect(todayIsoIn(DUB, Date.parse(iso))).toBe(legacyToday)
-    expect(todayIsoDublin()).toBe(legacyToday)
-    expect(LEGACY.dublinTodayLegacyDublin()).toBe(legacyToday)
-    const ev = { locations: loc(DUB) }
-    expect(eventToday(ev)).toBe(legacyToday)
-    expect(eventToday({ locations: null })).toBe(legacyToday) // no location row: Dublin, as before
-    expect(eventToday({})).toBe(legacyToday)
+    expect(todayIsoIn(DUB)).toBe(day)
+    expect(todayIsoIn(DUB, Date.parse(iso))).toBe(day)
+    expect(eventToday({ locations: loc(DUB) })).toBe(day)
+    expect(eventToday({ locations: null })).toBe(day)
+    expect(eventToday({})).toBe(day)
+  })
 
-    // evaluateMove: the target-date rule with no `today` passed = the old default.
+  it('the query floor is the UTC day before (never after any studio\'s day)', () => {
+    expect(earliestLocalToday(Date.parse('2026-10-24T23:30:00Z'))).toBe('2026-10-23')
+    expect(earliestLocalToday(Date.parse('2026-03-29T23:30:00Z'))).toBe('2026-03-28')
+  })
+
+  it('the move rule and the browse order use Dublin\'s day (00:30 IST on the fall-back Sunday)', () => {
+    const now = Date.parse('2026-10-24T23:30:00Z')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(now))
     const base = {
       registration: { id: 'r1', status: 'confirmed', race_event_id: 'e1', teams: { size: 1, team_members: [{}] } },
       sourceEvent: { id: 'e1', location_id: 'L-dub', host_id: null },
       targetWave: null, targetWaveRegistrations: [], checkinCount: 0, existingOnTarget: null,
     }
-    for (const n of [-2, -1, 0, 1, 2]) {
-      const targetEvent = { id: 'e2', active: true, status: 'published', location_id: 'L-dub', host_id: null, race_date: addDays(iso.slice(0, 10), n), locations: loc(DUB) }
-      expect(evaluateMove({ ...base, targetEvent })).toStrictEqual(evaluateMove({ ...base, targetEvent, today: legacyToday }))
-    }
+    const target = (race_date) => ({ id: 'e2', active: true, status: 'published', location_id: 'L-dub', host_id: null, race_date, locations: loc(DUB) })
+    expect(evaluateMove({ ...base, targetEvent: target('2026-10-24') })).toStrictEqual({ ok: false, error: 'target_unavailable' })
+    expect(evaluateMove({ ...base, targetEvent: target('2026-10-25') })).toStrictEqual({ ok: true })
+    const events = ['2026-10-23', '2026-10-24', '2026-10-25', '2026-10-26'].map((d, i) => ({ id: `e${i}`, race_date: d, locations: loc(DUB) }))
+      .concat([{ id: 'nodate', race_date: null }])
+    const { upcoming, past } = orderEventsForBrowse(events, (e) => eventToday(e, now))
+    expect(upcoming.map((e) => e.id)).toEqual(['nodate', 'e2', 'e3'])
+    expect(past.map((e) => e.id)).toEqual(['e1', 'e0'])
   })
 
-  it.each(SAMPLES)('orderEventsForBrowse with a per-event today = the old single Dublin today (%s)', (iso) => {
-    const now = Date.parse(iso)
-    const legacyToday = legacyTodayAt(now)
-    const day = iso.slice(0, 10)
-    const events = [-2, -1, 0, 1, 2].map((n, i) => ({ id: `e${i}`, race_date: addDays(day, n), locations: loc(DUB) })).concat([{ id: 'nodate', race_date: null }])
-    expect(orderEventsForBrowse(events, (e) => eventToday(e, now))).toStrictEqual(orderEventsForBrowse(events, legacyToday))
+  it('event date labels (reminders, waitlist, race confirmations) are the stored day', () => {
+    expect(eventDateLong('2026-03-29')).toMatch(/^Sunday,? 29 March 2026$/)
+    expect(eventDateLong('2026-10-25')).toMatch(/^Sunday,? 25 October 2026$/)
+    expect(reminderTimeLabel({ wave: { start_time: '09:30:00' } }, { race_date: '2026-10-25', start_time: '18:00:00' })).toMatch(/^Sunday,? 25 October 2026 · 09:30$/)
+    expect(reminderTimeLabel({}, { race_date: '2026-03-29' })).toMatch(/^Sunday,? 29 March 2026$/)
+    for (const d of [null, '', undefined]) {
+      expect(eventDateLong(d)).toBe('')
+      expect(reminderTimeLabel({}, { race_date: d, start_time: '09:00' })).toBe('09:00')
+    }
+    expect(eventDateLong('not-a-date')).toBe('not-a-date')
+    expect(reminderTimeLabel({}, { race_date: 'not-a-date', start_time: '09:00' })).toBe('not-a-date · 09:00')
   })
 
-  it('every hour of 2026: todayIsoIn(Dublin) and earliestLocalToday', () => {
-    for (const t of HOURS_2026) {
-      vi.useFakeTimers({ toFake: ['Date'] })
-      vi.setSystemTime(new Date(t))
-      const legacy = LEGACY.todayIsoDublinLegacyDublin()
-      expect(todayIsoIn(DUB, t)).toBe(legacy)
-      // The query floor is never after the Dublin day (or any zone's day).
-      expect(earliestLocalToday(t) <= legacy).toBe(true)
-      expect(earliestLocalToday(t) <= todayIsoIn(NY, t)).toBe(true)
-      expect(earliestLocalToday(t) <= todayIsoIn('Pacific/Pago_Pago', t)).toBe(true)
-      vi.useRealTimers()
+  it('public-events toBrowseCard: the "Opens" badge names the Dublin date (zone omitted = Dublin)', () => {
+    const card = (opens, zone) => toBrowseCard({ slug: 's', name: 'N', kind: 'race', race_date: '2026-12-01', registration_opens_at: opens, waves: [] }, { now: Date.parse(opens) - 1, ...(zone ? { zone } : {}) })
+    for (const [opens, badge] of [
+      ['2026-03-28T23:30:00Z', 'Opens 28 Mar'],
+      ['2026-03-29T23:30:00Z', 'Opens 30 Mar'],
+      ['2026-10-24T23:30:00Z', 'Opens 25 Oct'],
+      ['2026-10-25T23:30:00Z', 'Opens 25 Oct'],
+    ]) {
+      expect(card(opens, DUB).badge).toBe(badge)
+      expect(card(opens).badge).toBe(badge)
     }
-  })
-
-  it('event date labels (reminders, waitlist, race confirmations): every day of 2026', () => {
-    for (const d of DAYS_2026) {
-      expect(eventDateLong(d)).toBe(LEGACY.eventDateLongLegacyDublin(d))
-      for (const reg of [{ wave: { start_time: '09:30:00' } }, {}]) {
-        for (const ev of [{ race_date: d, start_time: '18:00:00' }, { race_date: d }]) {
-          expect(reminderTimeLabel(reg, ev)).toBe(LEGACY.reminderTimeLabelLegacyDublin(reg, ev))
-        }
-      }
-    }
-    for (const d of [null, '', undefined, 'not-a-date']) {
-      expect(eventDateLong(d)).toBe(LEGACY.eventDateLongLegacyDublin(d))
-      expect(reminderTimeLabel({}, { race_date: d, start_time: '09:00' })).toBe(LEGACY.reminderTimeLabelLegacyDublin({}, { race_date: d, start_time: '09:00' }))
-    }
-  })
-
-  it('public-events toBrowseCard: the "Opens" badge at every hour of 2026', () => {
-    for (const t of HOURS_2026) {
-      const e = { slug: 's', name: 'N', kind: 'race', race_date: '2026-12-01', registration_opens_at: new Date(t).toISOString(), waves: [] }
-      const now = t - 1
-      expect(toBrowseCard(e, { now, zone: DUB })).toStrictEqual(LEGACY.toBrowseCardLegacyDublin(e, { now }))
-      expect(toBrowseCard(e, { now })).toStrictEqual(LEGACY.toBrowseCardLegacyDublin(e, { now }))
-    }
+    expect(card('2026-10-24T23:30:00Z', DUB)).toStrictEqual({
+      slug: 's', title: 'N', kindLabel: 'Race', dateLabel: 'Tue 1 Dec', timeLabel: '', venue: null, priceLabel: 'Free', badge: 'Opens 25 Oct', closed: false,
+    })
     const closed = { slug: 's', name: 'N', race_date: '2026-12-01', registration_closes_at: '2026-01-01T00:00:00Z' }
-    expect(toBrowseCard(closed, { soldOut: true, now: Date.UTC(2026, 5, 1), zone: DUB })).toStrictEqual(LEGACY.toBrowseCardLegacyDublin(closed, { soldOut: true, now: Date.UTC(2026, 5, 1) }))
-  }, 60_000) // a CPU loop: a loaded CI runner took 7.5 s, past the 5 s default
-
-  it('host-schedule-time: every quarter hour of 2026, both directions', () => {
-    for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 15 * 60_000) {
-      const inputs = HST.isoToZonedInputs(t, DUB)
-      expect(inputs).toStrictEqual(LEGACY.isoToDublinInputsLegacyDublin(t))
-      expect(HST.zonedLocalToIso(inputs.date, inputs.time, DUB)).toBe(LEGACY.dublinLocalToIsoLegacyDublin(inputs.date, inputs.time))
-      expect(HST.scheduleLabelIn(t, DUB)).toBe(LEGACY.dublinScheduleLabelLegacyDublin(t))
-      expect(HST.nextQuarterHour(t, DUB)).toStrictEqual(LEGACY.nextQuarterHourLegacyDublin(t))
-    }
-    // Every wall clock of the two DST days, gap and overlap included.
-    for (const date of ['2026-03-29', '2026-10-25', '2026-02-30', '2026-13-01']) {
-      for (let m = 0; m < 24 * 60; m += 5) {
-        const time = `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
-        expect(HST.zonedLocalToIso(date, time, DUB)).toBe(LEGACY.dublinLocalToIsoLegacyDublin(date, time))
-      }
-    }
-    for (const bad of [null, '', 'garbage', Number.NaN]) {
-      expect(HST.isoToZonedInputs(bad, DUB)).toBe(LEGACY.isoToDublinInputsLegacyDublin(bad))
-      expect(HST.scheduleLabelIn(bad, DUB)).toBe(LEGACY.dublinScheduleLabelLegacyDublin(bad))
-    }
-    // The deprecated Dublin names still answer exactly as before (HostEmailReport, TZ.16's).
-    expect(HST.dublinScheduleLabel(Date.UTC(2026, 6, 1, 8))).toBe(LEGACY.dublinScheduleLabelLegacyDublin(Date.UTC(2026, 6, 1, 8)))
-    expect(HST.scheduleZoneLabel(DUB)).toBe('Dublin')
-  }, 60_000) // a CPU loop: a loaded CI runner took 7.5 s, past the 5 s default
-
-  it('hyrox mapping and the class time label: every hour of 2026', () => {
-    for (const t of HOURS_2026) {
-      const iso = new Date(t).toISOString()
-      expect(zonedDateStr(iso, DUB)).toBe(LEGACY.dublinDateStrLegacyDublin(iso))
-      expect(weekNoFor('2026-01-05', iso, 52, DUB)).toBe(LEGACY.weekNoForLegacyDublin('2026-01-05', iso, 52))
-      expect(weekNoFor('2026-01-05', iso, 52)).toBe(LEGACY.weekNoForLegacyDublin('2026-01-05', iso, 52))
-      expect(slotFor([3, 7], iso, DUB)).toBe(LEGACY.slotForLegacyDublin([3, 7], iso))
-      expect(slotFor([3, 7], iso)).toBe(LEGACY.slotForLegacyDublin([3, 7], iso))
-      expect(hyroxClassTimeLabel(iso, DUB)).toBe(LEGACY.hyroxClassTimeLabelLegacyDublin(iso))
-    }
-    expect(zonedDateStr('garbage', DUB)).toBe(LEGACY.dublinDateStrLegacyDublin('garbage'))
+    expect(toBrowseCard(closed, { soldOut: true, now: Date.UTC(2026, 5, 1), zone: DUB })).toMatchObject({ badge: 'Registration closed', closed: true })
   })
 
-  it.each(SAMPLES)('event reminders: same events, same offsets as the Dublin-today run (%s)', async (iso) => {
-    const now = Date.parse(iso)
-    const legacyToday = legacyTodayAt(now)
+  it('host-schedule-time: Dublin wall clock both ways, gap refused, overlap = GMT', () => {
+    expect(HST.isoToZonedInputs('2026-03-29T00:45:00Z', DUB)).toStrictEqual({ date: '2026-03-29', time: '00:45' })
+    expect(HST.isoToZonedInputs('2026-03-29T01:00:00Z', DUB)).toStrictEqual({ date: '2026-03-29', time: '02:00' })
+    expect(HST.isoToZonedInputs('2026-10-25T00:30:00Z', DUB)).toStrictEqual({ date: '2026-10-25', time: '01:30' })
+    expect(HST.isoToZonedInputs('2026-12-31T23:45:00Z', DUB)).toStrictEqual({ date: '2026-12-31', time: '23:45' })
+    expect(HST.zonedLocalToIso('2026-03-29', '00:30', DUB)).toBe('2026-03-29T00:30:00.000Z')
+    expect(HST.zonedLocalToIso('2026-03-29', '01:30', DUB)).toBeNull() // the skipped hour
+    expect(HST.zonedLocalToIso('2026-03-29', '02:00', DUB)).toBe('2026-03-29T01:00:00.000Z')
+    expect(HST.zonedLocalToIso('2026-10-25', '00:30', DUB)).toBe('2026-10-24T23:30:00.000Z')
+    expect(HST.zonedLocalToIso('2026-10-25', '01:30', DUB)).toBe('2026-10-25T01:30:00.000Z') // the repeated hour: GMT
+    expect(HST.zonedLocalToIso('2026-07-01', '09:00', DUB)).toBe('2026-07-01T08:00:00.000Z')
+    expect(HST.zonedLocalToIso('2026-12-01', '09:00', DUB)).toBe('2026-12-01T09:00:00.000Z')
+    expect(HST.zonedLocalToIso('2026-02-30', '09:00', DUB)).toBeNull()
+    expect(HST.zonedLocalToIso('2026-13-01', '09:00', DUB)).toBeNull()
+    expect(HST.scheduleLabelIn('2026-03-29T01:00:00Z', DUB)).toBe('Sun 29 Mar, 02:00')
+    expect(HST.scheduleLabelIn('2026-07-01T08:00:00Z', DUB)).toBe('Wed 1 Jul, 09:00')
+    expect(HST.nextQuarterHour(Date.parse('2026-03-29T00:45:00Z'), DUB)).toStrictEqual({ date: '2026-03-29', time: '02:15' })
+    expect(HST.nextQuarterHour(Date.parse('2026-10-25T00:30:00Z'), DUB)).toStrictEqual({ date: '2026-10-25', time: '01:00' })
+    expect(HST.nextQuarterHour(Date.parse('2026-12-31T23:45:00Z'), DUB)).toStrictEqual({ date: '2027-01-01', time: '00:15' })
+    for (const bad of [null, '', 'garbage', Number.NaN]) {
+      expect(HST.isoToZonedInputs(bad, DUB)).toBeNull()
+      expect(HST.scheduleLabelIn(bad, DUB)).toBe('')
+    }
+    expect(HST.scheduleZoneLabel(DUB)).toBe('Dublin')
+  })
+
+  it('hyrox mapping and the class time label (zone omitted = Dublin)', () => {
+    for (const [iso, day, week, slot, label] of [
+      ['2026-03-29T00:30:00Z', '2026-03-29', 12, 2, '00:30'], //    Sun 00:30 GMT
+      ['2026-03-29T23:30:00Z', '2026-03-30', 13, null, '00:30'], // Mon 00:30 IST
+      ['2026-10-24T23:30:00Z', '2026-10-25', 42, 2, '00:30'], //    Sun 00:30 IST
+      ['2026-10-25T23:30:00Z', '2026-10-25', 42, 2, '23:30'], //    Sun 23:30 GMT
+      ['2026-07-01T23:30:00Z', '2026-07-02', 26, null, '00:30'], // Thu 00:30 IST
+    ]) {
+      expect(zonedDateStr(iso, DUB)).toBe(day)
+      expect(weekNoFor('2026-01-05', iso, 52, DUB)).toBe(week)
+      expect(weekNoFor('2026-01-05', iso, 52)).toBe(week)
+      expect(slotFor([3, 7], iso, DUB)).toBe(slot)
+      expect(slotFor([3, 7], iso)).toBe(slot)
+      expect(hyroxClassTimeLabel(iso, DUB)).toBe(label)
+    }
+    expect(zonedDateStr('garbage', DUB)).toBeNull()
+  })
+
+  it.each(DUBLIN_TODAY)('event reminders at %s go out by Dublin\'s day %s', async (iso, today) => {
     const events = [-1, 0, 1, 2, 3, 4, 5].map((n) => ({
-      id: `e${n}`, name: `Event ${n}`, race_date: addDays(iso.slice(0, 10), n), start_time: '09:00:00',
+      id: `e${n}`, name: `Event ${n}`, race_date: addDays(today, n), start_time: '09:00:00',
       location_id: 'L-dub', kind: 'race', active: true, locations: loc(DUB),
     }))
-    const zoned = await runEventReminders({ db: remindersDb(events), nowMs: now })
-    const zonedPushes = pushedFor()
-    sendCustomerPush.mockClear()
-    const legacy = await runEventReminders({ db: remindersDb(events), todayStr: legacyToday })
-    expect(zoned).toStrictEqual(legacy)
-    expect(zonedPushes).toStrictEqual(pushedFor())
+    expect(await runEventReminders({ db: remindersDb(events), nowMs: Date.parse(iso) })).toStrictEqual({ events: 2, sent: 2, skipped: 0 })
+    expect(pushedFor()).toStrictEqual(['c-e1:1d', 'c-e3:3d'])
   })
 
-  it.each(SAMPLES)('the waitlist round: same expiries and writes as the Dublin-today run (%s)', async (iso) => {
+  it.each(DUBLIN_TODAY)('the waitlist round at %s = the run with Dublin\'s day %s passed explicitly', async (iso, today) => {
     const now = Date.parse(iso)
-    const legacyToday = legacyTodayAt(now)
     for (const n of [-2, -1, 0, 1]) {
-      const race = { id: 'e1', race_date: addDays(iso.slice(0, 10), n), active: false, status: 'published', location_id: 'L-dub', locations: loc(DUB), waves: [] }
-      const claimedRows = [-3, -1, 0, 2].map((k) => ({ id: `cl${k}`, race_event_id: 'e1', status: 'claimed', race: { race_date: addDays(legacyToday, k) }, registration: { id: 'rg', status: 'confirmed', race_event_id: 'e1' } }))
+      const race = { id: 'e1', race_date: addDays(today, n), active: false, status: 'published', location_id: 'L-dub', locations: loc(DUB), waves: [] }
+      const claimedRows = [-3, -1, 0, 2].map((k) => ({ id: `cl${k}`, race_event_id: 'e1', status: 'claimed', race: { race_date: addDays(today, k) }, registration: { id: 'rg', status: 'confirmed', race_event_id: 'e1' } }))
       const a = waitlistDb({ race, claimedRows })
       const b = waitlistDb({ race, claimedRows })
-      expect(await runWaitlistOffers(a, { now })).toStrictEqual(await runWaitlistOffers(b, { now, todayStr: legacyToday }))
+      expect(await runWaitlistOffers(a, { now })).toStrictEqual(await runWaitlistOffers(b, { now, todayStr: today }))
       expect(writesOf(a)).toStrictEqual(writesOf(b))
     }
   })
 
-  it.each(SAMPLES)('listMoveTargets: the same targets as the Dublin-today run (%s)', async (iso) => {
-    const now = Date.parse(iso)
-    const legacyToday = legacyTodayAt(now)
+  it.each(DUBLIN_TODAY)('listMoveTargets at %s offers targets from Dublin\'s day %s on', async (iso, today) => {
     vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(new Date(now))
+    vi.setSystemTime(new Date(iso))
     const source = { id: 'src', race_date: '2026-01-01', location_id: 'L-dub', host_id: null, locations: loc(DUB) }
-    const events = [-3, -2, -1, 0, 1, 2].map((n) => ({ id: `t${n}`, name: `T${n}`, race_date: addDays(legacyToday, n), location_id: 'L-dub', host_id: null, active: true, status: 'published', waves: [], locations: loc(DUB) }))
+    const events = [-3, -2, -1, 0, 1, 2].map((n) => ({ id: `t${n}`, name: `T${n}`, race_date: addDays(today, n), location_id: 'L-dub', host_id: null, active: true, status: 'published', waves: [], locations: loc(DUB) }))
     const zoned = await listMoveTargets(moveDb({ events, source }), { registrationId: 'r1' })
-    const legacy = await listMoveTargets(moveDb({ events, source }), { registrationId: 'r1', today: legacyToday })
-    expect(zoned).toStrictEqual(legacy)
+    expect(zoned).toStrictEqual(await listMoveTargets(moveDb({ events, source }), { registrationId: 'r1', today }))
+    expect(zoned.targets.map((t) => t.id)).toEqual(['t0', 't1', 't2'])
   })
 
-  it('hyrox expand + reminder runners: Dublin blocks get the old day and label', async () => {
+  it('hyrox expand runner: a Dublin block gets the Dublin day', async () => {
     const nowMs = Date.parse('2026-03-29T00:30:00Z') // Dublin 00:30 GMT, the night clocks go forward
     const block = { id: 'b1', location_id: 'L-dub', starts_on: '2026-03-02', weeks: 8, sessions_per_week: 2, session_weekdays: [7], locations: loc(DUB) }
     const db = { from: () => { const b = { select: () => b, eq: () => b, then: (r) => r({ data: [block], error: null }) }; return b } }
     await runExpandHyroxWeeks(db, { nowMs })
-    expect(weeksNeedingExpansion.mock.calls[0][2]).toBe(LEGACY.hyroxExpandTodayLegacyDublin(nowMs))
+    expect(weeksNeedingExpansion.mock.calls[0][2]).toBe('2026-03-29')
   })
 })
 

@@ -1,10 +1,11 @@
 // tz-8b.tz.test.js — TZ.8b: time off, attendance, contracts, equipment,
 // qualifications and checklists take EACH STUDIO's zone (locations.timezone).
 //
-// Two halves, as every sweep: (1) Europe/Dublin is byte-identical to the
-// frozen pre-change code (tz-8b.legacy-dublin.test-helpers.js) over the
-// DST-edge samples and every hour of 2026; (2) America/New_York follows New
-// York's clock across both 2026 US DST changes. The routes' halves are in
+// Two halves: (1) Europe/Dublin, pinned by fixed values around both 2026 EU
+// DST changes (TZ.8b's byte-identity sweep against a frozen copy of the
+// pre-change code was retired in TZ.18b; zoned-time ≡ dublin-time stays
+// proven by shared/zoned-time.parity.test.js); (2) America/New_York follows
+// New York's clock across both 2026 US DST changes. The routes' halves are in
 // tz-8b.routes.tz.test.js.
 process.env.TZ = 'America/Los_Angeles' // host zone is neither zone under test
 
@@ -13,7 +14,6 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('./push-dedup', () => ({ notifyUsersOnce: vi.fn(async () => ({ sent: 1, failed: 0, emailed: 0, email_failed: 0, deduped: 0 })) }))
 
-const LEGACY = await import('./tz-8b.legacy-dublin.test-helpers.js')
 const { allowanceYearIn, parseAllowanceYear } = await import('./allowance-year.js')
 const { retryLabelIn, annotateCancelAsk } = await import('./time-off-cancel.js')
 const { profileVariables, mergeVariables } = await import('./contracts.js')
@@ -30,20 +30,7 @@ const DUB = 'Europe/Dublin'
 const NY = 'America/New_York'
 // US DST 2026: spring forward Sun 8 Mar 02:00 → 03:00; fall back Sun 1 Nov 02:00 → 01:00.
 // EU DST 2026: spring forward Sun 29 Mar 01:00 UTC; fall back Sun 25 Oct 01:00 UTC.
-const SAMPLES = [
-  '2026-03-07T04:30:00Z', '2026-03-08T06:59:00Z', '2026-03-08T07:00:00Z', // NY around spring-forward
-  '2026-03-28T23:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', // Dublin around spring-forward
-  '2026-10-24T23:30:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z', // Dublin around fall-back
-  '2026-11-01T04:59:00Z', '2026-11-01T05:00:00Z', '2026-11-01T06:00:00Z', // NY around fall-back
-  '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-12-31T23:30:00Z', // month/year edges
-]
-const HOURS_2026 = (() => {
-  const out = []
-  for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1, 6); t += 3_600_000) out.push(t)
-  return out
-})()
 const at = (iso) => Date.parse(iso)
-const ALL = [...SAMPLES.map(at), ...HOURS_2026]
 const atTime = (ms) => vi.useFakeTimers({ toFake: ['Date'], now: ms })
 
 afterEach(() => {
@@ -51,63 +38,65 @@ afterEach(() => {
   resetLocationZoneCache()
 })
 
-describe('TZ.8b Europe/Dublin is byte-identical', () => {
-  it('allowance year: allowanceYearIn / parseAllowanceYear(absent) = the old Dublin year', () => {
-    for (const ms of ALL) {
-      atTime(ms)
-      expect(allowanceYearIn(DUB, ms)).toBe(LEGACY.dublinYearLegacy())
-      expect(parseAllowanceYear(null, DUB)).toStrictEqual(LEGACY.parseAllowanceYearLegacy(null))
-      expect(parseAllowanceYear('', zoneOfLocation({ timezone: DUB }))).toStrictEqual(LEGACY.parseAllowanceYearLegacy(''))
-    }
-    for (const raw of [2026, '2026', 'abc', 1999]) expect(parseAllowanceYear(raw, DUB)).toStrictEqual(LEGACY.parseAllowanceYearLegacy(raw))
-  }, 60_000)
+describe('TZ.8b Europe/Dublin pinned values', () => {
+  // [instant, Dublin day, Dublin wall clock 'HH:MM', Dublin 'D Mon']
+  const PINS = [
+    ['2026-01-15T12:00:00Z', '2026-01-15', '12:00', '15 Jan'], // winter (GMT)
+    ['2026-03-29T00:59:00Z', '2026-03-29', '00:59', '29 Mar'], // last GMT minute
+    ['2026-03-29T01:00:00Z', '2026-03-29', '02:00', '29 Mar'], // spring-forward
+    ['2026-06-30T23:30:00Z', '2026-07-01', '00:30', '1 Jul'], // summer: already tomorrow
+    ['2026-10-25T00:59:00Z', '2026-10-25', '01:59', '25 Oct'], // last IST minute
+    ['2026-10-25T01:00:00Z', '2026-10-25', '01:00', '25 Oct'], // fall-back
+    ['2026-12-31T23:59:00Z', '2026-12-31', '23:59', '31 Dec'],
+    ['2027-01-01T00:00:00Z', '2027-01-01', '00:00', '1 Jan'],
+  ]
+  const profile = { full_name: 'Test Person', email: 'p@example.test', role: 'staff', annual_salary: 40000, hourly_rate: 20 }
 
-  it('the re-ask label: retryLabelIn(iso, Dublin) = dublinRetryLabel(iso), every hour and quarter of 2026', () => {
-    for (const ms of ALL) {
-      for (const q of [0, 15 * 60_000, 30 * 60_000, 59 * 60_000]) {
-        const iso = new Date(ms + q).toISOString()
-        expect(retryLabelIn(iso, DUB)).toBe(LEGACY.dublinRetryLabelLegacy(iso))
-      }
-    }
-    expect(retryLabelIn(null, DUB)).toBe(LEGACY.dublinRetryLabelLegacy(null))
-    expect(retryLabelIn('not a date', DUB)).toBe(LEGACY.dublinRetryLabelLegacy('not a date'))
-  }, 60_000)
-
-  it('the contract {{today}} variable and the merged map', () => {
-    const profile = { full_name: 'Test Person', email: 'p@example.test', role: 'staff', annual_salary: 40000, hourly_rate: 20 }
-    for (const ms of ALL) {
-      atTime(ms)
-      expect(profileVariables(profile, { zone: DUB })).toStrictEqual(LEGACY.profileVariablesLegacy(profile))
-      expect(profileVariables(profile)).toStrictEqual(LEGACY.profileVariablesLegacy(profile))
-    }
-    atTime(at('2026-06-30T23:30:00Z'))
-    expect(mergeVariables(profile, { notice: '4 weeks' }, { zone: DUB })).toStrictEqual({ ...LEGACY.profileVariablesLegacy(profile), notice: '4 weeks' })
-  }, 60_000)
-
-  it('the signed-contract PDF stamp and the two emails\' stamps', () => {
-    for (const ms of ALL) {
-      const iso = new Date(ms).toISOString()
-      expect(signatureWhen(iso, DUB)).toBe(LEGACY.signatureWhenLegacy(iso))
-      expect(signatureWhen(iso)).toBe(LEGACY.signatureWhenLegacy(iso))
-      expect(formatFullDateTimeInTZ(iso, zoneOfLocation({ timezone: DUB }))).toBe(LEGACY.emailStampLegacy(iso))
-    }
-    expect(signatureWhen(null, DUB)).toBe(LEGACY.signatureWhenLegacy(null))
-  }, 60_000)
-
-  it('the qualification digest day: one Dublin organisation\'s day = dublinDayStr(now), every hour of 2026', () => {
+  it.each(PINS)('%s: allowance year, {{today}}, a route\'s today, the digest day', (iso, day) => {
+    const ms = at(iso)
+    const year = Number(day.slice(0, 4))
+    expect(allowanceYearIn(DUB, ms)).toBe(year)
+    atTime(ms)
+    expect(parseAllowanceYear(null, DUB)).toStrictEqual({ year, error: null })
+    expect(parseAllowanceYear('', zoneOfLocation({ timezone: DUB }))).toStrictEqual({ year, error: null })
+    expect(profileVariables(profile, { zone: DUB }).today).toBe(day)
+    expect(profileVariables(profile).today).toBe(day) // zone omitted = Dublin
+    expect(todayStrIn(zoneOfLocation({ id: 'loc', timezone: DUB }))).toBe(day)
+    expect(todayStrIn(zoneOfLocation(null))).toBe(day)
     const locs = [{ id: 'loc-b', organization_id: 'org-1', timezone: DUB }, { id: 'loc-a', organization_id: 'org-1', timezone: null }]
-    for (const ms of ALL) {
-      expect(digestDaysByOrg(locs, ms).get('org-1')).toBe(LEGACY.qualificationDigestDayLegacy(ms))
-    }
-  }, 60_000)
+    expect(digestDaysByOrg(locs, ms).get('org-1')).toBe(day)
+  })
 
-  it('a route\'s "today" for a Dublin studio = dublinTodayStr()', () => {
-    for (const ms of ALL) {
-      atTime(ms)
-      expect(todayStrIn(zoneOfLocation({ id: 'loc', timezone: DUB }))).toBe(LEGACY.routeTodayLegacy())
-      expect(todayStrIn(zoneOfLocation(null))).toBe(LEGACY.routeTodayLegacy())
+  it.each(PINS)('%s: the re-ask label, the signature stamp and the email stamp', (iso, day, hhmm, dayMonth) => {
+    expect(retryLabelIn(iso, DUB)).toBe(`${hhmm} on ${dayMonth}`)
+    const stamp = `${dayMonth} ${day.slice(0, 4)}, ${hhmm}` // e.g. '1 Jul 2026, 00:30'
+    expect(signatureWhen(iso, DUB)).toBe(stamp)
+    expect(signatureWhen(iso)).toBe(stamp)
+    expect(formatFullDateTimeInTZ(iso, zoneOfLocation({ timezone: DUB }))).toBe(stamp)
+  })
+
+  it('parseAllowanceYear: an explicit year is checked, not zoned', () => {
+    for (const raw of [2026, '2026']) expect(parseAllowanceYear(raw, DUB)).toStrictEqual({ year: 2026, error: null })
+    for (const raw of ['abc', 1999]) {
+      expect(parseAllowanceYear(raw, DUB)).toStrictEqual({ year: null, error: 'year must be a four-digit year from 2020 to 2100' })
     }
-  }, 60_000)
+  })
+
+  it('empty and unparseable stamps', () => {
+    expect(retryLabelIn(null, DUB)).toBeNull()
+    expect(retryLabelIn('not a date', DUB)).toBeNull()
+    expect(signatureWhen(null, DUB)).toBe('')
+  })
+
+  it('the contract variables and the merged map', () => {
+    atTime(at('2026-06-30T23:30:00Z'))
+    const vars = {
+      full_name: 'Test Person', email: 'p@example.test', role: 'staff',
+      annual_salary_raw: '40000', annual_salary: '€40,000', hourly_rate_raw: '20', hourly_rate: '€20', today: '2026-07-01',
+    }
+    expect(profileVariables(profile, { zone: DUB })).toStrictEqual(vars)
+    expect(mergeVariables(profile, { notice: '4 weeks' }, { zone: DUB })).toStrictEqual({ ...vars, notice: '4 weeks' })
+  })
 })
 
 describe('TZ.8b America/New_York follows New York across DST', () => {
@@ -238,15 +227,15 @@ describe('TZ.8b America/New_York follows New York across DST', () => {
     }))
   }
 
-  it('a run: a Dublin organisation\'s keys are exactly the legacy ones; the records read spans the latest studio day', async () => {
+  it('a run: a Dublin organisation keeps the pre-TZ.8b keys; the records read spans the latest studio day', async () => {
     notifyUsersOnce.mockClear()
     const ms = at('2026-09-29T13:00:00Z') // Tue 29 Sep in both zones
     const db = runDb()
     await runQualificationDigest(db, { nowMs: ms })
-    const legacy = LEGACY.qualificationDigestKeysLegacy('org-dub', ms)
+    // Dublin's day 29 Sep, week of Mon 28 Sep; records due within 30 days.
     const dubCall = notifyUsersOnce.mock.calls.find((c) => c[2][0] === 'own-dub')
-    expect(dubCall[1]).toBe(legacy.attemptKey)
-    expect(filter(db.log.find((q) => q.table === 'staff_qualifications'), 'lte', 'expires_on')).toBe(legacy.cutoff)
+    expect(dubCall[1]).toBe('qualification_digest:org-dub:2026-09-28:d2026-09-29')
+    expect(filter(db.log.find((q) => q.table === 'staff_qualifications'), 'lte', 'expires_on')).toBe('2026-10-29')
     const nyCall = notifyUsersOnce.mock.calls.find((c) => c[2][0] === 'own-ny')
     expect(nyCall[1]).toBe('qualification_digest:org-ny:2026-09-28:d2026-09-29')
   })

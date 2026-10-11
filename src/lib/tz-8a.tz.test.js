@@ -1,19 +1,17 @@
 // tz-8a.tz.test.js — TZ.8a: rostering, shifts, swaps, availability and staff
 // push decisions take EACH STUDIO's zone (locations.timezone).
 //
-// Two halves, as every sweep: (1) Europe/Dublin is byte-identical to the
-// frozen pre-change code (tz-8a*.legacy-dublin.test-helpers.js) over the
-// DST-edge samples and every day / hour / quarter-hour of 2026; (2)
-// America/New_York follows New York's clock across both 2026 US DST changes.
+// Two halves: (1) Europe/Dublin, pinned by fixed values around both 2026 EU
+// DST changes (TZ.8a's byte-identity sweep against a frozen copy of the
+// pre-change code was retired in TZ.18b; zoned-time ≡ dublin-time stays
+// proven by shared/zoned-time.parity.test.js); (2) America/New_York follows
+// New York's clock across both 2026 US DST changes.
 process.env.TZ = 'America/Los_Angeles' // host zone is neither zone under test
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
-const LEGACY = await import('./tz-8a.legacy-dublin.test-helpers.js')
-const LEGACY_WT = await import('./tz-8a.working-time.legacy-dublin.test-helpers.js')
-const LEGACY_CAND = await import('./tz-8a.candidates.legacy-dublin.test-helpers.js')
 const WT = await import('@shared/working-time')
 const { buildCandidates } = await import('@shared/candidates')
 const { staffWallClockHHMM, inStaffPushHours, resolveStaffTimeZone } = await import('./staff-push-hours.js')
@@ -26,7 +24,6 @@ const { fetchStaffingGapsThisWeek } = await import('./roster-staffing.js')
 const { fetchRosterRunways } = await import('./roster-runway-data.js')
 const { supersedeEmptyTrimmedRosters } = await import('./roster-publish.js')
 const { resetLocationZoneCache, todayStrIn } = await import('./location-time.js')
-const { dublinDayStr } = await import('./dublin-time.js')
 
 const DUB = 'Europe/Dublin'
 const NY = 'America/New_York'
@@ -39,22 +36,6 @@ const SAMPLES = [
   '2026-11-01T04:59:00Z', '2026-11-01T05:00:00Z', '2026-11-01T06:00:00Z', // NY around fall-back
   '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-12-31T23:30:00Z', // month/year edges
 ]
-const DAYS_2026 = (() => {
-  const out = []
-  for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 86_400_000) out.push(new Date(t).toISOString().slice(0, 10))
-  return out
-})()
-const HOURS_2026 = (() => {
-  const out = []
-  for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 3_600_000) out.push(t)
-  return out
-})()
-const pad = (n) => String(n).padStart(2, '0')
-const QUARTERS = (() => {
-  const out = []
-  for (let m = 0; m < 1440; m += 15) out.push(`${pad(Math.floor(m / 60))}:${pad(m % 60)}:00`)
-  return out
-})()
 const addDays = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10)
 const at = (iso) => Date.parse(iso)
 
@@ -101,51 +82,58 @@ const shift = (over = {}) => ({
   name: 'Class', status: 'scheduled', start_time: '09:00:00', end_time: '10:00:00', ...over,
 })
 
-describe('TZ.8a Europe/Dublin is byte-identical', () => {
-  it('workingWindow: every quarter-hour start of every 2026 day (no zone, and zone Europe/Dublin)', () => {
-    const bad = []
-    for (const d of DAYS_2026) {
-      for (const t of QUARTERS) {
-        const row = shift({ block_date: d, start_time: t, end_time: '23:59:59' })
-        const legacy = LEGACY_WT.workingWindowLegacyDublin(row)
-        if (JSON.stringify(WT.workingWindow(row)) !== JSON.stringify(legacy)) bad.push(`${d} ${t}`)
-        if (JSON.stringify(WT.workingWindow({ ...row, timezone: DUB })) !== JSON.stringify(legacy)) bad.push(`${d} ${t} tz`)
-      }
-    }
-    expect(bad).toEqual([])
-  }, 120_000)
+describe('TZ.8a Europe/Dublin pinned values', () => {
+  const iso = (ms) => new Date(ms).toISOString()
 
-  it('workingWindow: 24:00 ends, seconds, a rolled-over date and both DST nights', () => {
-    const rows = [
-      shift({ block_date: '2026-03-28', start_time: '22:00:00', end_time: '24:00:00' }),
-      shift({ block_date: '2026-10-24', start_time: '20:00:30', end_time: '24:00:00' }),
-      shift({ block_date: '2026-03-29', start_time: '01:30:00', end_time: '02:30:00' }), // the skipped hour
-      shift({ block_date: '2026-10-25', start_time: '01:30:00', end_time: '01:45:00' }), // the repeated hour
-      shift({ block_date: '2026-02-30', start_time: '09:00:00', end_time: '10:00:00' }), // rolls over, as before
-      shift({ block_date: '2026-06-01', start_time: '9:05', end_time: '23:00' }),
-      shift({ block_date: '2026-06-01', start_time: '22:00:00', end_time: '06:00:00' }), // overnight (defence)
-    ]
-    for (const row of rows) expect(WT.workingWindow(row)).toStrictEqual(LEGACY_WT.workingWindowLegacyDublin(row))
+  it.each([
+    // [block_date, start, end, start instant, end instant]
+    ['2026-01-15', '09:00:00', '10:00:00', '2026-01-15T09:00:00.000Z', '2026-01-15T10:00:00.000Z'], // winter (GMT)
+    ['2026-07-15', '09:00:00', '10:00:00', '2026-07-15T08:00:00.000Z', '2026-07-15T09:00:00.000Z'], // summer (IST)
+    ['2026-03-28', '22:00:00', '24:00:00', '2026-03-28T22:00:00.000Z', '2026-03-29T00:00:00.000Z'], // 24:00 end, eve of spring-forward
+    ['2026-10-24', '20:00:30', '24:00:00', '2026-10-24T19:00:30.000Z', '2026-10-24T23:00:00.000Z'], // seconds kept
+    ['2026-03-29', '01:30:00', '02:30:00', '2026-03-29T01:30:00.000Z', '2026-03-29T01:30:00.000Z'], // the skipped hour: zero length
+    ['2026-10-25', '01:30:00', '01:45:00', '2026-10-25T01:30:00.000Z', '2026-10-25T01:45:00.000Z'], // the repeated hour: the second (GMT)
+    ['2026-02-30', '09:00:00', '10:00:00', '2026-03-02T09:00:00.000Z', '2026-03-02T10:00:00.000Z'], // rolls over, as before
+    ['2026-06-01', '22:00:00', '06:00:00', '2026-06-01T21:00:00.000Z', '2026-06-02T05:00:00.000Z'], // overnight (defence)
+  ])('workingWindow %s %s-%s (no zone, and zone Europe/Dublin)', (date, start, end, startIso, endIso) => {
+    const row = shift({ block_date: date, start_time: start, end_time: end })
+    for (const w of [WT.workingWindow(row), WT.workingWindow({ ...row, timezone: DUB })]) {
+      expect([iso(w.startMs), iso(w.endMs)]).toEqual([startIso, endIso])
+    }
   })
 
-  // A week of a coach's shifts around each Dublin DST change.
+  // A week of a coach's shifts (06:00-13:30 and 17:00-22:30 daily) around each Dublin DST change.
   const weekAround = (monday) => Array.from({ length: 7 }, (_, i) => [
     shift({ block_id: `${monday}-${i}-a`, block_date: addDays(monday, i), start_time: '06:00:00', end_time: '13:30:00' }),
     shift({ block_id: `${monday}-${i}-b`, block_date: addDays(monday, i), start_time: '17:00:00', end_time: '22:30:00' }),
   ]).flat()
-  it.each(['2026-03-23', '2026-10-19', '2026-06-29'])('rest gaps, long weeks and the publish advisories: week of %s', (monday) => {
+  it.each([
+    // [monday, the six nightly rests (minutes), the candidate's rest before a 05:00 Sunday start]
+    ['2026-03-23', [450, 450, 450, 450, 450, 390], 330], // Sat→Sun night loses the spring-forward hour
+    ['2026-10-19', [450, 450, 450, 450, 450, 510], 450], // ...and gains the fall-back hour
+    ['2026-06-29', [450, 450, 450, 450, 450, 450], 390],
+  ])('rest gaps, long weeks and the publish advisories: week of %s', (monday, rests, candRest) => {
     const shifts = weekAround(monday)
     const people = new Map([['p1', { full_name: 'Coach A', employment_type: 'fte' }]])
-    expect(WT.restGapViolations(shifts)).toStrictEqual(LEGACY_WT.restGapViolationsLegacyDublin(shifts))
-    expect(WT.restGapViolations(shifts, { restScope: 'shift' })).toStrictEqual(LEGACY_WT.restGapViolationsLegacyDublin(shifts, { restScope: 'shift' }))
-    expect(WT.weekHoursOver(shifts)).toStrictEqual(LEGACY_WT.weekHoursOverLegacyDublin(shifts))
-    const opts = { people, hereLocationId: 'L', from: monday, to: addDays(monday, 6), todayIso: monday }
-    expect(WT.workingTimeAdvisories(shifts, opts)).toStrictEqual(LEGACY_WT.workingTimeAdvisoriesLegacyDublin(shifts, opts))
+    expect(WT.restGapViolations(shifts).map((v) => v.rest_minutes)).toEqual(rests)
+    // Per shift, each day's 13:30 → 17:00 break (210 min) counts too.
+    expect(WT.restGapViolations(shifts, { restScope: 'shift' }).map((v) => v.rest_minutes)).toEqual([...rests.flatMap((r) => [210, r]), 210])
+    expect(WT.weekHoursOver(shifts).map((w) => [w.week_start, w.minutes, w.shift_count])).toEqual([[monday, 5460, 14]])
+    const adv = WT.workingTimeAdvisories(shifts, { people, hereLocationId: 'L', from: monday, to: addDays(monday, 6), todayIso: monday })
+    expect(adv.restGaps.map((g) => g.rest_minutes)).toEqual(rests)
+    expect(adv.longWeeks.map((w) => w.minutes)).toEqual([5460])
     const cand = shift({ profile_id: 'p1', block_id: 'new', block_date: addDays(monday, 6), start_time: '05:00:00', end_time: '09:00:00' })
-    expect(WT.candidateWorkingTime(shifts, cand)).toStrictEqual(LEGACY_WT.candidateWorkingTimeLegacyDublin(shifts, cand))
+    const cwt = WT.candidateWorkingTime(shifts, cand)
+    expect(cwt.restGap.rest_minutes).toBe(candRest)
+    expect(cwt.weekHours).toEqual({ week_start: monday, minutes: 5700 })
   })
 
-  it.each(['2026-03-29', '2026-10-25', '2026-07-15'])('buildCandidates: a block on %s', (date) => {
+  it.each([
+    // [date, Coach A's rest after a 20:00-24:00 shift the night before, its wording]
+    ['2026-03-29', 360, 'Only 6h rest · 6h this week'], // 00:00 → 07:00 IST is 6 real hours
+    ['2026-10-25', 480, 'Only 8h rest · 6h this week'], // 00:00 IST → 07:00 GMT is 8
+    ['2026-07-15', 420, 'Only 7h rest · 6h this week'],
+  ])('buildCandidates: a 07:00-09:00 block on %s', (date, rest, reason) => {
     const block = {
       id: 'blk', location_id: 'L', block_date: date, start_time: '07:00:00', end_time: '09:00:00',
       shift_templates: { name: 'Early' }, shift_assignments: [],
@@ -157,89 +145,113 @@ describe('TZ.8a Europe/Dublin is byte-identical', () => {
       shift({ profile_id: 'p2', block_id: 'z', block_date: date, start_time: '06:00:00', end_time: '07:30:00' }),
     ]
     const args = { block, members, shifts, checked: { shifts: true, cross_studio: true, leave: true, availability: true } }
-    expect(buildCandidates(args)).toStrictEqual(LEGACY_CAND.buildCandidatesLegacyDublin(args))
-    // The studio zone on the block (Dublin) changes nothing either.
-    expect(buildCandidates({ ...args, block: { ...block, locations: { timezone: DUB } } })).toStrictEqual(LEGACY_CAND.buildCandidatesLegacyDublin(args))
+    // The studio zone on the block (Dublin) changes nothing.
+    for (const out of [buildCandidates(args), buildCandidates({ ...args, block: { ...block, locations: { timezone: DUB } } })]) {
+      const [a, b] = out.candidates
+      expect([a.profile_id, a.free, a.tier, a.rest_gap.rest_minutes, a.reason]).toEqual(['p1', true, 'advisory', rest, reason])
+      expect([b.profile_id, b.free, b.tier, b.reason]).toEqual(['p2', false, 'blocked', 'Working 6am–7:30am Class · 1h 30m this week'])
+    }
   })
 
-  it('staff quiet hours: the wall clock, the band and the resolver, every quarter-hour of 2026', () => {
-    const bad = []
-    for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 15 * 60_000) {
-      for (const tz of [DUB, null, undefined, 'Mars/Olympus', '']) {
-        if (staffWallClockHHMM(t, tz) !== LEGACY.staffWallClockHHMMLegacy(t, tz)) bad.push([t, tz, 'hhmm'])
-        if (inStaffPushHours(t, tz) !== LEGACY.inStaffPushHoursLegacy(t, tz)) bad.push([t, tz, 'band'])
-      }
+  it.each([
+    // [instant, Dublin 'HH:MM', inside 07:00-22:00]
+    ['2026-01-15T06:59:00Z', '06:59', false], ['2026-01-15T07:00:00Z', '07:00', true],
+    ['2026-01-15T21:59:00Z', '21:59', true], ['2026-01-15T22:00:00Z', '22:00', false],
+    ['2026-07-01T05:59:00Z', '06:59', false], ['2026-07-01T06:00:00Z', '07:00', true],
+    ['2026-07-01T21:00:00Z', '22:00', false],
+    ['2026-03-29T01:00:00Z', '02:00', false], ['2026-10-25T01:00:00Z', '01:00', false],
+  ])('staff quiet hours at %s: Dublin, and every unusable zone falls back to Dublin', (at_, hhmm, inBand) => {
+    for (const tz of [DUB, null, undefined, 'Mars/Olympus', '']) {
+      expect(staffWallClockHHMM(at(at_), tz)).toBe(hhmm)
+      expect(inStaffPushHours(at(at_), tz)).toBe(inBand)
     }
-    expect(bad).toEqual([])
-    for (const tz of [DUB, null, undefined, 'Mars/Olympus', '', '   ', 42, NY]) {
-      expect(resolveStaffTimeZone(tz)).toStrictEqual(LEGACY.resolveStaffTimeZoneLegacy(tz))
-    }
-  }, 60_000)
+  })
 
-  it('block edits: the notice day and "shift over", every hour of 2026', () => {
-    const bad = []
+  it('resolveStaffTimeZone', () => {
+    for (const tz of [DUB, null, undefined]) expect(resolveStaffTimeZone(tz)).toStrictEqual({ timeZone: DUB, warn: false })
+    for (const tz of ['Mars/Olympus', '', '   ', 42]) expect(resolveStaffTimeZone(tz)).toStrictEqual({ timeZone: DUB, warn: true })
+    expect(resolveStaffTimeZone(NY)).toStrictEqual({ timeZone: NY, warn: false })
+  })
+
+  it('block edits: the notice day and "shift over" on both DST nights and a summer morning', () => {
     const windows = [{ from: { start_time: '07:10:00', end_time: '08:00:00' }, to: { start_time: '07:20:00', end_time: '08:30:00' } }]
-    for (const nowMs of HOURS_2026) {
-      const today = dublinDayStr(nowMs)
-      for (const blockDate of [addDays(today, -1), today, addDays(today, 1)]) {
+    for (const [nowIso, today, expected] of [
+      // per block date (yesterday, today, tomorrow): [notice, shift over]
+      ['2026-03-29T00:30:00Z', '2026-03-29', [['morning', true], ['too_late', false], ['morning', false]]], // quiet night
+      ['2026-10-25T00:30:00Z', '2026-10-25', [['morning', true], ['too_late', false], ['morning', false]]],
+      ['2026-07-01T06:30:00Z', '2026-07-01', [['shortly', true], ['shortly', false], ['shortly', false]]], // 07:30 IST, shift not over
+      ['2026-07-01T07:31:00Z', '2026-07-01', [['shortly', true], ['shortly', true], ['shortly', false]]], // 08:31 IST, over
+    ]) {
+      const nowMs = at(nowIso)
+      expect(todayStrIn(DUB, nowMs)).toBe(today)
+      ;[addDays(today, -1), today, addDays(today, 1)].forEach((blockDate, i) => {
         for (const timeZone of [DUB, null]) {
-          const a = { nowMs, timeZone, blockDate, windows }
-          if (blockEditNoticeWhen(a) !== LEGACY.blockEditNoticeWhenLegacyDublin(a)) bad.push([nowMs, blockDate, 'when'])
-          const o = { blockDate, from: windows[0].from, to: windows[0].to, nowMs, timeZone }
-          if (coachShiftOver(o) !== LEGACY.coachShiftOverLegacyDublin(o)) bad.push([nowMs, blockDate, 'over'])
+          expect(blockEditNoticeWhen({ nowMs, timeZone, blockDate, windows })).toBe(expected[i][0])
+          expect(coachShiftOver({ blockDate, from: windows[0].from, to: windows[0].to, nowMs, timeZone })).toBe(expected[i][1])
         }
-      }
+      })
     }
-    expect(bad).toEqual([])
-  }, 60_000)
+  })
 
-  it('the change-log drawer: told time, told day and byline, every hour of 2026', () => {
-    const bad = []
-    for (const ms of HOURS_2026) {
-      const notified = new Date(ms + 5 * 60_000).toISOString()
-      const c = { action: 'assigned', details: {}, block_date: dublinDayStr(ms), created_at: new Date(ms - 3 * 3_600_000).toISOString(), notified_at: notified, actor_name: 'Mgr' }
-      for (const zone of [DUB, null, undefined]) {
-        if (stampMeansTold(c, zone) !== LEGACY.stampMeansToldLegacyDublin(c)) bad.push([ms, 'means'])
-        if (rosterChangeTold(c, zone) !== LEGACY.rosterChangeToldLegacyDublin(c)) bad.push([ms, 'told'])
-        if (rosterChangeByline(c, zone) !== LEGACY.rosterChangeBylineLegacyDublin(c)) bad.push([ms, 'byline'])
-      }
+  it.each([
+    // [notified - 5 min, told, byline (created 3h before)]
+    ['2026-01-15T12:00:00Z', 'told 12:05', 'Mgr · 15 Jan 09:00'],
+    ['2026-07-01T23:00:00Z', 'told 2 Jul 00:05', 'Mgr · 1 Jul 21:00'], // past Dublin midnight
+    ['2026-03-29T01:00:00Z', 'told 29 Mar 02:05', 'Mgr · 28 Mar 22:00'],
+    ['2026-10-25T01:30:00Z', 'told 25 Oct 01:35', 'Mgr · 24 Oct 23:30'],
+  ])('the change-log drawer at %s', (nowIso, told, byline) => {
+    const ms = at(nowIso)
+    const c = { action: 'assigned', details: {}, block_date: todayStrIn(DUB, ms), created_at: new Date(ms - 3 * 3_600_000).toISOString(), notified_at: new Date(ms + 5 * 60_000).toISOString(), actor_name: 'Mgr' }
+    for (const zone of [DUB, null, undefined]) {
+      expect(stampMeansTold(c, zone)).toBe(true)
+      expect(rosterChangeTold(c, zone)).toBe(told)
+      expect(rosterChangeByline(c, zone)).toBe(byline)
     }
-    expect(bad).toEqual([])
-  }, 60_000)
+  })
 
-  it('"Published vs now": the publish label and the before-snapshots message, every hour of 2026', () => {
-    const bad = []
-    for (const ms of HOURS_2026) {
-      const iso = new Date(ms).toISOString()
-      if (publishedLabel(iso) !== LEGACY.publishedLabelLegacyDublin(iso)) bad.push(iso)
-      if (publishedLabel(iso, DUB) !== LEGACY.publishedLabelLegacyDublin(iso)) bad.push(`${iso} tz`)
-      const d = { missing_reason: 'before_snapshots', snapshots_began_at: iso }
-      if (missingSnapshotMessage({ ...d, timezone: DUB }) !== LEGACY.missingSnapshotMessageLegacyDublin(d)) bad.push(`${iso} msg`)
-    }
-    expect(bad).toEqual([])
-  }, 60_000)
+  it.each([
+    ['2026-01-15T12:00:00Z', 'Thu 15 Jan, 12:00'],
+    ['2026-07-01T23:00:00Z', 'Thu 2 Jul, 00:00'],
+    ['2026-03-29T01:00:00Z', 'Sun 29 Mar, 02:00'],
+    ['2026-10-25T00:30:00Z', 'Sun 25 Oct, 01:30'], // first 01:30 (IST)
+    ['2026-10-25T01:30:00Z', 'Sun 25 Oct, 01:30'], // second 01:30 (GMT)
+  ])('"Published vs now": the publish label and the before-snapshots message at %s', (publishedIso, label) => {
+    expect(publishedLabel(publishedIso)).toBe(label)
+    expect(publishedLabel(publishedIso, DUB)).toBe(label)
+    expect(missingSnapshotMessage({ missing_reason: 'before_snapshots', snapshots_began_at: publishedIso, timezone: DUB }))
+      .toBe(`Published vs now is available for rosters published from ${label.split(',')[0]}. This roster was published before then.`)
+  })
 
-  it.each(SAMPLES)('the shift reminder\'s today/tomorrow wording at %s', (iso) => {
-    const nowMs = at(iso)
-    const today = dublinDayStr(nowMs)
-    for (const date of [today, addDays(today, 1), addDays(today, 2)]) {
+  it.each([
+    ['2026-03-28T23:30:00Z', '2026-03-28'], // eve of spring-forward
+    ['2026-10-24T23:30:00Z', '2026-10-25'], // 00:30 IST, the fall-back night
+    ['2026-07-01T12:00:00Z', '2026-07-01'],
+  ])('the shift reminder\'s today/tomorrow wording at %s', (nowIso, today) => {
+    const nowMs = at(nowIso)
+    const wording = [
+      ['Shift today at 06:00', 'Today 06:00 to 08:00 at North: Early · with Bo'],
+      ['Shift tomorrow at 06:00', 'Tomorrow 06:00 to 08:00 at North: Early · with Bo'],
+      [`Shift on ${addDays(today, 2)} at 06:00`, `On ${addDays(today, 2)} 06:00 to 08:00 at North: Early · with Bo`],
+    ]
+    ;[today, addDays(today, 1), addDays(today, 2)].forEach((date, i) => {
       const run = [{ id: 'a', profile_id: 'p', location_id: 'L', shift_date: date, block_start_time: '06:00:00', block_end_time: '08:00:00', shift_templates: { name: 'Early' } }]
       const args = { run, nameByLocation: { L: 'North' }, coNames: ['Bo'], nowMs }
-      expect(buildShiftReminderMessage({ ...args, zone: DUB })).toStrictEqual(LEGACY.buildShiftReminderMessageLegacyDublin(args))
-      expect(buildShiftReminderMessage(args)).toStrictEqual(LEGACY.buildShiftReminderMessageLegacyDublin(args))
-    }
+      const [title, body] = wording[i]
+      expect(buildShiftReminderMessage({ ...args, zone: DUB })).toStrictEqual({ title, body })
+      expect(buildShiftReminderMessage(args)).toStrictEqual({ title, body })
+    })
   })
 
   it.each(SAMPLES)('the Today chip reads and counts on the Dublin day at %s', async (iso) => {
     const nowMs = at(iso)
     const blocks = (q) => ({ data: [
-      { id: 'b1', location_id: 'L', block_date: dublinDayStr(nowMs), start_time: '23:00:00', min_coaches: 1, shift_templates: { kind: 'class' }, shift_assignments: [] },
-      { id: 'b2', location_id: 'L', block_date: addDays(dublinDayStr(nowMs), 1), start_time: '09:00:00', min_coaches: 1, shift_templates: { kind: 'class' }, shift_assignments: [] },
+      { id: 'b1', location_id: 'L', block_date: todayStrIn(DUB, nowMs), start_time: '23:00:00', min_coaches: 1, shift_templates: { kind: 'class' }, shift_assignments: [] },
+      { id: 'b2', location_id: 'L', block_date: addDays(todayStrIn(DUB, nowMs), 1), start_time: '09:00:00', min_coaches: 1, shift_templates: { kind: 'class' }, shift_assignments: [] },
     ].filter((b) => b.block_date >= q.gte[0][1] && b.block_date <= q.lte[0][1]), error: null })
     const zoned = recDb({ shift_blocks: blocks })
     const pinned = recDb({ shift_blocks: blocks })
     const a = await fetchStaffingGapsThisWeek(zoned, ['L'], { zones: new Map([['L', DUB]]), nowMs })
-    const b = await fetchStaffingGapsThisWeek(pinned, ['L'], { todayIso: dublinDayStr(nowMs) })
+    const b = await fetchStaffingGapsThisWeek(pinned, ['L'], { todayIso: todayStrIn(DUB, nowMs) })
     expect(a).toStrictEqual(b)
     expect(zoned.queries[0].gte).toStrictEqual(pinned.queries[0].gte)
     expect(zoned.queries[0].lte).toStrictEqual(pinned.queries[0].lte)
@@ -250,14 +262,14 @@ describe('TZ.8a Europe/Dublin is byte-identical', () => {
     const tables = {
       shift_templates: [{ id: 't', location_id: 'L', days_of_week: ['mon'], kind: 'class' }],
       shift_blocks: (q) => ({ data: [7, 8, 9, 10, 14, 15].map((n) => ({
-        id: `b${n}`, location_id: 'L', block_date: addDays(dublinDayStr(nowMs), n), min_coaches: 1,
+        id: `b${n}`, location_id: 'L', block_date: addDays(todayStrIn(DUB, nowMs), n), min_coaches: 1,
         shift_templates: { kind: 'class' }, rosters: { status: 'draft' }, shift_assignments: [],
       })).filter((b) => b.block_date >= q.gte[0][1] && b.block_date <= q.lte[0][1]), error: null }),
     }
     const zoned = recDb(tables)
     const pinned = recDb(tables)
     const a = await fetchRosterRunways(zoned, ['L'], { zones: { L: DUB }, nowMs })
-    const b = await fetchRosterRunways(pinned, ['L'], { todayIso: dublinDayStr(nowMs) })
+    const b = await fetchRosterRunways(pinned, ['L'], { todayIso: todayStrIn(DUB, nowMs) })
     expect(a).toStrictEqual(b)
     expect(zoned.queries[1].gte).toStrictEqual(pinned.queries[1].gte)
     expect(zoned.queries[1].lte).toStrictEqual(pinned.queries[1].lte)

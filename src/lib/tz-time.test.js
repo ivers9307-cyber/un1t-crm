@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest'
 import {
   DEFAULT_TZ, isValidTz, resolveTz, dayStrInTz, wallMsInTz, dayStartMsInTz, nextLocalMidnightMs,
 } from './tz-time'
-import { dublinDayStr } from './dublin-time'
+import { dayStrIn } from '@shared/zoned-time'
+
+// TZ.18b: dublin-time imports are banned; its byte-identity with zoned-time is
+// shared/zoned-time.parity.test.js's job.
+const dublinDayStr = (instant) => dayStrIn(instant, 'Europe/Dublin')
 
 const NY = 'America/New_York'
 const BERLIN = 'Europe/Berlin'

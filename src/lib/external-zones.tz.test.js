@@ -6,9 +6,10 @@
 // zone; when the column is empty, in the location's zone. Xero: an org's dates
 // are org-local, and one location is one Xero org, so the location's zone.
 //
-// Europe/Dublin is byte-identical to the frozen originals in
-// external-zones.legacy-dublin.test-helpers.js; America/New_York follows New
-// York across both 2026 DST edges.
+// America/New_York follows New York across both 2026 DST edges. The Dublin
+// byte-identity sweep ran in TZ.11c and was retired in TZ.18b: Europe/Dublin is
+// pinned by fixed values below, and zoned-time ≡ dublin-time stays proven by
+// shared/zoned-time.parity.test.js.
 process.env.TZ = 'America/Los_Angeles' // host zone is neither zone under test: proves nothing reads the host clock
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -23,7 +24,6 @@ vi.mock('@/lib/recon/coverage', () => ({ syncBankLines: vi.fn(async () => ({ pul
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 
-const LEGACY = await import('./external-zones.legacy-dublin.test-helpers.js')
 const DAY = await import('./ads/account-day.js')
 const { loadAdsDashboard } = await import('./ads/read.js')
 const { fetchAdsSummary } = await import('@shared/dashboard-data')
@@ -41,13 +41,27 @@ const DUB = 'Europe/Dublin'
 const NY = 'America/New_York'
 // US DST 2026: spring forward Sun 8 Mar 02:00 → 03:00; fall back Sun 1 Nov 02:00 → 01:00.
 // EU DST 2026: spring forward Sun 29 Mar 01:00 UTC; fall back Sun 25 Oct 01:00 UTC.
-const SAMPLES = [
-  '2026-03-07T04:30:00Z', '2026-03-08T06:59:00Z', '2026-03-08T07:00:00Z', // NY around spring-forward
-  '2026-03-28T23:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', // Dublin around spring-forward
-  '2026-10-24T23:30:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z', // Dublin around fall-back
-  '2026-11-01T04:59:00Z', '2026-11-01T05:00:00Z', '2026-11-01T06:00:00Z', // NY around fall-back
-  '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-12-31T23:30:00Z', // month/year edges
-  '2026-03-29T23:30:00Z', // the first Dublin hour after spring-forward: now - 24 h is two Dublin days back
+// Dublin instants around both 2026 EU DST changes and an ordinary summer and
+// winter night. `days` is the Dublin day of now + offset x 24 h (the Meta
+// rule); `summarySince` is Dublin's today minus 7 calendar days and
+// `attributedSince` now minus 7 x 24 h (fetchAdsSummary); `reconFrom` is
+// Dublin's today minus 90 calendar days (the Xero pull floor).
+const DUBLIN = [
+  { iso: '2026-03-29T23:30:00Z', // 00:30 IST Mon: now - 24 h is two Dublin days back
+    days: { 0: '2026-03-30', '-1': '2026-03-28', '-7': '2026-03-22', '-30': '2026-02-27' },
+    summarySince: '2026-03-23', attributedSince: '2026-03-22T23:30:00.000Z', reconFrom: '2025-12-30' },
+  { iso: '2026-10-24T23:30:00Z', // 00:30 IST Sun, the night of the fall-back
+    days: { 0: '2026-10-25', '-1': '2026-10-24', '-7': '2026-10-18', '-30': '2026-09-25' },
+    summarySince: '2026-10-18', attributedSince: '2026-10-17T23:30:00.000Z', reconFrom: '2026-07-27' },
+  { iso: '2026-10-25T01:00:00Z', // 01:00 GMT, just after the fall-back
+    days: { 0: '2026-10-25', '-1': '2026-10-24', '-7': '2026-10-18', '-30': '2026-09-25' },
+    summarySince: '2026-10-18', attributedSince: '2026-10-18T01:00:00.000Z', reconFrom: '2026-07-27' },
+  { iso: '2026-06-30T23:00:00Z', // 00:00 IST, summer month edge
+    days: { 0: '2026-07-01', '-1': '2026-06-30', '-7': '2026-06-24', '-30': '2026-06-01' },
+    summarySince: '2026-06-24', attributedSince: '2026-06-23T23:00:00.000Z', reconFrom: '2026-04-02' },
+  { iso: '2026-12-31T23:30:00Z', // 23:30 GMT, winter
+    days: { 0: '2026-12-31', '-1': '2026-12-30', '-7': '2026-12-24', '-30': '2026-12-01' },
+    summarySince: '2026-12-24', attributedSince: '2026-12-24T23:30:00.000Z', reconFrom: '2026-10-02' },
 ]
 const OFFSETS = [-30, -7, -1, 0]
 
@@ -88,7 +102,7 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers() })
 
 // ── the helper ──────────────────────────────────────────────────────────────
-describe('TZ.11c adAccountDay: Europe/Dublin is byte-identical to the four dublinDateStr copies', () => {
+describe('TZ.11c adAccountDay: Europe/Dublin pinned values', () => {
   // UN1T's live account (11 Oct 2026): account_timezone NULL, location Europe/Dublin.
   const DUBLIN_ACCOUNTS = [
     ['NULL account zone, Dublin location (UN1T today)', acct('a', null, DUB)],
@@ -97,21 +111,12 @@ describe('TZ.11c adAccountDay: Europe/Dublin is byte-identical to the four dubli
     ['no zone anywhere: the platform default', acct('d', null, undefined)],
   ]
   it.each(DUBLIN_ACCOUNTS)('%s', (_label, account) => {
-    for (const iso of SAMPLES) {
+    for (const { iso, days } of DUBLIN) {
       vi.setSystemTime(new Date(iso))
       for (const offsetDays of OFFSETS) {
-        expect(DAY.adAccountDay(account, { offsetDays }), `${iso} ${offsetDays}`).toBe(LEGACY.dublinDateStrLegacy(offsetDays))
-        expect(DAY.adAccountDay(account, { offsetDays, nowMs: Date.parse(iso) })).toBe(LEGACY.dublinDateStrLegacy(offsetDays))
+        expect(DAY.adAccountDay(account, { offsetDays }), `${iso} ${offsetDays}`).toBe(days[offsetDays])
+        expect(DAY.adAccountDay(account, { offsetDays, nowMs: Date.parse(iso) })).toBe(days[offsetDays])
       }
-    }
-  })
-
-  it('every hour of 2026, yesterday and today, for a NULL-zone Dublin account', () => {
-    const account = acct('e', null, DUB)
-    for (let ms = Date.parse('2026-01-01T00:30:00Z'); ms < Date.parse('2027-01-01T00:00:00Z'); ms += 3600_000) {
-      vi.setSystemTime(ms)
-      expect(DAY.adAccountDay(account, { offsetDays: -1 })).toBe(LEGACY.dublinDateStrLegacy(-1))
-      expect(DAY.adAccountDay(account)).toBe(LEGACY.dublinDateStrLegacy(0))
     }
   })
 })
@@ -178,10 +183,10 @@ function accountsDb(accounts) {
 }
 const windows = () => Object.fromEntries(syncAccount.mock.calls.map(([, a, , o]) => [a.id, [o.since, o.until]]))
 
-describe('TZ.11c ad-insights-sync / backfill / refresh: Europe/Dublin is byte-identical', () => {
-  it.each(SAMPLES)('%s', async (iso) => {
+describe('TZ.11c ad-insights-sync / backfill / refresh: Europe/Dublin pinned values', () => {
+  it.each(DUBLIN.map((d) => [d.iso, d]))('%s', async (iso, { days }) => {
     vi.setSystemTime(new Date(iso))
-    const y = LEGACY.dublinDateStrLegacy(-1), t = LEGACY.dublinDateStrLegacy(0), m = LEGACY.dublinDateStrLegacy(-30)
+    const y = days[-1], t = days[0], m = days[-30]
 
     state.db = accountsDb([acct('s1', null, DUB)])
     await syncRoute.GET(cronReq())
@@ -245,15 +250,15 @@ function adsDashDb(accountRow, locationTz) {
 }
 
 describe('TZ.11c loadAdsDashboard (/dashboard/ads, the ad report email)', () => {
-  it.each(SAMPLES)('Europe/Dublin is byte-identical at %s', async (iso) => {
+  it.each(DUBLIN.map((d) => [d.iso, d]))('Europe/Dublin days at %s', async (iso, { days }) => {
     vi.setSystemTime(new Date(iso))
     for (const sinceDays of [30, 1]) {
       resetLocationZoneCache()
       const db = adsDashDb(null, DUB) // no ad account: the location's zone
       await loadAdsDashboard(db, `l-${sinceDays}`, sinceDays)
       const q = db.of('ad_insights_daily')[0]
-      expect(arg(q, 'gte', 'date')).toBe(LEGACY.dublinDateStrLegacy(-sinceDays))
-      expect(arg(q, 'lte', 'date')).toBe(LEGACY.dublinDateStrLegacy(0))
+      expect(arg(q, 'gte', 'date')).toBe(days[-sinceDays])
+      expect(arg(q, 'lte', 'date')).toBe(days[0])
     }
   })
 
@@ -272,14 +277,13 @@ describe('TZ.11c fetchAdsSummary (Business dashboard, last 7 days)', () => {
   function summaryDb() {
     return fakeDb((table) => (table === 'ad_insights_daily' ? { data: [], error: null } : { count: 0, error: null }))
   }
-  it.each(SAMPLES)('Europe/Dublin (default and explicit) is byte-identical at %s', async (iso) => {
+  it.each(DUBLIN.map((d) => [d.iso, d]))('Europe/Dublin (default and explicit) at %s', async (iso, { summarySince, attributedSince }) => {
     const now = new Date(iso)
-    const legacy = LEGACY.adsSummaryWindowLegacy(now)
     for (const zone of [undefined, DUB]) {
       const db = summaryDb()
       await fetchAdsSummary(db, 'loc1', now, zone)
-      expect(arg(db.of('ad_insights_daily')[0], 'gte', 'date')).toBe(legacy.sinceIso)
-      expect(arg(db.of('contacts')[0], 'gte', 'attributed_at')).toBe(legacy.attributedSinceIso)
+      expect(arg(db.of('ad_insights_daily')[0], 'gte', 'date')).toBe(summarySince)
+      expect(arg(db.of('contacts')[0], 'gte', 'attributed_at')).toBe(attributedSince)
     }
   })
 
@@ -302,11 +306,11 @@ describe('TZ.11c aged payables (GET /api/accounting/payables)', () => {
   })
   const user = (timezone) => ({ id: 'u', activeLocation: { id: 'loc-p', timezone } })
 
-  it.each(SAMPLES)('Europe/Dublin is byte-identical at %s', async (iso) => {
+  it.each(DUBLIN.map((d) => [d.iso, d.days[0]]))('Europe/Dublin at %s ages on %s', async (iso, today) => {
     vi.setSystemTime(new Date(iso))
     getCurrentUser.mockResolvedValue(user(DUB))
     const body = await (await payablesRoute.GET()).json()
-    expect(body.data.asOf).toBe(LEGACY.payablesDaysLegacy().asOf)
+    expect(body.data.asOf).toBe(today)
   })
 
   it('a New York studio ages its Xero bills on New York\'s today', async () => {
@@ -338,11 +342,11 @@ describe('TZ.11c receipt-coverage Xero pull window (runCoveragePull)', () => {
     })
   })
 
-  it.each(SAMPLES)('Europe/Dublin is byte-identical at %s', async (iso) => {
+  it.each(DUBLIN.map((d) => [d.iso, d]))('Europe/Dublin window at %s', async (iso, { days, reconFrom }) => {
     vi.setSystemTime(new Date(iso))
     resetLocationZoneCache()
     const summary = await runCoveragePull(pullDb(DUB), 'loc-x', { trigger: 'manual' })
-    expect({ windowFrom: summary.windowFrom, windowTo: summary.windowTo }).toEqual(LEGACY.reconPullWindowLegacy())
+    expect({ windowFrom: summary.windowFrom, windowTo: summary.windowTo }).toEqual({ windowFrom: reconFrom, windowTo: days[0] })
   })
 
   it('a New York studio asks Xero for New York days', async () => {

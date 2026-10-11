@@ -69,6 +69,21 @@ describe('GET /api/cron/agent-followups — checkins_day', () => {
     expect(outcome().checkins_day.carry_failed).toBe(true)
   })
 
+  // TZ.18b — the rollup is ONE platform-wide row, keyed on the platform calendar
+  // (PLATFORM_TZ = Europe/Dublin), byte-identical to the old dublinDayStr key.
+  it.each([
+    ['2026-07-01T23:30:00Z', '2026-07-02'], // 00:30 IST: the Dublin day, not the UTC day
+    ['2026-01-15T23:30:00Z', '2026-01-15'], // 23:30 GMT
+    ['2026-03-29T00:30:00Z', '2026-03-29'], // spring-forward night, 00:30 GMT
+    ['2026-10-24T23:30:00Z', '2026-10-25'], // fall-back night, 00:30 IST
+    ['2026-11-01T04:30:00Z', '2026-11-01'], // the US fall-back night is an ordinary Dublin morning
+  ])('the checkins_day key at %s is the platform day %s', async (at, day) => {
+    vi.setSystemTime(new Date(at))
+    createServerClient.mockReturnValue(hbDb({ data: null, error: null }))
+    await GET(req())
+    expect(outcome().checkins_day.day).toBe(day)
+  })
+
   it('a check-in runner that threw is counted as a failed tick', async () => {
     runFirstClassCheckins.mockRejectedValue(new Error('boom'))
     createServerClient.mockReturnValue(hbDb({ data: null, error: null }))

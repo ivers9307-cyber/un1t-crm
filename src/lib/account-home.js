@@ -80,8 +80,6 @@ export function studioWeekWindow(now = Date.now(), zone = DEFAULT_TZ) {
   const start = addDaysISO(end, -6)      // 6 days earlier → 7-day inclusive span
   return { start, end }
 }
-/** The Europe/Dublin window (pre-TZ.11a name; DEFAULT_TZ). */
-export const dublinWeekWindow = (now = Date.now()) => studioWeekWindow(now, DEFAULT_TZ)
 
 /**
  * Sum the per-studio headline numbers into org-level KPIs. Pure.

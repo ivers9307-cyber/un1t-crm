@@ -1,14 +1,11 @@
 // agent-zone.tz.test.js — TZ.5. Mia's daytime gate, quiet hours, nightly
 // review window, Monday digest and the class/event labels she reads now follow
-// each studio's own timezone. Europe/Dublin is byte-identical to the frozen
-// pre-change copies (agent-zone.legacy-dublin.test-helpers.js); America/New_York
-// follows New York across both 2026 DST edges.
+// each studio's own timezone. America/New_York follows New York across both
+// 2026 DST edges. The Dublin byte-identity sweep ran in TZ.5 and was retired in
+// TZ.18b: Europe/Dublin is pinned by fixed values below, and zoned-time ≡
+// dublin-time stays proven by shared/zoned-time.parity.test.js.
 process.env.TZ = 'America/Los_Angeles' // host zone is neither zone under test: proves nothing reads the host clock
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-
-// The identity tests walk every hour of 2026 through Intl; CI runners are
-// several times slower than a laptop, so this file gets a wider budget.
-vi.setConfig({ testTimeout: 30_000 })
 
 vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn().mockResolvedValue({ companyName: 'Studio' }) }))
 vi.mock('@/lib/whatsapp', () => ({
@@ -41,90 +38,105 @@ const { SettingsSchema } = await import('./settings-contract')
 const { resetLocationZoneCache } = await import('@/lib/location-time')
 const { sendPushToRolesAtLocation } = await import('@/lib/push')
 const { logError } = await import('@/lib/log')
-const LEGACY = await import('./agent-zone.legacy-dublin.test-helpers.js')
 
 const DUB = 'Europe/Dublin'
 const NY = 'America/New_York'
-const H = 3600_000
 const ms = (iso) => Date.parse(iso)
 
-const SAMPLES = [
-  '2026-03-07T04:30:00Z', '2026-03-08T06:59:00Z', '2026-03-08T07:00:00Z', // NY around spring-forward
-  '2026-03-28T23:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', // Dublin around spring-forward
-  '2026-10-24T23:30:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z', // Dublin around fall-back
-  '2026-11-01T04:59:00Z', '2026-11-01T05:00:00Z', '2026-11-01T06:00:00Z', // NY around fall-back
-  '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-12-31T23:30:00Z', // month/year edges
-]
-// Every hour of 2026, plus the minute either side of each Dublin DST change.
-const HOURS_2026 = []
-for (let t = ms('2026-01-01T00:00:00Z'); t < ms('2027-01-01T00:00:00Z'); t += H) HOURS_2026.push(t)
-for (const iso of SAMPLES) HOURS_2026.push(ms(iso))
-// The quiet-hours check builds an Intl formatter per call (legacy and new),
-// so it runs on every 11th hour of the year (walks every hour of the day
-// across the year) plus every hour of the two days around each Dublin DST
-// change, and the samples.
-const DST_EDGE_HOURS = []
-for (const edge of ['2026-03-28T00:00:00Z', '2026-10-24T00:00:00Z']) {
-  for (let t = ms(edge); t < ms(edge) + 48 * H; t += H) DST_EDGE_HOURS.push(t)
-}
-for (const iso of SAMPLES) DST_EDGE_HOURS.push(ms(iso))
-const QUIET_HOURS = [...HOURS_2026.filter((_, i) => i % 11 === 0), ...DST_EDGE_HOURS]
-const DAYS_2026 = []
-for (let t = ms('2026-01-01T12:00:00Z'); t < ms('2027-01-01T00:00:00Z'); t += 24 * H) DAYS_2026.push(new Date(t).toISOString().slice(0, 10))
-
-const QUIET_CONFIGS = [
-  null, {}, { start: '21:00' },
-  { start: '21:00', end: '08:00' }, { start: '09:00', end: '17:00' }, { start: '00:30', end: '01:30' },
-  { start: '21:00', end: '08:00', tz: 'UTC' }, { start: '21:00', end: '08:00', tz: '' },
-  { start: '21:00', end: '08:00', tz: 'Not/AZone' }, { start: '09:00', end: '09:00' },
+// Dublin instants around both 2026 DST changes (spring-forward Sun 29 Mar
+// 01:00Z, fall-back Sun 25 Oct 01:00Z) and an ordinary summer/winter day, with
+// whether each is inside the 09:00-20:00 Dublin daytime.
+const DUBLIN_DAYTIME = [
+  ['2026-03-28T08:59:00Z', false], // 08:59 GMT
+  ['2026-03-29T07:59:00Z', false], // 08:59 IST
+  ['2026-03-29T08:00:00Z', true], //  09:00 IST
+  ['2026-03-29T19:00:00Z', false], // 20:00 IST
+  ['2026-10-24T08:00:00Z', true], //  09:00 IST
+  ['2026-10-25T08:59:00Z', false], // 08:59 GMT
+  ['2026-10-25T09:00:00Z', true], //  09:00 GMT
+  ['2026-07-01T18:59:00Z', true], //  19:59 IST
+  ['2026-07-01T23:30:00Z', false], // 00:30 IST
+  ['2026-12-31T19:59:00Z', true], //  19:59 GMT
+  ['2026-12-31T20:00:00Z', false], // 20:00 GMT
 ]
 
-describe('TZ.5 Europe/Dublin is byte-identical', () => {
-  it('withinLocalDaytime: every hour of 2026 + the DST edges', () => {
-    for (const t of HOURS_2026) expect(withinLocalDaytime(t, DUB)).toBe(LEGACY.withinDublinDaytimeLegacyDublin(t))
-  })
-  it('withinLocalDaytime with no zone falls back to Dublin (the default)', () => {
-    for (const iso of SAMPLES) expect(withinLocalDaytime(ms(iso))).toBe(LEGACY.withinDublinDaytimeLegacyDublin(ms(iso)))
-  })
-  it('isWithinQuietHours: every config, across 2026 and both DST edges', () => {
-    for (const q of QUIET_CONFIGS) {
-      for (const t of QUIET_HOURS) {
-        expect(isWithinQuietHours(new Date(t), q, DUB)).toBe(LEGACY.isWithinQuietHoursLegacyDublin(new Date(t), q))
-      }
+describe('TZ.5 Europe/Dublin pinned values', () => {
+  it('withinLocalDaytime: 09:00-20:00 Dublin across both DST changes (zone omitted = Dublin)', () => {
+    for (const [iso, day] of DUBLIN_DAYTIME) {
+      expect(withinLocalDaytime(ms(iso), DUB)).toBe(day)
+      expect(withinLocalDaytime(ms(iso))).toBe(day)
     }
   })
-  it('proactiveWindowOpen: every config, every hour of both DST edges', () => {
-    for (const q of QUIET_CONFIGS) {
-      for (const t of DST_EDGE_HOURS) {
-        expect(proactiveWindowOpen(t, { quiet_hours: q }, DUB)).toStrictEqual(LEGACY.proactiveWindowOpenLegacyDublin(t, { quiet_hours: q }))
-      }
-    }
+  it('isWithinQuietHours: 21:00-08:00 on the Dublin clock; a stored tz wins; bad configs are never quiet', () => {
+    const q = { start: '21:00', end: '08:00' }
+    const at = (iso, cfg = q) => isWithinQuietHours(new Date(iso), cfg, DUB)
+    expect(at('2026-03-28T20:59:00Z')).toBe(false) // 20:59 GMT
+    expect(at('2026-03-29T19:59:00Z')).toBe(false) // 20:59 IST
+    expect(at('2026-03-29T20:00:00Z')).toBe(true) //  21:00 IST
+    expect(at('2026-10-24T07:00:00Z')).toBe(false) // 08:00 IST
+    expect(at('2026-10-25T07:59:00Z')).toBe(true) //  07:59 GMT
+    expect(at('2026-10-25T08:00:00Z')).toBe(false) // 08:00 GMT
+    expect(at('2026-07-01T20:30:00Z')).toBe(true) //  21:30 IST
+    expect(at('2026-07-01T20:30:00Z', { ...q, tz: 'UTC' })).toBe(false) // 20:30 UTC
+    expect(at('2026-12-31T23:30:00Z', { start: '09:00', end: '17:00' })).toBe(false)
+    expect(at('2026-12-31T12:00:00Z', { start: '09:00', end: '17:00' })).toBe(true)
+    expect(at('2026-12-31T23:30:00Z', null)).toBe(false)
+    expect(at('2026-12-31T23:30:00Z', { start: '21:00' })).toBe(false)
+    expect(at('2026-12-31T23:30:00Z', { start: '09:00', end: '09:00' })).toBe(false)
+    expect(at('2026-12-31T23:30:00Z', { ...q, tz: 'Not/AZone' })).toBe(false)
   })
-  it('reviewWindow and the Monday gate: every hour of 2026', () => {
-    for (const t of HOURS_2026) {
-      expect(reviewWindow(t, DUB)).toStrictEqual(LEGACY.reviewWindowLegacyDublin(t))
-      expect(isMondayIn(t, DUB)).toBe(LEGACY.isMondayLegacyDublin(t))
-    }
+  it('proactiveWindowOpen: daytime first, then the operator\'s quiet hours', () => {
+    expect(proactiveWindowOpen(ms('2026-07-01T12:00:00Z'), { quiet_hours: null }, DUB)).toStrictEqual({ open: true })
+    expect(proactiveWindowOpen(ms('2026-07-01T23:30:00Z'), { quiet_hours: null }, DUB)).toStrictEqual({ open: false, reason: 'outside_daytime' })
+    expect(proactiveWindowOpen(ms('2026-07-01T12:00:00Z'), { quiet_hours: { start: '09:00', end: '17:00' } }, DUB)).toStrictEqual({ open: false, reason: 'operator_quiet_hours' })
   })
-  it('formatClassTime: every hour of 2026', () => {
-    for (const t of HOURS_2026) expect(formatClassTime(t / 1000, DUB)).toBe(LEGACY.formatDublinClassTimeLegacyDublin(t / 1000))
+  it('reviewWindow: Dublin\'s yesterday, a 23-hour and a 25-hour day across the DST changes', () => {
+    expect(reviewWindow(ms('2026-03-30T03:00:00Z'), DUB)).toStrictEqual({
+      reviewDate: '2026-03-29', startIso: '2026-03-29T00:00:00.000Z', endIso: '2026-03-29T23:00:00.000Z',
+    })
+    expect(reviewWindow(ms('2026-10-26T03:00:00Z'), DUB)).toStrictEqual({
+      reviewDate: '2026-10-25', startIso: '2026-10-24T23:00:00.000Z', endIso: '2026-10-26T00:00:00.000Z',
+    })
+    expect(reviewWindow(ms('2026-07-15T03:00:00Z'), DUB)).toStrictEqual({
+      reviewDate: '2026-07-14', startIso: '2026-07-13T23:00:00.000Z', endIso: '2026-07-14T23:00:00.000Z',
+    })
+    expect(reviewWindow(ms('2026-12-31T03:00:00Z'), DUB)).toStrictEqual({
+      reviewDate: '2026-12-30', startIso: '2026-12-30T00:00:00.000Z', endIso: '2026-12-31T00:00:00.000Z',
+    })
   })
-  it('dateLabel: every calendar day of 2026 (zone-free now)', () => {
-    for (const d of DAYS_2026) expect(dateLabel(d)).toBe(LEGACY.dateLabelLegacyDublin(d))
+  it('isMondayIn: the Dublin day', () => {
+    expect(isMondayIn(ms('2026-03-29T22:59:00Z'), DUB)).toBe(false) // Sun 23:59 IST
+    expect(isMondayIn(ms('2026-03-29T23:30:00Z'), DUB)).toBe(true) //  Mon 00:30 IST
+    expect(isMondayIn(ms('2026-10-25T23:30:00Z'), DUB)).toBe(false) // Sun 23:30 GMT
+    expect(isMondayIn(ms('2026-10-26T00:00:00Z'), DUB)).toBe(true) //  Mon 00:00 GMT
   })
-  it('todayIn: every hour of 2026', () => {
-    for (const t of HOURS_2026) expect(todayIn(t, DUB)).toBe(LEGACY.dublinTodayLegacyDublin(t))
+  it('formatClassTime: Dublin wall clock either side of both DST changes', () => {
+    expect(formatClassTime(ms('2026-03-29T00:59:00Z') / 1000, DUB)).toBe('Sun 29 Mar, 00:59')
+    expect(formatClassTime(ms('2026-03-29T01:00:00Z') / 1000, DUB)).toBe('Sun 29 Mar, 02:00')
+    expect(formatClassTime(ms('2026-10-25T00:30:00Z') / 1000, DUB)).toBe('Sun 25 Oct, 01:30') // IST
+    expect(formatClassTime(ms('2026-10-25T01:30:00Z') / 1000, DUB)).toBe('Sun 25 Oct, 01:30') // GMT
+    expect(formatClassTime(ms('2026-07-01T23:30:00Z') / 1000, DUB)).toBe('Thu 2 Jul, 00:30')
+    expect(formatClassTime(ms('2026-12-31T23:30:00Z') / 1000, DUB)).toBe('Thu 31 Dec, 23:30')
   })
-  it('the tool shapers read the same labels with the Dublin zone as before (no zone = Dublin too)', () => {
+  it('dateLabel (zone-free) and todayIn', () => {
+    expect(dateLabel('2026-03-29')).toBe('Sun 29 Mar')
+    expect(dateLabel('2026-10-25')).toBe('Sun 25 Oct')
+    expect(dateLabel('2026-12-31')).toBe('Thu 31 Dec')
+    expect(todayIn(ms('2026-03-28T23:30:00Z'), DUB)).toBe('2026-03-28') // 23:30 GMT
+    expect(todayIn(ms('2026-03-29T23:30:00Z'), DUB)).toBe('2026-03-30') // 00:30 IST
+    expect(todayIn(ms('2026-10-24T23:30:00Z'), DUB)).toBe('2026-10-25') // 00:30 IST
+    expect(todayIn(ms('2026-10-25T23:30:00Z'), DUB)).toBe('2026-10-25') // 23:30 GMT
+  })
+  it('the tool shapers read Dublin labels with the Dublin zone (no zone = Dublin too)', () => {
     const now = ms('2026-10-24T22:00:00Z')
     const events = [{ _id: 'e1', name: 'HIIT', time_start: ms('2026-10-25T00:30:00Z') / 1000, size: 10, booked: 2 }]
-    const legacyTime = LEGACY.formatDublinClassTimeLegacyDublin(ms('2026-10-25T00:30:00Z') / 1000)
-    expect(shapeClassListForAgent(events, now, 15, DUB)[0].time).toBe(legacyTime)
-    expect(shapeClassListForAgent(events, now)[0].time).toBe(legacyTime)
+    const label = 'Sun 25 Oct, 01:30'
+    expect(shapeClassListForAgent(events, now, 15, DUB)[0].time).toBe(label)
+    expect(shapeClassListForAgent(events, now)[0].time).toBe(label)
     const bookings = [{ _id: 'b1', event_name: 'HIIT', status: 'BOOKED', time_start: ms('2026-10-25T00:30:00Z') / 1000 }]
-    expect(shapeMemberBookingsForAgent(bookings, now, 10, DUB)[0].time).toBe(legacyTime)
-    expect(formatNextClass(bookings, new Date(now), DUB).class_time).toBe(legacyTime)
-    expect(formatNextClass(bookings, new Date(now)).class_time).toBe(legacyTime)
+    expect(shapeMemberBookingsForAgent(bookings, now, 10, DUB)[0].time).toBe(label)
+    expect(formatNextClass(bookings, new Date(now), DUB).class_time).toBe(label)
+    expect(formatNextClass(bookings, new Date(now)).class_time).toBe(label)
   })
 })
 
@@ -295,13 +307,12 @@ describe('TZ.5 runAgentFollowups — each studio gets its own daytime', () => {
     expect(out).toEqual({ nudges: 0, templates: 0, skipped: 0, reason: 'quiet_hours' })
     expect(queriedLocations(db, 'whatsapp_conversations')).toEqual([])
   })
-  it('a Dublin-only estate decides exactly as before, hour by hour across the DST edges', async () => {
-    for (const iso of SAMPLES) {
+  it('a Dublin-only estate runs only inside Dublin daytime, across the DST edges', async () => {
+    for (const [iso, day] of DUBLIN_DAYTIME) {
       const db = runnerDb({ locations: [LOC_DUB] })
       const out = await runAgentFollowups(db, { nowMs: ms(iso) })
-      const legacyDay = LEGACY.withinDublinDaytimeLegacyDublin(ms(iso))
-      expect(out.reason).toBe(legacyDay ? undefined : 'quiet_hours')
-      expect(queriedLocations(db, 'whatsapp_conversations')).toEqual(legacyDay ? ['loc-dub'] : [])
+      expect(out.reason).toBe(day ? undefined : 'quiet_hours')
+      expect(queriedLocations(db, 'whatsapp_conversations')).toEqual(day ? ['loc-dub'] : [])
     }
   })
   it('an estate with no active location keeps the old platform-clock answer', async () => {
@@ -337,11 +348,11 @@ describe('TZ.5 runFirstClassCheckins — each studio gets its own daytime', () =
     expect(out.reasons).toEqual({ outside_daytime: 1 })
     expect(queriedLocations(db, 'contacts')).toEqual(['loc-dub'])
   })
-  it('a Dublin-only estate returns exactly the legacy tick shape', async () => {
-    for (const iso of SAMPLES) {
+  it('a Dublin-only estate returns the old tick shape, across the DST edges', async () => {
+    for (const [iso, day] of DUBLIN_DAYTIME) {
       const db = runnerDb({ locations: [LOC_DUB] })
       const out = await runFirstClassCheckins(db, { nowMs: ms(iso) })
-      if (LEGACY.withinDublinDaytimeLegacyDublin(ms(iso))) {
+      if (day) {
         expect(out).toEqual({ freeform: 0, templates: 0, skipped: 0, candidates: 0, reasons: {} })
       } else {
         expect(out).toEqual({ freeform: 0, templates: 0, skipped: 0, candidates: 0, reasons: {}, reason: 'quiet_hours' })
@@ -420,12 +431,16 @@ describe('TZ.5 runAgentReview — per-studio window and Monday', () => {
     expect(out.reviewed).toBe(2)
   })
 
-  it('a Dublin-only estate runs the one legacy window, unchanged', async () => {
-    for (const iso of ['2026-03-29T03:00:00Z', '2026-07-15T03:00:00Z', '2026-10-25T03:00:00Z', '2026-12-31T03:00:00Z']) {
+  it('a Dublin-only estate (Dublin + NULL column) runs the one Dublin window', async () => {
+    for (const [iso, w] of [
+      ['2026-03-30T03:00:00Z', ['2026-03-29T00:00:00.000Z', '2026-03-29T23:00:00.000Z']], // 23-hour day
+      ['2026-07-15T03:00:00Z', ['2026-07-13T23:00:00.000Z', '2026-07-14T23:00:00.000Z']],
+      ['2026-10-26T03:00:00Z', ['2026-10-24T23:00:00.000Z', '2026-10-26T00:00:00.000Z']], // 25-hour day
+      ['2026-12-31T03:00:00Z', ['2026-12-30T00:00:00.000Z', '2026-12-31T00:00:00.000Z']],
+    ]) {
       const db = reviewDb({ locations: [{ id: 'loc-dub', timezone: DUB }, { id: 'loc-dub2', timezone: null }], messages: [] })
       await runAgentReview(db, { nowMs: ms(iso) })
-      const w = LEGACY.reviewWindowLegacyDublin(ms(iso))
-      expect(candidateWindows(db)).toEqual([[w.startIso, w.endIso]])
+      expect(candidateWindows(db)).toEqual([w])
     }
   })
 

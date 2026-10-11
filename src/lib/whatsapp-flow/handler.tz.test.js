@@ -1,11 +1,10 @@
 // handler.tz.test.js — TZ.5. The Flow's class slot times are the studio's own
-// clock; a day title is the date itself. Europe/Dublin is byte-identical to the
-// frozen pre-change labels; a failed zone read still answers, on DEFAULT_TZ.
+// clock; a day title is the date itself; a failed zone read still answers, on
+// DEFAULT_TZ. The Dublin byte-identity sweep ran in TZ.5 and was retired in
+// TZ.18b: Europe/Dublin is pinned by fixed values below, and zoned-time ≡
+// dublin-time stays proven by shared/zoned-time.parity.test.js.
 process.env.TZ = 'America/Los_Angeles' // neither zone under test
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-
-// The identity tests walk every hour of 2026 through Intl (slow CI runners).
-vi.setConfig({ testTimeout: 30_000 })
 
 vi.mock('@/lib/booking-slots.js', () => ({ computeAvailableDays: vi.fn(), computeAvailableSlots: vi.fn() }))
 // TZ.17 — listPublicClasses' real shape carries `day`, the class's day on the
@@ -27,10 +26,6 @@ const { handleDataExchange, dayLabel, timeLabel } = await import('./handler.js')
 const { SCREEN } = await import('./screens.js')
 const { resetLocationZoneCache } = await import('@/lib/location-time')
 const { logWarn } = await import('@/lib/log')
-const LEGACY = await import('../agent/agent-zone.legacy-dublin.test-helpers.js')
-
-const H = 3600_000
-const ms = (iso) => Date.parse(iso)
 
 function zoneDb(answer) {
   const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => answer }
@@ -43,20 +38,21 @@ const slotTitles = async (db, day) => (await handleDataExchange(db, {
 
 beforeEach(() => { resetLocationZoneCache(); vi.clearAllMocks(); globalThis.__flowZone = 'Europe/Dublin' })
 
-describe('TZ.5 Europe/Dublin is byte-identical', () => {
-  it('dayLabel: every calendar day of 2026', () => {
-    for (let t = ms('2026-01-01T12:00:00Z'); t < ms('2027-01-01T00:00:00Z'); t += 24 * H) {
-      const d = new Date(t).toISOString().slice(0, 10)
-      expect(dayLabel(d)).toBe(LEGACY.flowDayLabelLegacyDublin(d))
-    }
+describe('TZ.5 Europe/Dublin pinned values', () => {
+  it('dayLabel: the date itself, across both DST Sundays', () => {
+    expect(dayLabel('2026-03-29')).toBe('Sun, 29 Mar')
+    expect(dayLabel('2026-07-01')).toBe('Wed, 1 Jul')
+    expect(dayLabel('2026-10-25')).toBe('Sun, 25 Oct')
+    expect(dayLabel('2026-12-31')).toBe('Thu, 31 Dec')
   })
-  it('timeLabel: every hour of 2026 (and the DST minutes)', () => {
-    const extra = ['2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z']
-    for (let t = ms('2026-01-01T00:00:00Z'); t < ms('2027-01-01T00:00:00Z'); t += H) {
-      const iso = new Date(t).toISOString()
-      expect(timeLabel(iso, 'Europe/Dublin')).toBe(LEGACY.flowTimeLabelLegacyDublin(iso))
-    }
-    for (const iso of extra) expect(timeLabel(iso, 'Europe/Dublin')).toBe(LEGACY.flowTimeLabelLegacyDublin(iso))
+  it('timeLabel: Dublin wall clock either side of both DST changes (zone omitted = Dublin)', () => {
+    expect(timeLabel('2026-03-29T00:59:00Z', 'Europe/Dublin')).toBe('00:59') // GMT
+    expect(timeLabel('2026-03-29T01:00:00Z', 'Europe/Dublin')).toBe('02:00') // IST
+    expect(timeLabel('2026-07-01T23:30:00Z', 'Europe/Dublin')).toBe('00:30')
+    expect(timeLabel('2026-10-25T00:59:00Z', 'Europe/Dublin')).toBe('01:59') // IST
+    expect(timeLabel('2026-10-25T01:00:00Z', 'Europe/Dublin')).toBe('01:00') // GMT
+    expect(timeLabel('2026-12-31T23:30:00Z', 'Europe/Dublin')).toBe('23:30')
+    expect(timeLabel('2026-07-01T23:30:00Z')).toBe('00:30')
   })
   it('a Dublin (or NULL) location shows the old slot titles', async () => {
     expect(await slotTitles(zoneDb({ data: { id: 'loc-x', timezone: 'Europe/Dublin' }, error: null }), '2026-07-02')).toEqual(['00:30 HIIT'])

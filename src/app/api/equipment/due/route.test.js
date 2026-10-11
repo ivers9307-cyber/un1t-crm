@@ -110,13 +110,11 @@ describe('GET /api/equipment/due — the studio\'s day (TZ.8b)', () => {
   })
 
   it('a Dublin studio is byte-identical to the old Dublin day (and a dormant one echoes it too)', async () => {
-    const { dublinTodayStr } = await import('@/lib/dublin-time')
-    for (const iso of ['2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z',
-      '2026-10-24T23:30:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z', '2026-12-31T23:30:00Z']) {
+    // TZ.18b: the old dublinTodayStr answers, pinned as literals.
+    for (const [iso, legacy] of [['2026-03-29T00:59:00Z', '2026-03-29'], ['2026-03-29T01:00:00Z', '2026-03-29'],
+      ['2026-06-30T22:59:00Z', '2026-06-30'], ['2026-06-30T23:00:00Z', '2026-07-01'], ['2026-10-24T23:30:00Z', '2026-10-25'],
+      ['2026-10-25T00:59:00Z', '2026-10-25'], ['2026-10-25T01:00:00Z', '2026-10-25'], ['2026-12-31T23:30:00Z', '2026-12-31']]) {
       const ms = Date.parse(iso)
-      vi.useFakeTimers({ toFake: ['Date'], now: ms })
-      const legacy = dublinTodayStr()
-      vi.useRealTimers()
       expect((await todayAt(ms, 'Europe/Dublin')).today).toBe(legacy)
       expect((await todayAt(ms, null)).today).toBe(legacy)
     }

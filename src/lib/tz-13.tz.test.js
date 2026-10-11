@@ -2,10 +2,12 @@
 // days journey counts days on the member's home studio clock, and the
 // post-class email labels and streaks on the session's studio clock.
 //
-// (1) Europe/Dublin is byte-identical to the frozen pre-change code
-// (tz-13.onboarding-journey.legacy-dublin.test-helpers.js); (2) America/New_York
-// follows New York across both 2026 US DST changes. The shared modules have
-// their own pair of tests in shared/__tests__/tz-13/member-zone.tz.test.js.
+// (1) Europe/Dublin is pinned by fixed values around both 2026 EU DST changes
+// (the byte-identity sweep against a frozen pre-change copy ran in TZ.13 and was
+// retired in TZ.18b; zoned-time ≡ dublin-time stays proven by
+// shared/zoned-time.parity.test.js); (2) America/New_York follows New York
+// across both 2026 US DST changes. The shared modules have their own pair of
+// tests in shared/__tests__/tz-13/member-zone.tz.test.js.
 process.env.TZ = 'America/Los_Angeles' // host zone is neither zone under test
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -14,7 +16,6 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.f
 vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ shortName: 'UN1T', companyName: 'UN1T Stillorgan' })) }))
 
 const OJ = await import('./onboarding-journey.js')
-const LEGACY_OJ = await import('./tz-13.onboarding-journey.legacy-dublin.test-helpers.js')
 const { composeEmail, loadContextForSession } = await import('./hr-post-class-email.js')
 
 const DUB = 'Europe/Dublin'
@@ -28,30 +29,36 @@ const SAMPLES = [
   '2026-11-01T04:59:00Z', '2026-11-01T05:00:00Z', '2026-11-01T06:00:00Z',
   '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-12-31T23:30:00Z',
 ].map(Date.parse)
-const NOWS = (() => {
-  const out = [...SAMPLES]
-  for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += DAY) out.push(t + 30 * 60_000, t + 23.5 * HOUR)
-  return out
-})()
 
-describe('TZ.13 Europe/Dublin is byte-identical: the onboarding journey', () => {
-  it('daysBetweenIn / journeyStatus over every day of 2026', () => {
+describe('TZ.13 Europe/Dublin pinned values: the onboarding journey', () => {
+  it('daysBetweenIn counts Dublin calendar days across both EU clock changes', () => {
+    const d = (a, b, ...zone) => OJ.daysBetweenIn(Date.parse(a), Date.parse(b), ...zone)
+    expect(d('2026-03-28T23:30:00Z', '2026-03-29T23:30:00Z', DUB)).toBe(2) // 23:30 GMT Sat → 00:30 IST Mon
+    expect(d('2026-03-29T00:30:00Z', '2026-03-29T22:30:00Z', DUB)).toBe(0) // 00:30 GMT → 23:30 IST, both Sun
+    expect(d('2026-03-29T22:30:00Z', '2026-03-29T23:30:00Z', DUB)).toBe(1) // one hour across IST midnight
+    expect(d('2026-10-24T22:30:00Z', '2026-10-24T23:30:00Z', DUB)).toBe(1) // 23:30 IST Sat → 00:30 IST Sun
+    expect(d('2026-10-24T23:30:00Z', '2026-10-25T23:30:00Z', DUB)).toBe(0) // 24 hours inside the 25-hour Sunday
+    expect(d('2026-07-01T22:30:00Z', '2026-07-01T23:30:00Z')).toBe(1) // zone omitted = Dublin
+    expect(d('2026-01-15T23:30:00Z', '2026-01-16T00:30:00Z')).toBe(1)
+    expect(d('2026-03-28T23:30:00Z', '2026-03-29T23:30:00Z')).toBe(2) // 23:30 GMT Sat → 00:30 IST Mon
+  })
+  it('journeyStatus: the day index is the Dublin day (explicit or omitted zone)', () => {
     const config = { windowDays: 42, targetClasses: 3 }
-    for (const now of NOWS) {
-      for (const back of [0.5, 23.5, 24.5, 10 * 24 + 0.5, 43 * 24]) {
-        const joined = now - back * HOUR
-        expect(OJ.daysBetweenIn(joined, now, DUB)).toBe(LEGACY_OJ.dublinDaysBetween(joined, now))
-        expect(OJ.dublinDaysBetween(joined, now)).toBe(LEGACY_OJ.dublinDaysBetween(joined, now))
-      }
-      const args = {
+    const at = (s) => {
+      const now = Date.parse(s)
+      return {
         joinedAt: new Date(now - 20 * DAY - 0.5 * HOUR).toISOString(),
         attendedAt: [now - 19 * DAY - 23.5 * HOUR, now - 11 * DAY, now - 0.5 * HOUR].map((t) => new Date(t).toISOString()),
         now,
         config,
       }
-      expect(OJ.journeyStatus(args, DUB)).toStrictEqual(LEGACY_OJ.journeyStatus(args))
-      expect(OJ.journeyStatus(args)).toStrictEqual(LEGACY_OJ.journeyStatus(args))
     }
+    // Joined 23:00 GMT Mon 9 Mar; now 00:30 IST Mon 30 Mar: day 21.
+    expect(OJ.journeyStatus(at('2026-03-29T23:30:00Z'), DUB)).toMatchObject({ dayIndex: 21, weekIndex: 4, attended: 3, status: 'completed', completedAt: '2026-03-29T23:00:00.000Z', completedDaysAgo: 0 })
+    expect(OJ.journeyStatus(at('2026-07-01T23:30:00Z'))).toMatchObject({ dayIndex: 20, weekIndex: 3, status: 'completed' })
+    // Joined 00:00 IST Tue 6 Oct; now 23:30 GMT Sun 25 Oct: day 19.
+    expect(OJ.journeyStatus(at('2026-10-25T23:30:00Z'), DUB)).toMatchObject({ dayIndex: 19, weekIndex: 3, lastAttendedAt: '2026-10-25T23:00:00.000Z' })
+    expect(OJ.journeyStatus(at('2026-01-15T12:00:00Z'), DUB)).toMatchObject({ dayIndex: 20, inWindow: true, expectedByNow: 1 })
   })
 })
 

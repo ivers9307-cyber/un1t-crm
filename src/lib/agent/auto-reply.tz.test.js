@@ -1,7 +1,10 @@
 // auto-reply.tz.test.js — TZ.5. Mia's live reply path reads the studio's
 // clock from the location row it already loads: quiet hours with no stored tz,
 // "Today's date" in the prompt, and the zone handed to every tool (toolCtx.zone).
-// Europe/Dublin (and a NULL column) behave exactly as before.
+// Europe/Dublin (and a NULL column) behave exactly as before. The Dublin
+// byte-identity sweep ran in TZ.5 and was retired in TZ.18b: Dublin is pinned
+// by fixed values below; zoned-time ≡ dublin-time stays proven by
+// shared/zoned-time.parity.test.js.
 process.env.TZ = 'America/Los_Angeles' // neither zone under test
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -37,7 +40,6 @@ vi.mock('./card-tools', () => ({ CARD_TOOLS: [], CARD_TOOL_NAMES: new Set(), exe
 
 const { runChannelAgent } = await import('./auto-reply')
 const { executeAccountTool } = await import('./account-tools')
-const { dublinTodayStrLegacyDublin } = await import('./agent-zone.legacy-dublin.test-helpers.js')
 
 // Every query answered; the location row carries the zone under test.
 function zoneDb({ timezone, settings }) {
@@ -118,13 +120,18 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('TZ.5 Europe/Dublin is byte-identical', () => {
-  it.each(['2026-03-29T00:30:00Z', '2026-07-01T12:00:00Z', '2026-10-24T23:30:00Z', '2026-12-31T23:30:00Z'])('%s: the prompt\'s today is the Dublin day (Dublin or NULL column)', async (iso) => {
+describe('TZ.5 Europe/Dublin pinned values', () => {
+  it.each([
+    ['2026-03-29T00:30:00Z', '2026-03-29'], // 00:30 GMT, just before the spring-forward
+    ['2026-07-01T12:00:00Z', '2026-07-01'], // summer midday
+    ['2026-10-24T23:30:00Z', '2026-10-25'], // 00:30 IST, just before the fall-back
+    ['2026-12-31T23:30:00Z', '2026-12-31'], // winter: 23:30 GMT
+  ])('%s: the prompt\'s today is the Dublin day %s (Dublin or NULL column)', async (iso, day) => {
     for (const timezone of ['Europe/Dublin', null]) {
       vi.setSystemTime(new Date(iso))
       vi.stubGlobal('fetch', vi.fn(async () => text('Yes, 7pm.')))
       await runChannelAgent(zoneDb({ timezone, settings: { enabled: true } }), makeAdapter(), ctx)
-      expect(todayInPrompt()).toBe(dublinTodayStrLegacyDublin())
+      expect(todayInPrompt()).toBe(day)
     }
   })
   it('quiet hours with no stored tz are still read in Dublin for a Dublin studio', async () => {

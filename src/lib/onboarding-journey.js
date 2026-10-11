@@ -83,11 +83,6 @@ export function daysBetweenIn(aMs, bMs, zone = DEFAULT_TZ) {
   return dayKeyToEpochDays(dateKeyIn(bMs, zone)) - dayKeyToEpochDays(dateKeyIn(aMs, zone))
 }
 
-/** The Europe/Dublin form of daysBetweenIn, kept for its existing callers. */
-export function dublinDaysBetween(aMs, bMs) {
-  return daysBetweenIn(aMs, bMs)
-}
-
 /**
  * Where a member sits on their first-N-days journey.
  *

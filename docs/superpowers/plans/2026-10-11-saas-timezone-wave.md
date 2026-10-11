@@ -295,6 +295,8 @@ How each sweep keeps `LEGACY`: before editing, the task copies the function's cu
 
 **Order.** TZ.1 lands first. TZ.18a lands straight after it: from then on each sweep's first step is "remove my files from the baseline → lint fails". TZ.2 and TZ.3 run in parallel with the sweeps. The sweeps are independent of each other except TZ.14 after TZ.13 (the phone imports the shared signatures) and TZ.11b after TZ.15. Merge OTA tasks one at a time (TZ.1, TZ.8a, TZ.9, TZ.11a, TZ.13, TZ.14, TZ.17), never two inside one ramp.
 
+**Status (11 Oct 2026):** every task merged except TZ.18b. TZ.1 #2018 · TZ.18a #2019 · TZ.1b #2020 · TZ.2 #2021 · TZ.7 #2024 · TZ.4 #2025 · TZ.5 #2026 · TZ.3 #2027 · TZ.10 #2028 · TZ.12 #2030 · TZ.9 #2031 · TZ.6 #2032 · TZ.11c #2033 · TZ.8a #2034 · TZ.11a #2035 · TZ.15 #2036 · TZ.13 #2037 · TZ.16 #2038 · TZ.14 #2039 · TZ.8b #2040 · TZ.17 #2041 · TZ.18b #2042 (open). TZ.11b dropped (D5 = B).
+
 **Migrations in prefix order:** 719 (TZ.2), 720 (TZ.6), 721 (TZ.15), 722 (TZ.11b, conditional). All are forward-only. The orchestrator applies each via `apply_migration` on `iyvtbjjxdggiadzwwvdj` BEFORE its PR merges, then runs `get_advisors(type=security)` and the task's verify SQL. If a concurrent PR takes a number first, take the next free one; duplicate prefixes are allowed by convention.
 
 ## File structure (what changes where)
@@ -1524,14 +1526,21 @@ select pg_get_expr(polqual, polrelid) from pg_policy where polname = 'challenges
 
 **Files:** `eslint.guardrails.config.mjs`, `eslint-rules/dublin-zone-baseline.json` (deleted), `tests/dublin-zone-baseline.test.js` (deleted), every `*.legacy-dublin.test-helpers.js` and the `<area>.tz.test.js` cases that import them (the byte-identity half is retired; the NY half stays), `shared/events.js` (`todayIsoDublin` alias deleted), `CLAUDE.md`.
 
-- [ ] **Step 1:** `grep -cv '^#' eslint-rules/dublin-zone-baseline.txt` is 0 (then delete it, the `.tz18a-snapshot.txt` and `scripts/check-dublin-zone.mjs`'s baseline handling). If it is not, a sweep is unfinished: stop.
-- [ ] **Step 2:** delete the baseline and its test; the config block keeps only `DUBLIN_ZONE_ALLOW`. `npm run check:guardrails` → PASS.
-- [ ] **Step 3:** CLAUDE.md "Timezones" bullet (`:77`) becomes:
+- [x] **Step 1:** `grep -cv '^#' eslint-rules/dublin-zone-baseline.txt` is 0 (then delete it, the `.tz18a-snapshot.txt` and `scripts/check-dublin-zone.mjs`'s baseline handling). If it is not, a sweep is unfinished: stop.
+- [x] **Step 2:** delete the baseline and its test; the config block keeps only `DUBLIN_ZONE_ALLOW`. `npm run check:guardrails` → PASS.
+- [x] **Step 3:** CLAUDE.md "Timezones" bullet (`:77`) becomes:
 
   > **A studio's clock is `locations.timezone`.** Wall-clock columns (`bookings.booking_date/start_time`, `shift_blocks`, `race_events`, quiet hours, schedules) are local time in their row's location zone. Convert with `zonedWallClockToInstant(date, time, zone)` from `@/lib/location-time` (phone and shared: `shared/zoned-time`). "Today" is `todayStrIn(zone)`. Platform-level decisions use `PLATFORM_TZ`. `guardrails/no-hardcoded-dublin-zone` bans the literal and `dublin-time` imports; `no-utc-today`/`no-zulu-template-date` still apply.
 
   Update the `no-utc-today` message in `eslint-rules/index.mjs:177` to name `todayStrIn(zone)`.
-- [ ] **Step 4:** `npx vitest run --maxWorkers=2 tests/guardrails-rules.test.js tests/shared-pair-sync.test.js` → PASS. PR ritual. Changelog: `TZ.18b — the Dublin-zone baseline is empty: the literal and dublin-time imports are banned outright; CLAUDE.md timezone rule rewritten`.
+- [x] **Step 4:** `npx vitest run --maxWorkers=2 tests/guardrails-rules.test.js tests/shared-pair-sync.test.js` → PASS. PR ritual. Changelog: `TZ.18b — the Dublin-zone baseline is empty: the literal and dublin-time imports are banned outright; CLAUDE.md timezone rule rewritten`.
+
+**As built (TZ.18b, 11 Oct 2026; supersedes the steps where they differ):**
+- The 7 lines no sweep claimed were fixed here, so the baseline reached 0 and was deleted with its frozen snapshot: `cron/agent-followups/route.js` (the platform-wide check-in rollup row's day key → `dayStrIn(…, PLATFORM_TZ)`, D4), `class-occurrences.js` (the 04:00 Glofox trainer-lookup ops throttle → `timeLabelIn(…, PLATFORM_TZ)`), `approvals/event-move-card.js` (a DATE column formatted in UTC at noon UTC: zone-free, same text), and `schedule/week-cost/route.js`, `recon/hunt-queries.js`, `report-period.js`, `roster-grid-data.js` (zone-free `addDaysISO` from zoned-time). Dublin pinned in `src/lib/tz-18b.tz.test.js` and the agent-followups route test.
+- `scripts/check-dublin-zone.mjs` has no baseline handling. Non-test files: the literal and `dublin-time` imports fail. Test files (and `tests/**`, now linted too) run the rule with `{ literals: false }`: they may name the zone, never import `dublin-time`. Allowlist: `shared/zoned-time.js`, the two `dublin-time` modules (champ-app mirrors `shared/dublin-time`), their own tests, `shared/zoned-time.parity.test.js`. `tests/dublin-zone-baseline.test.js` became `tests/dublin-zone-guard.test.js`.
+- All 31 `*.legacy-dublin.test-helpers.js` files deleted (incl. `shared/__tests__/tz-13/`'s 14 frozen copies). Each `<area>.tz.test.js` kept its New York/DST half; its byte-identity half became a short "Europe/Dublin pinned values" block (fixed literals around both 2026 EU changes, read off the code the identity tests had just proven). zoned-time ≡ dublin-time stays proven by `shared/zoned-time.parity.test.js`. TZ.7's and TZ.13's TZ.17 exclusions went with their identity blocks.
+- Aliases removed (no callers left in `src/`, `shared/`, `mobile/`, or champ-app `origin/main`): `todayIsoDublin` (shared/events, OTA), `isoToDublinInputs`/`dublinLocalToIso`/`dublinScheduleLabel`, `dublinDateStr`/`dublinWeekday`, `dublinWeekWindow`, `dublinDaysBetween`; `dublinMonthStartStr` renamed `platformMonthStartStr` (D5).
+- Not done here (follow-up): merging `mobile/lib/studio-zone.js` with `src/lib/record-time.js`'s suffix helper into `shared/` (not in this task's scope).
 
 ---
 

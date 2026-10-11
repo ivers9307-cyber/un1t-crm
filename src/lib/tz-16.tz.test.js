@@ -2,10 +2,11 @@
 // screens render each record's instant in its studio's zone, and name the zone
 // only when it differs from the viewer's.
 //
-// Pinned against the FROZEN pre-change bodies (tz-16.legacy-dublin.test-helpers.js):
-//   • Europe/Dublin record + Dublin viewer (and an unknown viewer): identical
-//     text, every hour of 2026, every quarter-hour of both EU change nights, and
-//     the house sample instants.
+//   • Europe/Dublin record + Dublin viewer (and an unknown viewer): pinned by
+//     fixed text around both 2026 EU DST changes. (TZ.16 proved it byte-identical
+//     to frozen pre-change bodies over every hour of 2026; that sweep was retired
+//     in TZ.18b, and zoned-time ≡ dublin-time stays proven by
+//     shared/zoned-time.parity.test.js.)
 //   • America/New_York: the studio's own wall clock across both 2026 US DST
 //     changes, with EST/EDT appended for a Dublin viewer and nothing for a New
 //     York one.
@@ -15,7 +16,6 @@ import { describe, it, expect, vi } from 'vitest'
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh() {}, push() {} }), useSearchParams: () => new URLSearchParams() }))
 
-const L = await import('./tz-16.legacy-dublin.test-helpers.js')
 const { formatRecordTime } = await import('./record-time.js')
 const C = await import('./contract-display-time.js')
 const { nextClassLabel } = await import('../components/contact/format.js')
@@ -39,79 +39,100 @@ const NY = 'America/New_York'
 
 // US DST 2026: spring forward Sun 8 Mar 02:00 → 03:00; fall back Sun 1 Nov 02:00 → 01:00.
 // EU DST 2026: spring forward Sun 29 Mar 01:00Z; fall back Sun 25 Oct 01:00Z.
-const SAMPLES = [
-  '2026-03-07T04:30:00Z', '2026-03-08T06:59:00Z', '2026-03-08T07:00:00Z',
-  '2026-03-28T23:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z',
-  '2026-10-24T23:30:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z',
-  '2026-11-01T04:59:00Z', '2026-11-01T05:00:00Z', '2026-11-01T06:00:00Z',
-  '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-12-31T23:30:00Z',
-]
-const ISOS = (() => {
-  const out = [...SAMPLES]
-  for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 3600_000) out.push(new Date(t).toISOString())
-  for (const from of [Date.UTC(2026, 2, 28, 22), Date.UTC(2026, 9, 24, 22)]) {
-    for (let t = from; t < from + 6 * 3600_000; t += 15 * 60_000) out.push(new Date(t).toISOString())
-  }
-  return out
-})()
+// The Dublin pins: a winter afternoon; both sides of the spring-forward; 00:30
+// IST on 2 Jul (a different day from UTC); both 01:30s of the fall-back night.
+const PINS = ['2026-01-15T14:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', '2026-07-01T23:30:00Z', '2026-10-25T00:30:00Z', '2026-10-25T01:30:00Z']
 // Inputs the sites guard: absent, empty, unparseable.
 const EDGE = [null, undefined, '', 'not-a-date']
 
-// [name, legacy(iso), new(iso, zone, viewerZone)]
+// [name, render(iso, zone, viewerZone), Dublin text at PINS, Dublin text at EDGE]
 const SITES = [
-  ['contracts fmtDate (team detail, team list, templates, account detail)', L.contractFmtDateLegacyDublin, C.contractStamp],
-  ['account contracts list fmtDate', L.accountContractListFmtLegacyDublin, C.contractDay],
-  ['contract SignatureBlock', L.contractSignedLegacyDublin, C.contractSignedStamp],
-  ['AcControlPanel asOfLabel', L.acAsOfLabelLegacyDublin, asOfLabel],
-  ['CalendarFeedCard stamp', L.calendarFeedStampLegacyDublin, feedStamp],
-  ['next-class chip (DealCard, ContactDrawer, ContactHeaderBand)', L.nextClassLabelLegacyDublin, nextClassLabel],
-  ['InvoicesManager formatDay', L.invoiceFormatDayLegacyDublin, formatDay],
-  ['OfferSalesList paid time', L.offerSalesTimeLegacyDublin, paidAtLabel],
-  ['OrderDetail fmtDateTime', L.orderDetailDateTimeLegacyDublin, fmtDateTime],
-  ['OrdersTable row', L.orderRowDateLegacyDublin, orderRowDate],
-  ['OrdersTable card', L.orderCardDateLegacyDublin, orderCardDate],
-  ['ClassClimateCard class time', L.climateFmtLegacyDublin, classClimateTime],
-  ['BathroomClimateCard class time', L.climateFmtLegacyDublin, bathroomClimateTime],
-  ['AdsRefreshButton last synced', L.adsFmtSyncedLegacyDublin, fmtSynced],
-  ['HostEmailReport formatWhen', L.hostFormatWhenLegacyDublin, formatWhen],
-  ['email-forward Date header', L.forwardTimestampLegacyDublin, (iso, zone) => forwardTimestamp(iso, zone)],
-  ['reply attribution stamp', L.attributionStampLegacyDublin, (iso, zone) => attributionStamp(iso, zone)],
-  ['sale deadline (upper)', L.formatSaleDeadlineLegacyDublin, (iso, zone) => formatSaleDeadline(iso, { zone })],
-  ['sale deadline (lower)', (iso) => L.formatSaleDeadlineLegacyDublin(iso, { uppercase: false }), (iso, zone) => formatSaleDeadline(iso, { uppercase: false, zone })],
+  ['contracts fmtDate (team detail, team list, templates, account detail)', C.contractStamp,
+    ['15 Jan 2026, 14:30', '29 Mar 2026, 00:59', '29 Mar 2026, 02:00', '2 Jul 2026, 00:30', '25 Oct 2026, 01:30', '25 Oct 2026, 01:30'],
+    ['', '', '', 'Invalid Date']],
+  ['account contracts list fmtDate', C.contractDay,
+    ['15 Jan 2026', '29 Mar 2026', '29 Mar 2026', '2 Jul 2026', '25 Oct 2026', '25 Oct 2026'],
+    ['', '', '', 'Invalid Date']],
+  ['contract SignatureBlock', C.contractSignedStamp,
+    ['15/1/2026, 14:30:00', '29/3/2026, 00:59:00', '29/3/2026, 02:00:00', '2/7/2026, 00:30:00', '25/10/2026, 01:30:00', '25/10/2026, 01:30:00'],
+    ['1/1/1970, 01:00:00', 'Invalid Date', 'Invalid Date', 'Invalid Date']],
+  ['AcControlPanel asOfLabel', asOfLabel,
+    ['14:30', '00:59', '02:00', '00:30', '01:30', '01:30'],
+    [null, null, null, null]],
+  ['CalendarFeedCard stamp', feedStamp,
+    ['15 Jan, 14:30', '29 Mar, 00:59', '29 Mar, 02:00', '2 Jul, 00:30', '25 Oct, 01:30', '25 Oct, 01:30'],
+    [null, null, null, null]],
+  ['next-class chip (DealCard, ContactDrawer, ContactHeaderBand)', nextClassLabel,
+    ['Thu, 15 Jan', 'Sun, 29 Mar', 'Sun, 29 Mar', 'Thu, 2 Jul', 'Sun, 25 Oct', 'Sun, 25 Oct'],
+    ['Thu, 1 Jan', 'Invalid Date', 'Invalid Date', 'Invalid Date']],
+  ['InvoicesManager formatDay', formatDay,
+    ['15 Jan 2026', '29 Mar 2026', '29 Mar 2026', '2 Jul 2026', '25 Oct 2026', '25 Oct 2026'],
+    ['an unknown date', 'an unknown date', 'an unknown date', 'Invalid Date']],
+  ['OfferSalesList paid time', paidAtLabel,
+    ['Thu, 15 Jan, 14:30', 'Sun, 29 Mar, 00:59', 'Sun, 29 Mar, 02:00', 'Thu, 2 Jul, 00:30', 'Sun, 25 Oct, 01:30', 'Sun, 25 Oct, 01:30'],
+    ['', '', '', 'Invalid Date']],
+  ['OrderDetail fmtDateTime', fmtDateTime,
+    ['15 Jan 2026, 14:30', '29 Mar 2026, 00:59', '29 Mar 2026, 02:00', '2 Jul 2026, 00:30', '25 Oct 2026, 01:30', '25 Oct 2026, 01:30'],
+    ['', '', '', 'Invalid Date']],
+  ['OrdersTable row', orderRowDate,
+    ['15 Jan 2026, 14:30', '29 Mar 2026, 00:59', '29 Mar 2026, 02:00', '2 Jul 2026, 00:30', '25 Oct 2026, 01:30', '25 Oct 2026, 01:30'],
+    ['', '', '', 'Invalid Date']],
+  ['OrdersTable card', orderCardDate,
+    ['15 Jan, 14:30', '29 Mar, 00:59', '29 Mar, 02:00', '2 Jul, 00:30', '25 Oct, 01:30', '25 Oct, 01:30'],
+    ['', '', '', 'Invalid Date']],
+  ['ClassClimateCard class time', classClimateTime,
+    ['Thu, 15 Jan, 14:30', 'Sun, 29 Mar, 00:59', 'Sun, 29 Mar, 02:00', 'Thu, 02 Jul, 00:30', 'Sun, 25 Oct, 01:30', 'Sun, 25 Oct, 01:30'],
+    ['', '', '', 'Invalid Date']],
+  ['BathroomClimateCard class time', bathroomClimateTime,
+    ['Thu, 15 Jan, 14:30', 'Sun, 29 Mar, 00:59', 'Sun, 29 Mar, 02:00', 'Thu, 02 Jul, 00:30', 'Sun, 25 Oct, 01:30', 'Sun, 25 Oct, 01:30'],
+    ['', '', '', 'Invalid Date']],
+  ['AdsRefreshButton last synced', fmtSynced,
+    ['15 Jan, 14:30', '29 Mar, 00:59', '29 Mar, 02:00', '2 Jul, 00:30', '25 Oct, 01:30', '25 Oct, 01:30'],
+    ['never', 'never', 'never', 'unknown']],
+  ['HostEmailReport formatWhen', formatWhen,
+    ['15 Jan, 14:30', '29 Mar, 00:59', '29 Mar, 02:00', '2 Jul, 00:30', '25 Oct, 01:30', '25 Oct, 01:30'],
+    ['', '', '', '']],
+  ['email-forward Date header', (iso, zone) => forwardTimestamp(iso, zone),
+    ['Thu 15 Jan 2026, 14:30', 'Sun 29 Mar 2026, 00:59', 'Sun 29 Mar 2026, 02:00', 'Thu 2 Jul 2026, 00:30', 'Sun 25 Oct 2026, 01:30', 'Sun 25 Oct 2026, 01:30'],
+    ['', '', '', '']],
+  ['reply attribution stamp', (iso, zone) => attributionStamp(iso, zone),
+    ['Thu 15 Jan 2026 at 14:30', 'Sun 29 Mar 2026 at 00:59', 'Sun 29 Mar 2026 at 02:00', 'Thu 2 Jul 2026 at 00:30', 'Sun 25 Oct 2026 at 01:30', 'Sun 25 Oct 2026 at 01:30'],
+    ['', '', '', '']],
+  ['sale deadline (upper)', (iso, zone) => formatSaleDeadline(iso, { zone }),
+    ['THURSDAY 15 JANUARY, 14:30', 'SUNDAY 29 MARCH, 00:59', 'SUNDAY 29 MARCH, 02:00', 'THURSDAY 2 JULY, 00:30', 'SUNDAY 25 OCTOBER, 01:30', 'SUNDAY 25 OCTOBER, 01:30'],
+    ['', '', '', '']],
+  ['sale deadline (lower)', (iso, zone) => formatSaleDeadline(iso, { uppercase: false, zone }),
+    ['Thursday 15 January, 14:30', 'Sunday 29 March, 00:59', 'Sunday 29 March, 02:00', 'Thursday 2 July, 00:30', 'Sunday 25 October, 01:30', 'Sunday 25 October, 01:30'],
+    ['', '', '', '']],
 ]
 
 // The two page-local formatters (a Next page file may export only its route
 // fields), pinned by the exact call they now make.
 const PAGE_SITES = [
-  ['list-health dateLabel', L.listHealthDateLabelLegacyDublin, (iso, zone, viewer) => {
+  ['list-health dateLabel', (iso, zone, viewer) => {
     if (!iso) return 'Not recorded'
     const d = new Date(iso)
     if (Number.isNaN(d.getTime())) return 'Not recorded'
     return formatRecordTime(d, zone, { day: '2-digit', month: 'short', year: 'numeric' }, 'en-IE', viewer)
-  }],
-  ['welcome status "updated"', (iso) => L.statusUpdatedLegacyDublin(new Date(iso)), (iso, zone) => formatRecordTime(new Date(iso), zone, { hour: '2-digit', minute: '2-digit' }, 'en-IE')],
+  }, ['15 Jan 2026', '29 Mar 2026', '29 Mar 2026', '02 Jul 2026', '25 Oct 2026', '25 Oct 2026']],
+  ['welcome status "updated"', (iso, zone) => formatRecordTime(new Date(iso), zone, { hour: '2-digit', minute: '2-digit' }, 'en-IE'),
+    ['14:30', '00:59', '02:00', '00:30', '01:30', '01:30']],
 ]
 
-describe('TZ.16 Europe/Dublin is byte-identical (Dublin record, Dublin or unknown viewer)', () => {
-  it.each([...SITES, ...PAGE_SITES])('%s', (_name, legacy, next) => {
-    for (const iso of ISOS) {
-      const want = legacy(iso)
-      expect(next(iso, D, D)).toBe(want)
-      expect(next(iso, D, null)).toBe(want)
-    }
+describe('TZ.16 Europe/Dublin pinned values (Dublin record, Dublin or unknown viewer)', () => {
+  it.each([...SITES, ...PAGE_SITES])('%s', (_name, next, want) => {
+    expect(PINS.map((iso) => next(iso, D, D))).toEqual(want)
+    expect(PINS.map((iso) => next(iso, D, null))).toEqual(want)
   })
-  it.each(SITES)('%s on absent or unparseable input', (_name, legacy, next) => {
-    for (const bad of EDGE) {
-      let want
-      try { want = legacy(bad) } catch (e) { want = `throws ${e.constructor.name}` }
-      let got
-      try { got = next(bad, D, D) } catch (e) { got = `throws ${e.constructor.name}` }
-      expect(got).toBe(want)
-    }
+  it.each(SITES)('%s on absent or unparseable input', (_name, next, _want, wantEdge) => {
+    expect(EDGE.map((bad) => next(bad, D, D))).toEqual(wantEdge)
   })
-  it('the audit log stays on the platform zone (D4): identical, and never suffixed', () => {
-    for (const iso of ISOS) expect(fmtDt(iso)).toBe(L.auditFmtDtLegacyDublin(iso))
-    for (const bad of EDGE) expect(fmtDt(bad)).toBe(L.auditFmtDtLegacyDublin(bad))
+  it('the audit log stays on the platform zone (D4), and is never suffixed', () => {
+    expect(PINS.map((iso) => fmtDt(iso))).toEqual([
+      '15 Jan 2026, 14:30:00', '29 Mar 2026, 00:59:00', '29 Mar 2026, 02:00:00',
+      '02 Jul 2026, 00:30:00', '25 Oct 2026, 01:30:00', '25 Oct 2026, 01:30:00',
+    ])
+    expect(EDGE.map((bad) => fmtDt(bad))).toEqual(['—', '—', '—', 'Invalid Date'])
   })
   it('a forward and a reply quote built without a zone are the Dublin text', () => {
     const message = { from_email: 'member@example.test', sent_at: '2026-07-01T08:05:00Z', subject: 'Hi', to_emails: ['desk@example.test'], text_body: 'Hello' }
@@ -141,7 +162,7 @@ describe('TZ.16 America/New_York follows New York across DST', () => {
   })
   it('every site renders 09:00 for a 09:00 New York instant, in summer (13:00Z) and winter (14:00Z)', () => {
     for (const iso of ['2026-07-01T13:00:00Z', '2026-12-01T14:00:00Z']) {
-      for (const [name, , next] of SITES) {
+      for (const [name, next] of SITES) {
         if (name.startsWith('next-class') || name.startsWith('InvoicesManager') || name.startsWith('account contracts')) continue // date-only
         expect(next(iso, NY, NY), name).toMatch(/09:00/)
       }

@@ -1,56 +1,53 @@
 // TZ.14 — staff screens read a record in its studio's zone (D3 = A), with the
 // zone's abbreviation only when that zone is not the phone's own.
+//
+// The Europe/Dublin byte-identity sweep against a frozen pre-change copy ran in
+// TZ.14 and was retired in TZ.18b: Dublin is pinned below by fixed values, and
+// zoned-time ≡ dublin-time stays proven by shared/zoned-time.parity.test.js.
 process.env.TZ = 'America/Los_Angeles' // neither zone under test: nothing may read the host clock
 import { describe, it, expect, beforeEach } from 'vitest'
 
 const Z = await import('./studio-zone.js')
-const L = await import('./tz14-screens.legacy-dublin.test-helpers.js')
 const { reviewComparisonView } = await import('./invoice-review.js')
 
 const DUB = 'Europe/Dublin'
 const NY = 'America/New_York'
-const SAMPLES = [
-  '2026-03-07T04:30:00Z', '2026-03-08T06:59:00Z', '2026-03-08T07:00:00Z',
-  '2026-03-28T23:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z',
-  '2026-10-24T23:30:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z',
-  '2026-11-01T04:59:00Z', '2026-11-01T05:00:00Z', '2026-11-01T06:00:00Z',
-  '2026-06-30T22:59:00Z', '2026-06-30T23:00:00Z', '2026-12-31T23:30:00Z',
-]
-// Every day of 2026 at four instants, incl. both sides of Dublin midnight.
-const DAYS_2026 = []
-for (let ms = Date.UTC(2026, 0, 1); ms < Date.UTC(2027, 0, 1); ms += 86_400_000) {
-  for (const h of [0, 7, 22.5, 23.5]) DAYS_2026.push(new Date(ms + h * 3_600_000).toISOString())
-}
-const ALL = [...SAMPLES, ...DAYS_2026]
+// Winter; both sides of the EU spring-forward (29 Mar 01:00Z); 00:30 IST on
+// 2 Jul (the day differs from UTC); both 01:30s of the EU fall-back (25 Oct 01:00Z).
+const P = ['2026-01-15T14:30:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', '2026-07-01T23:30:00Z', '2026-10-25T00:30:00Z', '2026-10-25T01:30:00Z']
 
-describe('TZ.14 Europe/Dublin renders byte-identically (viewer on Dublin)', () => {
+describe('TZ.14 Europe/Dublin pinned values (viewer on Dublin)', () => {
   it('contract detail date+time', () => {
-    for (const iso of ALL) expect(Z.studioDateTimeLabel(iso, DUB, DUB)).toBe(L.contractDetailFmtDateLegacy(iso))
+    expect(P.map((iso) => Z.studioDateTimeLabel(iso, DUB, DUB))).toEqual([
+      '15 Jan 2026, 14:30', '29 Mar 2026, 00:59', '29 Mar 2026, 02:00',
+      '2 Jul 2026, 00:30', '25 Oct 2026, 01:30', '25 Oct 2026, 01:30',
+    ])
   })
   it('contract list date', () => {
-    for (const iso of ALL) expect(Z.studioDateLabel(iso, DUB)).toBe(L.dateFmtLegacy(iso))
+    expect(P.map((iso) => Z.studioDateLabel(iso, DUB))).toEqual([
+      '15 Jan 2026', '29 Mar 2026', '29 Mar 2026', '2 Jul 2026', '25 Oct 2026', '25 Oct 2026',
+    ])
   })
   it('AC "as of" time', () => {
-    for (const iso of ALL) expect(Z.studioTimeLabel(iso, DUB, DUB)).toBe(L.asOfLabelLegacy(iso))
+    expect(P.map((iso) => Z.studioTimeLabel(iso, DUB, DUB))).toEqual(['14:30', '00:59', '02:00', '00:30', '01:30', '01:30'])
   })
-  it('the empty and unparseable cases keep their old answers', () => {
-    expect(Z.studioDateTimeLabel(null, DUB, DUB)).toBe(L.contractDetailFmtDateLegacy(null))
-    expect(Z.studioDateLabel('', DUB)).toBe(L.dateFmtLegacy(''))
-    expect(Z.studioTimeLabel(null, DUB, DUB)).toBe(L.asOfLabelLegacy(null))
-    expect(Z.studioTimeLabel('not a date', DUB, DUB)).toBe(L.asOfLabelLegacy('not a date'))
+  it('the empty and unparseable cases', () => {
+    expect(Z.studioDateTimeLabel(null, DUB, DUB)).toBe('')
+    expect(Z.studioDateLabel('', DUB)).toBe('')
+    expect(Z.studioTimeLabel(null, DUB, DUB)).toBeNull()
+    expect(Z.studioTimeLabel('not a date', DUB, DUB)).toBeNull()
   })
-  it('policy effective dates (a Postgres date) render the same day as before, for every date of 2026', () => {
-    for (let ms = Date.UTC(2026, 0, 1); ms < Date.UTC(2027, 0, 1); ms += 86_400_000) {
-      const d = new Date(ms).toISOString().slice(0, 10)
-      expect(Z.dateOnlyLabel(d)).toBe(L.dateFmtLegacy(d))
-    }
+  it('policy effective dates (a Postgres date) render that calendar day', () => {
+    expect(['2026-01-15', '2026-03-29', '2026-10-25', '2026-12-31'].map((d) => Z.dateOnlyLabel(d)))
+      .toEqual(['15 Jan 2026', '29 Mar 2026', '25 Oct 2026', '31 Dec 2026'])
   })
-  it('invoice "as approved on" heading', () => {
-    for (const iso of ALL) {
-      const data = { invoice_amount: 10, review_comparison: { primary: { source: 'snapshot', as_of: iso, comparison: 'match' } } }
-      expect(reviewComparisonView(data, DUB).heading).toBe(`Roster vs invoice, as approved on ${L.invoiceFormatDayLegacy(iso)}`)
-      expect(reviewComparisonView(data).heading).toBe(reviewComparisonView(data, DUB).heading)
-    }
+  it('invoice "as approved on" heading (zone omitted = Dublin)', () => {
+    const heading = (iso, ...zone) => reviewComparisonView({ invoice_amount: 10, review_comparison: { primary: { source: 'snapshot', as_of: iso, comparison: 'match' } } }, ...zone).heading
+    expect(heading('2026-07-01T23:30:00Z', DUB)).toBe('Roster vs invoice, as approved on 2 Jul 2026')
+    expect(heading('2026-07-01T23:30:00Z')).toBe('Roster vs invoice, as approved on 2 Jul 2026')
+    expect(heading('2026-03-29T01:00:00Z', DUB)).toBe('Roster vs invoice, as approved on 29 Mar 2026')
+    expect(heading('2026-10-25T00:30:00Z', DUB)).toBe('Roster vs invoice, as approved on 25 Oct 2026')
+    expect(heading('2026-01-15T14:30:00Z')).toBe('Roster vs invoice, as approved on 15 Jan 2026')
   })
 })
 

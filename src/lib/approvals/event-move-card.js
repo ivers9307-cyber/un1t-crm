@@ -22,13 +22,15 @@ export const EVENT_MOVE_LABEL = 'Event move'
 // (red) nor the amber default.
 export const EVENT_MOVE_KIND_CHIP = 'bg-blue-500/10 text-blue-700'
 
-// A DATE column (YYYY-MM-DD, Dublin wall-clock) as "Sun 25 Oct". Anchored on
-// noon UTC so it never shifts a day in any timezone.
-const DUBLIN_SHORT = new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short' })
+// A DATE column (YYYY-MM-DD, the event's wall-clock date) as "Sun 25 Oct".
+// A calendar date has no zone: it is anchored on noon UTC and formatted in UTC,
+// so it never shifts a day in any timezone (TZ.18b; the same output the old
+// Europe/Dublin formatter gave, since noon UTC is the same date in Dublin).
+const DATE_SHORT = new Intl.DateTimeFormat('en-IE', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' })
 function shortDate(iso) {
   if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(String(iso))) return null
   const parts = {}
-  for (const p of DUBLIN_SHORT.formatToParts(new Date(`${String(iso).slice(0, 10)}T12:00:00Z`))) parts[p.type] = p.value
+  for (const p of DATE_SHORT.formatToParts(new Date(`${String(iso).slice(0, 10)}T12:00:00Z`))) parts[p.type] = p.value
   return `${parts.weekday} ${parts.day} ${parts.month}`
 }
 
