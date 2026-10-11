@@ -9,6 +9,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { canMutateLiveAt } from '@/lib/live-access'
+import { zoneOfLocation } from '@/lib/location-time'
 import LiveClassClient from './LiveClassClient'
 
 export const dynamic = 'force-dynamic'
@@ -40,9 +41,11 @@ export default async function LiveClassPage(props) {
   // Pull the location name. Member search is now server-side via
   // /api/live/[locationId]/contacts so we no longer preload contacts here.
   const db = createServerClient()
+  // TZ.12 — `timezone` rides the same read: the board's detection times and
+  // overnight poll back-off are the studio's own clock.
   const { data: location } = await db
     .from('locations')
-    .select('id, name')
+    .select('id, name, timezone')
     .eq('id', locationId)
     .single()
 
@@ -76,6 +79,7 @@ export default async function LiveClassPage(props) {
     <LiveClassClient
       locationId={locationId}
       locationName={location.name}
+      timeZone={zoneOfLocation(location)}
       tvToken={tvToken}
       // GATES-2 — End, Pair, test mode and Claim call routes that also need a
       // coach role here (LIVE_MUTATION_ROLES); nobody else is shown them.

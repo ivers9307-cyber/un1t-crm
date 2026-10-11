@@ -37,6 +37,8 @@ import {
   classDidEnd,
 } from '@/lib/tv-theatre'
 import { nextPollDelay, ACTIVE_POLL_MS } from '@/lib/live-poll'
+import { boardZone, boardClockText } from '@/lib/tv-board-time'
+import { DEFAULT_TZ } from '@shared/zoned-time'
 import { createBrowserClient } from '@/lib/supabase'
 import { repsetDisplay, repsetBody, repsetMono } from '@/fonts/repset'
 import { zoneColorDark, dominantZone } from '@/lib/tv-zone-colors'
@@ -160,7 +162,8 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
         setData(json)
         setError(null)
         setFailures(0)
-        delay = nextPollDelay(json)
+        // TZ.12 — overnight back-off on the studio's clock (payload `timezone`).
+        delay = nextPollDelay(json, new Date(), boardZone(json.timezone) ?? DEFAULT_TZ)
       } catch (e) {
         if (!cancelled) {
           setError(e.message)
@@ -199,6 +202,10 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
     const t = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(t)
   }, [])
+
+  // TZ.12 — the studio's zone from the payload. Null until the first poll
+  // lands, and the header clock then keeps the screen's own clock.
+  const zone = boardZone(data?.timezone)
 
   const reconnecting = showReconnecting({ consecutiveFailures: failures })
 
@@ -357,7 +364,7 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
           {!portrait && (
             <div className="text-right">
               <p className="text-xl tabular-nums" style={{ fontFamily: FONT_MONO, color: BONE }}>
-                {now.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                {boardClockText(now, zone, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </p>
               <p className="text-xs" style={{ fontFamily: FONT_MONO, color: BONE_3 }}>
                 {sessions.length} live
@@ -449,7 +456,7 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
         <RepsetSignature caption="Scores land in your app" />
       </div>
 
-      <ClassStartIntro current={data?.current_class} serverTime={data?.server_time} brand={brandName} />
+      <ClassStartIntro current={data?.current_class} serverTime={data?.server_time} brand={brandName} zone={zone} />
 
       <ToastLayer queue={toastQueue} onDone={(t) => setToastQueue((q) => q.filter((x) => x !== t))} />
 
@@ -621,13 +628,17 @@ function OutroPodium({ podium, total, brand = '' }) {
   )
 }
 
-function ClassStartIntro({ current, serverTime, brand = '' }) {
+function ClassStartIntro({ current, serverTime, brand = '', zone = null }) {
   const [visible, setVisible] = useState(false)
   const [shown, setShown] = useState(false) // drives the fade/scale-in transition
   // Preview mode (?introPreview=1): force the card to loop for on-demand QA on
   // any TV. Read once. Falls back to a demo class when nothing is scheduled.
   const preview = useState(() => typeof window !== 'undefined' && isIntroPreview(window.location.search))[0]
-  const demo = useMemo(() => (preview ? demoIntroClass() : null), [preview])
+  // TZ.12 — the preview label is the studio's clock. `demoZone` is the same
+  // string before and after the first poll for a Dublin board, so the demo
+  // (and the sequence keyed on it) is built once, exactly as before.
+  const demoZone = zone ?? DEFAULT_TZ
+  const demo = useMemo(() => (preview ? demoIntroClass(Date.now(), demoZone) : null), [preview, demoZone])
   const cls = current || demo
 
   // The 2s poll changes `serverTime` (and can re-supply `starts_at`) on every
