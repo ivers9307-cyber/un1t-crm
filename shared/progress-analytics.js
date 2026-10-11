@@ -1,7 +1,7 @@
 // progress-analytics.js — pure multi-session aggregations for the member progress
 // dashboard. No IO. champ-app-only (like goals.js). All bucketing is UTC-anchored.
 import { currentStreak } from './hr-analytics.js'
-import { dublinDateKey, dublinDayStartMs, dublinAddDays } from './dublin-time.js'
+import { dateKeyIn, dayStartMsIn, addDaysIn, DEFAULT_TZ } from './zoned-time.js'
 
 const DAY = 24 * 3600 * 1000
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -69,7 +69,9 @@ export function monthlyRecap(sessions, nowMs = Date.now(), months = 6) {
   return { months: out, fittest }
 }
 
-export function personalRecords(sessions) {
+// `zone` (TZ.13, D7): the member's home studio zone, for the day-streak only
+// (the best-week bucket is still a UTC week: TZ.17).
+export function personalRecords(sessions, zone = DEFAULT_TZ) {
   const list = (sessions || []).filter(s => startedMs(s) !== null)
   let bestSessionPoints = null, highestPeakHr = null, longestSessionMin = null
   const weekPoints = new Map()
@@ -85,21 +87,22 @@ export function personalRecords(sessions) {
   for (const [ws, pts] of weekPoints) {
     if (pts > 0 && (!bestWeekPoints || pts > bestWeekPoints.value)) bestWeekPoints = { value: Math.round(pts), weekStartMs: ws }
   }
-  return { bestSessionPoints, highestPeakHr, longestSessionMin, bestWeekPoints, bestStreak: currentStreak(list).best }
+  return { bestSessionPoints, highestPeakHr, longestSessionMin, bestWeekPoints, bestStreak: currentStreak(list, Date.now(), zone).best }
 }
 
-// Day-buckets in Europe/Dublin (NOT UTC) so the heatmap agrees with the
-// Dublin-keyed streak + milestone numbers shown beside it — a BST session at
-// 00:00–01:00 Dublin must light today's cell, not yesterday's. Days are walked
-// via dublinAddDays (not a fixed 24h step) so the grid never drifts across the
-// GMT/IST clock change. `dayMs` is the Dublin-midnight instant of each cell.
-export function activityCalendar(sessions, nowMs = Date.now(), days = 84) {
-  const todayKey = dublinDateKey(nowMs)
-  const startKey = dublinAddDays(todayKey, -(days - 1))
+// Day-buckets in `zone` — the member's home studio zone (TZ.13, D7; omitted =
+// Europe/Dublin), NOT UTC — so the heatmap agrees with the locally-keyed streak
+// + milestone numbers shown beside it: a summer-time session at 00:00–01:00
+// Dublin must light today's cell, not yesterday's. Days are walked via
+// addDaysIn (not a fixed 24h step) so the grid never drifts across a clock
+// change. `dayMs` is the local-midnight instant of each cell.
+export function activityCalendar(sessions, nowMs = Date.now(), days = 84, zone = DEFAULT_TZ) {
+  const todayKey = dateKeyIn(nowMs, zone)
+  const startKey = addDaysIn(todayKey, -(days - 1), zone)
   const map = new Map()
   for (const s of sessions || []) {
     const t = startedMs(s); if (t === null || t >= nowMs) continue
-    const key = dublinDateKey(t)
+    const key = dateKeyIn(t, zone)
     if (key < startKey || key > todayKey) continue // 'YYYY-MM-DD' sorts lexically
     const a = map.get(key) || { count: 0, points: 0 }; a.count++; a.points += pointsOf(s); map.set(key, a)
   }
@@ -108,8 +111,8 @@ export function activityCalendar(sessions, nowMs = Date.now(), days = 84) {
   for (let i = 0; i < days; i++) {
     const a = map.get(key) || { count: 0, points: 0 }
     if (a.count > maxCount) maxCount = a.count
-    out.push({ dayMs: dublinDayStartMs(key), dateKey: key, count: a.count, points: Math.round(a.points) })
-    key = dublinAddDays(key, 1)
+    out.push({ dayMs: dayStartMsIn(key, zone), dateKey: key, count: a.count, points: Math.round(a.points) })
+    key = addDaysIn(key, 1, zone)
   }
   return { days: out, maxCount }
 }

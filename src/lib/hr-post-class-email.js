@@ -33,6 +33,7 @@ import { buildSessionReport } from '@/lib/hr-session-report'
 import { normalizeClassName } from '@/lib/hr-analytics'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { formatWeekdayShortDateTimeInTZ } from '@/lib/dates'
+import { zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
 import { getAppUrl, getMemberAppUrl } from '@/lib/app-url'
 import { getLocationBranding } from '@/lib/location-branding'
 import { productName } from '@/lib/brand-name'
@@ -117,7 +118,10 @@ export async function loadContextForSession(db, sessionId) {
   const catMap = new Map((catRows || []).map((c) => [c.class_name_normalized, c.category]))
   const categoryFor = (name) => catMap.get(normalizeClassName(name)) ?? null
 
-  const { data: loc } = await db.from('locations').select('settings').eq('id', session.location_id).single()
+  // TZ.13 — `timezone` rides the same read: the studio's zone labels the
+  // session start and buckets the streak highlight (D7, the member's studio).
+  const { data: loc } = await db.from('locations').select('settings, timezone').eq('id', session.location_id).single()
+  const zone = zoneOfLocation(loc)
   const ca = loc?.settings?.customer_agent || {}
   // Pulse stays out of booking (Glofox owns it), so no booking CTA is passed —
   // only the membership/join conversion action for non-members. See buildNextAction.
@@ -205,6 +209,7 @@ export async function loadContextForSession(db, sessionId) {
     unsubscribeToken,
     shortName,
     companyName,
+    zone,
   }
 }
 
@@ -216,14 +221,14 @@ export async function loadContextForSession(db, sessionId) {
  * + text. Tested standalone.
  */
 export function composeEmail(ctx, { nowMs = Date.now(), customerBaseUrl = null } = {}) {
-  const { session, thisSession, history, eventTypeName, contact, shortName = '', companyName = '' } = ctx
+  const { session, thisSession, history, eventTypeName, contact, shortName = '', companyName = '', zone = DEFAULT_TZ } = ctx
   // W1.S1a — product names on the SHORT brand ("UN1T Points" / "UN1T HR"),
   // the studio named by its configured brand ("UN1T Stillorgan"). Either
   // blank degrades to the bare noun / a sentence without a name.
   const pointsName = productName(shortName, 'points')
   const hrName = productName(shortName, 'hr')
   const brand = String(companyName || '').trim()
-  const report = buildSessionReport({ session, thisSession, history, eventTypeName, cta: ctx.cta, shortName }, { nowMs })
+  const report = buildSessionReport({ session, thisSession, history, eventTypeName, cta: ctx.cta, shortName }, { nowMs }, zone)
   // Adapt the report back to the shapes the existing renderers read, so
   // the email's output is byte-identical while the numbers now flow from
   // the one canonical builder.
@@ -248,7 +253,7 @@ export function composeEmail(ctx, { nowMs = Date.now(), customerBaseUrl = null }
 
   const firstName = (contact?.name || 'there').split(/\s+/)[0]
   const classLabel = eventTypeName ? eventTypeName : 'your workout'
-  const startedAt = formatStartLabel(session.started_at)
+  const startedAt = formatStartLabel(session.started_at, zone)
   const points = Number.isFinite(session.effort_points) ? session.effort_points : 0
   const peak = Number.isFinite(session.peak_hr_bpm) ? session.peak_hr_bpm : null
   const avg = Number.isFinite(session.avg_hr_bpm) ? session.avg_hr_bpm : null
@@ -517,9 +522,10 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
-function formatStartLabel(iso) {
+// TZ.13 — in the session's studio zone (`zone`, from loadContextForSession).
+function formatStartLabel(iso, zone) {
   try {
-    return formatWeekdayShortDateTimeInTZ(iso)
+    return formatWeekdayShortDateTimeInTZ(iso, zone)
   } catch {
     return new Date(iso).toLocaleString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
   }

@@ -13,7 +13,8 @@ let releaseError = null
 function makeBuilder(table) {
   const state = { eqs: {}, is: {} }
   const b = {}
-  for (const m of ['or', 'order', 'range']) b[m] = () => b
+  // TZ.13 — getLocationZone reads the challenge's studio zone with maybeSingle().
+  for (const m of ['or', 'order', 'range', 'maybeSingle']) b[m] = () => b
   b.select = () => { state.selected = true; return b }
   b.eq = (c, v) => { state.eqs[c] = v; return b }
   b.is = (c, v) => { state.is[c] = v; return b }
@@ -36,6 +37,7 @@ function makeBuilder(table) {
       }
     } else if (table === 'challenges') out = { data: challengeRows.map((r) => ({ ...r })), error: null }
     else if (table === 'champ_push_tokens') out = { data: tokenRows, error: null }
+    else if (table === 'locations') out = { data: { id: state.eqs.id, timezone: 'Europe/Dublin' }, error: null }
     else out = { data: [], error: null }
     return Promise.resolve(out).then(res, rej)
   }

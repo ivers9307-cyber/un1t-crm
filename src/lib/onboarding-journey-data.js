@@ -8,9 +8,10 @@
 // kept out of onboarding-journey.js so that module stays pure + unit-tested.
 //
 // Window semantics (matches journeyStatus): a booking is "in window" when
-// its Dublin calendar day sits between the member's join day (day 0) and
-// day windowDays inclusive — dublinDaysBetween, NOT a UTC/ms comparison
-// (a 23:30 UTC session during IST belongs to the next Dublin day).
+// its local calendar day sits between the member's join day (day 0) and
+// day windowDays inclusive — daysBetweenIn, NOT a UTC/ms comparison
+// (a 23:30 UTC session during IST belongs to the next Dublin day). The zone is
+// the member's home studio's (TZ.13, D7), read with the journey config.
 //
 // Error handling: the member/booking/config reads THROW on a DB error and
 // the routes turn that into a standard 500. The lastTouch overlay is
@@ -20,8 +21,9 @@
 import {
   journeyStatus,
   resolveJourneyConfig,
-  dublinDaysBetween,
+  daysBetweenIn,
 } from '@/lib/onboarding-journey'
+import { zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
 import { MEMBER_STATUSES } from '@/lib/churn-radar'
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
 
@@ -49,35 +51,37 @@ const DAY_MS = 86_400_000
 // trail the list.
 const STATUS_RANK = { at_risk: 0, behind: 1, on_track: 2, expired: 3, completed: 4 }
 
-/** Read the location row and resolve its journey config (defaults 42/9). */
+/** Read the location row: its journey config (defaults 42/9) and, TZ.13, its
+ *  zone — the members' home studio zone their journey days are counted in. */
 async function fetchJourneyConfig(db, locationId) {
   const { data, error } = await db
     .from('locations')
-    .select('id, notification_config')
+    .select('id, notification_config, timezone')
     .eq('id', locationId)
     .maybeSingle()
   if (error) throw new Error(error.message)
-  return resolveJourneyConfig(data)
+  return { config: resolveJourneyConfig(data), zone: data ? zoneOfLocation(data) : DEFAULT_TZ }
 }
 
 /**
  * Keep only the attendance instants inside [day 0, day windowDays] of the
- * member's journey, by Dublin calendar day. Rows with a null/unparseable
+ * member's journey, by local calendar day in `zone`. Rows with a null/unparseable
  * starts_at are dropped.
  *
  * @param {string} joinedAt   contacts.joined_at
  * @param {Array<{starts_at: string|null}>} rows  attended class_bookings
  * @param {number} windowDays
+ * @param {string} zone  the member's home studio zone
  * @returns {string[]} in-window starts_at instants
  */
-function inWindowAttendance(joinedAt, rows, windowDays) {
+function inWindowAttendance(joinedAt, rows, windowDays, zone) {
   const joinedMs = Date.parse(joinedAt ?? '')
   if (!Number.isFinite(joinedMs)) return []
   const out = []
   for (const r of rows) {
     const ms = Date.parse(r?.starts_at ?? '')
     if (!Number.isFinite(ms)) continue
-    const day = dublinDaysBetween(joinedMs, ms)
+    const day = daysBetweenIn(joinedMs, ms, zone)
     if (day >= 0 && day <= windowDays) out.push(r.starts_at)
   }
   return out
@@ -168,7 +172,8 @@ function worstFirst(a, b) {
  *   lastTouch: {action, at}|null }
  */
 export async function loadJourneyLane(db, locationId, nowMs = Date.now()) {
-  const config = await fetchJourneyConfig(db, locationId)
+  // The lane lists the location's own members, so their home zone is its zone.
+  const { config, zone } = await fetchJourneyConfig(db, locationId)
   const sinceIso = new Date(nowMs - (config.windowDays + LANE_TAIL_DAYS) * DAY_MS).toISOString()
 
   const members = await selectAll((from, to) => db
@@ -189,8 +194,8 @@ export async function loadJourneyLane(db, locationId, nowMs = Date.now()) {
 
   const lane = []
   for (const m of members) {
-    const attendedAt = inWindowAttendance(m.joined_at, attendance.get(m.id) || [], config.windowDays)
-    const row = journeyStatus({ joinedAt: m.joined_at, attendedAt, now: nowMs, config })
+    const attendedAt = inWindowAttendance(m.joined_at, attendance.get(m.id) || [], config.windowDays, zone)
+    const row = journeyStatus({ joinedAt: m.joined_at, attendedAt, now: nowMs, config }, zone)
     if (!row) continue // unparseable joined_at — nothing to pace
     lane.push({
       contactId: m.id,
@@ -233,12 +238,12 @@ export async function loadContactJourney(db, contactId, nowMs = Date.now()) {
   const joinedMs = Date.parse(contact.joined_at)
   if (!Number.isFinite(joinedMs)) return null
 
-  const config = contact.location_id
+  const { config, zone } = contact.location_id
     ? await fetchJourneyConfig(db, contact.location_id)
-    : resolveJourneyConfig(null)
+    : { config: resolveJourneyConfig(null), zone: DEFAULT_TZ }
 
   // Hard stop past the tail — skip the booking scan entirely.
-  if (dublinDaysBetween(joinedMs, nowMs) > config.windowDays + LANE_TAIL_DAYS) return null
+  if (daysBetweenIn(joinedMs, nowMs, zone) > config.windowDays + LANE_TAIL_DAYS) return null
 
   const bookings = await selectAll((from, to) => db
     .from('class_bookings')
@@ -249,8 +254,8 @@ export async function loadContactJourney(db, contactId, nowMs = Date.now()) {
     .order('id', { ascending: true })
     .range(from, to))
 
-  const attendedAt = inWindowAttendance(contact.joined_at, bookings, config.windowDays)
-  const row = journeyStatus({ joinedAt: contact.joined_at, attendedAt, now: nowMs, config })
+  const attendedAt = inWindowAttendance(contact.joined_at, bookings, config.windowDays, zone)
+  const row = journeyStatus({ joinedAt: contact.joined_at, attendedAt, now: nowMs, config }, zone)
   if (!row) return null
   // Window over without hitting the target → no surface shows it (the
   // member card hides, the profile panel is in-window only).

@@ -35,6 +35,7 @@ import { sendCustomerPush } from '@/lib/customer-push'
 import { pushOutcome } from '@/lib/push-outcome'
 import { computeStandings, computeCollective } from '@/lib/challenges-io'
 import { windowIso } from '@/lib/challenges'
+import { getLocationZone } from '@/lib/location-time'
 import { buildChallengeStartPush, buildChallengeResultPush, buildCollectiveTargetPush } from '@/lib/challenge-notifications'
 import { getLocationBranding } from '@/lib/location-branding'
 import { logInfo, logWarn, logError } from '@/lib/log'
@@ -201,7 +202,9 @@ export async function GET(request) {
         if (outcome === 'gave_up') gaveUp++
         else if (FAILED.has(outcome)) failed++
       } else if (ch.ends_on < today && !ch.announced_end_at) {
-        const { fromIso, toIso } = windowIso(ch)
+        // TZ.13 — the result is computed over the challenge's own studio days.
+        // An unreadable zone throws to the per-challenge catch: retried next tick.
+        const { fromIso, toIso } = windowIso(ch, await getLocationZone(db, ch.location_id))
         let payload
         if (ch.mode === 'collective') {
           const collective = await computeCollective(db, { locationId: ch.location_id, metric: ch.metric, fromIso, toIso, target: ch.target })
@@ -215,7 +218,7 @@ export async function GET(request) {
       }
       // COLLECTIVE target reached (active, not yet announced)
       if (ch.mode === 'collective' && ch.target && !ch.announced_target_at && ch.starts_on <= today && ch.ends_on >= today) {
-        const { fromIso, toIso } = windowIso(ch)
+        const { fromIso, toIso } = windowIso(ch, await getLocationZone(db, ch.location_id))
         const collective = await computeCollective(db, { locationId: ch.location_id, metric: ch.metric, fromIso, toIso, target: ch.target })
         if (collective.total >= ch.target) {
           const ids = await tokenHolders(db, ch.location_id)
