@@ -12,9 +12,10 @@ vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(),
   rateLimitResponse: vi.fn(() => new Response('{"success":false}', { status: 429 })),
 }))
-vi.mock('@/lib/dublin-time', async (importOriginal) => ({
+// TZ.8a — "today" is the person's home-studio day (todayStrIn of that zone).
+vi.mock('@/lib/location-time', async (importOriginal) => ({
   ...(await importOriginal()),
-  dublinTodayStr: () => '2026-09-25',
+  todayStrIn: () => '2026-09-25',
 }))
 
 const { createServerClient } = await import('@/lib/supabase')

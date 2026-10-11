@@ -22,7 +22,7 @@
 // supabase client the way src/lib/roster.js does.
 
 import { addDays, formatDate, getMonday } from './roster'
-import { dublinTodayStr } from './dublin-time'
+import { getLocationZones, todayStrIn } from './location-time'
 import { countStaffingGaps } from '../../shared/roster-staffing'
 
 // MOBILESCHED.2 — the pure half (staffing status, gaps, publication status)
@@ -50,16 +50,39 @@ export {
  * It replaced the old zero-only count in shared/dashboard-data (ROSTERVIS.1),
  * which D1 DEADCODE.1 deleted once nothing read it.
  *
- * "Today" is the Dublin business day, not the server's UTC day.
+ * "Today" is EACH studio's own day (TZ.8a: its locations.timezone, read once
+ * with getLocationZones unless the caller passes `zones`, id → zone), never
+ * the server's UTC day; "this week" is that studio's Mon-Sun around it. An
+ * unreadable zone fails the read, never a guess. `todayIso` pins one day for
+ * every studio (tests).
  *
+ * @param {{ todayIso?: string, zones?: Map<string,string>|Record<string,string>, nowMs?: number }} [opts]
  * @returns {Promise<{ success: true, data: { empty: number, short: number, total: number } } | { success: false, error: string }>}
  */
-export async function fetchStaffingGapsThisWeek(db, locationIds, { todayIso = dublinTodayStr() } = {}) {
+export async function fetchStaffingGapsThisWeek(db, locationIds, { todayIso = null, zones = null, nowMs = Date.now() } = {}) {
   if (!locationIds || locationIds.length === 0) {
     return { success: true, data: { empty: 0, short: 0, total: 0 } }
   }
-  const [y, m, d] = todayIso.split('-').map(Number)
-  const weekEndIso = formatDate(addDays(getMonday(new Date(y, m - 1, d)), 6))
+  const ids = [...new Set(locationIds.filter(Boolean))]
+  let zoneOf = null
+  if (!todayIso) {
+    try {
+      const given = zones instanceof Map ? zones : (zones ? new Map(Object.entries(zones)) : null)
+      zoneOf = given && ids.every((id) => given.has(id)) ? given : await getLocationZones(db, ids, { nowMs })
+    } catch (e) {
+      return { success: false, error: e?.message || 'Failed to read studio timezones' }
+    }
+  }
+  const weekEndOf = (iso) => {
+    const [y, m, d] = iso.split('-').map(Number)
+    return formatDate(addDays(getMonday(new Date(y, m - 1, d)), 6))
+  }
+  const windows = new Map(ids.map((id) => {
+    const today = todayIso || todayStrIn(zoneOf.get(id), nowMs)
+    return [id, { today, weekEnd: weekEndOf(today) }]
+  }))
+  const readFrom = [...windows.values()].map((w) => w.today).sort()[0]
+  const weekEndIso = [...windows.values()].map((w) => w.weekEnd).sort().at(-1)
 
   // The assignment ROWS, not a `(count)` embed: an aggregate embed cannot be
   // status-filtered, and a cancelled row must not count as a coach
@@ -70,9 +93,20 @@ export async function fetchStaffingGapsThisWeek(db, locationIds, { todayIso = du
     // SHIFTTYPE.1 — the template's kind rides along: an admin block is never a gap.
     .select('id, location_id, block_date, start_time, min_coaches, shift_templates(kind), shift_assignments(profile_id, status)')
     .in('location_id', locationIds)
-    .gte('block_date', todayIso)
+    .gte('block_date', readFrom)
     .lte('block_date', weekEndIso)
 
   if (error) return { success: false, error: error.message }
-  return { success: true, data: countStaffingGaps(data || [], { todayIso }) }
+  // One pinned day: every row read is in that one window.
+  if (todayIso) return { success: true, data: countStaffingGaps(data || [], { todayIso }) }
+  // Each studio's blocks are counted on its own today and week.
+  const total = { empty: 0, short: 0, total: 0 }
+  for (const [id, w] of windows) {
+    const mine = (data || []).filter((b) => b.location_id === id)
+    const c = countStaffingGaps(mine, { from: w.today, to: w.weekEnd, todayIso: w.today })
+    total.empty += c.empty
+    total.short += c.short
+    total.total += c.total
+  }
+  return { success: true, data: total }
 }

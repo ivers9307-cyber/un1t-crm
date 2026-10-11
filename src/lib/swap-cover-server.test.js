@@ -713,14 +713,17 @@ describe('runSwapCoverSweep', () => {
       expect(tzWarnings[0][2]).toMatchObject({ locationId: LOC })
     })
 
-    it('an unreadable locations table is Europe/Dublin for everyone, logged, and the sweep still runs', async () => {
+    // TZ.8a — never a guessed zone: an unreadable locations table skips the
+    // pass as an arm error (the heartbeat is withheld; the next tick retries).
+    it('an unreadable locations table skips the pass as an arm error, never a guessed zone', async () => {
       const db = mockDb({
         shift_swap_requests: swapsTable([sweepSwap()]),
         locations: { data: null, error: { message: 'down' } },
       })
       const stats = await runSwapCoverSweep(db, { nowMs: START - 48 * H })
-      expect(stats).toMatchObject({ nudged: 1, errors: 0 })
-      expect(logWarn).toHaveBeenCalledWith('swap-cover', expect.stringContaining('timezone'), expect.objectContaining({ err: 'down' }))
+      expect(stats).toMatchObject({ open: 1, nudged: 0, expired: 0, errors: 1 })
+      expect(notifyUsersOnce).not.toHaveBeenCalled()
+      expect(logError).toHaveBeenCalledWith('swap-cover', expect.stringContaining('timezone'), expect.objectContaining({ err: 'down' }))
     })
   })
 })

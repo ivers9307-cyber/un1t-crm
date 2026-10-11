@@ -20,6 +20,7 @@
 import { buildPublishSnapshot, clipWindow, compareSnapshot, SNAPSHOT_FORMAT_VERSION } from './roster-compare'
 import { logError, logWarn } from './log'
 import { periodLabel } from './roster-compare-format'
+import { zoneOfLocation } from './location-time'
 
 export const SNAPSHOT_BLOCK_PAGE = 1000
 
@@ -151,6 +152,9 @@ export async function loadRosterComparison(db, { roster, againstId = null, from 
     .eq('id', roster.location_id)
     .maybeSingle()
   if (locErr) return fail('location read failed', locErr)
+  // TZ.8a — the studio's zone, for the publish-instant labels (the view
+  // reads them in the studio's clock, roster-compare-format.js).
+  const zone = zoneOfLocation(location)
 
   // The roster's OWN snapshot is always read: it is the default baseline and
   // its period is what "these dates" means for a chosen one (the rosters row's
@@ -243,7 +247,7 @@ export async function loadRosterComparison(db, { roster, againstId = null, from 
     const before = !Number.isFinite(beganMs) || !Number.isFinite(publishedMs) || publishedMs < beganMs
     return {
       data: {
-        roster: rosterSummary, window: null, baseline: null,
+        roster: rosterSummary, timezone: zone, window: null, baseline: null,
         missing_reason: before ? 'before_snapshots' : 'not_saved',
         snapshots_began_at: snapshotsBeganAt, publishes, blocks: [], totals: null,
       },
@@ -280,7 +284,7 @@ export async function loadRosterComparison(db, { roster, againstId = null, from 
   }
 
   const result = compareSnapshot({
-    snapshot: baseline.snapshot, currentBlocks: current, from, to, nowMs, tz: location?.timezone ?? null, names,
+    snapshot: baseline.snapshot, currentBlocks: current, from, to, nowMs, tz: zone, names,
   })
 
   const baselineSummary = {
@@ -295,7 +299,7 @@ export async function loadRosterComparison(db, { roster, againstId = null, from 
   if (!window) {
     return {
       data: {
-        roster: rosterSummary, window: null, baseline: baselineSummary,
+        roster: rosterSummary, timezone: zone, window: null, baseline: baselineSummary,
         missing_reason: 'outside_window', snapshots_began_at: snapshotsBeganAt,
         publishes, blocks: [], totals: null,
       },
@@ -305,6 +309,7 @@ export async function loadRosterComparison(db, { roster, againstId = null, from 
   return {
     data: {
       roster: rosterSummary,
+      timezone: zone,
       window: result.window,
       baseline: baselineSummary,
       missing_reason: null,

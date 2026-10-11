@@ -13,7 +13,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { logRosterChange, markChangesNotified } from '@/lib/roster-change-log'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 
 // COVERLOOP.1 — the status guard on the non-RPC update matched no row.
@@ -58,7 +58,7 @@ export async function PUT(request, props) {
   // COVERLOOP.1 — both shifts also carry their own start_time_override: "has
   // this shift started" is judged on the EFFECTIVE start.
   const { data: swap } = await db.from('shift_swap_requests')
-    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, start_time_override, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status))), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id, start_time_override, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status)))')
+    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, start_time_override, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status), locations(timezone))), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id, start_time_override, block:shift_blocks!block_id(id, location_id, block_date, start_time, end_time, rosters:roster_id(status), locations(timezone)))')
     .eq('id', params.id)
     .single()
 
@@ -208,7 +208,8 @@ export async function PUT(request, props) {
       // unreadable roster status — fail toward "stamp it", never toward
       // silently leaving the coach exposed to a later re-publish ping.
       const isDraft = block?.rosters?.status !== 'published'
-      const isPast = !!block?.block_date && block.block_date < dublinTodayStr()
+      // TZ.8a — past on the shift's own studio day (its block's locations.timezone).
+      const isPast = !!block?.block_date && block.block_date < blockToday(block, swap)
       if (isDraft || isPast) {
         await markChangesNotified(db, [dropLog.id])
         dropStamped = true
@@ -248,6 +249,13 @@ export async function PUT(request, props) {
     .catch(err => console.error('[swaps] notify failed', err)))
 
   return NextResponse.json(warnings ? { success: true, data, warnings } : { success: true, data })
+}
+
+// TZ.8a — "today" at a shift's OWN studio: its block's locations(timezone)
+// embed (the select above carries it), the swap's studio when the block has
+// none. Each side of a cross-studio swap is judged on its own studio's day.
+function blockToday(block, swap) {
+  return todayStrIn(zoneOfLocation({ id: block?.location_id || swap?.location_id, timezone: block?.locations?.timezone }))
 }
 
 // COVERLOOP.1 — has one of the swap's shifts (the requester's, or the target's
@@ -311,7 +319,6 @@ async function swapShiftStarted(db, swap, assignment, nowMs, zoneCache) {
 async function logSwapMoves(db, effect, swap, user) {
   try {
     const entries = swapChangeLogEntries(effect, swap)
-    const today = dublinTodayStr()
     const results = await Promise.all(entries.map((e) => logRosterChange(db, {
       isPublished: e.block?.rosters?.status === 'published',
       locationId: e.block?.location_id || swap.location_id,
@@ -331,7 +338,7 @@ async function logSwapMoves(db, effect, swap, user) {
       // A missing block/roster embed reads as a draft, as in the drop path:
       // fail toward "stamp it", never toward a surprise re-publish ping.
       const isDraft = e.block?.rosters?.status !== 'published'
-      const isPast = !!e.block?.block_date && e.block.block_date < today
+      const isPast = !!e.block?.block_date && e.block.block_date < blockToday(e.block, swap)
       if (isDraft || isPast) immediate.push(r.id)
       else pending[e.role].push(r.id)
     })

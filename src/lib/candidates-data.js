@@ -32,7 +32,7 @@ import { readStudioAvailability } from './availability-server'
 import { isRosterableProfile } from './roster-write'
 import { liveAssignments } from './roster'
 import { mondayOf } from './payroll'
-import { addDaysISO } from './dublin-time'
+import { addDaysISO, getLocationZone, zoneOfLocation } from './location-time'
 import { logWarn } from './log'
 import { buildCandidates } from '@shared/candidates'
 import { attachQualificationGaps } from '@shared/qualifications'
@@ -137,7 +137,7 @@ export async function readContractedHours(db, profileIds) {
  * skipped or refused over a draft shift they cannot see. The pickers keep
  * the default (a manager plans drafts, so drafts count there).
  *
- * @param {{ block: { id, location_id, block_date, start_time, end_time, shift_templates, shift_assignments },
+ * @param {{ block: { id, location_id, block_date, start_time, end_time, shift_templates, shift_assignments, locations?: { timezone } },
  *   audience: 'manager'|'colleague', withContract?: boolean, publishedShiftsOnly?: boolean }} opts
  * @returns {Promise<{ candidates?: object[], untimed?: number, checked?: object, error: object|null }>}
  */
@@ -158,6 +158,24 @@ export async function loadBlockCandidates(db, { block, audience = 'manager', wit
     if (error) return { error }
     const ids = members.map((m) => m.profile_id)
     if (ids.length === 0) return { ...buildCandidates({ block, members, checked, audience: who }), checked, error: null }
+
+    // TZ.8a — the block's studio zone: the target shift is read on its own
+    // clock, as every shift row is on its own studio's (readOrgShiftRows).
+    // Taken from the block's locations(timezone) embed when the caller's
+    // select carries it (the candidates route's does), else read (cached 60 s;
+    // the offer paths). An unreadable zone is a shifts facet we could not
+    // check, never a guess.
+    let zoneErr = null
+    let blockZone = null
+    if (block.locations && typeof block.locations === 'object' && 'timezone' in block.locations) {
+      blockZone = zoneOfLocation({ id: block.location_id, timezone: block.locations.timezone })
+    } else {
+      try {
+        blockZone = await getLocationZone(db, block.location_id)
+      } catch (e) {
+        zoneErr = { message: e?.message || 'studio timezone unreadable' }
+      }
+    }
 
     const { ids: siblingIds, error: sibErr } = await settle(() => siblingLocationIds(db, block.location_id))
     if (sibErr) {
@@ -190,6 +208,8 @@ export async function loadBlockCandidates(db, { block, audience = 'manager', wit
       logWarn('candidates', `${facet} unreadable; candidates say so`, { blockId: block.id, err: err?.message })
     }
     if (shiftRead.error) note('shifts', shiftRead.error)
+    else if (zoneErr) note('shifts', zoneErr)
+    const shiftsOk = !shiftRead.error && !zoneErr
     let leave = []
     let rules = []
     let contracts = null
@@ -205,7 +225,8 @@ export async function loadBlockCandidates(db, { block, audience = 'manager', wit
     }
 
     const built = buildCandidates({
-      block, members, shifts: shiftRead.error ? [] : shiftRead.shifts, leave, rules, contracts, checked, audience: who,
+      block: blockZone ? { ...block, timezone: blockZone } : block,
+      members, shifts: shiftsOk ? shiftRead.shifts : [], leave, rules, contracts, checked, audience: who,
     })
     // QUALS.1 — attach the gaps AFTER ranking: they badge, they never re-rank.
     let candidates = contract ? built.candidates : withoutContract(built.candidates)

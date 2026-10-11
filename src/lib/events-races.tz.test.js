@@ -138,10 +138,6 @@ function moveDb({ events, source }) {
   })
 }
 
-// Whole-year loops: seconds of work each, so a loaded CI shard needs more than
-// vitest's 5 s default (TZ.6 PR: one timed out at ~7 s on shard 3).
-const YEAR_LOOP_TIMEOUT = 30_000
-
 describe('TZ.9 Europe/Dublin is byte-identical', () => {
   it.each(SAMPLES)('shared/events today, the event day and the move rule at %s', async (iso) => {
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -188,7 +184,7 @@ describe('TZ.9 Europe/Dublin is byte-identical', () => {
       expect(earliestLocalToday(t) <= todayIsoIn('Pacific/Pago_Pago', t)).toBe(true)
       vi.useRealTimers()
     }
-  }, YEAR_LOOP_TIMEOUT)
+  })
 
   it('event date labels (reminders, waitlist, race confirmations): every day of 2026', () => {
     for (const d of DAYS_2026) {
@@ -214,7 +210,7 @@ describe('TZ.9 Europe/Dublin is byte-identical', () => {
     }
     const closed = { slug: 's', name: 'N', race_date: '2026-12-01', registration_closes_at: '2026-01-01T00:00:00Z' }
     expect(toBrowseCard(closed, { soldOut: true, now: Date.UTC(2026, 5, 1), zone: DUB })).toStrictEqual(LEGACY.toBrowseCardLegacyDublin(closed, { soldOut: true, now: Date.UTC(2026, 5, 1) }))
-  }, YEAR_LOOP_TIMEOUT)
+  }, 60_000) // a CPU loop: a loaded CI runner took 7.5 s, past the 5 s default
 
   it('host-schedule-time: every quarter hour of 2026, both directions', () => {
     for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 15 * 60_000) {
@@ -238,7 +234,7 @@ describe('TZ.9 Europe/Dublin is byte-identical', () => {
     // The deprecated Dublin names still answer exactly as before (HostEmailReport, TZ.16's).
     expect(HST.dublinScheduleLabel(Date.UTC(2026, 6, 1, 8))).toBe(LEGACY.dublinScheduleLabelLegacyDublin(Date.UTC(2026, 6, 1, 8)))
     expect(HST.scheduleZoneLabel(DUB)).toBe('Dublin')
-  }, YEAR_LOOP_TIMEOUT)
+  }, 60_000) // a CPU loop: a loaded CI runner took 7.5 s, past the 5 s default
 
   it('hyrox mapping and the class time label: every hour of 2026', () => {
     for (const t of HOURS_2026) {
@@ -251,7 +247,7 @@ describe('TZ.9 Europe/Dublin is byte-identical', () => {
       expect(hyroxClassTimeLabel(iso, DUB)).toBe(LEGACY.hyroxClassTimeLabelLegacyDublin(iso))
     }
     expect(zonedDateStr('garbage', DUB)).toBe(LEGACY.dublinDateStrLegacyDublin('garbage'))
-  }, YEAR_LOOP_TIMEOUT)
+  })
 
   it.each(SAMPLES)('event reminders: same events, same offsets as the Dublin-today run (%s)', async (iso) => {
     const now = Date.parse(iso)

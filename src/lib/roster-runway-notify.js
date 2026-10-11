@@ -35,12 +35,12 @@
 
 import { notifyUsersAtRolesOnce } from './push-dedup'
 import { fetchRosterRunways } from './roster-runway-data'
-import { dublinDayStr } from './dublin-time'
+import { DEFAULT_TZ, resolveZone, resolveZoneWithFallback } from './location-time'
 // QUIET HOURS are SHIFTREMIND.1's (#1730): one band, one predicate, one
 // timezone validator for every unprompted staff push. Imported, not copied, so
 // the two cannot drift. (COVERLOOP.1 is moving them to src/lib/staff-push-hours.js
 // and re-exporting from shift-reminders.js, so this import keeps working.)
-import { isInSendWindow, isValidTimeZone, NO_REMINDER_BEFORE, NO_REMINDER_FROM } from './shift-reminders'
+import { isInSendWindow, NO_REMINDER_BEFORE, NO_REMINDER_FROM } from './shift-reminders'
 import { rosterRunwayHeadline, rosterRunwayDetail } from '@shared/roster-runway'
 import { logWarn } from './log'
 
@@ -48,7 +48,6 @@ import { logWarn } from './log'
 // masters linked to the location.
 export const RUNWAY_NOTIFY_ROLES = Object.freeze(['owner', 'manager', 'head_coach'])
 
-const DEFAULT_TZ = 'Europe/Dublin'
 
 // The send band, studio wall clock, [from, until): shift-reminders' own.
 export const RUNWAY_SEND_FROM = NO_REMINDER_BEFORE
@@ -85,10 +84,9 @@ export function isInRunwaySendWindow(nowMs, tz = DEFAULT_TZ) {
 export function decideRunwayPush({ runway, location, nowMs }) {
   if (!runway) return { send: false, reason: 'ready' }
 
-  const raw = location?.timezone
-  const valid = isValidTimeZone(raw)
-  const timezoneFallback = raw != null && !valid
-  const tz = valid ? raw : DEFAULT_TZ
+  // TZ.8a — the canonical resolver (same answers: NULL is DEFAULT_TZ
+  // silently, an invalid value is DEFAULT_TZ with `timezoneFallback`).
+  const { zone: tz, fallback: timezoneFallback } = resolveZoneWithFallback(location?.timezone)
 
   if (!isInRunwaySendWindow(nowMs, tz)) return { send: false, reason: 'quiet_hours', timezoneFallback }
 
@@ -114,7 +112,8 @@ export function decideRunwayPush({ runway, location, nowMs }) {
 
 /**
  * @param {object} db  service-role supabase client
- * @param {{ nowMs?: number }} [opts]  the instant; "today" is its Dublin day
+ * @param {{ nowMs?: number }} [opts]  the instant; "today" is its day at EACH
+ *   studio (TZ.8a: the studio's locations.timezone, read with the row)
  * `alerts` counts unready (studio, week) pairs; `quiet_hours` how many of them
  * were held back by the band.
  * @returns {Promise<{ locations: number, alerts: number, quiet_hours: number, sent: number, emailed: number, deduped: number, failed: number, recipients_failed: number }>}
@@ -126,14 +125,16 @@ export function decideRunwayPush({ runway, location, nowMs }) {
  */
 export async function runRosterRunwayAlerts(db, { nowMs = Date.now() } = {}) {
   const outcome = { locations: 0, alerts: 0, quiet_hours: 0, sent: 0, emailed: 0, deduped: 0, failed: 0, recipients_failed: 0 }
-  const todayIso = dublinDayStr(nowMs)
-
   const { data: locations, error: locErr } = await db.from('locations').select('id, name, timezone')
   if (locErr) throw new Error(`locations read failed: ${locErr.message}`)
   outcome.locations = (locations || []).length
   if (outcome.locations === 0) return outcome
 
-  const res = await fetchRosterRunways(db, locations.map((l) => l.id), { todayIso })
+  // TZ.8a — each studio's "today" is its own day of nowMs, in the zone on the
+  // row just read (no second read; an unreadable table already threw above).
+  // Resolved silently here: an invalid value is warned once, below.
+  const zones = new Map(locations.map((l) => [l.id, resolveZone(l.timezone)]))
+  const res = await fetchRosterRunways(db, locations.map((l) => l.id), { zones, nowMs })
   if (!res.success) throw new Error(`runway read failed: ${res.error}`)
 
   for (const loc of locations) {
