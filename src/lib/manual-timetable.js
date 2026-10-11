@@ -12,7 +12,7 @@
 // TZ.7: the timetable is wall clock in the STUDIO's zone (the caller passes
 // its location's `locations.timezone`). Europe/Dublin output is byte-identical
 // to before (bookings-classes.tz.test.js).
-import { dateKeyIn, dayStartMsIn, addDaysIn, instantToZonedParts, formatInZone, DEFAULT_TZ } from '@shared/zoned-time'
+import { dateKeyIn, addDaysIn, zonedWallClockToInstant, formatInZone, DEFAULT_TZ } from '@shared/zoned-time'
 
 const LABEL_OPTS = Object.freeze({ weekday: 'short', day: 'numeric', month: 'short' })
 
@@ -184,21 +184,6 @@ function isoWeekday(dateKey) {
   return js === 0 ? 7 : js
 }
 
-// UTC ms of a wall-clock time on a calendar day in `zone`.
-// Midnight + minutes is an hour out on the two clock-change days (25 Oct 2026
-// has 25 hours), so read back the wall clock it landed on and correct once.
-// KNOWN BUG, owned by TZ.17 (plan: manual-timetable.js:188): this one-pass
-// correction puts a 23:xx slot on the spring-forward day a day late. TZ.7 only
-// made the zone a parameter and kept the algorithm, so its output is unchanged;
-// TZ.17 switches it to zonedWallClockToInstant.
-function zonedWallClockMsOnePass(dateKey, time, zone) {
-  const [h, mi] = time.split(':').map(Number)
-  const wanted = h * 60 + mi
-  const guess = dayStartMsIn(dateKey, zone) + wanted * 60_000
-  const landed = instantToZonedParts(guess, zone)
-  return guess + (wanted - landed.minuteOfDay) * 60_000
-}
-
 function slugForId(name) {
   return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'class'
 }
@@ -222,8 +207,12 @@ export function manualClassOccurrences({ slots, startDate = null, minNoticeHours
     const dow = isoWeekday(dateKey)
     for (const slot of slots) {
       if (slot.dow !== dow) continue
-      const ms = zonedWallClockMsOnePass(dateKey, slot.time, zone)
-      if (ms < earliestMs) continue
+      // TZ.17 — the canonical two-pass solver. The private one-pass correction
+      // it replaces put a 23:xx slot on the spring-forward day a day late, and
+      // on a fall-back day (01:xx happens twice in Dublin) could pick the other
+      // 01:xx from the one every booking and shift resolves to.
+      const ms = zonedWallClockToInstant(dateKey, slot.time, zone)
+      if (ms === null || ms < earliestMs) continue
       out.push({
         event_id: `${MANUAL_EVENT_PREFIX}${dateKey.replaceAll('-', '')}-${slot.time.replace(':', '')}-${slugForId(slot.name)}`,
         name: slot.name,

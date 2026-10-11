@@ -170,7 +170,14 @@ describe('TZ.13 Europe/Dublin is byte-identical (explicit zone AND omitted zone)
     for (const now of NOWS) {
       const h = historyAt(now)
       expect(PA.activityCalendar(h, now, 14, DUB)).toStrictEqual(L.PA.activityCalendar(h, now, 14))
-      expect(PA.personalRecords(h, DUB)).toStrictEqual(L.PA.personalRecords(h))
+      // TZ.17 ⚠️ moved the best-week bucket onto the Dublin week: it differs
+      // from the frozen UTC week only when a session falls 00:00-01:00 IST
+      // (pinned in src/lib/tz-17.dublin.test.js).
+      const midnightHour = h.some((x) => new Date(x.started_at).getUTCHours() === 23 && x.started_at.slice(0, 10) !== new Intl.DateTimeFormat('en-CA', { timeZone: DUB }).format(new Date(x.started_at)))
+      const { bestWeekPoints, ...rest } = PA.personalRecords(h, DUB)
+      const { bestWeekPoints: legacyBestWeek, ...legacyRest } = L.PA.personalRecords(h)
+      expect(rest).toStrictEqual(legacyRest)
+      if (!midnightHour) expect(bestWeekPoints).toStrictEqual(legacyBestWeek)
     }
     const now = Date.parse('2026-12-31T23:30:00Z')
     expect(PA.activityCalendar(historyAt(now), now, 364)).toStrictEqual(L.PA.activityCalendar(historyAt(now), now, 364))

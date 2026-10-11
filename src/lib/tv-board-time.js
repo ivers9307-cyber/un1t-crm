@@ -42,11 +42,13 @@ const pad2 = (n) => String(n).padStart(2, '0')
 
 /**
  * The cast board's idle clock: hour, minute and the day line ("today").
- * @param {Date} now
+ * @param {Date|null} now  null before the screen has mounted (TZ.17: the
+ *   server never renders a clock) → all three empty
  * @param {string|null} zone  boardZone(); null → the screen's own clock
  * @returns {{ hh: string, mm: string, day: string }}
  */
 export function idleBoardClock(now, zone) {
+  if (!now) return { hh: '', mm: '', day: '' }
   if (!zone) {
     return { hh: pad2(now.getHours()), mm: pad2(now.getMinutes()), day: now.toLocaleDateString('en-IE', IDLE_DAY_OPTIONS) }
   }

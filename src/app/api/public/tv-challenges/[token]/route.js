@@ -16,7 +16,7 @@ import { computeStandings, computeCollective } from '@/lib/challenges-io'
 import { challengePhase, windowIso } from '@/lib/challenges'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { resolveLocationBrand } from '@/lib/host-brand'
-import { zoneOfLocation } from '@/lib/location-time'
+import { zoneOfLocation, monthStartMsIn } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -94,8 +94,11 @@ export async function GET(request, props) {
     }
   }
 
-  const d = new Date(nowMs)
-  const monthFrom = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString()
+  // TZ.17 — the monthly gym board starts on the studio's 1st at local midnight
+  // (it started at 00:00 UTC, so from 00:00 to 01:00 Irish summer time on the
+  // 1st the board still showed last month, and 00:xx sessions on the 1st were
+  // never counted).
+  const monthFrom = new Date(monthStartMsIn(nowMs, zone)).toISOString()
   const gym = await computeStandings(db, { locationId, metric: 'points', fromIso: monthFrom, toIso: new Date(nowMs).toISOString(), excludeOptedOut: true })
 
   // W1.S1b — the studio's brand for "{Brand} Points" and the tab title

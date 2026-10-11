@@ -11,6 +11,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { getCachedGbpToEur } from '@/lib/fx'
 import { computeReportMetrics } from '@/lib/cars'
+import { zoneOfLocation } from '@/lib/location-time'
 import CarsReports from '@/components/cars/CarsReports'
 
 export const dynamic = 'force-dynamic'
@@ -42,7 +43,9 @@ export default async function CarsReportsPage() {
   ])
 
   const liveFxRate = fx?.rate ?? null
-  const metrics = computeReportMetrics(cars || [], { liveRate: liveFxRate })
+  // TZ.17 — the studio's calendar for YTD / MTD / the monthly buckets. The
+  // active location row already carries its zone (no query).
+  const metrics = computeReportMetrics(cars || [], { liveRate: liveFxRate, zone: zoneOfLocation(user.activeLocation) })
 
   return (
     <CarsReports

@@ -87,6 +87,7 @@ import { logInfo } from './log.js'
 import { buildCampaignViewUrl, prependViewInBrowserLink, fetchLocationEmailCopy } from './campaign-web-view.js'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { withSendMarker } from './postmark-send-marker.js'
+import { zoneOfLocation } from './location-time.js'
 
 const CHUNK_SIZE = 500             // recipients per cron tick per campaign
 const AUDIENCE_PAGE_SIZE = 1000    // audience load page (CAMPAIGN.11)
@@ -141,7 +142,8 @@ async function writeOrLog(builder, what, campaignId) {
  *
  * @param {SupabaseClient} db — service-role client
  * @param {object} campaign — full campaigns row (joined with
- *   locations(name, slug, email_inbox_reply_to, settings) — settings feeds
+ *   locations(name, slug, email_inbox_reply_to, settings, features, timezone)
+ *   — settings feeds
  *   the FREQ-CAP.1 gate; a missing join degrades to cap-disabled)
  * @returns {Promise<{ phase: string, sent?: number, error?: string }>}
  */
@@ -788,6 +790,9 @@ export async function tickCampaignSend(db, campaign) {
   // unresolved). Same extras on the body, the preheader and the subject.
   const { companyName: campaignBrand } = await getLocationBranding(db, campaign.location_id)
   const companyName = campaignBrand || ''
+  // TZ.17 — {{current_year}} on the campaign studio's calendar (the join
+  // carries locations.timezone; a missing join is Europe/Dublin).
+  const mergeZone = zoneOfLocation(campaign.locations)
 
   const emailBatch = queuedRows.map(row => {
     const contact = row.contact
@@ -814,6 +819,7 @@ export async function tickCampaignSend(db, campaign) {
       company_name: companyName,
       unsubscribe_url: unsubscribeUrl,
       preference_url: preferenceUrl,
+      zone: mergeZone, // TZ.17 — {{current_year}} on the sending studio's calendar
     })
     const personalizedHtml = unsubscribeUrl ? appendUnsubscribeFooter(merged, unsubscribeUrl) : merged
 
@@ -826,7 +832,7 @@ export async function tickCampaignSend(db, campaign) {
     // the editor but never used at send time. Inject it as a standard
     // hidden preheader, first thing inside the body, merge tags applied.
     const previewText = campaign.preview_text
-      ? applyMergeTags(campaign.preview_text, contact, { location_name: campaign.locations?.name || '', company_name: companyName })
+      ? applyMergeTags(campaign.preview_text, contact, { location_name: campaign.locations?.name || '', company_name: companyName, zone: mergeZone })
       : null
     // WEBVIEW.1 — "view in browser", inserted AFTER the plain-text part is
     // derived (the text alternative is never clipped, so it does not need the
@@ -865,6 +871,7 @@ export async function tickCampaignSend(db, campaign) {
         company_name: companyName,
         unsubscribe_url: unsubscribeUrl,
         preference_url: preferenceUrl,
+        zone: mergeZone,
       }),
       htmlBody: finalHtml,
       textBody,

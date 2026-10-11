@@ -31,7 +31,10 @@ export default function TVDisplay({ token, initial }) {
   // place — when the poll sees a new push the page hard-reloads
   // (see below), so the only state that moves here is the clock.
   const [data] = useState(initial)
-  const [now, setNow] = useState(new Date())
+  // TZ.17 — no clock until mounted: a server render would print the SERVER's
+  // time (UTC on Vercel) and, with no payload zone, its zone too, until
+  // hydration replaced it. The screen fills it on its first effect.
+  const [now, setNow] = useState(null)
   const lastPushedAtRef = useRef(initial?.content?.pushed_at || null)
   const lastRotationRef = useRef(initial?.display?.rotation ?? 0)
 
@@ -69,6 +72,7 @@ export default function TVDisplay({ token, initial }) {
   }, [token])
 
   useEffect(() => {
+    setNow(new Date())
     const handle = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(handle)
   }, [])
@@ -238,10 +242,10 @@ function IdleView({ now, zone = null, logoUrl, companyName }) {
         </div>
       )}
       <div style={{ fontSize: '18cqh', fontWeight: 700, fontVariantNumeric: 'tabular-nums', lineHeight: 1, fontFamily: tvFontFamily }}>
-        {hh}:{mm}
+        {hh ? `${hh}:${mm}` : '\u00a0'}
       </div>
       <div style={{ fontSize: '3.5cqh', color: '#888', letterSpacing: '0.1em', fontFamily: tvFontFamily }}>
-        {day}
+        {day || '\u00a0'}
       </div>
     </div>
   )

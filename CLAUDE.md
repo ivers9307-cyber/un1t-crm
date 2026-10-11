@@ -232,9 +232,9 @@ and stays authoritative for its copies until backend consolidation.
   written** — `tiers` (web grew the windowed-decay helpers, which
   `src/lib/live-class.js` depends on, so they must NOT be deleted to force
   identity), `heart-rate` (zone LABELS differ, `'Z1'` vs `'Zone 1'`), and
-  `goals` (**UTC vs Europe/Dublin week boundaries and a different `periodEnd`
-  arity, while web reads `@/lib/goals` and mobile reads `shared/goals` for
-  the same member's progress — OPEN**). Those three are pinned in mode
+  `goals` (UTC vs Europe/Dublin week boundaries, fixed by TZ.17: both now
+  bucket on the member's zone; **a different `periodEnd` arity is still
+  OPEN**). Those three are pinned in mode
   `diverged`, which fires in BOTH directions: a newly-drifted export fails,
   and so does a silent re-sync. **The champ-app leg is unguardable from this
   repo** — nothing here can read that repo, so the ~20-module rule above

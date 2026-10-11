@@ -15,7 +15,8 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { profitBreakdown, splitIrishPrice } from '@/lib/cars'
+import { profitBreakdown, splitIrishPrice, carsYearStartIso } from '@/lib/cars'
+import { zoneOfLocation } from '@/lib/location-time'
 import { getCachedGbpToEur } from '@/lib/fx'
 
 export const runtime = 'nodejs'
@@ -61,7 +62,9 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 
-  const startOfYear = new Date(new Date().getFullYear(), 0, 1).toISOString()
+  // TZ.17 — 1 Jan 00:00 on the active studio's calendar (it was the server
+  // clock's year start; identical for Europe/Dublin, which is on GMT in January).
+  const startOfYear = carsYearStartIso(Date.now(), zoneOfLocation(user.activeLocation))
   const today = new Date().toISOString().slice(0, 10) // eslint-disable-line guardrails/no-utc-today -- CSV export filename suffix (cars-*-${today}.csv); a UTC date key, not a business date
 
   let csv = ''

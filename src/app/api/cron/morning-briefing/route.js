@@ -84,7 +84,8 @@ export async function GET(request) {
       // BRIEFING.2 — the pulse strip is best-effort (fetchStudioPulse
       // returns null on failure); the triage list is the core payload.
       const [rows, pulseBundle] = await Promise.all([
-        fetchLocationTodayFeed(db, loc.id),
+        // TZ.17 — the feed's "today" is this studio's day (the slot's zone).
+        fetchLocationTodayFeed(db, loc.id, nowMs, { zone: slot.zone }),
         fetchStudioPulse(db, loc.id),
       ])
       const { subject, html } = buildMorningBriefingEmail(rows, {

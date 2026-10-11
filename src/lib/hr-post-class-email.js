@@ -523,11 +523,13 @@ function escapeHtml(s) {
 }
 
 // TZ.13 — in the session's studio zone (`zone`, from loadContextForSession).
+// The catch only fires for a zone Intl rejects; TZ.17 made its fallback the
+// platform zone, explicitly (it was the server's clock: UTC on Vercel).
 function formatStartLabel(iso, zone) {
   try {
     return formatWeekdayShortDateTimeInTZ(iso, zone)
   } catch {
-    return new Date(iso).toLocaleString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+    return new Date(iso).toLocaleString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: DEFAULT_TZ })
   }
 }
 

@@ -1,10 +1,11 @@
 // Vercel cron — hourly (TZ.6); acts for each member's home studio at its daily
 // slot: 11:00 UTC for a Europe/Dublin studio (as before, ~midday Dublin), 11:00
 // local for any other zone (src/lib/cron-daily-slot.js, at most once per studio
-// per local day). "Yesterday" and the daily key are the studio's: for a Dublin
-// studio, exactly the UTC-day window and UTC date the cron always used (the
-// slot is 11:00 UTC, where the two calendars agree); for any other zone, its
-// local day. (streakAtRisk itself still counts Dublin days: TZ.13's.)
+// per local day). "Yesterday" and the daily key are the studio's: since TZ.17
+// the window is the studio's own yesterday for every zone, Dublin included
+// (it was the UTC day for a Dublin studio, an hour off in Irish summer time);
+// the key is still the slot's day, the same date the cron always used
+// (src/lib/nudge-windows.js). streakAtRisk counts the member's home studio days.
 // Pushes a loss-aversion nudge to members whose streak (>= MIN_STREAK days,
 // ending YESTERDAY) will break unless they train today. Idempotent per member
 // per day via customer_engagement_nudges. Reachable members only (push token).
@@ -27,7 +28,7 @@ import { streakAtRisk, buildStreakAtRiskPush } from '@/lib/customer-notification
 import { logError, logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { gateDailySlot, scopeOf, readContactHomes, slotTickStampable } from '@/lib/cron-daily-slot'
-import { dayStartMsIn, addDaysIn } from '@/lib/location-time'
+import { streakCandidateWindow } from '@/lib/nudge-windows'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -57,20 +58,13 @@ export async function GET(request) {
     return NextResponse.json({ ok: !gate.faulted, slot: gate.summary, candidates: 0, nudged: 0 }, { status: gate.faulted ? 500 : 200 })
   }
 
-  // One "yesterday" window per calendar among the due studios. A legacy
-  // (Dublin, UTC-hour) slot keeps the UTC-midnight window and UTC date it has
-  // always used; any other zone uses its own local midnights.
-  const windows = new Map() // calendar zone → { todayMs, yestMs, dedupKey, scopes:Set }
+  // One "yesterday" window per (zone, day) among the due studios: the studio's
+  // own local midnights, Dublin included (TZ.17). The dedup key stays the slot
+  // day (src/lib/nudge-windows.js).
+  const windows = new Map() // `${zone}|${day}` → { todayMs, yestMs, dedupKey, scopes:Set }
   for (const [scope, slot] of gate.slots) {
-    const cal = slot.legacy ? 'UTC' : slot.zone // a legacy slot's day is also the UTC day
-    if (!windows.has(cal)) {
-      windows.set(cal, {
-        todayMs: dayStartMsIn(slot.day, cal),
-        yestMs: dayStartMsIn(addDaysIn(slot.day, -1, cal), cal),
-        dedupKey: slot.day,
-        scopes: new Set(),
-      })
-    }
+    const cal = `${slot.zone}|${slot.day}`
+    if (!windows.has(cal)) windows.set(cal, { ...streakCandidateWindow(slot), scopes: new Set() })
     windows.get(cal).scopes.add(scope)
   }
 
@@ -154,7 +148,10 @@ export async function GET(request) {
   const atRisk = []
   for (const cid of ids) {
     if (unread.has(cid)) continue
-    const streak = streakAtRisk(byContact.get(cid) || [], nowMs, MIN_STREAK)
+    // TZ.17 — the streak on the member's home studio calendar (D7): the zone of
+    // the slot that made them a candidate.
+    const memberZone = gate.slots.get(scopeOf(homes.get(cid)))?.zone
+    const streak = streakAtRisk(byContact.get(cid) || [], nowMs, MIN_STREAK, memberZone)
     if (streak > 0) atRisk.push({ cid, streak, dedupKey: candidateWindow.get(cid).dedupKey }) // YYYY-MM-DD
   }
   // A gate fault (a claim write failed) also withholds the stamp: those slots were skipped.
