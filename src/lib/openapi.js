@@ -9097,6 +9097,73 @@ registry.registerPath({
   },
 })
 
+// TZ.3 — changing an existing location's timezone (D2 = A: owners and master,
+// any time, after the preflight counts and a typed-name confirm). The only
+// writer of locations.timezone after creation (mig 719 revoked the client UPDATE).
+const TimezonePreflightCounts = z.object({
+  bookings: z.number().int().nullable(),
+  shift_blocks: z.number().int().nullable(),
+  race_events: z.number().int().nullable(),
+  hyrox_blocks: z.number().int().nullable(),
+  pending_enrolments: z.number().int().nullable(),
+  sonos_schedules: z.number().int().nullable(),
+  shelly_devices: z.number().int().nullable(),
+  drip_broadcasts: z.number().int().nullable(),
+}).openapi('TimezonePreflightCounts')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/timezone',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Preflight for changing a location\'s timezone (owner or master)',
+  description:
+    'Counts what has future wall-clock meaning at the location, judged against TODAY IN ITS CURRENT ZONE: future ' +
+    'bookings and shift blocks, upcoming race events, running Hyrox blocks, pending sequence steps (active enrolments ' +
+    'with next_step_at in the future), enabled Sonos schedules, scheduled Shelly devices, and scheduled or sending ' +
+    'WhatsApp drip broadcasts. A count that could not be read is null and named in `unknown` (never 0). ' +
+    '`hasFutureData` is true if any count is above 0, false only if every count answered 0, else null. Nothing is ' +
+    'refused for having future data (D2 = A). Gate: membership (404) then owner-or-master AT the location (403).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ location: { id, name, timezone }, today, future, unknown, hasFutureData }', content: { 'application/json': { schema: SuccessResponse(z.object({ future: TimezonePreflightCounts }).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden: owner or master at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The location could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/timezone',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Change a location\'s timezone (owner or master, typed-name confirm)',
+  description:
+    'Sets locations.timezone to a canonical IANA zone (canonicalZone; fixed offsets and unknown names are 400 ' +
+    '`invalid_timezone`, as is the mig 719 trigger refusing it, 22023). `confirm_name` must be the location\'s name ' +
+    '(surrounding spaces ignored, case-sensitive) or 400 `confirm_mismatch`. The same zone in any spelling is a no-op ' +
+    '200 (`changed: false`): nothing written or logged. A change: wall-clock rows keep their LOCAL meaning (09:00 stays ' +
+    '09:00 in the new zone); stored instants and calendar keys are not rewritten; pending sequence steps are re-clamped ' +
+    'by the next scheduler pass; unfinished WhatsApp broadcasts whose send_window_tz is the OLD zone follow the new one ' +
+    '(ones set to another zone are listed in `broadcasts.kept`; a failed follow is `warning: "broadcasts_not_followed"`, ' +
+    'never an undo); the instance zone cache is dropped; one audit_events row (location.timezone_changed) records from, ' +
+    'to and the preflight counts. Gate: membership (404) then owner-or-master AT the location (403).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ timezone: z.string().max(64), confirm_name: z.string().max(200) }).openapi('LocationTimezoneChange') } } },
+  },
+  responses: {
+    200: { description: '{ timezone, previous, changed, future?, unknown?, broadcasts?: { followed, kept } }, plus `warning` when broadcasts did not follow', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'Invalid body, `invalid_timezone`, or `confirm_mismatch`', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden: owner or master at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The location could not be read or written', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Tenant console (INTEG-D2) — master roster / drill-in / wallet adjust
 // ============================================================================

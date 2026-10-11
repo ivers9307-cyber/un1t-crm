@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 import { PLATFORM_TZ } from '@shared/zoned-time'
 import TimezoneSelect from '@/components/settings/TimezoneSelect'
+import TimezoneChangeDialog from '@/components/settings/TimezoneChangeDialog'
 import { COUNTRY_OPTIONS, browserZone, countryZoneMismatch, zoneOffsetLabel } from '@/lib/timezone-options'
 
 export default function LocationForm({ location, callerRole = 'owner', organizations = [], showEmailTab = false }) {
@@ -23,9 +24,13 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   const [email, setEmail] = useState(location?.email || '')
   // TZ.2 — creation: the zone is REQUIRED and pre-filled from the creating
   // browser's zone (D8), shown next to the country. Edit: shown read-only;
-  // no client may write locations.timezone since mig 719 (TZ.3 adds the
-  // preflighted change route and its dialog).
+  // no client may write locations.timezone since mig 719. TZ.3: "Change
+  // timezone" opens <TimezoneChangeDialog>, which runs the preflight and
+  // saves through PUT /api/locations/[id]/timezone (D2 = A: any time, with
+  // the counts shown and the location name typed to confirm).
   const [timezone, setTimezone] = useState(location?.timezone || PLATFORM_TZ)
+  const [changingTimezone, setChangingTimezone] = useState(false)
+  const [timezoneNotice, setTimezoneNotice] = useState(null)
   const timezoneTouched = useRef(false)
   useEffect(() => {
     if (isEditing || timezoneTouched.current) return
@@ -186,7 +191,16 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
     router.refresh()
   }
 
+  function handleTimezoneChanged(data) {
+    setChangingTimezone(false)
+    if (!data?.changed) return
+    setTimezone(data.timezone)
+    setTimezoneNotice(timezoneChangeNotice(data))
+    router.refresh()
+  }
+
   return (
+    <>
     <form onSubmit={handleSubmit} className="space-y-6">
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3">
@@ -283,7 +297,12 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
             <p className="text-xs text-un1t-muted mt-1">Drives the public-holiday list on the schedule. All listed countries have built-in holidays through 2030.</p>
           </div>
           {isEditing ? (
-            <TimezoneReadOnly timezone={timezone} country={country} />
+            <TimezoneReadOnly
+              timezone={timezone}
+              country={country}
+              notice={timezoneNotice}
+              onChangeClick={() => { setTimezoneNotice(null); setChangingTimezone(true) }}
+            />
           ) : (
             <TimezoneSelect
               value={timezone}
@@ -402,13 +421,41 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
         </button>
       </div>
     </form>
+    {/* TZ.3 — outside the <form>: the dialog has its own form, and nested
+        forms are invalid. Mounted only while open, so each opening runs a
+        fresh preflight. The name to type is the SAVED one (the server checks
+        against the row, not an unsaved edit). */}
+    {isEditing && changingTimezone && (
+      <TimezoneChangeDialog
+        location={{ id: location.id, name: location.name, timezone }}
+        country={country}
+        onClose={() => setChangingTimezone(false)}
+        onChanged={handleTimezoneChanged}
+      />
+    )}
+    </>
   )
 }
 
-// TZ.2 — an existing location's zone, read-only. Changing it needs TZ.3's
-// preflight (what moves, typed-name confirm) and its service-role route; until
-// that ships the button is disabled, so no path saves a zone unvalidated.
-function TimezoneReadOnly({ timezone, country }) {
+// What to tell the owner after a change (TZ.3). Broadcasts that kept their own
+// zone are named; a broadcast follow that failed is said plainly.
+function timezoneChangeNotice(data) {
+  const parts = [`Timezone changed to ${String(data.timezone).replace(/_/g, ' ')}.`]
+  const kept = data.broadcasts?.kept || []
+  if (data.warning === 'broadcasts_not_followed') {
+    parts.push('Some WhatsApp drip broadcasts could not be moved to the new timezone. Check their send windows.')
+  }
+  if (kept.length > 0) {
+    const who = kept.length === 1 ? 'One broadcast keeps its' : `${kept.length} broadcasts keep their`
+    parts.push(`${who} own timezone: ${kept.map((b) => b.name || 'Untitled').join(', ')}.`)
+  }
+  return parts.join(' ')
+}
+
+// TZ.2 — an existing location's zone, read-only here. TZ.3: the button opens
+// the change dialog (preflight, typed-name confirm, service-role route), so no
+// path saves a zone unvalidated.
+function TimezoneReadOnly({ timezone, country, notice, onChangeClick }) {
   const offset = zoneOffsetLabel(timezone)
   const hint = countryZoneMismatch(country, timezone)
   return (
@@ -422,11 +469,12 @@ function TimezoneReadOnly({ timezone, country }) {
       </div>
       <button
         type="button"
-        disabled
-        className="mt-2 text-xs text-un1t-muted border border-un1t-border rounded-md px-2.5 py-1 disabled:opacity-60"
+        onClick={onChangeClick}
+        className="mt-2 text-xs text-un1t-subtle border border-un1t-border rounded-md px-2.5 py-1 hover:text-un1t-text"
       >
-        Change timezone (coming next)
+        Change timezone
       </button>
+      {notice && <p role="status" className="text-xs text-un1t-subtle mt-1">{notice}</p>}
       {hint && <p role="status" className="text-xs text-amber-700 mt-1">{hint}</p>}
     </div>
   )
