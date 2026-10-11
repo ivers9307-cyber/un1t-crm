@@ -35,6 +35,7 @@ import { logInfo, logWarn, logError } from '@/lib/log'
 import { formatWeekdayShortDateTimeInTZ } from '@/lib/dates'
 import { getAppUrl, getMemberAppUrl } from '@/lib/app-url'
 import { getLocationBranding } from '@/lib/location-branding'
+import { productName } from '@/lib/brand-name'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 const HISTORY_LOOKBACK_DAYS = 90
@@ -188,7 +189,10 @@ export async function loadContextForSession(db, sessionId) {
   // W1.S4 — the highlight names the product in the studio's brand ("UN1T
   // Points"). Resolved last, after every read the tests count; the resolver
   // never throws and answers '' when unresolved (bare "Points").
-  const { shortName } = await getLocationBranding(db, session.location_id)
+  // W1.S1a — the same lookup yields the studio's configured brand
+  // (companyName), which the eyebrow, the "big day at" subject and the
+  // footer name; product names stay on the SHORT brand.
+  const { shortName, companyName } = await getLocationBranding(db, session.location_id)
 
   return {
     ok: true,
@@ -200,6 +204,7 @@ export async function loadContextForSession(db, sessionId) {
     contact: session.contact,
     unsubscribeToken,
     shortName,
+    companyName,
   }
 }
 
@@ -211,7 +216,13 @@ export async function loadContextForSession(db, sessionId) {
  * + text. Tested standalone.
  */
 export function composeEmail(ctx, { nowMs = Date.now(), customerBaseUrl = null } = {}) {
-  const { session, thisSession, history, eventTypeName, contact, shortName = '' } = ctx
+  const { session, thisSession, history, eventTypeName, contact, shortName = '', companyName = '' } = ctx
+  // W1.S1a — product names on the SHORT brand ("UN1T Points" / "UN1T HR"),
+  // the studio named by its configured brand ("UN1T Stillorgan"). Either
+  // blank degrades to the bare noun / a sentence without a name.
+  const pointsName = productName(shortName, 'points')
+  const hrName = productName(shortName, 'hr')
+  const brand = String(companyName || '').trim()
   const report = buildSessionReport({ session, thisSession, history, eventTypeName, cta: ctx.cta, shortName }, { nowMs })
   // Adapt the report back to the shapes the existing renderers read, so
   // the email's output is byte-identical while the numbers now flow from
@@ -252,35 +263,42 @@ export function composeEmail(ctx, { nowMs = Date.now(), customerBaseUrl = null }
   const vcLine = (vc && vc.percentile != null && vc.sample_size >= 2)
     ? (Math.round(vc.percentile * 100) >= 50
         ? `Top ${100 - Math.round(vc.percentile * 100)}% of your last ${vc.sample_size} ${vc.category} classes.`
-        : `Building back up in your ${vc.category} classes — avg ${vc.mean_points} pts over your last ${vc.sample_size}.`)
+        : `Building back up in your ${vc.category} classes: avg ${vc.mean_points} pts over your last ${vc.sample_size}.`)
     : null
 
-  const subject = pickSubject({ firstName, classLabel, points, highlight: analytics.highlight })
+  const subject = pickSubject({ firstName, classLabel, points, highlight: analytics.highlight, pointsName, hrName, brand })
 
   return {
     subject,
     text: renderText({
       firstName, classLabel, startedAt, points, peak, avg, durationMin,
-      breakdown, analytics, vcLine, sessionUrl, na,
+      breakdown, analytics, vcLine, sessionUrl, na, pointsName,
     }),
     html: renderHtml({
       firstName, classLabel, startedAt, points, peak, avg, durationMin,
       breakdown, analytics, vcLine, sessionUrl, contact, sessionId: session.id, na,
       unsubscribeToken: ctx.unsubscribeToken || null,
-      customerBaseUrl,
+      customerBaseUrl, pointsName, brand,
     }),
     analytics,
   }
 }
 
-function pickSubject({ firstName, classLabel, points, highlight }) {
-  if (highlight?.id === 'first_ever') return `Welcome to UN1T HR, ${firstName}`
+// W1.S1a — every subject names the studio's own brand (pointsName / hrName
+// from productName, `brand` = the configured company name), and customer
+// copy carries no em-dashes.
+function pickSubject({ firstName, classLabel, points, highlight, pointsName, hrName, brand }) {
+  if (highlight?.id === 'first_ever') return `Welcome to ${hrName}, ${firstName}`
   if (highlight?.id === 'first_z5') return `${firstName}, you hit Z5 today`
   if (highlight?.id === 'new_peak') return `New peak HR for ${firstName} 🔥`
-  if (highlight?.id === 'best_class_type_points') return `${firstName} — personal best in ${classLabel}`
-  if (highlight?.id === 'top_quartile_recent') return `${firstName}, big day at UN1T (${points} UN1T Points)`
+  if (highlight?.id === 'best_class_type_points') return `${firstName}, a personal best in ${classLabel}`
+  if (highlight?.id === 'top_quartile_recent') {
+    return brand
+      ? `${firstName}, big day at ${brand} (${points} ${pointsName})`
+      : `${firstName}, big day (${points} ${pointsName})`
+  }
   if (highlight?.id === 'streak') return `${firstName}, you're on a streak`
-  return `Your ${classLabel} — ${points} UN1T Points`
+  return `Your ${classLabel}: ${points} ${pointsName}`
 }
 
 function trendLabel(trend) {
@@ -301,14 +319,14 @@ function classTypeLabel(classType) {
   if (pctRound >= 75) return `Top ${100 - pctRound}% of your last ${classType.recentCount} ${classType.eventTypeName || 'sessions'}.`
   if (pctRound >= 50) return `Above your usual for ${classType.eventTypeName || 'this class'} (mean ${classType.meanPoints} pts over your last ${classType.recentCount}).`
   if (pctRound >= 25) return `A bit below your usual for ${classType.eventTypeName || 'this class'} (mean ${classType.meanPoints} pts).`
-  return `Lighter than your usual ${classType.eventTypeName || 'session'} — yours mean ${classType.meanPoints} pts.`
+  return `Lighter than your usual ${classType.eventTypeName || 'session'}: your mean is ${classType.meanPoints} pts.`
 }
 
-function renderText({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, na }) {
+function renderText({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, na, pointsName }) {
   const lines = []
   lines.push(`Hi ${firstName},`)
   lines.push('')
-  lines.push(`${classLabel} on ${startedAt} — ${points} UN1T Points.`)
+  lines.push(`${classLabel} on ${startedAt}: ${points} ${pointsName}.`)
   if (analytics.highlight) lines.push('')
   if (analytics.highlight) lines.push(`★ ${analytics.highlight.message}`)
   lines.push('')
@@ -327,17 +345,17 @@ function renderText({ firstName, classLabel, startedAt, points, peak, avg, durat
   const ctLabel = classTypeLabel(analytics.classType)
   if (ctLabel) {
     lines.push('')
-    lines.push(`Class trend — ${ctLabel}`)
+    lines.push(`Class trend: ${ctLabel}`)
   }
   if (vcLine) {
     lines.push('')
-    lines.push(`Category trend — ${vcLine}`)
+    lines.push(`Category trend: ${vcLine}`)
   }
 
   const tPoints = trendLabel(analytics.overall.pointsTrend)
   if (tPoints) {
     lines.push('')
-    lines.push(`Overall: UN1T Points ${tPoints.label}.`)
+    lines.push(`Overall: ${pointsName} ${tPoints.label}.`)
   }
 
   lines.push('')
@@ -349,7 +367,7 @@ function renderText({ firstName, classLabel, startedAt, points, peak, avg, durat
   return lines.join('\n')
 }
 
-function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, contact, sessionId, na, unsubscribeToken, customerBaseUrl }) {
+function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, contact, sessionId, na, unsubscribeToken, customerBaseUrl, pointsName, brand }) {
   const ctLabel = classTypeLabel(analytics.classType)
   const tPoints = trendLabel(analytics.overall.pointsTrend)
   const tPeak = trendLabel(analytics.overall.peakTrend)
@@ -390,7 +408,7 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
   if (vcLine) insightLines.push(`<strong>Category:</strong> ${escapeHtml(vcLine)}`)
   if (tPoints) {
     const arrow = tPoints.dir === 'up' ? '↑' : tPoints.dir === 'down' ? '↓' : '→'
-    insightLines.push(`<strong>UN1T Points overall:</strong> ${arrow} ${escapeHtml(tPoints.label)}`)
+    insightLines.push(`<strong>${escapeHtml(pointsName)} overall:</strong> ${arrow} ${escapeHtml(tPoints.label)}`)
   }
   if (tPeak && tPeak.dir !== 'flat') {
     const arrow = tPeak.dir === 'up' ? '↑' : '↓'
@@ -412,7 +430,7 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
 <html><body style="margin:0;background:#f4f4f5;padding:24px 12px;font-family:Arial,sans-serif;">
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="max-width:560px;width:100%;background:#ffffff;border-radius:12px;border:1px solid #e5e7eb;">
   <tr><td style="padding:24px 28px;">
-    <div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#888;">UN1T &middot; ${escapeHtml(startedAt)}</div>
+    <div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#888;">${brand ? `${escapeHtml(brand)} &middot; ` : ''}${escapeHtml(startedAt)}</div>
     <h1 style="margin:6px 0 4px 0;font-size:22px;color:#111;">Hi ${escapeHtml(firstName)},</h1>
     <p style="margin:0;color:#444;font-size:14px;line-height:1.5;">
       Here's how your <strong>${escapeHtml(classLabel)}</strong> went.
@@ -423,7 +441,7 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:18px 0;">
       <tr>
         <td style="background:#fafafa;border-radius:8px;padding:14px;text-align:center;width:33.33%;border:1px solid #e5e7eb;">
-          <div style="font-size:11px;color:#666;letter-spacing:.1em;text-transform:uppercase;">UN1T Points</div>
+          <div style="font-size:11px;color:#666;letter-spacing:.1em;text-transform:uppercase;">${escapeHtml(pointsName)}</div>
           <div style="font-size:28px;font-weight:bold;color:#111;margin-top:2px;">${points}</div>
         </td>
         <td style="width:6px;"></td>
@@ -461,7 +479,7 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
 
     <p style="margin:24px 0 0 0;font-size:11px;color:#9ca3af;text-align:center;">
       You're getting this because you trained with a heart-rate
-      monitor at UN1T. <a href="${escapeHtml(unsubUrl)}" style="color:#9ca3af;">Stop these emails</a>.
+      monitor${brand ? ` at ${escapeHtml(brand)}` : ''}. <a href="${escapeHtml(unsubUrl)}" style="color:#9ca3af;">Stop these emails</a>.
     </p>
   </td></tr>
 </table>

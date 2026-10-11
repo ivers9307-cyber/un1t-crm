@@ -14,6 +14,20 @@
 import { paymentsFor } from './payments'
 import { resolveLocationPaymentProvider } from './location-payments'
 import { resolveCustomerBaseUrl } from './tenant-host'
+import { getLocationBranding } from './location-branding'
+
+/**
+ * W1.S1a — the provider-side description a customer sees on the checkout
+ * page and their statement: "UN1T Stillorgan intro: HIIT".
+ * @param {string} brand  the location's configured brand ('' when unknown)
+ * @param {string} className
+ * @returns {string}
+ */
+export function classBookingPaymentDescription(brand, className) {
+  const b = String(brand || '').trim()
+  const cls = className || 'class'
+  return b ? `${b} intro: ${cls}` : `Intro class: ${cls}`
+}
 
 /**
  * Open a provider payment for an already-inserted `awaiting_payment` row and
@@ -25,10 +39,14 @@ export async function createClassBookingPayment({ db, request, location, amountC
   // W1.L3b — the customer returns to /class-pay/ on the BOOKING LOCATION's
   // tenant host (the resolver floors to the CRM host, never throws past it).
   const baseUrl = await resolveCustomerBaseUrl(db, location?.id || request?.location_id || null)
+  // W1.S1a — the checkout line names the booking location's configured brand
+  // (never a fixed gym's), with no em-dash. The resolver never throws; an
+  // unresolved brand reads "Intro class: HIIT".
+  const { companyName } = await getLocationBranding(db, location?.id || request.location_id)
   const created = await paymentsFor(provider).createPayment({
     amountCents,
     currency: currency || 'EUR',
-    description: `UN1T intro — ${request.class_name || 'class'}`,
+    description: classBookingPaymentDescription(companyName, request.class_name),
     returnUrl: `${baseUrl}/class-pay/${request.id}`,
     metadata: { class_booking_request_id: request.id, domain: 'un1t_class_booking' },
     idempotencyKey: request.id,

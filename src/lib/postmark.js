@@ -520,6 +520,12 @@ export function applyMergeTags(html, contact, extras = {}) {
     // Now reads pipeline_stage_slug (CLASSIFY.2).
     '{{lead_status}}': stageLabel,
     '{{location_name}}': extras.location_name || '',
+    // W1.S1a — the SENDING location's configured brand (getLocationBranding
+    // .companyName: company_settings -> org_settings -> locations.name), so
+    // shipped copy says "Welcome to {{company_name}}" instead of naming one
+    // gym. Lowercase like every tag here. Empty when the caller did not
+    // resolve it.
+    '{{company_name}}': extras.company_name || '',
     '{{unsubscribe_url}}': extras.unsubscribe_url || '',
     '{{preference_url}}': extras.preference_url || '',
     // STARTPREFILL.1 — a capability token the /start funnel exchanges for this

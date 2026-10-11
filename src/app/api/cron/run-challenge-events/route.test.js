@@ -45,6 +45,7 @@ const fakeDb = { from: (t) => makeBuilder(t) }
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
+vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Stillorgan', shortName: 'UN1T', locationName: 'UN1T Stillorgan' })) }))
 vi.mock('@/lib/customer-push', () => ({ sendCustomerPush: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/challenges-io', () => ({ computeStandings: vi.fn(async () => []), computeCollective: vi.fn(async () => ({ total: 0, target: 10, pct: 0 })) }))

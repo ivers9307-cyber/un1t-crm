@@ -44,6 +44,7 @@ vi.mock('./event-comms-location', async (importOriginal) => ({
 vi.mock('@/lib/connection-registry', () => ({ overlayConnections: vi.fn(async (_db, row) => row) }))
 vi.mock('./event-email', () => ({
   resolveEventEmail: vi.fn(async () => ({ subject: 'You are in', htmlBody: '<p>hi</p>' })),
+  resolveEventBrand: vi.fn(async () => ''),
   buildEventEmailShell: vi.fn(() => '<html></html>'),
 }))
 vi.mock('./app-url', () => ({ getAppUrl: () => 'https://crm.example.com' }))

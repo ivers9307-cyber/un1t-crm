@@ -188,6 +188,31 @@ const SWEPT = [
   'src/app/preferences/[token]/page.js',
   'src/app/preferences/layout.js',
   'src/app/unsubscribe/host/[token]/page.js',
+  // ── W1.S1a: customer-facing email and message libs ──────────────────
+  'src/lib/event-email.js',
+  'src/lib/event-attendee-reminders.js',
+  'src/lib/event-waitlist.js',
+  'src/lib/hr-post-class-email.js',
+  'src/lib/race-confirmations.js',
+  'src/lib/offer-purchase-emails.js',
+  'src/lib/manual-booking-confirm.js',
+  'src/lib/class-booking-payments.js',
+  'src/lib/contract-pdf.js',
+  'src/lib/contracting-entity.js',
+  'src/lib/contracts-email.js',
+  'src/lib/contracts-notify.js',
+  'src/app/api/contracts/[id]/resend/route.js',
+  'src/lib/external-export.js',
+  'src/lib/strava.js',
+  'src/lib/tcx-builder.js',
+  'src/app/api/cron/auto-end-stale-hr-sessions/route.js',
+  'src/lib/challenge-notifications.js',
+  'src/app/api/cron/run-challenge-events/route.js',
+  'src/lib/sequence-templates.js',
+  'src/lib/postmark.js',
+  'src/lib/campaign-sender.js',
+  'src/lib/campaign-web-view.js',
+  'src/lib/status-page.js',
 ]
 
 // W1.S5 — the login placeholder is lower-case (`you@un1t.ie`), which the
@@ -239,6 +264,11 @@ const KEEP = {
     'We operate the UN1T studios in Dublin',
     'Interested in Repset for your UN1T franchise?',
   ],
+  // W1.S1a — LEGACY_COUNTERSIGNATURE_ENTITY: the counterparty every contract
+  // issued before LEGALENT.1 was issued and signed under. An executed
+  // document must keep rendering what it said; rewriting it is tampering,
+  // not a sweep (appendix row contracting-entity.js:57, `keep`).
+  'src/lib/contracting-entity.js': ['UN1T Dublin Ltd'],
 }
 
 describe('UN1T literal sweep (W1.S*)', () => {

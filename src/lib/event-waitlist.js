@@ -31,7 +31,7 @@ import { sendTransactionalEmail } from './postmark'
 import { formatWeekdayLongDateInTZ } from './dates'
 import { getAppUrl } from './app-url'
 import { resolveCustomerBaseUrl } from './tenant-host'
-import { buildEventEmailShell, resolveEventEmail, escapeHtml } from './event-email'
+import { buildEventEmailShell, resolveEventEmail, resolveEventBrand, escapeHtml } from './event-email'
 import { resolveEventCommsLocation, pickAudienceVenueName } from './event-comms-location'
 import { checkTransactionalConsent, transactionalWhatsappSuppression } from './transactional-consent'
 import { maybeSendBookingWhatsappConfirm } from './automations/booking-whatsapp-confirm'
@@ -207,6 +207,7 @@ export function buildWaitlistJoinedEmail(ctx, race = {}) {
     infoRows: infoRowsFor(ctx),
     footerHtml: `If a spot opens, we'll email you (and WhatsApp you if you gave a number). The first to book gets it, so it's worth acting quickly.`,
     locationName: ctx.locationName,
+    brand: ctx.brand || '',
   })
   return { subject, htmlBody }
 }
@@ -255,9 +256,10 @@ export async function sendWaitlistJoinedEmail(db, { race, row }) {
     // Recoverable: the page already told them they are on the list.
     const gate = await checkTransactionalConsent({ db, contactId: row.contact_id, channel: 'email', module: 'event-waitlist', meta: { waitlistId: row.id } })
     if (!gate.allowed) return `skipped:${gate.reason}`
-    const ctx = contextFor(race, row)
-    const { subject, htmlBody } = buildWaitlistJoinedEmail(ctx, race)
     const locationId = await commsLocationIdFor(db, race, { waitlistId: row.id })
+    // W1.S1a — the shell carries the SENDING location's brand.
+    const ctx = { ...contextFor(race, row), brand: await resolveEventBrand(db, {}, locationId) }
+    const { subject, htmlBody } = buildWaitlistJoinedEmail(ctx, race)
     await sendTransactionalEmail({ to: row.email, subject, htmlBody, contactId: row.contact_id || null, locationId, tag: 'event-waitlist-joined' })
     return 'sent'
   } catch (e) {
@@ -435,8 +437,8 @@ export async function sendWaitlistOffer(db, { race, row, now = Date.now(), comms
       } else {
         const contact = { first_name: ctx.firstName, name: row.name || '', email: row.email, phone: '' }
         const extras = { event_name: ctx.eventName, when: ctx.dateLabel, location: ctx.locationName, claim_url: claimUrl }
-        const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'waitlist', race, contact, extras, defaults: buildWaitlistOfferDefaults(ctx) })
         const locationId = commsLocationId || await commsLocationIdFor(db, race, { waitlistId: row.id })
+        const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'waitlist', race, contact, extras, defaults: buildWaitlistOfferDefaults(ctx), brandLocationId: locationId })
         await sendTransactionalEmail({ to: row.email, subject, htmlBody, contactId: row.contact_id || null, locationId, tag: 'event-waitlist-offer' })
         out.email = 'sent'
       }

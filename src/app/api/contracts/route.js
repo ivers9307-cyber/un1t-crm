@@ -219,8 +219,9 @@ export async function POST(request) {
   //     through to {} fields if an explicit request-body location_id
   //     isn't actually one of the recipient's own links — an edge case
   //     that just means fewer location vars resolve, not an error).
-  //     Branding is location -> org -> 'UN1T' inheritance (see
-  //     getLocationBranding); fetch once, reused by the render below.
+  //     Branding is company_settings -> org_settings -> locations.name
+  //     inheritance (see getLocationBranding); fetch once, reused by the
+  //     render below.
   const locationRow = recipientLinks.find(l => l.location_id === locationId)?.location || null
   const branding = await getLocationBranding(db, locationId)
   //     LEGALENT.1 — {{legal_entity_name}} is the CONTRACTING COMPANY
@@ -229,6 +230,19 @@ export async function POST(request) {
   //     against the org already established above, so a CCF Autos
   //     contract can never inherit the gym's entity.
   const entity = await getContractingEntity(db, { organizationId, locationId, branding })
+  //     W1.S1a — never issue (or draft) a contract without a contracting
+  //     entity. Since the literal sweep the resolver's floor is the org's
+  //     own name, then '' when even that row is unreadable. A row stored
+  //     without legal_entity_name reads as pre-LEGALENT.1 to
+  //     contractCountersignatureLabel and would countersign as the legacy
+  //     entity on every surface and the archived PDF, for good. Refuse
+  //     before any insert; the operator retries.
+  if (!String(entity?.label || '').trim()) {
+    return NextResponse.json({
+      success: false,
+      error: "Couldn't confirm the contracting company for this organisation. Nothing was issued; please try again.",
+    }, { status: 503 })
+  }
   const locVars = locationVariables({ location: locationRow, branding, entity })
 
   // 4. Validate custom variables required by the template.

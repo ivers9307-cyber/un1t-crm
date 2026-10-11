@@ -61,10 +61,13 @@ export function reminderOffsetForDate(raceDateStr, todayStr) {
  * @param {string} args.whenLabel      e.g. "Saturday, 11 July 2026 · 09:30"
  * @param {string} args.locationName
  * @param {Array<{name:string, qrSrc:string}>} args.members  one QR per attendee
+ * @param {string} [args.brand]  W1.S1a: the sending location's brand, when the
+ *   caller has it; resolveEventEmail otherwise resolves it from brandLocationId
  * @returns {{ heading:string, introHtml:string, infoRows:string,
- *   afterInfoHtml:string, memberQrs:Array, footerHtml:string, locationName:string }}
+ *   afterInfoHtml:string, memberQrs:Array, footerHtml:string, locationName:string,
+ *   brand:string }}
  */
-export function buildReminderDefaults({ eventName, whenLabel, locationName, members } = {}) {
+export function buildReminderDefaults({ eventName, whenLabel, locationName, members, brand = '' } = {}) {
   const name = escapeHtml(eventName || 'Your event')
   const when = escapeHtml(whenLabel || '')
   const where = escapeHtml(locationName || '')
@@ -80,12 +83,13 @@ export function buildReminderDefaults({ eventName, whenLabel, locationName, memb
     memberQrs: Array.isArray(members) ? members : [],
     footerHtml: `<strong>Before you arrive:</strong> get here 30 minutes early, and bring water + a towel. Can't make it? Just reply to let us know.`,
     locationName: locationName || '',
+    brand: brand || '',
   }
 }
 
 /**
  * Branded transactional reminder email — the shared shell with no per-event
- * tint (the DEFAULT look). Mirrors the race-confirmation copy (black UN1T
+ * tint (the DEFAULT look). Mirrors the race-confirmation copy (black branded
  * header + check-in QR grid). Every interpolated value is HTML-escaped — a
  * member name or event name can carry arbitrary text. Characterization-tested
  * byte-for-byte (event-email.test.js).
@@ -105,6 +109,7 @@ export function buildReminderEmailHtml(args = {}) {
     afterInfoHtml: d.afterInfoHtml,
     footerHtml: d.footerHtml,
     locationName: d.locationName,
+    brand: d.brand,
   })
 }
 
@@ -138,7 +143,7 @@ function buildEventReminderPush({ ev, offset, whenLabel }) {
   const when = offset === '3d' ? 'in 3 days' : 'tomorrow'
   return {
     title: `${ev.name} is ${when}`,
-    body: whenLabel ? `${whenLabel} — see you there 💪` : 'See you there 💪',
+    body: whenLabel ? `${whenLabel}. See you there 💪` : 'See you there 💪',
     data: { type: 'event_reminder', race_event_id: ev.id, reminder_offset: offset },
   }
 }
@@ -181,6 +186,8 @@ async function sendReminderEmail({ db, ev, reg, offset, whenLabel, locationName,
       subject: defaultSubject,
       ...buildReminderDefaults({ eventName: ev.name, whenLabel, locationName, members }),
     },
+    // W1.S1a — the shell carries the SENDING location's brand.
+    brandLocationId: commsLocationId || null,
   })
   await sendTransactionalEmail({
     to,

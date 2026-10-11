@@ -5,8 +5,9 @@
 //
 // Two entry points:
 //   buildEventEmailShell(...) — the branded HTML skeleton. With accentHex /
-//     headerImageUrl null it reproduces TODAY's look byte-for-byte (black #000
-//     "UN1T" header). accentHex recolours the header; headerImageUrl swaps in a
+//     headerImageUrl null it renders the black #000 header band carrying the
+//     SENDING location's brand as its wordmark (W1.S1a: it used to be a fixed
+//     gym name). accentHex recolours the header; headerImageUrl swaps in a
 //     banner-image header. Every scalar it interpolates (member names, location)
 //     is HTML-escaped; the *Html slots (heading/introHtml/infoRows/afterInfoHtml/
 //     footerHtml) are raw fragments the caller has ALREADY escaped.
@@ -32,6 +33,7 @@
 
 import { applyMergeTags } from '@/lib/postmark'
 import { logWarn } from '@/lib/log'
+import { getLocationBranding } from '@/lib/location-branding'
 
 // Mirrors the strict per-event accent validation the public signup widget uses
 // (RaceSignupWidget) — only a literal #rrggbb can ever reach an inline style.
@@ -115,19 +117,32 @@ export function applyEventMergeTagsHtml(html, contact, extras = {}) {
 // BRANDED SHELL
 // ============================================================
 
-// The header band. Default = the historic black #000 "UN1T" wordmark. accentHex
-// recolours the band; headerImageUrl renders a full-width banner image instead
-// (with the accent — or black — as the load/letterbox background).
-function headerBlock(accentHex, headerImageUrl) {
+// The header band. Default = a black #000 band with the brand as its wordmark
+// (W1.S1a: the sending location's configured brand; blank brand = an empty
+// band, never another gym's name). accentHex recolours the band;
+// headerImageUrl renders a full-width banner image instead (with the accent,
+// or black, as the load/letterbox background) whose alt text is the brand.
+function headerBlock(accentHex, headerImageUrl, brand) {
   const accent =
     typeof accentHex === 'string' && HEX_RE.test(accentHex.trim()) ? accentHex.trim() : null
   const imageUrl =
     typeof headerImageUrl === 'string' && headerImageUrl.trim() ? headerImageUrl.trim() : null
   const bg = accent || '#000'
+  const mark = escapeHtml(brand || '')
   if (imageUrl) {
-    return `<div style="background:${bg};text-align:center;padding:0;line-height:0"><img src="${escapeHtml(imageUrl)}" alt="UN1T" width="560" style="display:block;width:100%;max-width:560px;height:auto;border:0;margin:0 auto"/></div>`
+    return `<div style="background:${bg};text-align:center;padding:0;line-height:0"><img src="${escapeHtml(imageUrl)}" alt="${mark}" width="560" style="display:block;width:100%;max-width:560px;height:auto;border:0;margin:0 auto"/></div>`
   }
-  return `<div style="background:${bg};color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T</div>`
+  return `<div style="background:${bg};color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">${mark}</div>`
+}
+
+// The signature line under the email: "brand · location", each part only when
+// known, and the location dropped when it IS the brand (a studio whose brand
+// is its own name would otherwise read "UN1T Hatch Street · UN1T Hatch Street").
+function signatureLine(brand, locationName) {
+  const b = String(brand || '').trim()
+  const l = String(locationName || '').trim()
+  const parts = [b, l && l.toLowerCase() !== b.toLowerCase() ? l : ''].filter(Boolean)
+  return parts.map(escapeHtml).join(' · ')
 }
 
 // The per-person check-in QR grid. Renders only members that carry a qrSrc.
@@ -154,10 +169,10 @@ function qrBlockHtml(memberQrs) {
 /**
  * The shared branded email skeleton. Composes, top to bottom: header band →
  * heading → intro paragraph → info table → (optional) afterInfoHtml block →
- * (optional) QR grid → the grey "what's next" copy box → the "UN1T · location"
+ * (optional) QR grid → the grey "what's next" copy box → the "brand · location"
  * signature line.
  *
- * Scalar params (memberQrs[].name, locationName) are escaped here. The raw-HTML
+ * Scalar params (memberQrs[].name, locationName, brand) are escaped here. The raw-HTML
  * slots — heading, introHtml, infoRows, afterInfoHtml, footerHtml — must be
  * pre-escaped by the caller (they legitimately contain markup like <strong> and
  * intentional literal apostrophes such as "You're").
@@ -172,6 +187,9 @@ function qrBlockHtml(memberQrs) {
  * @param {string} args.afterInfoHtml   block between the info table and QR grid (raw)
  * @param {string} args.footerHtml      inner HTML of the grey "what's next" box (raw)
  * @param {string} args.locationName    signature-line location (escaped here)
+ * @param {string} args.brand           W1.S1a: the SENDING location's brand
+ *   (getLocationBranding().companyName): the header wordmark, the banner
+ *   image's alt text and the signature line. '' renders neither.
  * @returns {string} HTML body
  */
 export function buildEventEmailShell({
@@ -184,10 +202,11 @@ export function buildEventEmailShell({
   afterInfoHtml = '',
   footerHtml = '',
   locationName = '',
+  brand = '',
 } = {}) {
-  const header = headerBlock(accentHex, headerImageUrl)
+  const header = headerBlock(accentHex, headerImageUrl, brand)
   const qr = qrBlockHtml(memberQrs)
-  const loc = escapeHtml(locationName || '')
+  const signature = signatureLine(brand, locationName)
 
   return `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#fff;color:#111;max-width:560px;margin:0 auto;padding:24px">
@@ -203,7 +222,7 @@ ${qr}
     ${footerHtml}
   </div>
 
-  <p style="color:#999;font-size:12px;margin-top:24px;text-align:center">UN1T · ${loc}</p>
+  <p style="color:#999;font-size:12px;margin-top:24px;text-align:center">${signature}</p>
 </div>`.trim()
 }
 
@@ -231,8 +250,14 @@ function renderOperatorIntro(text, contact, extras) {
  *
  * `defaults` carries this email's current default subject + the shell slots to
  * render when a field is blank: { subject, heading, introHtml, infoRows,
- * afterInfoHtml, memberQrs, footerHtml, locationName }. With NO per-event config
- * the shell branch reproduces the caller's default builder exactly.
+ * afterInfoHtml, memberQrs, footerHtml, locationName, brand? }. With NO per-event
+ * config the shell branch reproduces the caller's default builder exactly.
+ *
+ * W1.S1a — the brand (header wordmark + signature line) is `defaults.brand`
+ * when the caller already resolved it, else the configured brand of
+ * `brandLocationId` (the SENDING location the caller resolved for the email
+ * identity), else of the race's sending_location_id / location_id. Resolved
+ * through getLocationBranding, which never throws; no db = no brand.
  *
  * A configured-but-missing template row FALLS BACK to the shell rather than
  * throwing — a styling misconfiguration must never drop a live email.
@@ -248,9 +273,10 @@ function renderOperatorIntro(text, contact, extras) {
  * @param {object} args.contact  merge contact ({ first_name, name, email, ... })
  * @param {object} args.extras   { event_name, team_name, when, location, old_event_name?, old_when?, difference?, pay_url?, manage_url?, claim_url? }
  * @param {object} args.defaults default subject + shell slots for this email
+ * @param {?string} [args.brandLocationId] the sending location whose brand the shell carries
  * @returns {Promise<{ subject: string, htmlBody: string }>}
  */
-export async function resolveEventEmail({ db, kind, race, contact, extras, defaults }) {
+export async function resolveEventEmail({ db, kind, race, contact, extras, defaults, brandLocationId = null }) {
   const r = race || {}
   const d = defaults || {}
   const templateId = r[`${kind}_email_template_id`] || null
@@ -284,6 +310,7 @@ export async function resolveEventEmail({ db, kind, race, contact, extras, defau
     ? renderOperatorIntro(operatorIntro, contact, extras)
     : (d.footerHtml || '')
 
+  const brand = await resolveEventBrand(db, d, brandLocationId || r.sending_location_id || r.location_id || null)
   const htmlBody = buildEventEmailShell({
     heading: d.heading || '',
     introHtml: d.introHtml || '',
@@ -294,7 +321,26 @@ export async function resolveEventEmail({ db, kind, race, contact, extras, defau
     afterInfoHtml: d.afterInfoHtml || '',
     footerHtml,
     locationName: d.locationName || '',
+    brand,
   })
 
   return { subject, htmlBody }
+}
+
+/**
+ * W1.S1a — the brand an event email's shell carries: the caller's resolved
+ * `defaults.brand` when it is a non-empty string, else the configured brand of
+ * `locationId` (getLocationBranding: company_settings → org_settings →
+ * locations.name). Never throws; '' when nothing resolves.
+ * @param {object|null} db
+ * @param {object} defaults
+ * @param {?string} locationId
+ * @returns {Promise<string>}
+ */
+export async function resolveEventBrand(db, defaults, locationId) {
+  const given = typeof defaults?.brand === 'string' ? defaults.brand.trim() : ''
+  if (given) return given
+  if (!db || !locationId) return ''
+  const { companyName } = await getLocationBranding(db, locationId)
+  return companyName || ''
 }

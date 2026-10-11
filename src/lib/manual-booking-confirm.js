@@ -21,6 +21,7 @@ import { DEFAULT_MANUAL_CONFIRM_EMAIL, formatClassTime, manualConfirmEmailFromBl
 import { sendTransactionalEmail, getLocationInboxReplyTo } from '@/lib/postmark'
 import { transactionalEmailSuppression, loadTransactionalConsent } from '@/lib/transactional-consent'
 import { logWarn } from '@/lib/log'
+import { getLocationBranding } from '@/lib/location-branding'
 
 /**
  * Email the customer that staff have booked them in.
@@ -37,11 +38,19 @@ export async function sendManualBookingConfirmEmail(db, { locationId, contact, c
   if (suppression) return { sent: false, channel: 'email', reason: 'email_blocked' }
 
   const tpl = manualConfirmEmailFromBlocks(blocks)
+  // W1.S1a — {studio_name} is the studio's own name (the caller passes
+  // locations.name). Only when it is missing does this resolve the location's
+  // name, then its brand: never a fixed gym's name. The resolver never throws.
+  let studio = typeof studioName === 'string' ? studioName.trim() : ''
+  if (!studio) {
+    const branding = await getLocationBranding(db, locationId)
+    studio = branding.locationName || branding.companyName || ''
+  }
   const vars = {
     first_name: contact.first_name || (contact.name ? String(contact.name).split(' ')[0] : ''),
     class_name: className || 'your class',
     class_time: formatClassTime(startsAt),
-    studio_name: studioName || 'UN1T',
+    studio_name: studio,
     address: address || '',
   }
   const subject = renderCopy(tpl.subject, vars) || renderCopy(DEFAULT_MANUAL_CONFIRM_EMAIL.subject, vars)

@@ -133,8 +133,9 @@ export const LOCATION_VAR_KEYS = [
   // LEGALENT.1 — the contracting COMPANY (org_settings.legal_entity_name,
   // mig 425), distinct from company_name, which is the brand. A party
   // clause must name the entity; resolved server-side at issue time via
-  // getContractingEntity() and always non-empty (it degrades to the
-  // brand), so it can never leave an unresolved placeholder.
+  // getContractingEntity() (entity -> configured brand -> the org's own
+  // name). POST /api/contracts refuses with a 503 when that resolves
+  // empty (W1.S1a), so an issued contract never leaves it unresolved.
   'legal_entity_name',
 ]
 
@@ -142,8 +143,8 @@ export const LOCATION_VAR_KEYS = [
  * Build the location-derived auto-fill variable map. Pure — caller
  * passes the location row (from `public.locations`: name, address,
  * phone, email) and the resolved branding object (from
- * getLocationBranding(), which already inherits location ->
- * organisation -> 'UN1T' defaults). Only keys that resolve to a
+ * getLocationBranding(), which already inherits company_settings ->
+ * org_settings -> locations.name). Only keys that resolve to a
  * non-empty string are included, same convention as
  * profileVariables() — a template referencing an unset field falls
  * through to the "still unresolved" path instead of rendering an

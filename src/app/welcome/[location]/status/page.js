@@ -11,6 +11,7 @@ import { resolveGymSiteName } from '@/lib/default-site-name'
 import { createServerClient } from '@/lib/supabase'
 import { getIntegrationHealth } from '@/lib/integration-health'
 import { buildStatusView } from '@/lib/status-page'
+import { getLocationBranding } from '@/lib/location-branding'
 
 // Rendered per request: the root layout reads the Host header (W1.L4), which
 // is a dynamic API, so the former `revalidate = 60` ISR shell no longer
@@ -76,9 +77,13 @@ export default async function StatusPage(props) {
   const loc = await loadLocation(location)
   if (!loc?.id) notFound()
 
-  const rows = await loadHealth(createServerClient(), loc.id)
+  const db = createServerClient()
+  const rows = await loadHealth(db, loc.id)
   const overrides = loc.settings?.status_page || {}
-  const view = buildStatusView(rows, overrides)
+  // W1.S1a — the wordmark defaults to this location's configured brand (the
+  // status lib has no literal); getLocationBranding never throws.
+  const { companyName } = await getLocationBranding(db, loc.id)
+  const view = buildStatusView(rows, overrides, { defaultBrand: companyName })
 
   const updated = new Date().toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Dublin' })
 

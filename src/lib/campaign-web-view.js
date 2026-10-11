@@ -276,8 +276,10 @@ export function prependViewInBrowserLink(html, url, copy = null) {
  * because they could not find the real one.
  *
  * @param {object} campaign  A campaigns row, optionally with `locations(name)`.
- * @param {{ baseUrl?: string, copy?: object|null }} [opts]  `copy` is the
- *   location's company_settings copy (K7); omit for the defaults.
+ * @param {{ baseUrl?: string, copy?: object|null, companyName?: string }} [opts]
+ *   `copy` is the location's company_settings copy (K7); omit for the
+ *   defaults. `companyName` (W1.S1a) is the campaign location's brand for
+ *   {{company_name}}, a property of the sender like {{location_name}}.
  * @returns {string|null} null when there is nothing to show.
  */
 export function renderCampaignWebView(campaign, opts = {}) {
@@ -294,6 +296,7 @@ export function renderCampaignWebView(campaign, opts = {}) {
 
   const merged = applyMergeTags(html, anonymousContact, {
     location_name: campaign?.locations?.name || '',
+    company_name: opts?.companyName || '',
     unsubscribe_url: `#${UNSUB_ANCHOR}`,
     preference_url: `#${UNSUB_ANCHOR}`,
   })
