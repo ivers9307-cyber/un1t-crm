@@ -41,7 +41,7 @@ import { logInfo, logWarn, logError } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { selectAll } from '@/lib/select-all'
 import { addDaysIn } from '@/lib/location-time'
-import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -151,8 +151,9 @@ export async function GET(request) {
   const gate = await gateDailySlot(db, 'run-challenge-events', { nowMs, module: MODULE })
   if (!gate.ok) return NextResponse.json({ ok: false, slot: gate.summary }, { status: 500 })
   if (gate.slots.size === 0) {
-    await stampHeartbeat('run-challenge-events').catch((err) => logWarn('cron-challenge-events', 'heartbeat failed', { err }))
-    return NextResponse.json({ ok: true, slot: gate.summary, started: 0, ended: 0, targets: 0, failed: 0, gave_up: 0 })
+    // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ ok: !gate.faulted, slot: gate.summary, started: 0, ended: 0, targets: 0, failed: 0, gave_up: 0 }, { status: gate.faulted ? 500 : 200 })
   }
 
   // Only challenges that still need an event: start or end not yet announced.
@@ -226,6 +227,8 @@ export async function GET(request) {
     }
   }
   logInfo(MODULE, 'tick', { started, ended, targets, failed, gave_up: gaveUp, slot: gate.summary })
-  await stampHeartbeat('run-challenge-events').catch((err) => logWarn('cron-challenge-events', 'heartbeat failed', { err }))
-  return NextResponse.json({ ok: true, started, ended, targets, failed, gave_up: gaveUp })
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('run-challenge-events').catch((err) => logWarn('cron-challenge-events', 'heartbeat failed', { err }))
+  }
+  return NextResponse.json({ ok: !gate.faulted, started, ended, targets, failed, gave_up: gaveUp }, { status: gate.faulted ? 500 : 200 })
 }

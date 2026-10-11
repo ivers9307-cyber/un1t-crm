@@ -41,7 +41,7 @@ import { sendContractReminderEmail } from '@/lib/contracts-email'
 import { sendPush } from '@/lib/push'
 import { pushOutcome } from '@/lib/push-outcome'
 import { logWarn, logError } from '@/lib/log'
-import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 import { runRosterRunwayAlerts } from '@/lib/roster-runway-notify'
 import { runQualificationDigest } from '@/lib/qualification-digest'
 import {
@@ -254,8 +254,12 @@ export async function GET(request) {
     runway, runway_arm_failed: runwayArmFailed,
     qualifications, qualification_arm_failed: qualificationArmFailed,
   }
-  await stampHeartbeat('contract-reminders', outcome).catch((err) =>
-    logWarn('cron-contract-reminders', 'heartbeat failed', { err }))
+  // TZ.6: only a tick that took a slot, with no gate fault, stamps the row (it
+  // keeps the legacy daily clock); a quiet hourly tick never does.
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('contract-reminders', outcome).catch((err) =>
+      logWarn('cron-contract-reminders', 'heartbeat failed', { err }))
+  }
 
-  return NextResponse.json({ success: true, ...outcome })
+  return NextResponse.json({ success: !gate.faulted, ...outcome }, { status: gate.faulted ? 500 : 200 })
 }

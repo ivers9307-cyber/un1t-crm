@@ -26,11 +26,12 @@ beforeEach(() => {
 })
 
 describe('TZ.6 event-reminders', () => {
-  it('Europe/Dublin runs at 09:00 UTC only; other hours are quiet ticks that stamp', async () => {
+  it('Europe/Dublin runs at 09:00 UTC only; a quiet tick never stamps, the slot tick does', async () => {
     await at('2026-07-01T08:00:00Z')
     expect(runEventReminders).not.toHaveBeenCalled()
-    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
+    expect(stampHeartbeat).not.toHaveBeenCalled()
     await at('2026-07-01T09:00:00Z')
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
     const args = runEventReminders.mock.calls[0][0]
     expect(args.nowMs).toBe(Date.parse('2026-07-01T09:00:00Z'))
     expect(args.isDue('loc-dub')).toBe(true)

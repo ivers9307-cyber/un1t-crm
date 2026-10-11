@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
-const { gateDailySlot, dailySlotDue, DAILY_SLOTS, SLOT_CATCHUP_HOURS, LEGACY_UTC_ANCHORED, NO_LOCATION, slotFor, isLegacyAnchored } =
+const { gateDailySlot, dailySlotDue, DAILY_SLOTS, SLOT_CATCHUP_HOURS, LEGACY_UTC_ANCHORED, NO_LOCATION, slotFor, isLegacyAnchored, catchUpHoursFor, slotTickStampable } =
   await import('./cron-daily-slot.js')
 const { slotTables } = await import('./cron-daily-slot.test-helpers.js')
 const { instantToZonedParts, dayStrIn } = await import('./location-time.js')
@@ -67,7 +67,7 @@ async function simulateYear(cron, locations, locationId) {
 beforeEach(() => vi.clearAllMocks())
 
 describe('TZ.6 slot table', () => {
-  it('covers exactly the D6 list, and every slot + catch-up stays inside the UTC day Dublin shares', () => {
+  it('covers exactly the D6 list, and every slot (+ a non-Dublin catch-up) stays inside the UTC day Dublin shares', () => {
     expect(Object.keys(DAILY_SLOTS).sort()).toEqual(Object.keys(LEGACY_SCHEDULE).sort())
     for (const slot of Object.values(DAILY_SLOTS)) expect(slot.hour + SLOT_CATCHUP_HOURS).toBeLessThanOrEqual(21)
     expect([...LEGACY_UTC_ANCHORED]).toEqual(['Europe/Dublin'])
@@ -203,51 +203,104 @@ describe('TZ.6 the claim: never twice for one location on one local day', () => 
   })
 })
 
-describe('TZ.6 failure: never act on a guessed zone; an untaken claim retries on the next hourly tick', () => {
-  it('a failed zone read acts for nobody and claims nothing; the next tick catches up', async () => {
+describe('TZ.6 failure semantics: Dublin is skipped and pages, never late or twice; other zones retry', () => {
+  it('Europe/Dublin is due ONLY at the legacy instant (+1h/+2h never), for every anchor', () => {
+    for (const [cron, slot] of Object.entries(DAILY_SLOTS)) {
+      const base = slot.anchor === 'local'
+        ? at('2026-07-03T07:00:00Z') // Friday 08:00 IST
+        : Date.UTC(2026, 6, slot.weekday === 1 ? 6 : 1, slot.hour) // a Monday for the Monday crons
+      expect(dailySlotDue('Europe/Dublin', base, slot), cron).toMatchObject({ due: true, lateHours: 0 })
+      expect(dailySlotDue('Europe/Dublin', base + HOUR, slot).due, cron).toBe(false)
+      expect(dailySlotDue('Europe/Dublin', base + 2 * HOUR, slot).due, cron).toBe(false)
+    }
+    expect(catchUpHoursFor('Europe/Dublin')).toBe(0)
+    expect(catchUpHoursFor('America/New_York')).toBe(SLOT_CATCHUP_HOURS)
+  })
+
+  it('a failed zone read acts for nobody and is a fault; Dublin is not retried, New York still is', async () => {
     let fail = true
     const t = slotTables({ locations: [DUB, NY], locationsError: () => (fail ? { code: 'XX000', message: 'down' } : null) })
-    const down = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at('2026-07-01T10:00:00Z') })
-    expect(down.ok).toBe(false)
+    const down = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at('2026-07-01T14:00:00Z') }) // 10:00 EDT
+    expect(down).toMatchObject({ ok: false, faulted: true })
     expect(down.slots.size).toBe(0)
+    expect(slotTickStampable(down)).toBe(false)
     expect(t.calls.claimUpserts).toBe(0)
     expect(logError).toHaveBeenCalledWith('notify-winback', expect.stringContaining('unreadable'), expect.anything())
     fail = false
-    const next = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at('2026-07-01T11:00:00Z') })
-    expect(slotFor(next.slots, DUB.id)).toMatchObject({ day: '2026-07-01', lateHours: 1 })
-    expect(slotFor(next.slots, NY.id)).toBeUndefined() // 07:00 in New York: not its slot yet
+    const next = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at('2026-07-01T15:00:00Z') })
+    expect(slotFor(next.slots, NY.id)).toMatchObject({ day: '2026-07-01', lateHours: 1 })
+    const dub = slotTables({ locations: [DUB], locationsError: () => (fail ? { code: 'XX000', message: 'down' } : null) })
+    fail = true
+    expect((await gateDailySlot({ from: dub.from }, 'notify-winback', { nowMs: at('2026-07-01T10:00:00Z') })).ok).toBe(false)
+    fail = false
+    for (const iso of ['2026-07-01T11:00:00Z', '2026-07-01T12:00:00Z']) {
+      expect((await gateDailySlot({ from: dub.from }, 'notify-winback', { nowMs: at(iso) })).summary.due, iso).toBe(0)
+    }
   })
 
-  it('a failed claim write acts for nobody; the next tick claims and acts; past the window it is gone for the day', async () => {
-    const errors = [{ code: 'XX000', message: 'down' }, null]
+  it('a failed claim write (not the missing-table case) is a fault: nothing acts, nothing may stamp; Dublin is not retried', async () => {
+    const errors = [{ code: 'XX000', message: 'down' }]
     const t = slotTables({ locations: [DUB], claimError: () => errors.shift() ?? null })
     const first = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at('2026-07-01T10:00:00Z') })
+    expect(first).toMatchObject({ ok: true, faulted: true })
     expect(first.slots.size).toBe(0)
     expect(first.summary.claim_failed).toBe(2) // Dublin + no-location
-    const second = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at('2026-07-01T11:00:00Z') })
-    expect(slotFor(second.slots, DUB.id)).toMatchObject({ lateHours: 1 })
-    const t2 = slotTables({ locations: [DUB] })
-    const late = await gateDailySlot({ from: t2.from }, 'notify-winback', { nowMs: at('2026-07-01T13:00:00Z') })
-    expect(late.summary.due).toBe(0) // three hours late: outside SLOT_CATCHUP_HOURS
+    expect(slotTickStampable(first)).toBe(false)
+    for (const iso of ['2026-07-01T11:00:00Z', '2026-07-01T12:00:00Z']) {
+      const later = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at(iso) })
+      expect(later.summary.due, iso).toBe(0)
+      expect(later.slots.size).toBe(0)
+    }
   })
 
-  it('before mig 720 (no claim table) a Dublin studio acts at its exact legacy hour with no claim; others wait', async () => {
+  it('a failed claim write for New York is retried on the next tick, inside two', async () => {
+    const errors = [{ code: 'XX000', message: 'down' }]
+    const t = slotTables({ locations: [NY], claimError: () => errors.shift() ?? null })
+    expect((await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at('2026-07-01T14:00:00Z') })).faulted).toBe(true)
+    const next = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at('2026-07-01T15:00:00Z') })
+    expect(slotFor(next.slots, NY.id)).toMatchObject({ lateHours: 1 })
+    expect(slotTickStampable(next)).toBe(true)
+    const t2 = slotTables({ locations: [NY] })
+    expect((await gateDailySlot({ from: t2.from }, 'notify-winback', { nowMs: at('2026-07-01T17:00:00Z') })).summary.due).toBe(0) // 3 h late
+  })
+
+  it('a quiet tick (nothing due) is not stampable', async () => {
+    const t = slotTables({ locations: [DUB] })
+    const quiet = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at('2026-07-01T03:00:00Z') })
+    expect(quiet).toMatchObject({ ok: true, faulted: false })
+    expect(slotTickStampable(quiet)).toBe(false)
+  })
+
+  it('before mig 720 (no claim table) a Dublin studio acts at its exact legacy hour with no claim; others wait; not a fault', async () => {
     const t = slotTables({ locations: [DUB, NY], claimError: () => ({ code: 'PGRST205', message: "Could not find the table 'public.cron_daily_slot_claims'" }) })
     const exact = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at('2026-07-01T10:00:00Z') })
-    expect(slotFor(exact.slots, DUB.id)).toMatchObject({ lateHours: 0, legacy: true })
-    expect(exact.summary).toMatchObject({ legacy_fallback: 2 })
+    expect(slotFor(exact.slots, DUB.id)).toMatchObject({ lateHours: 0, legacy: true, fallback: true })
+    expect(exact).toMatchObject({ faulted: false, summary: { legacy_fallback: 2 } })
+    expect(slotTickStampable(exact)).toBe(true)
     expect(logWarn).toHaveBeenCalledWith('notify-winback', expect.stringContaining('mig 720'), expect.anything())
     const lateTick = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at('2026-07-01T11:00:00Z') })
-    expect(lateTick.slots.size).toBe(0) // no catch-up without a claim: it could repeat the 10:00 send
+    expect(lateTick.slots.size).toBe(0)
     const nyTick = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at('2026-07-01T14:00:00Z') })
     expect(slotFor(nyTick.slots, NY.id)).toBeUndefined()
-    expect(nyTick.summary).toMatchObject({ due: 1, claim_failed: 1 })
+    expect(nyTick).toMatchObject({ faulted: false, summary: { due: 1, waiting: 1, claim_failed: 0 } })
+  })
+
+  it('schema-cache lag: the legacy tick gets PGRST205 and acts on the fallback; the +1h tick finds the table and does NOT act again', async () => {
+    const errors = [{ code: 'PGRST205', message: 'schema cache' }]
+    const t = slotTables({ locations: [DUB], claimError: () => errors.shift() ?? null })
+    const legacy = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at('2026-07-01T10:00:00Z') })
+    expect(slotFor(legacy.slots, DUB.id)).toMatchObject({ fallback: true })
+    for (const iso of ['2026-07-01T11:00:00Z', '2026-07-01T12:00:00Z']) {
+      const later = await gateDailySlot({ from: t.from }, 'notify-winback', { nowMs: at(iso) })
+      expect(later.slots.size, iso).toBe(0)
+    }
+    expect(t.claims.size).toBe(0) // the later ticks never even tried: not due
   })
 
   it('before mig 720 the local-anchored Friday slot also keeps its exact old instant for Dublin', async () => {
     const t = slotTables({ locations: [DUB], claimError: () => ({ code: '42P01', message: 'relation does not exist' }) })
     const fri = await gateDailySlot({ from: t.from }, 'receipt-coverage-weekly', { nowMs: at('2026-07-03T07:00:00Z') }) // 08:00 IST
-    expect(slotFor(fri.slots, DUB.id)).toMatchObject({ lateHours: 0, legacy: false })
+    expect(slotFor(fri.slots, DUB.id)).toMatchObject({ lateHours: 0, legacy: false, fallback: true })
     const late = await gateDailySlot({ from: t.from }, 'receipt-coverage-weekly', { nowMs: at('2026-07-03T08:00:00Z') })
     expect(late.slots.size).toBe(0)
   })

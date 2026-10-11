@@ -31,16 +31,15 @@ const schedulesOf = (route) => vercel.crons.filter((c) => c.path === `/api/cron/
 /**
  * The period in seconds of the cron shapes these pins use. Anything else
  * throws: teach the parser the new shape rather than guessing.
- *   `*\/N * * * *` → N minutes;  `0 *\/H * * *` → H hours;  `M * * * *` → 1 hour.
+ *   `*\/N * * * *` → N minutes;  `0 *\/H * * *` → H hours.
  */
 function cronPeriodSeconds(schedule) {
   const minutes = schedule.match(/^\*\/(\d+) \* \* \* \*$/)
   if (minutes) return Number(minutes[1]) * 60
   const hours = schedule.match(/^0 \*\/(\d+) \* \* \*$/)
   if (hours) return Number(hours[1]) * 3600
-  if (/^([0-5]?\d) \* \* \* \*$/.test(schedule)) return 3600
   throw new Error(
-    `cronPeriodSeconds: unknown cron shape "${schedule}" (knows only "*/N * * * *", "0 */H * * *" and "M * * * *"); extend the parser in tests/cron-heartbeat-schedule-pins.test.js`,
+    `cronPeriodSeconds: unknown cron shape "${schedule}" (knows only "*/N * * * *" and "0 */H * * *"); extend the parser in tests/cron-heartbeat-schedule-pins.test.js`,
   )
 }
 
@@ -51,22 +50,13 @@ const PINNED = [
   { route: 'process-contact-imports', schedule: '*/2 * * * *', interval: 120, grace: 240, migration: '644_cron_heartbeat_cadence.sql' },
   { route: 'glofox-detail-backfill', schedule: '*/10 * * * *', interval: 600, grace: 900, migration: '645_contacts_glofox_detail_due_at.sql' },
   { route: 'event-waitlist-offers', schedule: '*/10 * * * *', interval: 600, grace: 900, migration: '713_event_waitlist.sql' },
-  // TZ.6 — the daily-slot crons run hourly and stamp every tick (mig 720).
-  ...[
-    ['notify-winback', '0 * * * *'], ['notify-onboarding-pace', '30 * * * *'], ['notify-streak-at-risk', '0 * * * *'],
-    ['run-challenge-events', '0 * * * *'], ['event-reminders', '0 * * * *'], ['contract-reminders', '0 * * * *'],
-    ['equipment-inspection-reminder', '0 * * * *'], ['equipment-inspection-sweep', '0 * * * *'], ['morning-briefing', '0 * * * *'],
-    ['churn-radar-digest', '0 * * * *'], ['ad-report-email', '0 * * * *'], ['run-scheduled-reports', '0 * * * *'],
-  ].map(([route, schedule]) => ({ route, schedule, interval: 3600, grace: 4800, migration: '720_cron_heartbeats_hourly_daily_slots.sql' })),
 ]
 
 describe('cronPeriodSeconds', () => {
-  it('reads the three shapes the pins use', () => {
+  it('reads the two shapes the pins use', () => {
     expect(cronPeriodSeconds('*/15 * * * *')).toBe(900)
     expect(cronPeriodSeconds('*/2 * * * *')).toBe(120)
     expect(cronPeriodSeconds('0 */4 * * *')).toBe(14400)
-    expect(cronPeriodSeconds('0 * * * *')).toBe(3600)
-    expect(cronPeriodSeconds('30 * * * *')).toBe(3600)
   })
 
   it('refuses a shape it does not know, rather than guessing', () => {

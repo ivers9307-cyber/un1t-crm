@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let contractRows = []
 const claims = new Map()
+const h = vi.hoisted(() => ({ claimError: null }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
 vi.mock('@/lib/contracts', () => ({ reminderDue: vi.fn(() => true) }))
 vi.mock('@/lib/contracts-email', () => ({ sendContractReminderEmail: vi.fn(async () => ({ ok: true })) }))
@@ -23,7 +24,7 @@ vi.mock('@/lib/supabase', async () => {
     return b
   }
   const locations = [{ id: 'loc-dub', timezone: 'Europe/Dublin' }, { id: 'loc-ny', timezone: 'America/New_York' }]
-  return { createServerClient: () => withSlotTables({ from: builder }, { locations, claims }) }
+  return { createServerClient: () => withSlotTables({ from: builder }, { locations, claims, claimError: () => h.claimError }) }
 })
 
 const { GET } = await import('./route.js')
@@ -41,16 +42,26 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] })
   process.env.CRON_SECRET = 'test-secret'
   claims.clear()
+  h.claimError = null
   contractRows = [K('k-dub', 'loc-dub'), K('k-ny', 'loc-ny')]
 })
 
 describe('TZ.6 contract-reminders', () => {
-  it('Europe/Dublin reminds at 08:00 UTC, not at 07:00 UTC (08:00 IST); every tick stamps', async () => {
+  it('Europe/Dublin reminds at 08:00 UTC, not at 07:00 UTC (08:00 IST); only the slot tick stamps', async () => {
     await at('2026-07-01T07:00:00Z')
     expect(reminded()).toEqual([])
     await at('2026-07-01T08:00:00Z')
     expect(reminded()).toEqual(['k-dub'])
-    expect(stampHeartbeat.mock.calls.filter(([n]) => n === 'contract-reminders')).toHaveLength(2)
+    expect(stampHeartbeat.mock.calls.filter(([n]) => n === 'contract-reminders')).toHaveLength(1)
+  })
+
+  it('a claim-write error at the slot tick reminds nobody, does not stamp contract-reminders, answers 500', async () => {
+    h.claimError = { code: 'XX000', message: 'down' }
+    vi.setSystemTime(Date.parse('2026-07-01T08:00:00Z'))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(reminded()).toEqual([])
+    expect(stampHeartbeat.mock.calls.map(([n]) => n)).not.toContain('contract-reminders')
   })
 
   it('America/New_York reminds at 08:00 local (12:00Z in summer), once that day', async () => {

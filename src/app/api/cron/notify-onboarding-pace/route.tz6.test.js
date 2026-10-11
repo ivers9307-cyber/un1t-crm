@@ -54,11 +54,14 @@ describe('TZ.6 notify-onboarding-pace', () => {
     expect(visited()).toEqual([REGISTRY_ONLY.id, REGISTRY_ONLY.id])
   })
 
-  it('a tick with no slot due stamps and paces nobody', async () => {
+  it('a tick with no slot due paces nobody and never stamps; the slot tick stamps', async () => {
     dbAt('2026-07-01T03:30:00Z')
     const out = await (await GET(req())).json()
     expect(out).toMatchObject({ ok: true, nudged: 0, slot: { due: 0 } })
     expect(visited()).toEqual([])
-    expect(stampHeartbeat).toHaveBeenCalledWith('notify-onboarding-pace', expect.anything())
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+    dbAt('2026-07-01T10:30:00Z')
+    await GET(req())
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
   })
 })

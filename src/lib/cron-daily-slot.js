@@ -24,27 +24,34 @@
 // that was claimed and then failed part-way is NOT re-run that day (its own
 // per-message ledgers decide any retry, unchanged).
 //
-// CATCH-UP. A slot stays due for SLOT_CATCHUP_HOURS ticks after its hour, but
-// only while it is UNCLAIMED. In normal operation the slot-hour tick claims
-// every due location, so nothing changes. The window exists for a tick that
-// could not claim: the location's zone could not be read (never act on a
-// guessed zone), or the claim write failed. Then nothing was taken and the next
-// hourly tick retries.
+// FAILURE SEMANTICS (D6 = B: UN1T behaves exactly as today, failures included).
+//   • Europe/Dublin: the slot is the legacy instant ONLY (lateHours 0, no
+//     catch-up, whatever the anchor). A tick that could not read the zones or
+//     could not write the claim acts for nobody and does NOT stamp its
+//     heartbeat, so the slot is SKIPPED and the cron's (daily/weekly) heartbeat
+//     PAGES, exactly as a failed run of the old once-a-day cron did. Never late,
+//     never twice.
+//   • Any other zone: a slot stays due for SLOT_CATCHUP_HOURS more ticks while
+//     UNCLAIMED, so a failed tick is retried up to two hours late.
 //
-// DEPLOY ORDER. Mig 720 creates the claim table and is applied right AFTER the
-// deploy (its heartbeat half must not land before the hourly code runs). Until
-// it lands, a claim insert finds no table: a Europe/Dublin location then acts
-// at its EXACT pre-TZ.6 instant with no claim (precisely the old behaviour) and
-// any other zone waits (catch-up picks it up once the table exists). Mig 720
-// seeds a claim for every Dublin slot that had already passed today, so the
-// catch-up window can never re-send what the old code (or this fallback) sent
-// before the table existed.
+// HEARTBEATS. A converted cron stamps only on a tick that took at least one
+// slot (a claim, or the pre-720 legacy fallback below) and had no gate fault
+// (slotTickStampable). The 'none' scope (DEFAULT_TZ, Dublin) is due at the
+// legacy instant, so every cron still stamps once per legacy run: the
+// cron_heartbeats rows keep their daily/weekly clocks. A quiet hourly tick
+// never stamps.
+//
+// DEPLOY ORDER. Mig 720 (the claim table + grants) is safe to apply any time
+// after the deploy. Until it lands a claim insert finds no table: a
+// Europe/Dublin location then acts at its EXACT pre-TZ.6 instant with no claim
+// (the old behaviour; `fallback: true` on its slot) and any other zone waits.
+// With no Dublin catch-up there is nothing for a seed to protect.
 //
 // The location universe is EVERY `locations` row plus NO_LOCATION (rows whose
 // location_id is NULL resolve to DEFAULT_TZ, the documented "no location" zone).
 // Claiming every due location at the slot tick, whether or not it has work,
-// is what keeps the catch-up window from acting on work that appears after the
-// slot (a challenge created at 08:30 is not announced at 09:00).
+// is what keeps a non-Dublin catch-up tick from acting on work that appeared
+// after the slot.
 
 import { selectAll } from '@/lib/select-all'
 import { DEFAULT_TZ, PLATFORM_TZ, canonicalZone, dayStrIn, instantToZonedParts, resolveZone, zoneOfLocation } from '@/lib/location-time'
@@ -57,7 +64,10 @@ import { logError, logWarn } from '@/lib/log'
  */
 export const LEGACY_UTC_ANCHORED = new Set([PLATFORM_TZ])
 
-/** Ticks after the slot hour that may still claim an UNCLAIMED slot (a retry). */
+/**
+ * Ticks after the slot hour that may still claim an UNCLAIMED slot (a retry),
+ * for a NON-Dublin zone. A Europe/Dublin location has none (catchUpHoursFor).
+ */
 export const SLOT_CATCHUP_HOURS = 2
 
 /** Claim scope for rows with no location_id. */
@@ -90,7 +100,10 @@ export const DAILY_SLOTS = Object.freeze({
 })
 
 /** True when `zone` keeps the pre-TZ.6 schedule (a Europe/Dublin location). */
-const keepsLegacySchedule = (zone) => LEGACY_UTC_ANCHORED.has(canonicalZone(zone) ?? resolveZone(zone))
+export const keepsLegacySchedule = (zone) => LEGACY_UTC_ANCHORED.has(canonicalZone(zone) ?? resolveZone(zone))
+
+/** Catch-up ticks for a zone: 0 for Europe/Dublin (skip and page, as before), else SLOT_CATCHUP_HOURS. */
+export const catchUpHoursFor = (zone) => (keepsLegacySchedule(zone) ? 0 : SLOT_CATCHUP_HOURS)
 
 /** True when `zone` keeps the legacy UTC hour for a slot of this anchor. */
 export function isLegacyAnchored(zone, slot = {}) {
@@ -106,15 +119,15 @@ export function isLegacyAnchored(zone, slot = {}) {
  * @param {{hour:number, weekday?:number, anchor?:'local'}} slot
  * @returns {{ due:boolean, day:string, lateHours:number, legacy:boolean }}
  *   day: the location's LOCAL calendar day (the claim key). For a legacy
- *   anchored slot it is also the UTC day: every slot hour + catch-up is <= 21
- *   UTC, when Dublin's date is the UTC date (location-time.daily-slot test).
+ *   anchored slot it is also the UTC day: every slot hour is <= 21 UTC, when
+ *   Dublin's date is the UTC date (cron-daily-slot.test.js).
  */
 export function dailySlotDue(zone, nowMs, slot) {
   const z = resolveZone(zone)
   const legacy = isLegacyAnchored(z, slot)
   const clock = instantToZonedParts(nowMs, legacy ? 'UTC' : z)
   const lateHours = clock.h - slot.hour
-  const due = lateHours >= 0 && lateHours <= SLOT_CATCHUP_HOURS &&
+  const due = lateHours >= 0 && lateHours <= catchUpHoursFor(z) &&
     (slot.weekday == null || clock.weekday === slot.weekday)
   return { due, day: dayStrIn(nowMs, z), lateHours, legacy }
 }
@@ -125,35 +138,38 @@ const isMissingTable = (error) => error?.code === '42P01' || error?.code === 'PG
 
 /**
  * The gate. Reads every location's zone, works out which are due now, claims
- * them, and returns the claimed ones. Never throws.
+ * them, and returns the claimed ones. Never throws (except for an unknown cron).
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db service-role client
  * @param {keyof typeof DAILY_SLOTS} cronName
  * @param {{ nowMs?: number, module?: string, slot?: object }} [opts]
  *   slot: override DAILY_SLOTS[cronName] (tests only).
  * @returns {Promise<{
- *   ok: boolean,
- *   slots: Map<string, { locationId: string|null, zone: string, day: string, lateHours: number, legacy: boolean }>,
- *   summary: { due: number, claimed: number, already: number, claim_failed: number, legacy_fallback: number, zone_unread: number },
- * }>} slots is keyed by scopeOf(location_id); read it with slotFor(). ok=false
- *   only when the zones could not be read: then NOTHING may act this tick.
+ *   ok: boolean, faulted: boolean,
+ *   slots: Map<string, { locationId: string|null, zone: string, day: string, lateHours: number, legacy: boolean, fallback: boolean }>,
+ *   summary: { due: number, claimed: number, already: number, claim_failed: number, waiting: number, legacy_fallback: number, zone_unread: number },
+ * }>} slots is keyed by scopeOf(location_id); read it with slotFor().
+ *   ok=false: the zones could not be read; NOTHING may act this tick.
+ *   faulted: the zones were unreadable or a claim write failed (not the
+ *   missing-table case). The caller still acts for the slots it holds, but
+ *   must NOT stamp its heartbeat and answers non-2xx, so the slot pages.
  */
 export async function gateDailySlot(db, cronName, { nowMs = Date.now(), module = cronName, slot: slotOverride } = {}) {
   const slot = slotOverride || DAILY_SLOTS[cronName]
   if (!slot) throw new Error(`cron-daily-slot: no slot for ${cronName}`)
-  const summary = { due: 0, claimed: 0, already: 0, claim_failed: 0, legacy_fallback: 0, zone_unread: 0 }
+  const summary = { due: 0, claimed: 0, already: 0, claim_failed: 0, waiting: 0, legacy_fallback: 0, zone_unread: 0 }
   const slots = new Map()
 
-  // Zones. A failed read is a DB outage: no location acts on a guessed zone,
-  // nothing is claimed, and the next hourly tick (still inside the catch-up
-  // window) retries.
+  // Zones. A failed read is a DB outage: no location acts on a guessed zone and
+  // nothing is claimed. Dublin's slot is skipped (and pages); another zone's is
+  // retried by the next hourly tick inside its catch-up window.
   let rows
   try {
     rows = await selectAll((from, to) => db.from('locations').select('id, timezone').order('id').range(from, to))
   } catch (err) {
     summary.zone_unread = 1
-    logError(module, 'locations.timezone unreadable; no location acts this tick, the next hourly tick retries', { cron: cronName, err })
-    return { ok: false, slots, summary }
+    logError(module, 'locations.timezone unreadable; no location acts this tick (a Europe/Dublin slot is skipped)', { cron: cronName, err })
+    return { ok: false, faulted: true, slots, summary }
   }
 
   const due = []
@@ -166,6 +182,7 @@ export async function gateDailySlot(db, cronName, { nowMs = Date.now(), module =
   summary.due = due.length
 
   let tableMissing = false
+  let faulted = false
   for (let i = 0; i < due.length; i += CLAIM_BATCH) {
     const batch = due.slice(i, i + CLAIM_BATCH)
     const { data, error } = await db.from(CLAIMS_TABLE)
@@ -181,16 +198,17 @@ export async function gateDailySlot(db, cronName, { nowMs = Date.now(), module =
         // location waits for the table.
         for (const d of batch) {
           if (keepsLegacySchedule(d.zone) && d.lateHours === 0) {
-            slots.set(d.scope, slotOf(d))
+            slots.set(d.scope, { ...slotOf(d), fallback: true })
             summary.legacy_fallback++
           } else {
-            summary.claim_failed++
+            summary.waiting++
           }
         }
         continue
       }
+      faulted = true
       summary.claim_failed += batch.length
-      logError(module, 'daily-slot claim failed; these locations act on a later tick', {
+      logError(module, 'daily-slot claim failed; these locations do not act this tick (a Europe/Dublin slot is skipped, others retry)', {
         cron: cronName, locations: batch.length, code: error.code, err: error.message,
       })
       continue
@@ -203,14 +221,23 @@ export async function gateDailySlot(db, cronName, { nowMs = Date.now(), module =
   }
   if (tableMissing) {
     logWarn(module, 'cron_daily_slot_claims missing (mig 720 not applied yet): legacy-hour fallback, no claim', {
-      cron: cronName, legacy_fallback: summary.legacy_fallback, waiting: summary.claim_failed,
+      cron: cronName, legacy_fallback: summary.legacy_fallback, waiting: summary.waiting,
     })
   }
-  return { ok: true, slots, summary }
+  return { ok: true, faulted, slots, summary }
 }
 
 function slotOf(d) {
-  return { locationId: d.locationId, zone: d.zone, day: d.day, lateHours: d.lateHours, legacy: d.legacy }
+  return { locationId: d.locationId, zone: d.zone, day: d.day, lateHours: d.lateHours, legacy: d.legacy, fallback: false }
+}
+
+/**
+ * May this tick stamp the cron's heartbeat? Only a tick that took at least one
+ * slot and had no gate fault (the caller adds its own body faults). A quiet
+ * hourly tick never stamps, so the cron_heartbeats rows keep the legacy clock.
+ */
+export function slotTickStampable(gate) {
+  return !!gate?.ok && !gate.faulted && (gate.slots?.size || 0) > 0
 }
 
 /** The claimed slot for a row's location_id (NULL → NO_LOCATION), or undefined. */

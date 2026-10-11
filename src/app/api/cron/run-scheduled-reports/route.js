@@ -7,7 +7,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logWarn } from '@/lib/log'
 import { isRateReportType } from '@/lib/report-access'
 import { filterRateReportRecipients } from '@/lib/report-recipients'
-import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,8 +40,9 @@ export async function GET(request) {
   const gate = await gateDailySlot(db, 'run-scheduled-reports', { nowMs: Date.parse(now), module: 'run-scheduled-reports' })
   if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
   if (gate.slots.size === 0) {
-    await stampHeartbeat('run-scheduled-reports')
-    return NextResponse.json({ success: true, message: 'No location at its daily slot', processed: 0, slot: gate.summary })
+    // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ success: !gate.faulted, message: 'No location at its daily slot', processed: 0, slot: gate.summary }, { status: gate.faulted ? 500 : 200 })
   }
 
   // Find all active scheduled reports where next_run_at <= now
@@ -63,8 +64,10 @@ export async function GET(request) {
   const runnable = (dueReports || []).filter(r => r.paused !== true && slotFor(gate.slots, r.location_id))
 
   if (runnable.length === 0) {
-    await stampHeartbeat('run-scheduled-reports')
-    return NextResponse.json({ success: true, message: 'No reports due', processed: 0 })
+    if (slotTickStampable(gate)) {
+      await stampHeartbeat('run-scheduled-reports')
+    }
+    return NextResponse.json({ success: !gate.faulted, message: 'No reports due', processed: 0 }, { status: gate.faulted ? 500 : 200 })
   }
 
   const results = []
@@ -202,11 +205,13 @@ export async function GET(request) {
 
   // Heartbeat after the loop — even if individual reports errored, the cron
   // tick itself ran end-to-end. Per-report errors are surfaced in `results`.
-  await stampHeartbeat('run-scheduled-reports')
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('run-scheduled-reports')
+  }
 
   return NextResponse.json({
-    success: true,
+    success: !gate.faulted,
     processed: results.length,
     results,
-  })
+  }, { status: gate.faulted ? 500 : 200 })
 }

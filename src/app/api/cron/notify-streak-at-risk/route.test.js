@@ -33,7 +33,7 @@ const DOWN = { code: 'XX000', message: 'down' }
 // TZ.6: the daily-slot gate's tables (one Europe/Dublin studio) and the
 // members' home locations ride along.
 const DUBLIN = { id: 'loc-dub', timezone: 'Europe/Dublin' }
-function fakeDb({ candidates, history, candidateError = null, historyErrors = [], home = DUBLIN.id, locations = [DUBLIN], claims }) {
+function fakeDb({ candidates, history, candidateError = null, historyErrors = [], home = DUBLIN.id, locations = [DUBLIN], claims, claimError }) {
   let historyCalls = 0
   const windows = []
   fakeDb.windows = windows
@@ -63,7 +63,7 @@ function fakeDb({ candidates, history, candidateError = null, historyErrors = []
       }
       return b
     },
-  }, { locations, claims })
+  }, { locations, claims, ...(claimError ? { claimError } : {}) })
 }
 
 // c-1 trained the last three days (streak 3, ending yesterday) → at risk.
@@ -117,23 +117,27 @@ describe('notify-streak-at-risk — a failed read is never an empty answer', () 
 })
 
 describe('TZ.6 notify-streak-at-risk acts per home studio at its daily slot', () => {
-  it('a Dublin studio acts at 11:00 UTC only: 10:00 UTC reads nothing and stamps a quiet tick', async () => {
+  it('a Dublin studio acts at 11:00 UTC only: 10:00 UTC reads nothing and, a quiet tick, never stamps', async () => {
     vi.setSystemTime(Date.parse('2026-09-16T10:00:00Z'))
     const db = fakeDb({ candidates: ['c-1'], history: HISTORY })
     createServerClient.mockReturnValue(db)
     const body = await (await GET(req())).json()
     expect(body).toMatchObject({ ok: true, candidates: 0, nudged: 0, slot: { due: 0 } })
     expect(sendNudgeOnce).not.toHaveBeenCalled()
-    expect(stampHeartbeat).toHaveBeenCalledWith('notify-streak-at-risk')
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
-  it('the 11:00 UTC tick acts once; a re-run (or the 12:00 catch-up tick) the same day does not repeat it', async () => {
+  it('the 11:00 UTC tick acts once; a re-run in the hour finds it claimed and the 12:00 tick finds nothing due', async () => {
     const claims = new Map()
     createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY, claims }))
     expect(await (await GET(req())).json()).toMatchObject({ nudged: 1 })
-    vi.setSystemTime(NOW + 3600_000)
+    vi.setSystemTime(NOW + 60_000)
     createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY, claims }))
     expect(await (await GET(req())).json()).toMatchObject({ ok: true, nudged: 0, slot: { due: 2, already: 2 } })
+    vi.setSystemTime(NOW + 3600_000)
+    createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY, claims }))
+    expect(await (await GET(req())).json()).toMatchObject({ ok: true, nudged: 0, slot: { due: 0 } })
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
     expect(sendNudgeOnce).toHaveBeenCalledTimes(1)
     expect(sendNudgeOnce).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ dedupKey: '2026-09-16' }))
   })
@@ -157,6 +161,14 @@ describe('TZ.6 notify-streak-at-risk acts per home studio at its daily slot', ()
     createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY, home: NYC.id, locations: [DUBLIN, NYC] }))
     expect(await (await GET(req())).json()).toMatchObject({ ok: true, nudged: 1 })
     expect(sendNudgeOnce).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: 'c-1', dedupKey: '2026-09-16' }))
+  })
+
+  it('a claim-write error at the slot tick acts for nobody: 500, no stamp, no send', async () => {
+    createServerClient.mockReturnValue(fakeDb({ candidates: ['c-1'], history: HISTORY, claimError: () => DOWN }))
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(sendNudgeOnce).not.toHaveBeenCalled()
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('an unreadable zone acts for nobody: 500, no stamp, no send', async () => {

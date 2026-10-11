@@ -28,7 +28,7 @@ import { buildOnboardingPacePush } from '@/lib/onboarding-journey'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
-import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -69,9 +69,9 @@ export async function GET(request) {
   const gate = await gateDailySlot(db, 'notify-onboarding-pace', { nowMs, module: 'cron-onboarding-pace' })
   if (!gate.ok) return NextResponse.json({ ok: false, slot: gate.summary }, { status: 500 })
   if (gate.slots.size === 0) {
-    await stampHeartbeat('notify-onboarding-pace', { slot: gate.summary }).catch((err) =>
-      logWarn('cron-onboarding-pace', 'heartbeat failed', { err }))
-    return NextResponse.json({ ok: true, slot: gate.summary, locations: 0, candidates: 0, nudged: 0 })
+    // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ ok: !gate.faulted, slot: gate.summary, locations: 0, candidates: 0, nudged: 0 }, { status: gate.faulted ? 500 : 200 })
   }
 
   // Live locations = Glofox-connected (attendance data only exists there); same
@@ -135,11 +135,13 @@ export async function GET(request) {
   logInfo('cron-onboarding-pace', 'tick', {
     locations: liveLocations.length, locations_skipped: skipped.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
   })
-  await stampHeartbeat('notify-onboarding-pace', {
-    locations: liveLocations.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
-  }).catch((err) =>
-    logWarn('cron-onboarding-pace', 'heartbeat failed', { err }))
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('notify-onboarding-pace', {
+      locations: liveLocations.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
+    }).catch((err) =>
+      logWarn('cron-onboarding-pace', 'heartbeat failed', { err }))
+  }
   return NextResponse.json({
-    ok: true, locations: liveLocations.length, locations_skipped: skipped.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
-  })
+    ok: !gate.faulted, locations: liveLocations.length, locations_skipped: skipped.length, ...skipCounts, candidates, nudged, failed, reachability_failed: reachabilityFailed,
+  }, { status: gate.faulted ? 500 : 200 })
 }

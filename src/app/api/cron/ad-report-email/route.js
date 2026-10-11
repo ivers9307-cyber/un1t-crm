@@ -10,7 +10,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { loadAdsDashboard } from '@/lib/ads/read'
 import { buildAdReportEmail } from '@/lib/ads/report'
 import { sendEmail } from '@/lib/postmark'
-import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -26,8 +26,9 @@ export async function GET(request) {
   const gate = await gateDailySlot(db, 'ad-report-email', { module: 'ad-report-email' })
   if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
   if (gate.slots.size === 0) {
-    await stampHeartbeat('ad-report-email').catch(() => {})
-    return NextResponse.json({ success: true, results: [], slot: gate.summary })
+    // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ success: !gate.faulted, results: [], slot: gate.summary }, { status: gate.faulted ? 500 : 200 })
   }
   const { data: locations } = await db.from('locations').select('id, name, settings').eq('active', true)
   const results = []
@@ -45,6 +46,8 @@ export async function GET(request) {
       results.push({ loc: loc.id, sent: recipients.length })
     } catch (e) { results.push({ loc: loc.id, error: e.message }) }
   }
-  await stampHeartbeat('ad-report-email').catch(() => {})
-  return NextResponse.json({ success: true, results })
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('ad-report-email').catch(() => {})
+  }
+  return NextResponse.json({ success: !gate.faulted, results }, { status: gate.faulted ? 500 : 200 })
 }

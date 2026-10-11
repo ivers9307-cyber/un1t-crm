@@ -45,14 +45,14 @@ beforeEach(() => {
 })
 
 describe('TZ.6 equipment-inspection-reminder (Wednesday 1 Jul 2026)', () => {
-  it('Europe/Dublin at 06:00 UTC only; New York at 06:00 local (10:00Z); every tick stamps', async () => {
+  it('Europe/Dublin at 06:00 UTC only; New York at 06:00 local (10:00Z); only the two slot ticks stamp', async () => {
     await at(reminder, '2026-07-01T05:00:00Z')
     await at(reminder, '2026-07-01T06:00:00Z')
     await at(reminder, '2026-07-01T07:00:00Z')
     expect(reminded()).toEqual(['loc-dub'])
     await at(reminder, '2026-07-01T10:00:00Z')
     expect(reminded()).toEqual(['loc-dub', 'loc-ny'])
-    expect(stampHeartbeat).toHaveBeenCalledTimes(4)
+    expect(stampHeartbeat).toHaveBeenCalledTimes(2)
   })
 
   it("New York's inspection weekday is its own: 06:00 Wednesday local is 10:00Z Wednesday", async () => {

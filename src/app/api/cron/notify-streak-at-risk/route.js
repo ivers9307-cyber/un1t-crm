@@ -26,7 +26,7 @@ import { sendNudgeOnce, readReachableContacts, nudgeFailed } from '@/lib/custome
 import { streakAtRisk, buildStreakAtRiskPush } from '@/lib/customer-notifications'
 import { logError, logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { gateDailySlot, scopeOf, readContactHomes } from '@/lib/cron-daily-slot'
+import { gateDailySlot, scopeOf, readContactHomes, slotTickStampable } from '@/lib/cron-daily-slot'
 import { dayStartMsIn, addDaysIn } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
@@ -52,8 +52,9 @@ export async function GET(request) {
   const gate = await gateDailySlot(db, 'notify-streak-at-risk', { nowMs, module: 'cron-streak-risk' })
   if (!gate.ok) return NextResponse.json({ ok: false, slot: gate.summary }, { status: 500 })
   if (gate.slots.size === 0) {
-    await stampHeartbeat('notify-streak-at-risk').catch(() => {})
-    return NextResponse.json({ ok: true, slot: gate.summary, candidates: 0, nudged: 0 })
+    // A quiet tick (no slot taken) never stamps; the row keeps the legacy clock.
+    // A faulted one (claim write failed) answers 500: the slot is skipped and pages.
+    return NextResponse.json({ ok: !gate.faulted, slot: gate.summary, candidates: 0, nudged: 0 }, { status: gate.faulted ? 500 : 200 })
   }
 
   // One "yesterday" window per calendar among the due studios. A legacy
@@ -114,6 +115,7 @@ export async function GET(request) {
     if (candidatesUnread || homesUnread) {
       return NextResponse.json({ ok: false, candidates: 0, nudged: 0, candidates_unread: candidatesUnread, homes_unread: homesUnread, slot: gate.summary }, { status: 500 })
     }
+    if (!slotTickStampable(gate)) return NextResponse.json({ ok: false, candidates: 0, nudged: 0, slot: gate.summary }, { status: 500 })
     await stampHeartbeat('notify-streak-at-risk').catch(() => {})
     return NextResponse.json({ ok: true, candidates: 0, nudged: 0, slot: gate.summary })
   }
@@ -155,7 +157,8 @@ export async function GET(request) {
     const streak = streakAtRisk(byContact.get(cid) || [], nowMs, MIN_STREAK)
     if (streak > 0) atRisk.push({ cid, streak, dedupKey: candidateWindow.get(cid).dedupKey }) // YYYY-MM-DD
   }
-  const readFailed = candidatesUnread > 0 || unread.size > 0 || homesUnread > 0
+  // A gate fault (a claim write failed) also withholds the stamp: those slots were skipped.
+  const readFailed = candidatesUnread > 0 || unread.size > 0 || homesUnread > 0 || !slotTickStampable(gate)
   if (atRisk.length === 0) {
     const summary = { candidates: ids.length, at_risk: 0, nudged: 0, history_unread: unread.size, candidates_unread: candidatesUnread, homes_unread: homesUnread, slot: gate.summary }
     if (readFailed) return NextResponse.json({ ok: false, ...summary }, { status: 500 })

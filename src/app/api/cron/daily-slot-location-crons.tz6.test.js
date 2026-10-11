@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const acted = []
 const claims = new Map()
+const h = vi.hoisted(() => ({ claimError: null, lastRecon: null }))
 const DUB = 'loc-dub'
 const NYC = 'loc-ny'
 
@@ -52,12 +53,12 @@ vi.mock('@/lib/supabase', async () => {
   function builder(table) {
     const b = {}
     for (const m of ['select', 'eq', 'order', 'limit', 'not', 'lte', 'in', 'range']) b[m] = () => b
-    b.maybeSingle = async () => ({ data: table === 'ad_accounts' ? { id: 'acc' } : null, error: null })
+    b.maybeSingle = async () => ({ data: table === 'ad_accounts' ? { id: 'acc' } : table === 'recon_runs' && h.lastRecon ? { started_at: h.lastRecon } : null, error: null })
     b.then = (res, rej) => Promise.resolve({ data: TABLES[table] || [], error: null }).then(res, rej)
     return b
   }
   const zones = [{ id: DUB, timezone: 'Europe/Dublin' }, { id: NYC, timezone: 'America/New_York' }]
-  return { createServerClient: () => withSlotTables({ from: builder }, { locations: zones, claims }) }
+  return { createServerClient: () => withSlotTables({ from: builder }, { locations: zones, claims, claimError: () => h.claimError }) }
 })
 
 const ROUTES = {
@@ -70,6 +71,7 @@ const ROUTES = {
 const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
 const { buildMorningBriefingEmail } = await import('@/lib/morning-briefing')
 const { buildAdReportEmail } = await import('@/lib/ads/report')
+const { noSourceLocationIds } = await import('@/lib/membership/locations-for-source')
 const req = () => new Request('https://x.test/api/cron/x', { headers: { authorization: 'Bearer shh' } })
 
 async function ticks(cron, isos) {
@@ -87,10 +89,12 @@ beforeEach(() => {
   process.env.CRON_SECRET = 'shh'
   acted.length = 0
   claims.clear()
+  h.claimError = null
+  h.lastRecon = null
 })
 
-// [cron, ticks]: an hour early, the Dublin legacy instant, a repeat inside the
-// catch-up window, New York's local slot, and a repeat of that.
+// [cron, ticks]: an hour early, the Dublin legacy instant, an hour after it
+// (Dublin has no catch-up), New York's local slot, and an hour after that.
 const CASES = [
   // Monday 6 Jul 2026 (IST / EDT)
   ['morning-briefing', ['2026-07-06T05:00:00Z', '2026-07-06T06:00:00Z', '2026-07-06T07:00:00Z', '2026-07-06T10:00:00Z', '2026-07-06T11:00:00Z']],
@@ -116,11 +120,39 @@ describe('TZ.6 location-loop daily crons act once per location, at its slot', ()
     expect(await ticks('receipt-coverage-weekly', ['2026-12-04T08:00:00Z'])).toEqual([DUB])
   })
 
-  it('every stamping cron stamps on a quiet tick (receipt-coverage-weekly never stamps here)', async () => {
-    for (const cron of ['morning-briefing', 'churn-radar-digest', 'ad-report-email', 'run-scheduled-reports', 'receipt-coverage-weekly']) {
-      await ticks(cron, ['2026-07-01T03:00:00Z'])
-    }
+  it('a quiet tick never stamps; the legacy slot tick stamps once (receipt-coverage-weekly never stamps here)', async () => {
+    const STAMPING = { 'morning-briefing': '2026-07-06T06:00:00Z', 'churn-radar-digest': '2026-07-06T07:00:00Z', 'ad-report-email': '2026-07-06T07:00:00Z', 'run-scheduled-reports': '2026-07-06T07:00:00Z' }
+    for (const cron of [...Object.keys(STAMPING), 'receipt-coverage-weekly']) await ticks(cron, ['2026-07-06T03:00:00Z'])
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+    for (const [cron, iso] of Object.entries(STAMPING)) await ticks(cron, [iso, iso.replace(':00:00Z', ':00:30Z')])
+    await ticks('receipt-coverage-weekly', ['2026-07-03T07:00:00Z'])
     expect(stampHeartbeat.mock.calls.map(([n]) => n).sort()).toEqual(['ad-report-email', 'churn-radar-digest', 'morning-briefing', 'run-scheduled-reports'])
+  })
+
+  it('a claim-write error at the slot tick acts for nobody, stamps nothing and answers 500', async () => {
+    h.claimError = { code: 'XX000', message: 'down' }
+    const SLOT = { 'morning-briefing': '2026-07-06T06:00:00Z', 'churn-radar-digest': '2026-07-06T07:00:00Z', 'ad-report-email': '2026-07-06T07:00:00Z', 'run-scheduled-reports': '2026-07-06T07:00:00Z', 'receipt-coverage-weekly': '2026-07-03T07:00:00Z' }
+    for (const [cron, iso] of Object.entries(SLOT)) {
+      vi.setSystemTime(Date.parse(iso))
+      expect((await ROUTES[cron].GET(req())).status, cron).toBe(500)
+    }
+    expect(acted).toEqual([])
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+
+  it('receipt-coverage-weekly before mig 720 keeps the old "already ran today" guard on the legacy fallback', async () => {
+    h.claimError = { code: 'PGRST205', message: 'schema cache' }
+    h.lastRecon = '2026-07-03T06:59:00Z' // 07:59 IST: a cron pull already started on the Friday
+    expect(await ticks('receipt-coverage-weekly', ['2026-07-03T07:00:00Z'])).toEqual([])
+    h.lastRecon = '2026-06-26T07:00:00Z' // last Friday
+    expect(await ticks('receipt-coverage-weekly', ['2026-07-03T07:00:00Z'])).toEqual([DUB])
+  })
+
+  it('a slot tick that crashes does not stamp', async () => {
+    noSourceLocationIds.mockRejectedValueOnce(new Error('boom'))
+    vi.setSystemTime(Date.parse('2026-07-06T07:00:00Z'))
+    await expect(ROUTES['churn-radar-digest'].GET(req())).rejects.toThrow('boom')
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it("the emailed dates are the studio's own day and label: Dublin byte-identical, New York its own", async () => {

@@ -73,6 +73,7 @@ describe('TZ.6 run-challenge-events', () => {
     challengeRows = [START('ch-d', DUBLIN.id, '2026-07-01')]
     await at('2026-07-01T08:00:00Z')
     challengeRows = [START('ch-d2', DUBLIN.id, '2026-07-01')] // appears after the slot
-    expect(await at('2026-07-01T09:00:00Z')).toMatchObject({ started: 0, slot: { already: 2 } })
+    expect(await at('2026-07-01T08:00:40Z')).toMatchObject({ started: 0, slot: { already: 2 } }) // a re-run in the hour
+    expect(await at('2026-07-01T09:00:00Z')).toMatchObject({ started: 0, slot: { due: 0 } }) // Dublin: no later tick
   })
 })

@@ -33,7 +33,7 @@ import { selectOutstanding, buildOverdueBody } from '@/lib/equipment-cron'
 import { readRoleRecipientIds } from '@/lib/push'
 import { sendPushOnce } from '@/lib/push-dedup'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 import { logAuditEvent } from '@/lib/audit'
 import { logWarn, logError } from '@/lib/log'
 import { pushOutcome } from '@/lib/push-outcome'
@@ -58,8 +58,9 @@ export async function GET(request) {
   const gate = await gateDailySlot(db, 'equipment-inspection-sweep', { module: 'equipment-cron' })
   if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
   if (gate.slots.size === 0) {
-    await stampHeartbeat('equipment-inspection-sweep')
-    return NextResponse.json({ success: true, data: { locations: results, slot: gate.summary } })
+    // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ success: !gate.faulted, data: { locations: results, slot: gate.summary } }, { status: gate.faulted ? 500 : 200 })
   }
 
   let settingsRows = []
@@ -143,6 +144,8 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('equipment-inspection-sweep')
-  return NextResponse.json({ success: true, data: { locations: results, slot: gate.summary } })
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('equipment-inspection-sweep')
+  }
+  return NextResponse.json({ success: !gate.faulted, data: { locations: results, slot: gate.summary } }, { status: gate.faulted ? 500 : 200 })
 }

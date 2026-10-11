@@ -31,7 +31,7 @@ import { getAppUrl } from '@/lib/app-url'
 import { fetchLocationTodayFeed } from '@/lib/today-feed-data'
 import { fetchStudioPulse } from '@/lib/studio-pulse-data'
 import { buildMorningBriefingEmail, shapePulseMetrics } from '@/lib/morning-briefing'
-import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 import { formatInZone } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
@@ -55,8 +55,9 @@ export async function GET(request) {
   const gate = await gateDailySlot(db, 'morning-briefing', { nowMs, module: 'morning-briefing' })
   if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
   if (gate.slots.size === 0) {
-    await stampHeartbeat('morning-briefing').catch(() => {})
-    return NextResponse.json({ success: true, emails_sent: 0, perLocation: [], slot: gate.summary })
+    // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ success: !gate.faulted, emails_sent: 0, perLocation: [], slot: gate.summary }, { status: gate.faulted ? 500 : 200 })
   }
 
   const { data: locations, error: locErr } = await db
@@ -103,7 +104,9 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('morning-briefing').catch(() => {})
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('morning-briefing').catch(() => {})
+  }
 
-  return NextResponse.json({ success: true, emails_sent: emailsSent, perLocation })
+  return NextResponse.json({ success: !gate.faulted, emails_sent: emailsSent, perLocation }, { status: gate.faulted ? 500 : 200 })
 }

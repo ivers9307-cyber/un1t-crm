@@ -15,7 +15,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { runEventReminders } from '@/lib/event-attendee-reminders'
-import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
@@ -33,10 +33,13 @@ export async function GET(request) {
   const gate = await gateDailySlot(db, 'event-reminders', { nowMs, module: 'event-reminders' })
   if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
 
-  const data = gate.slots.size === 0
-    ? { events: 0, sent: 0, skipped: 0 }
-    : await runEventReminders({ db, nowMs, isDue: (locationId) => !!slotFor(gate.slots, locationId) })
+  if (gate.slots.size === 0) {
+    // A quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ success: !gate.faulted, data: { events: 0, sent: 0, skipped: 0, slot: gate.summary } }, { status: gate.faulted ? 500 : 200 })
+  }
+  const data = await runEventReminders({ db, nowMs, isDue: (locationId) => !!slotFor(gate.slots, locationId) })
 
-  await stampHeartbeat('event-reminders', { ...data, slot: gate.summary })
-  return NextResponse.json({ success: true, data: { ...data, slot: gate.summary } })
+  if (slotTickStampable(gate)) await stampHeartbeat('event-reminders', { ...data, slot: gate.summary })
+  return NextResponse.json({ success: !gate.faulted, data: { ...data, slot: gate.summary } }, { status: gate.faulted ? 500 : 200 })
 }

@@ -99,16 +99,16 @@ class OpenSlots extends Map {
   constructor(day) { super(); this.day = day }
   has() { return true }
   get(scope) {
-    return { locationId: scope === 'none' ? null : scope, zone: DEFAULT_TZ, day: this.day, lateHours: 0, legacy: true }
+    return { locationId: scope === 'none' ? null : scope, zone: DEFAULT_TZ, day: this.day, lateHours: 0, legacy: true, fallback: false }
   }
   get size() { return 1 }
 }
-const OPEN_SUMMARY = { due: 1, claimed: 1, already: 0, claim_failed: 0, legacy_fallback: 0, zone_unread: 0 }
+const OPEN_SUMMARY = { due: 1, claimed: 1, already: 0, claim_failed: 0, waiting: 0, legacy_fallback: 0, zone_unread: 0 }
 
 /** gateDailySlot stand-in: every location is due today, in Europe/Dublin. */
 export async function openGate(_db, _cronName, { nowMs = Date.now() } = {}) {
-  return { ok: true, slots: new OpenSlots(dayStrIn(nowMs, DEFAULT_TZ)), summary: { ...OPEN_SUMMARY } }
+  return { ok: true, faulted: false, slots: new OpenSlots(dayStrIn(nowMs, DEFAULT_TZ)), summary: { ...OPEN_SUMMARY } }
 }
 
 /** As openGate, with every location's day fixed to `day` (for tests that pin "today"). */
-export const openGateOn = (day) => async () => ({ ok: true, slots: new OpenSlots(day), summary: { ...OPEN_SUMMARY } })
+export const openGateOn = (day) => async () => ({ ok: true, faulted: false, slots: new OpenSlots(day), summary: { ...OPEN_SUMMARY } })

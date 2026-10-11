@@ -16,7 +16,7 @@ import { sendNudgeOnce, readReachableContacts, nudgeFailed } from '@/lib/custome
 import { attendanceDrop, buildWinbackPush } from '@/lib/customer-notifications'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { gateDailySlot, slotFor, readContactHomes } from '@/lib/cron-daily-slot'
+import { gateDailySlot, slotFor, readContactHomes, slotTickStampable } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -39,8 +39,17 @@ export async function GET(request) {
   const gate = await gateDailySlot(db, 'notify-winback', { nowMs, module: 'cron-winback' })
   if (!gate.ok) return NextResponse.json({ ok: false, slot: gate.summary }, { status: 500 })
   if (gate.slots.size === 0) {
-    await stampHeartbeat('notify-winback').catch(() => {})
-    return NextResponse.json({ ok: true, slot: gate.summary, candidates: 0, dropping: 0, nudged: 0 })
+    // A quiet tick (no slot taken) never stamps; the row keeps the legacy clock.
+    // A faulted one (claim write failed) answers 500: the slot is skipped and pages.
+    return NextResponse.json({ ok: !gate.faulted, slot: gate.summary, candidates: 0, dropping: 0, nudged: 0 }, { status: gate.faulted ? 500 : 200 })
+  }
+  // Stamp only a slot tick with no fault of the gate's or the body's own.
+  const stamp = async (outcome, status = 200) => {
+    if (status === 200 && slotTickStampable(gate)) {
+      await stampHeartbeat('notify-winback').catch((err) => logWarn('cron-winback', 'heartbeat failed', { err }))
+      return NextResponse.json({ ok: true, ...outcome })
+    }
+    return NextResponse.json({ ok: false, ...outcome, slot: gate.summary }, { status: 500 })
   }
 
   const DAY = 24 * 3600 * 1000
@@ -65,8 +74,7 @@ export async function GET(request) {
     if (!rows || rows.length < PAGE) break
   }
   if (candidateIds.size === 0) {
-    await stampHeartbeat('notify-winback').catch(() => {})
-    return NextResponse.json({ ok: true, candidates: 0, dropping: 0, nudged: 0 })
+    return stamp({ candidates: 0, dropping: 0, nudged: 0 })
   }
 
   const ids = [...candidateIds]
@@ -94,8 +102,7 @@ export async function GET(request) {
     if (isDrop) dropping.push(cid)
   }
   if (dropping.length === 0) {
-    await stampHeartbeat('notify-winback').catch(() => {})
-    return NextResponse.json({ ok: true, candidates: ids.length, dropping: 0, nudged: 0 })
+    return stamp({ candidates: ids.length, dropping: 0, nudged: 0 })
   }
 
   // 4. TZ.6 — only members whose home studio is at its slot this tick. The
@@ -130,7 +137,7 @@ export async function GET(request) {
     reachability_failed: reachabilityFailed, homes_unread: homesUnread, slot: gate.summary,
   }
   logInfo('cron-winback', 'tick', summary)
-  await stampHeartbeat('notify-winback').catch((err) =>
-    logWarn('cron-winback', 'heartbeat failed', { err }))
-  return NextResponse.json({ ok: true, ...summary })
+  // An unreadable home is a member not seen this slot (they were skipped, not
+  // guessed): no stamp, so the run reads as failed.
+  return stamp(summary, homesUnread > 0 ? 500 : 200)
 }

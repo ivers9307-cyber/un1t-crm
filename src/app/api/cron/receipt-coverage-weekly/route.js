@@ -38,6 +38,7 @@ import { createServerClient } from '@/lib/supabase'
 import { runCoveragePull } from '@/lib/recon/pull'
 import { sweepSubmittedLines, seedHunts } from '@/lib/recon/statuses'
 import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
+import { dayStrIn } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,7 +57,26 @@ export async function GET(request) {
   const gate = await gateDailySlot(db, 'receipt-coverage-weekly', { module: 'receipt-coverage-weekly' })
   if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
   if (gate.slots.size === 0) {
-    return NextResponse.json({ success: true, skipped: true, slot: gate.summary })
+    return NextResponse.json({ success: !gate.faulted, skipped: true, slot: gate.summary }, { status: gate.faulted ? 500 : 200 })
+  }
+
+  // Before mig 720 lands there is no claim, so a Europe/Dublin slot taken on
+  // the legacy fallback keeps the old guard: skip it if a cron pull already
+  // started on that studio's day (a retry or manual re-fire inside the hour).
+  const fallbackSlots = [...gate.slots.values()].filter((s) => s.fallback)
+  const ranToday = new Set()
+  if (fallbackSlots.length) {
+    const { data: lastCron, error: lastErr } = await db
+      .from('recon_runs')
+      .select('started_at')
+      .eq('trigger', 'cron')
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    for (const s of fallbackSlots) {
+      // An unreadable history is not "never ran": skip, as the old guard's caller would have been told nothing.
+      if (lastErr || (lastCron && dayStrIn(lastCron.started_at, s.zone) === s.day)) ranToday.add(s.locationId)
+    }
   }
 
   const { data: conns, error: connErr } = await db
@@ -71,6 +91,7 @@ export async function GET(request) {
   const errors = []
   for (const conn of conns || []) {
     if (!slotFor(gate.slots, conn.location_id)) continue // TZ.6: not this location's slot
+    if (ranToday.has(conn.location_id)) continue // pre-720 fallback: already pulled today
     const locationName = conn.location?.name || conn.location_id
     try {
       const summary = await runCoveragePull(db, conn.location_id, { trigger: 'cron' })
@@ -84,7 +105,7 @@ export async function GET(request) {
   }
 
   return NextResponse.json({
-    success: errors.length === 0,
+    success: errors.length === 0 && !gate.faulted,
     data: { locations: perLocation.length, perLocation, errors },
-  })
+  }, { status: gate.faulted ? 500 : 200 })
 }

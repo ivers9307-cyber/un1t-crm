@@ -25,7 +25,7 @@ import { loadRadar } from '@/lib/churn-radar-data'
 import { loadFunnel } from '@/lib/lead-radar-data'
 import { buildDigestEmail } from '@/lib/churn-radar-digest'
 import { noSourceLocationIds } from '@/lib/membership/locations-for-source'
-import { gateDailySlot, slotFor } from '@/lib/cron-daily-slot'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -44,8 +44,9 @@ export async function GET(request) {
   const gate = await gateDailySlot(db, 'churn-radar-digest', { module: 'churn-radar-digest' })
   if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
   if (gate.slots.size === 0) {
-    await stampHeartbeat('churn-radar-digest').catch(() => {})
-    return NextResponse.json({ success: true, emails_sent: 0, skipped_no_source: 0, perLocation: [], slot: gate.summary })
+    // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ success: !gate.faulted, emails_sent: 0, skipped_no_source: 0, perLocation: [], slot: gate.summary }, { status: gate.faulted ? 500 : 200 })
   }
 
   const { data: locations, error: locErr } = await db
@@ -131,7 +132,9 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('churn-radar-digest').catch(() => {})
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('churn-radar-digest').catch(() => {})
+  }
 
-  return NextResponse.json({ success: true, emails_sent: emailsSent, skipped_no_source: skippedNoSource, perLocation })
+  return NextResponse.json({ success: !gate.faulted, emails_sent: emailsSent, skipped_no_source: skippedNoSource, perLocation }, { status: gate.faulted ? 500 : 200 })
 }
