@@ -20,6 +20,7 @@ import { useEffect, useState, useRef } from 'react'
 import TemplateCanvas from '@/components/TemplateCanvas'
 import HyroxBoard from '@/components/HyroxBoard'
 import { tvFontFamily } from '@/components/tv-font'
+import { boardZone, idleBoardClock } from '@/lib/tv-board-time'
 
 // Content-push display (near-static); runs all day — keep the poll relaxed
 // to limit Vercel Fluid-compute cost.
@@ -125,6 +126,7 @@ export default function TVDisplay({ token, initial }) {
     body = (
       <IdleView
         now={now}
+        zone={boardZone(data?.timezone)}
         logoUrl={data?.display?.logo_url}
         companyName={data?.display?.company_name}
       />
@@ -147,10 +149,10 @@ export default function TVDisplay({ token, initial }) {
   )
 }
 
-function IdleView({ now, logoUrl, companyName }) {
-  const hh = String(now.getHours()).padStart(2, '0')
-  const mm = String(now.getMinutes()).padStart(2, '0')
-  const day = now.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
+function IdleView({ now, zone = null, logoUrl, companyName }) {
+  // TZ.12 — the clock and day line are the studio's (payload `timezone`); with
+  // no payload (zone null) they keep the screen's own clock, as before.
+  const { hh, mm, day } = idleBoardClock(now, zone)
   // TV-IDLE-LOGO — show the location's brand logo in place of the
   // hard-coded wordmark. The idle screen is white-on-black, but the
   // stored logo (the same asset used on invoice/contract emails,
