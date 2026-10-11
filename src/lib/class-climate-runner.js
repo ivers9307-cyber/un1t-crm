@@ -14,6 +14,7 @@ import { vendorTurnOn, loadDeviceWithLocation, assertDeviceAtLocation } from '@/
 import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 import { logAuditEvent } from '@/lib/audit'
 import { logWarn, logError } from '@/lib/log'
+import { getLocationZone, getLocationZones, LocationZoneReadError } from '@/lib/location-time'
 import { resolveConfig, planClassClimate, autoOffAtFor } from '@/lib/class-climate'
 
 export const AUTOMATION_KEY = 'class_climate'
@@ -23,9 +24,11 @@ const OCCURRENCE_LOOKAHEAD_MS = 6 * 60 * 60_000 // classes within the next 6h
  * Run the automation for one location's config row.
  * @param {object} db
  * @param {{ location_id: string, config: object }} automationRow
- * @param {{ nowMs?: number, dryRun?: boolean }} opts
+ * @param {{ nowMs?: number, dryRun?: boolean, zone?: string|null }} opts
+ *   `zone`: the location's IANA zone, when the caller already resolved it
+ *   (runAll batches it). Read here otherwise, and only when needed.
  */
-export async function runClassClimateForLocation(db, automationRow, { nowMs = Date.now(), dryRun = false } = {}) {
+export async function runClassClimateForLocation(db, automationRow, { nowMs = Date.now(), dryRun = false, zone = null } = {}) {
   const locationId = automationRow.location_id
   const config = resolveConfig(automationRow.config)
   const result = { location_id: locationId, planned: [], actions: [], errors: [] }
@@ -33,6 +36,23 @@ export async function runClassClimateForLocation(db, automationRow, { nowMs = Da
   if (config.device_ids.length === 0) {
     result.errors.push('no_devices_configured')
     return result
+  }
+
+  // TZ.10 — excluded_slots are wall-clock keys ("Thu 06:00") in THIS studio's
+  // zone, so they are matched in it. The zone is needed only when a slot is
+  // excluded; without one nothing reads it. When it is needed and the read
+  // fails, the location is skipped for this tick (logged): matching a studio's
+  // slots on a guessed clock could switch its AC on for a class it excluded.
+  let slotZone = zone
+  if (config.excluded_slots.length > 0 && !slotZone) {
+    try {
+      slotZone = await getLocationZone(db, locationId)
+    } catch (err) {
+      if (!(err instanceof LocationZoneReadError)) throw err
+      logWarn('class-climate', 'location timezone unreadable; location skipped this tick', { locationId, error: err.message })
+      result.errors.push('zone_unreadable')
+      return result
+    }
   }
 
   // Occurrences in a tight window (now-1h .. now+6h covers the pre-class
@@ -52,7 +72,7 @@ export async function runClassClimateForLocation(db, automationRow, { nowMs = Da
     return result
   }
 
-  const planned = planClassClimate({ occurrences: occurrences || [], config, nowMs })
+  const planned = planClassClimate({ occurrences: occurrences || [], config, nowMs, zone: slotZone || undefined })
   result.planned = planned.map((p) => ({
     glofox_event_id: p.glofox_event_id, name: p.occurrence.name, starts_at: p.occurrence.starts_at,
   }))
@@ -204,9 +224,24 @@ export async function runClassClimate(db, { nowMs = Date.now(), dryRun = false, 
   const { data: rows, error } = await q
   if (error) return { ok: false, error: error.message, locations: [] }
 
+  // TZ.10 — one zone read for every location that excludes a slot, before the
+  // loop (it warms location-time's cache, so the per-location read above is a
+  // hit). A failed read is not fatal here: each such location then reads its
+  // own zone and is skipped, logged, if that fails too.
+  const needZone = (rows || []).filter((r) => resolveConfig(r.config).excluded_slots.length > 0).map((r) => r.location_id)
+  let zones = new Map()
+  if (needZone.length > 0) {
+    try {
+      zones = await getLocationZones(db, needZone)
+    } catch (err) {
+      if (!(err instanceof LocationZoneReadError)) throw err
+      logWarn('class-climate', 'location timezones unreadable; each location retries its own', { locationIds: err.locationIds, error: err.message })
+    }
+  }
+
   const locations = []
   for (const row of rows || []) {
-    locations.push(await runClassClimateForLocation(db, row, { nowMs, dryRun }))
+    locations.push(await runClassClimateForLocation(db, row, { nowMs, dryRun, zone: zones.get(row.location_id) || null }))
   }
   return { ok: true, locations }
 }

@@ -74,7 +74,14 @@ const toMs = (v) => {
 //   - a missed boundary tick self-heals (the next tick still sees it unapplied)
 //   - a human who pauses or turns the volume down mid-window is left alone
 //   - a redeploy mid-window re-reads last_applied and does nothing
-export function planAction(schedule, nowMs, dateStr) {
+//
+// TZ.10 — `dateStr` is the LOCATION's local day and `tz` its IANA zone: the
+// windows are wall clock in the studio's zone, so both come from the
+// schedule's location (reconcile: getLocationZones; run-now: the active
+// location). Until TZ.10 the zone was omitted here and the engine fell back to
+// Dublin for every studio. tests/climate-zone-callers.test.js fails a caller
+// that omits it.
+export function planAction(schedule, nowMs, dateStr, tz) {
   if (!schedule?.enabled) return null
 
   // Suppression override: "leave the music alone until X". Deliberately
@@ -89,6 +96,8 @@ export function planAction(schedule, nowMs, dateStr) {
   const windows = resolveServeWindows(
     { enabled: true, schedule_mode: 'fixed', fixed_windows: arr(schedule.windows) },
     dateStr,
+    [],
+    tz,
   )
 
   const last = schedule.last_applied

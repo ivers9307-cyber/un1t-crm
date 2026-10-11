@@ -12,8 +12,7 @@
 
 import { deriveBridgeStatus } from '@/lib/bridge-samples'
 import { isOvernight } from '@/lib/live-poll'
-import { DEFAULT_TZ } from '@/lib/location-time'
-import { dublinTimeLabel } from '@/lib/dublin-time'
+import { timeLabelIn, PLATFORM_TZ, DEFAULT_TZ } from '@/lib/location-time'
 
 // Devices are identified as fleet members by this Tailscale ACL tag, set at
 // provisioning time by un1t-pi (`tailscale up --advertise-tags=tag:un1t-pi`).
@@ -333,12 +332,16 @@ export function undeliveredDetail(bridgeRow, nowMs = Date.now()) {
     Math.round(stuckMs / 60000)} min. ${consequence}`
 }
 
-/** 'CONVOY 09:30' — name plus Dublin wall-clock start, for an alert line. */
+/**
+ * 'CONVOY 09:30' — name plus wall-clock start, for an alert line. The fleet
+ * alert is a platform operations message, so it reads the platform clock
+ * (PLATFORM_TZ, D4), not the studio's (TZ.10).
+ */
 export function describeClass(occ) {
   const name = typeof occ?.name === 'string' && occ.name.trim()
     ? occ.name.trim()
     : (typeof occ?.program === 'string' && occ.program.trim() ? occ.program.trim() : 'a class')
-  const at = dublinTimeLabel(occ?.starts_at)
+  const at = timeLabelIn(occ?.starts_at, PLATFORM_TZ)
   return at ? `${name} ${at}` : name
 }
 
