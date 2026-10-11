@@ -2,7 +2,10 @@
 //
 // Runs Monday 07:00 UTC — one hour after churn-radar-snapshot and
 // lead-radar-snapshot, so the digest's trend trails include the
-// snapshots just written. For every active location that has configured
+// snapshots just written. TZ.6: the schedule is hourly and each location acts
+// at its Monday slot: Mon 07:00 UTC for a Europe/Dublin studio (as before),
+// Mon 07:00 local for any other zone, once per local day
+// (src/lib/cron-daily-slot.js). For every active location that has configured
 // digest recipients, it computes the live churn + lead summaries, pulls
 // the recent snapshot history for each, composes one combined digest
 // email and sends it to each recipient.
@@ -22,6 +25,7 @@ import { loadRadar } from '@/lib/churn-radar-data'
 import { loadFunnel } from '@/lib/lead-radar-data'
 import { buildDigestEmail } from '@/lib/churn-radar-digest'
 import { noSourceLocationIds } from '@/lib/membership/locations-for-source'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -34,6 +38,16 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
+
+  // TZ.6 — which locations are at their Monday slot this tick (claimed, so
+  // never twice in one local day). An unreadable zone acts for nobody.
+  const gate = await gateDailySlot(db, 'churn-radar-digest', { module: 'churn-radar-digest' })
+  if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
+  if (gate.slots.size === 0) {
+    // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ success: !gate.faulted, emails_sent: 0, skipped_no_source: 0, perLocation: [], slot: gate.summary }, { status: gate.faulted ? 500 : 200 })
+  }
 
   const { data: locations, error: locErr } = await db
     .from('locations')
@@ -60,6 +74,7 @@ export async function GET(request) {
   const perLocation = []
 
   for (const loc of locations || []) {
+    if (!slotFor(gate.slots, loc.id)) continue // TZ.6: not this location's slot
     if (noSource.has(loc.id)) { skippedNoSource++; continue }
     const recipients = Array.isArray(loc.churn_digest_recipients)
       ? loc.churn_digest_recipients
@@ -117,7 +132,9 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('churn-radar-digest').catch(() => {})
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('churn-radar-digest').catch(() => {})
+  }
 
-  return NextResponse.json({ success: true, emails_sent: emailsSent, skipped_no_source: skippedNoSource, perLocation })
+  return NextResponse.json({ success: !gate.faulted, emails_sent: emailsSent, skipped_no_source: skippedNoSource, perLocation }, { status: gate.faulted ? 500 : 200 })
 }

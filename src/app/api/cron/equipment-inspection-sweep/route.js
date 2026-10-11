@@ -1,4 +1,8 @@
 // EQUIP-MAINT.3 — Vercel cron, daily 19:00 UTC.
+// TZ.6 — the schedule is hourly; each location acts at its daily slot:
+// 19:00 UTC for a Europe/Dublin studio (as before), 19:00 local for any
+// other zone, at most once per local day (src/lib/cron-daily-slot.js). "Today"
+// is the location's own day.
 //
 // For EVERY enabled location (not just today's inspection weekday — an
 // asset can be overdue on any day), count what is still outstanding and
@@ -29,7 +33,7 @@ import { selectOutstanding, buildOverdueBody } from '@/lib/equipment-cron'
 import { readRoleRecipientIds } from '@/lib/push'
 import { sendPushOnce } from '@/lib/push-dedup'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 import { logAuditEvent } from '@/lib/audit'
 import { logWarn, logError } from '@/lib/log'
 import { pushOutcome } from '@/lib/push-outcome'
@@ -47,8 +51,17 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const today = dublinTodayStr()
   const results = []
+
+  // TZ.6 — which locations are at their daily slot this tick (claimed, so
+  // never twice in one local day). An unreadable zone acts for nobody.
+  const gate = await gateDailySlot(db, 'equipment-inspection-sweep', { module: 'equipment-cron' })
+  if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
+  if (gate.slots.size === 0) {
+    // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ success: !gate.faulted, data: { locations: results, slot: gate.summary } }, { status: gate.faulted ? 500 : 200 })
+  }
 
   let settingsRows = []
   try {
@@ -59,6 +72,9 @@ export async function GET(request) {
   }
 
   for (const settings of settingsRows) {
+    const slot = slotFor(gate.slots, settings.location_id)
+    if (!slot) continue // TZ.6: not this location's slot
+    const today = slot.day
     try {
       const [assets, submitted] = await Promise.all([
         listActiveEquipment(db, settings.location_id),
@@ -128,6 +144,8 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('equipment-inspection-sweep')
-  return NextResponse.json({ success: true, data: { today, locations: results } })
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('equipment-inspection-sweep')
+  }
+  return NextResponse.json({ success: !gate.faulted, data: { locations: results, slot: gate.summary } }, { status: gate.faulted ? 500 : 200 })
 }

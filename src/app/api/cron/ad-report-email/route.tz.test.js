@@ -9,6 +9,14 @@ vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }
 vi.mock('@/lib/ads/read', () => ({ loadAdsDashboard: vi.fn(async () => ({ kpis: {}, perAd: [] })) }))
 vi.mock('@/lib/ads/report', () => ({ buildAdReportEmail: vi.fn(() => ({ subject: 's', html: 'h' })) }))
 vi.mock('@/lib/postmark', () => ({ sendEmail: vi.fn(async () => ({})) }))
+// TZ.6 — this file's subject is the studio date, not the daily-slot gate: every
+// studio is due on every run, in its own zone.
+vi.mock('@/lib/cron-daily-slot', async (importOriginal) => ({
+  ...(await importOriginal()),
+  gateDailySlot: (await import('@/lib/cron-daily-slot.test-helpers')).openGateZoned([
+    { id: 'l-dub', timezone: 'Europe/Dublin' }, { id: 'l-ny', timezone: 'America/New_York' },
+  ]),
+}))
 
 const { GET } = await import('./route.js')
 const { createServerClient } = await import('@/lib/supabase')

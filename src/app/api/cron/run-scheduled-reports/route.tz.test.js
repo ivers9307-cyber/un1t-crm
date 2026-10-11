@@ -9,6 +9,12 @@ vi.mock('@/lib/postmark', () => ({ sendTransactionalEmail: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn() }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.example' }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+// TZ.6 — this file's subject is the schedule's zone, not the daily-slot gate:
+// every studio is due on every run (route.test.js / the TZ.6 tests cover the gate).
+vi.mock('@/lib/cron-daily-slot', async (importOriginal) => ({
+  ...(await importOriginal()),
+  gateDailySlot: (await import('@/lib/cron-daily-slot.test-helpers')).openGate,
+}))
 vi.mock('@/lib/report-generator', async () => {
   const actual = await vi.importActual('@/lib/report-generator')
   return { ...actual, generateReport: vi.fn() }

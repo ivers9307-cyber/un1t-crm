@@ -24,14 +24,6 @@ mobile/lib/invoice-review.js
 src/app/api/attendance/geofence-checkin/route.js
 src/app/api/attendance/route.js
 src/app/api/cron/agent-followups/route.js
-src/app/api/cron/equipment-inspection-reminder/route.js
-src/app/api/cron/equipment-inspection-sweep/route.js
-src/app/api/cron/morning-briefing/route.js
-src/app/api/cron/race-timing-events/route.js
-src/app/api/cron/receipt-coverage-weekly/route.js
-src/app/api/cron/run-challenge-events/route.js
-src/app/api/cron/send-class-booking-reminders/route.js
-src/app/api/cron/send-push-reminders/route.js
 src/app/api/equipment/due/route.js
 src/app/api/equipment/inspections/[id]/submit/route.js
 src/app/api/equipment/route.js

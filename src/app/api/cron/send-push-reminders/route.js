@@ -49,6 +49,7 @@ import { sendPush } from '@/lib/push'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { localToUtc, formatLocalTime, isLastFireTick } from '@/lib/push-reminders'
+import { zoneOfLocation } from '@/lib/location-time'
 import { getEffectiveConfig, getEffectiveLeadTimesForUser } from '@/lib/notification-config'
 import { selectAll } from '@/lib/select-all'
 import { runShiftReminders } from '@/lib/shift-reminders'
@@ -108,7 +109,7 @@ export async function GET(request) {
   let maxLeadMinutes = 0
   for (const l of locations || []) {
     const cfg = getEffectiveConfig(l.notification_config)
-    locById.set(l.id, { tz: l.timezone || 'Europe/Dublin', cfg })
+    locById.set(l.id, { tz: zoneOfLocation(l), cfg }) // TZ.6: the canonical zone (an invalid value → Europe/Dublin, warned)
     for (const cat of ['tasks', 'bookings']) {
       for (const lt of cfg.categories?.[cat]?.lead_times_minutes || []) {
         if (lt > maxLeadMinutes) maxLeadMinutes = lt
