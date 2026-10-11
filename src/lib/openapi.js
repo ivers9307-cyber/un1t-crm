@@ -815,6 +815,82 @@ registry.registerPath({
   },
 })
 
+// BOOKINGSELF.1 — the person who booked cancels or reschedules their own
+// booking from the {{manage_url}} link (/book/manage/{token}). The token is
+// the only credential: a bad, expired or forged one is a 404, never 401/403.
+const BookingManageToken = z.string().min(10).openapi({ description: 'Signed booking-manage token (HMAC, kind booking_manage, 90-day TTL) from the booking confirmation or reminder email' })
+const bookingManageErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/booking-manage/{token}',
+  tags: ['Public'],
+  summary: 'The token holder\'s booking, and whether they may cancel or reschedule it',
+  description: 'Anonymous; the token is the credential. Booking type name, studio name and address, date and time as stored (the studio zone, named in `timezone`), never an email or a phone; plus `can_cancel`, `can_reschedule` (confirmed, more than 2 hours before the start on the studio clock; reschedule also needs the type live), `blocked_reason`, `reschedule_note` and `available_days` (days with a free slot of the same type, its own slot not counted; null when unreadable). Rate limited: 60 per IP per 5 minutes.',
+  request: { params: z.object({ token: BookingManageToken }) },
+  responses: {
+    200: { description: 'The booking', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicManagedBooking') } } },
+    404: bookingManageErr('Bad or expired link, or the booking is gone'),
+    429: bookingManageErr('Rate limited'),
+    500: bookingManageErr('The booking or its studio zone could not be read'),
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/booking-manage/{token}/slots',
+  tags: ['Public'],
+  summary: 'Free times on a date for rescheduling the token holder\'s booking',
+  description: 'Anonymous; the token is the credential. The public widget\'s slot rules for the same booking type, the holder\'s own booking not counted as taken. Times only, never a count. Only while the booking can be rescheduled (else the refusal). Rate limited with the summary: 60 per IP per 5 minutes.',
+  request: { params: z.object({ token: BookingManageToken }), query: z.object({ date: isoDate }) },
+  responses: {
+    200: { description: 'The times', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicManagedBookingSlots') } } },
+    400: bookingManageErr('Missing or malformed date'),
+    404: bookingManageErr('Bad or expired link, or the booking is gone'),
+    409: bookingManageErr('Cancelled, too late to change, or the type cannot be booked online'),
+    429: bookingManageErr('Rate limited'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/booking-manage/{token}/cancel',
+  tags: ['Public'],
+  summary: 'The token holder cancels their booking',
+  description: 'Anonymous; the token is the credential. Only a confirmed booking, until 2 hours before its start (studio clock). Compare-and-swap on status; the status trigger writes the contact timeline line. Nothing new is sent to the customer. Every refusal carries `error` and a customer `message`. Rate limited: 10 per IP per 15 minutes (shared with reschedule).',
+  request: { params: z.object({ token: BookingManageToken }) },
+  responses: {
+    200: { description: 'Cancelled', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicManagedBookingCancelResult') } } },
+    404: bookingManageErr('Bad or expired link, or the booking is gone'),
+    409: bookingManageErr('Already cancelled, too late to change online, or changed meanwhile'),
+    429: bookingManageErr('Rate limited'),
+    500: bookingManageErr('A read or write failed; nothing changed'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/booking-manage/{token}/reschedule',
+  tags: ['Public'],
+  summary: 'The token holder moves their booking to another slot of the same type',
+  description: 'Anonymous; the token is the credential. Only a confirmed booking, until 2 hours before its current start (studio clock), on a live type. The new slot is re-judged by the same check /api/public/book runs (availability window, duration + buffer grid, max_advance_days, the studio today, blocked times, other bookings), failing closed. Compare-and-swap on the row as read; then its reminder sends are cleared (reminders fire again for the new time), a timeline line goes on the contact and the type\'s own confirmation is sent again. Rate limited: 10 per IP per 15 minutes (shared with cancel).',
+  request: {
+    params: z.object({ token: BookingManageToken }),
+    body: { content: { 'application/json': { schema: z.object({
+      booking_date: isoDate,
+      start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
+    }).openapi('PublicBookingRescheduleRequest') } } },
+  },
+  responses: {
+    200: { description: 'Moved', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicBookingRescheduleResult') } } },
+    400: bookingManageErr('Same time as now, or a bad body'),
+    404: bookingManageErr('Bad or expired link, or the booking is gone'),
+    409: bookingManageErr('Cancelled, too late, the type cannot be booked online, the slot is taken, or changed meanwhile'),
+    429: bookingManageErr('Rate limited'),
+    500: bookingManageErr('A read or write failed; nothing changed'),
+  },
+})
+
 // EVENT-MOVE.1 — staff move an event entry (a race_registrations row) to
 // another event, possibly at another studio. Money never moves.
 registry.registerPath({

@@ -449,6 +449,13 @@ const config = [
       // error and the rows it touched, the broadcast follow reads its error.
       'src/app/api/locations/[[]id]/timezone/**',
       'src/lib/timezone-change.js',
+      // BOOKINGSELF.1 — customer cancel / reschedule: born clean; both writes
+      // are compare-and-swaps that read their error and the rows they
+      // touched, every after-effect write reads its error. The reminder
+      // runner's dedup rows and legacy stamp now read theirs too.
+      'src/lib/booking-self-service.js',
+      'src/app/api/public/booking-manage/**',
+      'src/lib/event-reminders.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

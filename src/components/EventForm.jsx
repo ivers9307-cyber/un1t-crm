@@ -683,7 +683,7 @@ export default function EventForm({ event, locationId }) {
                     className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                   />
                   <p className="text-[11px] text-un1t-muted mt-1">
-                    Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
+                    Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}. In the email template, {'{{manage_url}}'} is the customer&apos;s link to cancel or reschedule (up to 2 hours before).
                   </p>
                 </div>
               </div>
@@ -829,7 +829,7 @@ export default function EventForm({ event, locationId }) {
                     className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                   />
                   <p className="text-[11px] text-un1t-muted mt-1">
-                    Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
+                    Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}. In the email template, {'{{manage_url}}'} is the customer&apos;s link to cancel or reschedule (up to 2 hours before).
                   </p>
                 </div>
               </div>

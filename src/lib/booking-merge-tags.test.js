@@ -2,7 +2,8 @@
 // merge tags the template editor offers: {{location_name}} (the sending
 // location's own name) and {{company_name}} (its configured brand). Both
 // rendered blank before. The REAL applyMergeTags runs; Postmark is stubbed.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { verifyBookingManageToken } from './booking-manage-tokens'
 
 const sendTransactionalEmail = vi.fn(async () => ({ ok: true }))
 vi.mock('@/lib/postmark', async (importOriginal) => ({
@@ -68,6 +69,39 @@ describe('booking confirmation email', () => {
     const call = sendTransactionalEmail.mock.calls[0][0]
     expect(call.subject).toBe('Booked at UN1T Stillorgan')
     expect(call.htmlBody).toBe('<p>See you at Stillorgan, UN1T Stillorgan.</p>')
+  })
+})
+
+// BOOKINGSELF.1 — {{manage_url}}: the booking's own cancel/reschedule page.
+describe('{{manage_url}} in the booking confirmation', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  it('renders a signed /book/manage/ link for THIS booking', async () => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'svc-key')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.test')
+    const db = {
+      from(table) {
+        if (table === 'email_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: { subject: 'Booked', html_content: '<a href="{{manage_url}}">Change or cancel</a>' }, error: null }) }) }) }
+        return makeDb().from(table)
+      },
+    }
+    await sendBookingConfirmation(db, 'b1')
+    const href = sendTransactionalEmail.mock.calls[0][0].htmlBody.match(/href="([^"]+)"/)[1]
+    expect(href).toMatch(/^https:\/\/crm\.test\/book\/manage\//)
+    expect(verifyBookingManageToken(href.split('/').pop(), 'svc-key')).toEqual({ bookingId: 'b1' })
+  })
+
+  it('renders empty, and the email still goes, when no link can be built', async () => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', '')
+    const db = {
+      from(table) {
+        if (table === 'email_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: { subject: 'Booked', html_content: '[{{manage_url}}]' }, error: null }) }) }) }
+        return makeDb().from(table)
+      },
+    }
+    const r = await sendBookingConfirmation(db, 'b1')
+    expect(r.sent).toEqual(['email'])
+    expect(sendTransactionalEmail.mock.calls[0][0].htmlBody).toBe('[]')
   })
 })
 

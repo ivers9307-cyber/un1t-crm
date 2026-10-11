@@ -80,6 +80,60 @@ export async function eventTypeZone(db, event) {
 }
 
 /**
+ * The booked and blocked windows on a date for an event type, as
+ * { start: 'HH:MM', end: 'HH:MM' } lists. `excludeBookingId` leaves one
+ * booking out (BOOKINGSELF.1: a reschedule must not collide with the very
+ * booking it is moving). `error` is the first failed read, or null.
+ */
+async function readDayOccupancy(db, eventTypeId, date, excludeBookingId = null) {
+  let bookingsQ = db.from('bookings')
+    .select('start_time, end_time')
+    .eq('event_type_id', eventTypeId)
+    .eq('booking_date', date)
+    .in('status', ['confirmed', 'completed'])
+  if (excludeBookingId) bookingsQ = bookingsQ.neq('id', excludeBookingId)
+  const [bookingsRes, blockedRes] = await Promise.all([
+    bookingsQ,
+    db.from('blocked_times')
+      .select('start_time, end_time')
+      .eq('event_type_id', eventTypeId)
+      .eq('blocked_date', date),
+  ])
+  const booked = (bookingsRes?.data || []).map((b) => ({
+    start: b.start_time.slice(0, 5),
+    end: b.end_time.slice(0, 5),
+  }))
+  const blocked = (blockedRes?.data || []).map((b) => ({
+    start: b.start_time ? b.start_time.slice(0, 5) : '00:00',
+    end: b.end_time ? b.end_time.slice(0, 5) : '23:59',
+  }))
+  return { booked, blocked, error: bookingsRes?.error || blockedRes?.error || null }
+}
+
+// Everything computeAvailableSlots decides, plus the occupancy read's error.
+async function availableSlotsWithError(db, event, date, { zone, nowMs = Date.now(), excludeBookingId = null } = {}) {
+  if (!event || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return { slots: [], error: null }
+
+  const tz = zone || await eventTypeZone(db, event)
+  const todayStr = todayStrIn(tz, nowMs)
+  const maxDateStr = addDaysISO(todayStr, event.max_advance_days)
+  if (date < todayStr || date > maxDateStr) return { slots: [], error: null }
+
+  const dayName = DAY_NAMES[new Date(date + 'T00:00:00Z').getUTCDay()]
+  const dayAvailability = event.availability?.[dayName]
+  if (!dayAvailability) return { slots: [], error: null }
+
+  const slots = generateDaySlots(dayAvailability, {
+    durationMinutes: event.duration_minutes,
+    bufferMinutes: event.buffer_minutes,
+  })
+
+  const { booked, blocked, error } = await readDayOccupancy(db, event.id, date, excludeBookingId)
+  const nowMinutes = date === todayStr ? nowMinutesIn(tz, nowMs) : -1
+  return { slots: filterAvailableSlots(slots, { booked, blocked, nowMinutes }), error }
+}
+
+/**
  * Available slots for an event_types row on a calendar date.
  * Mirrors the public slots route end-to-end: studio-time range checks
  * (today / max_advance_days), weekday availability lookup (UTC-stable),
@@ -87,49 +141,42 @@ export async function eventTypeZone(db, event) {
  * filter. Returns [] outside the bookable range. `event` must carry
  * { id, duration_minutes, buffer_minutes, availability, max_advance_days }
  * and, for its zone, `location_id` (or a `locations: { timezone }` embed).
- * @param {{ zone?: string, nowMs?: number }} [opts] zone: the studio's, when
- *   the caller already holds it; nowMs: the clock (tests).
+ * Display path: a failed bookings/blocked read is treated as "none" (the
+ * write path, findBookableSlot, fails closed instead).
+ * @param {{ zone?: string, nowMs?: number, excludeBookingId?: string|null }} [opts]
+ *   zone: the studio's, when the caller already holds it; nowMs: the clock
+ *   (tests); excludeBookingId: leave this booking out of "taken" (reschedule).
  */
-export async function computeAvailableSlots(db, event, date, { zone, nowMs = Date.now() } = {}) {
-  if (!event || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return []
+export async function computeAvailableSlots(db, event, date, opts = {}) {
+  const { slots } = await availableSlotsWithError(db, event, date, opts)
+  return slots
+}
 
-  const tz = zone || await eventTypeZone(db, event)
-  const todayStr = todayStrIn(tz, nowMs)
-  const maxDateStr = addDaysISO(todayStr, event.max_advance_days)
-  if (date < todayStr || date > maxDateStr) return []
-
-  const dayName = DAY_NAMES[new Date(date + 'T00:00:00Z').getUTCDay()]
-  const dayAvailability = event.availability?.[dayName]
-  if (!dayAvailability) return []
-
-  const slots = generateDaySlots(dayAvailability, {
-    durationMinutes: event.duration_minutes,
-    bufferMinutes: event.buffer_minutes,
-  })
-
-  const [{ data: existingBookings }, { data: blockedTimes }] = await Promise.all([
-    db.from('bookings')
-      .select('start_time, end_time')
-      .eq('event_type_id', event.id)
-      .eq('booking_date', date)
-      .in('status', ['confirmed', 'completed']),
-    db.from('blocked_times')
-      .select('start_time, end_time')
-      .eq('event_type_id', event.id)
-      .eq('blocked_date', date),
-  ])
-
-  const booked = (existingBookings || []).map((b) => ({
-    start: b.start_time.slice(0, 5),
-    end: b.end_time.slice(0, 5),
-  }))
-  const blocked = (blockedTimes || []).map((b) => ({
-    start: b.start_time ? b.start_time.slice(0, 5) : '00:00',
-    end: b.end_time ? b.end_time.slice(0, 5) : '23:59',
-  }))
-
-  const nowMinutes = date === todayStr ? nowMinutesIn(tz, nowMs) : -1
-  return filterAvailableSlots(slots, { booked, blocked, nowMinutes })
+/**
+ * BOOKINGSELF.1 — the ONE server-side check that a requested slot may be
+ * booked: it is one of computeAvailableSlots' slots for that date, so the
+ * availability window, the duration + buffer grid, max_advance_days, the
+ * studio's today, blocked times and every other confirmed/completed booking
+ * are all judged exactly as the public widget offered them. Used by
+ * /api/public/book (create) and the customer reschedule.
+ *
+ * Unlike the display path it FAILS CLOSED: an unreadable bookings or blocked
+ * read is `{ error }`, never "free".
+ *
+ * @param {object} db
+ * @param {object} event  as computeAvailableSlots
+ * @param {string} date   'YYYY-MM-DD' (studio wall clock)
+ * @param {string} startTime 'HH:MM' or 'HH:MM:SS'
+ * @param {{ zone?: string, nowMs?: number, excludeBookingId?: string|null }} [opts]
+ * @returns {Promise<{ slot: { start: string, end: string }|null, error: object|null }>}
+ * @throws {import('@/lib/location-time').LocationZoneReadError} the zone read failed
+ */
+export async function findBookableSlot(db, event, date, startTime, opts = {}) {
+  const want = String(startTime || '').slice(0, 5)
+  if (!/^\d{2}:\d{2}$/.test(want)) return { slot: null, error: null }
+  const { slots, error } = await availableSlotsWithError(db, event, date, opts)
+  if (error) return { slot: null, error }
+  return { slot: slots.find((s) => s.start === want) || null, error: null }
 }
 
 // A calendar DATE's label: noon UTC on that date is the same calendar day
@@ -144,7 +191,7 @@ const dayLabelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: 'UTC', weekday:
  * semantics, no reimplementation. Clamped to the event's max_advance_days.
  * Returns [{ date: 'YYYY-MM-DD', label: 'Tue, 30 Jun' }] for bookable days only.
  */
-export async function computeAvailableDays(db, event, { days = 14, zone, nowMs = Date.now() } = {}) {
+export async function computeAvailableDays(db, event, { days = 14, zone, nowMs = Date.now(), excludeBookingId = null } = {}) {
   if (!event) return []
   const tz = zone || await eventTypeZone(db, event)
   const todayStr = todayStrIn(tz, nowMs)
@@ -159,7 +206,7 @@ export async function computeAvailableDays(db, event, { days = 14, zone, nowMs =
     dates.push(d)
   }
   const checked = await Promise.all(dates.map(async (date) => {
-    const slots = await computeAvailableSlots(db, event, date, { zone: tz, nowMs })
+    const slots = await computeAvailableSlots(db, event, date, { zone: tz, nowMs, excludeBookingId })
     return slots.length > 0 ? date : null
   }))
   return checked

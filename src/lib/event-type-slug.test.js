@@ -6,7 +6,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { makeFakeDb } from '@/lib/api-auth.test-helpers.js'
-import { pickFreeSlug, resolveEventTypeSlug, slugTaken, isSlugConflict } from './event-type-slug.js'
+import { pickFreeSlug, resolveEventTypeSlug, slugTaken, isSlugConflict, RESERVED_EVENT_TYPE_SLUGS, isReservedEventTypeSlug } from './event-type-slug.js'
 
 describe('pickFreeSlug', () => {
   it('keeps the plain slug when nobody holds it', () => {
@@ -84,6 +84,27 @@ describe('slugTaken', () => {
     expect(await slugTaken(db, 'yoga')).toEqual({ taken: true })
     expect(await slugTaken(db, 'yoga', 'e1')).toEqual({ taken: false })
     expect(await slugTaken(db, 'pilates')).toEqual({ taken: false })
+  })
+})
+
+// BOOKINGSELF.1 — /book/manage/<token> is a static route that beats [slug].
+describe('reserved slugs', () => {
+  it('pickFreeSlug never picks "manage", even when nothing holds it', () => {
+    expect(RESERVED_EVENT_TYPE_SLUGS.has('manage')).toBe(true)
+    expect(pickFreeSlug('manage', new Set(), 'un1t-stillorgan')).toBe('manage-un1t-stillorgan')
+    expect(pickFreeSlug('manage', new Set(), null)).toBe('manage-2')
+  })
+
+  it('a type named "Manage" resolves to a free, unreserved slug', async () => {
+    const db = makeFakeDb({ locations: [{ id: 'loc-s', slug: 'un1t-stillorgan' }], event_types: [] })
+    expect(await resolveEventTypeSlug(db, { name: 'Manage', locationId: 'loc-s' })).toEqual({ slug: 'manage-un1t-stillorgan' })
+  })
+
+  it('an explicit "manage" (any case) reads as taken, so the routes answer the usual 409', async () => {
+    const db = makeFakeDb({ event_types: [] })
+    expect(await slugTaken(db, 'manage')).toEqual({ taken: true })
+    expect(isReservedEventTypeSlug('Manage')).toBe(true)
+    expect(isReservedEventTypeSlug('manage-me')).toBe(false)
   })
 })
 
