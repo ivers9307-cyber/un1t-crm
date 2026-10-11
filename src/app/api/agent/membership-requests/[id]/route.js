@@ -16,6 +16,7 @@ import {
 import { approvalGrantsTrialCredit } from '@/lib/approvals/agent-request-why'
 import { logWarn } from '@/lib/log'
 import { isManualEventId } from '@/lib/manual-timetable'
+import { zoneOfLocation } from '@/lib/location-time'
 import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { staffActorName } from '@/lib/staff-actor-name'
@@ -489,7 +490,7 @@ export async function PATCH(request, { params }) {
       const [{ data: c }, { data: page }, { data: loc }] = await Promise.all([
         db.from('contacts').select('id, first_name, last_name, name, email, phone').eq('id', row.contact_id).maybeSingle(),
         db.from('landing_page_settings').select('public_path, blocks').eq('location_id', row.location_id).maybeSingle(),
-        db.from('locations').select('name, address').eq('id', row.location_id).maybeSingle(),
+        db.from('locations').select('name, address, timezone').eq('id', row.location_id).maybeSingle(),
       ])
       manualContact = c || null
       manualPage = page || null
@@ -524,6 +525,7 @@ export async function PATCH(request, { params }) {
         blocks: manualPage?.blocks,
         studioName: manualLocation?.name,
         address: manualLocation?.address,
+        zone: manualLocation ? zoneOfLocation({ id: row.location_id, timezone: manualLocation.timezone }) : null,
         requestId: id,
       })
     } catch (e) {
