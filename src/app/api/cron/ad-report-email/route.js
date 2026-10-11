@@ -30,7 +30,7 @@ export async function GET(request) {
     // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
     return NextResponse.json({ success: !gate.faulted, results: [], slot: gate.summary }, { status: gate.faulted ? 500 : 200 })
   }
-  const { data: locations } = await db.from('locations').select('id, name, settings').eq('active', true)
+  const { data: locations } = await db.from('locations').select('id, name, settings, timezone').eq('active', true)
   const results = []
   for (const loc of locations || []) {
     const slot = slotFor(gate.slots, loc.id)

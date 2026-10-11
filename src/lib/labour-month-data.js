@@ -6,7 +6,7 @@
 //   organisation  = the active studio + siblingLocationIds (ORGSCOPE.1); the
 //                   studios SHOWN are clipped to it, whatever the caller passed.
 //   roster        = shift_blocks at every studio of the organisation in the
-//                   Dublin month, with roster status, template times and
+//                   active studio's calendar month (TZ.11a), with roster status, template times and
 //                   assignments; paged past the 1,000-row cap.
 //   memberships   = profile_locations at those studios (unrostered salaries).
 //   people        = profiles by id, NAMED columns only (profiles still carries
@@ -31,6 +31,7 @@ import { selectAll } from './select-all'
 import { siblingLocationIds } from './sibling-locations'
 import { getCompensationForProfiles } from './profile-compensation'
 import { logError, logWarn } from './log'
+import { getLocationZone, DEFAULT_TZ } from './location-time'
 import { fetchMrr } from '@shared/studio-kpis'
 import {
   labourMonthWindow, labourShiftRows, buildLabourMonth, isSalaried, salaryBasisFrom,
@@ -40,16 +41,22 @@ const ID_CHUNK = 200
 
 /**
  * @param {object} db  service-role client
- * @param {{ activeLocationId: string, studios: {id:string,name:string}[], nowMs?: number }} args
+ * @param {{ activeLocationId: string, studios: {id:string,name:string}[], nowMs?: number, zone?: string }} args
  *   studios: from labourStudiosFor(user) — the caller has already decided
- *   the viewer is an owner there.
+ *   the viewer is an owner there. zone: the active studio's (TZ.11a); read
+ *   here when omitted (a display read: an unreadable zone falls back to
+ *   DEFAULT_TZ, logged).
  * @returns {Promise<{ data: object } | { error: string }>}
  */
-export async function loadLabourMonth(db, { activeLocationId, studios, nowMs = Date.now() } = {}) {
+export async function loadLabourMonth(db, { activeLocationId, studios, nowMs = Date.now(), zone } = {}) {
   if (!activeLocationId || !Array.isArray(studios) || studios.length === 0) {
     return { error: 'No studio to report on' }
   }
-  const period = labourMonthWindow(nowMs)
+  const monthZone = zone || await getLocationZone(db, activeLocationId).catch((err) => {
+    logWarn('labour-month', 'locations.timezone unreadable; the month is DEFAULT_TZ', { location_id: activeLocationId, err: err?.message || String(err) })
+    return DEFAULT_TZ
+  })
+  const period = labourMonthWindow(nowMs, monthZone)
   const failed = (what, err) => {
     logError('labour-month', `${what} read failed`, {
       err: err?.message || String(err), location_id: activeLocationId, month: period.month,

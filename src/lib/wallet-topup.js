@@ -41,6 +41,7 @@ import { getAppUrl } from '@/lib/app-url'
 import { getLocationBranding } from '@/lib/location-branding'
 import { sendEmail } from '@/lib/postmark'
 import { logWarn, logError } from '@/lib/log'
+import { PLATFORM_TZ } from '@/lib/location-time'
 
 // Fixed top-up denominations in EUR cents (server-side whitelist —
 // Richard's spec: small on purpose, because unused credit expires at
@@ -392,7 +393,9 @@ export async function markTopupSessionExpired(db, session) {
  */
 export function renderTopupInvoiceEmail({ invoice, locationName, branding, recipientName }) {
   const dateLabel = new Intl.DateTimeFormat('en-IE', {
-    day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Dublin',
+    // D5: the platform billing calendar (PLATFORM_TZ): the issuer is the Irish
+    // selling entity, whatever the tenant's zone.
+    day: 'numeric', month: 'long', year: 'numeric', timeZone: PLATFORM_TZ,
   }).format(new Date(invoice.paid_at || invoice.created_at || Date.now()))
 
   const header = branding?.logoUrl

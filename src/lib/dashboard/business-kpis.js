@@ -16,6 +16,7 @@ import { buildBusinessBriefing } from '@shared/business-briefing'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { computeMembershipCounts } from '@/lib/membership-snapshot'
 import { loadRadar } from '@/lib/churn-radar-data'
+import { displayZoneFor } from '@/lib/display-zone'
 
 export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()) {
   try {
@@ -34,8 +35,10 @@ export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()
       .lte('captured_at', sixDaysAgoIso)
       .order('captured_at', { ascending: false }).limit(1)
       .then(({ data }) => data?.[0] ?? null, () => null)
+    // TZ.11a — Revenue MTD is the studio's calendar month.
+    const zone = await displayZoneFor(db, user, locationId, 'business-kpis')
     const [revenue, arrears, membershipLive, radar, approvalsCount, churnPrev] = await Promise.all([
-      fetchRevenueMTD(db, locationId),
+      fetchRevenueMTD(db, locationId, new Date(nowMs), zone),
       fetchArrearsSummary(db, locationId),
       // Guarded like radar/approvals — any of its internal count
       // queries throwing must not reject the whole Promise.all and

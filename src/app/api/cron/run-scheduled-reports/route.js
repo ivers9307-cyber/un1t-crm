@@ -4,10 +4,11 @@ import { generateReport, calculatePeriodForSchedule, calculateNextRun, buildRepo
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logWarn } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import { isRateReportType } from '@/lib/report-access'
 import { filterRateReportRecipients } from '@/lib/report-recipients'
 import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
+import { getLocationZones, DEFAULT_TZ } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -70,12 +71,24 @@ export async function GET(request) {
     return NextResponse.json({ success: !gate.faulted, message: 'No reports due', processed: 0 }, { status: gate.faulted ? 500 : 200 })
   }
 
+  // TZ.11a — each schedule's period and next run are its studio's calendar.
+  // Zones are read once per tick. A failed read is a DB outage: no report runs
+  // on a guessed zone; next_run_at is untouched, so the next tick retries.
+  let zones
+  try {
+    zones = await getLocationZones(db, runnable.map((r) => r.location_id))
+  } catch (err) {
+    logError('run-scheduled-reports', 'locations.timezone unreadable; no schedule runs this tick', { err })
+    return NextResponse.json({ success: false, error: 'locations unreadable' }, { status: 500 })
+  }
+
   const results = []
 
   for (const schedule of runnable) {
     try {
+      const zone = zones.get(schedule.location_id) ?? DEFAULT_TZ
       // Calculate the reporting period based on frequency
-      const { period_start, period_end } = calculatePeriodForSchedule(schedule.frequency)
+      const { period_start, period_end } = calculatePeriodForSchedule(schedule.frequency, zone)
 
       // Generate the report
       const result = await generateReport({
@@ -89,7 +102,7 @@ export async function GET(request) {
 
       if (result.success) {
         // Calculate next run time
-        const nextRun = calculateNextRun(schedule.frequency, schedule.day_of_week, schedule.day_of_month)
+        const nextRun = calculateNextRun(schedule.frequency, schedule.day_of_week, schedule.day_of_month, zone)
 
         // Update the schedule: set last_run_at, advance next_run_at (or deactivate if 'once')
         const updateData = {

@@ -1,6 +1,7 @@
 // src/lib/labour-month-model.js
 //
-// LABOUR.1 — owner-only labour against revenue for the current Dublin month.
+// LABOUR.1 — owner-only labour against revenue for the current month of the
+// active studio's calendar (TZ.11a: `zone`, the active studio's zone).
 // Pure: no IO, no clock of its own (nowMs is passed in), and nothing reads the
 // host's timezone (tests run under Europe/Dublin and America/Los_Angeles).
 //
@@ -27,7 +28,7 @@
 import { workingWindow, EMPLOYEE_TYPE } from '@shared/working-time'
 import { isLiveAssignment } from './roster'
 import { hasRoleAtLocation } from './role-at-location'
-import { dublinDayStr, dublinDayRangeMs } from './dublin-time'
+import { dayStrIn, dayRangeMsIn, DEFAULT_TZ } from './location-time'
 
 export const CONTRACTOR_TYPE = 'contractor'
 
@@ -43,17 +44,18 @@ export const COUNT_UNROSTERED_SALARIES = true
 const MINUTE_MS = 60_000
 
 /**
- * The Dublin calendar month holding `nowMs`.
+ * The calendar month holding `nowMs` in `zone` (the active studio's).
  * @param {number} nowMs
+ * @param {string} [zone] canonical IANA zone (DEFAULT_TZ when omitted)
  */
-export function labourMonthWindow(nowMs) {
-  const today = dublinDayStr(nowMs)
+export function labourMonthWindow(nowMs, zone = DEFAULT_TZ) {
+  const today = dayStrIn(nowMs, zone)
   const month = today.slice(0, 7)
   const [y, m] = month.split('-').map(Number)
   const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate()
   const startDate = `${month}-01`
   const endDate = `${month}-${String(daysInMonth).padStart(2, '0')}`
-  const { startMs, endMs } = dublinDayRangeMs(startDate, endDate)
+  const { startMs, endMs } = dayRangeMsIn(startDate, endDate, zone)
   const elapsedFraction = Math.min(1, Math.max(0, (nowMs - startMs) / (endMs - startMs)))
   const monthLabel = new Intl.DateTimeFormat('en-IE', { month: 'long', year: 'numeric', timeZone: 'UTC' })
     .format(new Date(Date.UTC(y, m - 1, 1)))

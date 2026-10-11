@@ -1,7 +1,8 @@
 // SAAS4-M2 — nightly usage rollup (02:40 UTC, after the day's sends
 // and before the morning briefing).
 //
-// Re-aggregates BOTH yesterday and today (Dublin) on every run via the
+// Re-aggregates BOTH yesterday and today (D5: the platform billing
+// calendar, PLATFORM_TZ = Europe/Dublin) on every run via the
 // mig 421 SQL function — the upsert is idempotent recompute-in-full,
 // so late-arriving events (a Mia turn at 23:59, a slow webhook) are
 // folded in by the next tick and a missed run self-heals. Aggregation
@@ -16,7 +17,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, PLATFORM_TZ } from '@/lib/location-time'
 import { capNoticeDecision, dublinMonthStartStr } from '@/lib/usage-caps'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { logWarn } from '@/lib/log'
@@ -36,7 +37,7 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const today = dublinTodayStr()
+  const today = todayStrIn(PLATFORM_TZ) // D5: the platform billing calendar (PLATFORM_TZ)
   const days = [dublinYesterdayStr(today), today]
 
   for (const day of days) {

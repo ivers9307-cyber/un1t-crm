@@ -25,22 +25,22 @@
 
 import { METER_KEYS } from '@shared/plans'
 import { getLocationPlan } from '@/lib/plans'
-import { getWallet, currentPeriodStart, nextPeriodStart } from '@/lib/wallet'
-import { dublinTodayStr, dublinDayStartMs, addDaysISO } from '@/lib/dublin-time'
+import { getWallet, currentPeriodStart, nextPeriodStart, walletResetNote } from '@/lib/wallet'
+import { todayStrIn, dayStartMsIn, addDaysISO, zoneOfLocation, PLATFORM_TZ } from '@/lib/location-time'
 
 const DAY_MS = 24 * 3600 * 1000
 
 // Lapse-warning thresholds (Richard's mockup spec): warn when MORE
-// THAN €10 of wallet credit will expire within 7 days of the Dublin
-// month end. Wallet credit is a monthly usage budget — it never rolls
+// THAN €10 of wallet credit will expire within 7 days of the billing
+// month end (D5: the platform billing calendar, PLATFORM_TZ). Wallet credit is a monthly usage budget — it never rolls
 // over (explicit expiry_reset at the boundary, mig 420).
 export const LAPSE_WARNING_MIN_CENTS = 1000
 export const LAPSE_WARNING_WINDOW_DAYS = 7
 
 /**
  * Pure: the last day of the Dublin calendar month containing dateStr.
- * Wallet credit expires at the end of the billing month (= Dublin
- * calendar month v1 — src/lib/wallet.js documents the assumption), so
+ * Wallet credit expires at the end of the billing month (= the platform's
+ * calendar month, D5 — src/lib/wallet.js documents the assumption), so
  * this is the "expires <date>" the wallet block shows.
  *
  * @param {string} dateStr - 'YYYY-MM-DD'
@@ -78,7 +78,7 @@ export function daysLeftInMonth(todayStr) {
  * @param {{ balanceCents: number, todayStr?: string }} p
  * @returns {boolean}
  */
-export function walletLapseWarning({ balanceCents, todayStr = dublinTodayStr() }) {
+export function walletLapseWarning({ balanceCents, todayStr = todayStrIn(PLATFORM_TZ) }) { // D5: the platform billing calendar (PLATFORM_TZ)
   if (!(Number(balanceCents) > LAPSE_WARNING_MIN_CENTS)) return false
   return daysLeftInMonth(todayStr) <= LAPSE_WARNING_WINDOW_DAYS
 }
@@ -194,7 +194,7 @@ async function fetchMonthRollups(db, locationIds, monthStart) {
 // Live derived ai_message counts for one location: billable (allowance-
 // eligible) vs staff-assistant (allowance-EXEMPT, shown separately).
 // occurred_at is timestamptz, so the month boundary must be the UTC
-// instant of Dublin local midnight on the 1st (dublinDayStartMs), not
+// instant of PLATFORM_TZ midnight on the 1st (dayStartMsIn, D5), not
 // a naive 'T00:00:00Z' — during IST those differ by an hour.
 async function fetchAiMessageCounts(db, locationId, monthStartIso) {
   const base = () =>
@@ -227,13 +227,13 @@ async function fetchAiMessageCounts(db, locationId, monthStartIso) {
  *   billing_contact_supported: false,
  * }>}
  */
-export async function getBillingPageData(db, orgId, { todayStr = dublinTodayStr() } = {}) {
+export async function getBillingPageData(db, orgId, { todayStr = todayStrIn(PLATFORM_TZ) } = {}) { // D5: the platform billing calendar (PLATFORM_TZ)
   const monthStart = currentPeriodStart(todayStr)
-  const monthStartIso = new Date(dublinDayStartMs(monthStart)).toISOString()
+  const monthStartIso = new Date(dayStartMsIn(monthStart, PLATFORM_TZ)).toISOString()
 
   const { data: locs, error } = await db
     .from('locations')
-    .select('id, name')
+    .select('id, name, timezone')
     .eq('organization_id', orgId)
     .eq('is_host_anchor', false)
     .order('created_at', { ascending: true })
@@ -310,6 +310,9 @@ export async function getBillingPageData(db, orgId, { todayStr = dublinTodayStr(
         balance_cents: balanceCents,
         period_start: wallet?.period_start ?? null,
         expires_on: lastDayOfDublinMonth(todayStr),
+        // TZ.11a / D5 — the reset (00:00 Irish time on the 1st) on this
+        // studio's clock; null on the platform's own zone.
+        resets_note: walletResetNote(todayStr, zoneOfLocation(loc)),
         lapse_warning: walletLapseWarning({ balanceCents, todayStr }),
         auto_topup: {
           enabled: wallet?.auto_topup_enabled ?? false,

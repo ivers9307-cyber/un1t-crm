@@ -6,7 +6,9 @@
 // nothing else; the whole surface is inert until the master pins a
 // plan. Per pinned location: plan block, month-to-date meters vs
 // allowance (staff assistant shown separately — allowance-exempt),
-// wallet (balance + Dublin month-end expiry + late-month lapse
+// wallet (balance + month-end expiry on the platform billing calendar,
+// D5: 00:00 Irish time on the 1st, also shown on the studio's clock when
+// its zone differs (TZ.11a) + late-month lapse
 // warning + last-20 ledger + auto-top-up config), then org-level
 // invoices (empty state v1) and billing contact (disabled — no
 // columns yet).
@@ -35,6 +37,7 @@ import { redirect } from 'next/navigation'
 import { CreditCard, ReceiptText, Wallet } from 'lucide-react'
 import AutoTopupForm from '@/components/settings/AutoTopupForm'
 import WalletTopupButtons from '@/components/settings/WalletTopupButtons'
+import { PLATFORM_TZ } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -55,7 +58,7 @@ function dateLabel(dateStr) {
 function dateTimeLabel(iso) {
   if (!iso) return '—'
   return new Intl.DateTimeFormat('en-IE', {
-    day: 'numeric', month: 'short', timeZone: 'Europe/Dublin',
+    day: 'numeric', month: 'short', timeZone: PLATFORM_TZ, // D5: the platform billing calendar (PLATFORM_TZ)
   }).format(new Date(iso))
 }
 
@@ -208,6 +211,7 @@ export default async function BillingSettingsPage({ searchParams }) {
                 <p className="text-xs text-un1t-subtle mb-3">
                   Credit expires {dateLabel(loc.wallet.expires_on)} — the wallet is a monthly usage budget
                   and unused credit doesn&apos;t roll over.
+                  {loc.wallet.resets_note && <> {loc.wallet.resets_note}</>}
                 </p>
 
                 {loc.wallet.lapse_warning && (

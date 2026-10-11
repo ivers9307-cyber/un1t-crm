@@ -32,3 +32,23 @@ describe('TasksPage — writes follow canWrite', () => {
     expect(render({})).toContain('Read-only here')
   })
 })
+
+// TZ.11a — "overdue" is judged on the STUDIO's today (the page passes
+// user.activeLocation.timezone), not Dublin's and not the browser's.
+describe('TasksPage — overdue follows the studio zone (TZ.11a)', () => {
+  const DUE = { id: 't-2', subject: 'Chase invoice', status: 'todo', kind: 'task', due_date: '2026-10-31' }
+  const card = (props) => renderToStaticMarkup(
+    <TasksPage initialTasks={[DUE]} locationId="l-1" profiles={[]} projectsSeed={[]} {...props} />,
+  )
+  it('1 Nov 03:30Z: overdue in Dublin (1 Nov), not yet in New York (31 Oct, 23:30 EDT)', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-11-01T03:30:00Z'))
+      expect(card({ timezone: 'Europe/Dublin' })).toContain('border-red-500/30')
+      expect(card({})).toContain('border-red-500/30') // no zone: the Dublin floor, as before
+      expect(card({ timezone: 'America/New_York' })).not.toContain('border-red-500/30')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

@@ -12,7 +12,7 @@
 //       ...(await importOriginal()),
 //       gateDailySlot: (await import('@/lib/cron-daily-slot.test-helpers')).openGate,
 //     }))
-import { DEFAULT_TZ, dayStrIn } from '@/lib/location-time'
+import { DEFAULT_TZ, dayStrIn, zoneOfLocation } from '@/lib/location-time'
 
 const thenable = (result) => ({ then: (res, rej) => Promise.resolve(result).then(res, rej) })
 
@@ -28,14 +28,16 @@ export function slotTables({ locations = [], claims = new Map(), locationsError 
   function from(table) {
     if (table === 'locations') {
       let range = [0, 999]
+      let ids = null
       const b = {
         select: () => b,
         order: () => b,
+        in: (_col, list) => { ids = list; return b }, // getLocationZones' read
         range: (f, t) => { range = [f, t]; return b },
         then: (res, rej) => {
           calls.locationReads++
           const err = locationsError()
-          const sorted = [...locations].sort((a, c) => (a.id < c.id ? -1 : 1))
+          const sorted = [...locations].filter((l) => !ids || ids.includes(l.id)).sort((a, c) => (a.id < c.id ? -1 : 1))
           const out = err ? { data: null, error: err } : { data: sorted.slice(range[0], range[1] + 1), error: null }
           return Promise.resolve(out).then(res, rej)
         },
@@ -104,6 +106,21 @@ class OpenSlots extends Map {
   get size() { return 1 }
 }
 const OPEN_SUMMARY = { due: 1, claimed: 1, already: 0, claim_failed: 0, waiting: 0, legacy_fallback: 0, zone_unread: 0 }
+
+/**
+ * gateDailySlot stand-in: every location is due now, in ITS OWN zone (taken
+ * from `rows`, [{ id, timezone }]); for tests whose subject is a per-studio
+ * body, not the gate.
+ */
+export const openGateZoned = (rows) => async (_db, _cronName, { nowMs = Date.now() } = {}) => {
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  const slots = new OpenSlots(null)
+  slots.get = (scope) => {
+    const zone = scope === 'none' ? DEFAULT_TZ : zoneOfLocation(byId.get(scope) || { id: scope, timezone: null })
+    return { locationId: scope === 'none' ? null : scope, zone, day: dayStrIn(nowMs, zone), lateHours: 0, legacy: zone === DEFAULT_TZ, fallback: false }
+  }
+  return { ok: true, faulted: false, slots, summary: { ...OPEN_SUMMARY } }
+}
 
 /** gateDailySlot stand-in: every location is due today, in Europe/Dublin. */
 export async function openGate(_db, _cronName, { nowMs = Date.now() } = {}) {
