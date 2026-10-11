@@ -26,7 +26,7 @@
 import { withFreshToken } from '@/lib/xero/client'
 import { mapBankTransactions, bankTransactionLines } from './bank-transactions'
 import { syncBankLines } from './coverage'
-import { dublinTodayStr, addDaysISO } from '@/lib/dublin-time'
+import { getLocationZone, todayStrIn, addDaysISO } from '@/lib/location-time'
 
 const DEFAULT_WINDOW_DAYS = 90
 const STALE_RUN_MS = 15 * 60 * 1000
@@ -65,7 +65,7 @@ async function claimRun(db, locationId, trigger) {
   return data.id
 }
 
-async function windowFromFor(db, locationId) {
+async function windowFromFor(db, locationId, today) {
   const { data } = await db
     .from('recon_bank_lines')
     .select('line_date')
@@ -74,7 +74,7 @@ async function windowFromFor(db, locationId) {
     .order('line_date', { ascending: true })
     .limit(1)
     .maybeSingle()
-  const floor = addDaysISO(dublinTodayStr(), -DEFAULT_WINDOW_DAYS)
+  const floor = addDaysISO(today, -DEFAULT_WINDOW_DAYS)
   if (data?.line_date && data.line_date < floor) return data.line_date
   return floor
 }
@@ -98,12 +98,17 @@ export async function runCoveragePull(db, locationId, { trigger, acceptMassCover
   const perAccount = []
   const anomalies = []
   try {
+    // TZ.11c: Xero bank-transaction dates are org-local, and one location is
+    // one Xero organisation (mig 554), so the window is in the location's
+    // zone. (Xero's Organisation.Timezone is a Windows zone id, not IANA.) A
+    // failed zone read throws into the catch below: the run is audited as an
+    // error, never pulled on a silent Dublin day.
+    const zone = await getLocationZone(db, locationId)
+    const today = todayStrIn(zone)
     const { xfetch } = await withFreshToken(locationId)
-    const windowFrom = await windowFromFor(db, locationId)
-    // NOTE: correctness assumes Xero's toDate is INCLUSIVE and the org
-    // timezone is Dublin (dublinTodayStr) — if a non-Dublin org ever
-    // connects, its same-day lines could fall outside "today" and drop.
-    const windowTo = dublinTodayStr()
+    const windowFrom = await windowFromFor(db, locationId, today)
+    // NOTE: correctness assumes Xero's toDate is INCLUSIVE.
+    const windowTo = today
 
     const accountsRes = await xfetch('/Accounts?where=' + encodeURIComponent('Type=="BANK"'))
     const accounts = (accountsRes?.Accounts || []).filter((a) => a.Status === 'ACTIVE')
