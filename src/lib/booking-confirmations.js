@@ -25,7 +25,8 @@ import { transactionalEmailSuppression, transactionalWhatsappSuppression } from 
 import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
 
 // BOOKING.2 — booking_date (YYYY-MM-DD) and start_time (HH:MM:SS) are
-// stored as Dublin-local wall-clock values without timezone semantics.
+// stored as studio-local wall-clock values without timezone semantics
+// (the booking's location zone; Europe/Dublin for every UN1T studio).
 // The old implementation did `new Date(\`${dateStr}T${timeStr}Z\`)` —
 // the trailing `Z` parsed the time as UTC, then
 // formatWeekdayShortDateTimeInTZ rendered it in Europe/Dublin which
@@ -35,17 +36,19 @@ import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whats
 // stored time string verbatim.
 //
 // Exported so the cancellation email (bookings/[id]/cancel) and the
-// reminder runner (event-reminders) render Dublin wall-clock the same
+// reminder runner (event-reminders) render the wall clock the same
 // way instead of each re-deriving the (previously buggy) Date-Z parse.
+// Zone-free (TZ.7): the date and the time are both printed as stored.
 export function fmtBookingTime(dateStr, timeStr) {
   if (!dateStr) return ''
   const timePart = String(timeStr || '').slice(0, 5)  // "17:00"
-  // Use noon UTC on the booking date to derive the weekday label —
-  // any same-day UTC instant is fine here since we're only rendering
-  // the weekday + day + month in Europe/Dublin (no time involved).
+  // Use noon UTC on the booking date to derive the weekday label, read
+  // in UTC: that is the same calendar day, so the label is the stored
+  // date's own weekday + day + month in any studio's zone (no time
+  // involved). Byte-identical to the Europe/Dublin rendering it replaced.
   try {
     const dayLabel = new Intl.DateTimeFormat('en-IE', {
-      timeZone: 'Europe/Dublin',
+      timeZone: 'UTC',
       weekday: 'short',
       day: 'numeric',
       month: 'short',

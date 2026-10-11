@@ -3,18 +3,17 @@
 // agent's consultation tools reuse the EXACT same availability logic
 // (incident-hardened Dublin-time semantics included).
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
 // Pin "today" so computeAvailableDays' range/weekday math is deterministic.
 // 2026-06-29 is a Monday (2026-06-30 = Tue, per the live calendar).
-vi.mock('@/lib/dublin-time', () => ({
-  dublinTodayStr: () => '2026-06-29',
-  dublinNowMinutes: () => 0,
-  addDaysISO: (d, n) => {
-    const dt = new Date(`${d}T00:00:00Z`)
-    dt.setUTCDate(dt.getUTCDate() + Number(n))
-    return dt.toISOString().slice(0, 10)
-  },
-}))
+// TZ.7: the lib reads the clock through @/lib/location-time now, so the clock
+// itself is pinned (it used to mock @/lib/dublin-time's today/now): 23:00Z on
+// 28 Jun is Dublin midnight on Mon 29 Jun, minute 0 (the same pins as before).
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-06-28T23:00:00Z'))
+})
+afterAll(() => vi.useRealTimers())
 import { generateDaySlots, filterAvailableSlots, computeAvailableDays } from './booking-slots'
 
 // Chainable db stub: every bookings/blocked_times query resolves to { data: [] }.
