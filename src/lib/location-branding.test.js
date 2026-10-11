@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getLocationBranding, getOrgBrandName, getOrgCustomerBranding } from './location-branding.js'
+import { getLocationBranding, getOrgBrandName, getOrgCustomerBranding, getLocationOrgBrandName } from './location-branding.js'
 import { makeFakeDb } from './api-auth.test-helpers.js'
 
 // Table-aware supabase-builder fake. `rows` is keyed by table; `.eq()` pairs
@@ -340,5 +340,30 @@ describe('getOrgCustomerBranding (W1.L4)', () => {
     expect(await getOrgCustomerBranding(null, ORG_A)).toEqual(EMPTY)
     expect(await getOrgCustomerBranding(makeFakeDb(base()), null)).toEqual(EMPTY)
     expect(await getOrgCustomerBranding({ from() { throw new Error('x') } }, ORG_A)).toEqual(EMPTY)
+  })
+})
+
+// W1.S1b — the register routes' members-only refusal names the event's ORG,
+// the same name the public payload hands the signup widget, never the
+// event location's own label (a host-anchor location's is internal).
+describe('getLocationOrgBrandName', () => {
+  const rows = () => ({
+    org_settings: [{ organization_id: 'org1', company_name: 'Gym A' }],
+    locations: [
+      { id: 'loc-1', name: 'Gym A North', organization_id: 'org1', active: true, created_at: '2026-01-01' },
+      { id: 'loc-anchor', name: 'Hosts anchor (internal)', organization_id: 'org1', active: true, created_at: '2026-02-01' },
+    ],
+  })
+
+  it('a location → its organisation\'s brand, not the location label', async () => {
+    expect(await getLocationOrgBrandName(fakeDb(rows()), 'loc-1')).toBe('Gym A')
+    expect(await getLocationOrgBrandName(fakeDb(rows()), 'loc-anchor')).toBe('Gym A')
+  })
+
+  it('no db, no location, an unknown one or a read error → \'\'', async () => {
+    expect(await getLocationOrgBrandName(null, 'loc-1')).toBe('')
+    expect(await getLocationOrgBrandName(fakeDb(rows()), null)).toBe('')
+    expect(await getLocationOrgBrandName(fakeDb(rows()), 'loc-nope')).toBe('')
+    expect(await getLocationOrgBrandName(fakeDb(rows(), { errors: { locations: { message: 'boom' } } }), 'loc-1')).toBe('')
   })
 })

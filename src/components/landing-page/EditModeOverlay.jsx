@@ -41,8 +41,16 @@ const MESSAGE_NAMESPACE = 'lp-editor'
 export default function EditModeOverlay({
   initialBlocks = [],
   initialLogoUrl = null,
-  initialLogoAlt = 'UN1T Dublin',
+  initialLogoAlt = '',
   initialLogoWidthPx = 200,
+  // W1.S1b — the studio's brand chrome, from the page's own location load:
+  // `fallbackLogoAlt` (its brand) answers a blank alt pushed by the editor,
+  // `wordmark` / `locationName` feed the blocks, `footer` the SiteFooter.
+  // All blank until known; the preview never borrows another gym's name.
+  fallbackLogoAlt = '',
+  wordmark = '',
+  locationName = '',
+  footer = {},
 }) {
   const [blocks, setBlocks] = useState(initialBlocks)
   const [logoUrl, setLogoUrl] = useState(initialLogoUrl)
@@ -77,7 +85,7 @@ export default function EditModeOverlay({
       if (msg.type === 'state') {
         if (Array.isArray(msg.blocks)) setBlocks(msg.blocks)
         if (msg.logoUrl !== undefined)     setLogoUrl(msg.logoUrl || null)
-        if (msg.logoAlt !== undefined)     setLogoAlt(msg.logoAlt || 'UN1T Dublin')
+        if (msg.logoAlt !== undefined)     setLogoAlt(msg.logoAlt || fallbackLogoAlt)
         if (msg.logoWidthPx !== undefined) setLogoWidthPx(msg.logoWidthPx || 200)
         if (msg.locationId !== undefined)  setLocationId(msg.locationId || null)
         if (msg.selectedBlockId !== undefined) {
@@ -101,7 +109,7 @@ export default function EditModeOverlay({
     }
 
     return () => window.removeEventListener('message', onMessage)
-  }, [])
+  }, [fallbackLogoAlt])
 
   // ── PostMessage helpers ───────────────────────────────────
   // All structural edits route through the same emit() so the
@@ -159,6 +167,7 @@ export default function EditModeOverlay({
         logoUrl={logoUrl}
         logoAlt={logoAlt}
         logoWidthPx={logoWidthPx}
+        wordmark={wordmark}
         locationId={locationId}
         onChangeLogo={(url) => emitChromeEdit('logoUrl', url)}
       />
@@ -196,7 +205,7 @@ export default function EditModeOverlay({
                   : 'hover:outline hover:outline-2 hover:outline-blue-300/60 hover:outline-offset-[-2px]'
               }`}
             >
-              <BlockRenderer block={block} onEdit={emitFieldEdit} locationId={locationId} />
+              <BlockRenderer block={block} onEdit={emitFieldEdit} locationId={locationId} wordmark={wordmark} locationName={locationName} />
               {/* Type badge — top-left, hover-revealed. */}
               <div
                 className={`absolute top-2 left-2 z-30 px-2 py-1 rounded text-[10px] uppercase tracking-wider font-semibold pointer-events-none transition-opacity ${
@@ -230,7 +239,7 @@ export default function EditModeOverlay({
           </div>
         )
       })}
-      <SiteFooter />
+      <SiteFooter brand={footer.brand || ''} studios={footer.studios || []} legalName={footer.legalName || ''} />
     </div>
   )
 }

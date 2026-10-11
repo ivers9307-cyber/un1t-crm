@@ -32,6 +32,7 @@ import { Clock, MapPin, ChevronLeft, ChevronRight, Check, AlertCircle, Globe } f
 // up Sunday's null availability and return zero slots — see the
 // roster.js docstring for the full incident reasoning.
 import { formatDate } from '@/lib/roster'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 export default function BookingWidget({ slug }) {
   const [event, setEvent] = useState(null)
@@ -253,6 +254,8 @@ export default function BookingWidget({ slug }) {
   const days = getDaysInMonth(currentMonth)
   const showSlotsColumn = step === 'calendar' && !!selectedDate
   const location = event.locations || null
+  // W1.S1b — the studio's brand (payload), else its name; never a literal.
+  const brandName = event.brand || location?.name || ''
   const accent = event.color || '#111827'
 
   return (
@@ -296,7 +299,7 @@ export default function BookingWidget({ slug }) {
           {/* Footer powered-by sits with the brand panel so it
               doesn't fight the calendar for vertical space. */}
           <div className="pt-4 mt-auto">
-            <p className="text-[10px] text-gray-400 uppercase tracking-wider">Powered by UN1T</p>
+            <p className="text-[10px] text-gray-400 uppercase tracking-wider">Powered by {PLATFORM_NAME}</p>
           </div>
         </aside>
 
@@ -554,7 +557,9 @@ export default function BookingWidget({ slug }) {
                   className="mt-0.5 shrink-0"
                 />
                 <span>
-                  Yes, send me UN1T promotional updates and offers via email, SMS or WhatsApp.
+                  {brandName
+                    ? `Yes, send me ${brandName} promotional updates and offers via email, SMS or WhatsApp.`
+                    : 'Yes, send me promotional updates and offers via email, SMS or WhatsApp.'}
                   You can unsubscribe at any time. Booking confirmations are sent regardless.
                 </span>
               </label>

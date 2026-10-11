@@ -144,6 +144,50 @@ const SWEPT = [
   'mobile/components/member/BoardsPanel.jsx',
   'mobile/components/member/ProfileSetupWizard.jsx',
   'mobile/lib/member/use-member-brand.js',
+  // ── W1.S1b: public pages, widgets, landing pages and TV boards ───────────
+  'src/components/BookingWidget.jsx',
+  'src/app/api/public/bookings/[slug]/route.js',
+  'src/components/RaceSignupWidget.jsx',
+  'src/components/RaceConfirmedPage.jsx',
+  'src/components/PreferenceCentre.jsx',
+  'src/app/api/preferences/[token]/route.js',
+  'src/components/UnsubscribePage.jsx',
+  'src/app/unsubscribe/[token]/page.js',
+  'src/app/api/preferences/hr-emails/route.js',
+  'src/components/WaitlistWidget.jsx',
+  'src/components/EventWaitlistForm.jsx',
+  'src/components/landing-page/BlockRenderers.jsx',
+  'src/components/landing-page/EditModeOverlay.jsx',
+  'src/lib/landing-page-blocks.js',
+  'src/components/LandingPageSettingsForm.jsx',
+  'src/components/ClassFunnel.jsx',
+  'src/app/welcome/page.js',
+  'src/app/welcome/[location]/page.js',
+  'src/app/welcome/[location]/events/page.js',
+  'src/app/welcome/[location]/status/page.js',
+  'src/app/start/[path]/page.js',
+  'src/app/event/[slug]/page.js',
+  'src/app/embed/event/[slug]/page.js',
+  'src/app/api/public/events/[slug]/register/route.js',
+  'src/app/api/public/races/[slug]/register/route.js',
+  'src/app/(members)/challenges/page.js',
+  'src/app/api/challenges/route.js',
+  'src/app/tv/layout.js',
+  'src/app/tv/cast/[token]/page.js',
+  'src/app/tv/cast/[token]/TVDisplay.jsx',
+  'src/app/tv/live/[token]/LiveTvClient.jsx',
+  'src/app/api/public/tv-live/[token]/route.js',
+  'src/app/tv/live/[token]/challenges/ChallengeTvClient.jsx',
+  'src/app/api/public/tv-challenges/[token]/route.js',
+  'src/app/(operations)/tv-displays/TVAdmin.jsx',
+  'src/app/settings/landing-page/page.js',
+  'src/components/CookieConsent.jsx',
+  'src/app/start/page.js',
+  'src/app/free-class/page.js',
+  'src/app/technical/page.js',
+  'src/app/preferences/[token]/page.js',
+  'src/app/preferences/layout.js',
+  'src/app/unsubscribe/host/[token]/page.js',
   // ── W1.S1a: customer-facing email and message libs ──────────────────
   'src/lib/event-email.js',
   'src/lib/event-attendee-reminders.js',
@@ -186,6 +230,40 @@ const KEEP = {
   // VAT invoice names the platform's own trading entity (Wave 2 moves money
   // rails to the org).
   'src/lib/wallet-topup.js': ['(trading as UN1T Dublin)'],
+  // W1.S1b — the cookie banner renders only on un1tdublin.com (its host gate),
+  // so its heading is UN1T's own; `window.UN1TCookies` is a global identifier
+  // the site's footer links call, not copy.
+  'src/components/CookieConsent.jsx': ['UN1T Dublin', 'UN1TCookies'],
+  // W1.S1b — UN1T-only funnel pages, unreachable on a tenant host (no
+  // tenant allowlist admits /start, /free-class or /technical; pinned in
+  // src/public-compliance-paths.test.jsx). Their static metadata, campaign
+  // copy and the Meta Tech Provider page's company story are UN1T's own;
+  // `UN1T_GROUP_ORG_ID` is the identifier that loads UN1T Group's chrome.
+  'src/app/start/page.js': [
+    'UN1T_GROUP_ORG_ID',
+    '3 Free Classes — UN1T Stillorgan',
+    'Your first 3 classes at UN1T Stillorgan are free — coach-led strength & conditioning. Book your first session now.',
+  ],
+  'src/app/free-class/page.js': [
+    'UN1T_GROUP_ORG_ID',
+    'Every class at UN1T Stillorgan is coached start to finish — the programming, your form, the push when you need it. Come try three on us. No membership, no pressure.',
+    "I'd like to hear from UN1T Stillorgan about my free classes and offers by email, SMS and WhatsApp. I can opt out anytime.",
+    "I've been a member of UN1T Dublin since the day it opened",
+    'Your first 3 classes free — UN1T Stillorgan',
+    "siteName: 'UN1T Dublin'",
+    'logoAlt="UN1T Stillorgan"',
+  ],
+  'src/app/technical/page.js': [
+    'UN1T_GROUP_ORG_ID',
+    'built and provided by Champ Fitness Ltd (trading as UN1T Dublin) to UN1T gym franchises.',
+    'the same platform our own coaches use every day to run the UN1T studios in Dublin.',
+    'that runs UN1T.',
+    'Built by UN1T',
+    'offered to UN1T gym franchises',
+    'Champ Fitness Ltd, trading as UN1T Dublin, is registered in',
+    'We operate the UN1T studios in Dublin',
+    'Interested in Repset for your UN1T franchise?',
+  ],
   // W1.S1a — LEGACY_COUNTERSIGNATURE_ENTITY: the counterparty every contract
   // issued before LEGALENT.1 was issued and signed under. An executed
   // document must keep rendering what it said; rewriting it is tampering,

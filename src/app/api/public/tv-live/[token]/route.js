@@ -17,6 +17,7 @@ import { createServerClient } from '@/lib/supabase'
 import { buildLiveBoardPayload } from '@/lib/live-board'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { stampRender, deviceFromRequest } from '@/lib/fleet-render'
+import { resolveLocationBrand } from '@/lib/host-brand'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -78,6 +79,15 @@ export async function GET(request, props) {
   const device = deviceFromRequest(request)
   if (device) void stampRender(db, device, location.id)
 
-  const payload = await buildLiveBoardPayload(db, { location, nowMs })
-  return NextResponse.json(payload, { headers: NO_STORE })
+  // W1.S1b — the studio's brand for the board's wordmark and tab title.
+  // This endpoint is polled every few seconds, so it reads the per-location
+  // cache (host-brand.js), never a fresh walk per poll.
+  const [payload, brand] = await Promise.all([
+    buildLiveBoardPayload(db, { location, nowMs }),
+    resolveLocationBrand({ locationId: location.id, db, nowMs }),
+  ])
+  return NextResponse.json(
+    { ...payload, brand: { name: brand.companyName, short_name: brand.shortName } },
+    { headers: NO_STORE },
+  )
 }
