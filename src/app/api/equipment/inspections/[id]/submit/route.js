@@ -27,7 +27,7 @@ import {
   insertIssueWithAttachments, buildAttachmentPath, validateSubmission,
   verifyIssuePhotoPaths, isIssuePhotoPath, MAX_PHOTOS_PER_ISSUE,
 } from '@/lib/issues'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { logAuditEvent } from '@/lib/audit'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { logWarn } from '@/lib/log'
@@ -123,6 +123,10 @@ export const POST = withAuth(
 
     const asset = inspection.equipment
     const type = inspection.equipment_types
+    // TZ.8b — "today" is the studio's own day. The inspection is at
+    // withAuth's locationId (checked above), the active studio, whose
+    // timezone the session already carries.
+    const zone = zoneOfLocation(user.activeLocation)
 
     // Compute the next due date BEFORE any write, so an invalid
     // interval fails the request cleanly instead of half-way through.
@@ -131,7 +135,7 @@ export const POST = withAuth(
       nextDueOn = rollForward({
         dueOn: inspection.due_on,
         intervalWeeks: type?.interval_weeks,
-        today: dublinTodayStr(),
+        today: todayStrIn(zone),
       })
     } catch (err) {
       if (err instanceof RangeError) {
@@ -267,7 +271,7 @@ export const POST = withAuth(
     })
 
     const assetPatch = {
-      last_inspected_on: dublinTodayStr(),
+      last_inspected_on: todayStrIn(zone),
       next_due_on: nextDueOn,
     }
     if (takeOutOfService && issueId) {

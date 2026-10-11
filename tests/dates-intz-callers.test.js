@@ -16,10 +16,8 @@ import path from 'node:path'
 const ROOT = path.resolve(__dirname, '..')
 const NAMES = ['formatWeekdayShortDateTimeInTZ', 'formatWeekdayLongDateInTZ', 'formatFullDateTimeInTZ']
 
-const PENDING = {
-  'src/lib/contractor-invoice-email.js': { calls: 2, owner: 'TZ.8b (contractor-invoice-email.js:123,135: the invoice location zone)' },
-  'src/lib/contracts-email.js': { calls: 1, owner: 'TZ.8b (contracts-email.js:278: the contract location zone)' },
-}
+// TZ.8b (#2040) passed the record's zone at its three calls; nothing is pending.
+const PENDING = {}
 
 function walk(dir, out = []) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {

@@ -73,7 +73,7 @@ export async function GET(_request, { params }) {
       decline_reason, xero_synced_at, xero_email_message_id,
       created_at, updated_at,
       profile:profile_id ( id, full_name, email ),
-      location:location_id ( id, name ),
+      location:location_id ( id, name, timezone ),
       reviewer:reviewed_by ( id, full_name ),
       items:fte_expense_items (
         id, expense_date, category, vendor, description,

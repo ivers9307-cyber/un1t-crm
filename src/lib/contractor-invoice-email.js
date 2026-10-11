@@ -13,6 +13,7 @@ import { createServerClient } from '@/lib/supabase'
 import { periodLabel } from './contractor-invoices.js'
 import { formatFullDateTimeInTZ } from './dates.js'
 import { getLocationBranding } from './location-branding.js'
+import { zoneOfLocation } from './location-time.js'
 import { resolvePostmarkToken } from './postmark-token.js'
 import { platformFromHeader } from './platform-sender.js'
 // URLSEAM.1 — /schedule/invoices is served by THIS deployment, so the base is
@@ -75,7 +76,8 @@ async function loadInvoiceForEmail(invoiceId) {
       id, period_start, period_end, invoice_amount, status,
       decline_reason, approved_at, reviewed_by, location_id,
       contractor:contractor_id ( full_name, email ),
-      reviewer:reviewed_by ( full_name )
+      reviewer:reviewed_by ( full_name ),
+      location:location_id ( timezone )
     `)
     .eq('id', invoiceId)
     .single()
@@ -86,7 +88,9 @@ async function loadInvoiceForEmail(invoiceId) {
   // the shared helper (never throws; W1.S2: an unresolved brand is the empty
   // string, and the header then carries no wordmark rather than another gym's).
   const branding = await getLocationBranding(db, data.location_id)
-  return { ...data, branding }
+  // TZ.8b — "Approved at" is printed on the invoice's studio clock.
+  const zone = zoneOfLocation({ id: data.location_id, timezone: data.location?.timezone })
+  return { ...data, branding, zone }
 }
 
 function brandHeader(branding) {
@@ -120,7 +124,7 @@ export async function sendInvoiceApprovedEmail(invoiceId) {
       <table style="border-collapse:collapse;margin:16px 0">
         <tr><td style="padding:4px 12px 4px 0;color:#666">Period</td><td style="padding:4px 0">${period}</td></tr>
         <tr><td style="padding:4px 12px 4px 0;color:#666">Amount</td><td style="padding:4px 0">€${Number(inv.invoice_amount).toFixed(2)}</td></tr>
-        <tr><td style="padding:4px 12px 4px 0;color:#666">Approved at</td><td style="padding:4px 0">${formatFullDateTimeInTZ(inv.approved_at)}</td></tr>
+        <tr><td style="padding:4px 12px 4px 0;color:#666">Approved at</td><td style="padding:4px 0">${formatFullDateTimeInTZ(inv.approved_at, inv.zone)}</td></tr>
       </table>
       <p>You can review your submission history at <a href="${getAppUrl()}/schedule/invoices">${getAppUrl()}/schedule/invoices</a>.</p>
       <p style="color:#666;font-size:13px;margin-top:24px">
@@ -132,7 +136,7 @@ export async function sendInvoiceApprovedEmail(invoiceId) {
     `Hi ${inv.contractor.full_name || 'there'},\n\n` +
     `Your invoice for ${period} has been approved and queued for payment processing. Our accountant reviews it next, and it is paid from there.\n\n` +
     `Amount: €${Number(inv.invoice_amount).toFixed(2)}\n` +
-    `Approved at: ${formatFullDateTimeInTZ(inv.approved_at)}\n\n` +
+    `Approved at: ${formatFullDateTimeInTZ(inv.approved_at, inv.zone)}\n\n` +
     `Review your submission history: ${getAppUrl()}/schedule/invoices\n`
 
   const messageId = await postmarkSend({

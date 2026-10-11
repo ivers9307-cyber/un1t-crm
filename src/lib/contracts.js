@@ -28,7 +28,7 @@
 // only renders + validates. The API route is responsible for
 // persisting the issued row and for state-machine transitions.
 
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, DEFAULT_TZ } from '@/lib/location-time'
 
 /**
  * Build the auto-fill variable map from a profile row.
@@ -41,9 +41,11 @@ import { dublinTodayStr } from '@/lib/dublin-time'
  *                          role, employment_type, annual_salary,
  *                          hourly_rate, contracted_rate,
  *                          contracted_hours_per_week.
+ * @param {{ zone?: string }} [opts] TZ.8b — the issuing studio's zone, for
+ *                          {{today}} (DEFAULT_TZ when omitted).
  * @returns {Record<string, string>}
  */
-export function profileVariables(profile) {
+export function profileVariables(profile, { zone = DEFAULT_TZ } = {}) {
   if (!profile) return {}
   const v = {}
   // Identity
@@ -77,8 +79,9 @@ export function profileVariables(profile) {
   }
 
   // Today, pre-computed for templates that want a default
-  // {{today}} when the issuer doesn't override start_date.
-  v.today = dublinTodayStr()
+  // {{today}} when the issuer doesn't override start_date. TZ.8b: the
+  // issuing studio's day.
+  v.today = todayStrIn(zone)
 
   return v
 }
@@ -109,9 +112,9 @@ export function formatEuro(value) {
  * arguments win — so customVariables (from the issuer) overrides
  * profile auto-fills.
  */
-export function mergeVariables(profile, customVariables) {
+export function mergeVariables(profile, customVariables, { zone = DEFAULT_TZ } = {}) {
   return {
-    ...profileVariables(profile),
+    ...profileVariables(profile, { zone }),
     ...(customVariables || {}),
   }
 }

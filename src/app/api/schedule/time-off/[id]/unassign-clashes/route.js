@@ -26,7 +26,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn } from '@/lib/location-time'
+import { studioZoneFor } from '@/lib/staff-zone'
 import { canDecideTimeOff, decidingLocationIds, getProfileLocationIds, findLeaveClashes } from '@/lib/time-off-leave'
 import { unassignShiftAssignments, SHIFT_CHANGED_ERROR, SHIFTS_CHANGED_ERROR } from '@/lib/shift-unassign'
 
@@ -63,8 +64,16 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Only approved leave can clear the roster' }, { status: 409 })
   }
 
+  // TZ.8b — "from today on" is the leave's studio's day. An unreadable zone
+  // removes nothing.
+  let today
+  try {
+    today = todayStrIn(await studioZoneFor(db, user, leave.location_id))
+  } catch {
+    return NextResponse.json({ success: false, error: 'Could not read the studio\'s timezone. Try again.' }, { status: 500 })
+  }
   // ORGSCOPE.1 — the same organisation-bounded list the approver was shown.
-  const { clashes, error: clashError } = await findLeaveClashes(db, leave, dublinTodayStr(), {
+  const { clashes, error: clashError } = await findLeaveClashes(db, leave, today, {
     scopeLocationIds: decidingLocationIds(user, leave.location_id, requesterLocations),
   })
   if (clashError) return NextResponse.json({ success: false, error: clashError.message }, { status: 500 })

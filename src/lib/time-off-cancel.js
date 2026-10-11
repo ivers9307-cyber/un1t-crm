@@ -26,7 +26,7 @@
 
 import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { MANAGER_ROLES } from '@/lib/schemas'
-import { dublinTimeLabel, dublinDateKey } from '@/lib/dublin-time'
+import { timeLabelIn, dateKeyIn, DEFAULT_TZ } from '@/lib/location-time'
 
 export const LEAVE_CANCEL_DECIDER_ROLES = Object.freeze(['owner'])
 
@@ -35,7 +35,7 @@ export function leaveActingLocationIds(row, requesterLocationIds = []) {
   return [...new Set([row?.location_id, ...(requesterLocationIds || [])].filter(Boolean))]
 }
 
-/** Asked, undecided, still approved, and not yet over. `todayIso` is the Dublin business day. Pure. */
+/** Asked, undecided, still approved, and not yet over. `todayIso` is the studio's business day. Pure. */
 export function isOpenCancelAsk(row, todayIso) {
   return !!row && !!row.cancel_requested_at && !row.cancel_decided_at &&
     row.status === 'approved' && !!row.end_date && !!todayIso && row.end_date >= todayIso
@@ -170,7 +170,7 @@ export function annotateApprovedLeaveGuard(row, user, requesterLocationIds = [],
  * `nowMs` is passed in (the route's clock) so the 24h re-ask wait agrees with
  * the PUT that enforces it.
  */
-export function annotateCancelAsk(row, user, todayIso, requesterLocationIds = [], nowMs = Date.now()) {
+export function annotateCancelAsk(row, user, todayIso, requesterLocationIds = [], nowMs = Date.now(), zone = DEFAULT_TZ) {
   const state = cancelAskState(row, todayIso)
   const open = state === 'open'
   const isSelf = !!user?.id && row?.profile_id === user.id
@@ -188,9 +188,10 @@ export function annotateCancelAsk(row, user, todayIso, requesterLocationIds = []
     // true = the button ASKS an owner; false with can_request_cancel = a
     // master, whose cancel is immediate. The screen words its confirm from it.
     cancel_needs_owner: canAsk && mode === 'ask',
-    // When the wait lifts: the instant, and the Dublin wall-clock words for it.
+    // When the wait lifts: the instant, and the studio's wall-clock words for
+    // it (TZ.8b: `zone` is the request's studio zone).
     cancel_retry_after: retryAfter,
-    cancel_retry_after_label: retryAfter ? dublinRetryLabel(retryAfter) : null,
+    cancel_retry_after_label: retryAfter ? retryLabelIn(retryAfter, zone) : null,
     can_withdraw_cancel: open && isSelf,
     can_decide_cancel: open && canDecideLeaveCancel(user, row, requesterLocationIds),
   }
@@ -285,15 +286,16 @@ export function reAskBlockedUntil(row, nowMs) {
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 /**
- * "14:30 on 22 Sep": an instant as Dublin wall-clock words, whatever the
- * process timezone. The time is the house helper's; the day is built from
- * dublinDateKey with a fixed month list, because ICU's en-GB short month for
- * September varies between versions ("Sep" / "Sept"). null if unreadable. Pure.
+ * "14:30 on 22 Sep": an instant as wall-clock words in the studio's zone
+ * (TZ.8b; DEFAULT_TZ when omitted), whatever the process timezone. The time is
+ * the house helper's; the day is built from dateKeyIn with a fixed month list,
+ * because ICU's en-GB short month for September varies between versions
+ * ("Sep" / "Sept"). null if unreadable. Pure.
  */
-export function dublinRetryLabel(iso) {
-  const time = dublinTimeLabel(iso)
+export function retryLabelIn(iso, zone = DEFAULT_TZ) {
+  const time = timeLabelIn(iso, zone)
   if (!time) return null
-  const [, m, d] = dublinDateKey(iso).split('-').map(Number)
+  const [, m, d] = dateKeyIn(iso, zone).split('-').map(Number)
   return `${time} on ${d} ${MONTHS[m - 1]}`
 }
 

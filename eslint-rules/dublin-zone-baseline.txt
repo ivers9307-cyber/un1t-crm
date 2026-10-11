@@ -11,33 +11,10 @@
 # snapshot (dublin-zone-baseline.tz18a-snapshot.txt), or when this list is not
 # sorted. One path per line, sorted, so parallel sweeps that delete different
 # lines merge cleanly. TZ.18b deletes this file once it is empty.
-src/app/api/attendance/geofence-checkin/route.js
-src/app/api/attendance/route.js
 src/app/api/cron/agent-followups/route.js
-src/app/api/equipment/due/route.js
-src/app/api/equipment/inspections/[id]/submit/route.js
-src/app/api/equipment/route.js
-src/app/api/qualifications/route.js
-src/app/api/schedule/time-off/[id]/cancel-request/route.js
-src/app/api/schedule/time-off/[id]/route.js
-src/app/api/schedule/time-off/[id]/unassign-clashes/route.js
-src/app/api/schedule/time-off/route.js
 src/app/api/schedule/week-cost/route.js
-src/components/AttendanceReportClient.jsx
-src/components/ExpensesManager.jsx
-src/components/TimeOffManager.jsx
-src/components/maintenance/EquipmentTab.jsx
-src/lib/allowance-year.js
 src/lib/approvals/event-move-card.js
-src/lib/approvals/providers/time-off-cancellations.js
-src/lib/approvals/providers/time-off.js
-src/lib/attendance-report.js
 src/lib/class-occurrences.js
-src/lib/contract-pdf.js
-src/lib/contracts.js
-src/lib/equipment-dates.js
-src/lib/qualification-digest.js
 src/lib/recon/hunt-queries.js
 src/lib/report-period.js
 src/lib/roster-grid-data.js
-src/lib/time-off-cancel.js

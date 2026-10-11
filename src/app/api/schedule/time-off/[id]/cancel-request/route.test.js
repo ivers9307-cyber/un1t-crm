@@ -61,6 +61,8 @@ function buildDb({ existing, requesterLocations = ['loc-1'], matches = true, rea
       return { data: matches ? [{ ...existing, ...q.payload }] : [], error: null }
     }
     if (q.table === 'profile_locations') return { data: requesterLocations.map((location_id) => ({ location_id })), error: null }
+    // TZ.8b — a caller whose session does not hold the request's studio reads its zone.
+    if (q.table === 'locations' && q.action === 'select') return { data: { id: q.eq.id, timezone: 'Europe/Dublin' }, error: null }
     throw new Error(`unexpected ${q.table}/${q.action}`)
   })
   return { db, updateSpy }
@@ -184,6 +186,33 @@ describe('POST /api/schedule/time-off/[id]/cancel-request — deciding', () => {
     const res = await POST(req({ decision: 'approve' }), PROPS)
     expect(res.status).toBe(409)
     expect((await res.json()).error).toMatch(/ended/)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('TZ.8b: "ended" is the leave\'s studio\'s day: 03:00Z on 3 Jun is still 2 Jun (its last day) in New York, not in Dublin', async () => {
+    vi.setSystemTime(new Date('2026-06-03T03:00:00Z')) // 23:00 EDT on 2 Jun; 04:00 IST on 3 Jun
+    const owner = (timezone) => ({ ...OWNER, locations: [{ id: 'loc-1', timezone }] })
+    let built = arrange(owner('Europe/Dublin'), { existing: asked() })
+    expect((await POST(req({ decision: 'approve' }), PROPS)).status).toBe(409)
+    expect(built.updateSpy).not.toHaveBeenCalled()
+    built = arrange(owner('America/New_York'), { existing: asked() })
+    expect((await POST(req({ decision: 'approve' }), PROPS)).status).toBe(200)
+    expect(built.updateSpy).toHaveBeenCalled()
+  })
+
+  it('TZ.8b: an unreadable studio zone decides nothing (500, no write)', async () => {
+    const { resetLocationZoneCache } = await import('@/lib/location-time')
+    resetLocationZoneCache() // an earlier case read loc-1's zone; this one must read again
+    getCurrentUser.mockResolvedValue(MASTER)
+    const updateSpy = vi.fn()
+    createServerClient.mockReturnValue(fakeDb((q) => {
+      if (q.table === 'time_off_requests' && q.action === 'select') return { data: asked(), error: null }
+      if (q.table === 'time_off_requests') { updateSpy(q.payload); return { data: [], error: null } }
+      if (q.table === 'profile_locations') return { data: [{ location_id: 'loc-1' }], error: null }
+      if (q.table === 'locations') return { data: null, error: { message: 'down' } }
+      throw new Error(`unexpected ${q.table}`)
+    }))
+    expect((await POST(req({ decision: 'approve' }), PROPS)).status).toBe(500)
     expect(updateSpy).not.toHaveBeenCalled()
   })
 

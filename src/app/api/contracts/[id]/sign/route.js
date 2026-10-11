@@ -21,6 +21,7 @@ import { canTransition } from '@/lib/contracts'
 import { sendContractSignedEmails } from '@/lib/contracts-email'
 import { renderContractPdf } from '@/lib/contract-pdf'
 import { getLocationBranding } from '@/lib/location-branding'
+import { displayZoneFor } from '@/lib/display-zone'
 import { contractCountersignatureLabel } from '@/lib/contracting-entity'
 import { logAuditEvent } from '@/lib/audit'
 import { validateBody } from '@/lib/validate'
@@ -143,6 +144,10 @@ export async function POST(request, props) {
   // Note the buffer deliberately survives a STORAGE failure: if the
   // render succeeded we can still attach the PDF to the confirmation
   // emails even though it is not downloadable from /pdf yet.
+  // TZ.8b — the PDF and the confirmation emails print the signature times on
+  // the contract's studio clock. Display only: an unreadable zone prints the
+  // platform's (DEFAULT_TZ) rather than costing anyone their copy.
+  const zone = await displayZoneFor(db, user, updated.location_id, 'contracts')
   let pdfBuffer = null
   try {
     const branding = await getLocationBranding(db, updated.location_id)
@@ -164,6 +169,7 @@ export async function POST(request, props) {
       // PDF can never name two different counterparties. `updated`
       // comes from the UPDATE's `.select()`, so variables_data is on it.
       contractingEntity: contractCountersignatureLabel(updated),
+      zone,
     })
     const pdfPath = `${updated.id}/signed.pdf`
     const { error: upErr } = await db.storage
@@ -187,6 +193,7 @@ export async function POST(request, props) {
     issuer: detail?.issuer,
     templateName: detail?.template?.name,
     pdfBuffer,
+    zone,
   })
 
   if (emailResults.warning) warnings.push(emailResults.warning)

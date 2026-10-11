@@ -16,7 +16,7 @@
 // falls back to DEFAULT_TZ with a warning, never an error page. A shift's own
 // decisions (past, started, reminders) use THAT shift's studio zone instead.
 
-import { zoneOfLocation, DEFAULT_TZ } from './location-time'
+import { zoneOfLocation, getLocationZone, DEFAULT_TZ } from './location-time'
 import { logWarn } from './log'
 
 /** The signed-in person's studio clock: their active studio. Never throws. */
@@ -33,6 +33,24 @@ export function staffZoneOfUser(user) {
 export function sessionStudioZone(user, locationId) {
   const row = locationId ? (user?.locations || []).find((l) => l?.id === locationId) : null
   return row ? zoneOfLocation(row) : null
+}
+
+/**
+ * TZ.8b — the zone of ONE studio a decision is about (a leave request's
+ * studio, the studio a list is filtered to): the session's copy when it holds
+ * that studio (the active one first), else one cached read. No IO in the
+ * common case.
+ * @param {import('@supabase/supabase-js').SupabaseClient} db service-role client
+ * @param {object|null} user getCurrentUser()'s user
+ * @param {string|null|undefined} locationId
+ * @returns {Promise<string>} canonical IANA zone (DEFAULT_TZ for no id)
+ * @throws {LocationZoneReadError} the read failed: a decision route answers 500
+ */
+export async function studioZoneFor(db, user, locationId) {
+  if (!locationId) return DEFAULT_TZ
+  const active = user?.activeLocation
+  if (active?.id === locationId) return zoneOfLocation(active)
+  return sessionStudioZone(user, locationId) ?? getLocationZone(db, locationId)
 }
 
 /**
