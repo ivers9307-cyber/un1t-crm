@@ -25,6 +25,11 @@ function makeDb(schedules, { updateError = null } = {}) {
           },
         }
       }
+      // TZ.10 — the tick reads every location's zone once. No row → the
+      // platform zone (Europe/Dublin), which every schedule here is written in.
+      if (table === 'locations') {
+        return { select: () => ({ in: () => ({ order: async () => ({ data: [], error: null }) }) }) }
+      }
       throw new Error(`unexpected table ${table}`)
     },
   }

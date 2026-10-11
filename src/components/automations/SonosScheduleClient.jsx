@@ -25,7 +25,9 @@
 import { Suspense, useState, useEffect, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Loader2, AlertCircle, Music2, ExternalLink, Play, Plus, X, Trash2 } from 'lucide-react'
-import { dublinDateKey, dublinDayStartMs, dublinAddDays, dublinDayStr } from '@/lib/dublin-time'
+// TZ.10 — the studio's clock: GET /api/sonos/schedules returns the zone the
+// schedules' windows are wall clock in, and everything below takes it.
+import { dayStrIn, nextLocalMidnightMs, resolveZone } from '@shared/zoned-time'
 import SonosLiveControl from './SonosLiveControl'
 // SHELLY-UI.1 — the day pills / on-off times / add / remove block, shared
 // with the Shelly plug surface. Sonos's volume + favourite controls stay
@@ -42,11 +44,15 @@ import ReadFailedNote from '@/components/settings/ReadFailedNote'
 const MAX_WINDOWS = 16 // mirrors SchedulePayload's windows.max(16) in the API
 const DEFAULT_VOLUME = 30
 
-function fmtDublin(iso) {
+// A schedule time in the studio's zone ("Sun 08 Mar, 06:00"). Exported for
+// the TZ.10 tests. The old Dublin-only formatter with the zone as a parameter
+// (toLocaleString, not formatInZone, so even an unparseable value still reads
+// "Invalid Date" exactly as before): a Europe/Dublin studio sees no change.
+export function fmtScheduleTime(iso, zone) {
   if (!iso) return ''
   try {
     return new Date(iso).toLocaleString('en-IE', {
-      timeZone: 'Europe/Dublin', weekday: 'short', day: '2-digit', month: 'short',
+      timeZone: zone, weekday: 'short', day: '2-digit', month: 'short',
       hour: '2-digit', minute: '2-digit', hour12: false,
     })
   } catch { return iso }
@@ -106,7 +112,9 @@ const HEALTH_TONE_CLASSES = {
   grey: { chip: 'bg-un1t-muted/10 text-un1t-subtle', dot: 'bg-un1t-muted' },
 }
 
-function scheduleHealth(schedule, nowMs) {
+// `zone` is the schedule location's IANA zone, the one the cron plans in.
+export function scheduleHealth(schedule, nowMs, zone) {
+  const fmt = (v) => fmtScheduleTime(v, zone)
   const lastAtIso = schedule.last_state?.at || null
   const lastAtMs = lastAtIso ? Date.parse(lastAtIso) : NaN
   const hasLastAt = Number.isFinite(lastAtMs)
@@ -117,10 +125,12 @@ function scheduleHealth(schedule, nowMs) {
     ? ` (Sonos reports ${playbackLabel(schedule.last_state.playback_state).toLowerCase()})` : ''
 
   const overridden = isOverrideLive(schedule.override, nowMs)
-  const dateStr = dublinDayStr(nowMs)
+  const dateStr = dayStrIn(nowMs, zone)
   const windows = resolveServeWindows(
     { enabled: true, schedule_mode: 'fixed', fixed_windows: Array.isArray(schedule.windows) ? schedule.windows : [] },
     dateStr,
+    [],
+    zone,
   )
   // Only look for an active window when the schedule could actually be
   // acting on one — disabled or overridden, the cron does nothing, so
@@ -131,19 +141,19 @@ function scheduleHealth(schedule, nowMs) {
 
   if (active) {
     if (hasLastAt && lastAtMs >= active.on_at - HEALTH_GRACE_MS) {
-      return { tone: 'green', label: 'Playing', detail: `Last acted ${fmtDublin(lastAtIso)}${playbackSuffix}.` }
+      return { tone: 'green', label: 'Playing', detail: `Last acted ${fmt(lastAtIso)}${playbackSuffix}.` }
     }
     if (nowMs - active.on_at > HEALTH_OVERDUE_MS) {
       return {
         tone: 'red',
         label: 'Should be playing — not applied',
-        detail: `This window opened at ${fmtDublin(active.on_at)} and nothing has been recorded since. Check the sonos-reconcile cron and the Sonos connection.`,
+        detail: `This window opened at ${fmt(active.on_at)} and nothing has been recorded since. Check the sonos-reconcile cron and the Sonos connection.`,
       }
     }
     return {
       tone: 'amber',
       label: 'Window just opened',
-      detail: `Opened at ${fmtDublin(active.on_at)} — waiting for the per-minute cron to apply it.`,
+      detail: `Opened at ${fmt(active.on_at)} — waiting for the per-minute cron to apply it.`,
     }
   }
 
@@ -151,7 +161,7 @@ function scheduleHealth(schedule, nowMs) {
     return {
       tone: 'grey',
       label: 'Overridden',
-      detail: `Deliberately left alone until ${fmtDublin(schedule.override.until)} — see Override above.`,
+      detail: `Deliberately left alone until ${fmt(schedule.override.until)} — see Override above.`,
     }
   }
 
@@ -159,26 +169,23 @@ function scheduleHealth(schedule, nowMs) {
 
   return {
     tone: 'grey',
-    label: `Last acted ${fmtDublin(lastAtIso)}`,
+    label: `Last acted ${fmt(lastAtIso)}`,
     detail: `No window is open right now, so this only shows when the schedule last did something — it doesn't prove the cron is still running.${playbackSuffix}`,
   }
 }
 
 // "Leave the music alone until midnight [tonight]" — the design spec's own
-// suggested preset. Always the NEXT Europe/Dublin local midnight, computed
-// via the shared Dublin-time helpers — never hand-roll this with local
-// Date math (see src/lib/dublin-time.js and the CLAUDE.md timezone
+// suggested preset. Always the NEXT local midnight IN THE STUDIO'S ZONE (the
+// one the cron reads the override against), via the shared zone helpers —
+// never hand-roll this with local Date math (the CLAUDE.md timezone
 // invariant: never mix local-time Date parsing with toISOString()
-// formatting). dublinDateKey(now) is always the calendar day containing
-// `now`, so dublinDayStartMs(tomorrow) is always strictly after `now` —
-// including when it's already past midnight, "tonight" means the coming one.
-function untilMidnightTonightIso() {
-  const todayKey = dublinDateKey(Date.now())
-  const tomorrowKey = dublinAddDays(todayKey, 1)
-  return new Date(dublinDayStartMs(tomorrowKey)).toISOString()
+// formatting). nextLocalMidnightMs is strictly after `now`, so even just past
+// midnight "tonight" means the coming one.
+export function untilMidnightTonightIso(zone, nowMs = Date.now()) {
+  return new Date(nextLocalMidnightMs(nowMs, zone)).toISOString()
 }
 
-// The shorter presets are plain durations from now — no Dublin wall clock
+// The shorter presets are plain durations from now — no wall clock
 // involved, so no DST handling needed.
 function hoursFromNowIso(hours) {
   return new Date(Date.now() + hours * 3600_000).toISOString()
@@ -309,6 +316,9 @@ function SonosScheduleInner({ locationName }) {
   const canEditSchedules = Boolean(connected && household?.reachable)
 
   const [schedules, setSchedules] = useState([])
+  // The zone the schedules' windows are wall clock in, from the same response.
+  // resolveZone(undefined) is the platform default, for a response without it.
+  const [schedZone, setSchedZone] = useState(() => resolveZone(undefined))
   const [schedLoading, setSchedLoading] = useState(false)
   const [schedError, setSchedError] = useState(null)
 
@@ -319,6 +329,7 @@ function SonosScheduleInner({ locationName }) {
       const j = await res.json()
       if (!res.ok || j.success === false) throw new Error(j.error || 'Failed to load schedules')
       setSchedules(j.schedules || [])
+      setSchedZone(resolveZone(j.timezone))
       setSchedError(null)
     } catch (e) {
       setSchedError(e.message)
@@ -424,6 +435,7 @@ function SonosScheduleInner({ locationName }) {
           favoritesFailed={Boolean(household.favoritesFailed)}
           onRetryFavorites={loadHousehold}
           schedules={schedules}
+          zone={schedZone}
           schedLoading={schedLoading}
           schedError={schedError}
           onReload={loadSchedules}
@@ -550,7 +562,7 @@ function LiveNowSection({ groups, players, favorites, onRegrouped }) {
 // list itself is still shown (it's our own DB), but nothing that needs live
 // players/favourites renders as editable. See the `connected`/`canEditSchedules`
 // split in SonosScheduleInner above.
-function SchedulesSection({ canEdit, players, favorites, favoritesFailed, onRetryFavorites, schedules, schedLoading, schedError, onReload, onAdd, adding, addError }) {
+function SchedulesSection({ canEdit, players, favorites, favoritesFailed, onRetryFavorites, schedules, zone, schedLoading, schedError, onReload, onAdd, adding, addError }) {
   const hasPlayers = players.length > 0
   const hasFavorites = favorites.length > 0
 
@@ -621,7 +633,7 @@ function SchedulesSection({ canEdit, players, favorites, favoritesFailed, onRetr
       )}
 
       {schedules.map((s) => (
-        <ScheduleCard key={s.id} schedule={s} players={players} favorites={favorites} onReload={onReload} editable={canEdit} />
+        <ScheduleCard key={s.id} schedule={s} zone={zone} players={players} favorites={favorites} onReload={onReload} editable={canEdit} />
       ))}
 
       {canEdit && (
@@ -637,7 +649,7 @@ function SchedulesSection({ canEdit, players, favorites, favoritesFailed, onRetr
   )
 }
 
-function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
+function ScheduleCard({ schedule, zone, players, favorites, onReload, editable }) {
   const [name, setName] = useState(schedule.name || '')
   const [enabled, setEnabled] = useState(Boolean(schedule.enabled))
   const [playerIds, setPlayerIds] = useState(Array.isArray(schedule.player_ids) ? schedule.player_ids : [])
@@ -760,7 +772,7 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
 
       <SonosLiveControl scheduleId={schedule.id} favorites={favorites} editable={editable} />
 
-      <ScheduleOverride scheduleId={schedule.id} override={schedule.override} onReload={onReload} editable={editable} />
+      <ScheduleOverride scheduleId={schedule.id} override={schedule.override} zone={zone} onReload={onReload} editable={editable} />
 
       {/* Speakers */}
       <div className="mt-3 border-t border-un1t-border/60 pt-3">
@@ -877,7 +889,7 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
       {editable && runState?.error && <p className="mt-2 text-[11px] text-red-700">{runState.error}</p>}
 
       {(() => {
-        const health = scheduleHealth(schedule, Date.now())
+        const health = scheduleHealth(schedule, Date.now(), zone)
         const cls = HEALTH_TONE_CLASSES[health.tone] || HEALTH_TONE_CLASSES.grey
         return (
           <div className="mt-2">
@@ -927,7 +939,7 @@ function ScheduleCard({ schedule, players, favorites, onReload, editable }) {
 // the moment it's rendered again, with no timer of its own required — and it
 // mirrors planAction's own check exactly: state === 'off' && until && until
 // (as ms) is still in the future.
-function ScheduleOverride({ scheduleId, override, onReload, editable }) {
+function ScheduleOverride({ scheduleId, override, zone, onReload, editable }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
@@ -967,7 +979,7 @@ function ScheduleOverride({ scheduleId, override, onReload, editable }) {
         <>
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-700">
-              <AlertCircle size={12} /> Leaving the music alone until {fmtDublin(override.until)}
+              <AlertCircle size={12} /> Leaving the music alone until {fmtScheduleTime(override.until, zone)}
             </span>
             {editable && (
               <button
@@ -998,7 +1010,7 @@ function ScheduleOverride({ scheduleId, override, onReload, editable }) {
               type="button"
               disabled={busy}
               title="Leave the music alone until midnight tonight"
-              onClick={() => patchOverride({ state: 'off', until: untilMidnightTonightIso() })}
+              onClick={() => patchOverride({ state: 'off', until: untilMidnightTonightIso(zone) })}
               className="text-xs px-2.5 py-1 rounded-full border border-un1t-border text-un1t-text hover:border-un1t-muted disabled:opacity-40"
             >
               until midnight
