@@ -11,8 +11,15 @@ import EventActions from '@/components/EventActions'
 import { canManageEventType } from '@/lib/event-type-gates'
 import BookingStatusToggle from '@/components/BookingStatusToggle'
 import { hasPermissionForLocation } from '@/lib/permissions'
+import { selectAll } from '@/lib/select-all'
+import { summarizeBookingOutcomes } from '@/lib/booking-outcomes'
 
 export const dynamic = 'force-dynamic'
+
+// Named columns (BOOKINGOUTCOME.1): pipeline_stage_slug feeds the "now
+// members" count; nothing else of the contact row is needed here.
+const BOOKING_COLUMNS =
+  'id, status, booking_date, start_time, end_time, customer_name, customer_email, contacts(id, name, email, pipeline_stage_slug)'
 
 function formatTime(time) {
   if (!time) return ''
@@ -43,17 +50,33 @@ export default async function BookingTypeDetailPage(props) {
     )
   }
 
-  const { data: bookingRows } = await db.from('bookings')
-    .select('*, contacts(id, name, email)')
-    .eq('event_type_id', params.id)
-    .order('booking_date', { ascending: true })
-    .order('start_time', { ascending: true })
-  const bookings = bookingRows || []
+  // Paged under the 1,000-row cap with a stable order, so the counts below
+  // are over every booking of this type. A failed read says so on the page.
+  let bookings = []
+  let bookingsFailed = false
+  try {
+    bookings = await selectAll((from, to) => db.from('bookings')
+      .select(BOOKING_COLUMNS)
+      .eq('event_type_id', params.id)
+      .order('booking_date', { ascending: true })
+      .order('start_time', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to))
+  } catch {
+    bookingsFailed = true
+  }
 
   // TZ.7: booking_date is the booking type's studio's calendar day. Display
   // only: an unreadable zone splits on the default zone's day.
-  const today = todayStrIn(await getLocationZone(db, event.location_id).catch(() => DEFAULT_TZ))
+  const zone = await getLocationZone(db, event.location_id).catch(() => DEFAULT_TZ)
+  const today = todayStrIn(zone)
   const upcoming = bookings.filter(b => b.status === 'confirmed' && b.booking_date >= today)
+  // BOOKINGOUTCOME.1 — who showed up. "Awaiting outcome" = still confirmed
+  // and its end (a wall clock in the studio zone) has passed.
+  const outcomes = summarizeBookingOutcomes(bookings, zone, Date.now())
+  // The Needs outcome tab lists the ACTIVE studio's bookings, so link to it
+  // only when this booking type is there.
+  const outcomeTabHere = user.activeLocation?.id === event.location_id
 
   // ROLEUI.1 — Edit and Delete show exactly when /api/bookings/event-types/[id]
   // would act: a master, or MANAGER_ROLES at THIS booking type's location.
@@ -114,13 +137,56 @@ export default async function BookingTypeDetailPage(props) {
         </div>
       </div>
 
+      {/* Outcomes (BOOKINGOUTCOME.1) */}
+      {bookingsFailed ? (
+        <div role="alert" className="mb-6 text-sm text-red-700 bg-red-500/10 border border-red-500/40 rounded-lg p-3">
+          Could not load the bookings for this booking type. Reload the page to try again.
+        </div>
+      ) : (
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 mb-6">
+          <h3 className="font-semibold mb-3">Outcomes</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div data-outcome="total">
+              <p className="text-xs text-un1t-subtle">Total booked</p>
+              <p className="text-xl font-bold mt-1">{outcomes.total}</p>
+            </div>
+            <div data-outcome="showed">
+              <p className="text-xs text-un1t-subtle">Showed</p>
+              <p className="text-xl font-bold mt-1 text-green-700">{outcomes.showed}</p>
+              {outcomes.showRate != null && <p className="text-xs text-un1t-subtle">{outcomes.showRate}% showed</p>}
+            </div>
+            <div data-outcome="no_show">
+              <p className="text-xs text-un1t-subtle">No-show</p>
+              <p className="text-xl font-bold mt-1">{outcomes.noShow}</p>
+            </div>
+            <div data-outcome="cancelled">
+              <p className="text-xs text-un1t-subtle">Cancelled</p>
+              <p className="text-xl font-bold mt-1">{outcomes.cancelled}</p>
+            </div>
+            <div data-outcome="awaiting">
+              <p className="text-xs text-un1t-subtle">Awaiting outcome</p>
+              <p className="text-xl font-bold mt-1">{outcomes.awaiting}</p>
+              {outcomes.awaiting > 0 && outcomeTabHere && (
+                <Link href="/bookings?filter=needs_outcome" className="text-xs text-blue-700 hover:underline">Record outcomes</Link>
+              )}
+            </div>
+            <div data-outcome="members">
+              <p className="text-xs text-un1t-subtle">Now members</p>
+              <p className="text-xl font-bold mt-1">{outcomes.nowMembers}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Bookings List */}
       <div className="bg-un1t-surface border border-un1t-border rounded-lg">
         <div className="p-5 border-b border-un1t-border">
           <h3 className="font-semibold">Bookings</h3>
         </div>
 
-        {bookings.length === 0 ? (
+        {bookingsFailed ? (
+          <p className="p-8 text-center text-sm text-un1t-subtle">Bookings could not be loaded.</p>
+        ) : bookings.length === 0 ? (
           <p className="p-8 text-center text-sm text-un1t-subtle">No bookings yet. Share the booking link to start receiving bookings.</p>
         ) : (
           <div className="divide-y divide-un1t-border">

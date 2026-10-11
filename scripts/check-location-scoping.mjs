@@ -152,6 +152,13 @@ const SCOPING_HELPERS = [
   // ('bookings') there, and returns that row; the routes' write is then by
   // that row's id, which is why the handlers look unscoped in isolation.
   'loadBookingForWebWrite(',
+  // src/lib/booking-web-writes.js — BOOKINGOUTCOME.1. The judge
+  // loadBookingForWebWrite applies after its read, for a row already in hand:
+  // resolves the booking's studio (location_id, else its booking type's),
+  // runs assertLocationAccessOr404 there and then hasPermissionForLocation
+  // ('bookings') there. POST /api/bookings/outcomes reads up to 200 bookings
+  // by id, judges each one with it, and writes only the accepted ids.
+  'judgeBookingForWebWrite(',
   // src/lib/activity-web-writes.js — C148 ACTWRITEGATEWEB.1. Reads the task
   // by id (kind='task' only; no studio = 404), runs assertLocationAccessOr404
   // at its location_id and then canWriteActivitiesAt there, and returns that
