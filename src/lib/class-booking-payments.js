@@ -13,7 +13,7 @@
 // 'expired' are terminal (no booking, money not taken).
 import { paymentsFor } from './payments'
 import { resolveLocationPaymentProvider } from './location-payments'
-import { getAppUrl } from './app-url'
+import { resolveCustomerBaseUrl } from './tenant-host'
 import { getLocationBranding } from './location-branding'
 
 /**
@@ -36,6 +36,9 @@ export function classBookingPaymentDescription(brand, className) {
  */
 export async function createClassBookingPayment({ db, request, location, amountCents, currency }) {
   const { provider, connectedAccountId } = resolveLocationPaymentProvider(location)
+  // W1.L3b — the customer returns to /class-pay/ on the BOOKING LOCATION's
+  // tenant host (the resolver floors to the CRM host, never throws past it).
+  const baseUrl = await resolveCustomerBaseUrl(db, location?.id || request?.location_id || null)
   // W1.S1a — the checkout line names the booking location's configured brand
   // (never a fixed gym's), with no em-dash. The resolver never throws; an
   // unresolved brand reads "Intro class: HIIT".
@@ -44,7 +47,7 @@ export async function createClassBookingPayment({ db, request, location, amountC
     amountCents,
     currency: currency || 'EUR',
     description: classBookingPaymentDescription(companyName, request.class_name),
-    returnUrl: `${getAppUrl()}/class-pay/${request.id}`,
+    returnUrl: `${baseUrl}/class-pay/${request.id}`,
     metadata: { class_booking_request_id: request.id, domain: 'un1t_class_booking' },
     idempotencyKey: request.id,
     connectedAccountId,

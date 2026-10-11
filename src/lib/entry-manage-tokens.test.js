@@ -103,3 +103,22 @@ describe('entryManageUrl', () => {
     expect(entryManageUrl(REG)).toBeNull()
   })
 })
+
+// W1.L3b — the send path hands in the entry's tenant host (resolveCustomerBaseUrl
+// in race-confirmations); the helper stays pure and env-floored without one.
+describe('entryManageUrl — W1.L3b tenant host', () => {
+  it('mints on the handed-in base (trailing slash dropped) instead of the CRM host', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.test')
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', SECRET)
+    const url = entryManageUrl(REG, { baseUrl: 'https://gym-a.repset.ie/' })
+    expect(url).toMatch(/^https:\/\/gym-a\.repset\.ie\/event\/entry\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/)
+    expect(verifyEntryManageToken(url.split('/').pop(), SECRET)).toEqual({ registrationId: REG })
+  })
+  it('an empty handed-in base floors to the app url, and a missing key is still no link', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.test')
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', SECRET)
+    expect(entryManageUrl(REG, { baseUrl: '' })).toMatch(/^https:\/\/crm\.test\/event\/entry\//)
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', '')
+    expect(entryManageUrl(REG, { baseUrl: 'https://gym-a.repset.ie' })).toBeNull()
+  })
+})

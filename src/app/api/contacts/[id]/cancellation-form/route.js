@@ -34,7 +34,7 @@ import {
   hasMobilePermissionAtAnyLocation, hasMobilePermissionForLocation,
 } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents, renderTemplateBody } from '@/lib/whatsapp'
 import { URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
@@ -73,7 +73,11 @@ async function loadContext(db, contactId) {
   if (error || !contact) return { contact: null }
   const { data: loc } = await db.from('locations').select('name, settings').eq('id', contact.location_id).maybeSingle()
   const copy = resolveCancellationFormCopy(loc?.settings?.customer_agent?.cancellation_form)
-  const baseUrl = copy.public_base_url || getAppUrl()
+  // W1.L3b — the per-location `public_base_url` override stays first; else the
+  // form link lands on the CONTACT LOCATION's tenant host. An approved WhatsApp
+  // template's URL button must carry the same base (templateUrlPrefixOk), so a
+  // studio whose template was approved on another host pins `public_base_url`.
+  const baseUrl = copy.public_base_url || await resolveCustomerBaseUrl(db, contact.location_id)
   return { contact, locationName: loc?.name || '', copy, baseUrl }
 }
 

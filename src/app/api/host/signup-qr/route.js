@@ -14,7 +14,7 @@ import QRCode from 'qrcode'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { ensureHostSlug } from '@/lib/hosts'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -27,7 +27,7 @@ export async function GET() {
   const db = createServerClient()
   const { data: hostRow } = await db
     .from('event_hosts')
-    .select('id, name, slug')
+    .select('id, name, slug, anchor_location_id')
     .eq('id', session.host.id)
     .maybeSingle()
   if (!hostRow) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
@@ -40,12 +40,13 @@ export async function GET() {
     return NextResponse.json({ success: false, error: 'Could not prepare your signup page — try again shortly.' }, { status: 500 })
   }
 
-  // Origin-only from getAppUrl, same defensive pattern as the events QR
-  // route — a misconfigured env var can't poison the QR target.
+  // W1.L3b — on the tenant host of the host's ANCHOR location (NULL → the
+  // resolver floors to the CRM host). Origin-only, same defensive pattern as
+  // the events QR route — a misconfigured env var can't poison the QR target.
   let publicUrl
   try {
-    const origin = new URL(getAppUrl()).origin
-    publicUrl = `${origin}/h/${slug}`
+    const baseUrl = new URL(await resolveCustomerBaseUrl(db, hostRow.anchor_location_id)).origin
+    publicUrl = `${baseUrl}/h/${slug}`
   } catch (e) {
     return NextResponse.json({
       success: false,
