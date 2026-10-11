@@ -211,6 +211,19 @@ describe('runRosterRunwayAlerts', () => {
     expect(outcome).toEqual({ locations: 2, alerts: 1, quiet_hours: 0, sent: 2, emailed: 0, deduped: 0, failed: 0, recipients_failed: 0 })
   })
 
+  it('isDue (the cron\'s claimed daily slots): only studios at their slot are read and walked; none due reads no runways', async () => {
+    const db = makeDb([NORTH, SOUTH])
+    const outcome = await runRosterRunwayAlerts(db, { nowMs: CRON_TICK, isDue: (id) => id === SOUTH.id })
+    expect(fetchRosterRunways).toHaveBeenCalledWith(db, [SOUTH.id], { zones: new Map([[SOUTH.id, 'Europe/Dublin']]), nowMs: CRON_TICK })
+    expect(notifyUsersAtRolesOnce).not.toHaveBeenCalled() // North is unready but not at its slot this tick
+    expect(outcome).toMatchObject({ locations: 1, alerts: 0 })
+
+    fetchRosterRunways.mockClear()
+    const none = await runRosterRunwayAlerts(makeDb([NORTH, SOUTH]), { nowMs: CRON_TICK, isDue: () => false })
+    expect(fetchRosterRunways).not.toHaveBeenCalled()
+    expect(none).toEqual({ locations: 0, alerts: 0, quiet_hours: 0, sent: 0, emailed: 0, deduped: 0, failed: 0, recipients_failed: 0 })
+  })
+
   it('"today" follows Dublin across midnight: 23:30 UTC on the 19th is already the 20th there (IST)', async () => {
     const nowMs = Date.UTC(2026, 8, 19, 23, 30)
     await runRosterRunwayAlerts(makeDb([NORTH]), { nowMs })

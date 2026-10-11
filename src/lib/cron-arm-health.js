@@ -11,14 +11,20 @@
 //   'shift-reminders' — runShiftReminders (src/lib/shift-reminders.js), the
 //                       shift arm of the */5 send-push-reminders cron.
 //   'roster-runway'   — runRosterRunwayAlerts (src/lib/roster-runway-notify.js),
-//                       the first arm of the daily 08:00 UTC contract-reminders cron.
+//                       the first arm of the hourly contract-reminders cron, on
+//                       its own daily slot (DAILY_SLOTS['roster-runway']: 08:00
+//                       UTC for Europe/Dublin, 08:00 local elsewhere). Stamped
+//                       only on a tick that took one of its slots, so the row
+//                       keeps its daily clock.
 //   'shift-time-changes' — runShiftTimeChangeNotices (src/lib/block-edit-notify.js,
 //                       BLOCKEDIT.1), the time-change notice arm of send-push-reminders.
 //   'replace-notices' — runReplaceNotices (src/lib/shift-replace-notify.js,
 //                       REPLACE.1a), the held replace-notice arm of the */5
 //                       send-push-reminders cron.
 //   'qualification-digest' — runQualificationDigest (src/lib/qualification-digest.js,
-//                       QUALS.1), the third arm of the daily contract-reminders cron.
+//                       QUALS.1), the second arm of contract-reminders, on its
+//                       own daily slot (DAILY_SLOTS['qualification-digest']) at
+//                       each organisation's anchor studio; daily clock, as above.
 //
 // Seeding (stampHeartbeat is UPDATE-only): 'shift-reminders' and
 // 'roster-runway' by mig 633, 'shift-time-changes' by mig 639,

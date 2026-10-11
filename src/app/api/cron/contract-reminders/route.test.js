@@ -22,9 +22,9 @@ vi.mock('@/lib/push', () => ({ sendPush: vi.fn(async () => ({ sent: 0 })) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/roster-runway-notify', () => ({ runRosterRunwayAlerts: vi.fn() }))
 vi.mock('@/lib/qualification-digest', () => ({ runQualificationDigest: vi.fn() }))
-// TZ.6 — this file's subject is not the daily-slot gate: every location is due,
-// and the clock sits on the 08:00 UTC tick the arms ride (route.tz6.test.js
-// covers the gate and the arms' hour).
+// TZ.6 — this file's subject is not the daily-slot gate: every location is due
+// for the contract half AND both arms' own slots, on the 08:00 UTC tick
+// (route.tz6.test.js covers the gate and each arm's per-studio slot).
 vi.mock('@/lib/cron-daily-slot', async (importOriginal) => ({
   ...(await importOriginal()),
   gateDailySlot: (await import('@/lib/cron-daily-slot.test-helpers')).openGate,
@@ -67,7 +67,7 @@ describe('GET /api/cron/contract-reminders — roster runway arm', () => {
 
   it('runs the arm with the service-role client and records its outcome on the heartbeat and the response', async () => {
     const res = await GET(req())
-    expect(runRosterRunwayAlerts).toHaveBeenCalledWith(fakeDb)
+    expect(runRosterRunwayAlerts).toHaveBeenCalledWith(fakeDb, { nowMs: Date.parse('2026-10-01T08:00:00Z'), isDue: expect.any(Function) })
     expect(stampHeartbeat).toHaveBeenCalledWith('contract-reminders', {
       checked: 0, sent: 0, emailFailed: 0, rowErrors: 0, undelivered: 0, runway: OUTCOME, runway_arm_failed: 0,
       qualifications: QUALS, qualification_arm_failed: 0,
@@ -193,7 +193,7 @@ describe('GET /api/cron/contract-reminders — qualification digest arm', () => 
     let stampedBeforeContracts = null
     reminderDue.mockImplementation(() => { stampedBeforeContracts ??= stampedNames().slice(); return false })
     await GET(req())
-    expect(runQualificationDigest).toHaveBeenCalledWith(fakeDb)
+    expect(runQualificationDigest).toHaveBeenCalledWith(fakeDb, { nowMs: Date.parse('2026-10-01T08:00:00Z'), isDue: expect.any(Function) })
     expect(stampedBeforeContracts).toEqual(['roster-runway', 'qualification-digest'])
     expect(stampHeartbeat).toHaveBeenCalledWith('qualification-digest', QUALS)
   })
