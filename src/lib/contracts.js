@@ -28,7 +28,7 @@
 // only renders + validates. The API route is responsible for
 // persisting the issued row and for state-machine transitions.
 
-import { todayStrIn, DEFAULT_TZ } from '@/lib/location-time'
+import { todayStrIn, zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
 
 /**
  * Build the auto-fill variable map from a profile row.
@@ -387,6 +387,67 @@ export function recipientsForTemplate(staff, template, locationOrgs) {
   const all = staff || []
   if (!template) return all
   return all.filter((r) => recipientInTemplateOrg(r, template, locationOrgs))
+}
+
+// A studio link's embedded location row: POST /api/contracts embeds it as
+// `location`, GET /api/staff (the wizard's list) as `locations`.
+const linkLocation = (link) => link?.location ?? link?.locations ?? null
+
+/**
+ * The recipient's studio links in the template's organisation (all of them
+ * for a null-org template, which only a master may issue). The org is read
+ * off the embedded location row, else the caller's `locationOrgs` map.
+ * POST /api/contracts and the issue wizard share it. Pure.
+ *
+ * @param {Array<{ location_id?: string }>|null|undefined} links
+ * @param {{ organization_id?: string|null }|null} template
+ * @param {Record<string, string>|null} [locationOrgs]
+ * @returns {Array}
+ */
+export function linksInTemplateOrg(links, template, locationOrgs = null) {
+  const all = links || []
+  const orgId = template?.organization_id
+  if (!orgId) return all
+  return all.filter((l) => (linkLocation(l)?.organization_id ?? locationOrgs?.[l?.location_id] ?? null) === orgId)
+}
+
+/**
+ * The studio a contract is issued at when the issuer names none: the
+ * recipient's default studio in the template's org, else their first studio
+ * there. This is POST /api/contracts' rule (the wizard never sends a
+ * location_id), so the wizard's preview and the stored body agree. Pure.
+ *
+ * @param {{ profile_locations?: Array }|null} recipient
+ * @param {{ organization_id?: string|null }|null} template
+ * @param {Record<string, string>|null} [locationOrgs]
+ * @returns {object|null} the link row, or null
+ */
+export function issuingLocationLink(recipient, template, locationOrgs = null) {
+  const links = linksInTemplateOrg(recipient?.profile_locations, template, locationOrgs)
+  return links.find((l) => l?.is_default) || links[0] || null
+}
+
+/**
+ * The zone a contract's {{today}} is rendered in: the issuing studio's
+ * (issuingLocationLink). `locationZones` ({ location_id: zone }, built on the
+ * server from the issuer's own studios) wins; else the link's embedded row;
+ * else DEFAULT_TZ, which is what the route does with no location row. Never
+ * the browser's zone. Pure.
+ *
+ * @param {{ profile_locations?: Array }|null} recipient
+ * @param {{ organization_id?: string|null }|null} template
+ * @param {{ locationOrgs?: Record<string, string>|null, locationZones?: Record<string, string>|null }} [opts]
+ * @returns {string} canonical IANA zone
+ */
+export function issuingZone(recipient, template, { locationOrgs = null, locationZones = null } = {}) {
+  const link = issuingLocationLink(recipient, template, locationOrgs)
+  if (!link) return DEFAULT_TZ
+  const held = locationZones?.[link.location_id]
+  if (held) return zoneOfLocation({ id: link.location_id, timezone: held })
+  const row = linkLocation(link)
+  // A slim embed without the column says nothing about the zone.
+  if (row && Object.prototype.hasOwnProperty.call(row, 'timezone')) return zoneOfLocation(row)
+  return DEFAULT_TZ
 }
 
 /**

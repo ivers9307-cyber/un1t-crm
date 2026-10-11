@@ -73,3 +73,21 @@ export async function displayZonesFor(db, user, locationIds, module) {
   }
   return out
 }
+
+/**
+ * TZ follow-up — the zone a contract TEMPLATE's preview renders {{today}} in.
+ * A template belongs to an organisation, not a studio, and is issued at the
+ * recipient's studio in that org; the preview stands in for that with the
+ * viewer's active studio when it is in the template's org (or the template
+ * has none), else the viewer's first studio in the org, else the active
+ * studio, else DEFAULT_TZ. Session data only, no query. Display only.
+ * @param {{ activeLocation?: object|null, locations?: Array<object> }|null|undefined} user
+ * @param {string|null|undefined} orgId the template's organization_id
+ * @returns {string} canonical IANA zone
+ */
+export function templatePreviewZoneOf(user, orgId) {
+  const active = user?.activeLocation || null
+  if (active && (!orgId || active.organization_id === orgId)) return zoneOfLocation(active)
+  const inOrg = orgId ? (user?.locations || []).find((l) => l?.organization_id === orgId) : null
+  return zoneOfLocation(inOrg || active)
+}
