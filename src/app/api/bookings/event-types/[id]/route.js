@@ -8,6 +8,7 @@ import { assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { EventTypeUpdateSchema, eventTypeSlug } from '@/lib/event-type-schema'
+import { resolveEventTypeSlug, slugTaken, isSlugConflict, SLUG_IN_USE } from '@/lib/event-type-slug'
 import { logError } from '@/lib/log'
 
 // SAAS-12 — cookie/session location guard for this detail route.
@@ -80,13 +81,29 @@ export async function PUT(request, props) {
 
   const updates = { ...body }
 
-  // Re-generate slug if name changed and slug not explicitly set. The
-  // booking-type form sends no slug (EVENTTYPERLS.1): it is always this one.
-  if (updates.name && !updates.slug) {
-    updates.slug = eventTypeSlug(updates.name)
+  // ETSLUG.1 — the slug is the public /book/ address, unique across every
+  // studio. The booking-type form sends the name on every save and never a
+  // slug (EVENTTYPERLS.1), so the address moves only when the name really
+  // changes (a plain save used to re-derive it, which would collide for a
+  // type whose address had to carry a suffix). A new name picks a free
+  // variant; an explicit slug held by another type is a 409.
+  if (updates.slug) {
+    const held = await slugTaken(db, updates.slug, params.id)
+    if (held.error) return NextResponse.json({ success: false, error: held.error }, { status: 500 })
+    if (held.taken) return NextResponse.json({ success: false, error: SLUG_IN_USE }, { status: 409 })
+  } else if (updates.name) {
+    const { data: current, error: curErr } = await db.from('event_types').select('name, location_id').eq('id', params.id).maybeSingle()
+    if (curErr) return NextResponse.json({ success: false, error: curErr.message }, { status: 500 })
+    if (!current) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+    if (eventTypeSlug(updates.name) !== eventTypeSlug(current.name)) {
+      const picked = await resolveEventTypeSlug(db, { name: updates.name, locationId: current.location_id, excludeId: params.id })
+      if (picked.error) return NextResponse.json({ success: false, error: picked.error }, { status: 500 })
+      updates.slug = picked.slug
+    }
   }
 
   const { data, error } = await db.from('event_types').update(updates).eq('id', params.id).select().single()
+  if (isSlugConflict(error)) return NextResponse.json({ success: false, error: SLUG_IN_USE }, { status: 409 })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   return NextResponse.json({ success: true, data })
