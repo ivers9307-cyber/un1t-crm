@@ -19,7 +19,6 @@ const NAMES = ['formatWeekdayShortDateTimeInTZ', 'formatWeekdayLongDateInTZ', 'f
 const PENDING = {
   'src/lib/contractor-invoice-email.js': { calls: 2, owner: 'TZ.8b (contractor-invoice-email.js:123,135: the invoice location zone)' },
   'src/lib/contracts-email.js': { calls: 1, owner: 'TZ.8b (contracts-email.js:278: the contract location zone)' },
-  'src/lib/hr-post-class-email.js': { calls: 1, owner: 'TZ.13 (hr-post-class-email.js:522: the session location zone)' },
 }
 
 function walk(dir, out = []) {
