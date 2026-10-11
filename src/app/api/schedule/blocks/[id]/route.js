@@ -54,7 +54,7 @@ import { isLiveAssignment } from '@/lib/roster'
 import { logAndNotifyUnassignments } from '@/lib/shift-unassign'
 import { logRosterChange, logBlockEdit, markChangesNotified } from '@/lib/roster-change-log'
 import { planBlockEdit, sameWindow, matchesExpected, blockEditNoticeWhen, coachShiftOver, TIME_CHANGE_SOURCE } from '@/lib/block-edit'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { BRIEFING_MAX_LENGTH } from '@shared/shift-briefing'
 import { findShiftOverlaps } from '@/lib/shift-overlaps'
 import { formatTime12h } from '@/lib/schedule-overlap'
@@ -184,7 +184,7 @@ const BlockEditSchema = z.object({
   // so 500 characters padded with whitespace is a valid briefing.
   briefing: z.string().trim().max(BRIEFING_MAX_LENGTH).nullable().optional(),
   allow_below_assigned: z.boolean().optional(),
-  // Review nit — a shift dated before today (Dublin) is paid history; changing
+  // Review nit — a shift dated before today (the studio's day) is paid history; changing
   // it must be asked for explicitly.
   confirm_past: z.boolean().optional(),
   // Review fix 2 — what the editor OPENED with. The web form always sends it;
@@ -263,7 +263,8 @@ export async function PUT(request, props) {
 
   // Review nit — past shifts are paid hours: edit only when the caller says
   // so (the form asks first). An unchanged body never reaches here.
-  if (block.block_date < dublinTodayStr() && validation.data.confirm_past !== true) {
+  // TZ.8a — "before today" is the studio's day (locations.timezone, embedded above).
+  if (block.block_date < todayStrIn(zoneOfLocation({ id: block.location_id, timezone: block.locations?.timezone })) && validation.data.confirm_past !== true) {
     return NextResponse.json({
       success: false, error: 'past_shift',
       message: 'This shift is in the past. Changing it changes paid hours; confirm to go ahead.',

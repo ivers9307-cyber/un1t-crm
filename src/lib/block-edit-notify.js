@@ -34,7 +34,7 @@ import { formatTimeRange12h } from './schedule-overlap'
 import { inStaffPushHours, staffWallClockHHMM } from './staff-push-hours'
 import { isLiveAssignment } from './roster'
 import { toHms, sameWindow, TIME_CHANGE_SOURCE } from './block-edit'
-import { dublinDayStr } from './dublin-time'
+import { todayStrIn, resolveZone } from './location-time'
 import { logWarn, logError } from './log'
 
 export { TIME_CHANGE_SOURCE }
@@ -67,10 +67,12 @@ const byAge = (a, b) => (a.created_at === b.created_at
 
 /**
  * Pure. Unsent block-edit rows → what to send and what to stamp silently.
+ * TZ.8a — "today" is each row's STUDIO day: `todayByLocation[location_id]`,
+ * else the single `todayStr` (one studio, or a caller that already knows).
  * @param {Array<object>} rows  roster_change_log rows with the shift_blocks embed
- * @param {{ todayStr: string, nowHHMMByLocation: Record<string,string> }} opts
+ * @param {{ todayStr?: string, todayByLocation?: Record<string,string>, nowHHMMByLocation: Record<string,string> }} opts
  */
-export function planTimeChangeNotices(rows, { todayStr, nowHHMMByLocation = {} } = {}) {
+export function planTimeChangeNotices(rows, { todayStr, todayByLocation = {}, nowHHMMByLocation = {} } = {}) {
   const groups = new Map()
   for (const r of rows || []) {
     const key = `${r.coach_id}|${r.block_id}`
@@ -96,18 +98,19 @@ export function planTimeChangeNotices(rows, { todayStr, nowHHMMByLocation = {} }
       end_time: toHms(mine.end_time_override || block.end_time),
     }
     const nowHHMM = nowHHMMByLocation[oldest.location_id]
+    const today = todayByLocation[oldest.location_id] ?? todayStr
     // Review fix 3 — "started" is judged on the ORIGINAL start: the time the
     // coach was working to. A shift moved EARLIER past the clock has not
     // started for them, and they must hear they are now late. A running
     // shift whose END moved is still news; one whose only change is its
     // (already passed) start is not.
-    const started = oldest.block_date === todayStr && Boolean(nowHHMM) && toHms(from.start_time).slice(0, 5) <= nowHHMM
+    const started = oldest.block_date === today && Boolean(nowHHMM) && toHms(from.start_time).slice(0, 5) <= nowHHMM
     const endMoved = toHms(from.end_time) !== now.end_time
     // Second review 3 — over today (both the old and the new end have passed):
     // D8, a past shift is never messaged.
-    const ended = oldest.block_date === todayStr && Boolean(nowHHMM)
+    const ended = oldest.block_date === today && Boolean(nowHHMM)
       && toHms(from.end_time).slice(0, 5) <= nowHHMM && now.end_time.slice(0, 5) <= nowHHMM
-    if (sameWindow(from, now) || (started && !endMoved) || ended || oldest.block_date < todayStr) {
+    if (sameWindow(from, now) || (started && !endMoved) || ended || oldest.block_date < today) {
       silent.push(...list)
       continue
     }
@@ -139,7 +142,11 @@ export async function runShiftTimeChangeNotices(db, { nowMs = Date.now(), locati
     summary.time_change_quiet = 1
     return summary
   }
-  const todayStr = dublinDayStr(nowMs)
+  // TZ.8a — each studio's own day (same clock as its wall time and band). The
+  // read starts at the EARLIEST of them; each row is then held to its own
+  // studio's day, exactly as the single read used to hold every row to one.
+  const todayByLocation = Object.fromEntries(inBand.map((l) => [l.id, todayStrIn(resolveZone(l.timezone), nowMs)]))
+  const readFrom = Object.values(todayByLocation).sort()[0]
   const nowHHMMByLocation = Object.fromEntries(inBand.map((l) => [l.id, staffWallClockHHMM(nowMs, l.timezone)]))
 
   const { data, error } = await db
@@ -157,7 +164,7 @@ export async function runShiftTimeChangeNotices(db, { nowMs = Date.now(), locati
     .eq('action', 'time_changed')
     .eq('details->>source', TIME_CHANGE_SOURCE)
     .is('notified_at', null)
-    .gte('block_date', todayStr)
+    .gte('block_date', readFrom)
     .gte('created_at', new Date(nowMs - TIME_CHANGE_WINDOW_MS).toISOString())
     .order('created_at', { ascending: true })
     .order('id', { ascending: true })
@@ -167,14 +174,15 @@ export async function runShiftTimeChangeNotices(db, { nowMs = Date.now(), locati
     logError('block-edit-notify', 'time-change read failed', { err: error.message })
     return summary
   }
-  const rows = data || []
+  const read = data || []
+  const rows = read.filter((r) => todayByLocation[r.location_id] != null && r.block_date >= todayByLocation[r.location_id])
   summary.time_change_rows = rows.length
-  if (rows.length >= PAGE) {
+  if (read.length >= PAGE) {
     summary.time_change_read_capped = 1
     logWarn('block-edit-notify', 'time-change read hit the 1,000-row page; the rest waits for the next tick', {})
   }
 
-  const { send, silent } = planTimeChangeNotices(rows, { todayStr, nowHHMMByLocation })
+  const { send, silent } = planTimeChangeNotices(rows, { todayByLocation, nowHHMMByLocation })
 
   const stampedAt = new Date(nowMs).toISOString()
   for (const r of silent) {

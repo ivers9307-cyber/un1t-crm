@@ -39,6 +39,7 @@ import {
   restoreRosterPeriods,
   publishAftermathNote,
 } from '@/lib/roster-publish'
+import { sessionStudioZone } from '@/lib/staff-zone'
 import { logWarn, logError } from '@/lib/log'
 import { writePublishSnapshot } from '@/lib/roster-snapshot'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -365,7 +366,11 @@ export async function POST(_request, props) {
   // purpose (new blocks on its days resolve to it; see the helper). Log-only
   // on failure: nothing may fail an approval that already landed.
   if (trimmed.length > 0) {
-    const remnants = await supersedeEmptyTrimmedRosters(db, { newRosterId: roster.id, trimmed })
+    const remnants = await supersedeEmptyTrimmedRosters(db, {
+      newRosterId: roster.id, trimmed, locationId: roster.location_id,
+      // TZ.8a — the studio's own day; its row rides on the session (null: read).
+      timeZone: sessionStudioZone(user, roster.location_id),
+    })
     if (remnants.warning) {
       logWarn('rosters/approve', 'trimmed roster could not be superseded or shrunk', { err: remnants.warning, roster_id: roster.id })
     }

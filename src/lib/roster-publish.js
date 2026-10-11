@@ -21,7 +21,7 @@ import { shiftHours, mondayOf } from './payroll'
 import { liveAssignments } from './roster'
 import { isAdminShift } from '@shared/shift-kind'
 import { staffingGaps } from './roster-staffing'
-import { dublinTodayStr, addDaysISO } from './dublin-time'
+import { addDaysISO, todayStrIn, zoneOfLocation, getLocationZone } from './location-time'
 import { leaveScopeOrFilter } from './time-off-leave'
 // AVAIL.3 D1 — an all-day "can't work" availability date is off like leave.
 import { readAvailabilityLeave } from './availability-leave'
@@ -98,7 +98,8 @@ async function loadBudgetContext(db, locationId, periodStart, periodEnd = period
   // Location budget snapshot.
   const { data: loc, error: locErr } = await db
     .from('locations')
-    .select('id, organization_id, monthly_contractor_budget_eur')
+    // timezone: TZ.8a, the studio day "today" is judged on (impactFromContext).
+    .select('id, organization_id, monthly_contractor_budget_eur, timezone')
     .eq('id', locationId)
     .single()
   if (locErr) throw new Error(`Location lookup failed: ${locErr.message}`)
@@ -399,9 +400,16 @@ function blockContractorCost(block, contractorRateById, leaveByProfile) {
  *   }>,
  * }}
  */
-export async function projectPublishImpact(db, { locationId, periodStart, periodEnd, todayIso = dublinTodayStr(), advisories = true }) {
+export async function projectPublishImpact(db, { locationId, periodStart, periodEnd, todayIso = null, advisories = true, nowMs = Date.now() }) {
   const ctx = await loadBudgetContext(db, locationId, periodStart, periodEnd, { advisories })
-  return impactFromContext(ctx, { periodStart, periodEnd, todayIso })
+  return impactFromContext(ctx, { periodStart, periodEnd, todayIso: todayIso || studioToday(ctx, nowMs) })
+}
+
+// TZ.8a — "today" for a publish is the STUDIO's day: the location row the
+// context already read carries its timezone (no second read). `todayIso`
+// overrides it (tests).
+function studioToday(ctx, nowMs) {
+  return todayStrIn(zoneOfLocation(ctx?.location), nowMs)
 }
 
 /**
@@ -433,13 +441,15 @@ export async function projectPublishImpact(db, { locationId, periodStart, period
  * "overrun could not be re-checked" fallback on `impact: null`.
  *
  * @param {Array<{ locationId: string, periodStart: string, periodEnd: string }>} periods
- * @param {{ todayIso?: string, advisories?: boolean }} [opts]  COPYLEAVE.1 —
+ * @param {{ todayIso?: string, advisories?: boolean, nowMs?: number }} [opts]  COPYLEAVE.1 —
+ *   TZ.8a: "today" is each location's own day (its timezone) unless
+ *   `todayIso` pins one.
  *   `advisories` defaults to FALSE here: both callers (the approvals provider
  *   and /schedule/approvals) show budget figures only, so the other-studio
  *   read and the advisory lists are skipped unless asked for.
  * @returns {Promise<Array<{ impact: object|null, error: Error|null }>>} same order as `periods`
  */
-export async function projectPublishImpactBatch(db, periods, { todayIso = dublinTodayStr(), advisories = false } = {}) {
+export async function projectPublishImpactBatch(db, periods, { todayIso = null, advisories = false, nowMs = Date.now() } = {}) {
   const list = periods || []
   const results = list.map(() => ({ impact: null, error: null }))
 
@@ -477,7 +487,7 @@ export async function projectPublishImpactBatch(db, periods, { todayIso = dublin
         results[i].impact = impactFromContext(ctx, {
           periodStart: list[i].periodStart,
           periodEnd: list[i].periodEnd,
-          todayIso,
+          todayIso: todayIso || studioToday(ctx, nowMs), // TZ.8a — each location's own day
         })
       } catch (e) {
         results[i].error = e instanceof Error ? e : new Error(String(e))
@@ -839,7 +849,7 @@ export function coversPeriod(ranges, periodStart, periodEnd) {
  * (roster-write.js). While a remnant covers a day, a block created there joins
  * it and reads PUBLISHED at once; supersede the remnant and that block has no
  * roster and reads unpublished until someone publishes again. So:
- *   - a remnant whose trimmed period ENDED before today (Dublin) can never
+ *   - a remnant whose trimmed period ENDED before today (the studio's day) can never
  *     adopt a block anyone will work, and is superseded;
  *   - a remnant reaching today or later is KEPT on purpose, empty, because
  *     its period still does real work for blocks added on those days.
@@ -930,8 +940,9 @@ export async function trimPublishedRosters(db, trims) {
  * A block dated OUTSIDE the trimmed period is left alone with a warning: the
  * range would widen, not shrink, and that is the c2 state mig 602 forbids.
  *
- * 🔴 PAST ONLY. A remnant whose trimmed `period_end` is today or later (Dublin,
- * dublinTodayStr) is kept without even a recount: its period is how a block
+ * 🔴 PAST ONLY. A remnant whose trimmed `period_end` is today or later (the
+ * STUDIO's day, TZ.8a: `locationId`'s timezone) is kept without even a
+ * recount: its period is how a block
  * added on those days later finds its published roster
  * (findPublishedRosterFor / findPublishedRosterIdsByDate), so superseding it
  * would make such a block read unpublished where today it is published at
@@ -960,10 +971,10 @@ export async function trimPublishedRosters(db, trims) {
  * here may fail a publish that already happened. Every problem comes back in
  * `warning` for the caller to logWarn.
  *
- * @param {{ newRosterId: string, trimmed: Array<{id: string, trim_to: {period_start: string, period_end: string}}>, todayIso?: string }} opts
+ * @param {{ newRosterId: string, trimmed: Array<{id: string, trim_to: {period_start: string, period_end: string}}>, locationId?: string, timeZone?: string, todayIso?: string, nowMs?: number }} opts
  * @returns {Promise<{ superseded: string[], shrunk: Array<{id: string, period_start: string, period_end: string}>, kept: string[], future: string[], warning: string|null }>}
  */
-export async function supersedeEmptyTrimmedRosters(db, { newRosterId, trimmed = [], todayIso = dublinTodayStr() } = {}) {
+export async function supersedeEmptyTrimmedRosters(db, { newRosterId, trimmed = [], locationId = null, timeZone = null, todayIso = null, nowMs = Date.now() } = {}) {
   const superseded = []
   const shrunk = []
   const kept = []
@@ -972,6 +983,19 @@ export async function supersedeEmptyTrimmedRosters(db, { newRosterId, trimmed = 
   const targets = (trimmed || []).filter((t) => t?.id && t.id !== newRosterId && t?.trim_to?.period_start && t?.trim_to?.period_end)
   if (targets.length === 0) return { superseded, shrunk, kept, future, warning: null }
   if (!newRosterId) return { superseded, shrunk, kept, future, warning: 'trimmed-remnant check skipped: no newRosterId' }
+  // TZ.8a — "today" is the publishing studio's day (every remnant is at it):
+  // `timeZone` when the caller holds the studio row, else read for
+  // `locationId`. An unreadable zone skips the check with a warning: nothing
+  // is superseded on a guessed day. `todayIso` pins the day (tests).
+  if (!todayIso && timeZone) todayIso = todayStrIn(timeZone, nowMs)
+  if (!todayIso) {
+    if (!locationId) return { superseded, shrunk, kept, future, warning: 'trimmed-remnant check skipped: no locationId to read the studio day from' }
+    try {
+      todayIso = todayStrIn(await getLocationZone(db, locationId), nowMs)
+    } catch (e) {
+      return { superseded, shrunk, kept, future, warning: `trimmed-remnant check skipped: the studio timezone could not be read (${e?.message || 'unknown error'})` }
+    }
+  }
 
   const nowIso = new Date().toISOString()
   for (const t of targets) {

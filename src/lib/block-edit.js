@@ -19,7 +19,9 @@ import { formatTime12h, formatTimeRange12h } from './schedule-overlap'
 import { shiftKindOf } from '@shared/shift-kind'
 import { normaliseBriefing } from '@shared/shift-briefing'
 import { inStaffPushHours, staffWallClockHHMM, STAFF_PUSH_FROM } from './staff-push-hours'
-import { dublinDayStr, addDaysISO } from './dublin-time'
+// Pure zone maths straight from shared/ (this module is also in the client
+// bundle, via ScheduleCalendar): no IO, no logger.
+import { dayStrIn, addDaysISO, resolveZone } from '@shared/zoned-time'
 
 export const BLOCK_EDIT_FIELDS = ['start_time', 'end_time', 'min_coaches', 'max_coaches', 'briefing']
 
@@ -225,7 +227,8 @@ export const TOO_LATE_BEFORE = '07:30'
 export function blockEditNoticeWhen({ nowMs, timeZone, blockDate, windows = [] }) {
   if (inStaffPushHours(nowMs, timeZone)) return 'shortly'
   const wall = staffWallClockHHMM(nowMs, timeZone) || '00:00'
-  const today = dublinDayStr(nowMs)
+  // TZ.8a — the studio's day, on the same clock as the wall time above.
+  const today = dayStrIn(nowMs, resolveZone(timeZone))
   const noticeDay = wall < STAFF_PUSH_FROM ? today : addDaysISO(today, 1)
   const early = windows.some((w) => [w.from?.start_time, w.to?.start_time]
     .some((t) => toHms(t) !== null && toHms(t).slice(0, 5) < TOO_LATE_BEFORE))
@@ -234,13 +237,13 @@ export function blockEditNoticeWhen({ nowMs, timeZone, blockDate, windows = [] }
 
 /**
  * Second review 3 — is this coach's shift already OVER? D8: a past shift is
- * never messaged. Past = dated before today (Dublin), or today with both the
+ * never messaged. Past = dated before today (the studio's day, TZ.8a), or today with both the
  * old and the new end at or before the wall clock now. (An ended shift pulled
  * back into the future by a later end is not over: the coach may go back.)
  * @param {{ blockDate: string, from: {end_time}, to: {end_time}, nowMs: number, timeZone?: string|null }} args
  */
 export function coachShiftOver({ blockDate, from, to, nowMs, timeZone }) {
-  const today = dublinDayStr(nowMs)
+  const today = dayStrIn(nowMs, resolveZone(timeZone))
   if (blockDate < today) return true
   if (blockDate > today) return false
   const now = staffWallClockHHMM(nowMs, timeZone)

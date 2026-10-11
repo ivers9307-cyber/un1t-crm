@@ -20,10 +20,14 @@
 // Act: workingTimeAdvisories filters to EMPLOYEE_TYPE itself, and the picker
 // route asks per employee.
 //
-// Times: `block_date` + HH:MM is Europe/Dublin WALL CLOCK. It is turned into a
-// real instant here (dublinWallMs) because rest is elapsed time: the night the
-// clocks go back is an hour longer than its wall clock says, the night they go
-// forward an hour shorter. Never `new Date(`${d}T${t}Z`)` (CLAUDE.md).
+// Times: `block_date` + HH:MM is WALL CLOCK in the shift's own studio zone
+// (TZ.8a: the row's `timezone`, i.e. its locations.timezone, or the zone the
+// caller passes; DEFAULT_TZ when neither is there). It is turned into a real
+// instant here (zonedWallClockToInstant) because rest is elapsed time: the
+// night the clocks go back is an hour longer than its wall clock says, the
+// night they go forward an hour shorter. Each shift is converted in its OWN
+// zone, so a rest between studios in two zones is measured in real time.
+// Never `new Date(`${d}T${t}Z`)` (CLAUDE.md).
 // The window per assignment is override → block → template: effectiveShiftStart
 // / effectiveShiftEnd, the one resolution payroll's shiftHours also uses.
 //
@@ -32,6 +36,7 @@
 // returned.
 
 import { effectiveShiftStart, effectiveShiftEnd } from './roster-month.js'
+import { zonedWallClockToInstant, instantToZonedParts, resolveZone } from './zoned-time.js'
 
 export const MIN_REST_HOURS = 11
 export const MAX_WEEK_HOURS = 48
@@ -108,45 +113,31 @@ function weekStartOf(iso) {
   return new Date(ms - sinceMonday * DAY_MS).toISOString().slice(0, 10)
 }
 
-// Europe/Dublin wall-clock parts for an instant. Same formatter shape as
-// shared/dublin-time.js (which normalises the same '24' midnight quirk).
-const WALL_FMT = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Europe/Dublin',
-  year: 'numeric', month: '2-digit', day: '2-digit',
-  hour: '2-digit', minute: '2-digit', second: '2-digit',
-  hour12: false,
-})
-
-// How far Dublin's wall clock is ahead of UTC at instant `ms`: 0 in winter
-// (GMT), one hour in summer (IST).
-function dublinOffsetMs(ms) {
-  const p = {}
-  for (const { type, value } of WALL_FMT.formatToParts(new Date(ms))) p[type] = value
-  const hour = p.hour === '24' ? 0 : Number(p.hour)
-  return Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), hour, Number(p.minute), Number(p.second)) - ms
-}
-
-// The real instant of a Dublin wall-clock date + time. Read the wall time as if
-// it were UTC, correct by Dublin's offset, then correct again with the offset
-// AT the corrected instant. The second pass matters only inside the skipped
-// spring-forward hour (a wall 01:30 on 29 Mar 2026 lands on 02:30 IST, never
-// on 00:30 GMT); every real wall time is right after either pass.
-//
-// The AMBIGUOUS hour: on the October change (25 Oct 2026) the wall clock runs
-// 01:00-01:59 twice, first IST then GMT. A wall time in it resolves to the
-// SECOND (GMT) occurrence, because the naive guess (the wall time read as
-// UTC) already sits after the 01:00 UTC change, where the offset is 0. That is
-// harmless here: no studio shift starts or ends between 01:00 and 02:00, and
-// for one that did the choice moves a rest or a week total by at most the one
-// repeated hour, on the side of counting it as later.
-// shared/dublin-time.js dublinDayStartMs does the one-pass version for midnight.
-function dublinWallMs(date, time) {
-  const naive = Date.UTC(date.y, date.mo - 1, date.d, time.h, time.mi, time.s)
-  const first = naive - dublinOffsetMs(naive)
-  return naive - dublinOffsetMs(first)
-}
-
 const pad2 = (n) => String(n).padStart(2, '0')
+
+// The real instant of a wall-clock date + time in `zone`, through the
+// canonical solver (shared/zoned-time.js). Two edge rules are kept from the
+// private Dublin solver this replaced, so Europe/Dublin answers are unchanged:
+//   - the SKIPPED spring-forward hour (a wall 01:30 on 29 Mar 2026 in Dublin)
+//     resolves LATER, to the instant the clock reads 02:30 (the solver's own
+//     rule is earlier, so it is moved on by the hour the clocks skipped);
+//   - the REPEATED autumn hour (25 Oct 2026, 01:00-01:59 twice in Dublin)
+//     resolves to the SECOND (standard-time) occurrence, which is already the
+//     solver's answer there. Harmless: no studio shift starts or ends then,
+//     and for one that did the choice moves a rest or a week total by at most
+//     the one repeated hour, on the side of counting it as later.
+// A date that does not exist (30 Feb) rolls over, as Date.UTC does: the
+// parse above only checks the shape, and the old solver rolled it too.
+function wallMs(date, time, zone) {
+  const want = Date.UTC(date.y, date.mo - 1, date.d, time.h, time.mi)
+  const ms = zonedWallClockToInstant(new Date(want).toISOString().slice(0, 10), `${pad2(time.h)}:${pad2(time.mi)}`, zone)
+  if (ms == null) return null
+  const p = instantToZonedParts(ms, zone)
+  const back = Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi)
+  // In a gap the wall clock does not read back: step on by the skipped span.
+  return (back === want ? ms : want - (back - ms)) + time.s * 1000
+}
+
 
 /**
  * One assignment as a working window, or null when it is not one: cancelled,
@@ -155,22 +146,32 @@ const pad2 = (n) => String(n).padStart(2, '0')
  * day: an overnight shift cannot be created today, so this is defence, not a
  * feature. The window belongs to its block_date for working days and weeks.
  *
+ * TZ.8a — the wall clock is read in `zone` when given, else the row's own
+ * `timezone` (its studio's locations.timezone, as the readers attach it), else
+ * DEFAULT_TZ. Invalid values resolve to DEFAULT_TZ (resolveZone), never throw.
+ *
  * @param {{ profile_id, block_id?, block_date, location_id?, location_name?,
  *   name?, status?, start_time_override?, end_time_override?, start_time?,
- *   end_time?, block_start_time?, block_end_time?, shift_templates? }} row
+ *   end_time?, block_start_time?, block_end_time?, shift_templates?,
+ *   timezone? }} row
+ * @param {string} [zone]  IANA zone of the row's studio (overrides row.timezone)
  */
-export function workingWindow(row) {
+export function workingWindow(row, zone) {
   if (!row?.profile_id || row.status === 'cancelled') return null
   const date = parseDate(row.block_date)
   const start = parseTime(effectiveShiftStart(row))
   const end = parseEndTime(effectiveShiftEnd(row))
   if (!date || !start || !end) return null
+  const tz = resolveZone(zone ?? row.timezone)
   const startSecs = start.h * 3600 + start.mi * 60 + start.s
   const endSecs = end.endOfDay ? DAY_MS / 1000 : end.h * 3600 + end.mi * 60 + end.s
   if (endSecs === startSecs) return null
   // 24:00, or an end before the start (defence: overnight shifts cannot be
   // created today), is on the next calendar day.
   const endDate = end.endOfDay || endSecs < startSecs ? parseDate(addDays(row.block_date, 1)) : date
+  const startMs = wallMs(date, start, tz)
+  const endMs = wallMs(endDate, end, tz)
+  if (startMs == null || endMs == null) return null
   return {
     profile_id: row.profile_id,
     block_id: row.block_id ?? null,
@@ -180,8 +181,8 @@ export function workingWindow(row) {
     name: row.name || 'Shift',
     start: `${pad2(start.h)}:${pad2(start.mi)}`,
     end: `${pad2(end.h)}:${pad2(end.mi)}`,
-    startMs: dublinWallMs(date, start),
-    endMs: dublinWallMs(endDate, end),
+    startMs,
+    endMs,
   }
 }
 

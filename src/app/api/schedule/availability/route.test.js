@@ -18,7 +18,8 @@ vi.mock('@/lib/auth', async (importOriginal) => {
     hasRoleAtLocation: real.hasRoleAtLocation,
   }
 })
-vi.mock('@/lib/dublin-time', async (importOriginal) => ({ ...(await importOriginal()), dublinTodayStr: () => '2026-09-25' }))
+// TZ.8a — "today" is the person's studio day (todayStrIn of their active studio's zone).
+vi.mock('@/lib/location-time', async (importOriginal) => ({ ...(await importOriginal()), todayStrIn: () => '2026-09-25' }))
 vi.mock('@/lib/availability-server', async (importOriginal) => ({
   ...(await importOriginal()),
   readOwnAvailability: vi.fn(),

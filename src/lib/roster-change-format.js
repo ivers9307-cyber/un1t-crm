@@ -11,11 +11,14 @@
 // publishes an OTA and the phone does not show this.
 //
 // Two kinds of time are in play and they are handled differently on purpose:
-//   block_date / start_time  bare Dublin wall-clock values. Never parsed as
-//                            UTC (the BST off-by-one in CLAUDE.md): the
-//                            weekday is read from LOCAL date components.
-//   notified_at / created_at timestamptz instants, shown as Dublin wall-clock
-//                            via dublin-time.js.
+//   block_date / start_time  bare wall-clock values in the studio's zone.
+//                            Never parsed as UTC (the BST off-by-one in
+//                            CLAUDE.md): the weekday is read from LOCAL date
+//                            components.
+//   notified_at / created_at timestamptz instants, shown as the STUDIO's
+//                            wall clock (TZ.8a: the zone the caller passes,
+//                            the change-log route's `timezone`; DEFAULT_TZ
+//                            when none is given).
 //
 // `details` arrives already whitelisted by shapeRosterChange
 // (roster-change-log.js): known keys, string-or-null values, HH:MM(:SS) times,
@@ -23,7 +26,7 @@
 // degrades to the plain sentence and nothing is guessed.
 
 import { formatTime12h } from './schedule-overlap'
-import { dublinDayStr, dublinTimeLabel } from './dublin-time'
+import { dayStrIn, timeLabelIn, resolveZone } from '@shared/zoned-time'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -56,7 +59,7 @@ const BRIEFING_NOTE = { added: 'briefing added', changed: 'briefing changed', re
 //   2. swaps/[id]/route.js, an approved DROP on a DRAFT roster: via
 //      'swap_drop' with roster_status other than 'published' (an unreadable
 //      status is treated as a draft there too). Stamped unconditionally.
-//   3. A shift already OVER on the Dublin day the stamp was made:
+//   3. A shift already OVER on the studio's day the stamp was made:
 //      notifyRosterChanges (all-past coach, and the past rows of a mixed
 //      coach), swaps/[id]/route.js (isPast, drop and move rows) and
 //      renotifyChangedCoaches (stamps every collected row, messages about
@@ -227,7 +230,7 @@ function isDeliveredTimeEdit(c, d) {
   return gap >= 0 && gap <= OWN_STAMP_WINDOW_MS
 }
 
-export function stampMeansTold(change) {
+export function stampMeansTold(change, zone) {
   const c = change || {}
   const d = c.details || {}
   if (NO_MESSAGE_REASONS.includes(d.reason)) return false
@@ -237,31 +240,34 @@ export function stampMeansTold(change) {
   if (isDeliveredTimeEdit(c, d)) return true
   if (c.self_change === true) return false
   // 'YYYY-MM-DD' strings compare correctly as text. The stamp's day is the
-  // DUBLIN day, which is the "today" every writer judged "past" against.
-  if (dateParts(c.block_date) && isInstant(c.notified_at) && String(c.block_date).slice(0, 10) < dublinDayStr(c.notified_at)) return false
+  // STUDIO's day, which is the "today" every writer judged "past" against.
+  if (dateParts(c.block_date) && isInstant(c.notified_at) && String(c.block_date).slice(0, 10) < dayStrIn(Date.parse(c.notified_at), resolveZone(zone))) return false
   return true
 }
 
 /**
- * Has the coach been told, and when (Dublin wall-clock). null = this row has
- * a stamp that does not mean anybody was told, so there is no told state to show.
+ * Has the coach been told, and when (the studio's wall clock, `zone`). null =
+ * this row has a stamp that does not mean anybody was told, so there is no
+ * told state to show.
  */
-export function rosterChangeTold(change) {
+export function rosterChangeTold(change, zone) {
   const c = change || {}
   if (!c.notified_at) return 'not told yet'
-  if (!stampMeansTold(c)) return null
+  if (!stampMeansTold(c, zone)) return null
   if (!isInstant(c.notified_at)) return 'told'
-  const time = dublinTimeLabel(c.notified_at)
-  const toldDay = dublinDayStr(c.notified_at)
+  const tz = resolveZone(zone)
+  const time = timeLabelIn(c.notified_at, tz)
+  const toldDay = dayStrIn(Date.parse(c.notified_at), tz)
   // The day is only worth naming when it is not the day of the change.
-  const sameDay = isInstant(c.created_at) && dublinDayStr(c.created_at) === toldDay
+  const sameDay = isInstant(c.created_at) && dayStrIn(Date.parse(c.created_at), tz) === toldDay
   return sameDay ? `told ${time}` : `told ${shortDate(toldDay)} ${time}`
 }
 
-/** Who made the change, and when. */
-export function rosterChangeByline(change) {
+/** Who made the change, and when (the studio's wall clock, `zone`). */
+export function rosterChangeByline(change, zone) {
   const c = change || {}
   const who = c.actor_name || 'System'
   if (!isInstant(c.created_at)) return who
-  return `${who} · ${shortDate(dublinDayStr(c.created_at))} ${dublinTimeLabel(c.created_at)}`
+  const tz = resolveZone(zone)
+  return `${who} · ${shortDate(dayStrIn(Date.parse(c.created_at), tz))} ${timeLabelIn(c.created_at, tz)}`
 }
