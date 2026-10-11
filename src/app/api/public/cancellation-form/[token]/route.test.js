@@ -20,7 +20,8 @@ vi.mock('@/lib/rate-limit', () => ({
 }))
 vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Stillorgan', logoUrl: 'https://l/logo.png' })) }))
 vi.mock('@/lib/agent/approval-notify', () => ({ notifyAgentApprovalRequest: vi.fn(async () => {}) }))
-vi.mock('@/lib/dublin-time', async (orig) => ({ ...(await orig()), dublinTodayStr: () => '2026-09-05' }))
+// TZ.5 — the route's today is todayStrIn(the link location's zone); same pinned day.
+vi.mock('@/lib/location-time', async (orig) => ({ ...(await orig()), todayStrIn: () => '2026-09-05' }))
 
 import { GET, POST } from './route'
 import { resolveLink, markOpened, claimLink, unclaimLink, attachRequest } from '@/lib/cancellation-form/links'

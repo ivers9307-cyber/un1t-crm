@@ -46,7 +46,6 @@ src/app/(team)/schedule/availability/page.js
 src/app/account/contracts/[id]/page.js
 src/app/account/contracts/page.js
 src/app/api/accounting/payables/route.js
-src/app/api/assistant/chat/route.js
 src/app/api/attendance/geofence-checkin/route.js
 src/app/api/attendance/route.js
 src/app/api/calendar-feed/[file]/route.js
@@ -72,7 +71,6 @@ src/app/api/equipment/due/route.js
 src/app/api/equipment/inspections/[id]/submit/route.js
 src/app/api/equipment/route.js
 src/app/api/locations/route.js
-src/app/api/public/cancellation-form/[token]/route.js
 src/app/api/public/entry/[token]/move-options/route.js
 src/app/api/public/entry/[token]/move/route.js
 src/app/api/public/entry/[token]/route.js
@@ -96,7 +94,6 @@ src/app/communications/(marketing-era)/list-health/page.js
 src/app/dashboard/today/page.js
 src/app/live/[locationId]/DetectedTab.jsx
 src/app/settings/billing/page.js
-src/app/settings/customer-agent/CustomerAgentClient.jsx
 src/app/welcome/[location]/status/page.js
 src/components/AcControlPanel.jsx
 src/components/AttendanceReportClient.jsx
@@ -128,13 +125,6 @@ src/components/maintenance/EquipmentTab.jsx
 src/lib/account-home.js
 src/lib/admin-tenants.js
 src/lib/ads/read.js
-src/lib/agent/auto-reply.js
-src/lib/agent/core.js
-src/lib/agent/dublin-format.js
-src/lib/agent/event-date-label.js
-src/lib/agent/followups.js
-src/lib/agent/review.js
-src/lib/agent/settings-contract.js
 src/lib/allowance-year.js
 src/lib/approvals/event-move-card.js
 src/lib/approvals/providers/time-off-cancellations.js
@@ -147,7 +137,6 @@ src/lib/block-edit.js
 src/lib/booking-confirmations.js
 src/lib/booking-slots.js
 src/lib/bridge-samples.js
-src/lib/cancellation-form/rules.js
 src/lib/candidates-data.js
 src/lib/challenges.js
 src/lib/checklist-instances.js
@@ -220,4 +209,3 @@ src/lib/usage-caps.js
 src/lib/wallet-enforcement.js
 src/lib/wallet-topup.js
 src/lib/wallet.js
-src/lib/whatsapp-flow/handler.js

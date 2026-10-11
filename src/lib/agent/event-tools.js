@@ -45,7 +45,8 @@
 // here.
 
 import { linkedAccountsForContact, hasBookableMembership } from '@/lib/person-accounts'
-import { dateLabel, dublinToday } from './event-date-label'
+import { dateLabel, todayIn } from './event-date-label'
+import { DEFAULT_TZ } from '@/lib/location-time'
 import { EVENT_MOVE_TOOLS, executeMoveTool } from './event-move-tools'
 
 export const EVENT_TOOLS = [
@@ -160,10 +161,13 @@ export function formatEventPrice({
   return `${euro(non_member_fee_cents)} per person${members_only ? ' (members only)' : ''}`
 }
 
-/** Is this event open for registration right now? Pure. */
-export function eventOpenForRegistration(race, nowMs) {
+/**
+ * Is this event open for registration right now? Pure. TZ.5 — `zone` is the
+ * event's location zone ("today" flips at that studio's midnight).
+ */
+export function eventOpenForRegistration(race, nowMs, zone = DEFAULT_TZ) {
   if (!race || race.active === false) return { open: false, reason: 'inactive' }
-  if (!race.race_date || String(race.race_date) < dublinToday(nowMs)) return { open: false, reason: 'past' }
+  if (!race.race_date || String(race.race_date) < todayIn(nowMs, zone)) return { open: false, reason: 'past' }
   if (race.registration_opens_at && nowMs < Date.parse(race.registration_opens_at)) {
     return { open: false, reason: 'not_open_yet' }
   }
@@ -184,10 +188,10 @@ export function waveSpotsLeft(wave, taken) {
  * cancel directly; paid entries go to human approval (refunds are
  * decided per case by the team — Richard, 2026-06-12). Pure.
  */
-export function classifyEventCancellation({ isOwner, status, eventDate, paidCents, nowMs } = {}) {
+export function classifyEventCancellation({ isOwner, status, eventDate, paidCents, nowMs, zone = DEFAULT_TZ } = {}) {
   if (!isOwner) return { action: null, reason: 'not_yours' }
   if (status === 'cancelled' || status === 'no_show') return { action: null, reason: 'already_cancelled' }
-  if (!eventDate || String(eventDate) < dublinToday(nowMs)) return { action: null, reason: 'event_past' }
+  if (!eventDate || String(eventDate) < todayIn(nowMs, zone)) return { action: null, reason: 'event_past' }
   return (Number(paidCents) || 0) > 0 ? { action: 'draft' } : { action: 'direct' }
 }
 
@@ -214,9 +218,10 @@ const LIMITED_SPOTS_THRESHOLD = 3
  * @param {string} baseUrl  origin for the signup link — the conversation
  *   location's tenant host (W1.L3b), on the canonical /event/ path: /race/ is
  *   only a next.config alias on the CRM host and is not served on a tenant host
+ * @param {string} [zone] the events' location zone (TZ.5)
  */
-export function shapeEventsForAgent(events, takenByWave, nowMs, baseUrl) {
-  const today = dublinToday(nowMs)
+export function shapeEventsForAgent(events, takenByWave, nowMs, baseUrl, zone = DEFAULT_TZ) {
+  const today = todayIn(nowMs, zone)
   const out = []
   for (const e of Array.isArray(events) ? events : []) {
     if (!e || e.active === false) continue
@@ -255,9 +260,9 @@ export function shapeEventsForAgent(events, takenByWave, nowMs, baseUrl) {
   return out.slice(0, MAX_EVENTS).map(({ race_date: _omitted, ...rest }) => rest)
 }
 
-/** The customer's live future registrations. Pure. */
-export function shapeMyRegistrationsForAgent(rows, nowMs) {
-  const today = dublinToday(nowMs)
+/** The customer's live future registrations. Pure. TZ.5 — `zone` as above. */
+export function shapeMyRegistrationsForAgent(rows, nowMs, zone = DEFAULT_TZ) {
+  const today = todayIn(nowMs, zone)
   const out = []
   for (const r of Array.isArray(rows) ? rows : []) {
     if (!r || r.status === 'cancelled' || r.status === 'no_show') continue
@@ -305,13 +310,16 @@ async function fetchRegistrationsForContactIds(db, ids, locationId, today) {
 }
 
 // ── executor (IO) ───────────────────────────────────────────────────
-// ctx: { db, locationId, contactId, verifiedContactId }
+// ctx: { db, locationId, contactId, verifiedContactId, zone }
+// TZ.5 — every event read here is scoped to ctx.locationId, so the
+// conversation location's zone (ctx.zone) is the events' zone.
 export async function executeEventTool(toolName, input, ctx) {
   const { db, locationId, contactId, verifiedContactId } = ctx
+  const zone = ctx.zone || DEFAULT_TZ
 
   if (toolName === 'list_upcoming_events') {
     const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
-    const today = dublinToday(Date.now())
+    const today = todayIn(Date.now(), zone)
     const { data: events } = await db.from('race_events')
       .select('id, name, kind, slug, description, race_date, active, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, waves:race_waves(id, start_time, capacity, label)')
       .eq('location_id', locationId)
@@ -336,7 +344,7 @@ export async function executeEventTool(toolName, input, ctx) {
       }
     }
     // W1.L3b — Mia's signup links land on HER ACTIVE LOCATION's tenant host.
-    return { events: shapeEventsForAgent(events, takenByWave, Date.now(), await resolveCustomerBaseUrl(db, locationId)) }
+    return { events: shapeEventsForAgent(events, takenByWave, Date.now(), await resolveCustomerBaseUrl(db, locationId), zone) }
   }
 
   if (toolName === 'get_my_event_registrations') {
@@ -344,7 +352,7 @@ export async function executeEventTool(toolName, input, ctx) {
     if (!targetContactId) {
       return { error: 'no_contact', message: 'No contact is linked to this conversation — ask the team to check instead.' }
     }
-    const today = dublinToday(Date.now())
+    const today = todayIn(Date.now(), zone)
 
     // PERSON-ACCT.4 — the registration can sit on ANY contact row in this
     // person's group, not just the one this conversation is bound to. Fan the
@@ -370,7 +378,7 @@ export async function executeEventTool(toolName, input, ctx) {
         .limit(20)
       rows = data
     }
-    const registrations = shapeMyRegistrationsForAgent(rows, Date.now())
+    const registrations = shapeMyRegistrationsForAgent(rows, Date.now(), zone)
     return registrations.length
       ? { registrations }
       : { registrations: [], message: 'No upcoming event registrations found for this person.' }
@@ -388,7 +396,7 @@ export async function executeEventTool(toolName, input, ctx) {
       .maybeSingle()
     if (!race) return { error: 'not_found', message: 'That event was not found — re-check list_upcoming_events.' }
 
-    const openCheck = eventOpenForRegistration(race, Date.now())
+    const openCheck = eventOpenForRegistration(race, Date.now(), zone)
     if (!openCheck.open) {
       return { booked: false, reason: openCheck.reason, message: 'Registration is not open for this event — say so honestly and offer alternatives.' }
     }
@@ -572,6 +580,7 @@ export async function executeEventTool(toolName, input, ctx) {
       eventDate: String(reg.race_events.race_date),
       paidCents,
       nowMs: Date.now(),
+      zone,
     })
     const auditDetails = {
       registration_id: reg.id,
