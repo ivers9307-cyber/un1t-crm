@@ -28,7 +28,8 @@ import {
   buildSaveBody, isDirty, loadOutcome, saveOutcome, closeAction, saveButtonState, impersonationLine, cardsEditable,
 } from '../../../lib/availability-form'
 import { createInFlightGuard } from '../../../lib/in-flight-guard'
-import { dublinTodayIso } from '../../../lib/dates'
+import { studioTodayIso } from '../../../lib/dates'
+import { useStudioZone } from '../../../lib/use-studio-zone'
 import { AVAILABILITY_LIMITS } from 'shared/availability'
 import MonthCalendar from '../../../components/MonthCalendar'
 import TabletConstrained from '../../../components/TabletConstrained'
@@ -43,6 +44,9 @@ const TONE_TEXT = { ok: 'text-green-700', warn: 'text-amber-700', error: 'text-r
 
 export default function MyAvailability() {
   const { profile, impersonatingFrom } = useAuth()
+  // TZ.14 — the active studio's day: the one PUT /api/schedule/availability
+  // judges with (staffZoneOfUser, TZ.8a).
+  const tz = useStudioZone()
   const router = useRouter()
   const navigation = useNavigation()
   const headerHeight = useHeaderHeight()
@@ -68,7 +72,7 @@ export default function MyAvailability() {
 
   // The studio's day, not the phone's (ROSTER-FIX.7). Render-time: calendar
   // minDate and the card flags. A save reads it again at the moment of saving.
-  const today = dublinTodayIso()
+  const today = studioTodayIso(tz)
   const loaded = baseline !== null
   const dirty = loaded && isDirty(baseline, rows, { todayIso: today })
 
@@ -160,7 +164,7 @@ export default function MyAvailability() {
   async function sendSave() {
     // "Today" at the moment of saving: a screen left open over midnight must
     // judge dates the way the server will.
-    const todayIso = dublinTodayIso()
+    const todayIso = studioTodayIso(tz)
     // The loaded rules that started before today: the route's `stored` set
     // for carryStartedRules, so the phone judges a started rule its way.
     const started = startedRules(baseline, todayIso)

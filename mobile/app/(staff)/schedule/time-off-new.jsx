@@ -34,7 +34,8 @@ import {
   submittedDays, leaveSubmittedMessage, leaveFormGate,
 } from '../../../lib/leave-form'
 import { createInFlightGuard } from '../../../lib/in-flight-guard'
-import { dublinTodayIso } from '../../../lib/dates'
+import { studioTodayIso } from '../../../lib/dates'
+import { zoneOfLocationRow } from '../../../lib/studio-zone'
 import { timeOffTypesFor, defaultTimeOffTypeFor, isRestrictedEmployment } from 'shared/time-off'
 import MonthCalendar from '../../../components/MonthCalendar'
 
@@ -86,7 +87,8 @@ function TimeOffForm() {
   // ROSTER-FIX.7 — the studio's day, not the phone's. This is both the
   // calendar's minDate and the default range, so a device an hour behind
   // Dublin used to refuse to book leave for a day that had not started yet.
-  const today = dublinTodayIso()
+  // TZ.14: the active studio's zone, the server's day for this form (TZ.8a).
+  const today = studioTodayIso(zoneOfLocationRow(activeLocation))
   // Type menu is gated by employment type — everyone who reaches this form
   // gets the four leave types (AVAIL.3: contractors + casual staff are gated
   // out above and sent to My availability).

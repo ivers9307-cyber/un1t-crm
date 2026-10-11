@@ -23,6 +23,7 @@ import { useAuth } from '../../../lib/member/contact-context'
 import Card from '../../../components/member/ui/Card'
 import { goalDefs, GOAL_KINDS, computeProgress } from 'shared/goals'
 import { useMemberBrand } from '../../../lib/member/use-member-brand'
+import { useMemberZone } from '../../../lib/member/use-member-zone'
 
 // W1.S5 — goal labels name the product ("{Brand} Points this week"); the
 // shape (unit / period / suggested) is the same whatever the brand.
@@ -257,7 +258,9 @@ function GoalCard({ goal, sessions, onUpdate, onArchive }) {
   const [target, setTarget] = useState(String(goal.target_value))
 
   const def = useGoalDefs()[goal.kind]
-  const progress = computeProgress(goal, sessions)
+  // TZ.14 (D7) — the goal's week/month is the member's home studio calendar.
+  const tz = useMemberZone()
+  const progress = computeProgress(goal, sessions, new Date(), tz)
 
   const fillPct = Math.min(100, progress.pct * 100)
   const isComplete = progress.pct >= 1

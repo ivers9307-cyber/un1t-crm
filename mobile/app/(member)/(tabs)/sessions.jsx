@@ -11,6 +11,8 @@ import { useFocusEffect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../../lib/member/supabase'
 import { useMemberBrand } from '../../../lib/member/use-member-brand'
+import { useMemberZone } from '../../../lib/member/use-member-zone'
+import { memberClockLabel } from '../../../lib/member/member-zone'
 import Card from '../../../components/member/ui/Card'
 import ErrorRetry from '../../../components/member/ErrorRetry'
 import ZoneBar from '../../../components/member/ui/ZoneBar'
@@ -28,6 +30,8 @@ export function SessionsScreen() {
   const router = useRouter()
   // W1.S5 — product name + unit badge from the member's studio brand.
   const { productNames, pointsUnit } = useMemberBrand()
+  // TZ.14 (D7) — month sections, dates and start times on the member's home studio clock.
+  const tz = useMemberZone()
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [sessions, setSessions] = useState([])
@@ -75,11 +79,11 @@ export function SessionsScreen() {
   )
 
   // One date-sorted list of HR sessions + personal-only Strava activities,
-  // then grouped into Europe/Dublin calendar-month sections with a per-month
-  // stat line (sessions + UN1T points) for the sticky headers.
+  // then grouped into the member's studio calendar-month sections with a
+  // per-month stat line (sessions + UN1T points) for the sticky headers.
   const sections = useMemo(
-    () => groupSessionsByMonth(buildSessionsList({ sessions, stravaActivities })),
-    [sessions, stravaActivities],
+    () => groupSessionsByMonth(buildSessionsList({ sessions, stravaActivities }), tz),
+    [sessions, stravaActivities, tz],
   )
 
   if (loading) {
@@ -167,7 +171,7 @@ export default function Sessions() {
 
 // ── Month section header ──────────────────────────────────────────
 
-// Sticky header per Europe/Dublin calendar month, carrying a stat line
+// Sticky header per studio calendar month, carrying a stat line
 // ("June 2026 · 14 sessions · 3,240 pts"). Solid bg so pinned rows don't show
 // through. Strava rows render in-month but are excluded from the counts (they
 // carry no UN1T points) — see groupSessionsByMonth.
@@ -193,10 +197,11 @@ function MonthHeader({ section }) {
 // ── Session row ───────────────────────────────────────────────────
 
 function SessionRow({ session, onPress, pointsUnit = 'pts' }) {
+  const tz = useMemberZone()
   const inProgress = !session.ended_at
   const dur = durationMinutes(session.started_at, session.ended_at)
   const label = sourceLabel(session.source)
-  const date = sessionDate(session.started_at)
+  const date = sessionDate(session.started_at, tz)
 
   // topZone: highest-seconds zone — mirrors the web sort
   const breakdown = zoneBreakdown(session.zones_seconds)
@@ -205,13 +210,7 @@ function SessionRow({ session, onPress, pointsUnit = 'pts' }) {
   // The Burn — ≥12 min in Zone 4+. Furnace (Zone 4) accent.
   const burn = !inProgress && isBurn(session.zones_seconds)
 
-  const startTime = session.started_at
-    ? new Intl.DateTimeFormat('en-IE', {
-        hour: '2-digit',
-        minute: '2-digit',
-        timeZone: 'Europe/Dublin',
-      }).format(new Date(session.started_at))
-    : null
+  const startTime = memberClockLabel(session.started_at, tz)
 
   return (
     <Pressable
@@ -293,16 +292,13 @@ function SessionRow({ session, onPress, pointsUnit = 'pts' }) {
 // tappable — there's no heart_rate_sessions detail behind it. Badged so it reads
 // as distinct from a points-bearing UN1T session.
 function StravaRow({ activity }) {
-  const date = sessionDate(activity.started_at)
+  const tz = useMemberZone()
+  const date = sessionDate(activity.started_at, tz)
   const title = activity.name || workoutLabel(activity.activity_type)
   const dur = formatDuration(activity.duration_seconds)
   const dist = formatDistance(activity.distance_meters)
   const hr = Number.isFinite(Number(activity.avg_hr_bpm)) ? Math.round(Number(activity.avg_hr_bpm)) : null
-  const startTime = activity.started_at
-    ? new Intl.DateTimeFormat('en-IE', {
-        hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Dublin',
-      }).format(new Date(activity.started_at))
-    : null
+  const startTime = memberClockLabel(activity.started_at, tz)
   const meta = [startTime, title, dur, dist].filter(Boolean).join(' · ')
 
   return (

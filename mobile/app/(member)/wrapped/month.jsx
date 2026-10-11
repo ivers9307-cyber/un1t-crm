@@ -29,6 +29,7 @@ import { useRouter } from 'expo-router'
 import { supabase } from '../../../lib/member/supabase'
 import { markMonthRecapSeen } from '../../../lib/member/recap-seen'
 import { useMemberBrand } from '../../../lib/member/use-member-brand'
+import { useMemberZoneState } from '../../../lib/member/use-member-zone'
 import { monthlyRecap, personalRecords } from 'shared/progress-analytics'
 import { monthWrappedModel } from 'shared/month-wrapped'
 import { PEARL, VOLT } from '../../../lib/member/brand'
@@ -131,6 +132,10 @@ export default function MonthWrapped() {
   const { width } = useWindowDimensions()
   // W1.S5 — share copy + hero label from the member's studio brand.
   const { shortName, productNames } = useMemberBrand()
+  // TZ.14 (D7) — "last month" and the records on the member's home studio
+  // clock. Opening the story marks that month seen, so it waits for the zone:
+  // a non-Dublin member must not burn a month key from the fallback clock.
+  const { zone: tz, loading: tzLoading } = useMemberZoneState()
 
   const [model, setModel] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -155,6 +160,7 @@ export default function MonthWrapped() {
   // fittest across the year), compute the completed-month story. RLS scopes
   // the read to the signed-in member.
   useEffect(() => {
+    if (tzLoading) return undefined
     let cancelled = false
     async function load() {
       setLoading(true)
@@ -178,8 +184,8 @@ export default function MonthWrapped() {
         if (cancelled) return
         const now = Date.now()
         const recap = monthlyRecap(all, now, 6)
-        const records = personalRecords(all)
-        const m = monthWrappedModel(recap, records, now)
+        const records = personalRecords(all, tz)
+        const m = monthWrappedModel(recap, records, now, tz)
         setModel(m)
         // Mark the recapped month seen the moment it opens, so it never
         // re-ambushes the member on a later home visit this month.
@@ -192,7 +198,7 @@ export default function MonthWrapped() {
     }
     load()
     return () => { cancelled = true }
-  }, [])
+  }, [tz, tzLoading])
 
   // Kick the wash-in + reveal once data + motion pref are ready.
   useEffect(() => {
