@@ -193,11 +193,11 @@ const PAIRS = {
     mode: 'reexport',
     shared: 'shared/zoned-time.js',
     web: 'src/lib/location-time.js',
-    webOnly: ['getLocationZone', 'getLocationZones', 'resetLocationZoneCache', 'zoneOfLocation'],
+    webOnly: ['LOCATION_ZONE_CACHE_MAX', 'LocationZoneReadError', 'getLocationZone', 'getLocationZones', 'resetLocationZoneCache', 'zoneOfLocation'],
     why:
       'TZ.1 — THE per-location zone maths (dublin-time twins taking a zone, the SHELLY.1 wall-clock solver) lives ' +
       'in shared/ so the phone and champ-app use the same code as the server; src/lib/location-time.js is an ' +
-      '`export * from` shim that adds the web-only DB side (a location\'s zone, 60 s cache) and is cross-named, so ' +
+      '`export * from` shim that adds the web-only DB side (a location\'s zone, bounded 60 s cache, LocationZoneReadError) and is cross-named, so ' +
       'this entry is what makes the identity assertion run.',
   },
 
