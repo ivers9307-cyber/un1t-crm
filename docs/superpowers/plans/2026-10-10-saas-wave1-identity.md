@@ -10,6 +10,46 @@
 
 **Source review:** `docs/SAAS_READINESS_REVIEW_2026-10-09.md` — §1 foundation facts, §2 per-applet verdicts, §3 Blocker 8 + Majors themes B (brand fallbacks), C (links and hosts), E (Glofox dependency), §5 "Wave 1 — identity". Format precedent: `docs/superpowers/plans/2026-10-09-saas-wave0-stop-the-leaks.md`.
 
+## Status — Wave 1 delivered 10–11 Oct 2026
+
+All tasks shipped (PR titles checked against GitHub on 11 Oct). Every PR is on `ivers9307-cyber/un1t-crm` unless marked champ-app. Migrations landed at the planned numbers: 715, 716, 717, 718. The plan text below is kept as written. W1.L3 shipped as three PRs, not two: L3c moved the host invite link once the Supabase redirect allow-list held `*.repset.ie`. The review's dated block ("Wave 1 delivered 10–11 Oct 2026" in `docs/SAAS_READINESS_REVIEW_2026-10-09.md` §3) records Richard's decisions and what is still open.
+
+| Task | PR | State | Note |
+|---|---|---|---|
+| W1.B1 brand chain + `productName` | #1989 | Merged | mig 715 `org_settings.short_name` |
+| W1.B2 phone + champ-app brand loaders | #1995 · champ-app #127 | Merged | |
+| W1.L1 `<slug>.repset.ie` + resolver | #1986 | Merged | mig 716 |
+| W1.L2 tenant allowlist covers the customer flow | #1993 | Merged | |
+| W1.L3a marketing/sequence/HR links | #1996 | Merged | ⚠️ UN1T links move to `un1t-group.repset.ie` |
+| W1.L3b event/booking/host/Mia links | #2003 | Merged | ⚠️ same card |
+| W1.L3c host invite set-password link | #2009 | Merged | not in the plan's split; needs `https://*.repset.ie/**` in Supabase Auth redirects (added 10 Oct) |
+| W1.L4 metadata/site name/favicon by host | #1997 | Merged | ⚠️ |
+| W1.L5 customer ICS | #1994 | Merged | |
+| W1.E1 `custom_email_domain` gate reachable | #1987 | Merged | |
+| W1.E2 pre-domain `{Brand} <platform>` + location Reply-To | #1998 | Merged | ⚠️ made `from_email` inert; restored by #2015 |
+| W1.E3 tenant server streams + webhooks | #1991 | Merged | mig 718 |
+| W1.E4 suppressions per server | #1992 | Merged | |
+| W1.W1 location seeds settings | #1990 | Merged | |
+| W1.S1a customer email/message libs | #2014 | Merged | ⚠️ |
+| W1.S1b public pages, widgets, TV | #2012 | Merged | ⚠️ |
+| W1.S1c host portal + host emails | #2008 | Merged | |
+| W1.S2 staff chrome + staff emails | #2004 | Merged | chrome says Repset |
+| W1.S3 Mia, WA merge, assistant, hyrox | #2000 | Merged | |
+| W1.S4 `shared/` seam | #1999 | Merged | OTA |
+| W1.S5 `mobile/` screens | #2006 | Merged | OTA |
+| W1.S6 champ-app | champ-app #128 | Merged | ⚠️ pre-sign-in default Repset |
+| W1.M1 `membership_source` + interface | #1988 | Merged | mig 717 |
+| W1.M2 membership-source setting | #2001 | Merged | |
+| W1.M3a web surfaces gate on the source | #2002 | Merged | |
+| W1.M3b crons + Mia through the seam | #2005 | Merged | |
+| W1.M3c phone dashboards | #2007 | Merged | OTA |
+| (extra) adopt an existing Postmark account domain | #2013 | Merged | ADOPTDOMAIN.1; master only, unclaimed domains only |
+| (extra) campaigns/sequences from any address on the verified domain | #2015 | Merged | Richard's decision 11 Oct |
+
+**Corrections**
+- The claim that the platform From was `hello@un1t.ie` (`POSTMARK_FROM_EMAIL`: Track E "Platform From today", the E2 card and prerequisite P2) was wrong. That address came from `.env.local.example` and the docs. Vercel hides the values of Sensitive env vars, and the Postmark send log showed UN1T's mail actually sending from `accounts@mail.un1tdublin.com`. `hello@un1t.ie` was only the code fallback that W1.E2 removed.
+- W1.E2 at first made `campaigns.from_email` (and `email_sequences.from_email`) inert on the wire. #2015 restored them, fenced to the org's verified sending domain.
+
 ---
 
 ## Decisions already made by Richard (binding; do not re-open, do not add cards for these)
@@ -170,6 +210,8 @@ Research facts (HEAD e33e786b):
 
 ### Task W1.B1: The brand chain ends in `locations.name`; `DEFAULT_COMPANY_NAME` goes; shared `productName` helper
 
+**Status:** done — #1989 (merged, mig 715).
+
 **Why:** decision 3; review :237 "Replace `getLocationBranding`'s final `'UN1T'` fallback with `locations.name`". Everything in Track S consumes this.
 
 **Why the short name:** UN1T's configured brands are "UN1T stillorgan" / "UN1T Hatch Street" (company_settings) and "UN1T Dublin" (org_settings); `productName` on those gives "UN1T Dublin Points", but decision 3 says UN1T keeps "UN1T Points". So product names use an operator-editable `org_settings.short_name` (the wordmark used in product names), defaulting to the org brand name. One-time data step after mig 715: `update org_settings set short_name = 'UN1T' where organization_id = 'f117b7b8-5f56-4f80-8299-2c698242e4d2'`.
@@ -317,6 +359,8 @@ Merge note: this PR changes NO visible string on its own: every consumer still a
 
 ### Task W1.B2: The phone and champ-app can read the brand (`useBrand`, `loadBrand`)
 
+**Status:** done — #1995 (merged) + champ-app #127 (merged).
+
 **Why:** `company_settings` is closed to client sessions (mig 674); the 34 mobile rows and 36 champ-app rows in the appendix need a brand string. `/api/public/branding?location_id=` already answers it.
 
 **Files:**
@@ -369,6 +413,8 @@ Research facts this track rests on (HEAD e33e786b):
 - Vercel already carries `*.repset.ie` (verified) and DNS has the wildcard CNAME (Live facts table). The `*.repset.ie` host reaches the proxy as an unknown host today → CRM auth gate → `/login`.
 
 ### Task W1.L1: Every organisation gets `<slug>.repset.ie` — host resolver + platform tenant_domains rows
+
+**Status:** done — #1986 (merged, mig 716).
 
 **Why:** decision 4; review §1 "A `tenant_domains` row does not make a hostname resolve" is now false for `*.repset.ie` (wildcard verified 10 Oct), so an auto row per org makes the host live with zero Vercel work. Blocker 8's "links on crm.repset.ie" needs a resolver every minting site can call.
 
@@ -559,6 +605,8 @@ Merge note: after merge, `https://un1t-group.repset.ie/welcome` must render UN1T
 
 ### Task W1.L2: Widen the tenant-domain default allowlist to the whole customer flow
 
+**Status:** done — #1993 (merged).
+
 **Why:** decision 4; review :121/:163 and theme A "widen the tenant-domain default allowlist to cover the funnel, unsubscribe, preferences, view-email and host paths". Without this, a link W1.L3 mints on the tenant host rewrites to `/welcome` and the customer never reaches the unsubscribe page (`DB_BRAND_DEFAULTS.fallbackHandler = 'rewrite'`).
 
 **Files:**
@@ -603,6 +651,8 @@ and add a comment block above it: `/start`, `/free-class`, `/offers` are deliber
 ---
 
 ### Task W1.L3: Customer-facing links are minted on the tenant host (two PRs)
+
+**Status:** done — #1996 L3a (merged), #2003 L3b (merged), #2009 L3c (merged; host invite set-password link, a third PR not in the split below).
 
 **Why:** decision 4; review :96 "every emailed or WhatsApp link … is minted on crm.repset.ie"; :139 unsubscribe/preferences/view-in-browser on `NEXT_PUBLIC_APP_URL`. Depends on W1.L1 (resolver) and W1.L2 (paths served).
 
@@ -654,6 +704,8 @@ it('W1.L3a — unsubscribe, preferences and view-in-browser links use the campai
 
 ### Task W1.L4: Customer-facing metadata, site name and favicon resolve by the request's host ⚠️
 
+**Status:** done — #1997 (merged).
+
 **Why:** decision 4 "`customerFacingMetadata` resolves by the request's org"; review :97 first-row branding, :162 OG "UN1T Dublin", `default-site-name.js:20-26,128-131` own "SAAS-8 HANDOFF … thread the host in" comments.
 
 **Files:**
@@ -690,6 +742,8 @@ it('W1.L4 — on the CRM host with no org the name is the platform name, never t
 ---
 
 ### Task W1.L5: Customer ICS carries the tenant's identity
+
+**Status:** done — #1994 (merged).
 
 **Why:** review :162 "ICS `@un1tdublin.com`"; the event ICS is built client-side in `src/components/RaceConfirmedPage.jsx:101-117` with `PRODID:-//UN1T//Events//EN`, `UID:<id>@un1tdublin.com`, fallback `SUMMARY:UN1T Event`.
 
@@ -729,6 +783,8 @@ Research facts (HEAD e33e786b):
 - Probable bug, out of scope, flagged for a follow-up chip: `notify.js:169` judges `res?.ErrorCode === 0 || res?.MessageID` but `sendEmail` returns `{ messageId }` (`postmark.js:357-361`), so successful fallbacks count as `email_failed`.
 
 ### Task W1.E1: The `custom_email_domain` gate is reachable — add-on pins count, the pin UI is linked, the env gate is documented
+
+**Status:** done — #1987 (merged).
 
 **Why:** decision 1; review Blocker 8 "gated behind a plan pin, an org-admin grant and an env var that no org has".
 
@@ -787,6 +843,8 @@ Merge note (not a card — no customer-visible change): after merge, UN1T Group 
 
 ### Task W1.E2 ⚠️: Before a verified domain, every tenant email sends as "{Brand} <platform address>" with Reply-To = the location's address
 
+**Status:** done — #1998 (merged). It made `campaigns.from_email` / `email_sequences.from_email` inert; #2015 (merged) restored them, fenced to the verified domain.
+
 **Why:** decision 2; Blocker 8 "refuse or clearly label 'sending as UN1T' instead of silently falling back"; review :139 From chain; the literal `'UN1T <hello@un1t.ie>'` at `postmark.js:275,394`, `email-inbox-send.js:155` and four direct senders.
 
 **Files:**
@@ -843,6 +901,8 @@ async function platformSenderFor(db, locationId) {
 ---
 
 ### Task W1.E3: A tenant Postmark server is born with its streams and webhooks
+
+**Status:** done — #1991 (merged, mig 718).
 
 **Why:** Blocker 8 "register bounce/open/spam/subscription webhooks on the new server in `createTenantServer`"; review :140 "a tenant on its own server gets zero bounce/open/spam events". Campaign sends also need the `broadcast` stream.
 
@@ -940,6 +1000,8 @@ export async function ensureTenantServerWebhooks(serverToken) {
 
 ### Task W1.E4: Suppression sync and consent drift run per Postmark server
 
+**Status:** done — #1992 (merged).
+
 **Why:** review :140 "suppression sync and consent drift use the global token only (`postmark-suppressions.js:79,162,195`)"; Blocker 8 "run suppression sync per server".
 
 **Files:**
@@ -963,6 +1025,8 @@ Research facts (HEAD e33e786b):
 - `src/lib/location-seed.test.js:63-111` uses a table-routing `stubDb` that THROWS on an unexpected table: the new writes need the stub extended. `makeFakeDb` (`src/lib/api-auth.test-helpers.js:20`) has no `upsert`.
 
 ### Task W1.W1: Creating a location seeds `company_settings` (name, logo null, quiet hours) and `notification_config`
+
+**Status:** done — #1990 (merged).
 
 **Files:**
 - Modify: `src/lib/location-seed.js:159-181`, `src/lib/location-seed.test.js:63-111,55-259`
@@ -1064,6 +1128,8 @@ describe('UN1T literal sweep (W1.S*)', () => {
 
 ### Task W1.S1a ⚠️: Customer-facing email, ICS and message libs
 
+**Status:** done — #2014 (merged).
+
 **Files (Appendix A rows for):** `src/lib/event-email.js:128,130,206` (+`buildEventEmailShell({ brand })`, `resolveEventEmail` resolves it from `race.location_id`), `src/lib/hr-post-class-email.js:261-448` (+`brand`/`shortName` through `pickSubject`/`renderText`/`renderHtml`), `src/lib/race-confirmations.js:192,364,636,790`, `src/lib/offer-purchase-emails.js:116,168`, `src/lib/manual-booking-confirm.js:44`, `src/lib/class-booking-payments.js:28`, `src/lib/contract-pdf.js:314`, `src/lib/contracting-entity.js:48`, `src/lib/contracts-email.js:69,89,109,113,248` (recipient copy; `contract.location_id` in scope), `src/lib/contracts-notify.js:56-57`, `src/app/api/contracts/[id]/resend/route.js:75-76`, `src/lib/external-export.js:250,253`, `src/lib/strava.js:103`, `src/lib/tcx-builder.js:45`, `src/app/api/cron/auto-end-stale-hr-sessions/route.js:183`, `src/lib/challenge-notifications.js:3`, `src/lib/customer-notifications.js:20` (twin of `shared/` — swept together with W1.S4; this PR only if S4 has merged, else leave to S4), `src/lib/sequence-templates.js` (21 rows: the 16 `UN1T {{location_name}}` sign-offs → `{{location_name}}`; the brand rows → a NEW merge tag `{{company_name}}`), `src/lib/postmark.js:491` `applyMergeTags` + `src/lib/sequences/steps.js:198,328-330` + `src/lib/campaign-sender.js:782,832` (add `company_name` to the merge context from `getLocationBranding`; merge tags are lowercase per the memory rule), `src/lib/status-page.js:32`.
 
 - [ ] **Step 1:** create `tests/un1t-literal-sweep.test.js` with these files in `SWEPT` → run → FAIL. Also add to `src/lib/sequences/steps.test.js`: "`{{company_name}}` renders the location brand" and to `src/lib/event-email.test.js`: "the header wordmark and footer carry the brand" (replace the five UN1T pins).
@@ -1073,6 +1139,8 @@ describe('UN1T literal sweep (W1.S*)', () => {
 
 ### Task W1.S1b ⚠️: Public pages, widgets, landing pages and TV boards
 
+**Status:** done — #2012 (merged).
+
 **Files:** `src/components/BookingWidget.jsx:299,557` (+`brand` in `/api/public/bookings/[slug]` payload), `src/components/RaceSignupWidget.jsx:64-142,788,1051,1124` (KIND copy table → `kindCopy(brand)`; `race.organization_name` already in the payload), `src/components/RaceConfirmedPage.jsx:248` (+ the ICS rows handled in W1.L5), `src/components/PreferenceCentre.jsx:147,219` + `src/app/api/preferences/[token]/route.js:125` (org brand via the token's contact → location → `getOrgBrandName`), `src/components/UnsubscribePage.jsx:179`, `src/app/api/preferences/hr-emails/route.js:356`, `src/components/WaitlistWidget.jsx:90`, `src/components/EventWaitlistForm.jsx:112`, `src/components/landing-page/BlockRenderers.jsx:184,340,457,855,897,966,976,980,1004` (SiteHeader/SiteFooter/LeadFormBlock gain `brand` + `locations` props from the page's existing location load; the two studio footer links become the org's active locations), `src/components/landing-page/EditModeOverlay.jsx:44,80`, `src/lib/landing-page-blocks.js:137,190,215` (defaults become functions of `brand`), `src/components/LandingPageSettingsForm.jsx:376,391-392,769`, `src/components/ClassFunnel.jsx:38-42` (DEFAULTS → functions of `brand`/`locationName`; closes the "leaks onto every tenant" note), `src/app/welcome/[location]/page.js:56,60,70,110,129`, `src/app/welcome/[location]/events/page.js:57,58,67,82,87`, `src/app/welcome/[location]/status/page.js:36`, `src/app/start/[path]/page.js:63,64,93`, `src/app/event/[slug]/page.js:46,51,58` (+ `location_id` in its select), `src/app/embed/event/[slug]/page.js:40,45`, `src/app/api/public/events/[slug]/register/route.js:559`, `src/app/api/public/races/[slug]/register/route.js:293`, `src/app/(members)/challenges/page.js:21`, `src/app/tv/cast/[token]/TVDisplay.jsx:235`, `src/app/tv/cast/[token]/page.js:19`, `src/app/tv/layout.js:20`, `src/app/tv/live/[token]/LiveTvClient.jsx:560,671` (+ `brand` in the tv-live payload: `src/app/api/public/tv-live/[token]/route.js`), `src/app/tv/live/[token]/challenges/ChallengeTvClient.jsx:57`, `src/app/(operations)/tv-displays/TVAdmin.jsx:325`, `src/components/CookieConsent.jsx` (no change — keep).
 
 - [ ] Steps as S1a (extend `SWEPT`/`KEEP`; update `src/app/tv/live/[token]/page.test.jsx`, `src/app/tv/live/[token]/challenges/page.test.jsx`, `src/components/BookingWidget.test.jsx`, `src/components/RaceSignupWidget.test.jsx`, `src/components/PreferenceCentre.test.jsx` where they exist). `npm run build` locally (page metadata exports change shape). Changelog: `W1.S1b — public pages, widgets, landing pages and TV boards carry the tenant brand`.
@@ -1081,11 +1149,15 @@ describe('UN1T literal sweep (W1.S*)', () => {
 
 ### Task W1.S1c: Host portal and host emails
 
+**Status:** done — #2008 (merged).
+
 **Files:** `src/app/host/(portal)/layout.js:28`, `src/app/host/(portal)/page.js:110`, `src/app/host/(portal)/events/new/page.js:20`, `src/app/host/(portal)/events/[id]/edit/page.js:70`, `src/app/host/login/page.js:40,72`, `src/app/host/set-password/page.js:100` (pre-auth: host → org via W1.L4's `resolveTenantOrgId`, platform name on the CRM host), `src/components/HostConnect.jsx:104,156` (+`brand` in `/api/public/host-connect/[token]` payload), `src/components/host/HostEmailReport.jsx:295`, `src/components/host/HostEventActions.jsx:19`, `src/components/host/HostEventForm.jsx:273,527`, `src/lib/host-onboarding-email.js:29,33,37,52` (`renderHostOnboardingEmail({ hostName, url, brand })`; the `send*` wrapper has `host` → anchor location → org brand), `src/lib/host-campaign-launch.js:65-66`, `src/app/api/host/emails/[id]/send-test/route.js:84,93`, `src/app/api/host/events/[id]/route.js:146`, `src/lib/host-statements.js:59` (platform), `src/app/api/hosts/[id]/invite/route.js:89`, `src/app/api/hosts/[id]/link-staff/route.js:72`, `src/app/api/hosts/[id]/route.js:52`.
 
 - [ ] Steps as S1a. Tests: `src/lib/host-onboarding-email.test.js`, `src/lib/host-campaign-launch.test.js`, `src/components/HostConnect.test.jsx` if present. Changelog: `W1.S1c — host portal and host emails carry the organisation brand`.
 
 ### Task W1.S2: Staff-facing web chrome and staff emails
+
+**Status:** done — #2004 (merged).
 
 **Files (platform rows + staff brand rows):** `src/app/login/page.js:238`, `src/app/reset-password/page.js:169,250`, `src/components/Sidebar.jsx:365`, `src/components/AppShell.jsx:164`, `src/app/api/email/conversations/_gone.js:40`, `src/lib/roster-email.js:133`, `src/lib/glofox-notes.js:14-15`, `src/lib/xero/bills-email.js:138`, `src/lib/xero/contractor-bills.js:124`, `src/lib/xero/fte-expense-claims.js:183`, `src/lib/zoom/external-contacts.js:29`, `src/lib/openapi.js:329,8287`, `src/components/WidgetTokensCard.jsx:91`, `src/components/accounting/EventFeesCard.jsx:41`, `src/app/settings/hosts/page.jsx:39`, `src/components/settings/HostsManager.jsx:135,166`, `src/components/settings/HostDetail.jsx:189,816,903,1037,1105,1203,1271,1312`, `src/components/settings/integrations/PaymentsIntegrationTab.jsx:115,138`, `src/components/RaceEventForm.jsx:1073,1081,1092,1101,1105,1136,1384`, `src/components/RaceControlPanel.jsx:271,290`, `src/components/ContractSignForm.jsx:96`, `src/components/ContractTemplateForm.jsx:59,63,64,150`, `src/components/PendingContractsAlert.jsx:114-115`, `src/app/account/page.js:125`, `src/app/account/contracts/page.js:63`, `src/components/CampaignDetail.jsx:621`, `src/components/CampaignEditor.jsx:39,1140` (default `from_name` → the location brand, loaded from `/api/public/branding?location_id=`), `src/components/BrandingSettings.jsx:159`, `src/components/OrgBrandingSettings.jsx:89`, `src/components/LocationForm.jsx:219`, `src/components/AddOrganizationButton.jsx:118`, `src/components/AchievementsAdminTable.jsx:29`, `src/components/ChallengeForm.jsx:23`, `src/app/settings/scoring/ScoringClient.jsx:114`, `src/lib/settings-tree.js:246`, `src/components/settings/StatusPageSettingsForm.jsx:146`, `src/lib/wallet-topup.js:400`, `src/lib/contractor-invoice-email.js:87`.
 
@@ -1095,6 +1167,8 @@ Note: "UN1T (settles via Revolut)" money-rail rows are `platform('Repset')` toda
 
 ### Task W1.S3: Mia, WhatsApp merge, assistant and hyrox prompts
 
+**Status:** done — #2000 (merged).
+
 **Files:** `src/lib/agent/core.js:11` (`defaultHoldingMessage(brand)`; `auto-reply.js:1250,1404` pass the branding they already resolve at :475), `src/lib/agent/welcome-greeting.js:13` (`defaultWelcomeGreeting({ agentName, brand })`; `locationId` and `settings` are in scope at :35-36 — also fixes the review's "welcome greeting ignores `agent_name`"), `src/lib/agent/prompt.js:264-265` (drop `|| 'UN1T'`), `src/lib/agent/approval-suggest.js:123`, `src/lib/agent/followups.js:369`, `src/lib/churn-winback.js:5` (done in B1 — verify), `src/lib/whatsapp.js:1967` (`location_name` → `opts.companyName || opts.locationName` — pass `locationName` from the callers at `whatsapp.js:1373,1745` and `sequences/steps.js:529,606`; and add a `company_name` WhatsApp merge field alongside, so email and WhatsApp agree), `src/app/settings/customer-agent/CustomerAgentClient.jsx:462,506,603` (placeholders render the brand), `src/lib/assistant-prompt.js:56`, `src/lib/hyrox/prompt.js:12,23,48`, `src/lib/hyrox/expand-runner.js:33`, `src/lib/hyrox/generate-block.js:44`, `src/app/api/hyrox/blocks/[id]/expand/route.js:57`, `src/app/api/hyrox/sessions/[id]/regenerate/route.js:64`. `prompt.js:77-85` ("the Glofox app") is handled by W1.M3b.
 
 - [ ] Steps as S1a; update `src/lib/agent/prompt.test.js:413-415`, `welcome-greeting.test.js`, `core.test.js`, `src/lib/whatsapp-template-components.test.js:119-129`, `src/lib/hyrox/prompt.test.js`. Changelog: `W1.S3 — Mia, WhatsApp merge fields and hyrox prompts speak the tenant brand`.
@@ -1103,11 +1177,15 @@ Mia talks to UN1T customers live (Stillorgan, Sonnet 5): the resolved brand for 
 
 ### Task W1.S4: `shared/` seam (and its `src/lib` twins)
 
+**Status:** done — #1999 (merged).
+
 **Files:** `shared/customer-notifications.js:20` + `src/lib/customer-notifications.js:20` (identical twins; both `.test.js` copies), `shared/hr-analytics.js:198,214` + `src/lib/hr-analytics.js:198,214` (identical twins), `shared/goals.js:23,37` + `src/lib/goals.js:42,56` (`diverged` mode: edit both or add `GOAL_DEFS` to the drifted list — edit both), `shared/challenge-wrapped.js:20`, `shared/session-history.js:164,175`, `shared/permissions.js:734` (hint → "Notify when your studio issues you a contract…"). Every one becomes a function of `brand`/`shortName`: `pointsPhrase(n, shortName)`, `pickHighlight(stats, { shortName })`, `GOAL_DEFS(shortName)`, `METRIC_LABEL(shortName)`, `milestones(shortName, brand)`. Web callers pass the branding they resolve; phone callers pass `useBrand()` (W1.B2); champ-app mirrors in W1.S6.
 
 - [ ] Steps as S1a; `npx vitest run tests/shared-pair-sync.test.js shared src/lib/customer-notifications.test.js src/lib/hr-analytics.test.js src/lib/goals.test.js`; `npm run check:mobile-imports`. **Merging publishes an OTA on the staff lane** (`shared/**`; P6). Changelog: `W1.S4 — shared seam product names and milestones take the brand`.
 
 ### Task W1.S5: `mobile/` screens (34 rows, Appendix B) + login placeholder
+
+**Status:** done — #2006 (merged).
 
 Depends on W1.B2 (`useBrand`) and W1.S4 (shared signatures). Files: the 32 bundled rows in Appendix B plus `mobile/app/(staff)/(auth)/login.jsx:131`. Mechanical: `const { companyName, shortName, productNames } = useBrand()`; the two `metricLabel === 'UN1T Points'` comparisons become key comparisons (`metric === 'points'`).
 
@@ -1116,6 +1194,8 @@ Depends on W1.B2 (`useBrand`) and W1.S4 (shared signatures). Files: the 32 bundl
 🔴 Reach note (memory `staff-home-screen-widgets`): the staff fleet is frozen on runtime 2.3.x until the 2.4.0 binaries install; `runtimeVersion` is already `'2.4.0'` in `app.config.js:457`, so this OTA reaches installed devices only after 2.4.0 ships. Merge anyway (it is correct on the new lane); say so in the PR body.
 
 ### Task W1.S6: champ-app (36 rows, Appendix D; repo `/Users/richardivers/code/champ-app`)
+
+**Status:** done — champ-app #128 (merged).
 
 Depends on W1.S4 (mirror the four shared modules byte-for-byte per the CLAUDE.md mirror rule: `customer-notifications`, `hr-analytics`, `goals`, `challenge-wrapped`, `session-history`) and W1.B2's `src/lib/load-brand.js`. Files: Appendix D. `TopBar` gains a `brand` prop from the layout (which loads the signed-in member's contact → location); `layout.jsx:13-14` and `login/page.jsx:58` render `PLATFORM_NAME` pre-sign-in (no org is known on `app.champfitness.ie`; it is UN1T's host by configuration, so Richard may prefer `EXPO_PUBLIC_BRAND_NAME=UN1T` as the pre-sign-in default — offer it in the PR body as an env, default "Repset"); the two `metricLabel === 'UN1T Points'` compares become key compares; `share/[token]` resolves brand from the card's contact location (add `location_id` to `load-share-card.js:14`).
 
@@ -1137,6 +1217,8 @@ Research facts (HEAD e33e786b):
 - No reusable gate component exists; `src/components/ui/EmptyState.jsx:18` is the primitive.
 
 ### Task W1.M1: `locations.membership_source` + the provider interface
+
+**Status:** done — #1988 (merged, mig 717).
 
 **Files:**
 - Create: `supabase/migrations/717_locations_membership_source.sql`
@@ -1292,6 +1374,8 @@ export const glofoxSource = Object.freeze({
 
 ### Task W1.M2: A per-location "Membership source" setting
 
+**Status:** done — #2001 (merged).
+
 **Files:**
 - Create: `src/app/api/locations/[id]/membership-source/route.js` (+ `route.test.js`, Style B: real `assertLocationAccess` + `guardMasterOrOwner`), register in `src/lib/openapi.js`
 - Modify: `src/components/settings/LocationIntegrations.jsx:76-82,213-214` (a "Membership source" card ABOVE the Glofox tab: select `none` / `glofox`, with `un1t` rendered disabled "coming soon"; the Glofox tab's status dot reads `membershipSourceState`, replacing test (e))
@@ -1304,6 +1388,8 @@ export const glofoxSource = Object.freeze({
 ---
 
 ### Task W1.M3a: Glofox-only web surfaces show "No membership source connected" instead of empty data
+
+**Status:** done — #2002 (merged).
 
 **Files:**
 - Create: `src/components/MembershipSourceGate.jsx` (+ `.test.jsx`): server-component-friendly wrapper: `<MembershipSourceGate state={…} capability="memberships" settingsHref=…>children</MembershipSourceGate>` — `state.state === 'none'` → `EmptyState` "No membership source connected" + "Choose one in Location settings → Integrations" (owner) / "Ask an owner to connect a membership source" (others); `'unconfigured'` → "Glofox is selected but not fully configured (missing: API Key)"; `'unknown'` → "Membership data could not be read right now" (never the none copy); `'configured'` → children
@@ -1320,6 +1406,8 @@ Merge note: no UN1T change — Stillorgan is `glofox` + configured; Hatch Street
 
 ### Task W1.M3b: Crons and Mia discover Glofox locations through the seam; the backfill route bug
 
+**Status:** done — #2005 (merged).
+
 **Files:**
 - Create: `src/lib/membership/locations-for-source.js` (`locationsWithSource(db, 'glofox')` → active locations where `membership_source = 'glofox'`, each with `membershipSourceState` so a cron can log `skipped: unconfigured|unknown` instead of silently passing), `+ .test.js`
 - Modify the five legacy-slice crons to use it: `src/app/api/cron/glofox-sync/route.js:52-66`, `glofox-attendance-refresh/route.js:72-81`, `glofox-detail-backfill/route.js:83-92`, `sync-class-occurrences/route.js:34-41`, `notify-onboarding-pace/route.js:66-74` (their per-location credential re-read via `glofoxCredentialsForLocation` stays); their tests (`route.settings-read.test.js`, `route.test.js`, `route.cursor.test.js`, `route.reconcile.test.js`)
@@ -1335,6 +1423,8 @@ Merge note: the slice-sniffing crons used to try Hatch Street and CCF Autos (emp
 ---
 
 ### Task W1.M3c: The phone's Studio tab and Business dashboard show the membership-source state
+
+**Status:** done — #2007 (merged).
 
 **Files:**
 - Modify: `src/app/api/dashboard/business/route.js:28-46` (payload gains `membership_source: { source, state }`), `mobile/lib/dashboard-api.js:156`, `mobile/components/dashboard/BusinessDashboard.jsx` (the trend card renders the state copy when not `configured`), the Studio tab's pending lists component (memory: `studio-dashboard-pending-lists`; find with `grep -rn "awaiting_approval" mobile/app/\(staff\)/studio`), `mobile/lib/dashboard-api.test.js`
