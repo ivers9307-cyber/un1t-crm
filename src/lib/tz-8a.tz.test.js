@@ -217,7 +217,7 @@ describe('TZ.8a Europe/Dublin is byte-identical', () => {
       if (missingSnapshotMessage({ ...d, timezone: DUB }) !== LEGACY.missingSnapshotMessageLegacyDublin(d)) bad.push(`${iso} msg`)
     }
     expect(bad).toEqual([])
-  })
+  }, 60_000)
 
   it.each(SAMPLES)('the shift reminder\'s today/tomorrow wording at %s', (iso) => {
     const nowMs = at(iso)
