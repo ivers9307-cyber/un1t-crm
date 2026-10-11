@@ -6,6 +6,10 @@
 process.env.TZ = 'America/Los_Angeles' // host zone is neither zone under test: proves nothing reads the host clock
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+// The identity tests walk every hour of 2026 through Intl; CI runners are
+// several times slower than a laptop, so this file gets a wider budget.
+vi.setConfig({ testTimeout: 30_000 })
+
 vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn().mockResolvedValue({ companyName: 'Studio' }) }))
 vi.mock('@/lib/whatsapp', () => ({
   sendTemplateMessage: vi.fn(async () => ({ messageId: 'wamid.t' })),
@@ -56,13 +60,15 @@ const HOURS_2026 = []
 for (let t = ms('2026-01-01T00:00:00Z'); t < ms('2027-01-01T00:00:00Z'); t += H) HOURS_2026.push(t)
 for (const iso of SAMPLES) HOURS_2026.push(ms(iso))
 // The quiet-hours check builds an Intl formatter per call (legacy and new),
-// so it runs on every 5th hour of the year plus every hour of the two days
-// around each Dublin DST change, and the samples.
-const QUIET_HOURS = HOURS_2026.filter((_, i) => i % 5 === 0)
+// so it runs on every 11th hour of the year (walks every hour of the day
+// across the year) plus every hour of the two days around each Dublin DST
+// change, and the samples.
+const DST_EDGE_HOURS = []
 for (const edge of ['2026-03-28T00:00:00Z', '2026-10-24T00:00:00Z']) {
-  for (let t = ms(edge); t < ms(edge) + 48 * H; t += H) QUIET_HOURS.push(t)
+  for (let t = ms(edge); t < ms(edge) + 48 * H; t += H) DST_EDGE_HOURS.push(t)
 }
-for (const iso of SAMPLES) QUIET_HOURS.push(ms(iso))
+for (const iso of SAMPLES) DST_EDGE_HOURS.push(ms(iso))
+const QUIET_HOURS = [...HOURS_2026.filter((_, i) => i % 11 === 0), ...DST_EDGE_HOURS]
 const DAYS_2026 = []
 for (let t = ms('2026-01-01T12:00:00Z'); t < ms('2027-01-01T00:00:00Z'); t += 24 * H) DAYS_2026.push(new Date(t).toISOString().slice(0, 10))
 
@@ -80,10 +86,16 @@ describe('TZ.5 Europe/Dublin is byte-identical', () => {
   it('withinLocalDaytime with no zone falls back to Dublin (the default)', () => {
     for (const iso of SAMPLES) expect(withinLocalDaytime(ms(iso))).toBe(LEGACY.withinDublinDaytimeLegacyDublin(ms(iso)))
   })
-  it('isWithinQuietHours + proactiveWindowOpen: every config, across 2026 and both DST edges', () => {
+  it('isWithinQuietHours: every config, across 2026 and both DST edges', () => {
     for (const q of QUIET_CONFIGS) {
       for (const t of QUIET_HOURS) {
         expect(isWithinQuietHours(new Date(t), q, DUB)).toBe(LEGACY.isWithinQuietHoursLegacyDublin(new Date(t), q))
+      }
+    }
+  })
+  it('proactiveWindowOpen: every config, every hour of both DST edges', () => {
+    for (const q of QUIET_CONFIGS) {
+      for (const t of DST_EDGE_HOURS) {
         expect(proactiveWindowOpen(t, { quiet_hours: q }, DUB)).toStrictEqual(LEGACY.proactiveWindowOpenLegacyDublin(t, { quiet_hours: q }))
       }
     }

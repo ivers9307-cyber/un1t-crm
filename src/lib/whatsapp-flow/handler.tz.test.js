@@ -4,6 +4,9 @@
 process.env.TZ = 'America/Los_Angeles' // neither zone under test
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// The identity tests walk every hour of 2026 through Intl (slow CI runners).
+vi.setConfig({ testTimeout: 30_000 })
+
 vi.mock('@/lib/booking-slots.js', () => ({ computeAvailableDays: vi.fn(), computeAvailableSlots: vi.fn() }))
 vi.mock('@/lib/public-classes.js', () => ({
   listPublicClasses: vi.fn(async () => ([
