@@ -25,7 +25,6 @@ shared/challenges.js
 shared/coach-kudos.js
 shared/customer-notifications.js
 shared/dashboard-data.js
-shared/events.js
 shared/format.js
 shared/goals.js
 shared/hr-analytics.js
@@ -52,7 +51,6 @@ src/app/api/cron/ad-report-email/route.js
 src/app/api/cron/agent-followups/route.js
 src/app/api/cron/equipment-inspection-reminder/route.js
 src/app/api/cron/equipment-inspection-sweep/route.js
-src/app/api/cron/event-reminders/route.js
 src/app/api/cron/morning-briefing/route.js
 src/app/api/cron/race-timing-events/route.js
 src/app/api/cron/receipt-coverage-weekly/route.js
@@ -67,10 +65,6 @@ src/app/api/dashboard/studio-contacts/route.js
 src/app/api/equipment/due/route.js
 src/app/api/equipment/inspections/[id]/submit/route.js
 src/app/api/equipment/route.js
-src/app/api/public/entry/[token]/move-options/route.js
-src/app/api/public/entry/[token]/move/route.js
-src/app/api/public/entry/[token]/route.js
-src/app/api/public/events/[slug]/waitlist/route.js
 src/app/api/qualifications/route.js
 src/app/api/schedule/availability/route.js
 src/app/api/schedule/blocks/[id]/offer/route.js
@@ -129,15 +123,8 @@ src/lib/customer-notifications.js
 src/lib/dates.js
 src/lib/email-forward.js
 src/lib/equipment-dates.js
-src/lib/event-attendee-reminders.js
-src/lib/event-waitlist.js
-src/lib/host-move-session.js
-src/lib/host-schedule-time.js
 src/lib/hr-analytics.js
 src/lib/hr-attribution-sweep.js
-src/lib/hyrox/expand-runner.js
-src/lib/hyrox/mapping.js
-src/lib/hyrox/reminder-runner.js
 src/lib/integrations-hub.js
 src/lib/invoices-queue/enqueue.js
 src/lib/labour-month-model.js
@@ -149,12 +136,10 @@ src/lib/membership-flows.js
 src/lib/membership-snapshot.js
 src/lib/onboarding-journey.js
 src/lib/plans.js
-src/lib/public-events.js
 src/lib/qualification-digest.js
 src/lib/recon/finalize.js
 src/lib/recon/hunt-queries.js
 src/lib/recon/pull.js
-src/lib/registration-move.js
 src/lib/report-period.js
 src/lib/roster-change-format.js
 src/lib/roster-change-notify.js

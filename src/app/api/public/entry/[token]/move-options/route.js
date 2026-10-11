@@ -18,7 +18,7 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { verifyEntryManageTokenFromEnv } from '@/lib/entry-manage-tokens'
 import { readRegistrationForMove, countEntryCheckins, listMoveTargets, moveLocationIds } from '@/lib/registration-move'
 import { entryMoveBlock, publicMoveOptions, customerMoveMessage, CUSTOMER_MOVE_STATUS } from '@/lib/registration-move-public'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { eventToday } from '@/lib/event-day'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -44,7 +44,9 @@ export async function GET(request, props) {
   const checkins = await countEntryCheckins(db, reg.id)
   if (checkins.error) return fail('load_failed')
 
-  const block = entryMoveBlock({ registration: reg, checkinCount: checkins.count, today: dublinTodayStr() })
+  // TZ.9: "past" by the entry's own event's studio day (reg.race carries the
+  // locations embed with its timezone).
+  const block = entryMoveBlock({ registration: reg, checkinCount: checkins.count, today: eventToday(reg.race) })
   if (block) {
     return NextResponse.json({ success: true, data: { can_move: false, move_blocked_reason: block.message, options: [] } })
   }

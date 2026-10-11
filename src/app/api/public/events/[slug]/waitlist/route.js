@@ -19,7 +19,7 @@ import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { eventIsPublic } from '@/lib/host-events'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { eventToday } from '@/lib/event-day'
 import { joinWaitlist, loadEventHasRoom, registrationWindowOpen, WAITLIST_EVENT_COLUMNS } from '@/lib/event-waitlist'
 import { logError } from '@/lib/log'
 
@@ -70,7 +70,9 @@ export async function POST(request, props) {
   }
   if (!race || !eventIsPublic(race)) return refuse(404, 'not_found', 'Event not found')
 
-  if (race.race_date && race.race_date < dublinTodayStr()) {
+  // TZ.9: "already happened" by the event's studio day (the locations embed
+  // in WAITLIST_EVENT_COLUMNS carries the timezone).
+  if (race.race_date && race.race_date < eventToday(race)) {
     return refuse(409, 'past', 'This event has already happened.')
   }
   if (!registrationWindowOpen(race)) {

@@ -16,6 +16,7 @@ import { normalizeClassName } from '@/lib/hr-analytics'
 import { weekNoFor, slotFor } from './mapping'
 import { sendPush, readRoleRecipientIds } from '@/lib/push'
 import { logWarn, logError } from '@/lib/log'
+import { formatInZone, zoneOfLocation } from '@/lib/location-time'
 
 const LEAD_MS = 30 * 60_000        // remind 30 min before the class
 const FALLBACK_ROLES = ['owner', 'manager', 'head_coach']
@@ -41,13 +42,25 @@ async function classRecipients(db, locationId, occ) {
   return { ids: [...fallback.ids], error: null }
 }
 
+/**
+ * "09:00": the class start on the block studio's clock (TZ.9), with the exact
+ * Intl options the Dublin-only label used, so a Dublin coach reads the same.
+ * @param {string} startsAt  ISO instant
+ * @param {string} zone      the block's location zone
+ */
+export function hyroxClassTimeLabel(startsAt, zone) {
+  return formatInZone(new Date(startsAt), zone, { hour: '2-digit', minute: '2-digit' }, 'en-IE')
+}
+
 export async function runHyroxClassReminder(db, { nowMs = Date.now() } = {}) {
   const stats = { classes: 0, reminded: 0, recipients: 0, recipients_failed: 0, send_failed: 0, claim_failed: 0 }
+  // TZ.9 — the block's studio zone rides the block read (the locations embed).
   const { data: blocks } = await db
-    .from('hyrox_blocks').select('id, location_id, starts_on, weeks, session_weekdays').eq('status', 'active')
+    .from('hyrox_blocks').select('id, location_id, starts_on, weeks, session_weekdays, locations:location_id ( id, timezone )').eq('status', 'active')
 
   for (const block of blocks || []) {
     try {
+      const zone = zoneOfLocation(block.locations)
       const { data: occs } = await db.from('class_occurrences')
         .select('name, starts_at, ends_at')
         .eq('location_id', block.location_id)
@@ -104,8 +117,8 @@ export async function runHyroxClassReminder(db, { nowMs = Date.now() } = {}) {
 
         // The session this class maps to (for the deep-link + focus). Any status
         // — the coach reviews a draft too.
-        const wk = weekNoFor(block.starts_on, occ.starts_at, block.weeks)
-        const slot = slotFor(block.session_weekdays || [], occ.starts_at)
+        const wk = weekNoFor(block.starts_on, occ.starts_at, block.weeks, zone)
+        const slot = slotFor(block.session_weekdays || [], occ.starts_at, zone)
         let session = null
         if (wk != null && slot != null) {
           const { data: s } = await db.from('hyrox_sessions')
@@ -113,9 +126,7 @@ export async function runHyroxClassReminder(db, { nowMs = Date.now() } = {}) {
           session = s || null
         }
 
-        const timeStr = new Date(occ.starts_at).toLocaleTimeString('en-IE', {
-          timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit',
-        })
+        const timeStr = hyroxClassTimeLabel(occ.starts_at, zone)
         const result = await sendPush(recipientIds, {
           title: 'Hyrox class coming up',
           body: session?.focus

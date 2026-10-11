@@ -19,9 +19,9 @@ const session = () => ({ host: { id: H1, name: 'Pride Training Club' }, authUser
 const props = (id = R1) => ({ params: Promise.resolve({ id }) })
 const get = () => new Request(`http://localhost/api/host/registrations/${R1}/move-targets`)
 
-function dbWith({ ownEvents = [E1, E2], eventsError = null } = {}) {
+function dbWith({ ownEvents = [E1, E2], eventsError = null, rows = null } = {}) {
   const calls = []
-  const b = { then: (res, rej) => Promise.resolve({ data: eventsError ? null : ownEvents.map((id) => ({ id })), error: eventsError }).then(res, rej) }
+  const b = { then: (res, rej) => Promise.resolve({ data: eventsError ? null : (rows || ownEvents.map((id) => ({ id }))), error: eventsError }).then(res, rej) }
   for (const name of ['select', 'eq', 'gte']) b[name] = (...a) => { calls.push([name, ...a]); return b }
   return { calls, from: vi.fn(() => b) }
 }
@@ -33,6 +33,26 @@ beforeEach(() => {
 })
 
 describe('GET /api/host/registrations/[id]/move-targets', () => {
+  it('TZ.9: the own-event fence is by each event\'s studio day, not Dublin\'s', async () => {
+    // 2026-11-01T03:30Z: Dublin is Sunday 1 Nov; New York is Saturday 31 Oct 23:30.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-01T03:30:00Z'))
+    try {
+      mocks.getCurrentHost.mockResolvedValue(session())
+      const db = dbWith({ rows: [
+        { id: E1, race_date: '2026-10-31', locations: { id: 'L-ny', timezone: 'America/New_York' } },
+        { id: E2, race_date: '2026-10-31', locations: { id: 'L-dub', timezone: 'Europe/Dublin' } },
+      ] })
+      mocks.createServerClient.mockReturnValue(db)
+      expect((await GET(get(), props())).status).toBe(200)
+      // The query floor is the earliest studio day (the UTC day before) ...
+      expect(db.calls).toContainEqual(['gte', 'race_date', '2026-10-31'])
+      // ... and each event is then judged on its own studio's day.
+      expect([...mocks.listMoveTargets.mock.calls[0][1].allowedEventIds]).toEqual([E1])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
   it('401 without a host session, before any read', async () => {
     mocks.getCurrentHost.mockResolvedValue(null)
     expect((await GET(get(), props())).status).toBe(401)
@@ -69,7 +89,7 @@ describe('GET /api/host/registrations/[id]/move-targets', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ success: true, data: { entry: { id: R1 }, source: { id: E1 }, targets: [{ id: E2 }] } })
     expect(db.from).toHaveBeenCalledWith('race_events')
-    expect(db.calls).toContainEqual(['select', 'id'])
+    expect(db.calls).toContainEqual(['select', 'id, race_date, locations:location_id ( id, timezone )'])
     expect(db.calls).toContainEqual(['eq', 'host_id', H1])
     expect(db.calls).toContainEqual(['eq', 'active', true])
     expect(db.calls).toContainEqual(['eq', 'status', 'published'])
