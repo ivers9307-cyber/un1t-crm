@@ -14,52 +14,16 @@
 //     server render so hydration never mismatches; a server page passes
 //     viewerZoneOf(user) (the viewer's active studio). Unknown viewer → no
 //     suffix, which is today's text.
-import { canonicalZone, resolveZone, formatInZone } from '@shared/zoned-time'
+//
+// The suffix rule itself (needsZoneSuffix, zoneAbbreviation, zoneCity, and the
+// sameZone/zoneSuffix helpers) lives in shared/zone-suffix.js, the ONE
+// implementation the phone's mobile/lib/studio-zone.js wraps too; this module
+// re-exports it (tests/shared-pair-sync.test.js holds it to runtime identity)
+// and keeps only the web's formatter.
+import { resolveZone, formatInZone } from '@shared/zoned-time'
+import { zoneSuffix } from '@shared/zone-suffix'
 
-/**
- * Should a time in `zone` carry its abbreviation for this viewer?
- * Compared through canonicalZone() (alias spellings agree). An unknown or
- * invalid viewer zone never asks for a suffix.
- * @param {string|null|undefined} zone the record's zone (invalid → the Dublin floor)
- * @param {string|null|undefined} viewerZone
- */
-export function needsZoneSuffix(zone, viewerZone) {
-  const viewer = canonicalZone(viewerZone)
-  if (!viewer) return false
-  return resolveZone(zone) !== viewer
-}
-
-// The first locale whose short name for the zone is a real abbreviation (EST,
-// BST, IST, CEST, AEST) rather than a bare offset; else the offset itself.
-// en-US names the Americas, en-GB the UK and central Europe, en-IE Ireland,
-// en-AU Australia.
-const ABBR_LOCALES = ['en-US', 'en-GB', 'en-IE', 'en-AU']
-const BARE_OFFSET = /^(?:GMT|UTC)[+\-−]/
-const _abbrFmts = new Map()
-function abbrFmt(locale, zone) {
-  const k = `${locale}|${zone}`
-  let f = _abbrFmts.get(k)
-  if (!f) { f = new Intl.DateTimeFormat(locale, { timeZone: zone, timeZoneName: 'short' }); _abbrFmts.set(k, f) }
-  return f
-}
-const shortName = (locale, zone, d) => abbrFmt(locale, zone).formatToParts(d).find((p) => p.type === 'timeZoneName')?.value || ''
-
-/**
- * The zone's short name at that instant ('EST'/'EDT', 'GMT'/'IST', 'GMT+3').
- * @param {Date|number|string} instant
- * @param {string|null|undefined} zone
- * @returns {string} '' for an unparseable instant
- */
-export function zoneAbbreviation(instant, zone) {
-  const d = instant instanceof Date ? instant : new Date(instant)
-  if (Number.isNaN(d.getTime())) return ''
-  const z = resolveZone(zone)
-  for (const locale of ABBR_LOCALES) {
-    const name = shortName(locale, z, d)
-    if (name && !BARE_OFFSET.test(name)) return name
-  }
-  return shortName('en-GB', z, d)
-}
+export { needsZoneSuffix, sameZone, zoneAbbreviation, zoneCity, zoneSuffix } from '@shared/zone-suffix'
 
 /**
  * An instant rendered in the record's zone with the caller's exact Intl
@@ -79,16 +43,5 @@ export function formatRecordTime(instant, zone, options = {}, locale = 'en-IE', 
   if (Number.isNaN(d.getTime())) return 'Invalid Date'
   const z = resolveZone(zone)
   const text = formatInZone(d, z, options, locale)
-  return needsZoneSuffix(z, viewerZone) ? `${text} ${zoneAbbreviation(d, z)}` : text
-}
-
-/**
- * The zone named by its city for staff copy ("Dublin", "New York"), so copy
- * that used to say "Dublin" names the studio's own zone and reads the same for
- * a Dublin studio. Unknown → the Dublin floor.
- * @param {string|null|undefined} zone
- */
-export function zoneCity(zone) {
-  const z = resolveZone(zone)
-  return z.slice(z.lastIndexOf('/') + 1).replace(/_/g, ' ')
+  return text + zoneSuffix(d, z, viewerZone)
 }
