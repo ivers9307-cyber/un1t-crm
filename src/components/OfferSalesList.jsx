@@ -5,19 +5,25 @@
 // button POSTs the fulfil route and refreshes the server data.
 import { useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { formatRecordTime } from '@/lib/record-time'
+import { useViewerZone } from '@/lib/use-viewer-zone'
 
 function euro(cents) {
   return '€' + ((cents || 0) / 100).toLocaleString('en-IE', { maximumFractionDigits: 0 })
 }
 
-function dublinTime(iso) {
+// TZ.16 (D3 = A) — when the sale was paid, in the studio's zone (`timezone`,
+// the active studio whose sales these are), abbreviation only when the browser
+// is elsewhere.
+export function paidAtLabel(iso, zone, viewerZone = null) {
   if (!iso) return ''
-  return new Date(iso).toLocaleString('en-IE', {
-    timeZone: 'Europe/Dublin', weekday: 'short', hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short',
-  })
+  return formatRecordTime(new Date(iso), zone, {
+    weekday: 'short', hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short',
+  }, 'en-IE', viewerZone)
 }
 
-export default function OfferSalesList({ pending, fulfilled }) {
+export default function OfferSalesList({ pending, fulfilled, timezone = null }) {
+  const viewerZone = useViewerZone()
   const router = useRouter()
   const searchParams = useSearchParams()
   const focus = searchParams.get('focus')
@@ -80,7 +86,7 @@ export default function OfferSalesList({ pending, fulfilled }) {
                 <div className="min-w-0">
                   <p className="font-medium text-un1t-text">{r.buyer_name || r.buyer_email}</p>
                   <p className="text-sm text-un1t-subtle">
-                    {r.offer?.name} ({r.offer?.bonus_headline}) · {euro(r.amount_cents)} · paid {dublinTime(r.paid_at)}
+                    {r.offer?.name} ({r.offer?.bonus_headline}) · {euro(r.amount_cents)} · paid {paidAtLabel(r.paid_at, timezone, viewerZone)}
                   </p>
                   <p className="text-sm text-un1t-subtle">{r.buyer_email}{r.buyer_phone ? ` · ${r.buyer_phone}` : ''}</p>
                 </div>

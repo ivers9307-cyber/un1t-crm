@@ -8,6 +8,7 @@ import { createServerClient } from '@/lib/supabase'
 import { formatSaleDeadline } from '@/lib/sale-offers'
 import { resolveOffersHomeLocationId, NO_HOME_LOCATION_ID } from '@/lib/offers-home'
 import './offers.css'
+import { displayZoneFor } from '@/lib/display-zone'
 
 const archivo = Archivo({ subsets: ['latin'], weight: ['500', '600', '700'], variable: '--font-archivo' })
 const archivoBlack = Archivo_Black({ subsets: ['latin'], weight: '400', variable: '--font-archivo-black' })
@@ -55,7 +56,9 @@ export default async function OffersLayout({ children }) {
     .order('ends_at', { ascending: false })
     .limit(1)
     .maybeSingle()
-  const deadline = formatSaleDeadline(data?.ends_at)
+  // TZ.16 — the deadline on the offers' home studio clock (display only).
+  const zone = await displayZoneFor(db, null, homeId, 'offers')
+  const deadline = formatSaleDeadline(data?.ends_at, { zone })
 
   return (
     <div className={`ofr ${archivo.variable} ${archivoBlack.variable}`}>

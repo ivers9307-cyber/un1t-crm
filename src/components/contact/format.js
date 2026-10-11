@@ -3,6 +3,8 @@
 // (GlofoxProfileCard, the rails, the page itself) share one copy.
 // Pure formatting only — no data access.
 
+import { formatRecordTime } from '@/lib/record-time'
+
 export function relativeTime(iso) {
   if (!iso) return null
   const ms = Date.now() - new Date(iso).getTime()
@@ -45,4 +47,16 @@ export function formatTime(time) {
   const ampm = hour >= 12 ? 'PM' : 'AM'
   const h12 = hour % 12 || 12
   return `${h12}:${m} ${ampm}`
+}
+
+/**
+ * TZ.16 (D3 = A) — the "Next: Thu 9 Oct" chip on the deal card, the pipeline
+ * drawer and the contact header, in the studio's zone; the zone's abbreviation
+ * follows only when it differs from the viewer's.
+ * @param {string} iso
+ * @param {string} zone the studio's zone
+ * @param {string|null} [viewerZone]
+ */
+export function nextClassLabel(iso, zone, viewerZone = null) {
+  return formatRecordTime(new Date(iso), zone, { weekday: 'short', day: 'numeric', month: 'short' }, 'en-IE', viewerZone)
 }

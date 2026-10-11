@@ -10,18 +10,22 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CalendarDays, Check, Copy } from 'lucide-react'
 import { Button } from '@/components/ui'
+import { formatRecordTime } from '@/lib/record-time'
+import { useViewerZone } from '@/lib/use-viewer-zone'
 
 const ENDPOINT = '/api/me/calendar-feed'
 
-function dublinStamp(iso) {
+// TZ.16 (D3 = A) — the feed is the person's own, so it reads in their active
+// studio's zone (`timezone`, from the page), with the abbreviation only when
+// the browser is elsewhere.
+export function feedStamp(iso, zone, viewerZone = null) {
   const t = Date.parse(iso ?? '')
   if (!Number.isFinite(t)) return null
-  return new Date(t).toLocaleString('en-IE', {
-    timeZone: 'Europe/Dublin', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-  })
+  return formatRecordTime(new Date(t), zone, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }, 'en-IE', viewerZone)
 }
 
-export default function CalendarFeedCard() {
+export default function CalendarFeedCard({ timezone = null }) {
+  const viewerZone = useViewerZone()
   const [status, setStatus] = useState(null) // null while loading
   const [links, setLinks] = useState(null)   // { url, webcal_url, google_url } — only right after POST
   const [busy, setBusy] = useState(false)
@@ -96,7 +100,7 @@ export default function CalendarFeedCard() {
     }
   }
 
-  const lastChecked = dublinStamp(status?.last_fetched_at)
+  const lastChecked = feedStamp(status?.last_fetched_at, timezone, viewerZone)
 
   return (
     <div className="border-t border-un1t-border pt-6">

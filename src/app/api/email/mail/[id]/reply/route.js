@@ -30,6 +30,7 @@ import {
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { withSendMarker } from '@/lib/postmark-send-marker'
 import { logError } from '@/lib/log'
+import { displayZoneFor } from '@/lib/display-zone'
 import {
   loadConversationForUser, loadOwnAddresses, statusTimestamps,
   loadParticipantMessages, resolveReplyAudience, conversationMergedAway,
@@ -383,7 +384,10 @@ export async function POST(request, props) {
   // PLAIN text is ever quoted, the forward path's refusal for the same reason:
   // re-sending a stranger's sanitised HTML from the studio's own address is
   // not worth a prettier quote.
-  const quoteCtx = { anchor, conversation, mailbox: mailbox || null }
+  // TZ.16 — the attribution's stamp on the mailbox studio's clock (display
+  // only: an unreadable zone falls back to the default, logged).
+  const zone = await displayZoneFor(db, user, conversation.location_id, 'mail')
+  const quoteCtx = { anchor, conversation, mailbox: mailbox || null, zone }
   const wireText = buildReplyText({ signedText: outboundText, ...quoteCtx })
   const wireHtml = buildReplyHtml({
     bodyHtml: richSig ? textToHtml(text) + richSig.html : textToHtml(outboundText),

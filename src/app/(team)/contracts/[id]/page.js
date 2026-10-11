@@ -17,6 +17,8 @@ import ContractPrintButton from '@/components/ContractPrintButton'
 import ContractBody from '@/components/ContractBody'
 import ContractIssueWarningBanner from '@/components/ContractIssueWarningBanner'
 import ContractDraftActions from '@/components/ContractDraftActions'
+import { contractZone, contractStamp, contractSignedStamp } from '@/lib/contract-display-time'
+import { viewerZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,15 +29,6 @@ const STATUS_BADGE = {
   declined: { label: 'Declined', class: 'bg-red-500/15 text-red-700' },
   revoked:  { label: 'Revoked', class: 'bg-gray-500/15 text-gray-600' },
   draft:    { label: 'Draft', class: 'bg-purple-500/15 text-purple-700' },
-}
-
-function fmtDate(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleString('en-IE', {
-    timeZone: 'Europe/Dublin',
-    day: 'numeric', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  })
 }
 
 export default async function ContractDetailAdmin(props) {
@@ -60,12 +53,18 @@ export default async function ContractDetailAdmin(props) {
       *,
       profile:profiles!profile_id (id, full_name, email, role, employment_type),
       issuer:profiles!issued_by (id, full_name, email),
-      template:contract_templates!template_id (name, version)
+      template:contract_templates!template_id (name, version),
+      location:locations!location_id ( id, timezone )
     `)
     .eq('id', params.id)
   if (!user.isMaster) q = q.eq('organization_id', orgId)
   const { data: c } = await q.maybeSingle()
   if (!c) notFound()
+  // TZ.16 (D3 = A) — the contract's studio zone; the abbreviation follows only
+  // when it differs from the viewer's active studio (Dublin on Dublin: no change).
+  const zone = contractZone(c, user)
+  const viewerZone = viewerZoneOf(user)
+  const fmtDate = (iso) => contractStamp(iso, zone, viewerZone)
 
   // LEGALENT.1 — the countersignature label asserts the CONTRACTING
   // COMPANY. It is read from the contract's own FROZEN variables_data,
@@ -148,6 +147,8 @@ export default async function ContractDetailAdmin(props) {
             label={`For ${entityLabel}`}
             name={c.issuer_signature}
             timestamp={c.issued_at}
+            zone={zone}
+            viewerZone={viewerZone}
           />
           {c.status === 'signed' ? (
             <SignatureBlock
@@ -155,6 +156,8 @@ export default async function ContractDetailAdmin(props) {
               name={c.signature_value}
               timestamp={c.signed_at}
               ip={c.signed_ip}
+              zone={zone}
+              viewerZone={viewerZone}
             />
           ) : (
             <div>
@@ -201,7 +204,7 @@ export default async function ContractDetailAdmin(props) {
   )
 }
 
-function SignatureBlock({ label, name, timestamp, ip }) {
+function SignatureBlock({ label, name, timestamp, ip, zone, viewerZone }) {
   return (
     <div>
       <p className="text-[10px] uppercase tracking-wider text-gray-500">{label}</p>
@@ -209,7 +212,7 @@ function SignatureBlock({ label, name, timestamp, ip }) {
         {name || ''}
       </p>
       <p className="text-[10px] text-gray-500 mt-1">
-        Signed {new Date(timestamp).toLocaleString('en-IE', { timeZone: 'Europe/Dublin' })}
+        Signed {contractSignedStamp(timestamp, zone, viewerZone)}
         {ip ? ` · ${ip}` : ''}
       </p>
     </div>

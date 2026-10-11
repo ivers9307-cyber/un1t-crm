@@ -12,8 +12,9 @@ import { logError } from '@/lib/log'
 // follow-up ladder for every location that enabled it. Stage 1 =
 // in-window contextual nudge; stage 2 = one approved marketing
 // template outside the window. Default OFF per location
-// (settings.customer_agent.followups.enabled). Dublin daytime only —
-// outside it the run is a cheap no-op (heartbeat still stamps).
+// (settings.customer_agent.followups.enabled). Daytime on each studio's own
+// clock only (09:00-19:59 in its locations.timezone, TZ.5): outside it the
+// run is a cheap no-op for that studio (heartbeat still stamps).
 export const maxDuration = 300
 
 export async function GET(request) {

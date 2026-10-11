@@ -19,6 +19,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Download, ChevronDown, ChevronRight, RefreshCw, AlertCircle, Loader2 } from 'lucide-react'
+import { PLATFORM_TZ } from '@shared/zoned-time'
 
 const CATEGORY_LABELS = {
   auth: 'Authentication',
@@ -66,12 +67,14 @@ const ACTION_LABELS = {
   'permissions.updated': 'Permissions updated',
 }
 
-function fmtDt(iso) {
+// TZ.16 (D4 = A) — the audit log is a master-only platform console, so it
+// reads on the platform's clock (PLATFORM_TZ), whichever studio a row is from.
+export function fmtDt(iso) {
   if (!iso) return '—'
   try {
     const d = new Date(iso)
     return d.toLocaleString('en-IE', {
-      timeZone: 'Europe/Dublin',
+      timeZone: PLATFORM_TZ,
       year: 'numeric', month: 'short', day: '2-digit',
       hour: '2-digit', minute: '2-digit', second: '2-digit',
     })

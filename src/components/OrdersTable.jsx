@@ -11,6 +11,8 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, AlertCircle, Search, RefreshCw, X, Undo2, Check as CheckIcon } from 'lucide-react'
+import { formatRecordTime } from '@/lib/record-time'
+import { useViewerZone } from '@/lib/use-viewer-zone'
 
 const STATUS_TABS = [
   { id: 'completed', label: 'Completed', accent: 'emerald' },
@@ -232,14 +234,28 @@ export default function OrdersTable() {
   )
 }
 
-function OrderRow({ row, onChanged }) {
-  const router = useRouter()
-  const dt = row.created_at ? new Date(row.created_at) : null
-  const dateLabel = dt ? dt.toLocaleString('en-IE', {
-    timeZone: 'Europe/Dublin',
+// TZ.16 (D3 = A) — an order's created_at in ITS studio's zone (the list
+// route's per-row `timezone`; a master's unscoped list spans studios), with
+// the abbreviation only when the browser is elsewhere.
+export function orderRowDate(createdAt, zone, viewerZone = null) {
+  const dt = createdAt ? new Date(createdAt) : null
+  return dt ? formatRecordTime(dt, zone, {
     day: 'numeric', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
-  }) : ''
+  }, 'en-IE', viewerZone) : ''
+}
+export function orderCardDate(createdAt, zone, viewerZone = null) {
+  const dt = createdAt ? new Date(createdAt) : null
+  return dt ? formatRecordTime(dt, zone, {
+    day: 'numeric', month: 'short',
+    hour: '2-digit', minute: '2-digit',
+  }, 'en-IE', viewerZone) : ''
+}
+
+function OrderRow({ row, onChanged }) {
+  const router = useRouter()
+  const viewerZone = useViewerZone()
+  const dateLabel = orderRowDate(row.created_at, row.timezone, viewerZone)
   const amount = formatMoney(row.amount_cents, row.currency)
   const sourceLabel = SOURCE_LABELS[row.source_type] || row.source_type
   const meta = row.metadata || {}
@@ -459,12 +475,8 @@ function OrderRow({ row, onChanged }) {
 // breaking the table semantics.
 function OrderCard({ row }) {
   const router = useRouter()
-  const dt = row.created_at ? new Date(row.created_at) : null
-  const dateLabel = dt ? dt.toLocaleString('en-IE', {
-    timeZone: 'Europe/Dublin',
-    day: 'numeric', month: 'short',
-    hour: '2-digit', minute: '2-digit',
-  }) : ''
+  const viewerZone = useViewerZone()
+  const dateLabel = orderCardDate(row.created_at, row.timezone, viewerZone)
   const amount = formatMoney(row.amount_cents, row.currency)
   const sourceLabel = SOURCE_LABELS[row.source_type] || row.source_type
   const meta = row.metadata || {}
