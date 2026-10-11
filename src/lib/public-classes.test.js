@@ -6,6 +6,13 @@ vi.mock('@/lib/glofox', () => ({
     { _id: 'e1', name: 'S&C', time_start: 4102444800, duration: 60, size: 12, booked: 4, active: true, private: false },
   ] })),
 }))
+// TZ.7: readPublicClasses now reads the studio's zone. These tests pin the
+// landing/Glofox reads, so the zone read is stubbed (a Dublin studio); the
+// zone behaviour itself is bookings-classes.tz.test.js's.
+vi.mock('@/lib/location-time', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getLocationZone: vi.fn(async () => 'Europe/Dublin'),
+}))
 import { shapePublicClass, listPublicClasses, readPublicClasses, parseHiddenKeywords, isClassHidden, isEventFull, PUBLIC_CLASS_KEYS } from './public-classes'
 import { fetchUpcomingEvents, glofoxCredentialsForLocation } from '@/lib/glofox'
 

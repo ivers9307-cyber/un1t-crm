@@ -6,6 +6,7 @@
 //
 // Placeholders use the same single-brace form as the cancellation-form copy:
 // {first_name}, {class_name}, {class_time}, {studio_name}, {address}.
+import { DEFAULT_TZ } from '@shared/zoned-time' // pure: safe in the client editor
 
 export const DEFAULT_MANUAL_CONFIRM_EMAIL = Object.freeze({
   subject: 'You are booked in at {studio_name}',
@@ -25,13 +26,26 @@ export const DEFAULT_MANUAL_CONFIRM_EMAIL = Object.freeze({
   ].join('\n'),
 })
 
-const labelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', hour12: false })
+// One formatter per zone, built on first use. Same options as before TZ.7, so
+// a Dublin studio's text is byte-identical.
+const labelFmts = new Map()
+function labelFmt(zone) {
+  let f = labelFmts.get(zone)
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-IE', { timeZone: zone, weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', hour12: false })
+    labelFmts.set(zone, f)
+  }
+  return f
+}
 
-/** "Monday 5 October at 06:00", Dublin wall clock. '' for an unreadable time. */
-export function formatClassTime(startsAt) {
+/**
+ * "Monday 5 October at 06:00", the studio's wall clock (`zone`: the booking's
+ * location zone, TZ.7). '' for an unreadable time.
+ */
+export function formatClassTime(startsAt, zone = DEFAULT_TZ) {
   const d = startsAt ? new Date(startsAt) : null
   if (!d || isNaN(d.getTime())) return ''
-  const parts = labelFmt.formatToParts(d)
+  const parts = labelFmt(zone).formatToParts(d)
   const get = (t) => parts.find((p) => p.type === t)?.value || ''
   return `${get('weekday')} ${get('day')} ${get('month')} at ${get('hour')}:${get('minute')}`
 }

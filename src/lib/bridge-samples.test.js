@@ -16,7 +16,7 @@ import {
   deriveBridgeStatus,
   latestBridgeSeenMs,
   BRIDGE_ONLINE_WINDOW_MS,
-  dublinWallClockToMs,
+  bookingWallClockToMs,
   resolveStrapsForBatch,
   maskStrapLabel,
 } from './bridge-samples.js'
@@ -520,11 +520,13 @@ describe('isBridgeOnline', () => {
   })
 })
 
-// ── dublinWallClockToMs (HR-CLASS-ALLOC.1) ───────────────────────
-// bookings.booking_date + start_time are Dublin wall-clock with NO tz.
+// ── bookingWallClockToMs (HR-CLASS-ALLOC.1; was dublinWallClockToMs) ─
+// bookings.booking_date + start_time are studio wall-clock with NO tz.
 // The conversion must add the Dublin offset (BST +1h Mar–Oct, GMT +0
 // otherwise) — the naive `T${time}Z` parse was off by the BST offset.
-describe('dublinWallClockToMs', () => {
+// TZ.7: the zone is now an argument; these cases pin Europe/Dublin.
+const dublinWallClockToMs = (d, t) => bookingWallClockToMs(d, t, 'Europe/Dublin')
+describe('bookingWallClockToMs (Europe/Dublin)', () => {
   it('summer (BST): 06:00 Dublin = 05:00 UTC', () => {
     expect(dublinWallClockToMs('2026-06-18', '06:00')).toBe(Date.parse('2026-06-18T05:00:00Z'))
   })

@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Calendar, Clock, Mail } from 'lucide-react'
@@ -11,9 +11,9 @@ import CalendlyTabs from '@/components/CalendlyTabs'
 
 export const dynamic = 'force-dynamic'
 
-async function getBookings(filter, locationId) {
+// TZ.7: booking_date is the studio's calendar day, so "today" is its clock.
+async function getBookings(filter, locationId, today) {
   const db = createServerClient()
-  const today = dublinTodayStr()
 
   let query = db.from('bookings')
     .select('*, event_types(name, color, slug), contacts(id, name, email)')
@@ -49,7 +49,11 @@ export default async function BookingsPage(props) {
   if (!hasPermission(user, 'bookings')) redirect('/')
 
   const filter = searchParams.filter || 'upcoming'
-  const bookings = await getBookings(filter, user.activeLocation?.id)
+  // The list is one studio's (location_id = the active location), so its zone
+  // is the active location's (timezone is on CLIENT_LOCATION_COLUMNS).
+  const zone = zoneOfLocation(user.activeLocation)
+  const today = todayStrIn(zone)
+  const bookings = await getBookings(filter, user.activeLocation?.id, today)
 
   const filters = [
     { key: 'upcoming', label: 'Upcoming' },
@@ -57,8 +61,6 @@ export default async function BookingsPage(props) {
     { key: 'past', label: 'Past' },
     { key: 'cancelled', label: 'Cancelled' },
   ]
-
-  const today = dublinTodayStr()
 
   return (
     <div className="p-8">
@@ -159,6 +161,7 @@ export default async function BookingsPage(props) {
                     skipReminder={booking.skip_reminder}
                     reminderSentAt={booking.reminder_sent_at}
                     bookingDate={booking.booking_date}
+                    zone={zone}
                   />
                   <BookingStatusToggle bookingId={booking.id} currentStatus={booking.status} />
                 </div>

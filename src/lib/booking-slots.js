@@ -1,15 +1,21 @@
 // AGENT-HANDS.1 — consultation slot machinery, extracted from
 // /api/public/bookings/[slug]/slots so the customer agent's
 // consultation tools reuse the EXACT availability logic the public
-// booking widget uses (incident-hardened Dublin-time semantics —
+// booking widget uses (incident-hardened local-time semantics —
 // see the route's TIMEZONE NOTES from the 2026-05-11 incident).
 //
 // Pure: generateDaySlots + filterAvailableSlots (unit-tested).
 // IO: computeAvailableSlots(db, event, date) — queries bookings +
 // blocked_times and applies the same range/day/past filters the
 // route applied inline before this extraction.
+//
+// TZ.7: availability windows and bookings.booking_date/start_time are wall
+// clock in the STUDIO's zone (the event type's location), so "today" and
+// "already past" are judged on that zone's clock, never Dublin's or the
+// server's. Europe/Dublin output is byte-identical to before
+// (bookings-classes.tz.test.js).
 
-import { dublinTodayStr, dublinNowMinutes, addDaysISO } from '@/lib/dublin-time'
+import { todayStrIn, nowMinutesIn, addDaysISO, zoneOfLocation, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 
 /**
  * Generate the day's candidate slots from an availability window.
@@ -40,7 +46,7 @@ export function generateDaySlots(win, opts = {}) {
 
 /**
  * Subtract booked/blocked overlaps and (when nowMinutes >= 0) slots
- * already past on the Dublin clock. Pure — overlap predicate is the
+ * already past on the studio's clock. Pure — overlap predicate is the
  * route's original `slot.start < b.end && slot.end > b.start`.
  */
 export function filterAvailableSlots(slots, { booked = [], blocked = [], nowMinutes = -1 } = {}) {
@@ -60,17 +66,35 @@ export function filterAvailableSlots(slots, { booked = [], blocked = [], nowMinu
 const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
 
 /**
+ * The zone an event type's slots are written in: its location's. Uses the
+ * `locations` embed when the caller's select carried one (no IO), else the
+ * location row (cached 60 s). No location → DEFAULT_TZ.
+ * @throws {import('@/lib/location-time').LocationZoneReadError} the zone read
+ *   failed: deciding what is bookable on a guessed clock is not safe, so the
+ *   caller fails as it would on any DB outage.
+ */
+export async function eventTypeZone(db, event) {
+  if (event?.locations && typeof event.locations === 'object') return zoneOfLocation(event.locations)
+  if (event?.location_id) return getLocationZone(db, event.location_id)
+  return DEFAULT_TZ
+}
+
+/**
  * Available slots for an event_types row on a calendar date.
- * Mirrors the public slots route end-to-end: Dublin-time range checks
+ * Mirrors the public slots route end-to-end: studio-time range checks
  * (today / max_advance_days), weekday availability lookup (UTC-stable),
  * slot generation, booked + blocked subtraction, today's past-time
  * filter. Returns [] outside the bookable range. `event` must carry
- * { id, duration_minutes, buffer_minutes, availability, max_advance_days }.
+ * { id, duration_minutes, buffer_minutes, availability, max_advance_days }
+ * and, for its zone, `location_id` (or a `locations: { timezone }` embed).
+ * @param {{ zone?: string, nowMs?: number }} [opts] zone: the studio's, when
+ *   the caller already holds it; nowMs: the clock (tests).
  */
-export async function computeAvailableSlots(db, event, date) {
+export async function computeAvailableSlots(db, event, date, { zone, nowMs = Date.now() } = {}) {
   if (!event || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return []
 
-  const todayStr = dublinTodayStr()
+  const tz = zone || await eventTypeZone(db, event)
+  const todayStr = todayStrIn(tz, nowMs)
   const maxDateStr = addDaysISO(todayStr, event.max_advance_days)
   if (date < todayStr || date > maxDateStr) return []
 
@@ -104,22 +128,26 @@ export async function computeAvailableSlots(db, event, date) {
     end: b.end_time ? b.end_time.slice(0, 5) : '23:59',
   }))
 
-  const nowMinutes = date === todayStr ? dublinNowMinutes() : -1
+  const nowMinutes = date === todayStr ? nowMinutesIn(tz, nowMs) : -1
   return filterAvailableSlots(slots, { booked, blocked, nowMinutes })
 }
 
-const dayLabelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short' })
+// A calendar DATE's label: noon UTC on that date is the same calendar day
+// read in UTC, so the label needs no zone at all (TZ.7: was Europe/Dublin,
+// which gave the same text for every date).
+const dayLabelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' })
 
 /**
  * Which of the next `days` calendar days actually have ≥1 available slot.
  * Reuses computeAvailableSlots per day (in parallel) so the day list can NEVER
- * diverge from the per-day slot list — same incident-hardened Dublin-time
+ * diverge from the per-day slot list — same incident-hardened studio-time
  * semantics, no reimplementation. Clamped to the event's max_advance_days.
  * Returns [{ date: 'YYYY-MM-DD', label: 'Tue, 30 Jun' }] for bookable days only.
  */
-export async function computeAvailableDays(db, event, { days = 14 } = {}) {
+export async function computeAvailableDays(db, event, { days = 14, zone, nowMs = Date.now() } = {}) {
   if (!event) return []
-  const todayStr = dublinTodayStr()
+  const tz = zone || await eventTypeZone(db, event)
+  const todayStr = todayStrIn(tz, nowMs)
   const horizon = Math.min(Math.max(1, Number(days) || 14), 31)
   const maxAdv = Number.isFinite(Number(event.max_advance_days)) && Number(event.max_advance_days) >= 0
     ? Number(event.max_advance_days) : 30
@@ -131,7 +159,7 @@ export async function computeAvailableDays(db, event, { days = 14 } = {}) {
     dates.push(d)
   }
   const checked = await Promise.all(dates.map(async (date) => {
-    const slots = await computeAvailableSlots(db, event, date)
+    const slots = await computeAvailableSlots(db, event, date, { zone: tz, nowMs })
     return slots.length > 0 ? date : null
   }))
   return checked
