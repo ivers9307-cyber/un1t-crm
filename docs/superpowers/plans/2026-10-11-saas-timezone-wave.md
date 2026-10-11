@@ -105,6 +105,22 @@ select id, location_id, windows from public.sonos_schedules where windows::text 
 
 ---
 
+## Decisions TAKEN (Richard, 11 Oct 2026, by card; these override the recommendations below)
+
+| Card | Answer | Effect on tasks |
+|---|---|---|
+| D1 | **A**: any IANA zone, fixed offsets rejected | TZ.2 as written |
+| D2 | **A** (NOT the recommended B): owners may change the zone **any time**, after a preflight with counts and typing the location name to confirm | TZ.3 implements option A: no "future data" refusal, no master-only force path. Wall-clock rows keep their local meaning; stored instants/keys are not rewritten; pending `next_step_at` re-clamped by the next scheduler pass; audit row + cache bust as written |
+| D3 | **A**: the record's studio zone, abbreviation suffix only when it differs from the viewer's zone | TZ.14, TZ.16 as written |
+| D4 | **A**: `PLATFORM_TZ = 'Europe/Dublin'` | TZ.11a, TZ.16 as written |
+| D5 | **B**: platform calendar (`PLATFORM_TZ`) | **TZ.11b and mig 722 are DROPPED.** The 22 billing rows become `PLATFORM_TZ` references (in TZ.11a for JS, TZ.15 for the 42x SQL functions, which keep `Europe/Dublin` with a comment naming D5). Tenant UIs state the reset in local time |
+| D6 | **B**: Dublin-zoned locations stay on the legacy UTC hour (byte-identical); other zones fire at the local target hour | TZ.6 as written; no ⚠️ |
+| D7 | **A**: the member's home location zone | TZ.13, TZ.14 as written |
+| D8 | **A + country-mismatch warning** | TZ.2 as written |
+| TZ.17 | **Yes**: fix the ~20 UTC-day bugs in this wave (visible to UN1T only 00:00-01:00 IST) | TZ.17 as written |
+
+Live facts confirmed by the orchestrator on 11 Oct (Q1-Q8): six locations, all `Europe/Dublin`, all `country = IE`; `locations.timezone` is `text NULL DEFAULT 'Europe/Dublin'`; `authenticated` holds column SELECT + UPDATE on it; DB clock `UTC`; 1,196 zones in `pg_timezone_names`; functions pinning Dublin: `wallet_apply`, `rollup_usage_for_day`, `org_ai_spend_month_cents`, `org_email_sends_month`, `list_health_monthly_stats`, `email_sends_monthly_stats`, `hyrox_coaches_on_shift`, `tombstone_staff_profile`; no views; policy `challenges.challenges_read`; defaults on `whatsapp_broadcasts.send_window_tz` (31 rows, all Dublin) and `locations.timezone`; Mia quiet-hours `tz` unset everywhere; 0 Sonos windows with a 23:xx boundary.
+
 ## Decisions needed from Richard (the orchestrator turns each into a card before execution)
 
 Each is a real behavioural choice the binding decision leaves open. The recommendation is what the tasks below implement if Richard takes it. A task that depends on a card says so in its header, and **no task that depends on an unanswered card merges**.
