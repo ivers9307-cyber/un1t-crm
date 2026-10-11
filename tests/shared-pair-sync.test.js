@@ -189,6 +189,18 @@ const PAIRS = {
       'a gym literal; shared/ is the implementation, src/lib/brand-name.js is an `export * from` shim.',
   },
 
+  'zoned-time.js': {
+    mode: 'reexport',
+    shared: 'shared/zoned-time.js',
+    web: 'src/lib/location-time.js',
+    webOnly: ['LOCATION_ZONE_CACHE_MAX', 'LocationZoneReadError', 'getLocationZone', 'getLocationZones', 'resetLocationZoneCache', 'zoneOfLocation'],
+    why:
+      'TZ.1 — THE per-location zone maths (dublin-time twins taking a zone, the SHELLY.1 wall-clock solver) lives ' +
+      'in shared/ so the phone and champ-app use the same code as the server; src/lib/location-time.js is an ' +
+      '`export * from` shim that adds the web-only DB side (a location\'s zone, bounded 60 s cache, LocationZoneReadError) and is cross-named, so ' +
+      'this entry is what makes the identity assertion run.',
+  },
+
   // ── identical: hand-maintained twins that really are twins ─────────────────
   'challenges.js': {
     mode: 'identical',
@@ -422,6 +434,17 @@ const COINCIDENTAL = {
     '`isoDate` twice — a one-line YYYY-MM-DD formatter. Too small to be a contract.',
   'shared/dashboard-data.js::src/lib/schemas.js':
     '`isoDate` twice, the same one-line YYYY-MM-DD formatter as the dates.js collision above. schemas.js uses it for request validation, dashboard-data for a range label; no contract binds them.',
+  'shared/zoned-time.js::src/lib/tv-template.js':
+    '`resolveZone` twice, unrelated: tv-template (re-exporting shared/tv-template.js) merges a TV LAYOUT zone ' +
+    '(a screen region) with its pushed value; zoned-time resolves an IANA TIME zone name. Different meanings of "zone".',
+  'shared/zoned-time.js::src/lib/dublin-time.js':
+    '`addDaysISO` twice, a zone-free YYYY-MM-DD step that TZ.1 copies so shared/ (which cannot import src/lib) has it. ' +
+    'Not a coincidence but not a module pair either: dublin-time is the Dublin-only module the TZ wave retires (TZ.18b), ' +
+    'and shared/zoned-time.parity.test.js asserts the two agree on every day of 2025-2027.',
+  'shared/zoned-time.js::src/lib/tz-time.js':
+    '`DEFAULT_TZ` and `nextLocalMidnightMs` twice BY IDENTITY: tz-time is a renaming shim (`export { isValidZone as ' +
+    'isValidTz, … } from \'@shared/zoned-time\'`), so it cannot be a `reexport` pair (that mode requires every shared ' +
+    'name). The identity of every alias is asserted in the "tz-time is a renaming shim" block below.',
 }
 
 /** Every .js under a directory, recursively, excluding tests and fixtures. */
@@ -817,6 +840,23 @@ describe('the dark-canvas zone palette means the same thing on both surfaces', {
     for (const id of [0, 1, 2, 3, 4, 5, 6, '3', 'x', null, undefined]) {
       expect(w.zoneColorDark(id), `zoneColorDark(${String(id)})`).toBe(s.zoneColorDark(id))
     }
+  })
+})
+
+describe('tz-time is a renaming shim onto shared/zoned-time, not a copy (TZ.1)', { timeout: 120_000 }, () => {
+  it('every tz-time export but wallMsInTz is a shared/zoned-time binding', async () => {
+    const z = await import('../shared/zoned-time.js')
+    const t = await import('../src/lib/tz-time.js')
+    expect(t.DEFAULT_TZ).toBe(z.DEFAULT_TZ)
+    expect(t.isValidTz).toBe(z.isValidZone)
+    expect(t.resolveTz).toBe(z.resolveZone)
+    expect(t.dayStrInTz).toBe(z.strictDayStrIn)
+    expect(t.dayStartMsInTz).toBe(z.strictDayStartMsIn)
+    expect(t.nextLocalMidnightMs).toBe(z.nextLocalMidnightMs)
+    // wallMsInTz is the one wrapper (it keeps tz-time's HH:MM-only input); nothing else may appear.
+    expect(Object.keys(t).sort()).toEqual(
+      ['DEFAULT_TZ', 'dayStartMsInTz', 'dayStrInTz', 'isValidTz', 'nextLocalMidnightMs', 'resolveTz', 'wallMsInTz'],
+    )
   })
 })
 
