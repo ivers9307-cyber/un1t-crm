@@ -4,9 +4,8 @@
 // What lives here:
 //   resolveScheduledAt(blockDate, startTime, tz)
 //     → combines a date + time stored in the schedule with the
-//       location's IANA timezone to produce a real UTC instant.
-//       DST-correct via Intl.DateTimeFormat — no dependency on
-//       date-fns-tz.
+//       location's IANA timezone to produce a real UTC instant,
+//       through the canonical solver (shared/zoned-time.js, TZ.1b).
 //
 //   effectiveWindowAt(blockDate, row, tz)
 //     → the coach's EFFECTIVE window as instants: override → block →
@@ -38,6 +37,7 @@
 //     shift end is in the past and no arrival is recorded)
 
 import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
+import { zonedWallClockToInstant } from '@/lib/location-time'
 
 const MS_PER_MIN = 60 * 1000
 const DEFAULT_GRACE_MS = 60 * 1000          // 1 min
@@ -49,19 +49,17 @@ const DEFAULT_GRACE_MS = 60 * 1000          // 1 min
  * instant. Handles DST correctly: a 06:00 shift in Dublin lands on
  * 06:00 BST in summer (UTC+1) and 06:00 GMT in winter (UTC+0).
  *
- * The technique: build a guess UTC instant treating the local time
- * AS IF it were UTC, then ask Intl.DateTimeFormat what that instant
- * looks like in the target timezone, and use the discrepancy as the
- * offset. This is the standard offset-detection pattern that
- * survives DST without needing the IANA tz database client-side.
- *
- * ATTENDREPORT.1 — two passes (the tz-time.js solveWallMs technique). Pass 1
- * reads the zone's offset at the wall clock taken AS IF it were UTC; for a zone
- * west of UTC that instant is on the wrong side of the change for part of each
- * DST day (Los Angeles 07:00 on 8 Mar read as 15:00Z, not 14:00Z). Pass 2
- * re-reads the offset at pass 1's answer and is kept only when it reads back as
- * exactly the wall time asked. A time in a spring-forward gap, or in a repeated
- * hour, keeps pass 1's answer, so Europe/Dublin's answers are unchanged.
+ * TZ.1b — delegates to the canonical zonedWallClockToInstant
+ * (shared/zoned-time.js); the private two-pass solver (ATTENDREPORT.1) is
+ * retired. The parse is unchanged: '24:00' rolls to the next midnight
+ * (effectiveWindowAt relies on it), an out-of-range day rolls as Date.UTC
+ * does, a missing date/time is null, and a non-numeric seconds field or an
+ * invalid tz throws RangeError. Europe/Dublin answers are
+ * identical (src/lib/tz-1b.tz.test.js). One change outside Dublin: a time in
+ * a spring-forward gap now resolves EARLIER everywhere (the canonical rule);
+ * west of UTC the old pass-1 answer was the LATER instant (Los Angeles 02:30
+ * on 8 Mar 2026 was 03:30 PDT, now 01:30 PST). The repeated fall-back hour is
+ * unchanged.
  *
  * @param {string} dateStr   YYYY-MM-DD (Postgres `date` columns)
  * @param {string} timeStr   HH:MM[:SS] (Postgres `time` columns)
@@ -73,28 +71,13 @@ export function resolveScheduledAt(dateStr, timeStr, tz = 'UTC') {
   const [yy, mm, dd] = String(dateStr).split('-').map(Number)
   const [hh = 0, mi = 0, ss = 0] = String(timeStr).split(':').map(Number)
   if ([yy, mm, dd, hh, mi].some((n) => !Number.isFinite(n))) return null
-
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: tz,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
-  })
-  // The zone's wall clock at instant `ms`, re-encoded as if it were UTC.
-  const wallAt = (ms) => {
-    const parts = Object.fromEntries(fmt.formatToParts(new Date(ms)).map((p) => [p.type, p.value]))
-    // Intl reports midnight as '24' in some locales — normalise.
-    const h = (+parts.hour === 24) ? 0 : +parts.hour
-    return Date.UTC(+parts.year, +parts.month - 1, +parts.day, h, +parts.minute, +parts.second)
-  }
-
-  // The wall clock values AS IF they were UTC.
-  const want = Date.UTC(yy, mm - 1, dd, hh, mi, ss)
-  // Pass 1: the offset read at `want` itself (the old single pass).
-  const ms1 = want - (wallAt(want) - want)
-  // Pass 2: the offset read at pass 1's answer, kept only when exact.
-  const ms2 = want - (wallAt(ms1) - ms1)
-  return new Date(ms2 !== ms1 && wallAt(ms2) === want ? ms2 : ms1)
+  // The wall clock AS IF it were UTC, rolled over as Date.UTC rolls it.
+  const naive = Date.UTC(yy, mm - 1, dd, hh, mi, ss)
+  // A non-numeric seconds field: Intl threw on the NaN instant before; still does.
+  if (!Number.isFinite(naive)) throw new RangeError('Invalid time value')
+  const iso = new Date(naive).toISOString()
+  const ms = zonedWallClockToInstant(iso.slice(0, 10), iso.slice(11, 16), tz)
+  return new Date(ms == null ? NaN : ms + (naive % 60_000))
 }
 
 // The calendar day after a YYYY-MM-DD key (UTC arithmetic, so no DST hour).
