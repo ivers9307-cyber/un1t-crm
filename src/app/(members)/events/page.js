@@ -13,7 +13,8 @@ import { Plus, Flag, ExternalLink, Users, Tag } from 'lucide-react'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
 import { ADMIN_ROLES } from '@/lib/schemas'
-import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
+import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse } from '@shared/events'
+import { eventToday } from '@/lib/event-day'
 import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
 
 export const dynamic = 'force-dynamic'
@@ -64,6 +65,7 @@ export default async function EventsIndexPage(props) {
       .select(`
         id, name, slug, race_date, start_time, capacity, capacity_mode, allowed_team_sizes,
         active, kind, shared, location_id, registration_opens_at, registration_closes_at,
+        locations:location_id ( id, timezone ),
         host:event_hosts!host_id ( id, name, organization_id ),
         waves:race_waves ( capacity ),
         registrations:race_registrations ( id, status, team:teams ( size ) )
@@ -83,6 +85,7 @@ export default async function EventsIndexPage(props) {
       .select(`
         id, name, slug, race_date, start_time, capacity, capacity_mode, allowed_team_sizes,
         active, kind, shared, location_id, registration_opens_at, registration_closes_at,
+        locations:location_id ( id, timezone ),
         host:event_hosts!host_id ( id, name, organization_id ),
         waves:race_waves ( capacity ),
         registrations:race_registrations ( id, status, team:teams ( size ) )
@@ -96,8 +99,8 @@ export default async function EventsIndexPage(props) {
     }
   }
 
-  const today = todayIsoDublin()
-  const { upcoming, past } = orderEventsForBrowse(races, today)
+  // TZ.9: upcoming by each event's own studio day (the zone rides the read).
+  const { upcoming, past } = orderEventsForBrowse(races, (e) => eventToday(e))
 
   const visible = tab === 'past' ? past : upcoming
   const tabs = [

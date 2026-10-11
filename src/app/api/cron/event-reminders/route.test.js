@@ -1,6 +1,5 @@
 // TZ.6 — event-reminders runs hourly; each event location acts at its daily
-// slot (09:00 UTC for Europe/Dublin, as before; 09:00 local elsewhere) and its
-// "3 days / 1 day" count from that location's own today.
+// slot (09:00 UTC for Europe/Dublin, as before; 09:00 local elsewhere).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const claims = new Map()
@@ -27,16 +26,16 @@ beforeEach(() => {
 })
 
 describe('TZ.6 event-reminders', () => {
-  it('Europe/Dublin runs at 09:00 UTC with the Dublin today it always used; other hours are quiet ticks that stamp', async () => {
+  it('Europe/Dublin runs at 09:00 UTC only; other hours are quiet ticks that stamp', async () => {
     await at('2026-07-01T08:00:00Z')
     expect(runEventReminders).not.toHaveBeenCalled()
     expect(stampHeartbeat).toHaveBeenCalledTimes(1)
     await at('2026-07-01T09:00:00Z')
     const args = runEventReminders.mock.calls[0][0]
-    expect(args.todays).toEqual(['2026-07-01'])
-    expect(args.todayFor('loc-dub')).toBe('2026-07-01')
-    expect(args.todayFor(null)).toBe('2026-07-01') // an event with no location: DEFAULT_TZ
-    expect(args.todayFor('loc-ny')).toBeUndefined() // 05:00 in New York: not its slot
+    expect(args.nowMs).toBe(Date.parse('2026-07-01T09:00:00Z'))
+    expect(args.isDue('loc-dub')).toBe(true)
+    expect(args.isDue(null)).toBe(true) // an event with no location: DEFAULT_TZ
+    expect(args.isDue('loc-ny')).toBe(false) // 05:00 in New York: not its slot
   })
 
   it('America/New_York runs at 09:00 local (13:00Z in summer), once per local day', async () => {
@@ -44,7 +43,7 @@ describe('TZ.6 event-reminders', () => {
     await at('2026-07-01T14:00:00Z')
     expect(runEventReminders).toHaveBeenCalledTimes(1)
     const args = runEventReminders.mock.calls[0][0]
-    expect(args.todayFor('loc-ny')).toBe('2026-07-01')
-    expect(args.todayFor('loc-dub')).toBeUndefined()
+    expect(args.isDue('loc-ny')).toBe(true)
+    expect(args.isDue('loc-dub')).toBe(false)
   })
 })

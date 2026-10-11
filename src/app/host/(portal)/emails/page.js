@@ -5,13 +5,32 @@
 
 import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
+import { createServerClient } from '@/lib/supabase'
+import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
+import { logWarn } from '@/lib/log'
 import HostEmails from '@/components/host/HostEmails'
 
 export const dynamic = 'force-dynamic'
 
+// TZ.9 — the composer schedules on the host's own clock: its anchor location's
+// zone (a host's events live there). The schedule panel names the zone it
+// uses, so the display fallback on an unreadable read is visible, not silent.
+async function hostScheduleZone(hostId) {
+  try {
+    const db = createServerClient()
+    const { data, error } = await db.from('event_hosts').select('anchor_location_id').eq('id', hostId).maybeSingle()
+    if (error) throw error
+    return await getLocationZone(db, data?.anchor_location_id || null)
+  } catch (err) {
+    logWarn('host-emails', 'host zone unreadable; composer on the default zone', { err, hostId })
+    return DEFAULT_TZ
+  }
+}
+
 export default async function HostEmailsPage() {
   const session = await getCurrentHost()
   if (!session) redirect('/host/login')
+  const zone = await hostScheduleZone(session.host.id)
 
   return (
     <div>
@@ -24,7 +43,7 @@ export default async function HostEmailsPage() {
         </p>
       </div>
 
-      <HostEmails />
+      <HostEmails zone={zone} />
     </div>
   )
 }

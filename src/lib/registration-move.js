@@ -13,7 +13,7 @@
 // Spec: docs/superpowers/specs/2026-10-08-event-entry-move-design.md
 
 import { wouldFit, spotsLeft } from './event-signups'
-import { dublinTodayStr } from './dublin-time'
+import { eventToday, earliestLocalToday } from './event-day'
 import { logError, logWarn } from './log'
 import { emitEvent, EVENT_TYPES } from './contact-events'
 import { addEventAttendeesToHostList } from './host-contact-list'
@@ -55,12 +55,13 @@ export function samePayee(a, b) {
  * @param {number} args.checkinCount   race_checkins rows for the entry
  * @param {object|null} args.existingOnTarget  another entry of the same team on the target, any status
  * @param {boolean} [args.force]       true = skip wave_full
- * @param {string} [args.today]        YYYY-MM-DD in Europe/Dublin
+ * @param {string} [args.today]        YYYY-MM-DD; omitted, the TARGET event's
+ *   studio day (TZ.9, event-day.js: needs targetEvent.locations.timezone)
  * @returns {{ ok: true } | { ok: false, error: string, spots_left?: number|null }}
  */
 export function evaluateMove({
   registration, sourceEvent, targetEvent, targetWave, targetWaveRegistrations,
-  checkinCount, existingOnTarget, force = false, today = dublinTodayStr(),
+  checkinCount, existingOnTarget, force = false, today = null,
 }) {
   const fail = (error, extra = {}) => ({ ok: false, error, ...extra })
   if (!registration) return fail(MOVE_ERRORS.NOT_FOUND)
@@ -73,7 +74,7 @@ export function evaluateMove({
   if (!targetEvent) return fail(MOVE_ERRORS.TARGET_UNAVAILABLE)
   if (targetEvent.id === registration.race_event_id) return fail(MOVE_ERRORS.SAME_EVENT)
   if (targetEvent.active !== true || targetEvent.status !== 'published') return fail(MOVE_ERRORS.TARGET_UNAVAILABLE)
-  if (!targetEvent.race_date || String(targetEvent.race_date).slice(0, 10) < today) return fail(MOVE_ERRORS.TARGET_UNAVAILABLE)
+  if (!targetEvent.race_date || String(targetEvent.race_date).slice(0, 10) < (today || eventToday(targetEvent))) return fail(MOVE_ERRORS.TARGET_UNAVAILABLE)
   if (!samePayee(sourceEvent, targetEvent)) return fail(MOVE_ERRORS.DIFFERENT_PAYEE)
 
   // Any row of the same team on the target, cancelled included: UNIQUE
@@ -109,7 +110,7 @@ const EVENT_COLUMNS = `
   venue_name, accent_hex, hero_image_url, sending_location_id,
   moved_email_subject, moved_email_intro,
   waves:race_waves ( id, race_event_id, start_time, label, capacity, display_order ),
-  locations:location_id ( id, name, is_host_anchor, organization_id )
+  locations:location_id ( id, name, is_host_anchor, organization_id, timezone )
 `
 
 /**
@@ -282,9 +283,10 @@ function entrySummary(registration) {
  * @param {string} args.registrationId
  * @param {Set<string>|null} [args.allowedEventIds]   host caller: its own events
  * @param {string[]|null} [args.allowedLocationIds]   staff caller: getUserLocationIds (null = master)
- * @param {string} [args.today]
+ * @param {string} [args.today]  one YYYY-MM-DD for every target; omitted, each
+ *   target is upcoming by its own studio's day (TZ.9: the list crosses studios)
  */
-export async function listMoveTargets(db, { registrationId, allowedEventIds = null, allowedLocationIds = null, today = dublinTodayStr() }) {
+export async function listMoveTargets(db, { registrationId, allowedEventIds = null, allowedLocationIds = null, today = null }) {
   const { registration, error: readErr } = await readRegistrationForMove(db, registrationId)
   if (!registration) return entryReadRefusal(readErr)
   const source = registration.race
@@ -296,7 +298,7 @@ export async function listMoveTargets(db, { registrationId, allowedEventIds = nu
     .select(EVENT_COLUMNS)
     .eq('active', true)
     .eq('status', 'published')
-    .gte('race_date', today)
+    .gte('race_date', today || earliestLocalToday())
   query = source?.host_id ? query.eq('host_id', source.host_id) : query.is('host_id', null)
   if (Array.isArray(allowedLocationIds)) query = query.in('location_id', allowedLocationIds)
   const { data: events, error } = await query
@@ -314,6 +316,9 @@ export async function listMoveTargets(db, { registrationId, allowedEventIds = nu
     if (!samePayee(source, ev)) return false
     if (allowedEventIds && !allowedEventIds.has(ev.id)) return false
     if (Array.isArray(allowedLocationIds) && !allowedLocationIds.includes(ev.location_id)) return false
+    // TZ.9: the query floor is the earliest studio day; each target is
+    // upcoming by its OWN studio's day (evaluateMove's rule).
+    if (!today && String(ev.race_date).slice(0, 10) < eventToday(ev)) return false
     // The same rule as evaluateMove's headcount_not_allowed: never offer it.
     const sizes = ev.allowed_team_sizes
     if (Array.isArray(sizes) && sizes.length > 0 && !sizes.includes(headcount)) return false
@@ -370,7 +375,7 @@ function isConflict(err) {
 export async function checkMove(db, {
   registrationId, targetEventId, targetWaveId = null,
   force = false, allowedEventIds = null, allowedLocationIds = null, expectedSourceEventId = null,
-  today = dublinTodayStr(),
+  today = null,
 }) {
   const { registration, error: readErr } = await readRegistrationForMove(db, registrationId)
   if (!registration) return entryReadRefusal(readErr)
@@ -434,7 +439,7 @@ export async function moveRegistration(db, {
   registrationId, targetEventId, targetWaveId = null,
   actor, note = null, notify = true, force = false, allowedEventIds = null, allowedLocationIds = null,
   expectedSourceEventId = null,
-  today = dublinTodayStr(),
+  today = null,
 }) {
   // Who moved it is recorded on every move (registration_moves.actor_type
   // is NOT NULL, checked to staff/host/agent/customer, mig 712): a caller

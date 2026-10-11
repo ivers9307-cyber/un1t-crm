@@ -1,6 +1,5 @@
-// TZ.6 — runEventReminders judges each event against ITS location's today
-// (todayFor), reads the union of every due location's target dates, and skips
-// an event whose location is not at its daily slot this tick.
+// TZ.6 — runEventReminders (TZ.9: each event against its own studio's day)
+// skips an event whose location is not at its daily slot this tick (isDue).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const sendTransactionalEmail = vi.fn(async () => ({ ok: true }))
@@ -39,13 +38,12 @@ const REGISTRATION = {
 }
 
 
-const OTHER = { ...EVENT, id: 'ev2', location_id: 'NY', race_date: '2026-09-04', locations: { id: 'NY', name: 'NY' } }
-function makeDb(events, seen) {
+const OTHER = { ...EVENT, id: 'ev2', location_id: 'NY', race_date: '2026-09-04', locations: { id: 'NY', name: 'NY', timezone: 'America/New_York' } }
+function makeDb(events) {
   return {
     from(table) {
       const b = {}
-      for (const m of ['select', 'eq', 'neq', 'order']) b[m] = () => b
-      b.in = (col, vals) => { if (table === 'race_events') seen.push([col, vals]); return b }
+      for (const m of ['select', 'eq', 'neq', 'order', 'in']) b[m] = () => b
       b.range = async () => ({ data: table === 'race_registrations' ? [REGISTRATION] : [], error: null })
       b.insert = async () => ({ error: null })
       b.then = (resolve, reject) => Promise.resolve({ data: table === 'race_events' ? events : [], error: null }).then(resolve, reject)
@@ -56,25 +54,22 @@ function makeDb(events, seen) {
 
 beforeEach(() => vi.clearAllMocks())
 
-describe('TZ.6 runEventReminders with todayFor', () => {
-  it('reads the union of target dates and sends only for events whose location is due, by its own today', async () => {
-    const seen = []
-    const todayFor = (loc) => ({ ANCHOR: '2026-09-01', NY: '2026-09-03' })[loc]
-    const result = await runEventReminders({ db: makeDb([EVENT, OTHER], seen), todayFor, todays: ['2026-09-01', '2026-09-03'] })
-    expect(seen).toEqual([['race_date', ['2026-09-04', '2026-09-02', '2026-09-06']]])
-    expect(result.events).toBe(2) // ev1: 1d before 2 Sep for ANCHOR; ev2: 1d before 4 Sep for NY
+describe('TZ.6 runEventReminders isDue: only events whose location is at its daily slot', () => {
+  const nowMs = Date.parse('2026-09-01T09:00:00Z')
+  const dublinEvent = { ...EVENT, locations: { ...EVENT.locations, timezone: 'Europe/Dublin' } }
+
+  it('without isDue (as TZ.9 shipped) both events are judged', async () => {
+    const result = await runEventReminders({ db: makeDb([dublinEvent, { ...OTHER, race_date: '2026-09-02' }]), nowMs })
+    expect(result.events).toBe(2)
   })
 
   it('an event whose location is not due this tick is skipped', async () => {
-    const seen = []
-    const result = await runEventReminders({ db: makeDb([EVENT, OTHER], seen), todayFor: (loc) => (loc === 'ANCHOR' ? '2026-09-01' : undefined), todays: ['2026-09-01'] })
-    expect(seen).toEqual([['race_date', ['2026-09-04', '2026-09-02']]]) // byte-identical to the one-today read
+    const isDue = (loc) => loc === 'ANCHOR'
+    const result = await runEventReminders({ db: makeDb([dublinEvent, { ...OTHER, race_date: '2026-09-02' }]), nowMs, isDue })
     expect(result.events).toBe(1)
   })
 
-  it('no due location reads nothing', async () => {
-    const seen = []
-    expect(await runEventReminders({ db: makeDb([EVENT], seen), todayFor: () => undefined, todays: [] })).toEqual({ events: 0, sent: 0, skipped: 0 })
-    expect(seen).toEqual([])
+  it('no due location sends nothing', async () => {
+    expect(await runEventReminders({ db: makeDb([dublinEvent]), nowMs, isDue: () => false })).toEqual({ events: 0, sent: 0, skipped: 0 })
   })
 })

@@ -31,7 +31,7 @@ import { countEntryCheckins } from '@/lib/registration-move'
 import { entryMoveBlock, customerMoveMessage } from '@/lib/registration-move-public'
 import { refreshRacePaymentFromProvider } from '@/lib/race-payments'
 import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { getLocationZone, todayStrIn } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -99,9 +99,21 @@ export async function GET(request, props) {
   if (!data) return fail('not_found', 404)
 
   const checkins = await countEntryCheckins(db, data.id)
-  const block = checkins.error
+  // TZ.9: "past" by the event's studio day. The race select stays as the page
+  // receives it (no timezone in the payload), so the zone is its own cached
+  // read; an unreadable zone answers like an unreadable check-in count (the
+  // move button hides with "try again"), never a guessed day.
+  let today = null
+  if (!checkins.error) {
+    try {
+      today = todayStrIn(await getLocationZone(db, data.race?.location_id || null))
+    } catch (err) {
+      logWarn('public-entry', 'event zone unreadable; move hidden this load', { err, registrationId: data.id })
+    }
+  }
+  const block = !today
     ? { code: 'load_failed', message: customerMoveMessage('load_failed') }
-    : entryMoveBlock({ registration: data, checkinCount: checkins.count, today: dublinTodayStr() })
+    : entryMoveBlock({ registration: data, checkinCount: checkins.count, today })
 
   const members = (data.teams?.team_members || []).map((m) => ({ id: m.id, name: m.name, role: m.role, is_member: m.is_member }))
   const dateChangePending = change?.status === 'pending'

@@ -9,8 +9,9 @@
 //
 // TZ.6 — the schedule is hourly; each event's location acts at its daily slot:
 // 09:00 UTC for a Europe/Dublin studio (as before), 09:00 local for any other
-// zone, at most once per local day (src/lib/cron-daily-slot.js). "3 days" and
-// "1 day" count from that location's own today.
+// zone, at most once per local day (src/lib/cron-daily-slot.js). TZ.9 — "3
+// days" and "1 day" count from each event's own studio day (Dublin events: the
+// same day as before).
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { runEventReminders } from '@/lib/event-attendee-reminders'
@@ -28,16 +29,13 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const gate = await gateDailySlot(db, 'event-reminders', { module: 'event-reminders' })
+  const nowMs = Date.now()
+  const gate = await gateDailySlot(db, 'event-reminders', { nowMs, module: 'event-reminders' })
   if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
 
   const data = gate.slots.size === 0
     ? { events: 0, sent: 0, skipped: 0 }
-    : await runEventReminders({
-      db,
-      todayFor: (locationId) => slotFor(gate.slots, locationId)?.day,
-      todays: [...new Set([...gate.slots.values()].map((s) => s.day))],
-    })
+    : await runEventReminders({ db, nowMs, isDue: (locationId) => !!slotFor(gate.slots, locationId) })
 
   await stampHeartbeat('event-reminders', { ...data, slot: gate.summary })
   return NextResponse.json({ success: true, data: { ...data, slot: gate.summary } })
