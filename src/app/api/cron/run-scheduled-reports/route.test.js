@@ -49,6 +49,7 @@ function makeDb(tables, { failTable } = {}) {
         not() { return b },
         lte() { return b },
         eq(col, v) { preds.push(r => r[col] === v); return b },
+        in(col, vs) { preds.push(r => vs.includes(r[col])); return b },
         ilike(col, pattern) { preds.push(r => ilikeMatches(pattern, r[col])); return b },
         update(p) { op = 'update'; payload = p; return b },
         maybeSingle() {

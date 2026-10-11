@@ -82,6 +82,8 @@ export default async function ActivitiesPage() {
       // C146 TASKSNEEDCONTACTS.1 — create / status writes need Contacts here
       // (web or phone) since mig 700; without it the page is read-only.
       canWrite={canWriteActivitiesAt(user, locationId)}
+      // TZ.11a — "overdue" is judged on the studio's today.
+      timezone={user.activeLocation?.timezone ?? null}
     />
   )
 }

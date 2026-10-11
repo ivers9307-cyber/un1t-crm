@@ -10,6 +10,8 @@ vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(), assertLocationAccess: vi
 vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn() }))
 vi.mock('@shared/dashboard-data', () => ({ fetchStudioContactCounts: vi.fn() }))
+// TZ.11a — the studio's zone (Dublin unless a test says otherwise).
+vi.mock('@/lib/display-zone', () => ({ displayZoneFor: vi.fn(async () => 'Europe/Dublin') }))
 // W1.M3c — the state resolver is stubbed; the payload shaping is the real one.
 vi.mock('@/lib/membership/state-for-page', async (importOriginal) => {
   const real = await importOriginal()
@@ -23,6 +25,7 @@ const { logError } = await import('@/lib/log')
 const { fetchStudioContactCounts } = await import('@shared/dashboard-data')
 const { dublinWeekStartMs } = await import('@/lib/dublin-time')
 const { membershipStateForPage } = await import('@/lib/membership/state-for-page')
+const { displayZoneFor } = await import('@/lib/display-zone')
 const { GET } = await import('./route.js')
 const { NextResponse } = await import('next/server')
 
@@ -155,5 +158,23 @@ describe('GET /api/dashboard/studio-contacts', () => {
     hasPermissionForLocation.mockReturnValue(false)
     await GET(req({ location_id: LOC }))
     expect(membershipStateForPage).not.toHaveBeenCalled()
+  })
+
+  it('TZ.11a — "this week" starts at the STUDIO\'s Monday: New York across the fall-back', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      // Mon 2 Nov 2026 03:30Z = Sun 1 Nov 22:30 EST: still the week of Mon 26 Oct in New York.
+      vi.setSystemTime(new Date('2026-11-02T03:30:00Z'))
+      displayZoneFor.mockResolvedValueOnce('America/New_York')
+      await GET(req({ location_id: LOC }))
+      expect(displayZoneFor).toHaveBeenCalledWith({ tag: 'service-role' }, USER, LOC, 'dashboard.studio-contacts')
+      expect(fetchStudioContactCounts.mock.calls[0][2].weekStartIso).toBe('2026-10-26T04:00:00.000Z') // Mon 00:00 EDT
+      // Dublin at the same instant is already Monday 2 Nov (03:30 GMT).
+      fetchStudioContactCounts.mockClear()
+      await GET(req({ location_id: LOC }))
+      expect(fetchStudioContactCounts.mock.calls[0][2].weekStartIso).toBe('2026-11-02T00:00:00.000Z')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

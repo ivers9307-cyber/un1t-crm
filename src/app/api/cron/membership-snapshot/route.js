@@ -5,7 +5,9 @@
 // Runs daily at 02:00 UTC. For every active location it computes the
 // current membership breakdown (monthly recurring vs class packs vs
 // payg, plus active-recurring + dead-pack sub-metrics) and upserts one
-// membership_snapshots row for the Dublin day. The business
+// membership_snapshots row for the location's LOCAL day (TZ.11a: its
+// locations.timezone; for every zone the local date of a 02:00 UTC run is a
+// complete-day boundary). The business
 // dashboard's trend chart reads from that table.
 //
 // Idempotent — re-running on the same day upserts the same
@@ -19,6 +21,7 @@ import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { writeMembershipSnapshot } from '@/lib/membership-snapshot'
 import { noSourceLocationIds } from '@/lib/membership/locations-for-source'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -34,7 +37,7 @@ export async function GET(request) {
 
   const { data: locations, error: locErr } = await db
     .from('locations')
-    .select('id, name')
+    .select('id, name, timezone')
     .eq('active', true)
   if (locErr) {
     console.warn(`[cron][membership-snapshot] failed to list locations: ${locErr.message}`)
@@ -56,7 +59,7 @@ export async function GET(request) {
   for (const loc of locations || []) {
     if (noSource.has(loc.id)) { skippedNoSource++; continue }
     try {
-      const snap = await writeMembershipSnapshot(db, loc.id)
+      const snap = await writeMembershipSnapshot(db, loc.id, { zone: zoneOfLocation(loc) })
       results.push({ location_id: loc.id, location_name: loc.name, ...snap })
     } catch (e) {
       if (!firstError) firstError = `[${loc.id}] ${e?.message || 'threw'}`

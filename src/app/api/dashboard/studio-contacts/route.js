@@ -1,7 +1,7 @@
 // CONTACTREADSCOPE.1a — GET /api/dashboard/studio-contacts
 //
 // The Studio dashboard's contact numbers for ONE studio: new leads this week
-// (joined_at since the Europe/Dublin Monday), the funnel by
+// (joined_at since the studio's own Monday, TZ.11a), the funnel by
 // pipeline_stage_slug, and the contact total. The phone's Studio segment used
 // to read them with its own session; from mig 690 that session reads a
 // studio's contacts only while holding Contacts there, so a dashboard_studio
@@ -32,7 +32,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
-import { dublinWeekStartMs } from '@/lib/dublin-time'
+import { weekStartMsIn } from '@/lib/location-time'
+import { displayZoneFor } from '@/lib/display-zone'
 import { logError } from '@/lib/log'
 import { fetchStudioContactCounts } from '@shared/dashboard-data'
 import { membershipStateForPage, membershipStatePayload, canManageMembershipSource } from '@/lib/membership/state-for-page'
@@ -66,8 +67,11 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  const weekStartIso = new Date(dublinWeekStartMs(Date.now())).toISOString()
   const db = createServerClient()
+  // TZ.11a — "this week" starts at the STUDIO's Monday 00:00 (a display
+  // count: an unreadable zone falls back to DEFAULT_TZ, logged).
+  const zone = await displayZoneFor(db, user, location_id, 'dashboard.studio-contacts')
+  const weekStartIso = new Date(weekStartMsIn(Date.now(), zone)).toISOString()
   // Started alongside the counts; it never rejects (a failed read is
   // 'unknown'), and a rejection is caught to 'unknown' anyway so the key can
   // never 500 the counts for 2.3.x phones that never read it.

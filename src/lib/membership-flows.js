@@ -18,9 +18,10 @@
 // months before July 2026 have no data and return null (not 0) so the
 // chart can render the gap honestly.
 //
-// Months are Dublin calendar months keyed 'YYYY-MM'.
+// Months are the LOCATION's calendar months keyed 'YYYY-MM' (TZ.11a: the
+// caller passes the location's zone; DEFAULT_TZ when omitted).
 
-import { dublinDayStr } from '@/lib/dublin-time'
+import { dayStrIn, DEFAULT_TZ } from '@/lib/location-time'
 
 // Earliest day with reliable new-vs-renewal invoice data (webhook
 // INVOICE_UPDATED log starts 2026-05-12).
@@ -49,10 +50,10 @@ export function monthKeys(months, todayStr) {
  * Assemble the monthly sales/cancellations series for one location.
  * Returns { months: [{ month: 'YYYY-MM', sales, cancellations }],
  * cancelTrackingStart } — a series is null for months that predate its
- * data source. `nowMs` injectable for tests.
+ * data source. `nowMs` injectable for tests; `zone` is the location's.
  */
-export async function fetchMembershipFlows(db, locationId, months = 12, nowMs = Date.now()) {
-  const todayStr = dublinDayStr(nowMs)
+export async function fetchMembershipFlows(db, locationId, months = 12, nowMs = Date.now(), { zone = DEFAULT_TZ } = {}) {
+  const todayStr = dayStrIn(nowMs, zone)
   const keys = monthKeys(months, todayStr)
 
   // Fetch the full sale history (not just the window) so first-sale
@@ -86,13 +87,13 @@ export async function fetchMembershipFlows(db, locationId, months = 12, nowMs = 
     const cid = row.contact_id || 'unknown'
     if (seen.has(cid)) continue
     seen.add(cid)
-    const month = dublinDayStr(row.invoice_date).slice(0, 7)
+    const month = dayStrIn(row.invoice_date, zone).slice(0, 7)
     if (month in sales) sales[month] += 1
   }
 
   const cancels = Object.fromEntries(keys.map((k) => [k, 0]))
   for (const row of cancelRes.data || []) {
-    const month = dublinDayStr(row.occurred_at).slice(0, 7)
+    const month = dayStrIn(row.occurred_at, zone).slice(0, 7)
     if (month in cancels) cancels[month] += 1
   }
 

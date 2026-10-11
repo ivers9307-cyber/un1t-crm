@@ -18,10 +18,11 @@
 //     per-location connection status. REUSED, never re-derived — see
 //     summariseHubForLocation below.
 //
-// Month boundaries are Dublin calendar months (the wallet/usage-caps
-// convention). timestamptz MTD filters OVER-FETCH by one day
+// Month boundaries are the platform billing calendar's months (the
+// wallet/usage-caps convention; D4/D5: PLATFORM_TZ = Europe/Dublin, the
+// master console's zone). timestamptz MTD filters OVER-FETCH by one day
 // (addDaysISO(monthStart, -1)) and are then filtered precisely in JS
-// via dublinDayStr() — a plain `gte(col, monthStart)` compares against
+// via dayStrIn(…, PLATFORM_TZ) — a plain `gte(col, monthStart)` compares against
 // UTC midnight, which is an hour AFTER Dublin midnight under IST and
 // would drop the first hour of the month.
 //
@@ -31,7 +32,7 @@
 // Ledger and MTD reads .range()-paginate (1k-row cap invariant) even
 // though today's N is tiny.
 
-import { dublinTodayStr, dublinDayStr, addDaysISO } from '@/lib/dublin-time'
+import { todayStrIn, dayStrIn, addDaysISO, PLATFORM_TZ } from '@/lib/location-time'
 import { dublinMonthStartStr } from '@/lib/usage-caps'
 import { resolveAllowances, pickActiveVersion } from '@/lib/plans'
 import { assembleIntegrationsHub } from '@/lib/integrations-hub'
@@ -104,9 +105,9 @@ export function pastDueCount(wallets) {
 }
 
 /**
- * Sum of top-up ledger entries posted this Dublin month, in cents.
+ * Sum of top-up ledger entries posted this billing month (PLATFORM_TZ), in cents.
  * Rows arrive over-fetched by a day (see module header); the precise
- * month test happens here via dublinDayStr(created_at). Pure.
+ * month test happens here via dayStrIn(created_at, PLATFORM_TZ). Pure.
  *
  * @param {Array<{ kind?: string, amount_cents?: number, created_at?: string }>} txRows
  * @param {string} monthStart - 'YYYY-MM-01'
@@ -116,7 +117,7 @@ export function sumTopupsCents(txRows, monthStart) {
   let total = 0
   for (const t of txRows || []) {
     if (t?.kind !== 'topup' || !t.created_at) continue
-    if (dublinDayStr(new Date(t.created_at).getTime()) < monthStart) continue
+    if (dayStrIn(new Date(t.created_at).getTime(), PLATFORM_TZ) < monthStart) continue // D5: the platform billing calendar (PLATFORM_TZ)
     const cents = Number(t.amount_cents)
     if (Number.isFinite(cents)) total += cents
   }
@@ -315,7 +316,7 @@ const PIN_EMBED =
 const LOCATION_COLUMNS =
   'id, name, organization_id, active, created_at, settings, features, ' +
   'sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id, ' +
-  'thinq_country_code, bca_config'
+  'thinq_country_code, bca_config, timezone'
 
 // Hub assembly is decorative on this surface — a hub failure must not
 // take down the tenants console (same posture as the WA budget meter
@@ -338,7 +339,7 @@ async function tryAssembleHub(db, locations) {
  * @param {{ today?: string }} [opts] - 'YYYY-MM-DD' Dublin business
  *   today, injectable for tests
  */
-export async function getTenantsRoster(db, { today = dublinTodayStr() } = {}) {
+export async function getTenantsRoster(db, { today = todayStrIn(PLATFORM_TZ) } = {}) { // D5: the platform billing calendar (PLATFORM_TZ)
   const monthStart = dublinMonthStartStr(today)
   const overFetchFrom = addDaysISO(monthStart, -1)
 
@@ -394,7 +395,7 @@ export async function getTenantsRoster(db, { today = dublinTodayStr() } = {}) {
   const usage = aggregateUsage({
     rollupRows: rollups,
     aiEventRows: aiEvents.filter((e) =>
-      e.occurred_at && dublinDayStr(new Date(e.occurred_at).getTime()) >= monthStart
+      e.occurred_at && dayStrIn(new Date(e.occurred_at).getTime(), PLATFORM_TZ) >= monthStart
     ),
     locationOrgMap,
   })
@@ -467,7 +468,7 @@ const LEDGER_LIMIT = 50
  * @param {string} orgId
  * @param {{ today?: string }} [opts]
  */
-export async function getTenantDetail(db, orgId, { today = dublinTodayStr() } = {}) {
+export async function getTenantDetail(db, orgId, { today = todayStrIn(PLATFORM_TZ) } = {}) { // D5: the platform billing calendar (PLATFORM_TZ)
   const { data: org, error: orgErr } = await db
     .from('organizations')
     .select('id, name, slug, active, created_at')
@@ -548,7 +549,7 @@ export async function getTenantDetail(db, orgId, { today = dublinTodayStr() } = 
   const usage = aggregateUsage({
     rollupRows: rollups,
     aiEventRows: aiEvents.filter((e) =>
-      e.occurred_at && dublinDayStr(new Date(e.occurred_at).getTime()) >= monthStart
+      e.occurred_at && dayStrIn(new Date(e.occurred_at).getTime(), PLATFORM_TZ) >= monthStart
     ),
     locationOrgMap,
   })
