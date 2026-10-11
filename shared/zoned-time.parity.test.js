@@ -4,6 +4,8 @@
 // caller moved from dublin*() to *In(…, 'Europe/Dublin') cannot change output.
 process.env.TZ = 'America/Los_Angeles' // the host zone must not matter
 import { describe, it, expect, vi } from 'vitest'
+// ~27k instants × two twins: fast locally, but a loaded CI shard blew the 5 s default.
+vi.setConfig({ testTimeout: 60_000 })
 const Z = await import('./zoned-time.js')
 const S = await import('./dublin-time.js')
 const W = await import('../src/lib/dublin-time.js')
