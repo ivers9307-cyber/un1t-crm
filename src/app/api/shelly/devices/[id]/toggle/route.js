@@ -64,7 +64,7 @@ import { overrideKey } from '@/lib/shelly/plan'
 import { runNowForDevice } from '@/lib/shelly/reconcile'
 import { ShellyToggleBody, ShellyOverride, MAX_OVERRIDE_HOURS } from '@/lib/shelly/schemas'
 import { stateFromReading } from '@/lib/shelly/status'
-import { nextLocalMidnightMs } from '@/lib/tz-time'
+import { nextLocalMidnightMs } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
