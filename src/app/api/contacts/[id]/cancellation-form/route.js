@@ -34,7 +34,7 @@ import {
   hasMobilePermissionAtAnyLocation, hasMobilePermissionForLocation,
 } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents, renderTemplateBody } from '@/lib/whatsapp'
 import { URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
@@ -73,8 +73,17 @@ async function loadContext(db, contactId) {
   if (error || !contact) return { contact: null }
   const { data: loc } = await db.from('locations').select('name, settings').eq('id', contact.location_id).maybeSingle()
   const copy = resolveCancellationFormCopy(loc?.settings?.customer_agent?.cancellation_form)
-  const baseUrl = copy.public_base_url || getAppUrl()
-  return { contact, locationName: loc?.name || '', copy, baseUrl }
+  return { contact, locationName: loc?.name || '', copy }
+}
+
+// W1.L3b — the per-location `public_base_url` override stays first; else the
+// form link lands on the CONTACT LOCATION's tenant host. An approved WhatsApp
+// template's URL button must carry the same base (templateUrlPrefixOk), so a
+// studio whose template was approved on another host pins `public_base_url`.
+// Called only AFTER the location and channel gates: a refused caller must not
+// cost a tenant-host lookup (tests/role-sweep/contact-messaging.test.js).
+async function resolveFormBaseUrl(db, ctx) {
+  return ctx.copy.public_base_url || await resolveCustomerBaseUrl(db, ctx.contact.location_id)
 }
 
 async function loadTemplate(db, locationId, name) {
@@ -111,7 +120,8 @@ export async function GET(request, props) {
   if (!channelPermitted(user, ctx.contact.location_id, 'email') && !channelPermitted(user, ctx.contact.location_id, 'whatsapp')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
-  const { contact, locationName, copy, baseUrl } = ctx
+  const { contact, locationName, copy } = ctx
+  const baseUrl = await resolveFormBaseUrl(db, ctx)
 
   const [latest, template] = await Promise.all([
     latestLinkForContact(db, contact.id),
@@ -172,7 +182,8 @@ export async function POST(request, props) {
   if (!channelPermitted(user, ctx.contact.location_id, channel)) {
     return NextResponse.json({ success: false, error: `Forbidden — ${channel} not enabled at this location for your role` }, { status: 403 })
   }
-  const { contact, locationName, copy, baseUrl } = ctx
+  const { contact, locationName, copy } = ctx
+  const baseUrl = await resolveFormBaseUrl(db, ctx)
 
   // ── Pre-flight per channel (before a link is minted) ─────────────────
   let conversation = null

@@ -22,6 +22,8 @@ vi.mock('@/lib/registration-move', async (importOriginal) => ({ ...(await import
 vi.mock('@/lib/race-gap-payment', () => ({ createGapPayment: vi.fn() }))
 vi.mock('@/lib/race-confirmations', () => ({ sendGapLinkEmail: vi.fn() }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
+// W1.L3b — the Stripe return/cancel URLs land on the event location's tenant host.
+vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
 vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
 
 const { getCurrentUser } = await import('@/lib/auth')
@@ -29,6 +31,7 @@ const { readRegistrationForMove } = await import('@/lib/registration-move')
 const { createGapPayment } = await import('@/lib/race-gap-payment')
 const { sendGapLinkEmail } = await import('@/lib/race-confirmations')
 const { logError } = await import('@/lib/log')
+const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
 const { POST } = await import('./route.js')
 
 const L1 = 'a0000000-0000-0000-0000-000000000001'
@@ -179,6 +182,16 @@ describe('POST …/gap-link — the link', () => {
     }))
     expect(await res.json()).toEqual({ success: true, data: { payment_id: 'gp1', url: URL_, reused: false, emailed: false } })
     expect(sendGapLinkEmail).not.toHaveBeenCalled()
+  })
+  it("W1.L3b — the return and cancel URLs are on the event location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const res = await POST(post({ email: false }), props())
+    expect(res.status).toBe(200)
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(expect.anything(), L1)
+    expect(createGapPayment).toHaveBeenCalledWith(expect.objectContaining({
+      returnUrl: `https://gym-a.repset.ie/event/hatch-oct25-1100/confirmed?registration=${R1}`,
+      cancelUrl: 'https://gym-a.repset.ie/event/hatch-oct25-1100',
+    }))
   })
   it('an omitted body field sends no email', async () => {
     await POST(post({}), props())

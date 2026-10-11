@@ -27,6 +27,7 @@ import { timeRowLabel } from './event-time-slots'
 import { isRaceKind } from '@shared/events'
 import { entryLeadEmail, GAP_PAYMENT_KIND } from './registration-entry'
 import { entryManageUrl } from './entry-manage-tokens'
+import { resolveCustomerBaseUrl } from './tenant-host'
 
 function fmtRaceDate(dateStr) {
   if (!dateStr) return ''
@@ -224,7 +225,13 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     memberFeeLabel: payment.member_fee_cents != null ? fmtMoney(payment.member_fee_cents, payment.currency) : null,
     nonMemberFeeLabel: payment.non_member_fee_cents != null ? fmtMoney(payment.non_member_fee_cents, payment.currency) : null,
     // EVENT-MOVE.6 — the entry's own page, where the booker can change the date.
-    manageUrl: entryManageUrl(reg?.id || payment.race_registration_id || null),
+    // W1.L3b — minted on the EVENT LOCATION's tenant host (the resolver floors
+    // to the CRM host and never throws past it). The check-in QR image URLs
+    // above stay on the CRM host on purpose: the mail client fetches them, the
+    // customer never reads them.
+    manageUrl: entryManageUrl(reg?.id || payment.race_registration_id || null, {
+      baseUrl: await resolveCustomerBaseUrl(db, race?.location_id || null),
+    }),
   }
 
   // Email — only if not already sent.
@@ -663,7 +670,8 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
     oldEventName: move.from_event?.name || '',
     oldWhen,
     // EVENT-MOVE.6 — the same entry, so the same page; a fresh 90-day link.
-    manageUrl: entryManageUrl(reg.id),
+    // W1.L3b — on the event location's tenant host, as the confirmation's is.
+    manageUrl: entryManageUrl(reg.id, { baseUrl: await resolveCustomerBaseUrl(db, race.location_id || null) }),
     // W1.S1a — the sending location's brand (header, member badge, signature).
     brand: await resolveEventBrand(db, {}, commsLocationId),
   }

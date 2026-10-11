@@ -8,7 +8,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { verifyHostOnboardingToken } from '@/lib/host-onboarding-tokens'
 import { createConnectedAccount, createOnboardingLink } from '@/lib/payments/stripe-connect'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
@@ -38,7 +38,7 @@ export async function POST(request, props) {
 
   const { data: host } = await db
     .from('event_hosts')
-    .select('id, name, email, payment_provider, stripe_connected_account_id')
+    .select('id, name, email, payment_provider, stripe_connected_account_id, anchor_location_id')
     .eq('id', payload.hostId)
     .maybeSingle()
   if (!host || host.payment_provider !== 'stripe_connect') {
@@ -55,11 +55,14 @@ export async function POST(request, props) {
         .eq('id', host.id)
       if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 500 })
     }
-    const base = getAppUrl()
+    // W1.L3b — Stripe sends the host back to the token page on the tenant
+    // host of their anchor location (NULL → the CRM host); both paths are
+    // served there since W1.L2.
+    const baseUrl = await resolveCustomerBaseUrl(db, host.anchor_location_id)
     const url = await createOnboardingLink({
       accountId,
-      refreshUrl: `${base}/api/public/host-connect/${params.token}/refresh`,
-      returnUrl: `${base}/host-connect/${params.token}?done=1`,
+      refreshUrl: `${baseUrl}/api/public/host-connect/${params.token}/refresh`,
+      returnUrl: `${baseUrl}/host-connect/${params.token}?done=1`,
     })
     return NextResponse.json({ success: true, data: { url } })
   } catch (e) {

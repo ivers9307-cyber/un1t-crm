@@ -19,7 +19,9 @@ import EventWaitlistPanel from './EventWaitlistPanel'
 // `currency` is the event's payment_currency, for the outstanding-gap chip.
 // EVENT-WAITLIST.1 — `canManageWaitlist` (races + MANAGER_ROLES at the event's
 // studio, the waitlist routes' rule) shows the waitlist section. Defaults closed.
-export default function RaceTeamsManager({ race, canCancelEntries = false, canMoveEntries = false, canManageWaitlist = false, currency = 'EUR' }) {
+// W1.L3b — `customerOrigin` is the event's tenant-host origin (the page resolves
+// it with resolveCustomerBaseUrl); the copied payment link is minted on it.
+export default function RaceTeamsManager({ race, canCancelEntries = false, canMoveEntries = false, canManageWaitlist = false, currency = 'EUR', customerOrigin = '' }) {
   const [registrations, setRegistrations] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
@@ -136,6 +138,7 @@ export default function RaceTeamsManager({ race, canCancelEntries = false, canMo
             canCancel={canCancelEntries}
             canMove={canMoveEntries}
             currency={currency}
+            customerOrigin={customerOrigin}
           />
         ))}
       </div>
@@ -343,7 +346,7 @@ function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
 
 // ─── One-team card ───────────────────────────────────────────────
 
-function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel = false, canMove = false, currency = 'EUR' }) {
+function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel = false, canMove = false, currency = 'EUR', customerOrigin = '' }) {
   const team = registration.teams
   const wave = registration.wave
   const members = (team?.team_members || []).slice().sort((a, b) =>
@@ -376,9 +379,13 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
   async function copyPaymentLink() {
     // Link to our own /event-pay page (embedded checkout for either
     // provider) rather than a provider-hosted URL — Stripe Connect events
-    // have no hosted URL. Same origin as the CRM, so window.origin is safe.
+    // have no hosted URL. W1.L3b — this is a CUSTOMER link the operator
+    // pastes on, so it is minted on the event's tenant host (customerOrigin,
+    // resolved by the server page), never the CRM host the operator is on.
+    // The CRM origin is only the fallback when the page could not resolve one.
     const paymentId = registration.payment?.id
-    const url = paymentId ? `${window.location.origin}/event-pay/${paymentId}` : null
+    const origin = customerOrigin || window.location.origin
+    const url = paymentId ? `${origin}/event-pay/${paymentId}` : null
     if (!url) { onError('No payment link available for this team yet.'); return }
     try {
       await navigator.clipboard.writeText(url)

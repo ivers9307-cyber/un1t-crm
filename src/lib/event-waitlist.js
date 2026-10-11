@@ -30,6 +30,7 @@
 import { sendTransactionalEmail } from './postmark'
 import { formatWeekdayLongDateInTZ } from './dates'
 import { getAppUrl } from './app-url'
+import { resolveCustomerBaseUrl } from './tenant-host'
 import { buildEventEmailShell, resolveEventEmail, resolveEventBrand, escapeHtml } from './event-email'
 import { resolveEventCommsLocation, pickAudienceVenueName } from './event-comms-location'
 import { checkTransactionalConsent, transactionalWhatsappSuppression } from './transactional-consent'
@@ -151,10 +152,15 @@ export async function loadEventHasRoom(db, event) {
   return { hasRoom: eventHasRoom(event, data), error: null }
 }
 
-/** The offer link: the event's normal signup page, carrying the claim token. */
-export function waitlistClaimUrl(slug, waitlistId, now = Date.now()) {
+/**
+ * The offer link: the event's normal signup page, carrying the claim token.
+ * W1.L3b — `baseUrl` is the EVENT LOCATION's tenant host (sendWaitlistOffer
+ * resolves it); without one it floors to the CRM host as before.
+ */
+export function waitlistClaimUrl(slug, waitlistId, now = Date.now(), handed = null) {
   const token = signWaitlistClaimToken({ waitlistId, now }, waitlistTokenSecret())
-  return `${getAppUrl()}/event/${encodeURIComponent(slug)}?wl=${encodeURIComponent(token)}`
+  const baseUrl = (typeof handed === 'string' && handed.replace(/\/+$/, '')) || getAppUrl()
+  return `${baseUrl}/event/${encodeURIComponent(slug)}?wl=${encodeURIComponent(token)}`
 }
 
 function fmtDate(dateStr) {
@@ -410,7 +416,11 @@ export async function sendWaitlistOffer(db, { race, row, now = Date.now(), comms
   const out = { email: 'skipped:no_email', whatsapp: 'skipped:no_phone' }
   let claimUrl
   try {
-    claimUrl = waitlistClaimUrl(race.slug, row.id, now)
+    // W1.L3b — both legs (email + the WhatsApp body param) carry the link on
+    // the event location's tenant host; the resolver floors to the CRM host
+    // and never throws past it, so this try fails exactly as it did before.
+    const baseUrl = await resolveCustomerBaseUrl(db, race?.location_id || null)
+    claimUrl = waitlistClaimUrl(race.slug, row.id, now, baseUrl)
   } catch (e) {
     logError('event-waitlist', 'claim link could not be built; offer not sent', { err: e, waitlistId: row.id })
     return { email: 'failed', whatsapp: 'failed' }

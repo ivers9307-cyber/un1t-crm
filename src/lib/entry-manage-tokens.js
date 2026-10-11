@@ -77,11 +77,18 @@ export function verifyEntryManageTokenFromEnv(token) {
  * The absolute manage link for an entry, or null when it cannot be built (no
  * id, no signing key, no app URL). Never throws: an email that cannot carry
  * the link still goes out without it.
+ *
+ * W1.L3b — the send path (race-confirmations) hands in `baseUrl`, the EVENT
+ * LOCATION's tenant host from resolveCustomerBaseUrl(), so a second gym's
+ * entrants never see crm.repset.ie; this helper stays pure. Without one it
+ * floors to the CRM host exactly as before.
  */
-export function entryManageUrl(registrationId) {
+export function entryManageUrl(registrationId, { baseUrl: handed = null } = {}) {
   const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
   if (!registrationId || !secret) return null
-  let origin
-  try { origin = getAppUrl() } catch { return null }
-  return `${origin}/event/entry/${signEntryManageToken({ registrationId }, secret)}`
+  let baseUrl = typeof handed === 'string' ? handed.replace(/\/+$/, '') : ''
+  if (!baseUrl) {
+    try { baseUrl = getAppUrl() } catch { return null }
+  }
+  return `${baseUrl}/event/entry/${signEntryManageToken({ registrationId }, secret)}`
 }

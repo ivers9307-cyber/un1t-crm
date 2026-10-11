@@ -13,6 +13,9 @@ vi.mock('./event-hosts', async (importOriginal) => ({ ...(await importOriginal()
 vi.mock('./orders', () => ({ syncOrderFromRacePayment: vi.fn(async () => {}) }))
 vi.mock('./contact-events', async (importOriginal) => ({ ...(await importOriginal()), emitEvent: vi.fn(async () => {}), applyTagRules: vi.fn() }))
 vi.mock('./app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
+// W1.L3b — the /event-pay/ checkout link lands on the event location's tenant
+// host; defaults to the CRM host so the older assertions read as before.
+vi.mock('./tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
 vi.mock('./log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn(), logWarn: vi.fn() }))
 vi.mock('./sequences', () => ({ triggerSequencesForOrderStatus: vi.fn(async () => {}) }))
 vi.mock('./host-contact-list', () => ({ addEventAttendeesToHostList: vi.fn(async () => {}) }))
@@ -32,6 +35,7 @@ const { triggerSequencesForOrderStatus } = await import('./sequences')
 const { addEventAttendeesToHostList } = await import('./host-contact-list')
 const { moveRegistration } = await import('./registration-move')
 const { recordErrorEvent } = await import('./error-events')
+const { resolveCustomerBaseUrl } = await import('./tenant-host')
 
 const RACE = { id: 'e2', name: 'Hatch Oct 25', slug: 'hatch-oct25-1100', location_id: 'L1', host_id: null, payment_currency: 'EUR' }
 const REG = {
@@ -173,6 +177,24 @@ describe('createGapPayment — a new link', () => {
     expect('non_member_count' in row).toBe(false)
     expect(r.payment.id).toBe('gp1')
     expect(r.checkoutUrl).toBe('https://crm.test/event-pay/gp1')
+  })
+  // W1.L3b — minted on the EVENT LOCATION's tenant host (fresh and reused alike).
+  it("W1.L3b — the checkout link is on the event location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValue('https://gym-a.repset.ie')
+    try {
+      const a = args()
+      const r = await createGapPayment(a)
+      expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(a.db, 'L1')
+      expect(r).toMatchObject({ ok: true, reused: false, checkoutUrl: 'https://gym-a.repset.ie/event-pay/gp1' })
+      // The reused (still-pending) link is minted on the same host.
+      const pending = { id: 'gp0', kind: 'move_gap', status: 'pending', registration_move_id: 'mv1', amount_cents: 1000, contact_email: 'aoife@x.ie',
+        payment_provider: 'revolut', payment_provider_ref: 'ord-0', created_at: '2026-10-08T00:00:00Z' }
+      getPayment.mockResolvedValue({ state: 'pending', amountCents: 1000 })
+      const reused = await createGapPayment(args({ db: fakeDb({ payments: { data: [pending, ENTRY_PAY], error: null }, row: { data: pending, error: null } }) }))
+      expect(reused).toEqual({ ok: true, payment: pending, checkoutUrl: 'https://gym-a.repset.ie/event-pay/gp0', reused: true })
+    } finally {
+      resolveCustomerBaseUrl.mockResolvedValue('https://crm.test')
+    }
   })
   it('never touches the registration (active_payment_id stays the entry payment)', async () => {
     const a = args()
