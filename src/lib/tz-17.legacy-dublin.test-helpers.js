@@ -6,7 +6,6 @@
 // travel with them. src/lib/tz-17*.test.js diff the new code against these.
 // Test-only: nothing in src/ imports this file. TZ.18b deletes it once the wave
 // merges.
-/* eslint-disable guardrails/no-utc-today, guardrails/no-zulu-template-date -- frozen pre-TZ.17 copies, kept to prove the fix */
 
 import { currentStreak } from '@shared/hr-analytics'
 import { dayStartMsIn, instantToZonedParts, todayStrIn, DEFAULT_TZ } from '@shared/zoned-time'
@@ -21,7 +20,7 @@ export function eventReminderLegacy(nowMs, hoursBefore, booking, toleranceMs = 6
   const hi = new Date(targetMs + toleranceMs)
   const loDay = lo.toISOString().slice(0, 10)
   const hiDay = hi.toISOString().slice(0, 10)
-  const bookingMs = new Date(`${booking.booking_date}T${booking.start_time}Z`).getTime()
+  const bookingMs = new Date(`${booking.booking_date}T${booking.start_time}Z`).getTime() // eslint-disable-line guardrails/no-zulu-template-date -- the frozen pre-TZ.17 bug, kept to prove the fix
   const inDays = booking.booking_date >= loDay && booking.booking_date <= hiDay
   return { loDay, hiDay, matches: inDays && !(bookingMs < lo.getTime() || bookingMs > hi.getTime()) }
 }

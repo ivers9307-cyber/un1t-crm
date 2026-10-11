@@ -44,6 +44,7 @@ const { streakCandidateWindow } = await import('./nudge-windows.js')
 const { challengeDaysLeft } = await import('../../mobile/lib/member/challenge-countdown.js')
 const { idleBoardClock } = await import('./tv-board-time.js')
 const Z = await import('@/lib/location-time')
+const { allowanceYearIn } = await import('./allowance-year.js')
 
 const D = 'Europe/Dublin'
 const H = 3600_000
@@ -374,4 +375,11 @@ describe('the frozen helpers really are the old behaviour (sanity)', () => {
     }
   })
   it('PERIOD_EDGE is the same window', () => { expect(PERIOD_EDGE(MIDNIGHT_IST)).toBe(true) })
+})
+
+describe('time-off allowance year (TimeOffManager) — the studio year', () => {
+  it('Dublin: the same year the browser clock gave a Dublin viewer, at every hour and across New Year', () => {
+    const legacyDublinBrowser = (t) => Number(Z.dayStrIn(t, D).slice(0, 4)) // new Date().getFullYear() in a Dublin browser
+    for (const t of [...HOURS, ms('2026-12-31T23:59:00Z'), ms('2027-01-01T00:00:00Z')]) expect(allowanceYearIn(D, t)).toBe(legacyDublinBrowser(t))
+  })
 })

@@ -159,3 +159,28 @@ describe('GET /api/public/tv-challenges/[token]', () => {
     expect(resolveLocationBrand).not.toHaveBeenCalled()
   })
 })
+
+// TZ.17 ⚠️ — the monthly gym board starts on the studio's 1st at local midnight.
+describe('TZ.17 the gym board month is the studio month', () => {
+  const run = async (nowIso, timezone) => {
+    vi.useFakeTimers(); vi.setSystemTime(Date.parse(nowIso))
+    try {
+      const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan', timezone } })
+      await callRoute(db, 'good-token')
+    } finally { vi.useRealTimers() }
+    return computeStandings.mock.calls.at(-1)[1].fromIso
+  }
+  it('Dublin at 00:30 IST on 2 Jul: from 00:00 IST on 1 Jul (it was 00:00 UTC)', async () => {
+    expect(await run('2026-07-01T23:30:00Z', 'Europe/Dublin')).toBe('2026-06-30T23:00:00.000Z')
+  })
+  it('Dublin at 00:30 IST on 1 Jul is already July (the UTC board still showed June)', async () => {
+    expect(await run('2026-06-30T23:30:00Z', 'Europe/Dublin')).toBe('2026-06-30T23:00:00.000Z')
+  })
+  it('Dublin in winter: unchanged (00:00 UTC on the 1st)', async () => {
+    expect(await run('2026-01-15T12:00:00Z', 'Europe/Dublin')).toBe('2026-01-01T00:00:00.000Z')
+  })
+  it('New York: 00:00 EDT on 1 Nov, 00:00 EST on 1 Dec', async () => {
+    expect(await run('2026-11-15T12:00:00Z', 'America/New_York')).toBe('2026-11-01T04:00:00.000Z')
+    expect(await run('2026-12-15T12:00:00Z', 'America/New_York')).toBe('2026-12-01T05:00:00.000Z')
+  })
+})

@@ -183,7 +183,7 @@ export default function MonthWrapped() {
         }
         if (cancelled) return
         const now = Date.now()
-        const recap = monthlyRecap(all, now, 6)
+        const recap = monthlyRecap(all, now, 6, tz) // TZ.17: the member's months
         const records = personalRecords(all, tz)
         const m = monthWrappedModel(recap, records, now, tz)
         setModel(m)

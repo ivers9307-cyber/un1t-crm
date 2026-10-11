@@ -24,6 +24,7 @@ const { stravaTitleDate } = await import('./external-export.js')
 const { streakCandidateWindow } = await import('./nudge-windows.js')
 const { challengeDaysLeft } = await import('../../mobile/lib/member/challenge-countdown.js')
 const Z = await import('@/lib/location-time')
+const { allowanceYearIn } = await import('./allowance-year.js')
 
 const NY = 'America/New_York'
 const D = 'Europe/Dublin'
@@ -134,5 +135,12 @@ describe("streak-at-risk — a New York studio's yesterday", () => {
   it('at the 11:00 EST slot on 2 Nov, yesterday is the 25-hour 1 Nov', () => {
     const w = streakCandidateWindow({ day: '2026-11-02', zone: NY })
     expect([iso(w.yestMs), iso(w.todayMs), w.dedupKey]).toEqual(['2026-11-01T04:00:00.000Z', '2026-11-02T05:00:00.000Z', '2026-11-02'])
+  })
+})
+
+describe('time-off allowance year — the studio year, not the viewer browser', () => {
+  it('at 03:00Z on 1 Jan 2027 a New York studio is still in 2026 (a Dublin browser said 2027)', () => {
+    expect(allowanceYearIn(NY, ms('2027-01-01T03:00:00Z'))).toBe(2026)
+    expect(allowanceYearIn(D, ms('2027-01-01T03:00:00Z'))).toBe(2027)
   })
 })

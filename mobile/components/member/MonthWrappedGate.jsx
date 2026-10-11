@@ -89,7 +89,7 @@ export default function MonthWrappedGate() {
         if (cancelled) return
         // Same nowMs as the seen pre-check, so the model's monthKey is
         // guaranteed to be the key we just confirmed unseen.
-        const model = monthWrappedModel(monthlyRecap(all, nowMs, 6), personalRecords(all, tz), nowMs, tz)
+        const model = monthWrappedModel(monthlyRecap(all, nowMs, 6, tz), personalRecords(all, tz), nowMs, tz)
         if (!model?.hasContent) return // nothing to celebrate — never present empty
         if (cancelled) return
         router.push('/wrapped/month')

@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation'
 import { CalendarOff, CalendarX, Plus, Check, X, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis, AlertTriangle } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
+import { allowanceYearIn } from '@/lib/allowance-year'
 import { timeOffTypesFor, defaultTimeOffTypeFor, leaveClashLabel, leaveClashPrompt, canRequestTimeOff, AVAILABILITY_INSTEAD } from '@shared/time-off'
 import { Modal, Button } from '@/components/ui'
 // LEAVECANCEL.1 — shared with the dashboard's My requests card.
@@ -104,6 +105,8 @@ export default function TimeOffManager({ user, canApprove, canDecideCancellation
   // plumbing. The /approvals provider now filters by activeLocation
   // so the drill-in always lands on the right list.
   const locationId = user.activeLocation?.id
+  // TZ.17 — the active studio's zone (a string), for the allowance year below.
+  const studioZone = zoneOfLocation(user.activeLocation)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -118,7 +121,10 @@ export default function TimeOffManager({ user, canApprove, canDecideCancellation
     try {
       const [reqRes, allowRes] = await Promise.all([
         readJson(`/api/schedule/time-off?${params}`),
-        readJson(`/api/schedule/allowances?profile_id=${user.id}&year=${new Date().getFullYear()}`),
+        // TZ.17 — the allowance year on the active studio's calendar (it was the
+        // browser's clock: a viewer in another zone, or anyone at New Year
+        // away from the studio, asked for the wrong year's allowance).
+        readJson(`/api/schedule/allowances?profile_id=${user.id}&year=${allowanceYearIn(studioZone)}`),
       ])
       setRequests(reqRes.data || [])
       setAllowance(allowRes.data || null)
@@ -127,7 +133,7 @@ export default function TimeOffManager({ user, canApprove, canDecideCancellation
     } finally {
       setLoading(false)
     }
-  }, [locationId, filter, tab, user.id])
+  }, [locationId, filter, tab, user.id, studioZone])
 
   useEffect(() => { fetchData() }, [fetchData])
 

@@ -549,7 +549,7 @@ export function pickWhatsNext({ tierStatus, teaserChallenge, sessions, streak, t
 
 function daysUntil(isoDate, nowMs, tz) {
   // TZ.17 — "today" is the member's studio day (it was the UTC day); the
-  // zone is Europe/Dublin until the screen passes the member's own.
+  // zone is the member's home studio's (useMemberZone, TZ.14).
   return challengeDaysLeft(isoDate, nowMs, tz)
 }
 

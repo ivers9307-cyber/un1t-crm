@@ -148,8 +148,8 @@ export function ProgressScreen({ focus = 'trends', showHeader = true } = {}) {
   const data = useMemo(() => {
     const now = Date.now()
     return {
-      weeks: weeklyBuckets(sessions, now, 12),
-      recap: monthlyRecap(sessions, now, 6),
+      weeks: weeklyBuckets(sessions, now, 12, tz), // TZ.17: the member's weeks and months
+      recap: monthlyRecap(sessions, now, 6, tz),
       records: personalRecords(sessions, tz),
       // Two windows for the activity calendar: 12 weeks (default, reads cleanly
       // on phone) and a full year (52 weeks) behind a toggle — the "look how
