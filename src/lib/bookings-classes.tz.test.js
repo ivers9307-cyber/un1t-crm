@@ -132,6 +132,13 @@ describe('TZ.7 Europe/Dublin is byte-identical', () => {
   })
 
   describe('manual-timetable manualClassOccurrences', () => {
+    // TZ.17 ⚠️ (approved 11 Oct 2026) moved exactly two Dublin slots onto the
+    // canonical solver: 23:xx on the spring-forward Sunday (no longer a day
+    // late) and 01:xx on the fall-back Sunday (now the GMT 01:xx, like every
+    // booking and shift). Pinned in src/lib/tz-17.dublin.test.js; the rest of
+    // the timetable stays byte-identical to the TZ.7 freeze.
+    const TZ17_MOVED = new Set(['2026-03-29|23:30', '2026-10-25|01:30'])
+    const unmoved = (list) => list.filter((c) => !TZ17_MOVED.has(`${c.day}|${c.time}`))
     const { slots } = parseManualTimetable([
       'Mon-Sun 00:30 Early',
       'Mon-Sun 01:30 Edge',
@@ -148,19 +155,19 @@ describe('TZ.7 Europe/Dublin is byte-identical', () => {
         { slots, now, minNoticeHours: 0, days: 3, startDate: iso.slice(0, 10) },
         { slots, now, minNoticeHours: 0, days: 3, startDate: addDays(iso.slice(0, 10), 5) },
       ]) {
-        expect(manualClassOccurrences({ ...args, zone: DUB })).toStrictEqual(LEGACY.manualClassOccurrencesLegacyDublin(args))
+        expect(unmoved(manualClassOccurrences({ ...args, zone: DUB }))).toStrictEqual(unmoved(LEGACY.manualClassOccurrencesLegacyDublin(args)))
       }
     })
     it('every day of 2026 at local noon, two weeks ahead', () => {
       for (const d of DAYS_2026) {
         const now = Date.parse(`${d}T11:00:00Z`)
         const args = { slots, now, minNoticeHours: 0, days: 14 }
-        expect(manualClassOccurrences({ ...args, zone: DUB })).toStrictEqual(LEGACY.manualClassOccurrencesLegacyDublin(args))
+        expect(unmoved(manualClassOccurrences({ ...args, zone: DUB }))).toStrictEqual(unmoved(LEGACY.manualClassOccurrencesLegacyDublin(args)))
       }
     })
     it('no zone passed is Dublin', () => {
       const args = { slots, now: Date.parse('2026-10-24T23:30:00Z'), minNoticeHours: 0, days: 14 }
-      expect(manualClassOccurrences(args)).toStrictEqual(LEGACY.manualClassOccurrencesLegacyDublin(args))
+      expect(unmoved(manualClassOccurrences(args))).toStrictEqual(unmoved(LEGACY.manualClassOccurrencesLegacyDublin(args)))
     })
   })
 })
