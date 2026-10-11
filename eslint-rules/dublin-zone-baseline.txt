@@ -148,7 +148,6 @@ src/lib/bridge-samples.js
 src/lib/cancellation-form/rules.js
 src/lib/candidates-data.js
 src/lib/challenges.js
-src/lib/checklist-instances.js
 src/lib/class-booking-processor.js
 src/lib/class-climate.js
 src/lib/class-occurrences.js

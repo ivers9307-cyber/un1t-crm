@@ -24,6 +24,7 @@
 // the DB doesn't see cleanly with the service-role client.
 
 import { logWarn } from '@/lib/log'
+import { DEFAULT_TZ, instantToZonedParts, zonedWallClockToInstant } from '@/lib/location-time'
 
 // Shift assignments in these states do NOT count as "on shift" for
 // generation. Mirrors the existing schedule UIs.
@@ -41,25 +42,17 @@ export const INSTANCE_STATUS = Object.freeze({
 
 /**
  * Resolve "today" in a given IANA timezone as YYYY-MM-DD + dow.
- * Uses Intl.DateTimeFormat — works everywhere modern (Node 19+,
- * Edge runtime, browsers). Returns:
+ * Returns:
  *   { date: 'YYYY-MM-DD', dow: 0..6 }   (Sun=0, Sat=6 — matches Pg)
+ * TZ.1b: through the canonical instantToZonedParts (ISO weekday 1..7, so
+ * `% 7` puts Sunday at 0). A null zone is Europe/Dublin; an invalid one throws
+ * RangeError, as before.
  *
  * Pure: takes a Date so tests can fix it.
  */
 export function todayInTimezone(now, timezone) {
-  const tz = timezone || 'Europe/Dublin'
-  // Get the calendar-date parts in tz.
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: tz,
-    year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short',
-  }).formatToParts(now)
-  const find = (t) => parts.find((p) => p.type === t)?.value
-  const date = `${find('year')}-${find('month')}-${find('day')}`
-  // Convert weekday short label to dow (Pg convention).
-  const weekday = find('weekday')   // e.g. "Mon"
-  const DOW = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
-  return { date, dow: DOW[weekday] ?? 0 }
+  const p = instantToZonedParts(now, timezone || DEFAULT_TZ)
+  return { date: p.dateKey, dow: p.weekday % 7 }
 }
 
 /**
@@ -76,7 +69,7 @@ export function computeDeadlineAt(blocks, timezone) {
   for (const b of blocks) {
     if (!b?.block_date || !b?.end_time) continue
     const iso = `${b.block_date}T${b.end_time}`
-    const ms = parseLocalToUtcMs(iso, timezone || 'Europe/Dublin')
+    const ms = parseLocalToUtcMs(iso, timezone || DEFAULT_TZ)
     if (Number.isFinite(ms) && (latestUtcMs == null || ms > latestUtcMs)) {
       latestUtcMs = ms
     }
@@ -119,43 +112,32 @@ export function applyTick(itemsChecked, { itemId, checked, byProfileId, at }) {
 }
 
 // Parse a local 'YYYY-MM-DDTHH:MM[:SS]' wall-clock time in a given
-// timezone to a UTC ms epoch. Approximate (DST around the boundary
-// minute may shift by an hour) — fine for deadlines which round to
-// the minute. Inverse of Intl.DateTimeFormat.
+// timezone to a UTC ms epoch, NaN when unparseable.
+//
+// TZ.1b — the private two-pass solver (and tzOffsetMs) is retired: the
+// instant comes from the canonical zonedWallClockToInstant. The parse is
+// unchanged (Date.parse, so '24:00' still rolls to the next midnight and
+// fractional seconds survive). One deadline rule is kept on purpose: a
+// deadline in a spring-forward gap resolves to the LATER instant, which is
+// what Europe/Dublin has always got (01:30 on 29 Mar 2026 = 02:30 IST).
+// Dublin answers are identical (src/lib/tz-1b.tz.test.js); west of UTC the
+// old code gave the earlier instant in the gap, now it is the later one too.
 function parseLocalToUtcMs(localIso, timezone) {
   // Trim off any trailing 'Z' or offset — local means local.
   const cleaned = localIso.replace(/[zZ].*$/, '').replace(/[+-]\d\d:?\d\d$/, '')
-  // Compose a guess UTC and snap by the timezone offset at that
-  // moment. Two-pass to absorb DST in the same direction.
-  const guess = Date.parse(`${cleaned}Z`)
-  if (!Number.isFinite(guess)) return NaN
-  const offsetMs = tzOffsetMs(new Date(guess), timezone)
-  const candidate = guess - offsetMs
-  // One refinement in case DST shifted under us.
-  const offsetMs2 = tzOffsetMs(new Date(candidate), timezone)
-  return guess - offsetMs2
-}
-
-function tzOffsetMs(date, timezone) {
-  // Intl can give us the wall-clock parts in the target tz; compute
-  // their UTC ms and the diff is the offset.
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    hour12: false,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  })
-  const parts = fmt.formatToParts(date)
-  const find = (t) => parts.find((p) => p.type === t)?.value
-  const localMs = Date.UTC(
-    Number(find('year')),
-    Number(find('month')) - 1,
-    Number(find('day')),
-    Number(find('hour')),
-    Number(find('minute')),
-    Number(find('second')),
-  )
-  return localMs - date.getTime()
+  // The wall clock AS IF it were UTC ("naive" ms).
+  const naive = Date.parse(`${cleaned}Z`)
+  if (!Number.isFinite(naive)) return NaN
+  const iso = new Date(naive).toISOString()
+  const wantMin = Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10), +iso.slice(11, 13), +iso.slice(14, 16))
+  const ms = zonedWallClockToInstant(iso.slice(0, 10), iso.slice(11, 16), timezone)
+  if (ms == null) return NaN
+  // In a gap the solver answers EARLIER and the wall clock does not read back;
+  // the later instant is the wall clock less the offset in force before it.
+  const p = instantToZonedParts(ms, timezone)
+  const back = Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi)
+  const atMin = back === wantMin ? ms : wantMin - (back - ms)
+  return atMin + (naive - wantMin)
 }
 
 // ────────────────────────────────────────────────────────────────
