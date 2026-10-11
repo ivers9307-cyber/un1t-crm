@@ -2,21 +2,22 @@
 // rows go in, progress numbers come out. Isolated so the
 // dashboard card and /account/goals page share the math.
 
-import { dublinWeekStartMs, dublinMonthStartMs, dublinDayStartMs, dublinDateKey } from './dublin-time.js'
+import { weekStartMsIn, monthStartMsIn, dayStartMsIn, dateKeyIn, DEFAULT_TZ } from './zoned-time.js'
 import { productName } from './brand-name.js'
 
 const MS_DAY = 24 * 3600 * 1000
 
-// Week / month buckets are Europe/Dublin calendar periods (weeks start
-// Monday 00:00 Dublin, months on the 1st 00:00 Dublin). A UTC boundary
-// would credit a session at 00:30 Dublin on Monday to the PREVIOUS week
-// during IST (it's 23:30 UTC Sunday) — the member would see it in the
-// wrong "this week" total. Returns a Date at the Dublin-midnight instant.
-export function startOfIsoWeek(now = new Date()) {
-  return new Date(dublinWeekStartMs(now instanceof Date ? now.getTime() : now))
+// Week / month buckets are calendar periods in `zone` — the MEMBER's zone,
+// their home studio's (TZ.13, D7; omitted = Europe/Dublin): weeks start
+// Monday 00:00 local, months on the 1st 00:00 local. A UTC boundary would
+// credit a session at 00:30 Dublin on Monday to the PREVIOUS week during IST
+// (it's 23:30 UTC Sunday) — the member would see it in the wrong "this week"
+// total. Returns a Date at the local-midnight instant.
+export function startOfIsoWeek(now = new Date(), zone = DEFAULT_TZ) {
+  return new Date(weekStartMsIn(now instanceof Date ? now.getTime() : now, zone))
 }
-export function startOfMonth(now = new Date()) {
-  return new Date(dublinMonthStartMs(now instanceof Date ? now.getTime() : now))
+export function startOfMonth(now = new Date(), zone = DEFAULT_TZ) {
+  return new Date(monthStartMsIn(now instanceof Date ? now.getTime() : now, zone))
 }
 
 // W1.S4 — the two points goals name the PRODUCT ("UN1T Points this week"),
@@ -68,11 +69,11 @@ export const GOAL_KINDS = Object.keys(GOAL_DEFS)
  * @param {object} goal  contact_goals row
  * @param {Array}  sessions  heart_rate_sessions array (any window — we filter)
  */
-export function computeProgress(goal, sessions, now = new Date()) {
+export function computeProgress(goal, sessions, now = new Date(), zone = DEFAULT_TZ) {
   const def = GOAL_DEFS[goal.kind]
   if (!def) return { current: 0, target: goal.target_value, pct: 0, periodStart: null }
 
-  const periodStart = def.period === 'week' ? startOfIsoWeek(now) : startOfMonth(now)
+  const periodStart = def.period === 'week' ? startOfIsoWeek(now, zone) : startOfMonth(now, zone)
   const startMs = periodStart.getTime()
 
   let current = 0
@@ -88,18 +89,18 @@ export function computeProgress(goal, sessions, now = new Date()) {
   return { current, target, pct, periodStart, def }
 }
 
-export function periodEnd(period, periodStart) {
+export function periodEnd(period, periodStart, zone = DEFAULT_TZ) {
   const startMs = periodStart instanceof Date ? periodStart.getTime() : Number(periodStart)
   if (period === 'week') {
-    // Re-anchor to the Dublin midnight 7 calendar days later rather than
+    // Re-anchor to the local midnight 7 calendar days later rather than
     // adding a flat 7*24h — a DST-transition week is 167h or 169h long,
     // and a flat add would land an hour off the next Monday midnight.
-    const [y, m, d] = dublinDateKey(startMs + 7 * MS_DAY).split('-').map(Number)
-    return new Date(dublinDayStartMs({ y, mo: m, d }))
+    const [y, m, d] = dateKeyIn(startMs + 7 * MS_DAY, zone).split('-').map(Number)
+    return new Date(dayStartMsIn({ y, mo: m, d }, zone))
   }
-  // month: first moment (00:00 Dublin) of the next calendar month.
-  const [y, m] = dublinDateKey(startMs).split('-').map(Number)
+  // month: first moment (00:00 local) of the next calendar month.
+  const [y, m] = dateKeyIn(startMs, zone).split('-').map(Number)
   const nextY = m === 12 ? y + 1 : y
   const nextM = m === 12 ? 1 : m + 1
-  return new Date(dublinDayStartMs({ y: nextY, mo: nextM, d: 1 }))
+  return new Date(dayStartMsIn({ y: nextY, mo: nextM, d: 1 }, zone))
 }

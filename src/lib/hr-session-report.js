@@ -18,6 +18,7 @@
 
 import { zoneBreakdown, burnSeconds, isBurn } from './heart-rate.js'
 import { buildSessionAnalytics } from './hr-analytics.js'
+import { DEFAULT_TZ } from '@shared/zoned-time'
 
 export const SESSION_REPORT_VERSION = 1
 
@@ -85,9 +86,11 @@ function mapAchievements(achievements) {
  *                 highlight ("UN1T Points"); bare "Points" when absent
  * @param {{nowMs?: number}} opts
  */
-export function buildSessionReport(ctx, { nowMs = Date.now() } = {}) {
+// `zone` (TZ.13, D7) is the MEMBER's zone, their home studio's: it buckets the
+// streak highlight's days. Omitted = Europe/Dublin.
+export function buildSessionReport(ctx, { nowMs = Date.now() } = {}, zone = DEFAULT_TZ) {
   const { session, thisSession, history, eventTypeName, shortName = '' } = ctx
-  const analytics = buildSessionAnalytics({ thisSession, history, eventTypeName, nowMs, shortName })
+  const analytics = buildSessionAnalytics({ thisSession, history, eventTypeName, nowMs, shortName }, zone)
   const ct = analytics.classType || {}
   const zones = zoneBreakdown(session.zones_seconds).map((z) => ({
     id: z.id, name: z.name, color: z.color, seconds: z.seconds, percent: z.percent,

@@ -8,6 +8,7 @@ import { validateBody } from '@/lib/validate'
 // page gate and the redirect chain also read (src/lib/challenges-access).
 import { CHALLENGE_ADMIN_ROLES } from '@/lib/challenges-access'
 import { challengePhase } from '@/lib/challenges'
+import { getLocationZone } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -54,7 +55,11 @@ export async function PUT(request, props) {
   if (!validation.ok) return validation.response
   let patch = validation.data
   // Once started, only name + target are editable (metric/window/mode/flag would invalidate standings).
-  if (challengePhase(existing, Date.now()) !== 'upcoming') patch = { name: patch.name, target: patch.target }
+  // TZ.13 — "started" is judged on the challenge's own studio clock. An
+  // unreadable zone throws (500): the edit is refused rather than judged on a
+  // guessed clock.
+  const zone = await getLocationZone(db, existing.location_id)
+  if (challengePhase(existing, Date.now(), zone) !== 'upcoming') patch = { name: patch.name, target: patch.target }
   // A flagship challenge must be individual — check against the effective mode
   // (the patched mode if present, otherwise the existing row's mode).
   const effectiveMode = patch.mode ?? existing.mode

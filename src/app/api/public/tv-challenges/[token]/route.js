@@ -74,10 +74,13 @@ export async function GET(request, props) {
     .select('id, name, mode, metric, starts_on, ends_on, target')
     .eq('location_id', locationId).order('ends_on', { ascending: true })
 
+  // TZ.13 — every challenge here is this location's, so its window is this
+  // location's local days.
+  const zone = zoneOfLocation(location)
   const challenges = []
   for (const ch of defs || []) {
-    if (challengePhase(ch, nowMs) !== 'active') continue
-    const { fromIso, toIso } = windowIso(ch)
+    if (challengePhase(ch, nowMs, zone) !== 'active') continue
+    const { fromIso, toIso } = windowIso(ch, zone)
     // DECISION #1 (mig 348) — this is a PUBLIC render surface, so exclude
     // members who opted out of the leaderboard. They still score for
     // themselves and can still win (the run-challenge-events cron computes
@@ -102,7 +105,7 @@ export async function GET(request, props) {
   return NextResponse.json({
     ok: true, server_time: new Date().toISOString(),
     // TZ.12 — the studio's zone (missing/invalid → Europe/Dublin, warned once).
-    timezone: zoneOfLocation(location),
+    timezone: zone,
     location: { id: location.id, name: location.name },
     brand: { name: brand.companyName, short_name: brand.shortName },
     challenges, gymBoard: project(gym),
