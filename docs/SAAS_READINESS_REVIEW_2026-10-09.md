@@ -6,6 +6,8 @@ Scope: un1t-crm at `origin/main` (c91ae071, 9 Oct 2026), live Supabase project `
 >
 > **Status 11 Oct 2026:** Wave 1 (identity: blocker 8, brand fallbacks, per-tenant links, seeded settings, the membership-source seam) is delivered — see "Wave 1 delivered 10–11 Oct 2026" under [§3 Blockers](#blockers-fix-before-any-second-gym-has-staff-or-customers). Blocker 7 (money) is Wave 2.
 
+> **Status 11 Oct 2026 (evening):** the timezone wave (theme D) is delivered: every per-studio decision now runs on the studio's own `locations.timezone`, and UN1T's output is unchanged apart from the approved midnight-hour fixes. See "Timezone wave delivered 11 Oct 2026" under §3. **What is still left is consolidated in [§3a What remains](#3a-what-remains-as-of-11-oct-2026)**; §4 and §5 carry per-step status.
+
 ## 0. Headline
 
 **The goal is achievable and the architecture is already tenant-shaped. It is not yet safe to put a second gym on, and it is not yet smooth.**
@@ -286,8 +288,84 @@ Open after Wave 1:
 - Richard: adopt `un1tdublin.com` in Settings → Email domain. UN1T's mail currently sends from `accounts@mail.un1tdublin.com`; the plan's "hello@un1t.ie" was only the code fallback, not the live sender.
 - The host re-invite bug (spawned as its own task; #2011 HOSTREINVITE.1, open).
 - The membership-source `'un1t'` provider (the schema already admits it; the provider module plugs into `MEMBERSHIP_SOURCES`).
-- Per-location timezone (its own wave, next).
+- ~~Per-location timezone (its own wave, next).~~ Delivered 11 Oct (below).
 - Wave 2: money.
+
+#### Timezone wave delivered 11 Oct 2026
+
+The timezone wave closes theme D. Richard's binding decision (10 Oct): a location's timezone is set when the location is created and managed in that location's settings, and every per-tenant decision that assumed Europe/Dublin uses the location's own zone. Plan and per-task detail: `docs/superpowers/plans/2026-10-11-saas-timezone-wave.md`. Migrations: 719 (`locations.timezone` NOT NULL, validated against `pg_timezone_names`, no client UPDATE, `private.location_tz`), 720 (`cron_daily_slot_claims`, applied after the TZ.6 deploy), 721 (zone-aware SQL functions and the `challenges_read` policy; before/after output fingerprints identical on prod). All six live locations are Europe/Dublin; every sweep shipped with a Dublin identity test and a New York test across both 2026 DST changes.
+
+| Task | PR | What landed |
+|---|---|---|
+| Plan | #2017 | The plan, 484-row consumer inventory (244 files) and the decision cards. |
+| TZ.1 | #2018 | `shared/zoned-time.js` + `src/lib/location-time.js`: the one way to do zone maths. `getLocationZone` throws `LocationZoneReadError` on a DB error (decision paths skip; display paths fall back explicitly). |
+| TZ.18a | #2019 | Guard that failed any new hard-coded Dublin zone, with a shrink-only baseline. |
+| TZ.1b | #2020 | Three private wall-clock solvers moved onto the canonical one. |
+| TZ.2 | #2021 | Mig 719; timezone is required on location creation (browser prefill + country mismatch warning); searchable IANA picker. |
+| TZ.3 | #2027 | Owners change a live studio's zone after a preflight and a typed-name confirm (D2 = A); wall-clock rows keep their local meaning. |
+| TZ.4 | #2025 | Sequences, send quiet hours and drip broadcasts. |
+| TZ.5 | #2026 | Mia's daytime gate per studio, prompts and tools, WhatsApp Flow, cancellation form, nightly review. |
+| TZ.6 | #2032 | 13 daily crons run hourly and act at each studio's hour (D6 = B: Dublin keeps its exact legacy UTC instant, no catch-up; a failed slot skips and pages). Reviewed twice before merge. Mig 720. |
+| TZ.7 | #2024 | Bookings, slots, reminders, confirmations, timetables. |
+| TZ.8a | #2034 | Rostering, shifts, swaps, availability, staff push. OTA. |
+| TZ.8b | #2040 | Time off, attendance, contracts, equipment, qualifications. |
+| TZ.9 | #2031 | Events, races, entry moves, waitlist, hyrox, host schedule. OTA. |
+| TZ.10 | #2028 | Sonos, class and bathroom climate, Shelly; device actions skip a studio whose zone cannot be read. |
+| TZ.11a | #2035 | Reports, dashboards, snapshots, briefings; billing stays on the platform calendar (D5 = B, `PLATFORM_TZ`). OTA. |
+| TZ.11c | #2033 | Meta ad windows in the ad account's zone, Xero dates in the studio's. OTA. |
+| TZ.12 | #2030 | TV and live boards show the board's studio time. |
+| TZ.13 | #2037 · champ-app #129 | Member streaks, challenges, goals, digests and push keys on the member's home studio (D7 = A). OTA. |
+| TZ.14 | #2039 | Phone screens; `/api/mobile/me` carries `timezone`. OTA. |
+| TZ.15 | #2036 | Mig 721: per-studio SQL functions and `challenges_read`; the four billing functions stay on the platform calendar. |
+| TZ.16 | #2038 | Web display: times in the record's studio zone, abbreviation only when it differs from the viewer's (D3 = A). |
+| TZ.17 | #2041 · champ-app #130 | ⚠️ (approved) "today" was UTC or host time in ~20 places; for UN1T this changes only 00:00–01:00 Irish summer time and a 23:xx timetable slot on the spring-forward day. OTA. |
+| TZ.18b | #2042 | Baseline empty; `'Europe/Dublin'` literals and `dublin-time` imports banned outright; legacy test copies and Dublin-named aliases removed. |
+
+Follow-ups delivered the same day: #2043 (contract previews show the issuing studio's `{{today}}`), #2044 (qualification digest and roster runway act at each studio's 08:00; Dublin unchanged), #2045 · champ-app #131 (weekly digest spring-forward week label "23 Mar–29 Mar"; one shared `shared/zone-suffix.js`). Stillorgan's Meta ad account timezone was read from Meta (Europe/Dublin) and recorded on `ad_accounts.account_timezone`. Housekeeping: #2023 cleared the sharp, source-map-js, compression and shell-quote audit advisories on main.
+
+Richard's decisions for the timezone wave (cards, 11 Oct): D1 any IANA zone, fixed offsets refused · D2 owners may change a live studio's zone after a preflight and typed-name confirm · D3 records show their studio's zone, suffix only when it differs · D4 platform tools on Irish time · D5 billing, caps and wallet on the platform (Irish) calendar · D6 Dublin crons keep their exact UTC instant, other zones fire at the local hour · D7 a member's zone is their home studio's · D8 timezone required at creation, browser prefill, country warning · TZ.17 fix the UTC-day bugs in this wave · digest and runway at 08:00 local · fix the spring week label · record the Meta ad timezone if Dublin or London.
+
+## 3a. What remains (as of 11 Oct 2026)
+
+Ordered by what blocks a second paying gym first. Items marked *unverified* were open when last recorded and have not been re-checked since.
+
+**Wave 2: money (the last blocker, B7).**
+- Offer checkout, internal events and races, car deposits and default class-pay still settle to UN1T's Revolut merchant when a location has no provider; make "no provider connected" a hard refusal for non-UN1T orgs (src/lib/location-payments.js, src/lib/race-payments.js, src/lib/event-hosts.js).
+- `/offers` is pinned to Stillorgan (Wave 0 interim, #1958); make it per location and route its checkout through the location's provider.
+- Decide who receives the hosted-event application fee per org (src/lib/payments/stripe-connect.js) and hide the `revolut` host option for other orgs.
+- Minors that ride with it: `€`/EUR formatting and Irish VAT defaults; `country:'IE'` default on Stripe Connect; the Stripe `'un1t_class_booking'` discriminator literal.
+
+**Richard's manual steps.**
+- Adopt `un1tdublin.com` in Settings → Email domain (enter `accounts` as the From to keep the current transactional address).
+- *Unverified:* recreate the Strava push subscription with the tokenised callback (Wave 0, W0.10).
+- *Unverified:* kiosks: provision hatch-tv1/tv2; reimage stillorgan-tv2.
+
+**Open PRs and small fixes.**
+- #2011 HOSTREINVITE.1 (host re-invite never emails the set-password link), open.
+- Wave 0 follow-up: move the invite hint to `app_metadata`.
+- Restore the staff `/live/[locationId]` "TV display" button lost with W0.9c.
+- The membership-source `'un1t'` provider (UN1T's home-grown membership option; the schema already admits it).
+
+**Wave 3: self-serve onboarding (theme A).** Done in Wave 1: the wizard grants the owner `org_admin`, seeds `company_settings` and `notification_config`, every org gets `<slug>.repset.ie`, tenant Postmark servers register their webhooks, and the timezone is set at creation. Still to do:
+- Pin a plan and wallet at provisioning, and turn bundles on (or let the org admin flip them); make feature and bundle toggles org-admin level, not master.
+- Org-admin versions of: CSV import and rollback, the Glofox operator tools, AC credentials and device adds, UniFi settings, studio device pairing and trusted IPs, BCA config, a starter set of contract templates, achievement rules, bridge rows.
+- UIs for settings that are SQL-only today: `landing_page_settings.public_path`, `settings.whatsapp_flow`, `settings.glofox.trial_*`, `settings.inbody.accounts`, `settings.meta_ads` dataset and pixel ids.
+- Custom domains: call the Vercel domains API from the tenant-domains route (the `*.repset.ie` wildcard is live and auto-renewed).
+- Instagram: a Meta login and `subscribed_apps` flow instead of a pasted token. Postmark inbound: surface the forwarding address and per-tenant sender signatures.
+
+**Wave 5: operability at scale (themes F and G).**
+- Stamp `tenant_heartbeats` from every per-location cron, give org admins a read-only health view, and alert ops per org (`org_settings.ops_alert_emails`) instead of every master.
+- Glofox cron discovery via the connection registry before legacy writes are retired; rotate the per-location time budget.
+- Namespaces: scope `event_types.slug`, `sale_offers.slug`, `landing_page_settings.public_path` and the studio PIN pool per location or org; suffix `race_events.slug` and `event_hosts.slug` with the org.
+
+**Minors still open.** Android package id `com.un1tdublin.crm`; `car_enquiries` unscoped and unread; suspended-org message; `purge-spam-mail` heartbeat name; Irish-number test allowlist in Mia; welcome greeting ignoring `agent_name`. (The "Dublin labels in confirmations and TV" minor closed with the timezone wave.)
+
+**Timezone residuals (none affects UN1T today).**
+- A master issuing a contract from an org-less template for a studio the recipient is not linked to gets `{{today}}` on `DEFAULT_TZ`.
+- Mia's follow-up and check-in daily caps count from the UTC day (documented as deliberate).
+- An owner whose studios are more than 14 hours apart is quiet-held at the anchor studio's 08:00 for the qualification digest.
+- `shared/goals` `periodEnd` still differs in arity between the web and shared copies (pinned `diverged`).
+- To verify: the first claim-guarded runs. The equipment inspection sweep claimed once per studio at 19:00 UTC on 11 Oct (7 rows, no duplicates); the digest and runway arms first run at 08:00 UTC on 12 Oct.
 
 ### Majors, grouped by theme
 
@@ -304,7 +382,7 @@ Replace `getLocationBranding`'s final `'UN1T'` fallback with `locations.name` an
 **C. Links and hosts**
 `getAppUrl()` should resolve the org's tenant domain for customer-facing links (unsubscribe, preferences, view-email, booking, events, host pages) and fall back to the platform host; `customerFacingMetadata` should resolve by the request's org, not the first location.
 
-**D. Timezone**
+**D. Timezone** (✅ delivered 11 Oct 2026, the timezone wave; the original text is kept below)
 Either declare v1 as Ireland/UK only and enforce `timezone ∈ {Europe/Dublin, Europe/London}` at location creation, or thread `locations.timezone` through the `dublin-time` consumers that make per-tenant decisions (sequences scheduler, send-quiet-hours, agent follow-ups and review, Sonos windows, climate slot keys, race timing, equipment reminders, event reminder offsets, membership snapshot, wallet/usage month, scheduled report periods). Shelly, checklists and push reminders already show the pattern.
 
 **E. Glofox dependency**
@@ -317,33 +395,33 @@ Stamp `tenant_heartbeats` from every per-location cron, give org admins a read-o
 Scope `event_types.slug`, `sale_offers.slug`, `landing_page_settings.public_path` and the studio PIN pool per location or org; keep `race_events.slug` and `event_hosts.slug` global but suffix with the org.
 
 ### Minors
-Dublin labels in confirmations and TV; `€`/EUR formatting and Irish VAT defaults; Android package id `com.un1tdublin.crm`; `car_enquiries` unscoped and unread; suspended-org message; `purge-spam-mail` heartbeat name; Irish-number test allowlist in Mia; welcome greeting ignoring `agent_name`; Stripe `'un1t_class_booking'` discriminator literal; `country:'IE'` default on Stripe Connect.
+~~Dublin labels in confirmations and TV~~ (closed by the timezone wave); `€`/EUR formatting and Irish VAT defaults; Android package id `com.un1tdublin.crm`; `car_enquiries` unscoped and unread; suspended-org message; `purge-spam-mail` heartbeat name; Irish-number test allowlist in Mia; welcome greeting ignoring `agent_name`; Stripe `'un1t_class_booking'` discriminator literal; `country:'IE'` default on Stripe Connect.
 
 ## 4. What onboarding gym #2 takes today (manual checklist)
 
-Everything below is Richard, with SQL/env/Vercel/Postmark/Meta access:
-1. `/admin/tenants/new`: org, first location (timezone/country), invite owner, org branding, tenant-domain row.
-2. Grant the owner `org_admin` at `/settings/staff/[id]`.
-3. Pin a plan at `/admin/plans` and top up or adjust a wallet.
-4. Flip `bundle_money`, `bundle_marketing`, `bundle_team`, `bundle_operations` at `/admin/matrix`.
-5. Insert `company_settings` (name, logo, quiet hours) and `notification_config` for the location.
-6. Add the hostname in Vercel and DNS; widen the brand allowlist if the funnel pages are needed.
-7. Set `POSTMARK_ACCOUNT_TOKEN`, provision the tenant Postmark server and domain, then register its webhooks by hand in Postmark.
-8. Insert `landing_page_settings` with a `public_path`; insert `settings.whatsapp_flow`, `settings.meta_ads`, `settings.glofox.trial_*`, `settings.inbody.accounts` as needed.
-9. Connect WhatsApp (owner can), register the Flow public key on the number by Graph call, attach the IG account to the Meta app.
-10. Connect Glofox (owner can) and run the initial import; any reconcile/probe tool is master-only.
-11. Enter AC/UniFi credentials, pair studio devices and trusted IPs, image a Pi if HR straps are wanted.
-12. Create contract templates; accept that policies are UN1T's.
-13. Tell the gym that offers, deposits, internal events and default class-pay will settle to UN1T's Revolut unless they connect Stripe, and that all email sends as UN1T until step 7 is complete.
+Status as of 11 Oct 2026 in brackets after each step. As written on 9 Oct, everything below was Richard, with SQL/env/Vercel/Postmark/Meta access:
+1. `/admin/tenants/new`: org, first location (timezone/country), invite owner, org branding, tenant-domain row. **[Still Richard; the timezone is now required and validated (TZ.2), and the platform `<slug>.repset.ie` row is automatic (W1.L1).]**
+2. Grant the owner `org_admin` at `/settings/staff/[id]`. **[Done by the wizard (W1.E1).]**
+3. Pin a plan at `/admin/plans` and top up or adjust a wallet. **[Still manual; the wizard links the plan-pin page (W1.E1). Wave 3.]**
+4. Flip `bundle_money`, `bundle_marketing`, `bundle_team`, `bundle_operations` at `/admin/matrix`. **[Still manual. Wave 3.]**
+5. Insert `company_settings` (name, logo, quiet hours) and `notification_config` for the location. **[Seeded on location creation (W1.W1); the logo is still uploaded by hand.]**
+6. Add the hostname in Vercel and DNS; widen the brand allowlist if the funnel pages are needed. **[Not needed for `<slug>.repset.ie` (wildcard live, allowlist widened in W1.L2). A custom domain is still manual. Wave 3.]**
+7. Set `POSTMARK_ACCOUNT_TOKEN`, provision the tenant Postmark server and domain, then register its webhooks by hand in Postmark. **[Webhooks and the broadcast stream are registered automatically (W1.E3); the domain is set up in Settings → Email domain on a paid plan; until it is live, mail sends as the platform address with the tenant's name (W1.E2).]**
+8. Insert `landing_page_settings` with a `public_path`; insert `settings.whatsapp_flow`, `settings.meta_ads`, `settings.glofox.trial_*`, `settings.inbody.accounts` as needed. **[Still SQL. Wave 3.]**
+9. Connect WhatsApp (owner can), register the Flow public key on the number by Graph call, attach the IG account to the Meta app. **[Unchanged. Wave 3.]**
+10. Connect Glofox (owner can) and run the initial import; any reconcile/probe tool is master-only. **[Glofox is now optional: set the location's membership source (W1.M2); with none, Glofox-only surfaces say so (W1.M3). Operator tools still master-only.]**
+11. Enter AC/UniFi credentials, pair studio devices and trusted IPs, image a Pi if HR straps are wanted. **[Unchanged. Wave 3.]**
+12. Create contract templates; accept that policies are UN1T's. **[Policies are per org since W0.5; contract templates are still created by hand.]**
+13. Tell the gym that offers, deposits, internal events and default class-pay will settle to UN1T's Revolut unless they connect Stripe, and that all email sends as UN1T until step 7 is complete. **[Email no longer sends as UN1T (W1.E2). The money half is still true until Wave 2.]**
 
 ## 5. Suggested order of work
 
-- **Wave 0 — stop the leaks** (small, independent PRs): blockers 1–6, 9–11 and the five small holes. Each is a scoping change with a test. This wave alone makes it *safe* to invite a friendly second gym onto a shared host.
-- **Wave 1 — identity**: seeded `company_settings`, `'UN1T'` fallback removal (theme B), tenant email domain reachable with webhooks and per-server suppression (blocker 8), per-tenant links (theme C). After this a tenant's customers never see UN1T.
-- **Wave 2 — money**: blocker 7. After this a tenant's customers never pay UN1T.
-- **Wave 3 — self-serve**: theme A, starting with the wizard (org_admin, plan, bundles, settings rows) and org-admin-level toggles, then the SQL-only settings UIs, then Vercel domain automation.
-- **Wave 4 — decisions**: timezone (theme D) and membership source (theme E). Both are product decisions first; declaring Ireland/UK-only and Glofox-required for v1 is a legitimate answer that collapses most of the work.
-- **Wave 5 — operability at scale**: per-tenant heartbeats and health, cron budget rotation, per-org ops alerts, namespace scoping.
+- ✅ **Wave 0 — stop the leaks** (delivered 9–10 Oct) (small, independent PRs): blockers 1–6, 9–11 and the five small holes. Each is a scoping change with a test. This wave alone makes it *safe* to invite a friendly second gym onto a shared host.
+- ✅ **Wave 1 — identity** (delivered 10–11 Oct): seeded `company_settings`, `'UN1T'` fallback removal (theme B), tenant email domain reachable with webhooks and per-server suppression (blocker 8), per-tenant links (theme C). After this a tenant's customers never see UN1T.
+- ⏭ **Wave 2 — money** (next): blocker 7. After this a tenant's customers never pay UN1T.
+- **Wave 3 — self-serve** (partly done in Wave 1; see §3a): theme A, starting with the wizard (org_admin, plan, bundles, settings rows) and org-admin-level toggles, then the SQL-only settings UIs, then Vercel domain automation.
+- ✅ **Wave 4 — decisions** (timezone delivered 11 Oct as its own wave; membership-source seam delivered in Wave 1, the `'un1t'` provider still to build): timezone (theme D) and membership source (theme E). Both are product decisions first; declaring Ireland/UK-only and Glofox-required for v1 is a legitimate answer that collapses most of the work.
+- **Wave 5 — operability at scale** (not started): per-tenant heartbeats and health, cron budget rotation, per-org ops alerts, namespace scoping.
 
 ## 6. Notes on method and limits
 - Ten reviewers each covered one hub against the shared rubric; their reports are summarised above with file:line evidence. Every blocker and each surprising claim was re-read by hand in the worktree before inclusion.
