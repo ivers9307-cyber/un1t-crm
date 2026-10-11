@@ -84,7 +84,7 @@ describe('TZ.11a shared/dashboard-data — Europe/Dublin byte-identical', () => 
       expect(argOf(db, 'shift_assignments', 'gte', 'shift_blocks.block_date')).toBe(w.weekStartIso)
       expect(argOf(db, 'shift_assignments', 'lte', 'shift_blocks.block_date')).toBe(w.weekEndIso)
     }
-  })
+  }, 30_000) // exhaustive sweep: give a loaded CI shard room
 })
 
 describe('TZ.11a shared/dashboard-data — America/New_York', () => {
@@ -195,7 +195,7 @@ describe('TZ.11a membership flows', () => {
 describe('TZ.11a labour month', () => {
   it('Europe/Dublin is byte-identical at every hour of 2026', () => {
     for (const ms of EVERY_2026_HOUR) expect(labourMonthWindow(ms, DUB)).toStrictEqual(L.labourMonthWindowLegacy(ms))
-  })
+  }, 30_000) // exhaustive sweep: give a loaded CI shard room
   it('America/New_York: November starts 1 Nov 00:00 EDT and ends 1 Dec 00:00 EST', () => {
     const w = labourMonthWindow(at('2026-11-01T04:30:00Z'), NY)
     expect(w.month).toBe('2026-11')

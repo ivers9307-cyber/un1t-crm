@@ -68,7 +68,6 @@ src/app/api/schedule/time-off/[id]/unassign-clashes/route.js
 src/app/api/schedule/time-off/route.js
 src/app/api/schedule/week-cost/route.js
 src/app/communications/(marketing-era)/list-health/page.js
-src/app/live/[locationId]/DetectedTab.jsx
 src/app/welcome/[location]/status/page.js
 src/components/AcControlPanel.jsx
 src/components/AttendanceReportClient.jsx
@@ -107,9 +106,7 @@ src/lib/dates.js
 src/lib/email-forward.js
 src/lib/equipment-dates.js
 src/lib/hr-analytics.js
-src/lib/live-board.js
 src/lib/live-class.js
-src/lib/live-poll.js
 src/lib/mail/reply-quote.js
 src/lib/onboarding-journey.js
 src/lib/qualification-digest.js
@@ -131,4 +128,3 @@ src/lib/shift-replace-notify.js
 src/lib/staff-calendar-feed.js
 src/lib/staff-push-hours.js
 src/lib/time-off-cancel.js
-src/lib/tv-class-intro.js

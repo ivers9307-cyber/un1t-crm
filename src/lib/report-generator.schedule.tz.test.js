@@ -49,7 +49,7 @@ describe('TZ.11a calculateNextRun — Europe/Dublin is byte-identical (07:00 UTC
         expect(calculateNextRun(f, dow, dom, DUB, ms)).toBe(L.calculateNextRunLegacy(f, dow, dom, ms))
       }
     }
-  })
+  }, 30_000) // exhaustive sweep: give a loaded CI shard room
   it('summer: a daily run stays at 07:00Z, not 07:00 IST (06:00Z)', () => {
     expect(calculateNextRun('daily', null, null, DUB, Date.parse('2026-07-01T07:00:00Z'))).toBe('2026-07-02T07:00:00.000Z')
   })
@@ -62,7 +62,7 @@ describe('TZ.11a calculatePeriodForSchedule — Europe/Dublin', () => {
         expect(calculatePeriodForSchedule(f, DUB, ms)).toStrictEqual(L.calculatePeriodForScheduleLegacy(f, ms))
       }
     }
-  })
+  }, 30_000) // exhaustive sweep: give a loaded CI shard room
   it("23:30 UTC in summer is already tomorrow in Dublin: the period is Dublin's (the legacy host read UTC)", () => {
     const ms = Date.parse('2026-06-30T23:30:00Z') // 00:30 IST on 1 July
     expect(calculatePeriodForSchedule('monthly', DUB, ms)).toEqual({ period_start: '2026-06-01', period_end: '2026-06-30' })

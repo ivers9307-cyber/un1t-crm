@@ -13,12 +13,17 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Plug, ChevronDown, ChevronRight, Link2, Check } from 'lucide-react'
+import { DEFAULT_TZ } from '@shared/zoned-time'
+import { visitTimeLabel } from '@/lib/tv-board-time'
 
 const POLL_MS = 12000
 
 // GATES-2 — `canClaim` (the page's canMutate): Claim calls register-device,
 // which needs a coach role at the location. Defaults closed.
-export default function DetectedTab({ locationId, canClaim = false }) {
+//
+// TZ.12 — `timeZone` (the location's IANA zone, from the page) is the clock the
+// visit times are shown on: the studio's, not Dublin's.
+export default function DetectedTab({ locationId, canClaim = false, timeZone = DEFAULT_TZ }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -99,7 +104,7 @@ export default function DetectedTab({ locationId, canClaim = false }) {
       ) : (
         <ul className="mt-3 divide-y divide-un1t-border rounded-2xl border border-un1t-border bg-white">
           {filtered.map((r) => (
-            <DetectionRow key={r.id} row={r} locationId={locationId} onLink={canClaim ? () => setLinking(r) : null} />
+            <DetectionRow key={r.id} row={r} locationId={locationId} timeZone={timeZone} onLink={canClaim ? () => setLinking(r) : null} />
           ))}
         </ul>
       )}
@@ -116,7 +121,7 @@ export default function DetectedTab({ locationId, canClaim = false }) {
   )
 }
 
-function DetectionRow({ row, locationId, onLink }) {
+function DetectionRow({ row, locationId, timeZone, onLink }) {
   const [open, setOpen] = useState(false)
   const [visits, setVisits] = useState(null)
 
@@ -172,7 +177,7 @@ function DetectionRow({ row, locationId, onLink }) {
             <ul className="space-y-1">
               {visits.map((v) => (
                 <li key={v.id} className="text-xs text-un1t-subtle">
-                  {formatDateTime(v.started_at)}{v.class_name ? ` · ${v.class_name}` : ''}
+                  {visitTimeLabel(v.started_at, timeZone)}{v.class_name ? ` · ${v.class_name}` : ''}
                   {v.peak_bpm != null ? ` · peak ${v.peak_bpm} bpm` : ''}
                 </li>
               ))}
@@ -323,9 +328,3 @@ function formatSince(iso) {
   return `${Math.floor(ms / 86_400_000)}d ago`
 }
 
-function formatDateTime(iso) {
-  if (!iso) return ''
-  try {
-    return new Intl.DateTimeFormat('en-IE', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Dublin' }).format(new Date(iso))
-  } catch { return iso }
-}

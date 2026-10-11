@@ -210,7 +210,7 @@ describe('TZ.9 Europe/Dublin is byte-identical', () => {
     }
     const closed = { slug: 's', name: 'N', race_date: '2026-12-01', registration_closes_at: '2026-01-01T00:00:00Z' }
     expect(toBrowseCard(closed, { soldOut: true, now: Date.UTC(2026, 5, 1), zone: DUB })).toStrictEqual(LEGACY.toBrowseCardLegacyDublin(closed, { soldOut: true, now: Date.UTC(2026, 5, 1) }))
-  })
+  }, 30_000) // exhaustive sweep: over 5 s on a loaded CI shard (main Web CI, 11 Oct)
 
   it('host-schedule-time: every quarter hour of 2026, both directions', () => {
     for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 15 * 60_000) {
@@ -234,7 +234,7 @@ describe('TZ.9 Europe/Dublin is byte-identical', () => {
     // The deprecated Dublin names still answer exactly as before (HostEmailReport, TZ.16's).
     expect(HST.dublinScheduleLabel(Date.UTC(2026, 6, 1, 8))).toBe(LEGACY.dublinScheduleLabelLegacyDublin(Date.UTC(2026, 6, 1, 8)))
     expect(HST.scheduleZoneLabel(DUB)).toBe('Dublin')
-  })
+  }, 30_000) // exhaustive sweep: over 5 s on a loaded CI shard (main Web CI, 11 Oct)
 
   it('hyrox mapping and the class time label: every hour of 2026', () => {
     for (const t of HOURS_2026) {
