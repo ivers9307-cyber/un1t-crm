@@ -164,7 +164,12 @@ export default function EmailDomainWizard({ initialState, organizationId, featur
   const statusChip = STATUS_CHIP[state.status] || STATUS_CHIP.not_configured
 
   // ── 3. Enter domain (not yet provisioned) ──────────────────────────
-  if (state.status === 'not_configured') {
+  // Also when a server exists but no domain was ever attached (a first
+  // attempt that failed after creating the server, e.g. Postmark's "Domain
+  // already exists"): without the form there is nothing to verify and no way
+  // to retry. POST reuses the server and only attaches the domain.
+  const noDomainYet = state.status === 'not_configured' || !state.sending_domain
+  if (noDomainYet) {
     return (
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-6">
         <h2 className="text-base font-semibold mb-1">Set up your sending domain</h2>
@@ -222,6 +227,11 @@ export default function EmailDomainWizard({ initialState, organizationId, featur
               Mail will send from{' '}
               <code className="text-un1t-text">{(fromLocal.trim() || 'hello')}@{domain.trim()}</code>.
             </p>
+          )}
+          {!error && state.status !== 'not_configured' && state.last_error && (
+            <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3">
+              The last attempt did not finish: {state.last_error} Enter the domain again to retry.
+            </div>
           )}
           {error && (
             <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3">{error}</div>
