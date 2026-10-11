@@ -7,13 +7,14 @@
 // showers — and run on a fixed timer. Class END time is irrelevant.
 
 import { slotKey, classMatchesFilter } from '@/lib/class-climate'
+import { DEFAULT_TZ } from '@shared/zoned-time'
 
 export const DEFAULT_CONFIG = Object.freeze({
   device_ids: [],
   delay_after_start_min: 45, // turn AC on this many minutes AFTER class start
   run_duration_min: 30,      // off timer — minutes from the scheduled on-time
   class_filter: [],          // [] = all classes; else only names containing one of these (case-insensitive)
-  excluded_slots: [],        // recurring "<weekday> HH:MM" (Dublin) slots to skip, e.g. "Thu 06:00"
+  excluded_slots: [],        // recurring "<weekday> HH:MM" slots (the location's wall clock) to skip, e.g. "Thu 06:00"
 })
 
 /**
@@ -48,16 +49,20 @@ export function resolveConfig(config) {
  * The OFF is NOT planned here — the runner sets ac_sessions.auto_off_at
  * via autoOffAtFor and the existing ac-auto-off cron performs it.
  *
- * @param {{ occurrences: Array, config: object, nowMs?: number }} args
+ * `zone` is the location's IANA zone (TZ.10): the excluded-slot keys are that
+ * studio's wall clock, matched through class-climate's slotKey. Every non-test
+ * caller passes it (tests/climate-zone-callers.test.js).
+ *
+ * @param {{ occurrences: Array, config: object, nowMs?: number, zone?: string }} args
  * @returns {Array<{ glofox_event_id: string, occurrence: object }>}
  */
-export function planBathroomClimate({ occurrences, config, nowMs = Date.now() }) {
+export function planBathroomClimate({ occurrences, config, nowMs = Date.now(), zone = DEFAULT_TZ }) {
   const excluded = new Set(config.excluded_slots || [])
   const out = []
   for (const occ of occurrences || []) {
     if (!occ?.glofox_event_id || !occ.starts_at) continue
     if (!classMatchesFilter(occ, config.class_filter)) continue
-    if (excluded.has(slotKey(occ.starts_at))) continue
+    if (excluded.has(slotKey(occ.starts_at, zone))) continue
     const startMs = new Date(occ.starts_at).getTime()
     if (!Number.isFinite(startMs)) continue
     const windowOpen = startMs + config.delay_after_start_min * 60_000

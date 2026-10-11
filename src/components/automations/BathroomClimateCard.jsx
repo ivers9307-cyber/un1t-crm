@@ -26,7 +26,10 @@ function fmtDublin(iso) {
   } catch { return iso }
 }
 
-export default function BathroomClimateCard({ locationId, glofoxConnected, glofoxUnknown = false, devices, initialEnabled, initialConfig }) {
+// TZ.10 — `timezone` is the location's zone. The excluded-slot keys this card
+// writes ("Thu 06:00") are that studio's wall clock, and the runner matches
+// them in the same zone, so the two must agree.
+export default function BathroomClimateCard({ locationId, timezone, glofoxConnected, glofoxUnknown = false, devices, initialEnabled, initialConfig }) {
   const router = useRouter()
   const cfg0 = initialConfig || {}
   const [enabled, setEnabled] = useState(Boolean(initialEnabled))
@@ -73,7 +76,7 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, glofo
 
   const filters = filterText.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
   const classMatches = (name) => filters.length === 0 || filters.some((f) => String(name || '').toLowerCase().includes(f))
-  const isExcluded = (iso) => excludedSlots.includes(slotKey(iso))
+  const isExcluded = (iso) => excludedSlots.includes(slotKey(iso, timezone))
 
   function toggleSlot(key) {
     if (!key) return
@@ -227,7 +230,7 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, glofo
                   : willRun ? 'bg-blue-500/5' : 'opacity-40'
                 return (
                   <li key={c.glofox_event_id}>
-                    <button type="button" onClick={() => toggleSlot(slotKey(c.starts_at))}
+                    <button type="button" onClick={() => toggleSlot(slotKey(c.starts_at, timezone))}
                       title={excluded ? 'Excluded — click to include again' : 'Click to exclude this weekly time slot'}
                       className={`flex w-full items-center gap-3 text-[11px] rounded px-2 py-1 text-left hover:bg-un1t-border/30 ${cls}`}>
                       <span className="text-un1t-subtle tabular-nums shrink-0 w-36">{fmtDublin(c.starts_at)}</span>

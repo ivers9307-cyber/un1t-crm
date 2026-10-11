@@ -34,7 +34,7 @@ import { getCurrentUser, guardMasterOrOwner } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { readGlofoxAutomationStatus } from '@/lib/automations/glofox-status'
-import { DEFAULT_TZ } from '@/lib/tz-time'
+import { zoneOfLocation } from '@/lib/location-time'
 import ShellyDevicesClient from '@/components/automations/ShellyDevicesClient'
 
 export const dynamic = 'force-dynamic'
@@ -65,7 +65,9 @@ export default async function ShellyPage() {
       )}
       <ShellyDevicesClient
         locationName={location.name || ''}
-        locationTz={location.timezone || DEFAULT_TZ}
+        // TZ.10 — the active location's zone, canonicalised (an invalid value
+        // falls back to the platform zone with one logged warning).
+        locationTz={zoneOfLocation(location)}
         glofoxConnected={glofox.connected === true}
         // Unknown (a failed read): class mode stays off either way, but the
         // editor says the check failed instead of "Connect Glofox".

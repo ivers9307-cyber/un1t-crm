@@ -18,14 +18,19 @@
 // a concurrent/previous run already handled it. Any non-unique claim error
 // means we have no idempotency guard, so we do NOT send. Driven by a daily
 // Vercel cron at /api/cron/event-reminders.
+//
+// TZ.9 — "3 days out" and "tomorrow" are counted from the EVENT's studio day
+// (event-day.js: race_events.location_id's zone; a host event's anchor), not
+// Dublin's. The zone rides the event read (the locations embed), so there is
+// no separate zone read that could fail and leave a reminder sent on a guess.
 
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { logError } from '@/lib/log'
 import { signCheckinToken } from '@/lib/event-checkin-tokens'
 import { getAppUrl } from '@/lib/app-url'
 import { sendCustomerPush } from '@/lib/customer-push'
-import { addDaysISO, dublinTodayStr } from '@/lib/dublin-time'
-import { formatWeekdayLongDateInTZ } from '@/lib/dates'
+import { addDaysISO, dayStrIn } from '@/lib/location-time'
+import { eventToday, eventDateLong } from '@/lib/event-day'
 import { buildEventEmailShell, resolveEventEmail, escapeHtml } from '@/lib/event-email'
 import { resolveEventCommsLocation, pickAudienceVenueName } from '@/lib/event-comms-location'
 import { transactionalEmailSuppression } from '@/lib/transactional-consent'
@@ -34,11 +39,11 @@ const EVENT_REMINDER_PAGE = 1000
 
 /**
  * Which reminder offset (if any) a race date warrants relative to today.
- * Pure Europe/Dublin calendar arithmetic on YYYY-MM-DD strings — addDaysISO
- * does the math in UTC under the hood, so it never drifts across BST/GMT.
+ * Pure calendar arithmetic on YYYY-MM-DD strings — addDaysISO does the math
+ * in UTC under the hood, so it never drifts across a DST change.
  *
  * @param {string} raceDateStr  YYYY-MM-DD (the event's race_date)
- * @param {string} todayStr     YYYY-MM-DD (Europe/Dublin "today")
+ * @param {string} todayStr     YYYY-MM-DD ("today" at the event's studio)
  * @returns {'3d'|'1d'|null}    '3d' when raceDate===today+3, '1d' when ===today+1
  */
 export function reminderOffsetForDate(raceDateStr, todayStr) {
@@ -114,12 +119,14 @@ export function buildReminderEmailHtml(args = {}) {
 }
 
 // Human "when" label for a registration — prefers the wave start time, falls
-// back to the event's own start_time. The date renders in Europe/Dublin so a
-// UTC-runtime cron still says the Dublin calendar day.
-function reminderTimeLabel(reg, ev) {
+// back to the event's own start_time. Both are the studio's wall clock and
+// print as stored; the date is the stored calendar day (eventDateLong, TZ.9),
+// so a UTC-runtime cron says the studio's day in any zone. Exported for the
+// TZ.9 byte-identity test.
+export function reminderTimeLabel(reg, ev) {
   const t = reg?.wave?.start_time || ev?.start_time || null
   const hhmm = typeof t === 'string' ? t.slice(0, 5) : ''
-  const dateLabel = formatWeekdayLongDateInTZ(ev?.race_date) || ev?.race_date || ''
+  const dateLabel = eventDateLong(ev?.race_date) || ev?.race_date || ''
   if (dateLabel && hhmm) return `${dateLabel} · ${hhmm}`
   return dateLabel || hhmm || ''
 }
@@ -202,25 +209,32 @@ async function sendReminderEmail({ db, ev, reg, offset, whenLabel, locationName,
 
 /**
  * Daily orchestration. For every active, non-lead-gen race_event happening in
- * exactly 3 days or exactly 1 day (Europe/Dublin), send each CONFIRMED
+ * exactly 3 days or exactly 1 day (at the event's studio), send each CONFIRMED
  * registration one reminder (email + best-effort push) carrying the check-in
  * QRs + event time/location — claim-before-send against event_reminder_sends
  * so it never double-sends.
  *
  * @param {object} args
  * @param {import('@supabase/supabase-js').SupabaseClient} args.db  service-role client (injected for tests)
- * @param {string} [args.todayStr]  Europe/Dublin YYYY-MM-DD; defaults to dublinTodayStr()
+ * @param {string} [args.todayStr]  one YYYY-MM-DD "today" for EVERY event (tests,
+ *   a pinned replay). Omitted (the cron): each event's own studio day (TZ.9).
+ * @param {number} [args.nowMs]  the instant "today" is read at; defaults to now
  * @returns {Promise<{events:number, sent:number, skipped:number}>}
  */
-export async function runEventReminders({ db, todayStr } = {}) {
+export async function runEventReminders({ db, todayStr, nowMs = Date.now() } = {}) {
   const result = { events: 0, sent: 0, skipped: 0 }
   if (!db) return result
 
-  const today = todayStr || dublinTodayStr()
-  const d3 = addDaysISO(today, 3)
-  const d1 = addDaysISO(today, 1)
+  // Candidate dates. With one pinned today, its +3 and +1. Otherwise every
+  // date that is +3 or +1 of SOME studio's today: a studio's today is the UTC
+  // day, the day before or the day after, so that is UTC day +0 … +4. Each
+  // event is then judged against its own studio's today below, so a Dublin
+  // event matches exactly the dates it did before.
+  const raceDates = todayStr
+    ? [addDaysISO(todayStr, 3), addDaysISO(todayStr, 1)]
+    : [0, 1, 2, 3, 4].map((n) => addDaysISO(dayStrIn(nowMs, 'UTC'), n))
 
-  // Candidate events — only the two target dates, active, and not lead_gen
+  // Candidate events — only those dates, active, and not lead_gen
   // (lead_gen events have no date/time and are pure capture forms). Small set.
   const { data: events, error: evErr } = await db
     .from('race_events')
@@ -228,8 +242,8 @@ export async function runEventReminders({ db, todayStr } = {}) {
              venue_name, venue_address,
              accent_hex, hero_image_url,
              reminder_email_subject, reminder_email_intro, reminder_email_template_id,
-             locations:location_id ( id, name, is_host_anchor )`)
-    .in('race_date', [d3, d1])
+             locations:location_id ( id, name, is_host_anchor, timezone )`)
+    .in('race_date', raceDates)
     .eq('active', true)
     .neq('kind', 'lead_gen')
   if (evErr) {
@@ -242,7 +256,7 @@ export async function runEventReminders({ db, todayStr } = {}) {
   const checkinSecret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
 
   for (const ev of events) {
-    const offset = reminderOffsetForDate(ev.race_date, today)
+    const offset = reminderOffsetForDate(ev.race_date, todayStr || eventToday(ev, nowMs))
     if (!offset) continue
     result.events++
     // BAREWRITE.4 — resolveEventCommsLocation FAILS OPEN: it logs an

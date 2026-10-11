@@ -4,6 +4,7 @@
 import { normalizeClassName } from '@/lib/hr-analytics'
 import { pickSessionForOccurrence, resolveHyroxDisplayIds } from './publish'
 import { logWarn } from '@/lib/log'
+import { zoneOfLocation } from '@/lib/location-time'
 
 const LEAD_MS = 30 * 60_000   // put the board up 30 min before class
 const POST_MS = 5 * 60_000    // keep it a few min after the start
@@ -16,7 +17,7 @@ export async function runPublishHyroxBoard(db, { nowMs = Date.now() } = {}) {
   for (const block of blocks || []) {
     stats.locations++
     try {
-      const { data: loc } = await db.from('locations').select('id, settings').eq('id', block.location_id).single()
+      const { data: loc } = await db.from('locations').select('id, settings, timezone').eq('id', block.location_id).single()
       const { data: displays } = await db.from('tv_displays').select('id, tv_content(source_type, source_ref, triggered_by)').eq('location_id', block.location_id).eq('active', true)
       const activeIds = (displays || []).map((d) => d.id)
       const targetIds = resolveHyroxDisplayIds(loc, activeIds)
@@ -37,7 +38,8 @@ export async function runPublishHyroxBoard(db, { nowMs = Date.now() } = {}) {
         return nowMs >= start - LEAD_MS && nowMs <= end + POST_MS
       })
 
-      const session = live ? pickSessionForOccurrence(block, await loadSessions(db, block.id), live.starts_at) : null
+      // TZ.9: the occurrence's week/slot by the block studio's day.
+      const session = live ? pickSessionForOccurrence(block, await loadSessions(db, block.id), live.starts_at, zoneOfLocation(loc)) : null
 
       for (const d of displays.filter((x) => targetIds.includes(x.id))) {
         const cur = Array.isArray(d.tv_content) ? d.tv_content[0] : d.tv_content

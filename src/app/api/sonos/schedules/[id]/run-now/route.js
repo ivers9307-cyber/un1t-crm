@@ -27,7 +27,7 @@ import { uuidLike } from '@/lib/schemas'
 import { getSonosConfig, withFreshToken, sonosGetGroups } from '@/lib/sonos/client'
 import { mapGroups, resolveGroupIds, planAction } from '@/lib/sonos/groups'
 import { applyOpen } from '@/lib/sonos/apply'
-import { dublinDayStr } from '@/lib/dublin-time'
+import { dayStrIn, zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -71,10 +71,14 @@ export async function POST(request, { params }) {
   }
 
   const nowMs = Date.now()
+  // TZ.10 — the window is wall clock in the schedule's location, which is the
+  // active location (the select above is pinned to it). Its row is already in
+  // hand, so no read can fail here; the cron reads the same column.
+  const zone = zoneOfLocation(user.activeLocation)
   // planAction is asked what should happen with last_applied ignored, which
   // is exactly what "run it now" means: re-apply the active window whether
   // or not it has already been applied.
-  const plan = planAction({ ...schedule, last_applied: null }, nowMs, dublinDayStr(nowMs))
+  const plan = planAction({ ...schedule, last_applied: null }, nowMs, dayStrIn(nowMs, zone), zone)
   if (!plan || plan.action !== 'open') {
     // Outside every window there is nothing to apply. Say so — the old
     // route returned success here and looked like it had worked.

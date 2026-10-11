@@ -1,7 +1,7 @@
 // EVENT-WAITLIST.1 — the public join: refusals (not public, past, closed,
 // has room, bad group size) add nothing; a sold-out event adds the row; the
 // answer never carries a count or any capacity.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => ({ allowed: true })),
@@ -19,7 +19,8 @@ vi.mock('@/lib/supabase', () => ({
     },
   }),
 }))
-vi.mock('@/lib/dublin-time', () => ({ dublinTodayStr: () => '2026-10-09' }))
+// TZ.9: "today" is the event studio's day at the (fake) clock, 2026-10-09 in
+// Dublin as the old dublinTodayStr mock pinned (see beforeEach).
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 vi.mock('@/lib/event-waitlist', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -40,11 +41,14 @@ const post = (body = BODY) => POST(
 )
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-10-09T12:00:00Z'))
   vi.clearAllMocks()
   RACE = { ...BASE }
   loadEventHasRoom.mockResolvedValue({ hasRoom: false, error: null })
   joinWaitlist.mockResolvedValue({ row: { id: 'wl1' }, created: true })
 })
+afterEach(() => { vi.useRealTimers() })
 
 describe('POST /api/public/events/[slug]/waitlist', () => {
   it('rate-limits per slug + IP, 5 per 15 minutes', async () => {
@@ -81,6 +85,22 @@ describe('POST /api/public/events/[slug]/waitlist', () => {
     expect(res.status).toBe(status)
     expect((await res.json()).code).toBe(code)
     expect(joinWaitlist).not.toHaveBeenCalled()
+  })
+
+  it('TZ.9: "already happened" is by the event studio\'s day, not Dublin\'s', async () => {
+    // 2026-11-01T03:30Z: Dublin is Sunday 1 Nov; New York is Saturday 31 Oct 23:30.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-01T03:30:00Z'))
+    try {
+      RACE = { ...BASE, race_date: '2026-10-31', locations: { id: 'L-ny', timezone: 'America/New_York' } }
+      expect((await post()).status).toBe(200)
+      RACE = { ...BASE, race_date: '2026-10-31', locations: { id: 'L-dub', timezone: 'Europe/Dublin' } }
+      const res = await post()
+      expect(res.status).toBe(409)
+      expect((await res.json()).code).toBe('past')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('refuses a group size the event does not offer', async () => {
