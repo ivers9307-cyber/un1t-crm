@@ -26,7 +26,7 @@
 
 import { logWarn } from '@/lib/log'
 import { uuidLike } from '@/lib/schemas'
-import { resolveTz, isValidTz } from '@/lib/tz-time'
+import { resolveZone as resolveTz, isValidZone as isValidTz } from '@/lib/location-time'
 
 const MODULE = 'shelly-device'
 

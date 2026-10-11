@@ -318,3 +318,22 @@ describe('GET /api/settings/customer-agent — check-in counts are sends (CHECKI
     expect(body.checkin_stats.last_unreadable).toBe(true)
   })
 })
+
+// TZ.5 — the editor names the studio's zone next to the quiet-hours fields
+// (quiet hours with no stored tz are read in it).
+describe('GET /api/settings/customer-agent — TZ.5 location timezone', () => {
+  const getWith = async (timezone) => {
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'manager', activeLocation: { id: 'loc1' } })
+    createServerClient.mockReturnValue(fakeLocationsDb({
+      reads: { data: { name: 'Studio', settings: { customer_agent: {} }, timezone }, error: null },
+    }))
+    return (await (await GET()).json()).location
+  }
+  it('carries a New York studio\'s zone', async () => {
+    expect(await getWith('America/New_York')).toEqual({ id: 'loc1', name: 'Studio', timezone: 'America/New_York' })
+  })
+  it('a Dublin or NULL column reads Europe/Dublin', async () => {
+    expect((await getWith('Europe/Dublin')).timezone).toBe('Europe/Dublin')
+    expect((await getWith(null)).timezone).toBe('Europe/Dublin')
+  })
+})

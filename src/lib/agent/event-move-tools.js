@@ -20,7 +20,8 @@
 import { linkedAccountsForContact } from '@/lib/person-accounts'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { UUID_SHAPE } from '@/lib/uuid-shape'
-import { dateLabel, dublinToday } from './event-date-label'
+import { dateLabel, todayIn } from './event-date-label'
+import { DEFAULT_TZ } from '@/lib/location-time'
 import { publicMoveOptions } from '@/lib/registration-move-public'
 import { moveLocationIds } from '@/lib/move-locations'
 
@@ -157,7 +158,8 @@ async function ownedConfirmedRegistration(db, ctx, registrationId) {
     return { refusal: { error: 'not_active', message: 'This entry is not active (cancelled or already used), so there is nothing to move.' } }
   }
   const eventDate = String(reg.race_events?.race_date || '')
-  if (!eventDate || eventDate < dublinToday(Date.now())) {
+  // TZ.5 — the registration's event is read at ctx.locationId, so ctx.zone.
+  if (!eventDate || eventDate < todayIn(Date.now(), ctx.zone || DEFAULT_TZ)) {
     return { refusal: { error: 'not_active', message: 'That event has already happened, so the entry cannot be moved.' } }
   }
   return { reg }

@@ -8,6 +8,7 @@ import { getLocationBranding } from '@/lib/location-branding'
 import { phoneMatchesAllowlist, isWithinQuietHours, stripEmDashes, resolveAgentGate, AGENT_MESSAGE_SOURCE } from './core'
 import { defaultWelcomeGreeting } from './default-copy'
 import { DEFAULTS } from './settings-contract'
+import { zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
 
 // HUMANIZE.1 — no em dash, no emoji, low-key: this is shipped customer copy on
 // the click-to-WhatsApp path, and the deterministic scrub below covers the
@@ -19,8 +20,9 @@ export { defaultWelcomeGreeting }
 
 // Pure gate: mirrors shouldAgentReply's on-duty rules (enabled/test allowlist/
 // quiet hours) without the per-conversation state (a request_welcome thread is
-// brand new by definition).
-export function shouldSendWelcome({ settings, senderPhone, now = new Date() }) {
+// brand new by definition). TZ.5 — `zone` is the location's (quiet hours with
+// no stored tz are read on the studio's own clock).
+export function shouldSendWelcome({ settings, senderPhone, now = new Date(), zone = DEFAULT_TZ }) {
   const s = settings || {}
   // Shared combine (core.resolveAgentGate) so this gate can't drift from
   // shouldAgentReply — enabled+test_mode is live for everyone on both.
@@ -29,7 +31,7 @@ export function shouldSendWelcome({ settings, senderPhone, now = new Date() }) {
   if (!enabled && testMode && !phoneMatchesAllowlist(senderPhone, s.test_phones)) {
     return { send: false, reason: 'not_in_test_allowlist' }
   }
-  if (isWithinQuietHours(now, s.quiet_hours)) return { send: false, reason: 'quiet_hours' }
+  if (isWithinQuietHours(now, s.quiet_hours, zone)) return { send: false, reason: 'quiet_hours' }
   return { send: true }
 }
 
@@ -37,9 +39,10 @@ export function shouldSendWelcome({ settings, senderPhone, now = new Date() }) {
 export async function maybeSendWelcomeGreeting(db, { conversationId, locationId, senderPhone, contactId }) {
   try {
     if (!conversationId || !locationId || !senderPhone) return { sent: false, reason: 'missing_context' }
-    const { data: loc } = await db.from('locations').select('settings').eq('id', locationId).single()
+    const { data: loc } = await db.from('locations').select('settings, timezone').eq('id', locationId).single()
     const settings = loc?.settings?.customer_agent || null
-    const gate = shouldSendWelcome({ settings, senderPhone })
+    // TZ.5 — the zone rides the row already read (no second query).
+    const gate = shouldSendWelcome({ settings, senderPhone, zone: zoneOfLocation({ id: locationId, timezone: loc?.timezone }) })
     if (!gate.send) return { sent: false, reason: gate.reason }
 
     // Idempotency: greet a thread once — skip if ANY outbound already exists.

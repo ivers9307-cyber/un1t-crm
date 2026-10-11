@@ -76,8 +76,12 @@
 
 import { logWarn, logError } from '@/lib/log'
 import { mapWithConcurrency } from '@/lib/concurrency'
-import { addDaysISO } from '@/lib/dublin-time'
-import { resolveTz, isValidTz, dayStrInTz, dayStartMsInTz } from '@/lib/tz-time'
+// TZ.10 — import swap only (tz-time was a shim onto these): the strict twins
+// keep tz-time's throw-on-bad-instant / null-on-bad-date contract exactly.
+import {
+  addDaysISO, resolveZone as resolveTz, isValidZone as isValidTz,
+  strictDayStrIn as dayStrInTz, strictDayStartMsIn as dayStartMsInTz,
+} from '@/lib/location-time'
 import { createShellyClient, MAX_GET_IDS, MIN_GAP_MS, redactSecret } from './client'
 import { normaliseGetItems, stateFromReading, stateChanged, groupId } from './status'
 import { planDeviceAction, isLiveOverride } from './plan'
