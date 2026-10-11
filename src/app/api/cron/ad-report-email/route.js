@@ -5,6 +5,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { loadAdsDashboard } from '@/lib/ads/read'
 import { buildAdReportEmail } from '@/lib/ads/report'
 import { sendEmail } from '@/lib/postmark'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -15,7 +16,7 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
   const db = createServerClient()
-  const { data: locations } = await db.from('locations').select('id, name, settings').eq('active', true)
+  const { data: locations } = await db.from('locations').select('id, name, settings, timezone').eq('active', true)
   const results = []
   for (const loc of locations || []) {
     const recipients = loc.settings?.ads?.report_recipients || []
@@ -23,7 +24,9 @@ export async function GET(request) {
     if (!recipients.length || !hasAccount) continue
     try {
       const dash = await loadAdsDashboard(db, loc.id, 1) // yesterday
-      const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Dublin' }).format(new Date())
+      // TZ.11a — the studio's today, 'YYYY-MM-DD' (the en-CA Dublin label it
+      // replaces had the same shape). The zone is the row in hand: no read to fail.
+      const date = todayStrIn(zoneOfLocation(loc))
       const { subject, html } = buildAdReportEmail({ locationName: loc.name, date, kpis: dash.kpis, perAd: dash.perAd })
       for (const to of recipients) await sendEmail({ to, subject, htmlBody: html, stream: 'outbound', tag: 'ad-report' })
       results.push({ loc: loc.id, sent: recipients.length })

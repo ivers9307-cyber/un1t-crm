@@ -37,7 +37,7 @@ import { fetchRosterRunways } from '@/lib/roster-runway-data'
 import RosterRunwayChip from '@/components/dashboard/RosterRunwayChip'
 import { fetchTodayFeed } from '@/lib/today-feed-data'
 import { assembleHomeQueue, queueCountLabel, groupQueueRows } from '@/lib/home-queue'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { relativeTime } from '@/lib/mail/conversation-display'
 import {
   KpiCard, KpiRow, SectionHeader, ListCard, PendingRow,
@@ -151,8 +151,8 @@ export const dynamic = 'force-dynamic'
 // instant, and Vercel runs in UTC: between midnight and 01:00 Dublin during
 // BST the server is still on yesterday's date, so the month grid highlighted
 // the wrong cell and SwapActions' "on with you today" listed yesterday's
-// shifts. dublinTodayStr() is the house helper for a business today
-// (CLAUDE.md).
+// shifts. todayStrIn(zone) is the house helper for a business today
+// (CLAUDE.md); the zone is the active studio's (TZ.11a).
 
 export default async function PersonalDashboardPage() {
   const user = await getCurrentUser()
@@ -161,7 +161,9 @@ export default async function PersonalDashboardPage() {
   // Permission gate — toggle is honoured for every role including owner.
   if (!hasPermission(user, 'dashboard_personal')) redirect('/dashboard')
 
-  const todayIso = dublinTodayStr()
+  // TZ.11a — the ACTIVE studio's today (its row carries timezone).
+  const zone = zoneOfLocation(user.activeLocation)
+  const todayIso = todayStrIn(zone)
 
   const db = createServerClient()
   // TODAY-FEED.1 / HOME.3 — the triage feed and the item-level queue
@@ -175,10 +177,10 @@ export default async function PersonalDashboardPage() {
   // getPendingApprovalsCount fired once here and once more inside
   // assembleHomeQueue, every page load).
   const [res, feedRows, queue] = await Promise.all([
-    // A4 REVENUEMTD.1 — the same Dublin today as the month grid, so "This
-    // week" never lags a day behind it between 00:00 and 01:00 Dublin.
+    // A4 REVENUEMTD.1 — the same studio today as the month grid, so "This
+    // week" never lags a day behind it between 00:00 and 01:00 local.
     fetchPersonalDashboardData(db, user.id, user.activeLocation?.id, { todayIso }),
-    fetchTodayFeed(db, user, user.activeLocation?.id, { skip: QUEUE_MIGRATED_IDS }),
+    fetchTodayFeed(db, user, user.activeLocation?.id, { skip: QUEUE_MIGRATED_IDS, zone }),
     assembleHomeQueue(db, user),
   ])
   if (!res.success) {

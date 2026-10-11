@@ -18,7 +18,7 @@
 // people who hold web Tasks without them. /api/tasks is the API-key surface.
 
 import { useState, useMemo, useCallback, useEffect } from 'react'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, resolveZone } from '@shared/zoned-time'
 import { postActivityWrite } from '@/lib/activity-write-gate'
 import Link from 'next/link'
 import {
@@ -56,7 +56,10 @@ const PRIORITIES = [
 // canWriteActivitiesAt at this studio (src/lib/activity-write-gate.js): web
 // Tasks AND Contacts here, the rule the write routes apply. Without it the
 // page shows the list but offers no write. Defaults false: fail closed.
-export default function TasksPage({ initialTasks, locationId, profiles, projectsSeed, canWrite = false }) {
+// TZ.11a — `timezone`: the studio's (the page passes user.activeLocation.timezone);
+// a task is overdue once its due date is before the STUDIO's today.
+export default function TasksPage({ initialTasks, locationId, profiles, projectsSeed, canWrite = false, timezone = null }) {
+  const zone = resolveZone(timezone)
   const [tasks, setTasks] = useState(initialTasks || [])
   const [view, setView] = useState('board')   // 'board' | 'list'
   const [createOpen, setCreateOpen] = useState(false)
@@ -174,13 +177,13 @@ export default function TasksPage({ initialTasks, locationId, profiles, projects
         <DndContext sensors={canWrite ? sensors : NO_SENSORS} collisionDetection={closestCenter} onDragStart={onDragStart} onDragEnd={onDragEnd}>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
             {STATUSES.map(col => (
-              <Column key={col.key} status={col} tasks={byStatus[col.key]} />
+              <Column key={col.key} status={col} tasks={byStatus[col.key]} zone={zone} />
             ))}
           </div>
           <DragOverlay>
             {activeDragId && (() => {
               const t = tasks.find(x => x.id === activeDragId)
-              return t ? <TaskCard task={t} dragging /> : null
+              return t ? <TaskCard task={t} dragging zone={zone} /> : null
             })()}
           </DragOverlay>
         </DndContext>
@@ -295,7 +298,7 @@ function SelectFilter({ value, onChange, options }) {
   )
 }
 
-function Column({ status, tasks }) {
+function Column({ status, tasks, zone }) {
   const { setNodeRef, isOver } = useDroppableColumn(status.key)
   return (
     <div
@@ -310,7 +313,7 @@ function Column({ status, tasks }) {
       </div>
       <SortableContext items={tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
         <div className="p-2 space-y-2 flex-1">
-          {tasks.map(t => <SortableTaskCard key={t.id} task={t} />)}
+          {tasks.map(t => <SortableTaskCard key={t.id} task={t} zone={zone} />)}
         </div>
       </SortableContext>
     </div>
@@ -322,7 +325,7 @@ function Column({ status, tasks }) {
 import { useDroppable } from '@dnd-kit/core'
 function useDroppableColumn(id) { return useDroppable({ id }) }
 
-function SortableTaskCard({ task }) {
+function SortableTaskCard({ task, zone }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id })
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -331,13 +334,13 @@ function SortableTaskCard({ task }) {
   }
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <TaskCard task={task} />
+      <TaskCard task={task} zone={zone} />
     </div>
   )
 }
 
-function TaskCard({ task, dragging }) {
-  const isOverdue = task.due_date && task.status !== 'done' && task.status !== 'cancelled' && task.due_date < dublinTodayStr()
+function TaskCard({ task, dragging, zone }) {
+  const isOverdue = task.due_date && task.status !== 'done' && task.status !== 'cancelled' && task.due_date < todayStrIn(zone)
   return (
     <div className={`bg-un1t-bg border ${isOverdue ? 'border-red-500/30' : 'border-un1t-border'} rounded-md p-3 cursor-grab ${dragging ? 'shadow-lg' : ''}`}>
       <p className="text-sm text-un1t-text">{task.subject}</p>
