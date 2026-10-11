@@ -1051,7 +1051,10 @@ describe('dashboard-data stays loadable on the phone, and the server reads Dubli
     (name) => {
       const b = body(name)
       expect(b.length, `${name} not found`).toBeGreaterThan(50)
-      expect(b).toMatch(/loadDublinTime\(\)/)
+      // TZ.11c: fetchAdsSummary builds its window in the ad account's zone
+      // through zoned-time.js (Hermes-safe at module scope), not dublin-time.
+      if (name === 'fetchAdsSummary') expect(b).toMatch(/\bdateKeyIn\(nowMs, zone\)/)
+      else expect(b).toMatch(/loadDublinTime\(\)/)
       expect(b).not.toMatch(/\b(startOfMonth|startOfWeek|endOfWeek|isoDate)\(/)
       expect(b).not.toMatch(/\.(setHours|setDate|getDate|getDay|getMonth|getFullYear)\(/)
     },

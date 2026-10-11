@@ -22,7 +22,7 @@
 // Mock style matches statuses.test.js/pull.test.js: a chainable mock
 // whose FINAL method resolves; intermediate steps return `this`. `db`
 // is a parameter (no @/lib/supabase mock needed). report-email,
-// app-url, cron-heartbeat and dublin-time are mocked at the module
+// app-url, cron-heartbeat and location-time's todayStrIn are mocked at the module
 // boundary since finalize.js orchestrates them, not their internals.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -42,8 +42,11 @@ vi.mock('@/lib/app-url', () => ({ getAppUrl: (...args) => getAppUrl(...args) }))
 const stampHeartbeat = vi.fn(async () => {})
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: (...args) => stampHeartbeat(...args) }))
 
-const dublinTodayStr = vi.fn(() => '2026-07-04')
-vi.mock('@/lib/dublin-time', () => ({ dublinTodayStr: (...args) => dublinTodayStr(...args) }))
+const todayStrIn = vi.fn(() => '2026-07-04')
+vi.mock('@/lib/location-time', async (importOriginal) => ({
+  ...(await importOriginal()),
+  todayStrIn: (...args) => todayStrIn(...args),
+}))
 
 let finalize
 
@@ -69,8 +72,8 @@ beforeEach(async () => {
   getAppUrl.mockReturnValue('https://crm.un1tdublin.com')
   stampHeartbeat.mockReset()
   stampHeartbeat.mockResolvedValue()
-  dublinTodayStr.mockReset()
-  dublinTodayStr.mockReturnValue('2026-07-04')
+  todayStrIn.mockReset()
+  todayStrIn.mockReturnValue('2026-07-04')
   finalize = await import('./finalize')
 })
 

@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { syncAccount } from '@/lib/ads/sync'
 import * as meta from '@/lib/ads/providers/meta'
+import { adAccountDay } from '@/lib/ads/account-day'
 import { logError, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -13,10 +14,6 @@ export const maxDuration = 300
 const PROVIDERS = { meta }
 const BREAKDOWNS = ['publisher_platform', 'age', 'gender']
 
-function dublinDateStr(offsetDays = 0) {
-  const d = new Date(Date.now() + offsetDays * 86400000)
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Dublin' }).format(d) // YYYY-MM-DD
-}
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -27,8 +24,11 @@ export async function GET(request) {
   // yesterday+today: this cron runs every 4h so today stays live, and yesterday
   // gets its final full total after the day rolls over (a today-only window would
   // permanently miss each day's last few hours). Upsert makes the re-pull idempotent.
-  const since = dublinDateStr(-1), until = dublinDateStr(0)
-  const { data: accounts, error: accountsErr } = await db.from('ad_accounts').select('*').eq('is_active', true)
+  // TZ.11c: "yesterday" and "today" are days in EACH account's own zone (Meta
+  // dates insights in the ad account's timezone), so the window is per account;
+  // the embedded location zone is the fallback (account-day.js).
+  const nowMs = Date.now()
+  const { data: accounts, error: accountsErr } = await db.from('ad_accounts').select('*, locations(id, timezone)').eq('is_active', true)
   if (accountsErr) {
     // CRONREADERR.1 — a failed read is not "no accounts". Nothing is synced and
     // the heartbeat is NOT stamped: the next 4-hourly run re-pulls yesterday +
@@ -42,6 +42,7 @@ export async function GET(request) {
     try {
       const provider = PROVIDERS[account.provider]
       if (!provider) { results.push({ id: account.id, skipped: 'no_provider' }); continue }
+      const since = adAccountDay(account, { nowMs, offsetDays: -1 }), until = adAccountDay(account, { nowMs })
       await syncAccount(db, account, provider, { since, until, breakdowns: account.provider === 'meta' ? BREAKDOWNS : [] })
       // Bookkeeping only: the insights are already upserted, so a failed label
       // write leaves a stale "last synced", never lost data.
