@@ -1,6 +1,8 @@
 // SESSION-REPORT.4 — pure helpers for the shareable post-class card. No IO.
 // The card image (ImageResponse) + the share page render from cardModel().
 
+import { formatInZone, DEFAULT_TZ } from './zoned-time.js'
+
 const BRAND_ACCENT = '#0B0B0C' // near-black: the "no vivid zone" fallback band
 
 /**
@@ -61,16 +63,18 @@ export function shortName(full) {
   return `${parts[0]} ${parts[parts.length - 1][0].toUpperCase()}.`
 }
 
-function formatDate(iso) {
+function formatDate(iso, zone) {
   try {
-    return new Intl.DateTimeFormat('en-IE', { day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' }).format(new Date(iso))
+    return formatInZone(new Date(iso), zone, { day: 'numeric', month: 'short' })
   } catch { return '' }
 }
 
 /**
  * Report payload + extras → the flat field set the card JSX + page render. Pure.
+ * `zone` (TZ.13, D7): the member's home studio zone for the date label;
+ * omitted = Europe/Dublin.
  */
-export function cardModel(report, { name, tracePoints = null } = {}) {
+export function cardModel(report, { name, tracePoints = null } = {}, zone = DEFAULT_TZ) {
   const s = report.summary || {}
   const vc = report.comparisons?.vs_category
   const categoryLine = (vc && vc.percentile != null && vc.sample_size >= 2)
@@ -83,7 +87,7 @@ export function cardModel(report, { name, tracePoints = null } = {}) {
   return {
     name: shortName(name),
     className: report.session?.class?.name || null,
-    dateLabel: report.session?.started_at ? formatDate(report.session.started_at) : '',
+    dateLabel: report.session?.started_at ? formatDate(report.session.started_at, zone) : '',
     points: Number.isFinite(s.effort_points) ? s.effort_points : 0,
     avgHr: Number.isFinite(s.avg_hr_bpm) ? s.avg_hr_bpm : null,
     peakHr: Number.isFinite(s.peak_hr_bpm) ? s.peak_hr_bpm : null,

@@ -4,7 +4,7 @@ import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Mail, MessageSquare, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
-import { todayStrIn, getLocationZones, DEFAULT_TZ } from '@/lib/location-time'
+import { todayStrIn, getLocationZone, getLocationZones, DEFAULT_TZ } from '@/lib/location-time'
 import { canViewContact } from '@/lib/contact-crossovers'
 import { canLoadContactConsultations, contactChannelFlags, contactActionGates, contactWorkGates } from '@/lib/contact-page-gates'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
@@ -282,6 +282,9 @@ export default async function ContactDetailPage(props) {
     }))
     const signedPhotos = photos.filter((p) => p.url)
 
+    // TZ.13 — a new consultation defaults to today in the contact's home
+    // studio zone. Display default only, so an unreadable zone falls back.
+    const consultZone = await getLocationZone(db, contact.location_id).catch(() => DEFAULT_TZ)
     consultationsTab = (
       <div className="space-y-5">
         <SendKudosCard contactId={contact.id} />
@@ -291,6 +294,7 @@ export default async function ContactDetailPage(props) {
           consultations={consultations}
           coaches={coaches}
           currentUserId={user.id}
+          zone={consultZone}
         />
         <ProgressPhotos contactId={contact.id} photos={signedPhotos} />
         <InBodyProgress scans={inbodyScans} contactId={contact.id} />

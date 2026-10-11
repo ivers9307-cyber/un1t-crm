@@ -1,7 +1,9 @@
 // Pure display formatters for champ-app surfaces. No IO.
 // heart_rate_sessions.started_at / ended_at are real timestamptz instants
-// (from the bridge / providers), so Date parsing + Dublin formatting is correct
+// (from the bridge / providers), so Date parsing + zoned formatting is correct
 // here — unlike bookings, which store wall-clock strings.
+
+import { formatInZone, DEFAULT_TZ } from './zoned-time.js'
 
 const SOURCE_LABELS = {
   ble_bridge: 'In-studio',
@@ -24,13 +26,14 @@ export function durationMinutes(startedAt, endedAt) {
   return Math.max(1, Math.round(ms / 60000))
 }
 
-/** "Fri, 19 Jun" in Europe/Dublin; '' for empty/invalid input. */
-export function sessionDate(startedAt) {
+/** "Fri, 19 Jun" in `zone` — the member's home studio zone (TZ.13, D7;
+ *  omitted = Europe/Dublin); '' for empty/invalid input. */
+export function sessionDate(startedAt, zone = DEFAULT_TZ) {
   if (!startedAt) return ''
   try {
-    return new Intl.DateTimeFormat('en-IE', {
-      weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Dublin',
-    }).format(new Date(startedAt))
+    return formatInZone(new Date(startedAt), zone, {
+      weekday: 'short', day: 'numeric', month: 'short',
+    })
   } catch {
     return ''
   }

@@ -13,6 +13,7 @@
 //   selectedCoachId — default coach for a new consultation (current user)
 //   onDone       — () => void; called after a successful save (close)
 //   onCancel     — () => void; called when the form is dismissed
+//   zone         — the contact's home studio zone (TZ.13, D7); default Europe/Dublin
 //
 // POST (new) or PUT (edit) → consultations API; router.refresh() on
 // success. Every non-submit button is type="button".
@@ -21,13 +22,14 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AlertCircle } from 'lucide-react'
 import { Button, Field } from '@/components/ui'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, DEFAULT_TZ } from '@shared/zoned-time'
 
-// timestamptz → "YYYY-MM-DD" for a <input type="date"> default.
-function toDateInput(iso) {
-  if (!iso) return dublinTodayStr()
+// timestamptz → "YYYY-MM-DD" for a <input type="date"> default. A new
+// consultation defaults to today in the contact's studio zone (TZ.13).
+function toDateInput(iso, zone) {
+  if (!iso) return todayStrIn(zone)
   const d = new Date(iso)
-  if (!Number.isFinite(d.getTime())) return dublinTodayStr()
+  if (!Number.isFinite(d.getTime())) return todayStrIn(zone)
   return d.toISOString().slice(0, 10)
 }
 
@@ -38,11 +40,12 @@ export default function ConsultationForm({
   selectedCoachId = '',
   onDone,
   onCancel,
+  zone = DEFAULT_TZ,
 }) {
   const router = useRouter()
   const isEdit = Boolean(consultation?.id)
 
-  const [date, setDate] = useState(toDateInput(consultation?.consulted_at))
+  const [date, setDate] = useState(toDateInput(consultation?.consulted_at, zone))
   const [coachId, setCoachId] = useState(consultation?.coach_id || selectedCoachId || '')
   const [notes, setNotes] = useState(consultation?.notes || '')
   const [memberFeedback, setMemberFeedback] = useState(consultation?.member_feedback || '')
