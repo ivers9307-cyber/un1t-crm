@@ -295,7 +295,7 @@ How each sweep keeps `LEGACY`: before editing, the task copies the function's cu
 
 **Order.** TZ.1 lands first. TZ.18a lands straight after it: from then on each sweep's first step is "remove my files from the baseline → lint fails". TZ.2 and TZ.3 run in parallel with the sweeps. The sweeps are independent of each other except TZ.14 after TZ.13 (the phone imports the shared signatures) and TZ.11b after TZ.15. Merge OTA tasks one at a time (TZ.1, TZ.8a, TZ.9, TZ.11a, TZ.13, TZ.14, TZ.17), never two inside one ramp.
 
-**Status (11 Oct 2026):** every task merged except TZ.18b. TZ.1 #2018 · TZ.18a #2019 · TZ.1b #2020 · TZ.2 #2021 · TZ.7 #2024 · TZ.4 #2025 · TZ.5 #2026 · TZ.3 #2027 · TZ.10 #2028 · TZ.12 #2030 · TZ.9 #2031 · TZ.6 #2032 · TZ.11c #2033 · TZ.8a #2034 · TZ.11a #2035 · TZ.15 #2036 · TZ.13 #2037 · TZ.16 #2038 · TZ.14 #2039 · TZ.8b #2040 · TZ.17 #2041 · TZ.18b #TZ18B_PR (open). TZ.11b dropped (D5 = B).
+**Status (11 Oct 2026):** every task merged except TZ.18b. TZ.1 #2018 · TZ.18a #2019 · TZ.1b #2020 · TZ.2 #2021 · TZ.7 #2024 · TZ.4 #2025 · TZ.5 #2026 · TZ.3 #2027 · TZ.10 #2028 · TZ.12 #2030 · TZ.9 #2031 · TZ.6 #2032 · TZ.11c #2033 · TZ.8a #2034 · TZ.11a #2035 · TZ.15 #2036 · TZ.13 #2037 · TZ.16 #2038 · TZ.14 #2039 · TZ.8b #2040 · TZ.17 #2041 · TZ.18b #2042 (open). TZ.11b dropped (D5 = B).
 
 **Migrations in prefix order:** 719 (TZ.2), 720 (TZ.6), 721 (TZ.15), 722 (TZ.11b, conditional). All are forward-only. The orchestrator applies each via `apply_migration` on `iyvtbjjxdggiadzwwvdj` BEFORE its PR merges, then runs `get_advisors(type=security)` and the task's verify SQL. If a concurrent PR takes a number first, take the next free one; duplicate prefixes are allowed by convention.
 
