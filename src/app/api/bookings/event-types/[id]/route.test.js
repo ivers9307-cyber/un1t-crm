@@ -181,3 +181,37 @@ describe('event-types/[id] — API-key paths (SAAS-3 per-org keys; APIKEYS.4 ret
     expect(JSON.stringify(await res.json())).not.toContain('e1')
   })
 })
+
+// ETSLUG.1 — the form sends the name on every save; the public address moves
+// only when the name changes, and a new name never collides.
+describe('PUT /api/bookings/event-types/[id] — the public slug (ETSLUG.1)', () => {
+  it('a save with an unchanged name leaves a suffixed address alone', async () => {
+    etype('e1').slug = 'bootcamp-loc-1a'
+    tables.event_types.push({ id: 'e3', location_id: 'loc-2a', name: 'Bootcamp', slug: 'bootcamp', active: true })
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const res = await PUT(cookiePut('e1', { name: 'Bootcamp', duration_minutes: 45 }), props('e1'))
+    expect(res.status).toBe(200)
+    expect(etype('e1')).toMatchObject({ slug: 'bootcamp-loc-1a', duration_minutes: 45 })
+  })
+
+  it('a rename to a name another studio holds picks a free address instead of failing', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const res = await PUT(cookiePut('e1', { name: 'Yoga' }), props('e1'))
+    expect(res.status).toBe(200)
+    expect(etype('e1').slug).toBe('yoga-2')
+    expect(etype('e2').slug).toBe('yoga')
+  })
+
+  it('a rename to a free name takes the plain address', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    expect((await PUT(cookiePut('e1', { name: 'Strength Club' }), props('e1'))).status).toBe(200)
+    expect(etype('e1').slug).toBe('strength-club')
+  })
+
+  it('an explicit slug another type holds → 409, row untouched', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const res = await PUT(cookiePut('e1', { slug: 'yoga' }), props('e1'))
+    expect(res.status).toBe(409)
+    expect(etype('e1').slug).toBe('bootcamp')
+  })
+})

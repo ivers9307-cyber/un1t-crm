@@ -155,3 +155,55 @@ describe('POST /api/bookings/event-types — API-key path (per-org key, org-scop
     expect(tables.event_types).toHaveLength(0)
   })
 })
+
+// ETSLUG.1 — event_types.slug is one namespace for every studio (the public
+// /book/[slug] address). A clash used to come back as the raw duplicate-key
+// error; now a derived slug picks a free variant and an explicit one is a 409.
+describe('POST /api/bookings/event-types — the public slug (ETSLUG.1)', () => {
+  beforeEach(() => {
+    tables.locations.find((l) => l.id === STUDIO_A).slug = 'un1t-hatch-street'
+    tables.event_types.push({ id: 'held', slug: 'free-consultation', location_id: STUDIO_B, active: false })
+  })
+
+  it('a name another studio already uses gets the studio-suffixed address, not an error', async () => {
+    getCurrentUser.mockResolvedValue(at('manager', STUDIO_A))
+    const res = await POST(cookiePost(FORM_BODY))
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.slug).toBe('free-consultation-un1t-hatch-street')
+    expect(tables.event_types.find((e) => e.id === 'held').slug).toBe('free-consultation')
+  })
+
+  it('an explicit slug another type holds → 409 with a readable message, nothing created', async () => {
+    const res = await POST(keyPost({ name: 'Intro Call', slug: 'free-consultation', location_id: STUDIO_A }))
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'That booking link is already in use. Choose a different one.' })
+    expect(tables.event_types).toHaveLength(1)
+  })
+
+  it('a create that loses the race on its derived slug picks again and succeeds', async () => {
+    getCurrentUser.mockResolvedValue(at('manager', STUDIO_A))
+    const real = db
+    let raced = false
+    db = {
+      from: (t) => {
+        const b = real.from(t)
+        if (t !== 'event_types') return b
+        const insert = b.insert
+        b.insert = (row) => {
+          if (!raced) {
+            raced = true
+            // Another create takes the address between our read and our insert.
+            tables.event_types.push({ id: 'racer', slug: row.slug, location_id: STUDIO_B })
+            const fail = { select: () => fail, single: async () => ({ data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "event_types_slug_key"' } }) }
+            return fail
+          }
+          return insert(row)
+        }
+        return b
+      },
+    }
+    const res = await POST(cookiePost(FORM_BODY))
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.slug).toBe('free-consultation-2')
+  })
+})

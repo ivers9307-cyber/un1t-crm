@@ -9,7 +9,8 @@ import { authenticateApiKey, requireApiKeyOrManager, orgScopeLocationIds, assert
 import { assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { DEFAULT_COLOR, MANAGER_ROLES } from '@/lib/schemas'
-import { EventTypeCreateSchema, CONFIRMATION_FIELDS, eventTypeSlug } from '@/lib/event-type-schema'
+import { EventTypeCreateSchema, CONFIRMATION_FIELDS } from '@/lib/event-type-schema'
+import { resolveEventTypeSlug, slugTaken, isSlugConflict, SLUG_IN_USE } from '@/lib/event-type-slug'
 
 // GET /api/bookings/event-types — List all event types (API key only)
 export async function GET(request) {
@@ -73,18 +74,14 @@ export async function POST(request) {
   const scopeErr = await assertCreateInOrg({ db, orgId: auth.orgId, locationId: body.location_id })
   if (scopeErr) return scopeErr
 
-  // Auto-generate slug from name if not provided
-  const slug = body.slug || eventTypeSlug(body.name)
-
   // Mig 077 confirmation columns: written only when sent (the form always
   // sends all five; API-key creates keep the column defaults).
   const confirmation = Object.fromEntries(
     CONFIRMATION_FIELDS.filter((k) => body[k] !== undefined).map((k) => [k, body[k]]),
   )
 
-  const { data, error } = await db.from('event_types').insert({
+  const row = {
     name: body.name,
-    slug,
     description: body.description || null,
     duration_minutes: body.duration_minutes || 30,
     color: body.color || DEFAULT_COLOR,
@@ -98,9 +95,29 @@ export async function POST(request) {
     create_in_glofox: body.create_in_glofox === true,
     ...confirmation,
     ...(body.location_id ? { location_id: body.location_id } : {}),
-  }).select().single()
+  }
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  // ETSLUG.1 — the slug is the public /book/ address and is unique across
+  // every studio. An explicit slug is the caller's choice: a clash is a 409,
+  // never a silent rename. A derived one picks a free variant, and is picked
+  // again once if another create takes it between our read and our insert.
+  if (body.slug) {
+    const held = await slugTaken(db, body.slug)
+    if (held.error) return NextResponse.json({ success: false, error: held.error }, { status: 500 })
+    if (held.taken) return NextResponse.json({ success: false, error: SLUG_IN_USE }, { status: 409 })
+  }
 
-  return NextResponse.json({ success: true, data })
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let slug = body.slug
+    if (!slug) {
+      const picked = await resolveEventTypeSlug(db, { name: body.name, locationId: body.location_id })
+      if (picked.error) return NextResponse.json({ success: false, error: picked.error }, { status: 500 })
+      slug = picked.slug
+    }
+    const { data, error } = await db.from('event_types').insert({ ...row, slug }).select().single()
+    if (!error) return NextResponse.json({ success: true, data })
+    if (!isSlugConflict(error)) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    if (body.slug) break
+  }
+  return NextResponse.json({ success: false, error: SLUG_IN_USE }, { status: 409 })
 }
