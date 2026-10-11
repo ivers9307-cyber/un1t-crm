@@ -58,9 +58,11 @@ export async function GET(request, props) {
   }
 
   // Load the location the token maps to (for the board header + as the scope).
+  // TZ.12 — `timezone` rides the same read: the board's clocks and class label
+  // are the studio's own time (buildLiveBoardPayload resolves it).
   const { data: location } = await db
     .from('locations')
-    .select('id, name')
+    .select('id, name, timezone')
     .eq('id', display.location_id)
     .single()
   if (!location) {

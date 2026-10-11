@@ -66,7 +66,6 @@ src/app/api/schedule/time-off/route.js
 src/app/api/schedule/week-cost/route.js
 src/app/communications/(marketing-era)/list-health/page.js
 src/app/dashboard/today/page.js
-src/app/live/[locationId]/DetectedTab.jsx
 src/app/settings/billing/page.js
 src/app/welcome/[location]/status/page.js
 src/components/AcControlPanel.jsx
@@ -114,9 +113,7 @@ src/lib/hr-attribution-sweep.js
 src/lib/integrations-hub.js
 src/lib/invoices-queue/enqueue.js
 src/lib/labour-month-model.js
-src/lib/live-board.js
 src/lib/live-class.js
-src/lib/live-poll.js
 src/lib/mail/reply-quote.js
 src/lib/membership-flows.js
 src/lib/membership-snapshot.js
@@ -142,7 +139,6 @@ src/lib/staff-calendar-feed.js
 src/lib/staff-push-hours.js
 src/lib/time-off-cancel.js
 src/lib/today-feed-data.js
-src/lib/tv-class-intro.js
 src/lib/usage-caps.js
 src/lib/wallet-enforcement.js
 src/lib/wallet-topup.js
