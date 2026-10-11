@@ -4,61 +4,48 @@
 // the full route handler (Supabase + push.js are awkward to mock,
 // and the time math is the only bit that's genuinely tricky).
 
-// One formatter per timezone: constructing an Intl.DateTimeFormat is by far the
-// dearest step here, and the shift arm converts several times per shift per
-// tick. Same options as before, so the output is unchanged. An invalid tz
-// still throws inside localToUtc's try (and is not cached).
-const partsFormatters = new Map()
-function partsFormatterFor(tz) {
-  let fmt = partsFormatters.get(tz)
-  if (!fmt) {
-    fmt = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-    })
-    partsFormatters.set(tz, fmt)
-  }
-  return fmt
-}
+import { zonedWallClockToInstant } from '@/lib/location-time'
 
 /**
  * Treat (dateStr, timeStr) as wall-clock time in `tz`, return the
- * equivalent UTC Date.
+ * equivalent UTC Date, or null when the inputs or the zone are unusable.
  *
  * dateStr: 'YYYY-MM-DD'
  * timeStr: 'HH:MM' | 'HH:MM:SS'
- * tz:      IANA tz, e.g. 'Europe/Dublin'
+ * tz:      IANA tz, e.g. 'Europe/Dublin' (the location's own zone)
  *
- * Strategy: build a candidate UTC Date assuming the supplied time IS
- * UTC, format it back in tz, compute the offset between what we got
- * and what we wanted. Subtract the offset to get the true UTC. One
- * pass is enough — tz offsets don't have sub-second drift around
- * DST transitions.
- *
- * Handles DST correctly: a Dublin task at 14:00 on 2026-03-29 (DST
- * transition day, no clock issue at 14:00) → 13:00 UTC. A Dublin
- * task at 14:00 on 2026-12-15 (no DST) → 14:00 UTC.
+ * TZ.1b — the private one-pass solver is retired: this delegates to the
+ * canonical zonedWallClockToInstant (shared/zoned-time.js). The parse is
+ * unchanged, so '24:00' still rolls to the next midnight and an out-of-range
+ * day rolls as Date.UTC does. Europe/Dublin answers are identical (every
+ * quarter-hour of 2026, src/lib/tz-1b.tz.test.js). Elsewhere it is now right
+ * on DST days: the one pass read the offset on the wrong side of the change
+ * for a band of hours (New York 03:00-06:59 on spring-forward day was an hour
+ * late). A spring-forward gap time resolves EARLIER, the canonical rule.
+ * An invalid tz still returns null (Intl throws inside the try). An OMITTED tz
+ * now means Europe/Dublin (DEFAULT_TZ); it used to read the host zone. Every
+ * caller passes the location's zone.
  */
 export function localToUtc(dateStr, timeStr, tz) {
   try {
     const [y, m, d] = dateStr.split('-').map(Number)
     const [hh, mm, ss = '0'] = String(timeStr).split(':')
-    const candidate = new Date(Date.UTC(y, m - 1, d, Number(hh), Number(mm), Number(ss)))
-    if (Number.isNaN(candidate.getTime())) return null
-
-    const parts = partsFormatterFor(tz).formatToParts(candidate).reduce((a, p) => (a[p.type] = p.value, a), {})
-
-    const actualMs = Date.UTC(
-      Number(parts.year), Number(parts.month) - 1, Number(parts.day),
-      // 'en-US' returns hour='24' for midnight; coerce.
-      parts.hour === '24' ? 0 : Number(parts.hour),
-      Number(parts.minute), Number(parts.second)
-    )
-    const offsetMs = actualMs - candidate.getTime()
-    return new Date(candidate.getTime() - offsetMs)
+    const naive = Date.UTC(y, m - 1, d, Number(hh), Number(mm), Number(ss))
+    if (Number.isNaN(naive)) return null
+    const ms = naiveWallToInstant(naive, tz)
+    return ms == null ? null : new Date(ms)
   } catch {
     return null
   }
+}
+
+// A wall clock already rolled over by Date.UTC ("naive" ms: the wall clock as
+// if it were UTC) → the instant, through the canonical solver. Seconds ride
+// along unchanged (the solver works to the minute; offsets do too).
+function naiveWallToInstant(naive, tz) {
+  const iso = new Date(naive).toISOString()
+  const ms = zonedWallClockToInstant(iso.slice(0, 10), iso.slice(11, 16), tz)
+  return ms == null ? null : ms + (naive % 60_000)
 }
 
 /**

@@ -330,7 +330,9 @@ describe('resolveScheduledAt — DST days in any zone (ATTENDREPORT.1)', () => {
   it('the gap and the repeated hour keep today\'s answers', () => {
     expect(resolveScheduledAt('2026-03-29', '01:30:00', D).toISOString()).toBe('2026-03-29T00:30:00.000Z') // gap
     expect(resolveScheduledAt('2026-10-25', '01:30:00', D).toISOString()).toBe('2026-10-25T01:30:00.000Z') // second 01:30
-    expect(resolveScheduledAt('2026-03-08', '02:30:00', LA).toISOString()).toBe('2026-03-08T10:30:00.000Z') // gap
+    // TZ.1b: a gap time resolves EARLIER in every zone (the canonical solver's
+    // rule). The private solver gave LA the later instant (10:30Z, 03:30 PDT).
+    expect(resolveScheduledAt('2026-03-08', '02:30:00', LA).toISOString()).toBe('2026-03-08T09:30:00.000Z') // gap
     expect(resolveScheduledAt('2026-11-01', '01:30:00', LA).toISOString()).toBe('2026-11-01T08:30:00.000Z') // first 01:30
   })
 
