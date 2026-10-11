@@ -25,6 +25,7 @@ import { isoToLocalDatetime } from '@/lib/datetime-local'
 import { useUnlayerEditor } from './useUnlayerEditor'
 import { waBodyVariables, WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
+import { resolveZone } from '@shared/zoned-time'
 import { dynamicUrlButtonIndex, URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
 
 const EMPTY_FILTER = { logic: 'and', filters: [] }
@@ -32,8 +33,12 @@ const EMPTY_FILTER = { logic: 'and', filters: [] }
 const fieldCls =
   'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-subtle/60 focus:outline-none focus:ring-1 focus:ring-un1t-text/30'
 
-export default function UnifiedSendComposer({ locationId, channels = [], templates = [], initialAudienceFilter = null, initialSegmentId = null }) {
+// TZ.4 — `locationTimeZone` is the studio's IANA zone (the page passes the
+// active location's `timezone`; omitted, Europe/Dublin). A drip's window and
+// the audience builder's "today" are that studio's wall clock.
+export default function UnifiedSendComposer({ locationId, locationTimeZone = null, channels = [], templates = [], initialAudienceFilter = null, initialSegmentId = null }) {
   const router = useRouter()
+  const zone = resolveZone(locationTimeZone)
   const [channel, setChannel] = useState(channels[0] || 'email')
   const [label, setLabel] = useState('')
   const [filter, setFilter] = useState(initialAudienceFilter || EMPTY_FILTER)
@@ -262,8 +267,9 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           ...(drip ? {
             daily_cap: Number(dailyCap) || 500,
             ...(Number(perTickCap) > 0 ? { per_tick_max: Number(perTickCap) } : {}),
+            // TZ.4 — no send_window_tz: the route stores the studio's own
+            // zone (locations.timezone), the one the hint below names.
             send_window_start: windowStart, send_window_end: windowEnd,
-            send_window_tz: 'Europe/Dublin',
           } : {}),
           ...(scheduled ? { scheduled_at: scheduledIso, status: 'scheduled' } : {}),
         })
@@ -275,7 +281,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           // The run-whatsapp-broadcasts cron drives it during the window.
           await postJson(`/api/whatsapp/broadcasts/${broadcast.id}/send`, {})
           setResult({ channel, mode: 'drip', id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}`,
-            dailyCap: Number(dailyCap) || 500, windowStart, windowEnd })
+            dailyCap: Number(dailyCap) || 500, windowStart, windowEnd, windowTz: broadcast.send_window_tz || zone })
         } else {
           const data = await postJson(`/api/whatsapp/broadcasts/${broadcast.id}/send`, {})
           setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}`, ...data })
@@ -342,7 +348,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           <>
             <h2 className="text-lg font-semibold text-un1t-text">Drip started</h2>
             <p className="text-sm text-un1t-subtle mt-1">
-              Up to {result.dailyCap}/day will go out between {result.windowStart} and {result.windowEnd} (Europe/Dublin)
+              Up to {result.dailyCap}/day will go out between {result.windowStart} and {result.windowEnd} ({result.windowTz})
               until everyone&apos;s been messaged. Pause or track progress on the details page.
             </p>
           </>
@@ -477,7 +483,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         )}
         {useExplicit
           ? <ContactMultiSelect locationId={locationId} value={people} onChange={setPeople} />
-          : <AudienceBuilder filter={filter} onChange={handleFilterChange} presets={AUDIENCE_PRESETS} locationId={locationId} />}
+          : <AudienceBuilder filter={filter} onChange={handleFilterChange} presets={AUDIENCE_PRESETS} locationId={locationId} timeZone={zone} />}
         {/* FILTER-B.3 — the shared count block, replacing this surface's own
             inline count. Same component, same request and same wording as the
             WhatsApp/sequence builders, so they can no longer drift.
@@ -686,7 +692,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
                   <input type="time" className={fieldCls} value={windowEnd} onChange={e => setWindowEnd(e.target.value)} />
                 </label>
               </div>
-              <p className="text-[11px] text-un1t-subtle">Europe/Dublin time. The drip pauses overnight and resumes each morning.</p>
+              <p className="text-[11px] text-un1t-subtle">{zone} time. The drip pauses overnight and resumes each morning.</p>
             </div>
           )}
         </Section>

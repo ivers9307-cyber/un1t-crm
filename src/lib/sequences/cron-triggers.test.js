@@ -56,7 +56,10 @@ function mockDb(tables) {
   return {
     calls,
     from: vi.fn((table) => {
-      const t = tables[table]
+      // TZ.4 — the anniversary/audience runners read every sequence's studio
+      // zone (locations.timezone) once per run. A test that does not model it
+      // gets "no rows", i.e. every studio on the Europe/Dublin floor.
+      const t = tables[table] ?? (table === 'locations' ? { list: [] } : undefined)
       if (!t) throw new Error(`unexpected table: ${table}`)
       const cfg = Array.isArray(t) ? t.shift() : t
       const record = (method) => vi.fn((...args) => { calls.push({ table, method, args }); return builder })

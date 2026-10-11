@@ -29,7 +29,7 @@ const AUDIENCE_GATES = {
 // One POST per pause, not one per keystroke.
 const COUNT_DEBOUNCE_MS = 400
 
-export default function CampaignEditor({ campaign, locationId, userId: _userId, initialAudienceFilter = null }) {
+export default function CampaignEditor({ campaign, locationId, locationTimeZone = null, userId: _userId, initialAudienceFilter = null }) {
   const router = useRouter()
   const editorRef = useRef(null)
 
@@ -1008,6 +1008,7 @@ export default function CampaignEditor({ campaign, locationId, userId: _userId, 
               onChange={setAudienceFilter}
               audienceCount={audienceCount}
               locationId={locationId}
+              timeZone={locationTimeZone}
               // FILTER-C.3 — no seeded starting row. `Stage = member` looked
               // like a filter the operator had chosen and silently kept every
               // lead out of the campaign; FILTER-B.3 removed it from the

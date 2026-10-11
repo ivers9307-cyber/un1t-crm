@@ -121,7 +121,7 @@ function ReadOnlyFlow({ graph }) {
   )
 }
 
-export default function SequenceFlowBuilder({ graph, sequence, isDraft, isPublished }) {
+export default function SequenceFlowBuilder({ graph, sequence, isDraft, isPublished, locationTimeZone = null }) {
   const editable = isPureTree(graph)
   const status = sequence?.status || 'draft'
   const writeSteps = [...new Set((graph?.nodes || []).map(n => WRITE_STEP_LABELS[n.type]).filter(Boolean))]
@@ -162,7 +162,7 @@ export default function SequenceFlowBuilder({ graph, sequence, isDraft, isPublis
       </p>
 
       <AgentPanel sequenceId={sequence?.id} />
-      <SequenceSettings key={settingsKey} sequence={sequence} justSetSecret={justSetSecret} onJustSetSecret={setJustSetSecret} />
+      <SequenceSettings key={settingsKey} sequence={sequence} locationTimeZone={locationTimeZone} justSetSecret={justSetSecret} onJustSetSecret={setJustSetSecret} />
 
       <DraftBanner sequenceId={sequence?.id} isDraft={isDraft} isPublished={isPublished} writeSteps={writeSteps} />
 
