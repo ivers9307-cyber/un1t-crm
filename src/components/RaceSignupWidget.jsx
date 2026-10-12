@@ -730,17 +730,28 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                 </div>
               )}
               {/* Per-person price at a glance; the Total card below still
-                  carries the live, membership-confirmed sum. */}
+                  carries the live, membership-confirmed sum.
+                  EVENT-PRICEBOX.1 — with member pricing on, BOTH rates show,
+                  and a null member fee reads "free" (it used to fall through
+                  to "€25.00 per person", so members thought they'd pay). */}
               {(memberPricing && memberFeeCents != null) || nonMemberFeeCents != null ? (
                 <div className="flex items-start gap-3">
                   <BadgeEuro size={16} className="text-white/40 mt-0.5 shrink-0" />
                   <span>
-                    {memberPricing && memberFeeCents != null && nonMemberFeeCents != null
-                      ? `${fmtMoney(memberFeeCents)} members · ${fmtMoney(nonMemberFeeCents)} non-members`
+                    {memberPricing && nonMemberFeeCents != null
+                      ? `Members ${memberFeeCents != null ? fmtMoney(memberFeeCents) : 'free'} · Non-members ${fmtMoney(nonMemberFeeCents)}`
                       : `${fmtMoney(nonMemberFeeCents ?? memberFeeCents)} per person`}
                   </span>
                 </div>
               ) : null}
+              {/* EVENT-PRICEBOX.1 — the member-rate reminder beside the price
+                  (the form's notice repeats it). Same copy source as that notice. */}
+              {memberPricing && (
+                <div className="flex items-start gap-3">
+                  <Info size={16} className="text-white/40 mt-0.5 shrink-0" />
+                  <span>{race.organization_name ? `${race.organization_name} members` : 'Members'}: sign up with the email on your {accountOf(race.organization_name)} to get the member rate.</span>
+                </div>
+              )}
               {venueAddress && (
                 <div className="flex items-start gap-3">
                   <MapPin size={16} className="text-white/40 mt-0.5 shrink-0" />
