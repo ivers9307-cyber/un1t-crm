@@ -1,8 +1,10 @@
 import { redirect, notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import RaceEventForm from '@/components/RaceEventForm'
+import { eventOwnerOptions } from '@/lib/event-owner'
+import { ADMIN_ROLES } from '@/lib/schemas'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,11 +37,20 @@ export default async function EditRacePage(props) {
   if (assertLocationAccess(user, race.location_id)) notFound()
   if (!hasPermissionForLocation(user, race.location_id, 'races')) redirect('/')
 
+  // EVENT-OWNER.1 — an admin here may move a non-host event to another studio
+  // where they are also an admin (PUT /api/events/[id] re-judges it). Everyone
+  // else sees the owning studio, read-only.
+  const ownerLoc = (user.locations || []).find((l) => l.id === race.location_id) || null
+  const canMove = !race.host_id && hasRoleAtLocation(user, race.location_id, ADMIN_ROLES)
+  const ownerOptions = canMove
+    ? eventOwnerOptions(user, { organizationId: ownerLoc?.organization_id || null, requireAdmin: true })
+    : []
+
   return (
     <div className="p-8 max-w-2xl">
       <h2 className="text-2xl font-bold mb-1">Edit event</h2>
       <p className="text-sm text-un1t-subtle mb-6">{race.name}</p>
-      <RaceEventForm race={race} locationId={race.location_id} />
+      <RaceEventForm race={race} locationId={race.location_id} ownerName={ownerLoc?.name || null} ownerOptions={ownerOptions} />
     </div>
   )
 }

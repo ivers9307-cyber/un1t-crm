@@ -29,7 +29,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail } from 'lucide-react'
 import Link from 'next/link'
-import { toSlug } from '@/lib/slug'
+import { eventSlug } from '@/lib/event-slug'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 import { generateWaveTimes } from '@/lib/wave-generate'
 import { PLATFORM_NAME } from '@/lib/brand-name'
@@ -142,9 +142,25 @@ const KINDS = [
 
 const kindMeta = (k) => KINDS.find((x) => x.value === k) || KINDS[0]
 
-export default function RaceEventForm({ race, locationId }) {
+/**
+ * @param {object} props
+ * @param {object} [props.race]  the event being edited (absent = create)
+ * @param {string} props.locationId  the owning studio to start from
+ * @param {Array<{id: string, name: string}>} [props.ownerOptions]  EVENT-OWNER.1 —
+ *   studios this user may pick as the owner (eventOwnerOptions). Fewer than two
+ *   = the owner is shown, not chosen.
+ * @param {string} [props.ownerName]  the starting studio's name, for display
+ */
+export default function RaceEventForm({ race, locationId: initialLocationId, ownerOptions = [], ownerName = null }) {
   const router = useRouter()
   const isEditing = !!race
+  // EVENT-OWNER.1 — the owning studio is a choice on the form (it used to be
+  // whatever studio was active in the switcher, invisibly). Everything below
+  // that reads `locationId` (brand, templates, sending identity, submit)
+  // follows the pick.
+  const [locationId, setLocationId] = useState(initialLocationId)
+  const ownerLabel = ownerOptions.find((o) => o.id === locationId)?.name || ownerName || ''
+  const ownerMoved = isEditing && locationId !== race.location_id
   // W1.S2 — the studio's brand names its members and its events; the platform
   // (Revolut rail, booking fee) is named by PLATFORM_NAME.
   const { companyName: brand } = useLocationBrand(locationId)
@@ -184,6 +200,10 @@ export default function RaceEventForm({ race, locationId }) {
   }
 
   const [name, setName] = useState(race?.name || '')
+  // EVENT-SLUG.2 — on create the link is left to the server's place-date-time
+  // rule (EVENT-SLUG.1) unless someone types one. The form used to fill this
+  // from the name and send it, and a sent slug always wins, so every
+  // staff-created event kept a name-based link (/event/sean-noble-hyrox-workshop).
   const [slug, setSlug] = useState(race?.slug || '')
   const [slugAuto, setSlugAuto] = useState(!isEditing)
   const [description, setDescription] = useState(race?.description || '')
@@ -240,6 +260,15 @@ export default function RaceEventForm({ race, locationId }) {
         capacity: w.capacity != null ? String(w.capacity) : '',
         label: w.label || '',
       }))
+  })
+  // EVENT-SLUG.2 — the link the server will build (same rule, same inputs:
+  // the owning studio's name, the date, the earliest start time). Shown as the
+  // slug placeholder; the server still picks the final free one.
+  const autoSlug = eventSlug({
+    place: ownerLabel,
+    date: meta.isLeadGen ? null : raceDate,
+    times: (kind === 'race' ? waves : timeSlots).map((w) => w.start_time).filter(Boolean),
+    name,
   })
   // WAVEGEN.1 — bulk wave generator inputs. Generate replaces the
   // wave list with start→end at the cadence; rows stay editable after.
@@ -376,7 +405,14 @@ export default function RaceEventForm({ race, locationId }) {
 
   function onNameChange(v) {
     setName(v)
-    if (slugAuto) setSlug(toSlug(v))
+  }
+
+  // EVENT-OWNER.1 — templates are per studio, so a new owner starts from the
+  // shared shell; the template list refetches for the new studio.
+  function onOwnerChange(id) {
+    setLocationId(id)
+    setConfirmationTemplateId('')
+    setReminderTemplateId('')
   }
 
   // Mig 092: upload a single TV logo into the slot. Race-only — gated
@@ -543,9 +579,10 @@ export default function RaceEventForm({ race, locationId }) {
     setSaving(true)
     const payload = {
       ...(isEditing ? {} : { location_id: locationId, kind }),
+      ...(ownerMoved ? { location_id: locationId } : {}),
       name: name.trim(),
       staff_required: staffReqNum,
-      ...(isEditing ? {} : { slug: slug.trim() || undefined }),
+      ...(isEditing || slugAuto ? {} : { slug: slug.trim() || undefined }),
       description: description.trim() || null,
       ...(meta.isLeadGen ? {} : { race_date: raceDate }),
       registration_opens_at: registrationOpensAt ? new Date(registrationOpensAt).toISOString() : null,
@@ -675,6 +712,33 @@ export default function RaceEventForm({ race, locationId }) {
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">{meta.sectionLabel}</h3>
 
+        {/* EVENT-OWNER.1 — which studio runs the event. Shared or not, the
+            owner decides the inbox, the templates and where new sign-ups'
+            contacts live. */}
+        <div>
+          <label htmlFor="event-owner" className="block text-sm text-un1t-subtle mb-1">Studio</label>
+          {ownerOptions.length > 1 ? (
+            <select
+              id="event-owner"
+              value={locationId || ''}
+              onChange={(e) => onOwnerChange(e.target.value)}
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+            >
+              {ownerOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+          ) : (
+            <div id="event-owner" className="text-sm text-un1t-text">{ownerLabel || '—'}</div>
+          )}
+          <p className="text-[11px] text-un1t-muted mt-1">
+            The studio that runs this event: its inbox, email templates and new sign-ups belong here. &ldquo;Shared&rdquo; only lists it at every studio too.
+          </p>
+          {ownerMoved && (
+            <p className="text-[11px] text-amber-700 mt-1">
+              Saving moves this event to {ownerLabel}. Its custom email templates reset to the default look, and new sign-ups&apos; contacts are filed under {ownerLabel}. Existing registrations and the public link don&apos;t change.
+            </p>
+          )}
+        </div>
+
         <div>
           <label className="block text-sm text-un1t-subtle mb-1">Name *</label>
           <input
@@ -695,14 +759,15 @@ export default function RaceEventForm({ race, locationId }) {
           <input
             type="text"
             value={slug}
-            onChange={e => { setSlug(e.target.value.toLowerCase()); setSlugAuto(false) }}
+            onChange={e => { const v = e.target.value.toLowerCase(); setSlug(v); setSlugAuto(!v) }}
             disabled={isEditing}
             pattern="^[a-z0-9]+(-[a-z0-9]+)*$"
-            placeholder="hyrox-may-2026"
+            placeholder={autoSlug}
             className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text font-mono disabled:opacity-50"
           />
           <p className="text-[11px] text-un1t-muted mt-1">
-            Public signup page is at <span className="font-mono">/event/{slug || 'your-slug'}</span>.
+            Public signup page is at <span className="font-mono">/event/{slug || autoSlug}</span>.
+            {!isEditing && slugAuto && ' Built from the studio, date and first start time. Type your own to override it (a number is added if it is taken).'}
             {isEditing && ' Slug cannot be changed after creation (would break shared links).'}
           </p>
           {/* QR-code download is operator-only and only renders for

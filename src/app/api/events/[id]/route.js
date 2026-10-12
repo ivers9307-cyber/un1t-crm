@@ -10,6 +10,7 @@ import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/perm
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { ADMIN_ROLES, MANAGER_ROLES, uuidLike } from '@/lib/schemas'
+import { judgeEventOwnerChange } from '@/lib/event-owner'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -81,6 +82,9 @@ export const UpdateSchema = z.object({
   // EVENT-COMMS-LOC (mig 553) — flows through the generic scalar patch; in-org
   // non-anchor validated in PUT.
   sending_location_id: uuidLike.nullable().optional(),
+  // EVENT-OWNER.1 — the owning studio. Admin at both ends, same org, not a
+  // host anchor, not a host event: judged by judgeEventOwnerChange in PUT.
+  location_id: uuidLike.optional(),
   // When provided, replaces the wave set entirely (diff-and-apply).
   // Omitting leaves waves untouched. At least one wave required if set.
   waves: z.array(WaveInputSchema).min(1).max(50).optional(),
@@ -173,7 +177,7 @@ export async function PUT(request, props) {
   const db = createServerClient()
   const { data: existing, error: lookupErr } = await db
     .from('race_events')
-    .select('id, location_id, host_id')
+    .select('id, location_id, host_id, confirmation_email_template_id, reminder_email_template_id')
     .eq('id', params.id)
     .single()
   if (lookupErr || !existing) {
@@ -201,6 +205,15 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: 'Changing the payment host requires manager access.' }, { status: 403 })
   }
 
+  // EVENT-OWNER.1 — moving the event to another studio. Every location-bound
+  // check below (host org, templates, sending location) judges the TARGET.
+  const ownerChanging = Boolean(body.location_id) && body.location_id !== existing.location_id
+  if (ownerChanging) {
+    const verdict = await judgeEventOwnerChange({ db, user, existing, targetLocationId: body.location_id, nextHostId: body.host_id })
+    if (!verdict.ok) return NextResponse.json({ success: false, error: verdict.error }, { status: verdict.status })
+  }
+  const ownerLocationId = ownerChanging ? body.location_id : existing.location_id
+
   // EVENTS-HOST.4 — payment-routing security. When the caller reassigns the
   // payee, verify the target host is a real event_hosts row in THIS event's
   // organization (resolved from the event's location). Otherwise an operator
@@ -211,7 +224,7 @@ export async function PUT(request, props) {
     const { data: loc } = await db
       .from('locations')
       .select('organization_id')
-      .eq('id', existing.location_id)
+      .eq('id', ownerLocationId)
       .single()
     const { data: host } = await db
       .from('event_hosts')
@@ -240,9 +253,18 @@ export async function PUT(request, props) {
     const byId = new Map((templates || []).map((t) => [t.id, t]))
     for (const templateId of emailTemplateIds) {
       const tpl = byId.get(templateId)
-      if (!tpl || tpl.location_id !== existing.location_id) {
+      if (!tpl || tpl.location_id !== ownerLocationId) {
         return NextResponse.json({ success: false, error: 'invalid_template' }, { status: 400 })
       }
+    }
+  }
+  // EVENT-OWNER.1 — a template is per studio, so a move drops a stored
+  // pointer the caller did not replace (back to the shared shell) rather
+  // than leave the event on the old studio's template.
+  const ownerTemplateResets = {}
+  if (ownerChanging) {
+    for (const k of ['confirmation_email_template_id', 'reminder_email_template_id']) {
+      if (body[k] === undefined && existing[k]) ownerTemplateResets[k] = null
     }
   }
 
@@ -254,7 +276,7 @@ export async function PUT(request, props) {
   // DB through the generic `updates = { ...body }` patch below.
   if (body.sending_location_id) {
     const { data: loc } = await db.from('locations')
-      .select('organization_id').eq('id', existing.location_id).single()
+      .select('organization_id').eq('id', ownerLocationId).single()
     const { data: send } = await db.from('locations')
       .select('id, organization_id, is_host_anchor')
       .eq('id', body.sending_location_id).maybeSingle()
@@ -266,8 +288,9 @@ export async function PUT(request, props) {
   // Pull waves out before building the race_events update payload —
   // they go to a different table.
   const wavesInput = body.waves
-  const updates = { ...body }
+  const updates = { ...body, ...ownerTemplateResets }
   delete updates.waves
+  if (!ownerChanging) delete updates.location_id
   if (Array.isArray(updates.allowed_team_sizes)) {
     updates.allowed_team_sizes = [...updates.allowed_team_sizes].sort((a, b) => a - b)
   }
