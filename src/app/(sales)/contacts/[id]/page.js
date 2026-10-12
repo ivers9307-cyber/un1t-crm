@@ -27,6 +27,7 @@ import { aggregatePerson } from '@/lib/person-aggregate'
 import ContactHeaderBand from '@/components/contact/ContactHeaderBand'
 import { latestLinkForContact } from '@/lib/cancellation-form/links'
 import ContactWhoRail from '@/components/contact/ContactWhoRail'
+import { loadContactMemberships } from '@/lib/contact-memberships'
 import ContactNextRail from '@/components/contact/ContactNextRail'
 import ContactTimeline from '@/components/contact/ContactTimeline'
 import { PastEventsCard } from '@/components/contact/EventRegistrationsCards'
@@ -81,7 +82,7 @@ export default async function ContactDetailPage(props) {
     if (pg?.group?.id) person = await aggregatePerson(db, pg.group.id)
   } catch { person = null }
 
-  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink, primaryPipeline] = await Promise.all([
+  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink, primaryPipeline, studioMemberships] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
@@ -109,6 +110,9 @@ export default async function ContactDetailPage(props) {
     // profile, and null falls through to `derived` below — the button stays,
     // exactly as it does today.
     findPrimaryPipeline(db, contact.location_id).catch(() => null),
+    // HATCH-MEMBERS.1 (mig 722) — memberships held outside Glofox. Never
+    // throws; a failed read just hides the card.
+    loadContactMemberships(db, id),
   ])
 
   // GLOFOX-CATALOG — resolve the member's plan description (pricing +
@@ -408,6 +412,7 @@ export default async function ContactDetailPage(props) {
             identityPhones={identityPhones}
             canEditPrefs={actions.canEditPrefs}
             canLinkAccounts={work.canLinkAccounts}
+            studioMemberships={studioMemberships.rows}
           />
         </div>
 

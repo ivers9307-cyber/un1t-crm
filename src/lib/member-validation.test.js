@@ -137,8 +137,8 @@ const LOCATIONS = [
   { id: 'loc-other', organization_id: 'org-2', is_host_anchor: false }, // another tenant
 ]
 
-function fakeDb({ contacts = [], locations = LOCATIONS, errors = {} } = {}) {
-  const tables = { contacts, locations }
+function fakeDb({ contacts = [], locations = LOCATIONS, memberships = [], errors = {} } = {}) {
+  const tables = { contacts, locations, contact_memberships: memberships }
   const db = {
     from: vi.fn((table) => {
       let rows = [...(tables[table] || [])]
@@ -370,5 +370,50 @@ describe('validateTeamRoster — organisation scope', () => {
     })
     expect(r.map((m) => m.is_member)).toEqual([true, false])
     expect(db.from.mock.calls.filter(([t]) => t === 'locations')).toHaveLength(2) // own row + siblings, once
+  })
+})
+
+// ─── HATCH-MEMBERS.1 — memberships held outside Glofox (mig 722) ──
+// Hatch Street sells on un1t.online; its members sit on the manual Waitlist
+// board, so their stage never says 'member'. An active contact_memberships
+// row is the signal.
+
+describe('validateMemberByEmail — contact_memberships', () => {
+  const hatchLead = { id: 'c-h', location_id: 'loc-2', email: 'h@example.com', first_name: 'Hana', pipeline_stage_slug: 'waitlist_new_enquiry' }
+  const active = { contact_id: 'c-h', location_id: 'loc-2', status: 'active' }
+
+  it('an active Hatch membership verifies on a Hatch event and a Stillorgan event', async () => {
+    for (const locationId of ['loc-2', 'loc-1']) {
+      const db = fakeDb({ contacts: [hatchLead], memberships: [active] })
+      const r = await validateMemberByEmail({ db, email: 'h@example.com', locationId })
+      expect(r).toMatchObject({ is_member: true, contact_id: 'c-h', first_name: 'Hana' })
+    }
+  })
+
+  it('an ended membership does not', async () => {
+    const db = fakeDb({ contacts: [hatchLead], memberships: [{ ...active, status: 'ended' }] })
+    expect((await validateMemberByEmail({ db, email: 'h@example.com', locationId: 'loc-2' })).is_member).toBe(false)
+  })
+
+  it('a membership at another organisation\'s studio does not', async () => {
+    const db = fakeDb({ contacts: [hatchLead], memberships: [{ ...active, location_id: 'loc-other' }] })
+    expect((await validateMemberByEmail({ db, email: 'h@example.com', locationId: 'loc-2' })).is_member).toBe(false)
+  })
+
+  it('an unreadable memberships table falls back to the stage check, never throws', async () => {
+    const db = fakeDb({ contacts: [hatchLead], memberships: [active], errors: { contact_memberships: { message: 'down' } } })
+    expect((await validateMemberByEmail({ db, email: 'h@example.com', locationId: 'loc-2' })).is_member).toBe(false)
+  })
+
+  it('a stage member never needs the memberships read', async () => {
+    const db = fakeDb({ contacts: [{ ...hatchLead, pipeline_stage_slug: 'member' }] })
+    expect((await validateMemberByEmail({ db, email: 'h@example.com', locationId: 'loc-2' })).is_member).toBe(true)
+    expect(db.from.mock.calls.some(([t]) => t === 'contact_memberships')).toBe(false)
+  })
+
+  it('no contact found means no memberships read', async () => {
+    const db = fakeDb({ contacts: [], memberships: [active] })
+    expect((await validateMemberByEmail({ db, email: 'h@example.com', locationId: 'loc-2' })).is_member).toBe(false)
+    expect(db.from.mock.calls.some(([t]) => t === 'contact_memberships')).toBe(false)
   })
 })
