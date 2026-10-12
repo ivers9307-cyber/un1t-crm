@@ -66,6 +66,25 @@ describe('buildWebhookEventId — repeatable engagement events (COMMSFIX.C.2)', 
     expect(b).not.toBe(a)
   })
 
+  it('keys a NULL-MessageID SubscriptionChange on the change itself (PMSUBCHANGE.1)', () => {
+    // Account-made suppressions (Origin "Customer"), Admin ones and every
+    // reactivation arrive with MessageID null, per Postmark's docs.
+    const change = {
+      RecordType: 'SubscriptionChange', MessageID: null, ServerID: 21100951, MessageStream: 'broadcast',
+      Recipient: 'a@x.ie', ChangedAt: '2026-10-12T06:00:50Z', SuppressSending: true, Origin: 'Customer',
+    }
+    const key = buildWebhookEventId(change)
+    expect(key).toBe('SubscriptionChange:none:21100951:broadcast:a@x.ie:2026-10-12T06:00:50Z:true')
+    // A Postmark retry repeats the payload, so it dedups...
+    expect(buildWebhookEventId({ ...change })).toBe(key)
+    // ...while another address, a later change, or a reactivation do not.
+    expect(buildWebhookEventId({ ...change, Recipient: 'b@x.ie' })).not.toBe(key)
+    expect(buildWebhookEventId({ ...change, ChangedAt: '2026-10-13T06:00:50Z' })).not.toBe(key)
+    expect(buildWebhookEventId({ ...change, SuppressSending: false })).not.toBe(key)
+    const { MessageID: _omit, ...absent } = change
+    expect(buildWebhookEventId(absent)).toBe(key)
+  })
+
   it('falls back to the message-scoped key for an unknown RecordType', () => {
     expect(buildWebhookEventId({ RecordType: 'SomethingNew', MessageID: MSG })).toBe(`SomethingNew:${MSG}`)
     expect(buildWebhookEventId({ MessageID: MSG })).toBe(`unknown:${MSG}`)

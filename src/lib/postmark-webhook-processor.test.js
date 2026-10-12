@@ -706,6 +706,41 @@ describe('processPostmarkEvent — SubscriptionChange reactivation (COMMSFIX.C.7
     expect(r.ok).toBe(true)
     expect(db.contactUpdates).toEqual([])
   })
+
+  // PMSUBCHANGE.1 — Postmark sends MessageID NULL for every account-made
+  // suppression (our own consent-drift push, Origin "Customer"), Admin ones
+  // and every reactivation. Refused as missing_message_id, the route 400'd
+  // them and Postmark disabled the tenant server's webhook on 12 Oct 2026.
+  it('a NULL-MessageID reactivation resolves through Recipient (PMSUBCHANGE.1)', async () => {
+    const db = stubReactivationDb({ send: null, contact: { id: 'c9' } })
+
+    const r = await processPostmarkEvent(db, { ...REACTIVATE, MessageID: null, Origin: 'Customer' })
+
+    expect(r.ok).toBe(true)
+    const lookup = db.contactLookups.find(l => l.filters.some(([kind, col]) => kind === 'ilike' && col === 'email'))
+    expect(lookup).toBeTruthy()
+    expect(db.contactUpdates.length).toBeGreaterThan(0)
+  })
+
+  it('a NULL-MessageID suppression (our own API push) is acknowledged and writes nothing (PMSUBCHANGE.1)', async () => {
+    const db = stubReactivationDb({ send: null, contact: { id: 'c9' } })
+
+    const r = await processPostmarkEvent(db, {
+      RecordType: 'SubscriptionChange', MessageID: null, SuppressSending: true,
+      SuppressionReason: 'ManualSuppression', Origin: 'Customer', Recipient: 'a@x.ie',
+    })
+
+    expect(r).toEqual({ ok: true })
+    expect(db.contactUpdates).toEqual([])
+    expect(applyMarketingPreferencesBulk).not.toHaveBeenCalled()
+  })
+
+  it('every other record type still refuses a missing MessageID', async () => {
+    for (const RecordType of ['Delivery', 'Open', 'Click', 'Bounce', 'SpamComplaint']) {
+      const r = await processPostmarkEvent(stubReactivationDb(), { RecordType, MessageID: null })
+      expect(r).toEqual({ ok: false, error: 'missing_message_id' })
+    }
+  })
 })
 
 // ─── COMMSFIX.F.2 — Click writes rows, never arrays ──────────────────
