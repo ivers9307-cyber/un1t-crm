@@ -96,6 +96,8 @@ function classifyMissingSendRow(body, messageId, recordType) {
  * reachable in principle and worth a line in the log rather than a silent null.
  */
 async function findSendByMessageId(db, messageId, columns) {
+  // PMSUBCHANGE.1 — no message, no send (a NULL-MessageID SubscriptionChange).
+  if (!messageId) return null
   const { data, error } = await db.from('email_sends')
     .select(columns)
     .eq('postmark_message_id', messageId)
@@ -217,10 +219,15 @@ async function reportRpc(db, fn, args) {
  */
 export async function processPostmarkEvent(db, body) {
   const messageId = body?.MessageID
-  if (!messageId) {
+  const recordType = body?.RecordType
+  // PMSUBCHANGE.1 — a SubscriptionChange may legitimately carry MessageID
+  // NULL (an account-made suppression, e.g. our own consent-drift push, or a
+  // reactivation), and the webhook route now queues it. It resolves through
+  // `Recipient` (reactivation) or is a no-op echo of a refusal we already
+  // hold (suppression). Every other record type still needs a message.
+  if (!messageId && recordType !== 'SubscriptionChange') {
     return { ok: false, error: 'missing_message_id' }
   }
-  const recordType = body.RecordType
 
   // BCA submission events ride on the same Postmark webhook firehose
   // but tagged 'bca-submit'. They never match an email_sends or
@@ -228,7 +235,7 @@ export async function processPostmarkEvent(db, body) {
   // no-op on them. Route them here first; if the message id maps to
   // a car_bca_submissions row, handle it and return — the rest of
   // the switch is for marketing / transactional / campaign events.
-  if (body?.Tag === 'bca-submit') {
+  if (body?.Tag === 'bca-submit' && messageId) {
     const bca = await findBcaSubmissionByMessageId(db, messageId)
     if (bca) {
       const r = await recordBcaPostmarkEvent(db, bca.id, body)
