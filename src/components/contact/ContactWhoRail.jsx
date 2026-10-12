@@ -8,6 +8,7 @@ import { Mail, Phone } from 'lucide-react'
 import LinkedAccountsCard from '@/components/LinkedAccountsCard'
 import ContactMarketingPreferencesCard from '@/components/ContactMarketingPreferencesCard'
 import GlofoxProfileCard from './GlofoxProfileCard'
+import StudioMembershipsCard from './StudioMembershipsCard'
 import { visitOriginLabel } from '@/lib/visit-origin'
 
 function InfoRow({ label, value }) {
@@ -19,7 +20,7 @@ function InfoRow({ label, value }) {
   )
 }
 
-export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false }) {
+export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, studioMemberships = [] }) {
   return (
     <>
       {/* PERSON-LINK.1 — linked accounts (or "not linked" CTA when single). */}
@@ -63,6 +64,9 @@ export default function ContactWhoRail({ contact, person, identityEmails, identi
         <InfoRow label="Label" value={contact.label || '—'} />
         <InfoRow label="Created" value={new Date(contact.created_at).toLocaleDateString('en-IE')} />
       </div>
+
+      {/* HATCH-MEMBERS.1 — a membership sold outside Glofox (Hatch Street). */}
+      <StudioMembershipsCard memberships={studioMemberships} />
 
       <GlofoxProfileCard contact={contact} />
 
