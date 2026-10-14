@@ -10,6 +10,7 @@ import { useState, useEffect } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { classBookResultView } from '@/lib/glofox-class-book-result'
 import { bookChatConfirmationText } from '@/lib/book-chat-copy'
+import { dayHasWindows } from '@/lib/booking-windows'
 
 function fmtDay(d) {
   return d.toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
@@ -110,7 +111,7 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
     for (let i = 0; i < 14; i++) {
       const d = new Date()
       d.setDate(d.getDate() + i)
-      if (event.availability?.[DAY_KEYS[d.getDay()]]) {
+      if (dayHasWindows(event.availability, DAY_KEYS[d.getDay()])) {
         const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
         days.push({ d, ds })
       }

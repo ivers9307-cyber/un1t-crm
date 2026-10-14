@@ -13,6 +13,7 @@ import { Plus, Calendar, Clock, Users } from 'lucide-react'
 import EventActions from '@/components/EventActions'
 import { canManageEventType, canCreateEventType } from '@/lib/event-type-gates'
 import CalendlyTabs from '@/components/CalendlyTabs'
+import { dayHasWindows } from '@/lib/booking-windows'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,7 +42,7 @@ function getAvailableDays(availability) {
   if (!availability) return 'Not set'
   const days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
   const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-  return days.map((d, i) => availability[d] ? labels[i] : null).filter(Boolean).join(', ') || 'None'
+  return days.map((d, i) => dayHasWindows(availability, d) ? labels[i] : null).filter(Boolean).join(', ') || 'None'
 }
 
 export default async function BookingTypesPage(props) {

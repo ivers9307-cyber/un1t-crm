@@ -84,6 +84,30 @@ describe('computeAvailableDays', () => {
   })
 })
 
+// BOOKINGWINDOWS.1 — several windows in one day: each starts its own grid,
+// nothing is offered in the gap, and the legacy single-window shape still reads.
+describe('computeAvailableSlots with several windows a day', () => {
+  const db = makeEmptyDb()
+  const event = {
+    id: 'ev1', duration_minutes: 30, buffer_minutes: 10, max_advance_days: 30, location_id: null,
+    availability: { tue: [{ start: '17:00', end: '18:00' }, { start: '07:00', end: '08:15' }] },
+  }
+
+  it('offers each window on its own grid, in time order, and nothing in the gap', async () => {
+    const slots = await computeAvailableSlots(db, event, '2026-06-30')
+    expect(slots.map((s) => s.start)).toEqual(['07:00', '07:40', '17:00'])
+  })
+
+  it('an empty list is a closed day', async () => {
+    expect(await computeAvailableSlots(db, { ...event, availability: { tue: [] } }, '2026-06-30')).toEqual([])
+  })
+
+  it('findBookableSlot accepts a slot in the second window and refuses one in the gap', async () => {
+    expect((await findBookableSlot(db, event, '2026-06-30', '17:00')).slot).toEqual({ start: '17:00', end: '17:30' })
+    expect((await findBookableSlot(db, event, '2026-06-30', '12:00')).slot).toBeNull()
+  })
+})
+
 // BOOKINGSELF.1 — the shared write-side check (create + customer reschedule).
 describe('findBookableSlot', () => {
   // Mon 29 Jun 2026 is "today" (Dublin midnight, minute 0) per the pin above.

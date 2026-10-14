@@ -33,6 +33,7 @@ import { Clock, MapPin, ChevronLeft, ChevronRight, Check, AlertCircle, Globe } f
 // roster.js docstring for the full incident reasoning.
 import { formatDate } from '@/lib/roster'
 import { PLATFORM_NAME } from '@/lib/brand-name'
+import { dayHasWindows } from '@/lib/booking-windows'
 import { resolveZone } from '@shared/zoned-time'
 
 export default function BookingWidget({ slug }) {
@@ -140,7 +141,7 @@ export default function BookingWidget({ slug }) {
   function isAvailableForDayOfWeek(date) {
     if (!event || !date) return false
     const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
-    return !!event.availability[dayNames[date.getDay()]]
+    return dayHasWindows(event.availability, dayNames[date.getDay()])
   }
   function isAvailableDay(date) {
     return isWithinAdvanceWindow(date) && isAvailableForDayOfWeek(date)

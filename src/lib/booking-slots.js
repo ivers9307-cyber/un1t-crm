@@ -16,6 +16,7 @@
 // (bookings-classes.tz.test.js).
 
 import { todayStrIn, nowMinutesIn, addDaysISO, zoneOfLocation, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
+import { dayWindows } from '@/lib/booking-windows'
 
 /**
  * Generate the day's candidate slots from an availability window.
@@ -120,13 +121,15 @@ async function availableSlotsWithError(db, event, date, { zone, nowMs = Date.now
   if (date < todayStr || date > maxDateStr) return { slots: [], error: null }
 
   const dayName = DAY_NAMES[new Date(date + 'T00:00:00Z').getUTCDay()]
-  const dayAvailability = event.availability?.[dayName]
-  if (!dayAvailability) return { slots: [], error: null }
+  // BOOKINGWINDOWS.1: a day may hold several windows; each starts its own
+  // duration+buffer grid, and nothing is offered in the gaps between them.
+  const windows = dayWindows(event.availability, dayName)
+  if (!windows.length) return { slots: [], error: null }
 
-  const slots = generateDaySlots(dayAvailability, {
+  const slots = windows.flatMap((win) => generateDaySlots(win, {
     durationMinutes: event.duration_minutes,
     bufferMinutes: event.buffer_minutes,
-  })
+  }))
 
   const { booked, blocked, error } = await readDayOccupancy(db, event.id, date, excludeBookingId)
   const nowMinutes = date === todayStr ? nowMinutesIn(tz, nowMs) : -1
@@ -137,7 +140,7 @@ async function availableSlotsWithError(db, event, date, { zone, nowMs = Date.now
  * Available slots for an event_types row on a calendar date.
  * Mirrors the public slots route end-to-end: studio-time range checks
  * (today / max_advance_days), weekday availability lookup (UTC-stable),
- * slot generation, booked + blocked subtraction, today's past-time
+ * slot generation per window, booked + blocked subtraction, today's past-time
  * filter. Returns [] outside the bookable range. `event` must carry
  * { id, duration_minutes, buffer_minutes, availability, max_advance_days }
  * and, for its zone, `location_id` (or a `locations: { timezone }` embed).
