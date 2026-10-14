@@ -59,12 +59,16 @@ vi.mock('@/lib/cron-daily-slot', async (importOriginal) => ({
 vi.mock('@/lib/challenges-io', () => ({ computeStandings: vi.fn(async () => []), computeCollective: vi.fn(async () => ({ total: 0, target: 10, pct: 0 })) }))
 
 const { GET, END_ANNOUNCE_RETRY_DAYS } = await import('./route.js')
+const { todayStrIn } = await import('@/lib/location-time')
 const { sendCustomerPush } = await import('@/lib/customer-push')
 const { logWarn, logError } = await import('@/lib/log')
 const { computeStandings } = await import('@/lib/challenges-io')
 
 const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } })
-const today = () => new Date().toISOString().slice(0, 10)
+// The route's "today" is the studio's calendar day (TZ.13), never the UTC
+// date: between 00:00 and 01:00 Irish summer time the two differ, and every
+// START fixture missed its day (CHALTODAY.1, red CI on 15 Oct 2026).
+const today = () => todayStrIn('Europe/Dublin')
 const START = () => ({ id: 'ch-1', location_id: 'loc-1', name: 'October points', mode: 'individual', metric: 'points', starts_on: today(), ends_on: '2099-01-01', target: null, announced_start_at: null, announced_end_at: null, announced_target_at: null })
 const claimOf = (u) => u.patch.announced_start_at && u.is.announced_start_at === null
 const releaseOf = (u) => u.patch.announced_start_at === null
