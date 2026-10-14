@@ -41,6 +41,12 @@ describe('eventTypeHasWindowForDate', () => {
     expect(eventTypeHasWindowForDate(monAvailability, '2026-05-16')).toBe(false)
   })
 
+  it('reads a list of windows; an empty list is closed (BOOKINGWINDOWS.1)', () => {
+    const lists = { mon: [{ start: '07:00', end: '10:00' }, { start: '17:00', end: '20:00' }], tue: [] }
+    expect(eventTypeHasWindowForDate(lists, '2026-05-11')).toBe(true)
+    expect(eventTypeHasWindowForDate(lists, '2026-05-12')).toBe(false)
+  })
+
   it('false for missing/invalid input', () => {
     expect(eventTypeHasWindowForDate(null, '2026-05-11')).toBe(false)
     expect(eventTypeHasWindowForDate(undefined, '2026-05-11')).toBe(false)

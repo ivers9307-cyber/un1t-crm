@@ -35,6 +35,7 @@ import {
   underMinEntry,
 } from '@/lib/schedule-overview'
 import { logWarn } from '@/lib/log'
+import { dayWindows } from '@/lib/booking-windows'
 import { readAvailabilityLeave } from '@/lib/availability-leave'
 
 export const runtime = 'nodejs'
@@ -287,15 +288,17 @@ async function handleGet(request) {
         staff_required: e.staff_required,
       })),
       event_types: eventTypesToday.map((et) => {
-        // Surface the day's bookable window so the modal can show
-        // "PT bookings — bookable 09:00–17:00" instead of just "PT".
-        const win = et?.availability?.[dayKey] || null
+        // Surface the day's bookable windows so the modal can show
+        // "PT bookings — 09:00–12:00, 17:00–20:00" instead of just "PT".
+        // window_start/window_end span the first to the last window.
+        const windows = dayWindows(et?.availability, dayKey)
         return {
           id: et.id,
           name: et.name,
           staff_required: et.staff_required,
-          window_start: win?.start || null,
-          window_end:   win?.end   || null,
+          windows,
+          window_start: windows[0]?.start || null,
+          window_end:   windows[windows.length - 1]?.end || null,
         }
       }),
       time_off: onLeaveNames,

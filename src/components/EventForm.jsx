@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Plus, Trash2, Bell, Check, Mail, MessageCircle, UserPlus } from 'lucide-react'
+import { Plus, Trash2, Bell, Check, Mail, MessageCircle, UserPlus, X } from 'lucide-react'
+import { windowsIssue } from '@/lib/booking-windows'
 
 const DAYS = [
   { key: 'mon', label: 'Monday' },
@@ -25,13 +26,38 @@ const FIELD_TYPES = [
 const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316']
 
 const defaultAvailability = {
-  mon: { start: '09:00', end: '18:00' },
-  tue: { start: '09:00', end: '18:00' },
-  wed: { start: '09:00', end: '18:00' },
-  thu: { start: '09:00', end: '18:00' },
-  fri: { start: '09:00', end: '18:00' },
+  mon: [{ start: '09:00', end: '18:00' }],
+  tue: [{ start: '09:00', end: '18:00' }],
+  wed: [{ start: '09:00', end: '18:00' }],
+  thu: [{ start: '09:00', end: '18:00' }],
+  fri: [{ start: '09:00', end: '18:00' }],
   sat: null,
   sun: null,
+}
+
+// BOOKINGWINDOWS.1 — the editor holds every open day as a list of windows.
+// A row saved before then has one { start, end } per day; it is read as a
+// one-window list here and saved back as a list.
+function editableAvailability(availability) {
+  const src = availability && typeof availability === 'object' ? availability : {}
+  const hhmm = (t) => (typeof t === 'string' ? t.slice(0, 5) : '')
+  return Object.fromEntries(DAYS.map(({ key }) => {
+    const day = src[key]
+    const list = Array.isArray(day) ? day : day && typeof day === 'object' ? [day] : []
+    const windows = list
+      .filter((w) => w && (w.start || w.end))
+      .map((w) => ({ start: hhmm(w.start), end: hhmm(w.end) }))
+    return [key, windows.length ? windows : null]
+  }))
+}
+
+// A new window starts an hour after the day's last one ends.
+function nextWindow(windows) {
+  const toMin = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m }
+  const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+  const lastEnd = windows[windows.length - 1]?.end
+  const from = /^\d{2}:\d{2}$/.test(lastEnd || '') ? Math.min(toMin(lastEnd) + 60, 22 * 60) : 17 * 60
+  return { start: fmt(from), end: fmt(Math.min(from + 60, 23 * 60 + 59)) }
 }
 
 // EVENTTYPERLS.1 — a refusal from the save route, in words the operator can
@@ -79,7 +105,7 @@ export default function EventForm({ event, locationId }) {
   // location trial membership + tag for the welcome sequence.
   // Default off — operator opts in per booking type.
   const [createInGlofox, setCreateInGlofox] = useState(!!event?.create_in_glofox)
-  const [availability, setAvailability] = useState(event?.availability || defaultAvailability)
+  const [availability, setAvailability] = useState(() => (event?.availability ? editableAvailability(event.availability) : defaultAvailability))
   const [customFields, setCustomFields] = useState(event?.custom_fields || [])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -199,16 +225,32 @@ export default function EventForm({ event, locationId }) {
   function toggleDay(day) {
     setAvailability(prev => ({
       ...prev,
-      [day]: prev[day] ? null : { start: '09:00', end: '18:00' },
+      [day]: prev[day] ? null : [{ start: '09:00', end: '18:00' }],
     }))
   }
 
-  function updateDayTime(day, field, value) {
+  function updateWindow(day, idx, field, value) {
     setAvailability(prev => ({
       ...prev,
-      [day]: { ...prev[day], [field]: value },
+      [day]: prev[day].map((w, i) => (i === idx ? { ...w, [field]: value } : w)),
     }))
   }
+
+  function addWindow(day) {
+    setAvailability(prev => ({ ...prev, [day]: [...prev[day], nextWindow(prev[day])] }))
+  }
+
+  // Removing a day's last window turns the day off.
+  function removeWindow(day, idx) {
+    setAvailability(prev => {
+      const rest = prev[day].filter((_, i) => i !== idx)
+      return { ...prev, [day]: rest.length ? rest : null }
+    })
+  }
+
+  const dayIssues = Object.fromEntries(
+    DAYS.map(({ key }) => [key, availability[key] ? windowsIssue(availability[key]) : null]),
+  )
 
   function addCustomField() {
     setCustomFields(prev => [...prev, {
@@ -235,6 +277,12 @@ export default function EventForm({ event, locationId }) {
 
   async function handleSubmit(e) {
     e.preventDefault()
+    // The save route refuses these too; say so before anything is sent.
+    const badDay = DAYS.find(({ key }) => dayIssues[key])
+    if (badDay) {
+      setError(`Could not save: ${badDay.label}: ${dayIssues[badDay.key]}`)
+      return
+    }
     setSaving(true)
     setError(null)
 
@@ -463,38 +511,61 @@ export default function EventForm({ event, locationId }) {
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
         <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Availability</h3>
 
-        <div className="space-y-2">
+        <div className="space-y-3">
           {DAYS.map(({ key, label }) => (
-            <div key={key} className="flex items-center gap-3">
+            <div key={key} className="flex items-start gap-3">
               <button
                 type="button"
                 onClick={() => toggleDay(key)}
-                className={`w-20 text-xs py-1.5 rounded text-center transition-colors ${
+                className={`w-20 shrink-0 text-xs py-1.5 rounded text-center transition-colors ${
                   availability[key]
-                    ? 'bg-blue-600/20 text-blue-400 border border-blue-600/30'
+                    ? 'bg-blue-600/20 text-blue-700 border border-blue-600/30'
                     : 'bg-un1t-border/30 text-un1t-subtle border border-un1t-border'
                 }`}
               >
                 {label.slice(0, 3)}
               </button>
               {availability[key] ? (
-                <div className="flex items-center gap-2">
-                  <input
-                    type="time"
-                    value={availability[key].start}
-                    onChange={e => updateDayTime(key, 'start', e.target.value)}
-                    className="bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
-                  />
-                  <span className="text-un1t-subtle text-sm">to</span>
-                  <input
-                    type="time"
-                    value={availability[key].end}
-                    onChange={e => updateDayTime(key, 'end', e.target.value)}
-                    className="bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
-                  />
+                <div className="min-w-0 space-y-1.5">
+                  {availability[key].map((win, idx) => (
+                    <div key={idx} className="flex flex-wrap items-center gap-2">
+                      <input
+                        type="time"
+                        aria-label={`${label} window ${idx + 1} start`}
+                        value={win.start}
+                        onChange={e => updateWindow(key, idx, 'start', e.target.value)}
+                        className="bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+                      />
+                      <span className="text-un1t-subtle text-sm">to</span>
+                      <input
+                        type="time"
+                        aria-label={`${label} window ${idx + 1} end`}
+                        value={win.end}
+                        onChange={e => updateWindow(key, idx, 'end', e.target.value)}
+                        className="bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        aria-label={`Remove ${label} window ${idx + 1}`}
+                        onClick={() => removeWindow(key, idx)}
+                        className="p-1 text-un1t-subtle hover:text-red-700 transition-colors"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    aria-label={`Add a window on ${label}`}
+                    onClick={() => addWindow(key)}
+                    className="inline-flex items-center gap-1 text-xs text-blue-700 hover:underline"
+                  >
+                    <Plus size={12} /> Add window
+                  </button>
+                  {dayIssues[key] && <p className="text-xs text-red-700">{dayIssues[key]}</p>}
                 </div>
               ) : (
-                <span className="text-xs text-un1t-subtle">Unavailable</span>
+                <span className="text-xs text-un1t-subtle py-1.5">Unavailable</span>
               )}
             </div>
           ))}

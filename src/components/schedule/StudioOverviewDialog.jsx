@@ -22,6 +22,7 @@
 import { useState, useEffect } from 'react'
 import { Calendar, AlertCircle, Loader2, Flag, Palmtree, Users, Clock, UserX } from 'lucide-react'
 import { Modal } from '@/components/ui'
+import { formatWindows } from '@/lib/booking-windows'
 
 const STATUS_STYLES = {
   red:   { border: 'border-red-500/60',    bg: 'bg-red-500/5',    label: 'Uncovered' },
@@ -219,7 +220,12 @@ function DayDetailBody({ day, onOpenShift }) {
                   <div className="min-w-0">
                     <div className="text-un1t-text truncate">{et.name}</div>
                     <div className="text-[10px] text-un1t-muted">
-                      {fmtTime(et.window_start) && fmtTime(et.window_end) ? (
+                      {et.windows?.length ? (
+                        <span className="inline-flex items-center gap-1">
+                          <Clock size={9} />
+                          {formatWindows(et.windows)}
+                        </span>
+                      ) : fmtTime(et.window_start) && fmtTime(et.window_end) ? (
                         <span className="inline-flex items-center gap-1">
                           <Clock size={9} />
                           {fmtTime(et.window_start)}–{fmtTime(et.window_end)}

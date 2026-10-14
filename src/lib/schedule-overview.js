@@ -20,14 +20,16 @@
 // data assembly.
 
 import { isAdminShift } from '@shared/shift-kind'
+import { dayHasWindows } from '@/lib/booking-windows'
 
 const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
 
 /**
  * Does this Calendly event_type's availability JSON have a window
  * for the given day-of-week? availability is the same shape used
- * by /api/public/bookings/[slug]/slots:
- *   { mon: { start: 'HH:MM', end: 'HH:MM' }, tue: ..., ... }
+ * by /api/public/bookings/[slug]/slots, read through dayWindows
+ * (src/lib/booking-windows.js): a day is a list of { start, end }
+ * windows, or a legacy single { start, end }.
  *
  * A null/undefined availability or a missing day key = no window.
  *
@@ -42,11 +44,8 @@ export function eventTypeHasWindowForDate(availability, dateIso) {
   const [y, m, d] = String(dateIso).split('-').map(Number)
   if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return false
   const dayName = DAY_NAMES[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]
-  const window = availability[dayName]
-  // Treat any non-null window object with start+end as bookable.
-  // Some operators use null to disable a day; some use { start: null }.
-  if (!window || typeof window !== 'object') return false
-  return !!(window.start && window.end)
+  // null, { start: null } and [] all mean closed (BOOKINGWINDOWS.1).
+  return dayHasWindows(availability, dayName)
 }
 
 /**

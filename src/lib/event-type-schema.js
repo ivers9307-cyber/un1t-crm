@@ -10,6 +10,7 @@
 // Server-only (zod). The form imports nothing from here.
 import { z } from 'zod'
 import { uuidLike, hexColor, url } from './schemas'
+import { availabilityIssue } from './booking-windows'
 
 const fields = {
   name: z.string().min(1).max(200),
@@ -17,7 +18,13 @@ const fields = {
   description: z.string().max(5000).nullable(),
   duration_minutes: z.number().int().min(1).max(1440),
   color: hexColor,
-  availability: z.unknown(), // opaque JSON shape, schema lives client-side
+  // { mon: [{ start, end }, …] | { start, end } | null, … } — read by
+  // dayWindows (./booking-windows). Several windows a day may touch but
+  // never overlap (BOOKINGWINDOWS.1).
+  availability: z.unknown().superRefine((value, ctx) => {
+    const issue = availabilityIssue(value)
+    if (issue) ctx.addIssue({ code: 'custom', message: issue })
+  }),
   buffer_minutes: z.number().int().min(0).max(1440),
   max_advance_days: z.number().int().min(0).max(3650),
   custom_fields: z.array(z.unknown()),

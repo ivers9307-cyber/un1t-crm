@@ -14,7 +14,9 @@ const EMOJI = /\p{Extended_Pictographic}/u
 const CLASS = { id: 'ev1', name: 'HIIT', time_start_ms: Date.now() + 3 * 3600 * 1000 }
 const EVENT_TYPES = [{
   id: 'et1', name: 'Consultation', slug: 'consult', duration_minutes: 30,
-  availability: { sun: true, mon: true, tue: true, wed: true, thu: true, fri: true, sat: true },
+  availability: Object.fromEntries(
+    ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].map((d) => [d, [{ start: '09:00', end: '18:00' }]]),
+  ),
 }]
 
 let sent
