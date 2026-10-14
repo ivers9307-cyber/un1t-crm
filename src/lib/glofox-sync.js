@@ -1679,6 +1679,17 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
 
   const { byGlofox, byEmail } = await findExistingContact(db, locationId, mapped)
   const existingRow = byGlofox || byEmail
+  // LASTATTEND.1 — the bookings fetch is a 30-day window, so a member who last
+  // trained before it comes back with null dates. last_attended_at /
+  // last_booked_at are advance-only (mergeBookingAggregates): keep the stored
+  // value unless the fresh one is newer, so the classifier, the diff and the
+  // apply write below all see the same date. Writing the null straight over
+  // the row wiped 120 attendees' dates by 14 Oct 2026.
+  if (bookingAggs && existingRow) {
+    const advanced = mergeBookingAggregates(existingRow, bookingAggs)
+    mapped.last_attended_at = advanced.last_attended_at ?? existingRow.last_attended_at ?? null
+    mapped.last_booked_at   = advanced.last_booked_at   ?? existingRow.last_booked_at   ?? null
+  }
   // CREDITSREAD.1 — the credit_member rule could not run (a credits or
   // membership read failed), so the standard mapping's 'member' is not
   // evidence against a stored 'credit_member'. Keep it until a read works.
@@ -1855,12 +1866,18 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     }
   }
 
-  // GLOFOX2.1.14 — booking aggregates always overwrite when fetched
+  // GLOFOX2.1.14 — the windowed counts always overwrite when fetched
   // (full recompute is the source of truth; cron is the safety net
-  // that corrects any webhook-counter drift).
+  // that corrects any webhook-counter drift). The two timestamps are
+  // advance-only (LASTATTEND.1): mapped already holds the stored date
+  // unless the fetch found a newer one, so diff against that.
   if (bookingAggs) {
-    changes.last_booked_at        = { from: existing.last_booked_at ?? null,        to: bookingAggs.last_booked_at }
-    changes.last_attended_at      = { from: existing.last_attended_at ?? null,      to: bookingAggs.last_attended_at }
+    if ((existing.last_booked_at ?? null) !== mapped.last_booked_at) {
+      changes.last_booked_at      = { from: existing.last_booked_at ?? null,        to: mapped.last_booked_at }
+    }
+    if ((existing.last_attended_at ?? null) !== mapped.last_attended_at) {
+      changes.last_attended_at    = { from: existing.last_attended_at ?? null,      to: mapped.last_attended_at }
+    }
     changes.total_bookings_30d    = { from: existing.total_bookings_30d ?? 0,       to: bookingAggs.total_bookings_30d }
     changes.total_attended_30d    = { from: existing.total_attended_30d ?? 0,       to: bookingAggs.total_attended_30d }
     changes.total_attended_7d     = { from: existing.total_attended_7d ?? 0,        to: bookingAggs.total_attended_7d }

@@ -1915,6 +1915,68 @@ describe('previewMemberSync', () => {
     expect(out.action).toBe('update')
     expect(out.changes.emergency_contact).toEqual({ from: 'ICE: next of kin', to: null })
   })
+
+  // LASTATTEND.1 — the bookings fetch is a 30-day window, so a trial who last
+  // trained 45 days ago comes back with no attended class at all. The UPDATE
+  // path used to write that null straight over the stored date: on 14 Oct
+  // 2026, 120 Stillorgan contacts with attended class_bookings rows had a NULL
+  // last_attended_at, every one of them last synced 30+ days after their last
+  // class. The timestamps are advance-only (mergeBookingAggregates); the
+  // windowed counts still refresh.
+  describe('booking-aggregate timestamps are advance-only (LASTATTEND.1)', () => {
+    const trial = (over = {}) => ({
+      id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'trial',
+      last_attended_at: isoDaysAgo(45), last_booked_at: isoDaysAgo(50),
+      total_attended_30d: 1, total_attended_7d: 0, total_bookings_30d: 1, total_noshow_30d: 0,
+      ...over,
+    })
+    const sync = (existing, bookings) => previewMemberSync(
+      fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing] }),
+      'loc',
+      { ...member, lead_status: 'TRIAL' },
+      { bookings, skipInteractions: true },
+    )
+
+    it('keeps the stored dates when the 30-day fetch has nothing', async () => {
+      const existing = trial()
+      const out = await sync(existing, [])
+      expect(out.action).toBe('update')
+      expect(out.changes).not.toHaveProperty('last_attended_at')
+      expect(out.changes).not.toHaveProperty('last_booked_at')
+      // applyMemberSync writes mapped.* for a changed key, and the classifier
+      // reads mapped.* first: both must see the stored date, not null.
+      expect(out.mapped.last_attended_at).toBe(existing.last_attended_at)
+      expect(out.mapped.last_booked_at).toBe(existing.last_booked_at)
+      // The windowed counts are a fresh answer and still refresh to 0.
+      expect(out.changes.total_attended_30d).toEqual({ from: 1, to: 0 })
+    })
+
+    it('keeps a newer stored date over an older fresh one', async () => {
+      const existing = trial({ last_attended_at: isoDaysAgo(2) })
+      const tenDaysAgoSec = Math.floor((Date.now() - 10 * 86_400_000) / 1000)
+      const out = await sync(existing, [{ _id: 'b1', created: tenDaysAgoSec, time_start: tenDaysAgoSec, attended: true, status: 'BOOKED' }])
+      expect(out.changes).not.toHaveProperty('last_attended_at')
+      expect(out.mapped.last_attended_at).toBe(existing.last_attended_at)
+    })
+
+    it('advances to a newer attended class', async () => {
+      const existing = trial()
+      const threeDaysAgoSec = Math.floor((Date.now() - 3 * 86_400_000) / 1000)
+      const fresh = new Date(threeDaysAgoSec * 1000).toISOString()
+      const out = await sync(existing, [{ _id: 'b1', created: threeDaysAgoSec, time_start: threeDaysAgoSec, attended: true, status: 'BOOKED' }])
+      expect(out.changes.last_attended_at).toEqual({ from: existing.last_attended_at, to: fresh })
+      expect(out.mapped.last_attended_at).toBe(fresh)
+    })
+
+    it('sets the date when none was stored', async () => {
+      const existing = trial({ last_attended_at: null, last_booked_at: null })
+      const threeDaysAgoSec = Math.floor((Date.now() - 3 * 86_400_000) / 1000)
+      const fresh = new Date(threeDaysAgoSec * 1000).toISOString()
+      const out = await sync(existing, [{ _id: 'b1', created: threeDaysAgoSec, time_start: threeDaysAgoSec, attended: true, status: 'BOOKED' }])
+      expect(out.changes.last_attended_at).toEqual({ from: null, to: fresh })
+      expect(out.changes.last_booked_at).toEqual({ from: null, to: fresh })
+    })
+  })
 })
 
 describe('targetDealStageForSync (GLOFOX2.1.5 transitions)', () => {
