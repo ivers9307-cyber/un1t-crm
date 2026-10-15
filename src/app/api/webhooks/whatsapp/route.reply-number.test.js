@@ -61,6 +61,8 @@ import { createServerClient } from '@/lib/supabase'
 import { resolveWhatsAppNumberByPhoneNumberId, getLocationWhatsAppNumberConfig } from '@/lib/whatsapp-config'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
 import { pickInboundContact } from '@/lib/whatsapp'
+import { handleFlowCompletion } from '@/lib/whatsapp-flow/completion.js'
+import { recordCtwaTouch } from '@/lib/meta-capi'
 
 // Recording fake supabase client: chainable builder, thenable (matches
 // supabase-js), with per-table response handlers. Every terminal call is
@@ -98,6 +100,22 @@ function reqFor(body) {
 
 function envelope(value, field = 'messages') {
   return { entry: [{ changes: [{ field, value }] }] }
+}
+
+function inboundFlowReply(pni) {
+  return envelope({
+    metadata: { phone_number_id: pni },
+    contacts: [{ wa_id: '353871234567', profile: { name: 'Test Sender' } }],
+    messages: [{ id: 'wamid.flow1', from: '353871234567', timestamp: '1770000000', type: 'interactive', interactive: { type: 'nfm_reply', nfm_reply: { response_json: '{}' } } }],
+  })
+}
+
+function inboundCtwa(pni) {
+  return envelope({
+    metadata: { phone_number_id: pni },
+    contacts: [{ wa_id: '353871234567', profile: { name: 'Test Sender' } }],
+    messages: [{ id: 'wamid.ctwa1', from: '353871234567', timestamp: '1770000000', type: 'text', text: { body: 'hi' }, referral: { ctwa_clid: 'clid-1' } }],
+  })
 }
 
 function inboundText(pniOrNull) {
@@ -221,6 +239,40 @@ describe('POST /api/webhooks/whatsapp — the receiving number is recorded on th
     const insert = db.calls.find((c) => c.table === 'whatsapp_conversations' && c.ops.some(([m]) => m === 'insert'))
     expect(insert.ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-still', contact_id: null })
     expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
+  })
+
+  // WAHOMESTUDIO.1 — Flows, ads and Glofox belong to the studio whose number
+  // the customer used. A thread filed at a number-less home studio still acts
+  // for the receiving number's studio.
+  it('a number-less-home contact completing a Flow: the completion runs for the receiving number’s studio', async () => {
+    pickInboundContact.mockReturnValueOnce({ id: 'contact-9', location_id: 'loc-hatch' })
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(null)
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    await POST(reqFor(inboundFlowReply(REGISTERED_PNI)))
+    expect(handleFlowCompletion).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-still' }))
+    const insert = db.calls.find((c) => c.table === 'whatsapp_conversations' && c.ops.some(([m]) => m === 'insert'))
+    expect(insert.ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-hatch' })
+  })
+
+  it('a number-less-home contact’s CTWA referral is recorded for the receiving number’s studio', async () => {
+    pickInboundContact.mockReturnValueOnce({ id: 'contact-9', location_id: 'loc-hatch' })
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(null)
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    await POST(reqFor(inboundCtwa(REGISTERED_PNI)))
+    expect(recordCtwaTouch).toHaveBeenCalledWith(db, expect.objectContaining({ ctwaClid: 'clid-1', locationId: 'loc-still' }))
+  })
+
+  it('control: a contact at a studio WITH its own number keeps that studio for the Flow completion and the CTWA touch', async () => {
+    pickInboundContact.mockReturnValueOnce({ id: 'contact-9', location_id: 'loc-other' })
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce({ source: 'db', id: 'wn-other', locationId: 'loc-other', phoneNumberId: '555', token: 'tok2' })
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    await POST(reqFor(inboundFlowReply(REGISTERED_PNI)))
+    expect(handleFlowCompletion).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-other' }))
+    vi.clearAllMocks()
+    pickInboundContact.mockReturnValueOnce({ id: 'contact-9', location_id: 'loc-other' })
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce({ source: 'db', id: 'wn-other', locationId: 'loc-other', phoneNumberId: '555', token: 'tok2' })
+    await POST(reqFor(inboundCtwa(REGISTERED_PNI)))
+    expect(recordCtwaTouch).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-other' }))
   })
 
   it('a failed stamp (e.g. 696 not applied yet) is logged and costs nothing else: message stored, Mia runs', async () => {

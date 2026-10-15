@@ -311,6 +311,12 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     }
   }
 
+  // WAHOMESTUDIO.1 — the studio whose number (and so whose Flows, ads and
+  // Glofox) the customer is talking to. Equals the thread's studio except for a
+  // thread filed at a number-less home studio, which talks through the
+  // receiving number's studio.
+  const actingLocationId = (locationId !== defaultLocationId && stampReceivingNumber) ? defaultLocationId : locationId
+
   // Get or create conversation (keyed by phone number, NOT by contact)
   const { data: existingConv } = await db.from('whatsapp_conversations')
     .select('id, contact_id, ctwa_clid')
@@ -331,7 +337,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
       // CTWA backfill: the click id landed while the sender was unknown —
       // move it onto the newly linked contact (fires the Lead event once).
       if (existingConv.ctwa_clid) {
-        await recordCtwaTouch(db, { ctwaClid: existingConv.ctwa_clid, conversationId: null, contact, locationId })
+        await recordCtwaTouch(db, { ctwaClid: existingConv.ctwa_clid, conversationId: null, contact, locationId: actingLocationId })
       }
     }
   } else {
@@ -376,7 +382,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
 
   // CTWA attribution — stamp the click id (conversation + contact) and fire
   // the Lead conversion once. Swallows its own errors; never blocks the webhook.
-  await recordCtwaTouch(db, { ctwaClid: message.referral?.ctwa_clid, conversationId, contact, locationId })
+  await recordCtwaTouch(db, { ctwaClid: message.referral?.ctwa_clid, conversationId, contact, locationId: actingLocationId })
 
   // WA-BSUID.1 — capture Meta's Business-Scoped User ID (arrives as
   // contacts[].user_id once usernames roll out) onto the matched
@@ -437,7 +443,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     case 'interactive':
       if (message.interactive?.type === 'nfm_reply') {
         // A completed WhatsApp Flow ("Book your first visit"). Book it, then log a marker.
-        try { await handleFlowCompletion(db, { interactive: message.interactive, contact, locationId }) }
+        try { await handleFlowCompletion(db, { interactive: message.interactive, contact, locationId: actingLocationId }) }
         catch (e) { console.error('[wa-webhook] flow completion failed:', e.message) }
         body = '[Booking submitted via WhatsApp Flow]'
       } else {
