@@ -91,9 +91,9 @@ const CALLERS = {
     why: 'ownNumberOrRefusal: 409 no number / 500 lookup failed. whatsapp-own-number.test.js.',
   },
   'src/lib/whatsapp-media-server.js': {
-    calls: { getLocationWhatsAppNumberConfig: 1 },
+    calls: { getLocationWhatsAppNumberConfig: 1, getConversationNumberConfig: 1 },
     decision: 'own-number',
-    why: 'inbound media fetched with the message location’s own token; none → null (the inbox’s graceful gap). whatsapp-media-server.test.js.',
+    why: 'inbound media fetched with the thread’s number when it replies through a same-org sibling’s (WAHOMESTUDIO.1), else the message location’s own token; none → null (the inbox’s graceful gap). whatsapp-media-server.test.js.',
   },
   'src/app/api/webhooks/whatsapp/route.js': {
     calls: { resolveWhatsAppNumberByPhoneNumberId: 2, getLocationWhatsAppNumberConfig: 1 },
@@ -163,7 +163,7 @@ const CALLERS = {
   'src/app/api/whatsapp/conversations/[id]/block/route.js': {
     calls: { setWhatsAppUserBlockState: 1 },
     decision: 'refuse-409',
-    why: '409, nothing mirrored (the env Block API blocked the sender on ANOTHER studio’s number). no-number.test.js.',
+    why: '409, nothing mirrored (the env Block API blocked the sender on ANOTHER studio’s number). no-number.test.js. WAHOMESTUDIO.1: through the thread (replyInConversation).',
   },
   'src/app/api/whatsapp/conversations/[id]/send-flow/route.js': {
     calls: { sendFlowMessage: 1 },
@@ -188,7 +188,7 @@ const CALLERS = {
   'src/lib/whatsapp-consent.js': {
     calls: { sendTextMessage: 1 },
     decision: 'inbound-owner',
-    why: 'STOP/START ack only; the consent change is written first and stands (louder-failure rule). whatsapp-consent.test.js.',
+    why: 'STOP/START ack only; the consent change is written first and stands (louder-failure rule). whatsapp-consent.test.js. WAHOMESTUDIO.1: through the thread (replyInConversation).',
   },
   'src/lib/agent/notify.js': {
     calls: { sendTextMessage: 1 },

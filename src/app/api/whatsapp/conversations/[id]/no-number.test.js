@@ -79,3 +79,12 @@ describe.each(ROUTES)('%s', (_name, call, sender) => {
     expect(res.status).toBe(502)
   })
 })
+
+describe('block', () => {
+  it('WAHOMESTUDIO.1 — block resolves the number through the thread', async () => {
+    createServerClient.mockReturnValue(makeDb())
+    setWhatsAppUserBlockState.mockResolvedValue({})
+    await block(json({ action: 'block' }), props)
+    expect(setWhatsAppUserBlockState).toHaveBeenCalledWith(CONV.wa_phone, true, { locationId: LOC, replyInConversation: 'conv-1' })
+  })
+})

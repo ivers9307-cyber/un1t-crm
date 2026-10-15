@@ -8,7 +8,7 @@
 // Pure classification/addressing helpers live in @shared/whatsapp-media;
 // this module is the IO that depends on the network, Storage and the DB.
 
-import { getLocationWhatsAppNumberConfig, META_API_URL } from './whatsapp-config'
+import { getLocationWhatsAppNumberConfig, getConversationNumberConfig, META_API_URL } from './whatsapp-config'
 import {
   WHATSAPP_MEDIA_BUCKET,
   resolveMediaExternalId,
@@ -47,14 +47,15 @@ export async function ensureMediaRehosted(db, message) {
   const externalId = resolveMediaExternalId(message)
   if (!externalId || !message.location_id) return null
 
-  // WACONFIGFALLBACK.1 — the message's location's OWN number. Inbound only
-  // lands at a location that owns the receiving number (classifyInboundOwner),
-  // so there is always one; if it has since been removed, the media is
-  // unreachable (null = the inbox's graceful gap), never fetched with another
-  // studio's token.
+  // WACONFIGFALLBACK.1 — the message's location's OWN number, never another
+  // studio's by accident. WAHOMESTUDIO.1 — or, for a message in a thread that
+  // replies through a same-organisation sibling's number (a studio with none
+  // of its own), the thread's number, which is the one Meta delivered it to.
+  // None → null (the inbox's graceful gap).
   let config
   try {
-    config = await getLocationWhatsAppNumberConfig(message.location_id)
+    config = (message.conversation_id && await getConversationNumberConfig(message.location_id, message.conversation_id))
+      || await getLocationWhatsAppNumberConfig(message.location_id)
   } catch {
     return null
   }

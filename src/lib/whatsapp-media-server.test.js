@@ -7,10 +7,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('./whatsapp-config', () => ({
   META_API_URL: 'https://graph.facebook.com/v21.0',
   getLocationWhatsAppNumberConfig: vi.fn(),
+  getConversationNumberConfig: vi.fn(async () => null),
 }))
 
 import { ensureMediaRehosted } from './whatsapp-media-server.js'
-import { getLocationWhatsAppNumberConfig } from './whatsapp-config'
+import { getLocationWhatsAppNumberConfig, getConversationNumberConfig } from './whatsapp-config'
 
 const LOC = 'a0000000-0000-4000-8000-000000000001'
 const MSG = { id: 'b0000000-0000-4000-8000-000000000002', location_id: LOC, message_type: 'image', media_mime_type: 'image/jpeg', media_external_id: '1000000000000001', media_storage_path: null }
@@ -53,5 +54,15 @@ describe('ensureMediaRehosted — the location’s own number only', () => {
     getLocationWhatsAppNumberConfig.mockRejectedValue(new Error('db down'))
     expect(await ensureMediaRehosted(makeDb(), MSG)).toBeNull()
     expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('WAHOMESTUDIO.1 — a message in a thread replying through a sibling’s number is fetched with THAT number’s token', async () => {
+    getConversationNumberConfig.mockResolvedValue({ source: 'db', token: 'tok-thread', phoneNumberId: 'PNI-THREAD', locationId: 'a0000000-0000-4000-8000-000000000009' })
+    const db = makeDb()
+    const path = await ensureMediaRehosted(db, { ...MSG, conversation_id: 'c0000000-0000-4000-8000-000000000001' })
+    expect(path).toEqual(expect.any(String))
+    expect(getConversationNumberConfig).toHaveBeenCalledWith(LOC, 'c0000000-0000-4000-8000-000000000001')
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
+    expect(globalThis.fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer tok-thread')
   })
 })
