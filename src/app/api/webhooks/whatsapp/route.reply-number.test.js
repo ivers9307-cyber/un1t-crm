@@ -77,7 +77,7 @@ function makeDb(handlers = {}) {
       return (typeof h === 'function' ? h(ops, terminal) : h) || { data: null, error: null }
     }
     const b = {}
-    for (const m of ['select', 'eq', 'or', 'is', 'in', 'order', 'limit', 'insert', 'update', 'upsert', 'delete']) {
+    for (const m of ['select', 'eq', 'neq', 'or', 'is', 'in', 'order', 'limit', 'insert', 'update', 'upsert', 'delete']) {
       b[m] = (...args) => { ops.push([m, ...args]); return b }
     }
     b.single = async () => finish('single')
@@ -296,6 +296,98 @@ describe('POST /api/webhooks/whatsapp — the receiving number is recorded on th
     expect(errSpy).toHaveBeenCalledWith(
       '[wa-webhook] receiving-number stamp failed for conversation conv-1 (replies go from the studio default):',
       "Could not find the 'whatsapp_number_id' column of 'whatsapp_conversations' in the schema cache",
+    )
+  })
+})
+
+// WAHOMESTUDIO.1 (F1) — staff moved an unknown sender's thread from the
+// receiving studio to a number-less sibling (Move to studio). The next inbound
+// must land in THAT thread, not open a fresh one back at the receiving studio.
+describe('POST /api/webhooks/whatsapp — a thread moved to a number-less studio stays put (F1)', () => {
+  const isMovedLookup = (ops) => ops.some(([m]) => m === 'select') && ops.some(([m, col]) => m === 'eq' && col === 'whatsapp_number_id')
+  const HATCH_THREAD = { id: 'conv-hatch', contact_id: null, ctwa_clid: null, location_id: 'loc-hatch' }
+
+  function movedDb({ moved = { data: [HATCH_THREAD], error: null }, numbers = { data: [], error: null } } = {}) {
+    return makeDb({
+      contacts: { data: [], error: null },
+      locations: (ops, terminal) => (terminal === 'maybeSingle'
+        ? { data: { id: 'loc-still', organization_id: 'org-1' }, error: null }
+        : { data: [{ id: 'loc-hatch' }, { id: 'loc-other' }], error: null }),
+      whatsapp_conversations: (ops, terminal) => {
+        if (ops.some(([m]) => m === 'insert')) return { data: { id: 'conv-new' }, error: null }
+        if (isMovedLookup(ops)) return moved
+        if (terminal === 'single') return { data: null, error: null }
+        return { data: null, error: null }
+      },
+      whatsapp_numbers: numbers,
+      whatsapp_messages: (ops) => (ops.some(([m]) => m === 'insert') ? { data: { id: 'msg-row-1' }, error: null } : { data: null, error: null }),
+    })
+  }
+  const convInserts = () => db.calls.filter((c) => c.table === 'whatsapp_conversations' && c.ops.some(([m]) => m === 'insert'))
+  const msgInsert = () => db.calls.find((c) => c.table === 'whatsapp_messages' && c.ops.some(([m]) => m === 'insert'))
+
+  it('an unknown sender whose thread was moved to Hatch (stamped with this number) is filed into that Hatch thread, no new thread', async () => {
+    db = movedDb()
+    createServerClient.mockReturnValue(db)
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    const res = await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(res.status).toBe(200)
+    const lookup = db.calls.find((c) => c.table === 'whatsapp_conversations' && isMovedLookup(c.ops))
+    expect(lookup.ops).toContainEqual(['eq', 'wa_phone', '353871234567'])
+    expect(lookup.ops).toContainEqual(['eq', 'whatsapp_number_id', 'wn-1'])
+    expect(lookup.ops).toContainEqual(['in', 'location_id', ['loc-still', 'loc-hatch', 'loc-other']])
+    const numbersRead = db.calls.find((c) => c.table === 'whatsapp_numbers')
+    expect(numbersRead.ops).toContainEqual(['in', 'location_id', ['loc-hatch']])
+    expect(numbersRead.ops).toContainEqual(['eq', 'is_active', true])
+    expect(convInserts()).toEqual([])
+    expect(msgInsert().ops.find(([m]) => m === 'insert')[1]).toMatchObject({ conversation_id: 'conv-hatch', location_id: 'loc-hatch' })
+    expect(maybeAutoReply).toHaveBeenCalledWith(db, expect.objectContaining({ conversationId: 'conv-hatch', locationId: 'loc-hatch' }))
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
+  })
+
+  it('Flows still act for the receiving studio when the thread was moved to a number-less studio', async () => {
+    db = movedDb()
+    createServerClient.mockReturnValue(db)
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    await POST(reqFor(inboundFlowReply(REGISTERED_PNI)))
+    expect(handleFlowCompletion).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-still' }))
+    expect(convInserts()).toEqual([])
+  })
+
+  it('a stamped thread at a studio that HAS its own number is ignored: a new thread opens at the receiving studio', async () => {
+    db = movedDb({
+      moved: { data: [{ ...HATCH_THREAD, id: 'conv-other', location_id: 'loc-other' }], error: null },
+      numbers: { data: [{ location_id: 'loc-other' }], error: null },
+    })
+    createServerClient.mockReturnValue(db)
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(convInserts()).toHaveLength(1)
+    expect(convInserts()[0].ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-still' })
+    expect(msgInsert().ops.find(([m]) => m === 'insert')[1]).toMatchObject({ conversation_id: 'conv-new', location_id: 'loc-still' })
+  })
+
+  it('two candidate threads (ambiguous) → a new thread opens at the receiving studio', async () => {
+    db = movedDb({ moved: { data: [HATCH_THREAD, { ...HATCH_THREAD, id: 'conv-hatch-2', location_id: 'loc-other' }], error: null } })
+    createServerClient.mockReturnValue(db)
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(convInserts()).toHaveLength(1)
+    expect(convInserts()[0].ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-still' })
+  })
+
+  it('a failed moved-thread read is logged and the message still lands in a new thread at the receiving studio', async () => {
+    db = movedDb({ moved: { data: null, error: { message: 'boom' } } })
+    createServerClient.mockReturnValue(db)
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    const res = await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(res.status).toBe(200)
+    expect(convInserts()).toHaveLength(1)
+    expect(convInserts()[0].ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-still' })
+    expect(msgInsert()).toBeTruthy()
+    expect(errSpy).toHaveBeenCalledWith(
+      '[wa-webhook] moved-thread lookup failed (a new thread opens at loc-still):',
+      'boom',
     )
   })
 })

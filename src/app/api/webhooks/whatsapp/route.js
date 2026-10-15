@@ -219,6 +219,41 @@ export async function POST(request) {
   return NextResponse.json({ success: true })
 }
 
+// WAHOMESTUDIO.1 (F1) — the thread staff moved this sender to: stamped with
+// the receiving number, at another studio of the receiving studio's
+// organisation (never `excludeLocationId`), where that studio has no active
+// WhatsApp number of its own. Exactly one such thread, or null. A move to a
+// studio WITH its own number is not followed here: that thread replies from
+// its own number, so the customer writing to this one starts a thread here.
+// A failed read is logged and answers null — a new thread here is answerable;
+// a lost message is not.
+async function findMovedNumberlessThread(db, { senderPhone, receivingNumberId, orgLocIds, excludeLocationId }) {
+  if (!receivingNumberId) return null
+  try {
+    const { data: rows, error } = await db.from('whatsapp_conversations')
+      .select('id, contact_id, ctwa_clid, location_id')
+      .eq('wa_phone', senderPhone)
+      .eq('whatsapp_number_id', receivingNumberId)
+      .in('location_id', scopeFor(orgLocIds))
+      .limit(20)
+    if (error) throw error
+    const candidates = (rows || []).filter((r) => r.location_id && r.location_id !== excludeLocationId)
+    if (candidates.length === 0) return null
+
+    const { data: numbered, error: numErr } = await db.from('whatsapp_numbers')
+      .select('location_id')
+      .in('location_id', [...new Set(candidates.map((r) => r.location_id))])
+      .eq('is_active', true)
+    if (numErr) throw numErr
+    const withNumber = new Set((numbered || []).map((n) => n.location_id))
+    const numberless = candidates.filter((r) => !withNumber.has(r.location_id))
+    return numberless.length === 1 ? numberless[0] : null
+  } catch (e) {
+    console.error(`[wa-webhook] moved-thread lookup failed (a new thread opens at ${excludeLocationId}):`, e?.message || String(e))
+    return null
+  }
+}
+
 // `defaultLocationId` is the location owning the recipient phone_number_id —
 // already resolved (and unroutable traffic dropped) by the POST loop.
 // `receivingNumberId` is that whatsapp_numbers row (WAREPLYNUMBER.1).
@@ -295,7 +330,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // Hatch inbox, Mia judged on Hatch's settings) and replies go through the
   // receiving number stamped below (getConversationNumberConfig, R4). This
   // replaces WANUMBERLESS.1, which filed such threads at the receiving studio.
-  const locationId = contact?.location_id || defaultLocationId
+  let locationId = contact?.location_id || defaultLocationId
 
   // R3 — stamp the receiving number when the thread is at its studio (as
   // ever), or when the thread's studio has none of its own. A failed lookup
@@ -315,15 +350,30 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // Glofox) the customer is talking to. Equals the thread's studio except for a
   // thread filed at a number-less home studio, which talks through the
   // receiving number's studio.
-  const actingLocationId = (locationId !== defaultLocationId && stampReceivingNumber) ? defaultLocationId : locationId
+  let actingLocationId = (locationId !== defaultLocationId && stampReceivingNumber) ? defaultLocationId : locationId
 
   // Get or create conversation (keyed by phone number, NOT by contact)
-  const { data: existingConv } = await db.from('whatsapp_conversations')
+  let { data: existingConv } = await db.from('whatsapp_conversations')
     .select('id, contact_id, ctwa_clid')
     .eq('wa_phone', senderPhone)
     .eq('location_id', locationId)
     .limit(1)
     .single()
+
+  // WAHOMESTUDIO.1 (F1) — no thread here, but staff may have moved this
+  // sender's thread to a number-less studio of the organisation (Move to
+  // studio). That thread keeps replying through this number, so the message
+  // follows it: messages, Mia, push and stamp all go to its studio, while
+  // Flows, ads and Glofox still act for the receiving studio.
+  if (!existingConv) {
+    const moved = await findMovedNumberlessThread(db, { senderPhone, receivingNumberId, orgLocIds, excludeLocationId: locationId })
+    if (moved) {
+      existingConv = moved
+      locationId = moved.location_id
+      stampReceivingNumber = true
+      actingLocationId = defaultLocationId
+    }
+  }
 
   let conversationId
   if (existingConv) {
