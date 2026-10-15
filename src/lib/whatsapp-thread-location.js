@@ -39,3 +39,33 @@ export async function numberlessHomeStudio(db, contact, numberLocationId) {
     return null
   }
 }
+
+// WAHOMESTUDIO.1 (Task 4b) — the studios in `locationId`'s organisation (never
+// `locationId` itself) that have NO active whatsapp_numbers row. A template
+// sent from `locationId` into a thread filed at one of them carries that
+// sibling's location_id (the message follows its thread, mig 723), so the send
+// budget counts their outbound template rows against `locationId`.
+// Unlike numberlessHomeStudio this THROWS on a failed read: the budget fails
+// closed ("WhatsApp budget usage query failed"), and a smaller sibling set would
+// free up phantom headroom. An unknown studio or one with no organisation has no
+// siblings: [].
+export async function numberlessSiblingLocationIds(db, locationId) {
+  if (!locationId) return []
+  const { data: self, error: selfErr } = await db.from('locations')
+    .select('organization_id').eq('id', locationId).maybeSingle()
+  if (selfErr) throw new Error(`WhatsApp sibling studio lookup failed: ${selfErr.message}`)
+  const orgId = self?.organization_id
+  if (!orgId) return []
+
+  const { data: siblings, error: sibErr } = await db.from('locations')
+    .select('id').eq('organization_id', orgId).neq('id', locationId)
+  if (sibErr) throw new Error(`WhatsApp sibling studio lookup failed: ${sibErr.message}`)
+  const ids = (siblings || []).map((l) => l.id)
+  if (ids.length === 0) return []
+
+  const { data: numbered, error: numErr } = await db.from('whatsapp_numbers')
+    .select('location_id').in('location_id', ids).eq('is_active', true)
+  if (numErr) throw new Error(`WhatsApp sibling studio lookup failed: ${numErr.message}`)
+  const withNumber = new Set((numbered || []).map((n) => n.location_id))
+  return ids.filter((id) => !withNumber.has(id))
+}

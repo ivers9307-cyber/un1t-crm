@@ -74,20 +74,51 @@ describe('effectiveTickHeadroom', () => {
 })
 
 // Fake db mimicking the paginated usage query chain:
-// .from('whatsapp_messages').select(...).eq×3.gt(...).order(...).range(s,e)
-function usageDb(rows, calls = {}) {
+// .from('whatsapp_messages').select(...).in(location_id).eq×2.gt(...).order(...).range(s,e)
+// plus the sibling lookup (locations / whatsapp_numbers) that feeds the .in().
+// The studio under test is 'loc1' in organisation 'org1'; `world` adds more.
+function usageDb(rows, calls = {}, world = {}) {
   calls.filters = []
+  const tables = {
+    locations: [{ id: 'loc1', organization_id: 'org1' }, ...(world.locations || [])],
+    whatsapp_numbers: world.numbers || [],
+  }
+  const lookup = (table) => {
+    const filters = []
+    if (world.fault === table) {
+      const failed = { select: () => failed, eq: () => failed, neq: () => failed, in: () => failed,
+        maybeSingle: async () => ({ data: null, error: { message: 'boom' } }),
+        then: (res, rej) => Promise.resolve({ data: null, error: { message: 'boom' } }).then(res, rej) }
+      return failed
+    }
+    const b = {
+      select: () => b,
+      eq(c, v) { filters.push((r) => r[c] === v); return b },
+      neq(c, v) { filters.push((r) => r[c] !== v); return b },
+      in(c, vals) { filters.push((r) => vals.includes(r[c])); return b },
+      limit: () => b,
+      maybeSingle: async () => ({ data: (tables[table] || []).filter((r) => filters.every((f) => f(r)))[0] ?? null, error: null }),
+      then: (res, rej) => Promise.resolve({ data: (tables[table] || []).filter((r) => filters.every((f) => f(r))), error: null }).then(res, rej),
+    }
+    return b
+  }
   return {
     from: (table) => {
+      if (table !== 'whatsapp_messages') return lookup(table)
       calls.table = table
       return {
         select: () => {
           const chain = {
             eq(col, val) { calls.filters.push(['eq', col, val]); return chain },
+            in(col, vals) { calls.filters.push(['in', col, vals]); return chain },
             gt(col, val) { calls.filters.push(['gt', col, val]); return chain },
             not(col, op, val) { calls.filters.push(['not', col, op, val]); return chain },
             order() { return chain },
-            range: (s, e) => Promise.resolve({ data: rows.slice(s, e + 1), error: null }),
+            range: (s, e) => Promise.resolve({
+              data: rows.filter((r) => !r.location_id || calls.filters.some(([op, c, v]) => op === 'in' && c === 'location_id' && v.includes(r.location_id)))
+                .slice(s, e + 1),
+              error: null,
+            }),
           }
           return chain
         },
@@ -115,7 +146,7 @@ describe('countBusinessInitiatedContactsLast24h', () => {
     await countBusinessInitiatedContactsLast24h(db, 'loc1')
     expect(calls.table).toBe('whatsapp_messages')
     expect(calls.filters).toEqual(expect.arrayContaining([
-      ['eq', 'location_id', 'loc1'],
+      ['in', 'location_id', ['loc1']],
       ['eq', 'direction', 'outbound'],
       ['eq', 'message_type', 'template'],
     ]))
@@ -133,6 +164,36 @@ describe('countBusinessInitiatedContactsLast24h', () => {
     const db = usageDb([], calls)
     await countBusinessInitiatedContactsLast24h(db, 'loc1')
     expect(calls.filters).toContainEqual(['not', 'source', 'in', '(app_echo,history_sync)'])
+  })
+  // WAHOMESTUDIO.1 — a template sent from studio S into a thread filed at a
+  // number-less same-org sibling H carries location_id = H (the trigger in
+  // mig 723), so S's tier budget must count H's rows too.
+  it('counts a template row at a number-less same-organisation sibling against the sending studio', async () => {
+    const calls = {}
+    const world = {
+      locations: [{ id: 'hatch', organization_id: 'org1' }, { id: 'elsewhere', organization_id: 'org2' }],
+      numbers: [],
+    }
+    const db = usageDb([
+      { id: 1, contact_id: 'a', location_id: 'loc1' },
+      { id: 2, contact_id: 'b', location_id: 'hatch' },
+      { id: 3, contact_id: 'c', location_id: 'elsewhere' },
+    ], calls, world)
+    expect(await countBusinessInitiatedContactsLast24h(db, 'loc1')).toBe(2)
+    expect(calls.filters).toContainEqual(['in', 'location_id', ['loc1', 'hatch']])
+  })
+  it('does not count a sibling that has its own number', async () => {
+    const calls = {}
+    const world = { locations: [{ id: 'hatch', organization_id: 'org1' }], numbers: [{ id: 'n', location_id: 'hatch', is_active: true }] }
+    const db = usageDb([{ id: 1, contact_id: 'a', location_id: 'loc1' }, { id: 2, contact_id: 'b', location_id: 'hatch' }], calls, world)
+    expect(await countBusinessInitiatedContactsLast24h(db, 'loc1')).toBe(1)
+    expect(calls.filters).toContainEqual(['in', 'location_id', ['loc1']])
+  })
+  it('fails closed when the sibling lookup fails (never counts a smaller set)', async () => {
+    for (const table of ['locations', 'whatsapp_numbers']) {
+      const db = usageDb([], {}, { fault: table, locations: [{ id: 'hatch', organization_id: 'org1' }] })
+      await expect(countBusinessInitiatedContactsLast24h(db, 'loc1')).rejects.toThrow(/boom/)
+    }
   })
   it('paginates past the 1,000-row PostgREST cap', async () => {
     const rows = []

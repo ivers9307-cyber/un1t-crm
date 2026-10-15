@@ -185,6 +185,59 @@ describe('723 move_whatsapp_conversation', () => {
   })
 })
 
+describe('723 wa_message_location_from_conversation (a message row belongs to its thread’s studio)', () => {
+  const insertMsg = (db, conv, loc, body = 'x') =>
+    one(db, `INSERT INTO public.whatsapp_messages (conversation_id, location_id, body) VALUES (${conv ? `'${conv}'` : 'NULL'}, ${loc ? `'${loc}'` : 'NULL'}, '${body}')
+      RETURNING location_id, conversation_id`)
+
+  it('a message inserted into a Hatch-filed thread with the sending studio’s location_id lands at Hatch', async () => {
+    const db = await boot(`
+      INSERT INTO public.whatsapp_conversations (id, location_id, contact_id, wa_phone) VALUES ('${C1}', '${HATCH}', '${K_HATCH}', '15555550100');`)
+    expect(await insertMsg(db, C1, STILL)).toEqual({ location_id: HATCH, conversation_id: C1 })
+    expect(await insertMsg(db, C1, null)).toEqual({ location_id: HATCH, conversation_id: C1 })
+  })
+
+  it('a message already carrying its thread’s studio is unchanged', async () => {
+    const db = await boot(`
+      INSERT INTO public.whatsapp_conversations (id, location_id, contact_id, wa_phone) VALUES ('${C1}', '${STILL}', '${K_STILL}', '15555550100');`)
+    expect(await insertMsg(db, C1, STILL)).toEqual({ location_id: STILL, conversation_id: C1 })
+  })
+
+  it('a message with no conversation keeps its location_id', async () => {
+    const db = await boot()
+    expect(await insertMsg(db, null, STILL)).toEqual({ location_id: STILL, conversation_id: null })
+    expect(await insertMsg(db, null, null)).toEqual({ location_id: null, conversation_id: null })
+  })
+
+  it('only INSERT is covered: an UPDATE of location_id is left alone (the move function’s job)', async () => {
+    const db = await boot(`
+      INSERT INTO public.whatsapp_conversations (id, location_id, contact_id, wa_phone) VALUES ('${C1}', '${HATCH}', '${K_HATCH}', '15555550100');`)
+    await insertMsg(db, C1, STILL)
+    await db.exec(`UPDATE public.whatsapp_messages SET location_id = '${STILL}'`)
+    expect(await one(db, `SELECT location_id FROM whatsapp_messages`)).toEqual({ location_id: STILL })
+  })
+
+  it('is a BEFORE INSERT row trigger, SECURITY INVOKER with a pinned search_path, and re-running the migration passes', async () => {
+    const db = await boot()
+    await db.exec(MIG_723)
+    const t = await one(db, `SELECT count(*)::int AS n, bool_or(tgtype & 2 = 2) AS before_, bool_or(tgtype & 4 = 4) AS ins, bool_or(tgtype & 16 = 0) AS no_update, bool_or(tgtype & 1 = 1) AS per_row
+      FROM pg_trigger WHERE tgname = 'trg_wa_message_location_from_conversation' AND NOT tgisinternal`)
+    expect(t).toEqual({ n: 1, before_: true, ins: true, no_update: true, per_row: true })
+    const f = await one(db, `SELECT prosecdef, proconfig::text AS cfg, prorettype::regtype::text AS ret FROM pg_proc WHERE proname = 'wa_message_location_from_conversation'`)
+    expect(f.prosecdef).toBe(false)
+    expect(f.cfg).toContain('search_path=public, pg_temp')
+    expect(f.ret).toBe('trigger')
+  })
+
+  it('the function is not executable by PUBLIC, anon or authenticated', async () => {
+    const db = await boot()
+    const acl = await one(db, `SELECT proacl::text AS acl FROM pg_proc WHERE proname = 'wa_message_location_from_conversation'`)
+    expect(acl.acl).not.toBeNull()
+    expect(acl.acl).not.toMatch(/(^|[{,])=X/)
+    expect(acl.acl).not.toMatch(/(anon|authenticated)=X/)
+  })
+})
+
 describe('724 backfill', () => {
   it('moves only threads of contacts whose home is a number-less same-org sibling; a second run is a no-op', async () => {
     const db = await boot(HATCH_THREAD_AT_STILL + `

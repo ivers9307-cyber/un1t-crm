@@ -26,6 +26,23 @@
 --     the number it was talking through (getConversationNumberConfig, R4).
 -- SECURITY INVOKER: only service_role may execute it (mig 667 rule), and
 -- service_role bypasses RLS.
+--
+-- Also here (WAHOMESTUDIO.1, Task 4b): a message row belongs to its thread's
+-- studio. After the code ships, a broadcast/sequence/automation sender inserts
+-- whatsapp_messages.location_id = the SENDING studio into a thread that is now
+-- filed at the customer's HOME studio. RLS wa_msg_select (mig 691) reads the
+-- MESSAGE's location_id, so a Hatch-only phone user or realtime listener would
+-- not see those rows, and the move function above re-files message
+-- location_id to the thread's studio: two inconsistent models. One enforcement
+-- point, no caller changes: a BEFORE INSERT trigger copies the conversation's
+-- location_id onto the message. It must be BEFORE: the AFTER INSERT timeline
+-- trigger (log_wa_message_to_timeline) copies the message's location_id into
+-- activities. INSERT only: an UPDATE of location_id is the move function's
+-- job. Inert today (live check 15 Oct 2026: 0 of 2,962 messages disagree with
+-- their conversation's location_id). A message with no conversation, or whose
+-- conversation has no location, keeps what the caller sent.
+-- A trigger function needs no EXECUTE grant (CLAUDE.md, mig 667), so none is
+-- given; the REVOKE states that decision for tests/function-execute-guard.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
@@ -140,5 +157,31 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION public.move_whatsapp_conversation(uuid, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.move_whatsapp_conversation(uuid, uuid) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.wa_message_location_from_conversation()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_location uuid;
+BEGIN
+  IF NEW.conversation_id IS NOT NULL THEN
+    SELECT c.location_id INTO v_location FROM public.whatsapp_conversations c WHERE c.id = NEW.conversation_id;
+    IF v_location IS NOT NULL THEN
+      NEW.location_id := v_location;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.wa_message_location_from_conversation() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_wa_message_location_from_conversation ON public.whatsapp_messages;
+CREATE TRIGGER trg_wa_message_location_from_conversation
+  BEFORE INSERT ON public.whatsapp_messages
+  FOR EACH ROW EXECUTE FUNCTION public.wa_message_location_from_conversation();
 
 COMMIT;
