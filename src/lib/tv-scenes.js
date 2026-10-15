@@ -12,10 +12,12 @@
 //
 // The operator scene has two questions, and this module answers both so no
 // consumer re-derives either: whether the scene appears at all
-// (operatorRenderable), and which branch it draws (operatorImageRef). For the
-// image branch, operatorImageRef returns the trimmed source_ref, which the
-// payload builder has already resolved to a public URL for storage rows. So it
-// is the string to use as src, and callers must not re-resolve it.
+// (operatorRenderable), and which branch it draws (operatorImageRef, else
+// operatorLabel). For the image branch, operatorImageRef returns the trimmed
+// source_ref, which the payload builder has already resolved to a public URL
+// for storage rows. So it is the string to use as src, and callers must not
+// re-resolve it. For the label branch, operatorLabel returns the trimmed label,
+// so a whitespace-only label is "no label" in the scene exactly as it is here.
 
 /** How long one scene holds the screen. Richard's call, 2026-10-15. */
 export const SCENE_DWELL_MS = 30000
@@ -47,6 +49,22 @@ export function operatorImageRef(operator) {
 }
 
 /**
+ * The label the scene draws when it has no image: the trimmed label, or null
+ * when it is missing, not a string, or only whitespace. Read whatever the
+ * source_type, because the scene picks its BRANCH with operatorImageRef and
+ * only falls back to this when that returns null. The same rule
+ * operatorRenderable counts, exported so the scene consumes it instead of
+ * restating "non-blank" (the drift that blanked the stage three times).
+ *
+ * @param {object|null|undefined} operator  the payload's `idle.operator` row
+ * @returns {string|null}
+ */
+export function operatorLabel(operator) {
+  const label = operator?.label
+  return present(label) ? label.trim() : null
+}
+
+/**
  * Whether the operator scene appears at all. It appears when it can draw
  * something: an image (operatorImageRef is non-null) or a non-blank label.
  * template_values alone is not renderable yet, so it does not count. This
@@ -58,7 +76,7 @@ export function operatorImageRef(operator) {
  * @returns {boolean}
  */
 export function operatorRenderable(operator) {
-  return operatorImageRef(operator) !== null || present(operator?.label)
+  return operatorImageRef(operator) !== null || operatorLabel(operator) !== null
 }
 
 const HAS_CONTENT = {

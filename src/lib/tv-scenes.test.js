@@ -7,6 +7,7 @@ import {
   sceneAt,
   operatorRenderable,
   operatorImageRef,
+  operatorLabel,
 } from './tv-scenes.js'
 
 const full = {
@@ -81,6 +82,31 @@ describe('operatorImageRef', () => {
     const op = { source_type: 'storage', source_ref: '   ', label: 'Offer', template_values: null }
     expect(operatorImageRef(op)).toBeNull()
     expect(operatorRenderable(op)).toBe(true)
+  })
+})
+
+describe('operatorLabel', () => {
+  it('returns the label trimmed', () => {
+    expect(operatorLabel({ source_type: 'template', source_ref: null, label: '  Open day  ', template_values: null })).toBe('Open day')
+  })
+
+  it('is null for a blank, whitespace, missing or non-string label', () => {
+    for (const label of ['', '   ', '\n\t', null, undefined, 7, {}]) {
+      expect(operatorLabel({ source_type: 'template', source_ref: null, label, template_values: null }), String(label)).toBeNull()
+    }
+  })
+
+  it('is null for a null, undefined or non-object operator', () => {
+    expect(operatorLabel(null)).toBeNull()
+    expect(operatorLabel(undefined)).toBeNull()
+    expect(operatorLabel('x')).toBeNull()
+  })
+
+  // The label is read whatever the source_type: the scene decides the BRANCH
+  // with operatorImageRef, and falls back to this when it returns null.
+  it('does not depend on source_type', () => {
+    expect(operatorLabel({ source_type: 'storage', source_ref: 'a.png', label: 'Offer' })).toBe('Offer')
+    expect(operatorLabel({ label: 'Offer' })).toBe('Offer')
   })
 })
 
@@ -178,6 +204,9 @@ describe('eligibility and renderability agree', () => {
     for (const [name, operator] of Object.entries(OPERATOR_MATRIX)) {
       const inScene = eligibleScenes({ up_next: [], earned: [], operator }).includes('operator')
       expect(inScene, name).toBe(operatorRenderable(operator))
+      // And the two things a scene can draw are exactly the two predicates it
+      // exposes, so a consumer that branches on them cannot draw a blank.
+      expect(inScene, name).toBe(operatorImageRef(operator) !== null || operatorLabel(operator) !== null)
       outcomes.add(inScene)
     }
     // The matrix must cover both outcomes, or the agreement check proves nothing.
