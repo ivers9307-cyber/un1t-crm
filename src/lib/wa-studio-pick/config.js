@@ -28,8 +28,19 @@ export async function readPickerConfig(db, receivingLocationId) {
       .select('id, name, organization_id, settings').eq('organization_id', home.organization_id).order('name')
     if (error) throw error
     const own = pickerOf(home)
-    const studios = (rows || [])
-      .filter((l) => pickerOf(l).listed === true)
+    const listed = (rows || []).filter((l) => pickerOf(l).listed === true)
+    // A sibling with its own WhatsApp number is only offered on that number: a
+    // thread moved to it here would be answered from this number, not its own.
+    const siblingIds = listed.map((l) => l.id).filter((id) => id !== receivingLocationId)
+    let numbered = new Set()
+    if (siblingIds.length) {
+      const { data: nums, error: numErr } = await db.from('whatsapp_numbers')
+        .select('location_id').in('location_id', siblingIds).eq('is_active', true)
+      if (numErr) throw numErr
+      numbered = new Set((nums || []).map((n) => n.location_id))
+    }
+    const studios = listed
+      .filter((l) => !numbered.has(l.id))
       .map((l) => ({
         id: l.id,
         name: l.name,

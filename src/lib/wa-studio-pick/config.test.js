@@ -10,14 +10,18 @@ const HATCH = { id: 'a2', name: 'UN1T Hatch Street', organization_id: ORG, setti
 const TEST = { id: 'a3', name: 'Test Studio', organization_id: ORG, settings: {} }
 const OTHER = { id: 'a9', name: 'Elsewhere', organization_id: 'd0000000-0000-4000-8000-000000000009', settings: { wa_studio_picker: { listed: true } } }
 
-function makeDb(rows, fault) {
+// `numbers` are whatsapp_numbers rows; `numbersFault` fails only that read.
+function makeDb(rows, fault, { numbers = [], numbersFault = null } = {}) {
   return {
-    from: () => {
+    from: (table) => {
       const filters = []
-      const run = () => (fault ? { data: null, error: fault } : { data: rows.filter((r) => filters.every((f) => f(r))), error: null })
+      const source = table === 'whatsapp_numbers' ? numbers : rows
+      const err = table === 'whatsapp_numbers' ? numbersFault : fault
+      const run = () => (err ? { data: null, error: err } : { data: source.filter((r) => filters.every((f) => f(r))), error: null })
       const b = {
         select: () => b, order: () => b,
         eq: (c, v) => { filters.push((r) => r[c] === v); return b },
+        in: (c, vs) => { filters.push((r) => vs.includes(r[c])); return b },
         maybeSingle: async () => { const o = run(); return o.error ? o : { data: o.data[0] ?? null, error: null } },
         then: (res, rej) => Promise.resolve(run()).then(res, rej),
       }
@@ -37,6 +41,23 @@ describe('readPickerConfig', () => {
   it('disabled by default; a failed read is null and logged', async () => {
     expect((await readPickerConfig(makeDb([HATCH, TEST]), 'a2')).enabled).toBe(false)
     expect(await readPickerConfig(makeDb([], { message: 'boom' }), 'a1')).toBeNull()
+    expect(logWarn).toHaveBeenCalled()
+  })
+})
+
+describe('readPickerConfig — studios with their own number (F2)', () => {
+  const HATCH_NO = { location_id: 'a2', is_active: true }
+  it('a listed sibling with an active number is not offered; the receiving studio (with its number) stays', async () => {
+    const cfg = await readPickerConfig(makeDb([STILL, HATCH, TEST], null, { numbers: [{ location_id: 'a1', is_active: true }, HATCH_NO] }), 'a1')
+    expect(cfg.studios.map((s) => s.id)).toEqual(['a1'])
+  })
+  it('an inactive number does not exclude the sibling', async () => {
+    const cfg = await readPickerConfig(makeDb([STILL, HATCH], null, { numbers: [{ location_id: 'a2', is_active: false }] }), 'a1')
+    expect(cfg.studios.map((s) => s.id).sort()).toEqual(['a1', 'a2'])
+  })
+  it('the numbers read failing → null, logged (picker skipped)', async () => {
+    logWarn.mockClear()
+    expect(await readPickerConfig(makeDb([STILL, HATCH], null, { numbersFault: { message: 'numbers down' } }), 'a1')).toBeNull()
     expect(logWarn).toHaveBeenCalled()
   })
 })

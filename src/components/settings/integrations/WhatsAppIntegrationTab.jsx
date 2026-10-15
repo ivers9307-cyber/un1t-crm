@@ -351,6 +351,7 @@ function StudioPickerCard({ location, canEdit }) {
             />
             Show this studio in the WhatsApp studio picker
           </label>
+          <p className="text-[11px] text-un1t-subtle">Studios with their own WhatsApp number are only offered on their own number.</p>
           <Row label={`Button label (${PICKER_LABEL_MAX} characters)`}>
             <input
               disabled={!canEdit}

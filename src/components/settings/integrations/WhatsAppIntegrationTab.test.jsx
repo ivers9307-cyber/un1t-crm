@@ -265,6 +265,14 @@ describe('WhatsAppIntegrationTab — Studio picker card (WASTUDIOPICK.1)', () =>
     expect(question.getAttribute('maxlength')).toBe('1024')
   })
 
+  it('says a studio with its own number is only offered on that number (F2)', async () => {
+    mockPicker(PICKER())
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    await screen.findByLabelText('Show this studio in the WhatsApp studio picker')
+    const hint = screen.getByText('Studios with their own WhatsApp number are only offered on their own number.')
+    expect(hint.className).toContain('text-un1t-subtle')
+  })
+
   it('hides the question controls when the studio has no number, and saves without them', async () => {
     mockPicker(PICKER({ has_number: false, enabled: false }))
     render(<WhatsAppIntegrationTab location={LOC} canEdit />)
