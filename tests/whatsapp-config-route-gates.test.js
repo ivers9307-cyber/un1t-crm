@@ -229,6 +229,7 @@ export const EXPECTED = {
   'POST whatsapp/conversations/[id]/add-contact/route.js': ['web-inbox-at-location', 'INBOXWEBONLY3.1: links a thread to a contact; web only, so the WEB key at the thread\'s studio.'],
   'PATCH whatsapp/conversations/[id]/agent/route.js': ['web-inbox-at-location', 'INBOXWEBONLY3.1: Mia pause / take-over; web only, so the WEB key at the thread\'s studio.'],
   'POST whatsapp/conversations/[id]/block/route.js': ['inbox-at-location', 'Blocks a sender.'],
+  'POST whatsapp/conversations/[id]/move/route.js': ['inbox-at-location', 'Moves a thread to another studio of the same organisation (WAHOMESTUDIO.1); the target studio is judged by the same pair.'],
   'POST whatsapp/conversations/[id]/react/route.js': ['inbox-at-location', 'Reacts to a message.'],
   'POST whatsapp/conversations/[id]/send/route.js': ['inbox-at-location', 'Sends a text or an approved template in the thread (WATPLSEND.1: template rows judged, Flow token minted); membership at the thread\'s location, then the whatsapp permission there.'],
   'POST whatsapp/conversations/[id]/send-carousel/route.js': ['inbox-at-location', 'Sends a card set.'],

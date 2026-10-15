@@ -116,6 +116,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   // No dropdown/menu primitive exists yet in src/components/ui, so this is a
   // minimal click-toggled popover (ref pattern mirrors PersonActionBar.jsx).
   const [showMoreMenu, setShowMoreMenu] = useState(false)
+  // WAHOMESTUDIO.1 (R7) — studios this thread can move to (null = not loaded
+  // for the open thread; reset whenever the selection changes).
+  const [moveTargets, setMoveTargets] = useState(null)
   const moreButtonRef = useRef(null)
   const moreMenuRef = useRef(null)
   useEffect(() => {
@@ -245,6 +248,47 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     } catch { /* leave state as-is */ }
   }
 
+  // WAHOMESTUDIO.1 (R7) — "Move to <studio>": re-file the thread at another
+  // studio of the same organisation. The server decides who may; this only
+  // lists what GET /move offered.
+  async function loadMoveTargets(conv) {
+    try {
+      const res = await fetch(`/api/whatsapp/conversations/${conv.id}/move`)
+      const j = await res.json().catch(() => ({}))
+      // The thread changed while this was in flight: drop the answer.
+      if (selectedIdRef.current !== conv.id) return
+      setMoveTargets(j.success ? (j.data?.targets || []) : [])
+    } catch {
+      if (selectedIdRef.current === conv.id) setMoveTargets([])
+    }
+  }
+
+  async function moveTo(conv, target) {
+    if (!window.confirm(`Move this conversation to ${target.name}? It will leave this inbox.`)) return
+    try {
+      const res = await fetch(`/api/whatsapp/conversations/${conv.id}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: target.id }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!j.success) { window.alert(j.error || 'Move failed'); return }
+      setConversations(prev => prev.filter(c => c.id !== conv.id))
+      // Deliberately close the thread: it no longer belongs to this inbox.
+      // selectedId drives the pane, the poll and the realtime handler; a null
+      // thread is handled by the effects that read it (template restore,
+      // card-set, poll all guard on it).
+      if (selectedIdRef.current === conv.id) {
+        setSelectedId(null)
+        setConversation(null)
+        setMessages([])
+        setMoveTargets(null)
+      }
+    } catch {
+      window.alert('Move failed')
+    }
+  }
+
   const fetchTemplates = useCallback(async () => {
     try {
       const res = await fetch(`/api/whatsapp/templates?location_id=${locationId}&status=APPROVED`)
@@ -350,6 +394,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   useEffect(() => {
     selectedIdRef.current = selectedId
     setApprovals([])
+    setMoveTargets(null)
     threadSigRef.current = ''   // force a fresh load when switching threads
     if (selectedId) {
       fetchMessages(selectedId)
@@ -413,6 +458,8 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     try {
       const res = await fetch(`/api/whatsapp/conversations/${convId}`)
       const data = await res.json()
+      // A closed (e.g. moved) or switched thread must not repopulate the pane.
+      if (convId !== selectedIdRef.current) return
       if (data.success) {
         const msgs = data.messages || []
         const sig = `${msgs.length}:${msgs[msgs.length - 1]?.id || ''}`
@@ -927,7 +974,11 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                     <button
                       ref={moreButtonRef}
                       type="button"
-                      onClick={() => setShowMoreMenu(v => !v)}
+                      onClick={() => {
+                        const opening = !showMoreMenu
+                        setShowMoreMenu(opening)
+                        if (opening && moveTargets === null) loadMoveTargets(conversation)
+                      }}
                       className="p-1.5 text-un1t-subtle hover:text-un1t-text rounded-md border border-un1t-border transition-colors"
                       aria-haspopup="menu"
                       aria-expanded={showMoreMenu}
@@ -952,6 +1003,17 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                         >
                           {conversation.is_blocked ? 'Blocked — unblock' : 'Block'}
                         </button>
+                        {(moveTargets || []).map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            role="menuitem"
+                            onClick={() => { setShowMoreMenu(false); moveTo(conversation, t) }}
+                            className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40 transition-colors"
+                          >
+                            Move to {t.name}
+                          </button>
+                        ))}
                         {isUnknown ? (canUseWebControls && (
                           <button
                             type="button"
