@@ -11,7 +11,8 @@
 // whatsapp_messages has no metadata column, so the machine value (payload /
 // id) is kept in the body, the way location and shared-contact messages keep
 // theirs, but only when it says something the visible text does not: a
-// payload equal to the text, or one of Mia's own `opt_<n>` ids, adds nothing
+// payload equal to the text, one of Mia's own `opt_<n>` ids, or a studio
+// picker `studio:<id>` (WASTUDIOPICK.1), adds nothing
 // and would only clutter the inbox and Mia's history. Pure.
 
 // Mia's interactive option ids (buildInteractivePayload in whatsapp.js).
@@ -20,6 +21,10 @@ export function agentOptionId(index) {
 }
 
 const AGENT_OPTION_ID = /^opt_\d+$/
+// The studio picker's option ids (PICKER_ID_PREFIX in wa-studio-pick/config):
+// the resolver reads the id off the raw message, so the body needs only the title.
+const STUDIO_PICKER_ID = /^studio:/
+const isNoiseId = (id) => AGENT_OPTION_ID.test(id) || STUDIO_PICKER_ID.test(id)
 
 function clean(v) {
   return typeof v === 'string' ? v.trim() : ''
@@ -41,5 +46,5 @@ export function interactiveReplyBody(interactive) {
   const reply = interactive?.button_reply || interactive?.list_reply
   const title = clean(reply?.title)
   const id = clean(reply?.id)
-  return withValue(title, AGENT_OPTION_ID.test(id) ? '' : id, 'option id')
+  return withValue(title, isNoiseId(id) ? '' : id, 'option id')
 }
