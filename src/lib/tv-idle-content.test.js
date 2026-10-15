@@ -5,8 +5,15 @@
 // ignores `.is()` and `.gte()` would pass whether or not the query excluded a
 // cancelled or past class, which is theatre. A board that advertises a
 // cancelled class is a real-world failure, so those filters are asserted.
+//
+// A failed read logs (structurally) AND answers absent: the logger is mocked so
+// each failure test can assert both halves of that contract.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+
+import { logWarn } from '@/lib/log'
 import { buildIdleContent, EARNED_WINDOW_MS, EARNED_LIMIT, UP_NEXT_LIMIT } from './tv-idle-content.js'
 
 const ZONE = 'Europe/Dublin'
@@ -59,13 +66,41 @@ function dbWith({ occurrences = [], achievements = [], content = null, fail = {}
 
 const opts = (over = {}) => ({ locationId: LOC, displayId: 'd1', zone: ZONE, nowMs: NOW, ...over })
 
-beforeEach(() => { vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPA) })
+beforeEach(() => { vi.clearAllMocks(); vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPA) })
 afterEach(() => { vi.unstubAllEnvs() })
 
 describe('buildIdleContent — shape', () => {
   it('returns exactly up_next, earned and operator: no counts, no aggregates', async () => {
     const out = await buildIdleContent(dbWith(), opts())
     expect(Object.keys(out).sort()).toEqual(['earned', 'operator', 'up_next'])
+  })
+})
+
+describe('buildIdleContent — logging', () => {
+  it('logs nothing when every read succeeds, including "nothing pushed" and "no display"', async () => {
+    await buildIdleContent(dbWith({ occurrences: [{ name: 'A', program: null, starts_at: '2026-10-16T05:00:00Z' }] }), opts())
+    await buildIdleContent(dbWith(), opts({ displayId: null }))
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('logs each failed read once, naming the read, the location and the error', async () => {
+    const down = { from: () => { throw new Error('client down') } }
+    const out = await buildIdleContent(down, opts())
+    expect(out).toEqual({ up_next: [], earned: [], operator: null })
+    expect(logWarn).toHaveBeenCalledTimes(3)
+    const reads = logWarn.mock.calls.map(([, , meta]) => meta.read).sort()
+    expect(reads).toEqual(['earned', 'operator', 'up_next'])
+    for (const [module, , meta] of logWarn.mock.calls) {
+      expect(module).toBe('tv-idle')
+      expect(meta).toMatchObject({ locationId: LOC, err: expect.objectContaining({ message: 'client down' }) })
+    }
+  })
+
+  it('still answers absent when the logger itself throws', async () => {
+    logWarn.mockImplementation(() => { throw new Error('cannot serialise') })
+    const out = await buildIdleContent(dbWith({ fail: { occurrences: true, achievements: 'throw', content: true } }), opts())
+    expect(out).toEqual({ up_next: [], earned: [], operator: null })
+    logWarn.mockReset()
   })
 })
 
@@ -129,20 +164,27 @@ describe('buildIdleContent — up_next', () => {
     expect(out.up_next.map((o) => o.class_name)).toEqual(['Has time'])
   })
 
-  it('is empty, not an error, when the occurrence read fails', async () => {
+  it('is empty, not an error, and logs, when the occurrence read fails', async () => {
     const out = await buildIdleContent(dbWith({ fail: { occurrences: true } }), opts())
     expect(out.up_next).toEqual([])
+    expect(logWarn).toHaveBeenCalledWith('tv-idle', expect.any(String), expect.objectContaining({
+      read: 'up_next', locationId: LOC, err: expect.objectContaining({ message: 'boom' }),
+    }))
   })
 
-  it('is empty, not an error, when the occurrence read throws', async () => {
+  it('is empty, not an error, and logs, when the occurrence read throws', async () => {
     const out = await buildIdleContent(dbWith({ fail: { occurrences: 'throw' } }), opts())
     expect(out.up_next).toEqual([])
+    expect(logWarn).toHaveBeenCalledWith('tv-idle', expect.any(String), expect.objectContaining({
+      read: 'up_next', locationId: LOC, err: expect.objectContaining({ message: 'boom' }),
+    }))
   })
 })
 
 describe('buildIdleContent — earned', () => {
   const row = (over = {}) => ({
     earned_at: '2026-10-15T18:00:00Z',
+    metadata: {},
     achievement_rules: { name: '50 classes', tier: 4 },
     contacts: { name: 'Saoirse Murphy', location_id: LOC, hr_leaderboard_opt_out: false },
     ...over,
@@ -213,18 +255,61 @@ describe('buildIdleContent — earned', () => {
     expect(out.earned[0].display_name).toBe('Member0 S.')
   })
 
-  it('is empty, not an error, when the achievement read fails', async () => {
+  it('is empty, not an error, and logs, when the achievement read fails', async () => {
     const out = await buildIdleContent(dbWith({ fail: { achievements: true } }), opts())
     expect(out.earned).toEqual([])
+    expect(logWarn).toHaveBeenCalledWith('tv-idle', expect.any(String), expect.objectContaining({
+      read: 'earned', locationId: LOC, err: expect.objectContaining({ message: 'boom' }),
+    }))
   })
 
-  it('is empty, not an error, when the achievement read throws', async () => {
+  it('is empty, not an error, and logs, when the achievement read throws', async () => {
     const out = await buildIdleContent(dbWith({ fail: { achievements: 'throw' } }), opts())
     expect(out.earned).toEqual([])
+    expect(logWarn).toHaveBeenCalledWith('tv-idle', expect.any(String), expect.objectContaining({
+      read: 'earned', locationId: LOC, err: expect.objectContaining({ message: 'boom' }),
+    }))
+  })
+})
+
+// The admin backfill route (api/admin/achievements/[id]/backfill) upserts rows
+// with earned_at = now() and metadata.backfilled = true. Left in, months-old
+// milestones would read as "earned this week" on a public screen and, being
+// newest, fill both the 100-row window and the 5-row display.
+describe('buildIdleContent — earned: backfilled grants', () => {
+  const backfilled = (name) => ({
+    earned_at: '2026-10-16T03:59:00Z',
+    metadata: { backfilled: true },
+    achievement_rules: { name: '100 classes', tier: 4 },
+    contacts: { name, location_id: LOC, hr_leaderboard_opt_out: false },
+  })
+  const normal = (name) => ({
+    earned_at: '2026-10-15T18:00:00Z',
+    metadata: {},
+    achievement_rules: { name: '50 classes', tier: 3 },
+    contacts: { name, location_id: LOC, hr_leaderboard_opt_out: false },
   })
 
-  it('exports a 7-day window', () => {
-    expect(EARNED_WINDOW_MS).toBe(7 * 24 * 60 * 60 * 1000)
+  it('drops a backfilled grant in the window, and a normal one beside it still shows', async () => {
+    const out = await buildIdleContent(dbWith({ achievements: [backfilled('Old Milestone'), normal('Real Moment')] }), opts())
+    expect(out.earned).toEqual([
+      { display_name: 'Real M.', achievement: '50 classes', tier: 3, earned_at: '2026-10-15T18:00:00Z' },
+    ])
+  })
+
+  it('does not let backfilled grants use up the display limit', async () => {
+    const flood = Array.from({ length: EARNED_LIMIT + 3 }, (_, i) => backfilled(`Old${i} Person`))
+    const out = await buildIdleContent(dbWith({ achievements: [...flood, normal('Real Moment')] }), opts())
+    expect(out.earned.map((e) => e.display_name)).toEqual(['Real M.'])
+  })
+
+  // The row check alone would still let a flood of backfilled rows eat the
+  // 100-row read, so the query itself must leave them out.
+  it('asks the database to leave backfilled grants out, so they cannot fill the 100-row read', async () => {
+    const db = dbWith()
+    await buildIdleContent(db, opts())
+    expect(db.calls.contact_achievements).toContainEqual({ method: 'is', args: ['metadata->>backfilled', null] })
+    expect(db.calls.contact_achievements).toContainEqual({ method: 'limit', args: [100] })
   })
 })
 
@@ -290,14 +375,20 @@ describe('buildIdleContent — operator', () => {
     expect(db.calls.tv_content).toEqual([])
   })
 
-  it('is null, not an error, when the content read fails', async () => {
+  it('is null, not an error, and logs, when the content read fails', async () => {
     const out = await buildIdleContent(dbWith({ fail: { content: true } }), opts())
     expect(out.operator).toBeNull()
+    expect(logWarn).toHaveBeenCalledWith('tv-idle', expect.any(String), expect.objectContaining({
+      read: 'operator', locationId: LOC, displayId: 'd1', err: expect.objectContaining({ message: 'boom' }),
+    }))
   })
 
-  it('is null, not an error, when the content read throws', async () => {
+  it('is null, not an error, and logs, when the content read throws', async () => {
     const out = await buildIdleContent(dbWith({ fail: { content: 'throw' } }), opts())
     expect(out.operator).toBeNull()
+    expect(logWarn).toHaveBeenCalledWith('tv-idle', expect.any(String), expect.objectContaining({
+      read: 'operator', locationId: LOC, displayId: 'd1', err: expect.objectContaining({ message: 'boom' }),
+    }))
   })
 })
 

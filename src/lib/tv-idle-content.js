@@ -6,8 +6,25 @@
 // floor is not. Nothing here may return an aggregate COUNT — individual
 // member moments only (see the spec's constraint 1). Class entries carry a
 // time and a name, never capacity or a booked count.
+//
+// Failing to absent is not failing silently. A phantom column, an RLS change
+// or a PGRST201 would otherwise leave a scene blank for good with no signal
+// anywhere (the shape of the 24-day enrolment outage), so every failed read
+// logs once, structurally (read, location, error), and then answers absent.
 
 import { timeLabelIn } from '@/lib/location-time'
+import { logWarn } from '@/lib/log'
+
+const LOG_MODULE = 'tv-idle'
+
+/** One structured line per failed read. Never throws, never changes the answer. */
+function readFailed(read, ctx, err) {
+  try {
+    logWarn(LOG_MODULE, 'idle read failed; scene will be skipped', { read, ...ctx, err })
+  } catch {
+    // A logger that cannot serialise the error must not turn "absent" into a 500.
+  }
+}
 
 /** How far back "earned this week" looks. 65 rows / 61 people at Stillorgan. */
 export const EARNED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
@@ -59,7 +76,10 @@ async function readUpNext(db, { locationId, zone, nowMs }) {
       .gte('starts_at', new Date(nowMs).toISOString())
       .order('starts_at', { ascending: true })
       .limit(UP_NEXT_LIMIT)
-    if (error) return []
+    if (error) {
+      readFailed('up_next', { locationId }, error)
+      return []
+    }
     return (data || [])
       .map((o) => ({
         starts_at: o.starts_at,
@@ -70,31 +90,42 @@ async function readUpNext(db, { locationId, zone, nowMs }) {
       // A class with no readable time has nothing to show under "Up next".
       .filter((o) => o.starts_at_label)
       .slice(0, UP_NEXT_LIMIT)
-  } catch {
+  } catch (err) {
+    readFailed('up_next', { locationId }, err)
     return []
   }
 }
 
 async function readEarned(db, { locationId, nowMs }) {
   try {
-    // Why a 100-row pre-limit, then the studio filter in JS: contact_achievements
+    // Why the studio filter happens in JS over a 100-row window: contact_achievements
     // has no location_id of its own (it reaches a studio only through
-    // contacts.location_id), and a PostgREST filter on an embedded resource is a
-    // documented trap in this repo's CLAUDE.md (they silently return 0, no
-    // error, under count-only head:true selects). So we read the newest 100
-    // achievements in the window and keep this studio's. Starving the result
-    // needs 100 other-studio achievements in a week to push this studio's out,
-    // and one studio holds effectively all current achievements, so it is not
-    // reachable today. Revisit when a second studio earns them.
+    // contacts.location_id), so we read the newest 100 achievements in the
+    // window and keep this studio's. Starving the result needs 100 other-studio
+    // achievements in a week to push this studio's out, and one studio holds
+    // effectively all current achievements, so it is not reachable today.
+    // Revisit when a second studio earns them.
+    //
+    // Backfilled grants are excluded: the admin backfill route upserts rows with
+    // earned_at = now() and metadata.backfilled = true, so a backfill of months-old
+    // milestones would otherwise read as "earned this week" on a public screen,
+    // and, being newest, fill both this 100-row window and the 5-row display. The
+    // key is absent on every normal grant, so IS NULL keeps those. The row check
+    // below is the guard if the filter ever stops applying.
     const { data, error } = await db
       .from('contact_achievements')
-      .select('earned_at, achievement_rules!rule_id(name, tier), contacts!contact_id(name, location_id, hr_leaderboard_opt_out)')
+      .select('earned_at, metadata, achievement_rules!rule_id(name, tier), contacts!contact_id(name, location_id, hr_leaderboard_opt_out)')
       .gte('earned_at', new Date(nowMs - EARNED_WINDOW_MS).toISOString())
+      .is('metadata->>backfilled', null)
       .order('earned_at', { ascending: false })
       .limit(100)
-    if (error) return []
+    if (error) {
+      readFailed('earned', { locationId }, error)
+      return []
+    }
     const out = []
     for (const row of data || []) {
+      if (row?.metadata?.backfilled === true) continue
       const c = row?.contacts
       const r = row?.achievement_rules
       // A contact can be erased (CASCADE) or belong to another studio; a rule
@@ -113,12 +144,13 @@ async function readEarned(db, { locationId, nowMs }) {
       if (out.length >= EARNED_LIMIT) break
     }
     return out
-  } catch {
+  } catch (err) {
+    readFailed('earned', { locationId }, err)
     return []
   }
 }
 
-async function readOperator(db, { displayId }) {
+async function readOperator(db, { locationId, displayId }) {
   if (!displayId) return null
   try {
     const { data, error } = await db
@@ -126,14 +158,20 @@ async function readOperator(db, { displayId }) {
       .select('source_type, source_ref, label, template_values')
       .eq('tv_display_id', displayId)
       .maybeSingle()
-    if (error || !data) return null
+    if (error) {
+      readFailed('operator', { locationId, displayId }, error)
+      return null
+    }
+    // No row is the normal "nothing pushed" answer, not a failure.
+    if (!data) return null
     return {
       source_type: data.source_type,
       source_ref: resolveOperatorRef(data.source_type, data.source_ref),
       label: data.label ?? null,
       template_values: data.template_values ?? null,
     }
-  } catch {
+  } catch (err) {
+    readFailed('operator', { locationId, displayId }, err)
     return null
   }
 }
@@ -155,7 +193,7 @@ export async function buildIdleContent(db, { locationId, displayId = null, zone,
   const [up_next, earned, operator] = await Promise.all([
     readUpNext(db, { locationId, zone, nowMs }),
     readEarned(db, { locationId, nowMs }),
-    readOperator(db, { displayId }),
+    readOperator(db, { locationId, displayId }),
   ])
   return { up_next, earned, operator }
 }
