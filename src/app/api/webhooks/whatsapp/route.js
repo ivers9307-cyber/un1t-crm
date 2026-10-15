@@ -9,6 +9,7 @@ import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
+import { resolveNewSenderStudio } from '@/lib/wa-studio-pick/resolve'
 import { applyTemplateEvent } from '@/lib/whatsapp-template-events'
 import { NUMBER_EVENT_FIELDS, applyNumberEvent } from '@/lib/whatsapp-number-events'
 import { FLOW_EVENT_FIELDS, applyFlowEvent } from '@/lib/whatsapp-flow-events'
@@ -231,7 +232,7 @@ async function findMovedNumberlessThread(db, { senderPhone, receivingNumberId, o
   if (!receivingNumberId) return null
   try {
     const { data: rows, error } = await db.from('whatsapp_conversations')
-      .select('id, contact_id, ctwa_clid, location_id')
+      .select('id, contact_id, ctwa_clid, location_id, studio_resolution')
       .eq('wa_phone', senderPhone)
       .eq('whatsapp_number_id', receivingNumberId)
       .in('location_id', scopeFor(orgLocIds))
@@ -354,7 +355,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
 
   // Get or create conversation (keyed by phone number, NOT by contact)
   let { data: existingConv } = await db.from('whatsapp_conversations')
-    .select('id, contact_id, ctwa_clid')
+    .select('id, contact_id, ctwa_clid, studio_resolution')
     .eq('wa_phone', senderPhone)
     .eq('location_id', locationId)
     .limit(1)
@@ -552,6 +553,34 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     console.error('[wa-webhook] inbound message insert failed (agent turn skipped):', inboundInsertError.message, messageId)
   }
 
+  // WASTUDIOPICK.1 — an unknown sender on a studio-picker number: decide their
+  // studio (ad → reply → classifier → tap picker) and move the thread before
+  // anything else acts on it. While the picker waits for an answer, Mia and the
+  // greeting stay quiet (spec R7). Never throws; a failure carries on as before.
+  // actingLocationId (Flows/CTWA) is deliberately NOT moved: it follows the
+  // receiving number, not the studio the thread is filed at.
+  let studioPick = { action: 'skip' }
+  if (!inboundInsertError) {
+    try {
+      studioPick = await resolveNewSenderStudio(db, {
+        conversationId,
+        threadLocationId: locationId,
+        receivingLocationId: defaultLocationId,
+        contactId: contact?.id || null,
+        resolution: existingConv?.studio_resolution ?? null,
+        message,
+        messageType,
+        body,
+        senderPhone,
+      })
+    } catch (e) {
+      console.error('[wa-webhook] studio picker failed (carrying on):', e?.message || String(e))
+    }
+    if (studioPick?.locationId) locationId = studioPick.locationId
+    if (studioPick?.conversationId) conversationId = studioPick.conversationId
+  }
+  const awaitingStudio = studioPick?.action === 'asked'
+
   // Update conversation
   const { error: convStampErr } = await db.from('whatsapp_conversations').update({
     last_message_at: timestamp.toISOString(),
@@ -640,7 +669,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // soft-handoff acknowledgement to someone who hasn't said anything. The
   // open-event gets the instant greeting below instead.
   let agentResult = null
-  if (messageType !== 'request_welcome' && !inboundInsertError) {
+  if (messageType !== 'request_welcome' && !inboundInsertError && !awaitingStudio) {
     try {
       agentResult = await maybeAutoReply(db, {
         conversationId,
@@ -707,7 +736,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
 
   // C2 — first-touch chat open (no typed message): greet instantly instead of
   // letting the agent treat it as an unsupported type.
-  if (messageType === 'request_welcome') {
+  if (messageType === 'request_welcome' && !awaitingStudio) {
     try {
       const { maybeSendWelcomeGreeting } = await import('@/lib/agent/welcome-greeting')
       await maybeSendWelcomeGreeting(db, { conversationId, locationId, senderPhone, contactId: contact?.id || null })
