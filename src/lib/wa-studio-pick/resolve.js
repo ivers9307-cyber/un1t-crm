@@ -100,6 +100,23 @@ async function ask(db, ctx, cfg) {
   return { action: 'asked', locationId: threadLocationId, conversationId }
 }
 
+// F7 — a customer who only ever sends voice notes must not stay 'asked'
+// forever (Mia stays quiet while asked). First non-answer: count it on the
+// still-asked row, keeping the original `at` the F1 rule reads. Second: final.
+async function nonAnswer(db, ctx) {
+  const { conversationId, threadLocationId } = ctx
+  if (Number(ctx.resolution?.nonanswers) >= 1) {
+    await record(db, conversationId, { status: 'unresolved', reason: 'no_answer' })
+    return { action: 'unresolved', locationId: threadLocationId, conversationId }
+  }
+  const { data, error } = await db.from('whatsapp_conversations')
+    .update({ studio_resolution: { status: 'asked', at: ctx.resolution?.at, nonanswers: 1 } })
+    .eq('id', conversationId).filter('studio_resolution->>status', 'eq', 'asked').select('id')
+  if (error) logError('wa-studio-pick', 'non-answer count write failed', { conversationId, err: error.message })
+  else if (!data?.length) logInfo('wa-studio-pick', 'no longer asked; non-answer not counted', { conversationId })
+  return { action: 'asked', locationId: threadLocationId, conversationId }
+}
+
 export async function resolveNewSenderStudio(db, ctx) {
   const skip = { action: 'skip', locationId: ctx.threadLocationId, conversationId: ctx.conversationId }
   try {
@@ -118,8 +135,9 @@ export async function resolveNewSenderStudio(db, ctx) {
       // Typed before the question reached them: not an answer. Mia stays quiet
       // and answers with the whole history once the thread resolves (R7).
       if (sentBeforePicker(ctx.message, ctx.resolution)) return { action: 'asked', locationId: ctx.threadLocationId, conversationId: ctx.conversationId }
-      // A reaction, sticker, voice note... cannot answer; leave the question open.
-      if (NON_ANSWER_TYPES.has(ctx.messageType)) return { action: 'asked', locationId: ctx.threadLocationId, conversationId: ctx.conversationId }
+      // A reaction, sticker, voice note... cannot answer. The first one leaves
+      // the question open; a second ends it so Mia is not silent for good.
+      if (NON_ANSWER_TYPES.has(ctx.messageType)) return await nonAnswer(db, ctx)
       if (hasText) {
         const c = await classifyStudio({ text: ctx.body, studios: cfg.studios, locationId: ctx.receivingLocationId })
         if (c.studioId) return await decide(db, ctx, c.studioId, 'ai')

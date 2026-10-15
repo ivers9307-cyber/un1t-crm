@@ -239,14 +239,44 @@ describe('resolveNewSenderStudio', () => {
     expect(lastOps()).toContainEqual(['or', FINAL_FILTER])
   })
 
-  it('asked + a reaction/sticker/voice note does not burn the question: stays asked, no write, no classifier', async () => {
+  it('asked + a reaction/sticker/voice note does not burn the question: stays asked, first one counted, no classifier (F7)', async () => {
     for (const messageType of ['reaction', 'sticker', 'audio', 'unsupported', 'system', 'request_welcome']) {
-      const r = await resolveNewSenderStudio(db, { ...base, resolution: { status: 'asked' }, messageType, body: '[x]', message: { type: messageType } })
+      const r = await resolveNewSenderStudio(db, { ...base, resolution: { status: 'asked', at: '2026-10-15T10:00:00.000Z' }, messageType, body: '[x]', message: { type: messageType } })
       expect(r.action).toBe('asked')
+      expect(recorded()).toEqual({ status: 'asked', at: '2026-10-15T10:00:00.000Z', nonanswers: 1 })
     }
-    expect(updates).toHaveLength(0)
+    expect(updates).toHaveLength(6)
     expect(classifyStudio).not.toHaveBeenCalled()
     expect(sendInteractiveOptions).not.toHaveBeenCalled()
+  })
+
+  it('the first non-answer is a compare-and-set on a still-asked row, keeping the original at (F7)', async () => {
+    const r = await resolveNewSenderStudio(db, { ...base, resolution: { status: 'asked', at: '2026-10-15T10:00:00.000Z' }, messageType: 'reaction', body: '[x]', message: { type: 'reaction', timestamp: String(Date.parse('2026-10-15T10:00:00.000Z') / 1000 + 60) } })
+    expect(r).toEqual({ action: 'asked', locationId: 'a1', conversationId: 'c1' })
+    expect(lastOps()).toContainEqual(['eq', 'id', 'c1'])
+    expect(lastOps()).toContainEqual(['filter', 'studio_resolution->>status', 'eq', 'asked'])
+  })
+
+  it('a second non-answer ends it: unresolved no_answer, conditional final write, Mia handles it (F7)', async () => {
+    const r = await resolveNewSenderStudio(db, { ...base, resolution: { status: 'asked', at: '2026-10-15T10:00:00.000Z', nonanswers: 1 }, messageType: 'audio', body: '[Voice note]', message: { type: 'audio' } })
+    expect(r).toEqual({ action: 'unresolved', locationId: 'a1', conversationId: 'c1' })
+    expect(recorded()).toMatchObject({ status: 'unresolved', reason: 'no_answer' })
+    expect(lastOps()).toContainEqual(['or', FINAL_FILTER])
+    expect(classifyStudio).not.toHaveBeenCalled()
+  })
+
+  it('a non-answer sent before the picker is not counted (F1 before F7)', async () => {
+    const at = '2026-10-15T10:00:00.000Z'
+    const r = await resolveNewSenderStudio(db, { ...base, resolution: { status: 'asked', at }, messageType: 'reaction', body: '[x]', message: { type: 'reaction', timestamp: String(Date.parse(at) / 1000 - 1) } })
+    expect(r.action).toBe('asked')
+    expect(updates).toHaveLength(0)
+  })
+
+  it('a failed non-answer count write is logged and the question stays open (F7)', async () => {
+    db.from = vi.fn(() => ({ update: vi.fn((patch) => { updates.push(patch.studio_resolution); const b = { eq: () => b, filter: () => b, select: () => b, then: (res, rej) => Promise.resolve({ data: null, error: { message: 'db down' } }).then(res, rej) }; return b }) }))
+    const r = await resolveNewSenderStudio(db, { ...base, resolution: { status: 'asked', at: '2026-10-15T10:00:00.000Z' }, messageType: 'sticker', body: '[x]', message: { type: 'sticker' } })
+    expect(r.action).toBe('asked')
+    expect(logError).toHaveBeenCalled()
   })
 
   it('a body that starts with a bracket is still text: classified', async () => {
