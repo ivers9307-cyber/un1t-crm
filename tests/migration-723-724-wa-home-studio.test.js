@@ -55,6 +55,8 @@ const SCHEMA = `
   CREATE TABLE public.agent_message_feedback (id serial PRIMARY KEY, channel text, conversation_id uuid, location_id uuid);
   CREATE TABLE public.agent_conversation_reviews (id serial PRIMARY KEY, channel text, conversation_id uuid, location_id uuid,
     review_date date, UNIQUE (channel, conversation_id, review_date));
+  CREATE TABLE public.cancellation_form_links (id serial PRIMARY KEY, location_id uuid NOT NULL,
+    channel text NOT NULL CHECK (channel IN ('email', 'whatsapp')), conversation_id uuid);
   INSERT INTO public.locations VALUES ('${STILL}', '${ORG}'), ('${HATCH}', '${ORG}'), ('${OTHER}', '${ORG2}');
   INSERT INTO public.whatsapp_numbers (id, location_id, is_default) VALUES ('${NUM}', '${STILL}', true);
   INSERT INTO public.contacts VALUES ('${K_HATCH}', '${HATCH}'), ('${K_STILL}', '${STILL}');
@@ -166,6 +168,29 @@ describe('723 move_whatsapp_conversation', () => {
     await move(db2, C1, HATCH)
     expect(await one(db2, `SELECT conversation_id, location_id FROM agent_message_feedback`)).toEqual({ conversation_id: C2, location_id: HATCH })
     expect((await db2.query(`SELECT conversation_id FROM agent_membership_requests WHERE channel = 'whatsapp'`)).rows).toEqual([{ conversation_id: C2 }])
+  })
+
+  // F5 — cancellation_form_links.conversation_id (mig 585) is a soft ref with
+  // no FK: a merge that deleted the source left the link pointing at nothing,
+  // so the approve path could not answer in-thread.
+  it('re-points the WhatsApp cancellation-form links on a merge and a re-file (email links untouched)', async () => {
+    const links = `
+      INSERT INTO public.cancellation_form_links (location_id, channel, conversation_id) VALUES
+        ('${STILL}', 'whatsapp', '${C1}'), ('${STILL}', 'email', '${C1}');
+    `
+    const db = await boot(HATCH_THREAD_AT_STILL + links + `
+      INSERT INTO public.whatsapp_conversations (id, location_id, contact_id, wa_phone) VALUES ('${C2}', '${HATCH}', '${K_HATCH}', '15555550100');`)
+    const r = await move(db, C1, HATCH)
+    expect(r).toMatchObject({ conversation_id: C2, merged: true })
+    expect((await db.query(`SELECT channel, conversation_id, location_id FROM cancellation_form_links ORDER BY channel`)).rows).toEqual([
+      { channel: 'email', conversation_id: C1, location_id: STILL },
+      { channel: 'whatsapp', conversation_id: C2, location_id: HATCH },
+    ])
+
+    const db2 = await boot(HATCH_THREAD_AT_STILL + links)
+    await move(db2, C1, HATCH)
+    expect(await one(db2, `SELECT conversation_id, location_id FROM cancellation_form_links WHERE channel = 'whatsapp'`))
+      .toEqual({ conversation_id: C1, location_id: HATCH })
   })
 
   it('refuses another organisation and its own studio, writing nothing (Review Focus 5)', async () => {
