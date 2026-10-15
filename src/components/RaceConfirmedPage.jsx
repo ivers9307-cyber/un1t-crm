@@ -254,7 +254,7 @@ export default function RaceConfirmedPage({ slug, registrationId, brandName = ''
         {/* ── What's next ────────────────────────────────────────── */}
         <div className="mt-6 p-4 rounded-xl bg-white/[0.03] border border-white/10 text-xs text-white/60 leading-relaxed">
           <strong className="block text-white/90 mb-1 font-semibold">What&apos;s next:</strong>
-          We&apos;ll email a reminder the day before with parking + check-in details. Arrive 30 minutes
+          We&apos;ll email a reminder the day before with parking + check-in details. Arrive 10-15 minutes
           before your wave. Bring water, a towel, and your race-day energy. See you on the start line.
         </div>
 

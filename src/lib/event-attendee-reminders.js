@@ -86,7 +86,7 @@ export function buildReminderDefaults({ eventName, whenLabel, locationName, memb
     infoRows,
     afterInfoHtml: '',
     memberQrs: Array.isArray(members) ? members : [],
-    footerHtml: `<strong>Before you arrive:</strong> get here 30 minutes early, and bring water + a towel. Can't make it? Just reply to let us know.`,
+    footerHtml: `<strong>Before you arrive:</strong> get here 10-15 minutes early, and bring water + a towel. Can't make it? Just reply to let us know.`,
     locationName: locationName || '',
     brand: brand || '',
   }
