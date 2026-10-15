@@ -29,7 +29,7 @@ import { GET } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { getAvailableStraps } from '@/lib/live-class'
 import { logWarn } from '@/lib/log'
-import { __resetIdleLogThrottle } from '@/lib/tv-idle-content'
+import { __resetIdleLogThrottle, __resetIdleCache } from '@/lib/tv-idle-content'
 
 const PAGE = 1000
 const TOKEN = 'tok-1'
@@ -51,6 +51,7 @@ function makeDb({ samples, sessions, idle, location = { id: 'loc-1', name: 'Stil
       eq: () => chain,
       is: () => chain,
       gte: () => chain,
+      lte: () => chain,
       order: () => chain,
       limit: () => chain,
       maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
@@ -121,7 +122,9 @@ async function callRoute(db) {
   return GET(request, { params: Promise.resolve({ token: TOKEN }) })
 }
 
-beforeEach(() => { vi.clearAllMocks(); __resetIdleLogThrottle() })
+// Both are module-level state in tv-idle-content: the throttle would silence a
+// later test's log, and the read cache would hand it an earlier test's rows.
+beforeEach(() => { vi.clearAllMocks(); __resetIdleLogThrottle(); __resetIdleCache() })
 afterEach(() => { vi.unstubAllEnvs() })
 
 describe('GET /api/public/tv-live/[token] — board payload', () => {
