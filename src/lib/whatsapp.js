@@ -2,6 +2,7 @@ import { createServerClient } from './supabase'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
 import { getWhatsAppConfig, getConversationReplyConfig, META_API_URL } from './whatsapp-config'
 import { isWhatsAppNumberMissing } from './whatsapp-number-missing'
+import { numberlessHomeStudio } from './whatsapp-thread-location'
 import {
   PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
   rollingHeadroom, selectDripRecipients, dripOutcome,
@@ -2082,34 +2083,61 @@ export async function getOrCreateConversation(db, contact, locationId) {
   // thread. Key on wa_phone to match the constraint.
   const waPhone = contact.wa_phone
   if (waPhone) {
-    const { data: existing } = await db.from('whatsapp_conversations')
-      .select('id, contact_id')
-      .eq('location_id', locationId)
-      .eq('wa_phone', waPhone)
-      .maybeSingle()
-    if (existing) {
+    const findAt = async (loc) => {
+      const { data } = await db.from('whatsapp_conversations')
+        .select('id, contact_id')
+        .eq('location_id', loc)
+        .eq('wa_phone', waPhone)
+        .maybeSingle()
+      return data
+    }
+    const linkContact = async (row) => {
       // Backfill contact_id if the row was created for an unknown sender.
-      if (!existing.contact_id && contact.id) {
-        await db.from('whatsapp_conversations').update({ contact_id: contact.id }).eq('id', existing.id)
+      if (!row.contact_id && contact.id) {
+        const { error: linkErr } = await db.from('whatsapp_conversations').update({ contact_id: contact.id }).eq('id', row.id)
+        if (linkErr) console.error('[whatsapp] getOrCreateConversation: contact_id backfill failed', row.id, linkErr.message)
       }
-      return existing.id
+      return row.id
+    }
+
+    const existing = await findAt(locationId)
+    if (existing) return linkContact(existing)
+
+    // WAHOMESTUDIO.1 (R1) — a contact whose home studio has no WhatsApp number
+    // of its own (same organisation) gets the thread at their home studio, the
+    // same place the webhook files their reply, stamped with the sending
+    // studio's number so replies resolve it (R3/R4). Only on a NEW thread: an
+    // existing one at the sending studio is the backfill's (mig 724) to move.
+    const home = await numberlessHomeStudio(db, contact, locationId)
+    let fileAt = locationId
+    let stamp = null
+    if (home) {
+      const atHome = await findAt(home)
+      if (atHome) return linkContact(atHome)
+      fileAt = home
+      const { data: num } = await db.from('whatsapp_numbers')
+        .select('id')
+        .eq('location_id', locationId)
+        .eq('is_active', true)
+        .order('is_default', { ascending: false })
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      stamp = num?.id || null
     }
 
     const { data: created, error } = await db.from('whatsapp_conversations').insert({
-      location_id: locationId,
+      location_id: fileAt,
       contact_id: contact.id,
       wa_phone: waPhone,
       status: 'active',
+      ...(stamp ? { whatsapp_number_id: stamp } : {}),
     }).select('id').single()
     if (!error && created) return created.id
 
     // Lost a race with the inbound webhook (or another send) on the same
     // wa_phone — the unique constraint rejected us; re-read the winner.
-    const { data: raced } = await db.from('whatsapp_conversations')
-      .select('id')
-      .eq('location_id', locationId)
-      .eq('wa_phone', waPhone)
-      .maybeSingle()
+    const raced = await findAt(fileAt)
     return raced?.id
   }
 
