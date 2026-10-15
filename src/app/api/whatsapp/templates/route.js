@@ -2,7 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createTemplate as createMetaTemplate, getTemplates as getMetaTemplates } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccess , getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, assertLocationAccessOr404, getUserLocationIds } from '@/lib/auth'
 import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -51,7 +51,8 @@ export async function GET(request) {
       .select('id, location_id').eq('id', conversationId).maybeSingle()
     if (convErr) return NextResponse.json({ success: false, error: 'Could not load the conversation' }, { status: 500 })
     if (!conv) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-    const convGuard = assertLocationAccess(user, conv.location_id)
+    // 404 like the unknown id above: a 403 here would confirm the id exists.
+    const convGuard = assertLocationAccessOr404(user, conv.location_id)
     if (convGuard) return convGuard
     const templateLocationId = await templateLocationIdFor(conv.location_id, conv.id)
     // Same select and order as the location mode below: one row shape.

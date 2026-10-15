@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(async () => ({ id: 'prof-1' })),
   assertLocationAccess: vi.fn(() => null),
+  assertLocationAccessOr404: vi.fn(() => null),
   getUserLocationIds: vi.fn(() => ['a0000000-0000-4000-8000-000000000001']),
 }))
 vi.mock('@/lib/wa-template-access', () => ({ canManageWaTemplatesAt: vi.fn(() => true) }))
@@ -19,7 +20,7 @@ vi.mock('@/lib/whatsapp-own-number', () => ({ ownNumberOrRefusal: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { GET } from './route.js'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, assertLocationAccessOr404 } from '@/lib/auth'
 import { getTemplates as getMetaTemplates } from '@/lib/whatsapp'
 import { createServerClient } from '@/lib/supabase'
 import { templateLocationIdFor } from '@/lib/whatsapp-config'
@@ -61,6 +62,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   getCurrentUser.mockResolvedValue({ id: 'prof-1' })
   assertLocationAccess.mockReturnValue(null)
+  assertLocationAccessOr404.mockReturnValue(null)
 })
 
 describe('GET /api/whatsapp/templates?conversation_id= (WAHOMESTUDIO.1)', () => {
@@ -73,7 +75,7 @@ describe('GET /api/whatsapp/templates?conversation_id= (WAHOMESTUDIO.1)', () => 
     const body = await res.json()
 
     expect(res.status).toBe(200)
-    expect(assertLocationAccess).toHaveBeenCalledWith(expect.anything(), HATCH)
+    expect(assertLocationAccessOr404).toHaveBeenCalledWith(expect.anything(), HATCH)
     expect(templateLocationIdFor).toHaveBeenCalledTimes(1)
     expect(templateLocationIdFor).toHaveBeenCalledWith(HATCH, CONV)
     expect(body).toMatchObject({ success: true, templates: ROWS, template_location_id: STILL })
@@ -112,12 +114,17 @@ describe('GET /api/whatsapp/templates?conversation_id= (WAHOMESTUDIO.1)', () => 
     expect(await res.json()).not.toHaveProperty('sync_error')
   })
 
-  it("a caller with no access to the conversation's studio is refused before any template read", async () => {
+  // F2 — a 403 after the 404 lookup would tell a caller the id exists
+  // (CLAUDE.md: detail routes 404, never 403). Same answer as an unknown id.
+  it("a caller with no access to the conversation's studio gets the unknown-id 404, before any template read", async () => {
     const db = makeDb()
     createServerClient.mockReturnValue(db)
-    assertLocationAccess.mockReturnValue(new Response(JSON.stringify({ success: false, error: 'Forbidden' }), { status: 403 }))
+    assertLocationAccessOr404.mockReturnValue(new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404 }))
     const res = await GET(req(`conversation_id=${CONV}`))
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'Not found' })
+    expect(assertLocationAccessOr404).toHaveBeenCalledWith(expect.anything(), HATCH)
+    expect(assertLocationAccess).not.toHaveBeenCalled()
     expect(db.reads.templates).toHaveLength(0)
     expect(templateLocationIdFor).not.toHaveBeenCalled()
   })
