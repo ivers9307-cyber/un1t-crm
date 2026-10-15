@@ -9,7 +9,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
 import { SCENE_DWELL_MS } from '@/lib/tv-scenes'
-import IdleStage from './IdleStage.jsx'
+import IdleStage, { IMAGE_FAILURE_WINDOW_MS } from './IdleStage.jsx'
 
 const fonts = { display: 'sans-serif', body: 'sans-serif', mono: 'monospace' }
 const idle = {
@@ -263,6 +263,107 @@ describe('IdleStage dead operator image', () => {
     )
     expect(container.querySelector('img')).toBeNull()
     expect(screen.getByText('Waiting')).toBeTruthy()
+  })
+})
+
+// A kiosk keeps one page load for days, so a failure that lasted until reload
+// would let one blip drop the operator scene until somebody restarted Chromium.
+// The window is judged on the nowMs the rotation already uses, so these tests
+// move that prop instead of sleeping.
+describe('IdleStage dead operator image expiry', () => {
+  const IMG = 'https://proj.supabase.co/storage/v1/object/public/tv-content/blip.png'
+  const WINDOW = IMAGE_FAILURE_WINDOW_MS
+  const only = (nowMs, over = {}) => (
+    <IdleStage
+      idle={{ up_next: [], earned: [], operator: { source_type: 'url', source_ref: IMG, label: null, template_values: null, ...over } }}
+      nowMs={nowMs}
+      idleSinceMs={1000}
+      fonts={fonts}
+      fallback={<p>Waiting</p>}
+    />
+  )
+
+  it('pins the window at ten minutes', () => {
+    expect(WINDOW).toBe(10 * 60 * 1000)
+  })
+
+  it('is still dropped just before the window elapses', () => {
+    const { container, rerender } = render(only(1000))
+    fireEvent.error(container.querySelector('img'))
+    expect(screen.getByText('Waiting')).toBeTruthy()
+
+    rerender(only(1000 + WINDOW - 1))
+
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('Waiting')).toBeTruthy()
+  })
+
+  it('is requested again once the window has passed', () => {
+    const { container, rerender } = render(only(1000))
+    fireEvent.error(container.querySelector('img'))
+
+    rerender(only(1000 + WINDOW))
+
+    expect(container.querySelector('img').getAttribute('src')).toBe(IMG)
+    expect(screen.queryByText('Waiting')).toBeNull()
+  })
+
+  it('puts the operator card back when the image returns after a blip', () => {
+    const { container, rerender } = render(only(1000, { label: 'Open day' }))
+    fireEvent.error(container.querySelector('img'))
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('Open day')).toBeTruthy()
+
+    rerender(only(1000 + WINDOW, { label: 'Open day' }))
+
+    expect(container.querySelector('img').getAttribute('src')).toBe(IMG)
+    expect(screen.queryByText('Open day')).toBeNull()
+  })
+
+  it('re-enters the window when the retry fails again, rather than retrying every frame', () => {
+    const { container, rerender } = render(only(1000))
+    fireEvent.error(container.querySelector('img'))
+
+    // The retry, which fails again at 1000 + WINDOW.
+    rerender(only(1000 + WINDOW))
+    fireEvent.error(container.querySelector('img'))
+    expect(container.querySelector('img')).toBeNull()
+
+    // Every board tick for the next window: no request.
+    for (const offset of [1000, 2000, 60_000, WINDOW - 1]) {
+      rerender(only(1000 + WINDOW + offset))
+      expect(container.querySelector('img'), `+${offset}ms`).toBeNull()
+    }
+
+    // And once that window has passed, one more try.
+    rerender(only(1000 + WINDOW + WINDOW))
+    expect(container.querySelector('img').getAttribute('src')).toBe(IMG)
+  })
+
+  it('judges each URL on its own failure time', () => {
+    const IMG_2 = 'https://proj.supabase.co/storage/v1/object/public/tv-content/other.png'
+    const { container, rerender } = render(only(1000))
+    fireEvent.error(container.querySelector('img'))
+
+    // A different image fails later; the first one's window is still its own.
+    rerender(only(1000 + 60_000, { source_ref: IMG_2 }))
+    fireEvent.error(container.querySelector('img'))
+    expect(container.querySelector('img')).toBeNull()
+
+    // The first expires on its own clock while the second is still dropped.
+    rerender(only(1000 + WINDOW, { source_ref: IMG }))
+    expect(container.querySelector('img').getAttribute('src')).toBe(IMG)
+    rerender(only(1000 + WINDOW, { source_ref: IMG_2 }))
+    expect(container.querySelector('img')).toBeNull()
+  })
+
+  it('treats a clock that moved backwards as expired, never as dropped for good', () => {
+    const { container, rerender } = render(only(5_000_000))
+    fireEvent.error(container.querySelector('img'))
+
+    rerender(only(1000))
+
+    expect(container.querySelector('img')).not.toBeNull()
   })
 })
 

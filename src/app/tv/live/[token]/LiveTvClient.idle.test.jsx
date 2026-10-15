@@ -22,8 +22,9 @@ vi.mock('@/fonts/repset', () => ({
 vi.mock('@/lib/supabase', () => ({ createBrowserClient: vi.fn(() => null) }))
 
 import { SCENE_DWELL_MS } from '@/lib/tv-scenes'
+import { IMAGE_FAILURE_WINDOW_MS } from './IdleStage.jsx'
 import { ACTIVE_POLL_MS } from '@/lib/live-poll'
-import LiveTvClient from './LiveTvClient.jsx'
+import LiveTvClient, { OUTRO_MS } from './LiveTvClient.jsx'
 
 const ENDPOINT = '/api/public/tv-live/tok-1'
 
@@ -281,6 +282,30 @@ describe('idle stage and live tiles', () => {
       expect(screen.queryByText('Waiting for class to start')).toBeNull()
     })
 
+    it('self-heals: a blip is retried once the window has passed, and a dead URL re-enters the window', async () => {
+      serveOperator(operator())
+      const { container } = mount()
+      await advance(0)
+      fireEvent.error(container.querySelector('img'))
+      await advance(0)
+      expect(screen.getByText('Waiting for class to start')).toBeTruthy()
+
+      // Just short of the window, the board is still on the empty board.
+      await advance(IMAGE_FAILURE_WINDOW_MS - 5000)
+      expect(container.querySelector('img')).toBeNull()
+      expect(screen.getByText('Waiting for class to start')).toBeTruthy()
+
+      // Past it, the image is requested again with no reload and no new push.
+      await advance(10000)
+      expect(container.querySelector('img').getAttribute('src')).toBe(DEAD)
+
+      // Still dead: back in the window, not retried on every tick.
+      fireEvent.error(container.querySelector('img'))
+      await advance(60_000)
+      expect(container.querySelector('img')).toBeNull()
+      expect(screen.getByText('Waiting for class to start')).toBeTruthy()
+    })
+
     it('stays dropped across polls that keep delivering the same dead URL', async () => {
       serveOperator(operator())
       const { container } = mount()
@@ -302,9 +327,6 @@ describe('idle stage and live tiles', () => {
   // from there is ~10s into Earned by the time the podium clears and Up next,
   // the most useful thing to show someone who has just finished, is never seen.
   describe('after a class', () => {
-    // 40s, LiveTvClient's OUTRO_MS (not exported); the test fails loudly if the
-    // podium is no longer up at 35s.
-    const OUTRO_MS = 40000
     const CLASS = {
       class_name: 'Evening HIIT',
       program: null,
@@ -315,22 +337,32 @@ describe('idle stage and live tiles', () => {
     }
 
     it('starts the idle clock when the podium clears, so the first scene is Up next', async () => {
+      // The test only bites if a clock counted from the moment the tiles leave
+      // would read past the first scene (>= one dwell) yet not have come all the
+      // way round (< three scenes) when the podium lifts. If the outro is retuned
+      // out of that range, re-aim this test rather than let it go quiet.
+      expect(OUTRO_MS).toBeGreaterThanOrEqual(SCENE_DWELL_MS)
+      expect(OUTRO_MS).toBeLessThan(SCENE_DWELL_MS * 3)
+
+      // Three scenes, so the rotation is 90s long.
+      const openDay = { source_type: 'template', source_ref: null, label: 'Open day Saturday', template_values: null }
+      const idleOutro = { ...IDLE, idle: { ...IDLE.idle, operator: openDay } }
+
       serve({ ...LIVE, current_class: CLASS })
       mount()
       await advance(0)
       expect(screen.getByText('Strap 49931')).toBeTruthy()
 
       // Class over, band gone: podium goes up.
-      serve(IDLE)
+      serve(idleOutro)
       await nextPoll()
       expect(screen.getByText('Class complete')).toBeTruthy()
 
-      // 35s into a 40s podium: a clock counted from here would already read
-      // 35s (Earned) when the podium lifts.
-      await advance(35000)
+      // Still up shortly before it ends.
+      await advance(OUTRO_MS - 5000)
       expect(screen.getByText('Class complete')).toBeTruthy()
 
-      await advance(OUTRO_MS - 35000 + 1000)
+      await advance(6000)
       expect(screen.queryByText('Class complete')).toBeNull()
       expect(screen.getByText('BU1LD — Strength')).toBeTruthy()
       expect(screen.queryByText('Saoirse M.')).toBeNull()

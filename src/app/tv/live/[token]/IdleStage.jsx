@@ -21,16 +21,24 @@
 // only (never capacity or a booked count), and the Earned scene lists
 // individual member moments only (never a count of them).
 //
-// One piece of state lives here: the image URLs that failed to load. A dead
-// image (deleted from the bucket, a bad URL, no network) is a scene with
-// nothing to show, so the stage reads the row as having no image and the usual
-// rules apply: the label draws if there is one, otherwise the scene drops out
-// of the rotation, and if that leaves nothing the stage hands over to its
+// One piece of state lives here: the image URLs that failed to load, each with
+// the board-clock time it failed. A dead image (deleted from the bucket, a bad
+// URL, no network) is a scene with nothing to show, so for
+// IMAGE_FAILURE_WINDOW_MS the stage reads the row as having no image and the
+// usual rules apply: the label draws if there is one, otherwise the scene drops
+// out of the rotation, and if that leaves nothing the stage hands over to its
 // `fallback`. Failures are keyed by URL, so a later, different push is judged
-// on its own.
+// on its own, and they EXPIRE: a kiosk keeps one page load for days, so a
+// failure that lasted until reload would let one blip at 3am silently drop the
+// operator scene until somebody restarted Chromium. After the window the image
+// is simply requested again; a still-dead one fails again and re-enters the
+// window, so it is retried once per window, not once per frame.
 
 import { useState } from 'react'
 import { eligibleScenes, sceneAt, operatorImageRef, operatorLabel } from '@/lib/tv-scenes'
+
+/** How long a failed image URL is treated as dead before it is requested again. */
+export const IMAGE_FAILURE_WINDOW_MS = 10 * 60 * 1000
 
 const BONE = '#F1EEE7'
 const BONE_2 = '#B1AEA6'
@@ -138,15 +146,23 @@ function OperatorScene({ operator, fonts, onImageError }) {
   )
 }
 
+/** Did a URL fail within the window ending at `nowMs`? A clock that moved backwards is not "recent". */
+function failedWithinWindow(failedAtMs, nowMs) {
+  const elapsed = nowMs - failedAtMs
+  return elapsed >= 0 && elapsed < IMAGE_FAILURE_WINDOW_MS
+}
+
 /**
- * The idle block as the stage should see it once some image URLs are known to
- * be dead: an operator row whose image failed has no image, so it keeps its
- * label (if any) and loses its ref. Everything downstream (eligibility, the
- * image/label branch) is still decided by tv-scenes.js on that row.
+ * The idle block as the stage should see it while some image URLs are known to
+ * be dead: an operator row whose image failed recently has no image, so it
+ * keeps its label (if any) and loses its ref. Everything downstream
+ * (eligibility, the image/label branch) is still decided by tv-scenes.js on
+ * that row.
  */
-function withoutDeadImage(idle, failedImages) {
+function withoutDeadImage(idle, failedImages, nowMs) {
   const src = operatorImageRef(idle?.operator)
   if (src === null || !failedImages.has(src)) return idle
+  if (!failedWithinWindow(failedImages.get(src), nowMs)) return idle
   return { ...idle, operator: { ...idle.operator, source_ref: null } }
 }
 
@@ -162,12 +178,21 @@ function withoutDeadImage(idle, failedImages) {
  * image).
  */
 export default function IdleStage({ idle, nowMs, idleSinceMs, fonts, fallback = null }) {
-  const [failedImages, setFailedImages] = useState(() => new Set())
-  const showable = withoutDeadImage(idle, failedImages)
-  const key = sceneAt(eligibleScenes(showable), Number(nowMs) - Number(idleSinceMs))
+  // url -> the board-clock time it failed. The clock is the `nowMs` prop, so
+  // the window is decided by the same time the rotation uses.
+  const [failedImages, setFailedImages] = useState(() => new Map())
+  const now = Number(nowMs)
+  const showable = withoutDeadImage(idle, failedImages, now)
+  const key = sceneAt(eligibleScenes(showable), now - Number(idleSinceMs))
   if (!key) return fallback
 
-  const onImageError = (src) => setFailedImages((prev) => (prev.has(src) ? prev : new Set(prev).add(src)))
+  const onImageError = (src) => setFailedImages((prev) => {
+    // Forget what has already expired while we are here, so the map is bounded
+    // by the URLs that failed in the last window, not by every push ever made.
+    const next = new Map()
+    for (const [url, at] of prev) if (failedWithinWindow(at, now)) next.set(url, at)
+    return next.set(src, now)
+  })
 
   let body
   if (key === 'up-next') body = <UpNextScene rows={showable.up_next} fonts={fonts} />

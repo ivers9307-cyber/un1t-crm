@@ -49,8 +49,9 @@ import IdleStage from './IdleStage'
 
 // How long a toast stays on screen before auto-dismiss.
 const TOAST_MS = 6000
-// Outro podium dwell before returning to the idle board.
-const OUTRO_MS = 40000
+// Outro podium dwell before returning to the idle board. Exported so tests
+// follow it when it is retuned.
+export const OUTRO_MS = 40000
 
 // ── Repset tokens (P4a) ──────────────────────────────────────────
 // Chrome only. The five zone DATA colours live in @/lib/tv-zone-colors and
