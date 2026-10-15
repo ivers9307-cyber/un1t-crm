@@ -4,7 +4,7 @@
 // on at the thread's studio, exactly as before this existed.
 import { sendInteractiveOptions } from '@/lib/whatsapp'
 import { AGENT_MESSAGE_SOURCE, stripEmDashes } from '@/lib/agent/core'
-import { logWarn, logError } from '../log'
+import { logInfo, logWarn, logError } from '../log'
 import { readPickerConfig, PICKER_ID_PREFIX } from './config'
 import { adSignal, replySignal, tapSignal } from './signals'
 import { classifyStudio } from './classify'
@@ -13,11 +13,18 @@ import { classifyStudio } from './classify'
 // own branch; anything else (null, a malformed value) behaves like no record.
 const FINAL = new Set(['decided', 'unresolved'])
 const TEXT_TYPES = new Set(['text', 'interactive', 'image', 'video', 'document'])
+// After the picker, these cannot answer it: they must not burn the one question.
+const NON_ANSWER_TYPES = new Set(['reaction', 'sticker', 'audio', 'unsupported', 'system', 'request_welcome'])
+// A final write only lands while the row is unresolved or still asking, so a
+// burst's slower message can never overwrite a decision another one finished.
+const NOT_FINAL = 'studio_resolution.is.null,studio_resolution->>status.eq.asked'
 
 async function record(db, conversationId, resolution) {
-  const { error } = await db.from('whatsapp_conversations')
-    .update({ studio_resolution: { ...resolution, at: new Date().toISOString() } }).eq('id', conversationId)
+  const { data, error } = await db.from('whatsapp_conversations')
+    .update({ studio_resolution: { ...resolution, at: new Date().toISOString() } })
+    .eq('id', conversationId).or(NOT_FINAL).select('id')
   if (error) logError('wa-studio-pick', 'studio_resolution write failed', { conversationId, err: error.message })
+  else if (!data?.length) logInfo('wa-studio-pick', 'resolution already final; write skipped', { conversationId })
 }
 
 async function decide(db, ctx, studioId, by) {
@@ -25,37 +32,58 @@ async function decide(db, ctx, studioId, by) {
   let locationId = ctx.threadLocationId
   if (studioId !== ctx.threadLocationId) {
     const { data, error } = await db.rpc('move_whatsapp_conversation', { p_conversation_id: conversationId, p_target_location_id: studioId })
-    if (error) {
+    if (error && String(error.message || '').includes('same_studio')) {
+      // A burst sibling already moved this thread there: that is the goal.
+      locationId = studioId
+    } else if (error) {
       logError('wa-studio-pick', 'move failed; thread stays', { conversationId, studioId, err: error.message })
       await record(db, conversationId, { status: 'unresolved', reason: 'move_failed', by, location_id: studioId })
       return { action: 'unresolved', locationId, conversationId }
+    } else {
+      conversationId = data?.conversation_id || conversationId
+      locationId = studioId
     }
-    conversationId = data?.conversation_id || conversationId
-    locationId = studioId
   }
   await record(db, conversationId, { status: 'decided', by, location_id: studioId })
   return { action: 'decided', locationId, conversationId }
 }
 
 async function ask(db, ctx, cfg) {
+  const { conversationId, threadLocationId } = ctx
+  // Claim the question BEFORE sending: a compare-and-set on a still-null
+  // resolution, so a burst of first messages sends exactly one picker.
+  const { data: claimed, error: claimError } = await db.from('whatsapp_conversations')
+    .update({ studio_resolution: { status: 'asked', at: new Date().toISOString() } })
+    .eq('id', conversationId).is('studio_resolution', null).select('id')
+  if (claimError) {
+    logError('wa-studio-pick', 'picker claim failed; carrying on', { conversationId, err: claimError.message })
+    return { action: 'skip', locationId: threadLocationId, conversationId }
+  }
+  // Another message owns the question: stay quiet, it is already on its way.
+  if (!claimed?.length) return { action: 'asked', locationId: threadLocationId, conversationId }
+
   const question = stripEmDashes(cfg.question)
   const options = cfg.studios.map((s) => ({ id: `${PICKER_ID_PREFIX}${s.id}`, title: s.label }))
+  let sent
   try {
-    const sent = await sendInteractiveOptions(ctx.senderPhone, question, options,
-      { locationId: ctx.threadLocationId, replyInConversation: ctx.conversationId })
-    const { error } = await db.from('whatsapp_messages').insert({
-      conversation_id: ctx.conversationId, contact_id: null, location_id: ctx.threadLocationId,
-      wa_message_id: sent?.messageId || null, direction: 'outbound', message_type: 'interactive',
-      body: question, status: 'sent', source: AGENT_MESSAGE_SOURCE, sent_at: new Date().toISOString(),
-    })
-    if (error) logError('wa-studio-pick', 'picker sent but not logged', { conversationId: ctx.conversationId, err: error.message })
-    await record(db, ctx.conversationId, { status: 'asked' })
-    return { action: 'asked', locationId: ctx.threadLocationId, conversationId: ctx.conversationId }
+    sent = await sendInteractiveOptions(ctx.senderPhone, question, options,
+      { locationId: threadLocationId, replyInConversation: conversationId })
   } catch (e) {
-    logWarn('wa-studio-pick', 'picker send failed; carrying on', { conversationId: ctx.conversationId, err: e?.message || String(e) })
-    await record(db, ctx.conversationId, { status: 'unresolved', reason: 'ask_failed' })
-    return { action: 'unresolved', locationId: ctx.threadLocationId, conversationId: ctx.conversationId }
+    logWarn('wa-studio-pick', 'picker send failed; carrying on', { conversationId, err: e?.message || String(e) })
+    // We own the claim, so this overwrite is unconditional.
+    const { error } = await db.from('whatsapp_conversations')
+      .update({ studio_resolution: { status: 'unresolved', reason: 'ask_failed', at: new Date().toISOString() } }).eq('id', conversationId)
+    if (error) logError('wa-studio-pick', 'studio_resolution write failed', { conversationId, err: error.message })
+    return { action: 'unresolved', locationId: threadLocationId, conversationId }
   }
+  // The picker is out. A failed log row is reported, never allowed to undo that.
+  const { error } = await db.from('whatsapp_messages').insert({
+    conversation_id: conversationId, contact_id: null, location_id: threadLocationId,
+    wa_message_id: sent?.messageId || null, direction: 'outbound', message_type: 'interactive',
+    body: question, status: 'sent', source: AGENT_MESSAGE_SOURCE, sent_at: new Date().toISOString(),
+  })
+  if (error) logError('wa-studio-pick', 'picker sent but not logged', { conversationId, err: error.message })
+  return { action: 'asked', locationId: threadLocationId, conversationId }
 }
 
 export async function resolveNewSenderStudio(db, ctx) {
@@ -67,11 +95,14 @@ export async function resolveNewSenderStudio(db, ctx) {
     const cfg = await readPickerConfig(db, ctx.receivingLocationId)
     if (!cfg?.enabled || cfg.studios.length < 2) return skip
     const ids = cfg.studios.map((s) => s.id)
-    const hasText = TEXT_TYPES.has(ctx.messageType) && String(ctx.body || '').trim() && !String(ctx.body).startsWith('[')
+    const hasText = TEXT_TYPES.has(ctx.messageType) && String(ctx.body || '').trim()
+      && !(ctx.messageType === 'interactive' && ctx.message?.interactive?.type === 'nfm_reply')
 
     if (status === 'asked') {
       const tapped = tapSignal(ctx.message, ids)
       if (tapped) return await decide(db, ctx, tapped, 'picker')
+      // A reaction, sticker, voice note... cannot answer; leave the question open.
+      if (NON_ANSWER_TYPES.has(ctx.messageType)) return { action: 'asked', locationId: ctx.threadLocationId, conversationId: ctx.conversationId }
       if (hasText) {
         const c = await classifyStudio({ text: ctx.body, studios: cfg.studios, locationId: ctx.receivingLocationId })
         if (c.studioId) return await decide(db, ctx, c.studioId, 'ai')

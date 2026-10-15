@@ -5,7 +5,8 @@ vi.mock('./signals', () => ({ adSignal: vi.fn(), replySignal: vi.fn(), tapSignal
 vi.mock('./classify', () => ({ classifyStudio: vi.fn() }))
 vi.mock('@/lib/whatsapp', () => ({ sendInteractiveOptions: vi.fn() }))
 vi.mock('@/lib/agent/core', () => ({ AGENT_MESSAGE_SOURCE: 'agent', stripEmDashes: (s) => s }))
-vi.mock('../log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
+vi.mock('../log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
+import { logError } from '../log'
 import { readPickerConfig } from './config'
 import { adSignal, replySignal, tapSignal } from './signals'
 import { classifyStudio } from './classify'
@@ -16,23 +17,52 @@ const CFG = { enabled: true, question: 'Which studio?', studios: [{ id: 'a1', la
 const base = { conversationId: 'c1', threadLocationId: 'a1', receivingLocationId: 'a1', contactId: null, resolution: null, messageType: 'text', body: 'hi', senderPhone: '353000000000', message: { type: 'text', text: { body: 'hi' } } }
 
 let updates
+let ops
 let inserts
+let claimResults
+let claimError
+let insertError
 let db
 const recorded = () => updates[updates.length - 1]
+const lastOps = () => ops[ops.length - 1]
+const FINAL_FILTER = 'studio_resolution.is.null,studio_resolution->>status.eq.asked'
+// An update builder: records patch + chained filters, and is a thenable like supabase's.
+function updateBuilder(patch) {
+  const chain = []
+  updates.push(patch.studio_resolution)
+  ops.push(chain)
+  const b = {
+    eq: (...a) => { chain.push(['eq', ...a]); return b },
+    is: (...a) => { chain.push(['is', ...a]); return b },
+    or: (...a) => { chain.push(['or', ...a]); return b },
+    select: (...a) => { chain.push(['select', ...a]); return b },
+    then: (res, rej) => {
+      const isClaim = chain.some((o) => o[0] === 'is')
+      let out = { data: [{ id: 'row' }], error: null }
+      if (isClaim) out = claimError ? { data: null, error: claimError } : (claimResults.shift() || out)
+      return Promise.resolve(out).then(res, rej)
+    },
+  }
+  return b
+}
 const messageInsert = () => inserts[inserts.length - 1]
 
 beforeEach(() => {
   vi.resetAllMocks()
   updates = []
+  ops = []
   inserts = []
+  claimResults = []
+  claimError = null
+  insertError = null
   db = {
     rpc: vi.fn(),
     from: vi.fn((table) => {
       if (table === 'whatsapp_conversations') {
-        return { update: vi.fn((patch) => ({ eq: vi.fn(async () => { updates.push(patch.studio_resolution); return { error: null } }) })) }
+        return { update: vi.fn((patch) => updateBuilder(patch)) }
       }
       if (table === 'whatsapp_messages') {
-        return { insert: vi.fn(async (row) => { inserts.push(row); return { error: null } }) }
+        return { insert: vi.fn(async (row) => { inserts.push(row); return { error: insertError } }) }
       }
       throw new Error(`unexpected table ${table}`)
     }),
@@ -141,6 +171,88 @@ describe('resolveNewSenderStudio', () => {
     expect(r.action).toBe('asked')
     expect(sendInteractiveOptions).toHaveBeenCalledTimes(1)
     expect(tapSignal).not.toHaveBeenCalled()
+  })
+
+  it('a burst of first messages sends exactly ONE picker: the loser of the claim returns asked and stays quiet', async () => {
+    claimResults = [{ data: [{ id: 'c1' }], error: null }, { data: [], error: null }]
+    sendInteractiveOptions.mockResolvedValue({ messageId: 'wamid.P' })
+    const [a, b] = await Promise.all([resolveNewSenderStudio(db, base), resolveNewSenderStudio(db, base)])
+    expect(sendInteractiveOptions).toHaveBeenCalledTimes(1)
+    expect([a.action, b.action]).toEqual(['asked', 'asked'])
+    expect(inserts).toHaveLength(1)
+    // the claim is a compare-and-set on a still-null resolution
+    expect(ops.slice(0, 2).every((o) => o.some((x) => x[0] === 'is' && x[1] === 'studio_resolution' && x[2] === null))).toBe(true)
+  })
+
+  it('a claim write error: no picker, carries on (skip)', async () => {
+    claimError = { message: 'db down' }
+    const r = await resolveNewSenderStudio(db, base)
+    expect(r).toEqual({ action: 'skip', locationId: 'a1', conversationId: 'c1' })
+    expect(sendInteractiveOptions).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalled()
+  })
+
+  it('a failed message-log insert after a successful send is logged only: still asked, status not flipped', async () => {
+    insertError = { message: 'insert failed' }
+    sendInteractiveOptions.mockResolvedValueOnce({ messageId: 'wamid.P' })
+    const r = await resolveNewSenderStudio(db, base)
+    expect(r.action).toBe('asked')
+    expect(recorded()).toMatchObject({ status: 'asked' })
+    expect(updates).toHaveLength(1)
+    expect(logError).toHaveBeenCalled()
+  })
+
+  it('ask_failed overwrites the claim unconditionally (we own it)', async () => {
+    sendInteractiveOptions.mockRejectedValueOnce(new Error('window closed'))
+    await resolveNewSenderStudio(db, base)
+    expect(lastOps().map((o) => o[0])).toEqual(['eq'])
+  })
+
+  it('a burst sibling already moved the thread (same_studio) → decided, not move_failed', async () => {
+    adSignal.mockResolvedValueOnce('a2')
+    db.rpc.mockResolvedValueOnce({ data: null, error: { code: '22023', message: 'same_studio' } })
+    const r = await resolveNewSenderStudio(db, base)
+    expect(r).toEqual({ action: 'decided', locationId: 'a2', conversationId: 'c1' })
+    expect(recorded()).toMatchObject({ status: 'decided', by: 'ad', location_id: 'a2' })
+  })
+
+  it('every final write is conditional on the row not already being final', async () => {
+    adSignal.mockResolvedValueOnce('a2')
+    db.rpc.mockResolvedValueOnce({ data: { conversation_id: 'c1', merged: false }, error: null })
+    await resolveNewSenderStudio(db, base)
+    expect(lastOps()).toContainEqual(['or', FINAL_FILTER])
+    adSignal.mockResolvedValueOnce('a2')
+    db.rpc.mockResolvedValueOnce({ data: null, error: { code: '23505', message: 'dup' } })
+    await resolveNewSenderStudio(db, base)
+    expect(recorded()).toMatchObject({ reason: 'move_failed' })
+    expect(lastOps()).toContainEqual(['or', FINAL_FILTER])
+    await resolveNewSenderStudio(db, { ...base, resolution: { status: 'asked' } })
+    expect(recorded()).toMatchObject({ reason: 'no_answer' })
+    expect(lastOps()).toContainEqual(['or', FINAL_FILTER])
+  })
+
+  it('asked + a reaction/sticker/voice note does not burn the question: stays asked, no write, no classifier', async () => {
+    for (const messageType of ['reaction', 'sticker', 'audio', 'unsupported', 'system', 'request_welcome']) {
+      const r = await resolveNewSenderStudio(db, { ...base, resolution: { status: 'asked' }, messageType, body: '[x]', message: { type: messageType } })
+      expect(r.action).toBe('asked')
+    }
+    expect(updates).toHaveLength(0)
+    expect(classifyStudio).not.toHaveBeenCalled()
+    expect(sendInteractiveOptions).not.toHaveBeenCalled()
+  })
+
+  it('a body that starts with a bracket is still text: classified', async () => {
+    classifyStudio.mockResolvedValueOnce({ studioId: 'a2', reason: 'decided' })
+    db.rpc.mockResolvedValueOnce({ data: { conversation_id: 'c1', merged: false }, error: null })
+    await resolveNewSenderStudio(db, { ...base, body: '[urgent] is hatch open?' })
+    expect(classifyStudio).toHaveBeenCalledWith(expect.objectContaining({ text: '[urgent] is hatch open?' }))
+  })
+
+  it('a flow (nfm_reply) answer is not free text: never classified', async () => {
+    sendInteractiveOptions.mockResolvedValueOnce({ messageId: 'wamid.P' })
+    const r = await resolveNewSenderStudio(db, { ...base, messageType: 'interactive', body: '{"x":1}', message: { type: 'interactive', interactive: { type: 'nfm_reply' } } })
+    expect(r.action).toBe('asked')
+    expect(classifyStudio).not.toHaveBeenCalled()
   })
 
   it('never throws: an internal error → skip, logged', async () => {
