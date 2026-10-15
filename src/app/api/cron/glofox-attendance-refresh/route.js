@@ -26,6 +26,10 @@
 //      so this is the only place the whole base gets it refreshed.
 // Together these are the prerequisite for the churn-risk radar.
 //
+// ATTPROSPECTS.1 — before the members, every OTHER active contact at the
+// studio except ClassPass (trials, leads, tours, cold …) gets step 1 only, so
+// their 7-/30-day counts are current too. See PROSPECT_* below.
+//
 // Members are processed stalest-glofox_synced_at-first and the run
 // is time-budgeted: if a run can't finish the whole base it stops
 // cleanly and the next run resumes from the stalest remaining
@@ -43,6 +47,7 @@ import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
 import { computeBookingAggregates, mergeBookingAggregates, trimRecentBookings, extractMembershipPlan, extractMembershipState, extractMemberProfile } from '@/lib/glofox-sync'
 import { logWarn } from '@/lib/log'
+import { dayStrIn, DAY_MS } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,6 +61,19 @@ const TIME_BUDGET_MS = 250_000
 // Membership tiers that count as paying members — the churn radar's
 // population. Drop-in tiers (classpass_payg) and prospects are out.
 const MEMBER_STATUSES = ['member', 'credit_member']
+
+// ATTPROSPECTS.1 — the non-member contacts that get the bookings refresh.
+// ClassPass is left out (Richard, 15 Oct 2026). Only the ACTIVE ones: a booking
+// or an attended class in the last PROSPECT_WINDOW_DAYS, or a stored count
+// that still has to decay to 0. That was ~76 contacts against ~5,700 on file
+// at Stillorgan (15 Oct 2026, run ~212s of the 250s budget), so this adds
+// seconds; the whole population would blow the budget many times over.
+// Bookings only, no member read: the delta sync keeps their profile, and it
+// halves the Glofox calls. They run BEFORE the members: they are few and
+// bounded, and an over-budget member run rotates stalest-first anyway, while
+// a list run after it would never be reached.
+const PROSPECT_EXCLUDED_STATUSES = [...MEMBER_STATUSES, 'classpass_payg']
+const PROSPECT_WINDOW_DAYS = 35
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -114,6 +132,8 @@ function attendanceOutcome(perLocation, budgetExhausted, glofoxHttp, skipped = [
     update_failed: sum('update_failed'),
     // A run where every location failed would otherwise read as all zeros (idle).
     failed_locations: perLocation.filter((r) => r.status === 'failed').length,
+    prospects: ['eligible', 'refreshed', 'fetch_failed', 'update_failed']
+      .reduce((o, k) => ({ ...o, [k]: perLocation.reduce((n, r) => n + (r.prospects?.[k] ?? 0), 0) }), {}),
     budget_exhausted: budgetExhausted,
     glofox_http: glofoxHttp,
   }
@@ -128,6 +148,7 @@ async function refreshLocation(db, location, startedAt) {
   // member (200 success:false "Resource not available" = a deleted/merged
   // account). Not a blip, so it is counted apart from membership_failed.
   const summary = { refreshed: 0, fetch_failed: 0, update_failed: 0, membership_failed: 0, member_refused: 0 }
+  const prospects = { eligible: 0, refreshed: 0, fetch_failed: 0, update_failed: 0 }
   const httpBefore = glofoxHttpStats()
   let budgetExhausted = false
 
@@ -136,7 +157,11 @@ async function refreshLocation(db, location, startedAt) {
     .from('glofox_sync_runs')
     .insert({
       location_id: location.id,
-      filter_used: { attendance_refresh: true, statuses: MEMBER_STATUSES },
+      filter_used: {
+        attendance_refresh: true,
+        statuses: MEMBER_STATUSES,
+        prospects: { excluded_statuses: PROSPECT_EXCLUDED_STATUSES, window_days: PROSPECT_WINDOW_DAYS },
+      },
       status: 'running',
     })
     .select('id')
@@ -157,6 +182,21 @@ async function refreshLocation(db, location, startedAt) {
     }
     if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
       throw new Error('Glofox credentials missing on this location.')
+    }
+
+    // ATTPROSPECTS.1 — the active non-members first (see PROSPECT_* above).
+    const prospectRows = await listProspects(db, location.id)
+    prospects.eligible = prospectRows.length
+    for (const p of prospectRows) {
+      if (Date.now() - startedAt > TIME_BUDGET_MS) { budgetExhausted = true; break }
+      const { ok, bookings } = await fetchUserBookingsResult(creds, p.glofox_member_id)
+      if (!ok) { prospects.fetch_failed++; continue }
+      const { error: upErr } = await db
+        .from('contacts')
+        .update(attendanceUpdate(p, bookings))
+        .eq('id', p.id)
+      if (upErr) prospects.update_failed++
+      else prospects.refreshed++
     }
 
     // Stalest glofox_synced_at first so each run advances coverage.
@@ -198,23 +238,7 @@ async function refreshLocation(db, location, startedAt) {
         continue
       }
 
-      const aggs = computeBookingAggregates(bookings)
-      // mergeBookingAggregates: the 7-/30-day counts always refresh,
-      // but last_attended_at / last_booked_at are advance-only — so
-      // this 30-day fetch window can NEVER wipe a real historical
-      // attendance date for a member who simply hasn't trained in the
-      // last month. (Previously it overwrote those dates with null,
-      // making ~80% of the member base look like zero-activity ghosts.)
-      const update = {
-        ...mergeBookingAggregates(m, aggs),
-        glofox_synced_at: new Date().toISOString(),
-      }
-      // recent_bookings drives the contact-profile history list — only
-      // refresh it when we actually fetched bookings, so an empty
-      // 30-day window doesn't blank a member's recent-bookings panel.
-      if (bookings.length > 0) {
-        update.recent_bookings = trimRecentBookings(bookings, 10)
-      }
+      const update = attendanceUpdate(m, bookings)
 
       // CHURN-PREP.2 — also refresh the current membership plan +
       // lifecycle state (active/paused/cancelled) from the
@@ -253,7 +277,7 @@ async function refreshLocation(db, location, startedAt) {
         duration_ms: Date.now() - startedAt,
         leads_processed: summary.refreshed,
         total_available: eligibleCount,
-        summary: { ...summary, glofox_http: glofoxHttpStatsSince(httpBefore) },
+        summary: { ...summary, prospects, glofox_http: glofoxHttpStatsSince(httpBefore) },
         status: 'completed',
       }).eq('id', runId)
     }
@@ -263,6 +287,7 @@ async function refreshLocation(db, location, startedAt) {
       status: 'completed',
       eligible: eligibleCount,
       summary,
+      prospects,
       budget_exhausted: budgetExhausted,
     }
   } catch (e) {
@@ -272,7 +297,7 @@ async function refreshLocation(db, location, startedAt) {
         finished_at: new Date().toISOString(),
         duration_ms: Date.now() - startedAt,
         first_error: msg,
-        summary,
+        summary: { ...summary, prospects },
         status: 'failed',
       }).eq('id', runId)
     }
@@ -283,7 +308,65 @@ async function refreshLocation(db, location, startedAt) {
       status: 'failed',
       error: msg,
       summary,
+      prospects,
       budget_exhausted: false,
     }
   }
+}
+
+/**
+ * The contacts update for one fresh bookings fetch. mergeBookingAggregates:
+ * the 7-/30-day counts always refresh, but last_attended_at / last_booked_at
+ * are advance-only, so this 30-day fetch window can NEVER wipe a real
+ * historical attendance date for someone who simply hasn't trained in the
+ * last month. (Previously it overwrote those dates with null, making ~80% of
+ * the member base look like zero-activity ghosts.)
+ */
+function attendanceUpdate(contact, bookings) {
+  const update = {
+    ...mergeBookingAggregates(contact, computeBookingAggregates(bookings)),
+    glofox_synced_at: new Date().toISOString(),
+  }
+  // recent_bookings drives the contact-profile history list — only refresh it
+  // when we actually fetched bookings, so an empty 30-day window doesn't blank
+  // someone's recent-bookings panel.
+  if (bookings.length > 0) {
+    update.recent_bookings = trimRecentBookings(bookings, 10)
+  }
+  return update
+}
+
+/**
+ * ATTPROSPECTS.1 — the active non-member, non-ClassPass Glofox contacts at one
+ * location, stalest glofox_synced_at first, paged past the 1,000-row cap.
+ */
+async function listProspects(db, locationId) {
+  // A day string, not an instant: the PostgREST or() grammar reserves '.' and
+  // ':', and a day either side does not matter to a 35-day window.
+  const since = dayStrIn(new Date(Date.now() - PROSPECT_WINDOW_DAYS * DAY_MS))
+  const rows = []
+  const PAGE = 1000
+  for (let from = 0; ; from += PAGE) {
+    const { data: page, error } = await db
+      .from('contacts')
+      .select('id, glofox_member_id, last_attended_at, last_booked_at')
+      .eq('location_id', locationId)
+      .not('glofox_member_id', 'is', null)
+      .not('glofox_membership_status', 'in', `(${PROSPECT_EXCLUDED_STATUSES.join(',')})`)
+      .or([
+        `last_booked_at.gte.${since}`,
+        `last_attended_at.gte.${since}`,
+        'total_bookings_30d.gt.0',
+        'total_attended_30d.gt.0',
+        'total_attended_7d.gt.0',
+        'total_noshow_30d.gt.0',
+      ].join(','))
+      .order('glofox_synced_at', { ascending: true, nullsFirst: true })
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) throw new Error(error.message)
+    rows.push(...(page || []))
+    if (!page || page.length < PAGE) break
+  }
+  return rows
 }
