@@ -24,7 +24,12 @@ function makeDb(state) {
         writes.push({ table, op, payload })
         return { data: { id: row.id }, error: null }
       }
-      if (op === 'update') { writes.push({ table, op, payload }); return { data: null, error: null } }
+      if (op === 'update') {
+        writes.push({ table, op, payload })
+        if (state.failUpdate) return { data: null, error: { message: state.failUpdate } }
+        for (const r of (state[table] || []).filter((row) => filters.every((f) => f(row)))) Object.assign(r, payload)
+        return { data: null, error: null }
+      }
       const rows = (state[table] || []).filter((r) => filters.every((f) => f(r)))
       return { data: rows, error: null }
     }
@@ -33,6 +38,7 @@ function makeDb(state) {
       insert: (p) => { op = 'insert'; payload = p; return b },
       update: (p) => { op = 'update'; payload = p; return b },
       eq: (c, v) => { filters.push((r) => r[c] === v); return b },
+      is: (c, v) => { filters.push((r) => (r[c] ?? null) === v); return b },
       order: () => b,
       limit: () => b,
       single: async () => { const o = run(); return { data: Array.isArray(o.data) ? o.data[0] ?? null : o.data, error: o.error } },
@@ -78,5 +84,36 @@ describe('getOrCreateConversation — WAHOMESTUDIO.1', () => {
     await getOrCreateConversation(makeDb(state), { id: 'k2', wa_phone: '15555550101', location_id: STILL }, STILL)
     expect(state.whatsapp_conversations[0]).toMatchObject({ location_id: STILL })
     expect(state.whatsapp_conversations[0]).not.toHaveProperty('whatsapp_number_id')
+  })
+
+  // F4 (R3 completeness) — a home thread opened before WAHOMESTUDIO.1 (or by a
+  // path that did not stamp) gets the sending studio's number, so the reply
+  // into it resolves (getConversationNumberConfig). Logged, never thrown.
+  it('an existing UNSTAMPED home thread is stamped with the sending studio’s default active number', async () => {
+    state.whatsapp_conversations.push({ id: 'conv-hatch', location_id: HATCH, wa_phone: '15555550100', contact_id: 'k1', whatsapp_number_id: null })
+    numberlessHomeStudio.mockResolvedValueOnce(HATCH)
+    const db = makeDb(state)
+    expect(await getOrCreateConversation(db, { id: 'k1', wa_phone: '15555550100' }, STILL)).toBe('conv-hatch')
+    expect(state.whatsapp_conversations[0].whatsapp_number_id).toBe('n-still')
+    expect(db.writes).toEqual([{ table: 'whatsapp_conversations', op: 'update', payload: { whatsapp_number_id: 'n-still' } }])
+  })
+
+  it('an existing home thread that is already stamped is left alone', async () => {
+    state.whatsapp_conversations.push({ id: 'conv-hatch', location_id: HATCH, wa_phone: '15555550100', contact_id: 'k1', whatsapp_number_id: 'n-other' })
+    numberlessHomeStudio.mockResolvedValueOnce(HATCH)
+    const db = makeDb(state)
+    expect(await getOrCreateConversation(db, { id: 'k1', wa_phone: '15555550100' }, STILL)).toBe('conv-hatch')
+    expect(state.whatsapp_conversations[0].whatsapp_number_id).toBe('n-other')
+    expect(db.writes).toEqual([])
+  })
+
+  it('a failed stamp on the existing home thread is logged and the thread is still returned', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    state.whatsapp_conversations.push({ id: 'conv-hatch', location_id: HATCH, wa_phone: '15555550100', contact_id: 'k1', whatsapp_number_id: null })
+    state.failUpdate = 'boom'
+    numberlessHomeStudio.mockResolvedValueOnce(HATCH)
+    expect(await getOrCreateConversation(makeDb(state), { id: 'k1', wa_phone: '15555550100' }, STILL)).toBe('conv-hatch')
+    expect(errSpy).toHaveBeenCalledWith('[whatsapp] getOrCreateConversation: number stamp on the home thread failed', 'conv-hatch', 'boom')
+    errSpy.mockRestore()
   })
 })

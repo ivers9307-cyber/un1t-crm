@@ -86,8 +86,22 @@ export async function ingestCoexistenceMessage(db, { locationId, numberId = null
 
   const waPhone = n?.without || peerPhone || 'unknown'
   const { data: existingConv } = await db
-    .from('whatsapp_conversations').select('id').eq('location_id', threadLocationId).eq('wa_phone', waPhone).limit(1).maybeSingle()
+    .from('whatsapp_conversations').select('id, whatsapp_number_id').eq('location_id', threadLocationId).eq('wa_phone', waPhone).limit(1).maybeSingle()
   let conversationId = existingConv?.id
+  // An existing home thread with no stamp (opened before WAHOMESTUDIO.1) gets
+  // the receiving number too, or a reply into it has no number to resolve.
+  // Only while unstamped; a lost stamp is logged, never thrown.
+  if (conversationId && home && numberId && !existingConv.whatsapp_number_id) {
+    const { error: numberStampErr } = await db.from('whatsapp_conversations')
+      .update({ whatsapp_number_id: numberId })
+      .eq('id', conversationId)
+      .is('whatsapp_number_id', null)
+    if (numberStampErr) {
+      logError('wa-coexistence', 'number stamp on the existing home thread failed (replies into it have no number)', {
+        conversationId, locationId, numberId, err: numberStampErr.message,
+      })
+    }
+  }
   if (!conversationId) {
     const { data: newConv, error: convErr } = await db
       .from('whatsapp_conversations')

@@ -16,7 +16,7 @@ function makeDb(handlers) {
       const builder = {
         select() { return builder }, insert(v) { ctx.op = 'insert'; ctx.values = v; return builder },
         update(v) { ctx.op = 'update'; ctx.values = v; return builder },
-        eq(c, v) { ctx.filters.push(['eq', c, v]); return builder }, is() { return builder },
+        eq(c, v) { ctx.filters.push(['eq', c, v]); return builder }, is(c, v) { ctx.filters.push(['is', c, v]); return builder },
         neq(c, v) { ctx.filters.push(['neq', c, v]); return builder },
         in(c, v) { ctx.filters.push(['in', c, v]); return builder },
         or(f) { ctx.filters.push(['or', f]); return builder },
@@ -368,5 +368,58 @@ describe('ingestCoexistenceMessage — thread filed at a number-less home studio
     })
     const convInsert = writes.find((w) => w.table === 'whatsapp_conversations' && w.op === 'insert')
     expect(convInsert.values).toEqual({ location_id: 'loc-still', contact_id: 'k1', wa_phone: '353222', status: 'active' })
+  })
+})
+
+// F4 (R3 completeness) — an EXISTING home thread with no stamp (opened before
+// WAHOMESTUDIO.1) gets the receiving number, or a reply into it has no number
+// to resolve. Logged, never thrown; the message is stored either way.
+describe('ingestCoexistenceMessage — an existing unstamped home thread is stamped (F4)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  function homeDb({ existing, updateError = null }) {
+    const writes = []
+    const db = makeDb((ctx) => {
+      if (ctx.op) writes.push({ table: ctx.table, op: ctx.op, values: ctx.values, filters: ctx.filters })
+      if (ctx.table === 'whatsapp_messages') return { data: ctx.op === 'insert' ? { id: 'm1' } : null, error: null }
+      if (ctx.table === 'contacts') return { data: { id: 'k1', location_id: 'loc-hatch' }, error: null }
+      if (ctx.table === 'whatsapp_conversations') {
+        if (ctx.op === 'update') return { data: null, error: updateError }
+        if (!ctx.op) return { data: existing, error: null }
+      }
+      return { data: null, error: null }
+    })
+    return { db, writes }
+  }
+  const inbound = { waMessageId: 'wamid.HOME9', peerPhone: '353222', direction: 'inbound', messageType: 'text', body: 'x', tsSeconds: 1700000000 }
+  const stampWrites = (writes) => writes.filter((w) => w.table === 'whatsapp_conversations' && w.op === 'update' && 'whatsapp_number_id' in (w.values || {}))
+
+  it('stamps the existing home thread with the receiving number, only while it is unstamped', async () => {
+    numberlessHomeStudio.mockResolvedValueOnce('loc-hatch')
+    const { db, writes } = homeDb({ existing: { id: 'conv-h', whatsapp_number_id: null } })
+    const r = await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: inbound })
+    expect(r).toMatchObject({ inserted: true, conversationId: 'conv-h' })
+    expect(stampWrites(writes)).toEqual([{
+      table: 'whatsapp_conversations', op: 'update', values: { whatsapp_number_id: 'wn-1' },
+      filters: [['eq', 'id', 'conv-h'], ['is', 'whatsapp_number_id', null]],
+    }])
+  })
+
+  it('leaves an already-stamped home thread alone', async () => {
+    numberlessHomeStudio.mockResolvedValueOnce('loc-hatch')
+    const { db, writes } = homeDb({ existing: { id: 'conv-h', whatsapp_number_id: 'wn-9' } })
+    await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: inbound })
+    expect(stampWrites(writes)).toEqual([])
+  })
+
+  it('a failed stamp is logged and the message is still stored', async () => {
+    numberlessHomeStudio.mockResolvedValueOnce('loc-hatch')
+    const { db, writes } = homeDb({ existing: { id: 'conv-h', whatsapp_number_id: null }, updateError: { message: 'boom' } })
+    const r = await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: inbound })
+    expect(r).toMatchObject({ inserted: true, conversationId: 'conv-h' })
+    expect(writes.some((w) => w.table === 'whatsapp_messages' && w.op === 'insert')).toBe(true)
+    expect(logError).toHaveBeenCalledWith('wa-coexistence', 'number stamp on the existing home thread failed (replies into it have no number)', {
+      conversationId: 'conv-h', locationId: 'loc-still', numberId: 'wn-1', err: 'boom',
+    })
   })
 })
