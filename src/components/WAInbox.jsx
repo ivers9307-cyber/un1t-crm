@@ -263,6 +263,41 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     return () => clearInterval(pollRef.current)
   }, [locationId, fetchConversations, fetchTemplates])
 
+  // WAHOMESTUDIO.1 (R5) — inside a thread, ask for templates by conversation: a
+  // thread replying through a same-organisation sibling's number lists that
+  // studio's templates. A separate effect keyed on the thread id, NOT a change
+  // to fetchTemplates' deps: its identity must stay put or every thread click
+  // would re-run the initial-load effect (fetchConversations + the 60s poll).
+  // With no thread open the location list above stays as it is.
+  const threadTemplatesRef = useRef(false)
+  const openThreadId = conversation?.id || null
+  useEffect(() => {
+    if (!openThreadId) {
+      // Back to no thread: restore the location list if a thread's replaced it.
+      if (threadTemplatesRef.current) {
+        threadTemplatesRef.current = false
+        fetchTemplates()
+      }
+      return
+    }
+    let stale = false
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/whatsapp/templates?conversation_id=${openThreadId}&status=APPROVED`)
+        const data = await res.json()
+        // The thread changed while this was in flight: drop the answer.
+        if (stale) return
+        if (data.success) {
+          threadTemplatesRef.current = true
+          setTemplates(data.templates || [])
+        }
+      } catch (err) {
+        if (!stale) console.error('Failed to fetch thread templates:', err)
+      }
+    })()
+    return () => { stale = true }
+  }, [openThreadId, fetchTemplates])
+
   // Realtime subscription — push updates instead of polling. RLS scopes
   // events to rows the user can read, so the per-location filter is
   // already enforced server-side. We listen on:

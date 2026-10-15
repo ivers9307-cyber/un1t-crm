@@ -106,9 +106,9 @@ const CALLERS = {
     why: 'chat openers on the location’s own number (C33 WAROLE.1), 409 / 500 before Meta.',
   },
   'src/app/api/whatsapp/templates/route.js': {
-    calls: { createTemplate: 1, getTemplates: 1, ownNumberOrRefusal: 2 },
+    calls: { createTemplate: 1, getTemplates: 1, ownNumberOrRefusal: 2, templateLocationIdFor: 1 },
     decision: 'own-number',
-    why: 'create: 409 / 500 before Meta (it named no location, so it always used the env WABA). Sync: sync_error, Meta not called, cache served (it copied the env WABA’s templates into a number-less location). route.own-number.test.js.',
+    why: 'create: 409 / 500 before Meta (it named no location, so it always used the env WABA). Sync: sync_error, Meta not called, cache served (it copied the env WABA’s templates into a number-less location). route.own-number.test.js. WAHOMESTUDIO.1: ?conversation_id= serves the thread number owner’s cached rows, no sync.',
   },
   'src/app/api/whatsapp/templates/[id]/route.js': {
     calls: { deleteTemplate: 1, ownNumberOrRefusal: 1 },
@@ -151,9 +151,9 @@ const CALLERS = {
     why: 'scheduled blast or (C138 b) scheduled drip start refusal: row stays draft, managers pushed; drip: paused by sendDripChunk (no error loop); a resumed chunked blast logs per tick (existing path).',
   },
   'src/app/api/whatsapp/conversations/[id]/send/route.js': {
-    calls: { sendTemplateMessage: 1, sendMediaMessage: 1, sendTextMessage: 1 },
+    calls: { sendTemplateMessage: 1, sendMediaMessage: 1, sendTextMessage: 1, templateLocationIdFor: 1 },
     decision: 'refuse-409',
-    why: 'inbox reply: 409, nothing logged (it replied from another studio’s number, so the answer went to that studio). route.test.js.',
+    why: 'inbox reply: 409, nothing logged (it replied from another studio’s number, so the answer went to that studio). route.test.js. WAHOMESTUDIO.1: template rows read from templateLocationIdFor (the thread number’s owner); a Flow-button template across studios is a 400.',
   },
   'src/app/api/whatsapp/conversations/[id]/react/route.js': {
     calls: { sendReaction: 1 },

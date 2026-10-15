@@ -112,13 +112,17 @@ export async function getWhatsAppConfig(locationId) {
  * WAREPLYNUMBER.1 (C86) — the number a REPLY into a conversation goes from:
  * the number the customer wrote to. The inbound webhook stamps it on
  * whatsapp_conversations.whatsapp_number_id (mig 696). Used when it is still
- * an active row AT this location; otherwise the location default
+ * an active row AT this location (or, WAHOMESTUDIO.1, a same-organisation
+ * sibling's when this studio has none); otherwise the location default
  * (getWhatsAppConfig, which refuses a number-less studio as ever). A single-
  * number studio resolves the same number either way.
  *
  * A TEMPLATE goes from the thread number only when it shares the default's
  * WABA: templates are synced per location from the default number's account,
- * and Meta only sends a number's own-WABA templates.
+ * and Meta only sends a number's own-WABA templates. The one exception
+ * (WAHOMESTUDIO.1): a number-less studio's thread replies through a
+ * same-organisation sibling's stamped number, and its templates come from that
+ * number's owner (templateLocationIdFor), not from a default it does not have.
  *
  * Any failed read here (including the column not existing yet, before 696 is
  * applied) falls back to the default, logged: losing a reply is worse than

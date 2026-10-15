@@ -43,7 +43,12 @@ import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
 //   opts.replyInConversation — WAREPLYNUMBER.1 (C86): a reply into this
 //                       whatsapp_conversations id goes from the number the
 //                       customer wrote to (getConversationReplyConfig), else
-//                       the location default. Needs opts.locationId.
+//                       the location default. Needs opts.locationId. A template
+//                       goes from the thread number only within the default's
+//                       WABA, except (WAHOMESTUDIO.1) a number-less studio's
+//                       thread, which uses a same-org sibling's stamped number
+//                       and whose templates come from that number's owner
+//                       (templateLocationIdFor).
 async function resolveConfig(opts = {}, { template = false } = {}) {
   if (opts.config) return opts.config
   if (opts.replyInConversation) {
