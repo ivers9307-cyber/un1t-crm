@@ -31,6 +31,7 @@ vi.mock('@/lib/host-brand', () => ({
 }))
 
 import { GET } from './route.js'
+import { buildLiveBoardPayload } from '@/lib/live-board'
 import { resolveLocationBrand } from '@/lib/host-brand'
 import { createServerClient } from '@/lib/supabase'
 import { stampRender } from '@/lib/fleet-render'
@@ -67,6 +68,18 @@ describe('GET /api/public/tv-live/[token]', () => {
     expect(body.ok).toBe(true)
     expect(body.location).toEqual({ id: 'loc-1', name: 'Stillorgan' })
     expect(res.headers.get('Cache-Control')).toBe('no-store')
+  })
+
+  // TVSCENE.1 — the operator idle scene is scoped to the display the TOKEN
+  // resolved to, never to anything the caller supplies.
+  it('hands the token-resolved display id to the board builder', async () => {
+    const db = makeDb({ display: { id: 'disp-7', location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan' } })
+    const res = await callRoute(db, 'good-token')
+    expect(res.status).toBe(200)
+    expect(buildLiveBoardPayload).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ displayId: 'disp-7', location: { id: 'loc-1', name: 'Stillorgan' } }),
+    )
   })
 
   it('returns 404 for an unknown token (no row)', async () => {

@@ -68,7 +68,7 @@ function makeDb({ samples, sessions, location = { id: 'loc-1', name: 'Stillorgan
     rpc: vi.fn(() => Promise.resolve({ data: 1, error: null })), // rate_limit_hit → count 1
     from: vi.fn((table) => {
       if (table === 'tv_displays') {
-        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { location_id: 'loc-1', active: true }, error: null }) }) }) }
+        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { id: 'disp-1', location_id: 'loc-1', active: true }, error: null }) }) }) }
       }
       if (table === 'locations') {
         return { select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: location, error: null }) }) }) }
@@ -216,5 +216,54 @@ describe('GET /api/public/tv-live/[token] — TZ.12 board zone', () => {
     expect(ny.location).toEqual({ id: 'loc-1', name: 'NY' })
     const dub = await (await callRoute(makeDb({ samples: [] }))).json()
     expect(dub.timezone).toBe('Europe/Dublin')
+  })
+})
+
+describe('TVSCENE.1 — idle block', () => {
+  it('carries an idle block when there are no open sessions', async () => {
+    const db = makeDb({ samples: [], sessions: [] })
+    const res = await callRoute(db)
+    const body = await res.json()
+
+    expect(body.sessions).toEqual([])
+    expect(body.idle).toBeDefined()
+    expect(body.idle).toHaveProperty('up_next')
+    expect(body.idle).toHaveProperty('earned')
+    expect(body.idle).toHaveProperty('operator')
+  })
+
+  // Fail-to-absent, end to end: this stub serves no class_occurrences,
+  // contact_achievements or tv_content, so every read inside buildIdleContent
+  // throws and is caught. The block must still arrive, empty — a scene the
+  // scheduler skips is correct; a 500 on a studio TV is not. Content
+  // correctness is covered by src/lib/tv-idle-content.test.js.
+  it('returns an empty idle block rather than failing when the reads cannot be served', async () => {
+    const db = makeDb({ samples: [], sessions: [] })
+    const res = await callRoute(db)
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.idle.up_next).toEqual([])
+    expect(body.idle.earned).toEqual([])
+    expect(body.idle.operator).toBeNull()
+  })
+
+  it('omits idle entirely while a session is open', async () => {
+    const db = makeDb({ samples: [] }) // the file's default fixture carries one session
+    const res = await callRoute(db)
+    const body = await res.json()
+
+    expect(body.sessions.length).toBeGreaterThan(0)
+    expect(body.idle).toBeUndefined()
+  })
+
+  it('does not even read the idle tables while a session is open', async () => {
+    const db = makeDb({ samples: [] })
+    await callRoute(db)
+    const tables = db.from.mock.calls.map(([t]) => t)
+    expect(tables).not.toContain('class_occurrences')
+    expect(tables).not.toContain('contact_achievements')
+    expect(tables).not.toContain('tv_content')
   })
 })

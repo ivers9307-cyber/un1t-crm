@@ -17,6 +17,7 @@ import { getAvailableStraps } from '@/lib/live-class'
 import { resolveCurrentClassForTv } from '@/lib/class-occurrences'
 import { zoneOfLocation, timeLabelIn } from '@/lib/location-time'
 import { selectAll } from '@/lib/select-all'
+import { buildIdleContent } from '@/lib/tv-idle-content'
 
 const RECENT_BPM_WINDOW_MS = 30 * 1000   // moving-avg window for "current"
 const STALE_AFTER_MS = 2 * 60 * 1000     // strap silent for 2min → flag
@@ -27,10 +28,11 @@ const STALE_AFTER_MS = 2 * 60 * 1000     // strap silent for 2min → flag
  * @param {object} db        service-role Supabase client
  * @param {object} opts
  * @param {{ id: string, name: string, timezone?: string|null }} opts.location  the resolved location row
+ * @param {string|null} [opts.displayId]  the tv_displays.id the token resolved to; scopes the operator idle scene
  * @param {number} [opts.nowMs]
- * @returns {Promise<object>} the JSON body ({ ok, server_time, timezone, location, bridge, sessions, available_straps, timer, current_class })
+ * @returns {Promise<object>} the JSON body ({ ok, server_time, timezone, location, bridge, sessions, available_straps, timer, current_class }), plus `idle` when no session is open
  */
-export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }) {
+export async function buildLiveBoardPayload(db, { location, displayId = null, nowMs = Date.now() }) {
   const locationId = location.id
   // TZ.12 — the board tells its own studio's time: the class label below, and
   // `timezone` in the payload for the TV's header clock and overnight poll
@@ -105,6 +107,14 @@ export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }
     : null
 
   if (!sessions || sessions.length === 0) {
+    // TVSCENE.1 — idle scenes. Built ONLY here, so a live class pays nothing
+    // for these three reads. Each one fails to absent, never to an error.
+    const idle = await buildIdleContent(db, {
+      locationId,
+      displayId,
+      zone,
+      nowMs,
+    })
     return {
       ok: true,
       server_time: new Date().toISOString(),
@@ -115,6 +125,7 @@ export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }
       available_straps: availableStraps,
       timer: timerRun || null,
       current_class: currentClass,
+      idle,
     }
   }
 
