@@ -3,6 +3,7 @@ import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter
 import { getWhatsAppConfig, getConversationReplyConfig, META_API_URL } from './whatsapp-config'
 import { isWhatsAppNumberMissing } from './whatsapp-number-missing'
 import { numberlessHomeStudio } from './whatsapp-thread-location'
+import { agentOptionId } from './whatsapp-inbound-tap'
 import {
   PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
   rollingHeadroom, selectDripRecipients, dripOutcome,
@@ -127,7 +128,7 @@ export function buildInteractivePayload(to, text, options) {
         type: 'button',
         body: { text },
         action: {
-          buttons: opts.map((o, i) => ({ type: 'reply', reply: { id: `opt_${i}`, title: String(o).slice(0, 20) } })),
+          buttons: opts.map((o, i) => ({ type: 'reply', reply: { id: agentOptionId(i), title: String(o).slice(0, 20) } })),
         },
       },
     }
@@ -139,7 +140,7 @@ export function buildInteractivePayload(to, text, options) {
       body: { text },
       action: {
         button: 'Choose an option',
-        sections: [{ rows: opts.map((o, i) => ({ id: `opt_${i}`, title: String(o).slice(0, 24) })) }],
+        sections: [{ rows: opts.map((o, i) => ({ id: agentOptionId(i), title: String(o).slice(0, 24) })) }],
       },
     },
   }

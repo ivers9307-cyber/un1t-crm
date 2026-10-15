@@ -248,6 +248,13 @@ export function warnLiveDespiteTestMode(locationId, settings) {
 // a "sent a photo / voice / attachment" page.
 const IGNORABLE_MESSAGE_TYPES = new Set(['reaction'])
 
+// Message types Mia answers as text: a typed message, and a button tap whose
+// body is what the customer tapped (the webhook stores it). 'interactive' is a
+// session button/list reply (Mia's own [[OPTIONS]]); 'button' is a quick-reply
+// on a TEMPLATE (WABUTTONTAP.1: the Meta-ad welcome, which hands the lead to
+// Mia on the tap and used to get the holding message instead).
+const REPLYABLE_MESSAGE_TYPES = new Set(['text', 'interactive', 'button'])
+
 export function shouldAgentReply({ settings, conversation, message, senderPhone, lastOutboundHuman = false, now = new Date(), zone = DEFAULT_TZ }) {
   const s = settings || {}
   const { enabled, testMode } = resolveAgentGate(s)
@@ -297,8 +304,8 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   // caller can ACKNOWLEDGE a non-text message (soft handoff → a human)
   // instead of silently dropping it. (Checked after the on-duty gates so
   // we never acknowledge while disabled, off-allowlist, or in quiet hours.)
-  // 'interactive' = a tapped quick-reply/list button; the webhook maps the
-  // tap to its title in body, so it's a text reply in all but name.
+  // 'interactive' / 'button' = a tapped button or list row; the webhook maps
+  // the tap to its text in body, so it's a text reply in all but name.
   // Voice notes (Richard's call, 2026-06-12): no transcription vendor —
   // audio takes the soft-handoff path below, so Mia acknowledges the
   // voice note and the thread lands in the team's review queue.
@@ -308,7 +315,7 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   if (IGNORABLE_MESSAGE_TYPES.has(type)) {
     return { reply: false, reason: 'ignorable_type' }
   }
-  if (type !== 'text' && type !== 'interactive') {
+  if (!REPLYABLE_MESSAGE_TYPES.has(type)) {
     return { reply: false, reason: 'unsupported_type', onDuty: true }
   }
   if (!String(message?.body || '').trim()) return { reply: false, reason: 'empty', onDuty: true }
@@ -407,7 +414,7 @@ export function formatHistoryForClaude(rows, opts = {}) {
 export function isReplyWorthyInbound(row) {
   if (!row || row.direction !== 'inbound') return false
   const type = row.message_type || 'text'
-  if (type !== 'text' && type !== 'interactive') return false
+  if (!REPLYABLE_MESSAGE_TYPES.has(type)) return false
   if (!String(row.body || '').trim()) return false
   if (type === 'text' && isLikelyBusinessAutoReply(row.body)) return false
   return true

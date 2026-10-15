@@ -83,6 +83,37 @@ describe('shouldAgentReply', () => {
     expect(r).toEqual({ reply: true, reason: 'ok' })
   })
 
+  // WABUTTONTAP.1 — a quick-reply tap on a TEMPLATE arrives as type 'button'.
+  // The Meta-ad welcome hands the lead to Mia on that tap; 'button' used to be
+  // unsupported_type, so the lead got the holding message instead.
+  it('treats a template quick-reply tap (type button) as a text reply', () => {
+    const r = shouldAgentReply({
+      settings: { enabled: true },
+      conversation: { agent_active: true },
+      message: { type: 'button', body: 'Book a consultation' },
+      senderPhone: '353870000000',
+    })
+    expect(r).toEqual({ reply: true, reason: 'ok' })
+  })
+  it('a button tap with an empty body is empty, not answered', () => {
+    const r = shouldAgentReply({
+      settings: { enabled: true },
+      conversation: { agent_active: true },
+      message: { type: 'button', body: '  ' },
+      senderPhone: '353870000000',
+    })
+    expect(r).toEqual({ reply: false, reason: 'empty', onDuty: true })
+  })
+  it('media is still unsupported (soft handoff), so the set did not open everything', () => {
+    const r = shouldAgentReply({
+      settings: { enabled: true },
+      conversation: { agent_active: true },
+      message: { type: 'image', body: '' },
+      senderPhone: '353870000000',
+    })
+    expect(r).toEqual({ reply: false, reason: 'unsupported_type', onDuty: true })
+  })
+
   const base = {
     settings: { enabled: true },
     conversation: { agent_active: true },
