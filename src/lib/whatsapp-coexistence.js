@@ -5,6 +5,8 @@
 // ingest layer (whatsapp-coexistence-ingest.js) persists. No DB, no fetch —
 // unit-tested against fixtures.
 
+import { buttonTapBody, interactiveReplyBody } from './whatsapp-inbound-tap'
+
 /** Both phone forms Meta/our DB use. `without` is what we store in wa_phone. */
 export function normalizeWaPhone(raw) {
   if (!raw) return null
@@ -18,6 +20,9 @@ function textBody(msg) {
   if (msg.type === 'image') return msg.image?.caption || ''
   if (msg.type === 'video') return msg.video?.caption || ''
   if (msg.type === 'document') return msg.document?.caption || msg.document?.filename || ''
+  // WABUTTONTAP.1 — same body the live webhook stores for a tap.
+  if (msg.type === 'button') return buttonTapBody(msg.button)
+  if (msg.type === 'interactive' && msg.interactive?.type !== 'nfm_reply') return interactiveReplyBody(msg.interactive)
   return `[${msg.type || 'text'} message]`
 }
 

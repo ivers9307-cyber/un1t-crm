@@ -20,6 +20,7 @@ import { captureInboundBsuid } from '@/lib/whatsapp-bsuid'
 import { parseEchoMessages, parseSyncContacts, parseHistoryMessages, nextHistorySyncState, parseAccountUpdateEvent, nextCoexistenceLinkState, COEX_LINK_EVENTS } from '@/lib/whatsapp-coexistence'
 import { syncContactMatchOnly, ingestCoexistenceMessage } from '@/lib/whatsapp-coexistence-ingest'
 import { orgLocationIdsFor, scopeFor } from '@/lib/inbound-contact-match'
+import { buttonTapBody, interactiveReplyBody } from '@/lib/whatsapp-inbound-tap'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
 export const runtime = 'nodejs'
@@ -498,8 +499,16 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
         catch (e) { console.error('[wa-webhook] flow completion failed:', e.message) }
         body = '[Booking submitted via WhatsApp Flow]'
       } else {
-        body = message.interactive?.button_reply?.title || message.interactive?.list_reply?.title || ''
+        body = interactiveReplyBody(message.interactive)
       }
+      break
+    case 'button':
+      // WABUTTONTAP.1 — a quick-reply tap on a TEMPLATE (the Meta-ad welcome's
+      // "consultation vs first class"). It fell to default as "[button
+      // message]", so Mia saw an unreadable type and sent the holding message
+      // instead of booking them. Store what they tapped; Mia answers it like
+      // text (core.js REPLYABLE_MESSAGE_TYPES).
+      body = buttonTapBody(message.button)
       break
     case 'reaction':
       body = `Reacted: ${message.reaction?.emoji || ''}`

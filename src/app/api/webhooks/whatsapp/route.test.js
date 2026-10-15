@@ -305,6 +305,62 @@ describe('POST /api/webhooks/whatsapp — inbound persistence guards', () => {
   })
 })
 
+// WABUTTONTAP.1 — a quick-reply tap on a TEMPLATE arrives as type 'button'
+// ({ button: { text, payload } }). It fell to default as "[button message]",
+// so the Meta-ad welcome's "consultation vs first class" tap reached Mia as an
+// unreadable type and got the holding message instead of a booking.
+function inboundMessage(message) {
+  return envelope({
+    metadata: { phone_number_id: REGISTERED_PNI },
+    contacts: [{ wa_id: '353871234567', profile: { name: 'Test Sender' } }],
+    messages: [{ id: 'wamid.tap1', from: '353871234567', timestamp: '1770000000', ...message }],
+  })
+}
+
+function insertedMessage() {
+  const call = db.calls.find((c) => c.table === 'whatsapp_messages' && c.ops.some(([m]) => m === 'insert'))
+  return call?.ops.find(([m]) => m === 'insert')[1]
+}
+
+describe('POST /api/webhooks/whatsapp — button taps', () => {
+  beforeEach(() => resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN))
+
+  it('stores a template quick-reply tap as what was tapped and hands it to Mia as a button reply', async () => {
+    const res = await POST(reqFor(inboundMessage({
+      type: 'button',
+      context: { from: '353000000000', id: 'wamid.template1' },
+      button: { text: 'Book a consultation', payload: 'Book a consultation' },
+    })))
+    expect(res.status).toBe(200)
+
+    expect(insertedMessage()).toMatchObject({ message_type: 'button', body: 'Book a consultation', direction: 'inbound' })
+    expect(maybeAutoReply).toHaveBeenCalledWith(db, expect.objectContaining({ messageType: 'button', body: 'Book a consultation' }))
+    const stamp = db.calls.find((c) => c.table === 'whatsapp_conversations' && c.ops.some(([m, u]) => m === 'update' && u?.last_message_preview))
+    expect(stamp.ops.find(([m]) => m === 'update')[1].last_message_preview).toBe('Book a consultation')
+  })
+
+  it('keeps a custom template payload in the body (no column holds it)', async () => {
+    await POST(reqFor(inboundMessage({ type: 'button', button: { text: 'First class', payload: 'WELCOME_FIRST_CLASS' } })))
+    expect(insertedMessage()).toMatchObject({ message_type: 'button', body: 'First class (button payload: WELCOME_FIRST_CLASS)' })
+  })
+
+  it('never stores the "[button message]" placeholder', async () => {
+    await POST(reqFor(inboundMessage({ type: 'button', button: { payload: 'WELCOME_CONSULT' } })))
+    expect(insertedMessage().body).toBe('WELCOME_CONSULT')
+  })
+
+  it("keeps an interactive reply's id when it is not one of Mia's opt_<n>", async () => {
+    await POST(reqFor(inboundMessage({ type: 'interactive', interactive: { type: 'list_reply', list_reply: { id: 'slot_42', title: 'Sat 9am' } } })))
+    expect(insertedMessage()).toMatchObject({ message_type: 'interactive', body: 'Sat 9am (option id: slot_42)' })
+  })
+
+  it("an interactive tap on Mia's own options still stores just the title", async () => {
+    await POST(reqFor(inboundMessage({ type: 'interactive', interactive: { type: 'button_reply', button_reply: { id: 'opt_1', title: '8am' } } })))
+    expect(insertedMessage()).toMatchObject({ message_type: 'interactive', body: '8am' })
+    expect(maybeAutoReply).toHaveBeenCalledWith(db, expect.objectContaining({ messageType: 'interactive', body: '8am' }))
+  })
+})
+
 describe('POST /api/webhooks/whatsapp — status updates', () => {
   it('still applies a status update for a registered number (unchanged live path)', async () => {
     resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)

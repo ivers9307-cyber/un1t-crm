@@ -3,6 +3,7 @@ import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter
 import { getWhatsAppConfig, getConversationReplyConfig, META_API_URL } from './whatsapp-config'
 import { isWhatsAppNumberMissing } from './whatsapp-number-missing'
 import { numberlessHomeStudio } from './whatsapp-thread-location'
+import { agentOptionId } from './whatsapp-inbound-tap'
 import {
   PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
   rollingHeadroom, selectDripRecipients, dripOutcome,
@@ -120,7 +121,7 @@ export async function sendTextMessage(to, text, opts = {}) {
 // `opt_<i>`) or `{ id, title }` (WASTUDIOPICK.1). Pure — exported for tests.
 export function buildInteractivePayload(to, text, options) {
   const opts = (options || []).slice(0, 10)
-  const norm = (o, i) => (o && typeof o === 'object' ? { id: String(o.id), title: String(o.title) } : { id: `opt_${i}`, title: String(o) })
+  const norm = (o, i) => (o && typeof o === 'object' ? { id: String(o.id), title: String(o.title) } : { id: agentOptionId(i), title: String(o) })
   const base = { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive' }
   if (opts.length <= 3) {
     return {

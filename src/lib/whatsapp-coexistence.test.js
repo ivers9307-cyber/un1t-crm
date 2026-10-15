@@ -54,6 +54,21 @@ describe('parseHistoryMessages', () => {
       { waMessageId: 'wamid.H2', peerPhone: '353222', direction: 'outbound', messageType: 'text', body: 'old outbound', tsSeconds: 1699000100, origin: 'history' },
     ])
   })
+
+  // WABUTTONTAP.1 — history-synced taps read as what was tapped, not "[button message]".
+  it('stores a template quick-reply tap and a list reply as their text', () => {
+    const value = { history: [ { threads: [
+      { messages: [
+        { id: 'wamid.H3', from: '353222', to: '353111', type: 'button', button: { text: 'Book a consultation', payload: 'Book a consultation' }, timestamp: '1699000200' },
+        { id: 'wamid.H4', from: '353222', to: '353111', type: 'interactive', interactive: { type: 'list_reply', list_reply: { id: 'opt_1', title: '8am' } }, timestamp: '1699000300' },
+      ] },
+    ] } ] }
+    const out = parseHistoryMessages(value, '353111')
+    expect(out.map((m) => [m.messageType, m.body])).toEqual([
+      ['button', 'Book a consultation'],
+      ['interactive', '8am'],
+    ])
+  })
 })
 
 describe('nextHistorySyncState', () => {
