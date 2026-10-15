@@ -35,6 +35,7 @@ function updateBuilder(patch) {
     eq: (...a) => { chain.push(['eq', ...a]); return b },
     is: (...a) => { chain.push(['is', ...a]); return b },
     or: (...a) => { chain.push(['or', ...a]); return b },
+    filter: (...a) => { chain.push(['filter', ...a]); return b },
     select: (...a) => { chain.push(['select', ...a]); return b },
     then: (res, rej) => {
       const isClaim = chain.some((o) => o[0] === 'is')
@@ -253,6 +254,45 @@ describe('resolveNewSenderStudio', () => {
     const r = await resolveNewSenderStudio(db, { ...base, messageType: 'interactive', body: '{"x":1}', message: { type: 'interactive', interactive: { type: 'nfm_reply' } } })
     expect(r.action).toBe('asked')
     expect(classifyStudio).not.toHaveBeenCalled()
+  })
+
+  // F1 — a message typed before (or as) the picker went out is not an answer to it.
+  const AT = '2026-10-15T10:00:00.000Z'
+  const secs = (offsetMs) => String(Math.floor((Date.parse(AT) + offsetMs) / 1000))
+  const askedAt = (offsetMs, extra = {}) => ({ ...base, resolution: { status: 'asked', at: AT }, body: 'the hatch one', message: { type: 'text', text: { body: 'the hatch one' }, timestamp: secs(offsetMs) }, ...extra })
+
+  it('asked + a text sent before the picker → asked, no classifier, no write (F1)', async () => {
+    const r = await resolveNewSenderStudio(db, askedAt(-2000))
+    expect(r).toEqual({ action: 'asked', locationId: 'a1', conversationId: 'c1' })
+    expect(classifyStudio).not.toHaveBeenCalled()
+    expect(updates).toHaveLength(0)
+  })
+
+  it('asked + a text within 5s of the claim is still before the picker; after that it is an answer (F1)', async () => {
+    expect((await resolveNewSenderStudio(db, askedAt(5000))).action).toBe('asked')
+    expect(classifyStudio).not.toHaveBeenCalled()
+    classifyStudio.mockResolvedValueOnce({ studioId: 'a2', reason: 'decided' })
+    db.rpc.mockResolvedValueOnce({ data: { conversation_id: 'c1', merged: false }, error: null })
+    expect((await resolveNewSenderStudio(db, askedAt(10000))).action).toBe('decided')
+    expect(classifyStudio).toHaveBeenCalledTimes(1)
+    expect(recorded()).toMatchObject({ status: 'decided', by: 'ai' })
+  })
+
+  it('a tap is always judged as a tap, whatever its timestamp (F1)', async () => {
+    tapSignal.mockReturnValueOnce('a2')
+    db.rpc.mockResolvedValueOnce({ data: { conversation_id: 'c1', merged: false }, error: null })
+    const r = await resolveNewSenderStudio(db, askedAt(-60000, { messageType: 'interactive', body: 'Hatch Street', message: { type: 'interactive', interactive: { type: 'button_reply', button_reply: { id: 'studio:a2' } }, timestamp: secs(-60000) } }))
+    expect(r.action).toBe('decided')
+    expect(recorded()).toMatchObject({ by: 'picker', location_id: 'a2' })
+  })
+
+  it('an unparseable timestamp or claim time is treated as an answer (F1)', async () => {
+    for (const ctx of [askedAt(-2000, { resolution: { status: 'asked', at: 'not a date' } }), { ...askedAt(0), message: { type: 'text', timestamp: 'soon' } }]) {
+      classifyStudio.mockResolvedValueOnce({ studioId: 'a2', reason: 'decided' })
+      db.rpc.mockResolvedValueOnce({ data: { conversation_id: 'c1', merged: false }, error: null })
+      expect((await resolveNewSenderStudio(db, ctx)).action).toBe('decided')
+    }
+    expect(classifyStudio).toHaveBeenCalledTimes(2)
   })
 
   it('never throws: an internal error → skip, logged', async () => {

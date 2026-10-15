@@ -18,6 +18,19 @@ const NON_ANSWER_TYPES = new Set(['reaction', 'sticker', 'audio', 'unsupported',
 // A final write only lands while the row is unresolved or still asking, so a
 // burst's slower message can never overwrite a decision another one finished.
 const NOT_FINAL = 'studio_resolution.is.null,studio_resolution->>status.eq.asked'
+// The claim stamps `at` just before the picker is sent; anything the customer
+// sent up to this long after it was typed before the question reached them.
+const SENT_BEFORE_PICKER_MS = 5000
+
+// True only when both times parse and the message (Meta's unix-seconds
+// `timestamp`) is at or before the claim + grace. Unparseable → false, so the
+// message is judged as an answer, as before this rule existed.
+function sentBeforePicker(message, resolution) {
+  const ts = Number(message?.timestamp)
+  const at = Date.parse(resolution?.at)
+  if (!message?.timestamp || !Number.isFinite(ts) || !Number.isFinite(at)) return false
+  return ts * 1000 <= at + SENT_BEFORE_PICKER_MS
+}
 
 async function record(db, conversationId, resolution) {
   const { data, error } = await db.from('whatsapp_conversations')
@@ -101,6 +114,9 @@ export async function resolveNewSenderStudio(db, ctx) {
     if (status === 'asked') {
       const tapped = tapSignal(ctx.message, ids)
       if (tapped) return await decide(db, ctx, tapped, 'picker')
+      // Typed before the question reached them: not an answer. Mia stays quiet
+      // and answers with the whole history once the thread resolves (R7).
+      if (sentBeforePicker(ctx.message, ctx.resolution)) return { action: 'asked', locationId: ctx.threadLocationId, conversationId: ctx.conversationId }
       // A reaction, sticker, voice note... cannot answer; leave the question open.
       if (NON_ANSWER_TYPES.has(ctx.messageType)) return { action: 'asked', locationId: ctx.threadLocationId, conversationId: ctx.conversationId }
       if (hasText) {
