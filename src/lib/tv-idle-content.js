@@ -9,18 +9,56 @@
 //
 // Failing to absent is not failing silently. A phantom column, an RLS change
 // or a PGRST201 would otherwise leave a scene blank for good with no signal
-// anywhere (the shape of the 24-day enrolment outage), so every failed read
-// logs once, structurally (read, location, error), and then answers absent.
+// anywhere (the shape of the 24-day enrolment outage), so a failed read logs
+// structurally (read, location, error) and then answers absent.
+//
+// Loud must not become unreadable. The idle board polls every ~4s per kiosk,
+// so a permanent fault would write ~90 lines a minute (~130k a day) and bury
+// the one line that matters. So a persistent fault reports once per read per
+// location per IDLE_LOG_WINDOW_MS, and the next line says how many were held
+// back (`suppressed`). Same shape as GLOFOX_WRITE_FAILURE_ROWS_PER_MIN: cap what
+// one outage can emit per instance, never drop the fact that it is happening.
 
 import { timeLabelIn } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 
 const LOG_MODULE = 'tv-idle'
 
-/** One structured line per failed read. Never throws, never changes the answer. */
+/** At most one log line per read per location in this window (per instance). */
+export const IDLE_LOG_WINDOW_MS = 5 * 60 * 1000
+
+// key `${read}:${locationId}` -> when we last emitted, and how many failures
+// since. Keys are 3 reads x the studios that have a TV, so it cannot grow.
+const logThrottle = new Map()
+
+/** Test hook: clears the throttle so one test's failures cannot silence the next. Not for app code. */
+export function __resetIdleLogThrottle() {
+  logThrottle.clear()
+}
+
+/**
+ * One structured line per failed read, throttled. Never throws and never
+ * changes the answer: the caller returns absent whether or not a line went out.
+ */
 function readFailed(read, ctx, err) {
   try {
-    logWarn(LOG_MODULE, 'idle read failed; scene will be skipped', { read, ...ctx, err })
+    const key = `${read}:${ctx.locationId}`
+    const now = Date.now()
+    const state = logThrottle.get(key)
+    // The window runs from the last line EMITTED, so a held-back failure never
+    // pushes the next report out and a fault that never clears still reports.
+    if (state && now - state.emittedAtMs < IDLE_LOG_WINDOW_MS) {
+      state.suppressed += 1
+      return
+    }
+    const suppressed = state ? state.suppressed : 0
+    logThrottle.set(key, { emittedAtMs: now, suppressed: 0 })
+    logWarn(LOG_MODULE, 'idle read failed; scene will be skipped', {
+      read,
+      ...ctx,
+      ...(suppressed > 0 ? { suppressed } : {}),
+      err,
+    })
   } catch {
     // A logger that cannot serialise the error must not turn "absent" into a 500.
   }

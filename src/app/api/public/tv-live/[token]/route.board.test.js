@@ -29,6 +29,7 @@ import { GET } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { getAvailableStraps } from '@/lib/live-class'
 import { logWarn } from '@/lib/log'
+import { __resetIdleLogThrottle } from '@/lib/tv-idle-content'
 
 const PAGE = 1000
 const TOKEN = 'tok-1'
@@ -120,7 +121,7 @@ async function callRoute(db) {
   return GET(request, { params: Promise.resolve({ token: TOKEN }) })
 }
 
-beforeEach(() => { vi.clearAllMocks() })
+beforeEach(() => { vi.clearAllMocks(); __resetIdleLogThrottle() })
 afterEach(() => { vi.unstubAllEnvs() })
 
 describe('GET /api/public/tv-live/[token] — board payload', () => {

@@ -14,7 +14,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 
 import { logWarn } from '@/lib/log'
-import { buildIdleContent, EARNED_WINDOW_MS, EARNED_LIMIT, UP_NEXT_LIMIT } from './tv-idle-content.js'
+import {
+  buildIdleContent, EARNED_WINDOW_MS, EARNED_LIMIT, UP_NEXT_LIMIT,
+  IDLE_LOG_WINDOW_MS, __resetIdleLogThrottle,
+} from './tv-idle-content.js'
 
 const ZONE = 'Europe/Dublin'
 const LOC = 'a0000000-0000-0000-0000-000000000001'
@@ -66,7 +69,11 @@ function dbWith({ occurrences = [], achievements = [], content = null, fail = {}
 
 const opts = (over = {}) => ({ locationId: LOC, displayId: 'd1', zone: ZONE, nowMs: NOW, ...over })
 
-beforeEach(() => { vi.clearAllMocks(); vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPA) })
+beforeEach(() => {
+  vi.clearAllMocks()
+  __resetIdleLogThrottle() // module-level state: every test starts with nothing suppressed
+  vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPA)
+})
 afterEach(() => { vi.unstubAllEnvs() })
 
 describe('buildIdleContent — shape', () => {
@@ -101,6 +108,93 @@ describe('buildIdleContent — logging', () => {
     const out = await buildIdleContent(dbWith({ fail: { occurrences: true, achievements: 'throw', content: true } }), opts())
     expect(out).toEqual({ up_next: [], earned: [], operator: null })
     logWarn.mockReset()
+  })
+})
+
+// A persistent fault is polled every ~4s per kiosk, so an unthrottled log would
+// bury the fault in ~130k lines a day. One line per read per location per
+// window, carrying how many were held back. Fake timers, never real waits.
+describe('buildIdleContent — log throttle', () => {
+  const OTHER_LOC = 'b0000000-0000-0000-0000-000000000002'
+  const failingUpNext = () => dbWith({ fail: { occurrences: true } })
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-16T04:00:00Z'))
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('logs two failures of the same read at the same location inside the window once, and both still return absent', async () => {
+    const first = await buildIdleContent(failingUpNext(), opts())
+    await vi.advanceTimersByTimeAsync(4_000)
+    const second = await buildIdleContent(failingUpNext(), opts())
+    expect(first.up_next).toEqual([])
+    expect(second.up_next).toEqual([])
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    expect(logWarn.mock.calls[0][2]).not.toHaveProperty('suppressed')
+  })
+
+  it('logs again once the window has passed, carrying how many lines were held back', async () => {
+    await buildIdleContent(failingUpNext(), opts())
+    await vi.advanceTimersByTimeAsync(IDLE_LOG_WINDOW_MS - 1)
+    const inside = await buildIdleContent(failingUpNext(), opts())
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    const after = await buildIdleContent(failingUpNext(), opts())
+    expect(inside.up_next).toEqual([])
+    expect(after.up_next).toEqual([])
+    expect(logWarn).toHaveBeenCalledTimes(2)
+    expect(logWarn.mock.calls[1][2]).toMatchObject({ read: 'up_next', locationId: LOC, suppressed: 1 })
+  })
+
+  it('counts the window from the last line emitted, so a suppressed failure never pushes the next report out', async () => {
+    await buildIdleContent(failingUpNext(), opts())                      // t0: emitted
+    await vi.advanceTimersByTimeAsync(IDLE_LOG_WINDOW_MS - 60_000)
+    await buildIdleContent(failingUpNext(), opts())                      // t0+4min: suppressed
+    await vi.advanceTimersByTimeAsync(60_000)
+    await buildIdleContent(failingUpNext(), opts())                      // t0+5min: due again
+    expect(logWarn).toHaveBeenCalledTimes(2)
+    expect(logWarn.mock.calls[1][2]).toMatchObject({ suppressed: 1 })
+  })
+
+  it('reports the suppressed count once, then starts counting from zero again', async () => {
+    await buildIdleContent(failingUpNext(), opts())
+    await vi.advanceTimersByTimeAsync(1_000)
+    await buildIdleContent(failingUpNext(), opts())
+    await buildIdleContent(failingUpNext(), opts())
+    await vi.advanceTimersByTimeAsync(IDLE_LOG_WINDOW_MS)
+    await buildIdleContent(failingUpNext(), opts())                      // emits, suppressed: 2
+    await vi.advanceTimersByTimeAsync(IDLE_LOG_WINDOW_MS)
+    await buildIdleContent(failingUpNext(), opts())                      // emits, nothing held back
+    expect(logWarn).toHaveBeenCalledTimes(3)
+    expect(logWarn.mock.calls[1][2]).toMatchObject({ suppressed: 2 })
+    expect(logWarn.mock.calls[2][2]).not.toHaveProperty('suppressed')
+  })
+
+  it('throttles different reads independently: one failing read does not silence another', async () => {
+    const out1 = await buildIdleContent(dbWith({ fail: { occurrences: true } }), opts())
+    const out2 = await buildIdleContent(dbWith({ fail: { occurrences: true, achievements: true } }), opts())
+    expect(out1.up_next).toEqual([])
+    expect(out2).toEqual({ up_next: [], earned: [], operator: null })
+    // up_next logged on the first call and was held back on the second; earned
+    // had never failed, so its first failure is not held back by up_next's.
+    expect(logWarn.mock.calls.map(([, , meta]) => meta.read)).toEqual(['up_next', 'earned'])
+  })
+
+  it('throttles the same read at different locations independently', async () => {
+    const a = await buildIdleContent(failingUpNext(), opts())
+    const b = await buildIdleContent(failingUpNext(), opts({ locationId: OTHER_LOC }))
+    const aAgain = await buildIdleContent(failingUpNext(), opts())
+    expect([a.up_next, b.up_next, aAgain.up_next]).toEqual([[], [], []])
+    expect(logWarn.mock.calls.map(([, , meta]) => meta.locationId)).toEqual([LOC, OTHER_LOC])
+  })
+
+  it('throttles a thrown failure the same way as a returned one', async () => {
+    const db = () => dbWith({ fail: { achievements: 'throw' } })
+    const a = await buildIdleContent(db(), opts())
+    const b = await buildIdleContent(db(), opts())
+    expect([a.earned, b.earned]).toEqual([[], []])
+    expect(logWarn).toHaveBeenCalledTimes(1)
   })
 })
 
