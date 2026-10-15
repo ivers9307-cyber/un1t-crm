@@ -108,10 +108,21 @@ scene with nothing to say is not shown.
 ### Scheduler
 
 - Fixed dwell per scene of **30s** (Richard's call, 2026-10-15), cross-faded.
-- Driven off the **existing poll tick**, not a new interval — an idle kiosk must not
-  acquire a second 1 Hz heartbeat. The poll already backs off when idle
-  (`nextPollDelay` / `ACTIVE_POLL_MS` in `@/lib/live-poll`), and scene content changes
-  on the order of hours, so the idle cadence is ample.
+- Derived from **elapsed time**, not a timer — the board already re-renders every second
+  for its header clock, so `sceneAt` advances itself and there is no dwell timeout to be
+  reset by a re-render (the TVTOAST.1 / #2066 failure shape).
+- 🔴 **CORRECTION (2026-10-16).** This section originally said "the poll already backs off
+  when idle … so the idle cadence is ample", and used that to argue the three reads needed
+  no cache. **That was false.** TV-POLL-FAST.1 made the back-off **overnight-only**
+  (`src/lib/live-poll.js`): during opening hours an idle board polls every **4 seconds**,
+  so the reads ran ~14,400×/day per kiosk. `readEarned` carries no `location_id` predicate
+  and `contact_achievements` has no index on `earned_at` alone, so each poll full-scanned
+  and sorted the whole estate's achievements — for content this same section calls
+  "slow-changing". Caught by the final whole-branch review. `up_next` and `earned` are now
+  cached per location for `IDLE_CACHE_TTL_MS` (60s); the operator read stays **uncached**,
+  because it is a primary-key lookup and it is the one an operator watches after pushing a
+  card. **The lesson: a claim about cadence is a claim about the code, and this one was
+  never checked against `live-poll.js`.**
 - Rotation order is the scene list order, filtered by `hasContent`. One eligible scene
   means it simply stays up.
 - 🔴 **The dwell timer uses the `onDone`-in-a-ref pattern from TVTOAST.1 (#2066).** That
