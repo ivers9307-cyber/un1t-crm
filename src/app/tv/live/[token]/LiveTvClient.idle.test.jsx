@@ -11,7 +11,7 @@
 // clock move is inside act() (tests/fake-timer-act.test.js).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, screen, act } from '@testing-library/react'
+import { render, cleanup, screen, act, fireEvent } from '@testing-library/react'
 
 // next/font only runs under the Next compiler.
 vi.mock('@/fonts/repset', () => ({
@@ -128,6 +128,41 @@ describe('idle stage and live tiles', () => {
     expect(global.fetch.mock.calls.every(([url]) => url === ENDPOINT)).toBe(true)
   })
 
+  // The gate itself. LIVE above carries no `idle` block (live-board.js builds
+  // it only when no session is open), so a test that only uses LIVE cannot tell
+  // "tiles win" from "idle wins unless the payload happens to lack idle". These
+  // two hand the board BOTH at once: the tiles must win, and no scene text may
+  // appear anywhere.
+  describe('when a payload carries both a session and idle content', () => {
+    const BOTH = { ...LIVE, idle: IDLE.idle }
+    const sceneText = ['BU1LD — Strength', 'Up next', 'Saoirse M.', 'Earned this week']
+
+    it('shows the tile and no scene when it arrives mid-dwell', async () => {
+      serve(IDLE)
+      mount()
+      await advance(0)
+      expect(screen.getByText('BU1LD — Strength')).toBeTruthy()
+
+      serve(BOTH)
+      await nextPoll()
+
+      expect(screen.getByText('Strap 49931')).toBeTruthy()
+      for (const text of sceneText) expect(screen.queryByText(text), text).toBeNull()
+    })
+
+    it('shows the tile and no scene from the first frame, and keeps it past a dwell', async () => {
+      serve(BOTH)
+      mount()
+      await advance(0)
+      expect(screen.getByText('Strap 49931')).toBeTruthy()
+      for (const text of sceneText) expect(screen.queryByText(text), text).toBeNull()
+
+      await advance(SCENE_DWELL_MS + 1000)
+      expect(screen.getByText('Strap 49931')).toBeTruthy()
+      for (const text of sceneText) expect(screen.queryByText(text), text).toBeNull()
+    })
+  })
+
   it('yields from the Earned scene too, whichever scene was up', async () => {
     serve(IDLE)
     mount()
@@ -212,6 +247,98 @@ describe('idle stage and live tiles', () => {
     await advance(0)
 
     expect(screen.getByText('Waiting for class to start')).toBeTruthy()
+  })
+
+  describe('a dead operator image', () => {
+    const DEAD = 'https://proj.supabase.co/storage/v1/object/public/tv-content/dead.png'
+    const operator = (over = {}) => ({ source_type: 'url', source_ref: DEAD, label: null, template_values: null, ...over })
+    const serveOperator = (op) => serve({ ...BASE, sessions: [], idle: { up_next: [], earned: [], operator: op } })
+
+    it('lands on the empty board, not a blank stage, when the image was all there was', async () => {
+      serveOperator(operator())
+      const { container } = mount()
+      await advance(0)
+      expect(container.querySelector('img').getAttribute('src')).toBe(DEAD)
+      expect(screen.queryByText('Waiting for class to start')).toBeNull()
+
+      fireEvent.error(container.querySelector('img'))
+      await advance(0)
+
+      expect(container.querySelector('img')).toBeNull()
+      expect(screen.getByText('Waiting for class to start')).toBeTruthy()
+    })
+
+    it('shows the label instead when the row has one', async () => {
+      serveOperator(operator({ label: 'Open day Saturday' }))
+      const { container } = mount()
+      await advance(0)
+
+      fireEvent.error(container.querySelector('img'))
+      await advance(0)
+
+      expect(container.querySelector('img')).toBeNull()
+      expect(screen.getByText('Open day Saturday')).toBeTruthy()
+      expect(screen.queryByText('Waiting for class to start')).toBeNull()
+    })
+
+    it('stays dropped across polls that keep delivering the same dead URL', async () => {
+      serveOperator(operator())
+      const { container } = mount()
+      await advance(0)
+      fireEvent.error(container.querySelector('img'))
+      await advance(0)
+
+      // Fresh object each poll, same URL: a new payload must not resurrect it.
+      serve({ ...BASE, sessions: [], idle: { up_next: [], earned: [], operator: operator() } })
+      await nextPoll()
+
+      expect(container.querySelector('img')).toBeNull()
+      expect(screen.getByText('Waiting for class to start')).toBeTruthy()
+    })
+  })
+
+  // Outro: the opaque "Class complete" podium covers the board for OUTRO_MS
+  // after a class. The tiles leave at the same moment, so a rotation counted
+  // from there is ~10s into Earned by the time the podium clears and Up next,
+  // the most useful thing to show someone who has just finished, is never seen.
+  describe('after a class', () => {
+    // 40s, LiveTvClient's OUTRO_MS (not exported); the test fails loudly if the
+    // podium is no longer up at 35s.
+    const OUTRO_MS = 40000
+    const CLASS = {
+      class_name: 'Evening HIIT',
+      program: null,
+      // Long before server_time, so the class-start intro card does not play.
+      starts_at: '2026-10-16T08:00:00Z',
+      starts_at_label: '09:00',
+      glofox_event_id: 'ev-1',
+    }
+
+    it('starts the idle clock when the podium clears, so the first scene is Up next', async () => {
+      serve({ ...LIVE, current_class: CLASS })
+      mount()
+      await advance(0)
+      expect(screen.getByText('Strap 49931')).toBeTruthy()
+
+      // Class over, band gone: podium goes up.
+      serve(IDLE)
+      await nextPoll()
+      expect(screen.getByText('Class complete')).toBeTruthy()
+
+      // 35s into a 40s podium: a clock counted from here would already read
+      // 35s (Earned) when the podium lifts.
+      await advance(35000)
+      expect(screen.getByText('Class complete')).toBeTruthy()
+
+      await advance(OUTRO_MS - 35000 + 1000)
+      expect(screen.queryByText('Class complete')).toBeNull()
+      expect(screen.getByText('BU1LD — Strength')).toBeTruthy()
+      expect(screen.queryByText('Saoirse M.')).toBeNull()
+
+      // And from there it rotates normally.
+      await advance(SCENE_DWELL_MS)
+      expect(screen.getByText('Saoirse M.')).toBeTruthy()
+    })
   })
 
   it('shows the empty board before the first poll lands', () => {

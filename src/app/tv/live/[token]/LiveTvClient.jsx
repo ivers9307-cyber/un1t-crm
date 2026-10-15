@@ -43,7 +43,6 @@ import { createBrowserClient } from '@/lib/supabase'
 import { repsetDisplay, repsetBody, repsetMono } from '@/fonts/repset'
 import { zoneColorDark, dominantZone } from '@/lib/tv-zone-colors'
 import { withDevice } from '@/lib/tv-data-url'
-import { eligibleScenes } from '@/lib/tv-scenes'
 import IdleStage from './IdleStage'
 
 // Poll cadence (active few-seconds vs idle back-off) lives in @/lib/live-poll.
@@ -233,20 +232,10 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
     setSlotOrder((prev) => (sameOrder(prev, order) ? prev : order))
   }, [order])
   const cols = gridColsFor(tiles.length, portrait)
-
-  // TVSCENE.1 — when the board last went idle. The idle scene is derived from
-  // (now - idleSinceMs), so a board that has just emptied starts at scene one
-  // instead of wherever page load put it. Adjusted during render (React's
-  // "adjust state when a prop changes" pattern) rather than in an effect, so
-  // the first idle frame already counts from zero and no frame shows a stale
-  // scene; and `now` is the board's own clock, so render stays pure.
+  // TVSCENE.1 — the idle condition, stated once: nobody strapped in. Everything
+  // below that means "idle" reads this, so the live tiles win on exactly one
+  // test and the idle layer cannot drift from it.
   const isIdle = tiles.length === 0
-  const [idleSinceMs, setIdleSinceMs] = useState(() => now.getTime())
-  const [wasIdle, setWasIdle] = useState(true)
-  if (isIdle !== wasIdle) {
-    setWasIdle(isIdle)
-    if (isIdle) setIdleSinceMs(now.getTime())
-  }
 
   // ── Room-total ticker (replaces "N active") ──────────────────────
   const roomTotal = useMemo(() => roomTotalPoints(sessions), [sessions])
@@ -309,6 +298,24 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
     return () => clearTimeout(t)
   }, [outro])
 
+  // TVSCENE.1 — when the idle scenes' clock last started. The scene is derived
+  // from (now - idleSinceMs), so each time the clock starts the rotation begins
+  // at scene one. It starts when the board is idle AND the outro podium is not
+  // up: the tiles leave at the same moment the opaque 40s podium goes up, and
+  // counting from there would put the board ~10s into Earned when the podium
+  // lifts, so Up next, the most useful thing to show someone who has just
+  // finished a class, would never be seen. Adjusted during render (React's
+  // "adjust state when a prop changes" pattern) rather than in an effect, so
+  // the first idle frame already counts from zero and no frame shows a stale
+  // scene; `now` is the board's own clock, so render stays pure.
+  const idleClockRunning = isIdle && !outro
+  const [idleSinceMs, setIdleSinceMs] = useState(() => now.getTime())
+  const [wasIdleClockRunning, setWasIdleClockRunning] = useState(true)
+  if (idleClockRunning !== wasIdleClockRunning) {
+    setWasIdleClockRunning(idleClockRunning)
+    if (idleClockRunning) setIdleSinceMs(now.getTime())
+  }
+
   // Green dot to the right of "Live" = the studio's HR bridge (Pi) is
   // streaming. Driven by last_seen_at freshness server-side (see the
   // live API); no green dot ⇒ bridge offline.
@@ -316,23 +323,6 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
   const bridgeStatusLabel = bridgeOnline
     ? 'Heart-rate bridge connected'
     : 'Heart-rate bridge offline'
-
-  // TVSCENE.1 — the idle stage, or null. It is null unless a scene has
-  // something to say: `<IdleStage />` is always a non-null ELEMENT, even when
-  // the component renders nothing, so `idleStage ?? <EmptyBoard />` below could
-  // never reach the empty board if this local were just the element. The
-  // guard asks the same question IdleStage does (eligibleScenes), so the floor
-  // is never worse than today's "Waiting for class to start".
-  const idleStage = isIdle && !data?.timer && eligibleScenes(data?.idle).length > 0
-    ? (
-      <IdleStage
-        idle={data.idle}
-        nowMs={now.getTime()}
-        idleSinceMs={idleSinceMs}
-        fonts={IDLE_FONTS}
-      />
-    )
-    : null
 
   return (
     <main
@@ -420,10 +410,21 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
           takes the screen; the first band to connect drops it to the bottom
           bar and the tiles take over. A class with no timer still gets the
           original idle board. */}
-      {tiles.length === 0 ? (
+      {isIdle ? (
         data?.timer
           ? <TimerBanner placement="hero" portrait={portrait} timer={data?.timer} serverTime={data?.server_time} />
-          : (idleStage ?? <EmptyBoard />)
+          : (
+            // TVSCENE.1 — the scenes, or today's empty board when none has
+            // anything to show (the stage owns that call: a dead image is a
+            // reason only it knows).
+            <IdleStage
+              idle={data?.idle}
+              nowMs={now.getTime()}
+              idleSinceMs={idleSinceMs}
+              fonts={IDLE_FONTS}
+              fallback={<EmptyBoard />}
+            />
+          )
       ) : (
         // TV-FIT.1 — the grid is the one part of the board that yields.
         // The page is exactly one screen tall (h-screen above), the header,
@@ -484,7 +485,7 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
           when the column runs out of height it is the grid that gives, never
           the countdown. */}
       <div className="mt-auto shrink-0">
-        {tiles.length > 0 && (
+        {!isIdle && (
           <TimerBanner placement="bottom" portrait={portrait} timer={data?.timer} serverTime={data?.server_time} />
         )}
         {/* The Repset signature — every board signs off the same way. */}

@@ -2,9 +2,10 @@
 
 // TVSCENE.1 — what the board shows when nothing is live.
 //
-// Stateless on purpose: the scene is derived from (nowMs - idleSinceMs), and
-// the board already re-renders every second for its header clock, so the
-// rotation advances with no timer of its own. See src/lib/tv-scenes.js.
+// The rotation is stateless on purpose: the scene is derived from
+// (nowMs - idleSinceMs), and the board already re-renders every second for its
+// header clock, so the rotation advances with no timer of its own. See
+// src/lib/tv-scenes.js.
 //
 // This file DRAWS; it does not decide. Which scenes exist, which one is up and
 // what the operator card is made of all come from @/lib/tv-scenes
@@ -19,7 +20,16 @@
 // Content rules, pinned in IdleStage.test.jsx: a class shows its TIME and NAME
 // only (never capacity or a booked count), and the Earned scene lists
 // individual member moments only (never a count of them).
+//
+// One piece of state lives here: the image URLs that failed to load. A dead
+// image (deleted from the bucket, a bad URL, no network) is a scene with
+// nothing to show, so the stage reads the row as having no image and the usual
+// rules apply: the label draws if there is one, otherwise the scene drops out
+// of the rotation, and if that leaves nothing the stage hands over to its
+// `fallback`. Failures are keyed by URL, so a later, different push is judged
+// on its own.
 
+import { useState } from 'react'
 import { eligibleScenes, sceneAt, operatorImageRef, operatorLabel } from '@/lib/tv-scenes'
 
 const BONE = '#F1EEE7'
@@ -95,7 +105,7 @@ function EarnedScene({ rows, fonts }) {
   )
 }
 
-function OperatorScene({ operator, fonts }) {
+function OperatorScene({ operator, fonts, onImageError }) {
   // Two branches, both decided by tv-scenes.js. An image is drawn only when
   // operatorImageRef returns a string, and that string is the src as it stands:
   // the payload builder already resolved a storage path to a public URL and
@@ -109,7 +119,12 @@ function OperatorScene({ operator, fonts }) {
   if (src) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
-        <img src={src} alt={label ?? ''} className="max-h-full max-w-full object-contain" />
+        <img
+          src={src}
+          alt={label ?? ''}
+          onError={() => onImageError(src)}
+          className="max-h-full max-w-full object-contain"
+        />
       </div>
     )
   }
@@ -124,19 +139,40 @@ function OperatorScene({ operator, fonts }) {
 }
 
 /**
- * One idle scene, chosen by elapsed time. Returns null when nothing is
- * eligible so the caller can fall back to its own empty board.
+ * The idle block as the stage should see it once some image URLs are known to
+ * be dead: an operator row whose image failed has no image, so it keeps its
+ * label (if any) and loses its ref. Everything downstream (eligibility, the
+ * image/label branch) is still decided by tv-scenes.js on that row.
  */
-export default function IdleStage({ idle, nowMs, idleSinceMs, fonts }) {
-  const eligible = eligibleScenes(idle)
-  const key = sceneAt(eligible, Number(nowMs) - Number(idleSinceMs))
-  if (!key) return null
+function withoutDeadImage(idle, failedImages) {
+  const src = operatorImageRef(idle?.operator)
+  if (src === null || !failedImages.has(src)) return idle
+  return { ...idle, operator: { ...idle.operator, source_ref: null } }
+}
 
-  let body = null
-  if (key === 'up-next') body = <UpNextScene rows={idle.up_next} fonts={fonts} />
-  else if (key === 'earned') body = <EarnedScene rows={idle.earned} fonts={fonts} />
-  else if (key === 'operator') body = <OperatorScene operator={idle.operator} fonts={fonts} />
-  if (!body) return null
+/**
+ * One idle scene, chosen by elapsed time. When no scene has anything to show
+ * (nothing eligible, or the only content was an image that would not load) it
+ * returns `fallback`, null by default.
+ *
+ * `fallback` is a prop rather than the caller testing for null because
+ * `<IdleStage />` is always a non-null ELEMENT, however little it renders, so
+ * `idleStage ?? <EmptyBoard />` on the bare element can never reach the empty
+ * board. It also lets the stage fall back for a reason only it knows (a dead
+ * image).
+ */
+export default function IdleStage({ idle, nowMs, idleSinceMs, fonts, fallback = null }) {
+  const [failedImages, setFailedImages] = useState(() => new Set())
+  const showable = withoutDeadImage(idle, failedImages)
+  const key = sceneAt(eligibleScenes(showable), Number(nowMs) - Number(idleSinceMs))
+  if (!key) return fallback
+
+  const onImageError = (src) => setFailedImages((prev) => (prev.has(src) ? prev : new Set(prev).add(src)))
+
+  let body
+  if (key === 'up-next') body = <UpNextScene rows={showable.up_next} fonts={fonts} />
+  else if (key === 'earned') body = <EarnedScene rows={showable.earned} fonts={fonts} />
+  else body = <OperatorScene operator={showable.operator} fonts={fonts} onImageError={onImageError} />
 
   return (
     <div key={key} className="flex min-h-0 flex-1 flex-col justify-center px-10 py-6">

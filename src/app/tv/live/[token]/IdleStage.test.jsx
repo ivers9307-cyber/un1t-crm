@@ -7,7 +7,7 @@
 // label), so each is pinned here against what the component actually draws.
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, cleanup, screen } from '@testing-library/react'
+import { render, cleanup, screen, fireEvent } from '@testing-library/react'
 import { SCENE_DWELL_MS } from '@/lib/tv-scenes'
 import IdleStage from './IdleStage.jsx'
 
@@ -165,5 +165,121 @@ describe('IdleStage operator scene', () => {
   ])('draws nothing, and so yields to the caller, for %s', (_name, operator) => {
     const { container } = onlyOperator(operator)
     expect(container.firstChild).toBeNull()
+  })
+})
+
+// A pushed image can be dead (deleted from the bucket, a bad URL, the network).
+// That is a scene with nothing to show, not a blank 30 seconds: the stage
+// learns it from the <img> itself and treats the row as having no image.
+describe('IdleStage dead operator image', () => {
+  const IMG = 'https://proj.supabase.co/storage/v1/object/public/tv-content/dead.png'
+  const IMG_2 = 'https://proj.supabase.co/storage/v1/object/public/tv-content/new.png'
+  const image = (over = {}) => ({ source_type: 'storage', source_ref: IMG, label: null, template_values: null, ...over })
+
+  it('falls back to the label when the image fails to load', () => {
+    const { container } = render(
+      <IdleStage idle={{ up_next: [], earned: [], operator: image({ label: 'Spring offer' }) }} nowMs={1000} idleSinceMs={1000} fonts={fonts} />,
+    )
+    fireEvent.error(container.querySelector('img'))
+
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('Spring offer')).toBeTruthy()
+  })
+
+  it('drops the operator scene from the rotation when the image fails and there is no label', () => {
+    // Rotation is [up-next, operator]; one dwell in, the operator card is up.
+    const props = { idle: { ...idle, earned: [], operator: image() }, nowMs: 1000 + SCENE_DWELL_MS, idleSinceMs: 1000, fonts }
+    const { container } = render(<IdleStage {...props} />)
+    expect(container.querySelector('img')).not.toBeNull()
+
+    fireEvent.error(container.querySelector('img'))
+
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('06:00')).toBeTruthy()
+  })
+
+  it('never offers the dead scene again on later dwells', () => {
+    const idleWith = { ...idle, earned: [], operator: image() }
+    const { container, rerender } = render(
+      <IdleStage idle={idleWith} nowMs={1000 + SCENE_DWELL_MS} idleSinceMs={1000} fonts={fonts} />,
+    )
+    fireEvent.error(container.querySelector('img'))
+
+    for (const dwells of [0, 1, 2, 3, 4]) {
+      rerender(<IdleStage idle={idleWith} nowMs={1000 + SCENE_DWELL_MS * dwells} idleSinceMs={1000} fonts={fonts} />)
+      expect(container.querySelector('img')).toBeNull()
+      expect(screen.getByText('06:00')).toBeTruthy()
+    }
+  })
+
+  it('hands the screen to the fallback when nothing else is eligible, never a blank stage', () => {
+    const { container } = render(
+      <IdleStage
+        idle={{ up_next: [], earned: [], operator: image() }}
+        nowMs={1000}
+        idleSinceMs={1000}
+        fonts={fonts}
+        fallback={<p>Waiting for class to start</p>}
+      />,
+    )
+    expect(container.querySelector('img')).not.toBeNull()
+    expect(screen.queryByText('Waiting for class to start')).toBeNull()
+
+    fireEvent.error(container.querySelector('img'))
+
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('Waiting for class to start')).toBeTruthy()
+  })
+
+  it('renders nothing for a dead image when no fallback was given', () => {
+    const { container } = render(
+      <IdleStage idle={{ up_next: [], earned: [], operator: image() }} nowMs={1000} idleSinceMs={1000} fonts={fonts} />,
+    )
+    fireEvent.error(container.querySelector('img'))
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('does not suppress a different image pushed after the earlier one failed', () => {
+    const { container, rerender } = render(
+      <IdleStage idle={{ up_next: [], earned: [], operator: image() }} nowMs={1000} idleSinceMs={1000} fonts={fonts} fallback={<p>Waiting</p>} />,
+    )
+    fireEvent.error(container.querySelector('img'))
+    expect(container.querySelector('img')).toBeNull()
+
+    rerender(
+      <IdleStage idle={{ up_next: [], earned: [], operator: image({ source_ref: IMG_2 }) }} nowMs={1000} idleSinceMs={1000} fonts={fonts} fallback={<p>Waiting</p>} />,
+    )
+    expect(container.querySelector('img').getAttribute('src')).toBe(IMG_2)
+  })
+
+  it('keys a failure by the URL that failed, so a trimmed and untrimmed ref are the same image', () => {
+    const { container, rerender } = render(
+      <IdleStage idle={{ up_next: [], earned: [], operator: image() }} nowMs={1000} idleSinceMs={1000} fonts={fonts} fallback={<p>Waiting</p>} />,
+    )
+    fireEvent.error(container.querySelector('img'))
+
+    rerender(
+      <IdleStage idle={{ up_next: [], earned: [], operator: image({ source_ref: `  ${IMG}  ` }) }} nowMs={1000} idleSinceMs={1000} fonts={fonts} fallback={<p>Waiting</p>} />,
+    )
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('Waiting')).toBeTruthy()
+  })
+})
+
+describe('IdleStage fallback', () => {
+  it('shows the fallback when nothing is eligible', () => {
+    render(<IdleStage idle={{ up_next: [], earned: [], operator: null }} nowMs={1000} idleSinceMs={1000} fonts={fonts} fallback={<p>Waiting for class to start</p>} />)
+    expect(screen.getByText('Waiting for class to start')).toBeTruthy()
+  })
+
+  it('shows the fallback when the payload has no idle block', () => {
+    render(<IdleStage idle={undefined} nowMs={1000} idleSinceMs={1000} fonts={fonts} fallback={<p>Waiting for class to start</p>} />)
+    expect(screen.getByText('Waiting for class to start')).toBeTruthy()
+  })
+
+  it('does not show the fallback while a scene is up', () => {
+    at(0)
+    render(<IdleStage idle={idle} nowMs={1000} idleSinceMs={1000} fonts={fonts} fallback={<p>Waiting for class to start</p>} />)
+    expect(screen.queryByText('Waiting for class to start')).toBeNull()
   })
 })
