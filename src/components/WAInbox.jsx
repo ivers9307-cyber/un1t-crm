@@ -56,6 +56,15 @@ function MessageTypeIcon({ type }) {
   }
 }
 
+// WASTUDIOPICK.1 — how this thread's studio was decided (spec R9). Anything
+// not covered (null, unresolved, an unknown status or `by`) renders nothing.
+const FILED_BY_LABEL = { ad: 'ad', reply: 'reply', ai: 'AI', picker: 'picker', staff: 'staff' }
+export function studioNote(resolution) {
+  if (resolution?.status === 'asked') return 'Asked which studio'
+  if (resolution?.status === 'decided' && Object.hasOwn(FILED_BY_LABEL, resolution.by)) return `Filed by: ${FILED_BY_LABEL[resolution.by]}`
+  return null
+}
+
 // Display name helper — prefers contact name, falls back to WA profile name, then phone
 function getDisplayName(conv) {
   if (conv.contacts?.name) return conv.contacts.name
@@ -935,6 +944,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                       <span className="text-[10px] text-un1t-subtle">
                         {conversation.contacts.pipeline_stage_slug.replace(/_/g, ' ')}
                       </span>
+                    )}
+                    {studioNote(conversation?.studio_resolution) && (
+                      <span className="text-[11px] text-un1t-subtle">{studioNote(conversation.studio_resolution)}</span>
                     )}
                   </div>
                   <p className="text-xs text-un1t-muted flex items-center gap-1">

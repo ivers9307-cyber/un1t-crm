@@ -26,9 +26,12 @@ const LOCS = [
   { id: OTHER, name: 'Elsewhere', organization_id: 'O2' },
 ]
 let rpc
+let updates
+let updateError
 let failTable = null
 function makeDb() {
   rpc = vi.fn(async () => ({ data: { conversation_id: 'conv-1', merged: false }, error: null }))
+  updates = []
   return {
     rpc,
     from: (table) => {
@@ -40,6 +43,15 @@ function makeDb() {
       }
       const b = {
         select: () => b,
+        update: (patch) => {
+          const rec = { table, patch, eq: [] }
+          updates.push(rec)
+          const u = {
+            eq: (c, v) => { rec.eq.push([c, v]); return u },
+            then: (res, rej) => Promise.resolve({ data: null, error: updateError }).then(res, rej),
+          }
+          return u
+        },
         eq: (c, v) => { filters.push((r) => r[c] === v); return b },
         in: (c, vals) => { filters.push((r) => vals.includes(r[c])); return b },
         order: () => b,
@@ -59,6 +71,7 @@ const post = (body) => new Request('http://x', { method: 'POST', body: JSON.stri
 beforeEach(() => {
   vi.clearAllMocks()
   failTable = null
+  updateError = null
   assertLocationAccessOr404.mockImplementation(() => null)
   getCurrentUser.mockResolvedValue({ id: 'u1', locations: [{ id: STILL }, { id: HATCH }, { id: OTHER }] })
   createServerClient.mockReturnValue(makeDb())
@@ -164,5 +177,39 @@ describe('POST move', () => {
     createServerClient.mockReturnValue(db)
     const body = await (await POST(post({ location_id: HATCH }), params)).json()
     expect(body.data).toEqual({ conversation_id: 'conv-9', merged: true })
+  })
+
+  // WASTUDIOPICK.1 — a staff move settles the studio for good (spec R6).
+  describe('records the decision', () => {
+    it('writes studio_resolution { decided, staff, target } on the moved conversation', async () => {
+      const res = await POST(post({ location_id: HATCH }), params)
+      expect(res.status).toBe(200)
+      expect(updates).toHaveLength(1)
+      expect(updates[0].table).toBe('whatsapp_conversations')
+      expect(updates[0].eq).toEqual([['id', 'conv-1']])
+      expect(updates[0].patch.studio_resolution).toMatchObject({ status: 'decided', by: 'staff', location_id: HATCH })
+      expect(Number.isNaN(Date.parse(updates[0].patch.studio_resolution.at))).toBe(false)
+    })
+    it('records on the RETURNED conversation id when the move merged into another thread', async () => {
+      const db = makeDb()
+      db.rpc = vi.fn(async () => ({ data: { conversation_id: 'conv-9', merged: true }, error: null }))
+      createServerClient.mockReturnValue(db)
+      await POST(post({ location_id: HATCH }), params)
+      expect(updates[0].eq).toEqual([['id', 'conv-9']])
+    })
+    it('a failed write is logged and the move still answers 200', async () => {
+      updateError = { message: 'write failed' }
+      const res = await POST(post({ location_id: HATCH }), params)
+      expect(res.status).toBe(200)
+      expect((await res.json()).success).toBe(true)
+      expect(logError).toHaveBeenCalledWith('wa-move', 'studio_resolution write failed', expect.objectContaining({ conversationId: 'conv-1', err: 'write failed' }))
+    })
+    it('a refused move records nothing', async () => {
+      const db = makeDb()
+      db.rpc = vi.fn(async () => ({ data: null, error: { code: '23505', message: 'x' } }))
+      createServerClient.mockReturnValue(db)
+      await POST(post({ location_id: HATCH }), params)
+      expect(updates).toHaveLength(0)
+    })
   })
 })
