@@ -219,7 +219,7 @@ describe('buildMovedDefaults', () => {
     expect(buildMovedDefaults(CTX).footerHtml).toContain('before your wave')
     expect(buildMovedDefaults(CTX).footerHtml).toContain('race-day energy')
     const workshop = buildMovedDefaults({ ...CTX, isRace: false, waveRowLabel: 'Time' }).footerHtml
-    expect(workshop).toContain('arrive 30 minutes before your start')
+    expect(workshop).toContain('arrive 10-15 minutes before your start')
     expect(workshop).not.toContain('race-day')
   })
 })

@@ -113,7 +113,7 @@ describe('confirmation email — characterization (default look)', () => {
           </tr>
         </table>
         <div style="background:#f5f5f5;padding:16px;border-radius:8px;font-size:13px;color:#333;line-height:1.5">
-          <strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.<br><br>Need a different date? <a href="https://crm.example/event/entry/PAYLOAD.SIG" style="color:#111;font-weight:600">Change it here</a>.
+          <strong>What's next:</strong> arrive 10-15 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.<br><br>Need a different date? <a href="https://crm.example/event/entry/PAYLOAD.SIG" style="color:#111;font-weight:600">Change it here</a>.
         </div>
 
         <p style="color:#999;font-size:12px;margin-top:24px;text-align:center">UN1T Stillorgan</p>
@@ -163,7 +163,7 @@ describe('confirmation email — characterization (default look)', () => {
 
   it("has the \"What's next\" copy block", () => {
     const html = buildConfirmationEmailHtml(CONFIRM_CTX)
-    expect(html).toContain("<strong>What's next:</strong> arrive 30 minutes before your wave.")
+    expect(html).toContain("<strong>What's next:</strong> arrive 10-15 minutes before your wave.")
   })
 
   it('escapes the team name (no raw injection)', () => {
@@ -206,7 +206,7 @@ describe('confirmation email — characterization (default look)', () => {
         <ul style="padding-left:20px;margin:0 0 24px;font-size:14px;line-height:1.7"><li>Solo Runner <em>(captain)</em></li></ul>
 
         <div style="background:#f5f5f5;padding:16px;border-radius:8px;font-size:13px;color:#333;line-height:1.5">
-          <strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.
+          <strong>What's next:</strong> arrive 10-15 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.
         </div>
 
         <p style="color:#999;font-size:12px;margin-top:24px;text-align:center"></p>
@@ -251,7 +251,7 @@ describe('reminder email — characterization (default look)', () => {
           </tr>
         </table>
         <div style="background:#f5f5f5;padding:16px;border-radius:8px;font-size:13px;color:#333;line-height:1.5">
-          <strong>Before you arrive:</strong> get here 30 minutes early, and bring water + a towel. Can't make it? Just reply to let us know.
+          <strong>Before you arrive:</strong> get here 10-15 minutes early, and bring water + a towel. Can't make it? Just reply to let us know.
         </div>
 
         <p style="color:#999;font-size:12px;margin-top:24px;text-align:center">UN1T Stillorgan</p>
@@ -276,7 +276,7 @@ describe('reminder email — characterization (default look)', () => {
 
   it('has the "Before you arrive" copy block', () => {
     const html = buildReminderEmailHtml({ eventName: 'E', whenLabel: 'w', locationName: 'L', members })
-    expect(html).toContain('<strong>Before you arrive:</strong> get here 30 minutes early')
+    expect(html).toContain('<strong>Before you arrive:</strong> get here 10-15 minutes early')
   })
 })
 
