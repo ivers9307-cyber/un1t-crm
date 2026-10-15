@@ -26,6 +26,7 @@ describe('isReplyWorthyInbound', () => {
   it('answers text and tapped buttons with content only', () => {
     expect(isReplyWorthyInbound(inn('hi', 1))).toBe(true)
     expect(isReplyWorthyInbound(inn('6pm', 1, 'interactive'))).toBe(true)
+    expect(isReplyWorthyInbound(inn('Book a consultation', 1, 'button'))).toBe(true)
     expect(isReplyWorthyInbound(inn('Reacted: 👍', 1, 'reaction'))).toBe(false)
     expect(isReplyWorthyInbound(inn('', 1, 'image'))).toBe(false)
     expect(isReplyWorthyInbound(inn('a caption', 1, 'image'))).toBe(false)
