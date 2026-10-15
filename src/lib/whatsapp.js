@@ -116,9 +116,11 @@ export async function sendTextMessage(to, text, opts = {}) {
 // AGENT-UX.1 — interactive tap-choice messages. Meta caps: quick-reply
 // buttons max 3 / titles 20 chars; list messages max 10 rows / titles 24
 // chars. The payload builder picks the right shape from the option count
-// so callers never think about the split. Pure — exported for tests.
+// so callers never think about the split. An option is a string (id
+// `opt_<i>`) or `{ id, title }` (WASTUDIOPICK.1). Pure — exported for tests.
 export function buildInteractivePayload(to, text, options) {
   const opts = (options || []).slice(0, 10)
+  const norm = (o, i) => (o && typeof o === 'object' ? { id: String(o.id), title: String(o.title) } : { id: `opt_${i}`, title: String(o) })
   const base = { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive' }
   if (opts.length <= 3) {
     return {
@@ -127,7 +129,7 @@ export function buildInteractivePayload(to, text, options) {
         type: 'button',
         body: { text },
         action: {
-          buttons: opts.map((o, i) => ({ type: 'reply', reply: { id: `opt_${i}`, title: String(o).slice(0, 20) } })),
+          buttons: opts.map((o, i) => { const n = norm(o, i); return { type: 'reply', reply: { id: n.id, title: n.title.slice(0, 20) } } }),
         },
       },
     }
@@ -139,7 +141,7 @@ export function buildInteractivePayload(to, text, options) {
       body: { text },
       action: {
         button: 'Choose an option',
-        sections: [{ rows: opts.map((o, i) => ({ id: `opt_${i}`, title: String(o).slice(0, 24) })) }],
+        sections: [{ rows: opts.map((o, i) => { const n = norm(o, i); return { id: n.id, title: n.title.slice(0, 24) } }) }],
       },
     },
   }

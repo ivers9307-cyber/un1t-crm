@@ -33,4 +33,10 @@ describe('buildInteractivePayload', () => {
     const p = buildInteractivePayload('1', 'x', many)
     expect(p.interactive.action.sections[0].rows).toHaveLength(10)
   })
+  it('WASTUDIOPICK.1 — an option may carry its own id', () => {
+    const p = buildInteractivePayload('353000000000', 'Which?', [{ id: 'studio:a1', title: 'Stillorgan' }, { id: 'studio:a2', title: 'Hatch Street' }])
+    expect(p.interactive.action.buttons.map((b) => b.reply)).toEqual([{ id: 'studio:a1', title: 'Stillorgan' }, { id: 'studio:a2', title: 'Hatch Street' }])
+    const list = buildInteractivePayload('353000000000', 'Which?', [1, 2, 3, 4].map((i) => ({ id: `studio:a${i}`, title: `S${i}` })))
+    expect(list.interactive.action.sections[0].rows[3]).toEqual({ id: 'studio:a4', title: 'S4' })
+  })
 })
