@@ -524,17 +524,25 @@ function CountUp({ value }) {
 // Broadcast-clean: slides down from the top, holds, fades out. Burn toasts
 // run volt (earned) with ink-dark text; Zone-5 toasts Redline-on-bone. No emoji — the
 // system's voice is type, so any emoji in the message string is stripped.
-function ToastLayer({ queue, onDone }) {
+export function ToastLayer({ queue, onDone }) {
   const active = queue[0] || null
   const [shown, setShown] = useState(false)
+  // TVTOAST.1 — `onDone` is an inline arrow at the call site, so it is a new
+  // identity on every parent render, and the board re-renders once a second
+  // for the header clock. Depending on it here tore this effect down and
+  // restarted the TOAST_MS timer every second, so the toast NEVER dismissed
+  // (and every later toast queued behind it, unseen). Hold it in a ref and
+  // depend only on the toast itself.
+  const onDoneRef = useRef(onDone)
+  useEffect(() => { onDoneRef.current = onDone }, [onDone])
   useEffect(() => {
     if (!active) return
     setShown(false)
     const inT = setTimeout(() => setShown(true), 30)
     const outT = setTimeout(() => setShown(false), TOAST_MS - 500)
-    const doneT = setTimeout(() => onDone(active), TOAST_MS)
+    const doneT = setTimeout(() => onDoneRef.current(active), TOAST_MS)
     return () => { clearTimeout(inT); clearTimeout(outT); clearTimeout(doneT) }
-  }, [active, onDone])
+  }, [active])
   if (!active) return null
   const burnToast = active.event === 'burn'
   const message = String(active.message || '').replace(/[🔥🔴]/gu, '').replace(/\s{2,}/g, ' ').trim()
