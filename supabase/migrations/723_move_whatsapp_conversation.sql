@@ -6,9 +6,19 @@
 -- Used by mig 724 (the one-off backfill of threads WANUMBERLESS.1 filed at the
 -- receiving studio) and by POST /api/whatsapp/conversations/[id]/move.
 --   * target in another organisation, or the thread's own studio → refused;
---   * no thread at the target for this wa_phone → the row is re-filed;
---   * one exists → MERGED into it: messages re-pointed, target row kept
---     (newest last_message_*, summed unread), the emptied source deleted;
+--   * no thread at the target for this wa_phone, nor for this wa_bsuid (the
+--     live partial unique (location_id, wa_bsuid) would refuse a second one) →
+--     the row is re-filed;
+--   * one exists (phone match preferred, else bsuid match) → MERGED into it:
+--     messages re-pointed, target row kept, the emptied source deleted. The
+--     per-column rule is safety-first: a block, a takeover or a pause on
+--     EITHER thread survives (is_blocked OR, agent_active AND, agent_paused_at
+--     COALESCE(t, s)); timestamps and counters take the later/greater; the
+--     verified-contact pair follows the later agent_verified_at; the live
+--     claim lease agent_processing_at is the target's; resolved_at stays
+--     resolved only if both are; created_at is the earlier; status the target's.
+--     A merge that copies a wa_bsuid onto the target which another row there
+--     already holds raises 23505 (unique_violation); the caller decides.
 --   * whatsapp_messages.location_id and the channel='whatsapp' rows of the four
 --     agent tables follow the thread (a same-day review clash keeps the
 --     target's review);
@@ -53,7 +63,11 @@ BEGIN
      LIMIT 1));
 
   SELECT id INTO v_target_id FROM public.whatsapp_conversations
-   WHERE location_id = p_target_location_id AND wa_phone IS NOT DISTINCT FROM v_conv.wa_phone
+   WHERE location_id = p_target_location_id
+     AND ((v_conv.wa_phone IS NOT NULL AND wa_phone = v_conv.wa_phone)
+       OR (v_conv.wa_bsuid IS NOT NULL AND wa_bsuid = v_conv.wa_bsuid))
+   ORDER BY (v_conv.wa_phone IS NOT NULL AND wa_phone = v_conv.wa_phone) DESC
+   LIMIT 1
    FOR UPDATE;
 
   IF v_target_id IS NULL THEN
@@ -68,10 +82,34 @@ BEGIN
       contact_id = COALESCE(t.contact_id, v_conv.contact_id),
       unread_count = COALESCE(t.unread_count, 0) + COALESCE(v_conv.unread_count, 0),
       window_expires_at = GREATEST(t.window_expires_at, v_conv.window_expires_at),
+      window_open_at = GREATEST(t.window_open_at, v_conv.window_open_at),
       last_message_direction = CASE WHEN v_conv.last_message_at > COALESCE(t.last_message_at, '-infinity') THEN v_conv.last_message_direction ELSE t.last_message_direction END,
       last_message_preview = CASE WHEN v_conv.last_message_at > COALESCE(t.last_message_at, '-infinity') THEN v_conv.last_message_preview ELSE t.last_message_preview END,
       last_message_at = GREATEST(t.last_message_at, v_conv.last_message_at),
-      whatsapp_number_id = COALESCE(t.whatsapp_number_id, v_stamp)
+      whatsapp_number_id = COALESCE(t.whatsapp_number_id, v_stamp),
+      is_blocked = t.is_blocked OR v_conv.is_blocked,
+      agent_active = t.agent_active AND v_conv.agent_active,
+      agent_paused_at = COALESCE(t.agent_paused_at, v_conv.agent_paused_at),
+      agent_handed_off_at = GREATEST(t.agent_handed_off_at, v_conv.agent_handed_off_at),
+      agent_last_reply_at = GREATEST(t.agent_last_reply_at, v_conv.agent_last_reply_at),
+      handoff_escalated_at = GREATEST(t.handoff_escalated_at, v_conv.handoff_escalated_at),
+      agent_activity_notified_at = GREATEST(t.agent_activity_notified_at, v_conv.agent_activity_notified_at),
+      agent_followup_sent_at = GREATEST(t.agent_followup_sent_at, v_conv.agent_followup_sent_at),
+      agent_followup_stage = GREATEST(t.agent_followup_stage, v_conv.agent_followup_stage),
+      agent_verify_attempts = GREATEST(t.agent_verify_attempts, v_conv.agent_verify_attempts),
+      agent_verified_contact_id = CASE WHEN v_conv.agent_verified_at IS NOT NULL
+        AND (t.agent_verified_at IS NULL OR v_conv.agent_verified_at > t.agent_verified_at)
+        THEN v_conv.agent_verified_contact_id ELSE t.agent_verified_contact_id END,
+      agent_verified_at = CASE WHEN v_conv.agent_verified_at IS NOT NULL
+        AND (t.agent_verified_at IS NULL OR v_conv.agent_verified_at > t.agent_verified_at)
+        THEN v_conv.agent_verified_at ELSE t.agent_verified_at END,
+      assigned_to = COALESCE(t.assigned_to, v_conv.assigned_to),
+      wa_bsuid = COALESCE(t.wa_bsuid, v_conv.wa_bsuid),
+      wa_profile_name = COALESCE(t.wa_profile_name, v_conv.wa_profile_name),
+      ctwa_clid = COALESCE(t.ctwa_clid, v_conv.ctwa_clid),
+      resolved_at = CASE WHEN t.resolved_at IS NULL OR v_conv.resolved_at IS NULL THEN NULL
+                         ELSE GREATEST(t.resolved_at, v_conv.resolved_at) END,
+      created_at = LEAST(t.created_at, v_conv.created_at)
      WHERE t.id = v_target_id;
     DELETE FROM public.agent_conversation_reviews s
      WHERE s.channel = 'whatsapp' AND s.conversation_id = v_conv.id

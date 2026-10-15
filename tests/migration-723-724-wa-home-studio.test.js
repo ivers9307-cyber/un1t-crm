@@ -1,6 +1,8 @@
 // WAHOMESTUDIO.1 — behavioural test for migrations 723 (move/merge function)
 // and 724 (backfill). Models the live columns (information_schema, 15 Oct
-// 2026) of the tables the function touches and runs the REAL files.
+// 2026) of the tables the function touches (every whatsapp_conversations column
+// the merge rule reads, and its two live PARTIAL unique indexes) and runs the
+// REAL files.
 // Fictional ids only: the repo is public.
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -22,6 +24,10 @@ const K_STILL = 'b0000000-0000-0000-0000-000000000002'
 const C1 = 'c0000000-0000-0000-0000-000000000001'
 const C2 = 'c0000000-0000-0000-0000-000000000002'
 const C3 = 'c0000000-0000-0000-0000-000000000003'
+const C4 = 'c0000000-0000-0000-0000-000000000004'
+const C5 = 'c0000000-0000-0000-0000-000000000005'
+const K_X = 'b0000000-0000-0000-0000-000000000003'
+const USER = 'e0000000-0000-0000-0000-000000000001'
 
 const SCHEMA = `
   CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS;
@@ -30,11 +36,18 @@ const SCHEMA = `
   CREATE TABLE public.whatsapp_numbers (id uuid PRIMARY KEY, location_id uuid NOT NULL, is_active boolean NOT NULL DEFAULT true,
     is_default boolean NOT NULL DEFAULT false, updated_at timestamptz DEFAULT now());
   CREATE TABLE public.whatsapp_conversations (
-    id uuid PRIMARY KEY, location_id uuid NOT NULL, contact_id uuid, wa_phone text, status text DEFAULT 'active',
-    window_expires_at timestamptz, last_message_at timestamptz, last_message_direction text, last_message_preview text,
-    unread_count integer DEFAULT 0, assigned_to uuid, resolved_at timestamptz,
-    whatsapp_number_id uuid REFERENCES public.whatsapp_numbers(id) ON DELETE SET NULL,
-    created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(), UNIQUE (location_id, wa_phone));
+    id uuid PRIMARY KEY, location_id uuid NOT NULL, contact_id uuid, wa_phone text, window_open_at timestamptz,
+    window_expires_at timestamptz, status text DEFAULT 'active', last_message_at timestamptz, last_message_direction text,
+    last_message_preview text, unread_count integer DEFAULT 0, assigned_to uuid,
+    created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(), wa_profile_name text,
+    agent_active boolean NOT NULL DEFAULT true, agent_handed_off_at timestamptz, agent_last_reply_at timestamptz,
+    agent_verified_contact_id uuid, agent_verified_at timestamptz, agent_processing_at timestamptz, resolved_at timestamptz,
+    agent_followup_stage smallint NOT NULL DEFAULT 0, agent_followup_sent_at timestamptz, ctwa_clid text,
+    is_blocked boolean NOT NULL DEFAULT false, handoff_escalated_at timestamptz, wa_bsuid text,
+    agent_activity_notified_at timestamptz, agent_verify_attempts smallint NOT NULL DEFAULT 0, agent_paused_at timestamptz,
+    whatsapp_number_id uuid REFERENCES public.whatsapp_numbers(id) ON DELETE SET NULL);
+  CREATE UNIQUE INDEX idx_wa_conv_location_phone ON public.whatsapp_conversations (location_id, wa_phone) WHERE wa_phone IS NOT NULL;
+  CREATE UNIQUE INDEX whatsapp_conversations_location_wa_bsuid_key ON public.whatsapp_conversations (location_id, wa_bsuid) WHERE wa_bsuid IS NOT NULL;
   CREATE TABLE public.whatsapp_messages (id serial PRIMARY KEY,
     conversation_id uuid REFERENCES public.whatsapp_conversations(id) ON DELETE CASCADE, location_id uuid, body text);
   CREATE TABLE public.agent_decisions (id serial PRIMARY KEY, channel text, conversation_id uuid, location_id uuid);
@@ -94,6 +107,67 @@ describe('723 move_whatsapp_conversation', () => {
     expect(await one(db, `SELECT conversation_id, location_id FROM agent_decisions`)).toEqual({ conversation_id: C2, location_id: HATCH })
   })
 
+  it('merge carries a block, a takeover, a pause, the assignee and the bsuid from the source onto a fresh target', async () => {
+    const db = await boot(`
+      INSERT INTO public.whatsapp_conversations (id, location_id, contact_id, wa_phone, is_blocked, agent_active, agent_paused_at,
+          assigned_to, wa_bsuid, wa_profile_name, ctwa_clid, agent_followup_stage, agent_verify_attempts, agent_handed_off_at,
+          agent_verified_contact_id, agent_verified_at, resolved_at, created_at)
+        VALUES ('${C1}', '${STILL}', '${K_HATCH}', '15555550100', true, false, '2026-10-02T09:00Z',
+          '${USER}', 'BSUID.X', 'Pat', 'clid-1', 2, 3, '2026-10-03T09:00Z',
+          '${K_STILL}', '2026-10-04T09:00Z', NULL, '2026-09-01T00:00Z');
+      INSERT INTO public.whatsapp_conversations (id, location_id, contact_id, wa_phone, resolved_at, created_at, agent_processing_at, status)
+        VALUES ('${C2}', '${HATCH}', '${K_HATCH}', '15555550100', '2026-10-06T09:00Z', '2026-10-01T00:00Z', '2026-10-07T09:00Z', 'resolved');
+    `)
+    const r = await move(db, C1, HATCH)
+    expect(r).toMatchObject({ conversation_id: C2, merged: true })
+    const row = await one(db, `SELECT is_blocked, agent_active, agent_paused_at::text AS paused, assigned_to, wa_bsuid, wa_profile_name, ctwa_clid,
+        agent_followup_stage, agent_verify_attempts, agent_handed_off_at::text AS handed, agent_verified_contact_id, agent_verified_at::text AS vat,
+        resolved_at, created_at::text AS created, agent_processing_at::text AS lease, status
+      FROM whatsapp_conversations WHERE id = '${C2}'`)
+    expect(row).toMatchObject({
+      is_blocked: true, agent_active: false, assigned_to: USER, wa_bsuid: 'BSUID.X', wa_profile_name: 'Pat', ctwa_clid: 'clid-1',
+      agent_followup_stage: 2, agent_verify_attempts: 3, agent_verified_contact_id: K_STILL, resolved_at: null, status: 'resolved',
+    })
+    expect(new Date(row.paused).toISOString()).toBe('2026-10-02T09:00:00.000Z')
+    expect(new Date(row.handed).toISOString()).toBe('2026-10-03T09:00:00.000Z')
+    expect(new Date(row.vat).toISOString()).toBe('2026-10-04T09:00:00.000Z')
+    expect(new Date(row.created).toISOString()).toBe('2026-09-01T00:00:00.000Z')
+    expect(new Date(row.lease).toISOString()).toBe('2026-10-07T09:00:00.000Z')   // the target's live claim lease, not imported
+  })
+
+  it('merges into a target studio row holding the same wa_bsuid under a different wa_phone, with no unique violation', async () => {
+    const db = await boot(`
+      INSERT INTO public.whatsapp_conversations (id, location_id, contact_id, wa_phone, wa_bsuid, unread_count)
+        VALUES ('${C1}', '${STILL}', '${K_HATCH}', '15555550100', 'BSUID.X', 1);
+      INSERT INTO public.whatsapp_conversations (id, location_id, contact_id, wa_phone, wa_bsuid, unread_count)
+        VALUES ('${C2}', '${HATCH}', '${K_HATCH}', '15555550199', 'BSUID.X', 4);
+      INSERT INTO public.whatsapp_messages (conversation_id, location_id, body) VALUES ('${C1}', '${STILL}', 'hi');
+    `)
+    const r = await move(db, C1, HATCH)
+    expect(r).toMatchObject({ conversation_id: C2, merged: true })
+    expect(await one(db, `SELECT count(*)::int AS n FROM whatsapp_conversations`)).toEqual({ n: 1 })
+    expect(await one(db, `SELECT unread_count, wa_phone FROM whatsapp_conversations`)).toEqual({ unread_count: 5, wa_phone: '15555550199' })
+    expect(await one(db, `SELECT conversation_id, location_id FROM whatsapp_messages`)).toEqual({ conversation_id: C2, location_id: HATCH })
+  })
+
+  it('re-points the membership-request and message-feedback rows too, on a re-file and on a merge', async () => {
+    const rows = `
+      INSERT INTO public.agent_membership_requests (channel, conversation_id, location_id) VALUES ('whatsapp', '${C1}', '${STILL}'), ('instagram', '${C1}', '${STILL}');
+      INSERT INTO public.agent_message_feedback (channel, conversation_id, location_id) VALUES ('whatsapp', '${C1}', '${STILL}');
+    `
+    const db = await boot(HATCH_THREAD_AT_STILL + rows)
+    await move(db, C1, HATCH)
+    expect((await db.query(`SELECT channel, conversation_id, location_id FROM agent_membership_requests ORDER BY channel`)).rows)
+      .toEqual([{ channel: 'instagram', conversation_id: C1, location_id: STILL }, { channel: 'whatsapp', conversation_id: C1, location_id: HATCH }])
+    expect(await one(db, `SELECT conversation_id, location_id FROM agent_message_feedback`)).toEqual({ conversation_id: C1, location_id: HATCH })
+
+    const db2 = await boot(HATCH_THREAD_AT_STILL + rows + `
+      INSERT INTO public.whatsapp_conversations (id, location_id, contact_id, wa_phone) VALUES ('${C2}', '${HATCH}', '${K_HATCH}', '15555550100');`)
+    await move(db2, C1, HATCH)
+    expect(await one(db2, `SELECT conversation_id, location_id FROM agent_message_feedback`)).toEqual({ conversation_id: C2, location_id: HATCH })
+    expect((await db2.query(`SELECT conversation_id FROM agent_membership_requests WHERE channel = 'whatsapp'`)).rows).toEqual([{ conversation_id: C2 }])
+  })
+
   it('refuses another organisation and its own studio, writing nothing (Review Focus 5)', async () => {
     const db = await boot(HATCH_THREAD_AT_STILL)
     await expect(move(db, C1, OTHER)).rejects.toThrow(/other_organisation/)
@@ -121,6 +195,24 @@ describe('724 backfill', () => {
       .toEqual([{ id: C1, location_id: HATCH }, { id: C3, location_id: STILL }])
     await db.exec(MIG_724)
     expect(await one(db, `SELECT location_id FROM whatsapp_conversations WHERE id = '${C1}'`)).toEqual({ location_id: HATCH })
+  })
+
+  it('skips a thread whose merge would collide on wa_bsuid (NOTICE, no abort) while the other threads still move', async () => {
+    // C1 would merge into C2 (same wa_phone at Hatch) and copy BSUID.X onto it,
+    // but C4 at Hatch already holds BSUID.X: unique_violation. C5 must still move.
+    const db = await boot(HATCH_THREAD_AT_STILL + `
+      UPDATE public.whatsapp_conversations SET wa_bsuid = 'BSUID.X' WHERE id = '${C1}';
+      INSERT INTO public.whatsapp_conversations (id, location_id, contact_id, wa_phone) VALUES ('${C2}', '${HATCH}', '${K_HATCH}', '15555550100');
+      INSERT INTO public.whatsapp_conversations (id, location_id, contact_id, wa_phone, wa_bsuid) VALUES ('${C4}', '${HATCH}', '${K_X}', '15555550177', 'BSUID.X');
+      INSERT INTO public.contacts VALUES ('${K_X}', '${HATCH}');
+      INSERT INTO public.whatsapp_conversations (id, location_id, contact_id, wa_phone) VALUES ('${C5}', '${STILL}', '${K_HATCH}', '15555550188');
+    `)
+    const notices = []
+    await db.exec(MIG_724, { onNotice: (n) => notices.push(n.message) })
+    expect((await db.query(`SELECT id, location_id FROM whatsapp_conversations ORDER BY id`)).rows)
+      .toEqual([{ id: C1, location_id: STILL }, { id: C2, location_id: HATCH }, { id: C4, location_id: HATCH }, { id: C5, location_id: HATCH }])
+    expect(notices.some((m) => m.includes('skipped thread') && m.includes(C1))).toBe(true)
+    expect(notices.at(-1)).toMatch(/1 moved, 0 merged, 1 skipped/)
   })
 
   it('leaves a contact whose home studio has its own active number alone', async () => {
