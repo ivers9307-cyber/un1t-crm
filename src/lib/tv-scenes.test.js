@@ -1,12 +1,59 @@
 // src/lib/tv-scenes.test.js
 import { describe, it, expect } from 'vitest'
-import { SCENE_DWELL_MS, SCENE_KEYS, eligibleScenes, sceneAt, operatorRenderable } from './tv-scenes.js'
+import {
+  SCENE_DWELL_MS,
+  SCENE_KEYS,
+  eligibleScenes,
+  sceneAt,
+  operatorRenderable,
+  operatorImageRef,
+} from './tv-scenes.js'
 
 const full = {
   up_next: [{ starts_at: '2026-10-16T05:00:00Z', starts_at_label: '06:00', class_name: 'BU1LD' }],
   earned: [{ display_name: 'Saoirse M.', achievement: '50 classes', tier: 4 }],
   operator: { source_type: 'storage', source_ref: 'x.png' },
 }
+
+describe('operatorImageRef', () => {
+  it('returns the ref for a storage image', () => {
+    expect(operatorImageRef({ source_type: 'storage', source_ref: 'a.png', label: null, template_values: null })).toBe('a.png')
+  })
+
+  it('returns the ref for a url image', () => {
+    expect(operatorImageRef({ source_type: 'url', source_ref: 'https://example.com/a.png', label: null, template_values: null })).toBe('https://example.com/a.png')
+  })
+
+  it('returns the ref trimmed, since that is the exact string for src', () => {
+    expect(operatorImageRef({ source_type: 'storage', source_ref: '  a.png  ', label: null, template_values: null })).toBe('a.png')
+  })
+
+  // Only storage and url draw an image; a ref on a template row is never an image.
+  it('is null for a template row even with a ref', () => {
+    expect(operatorImageRef({ source_type: 'template', source_ref: 'x', label: null, template_values: null })).toBeNull()
+  })
+
+  it('is null for a whitespace-only ref', () => {
+    expect(operatorImageRef({ source_type: 'storage', source_ref: '   ', label: null, template_values: null })).toBeNull()
+  })
+
+  it('is null for a missing ref', () => {
+    expect(operatorImageRef({ source_type: 'storage', source_ref: null, label: null, template_values: null })).toBeNull()
+  })
+
+  it('is null for a null or undefined operator', () => {
+    expect(operatorImageRef(null)).toBeNull()
+    expect(operatorImageRef(undefined)).toBeNull()
+  })
+
+  // The motivating case: a whitespace ref must not send the scene down the image branch.
+  // The row still appears (it has a label), but it draws the label, never an <img>.
+  it('is null for a storage ref that is only whitespace when a label carries the row', () => {
+    const op = { source_type: 'storage', source_ref: '   ', label: 'Offer', template_values: null }
+    expect(operatorImageRef(op)).toBeNull()
+    expect(operatorRenderable(op)).toBe(true)
+  })
+})
 
 describe('operatorRenderable', () => {
   it('is true for an image the scene can draw (storage + ref)', () => {

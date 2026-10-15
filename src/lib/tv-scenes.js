@@ -9,6 +9,11 @@
 // rotation, is exactly the shape of TVTOAST.1 (#2066), where an effect
 // depending on a callback identity that changed every second meant the
 // timeout never fired. No timer, no bug.
+//
+// The operator scene has two questions, and this module answers both so no
+// consumer re-derives either: whether the scene appears at all
+// (operatorRenderable), and which branch it draws, with the exact src string
+// (operatorImageRef).
 
 /** How long one scene holds the screen. Richard's call, 2026-10-15. */
 export const SCENE_DWELL_MS = 30000
@@ -19,23 +24,34 @@ export const SCENE_KEYS = ['up-next', 'earned', 'operator']
 const present = (value) => typeof value === 'string' && value.trim() !== ''
 
 /**
- * Whether an operator row can actually be drawn. The operator scene draws an
- * image (source_type storage or url, with a source_ref) or a text label,
- * nothing else. So eligibility and rendering must agree: if this says true the
- * scene shows something, and if it says false the scene is skipped. Two copies
- * of this rule would drift, and the board would show a blank stage for a full
- * 30s dwell. template_values alone is not renderable yet, so it does not count.
- * OperatorScene in Task 3 must guard on this predicate and not re-derive it.
+ * Which branch the operator scene draws, and the exact string for its `src`.
+ * Returns the trimmed source_ref when the row is an image the scene can draw
+ * (source_type storage or url, with a non-blank ref), otherwise null. A null
+ * means the scene draws its label, or nothing. This answers WHICH BRANCH, not
+ * whether the scene appears: use operatorRenderable for that.
+ *
+ * @param {object|null|undefined} operator  the payload's `idle.operator` row
+ * @returns {string|null}
+ */
+export function operatorImageRef(operator) {
+  if (!operator || typeof operator !== 'object') return null
+  if (operator.source_type !== 'storage' && operator.source_type !== 'url') return null
+  return present(operator.source_ref) ? operator.source_ref.trim() : null
+}
+
+/**
+ * Whether the operator scene appears at all. It appears when it can draw
+ * something: an image (operatorImageRef is non-null) or a non-blank label.
+ * template_values alone is not renderable yet, so it does not count. This
+ * answers WHETHER THE SCENE APPEARS, not which branch it draws: use
+ * operatorImageRef for that. Eligibility and rendering must agree, or the
+ * board shows a blank stage for a full 30s dwell.
  *
  * @param {object|null|undefined} operator  the payload's `idle.operator` row
  * @returns {boolean}
  */
 export function operatorRenderable(operator) {
-  if (!operator || typeof operator !== 'object') return false
-  const image =
-    (operator.source_type === 'storage' || operator.source_type === 'url') &&
-    present(operator.source_ref)
-  return image || present(operator.label)
+  return operatorImageRef(operator) !== null || present(operator?.label)
 }
 
 const HAS_CONTENT = {
