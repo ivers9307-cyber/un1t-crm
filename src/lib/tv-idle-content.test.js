@@ -17,6 +17,7 @@ import { logWarn } from '@/lib/log'
 import {
   buildIdleContent, EARNED_WINDOW_MS, EARNED_LIMIT, UP_NEXT_LIMIT,
   IDLE_LOG_WINDOW_MS, __resetIdleLogThrottle,
+  IDLE_CACHE_TTL_MS, UP_NEXT_HORIZON_MS, __resetIdleCache,
 } from './tv-idle-content.js'
 
 const ZONE = 'Europe/Dublin'
@@ -28,6 +29,12 @@ const SUPA = 'https://proj.supabase.co'
 // records each call (method + args) in `calls[table]`.
 //   fail.<table> === true     -> the query resolves { data: null, error }
 //   fail.<table> === 'throw'  -> the query itself rejects (the catch path)
+// gte/lte are APPLIED, not only recorded, to string-valued columns: a time
+// window is the behaviour under test, and a stub that returned every canned row
+// whatever the bounds would pass whether or not the query had them. A row whose
+// column is not a string (a null start time) is let through, so the code's own
+// guard for unreadable rows stays testable. `is`/`eq`/`order`/`limit` are only
+// recorded; their tests assert the call.
 function dbWith({ occurrences = [], achievements = [], content = null, fail = {} } = {}) {
   const calls = { class_occurrences: [], contact_achievements: [], tv_content: [] }
   const table = (name, rows, mode) => {
@@ -35,23 +42,30 @@ function dbWith({ occurrences = [], achievements = [], content = null, fail = {}
       calls[name].push({ method, args })
       return chain
     }
+    const bounds = []
+    const bound = (method, keep) => (col, value) => {
+      calls[name].push({ method, args: [col, value] })
+      bounds.push((row) => typeof row[col] !== 'string' || keep(row[col], value))
+      return chain
+    }
+    const visible = () => rows.filter((row) => bounds.every((ok) => ok(row)))
     const errored = () => ({ data: null, error: new Error('boom') })
     const chain = {
       select: record('select'),
       eq: record('eq'),
-      gte: record('gte'),
-      lte: record('lte'),
+      gte: bound('gte', (v, min) => v >= min),
+      lte: bound('lte', (v, max) => v <= max),
       is: record('is'),
       order: record('order'),
       limit: record('limit'),
       maybeSingle: () => {
         calls[name].push({ method: 'maybeSingle', args: [] })
         if (mode === 'throw') return Promise.reject(new Error('boom'))
-        return Promise.resolve(mode ? errored() : { data: rows[0] ?? null, error: null })
+        return Promise.resolve(mode ? errored() : { data: visible()[0] ?? null, error: null })
       },
       then: (resolve, reject) => {
         if (mode === 'throw') return reject(new Error('boom'))
-        return resolve(mode ? errored() : { data: rows, error: null })
+        return resolve(mode ? errored() : { data: visible(), error: null })
       },
     }
     return chain
@@ -69,9 +83,13 @@ function dbWith({ occurrences = [], achievements = [], content = null, fail = {}
 
 const opts = (over = {}) => ({ locationId: LOC, displayId: 'd1', zone: ZONE, nowMs: NOW, ...over })
 
+// How many times a table was actually queried (each query selects once).
+const reads = (db, table) => db.calls[table].filter((c) => c.method === 'select').length
+
 beforeEach(() => {
   vi.clearAllMocks()
   __resetIdleLogThrottle() // module-level state: every test starts with nothing suppressed
+  __resetIdleCache()       // ...and with nothing cached from the last test's database
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPA)
 })
 afterEach(() => { vi.unstubAllEnvs() })
@@ -105,9 +123,14 @@ describe('buildIdleContent — logging', () => {
 
   it('still answers absent when the logger itself throws', async () => {
     logWarn.mockImplementation(() => { throw new Error('cannot serialise') })
-    const out = await buildIdleContent(dbWith({ fail: { occurrences: true, achievements: 'throw', content: true } }), opts())
-    expect(out).toEqual({ up_next: [], earned: [], operator: null })
-    logWarn.mockReset()
+    try {
+      const out = await buildIdleContent(dbWith({ fail: { occurrences: true, achievements: 'throw', content: true } }), opts())
+      expect(out).toEqual({ up_next: [], earned: [], operator: null })
+    } finally {
+      // Always, so a failed assertion above cannot leak a throwing logger into
+      // the tests after it and make them fail for the wrong reason.
+      logWarn.mockReset()
+    }
   })
 })
 
@@ -173,6 +196,9 @@ describe('buildIdleContent — log throttle', () => {
 
   it('throttles different reads independently: one failing read does not silence another', async () => {
     const out1 = await buildIdleContent(dbWith({ fail: { occurrences: true } }), opts())
+    // The first call's earned read succeeded, so it is cached. This test is about
+    // the log throttle, so make the second call read again.
+    __resetIdleCache()
     const out2 = await buildIdleContent(dbWith({ fail: { occurrences: true, achievements: true } }), opts())
     expect(out1.up_next).toEqual([])
     expect(out2).toEqual({ up_next: [], earned: [], operator: null })
@@ -222,6 +248,27 @@ describe('buildIdleContent — up_next', () => {
     expect(calls).toContainEqual({ method: 'gte', args: ['starts_at', new Date(NOW).toISOString()] })
     expect(calls).toContainEqual({ method: 'order', args: ['starts_at', { ascending: true }] })
     expect(calls).toContainEqual({ method: 'limit', args: [UP_NEXT_LIMIT] })
+  })
+
+  // The scene prints a bare HH:MM with no day, so it must not reach past a day.
+  // The stub applies the bounds, so these assert what the query lets through,
+  // and the last one pins the upper bound itself.
+  it('leaves out a class more than 24 hours away, and keeps one inside the window', async () => {
+    const db = dbWith({ occurrences: [
+      { name: 'Tomorrow, same time', program: null, starts_at: new Date(NOW + 23 * 3600_000).toISOString() },
+      { name: 'Day after', program: null, starts_at: new Date(NOW + 25 * 3600_000).toISOString() },
+    ] })
+    const out = await buildIdleContent(db, opts())
+    expect(out.up_next.map((o) => o.class_name)).toEqual(['Tomorrow, same time'])
+  })
+
+  it('asks for an upper bound of 24 hours from now', async () => {
+    const db = dbWith()
+    await buildIdleContent(db, opts())
+    expect(UP_NEXT_HORIZON_MS).toBe(24 * 60 * 60 * 1000)
+    expect(db.calls.class_occurrences).toContainEqual({
+      method: 'lte', args: ['starts_at', new Date(NOW + UP_NEXT_HORIZON_MS).toISOString()],
+    })
   })
 
   it('never selects capacity or any booked count', async () => {
@@ -483,6 +530,149 @@ describe('buildIdleContent — operator', () => {
     expect(logWarn).toHaveBeenCalledWith('tv-idle', expect.any(String), expect.objectContaining({
       read: 'operator', locationId: LOC, displayId: 'd1', err: expect.objectContaining({ message: 'boom' }),
     }))
+  })
+})
+
+// up_next and earned are the two expensive, slow-changing reads (earned scans
+// every studio's achievements), cached per location for IDLE_CACHE_TTL_MS. The
+// operator read is a primary-key lookup an operator watches, so it is never
+// cached. Fake timers: the TTL is clock-driven and a real wait would be slow
+// and flaky.
+describe('buildIdleContent — read cache', () => {
+  const OTHER_LOC = 'b0000000-0000-0000-0000-000000000002'
+  const occ = { name: 'Cached Class', program: null, starts_at: '2026-10-16T05:00:00Z' }
+  const ach = {
+    earned_at: '2026-10-15T18:00:00Z', metadata: {},
+    achievement_rules: { name: '50 classes', tier: 4 },
+    contacts: { name: 'Saoirse Murphy', location_id: LOC, hr_leaderboard_opt_out: false },
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-16T04:00:00Z'))
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('serves up_next and earned from the cache inside the TTL, without querying again', async () => {
+    const db = dbWith({ occurrences: [occ], achievements: [ach] })
+    const first = await buildIdleContent(db, opts())
+    await vi.advanceTimersByTimeAsync(IDLE_CACHE_TTL_MS - 1)
+    const second = await buildIdleContent(db, opts())
+    expect(reads(db, 'class_occurrences')).toBe(1)
+    expect(reads(db, 'contact_achievements')).toBe(1)
+    expect(second.up_next).toEqual(first.up_next)
+    expect(second.earned).toEqual(first.earned)
+    expect(second.up_next).toHaveLength(1)
+    expect(second.earned).toHaveLength(1)
+  })
+
+  it('reads again once the TTL has passed', async () => {
+    const db = dbWith({ occurrences: [occ], achievements: [ach] })
+    await buildIdleContent(db, opts())
+    await vi.advanceTimersByTimeAsync(IDLE_CACHE_TTL_MS)
+    await buildIdleContent(db, opts())
+    expect(reads(db, 'class_occurrences')).toBe(2)
+    expect(reads(db, 'contact_achievements')).toBe(2)
+  })
+
+  it('reads the operator row on EVERY call, so a push shows within one poll', async () => {
+    const db = dbWith({ content: { source_type: 'url', source_ref: 'https://example.com/a.png', label: 'Offer', template_values: null } })
+    await buildIdleContent(db, opts())
+    await vi.advanceTimersByTimeAsync(4_000)
+    await buildIdleContent(db, opts())
+    await buildIdleContent(db, opts())
+    expect(reads(db, 'tv_content')).toBe(3)
+    // ...while the two cached reads ran once.
+    expect(reads(db, 'class_occurrences')).toBe(1)
+    expect(reads(db, 'contact_achievements')).toBe(1)
+  })
+
+  it('shows a card pushed after the cache was filled on the very next call', async () => {
+    const before = await buildIdleContent(dbWith({ occurrences: [occ] }), opts())
+    expect(before.operator).toBeNull()
+    await vi.advanceTimersByTimeAsync(4_000)
+    const pushed = dbWith({ occurrences: [occ], content: { source_type: 'url', source_ref: 'https://example.com/a.png', label: 'Offer', template_values: null } })
+    const after = await buildIdleContent(pushed, opts())
+    expect(after.operator).toMatchObject({ label: 'Offer' })
+    expect(reads(pushed, 'class_occurrences')).toBe(0) // still served from cache
+  })
+
+  it('does not cache a failed read: the next call retries instead of serving an empty scene', async () => {
+    const failing = dbWith({ fail: { occurrences: true, achievements: true } })
+    const a = await buildIdleContent(failing, opts())
+    expect(a).toMatchObject({ up_next: [], earned: [] })
+    await vi.advanceTimersByTimeAsync(4_000)
+    const healthy = dbWith({ occurrences: [occ], achievements: [ach] })
+    const b = await buildIdleContent(healthy, opts())
+    expect(reads(healthy, 'class_occurrences')).toBe(1)
+    expect(reads(healthy, 'contact_achievements')).toBe(1)
+    expect(b.up_next).toHaveLength(1)
+    expect(b.earned).toHaveLength(1)
+  })
+
+  it('does not cache a read that threw either', async () => {
+    const throwing = dbWith({ fail: { occurrences: 'throw', achievements: 'throw' } })
+    await buildIdleContent(throwing, opts())
+    const healthy = dbWith({ occurrences: [occ], achievements: [ach] })
+    const out = await buildIdleContent(healthy, opts())
+    expect(out.up_next).toHaveLength(1)
+    expect(out.earned).toHaveLength(1)
+  })
+
+  it('caches a successful EMPTY answer (nothing coming up is an answer, not a failure)', async () => {
+    const db = dbWith()
+    await buildIdleContent(db, opts())
+    await buildIdleContent(db, opts())
+    expect(reads(db, 'class_occurrences')).toBe(1)
+    expect(reads(db, 'contact_achievements')).toBe(1)
+  })
+
+  it('keeps one entry per location: another studio never gets this studio\'s rows', async () => {
+    const a = dbWith({ occurrences: [occ], achievements: [ach] })
+    await buildIdleContent(a, opts())
+    const b = dbWith({ occurrences: [{ ...occ, name: 'Other Studio Class' }] })
+    const out = await buildIdleContent(b, opts({ locationId: OTHER_LOC }))
+    expect(reads(b, 'class_occurrences')).toBe(1)
+    expect(reads(b, 'contact_achievements')).toBe(1)
+    expect(out.up_next.map((o) => o.class_name)).toEqual(['Other Studio Class'])
+    expect(out.earned).toEqual([])
+    // and this studio's entry is still its own
+    const again = await buildIdleContent(a, opts())
+    expect(again.up_next.map((o) => o.class_name)).toEqual(['Cached Class'])
+    expect(reads(a, 'class_occurrences')).toBe(1)
+  })
+
+  it('shares an entry between two kiosks of one studio (keyed on location, not display)', async () => {
+    const db = dbWith({ occurrences: [occ], achievements: [ach] })
+    await buildIdleContent(db, opts({ displayId: 'd1' }))
+    await buildIdleContent(db, opts({ displayId: 'd2' }))
+    expect(reads(db, 'class_occurrences')).toBe(1)
+    expect(reads(db, 'contact_achievements')).toBe(1)
+  })
+
+  it('hands every caller its own copy: mutating a result cannot change what the next caller gets', async () => {
+    const db = dbWith({ occurrences: [occ], achievements: [ach] })
+    const first = await buildIdleContent(db, opts())     // the miss
+    first.up_next.push({ class_name: 'Injected' })
+    first.up_next[0].class_name = 'Mutated'
+    first.earned[0].display_name = 'Mutated'
+    first.earned.length = 0
+    const second = await buildIdleContent(db, opts())    // a hit
+    expect(second.up_next.map((o) => o.class_name)).toEqual(['Cached Class'])
+    expect(second.earned.map((e) => e.display_name)).toEqual(['Saoirse M.'])
+    second.up_next[0].class_name = 'Mutated again'
+    second.earned.pop()
+    const third = await buildIdleContent(db, opts())     // another hit
+    expect(third.up_next.map((o) => o.class_name)).toEqual(['Cached Class'])
+    expect(third.earned.map((e) => e.display_name)).toEqual(['Saoirse M.'])
+    expect(reads(db, 'class_occurrences')).toBe(1)
+  })
+
+  it('still logs a failed read once, then retries without re-logging inside the log window', async () => {
+    await buildIdleContent(dbWith({ fail: { occurrences: true } }), opts())
+    await vi.advanceTimersByTimeAsync(4_000)
+    await buildIdleContent(dbWith({ fail: { occurrences: true } }), opts())
+    expect(logWarn).toHaveBeenCalledTimes(1)
   })
 })
 
