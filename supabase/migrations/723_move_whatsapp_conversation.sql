@@ -20,9 +20,10 @@
 --     A merge that copies a wa_bsuid onto the target which another row there
 --     already holds raises 23505 (unique_violation); the caller decides.
 --   * whatsapp_messages.location_id and the channel='whatsapp' rows of the four
---     agent tables and of cancellation_form_links (mig 585; its conversation_id
---     is a soft ref with no FK, so a merge would otherwise strand it) follow
---     the thread (a same-day review clash keeps the target's review);
+--     agent tables follow the thread (a same-day review clash keeps the
+--     target's review); cancellation_form_links (mig 585) follows by
+--     conversation_id only (a soft ref with no FK, so a merge would otherwise
+--     strand it), keeping location_id at the issuing studio;
 --   * a thread with no number stamp gets the SOURCE studio's default number,
 --     the number it was talking through (getConversationNumberConfig, R4).
 -- SECURITY INVOKER: only service_role may execute it (mig 667 rule), and
@@ -146,7 +147,8 @@ BEGIN
   UPDATE public.agent_conversation_reviews SET conversation_id = v_target_id, location_id = p_target_location_id
    WHERE channel = 'whatsapp' AND conversation_id = v_conv.id;
   -- mig 585: a soft ref (no FK), read by the approve path to answer in-thread.
-  UPDATE public.cancellation_form_links SET conversation_id = v_target_id, location_id = p_target_location_id
+  -- location_id stays the ISSUING studio: confirm.js finds the link and sends by it.
+  UPDATE public.cancellation_form_links SET conversation_id = v_target_id
    WHERE channel = 'whatsapp' AND conversation_id = v_conv.id;
 
   IF v_merged THEN

@@ -172,8 +172,9 @@ describe('723 move_whatsapp_conversation', () => {
 
   // F5 — cancellation_form_links.conversation_id (mig 585) is a soft ref with
   // no FK: a merge that deleted the source left the link pointing at nothing,
-  // so the approve path could not answer in-thread.
-  it('re-points the WhatsApp cancellation-form links on a merge and a re-file (email links untouched)', async () => {
+  // so the approve path could not answer in-thread. location_id stays the
+  // issuing studio: confirm.js looks the link up and sends by it.
+  it('re-points the WhatsApp cancellation-form links on a merge and a re-file, keeping the issuing studio (email links untouched)', async () => {
     const links = `
       INSERT INTO public.cancellation_form_links (location_id, channel, conversation_id) VALUES
         ('${STILL}', 'whatsapp', '${C1}'), ('${STILL}', 'email', '${C1}');
@@ -184,13 +185,13 @@ describe('723 move_whatsapp_conversation', () => {
     expect(r).toMatchObject({ conversation_id: C2, merged: true })
     expect((await db.query(`SELECT channel, conversation_id, location_id FROM cancellation_form_links ORDER BY channel`)).rows).toEqual([
       { channel: 'email', conversation_id: C1, location_id: STILL },
-      { channel: 'whatsapp', conversation_id: C2, location_id: HATCH },
+      { channel: 'whatsapp', conversation_id: C2, location_id: STILL },
     ])
 
     const db2 = await boot(HATCH_THREAD_AT_STILL + links)
     await move(db2, C1, HATCH)
     expect(await one(db2, `SELECT conversation_id, location_id FROM cancellation_form_links WHERE channel = 'whatsapp'`))
-      .toEqual({ conversation_id: C1, location_id: HATCH })
+      .toEqual({ conversation_id: C1, location_id: STILL })
   })
 
   it('refuses another organisation and its own studio, writing nothing (Review Focus 5)', async () => {
