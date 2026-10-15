@@ -43,6 +43,8 @@ import { createBrowserClient } from '@/lib/supabase'
 import { repsetDisplay, repsetBody, repsetMono } from '@/fonts/repset'
 import { zoneColorDark, dominantZone } from '@/lib/tv-zone-colors'
 import { withDevice } from '@/lib/tv-data-url'
+import { eligibleScenes } from '@/lib/tv-scenes'
+import IdleStage from './IdleStage'
 
 // Poll cadence (active few-seconds vs idle back-off) lives in @/lib/live-poll.
 
@@ -71,6 +73,8 @@ const FIELD = '#22C58B'    // Z3 green — bridge online, timer complete (zone p
 const FONT_DISPLAY = 'var(--font-repset-display), ui-sans-serif, system-ui, sans-serif'
 const FONT_BODY = 'var(--font-repset-body), ui-sans-serif, system-ui, sans-serif'
 const FONT_MONO = 'var(--font-repset-mono), ui-monospace, SFMono-Regular, Menlo, monospace'
+// The faces the idle stage draws with (module-level: one object, not one per render).
+const IDLE_FONTS = { display: FONT_DISPLAY, body: FONT_BODY, mono: FONT_MONO }
 
 // Display remap of the canonical SEG_COLOR (shared/class-timer — untouched;
 // it also serves the coach screen + mobile) onto the dark-canvas palette.
@@ -230,6 +234,20 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
   }, [order])
   const cols = gridColsFor(tiles.length, portrait)
 
+  // TVSCENE.1 — when the board last went idle. The idle scene is derived from
+  // (now - idleSinceMs), so a board that has just emptied starts at scene one
+  // instead of wherever page load put it. Adjusted during render (React's
+  // "adjust state when a prop changes" pattern) rather than in an effect, so
+  // the first idle frame already counts from zero and no frame shows a stale
+  // scene; and `now` is the board's own clock, so render stays pure.
+  const isIdle = tiles.length === 0
+  const [idleSinceMs, setIdleSinceMs] = useState(() => now.getTime())
+  const [wasIdle, setWasIdle] = useState(true)
+  if (isIdle !== wasIdle) {
+    setWasIdle(isIdle)
+    if (isIdle) setIdleSinceMs(now.getTime())
+  }
+
   // ── Room-total ticker (replaces "N active") ──────────────────────
   const roomTotal = useMemo(() => roomTotalPoints(sessions), [sessions])
 
@@ -298,6 +316,23 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
   const bridgeStatusLabel = bridgeOnline
     ? 'Heart-rate bridge connected'
     : 'Heart-rate bridge offline'
+
+  // TVSCENE.1 — the idle stage, or null. It is null unless a scene has
+  // something to say: `<IdleStage />` is always a non-null ELEMENT, even when
+  // the component renders nothing, so `idleStage ?? <EmptyBoard />` below could
+  // never reach the empty board if this local were just the element. The
+  // guard asks the same question IdleStage does (eligibleScenes), so the floor
+  // is never worse than today's "Waiting for class to start".
+  const idleStage = isIdle && !data?.timer && eligibleScenes(data?.idle).length > 0
+    ? (
+      <IdleStage
+        idle={data.idle}
+        nowMs={now.getTime()}
+        idleSinceMs={idleSinceMs}
+        fonts={IDLE_FONTS}
+      />
+    )
+    : null
 
   return (
     <main
@@ -388,7 +423,7 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
       {tiles.length === 0 ? (
         data?.timer
           ? <TimerBanner placement="hero" portrait={portrait} timer={data?.timer} serverTime={data?.server_time} />
-          : <EmptyBoard />
+          : (idleStage ?? <EmptyBoard />)
       ) : (
         // TV-FIT.1 — the grid is the one part of the board that yields.
         // The page is exactly one screen tall (h-screen above), the header,
