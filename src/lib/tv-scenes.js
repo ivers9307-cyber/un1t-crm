@@ -18,15 +18,30 @@ export const SCENE_KEYS = ['up-next', 'earned', 'operator']
 
 const present = (value) => typeof value === 'string' && value.trim() !== ''
 
+/**
+ * Whether an operator row can actually be drawn. The operator scene draws an
+ * image (source_type storage or url, with a source_ref) or a text label,
+ * nothing else. So eligibility and rendering must agree: if this says true the
+ * scene shows something, and if it says false the scene is skipped. Two copies
+ * of this rule would drift, and the board would show a blank stage for a full
+ * 30s dwell. template_values alone is not renderable yet, so it does not count.
+ * OperatorScene in Task 3 must guard on this predicate and not re-derive it.
+ *
+ * @param {object|null|undefined} operator  the payload's `idle.operator` row
+ * @returns {boolean}
+ */
+export function operatorRenderable(operator) {
+  if (!operator || typeof operator !== 'object') return false
+  const image =
+    (operator.source_type === 'storage' || operator.source_type === 'url') &&
+    present(operator.source_ref)
+  return image || present(operator.label)
+}
+
 const HAS_CONTENT = {
   'up-next': (idle) => Array.isArray(idle?.up_next) && idle.up_next.length > 0,
   earned: (idle) => Array.isArray(idle?.earned) && idle.earned.length > 0,
-  // The operator scene can only draw an image (source_ref) or a label, so a
-  // row with neither is not content. template_values alone does not count.
-  operator: (idle) => {
-    const op = idle?.operator
-    return Boolean(op && typeof op === 'object') && (present(op.source_ref) || present(op.label))
-  },
+  operator: (idle) => operatorRenderable(idle?.operator),
 }
 
 /**

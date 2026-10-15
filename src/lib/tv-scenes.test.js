@@ -1,12 +1,49 @@
 // src/lib/tv-scenes.test.js
 import { describe, it, expect } from 'vitest'
-import { SCENE_DWELL_MS, SCENE_KEYS, eligibleScenes, sceneAt } from './tv-scenes.js'
+import { SCENE_DWELL_MS, SCENE_KEYS, eligibleScenes, sceneAt, operatorRenderable } from './tv-scenes.js'
 
 const full = {
   up_next: [{ starts_at: '2026-10-16T05:00:00Z', starts_at_label: '06:00', class_name: 'BU1LD' }],
   earned: [{ display_name: 'Saoirse M.', achievement: '50 classes', tier: 4 }],
   operator: { source_type: 'storage', source_ref: 'x.png' },
 }
+
+describe('operatorRenderable', () => {
+  it('is true for an image the scene can draw (storage + ref)', () => {
+    expect(operatorRenderable({ source_type: 'storage', source_ref: 'a.png', label: null, template_values: null })).toBe(true)
+  })
+
+  it('is true for a url image (url + ref)', () => {
+    expect(operatorRenderable({ source_type: 'url', source_ref: 'https://example.com/a.png', label: null, template_values: null })).toBe(true)
+  })
+
+  // A ref is only drawn as an image for storage/url; on a template row it is dead weight.
+  it('is false for a template row with a ref and no label', () => {
+    expect(operatorRenderable({ source_type: 'template', source_ref: 'x', label: null, template_values: null })).toBe(false)
+  })
+
+  it('is true for a template row whose label carries it', () => {
+    expect(operatorRenderable({ source_type: 'template', source_ref: 'x', label: 'Offer', template_values: {} })).toBe(true)
+  })
+
+  it('is true for a label-only row', () => {
+    expect(operatorRenderable({ source_type: 'template', source_ref: null, label: 'Offer', template_values: null })).toBe(true)
+  })
+
+  // template_values alone is not renderable yet, so neither field means false.
+  it('is false when neither an image nor a label is present', () => {
+    expect(operatorRenderable({ source_type: 'template', source_ref: null, label: null, template_values: {} })).toBe(false)
+  })
+
+  it('is false for a whitespace-only ref and label', () => {
+    expect(operatorRenderable({ source_type: 'storage', source_ref: '  ', label: '   ', template_values: null })).toBe(false)
+  })
+
+  it('is false for null and undefined', () => {
+    expect(operatorRenderable(null)).toBe(false)
+    expect(operatorRenderable(undefined)).toBe(false)
+  })
+})
 
 describe('eligibleScenes', () => {
   it('returns every scene that has content, in rotation order', () => {
@@ -40,6 +77,10 @@ describe('eligibleScenes', () => {
 
   it('skips an operator row whose label is only whitespace', () => {
     expect(eligibleScenes({ ...full, operator: { source_type: 'template', source_ref: null, label: '   ', template_values: null } })).toEqual(['up-next', 'earned'])
+  })
+
+  it('skips an operator row whose image is a template ref with no label', () => {
+    expect(eligibleScenes({ ...full, operator: { source_type: 'template', source_ref: 'x', label: null, template_values: null } })).toEqual(['up-next', 'earned'])
   })
 
   // Review Focus 4 — every scene empty must be representable, not a crash.
