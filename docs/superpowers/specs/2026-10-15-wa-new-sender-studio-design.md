@@ -163,3 +163,21 @@ picker / staff" note from `studio_resolution` when it is `decided`, and
   already runs Mia inline, and the call has an 8 s cap.
 - **Phase 3 overlap:** org-level settings will later hold the question; R8
   keeps it on the number's studio for now.
+
+## 8. Amendments made during implementation (15 Oct 2026)
+Rulings taken in review, now part of the behaviour:
+- **R4 claim before send.** The picker is claimed with a compare-and-set
+  (`studio_resolution IS NULL` → `asked`) before it is sent, so a burst of
+  messages sends one picker; the losing message is treated as `asked`.
+- **R5 refined.** On an `asked` thread: a message sent at or before the
+  question went out (Meta timestamp ≤ `at` + 5 s) is not an answer; a first
+  non-answer (reaction, sticker, voice note, other non-text) keeps the thread
+  `asked` and counts `nonanswers: 1`; a second ends it `unresolved/no_answer`.
+  A tap on a listed studio is always an answer.
+- **R2.** Template quick-reply taps (`type: 'button'`, WABUTTONTAP.1 #2064) are
+  read as text. A move error `same_studio` counts as success; final writes only
+  land while the thread is not already final.
+- **R8.** Only the receiving studio and listed studios WITHOUT their own
+  WhatsApp number are offered (a thread moved to a numbered studio could not
+  reply through this number).
+- **R6.** The record may carry `nonanswers`.
