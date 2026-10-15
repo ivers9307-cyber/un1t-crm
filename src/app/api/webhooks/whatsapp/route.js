@@ -286,30 +286,29 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     if (reactivateErr) console.error(`[wa-webhook] undeliverable→active reactivation failed for contact ${contact.id} (future audiences will keep skipping them):`, reactivateErr.message)
   }
 
-  // Determine location: contact's location wins if known (their
-  // existing CRM placement), otherwise the WA-number owner.
+  // Determine location: the contact's own studio if known (their CRM
+  // placement; the match above is organisation-fenced), otherwise the
+  // WA-number owner.
   //
-  // WANUMBERLESS.1 — unless that studio has no WhatsApp number of its own.
-  // Every reply into a thread goes from the thread's studio's number
-  // (getConversationReplyConfig → getWhatsAppConfig), and a number-less
-  // studio is refused there (WACONFIGFALLBACK.1), so a thread filed at one
-  // could be read but never answered: Hatch Street's first opening-week
-  // replies to a Stillorgan broadcast landed in the Hatch inbox behind
-  // "No WhatsApp number is connected at this location." The thread lives at
-  // the studio whose number the customer wrote to instead, where the
-  // receiving-number stamp below applies and the reply path works. A studio
-  // with an active number keeps its own threads exactly as before. A failed
-  // lookup files the thread at the receiving studio too, logged: a thread
-  // that can be answered beats one that cannot.
-  let locationId = contact?.location_id || defaultLocationId
-  if (locationId !== defaultLocationId) {
-    let ownNumber = null
+  // WAHOMESTUDIO.1 (R2) — even when that studio has no WhatsApp number of its
+  // own: the thread sits in the customer's own inbox (Hatch Street's in the
+  // Hatch inbox, Mia judged on Hatch's settings) and replies go through the
+  // receiving number stamped below (getConversationNumberConfig, R4). This
+  // replaces WANUMBERLESS.1, which filed such threads at the receiving studio.
+  const locationId = contact?.location_id || defaultLocationId
+
+  // R3 — stamp the receiving number when the thread is at its studio (as
+  // ever), or when the thread's studio has none of its own. A failed lookup
+  // stamps too: the resolver ignores a sibling's stamp wherever the studio
+  // has a number, so it can only help.
+  let stampReceivingNumber = locationId === defaultLocationId
+  if (!stampReceivingNumber) {
     try {
-      ownNumber = await getLocationWhatsAppNumberConfig(locationId)
+      stampReceivingNumber = !(await getLocationWhatsAppNumberConfig(locationId))
     } catch (e) {
-      console.error(`[wa-webhook] WhatsApp number lookup for location ${locationId} failed (thread filed at the receiving number's studio ${defaultLocationId}):`, e?.message || String(e))
+      console.error(`[wa-webhook] WhatsApp number lookup for location ${locationId} failed (thread stamped with the receiving number):`, e?.message || String(e))
+      stampReceivingNumber = true
     }
-    if (!ownNumber) locationId = defaultLocationId
   }
 
   // Get or create conversation (keyed by phone number, NOT by contact)
@@ -362,12 +361,13 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // WAREPLYNUMBER.1 (C86) — record the number the customer wrote to, so a
   // reply into this thread (staff send, Flow, carousel, reaction, Mia, her
   // confirmations) goes from it rather than the studio's default
-  // (getConversationReplyConfig). Only when that number belongs to the
-  // thread's studio: a contact filed at another studio keeps that studio's
-  // thread, which replies from its own number. Its OWN update, logged: a
+  // (getConversationReplyConfig). When that number belongs to the thread's
+  // studio, or the thread's studio has no number (WAHOMESTUDIO.1 R3); a
+  // contact filed at a studio WITH a number keeps that studio's thread, which
+  // replies from its own number. Its OWN update, logged: a
   // lost stamp (the column missing before mig 696 is applied included) costs
   // only the stamp, never the message, the thread or Mia's turn.
-  if (receivingNumberId && locationId === defaultLocationId) {
+  if (receivingNumberId && stampReceivingNumber) {
     const { error: numberStampErr } = await db.from('whatsapp_conversations')
       .update({ whatsapp_number_id: receivingNumberId })
       .eq('id', conversationId)
@@ -526,6 +526,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
       await ensureMediaRehosted(db, {
         id: insertedMessage.id,
         location_id: locationId,
+        conversation_id: conversationId,
         message_type: messageType,
         media_mime_type: mediaMime,
         media_external_id: mediaExternalId,
@@ -821,7 +822,7 @@ async function handleCoexistenceEvent(db, field, value) {
     if (!d.waMessageId) continue
     const dedup = await recordWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.WHATSAPP, eventId: `coex:${d.waMessageId}` })
     if (dedup.seen) continue
-    try { await ingestCoexistenceMessage(db, { locationId, descriptor: d }) }
+    try { await ingestCoexistenceMessage(db, { locationId, numberId: routing.numberId, descriptor: d }) }
     catch (e) { console.error('[wa-webhook] coexistence ingest failed:', e?.message) }
   }
 

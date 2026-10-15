@@ -2,7 +2,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+vi.mock('./whatsapp-thread-location', () => ({ numberlessHomeStudio: vi.fn(async () => null) }))
 const { logError } = await import('@/lib/log')
+const { numberlessHomeStudio } = await import('./whatsapp-thread-location')
 const { syncContactMatchOnly, ingestCoexistenceMessage } = await import('./whatsapp-coexistence-ingest.js')
 
 // Minimal chainable mock db. Each .from() returns a builder whose terminal
@@ -314,5 +316,57 @@ describe('ingestCoexistenceMessage — phone-app echoes are staff (C106 d)', () 
     const { db, writes } = echoDb()
     await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: history })
     expect(stampOf(writes)).toBeUndefined()
+  })
+})
+
+// WAHOMESTUDIO.1 (R1) — a phone-app echo / history row for a peer whose home
+// studio has no number files at THAT studio (where the webhook files their
+// messages), the thread stamped with the receiving number.
+describe('ingestCoexistenceMessage — thread filed at a number-less home studio (WAHOMESTUDIO.1)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('a peer whose home studio has no number threads at that studio, stamped with the receiving number', async () => {
+    numberlessHomeStudio.mockResolvedValueOnce('loc-hatch')
+    const writes = []
+    const convFilters = []
+    const db = makeDb((ctx) => {
+      if (ctx.op) writes.push({ table: ctx.table, op: ctx.op, values: ctx.values })
+      if (ctx.table === 'whatsapp_messages') return { data: ctx.op === 'insert' ? { id: 'm1' } : null, error: null }
+      if (ctx.table === 'contacts') return { data: { id: 'k1', location_id: 'loc-hatch' }, error: null }
+      if (ctx.table === 'whatsapp_conversations') {
+        if (ctx.op === 'insert') return { data: { id: 'conv1' }, error: null }
+        if (!ctx.op) convFilters.push(ctx.filters)
+        return { data: null, error: null }
+      }
+      return { data: null, error: null }
+    })
+    const r = await ingestCoexistenceMessage(db, {
+      locationId: 'loc-still', numberId: 'wn-1',
+      descriptor: { waMessageId: 'wamid.HOME1', peerPhone: '353222', direction: 'outbound', messageType: 'text', body: 'x', tsSeconds: 1700000000, origin: 'echo' },
+    })
+    expect(r).toMatchObject({ inserted: true, conversationId: 'conv1', contactId: 'k1' })
+    expect(numberlessHomeStudio).toHaveBeenCalledWith(db, { id: 'k1', location_id: 'loc-hatch' }, 'loc-still')
+    expect(convFilters[0]).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+    const convInsert = writes.find((w) => w.table === 'whatsapp_conversations' && w.op === 'insert')
+    expect(convInsert.values).toMatchObject({ location_id: 'loc-hatch', contact_id: 'k1', whatsapp_number_id: 'wn-1' })
+    const msgInsert = writes.find((w) => w.table === 'whatsapp_messages' && w.op === 'insert')
+    expect(msgInsert.values).toMatchObject({ location_id: 'loc-hatch', conversation_id: 'conv1', contact_id: 'k1' })
+  })
+
+  it('a peer with no home-studio override threads at the receiving studio, unstamped', async () => {
+    const writes = []
+    const db = makeDb((ctx) => {
+      if (ctx.op) writes.push({ table: ctx.table, op: ctx.op, values: ctx.values })
+      if (ctx.table === 'whatsapp_messages') return { data: ctx.op === 'insert' ? { id: 'm1' } : null, error: null }
+      if (ctx.table === 'contacts') return { data: { id: 'k1', location_id: 'loc-still' }, error: null }
+      if (ctx.table === 'whatsapp_conversations') return { data: ctx.op === 'insert' ? { id: 'conv1' } : null, error: null }
+      return { data: null, error: null }
+    })
+    await ingestCoexistenceMessage(db, {
+      locationId: 'loc-still', numberId: 'wn-1',
+      descriptor: { waMessageId: 'wamid.HOME2', peerPhone: '353222', direction: 'inbound', messageType: 'text', body: 'x', tsSeconds: 1700000000 },
+    })
+    const convInsert = writes.find((w) => w.table === 'whatsapp_conversations' && w.op === 'insert')
+    expect(convInsert.values).toEqual({ location_id: 'loc-still', contact_id: 'k1', wa_phone: '353222', status: 'active' })
   })
 })
