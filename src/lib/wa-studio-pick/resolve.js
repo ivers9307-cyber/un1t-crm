@@ -76,7 +76,7 @@ async function ask(db, ctx, cfg) {
   if (!claimed?.length) return { action: 'asked', locationId: threadLocationId, conversationId }
 
   const question = stripEmDashes(cfg.question)
-  const options = cfg.studios.map((s) => ({ id: `${PICKER_ID_PREFIX}${s.id}`, title: s.label }))
+  const options = cfg.studios.map((s) => ({ id: `${PICKER_ID_PREFIX}${s.id}`, title: stripEmDashes(s.label) }))
   let sent
   try {
     sent = await sendInteractiveOptions(ctx.senderPhone, question, options,

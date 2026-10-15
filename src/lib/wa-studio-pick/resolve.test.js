@@ -4,7 +4,7 @@ vi.mock('./config', () => ({ readPickerConfig: vi.fn(), PICKER_ID_PREFIX: 'studi
 vi.mock('./signals', () => ({ adSignal: vi.fn(), replySignal: vi.fn(), tapSignal: vi.fn() }))
 vi.mock('./classify', () => ({ classifyStudio: vi.fn() }))
 vi.mock('@/lib/whatsapp', () => ({ sendInteractiveOptions: vi.fn() }))
-vi.mock('@/lib/agent/core', () => ({ AGENT_MESSAGE_SOURCE: 'agent', stripEmDashes: (s) => s }))
+vi.mock('@/lib/agent/core', () => ({ AGENT_MESSAGE_SOURCE: 'agent', stripEmDashes: (s) => String(s).replace(/\u2014/g, '-') }))
 vi.mock('../log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 import { logError } from '../log'
 import { readPickerConfig } from './config'
@@ -118,6 +118,13 @@ describe('resolveNewSenderStudio', () => {
       { locationId: 'a1', replyInConversation: 'c1' })
     expect(messageInsert()).toMatchObject({ conversation_id: 'c1', direction: 'outbound', message_type: 'interactive', body: 'Which studio?', wa_message_id: 'wamid.P', source: 'agent' })
     expect(recorded()).toMatchObject({ status: 'asked' })
+  })
+
+  it('studio labels are scrubbed of em-dashes like the question (F5)', async () => {
+    readPickerConfig.mockResolvedValueOnce({ ...CFG, studios: [CFG.studios[0], { id: 'a2', label: 'Hatch \u2014 St' }] })
+    sendInteractiveOptions.mockResolvedValueOnce({ messageId: 'wamid.P' })
+    await resolveNewSenderStudio(db, base)
+    expect(sendInteractiveOptions.mock.calls[0][2]).toEqual([{ id: 'studio:a1', title: 'Stillorgan' }, { id: 'studio:a2', title: 'Hatch - St' }])
   })
 
   it('picker send fails → unresolved ask_failed, carries on at the thread’s studio', async () => {
