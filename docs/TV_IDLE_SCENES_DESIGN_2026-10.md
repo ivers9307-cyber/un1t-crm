@@ -107,7 +107,7 @@ scene with nothing to say is not shown.
 
 ### Scheduler
 
-- Fixed dwell per scene, starting at **20s**, cross-faded.
+- Fixed dwell per scene of **30s** (Richard's call, 2026-10-15), cross-faded.
 - Driven off the **existing poll tick**, not a new interval — an idle kiosk must not
   acquire a second 1 Hz heartbeat. The poll already backs off when idle
   (`nextPollDelay` / `ACTIVE_POLL_MS` in `@/lib/live-poll`), and scene content changes
@@ -237,13 +237,13 @@ Band linking is not built, and the design must light up the day it is, with no r
 
 ## Open questions
 
-**Open — needs a judgement call:**
-
-- Dwell of 20s is a starting guess. It wants a look on the real TV from across the
-  room; too short reads as churn, too long as a frozen screen. Tune after the first
-  deploy, not before.
+None. All three settled 2026-10-15.
 
 **Settled 2026-10-15:**
+
+- ~~Scene dwell~~ — **30s**, Richard's call. With three eligible scenes that is a 90s
+  cycle, so someone in the studio for a few minutes sees every scene without any of
+  them feeling frozen. Keep it one named constant so it can be retuned from the wall.
 
 - ~~Window for "earned this week"~~ — **7 days stands.** Scoped to Stillorgan with
   opt-outs excluded: **65 achievements in the last 7 days across 61 distinct people**
