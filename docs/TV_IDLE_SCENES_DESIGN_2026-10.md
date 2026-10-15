@@ -237,7 +237,24 @@ Band linking is not built, and the design must light up the day it is, with no r
 
 ## Open questions
 
-- Dwell of 20s is a starting guess; it wants a look on the real TV from across the room.
-- Window for "earned this week" — 7 days is the assumption; if volume makes the scene
-  repetitive, narrow it rather than adding a count.
-- Whether `OutroPodium` currently fires at all (separate check, may be its own fix).
+**Open — needs a judgement call:**
+
+- Dwell of 20s is a starting guess. It wants a look on the real TV from across the
+  room; too short reads as churn, too long as a frozen screen. Tune after the first
+  deploy, not before.
+
+**Settled 2026-10-15:**
+
+- ~~Window for "earned this week"~~ — **7 days stands.** Scoped to Stillorgan with
+  opt-outs excluded: **65 achievements in the last 7 days across 61 distinct people**
+  (34 in 3 days, 276 in 30). A five-row scene draws from 65 with almost no repeated
+  name, so the window needs no narrowing and certainly no count to pad it.
+- ~~Does `OutroPodium` include anonymous bands?~~ — **Yes, no code blocker.**
+  `selectPodium` (`src/lib/tv-theatre.js:195`) maps on `displayName` and filters only
+  `points > 0`, so a band labelled `Strap 49931` places exactly like a named member —
+  already consistent with the unlinked-bands constraint. `classDidEnd` fires on
+  `current_class` present → absent, or on the timer reporting finished.
+  **Still unobserved:** whether a podium has ever actually been seen on the floor. With
+  112 bridge sessions in 30 days it would fire rarely, and a stuck toast used to cover
+  the screen (TVTOAST.1, #2066) — worth watching for after that fix deploys, rather
+  than designing against.
