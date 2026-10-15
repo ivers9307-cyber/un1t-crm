@@ -10,6 +10,7 @@ import { logError } from '@/lib/log'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { flowButtonIndex, flowButtonComponentFor } from '@/lib/whatsapp-template-buttons'
 import { flowTokenFor } from '@/lib/whatsapp-flow/config'
+import { templateLocationIdFor } from '@/lib/whatsapp-config'
 import { templateSendBlock, SEND_BLOCK_TEXT, renderSentTemplateBody } from '@shared/wa-template-send'
 
 const SendMessageSchema = z.object({
@@ -34,6 +35,7 @@ const TEXT = Object.freeze({
   templateMissing: "That template is not in this studio's approved list in that language, so nothing was sent. Reopen the template list and pick it again.",
   flowNeedsContact: 'Not sent. This template has a booking Flow button, which books against a contact: add the sender as a contact first.',
   notLogged: 'Sent to the customer, but it could not be saved to this thread. Do not send it again.',
+  flowOtherStudio: 'Booking Flow templates can’t be sent from this studio’s threads yet.',
   threadNotUpdated: 'Sent to the customer, but the conversation could not be updated, so it may not move to the top of the list and Mia may still reply in this thread.',
 })
 const blockedText = (block) => `This template can't be sent from the inbox. ${SEND_BLOCK_TEXT[block]}`
@@ -101,6 +103,11 @@ export async function POST(request, props) {
     }
     const language = body.template_language || 'en'
 
+    // WAHOMESTUDIO.1 (R5) — templates are synced per studio from the default
+    // number's WABA; a thread replying through a same-organisation sibling's
+    // number sends that sibling's templates.
+    const templateLocationId = await templateLocationIdFor(conversation.location_id, conversation.id)
+
     // WATPLSEND.1 — read the row BEFORE sending, and judge the read. It decides
     // the media header (WA-TMPL-SEND.1), the Flow button, what is refused, and
     // the logged text. Name + LANGUAGE, because Meta keys a template on both and
@@ -116,7 +123,7 @@ export async function POST(request, props) {
     const { data: tplRow, error: tplError } = await db
       .from('whatsapp_templates')
       .select('name, language, components, header_media_url')
-      .eq('location_id', conversation.location_id)
+      .eq('location_id', templateLocationId)
       .eq('name', body.template_name)
       .eq('language', language)
       .eq('status', 'APPROVED')
@@ -125,7 +132,7 @@ export async function POST(request, props) {
       .maybeSingle()
     if (tplError) {
       logError(LOG, 'template read failed; nothing sent', {
-        conversationId: params.id, locationId: conversation.location_id, template: body.template_name, err: tplError.message,
+        conversationId: params.id, locationId: conversation.location_id, templateLocationId, template: body.template_name, err: tplError.message,
       })
       return NextResponse.json({ success: false, error: TEXT.templateReadFailed }, { status: 500 })
     }
@@ -157,6 +164,12 @@ export async function POST(request, props) {
       if (headerComponent) components = [headerComponent, ...components]
     }
 
+    // A Flow books at the studio its token names, and a Flow belongs to the
+    // number owner's WABA: not sendable across studios in Phase 1 (spec §4).
+    if (templateLocationId !== conversation.location_id && flowButtonIndex(tplRow.components) >= 0) {
+      return NextResponse.json({ success: false, error: TEXT.flowOtherStudio }, { status: 400 })
+    }
+
     // WATPLSEND.1 — a FLOW button needs its per-send token (Meta 131009 without
     // it). Same format and builder as broadcasts and sequences.
     if (flowButtonIndex(tplRow.components) >= 0) {
@@ -176,6 +189,8 @@ export async function POST(request, props) {
     // location with none is refused (WACONFIGFALLBACK.1), never another's.
     // WAREPLYNUMBER.1 — the number this thread was written to when it
     // shares the default's WABA, else the default (getConversationReplyConfig).
+    // WAHOMESTUDIO.1 — or, for a number-less studio's thread, the same-org
+    // sibling's number stamped on it, whose owner's templates were read above.
     send = () => sendTemplateMessage(phone, templateName, language, components, replyOpts)
   } else if (['image', 'video', 'document', 'audio'].includes(messageType)) {
     // Media message — 24h window only

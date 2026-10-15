@@ -64,6 +64,10 @@ export const CLOSED_FUNCTIONS = [
     why: 'the permanent staff delete (bans, strips PII, removes not-started shifts); master-only route, service role' },
   { fn: 'public.claim_shift_offer', args: '(uuid, uuid)', closedBy: 721,
     why: 'claims a shift offer for any profile id; the claim route judges the caller first' },
+  { fn: 'public.move_whatsapp_conversation', args: '(uuid, uuid)', closedBy: 723,
+    why: 're-files or merges a WhatsApp thread at another studio of its organisation; service-role route and backfill only' },
+  { fn: 'public.wa_message_location_from_conversation', args: '()', closedBy: 723,
+    why: 'a trigger function (a message row follows its thread’s studio); a trigger fires without EXECUTE' },
 ]
 
 /** The client roles a closed function is closed to. */

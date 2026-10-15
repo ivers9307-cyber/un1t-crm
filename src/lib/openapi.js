@@ -4202,6 +4202,38 @@ registry.registerPath({
   },
 })
 
+// WAHOMESTUDIO.1 — move a WhatsApp thread to another studio of the same organisation
+registry.registerPath({
+  method: 'get',
+  path: '/api/whatsapp/conversations/{id}/move',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List the studios a WhatsApp conversation can move to',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The caller’s other studios in the conversation’s organisation' },
+    404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/conversations/{id}/move',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Move (or merge) a WhatsApp conversation into another studio of the same organisation',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ location_id: uuidLike }).openapi('WaMoveConversation') } } },
+  },
+  responses: {
+    200: { description: 'Moved; merged=true when it joined an existing thread there' },
+    400: { description: 'Same studio, or a studio in another organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Conversation or target studio not found for the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The customer already has a thread at that studio that could not be merged automatically', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The move failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // WhatsApp inbox reaction action (cookie auth)
 registry.registerPath({
   method: 'post',

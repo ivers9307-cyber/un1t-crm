@@ -112,13 +112,17 @@ export async function getWhatsAppConfig(locationId) {
  * WAREPLYNUMBER.1 (C86) — the number a REPLY into a conversation goes from:
  * the number the customer wrote to. The inbound webhook stamps it on
  * whatsapp_conversations.whatsapp_number_id (mig 696). Used when it is still
- * an active row AT this location; otherwise the location default
+ * an active row AT this location (or, WAHOMESTUDIO.1, a same-organisation
+ * sibling's when this studio has none); otherwise the location default
  * (getWhatsAppConfig, which refuses a number-less studio as ever). A single-
  * number studio resolves the same number either way.
  *
  * A TEMPLATE goes from the thread number only when it shares the default's
  * WABA: templates are synced per location from the default number's account,
- * and Meta only sends a number's own-WABA templates.
+ * and Meta only sends a number's own-WABA templates. The one exception
+ * (WAHOMESTUDIO.1): a number-less studio's thread replies through a
+ * same-organisation sibling's stamped number, and its templates come from that
+ * number's owner (templateLocationIdFor), not from a default it does not have.
  *
  * Any failed read here (including the column not existing yet, before 696 is
  * applied) falls back to the default, logged: losing a reply is worse than
@@ -133,14 +137,20 @@ export async function getConversationReplyConfig(locationId, conversationId, { t
   const thread = await getConversationNumberConfig(locationId, conversationId)
   if (!thread) return getWhatsAppConfig(locationId)
   if (!template) return thread
+  // WAHOMESTUDIO.1 — a sibling's number only reaches here for a studio with no
+  // number of its own, so there is no default to compare WABAs with: the
+  // template comes from the number owner's WABA (templateLocationIdFor).
+  if (thread.locationId !== locationId) return thread
   return pickReplyConfig(thread, await getWhatsAppConfig(locationId), { template: true })
 }
 
 /**
  * WAREPLYNUMBER.1 — the number recorded on the thread
- * (whatsapp_conversations.whatsapp_number_id) while it is an ACTIVE row AT
- * this location, as a config; null when none is recorded, it is inactive,
- * gone or another studio's. Never throws: a failed read (the column missing
+ * (whatsapp_conversations.whatsapp_number_id) while it is an ACTIVE row at this
+ * location, or (WAHOMESTUDIO.1) a same-organisation sibling's when this
+ * location has no active number; null otherwise (none recorded, inactive,
+ * gone, another organisation's, or a sibling's while this studio has its own
+ * number), as a config. Never throws: a failed read (the column missing
  * before mig 696 included) is null, logged, so the caller replies from the
  * default as it did before.
  *
@@ -162,15 +172,46 @@ export async function getConversationNumberConfig(locationId, conversationId) {
     const { data: num, error: numErr } = await db.from('whatsapp_numbers')
       .select('*')
       .eq('id', conv.whatsapp_number_id)
-      .eq('location_id', locationId)
       .eq('is_active', true)
       .maybeSingle()
     if (numErr) throw numErr
-    return num ? rowToConfig(num) : null
+    if (!num) return null
+    if (num.location_id === locationId) return rowToConfig(num)
+    // WAHOMESTUDIO.1 (R4) — a SIBLING studio's number: only for a thread at a
+    // studio with no active number of its own, and only inside one
+    // organisation. The thread is filed at the customer's own studio, so a
+    // reply from the organisation number cannot land in another studio's
+    // inbox (the harm WACONFIGFALLBACK.1 closed).
+    const { data: own, error: ownErr } = await db.from('whatsapp_numbers')
+      .select('id')
+      .eq('location_id', locationId)
+      .eq('is_active', true)
+      .limit(1)
+    if (ownErr) throw ownErr
+    if (own && own.length > 0) return null
+    const { data: locs, error: locErr } = await db.from('locations')
+      .select('id, organization_id')
+      .in('id', [locationId, num.location_id])
+    if (locErr) throw locErr
+    const orgOf = (id) => (locs || []).find((l) => l.id === id)?.organization_id || null
+    const threadOrg = orgOf(locationId)
+    if (!threadOrg || threadOrg !== orgOf(num.location_id)) return null
+    return rowToConfig(num)
   } catch (e) {
     logWarn('wa-config', 'reply number unreadable; replying from the default number', { conversationId, err: e?.message || String(e) })
     return null
   }
+}
+
+/**
+ * WAHOMESTUDIO.1 (R5) — the studio whose whatsapp_templates a send in this
+ * thread uses: templates are synced per studio from that studio's default
+ * number's WABA, so a thread replying through a sibling's number sends that
+ * sibling's templates. Never throws (getConversationNumberConfig never does).
+ */
+export async function templateLocationIdFor(locationId, conversationId) {
+  const thread = await getConversationNumberConfig(locationId, conversationId)
+  return thread?.locationId || locationId
 }
 
 /**

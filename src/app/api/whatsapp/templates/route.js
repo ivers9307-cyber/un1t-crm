@@ -2,12 +2,13 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createTemplate as createMetaTemplate, getTemplates as getMetaTemplates } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccess , getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, assertLocationAccessOr404, getUserLocationIds } from '@/lib/auth'
 import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
+import { templateLocationIdFor } from '@/lib/whatsapp-config'
 
 const WaTemplateCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -39,6 +40,31 @@ export async function GET(request) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const { searchParams } = new URL(request.url)
+  // WAHOMESTUDIO.1 (R5) — the picker inside a thread asks by conversation: a
+  // thread replying through a same-organisation sibling's number lists that
+  // sibling's templates. Authorised on the CONVERSATION's studio (Hatch staff
+  // need no Stillorgan access); cached rows only, never a sync.
+  const conversationId = searchParams.get('conversation_id')
+  if (conversationId) {
+    const db = createServerClient()
+    const { data: conv, error: convErr } = await db.from('whatsapp_conversations')
+      .select('id, location_id').eq('id', conversationId).maybeSingle()
+    if (convErr) return NextResponse.json({ success: false, error: 'Could not load the conversation' }, { status: 500 })
+    if (!conv) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+    // 404 like the unknown id above: a 403 here would confirm the id exists.
+    const convGuard = assertLocationAccessOr404(user, conv.location_id)
+    if (convGuard) return convGuard
+    const templateLocationId = await templateLocationIdFor(conv.location_id, conv.id)
+    // Same select and order as the location mode below: one row shape.
+    let q = db.from('whatsapp_templates').select('*').order('created_at', { ascending: false })
+      .eq('location_id', templateLocationId)
+    const status = searchParams.get('status')
+    if (status) q = q.eq('status', status)
+    const { data: templates, error } = await q
+    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    return NextResponse.json({ success: true, templates: templates || [], template_location_id: templateLocationId })
+  }
+
   const locationId = searchParams.get('location_id')
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard

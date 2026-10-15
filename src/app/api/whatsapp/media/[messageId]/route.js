@@ -26,7 +26,7 @@ export async function GET(request, props) {
 
   const db = createServerClient()
   const { data: message, error } = await db.from('whatsapp_messages')
-    .select('id, location_id, message_type, media_mime_type, media_url, media_external_id, media_storage_path')
+    .select('id, location_id, conversation_id, message_type, media_mime_type, media_url, media_external_id, media_storage_path')
     .eq('id', params.messageId)
     .maybeSingle()
   if (error || !message) {

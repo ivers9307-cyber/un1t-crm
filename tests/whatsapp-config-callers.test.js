@@ -61,7 +61,7 @@ const RESOLVING = {
   ],
   'src/lib/whatsapp-config': [
     'getWhatsAppConfig', 'getLocationWhatsAppNumberConfig', 'getWhatsAppConfigById', 'resolveWhatsAppNumberByPhoneNumberId',
-    'getConversationReplyConfig', 'getConversationNumberConfig',
+    'getConversationReplyConfig', 'getConversationNumberConfig', 'templateLocationIdFor',
   ],
   'src/lib/whatsapp-own-number': ['ownNumberOrRefusal'],
 }
@@ -83,7 +83,7 @@ const CALLERS = {
   'src/lib/whatsapp.js': {
     calls: { getWhatsAppConfig: 3, getConversationReplyConfig: 1 },
     decision: 'resolver',
-    why: 'resolveConfig (every Meta helper; opts.replyInConversation → getConversationReplyConfig, which falls back to getWhatsAppConfig and so refuses a number-less studio the same way: WAREPLYNUMBER.1, whatsapp-reply-number.test.js), sendBroadcast (blast: throws BEFORE the status flip → route 409 / cron pushes managers), sendDripChunk (pauses the drip). src/lib/whatsapp-no-number-senders.test.js, whatsapp-no-number-broadcasts.test.js.',
+    why: 'resolveConfig (every Meta helper; opts.replyInConversation → getConversationReplyConfig, which falls back to getWhatsAppConfig and so refuses a number-less studio the same way, unless the thread carries a same-organisation sibling’s stamp (WAHOMESTUDIO.1 R4): WAREPLYNUMBER.1, whatsapp-reply-number.test.js), sendBroadcast (blast: throws BEFORE the status flip → route 409 / cron pushes managers), sendDripChunk (pauses the drip). src/lib/whatsapp-no-number-senders.test.js, whatsapp-no-number-broadcasts.test.js.',
   },
   'src/lib/whatsapp-own-number.js': {
     calls: { getLocationWhatsAppNumberConfig: 1 },
@@ -91,14 +91,14 @@ const CALLERS = {
     why: 'ownNumberOrRefusal: 409 no number / 500 lookup failed. whatsapp-own-number.test.js.',
   },
   'src/lib/whatsapp-media-server.js': {
-    calls: { getLocationWhatsAppNumberConfig: 1 },
+    calls: { getLocationWhatsAppNumberConfig: 1, getConversationNumberConfig: 1 },
     decision: 'own-number',
-    why: 'inbound media fetched with the message location’s own token; none → null (the inbox’s graceful gap). whatsapp-media-server.test.js.',
+    why: 'inbound media fetched with the thread’s number when it replies through a same-org sibling’s (WAHOMESTUDIO.1), else the message location’s own token; none → null (the inbox’s graceful gap). whatsapp-media-server.test.js.',
   },
   'src/app/api/webhooks/whatsapp/route.js': {
     calls: { resolveWhatsAppNumberByPhoneNumberId: 2, getLocationWhatsAppNumberConfig: 1 },
     decision: 'resolver',
-    why: 'inbound routing: only an active row owns inbound (classifyInboundOwner); the env branch is gone (it could only produce a location-less config, which was dropped anyway). WANUMBERLESS.1: a contact filed at a studio with no active row (getLocationWhatsAppNumberConfig → null, or a failed lookup, logged) gets the thread at the receiving number’s studio, which can answer it; route.reply-number.test.js.',
+    why: 'inbound routing: only an active row owns inbound (classifyInboundOwner); the env branch is gone (it could only produce a location-less config, which was dropped anyway). WAHOMESTUDIO.1: a contact’s thread is filed at their own studio; getLocationWhatsAppNumberConfig decides only whether the receiving number is stamped on it (none there, or a failed lookup, logged → stamped; replies then go through it, R4); route.reply-number.test.js.',
   },
   'src/app/api/whatsapp/conversational-automation/route.js': {
     calls: { setConversationalAutomation: 1, ownNumberOrRefusal: 1 },
@@ -106,9 +106,9 @@ const CALLERS = {
     why: 'chat openers on the location’s own number (C33 WAROLE.1), 409 / 500 before Meta.',
   },
   'src/app/api/whatsapp/templates/route.js': {
-    calls: { createTemplate: 1, getTemplates: 1, ownNumberOrRefusal: 2 },
+    calls: { createTemplate: 1, getTemplates: 1, ownNumberOrRefusal: 2, templateLocationIdFor: 1 },
     decision: 'own-number',
-    why: 'create: 409 / 500 before Meta (it named no location, so it always used the env WABA). Sync: sync_error, Meta not called, cache served (it copied the env WABA’s templates into a number-less location). route.own-number.test.js.',
+    why: 'create: 409 / 500 before Meta (it named no location, so it always used the env WABA). Sync: sync_error, Meta not called, cache served (it copied the env WABA’s templates into a number-less location). route.own-number.test.js. WAHOMESTUDIO.1: ?conversation_id= serves the thread number owner’s cached rows, no sync.',
   },
   'src/app/api/whatsapp/templates/[id]/route.js': {
     calls: { deleteTemplate: 1, ownNumberOrRefusal: 1 },
@@ -151,9 +151,9 @@ const CALLERS = {
     why: 'scheduled blast or (C138 b) scheduled drip start refusal: row stays draft, managers pushed; drip: paused by sendDripChunk (no error loop); a resumed chunked blast logs per tick (existing path).',
   },
   'src/app/api/whatsapp/conversations/[id]/send/route.js': {
-    calls: { sendTemplateMessage: 1, sendMediaMessage: 1, sendTextMessage: 1 },
+    calls: { sendTemplateMessage: 1, sendMediaMessage: 1, sendTextMessage: 1, templateLocationIdFor: 1 },
     decision: 'refuse-409',
-    why: 'inbox reply: 409, nothing logged (it replied from another studio’s number, so the answer went to that studio). route.test.js.',
+    why: 'inbox reply: 409, nothing logged (it replied from another studio’s number, so the answer went to that studio). route.test.js. WAHOMESTUDIO.1: template rows read from templateLocationIdFor (the thread number’s owner); a Flow-button template across studios is a 400.',
   },
   'src/app/api/whatsapp/conversations/[id]/react/route.js': {
     calls: { sendReaction: 1 },
@@ -163,7 +163,7 @@ const CALLERS = {
   'src/app/api/whatsapp/conversations/[id]/block/route.js': {
     calls: { setWhatsAppUserBlockState: 1 },
     decision: 'refuse-409',
-    why: '409, nothing mirrored (the env Block API blocked the sender on ANOTHER studio’s number). no-number.test.js.',
+    why: '409, nothing mirrored (the env Block API blocked the sender on ANOTHER studio’s number). no-number.test.js. WAHOMESTUDIO.1: through the thread (replyInConversation).',
   },
   'src/app/api/whatsapp/conversations/[id]/send-flow/route.js': {
     calls: { sendFlowMessage: 1 },
@@ -188,7 +188,7 @@ const CALLERS = {
   'src/lib/whatsapp-consent.js': {
     calls: { sendTextMessage: 1 },
     decision: 'inbound-owner',
-    why: 'STOP/START ack only; the consent change is written first and stands (louder-failure rule). whatsapp-consent.test.js.',
+    why: 'STOP/START ack only; the consent change is written first and stands (louder-failure rule). whatsapp-consent.test.js. WAHOMESTUDIO.1: through the thread (replyInConversation).',
   },
   'src/lib/agent/notify.js': {
     calls: { sendTextMessage: 1 },

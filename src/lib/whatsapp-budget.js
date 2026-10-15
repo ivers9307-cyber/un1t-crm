@@ -13,6 +13,10 @@
 // business-initiated conversations. Known deltas, both conservative:
 //   • a template sent inside an already-open customer-service window doesn't
 //     consume Meta budget but we count it → we under-spend, never over-spend;
+//   • WAHOMESTUDIO.1 — a template sent from studio S into a thread filed at a
+//     number-less same-org sibling H carries location_id = H (a message row
+//     follows its thread, mig 723), so S's usage also counts the outbound
+//     template rows of every number-less sibling of S (over-counts only);
 //   • whatsapp_messages carries no sender-number id, so usage is counted per
 //     LOCATION — a multi-number location debits every number's tier with the
 //     location's whole spend (single-number locations, i.e. all of them today,
@@ -36,6 +40,7 @@
 
 import { tierLabel } from './whatsapp-number-health'
 import { WA_PHONE_APP_SOURCES_IN_LIST } from './whatsapp-staff-sources'
+import { numberlessSiblingLocationIds } from './whatsapp-thread-location'
 
 // Meta messaging-limit tier → business-initiated conversations per rolling 24h.
 // UNLIMITED (and unknown/null) carry no numeric limit → ungated.
@@ -81,11 +86,14 @@ export function effectiveTickHeadroom(capHeadroom, budget) {
  * (blast, drip, sequence, automation, inbox template) contributes to via its
  * whatsapp_messages insert. Rows with no linked contact each count once
  * (conservative: can only over-count usage, never free up phantom headroom).
- * Paginated (>1k-safe) with a deterministic order, per the PostgREST cap rule.
+ * Counts the location's own rows AND those of its number-less same-organisation
+ * siblings (numberlessSiblingLocationIds; a failed lookup throws, so the budget
+ * fails closed). Paginated (>1k-safe) with a deterministic order, per the PostgREST cap rule.
  */
 export async function countBusinessInitiatedContactsLast24h(db, locationId) {
   const PAGE = 1000
   const HARD_LIMIT = 200_000
+  const locationIds = [locationId, ...(await numberlessSiblingLocationIds(db, locationId))]
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
   const seen = new Set()
   let unlinked = 0
@@ -94,7 +102,7 @@ export async function countBusinessInitiatedContactsLast24h(db, locationId) {
     const end = Math.min(start + PAGE - 1, HARD_LIMIT - 1)
     const { data: page, error } = await db.from('whatsapp_messages')
       .select('id, contact_id')
-      .eq('location_id', locationId)
+      .in('location_id', locationIds)
       .eq('direction', 'outbound')
       .eq('message_type', 'template')
       // C106 (d) — phone-app rows (coexistence echoes, history) never went

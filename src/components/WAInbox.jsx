@@ -77,7 +77,7 @@ function initialsOf(name) {
 // `embedded` (UIX-P1b): thread-pane-only mode for the unified inbox —
 // the internal conversation list is hidden and selection is driven by
 // the `initialConversationId` prop (synced on change, not just mount).
-export default function WAInbox({ locationId, userId, initialConversationId, embedded = false, onOpenBookTab }) {
+export default function WAInbox({ locationId, userId, initialConversationId, embedded = false, onOpenBookTab, onMoved }) {
   const [conversations, setConversations] = useState([])
   const [selectedId, setSelectedId] = useState(initialConversationId || null)
   const [messages, setMessages] = useState([])
@@ -116,6 +116,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   // No dropdown/menu primitive exists yet in src/components/ui, so this is a
   // minimal click-toggled popover (ref pattern mirrors PersonActionBar.jsx).
   const [showMoreMenu, setShowMoreMenu] = useState(false)
+  // WAHOMESTUDIO.1 (R7) — studios this thread can move to (null = not loaded
+  // for the open thread; reset whenever the selection changes).
+  const [moveTargets, setMoveTargets] = useState(null)
   const moreButtonRef = useRef(null)
   const moreMenuRef = useRef(null)
   useEffect(() => {
@@ -245,6 +248,50 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     } catch { /* leave state as-is */ }
   }
 
+  // WAHOMESTUDIO.1 (R7) — "Move to <studio>": re-file the thread at another
+  // studio of the same organisation. The server decides who may; this only
+  // lists what GET /move offered.
+  async function loadMoveTargets(conv) {
+    try {
+      const res = await fetch(`/api/whatsapp/conversations/${conv.id}/move`)
+      const j = await res.json().catch(() => ({}))
+      // The thread changed while this was in flight: drop the answer.
+      if (selectedIdRef.current !== conv.id) return
+      setMoveTargets(j.success ? (j.data?.targets || []) : [])
+    } catch {
+      if (selectedIdRef.current === conv.id) setMoveTargets([])
+    }
+  }
+
+  async function moveTo(conv, target) {
+    if (!window.confirm(`Move this conversation to ${target.name}? It will leave this inbox.`)) return
+    try {
+      const res = await fetch(`/api/whatsapp/conversations/${conv.id}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: target.id }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!j.success) { window.alert(j.error || 'Move failed'); return }
+      setConversations(prev => prev.filter(c => c.id !== conv.id))
+      // Deliberately close the thread: it no longer belongs to this inbox.
+      // selectedId drives the pane, the poll and the realtime handler; a null
+      // thread is handled by the effects that read it (template restore,
+      // card-set, poll all guard on it).
+      if (selectedIdRef.current === conv.id) {
+        setSelectedId(null)
+        setConversation(null)
+        setMessages([])
+        setMoveTargets(null)
+      }
+      // Embedded: the parent (UnifiedInbox) owns the queue and its own
+      // selection, so tell it once our own state is clear. Standalone: no-op.
+      if (typeof onMoved === 'function') onMoved(conv.id)
+    } catch {
+      window.alert('Move failed')
+    }
+  }
+
   const fetchTemplates = useCallback(async () => {
     try {
       const res = await fetch(`/api/whatsapp/templates?location_id=${locationId}&status=APPROVED`)
@@ -262,6 +309,41 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     pollRef.current = setInterval(fetchConversations, 60000)
     return () => clearInterval(pollRef.current)
   }, [locationId, fetchConversations, fetchTemplates])
+
+  // WAHOMESTUDIO.1 (R5) — inside a thread, ask for templates by conversation: a
+  // thread replying through a same-organisation sibling's number lists that
+  // studio's templates. A separate effect keyed on the thread id, NOT a change
+  // to fetchTemplates' deps: its identity must stay put or every thread click
+  // would re-run the initial-load effect (fetchConversations + the 60s poll).
+  // With no thread open the location list above stays as it is.
+  const threadTemplatesRef = useRef(false)
+  const openThreadId = conversation?.id || null
+  useEffect(() => {
+    if (!openThreadId) {
+      // Back to no thread: restore the location list if a thread's replaced it.
+      if (threadTemplatesRef.current) {
+        threadTemplatesRef.current = false
+        fetchTemplates()
+      }
+      return
+    }
+    let stale = false
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/whatsapp/templates?conversation_id=${openThreadId}&status=APPROVED`)
+        const data = await res.json()
+        // The thread changed while this was in flight: drop the answer.
+        if (stale) return
+        if (data.success) {
+          threadTemplatesRef.current = true
+          setTemplates(data.templates || [])
+        }
+      } catch (err) {
+        if (!stale) console.error('Failed to fetch thread templates:', err)
+      }
+    })()
+    return () => { stale = true }
+  }, [openThreadId, fetchTemplates])
 
   // Realtime subscription — push updates instead of polling. RLS scopes
   // events to rows the user can read, so the per-location filter is
@@ -315,6 +397,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   useEffect(() => {
     selectedIdRef.current = selectedId
     setApprovals([])
+    setMoveTargets(null)
     threadSigRef.current = ''   // force a fresh load when switching threads
     if (selectedId) {
       fetchMessages(selectedId)
@@ -378,6 +461,8 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     try {
       const res = await fetch(`/api/whatsapp/conversations/${convId}`)
       const data = await res.json()
+      // A closed (e.g. moved) or switched thread must not repopulate the pane.
+      if (convId !== selectedIdRef.current) return
       if (data.success) {
         const msgs = data.messages || []
         const sig = `${msgs.length}:${msgs[msgs.length - 1]?.id || ''}`
@@ -892,7 +977,11 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                     <button
                       ref={moreButtonRef}
                       type="button"
-                      onClick={() => setShowMoreMenu(v => !v)}
+                      onClick={() => {
+                        const opening = !showMoreMenu
+                        setShowMoreMenu(opening)
+                        if (opening && moveTargets === null) loadMoveTargets(conversation)
+                      }}
                       className="p-1.5 text-un1t-subtle hover:text-un1t-text rounded-md border border-un1t-border transition-colors"
                       aria-haspopup="menu"
                       aria-expanded={showMoreMenu}
@@ -917,6 +1006,17 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                         >
                           {conversation.is_blocked ? 'Blocked — unblock' : 'Block'}
                         </button>
+                        {(moveTargets || []).map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            role="menuitem"
+                            onClick={() => { setShowMoreMenu(false); moveTo(conversation, t) }}
+                            className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40 transition-colors"
+                          >
+                            Move to {t.name}
+                          </button>
+                        ))}
                         {isUnknown ? (canUseWebControls && (
                           <button
                             type="button"

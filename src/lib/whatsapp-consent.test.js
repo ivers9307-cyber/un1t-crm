@@ -111,7 +111,7 @@ describe('applyWhatsappConsentKeyword — STOP', () => {
     expect(sendTextMessage).toHaveBeenCalledWith(
       '353871234567',
       expect.stringContaining('unsubscribed'),
-      expect.objectContaining({ locationId: 'loc1' }),
+      expect.objectContaining({ locationId: 'loc1', replyInConversation: 'conv1' }),
     )
   })
 

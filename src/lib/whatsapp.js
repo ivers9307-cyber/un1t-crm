@@ -2,6 +2,7 @@ import { createServerClient } from './supabase'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
 import { getWhatsAppConfig, getConversationReplyConfig, META_API_URL } from './whatsapp-config'
 import { isWhatsAppNumberMissing } from './whatsapp-number-missing'
+import { numberlessHomeStudio } from './whatsapp-thread-location'
 import {
   PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
   rollingHeadroom, selectDripRecipients, dripOutcome,
@@ -42,7 +43,12 @@ import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
 //   opts.replyInConversation — WAREPLYNUMBER.1 (C86): a reply into this
 //                       whatsapp_conversations id goes from the number the
 //                       customer wrote to (getConversationReplyConfig), else
-//                       the location default. Needs opts.locationId.
+//                       the location default. Needs opts.locationId. A template
+//                       goes from the thread number only within the default's
+//                       WABA, except (WAHOMESTUDIO.1) a number-less studio's
+//                       thread, which uses a same-org sibling's stamped number
+//                       and whose templates come from that number's owner
+//                       (templateLocationIdFor).
 async function resolveConfig(opts = {}, { template = false } = {}) {
   if (opts.config) return opts.config
   if (opts.replyInConversation) {
@@ -2082,34 +2088,82 @@ export async function getOrCreateConversation(db, contact, locationId) {
   // thread. Key on wa_phone to match the constraint.
   const waPhone = contact.wa_phone
   if (waPhone) {
-    const { data: existing } = await db.from('whatsapp_conversations')
-      .select('id, contact_id')
-      .eq('location_id', locationId)
-      .eq('wa_phone', waPhone)
-      .maybeSingle()
-    if (existing) {
+    const findAt = async (loc) => {
+      const { data } = await db.from('whatsapp_conversations')
+        .select('id, contact_id, whatsapp_number_id')
+        .eq('location_id', loc)
+        .eq('wa_phone', waPhone)
+        .maybeSingle()
+      return data
+    }
+    // The sending studio's default active number: the stamp a thread at a
+    // number-less home studio replies through (R3/R4).
+    const sendingNumberId = async () => {
+      const { data: num, error: numErr } = await db.from('whatsapp_numbers')
+        .select('id')
+        .eq('location_id', locationId)
+        .eq('is_active', true)
+        .order('is_default', { ascending: false })
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (numErr) console.error('[whatsapp] getOrCreateConversation: sending number lookup failed', locationId, numErr.message)
+      return num?.id || null
+    }
+    const linkContact = async (row) => {
       // Backfill contact_id if the row was created for an unknown sender.
-      if (!existing.contact_id && contact.id) {
-        await db.from('whatsapp_conversations').update({ contact_id: contact.id }).eq('id', existing.id)
+      if (!row.contact_id && contact.id) {
+        const { error: linkErr } = await db.from('whatsapp_conversations').update({ contact_id: contact.id }).eq('id', row.id)
+        if (linkErr) console.error('[whatsapp] getOrCreateConversation: contact_id backfill failed', row.id, linkErr.message)
       }
-      return existing.id
+      return row.id
+    }
+
+    const existing = await findAt(locationId)
+    if (existing) return linkContact(existing)
+
+    // WAHOMESTUDIO.1 (R1) — a contact whose home studio has no WhatsApp number
+    // of its own (same organisation) gets the thread at their home studio, the
+    // same place the webhook files their reply, stamped with the sending
+    // studio's number so replies resolve it (R3/R4). Only on a NEW thread: an
+    // existing one at the sending studio is the backfill's (mig 724) to move.
+    const home = await numberlessHomeStudio(db, contact, locationId)
+    let fileAt = locationId
+    let stamp = null
+    if (home) {
+      const atHome = await findAt(home)
+      if (atHome) {
+        // An existing home thread with no stamp (opened before WAHOMESTUDIO.1)
+        // gets the sending number too, or a reply into it has no number to
+        // resolve. Only an unstamped row; a lost stamp is logged, never thrown.
+        if (!atHome.whatsapp_number_id) {
+          const numberId = await sendingNumberId()
+          if (numberId) {
+            const { error: stampErr } = await db.from('whatsapp_conversations')
+              .update({ whatsapp_number_id: numberId })
+              .eq('id', atHome.id)
+              .is('whatsapp_number_id', null)
+            if (stampErr) console.error('[whatsapp] getOrCreateConversation: number stamp on the home thread failed', atHome.id, stampErr.message)
+          }
+        }
+        return linkContact(atHome)
+      }
+      fileAt = home
+      stamp = await sendingNumberId()
     }
 
     const { data: created, error } = await db.from('whatsapp_conversations').insert({
-      location_id: locationId,
+      location_id: fileAt,
       contact_id: contact.id,
       wa_phone: waPhone,
       status: 'active',
+      ...(stamp ? { whatsapp_number_id: stamp } : {}),
     }).select('id').single()
     if (!error && created) return created.id
 
     // Lost a race with the inbound webhook (or another send) on the same
     // wa_phone — the unique constraint rejected us; re-read the winner.
-    const { data: raced } = await db.from('whatsapp_conversations')
-      .select('id')
-      .eq('location_id', locationId)
-      .eq('wa_phone', waPhone)
-      .maybeSingle()
+    const raced = await findAt(fileAt)
     return raced?.id
   }
 

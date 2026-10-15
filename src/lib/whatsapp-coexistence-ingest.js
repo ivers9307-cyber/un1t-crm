@@ -10,6 +10,7 @@ import { manualTakeoverPatch } from './agent/core'
 import { WA_APP_ECHO_SOURCE } from './whatsapp-staff-sources'
 import { logError } from './log'
 import { orgLocationIdsFor, scopeFor } from './inbound-contact-match'
+import { numberlessHomeStudio } from './whatsapp-thread-location'
 
 /**
  * Match a synced contact to an EXISTING CRM contact by phone. If found,
@@ -53,7 +54,7 @@ export async function syncContactMatchOnly(db, { phone, locationId }) {
  * the IMPORT time, so a staff tag would read as "staff just spoke" in every
  * created_at-ordered reader.
  */
-export async function ingestCoexistenceMessage(db, { locationId, descriptor }) {
+export async function ingestCoexistenceMessage(db, { locationId, numberId = null, descriptor }) {
   const { waMessageId, peerPhone, direction, messageType, body, tsSeconds } = descriptor
   if (!waMessageId) return { inserted: false, reason: 'no_id' }
   if (direction !== 'inbound' && direction !== 'outbound') return { inserted: false, reason: 'bad_direction' }
@@ -65,30 +66,55 @@ export async function ingestCoexistenceMessage(db, { locationId, descriptor }) {
 
   const n = peerPhone ? normalizeWaPhone(peerPhone) : null
   let contactId = null
+  let contactHome = null
   if (n) {
     // W0.2 — organisation-scoped, as above.
     const { data: contact } = await db
-      .from('contacts').select('id')
+      .from('contacts').select('id, location_id')
       .in('location_id', scopeFor(await orgLocationIdsFor(db, locationId)))
       .or(`wa_phone.eq.${n.without},wa_phone.eq.${n.withPlus},phone.eq.${n.without},phone.eq.${n.withPlus}`)
       .limit(1).maybeSingle()
     contactId = contact?.id || null
+    contactHome = contact?.location_id || null
   }
+
+  // WAHOMESTUDIO.1 (R1) — the thread for a contact whose home studio has no
+  // number of its own sits at that studio (where the webhook files their
+  // messages), stamped with the receiving number.
+  const home = contactId ? await numberlessHomeStudio(db, { id: contactId, location_id: contactHome }, locationId) : null
+  const threadLocationId = home || locationId
 
   const waPhone = n?.without || peerPhone || 'unknown'
   const { data: existingConv } = await db
-    .from('whatsapp_conversations').select('id').eq('location_id', locationId).eq('wa_phone', waPhone).limit(1).maybeSingle()
+    .from('whatsapp_conversations').select('id, whatsapp_number_id').eq('location_id', threadLocationId).eq('wa_phone', waPhone).limit(1).maybeSingle()
   let conversationId = existingConv?.id
+  // An existing home thread with no stamp (opened before WAHOMESTUDIO.1) gets
+  // the receiving number too, or a reply into it has no number to resolve.
+  // Only while unstamped; a lost stamp is logged, never thrown.
+  if (conversationId && home && numberId && !existingConv.whatsapp_number_id) {
+    const { error: numberStampErr } = await db.from('whatsapp_conversations')
+      .update({ whatsapp_number_id: numberId })
+      .eq('id', conversationId)
+      .is('whatsapp_number_id', null)
+    if (numberStampErr) {
+      logError('wa-coexistence', 'number stamp on the existing home thread failed (replies into it have no number)', {
+        conversationId, locationId, numberId, err: numberStampErr.message,
+      })
+    }
+  }
   if (!conversationId) {
     const { data: newConv, error: convErr } = await db
       .from('whatsapp_conversations')
-      .insert({ location_id: locationId, contact_id: contactId, wa_phone: waPhone, status: 'active' })
+      .insert({
+        location_id: threadLocationId, contact_id: contactId, wa_phone: waPhone, status: 'active',
+        ...(home && numberId ? { whatsapp_number_id: numberId } : {}),
+      })
       .select('id').single()
     if (convErr) {
       // Lost the (location_id, wa_phone) unique race — re-read the winner.
       const { data: raced } = await db
         .from('whatsapp_conversations').select('id')
-        .eq('location_id', locationId).eq('wa_phone', waPhone).limit(1).maybeSingle()
+        .eq('location_id', threadLocationId).eq('wa_phone', waPhone).limit(1).maybeSingle()
       conversationId = raced?.id
     } else {
       conversationId = newConv?.id
@@ -99,7 +125,7 @@ export async function ingestCoexistenceMessage(db, { locationId, descriptor }) {
   const isEcho = descriptor.origin === 'echo' && direction === 'outbound'
   const sentAt = tsSeconds ? new Date(tsSeconds * 1000).toISOString() : new Date().toISOString()
   const { error: msgErr } = await db.from('whatsapp_messages').insert({
-    conversation_id: conversationId, contact_id: contactId, location_id: locationId,
+    conversation_id: conversationId, contact_id: contactId, location_id: threadLocationId,
     wa_message_id: waMessageId, direction, message_type: messageType, body,
     status: direction === 'outbound' ? 'sent' : 'delivered', sent_at: sentAt,
     ...(isEcho ? { source: WA_APP_ECHO_SOURCE } : {}),

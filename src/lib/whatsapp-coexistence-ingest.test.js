@@ -2,7 +2,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+vi.mock('./whatsapp-thread-location', () => ({ numberlessHomeStudio: vi.fn(async () => null) }))
 const { logError } = await import('@/lib/log')
+const { numberlessHomeStudio } = await import('./whatsapp-thread-location')
 const { syncContactMatchOnly, ingestCoexistenceMessage } = await import('./whatsapp-coexistence-ingest.js')
 
 // Minimal chainable mock db. Each .from() returns a builder whose terminal
@@ -14,7 +16,7 @@ function makeDb(handlers) {
       const builder = {
         select() { return builder }, insert(v) { ctx.op = 'insert'; ctx.values = v; return builder },
         update(v) { ctx.op = 'update'; ctx.values = v; return builder },
-        eq(c, v) { ctx.filters.push(['eq', c, v]); return builder }, is() { return builder },
+        eq(c, v) { ctx.filters.push(['eq', c, v]); return builder }, is(c, v) { ctx.filters.push(['is', c, v]); return builder },
         neq(c, v) { ctx.filters.push(['neq', c, v]); return builder },
         in(c, v) { ctx.filters.push(['in', c, v]); return builder },
         or(f) { ctx.filters.push(['or', f]); return builder },
@@ -314,5 +316,110 @@ describe('ingestCoexistenceMessage — phone-app echoes are staff (C106 d)', () 
     const { db, writes } = echoDb()
     await ingestCoexistenceMessage(db, { locationId: 'L1', descriptor: history })
     expect(stampOf(writes)).toBeUndefined()
+  })
+})
+
+// WAHOMESTUDIO.1 (R1) — a phone-app echo / history row for a peer whose home
+// studio has no number files at THAT studio (where the webhook files their
+// messages), the thread stamped with the receiving number.
+describe('ingestCoexistenceMessage — thread filed at a number-less home studio (WAHOMESTUDIO.1)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('a peer whose home studio has no number threads at that studio, stamped with the receiving number', async () => {
+    numberlessHomeStudio.mockResolvedValueOnce('loc-hatch')
+    const writes = []
+    const convFilters = []
+    const db = makeDb((ctx) => {
+      if (ctx.op) writes.push({ table: ctx.table, op: ctx.op, values: ctx.values })
+      if (ctx.table === 'whatsapp_messages') return { data: ctx.op === 'insert' ? { id: 'm1' } : null, error: null }
+      if (ctx.table === 'contacts') return { data: { id: 'k1', location_id: 'loc-hatch' }, error: null }
+      if (ctx.table === 'whatsapp_conversations') {
+        if (ctx.op === 'insert') return { data: { id: 'conv1' }, error: null }
+        if (!ctx.op) convFilters.push(ctx.filters)
+        return { data: null, error: null }
+      }
+      return { data: null, error: null }
+    })
+    const r = await ingestCoexistenceMessage(db, {
+      locationId: 'loc-still', numberId: 'wn-1',
+      descriptor: { waMessageId: 'wamid.HOME1', peerPhone: '353222', direction: 'outbound', messageType: 'text', body: 'x', tsSeconds: 1700000000, origin: 'echo' },
+    })
+    expect(r).toMatchObject({ inserted: true, conversationId: 'conv1', contactId: 'k1' })
+    expect(numberlessHomeStudio).toHaveBeenCalledWith(db, { id: 'k1', location_id: 'loc-hatch' }, 'loc-still')
+    expect(convFilters[0]).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+    const convInsert = writes.find((w) => w.table === 'whatsapp_conversations' && w.op === 'insert')
+    expect(convInsert.values).toMatchObject({ location_id: 'loc-hatch', contact_id: 'k1', whatsapp_number_id: 'wn-1' })
+    const msgInsert = writes.find((w) => w.table === 'whatsapp_messages' && w.op === 'insert')
+    expect(msgInsert.values).toMatchObject({ location_id: 'loc-hatch', conversation_id: 'conv1', contact_id: 'k1' })
+  })
+
+  it('a peer with no home-studio override threads at the receiving studio, unstamped', async () => {
+    const writes = []
+    const db = makeDb((ctx) => {
+      if (ctx.op) writes.push({ table: ctx.table, op: ctx.op, values: ctx.values })
+      if (ctx.table === 'whatsapp_messages') return { data: ctx.op === 'insert' ? { id: 'm1' } : null, error: null }
+      if (ctx.table === 'contacts') return { data: { id: 'k1', location_id: 'loc-still' }, error: null }
+      if (ctx.table === 'whatsapp_conversations') return { data: ctx.op === 'insert' ? { id: 'conv1' } : null, error: null }
+      return { data: null, error: null }
+    })
+    await ingestCoexistenceMessage(db, {
+      locationId: 'loc-still', numberId: 'wn-1',
+      descriptor: { waMessageId: 'wamid.HOME2', peerPhone: '353222', direction: 'inbound', messageType: 'text', body: 'x', tsSeconds: 1700000000 },
+    })
+    const convInsert = writes.find((w) => w.table === 'whatsapp_conversations' && w.op === 'insert')
+    expect(convInsert.values).toEqual({ location_id: 'loc-still', contact_id: 'k1', wa_phone: '353222', status: 'active' })
+  })
+})
+
+// F4 (R3 completeness) — an EXISTING home thread with no stamp (opened before
+// WAHOMESTUDIO.1) gets the receiving number, or a reply into it has no number
+// to resolve. Logged, never thrown; the message is stored either way.
+describe('ingestCoexistenceMessage — an existing unstamped home thread is stamped (F4)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  function homeDb({ existing, updateError = null }) {
+    const writes = []
+    const db = makeDb((ctx) => {
+      if (ctx.op) writes.push({ table: ctx.table, op: ctx.op, values: ctx.values, filters: ctx.filters })
+      if (ctx.table === 'whatsapp_messages') return { data: ctx.op === 'insert' ? { id: 'm1' } : null, error: null }
+      if (ctx.table === 'contacts') return { data: { id: 'k1', location_id: 'loc-hatch' }, error: null }
+      if (ctx.table === 'whatsapp_conversations') {
+        if (ctx.op === 'update') return { data: null, error: updateError }
+        if (!ctx.op) return { data: existing, error: null }
+      }
+      return { data: null, error: null }
+    })
+    return { db, writes }
+  }
+  const inbound = { waMessageId: 'wamid.HOME9', peerPhone: '353222', direction: 'inbound', messageType: 'text', body: 'x', tsSeconds: 1700000000 }
+  const stampWrites = (writes) => writes.filter((w) => w.table === 'whatsapp_conversations' && w.op === 'update' && 'whatsapp_number_id' in (w.values || {}))
+
+  it('stamps the existing home thread with the receiving number, only while it is unstamped', async () => {
+    numberlessHomeStudio.mockResolvedValueOnce('loc-hatch')
+    const { db, writes } = homeDb({ existing: { id: 'conv-h', whatsapp_number_id: null } })
+    const r = await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: inbound })
+    expect(r).toMatchObject({ inserted: true, conversationId: 'conv-h' })
+    expect(stampWrites(writes)).toEqual([{
+      table: 'whatsapp_conversations', op: 'update', values: { whatsapp_number_id: 'wn-1' },
+      filters: [['eq', 'id', 'conv-h'], ['is', 'whatsapp_number_id', null]],
+    }])
+  })
+
+  it('leaves an already-stamped home thread alone', async () => {
+    numberlessHomeStudio.mockResolvedValueOnce('loc-hatch')
+    const { db, writes } = homeDb({ existing: { id: 'conv-h', whatsapp_number_id: 'wn-9' } })
+    await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: inbound })
+    expect(stampWrites(writes)).toEqual([])
+  })
+
+  it('a failed stamp is logged and the message is still stored', async () => {
+    numberlessHomeStudio.mockResolvedValueOnce('loc-hatch')
+    const { db, writes } = homeDb({ existing: { id: 'conv-h', whatsapp_number_id: null }, updateError: { message: 'boom' } })
+    const r = await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: inbound })
+    expect(r).toMatchObject({ inserted: true, conversationId: 'conv-h' })
+    expect(writes.some((w) => w.table === 'whatsapp_messages' && w.op === 'insert')).toBe(true)
+    expect(logError).toHaveBeenCalledWith('wa-coexistence', 'number stamp on the existing home thread failed (replies into it have no number)', {
+      conversationId: 'conv-h', locationId: 'loc-still', numberId: 'wn-1', err: 'boom',
+    })
   })
 })
