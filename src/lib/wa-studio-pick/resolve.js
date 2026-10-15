@@ -12,7 +12,8 @@ import { classifyStudio } from './classify'
 // Only these two statuses end the conversation's resolution. 'asked' has its
 // own branch; anything else (null, a malformed value) behaves like no record.
 const FINAL = new Set(['decided', 'unresolved'])
-const TEXT_TYPES = new Set(['text', 'interactive', 'image', 'video', 'document'])
+// 'button' is a template quick-reply tap: WABUTTONTAP.1 stores its readable text.
+const TEXT_TYPES = new Set(['text', 'interactive', 'button', 'image', 'video', 'document'])
 // After the picker, these cannot answer it: they must not burn the one question.
 const NON_ANSWER_TYPES = new Set(['reaction', 'sticker', 'audio', 'unsupported', 'system', 'request_welcome'])
 // A final write only lands while the row is unresolved or still asking, so a

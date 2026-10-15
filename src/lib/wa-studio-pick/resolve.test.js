@@ -256,6 +256,14 @@ describe('resolveNewSenderStudio', () => {
     expect(classifyStudio).toHaveBeenCalledWith(expect.objectContaining({ text: '[urgent] is hatch open?' }))
   })
 
+  it('a template quick-reply tap (type button) with readable text is classified (F6)', async () => {
+    classifyStudio.mockResolvedValueOnce({ studioId: 'a2', reason: 'decided' })
+    db.rpc.mockResolvedValueOnce({ data: { conversation_id: 'c1', merged: false }, error: null })
+    const r = await resolveNewSenderStudio(db, { ...base, messageType: 'button', body: 'Hatch Street trial', message: { type: 'button', button: { text: 'Hatch Street trial', payload: 'Hatch Street trial' } } })
+    expect(classifyStudio).toHaveBeenCalledWith(expect.objectContaining({ text: 'Hatch Street trial' }))
+    expect(r.action).toBe('decided')
+  })
+
   it('a flow (nfm_reply) answer is not free text: never classified', async () => {
     sendInteractiveOptions.mockResolvedValueOnce({ messageId: 'wamid.P' })
     const r = await resolveNewSenderStudio(db, { ...base, messageType: 'interactive', body: '{"x":1}', message: { type: 'interactive', interactive: { type: 'nfm_reply' } } })
