@@ -77,7 +77,7 @@ function initialsOf(name) {
 // `embedded` (UIX-P1b): thread-pane-only mode for the unified inbox —
 // the internal conversation list is hidden and selection is driven by
 // the `initialConversationId` prop (synced on change, not just mount).
-export default function WAInbox({ locationId, userId, initialConversationId, embedded = false, onOpenBookTab }) {
+export default function WAInbox({ locationId, userId, initialConversationId, embedded = false, onOpenBookTab, onMoved }) {
   const [conversations, setConversations] = useState([])
   const [selectedId, setSelectedId] = useState(initialConversationId || null)
   const [messages, setMessages] = useState([])
@@ -284,6 +284,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
         setMessages([])
         setMoveTargets(null)
       }
+      // Embedded: the parent (UnifiedInbox) owns the queue and its own
+      // selection, so tell it once our own state is clear. Standalone: no-op.
+      if (typeof onMoved === 'function') onMoved(conv.id)
     } catch {
       window.alert('Move failed')
     }
