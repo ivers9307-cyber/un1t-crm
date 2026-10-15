@@ -48,9 +48,10 @@ contact's home `location_id` when ALL hold, else `null`:
 - the home studio has no active `whatsapp_numbers` row.
 
 A failed lookup returns `null`, logged: the thread files where it does today
-(answerable beats lost). Callers: the inbound webhook, `getOrCreateConversation`
-(broadcasts, sequences, every outbound that opens a thread), and the
-coexistence ingest.
+(answerable beats lost). Callers: `getOrCreateConversation` (broadcasts,
+sequences, every outbound that opens a thread) and the coexistence ingest. The
+inbound webhook applies R2 directly (its contact match is already
+organisation-fenced).
 
 **R2 — the webhook.** An inbound from a matched contact files at the contact's
 home studio (contact matching is already org-fenced, `orgLocationIdsFor`). The
