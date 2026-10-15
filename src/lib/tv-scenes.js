@@ -16,8 +16,10 @@
 // operatorLabel). For the image branch, operatorImageRef returns the trimmed
 // source_ref, which the payload builder has already resolved to a public URL
 // for storage rows. So it is the string to use as src, and callers must not
-// re-resolve it. For the label branch, operatorLabel returns the trimmed label,
-// so a whitespace-only label is "no label" in the scene exactly as it is here.
+// re-resolve it. Never put a raw bucket path in an <img>: it is a broken image
+// held for the whole dwell, and the cause of this branch's worst cross-task bug.
+// For the label branch, operatorLabel returns the trimmed label, so a
+// whitespace-only label is "no label" in the scene exactly as it is here.
 
 /** How long one scene holds the screen. Richard's call, 2026-10-15. */
 export const SCENE_DWELL_MS = 30000
