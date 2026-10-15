@@ -21,6 +21,27 @@ describe('eligibleScenes', () => {
     expect(eligibleScenes({ ...full, operator: null })).toEqual(['up-next', 'earned'])
   })
 
+  it('keeps the operator card when it has an image to show', () => {
+    expect(eligibleScenes({ up_next: [], earned: [], operator: { source_type: 'storage', source_ref: 'a.png', label: null, template_values: null } })).toEqual(['operator'])
+  })
+
+  it('keeps the operator card when it has a label to show', () => {
+    expect(eligibleScenes({ up_next: [], earned: [], operator: { source_type: 'template', source_ref: null, label: 'Offer', template_values: null } })).toEqual(['operator'])
+  })
+
+  // template_values alone cannot be drawn, so a row with neither field is not content.
+  it('skips an operator row with neither an image nor a label', () => {
+    expect(eligibleScenes({ ...full, operator: { source_type: 'template', source_ref: null, label: null, template_values: {} } })).toEqual(['up-next', 'earned'])
+  })
+
+  it('skips an operator row whose image and label are empty strings', () => {
+    expect(eligibleScenes({ ...full, operator: { source_type: 'storage', source_ref: '', label: '', template_values: null } })).toEqual(['up-next', 'earned'])
+  })
+
+  it('skips an operator row whose label is only whitespace', () => {
+    expect(eligibleScenes({ ...full, operator: { source_type: 'template', source_ref: null, label: '   ', template_values: null } })).toEqual(['up-next', 'earned'])
+  })
+
   // Review Focus 4 — every scene empty must be representable, not a crash.
   it('returns an empty list when nothing has content', () => {
     expect(eligibleScenes({ up_next: [], earned: [], operator: null })).toEqual([])
