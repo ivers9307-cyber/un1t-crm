@@ -399,7 +399,7 @@ export function buildConfirmationDefaults(ctx) {
     infoRows,
     afterInfoHtml,
     memberQrs,
-    footerHtml: `<strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.${manageLineHtml(ctx.manageUrl)}`,
+    footerHtml: `<strong>What's next:</strong> arrive 10-15 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.${manageLineHtml(ctx.manageUrl)}`,
     locationName: ctx.locationName || '',
     brand,
   }
@@ -530,8 +530,8 @@ export function buildMovedDefaults(ctx) {
   const from = `<strong>${escapeHtml(ctx.oldEventName || '')}</strong>${ctx.oldWhen ? ` (${escapeHtml(ctx.oldWhen)})` : ''}`
   const to = `<strong>${escapeHtml(ctx.raceName)}</strong>`
   const footerHtml = (ctx.isRace
-    ? `<strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before.`
-    : `<strong>What's next:</strong> arrive 30 minutes before your start. Bring water and a towel. We'll send a reminder the day before.`) + manageLineHtml(ctx.manageUrl)
+    ? `<strong>What's next:</strong> arrive 10-15 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before.`
+    : `<strong>What's next:</strong> arrive 10-15 minutes before your start. Bring water and a towel. We'll send a reminder the day before.`) + manageLineHtml(ctx.manageUrl)
   return {
     ...base,
     subject: `Your entry has moved to ${ctx.raceName}`,

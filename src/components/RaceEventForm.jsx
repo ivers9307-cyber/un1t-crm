@@ -1465,7 +1465,7 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
             subjectPlaceholder="{{event_name}} — you're in!"
             intro={confirmationIntro}
             onIntro={setConfirmationIntro}
-            introPlaceholder="What's next: arrive 30 minutes early, bring water + a towel…"
+            introPlaceholder="What's next: arrive 10-15 minutes early, bring water + a towel…"
             templateId={confirmationTemplateId}
             onTemplateId={setConfirmationTemplateId}
             templates={emailTemplates}
@@ -1481,7 +1481,7 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
               subjectPlaceholder="Reminder: {{event_name}} is tomorrow"
               intro={reminderIntro}
               onIntro={setReminderIntro}
-              introPlaceholder="Before you arrive: get here 30 minutes early, bring water + a towel…"
+              introPlaceholder="Before you arrive: get here 10-15 minutes early, bring water + a towel…"
               templateId={reminderTemplateId}
               onTemplateId={setReminderTemplateId}
               templates={emailTemplates}
@@ -1497,7 +1497,7 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
               subjectPlaceholder="Your entry has moved to {{event_name}}"
               intro={movedIntro}
               onIntro={setMovedIntro}
-              introPlaceholder="What's next: arrive 30 minutes before your start, bring water and a towel. Your old tickets no longer work."
+              introPlaceholder="What's next: arrive 10-15 minutes before your start, bring water and a towel. Your old tickets no longer work."
               showTemplate={false}
               extraTags={['{{old_event_name}}', '{{old_when}}', '{{manage_url}}']}
             />
