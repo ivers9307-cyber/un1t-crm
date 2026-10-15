@@ -98,6 +98,23 @@ describe('POST move', () => {
     expect((await POST(post({ location_id: HATCH }), params)).status).toBe(404)
     expect(rpc).not.toHaveBeenCalled()
   })
+  // F3 — the organisation check must not answer before the access check, or
+  // a 400 vs 404 tells the caller whether a studio they cannot see is in the
+  // thread's organisation.
+  it('an inaccessible target in ANOTHER organisation → 404 (not 400), the function never runs', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', locations: [{ id: STILL }, { id: HATCH }] })
+    assertLocationAccessOr404.mockImplementation((u, loc) => ((u.locations || []).some((l) => l.id === loc) ? null : new Response(null, { status: 404 })))
+    const res = await POST(post({ location_id: OTHER }), params)
+    expect(res.status).toBe(404)
+    expect(rpc).not.toHaveBeenCalled()
+  })
+  it('an inaccessible target that does not exist → 404, the same answer', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', locations: [{ id: STILL }, { id: HATCH }] })
+    assertLocationAccessOr404.mockImplementation((u, loc) => ((u.locations || []).some((l) => l.id === loc) ? null : new Response(null, { status: 404 })))
+    const res = await POST(post({ location_id: '00000000-0000-4000-8000-0000000000ff' }), params)
+    expect(res.status).toBe(404)
+    expect(rpc).not.toHaveBeenCalled()
+  })
   it('a failed read of the conversation is a 500, never a 404', async () => {
     failTable = 'whatsapp_conversations'
     expect((await POST(post({ location_id: HATCH }), params)).status).toBe(500)

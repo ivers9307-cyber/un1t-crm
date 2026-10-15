@@ -71,6 +71,11 @@ export async function POST(request, props) {
   if (target === conversation.location_id) {
     return NextResponse.json({ success: false, error: SAME_STUDIO }, { status: 400 })
   }
+  // Access at the target BEFORE the organisation check: answering 400 first
+  // would tell a caller whether a studio they cannot see is in this
+  // organisation. An inaccessible target is the unknown-id 404.
+  const guard = assertLocationAccessOr404(user, target) || requireWhatsAppInboxAt(user, target)
+  if (guard) return guard
   const { data: dest, error: destErr } = await db.from('locations').select('id, organization_id').eq('id', target).maybeSingle()
   if (destErr) {
     logError('wa-move', 'target studio read failed', { conversationId: conversation.id, target, err: destErr.message })
@@ -79,8 +84,6 @@ export async function POST(request, props) {
   if (!dest || !orgId || dest.organization_id !== orgId) {
     return NextResponse.json({ success: false, error: WRONG_ORG }, { status: 400 })
   }
-  const guard = assertLocationAccessOr404(user, target) || requireWhatsAppInboxAt(user, target)
-  if (guard) return guard
 
   const { data, error } = await db.rpc('move_whatsapp_conversation', { p_conversation_id: conversation.id, p_target_location_id: target })
   if (error) {
