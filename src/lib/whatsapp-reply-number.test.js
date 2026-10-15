@@ -3,8 +3,9 @@
 // The inbound webhook stamps whatsapp_conversations.whatsapp_number_id (mig
 // 696) with the number that received the message. A reply into that thread
 // (opts.replyInConversation on any whatsapp.js sender) resolves that number
-// when it is still an active row AT the conversation's studio; otherwise the
-// location default, exactly as before. A single-number studio sends from the
+// when it is still an active row AT the conversation's studio (or, at a studio
+// with no number of its own, a same-organisation sibling's, WAHOMESTUDIO.1);
+// otherwise the location default, exactly as before. A single-number studio sends from the
 // same number either way. A template goes from the thread number only when it
 // shares the default's WABA (templates are synced per studio from the
 // default's account). A failed read in this layer is never a lost reply: it
@@ -13,7 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const state = { conversations: [], numbers: [], faults: {} }
+const state = { conversations: [], numbers: [], locations: [], faults: {} }
 const reads = []
 vi.mock('./supabase', () => ({
   createServerClient: () => ({
@@ -24,7 +25,9 @@ vi.mock('./supabase', () => ({
       const run = () => {
         reads.push(table)
         if (state.faults[table]) return { data: null, error: state.faults[table] }
-        const src = table === 'whatsapp_conversations' ? state.conversations : table === 'whatsapp_numbers' ? state.numbers : []
+        const src = table === 'whatsapp_conversations' ? state.conversations
+          : table === 'whatsapp_numbers' ? state.numbers
+          : table === 'locations' ? state.locations : []
         let rows = src.filter((r) => filters.every((f) => f(r)))
         for (const [col, asc] of orders.slice().reverse()) {
           rows = rows.slice().sort((a, b) => (a[col] === b[col] ? 0 : (a[col] > b[col] ? 1 : -1) * (asc ? 1 : -1)))
@@ -34,6 +37,7 @@ vi.mock('./supabase', () => ({
       const b = {
         select: () => b,
         eq: (c, v) => { filters.push((r) => r[c] === v); return b },
+        in: (c, vals) => { filters.push((r) => vals.includes(r[c])); return b },
         order: (c, o) => { orders.push([c, o?.ascending !== false]); return b },
         limit: (n) => { cap = n; return b },
         maybeSingle: async () => { const out = run(); return out.error ? out : { data: out.data[0] ?? null, error: null } },
@@ -52,6 +56,7 @@ const { logWarn } = await import('./log')
 
 const LOC = 'a0000000-0000-4000-8000-000000000001'
 const LOC2 = 'a0000000-0000-4000-8000-000000000002'
+const LOC3 = 'a0000000-0000-4000-8000-000000000003'
 const CONV = 'c0000000-0000-4000-8000-000000000001'
 const num = (id, extra = {}) => ({
   id, location_id: LOC, label: id, phone_number_id: `PNI-${id}`, business_account_id: 'WABA-1', app_id: 'APP',
@@ -67,6 +72,7 @@ beforeEach(() => {
   reads.length = 0
   state.conversations = []
   state.numbers = [DEFAULT, SECOND]
+  state.locations = [{ id: LOC, organization_id: 'ORG-1' }, { id: LOC2, organization_id: 'ORG-1' }, { id: LOC3, organization_id: 'ORG-2' }]
   state.faults = {}
   sentFrom = []
   globalThis.fetch = vi.fn(async (url) => {
@@ -137,6 +143,46 @@ describe('getConversationReplyConfig', () => {
   it('no conversation id: the default, with no conversation read', async () => {
     expect((await getConversationReplyConfig(LOC, null)).phoneNumberId).toBe('PNI-n-default')
     expect(reads).not.toContain('whatsapp_conversations')
+  })
+})
+
+describe('WAHOMESTUDIO.1 — a number-less studio replies through a same-organisation sibling’s number', () => {
+  // LOC owns DEFAULT and SECOND; LOC2 owns nothing.
+  const hatchConv = (stamp) => conv(stamp, { location_id: LOC2 })
+
+  it('a thread at a number-less studio stamped with a sibling’s number replies from it, templates too', async () => {
+    state.conversations = [hatchConv('n-default')]
+    expect((await getConversationReplyConfig(LOC2, CONV)).phoneNumberId).toBe('PNI-n-default')
+    expect((await getConversationReplyConfig(LOC2, CONV, { template: true })).phoneNumberId).toBe('PNI-n-default')
+  })
+
+  it('a sibling stamp is ignored once the thread’s studio has a number of its own (Review Focus 1)', async () => {
+    state.numbers = [DEFAULT, num('n-hatch', { location_id: LOC2, is_default: true })]
+    state.conversations = [hatchConv('n-default')]
+    expect((await getConversationReplyConfig(LOC2, CONV)).phoneNumberId).toBe('PNI-n-hatch')
+  })
+
+  it('a number in ANOTHER organisation is never used; the number-less studio still refuses', async () => {
+    state.numbers = [num('n-foreign', { location_id: LOC3, is_default: true })]
+    state.conversations = [hatchConv('n-foreign')]
+    expect(await getConversationNumberConfig(LOC2, CONV)).toBeNull()
+    await expect(getConversationReplyConfig(LOC2, CONV)).rejects.toSatisfy(isWhatsAppNumberMissing)
+  })
+
+  it('an unreadable locations row is null (no sibling number), logged', async () => {
+    state.conversations = [hatchConv('n-default')]
+    state.faults.locations = { message: 'boom' }
+    expect(await getConversationNumberConfig(LOC2, CONV)).toBeNull()
+    expect(logWarn).toHaveBeenCalled()
+  })
+
+  it('templateLocationIdFor names the number owner for a sibling stamp, else the thread’s studio', async () => {
+    const { templateLocationIdFor } = await import('./whatsapp-config.js')
+    state.conversations = [hatchConv('n-default')]
+    expect(await templateLocationIdFor(LOC2, CONV)).toBe(LOC)
+    state.conversations = [conv('n-second')]
+    expect(await templateLocationIdFor(LOC, CONV)).toBe(LOC)
+    expect(await templateLocationIdFor(LOC2, null)).toBe(LOC2)
   })
 })
 
