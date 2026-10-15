@@ -15,6 +15,35 @@ const full = {
   operator: { source_type: 'storage', source_ref: 'x.png' },
 }
 
+// Every operator shape the scene could see, named so a failure says which row broke.
+const OPERATOR_MATRIX = {
+  'storage image with ref': { source_type: 'storage', source_ref: 'a.png', label: null, template_values: null },
+  'url image with ref': { source_type: 'url', source_ref: 'https://example.com/a.png', label: null, template_values: null },
+  'storage ref with surrounding whitespace': { source_type: 'storage', source_ref: '  a.png  ', label: null, template_values: null },
+  'template row with ref and no label': { source_type: 'template', source_ref: 'x', label: null, template_values: null },
+  'template row with ref and label': { source_type: 'template', source_ref: 'x', label: 'Offer', template_values: {} },
+  'label only': { source_type: 'template', source_ref: null, label: 'Offer', template_values: null },
+  'template_values only': { source_type: 'template', source_ref: null, label: null, template_values: { a: 1 } },
+  'neither image nor label': { source_type: 'template', source_ref: null, label: null, template_values: {} },
+  'storage whitespace ref and whitespace label': { source_type: 'storage', source_ref: '   ', label: '   ', template_values: null },
+  'storage whitespace ref with real label': { source_type: 'storage', source_ref: '   ', label: 'Offer', template_values: null },
+  'url whitespace ref with real label': { source_type: 'url', source_ref: '   ', label: 'Offer', template_values: null },
+  'source_ref with no source_type': { source_ref: 'a.png', label: null },
+  'null operator': null,
+  'undefined operator': undefined,
+  'non-object operator': 'x',
+}
+
+describe('constants', () => {
+  it('pins the dwell at exactly 30 seconds', () => {
+    expect(SCENE_DWELL_MS).toBe(30000)
+  })
+
+  it('pins the rotation order', () => {
+    expect(SCENE_KEYS).toEqual(['up-next', 'earned', 'operator'])
+  })
+})
+
 describe('operatorImageRef', () => {
   it('returns the ref for a storage image', () => {
     expect(operatorImageRef({ source_type: 'storage', source_ref: 'a.png', label: null, template_values: null })).toBe('a.png')
@@ -24,7 +53,7 @@ describe('operatorImageRef', () => {
     expect(operatorImageRef({ source_type: 'url', source_ref: 'https://example.com/a.png', label: null, template_values: null })).toBe('https://example.com/a.png')
   })
 
-  it('returns the ref trimmed, since that is the exact string for src', () => {
+  it('returns the ref with surrounding whitespace trimmed', () => {
     expect(operatorImageRef({ source_type: 'storage', source_ref: '  a.png  ', label: null, template_values: null })).toBe('a.png')
   })
 
@@ -140,6 +169,19 @@ describe('eligibleScenes', () => {
     expect(eligibleScenes(undefined)).toEqual([])
     expect(eligibleScenes({})).toEqual([])
     expect(eligibleScenes({ up_next: 'nope', earned: 7, operator: 'x' })).toEqual([])
+  })
+})
+
+describe('eligibility and renderability agree', () => {
+  it('agrees with operatorRenderable for every operator row, in both directions', () => {
+    const outcomes = new Set()
+    for (const [name, operator] of Object.entries(OPERATOR_MATRIX)) {
+      const inScene = eligibleScenes({ up_next: [], earned: [], operator }).includes('operator')
+      expect(inScene, name).toBe(operatorRenderable(operator))
+      outcomes.add(inScene)
+    }
+    // The matrix must cover both outcomes, or the agreement check proves nothing.
+    expect(outcomes).toEqual(new Set([true, false]))
   })
 })
 

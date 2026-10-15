@@ -12,8 +12,10 @@
 //
 // The operator scene has two questions, and this module answers both so no
 // consumer re-derives either: whether the scene appears at all
-// (operatorRenderable), and which branch it draws, with the exact src string
-// (operatorImageRef).
+// (operatorRenderable), and which branch it draws (operatorImageRef). For the
+// image branch, operatorImageRef returns the trimmed source_ref, which the
+// payload builder has already resolved to a public URL for storage rows. So it
+// is the string to use as src, and callers must not re-resolve it.
 
 /** How long one scene holds the screen. Richard's call, 2026-10-15. */
 export const SCENE_DWELL_MS = 30000
@@ -24,10 +26,15 @@ export const SCENE_KEYS = ['up-next', 'earned', 'operator']
 const present = (value) => typeof value === 'string' && value.trim() !== ''
 
 /**
- * Which branch the operator scene draws, and the exact string for its `src`.
+ * Which branch the operator scene draws, and the string to use as its `src`.
  * Returns the trimmed source_ref when the row is an image the scene can draw
  * (source_type storage or url, with a non-blank ref), otherwise null. A null
- * means the scene draws its label, or nothing. This answers WHICH BRANCH, not
+ * means the scene draws its label, or nothing.
+ *
+ * For storage rows the ref is NOT a raw bucket path by the time it gets here:
+ * the payload builder has already resolved it to a public URL. So the return
+ * value is the string for src, and callers must not re-resolve it or assume a
+ * raw storage path is usable in an <img>. This answers WHICH BRANCH, not
  * whether the scene appears: use operatorRenderable for that.
  *
  * @param {object|null|undefined} operator  the payload's `idle.operator` row
