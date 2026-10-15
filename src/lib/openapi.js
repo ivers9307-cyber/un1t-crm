@@ -4141,6 +4141,67 @@ registry.registerPath({
   },
 })
 
+// WASTUDIOPICK.1 — /api/whatsapp/studio-picker
+const WaStudioPickerSettings = z.object({
+  listed: z.boolean(),
+  label: z.string().max(20),
+  keywords: z.array(z.string().min(1).max(40)).max(10),
+  enabled: z.boolean(),
+  question: z.string().max(1024),
+  has_number: z.boolean(),
+  default_question: z.string(),
+}).openapi('WaStudioPickerSettings')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/whatsapp/studio-picker',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Read a studio's WhatsApp studio-picker settings",
+  description: "How a studio appears in the picker an unrecognised sender is asked (listed, button label, keywords), and, where the studio owns a WhatsApp number, whether that number asks the question and its wording. Stored on locations.settings.wa_studio_picker. Any member of the studio may read it.",
+  request: { query: z.object({ location_id: uuidLike }) },
+  responses: {
+    200: { description: 'Picker settings with defaults applied', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaStudioPickerSettings }) } } },
+    400: { description: 'location_id is required', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Could not read the settings or the studio numbers (never answered as defaults)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/whatsapp/studio-picker',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Save a studio's WhatsApp studio-picker settings",
+  description: "Replaces the locations.settings.wa_studio_picker slice only (other settings are kept). enabled and question are accepted only when the studio has an active WhatsApp number, otherwise 400. Master, or owner at the studio.",
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            location_id: uuidLike,
+            listed: z.boolean(),
+            label: z.string().max(20).optional(),
+            keywords: z.array(z.string().min(1).max(40)).max(10).optional(),
+            enabled: z.boolean().optional(),
+            question: z.string().max(1024).optional(),
+          }).openapi('WaStudioPickerPut'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Settings saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaStudioPickerSettings }) } } },
+    400: { description: 'Validation failed, or enabled/question sent for a studio with no WhatsApp number', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Master or owner role required at this studio; nothing written', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'settings_unreadable, settings_write_failed, or the studio numbers could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // WhatsApp inbox carousel send (cookie auth)
 registry.registerPath({
   method: 'post',
