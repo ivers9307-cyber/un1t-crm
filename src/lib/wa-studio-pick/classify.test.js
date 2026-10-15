@@ -4,6 +4,7 @@ vi.mock('@/lib/anthropic', () => ({ anthropicMessages: vi.fn() }))
 vi.mock('@/lib/usage-caps', () => ({ getAiCapStatus: vi.fn(async () => ({ capped: false })) }))
 vi.mock('../log', () => ({ logWarn: vi.fn() }))
 import { anthropicMessages } from '@/lib/anthropic'
+import { logWarn } from '../log'
 import { getAiCapStatus } from '@/lib/usage-caps'
 import { AGENT_MODEL } from '@/lib/agent/auto-reply'
 import { classifyStudio } from './classify.js'
@@ -13,6 +14,7 @@ const reply = (obj, extra = {}) => ({ res: { ok: true }, data: { stop_reason: 'e
 
 beforeEach(() => {
   anthropicMessages.mockReset()
+  logWarn.mockReset()
   getAiCapStatus.mockReset()
   getAiCapStatus.mockResolvedValue({ capped: false })
 })
@@ -39,6 +41,19 @@ describe('classifyStudio', () => {
   ])('%s → unsure', async (_n, r, reason) => {
     anthropicMessages.mockResolvedValue(r)
     expect(await classifyStudio({ text: 'hi', studios: STUDIOS, locationId: 'a1' })).toEqual({ studioId: null, reason })
+  })
+  it('an HTTP refusal is logged with its status and a body snippet, still call_failed (F3)', async () => {
+    anthropicMessages.mockResolvedValue({ res: { ok: false, status: 400, text: async () => `{"error":"bad request"}${'x'.repeat(500)}` }, data: null })
+    expect((await classifyStudio({ text: 'hi', studios: STUDIOS, locationId: 'a1' })).reason).toBe('call_failed')
+    expect(logWarn).toHaveBeenCalledWith('wa-studio-pick', 'classifier call refused', expect.objectContaining({ locationId: 'a1', status: 400 }))
+    const { body } = logWarn.mock.calls[0][2]
+    expect(body.startsWith('{"error":"bad request"}')).toBe(true)
+    expect(body).toHaveLength(200)
+  })
+  it('an unreadable refusal body logs an empty snippet, never throws (F3)', async () => {
+    anthropicMessages.mockResolvedValue({ res: { ok: false, status: 529, text: async () => { throw new Error('used') } }, data: null })
+    expect((await classifyStudio({ text: 'hi', studios: STUDIOS, locationId: 'a1' })).reason).toBe('call_failed')
+    expect(logWarn).toHaveBeenCalledWith('wa-studio-pick', 'classifier call refused', { locationId: 'a1', status: 529, body: '' })
   })
   it('a thrown/aborted call → call_failed; empty text → empty without a call; cap reached → capped without a call', async () => {
     anthropicMessages.mockRejectedValue(new Error('aborted'))

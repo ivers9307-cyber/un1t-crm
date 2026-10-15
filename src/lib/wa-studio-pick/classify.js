@@ -9,6 +9,12 @@ import { logWarn } from '../log'
 
 const TIMEOUT_MS = 8000
 
+// anthropicMessages leaves a refused response's body unread; read it for the
+// log only, and never let that read fail the call.
+async function safeText(res) {
+  try { return String(await res.text()) } catch { return '' }
+}
+
 function systemPrompt(studios) {
   const lines = studios.map((s) => `- id ${s.id}: ${s.name}${s.label && s.label !== s.name ? ` (also "${s.label}")` : ''}${s.keywords.length ? `; also known as: ${s.keywords.join(', ')}` : ''}`)
   return [
@@ -52,7 +58,10 @@ export async function classifyStudio({ text, studios, locationId }) {
     logWarn('wa-studio-pick', 'classifier call failed', { locationId, err: e?.message || String(e) })
     return { studioId: null, reason: 'call_failed' }
   }
-  if (!out?.res?.ok || !out.data) return { studioId: null, reason: 'call_failed' }
+  if (!out?.res?.ok || !out.data) {
+    logWarn('wa-studio-pick', 'classifier call refused', { locationId, status: out?.res?.status ?? null, body: (await safeText(out?.res)).slice(0, 200) })
+    return { studioId: null, reason: 'call_failed' }
+  }
   if (out.data.stop_reason === 'refusal') return { studioId: null, reason: 'refused' }
   const textBlock = (out.data.content || []).find((b) => b.type === 'text')
   let parsed
