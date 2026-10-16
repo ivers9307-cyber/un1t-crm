@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { agentOptionId, buttonTapBody, interactiveReplyBody } from './whatsapp-inbound-tap'
 import { buildInteractivePayload } from './whatsapp'
+import { PICKER_ID_PREFIX } from './wa-studio-pick/config'
 
 describe('buttonTapBody (template quick-reply, WABUTTONTAP.1)', () => {
   it('stores the tapped text when the payload is the default (same as the text)', () => {
@@ -45,5 +46,16 @@ describe("agentOptionId matches the ids Mia's interactive sends carry", () => {
     expect(list.interactive.action.sections[0].rows.map((r) => r.id)).toEqual([0, 1, 2, 3].map(agentOptionId))
     // and the reader drops exactly these
     expect(interactiveReplyBody({ button_reply: { id: agentOptionId(2), title: 'x' } })).toBe('x')
+  })
+})
+
+describe('studio picker taps (WASTUDIOPICK.1 F4)', () => {
+  it("drops the picker's studio:<id> ids too: the title already says it", () => {
+    const id = `${PICKER_ID_PREFIX}a0000000-0000-4000-8000-000000000002`
+    expect(interactiveReplyBody({ type: 'button_reply', button_reply: { id, title: 'Hatch Street' } })).toBe('Hatch Street')
+    expect(interactiveReplyBody({ type: 'list_reply', list_reply: { id, title: 'Hatch Street' } })).toBe('Hatch Street')
+  })
+  it('an id that merely contains studio: is still kept', () => {
+    expect(interactiveReplyBody({ button_reply: { id: 'xstudio:a2', title: 'Hatch' } })).toBe('Hatch (option id: xstudio:a2)')
   })
 })

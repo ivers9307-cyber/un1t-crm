@@ -205,6 +205,7 @@ export const EXPECTED = {
   'DELETE locations/[id]/whatsapp/numbers/[numberId]/route.js': ['owner', 'Removes a number.'],
   'POST whatsapp/conversational-automation/route.js': ['owner', 'WAROLE.1: sets the welcome event + ice breakers AT META on the number.'],
   'PUT whatsapp/card-sets/route.js': ['owner', 'WAROLE.1: replaces the carousel card sets staff and Mia send.'],
+  'PUT whatsapp/studio-picker/route.js': ['owner', 'WASTUDIOPICK.1: sets how the studio appears in the picker unknown senders are asked and, with a number, whether it asks.'],
 
   // ── Templates ──
   'POST whatsapp/templates/[id]/resubmit/route.js': ['manager-whatsapp', 'Edits a rejected/paused template at Meta; GATES-3: MANAGER_ROLES and whatsapp at the template.'],

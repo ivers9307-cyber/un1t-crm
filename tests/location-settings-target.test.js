@@ -45,6 +45,7 @@ const REVIEWED = {
   '/api/settings/ads/test': 'AdsIntegrationTab passes locationId in the body; the route asserts membership at it.',
   '/api/whatsapp/conversational-automation': 'WhatsAppIntegrationTab passes location_id in the body (required by its schema).',
   '/api/whatsapp/card-sets': 'WhatsAppIntegrationTab passes location_id in the body (required by its schema).',
+  '/api/whatsapp/studio-picker': 'WhatsAppIntegrationTab passes location_id (query on GET, body on PUT).',
   '/api/whatsapp/templates/upload-media/sign': 'The carousel image uploader passes location_id in the body.',
   '/api/whatsapp/templates/upload-media': 'The carousel image uploader passes location_id in the body.',
   '/api/xero/disconnect': 'XeroLocationCard passes location_id in the body.',

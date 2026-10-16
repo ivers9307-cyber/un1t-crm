@@ -149,6 +149,8 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
 
           <ChatOpenersCard location={location} canEdit={canEdit} />
 
+          <StudioPickerCard location={location} canEdit={canEdit} />
+
           <CardSetsCard location={location} canEdit={canEdit} />
         </>
       )}
@@ -242,6 +244,176 @@ function ChatOpenersCard({ location, canEdit }) {
           </button>
           {savedAt && <span className="text-[11px] text-emerald-500">Saved ✓</span>}
         </div>
+      )}
+    </div>
+  )
+}
+
+// WASTUDIOPICK.1 — the WhatsApp studio picker. A message from someone we do
+// not know is filed at a studio by the ad they came from or by what they
+// wrote; when that is unclear they get one question with a button per studio
+// that is listed here. Settings live on locations.settings.wa_studio_picker
+// via /api/whatsapp/studio-picker. Every studio can be listed (button label +
+// keywords); only a studio with its own number can ask the question.
+const PICKER_LABEL_MAX = 20
+const PICKER_QUESTION_MAX = 1024
+
+function StudioPickerCard({ location, canEdit }) {
+  const [state, setState] = useState('loading') // loading | ready | failed
+  const [hasNumber, setHasNumber] = useState(false)
+  const [defaultQuestion, setDefaultQuestion] = useState('')
+  const [listed, setListed] = useState(false)
+  const [label, setLabel] = useState('')
+  const [keywords, setKeywords] = useState('')
+  const [enabled, setEnabled] = useState(false)
+  const [question, setQuestion] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [savedAt, setSavedAt] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const res = await fetch(`/api/whatsapp/studio-picker?location_id=${encodeURIComponent(location.id)}`)
+        const j = await res.json()
+        if (cancelled) return
+        if (!res.ok || !j.success || !j.data) { setState('failed'); return }
+        const d = j.data
+        setListed(d.listed === true)
+        setLabel(d.label || '')
+        setKeywords(Array.isArray(d.keywords) ? d.keywords.join(', ') : '')
+        setEnabled(d.enabled === true)
+        setQuestion(d.question || '')
+        setHasNumber(d.has_number === true)
+        setDefaultQuestion(d.default_question || '')
+        setState('ready')
+      } catch {
+        if (!cancelled) setState('failed')
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [location.id])
+
+  async function save() {
+    setSaving(true); setError(null); setSavedAt(null)
+    try {
+      const res = await fetch('/api/whatsapp/studio-picker', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location_id: location.id,
+          listed,
+          label: label.trim(),
+          keywords: keywords.split(',').map((k) => k.trim()).filter(Boolean),
+          ...(hasNumber ? { enabled, question: question.trim() } : {}),
+        }),
+      })
+      const j = await res.json()
+      if (!res.ok || !j.success) throw new Error(j.error || 'Failed to save the studio picker')
+      setSavedAt(Date.now())
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 space-y-2">
+      <div>
+        <h4 className="text-sm font-semibold text-un1t-text mb-1">Studio picker</h4>
+        <p className="text-xs text-un1t-subtle">
+          When someone we don&apos;t know messages this number, we work out which studio they mean
+          from the ad they came from or their message. If it isn&apos;t clear, they get one question
+          with a button for each studio shown here.
+        </p>
+      </div>
+      {state === 'loading' && (
+        <div className="text-xs text-un1t-subtle inline-flex items-center gap-1.5">
+          <Loader2 size={12} className="animate-spin" /> Loading…
+        </div>
+      )}
+      {state === 'failed' && (
+        <div className="text-xs text-red-700 inline-flex items-center gap-1.5">
+          <AlertCircle size={12} /> Could not load the studio picker settings just now. Reload the page to try again.
+        </div>
+      )}
+      {state === 'ready' && (
+        <>
+          <label className="flex items-center gap-2 text-[11px] text-un1t-subtle">
+            <input
+              type="checkbox"
+              disabled={!canEdit}
+              checked={listed}
+              onChange={(e) => setListed(e.target.checked)}
+            />
+            Show this studio in the WhatsApp studio picker
+          </label>
+          <p className="text-[11px] text-un1t-subtle">Studios with their own WhatsApp number are only offered on their own number.</p>
+          <Row label={`Button label (${PICKER_LABEL_MAX} characters)`}>
+            <input
+              disabled={!canEdit}
+              maxLength={PICKER_LABEL_MAX}
+              className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={location.name || ''}
+            />
+          </Row>
+          <Row label="Keywords that point to this studio (comma separated, optional)">
+            <input
+              disabled={!canEdit}
+              className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text"
+              value={keywords}
+              onChange={(e) => setKeywords(e.target.value)}
+            />
+          </Row>
+          {hasNumber && (
+            <>
+              <label className="flex items-center gap-2 text-[11px] text-un1t-subtle">
+                <input
+                  type="checkbox"
+                  disabled={!canEdit}
+                  checked={enabled}
+                  onChange={(e) => setEnabled(e.target.checked)}
+                />
+                Ask new senders which studio they mean
+              </label>
+              <Row label="Question">
+                <textarea
+                  disabled={!canEdit}
+                  maxLength={PICKER_QUESTION_MAX}
+                  rows={3}
+                  className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text"
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  placeholder={defaultQuestion}
+                />
+              </Row>
+            </>
+          )}
+          {error && (
+            <div className="text-xs text-red-700 inline-flex items-center gap-1.5">
+              <AlertCircle size={12} /> {error}
+            </div>
+          )}
+          {canEdit && (
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={save}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-un1t-text text-un1t-bg text-[11px] font-semibold hover:bg-un1t-accent disabled:opacity-50"
+              >
+                {saving ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />}
+                {saving ? 'Saving…' : 'Save studio picker'}
+              </button>
+              {savedAt && <span className="text-[11px] text-emerald-700">Saved ✓</span>}
+            </div>
+          )}
+        </>
       )}
     </div>
   )

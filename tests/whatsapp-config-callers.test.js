@@ -225,6 +225,11 @@ const CALLERS = {
     decision: 'refuse-skip',
     why: 'recorded skip + structured warning, never a throw (a throw can auto-pause the enrolment and kill its email steps). wa-no-number-step.test.js.',
   },
+  'src/lib/wa-studio-pick/resolve.js': {
+    calls: { sendInteractiveOptions: 1 },
+    decision: 'refuse-quiet',
+    why: 'WASTUDIOPICK.1 studio picker, sent through the thread (replyInConversation); a refusal or send failure is caught, recorded unresolved (ask_failed) and the message carries on at the thread’s studio. resolve.test.js.',
+  },
 }
 
 const DECISIONS = new Set(['refuse-409', 'own-number', 'refuse-quiet', 'refuse-skip', 'inbound-owner', 'resolver'])

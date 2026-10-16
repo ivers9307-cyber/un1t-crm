@@ -99,5 +99,18 @@ export async function POST(request, props) {
     logError('wa-move', 'move_whatsapp_conversation failed', { conversationId: conversation.id, target, err: error.message })
     return NextResponse.json({ success: false, error: 'Could not move the conversation.' }, { status: 500 })
   }
-  return NextResponse.json({ success: true, data: { conversation_id: data?.conversation_id || conversation.id, merged: !!data?.merged } })
+  // WASTUDIOPICK.1 — a staff move settles the studio for good (spec R6).
+  // Recorded on the RETURNED id: a merge keeps the target row, not this one.
+  // The move already happened, so a failed bookkeeping write is logged and
+  // never turns the answer into an error (a retry would only fail SAME_STUDIO).
+  const movedId = data?.conversation_id || conversation.id
+  try {
+    const { error: recErr } = await db.from('whatsapp_conversations')
+      .update({ studio_resolution: { status: 'decided', by: 'staff', location_id: target, at: new Date().toISOString() } })
+      .eq('id', movedId)
+    if (recErr) logError('wa-move', 'studio_resolution write failed', { conversationId: movedId, err: recErr.message })
+  } catch (e) {
+    logError('wa-move', 'studio_resolution write failed', { conversationId: movedId, err: e?.message })
+  }
+  return NextResponse.json({ success: true, data: { conversation_id: movedId, merged: !!data?.merged } })
 }

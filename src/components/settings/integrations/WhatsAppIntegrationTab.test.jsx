@@ -225,3 +225,108 @@ describe('WhatsAppIntegrationTab — no env fallback in the copy (WACONFIGFALLBA
     expect(global.fetch.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true)
   })
 })
+
+// WASTUDIOPICK.1 — the Studio picker card: loads its settings from
+// /api/whatsapp/studio-picker, offers the question only where the studio has a
+// number, and saves exactly what the route expects. No fake timers: every
+// wait is a real findBy/waitFor on the DOM.
+describe('WhatsAppIntegrationTab — Studio picker card (WASTUDIOPICK.1)', () => {
+  const DEFAULT_Q = 'Thanks for getting in touch. Which studio is this about?'
+  const PICKER = (over) => ({
+    listed: true, label: 'Hatch Street', keywords: ['hatch', 'st'], enabled: true, question: '',
+    has_number: true, default_question: DEFAULT_Q, ...over,
+  })
+  const mockPicker = (picker, putAnswer = { success: true, data: PICKER() }) => {
+    global.fetch = vi.fn(async (url, init) => {
+      const u = String(url)
+      if (u.includes('/whatsapp/studio-picker')) {
+        if (init?.method === 'PUT') return reply(putAnswer.success ? 200 : 400, putAnswer)
+        return picker instanceof Error ? Promise.reject(picker) : reply(200, { success: true, data: picker })
+      }
+      if (u.endsWith('/whatsapp/numbers')) return reply(200, { success: true, numbers: [] })
+      if (u.endsWith('/whatsapp/embedded-signup')) return reply(200, { success: true, data: { configured: false } })
+      return reply(200, { success: true })
+    })
+  }
+  const putCalls = () => global.fetch.mock.calls.filter(([, init]) => init?.method === 'PUT')
+
+  it('loads the studio settings into the fields, with the label placeholder and default question', async () => {
+    mockPicker(PICKER())
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    const listed = await screen.findByLabelText('Show this studio in the WhatsApp studio picker')
+    expect(listed.checked).toBe(true)
+    expect(global.fetch.mock.calls.some(([u]) => String(u) === `/api/whatsapp/studio-picker?location_id=${LOC.id}`)).toBe(true)
+    const label = screen.getByDisplayValue('Hatch Street')
+    expect(label.getAttribute('maxlength')).toBe('20')
+    expect(label.getAttribute('placeholder')).toBe('Test Studio')
+    expect(screen.getByDisplayValue('hatch, st')).toBeTruthy()
+    expect(screen.getByLabelText('Ask new senders which studio they mean').checked).toBe(true)
+    const question = screen.getByPlaceholderText(DEFAULT_Q)
+    expect(question.getAttribute('maxlength')).toBe('1024')
+  })
+
+  it('says a studio with its own number is only offered on that number (F2)', async () => {
+    mockPicker(PICKER())
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    await screen.findByLabelText('Show this studio in the WhatsApp studio picker')
+    const hint = screen.getByText('Studios with their own WhatsApp number are only offered on their own number.')
+    expect(hint.className).toContain('text-un1t-subtle')
+  })
+
+  it('hides the question controls when the studio has no number, and saves without them', async () => {
+    mockPicker(PICKER({ has_number: false, enabled: false }))
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    await screen.findByLabelText('Show this studio in the WhatsApp studio picker')
+    expect(screen.queryByLabelText('Ask new senders which studio they mean')).toBeNull()
+    expect(screen.queryByPlaceholderText(DEFAULT_Q)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Save studio picker/ }))
+    expect(await screen.findByText('Saved ✓')).toBeTruthy()
+    expect(JSON.parse(putCalls()[0][1].body)).toEqual({
+      location_id: LOC.id, listed: true, label: 'Hatch Street', keywords: ['hatch', 'st'],
+    })
+  })
+
+  it('saves the edited fields: listed, trimmed label, split keywords, enabled and question', async () => {
+    mockPicker(PICKER({ listed: false, label: '', keywords: [], enabled: false }))
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    fireEvent.click(await screen.findByLabelText('Show this studio in the WhatsApp studio picker'))
+    fireEvent.change(screen.getByPlaceholderText('Test Studio'), { target: { value: '  Stillorgan  ' } })
+    fireEvent.change(screen.getByLabelText(/Keywords that point to this studio/), { target: { value: ' still , , blackrock ' } })
+    fireEvent.click(screen.getByLabelText('Ask new senders which studio they mean'))
+    fireEvent.change(screen.getByPlaceholderText(DEFAULT_Q), { target: { value: ' Which studio? ' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save studio picker/ }))
+    expect(await screen.findByText('Saved ✓')).toBeTruthy()
+    expect(putCalls()).toHaveLength(1)
+    expect(putCalls()[0][0]).toBe('/api/whatsapp/studio-picker')
+    expect(JSON.parse(putCalls()[0][1].body)).toEqual({
+      location_id: LOC.id, listed: true, label: 'Stillorgan', keywords: ['still', 'blackrock'],
+      enabled: true, question: 'Which studio?',
+    })
+  })
+
+  it('shows the route’s error and no "Saved" when the save is refused', async () => {
+    mockPicker(PICKER(), { success: false, error: 'Could not save just now. Try again.' })
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    fireEvent.click(await screen.findByRole('button', { name: /Save studio picker/ }))
+    expect(await screen.findByText('Could not save just now. Try again.')).toBeTruthy()
+    expect(screen.queryByText('Saved ✓')).toBeNull()
+  })
+
+  it('a failed load shows a note instead of defaults, and offers no Save', async () => {
+    mockPicker(new TypeError('Failed to fetch'))
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    expect(await screen.findByText(/Could not load the studio picker settings just now/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Save studio picker/ })).toBeNull()
+    expect(screen.queryByLabelText('Show this studio in the WhatsApp studio picker')).toBeNull()
+  })
+
+  it('canEdit=false: fields are read-only with no Save and no write', async () => {
+    mockPicker(PICKER())
+    render(<WhatsAppIntegrationTab location={LOC} canEdit={false} />)
+    const listed = await screen.findByLabelText('Show this studio in the WhatsApp studio picker')
+    expect(listed.disabled).toBe(true)
+    expect(screen.getByDisplayValue('Hatch Street').disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: /Save studio picker/ })).toBeNull()
+    expect(putCalls()).toEqual([])
+  })
+})
