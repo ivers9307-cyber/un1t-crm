@@ -37,6 +37,7 @@ import { GET, PUT, DELETE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { logAuditEvent } from '@/lib/audit'
+import { logError } from '@/lib/log'
 import { resetMembershipStateCache } from '@/lib/membership/state-for-page'
 import { createUn1tClient, Un1tAuthError, Un1tApiError } from '@/lib/un1t-online'
 import { MANAGER_A_STAFF_B, STAFF_A_OWNER_B, OUTSIDER, MASTER, LOC_A, LOC_B } from '../_role-gate-cases.js'
@@ -67,7 +68,7 @@ const ownerAt = (id) => ({
 // A small in-memory supabase fake: select/eq/in/order/limit/maybeSingle/update/
 // insert over plain arrays, thenable like the real builders. Anything the
 // routes do that this does not model throws, so a stray query fails LOUD.
-function makeDb(seed = {}) {
+function makeDb(seed = {}, { failures = {}, onWrite = null } = {}) {
   const tables = {
     locations: [{ id: LOC_A, name: 'Hatch', membership_source: 'none' }],
     channel_connections: [],
@@ -87,6 +88,11 @@ function makeDb(seed = {}) {
     )))
     const run = () => {
       if (!(table in tables)) throw new Error(`unexpected table ${table}`)
+      if (mode !== 'select') {
+        if (onWrite) onWrite(table, mode)
+        const failure = failures[`${table}:${mode}`]
+        if (failure) return { data: null, error: failure }
+      }
       if (mode === 'insert') {
         const row = { id: `row-${nextId++}`, ...payload }
         tables[table].push(row)
@@ -243,6 +249,152 @@ describe('PUT connect', () => {
     expect(db.writes.filter((w) => w.table === 'locations')).toEqual([])
     expect(resetMembershipStateCache).not.toHaveBeenCalled()
     expect(logAuditEvent).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('PUT studio binding (409s)', () => {
+  const SELF_STUDIO = 'studio-9'
+
+  it('refuses a token for a DIFFERENT studio than the one connected here: 409 studio_changed, nothing written', async () => {
+    db.tables.channel_connections.push({
+      id: 'c1', location_id: LOC_A, platform: 'un1t_online', is_active: true, access_token: 'un1t_old_old_old_old_old_old',
+      external_account_id: 'studio-OTHER', status: 'connected',
+    })
+    const res = await PUT(putReq({ token: TOKEN }), params(LOC_A))
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error).toBe('studio_changed')
+    expect(JSON.stringify(body)).not.toContain(TOKEN)
+    expect(db.writes).toEqual([])
+    expect(db.tables.channel_connections[0].external_account_id).toBe('studio-OTHER')
+  })
+
+  it('accepts a replacement token for the SAME studio', async () => {
+    db.tables.channel_connections.push({
+      id: 'c1', location_id: LOC_A, platform: 'un1t_online', is_active: true, access_token: 'un1t_old_old_old_old_old_old',
+      external_account_id: SELF_STUDIO, status: 'action_needed',
+    })
+    const res = await PUT(putReq({ token: TOKEN }), params(LOC_A))
+    expect(res.status).toBe(200)
+    expect(db.tables.channel_connections[0]).toMatchObject({ access_token: TOKEN, external_account_id: SELF_STUDIO, status: 'connected' })
+  })
+
+  it('refuses a studio already ACTIVE at another location: 409 studio_already_connected, nothing written', async () => {
+    db.tables.locations.push({ id: LOC_B, name: 'Other', membership_source: 'un1t_online' })
+    db.tables.channel_connections.push({
+      id: 'c9', location_id: LOC_B, platform: 'un1t_online', is_active: true, access_token: 'un1t_x', external_account_id: SELF_STUDIO,
+    })
+    const res = await PUT(putReq({ token: TOKEN }), params(LOC_A))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('studio_already_connected')
+    expect(db.writes).toEqual([])
+  })
+
+  it('a DEACTIVATED row at another location does not block the studio', async () => {
+    db.tables.channel_connections.push({
+      id: 'c9', location_id: LOC_B, platform: 'un1t_online', is_active: false, access_token: null, external_account_id: SELF_STUDIO,
+    })
+    expect((await PUT(putReq({ token: TOKEN }), params(LOC_A))).status).toBe(200)
+  })
+
+  it('maps the unique-index violation (23505) on insert to the same 409', async () => {
+    const dbf = makeDb({}, { failures: { 'channel_connections:insert': {
+      code: '23505',
+      message: 'duplicate key value violates unique constraint "channel_connections_un1t_online_studio_unique"',
+      details: `Failing row contains (${TOKEN})`,
+    } } })
+    createServerClient.mockReturnValue(dbf)
+    const res = await PUT(putReq({ token: TOKEN }), params(LOC_A))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('studio_already_connected')
+    expect(dbf.tables.locations[0].membership_source).toBe('none')
+  })
+
+  it('maps a 23505 on update to the same 409', async () => {
+    const dbf = makeDb({
+      channel_connections: [{ id: 'c1', location_id: LOC_A, platform: 'un1t_online', is_active: true, external_account_id: SELF_STUDIO }],
+    }, { failures: { 'channel_connections:update': { code: '23505', message: 'duplicate key value violates unique constraint "channel_connections_un1t_online_studio_unique"' } } })
+    createServerClient.mockReturnValue(dbf)
+    const res = await PUT(putReq({ token: TOKEN }), params(LOC_A))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('studio_already_connected')
+  })
+})
+
+describe('PUT logging never carries the token', () => {
+  it('a failed write logs { code, message } only, not the PostgREST details', async () => {
+    const dbf = makeDb({}, { failures: { 'channel_connections:insert': {
+      code: '23514', message: 'new row violates check constraint', details: `Failing row contains (row-1, ${TOKEN}, studio-9)`, hint: TOKEN,
+    } } })
+    createServerClient.mockReturnValue(dbf)
+    const res = await PUT(putReq({ token: TOKEN }), params(LOC_A))
+    expect(res.status).toBe(500)
+    expect(logError).toHaveBeenCalled()
+    expect(JSON.stringify(logError.mock.calls)).not.toContain(TOKEN)
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('secret-token-123')
+    expect(JSON.stringify(logError.mock.calls)).toContain('23514')
+    expect(await res.text()).not.toContain(TOKEN)
+  })
+
+  it('a failed update logs { code, message } only', async () => {
+    const dbf = makeDb({
+      channel_connections: [{ id: 'c1', location_id: LOC_A, platform: 'un1t_online', is_active: true, external_account_id: 'studio-9' }],
+    }, { failures: { 'channel_connections:update': { code: 'XX000', message: 'boom', details: `Failing row contains (${TOKEN})` } } })
+    createServerClient.mockReturnValue(dbf)
+    expect((await PUT(putReq({ token: TOKEN }), params(LOC_A))).status).toBe(500)
+    expect(JSON.stringify(logError.mock.calls)).not.toContain(TOKEN)
+  })
+})
+
+describe('PUT membership_source flip is conditional', () => {
+  it('updates only a row still on none, and reports membership_source_set true', async () => {
+    const res = await PUT(putReq({ token: TOKEN }), params(LOC_A))
+    const flip = db.writes.find((w) => w.table === 'locations')
+    expect(flip.filters).toContainEqual(['membership_source', 'none'])
+    expect(flip.filters).toContainEqual(['id', LOC_A])
+    expect((await res.json()).data.membership_source_set).toBe(true)
+  })
+
+  it('a source changed since the read wins: no flip, no audit, membership_source_set false, connection still saved', async () => {
+    const dbf = makeDb({}, { onWrite: (table) => {
+      if (table === 'locations') dbf.tables.locations[0].membership_source = 'glofox'
+    } })
+    createServerClient.mockReturnValue(dbf)
+    const res = await PUT(putReq({ token: TOKEN }), params(LOC_A))
+    expect(res.status).toBe(200)
+    expect(dbf.tables.locations[0].membership_source).toBe('glofox')
+    expect(resetMembershipStateCache).not.toHaveBeenCalled()
+    expect(logAuditEvent).not.toHaveBeenCalled()
+    expect(dbf.tables.channel_connections[0].access_token).toBe(TOKEN)
+    expect((await res.json()).data.membership_source_set).toBe(false)
+  })
+
+  it('a failed flip is reported as membership_source_set false, not a failed connect', async () => {
+    const dbf = makeDb({}, { failures: { 'locations:update': { code: 'XX000', message: 'boom' } } })
+    createServerClient.mockReturnValue(dbf)
+    const res = await PUT(putReq({ token: TOKEN }), params(LOC_A))
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.membership_source_set).toBe(false)
+  })
+
+  it('a studio already on un1t_online reports membership_source_set true (nothing to switch)', async () => {
+    db.tables.locations[0].membership_source = 'un1t_online'
+    expect((await (await PUT(putReq({ token: TOKEN }), params(LOC_A))).json()).data.membership_source_set).toBe(true)
+  })
+
+  it('a studio on glofox reports membership_source_set false', async () => {
+    db.tables.locations[0].membership_source = 'glofox'
+    expect((await (await PUT(putReq({ token: TOKEN }), params(LOC_A))).json()).data.membership_source_set).toBe(false)
+  })
+})
+
+describe('PUT token length', () => {
+  it('refuses a token over 512 characters before calling un1t.online', async () => {
+    const res = await PUT(putReq({ token: `un1t_${'a'.repeat(600)}` }), params(LOC_A))
+    expect(res.status).toBe(400)
+    expect(createUn1tClient).not.toHaveBeenCalled()
+    expect(db.writes).toEqual([])
   })
 })
 

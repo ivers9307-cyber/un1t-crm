@@ -51,7 +51,12 @@ beforeEach(() => {
   })
   vi.stubGlobal('fetch', fetchMock)
 })
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+let confirmSpy = null
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+  if (confirmSpy) { confirmSpy.mockRestore(); confirmSpy = null }
+})
 
 const callsOf = (method) => fetchMock.mock.calls.filter(([, init]) => (init?.method || 'GET') === method)
 
@@ -167,7 +172,7 @@ describe('Un1tOnlineIntegrationTab', () => {
 
   it('Disconnect asks for confirmation and only then DELETEs', async () => {
     current = connected()
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
+    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
     render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
     const btn = await screen.findByRole('button', { name: 'Disconnect' })
     fireEvent.click(btn)
@@ -176,7 +181,48 @@ describe('Un1tOnlineIntegrationTab', () => {
     await waitFor(() => expect(callsOf('DELETE')).toHaveLength(1))
     expect(callsOf('DELETE')[0][0]).toBe(`/api/locations/${LOC.id}/un1t-online`)
     await waitFor(() => expect(screen.queryByText('UN1T Hatch Street')).toBeNull())
-    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(confirmSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('Connect shows the membership-source note when the studio was not switched', async () => {
+    fetchMock.mockImplementation(async (url, init) => {
+      if (init?.method === 'PUT') { current = connected(); return reply({ ...current, membership_source_set: false }) }
+      return reply(current)
+    })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    fireEvent.change(await screen.findByLabelText(/API token/i), { target: { value: TOKEN } })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    expect(await screen.findByText("Connected, but this studio's membership source was not switched to un1t.online. Set it on the Membership source card.")).toBeTruthy()
+  })
+
+  it('Connect shows no such note when the source was set', async () => {
+    fetchMock.mockImplementation(async (url, init) => {
+      if (init?.method === 'PUT') { current = connected(); return reply({ ...current, membership_source_set: true }) }
+      return reply(current)
+    })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    fireEvent.change(await screen.findByLabelText(/API token/i), { target: { value: TOKEN } })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await screen.findByText('UN1T Hatch Street')
+    expect(screen.queryByText(/was not switched to un1t\.online/)).toBeNull()
+  })
+
+  it('shows the route\'s readable message for a 409 (studio_changed)', async () => {
+    fetchMock.mockImplementation(async (url, init) => (init?.method === 'PUT'
+      ? { ok: false, status: 409, json: async () => ({ success: false, error: 'studio_changed', message: 'That token is for a different un1t.online studio.' }) }
+      : reply(NOT_CONNECTED)))
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    fireEvent.change(await screen.findByLabelText(/API token/i), { target: { value: TOKEN } })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    expect(await screen.findByText('That token is for a different un1t.online studio.')).toBeTruthy()
+  })
+
+  it('an unrecognised status renders a neutral chip, never "Connected"', async () => {
+    current = connected({ status: 'mystery' })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    const chip = await screen.findByText('mystery')
+    expect(chip.className).not.toMatch(/green/)
+    expect(screen.queryByText('Connected')).toBeNull()
   })
 
   it('without edit rights it offers no actions', async () => {

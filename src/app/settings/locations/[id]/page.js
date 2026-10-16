@@ -129,7 +129,7 @@ export default async function EditLocationPage(props) {
   // W1.M2 — the membership-source STATE for the Integrations card and the
   // Glofox tab's dot (none | configured | unconfigured | unknown), resolved
   // by the seam here because a client component cannot ask it.
-  const [{ data: org }, { data: xeroConnection, error: xeroErr }, { data: sampleBcaCar }, membershipSource] = await Promise.all([
+  const [{ data: org }, { data: xeroConnection, error: xeroErr }, { data: sampleBcaCar }, membershipSource, un1tConn] = await Promise.all([
     location.organization_id
       ? db.from('organizations').select('*').eq('id', location.organization_id).maybeSingle()
       : Promise.resolve({ data: null }),
@@ -155,12 +155,24 @@ export default async function EditLocationPage(props) {
           .maybeSingle()
       : Promise.resolve({ data: null }),
     membershipSourceState(db, location.id),
+    // UN1TSYNC.7 — does this studio hold an ACTIVE un1t.online token? Keeps its
+    // tab (and so Disconnect) reachable after the membership source moves off
+    // un1t_online. A head count: the row, and its token, never leave the server.
+    db.from('channel_connections')
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', location.id)
+      .eq('platform', 'un1t_online')
+      .eq('is_active', true),
   ])
 
   // CHANNELREAD.1 — a failed xero_connections read is not "not connected":
   // the Xero tab would offer Connect (an OAuth rebind) over a live
   // connection. The tab renders "Could not load" instead.
   if (xeroErr) logError('location-settings', 'xero_connections read failed', { locationId: location.id, err: xeroErr.message })
+  // A failed count shows the tab (harmless: the tab itself is owner/master and
+  // reads its own status); only a clean zero hides it.
+  if (un1tConn?.error) logError('location-settings', 'un1t_online connection count failed', { locationId: location.id, code: un1tConn.error.code ?? null })
+  const hasUn1tOnlineConnection = !!un1tConn?.error || (un1tConn?.count || 0) > 0
 
   // Build the visible tab list. Features is master-only (per the mig 092
   // audit it's a master knob); Deposits only shows when car_processing is
@@ -396,6 +408,7 @@ export default async function EditLocationPage(props) {
           user={user}
           sampleBcaCar={sampleBcaCar || null}
           membershipSource={membershipSource}
+          hasUn1tOnlineConnection={hasUn1tOnlineConnection}
         />
       )}
     </div>

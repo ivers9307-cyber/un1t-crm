@@ -47,6 +47,16 @@ describe('LocationIntegrations — un1t.online tab', () => {
     expect(tab()).toBeNull()
   })
 
+  it('stays reachable on a Glofox studio that still holds an active un1t.online token (so it can be disconnected)', () => {
+    render(<LocationIntegrations location={loc('glofox')} user={MASTER} hasUn1tOnlineConnection />)
+    expect(tab()).toBeTruthy()
+  })
+
+  it('hasUn1tOnlineConnection never shows the tab to a manager', () => {
+    render(<LocationIntegrations location={loc('glofox')} user={MANAGER} hasUn1tOnlineConnection />)
+    expect(tab()).toBeNull()
+  })
+
   it('shows a green dot only when un1t_online is the source and is configured', () => {
     const { rerender } = render(
       <LocationIntegrations location={loc('un1t_online')} user={MASTER} membershipSource={{ source: 'un1t_online', state: 'configured' }} />,

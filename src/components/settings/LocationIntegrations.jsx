@@ -58,7 +58,7 @@ function un1tOnlineTabStatus(membershipSource) {
   return 'not-configured'
 }
 
-export default function LocationIntegrations({ location, xeroConnection, xeroReadFailed = false, user, sampleBcaCar, membershipSource = null }) {
+export default function LocationIntegrations({ location, xeroConnection, xeroReadFailed = false, user, sampleBcaCar, membershipSource = null, hasUn1tOnlineConnection = false }) {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -110,8 +110,10 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
   // UN1TSYNC.7 — un1t.online (Hatch Street's gym platform). Owner/master only
   // (the connect route's gate). Shown where it is, or can become, the
   // membership source: a studio already on un1t_online, or on 'none' where
-  // connecting selects it. A Glofox studio is not offered it.
-  if (isOwnerOrMaster && ['none', 'un1t_online'].includes(location.membership_source ?? 'none')) {
+  // connecting selects it. A Glofox studio is not offered it, UNLESS it holds
+  // an active un1t.online token (the page reads that): a connected token can
+  // always be disconnected, even after the source was changed elsewhere.
+  if (isOwnerOrMaster && (hasUn1tOnlineConnection || ['none', 'un1t_online'].includes(location.membership_source ?? 'none'))) {
     tabs.push({
       key: 'un1t-online',
       label: 'un1t.online',

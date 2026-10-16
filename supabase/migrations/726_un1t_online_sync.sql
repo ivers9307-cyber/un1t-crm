@@ -305,6 +305,14 @@ ALTER TABLE public.contact_memberships
   ADD CONSTRAINT contact_memberships_source_check
   CHECK (source IN ('un1t_online_export', 'un1t_online_api'));
 
+-- One un1t.online studio is bound to ONE CRM location (the Xero rule, mig 554):
+-- the connect route refuses a studio already active elsewhere (409
+-- studio_already_connected); this index is the structural backstop. Partial on
+-- platform + is_active so a deactivated row never blocks a re-connect.
+CREATE UNIQUE INDEX IF NOT EXISTS channel_connections_un1t_online_studio_unique
+  ON public.channel_connections (external_account_id)
+  WHERE platform = 'un1t_online' AND is_active;
+
 -- ---------------------------------------------------------------------------
 -- Self-check: the catalog, never this file's text (mig 153's lesson).
 -- ---------------------------------------------------------------------------
@@ -355,6 +363,13 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'contacts'
                   AND indexname = 'contacts_un1t_user_id_unique') THEN
     RAISE EXCEPTION 'mig 726: contacts_un1t_user_id_unique missing';
+  END IF;
+
+  d := (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'channel_connections'
+         AND indexname = 'channel_connections_un1t_online_studio_unique');
+  IF d IS NULL OR d NOT LIKE 'CREATE UNIQUE INDEX%' OR d NOT LIKE '%external_account_id%'
+     OR d NOT LIKE '%un1t_online%' OR d NOT LIKE '%is_active%' THEN
+    RAISE EXCEPTION 'mig 726: channel_connections_un1t_online_studio_unique wrong or missing: %', d;
   END IF;
 END $$;
 

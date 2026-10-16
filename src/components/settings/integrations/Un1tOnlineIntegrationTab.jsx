@@ -18,6 +18,9 @@ import { Loader2, AlertCircle, RefreshCw, Unplug, PlugZap } from 'lucide-react'
 const DAY_MS = 24 * 60 * 60 * 1000
 const EXPIRY_WARN_DAYS = 30
 
+const UNKNOWN_CHIP = { label: 'Unknown', tone: 'bg-un1t-border/40 text-un1t-subtle' }
+const SOURCE_NOT_SET_NOTE = 'Connected, but this studio\'s membership source was not switched to un1t.online. Set it on the Membership source card.'
+
 const STATUS_CHIP = {
   connected: { label: 'Connected', tone: 'bg-green-500/10 text-green-700' },
   action_needed: { label: 'Action needed', tone: 'bg-amber-500/10 text-amber-700' },
@@ -53,17 +56,18 @@ function describeCounts(counts) {
 
 export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
   const router = useRouter()
-  const base = `/api/locations/${location.id}/un1t-online`
 
   const [state, setState] = useState({ loading: true, data: null, error: null })
   const [token, setToken] = useState('')
   const [busy, setBusy] = useState(null) // 'connect' | 'sync' | 'disconnect'
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
+  // PUT said the connect saved but membership_source did not move to un1t_online.
+  const [sourceNotSet, setSourceNotSet] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(base)
+      const res = await fetch(`/api/locations/${location.id}/un1t-online`)
       const json = await res.json().catch(() => null)
       if (!res.ok || !json?.success) {
         setState({ loading: false, data: null, error: json?.error || `Could not load (${res.status})` })
@@ -73,20 +77,22 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
     } catch (e) {
       setState({ loading: false, data: null, error: `Could not load: ${e?.message || 'network error'}` })
     }
-  }, [base])
+  }, [location.id])
 
   useEffect(() => { load() }, [load])
 
-  async function call(url, init) {
+  // `send` makes the request; each fetch below names its /api/locations/${id}
+  // path literally (tests/location-settings-target.test.js scans for that).
+  async function call(send) {
     let res
     let json = null
     try {
-      res = await fetch(url, init)
+      res = await send()
       json = await res.json().catch(() => null)
     } catch (e) {
       return { ok: false, error: `Request failed: ${e?.message || 'network error'}` }
     }
-    if (!res.ok || !json?.success) return { ok: false, error: json?.error || `Request failed (${res.status})` }
+    if (!res.ok || !json?.success) return { ok: false, error: json?.message || json?.error || `Request failed (${res.status})` }
     return { ok: true, json }
   }
 
@@ -95,14 +101,15 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
     const value = token.trim()
     if (!value) { setError('Paste the API token from un1t.online first.'); return }
     setBusy('connect'); setError(null); setNotice(null)
-    const r = await call(base, {
+    const r = await call(() => fetch(`/api/locations/${location.id}/un1t-online`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: value }),
-    })
+    }))
     setBusy(null)
     if (!r.ok) { setError(r.error); return }
     setToken('')
+    setSourceNotSet(r.json.data?.membership_source_set === false)
     setState({ loading: false, data: r.json.data, error: null })
     setNotice('Connected.')
     router.refresh()
@@ -110,7 +117,7 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
 
   async function syncNow() {
     setBusy('sync'); setError(null); setNotice(null)
-    const r = await call(`${base}/sync`, { method: 'POST' })
+    const r = await call(() => fetch(`/api/locations/${location.id}/un1t-online/sync`, { method: 'POST' }))
     if (!r.ok) { setBusy(null); setError(r.error); return }
     const result = r.json.data || {}
     if (result.ok) setNotice('Sync finished.')
@@ -123,9 +130,10 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
   async function disconnect() {
     if (!window.confirm('Disconnect un1t.online? The token is deleted and the sync stops. Existing data stays.')) return
     setBusy('disconnect'); setError(null); setNotice(null)
-    const r = await call(base, { method: 'DELETE' })
+    const r = await call(() => fetch(`/api/locations/${location.id}/un1t-online`, { method: 'DELETE' }))
     setBusy(null)
     if (!r.ok) { setError(r.error); return }
+    setSourceNotSet(false)
     setState({ loading: false, data: { connected: false, status: 'not_connected', last_run: null }, error: null })
     router.refresh()
   }
@@ -136,7 +144,7 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
   }
 
   const connected = !!data?.connected
-  const chip = STATUS_CHIP[data?.status] || STATUS_CHIP.connected
+  const chip = STATUS_CHIP[data?.status] || (data?.status ? { ...UNKNOWN_CHIP, label: data.status } : UNKNOWN_CHIP)
   const expiry = connected ? describeExpiry(data.expires_at, Date.now(), location.timezone) : null
   const run = data?.last_run || null
   const runCounts = describeCounts(run?.counts)
@@ -153,6 +161,9 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
         <div role="alert" className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
           <AlertCircle size={12} className="mt-0.5" /> <span>{shownError}</span>
         </div>
+      )}
+      {sourceNotSet && connected && (
+        <div role="status" className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-xs rounded-md p-2">{SOURCE_NOT_SET_NOTE}</div>
       )}
       {notice && !shownError && (
         <div role="status" className="bg-green-500/10 border border-green-500/30 text-green-700 text-xs rounded-md p-2">{notice}</div>

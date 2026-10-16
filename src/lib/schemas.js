@@ -424,5 +424,5 @@ export const giversEnquirySchema = z.object({
 // read-only, and a server-side (no browser origins) token is judged by calling
 // un1t.online with it. Never echoed in a response or a validation issue.
 export const Un1tOnlineConnectSchema = z.object({
-  token: z.string().trim().regex(/^un1t_[A-Za-z0-9_-]{20,}$/, 'That does not look like an un1t.online API token'),
+  token: z.string().trim().max(512).regex(/^un1t_[A-Za-z0-9_-]{20,}$/, 'That does not look like an un1t.online API token'),
 })

@@ -21,6 +21,11 @@
 // 'none' moves to 'un1t_online' (audited, cache dropped) exactly as the Glofox
 // connect does; a studio on any other source is left alone.
 //
+// A replacement token must be for the studio already connected here (409
+// studio_changed; disconnect first), and a studio already active at ANOTHER
+// location is refused (409 studio_already_connected; mig 726's partial unique
+// index is the backstop, its 23505 maps to the same answer).
+//
 // DELETE deactivates the row and blanks the token. It never touches
 // membership_source: that is the Membership source card's job.
 //
@@ -48,6 +53,40 @@ const PLATFORM = 'un1t_online'
 const SOURCE_KEY = 'un1t_online'
 const LOG = 'un1t-online-connect'
 
+// Log a Supabase/PostgREST error as { code, message } ONLY. The raw error's
+// `details` ("Failing row contains (...)") carries the whole channel_connections
+// row, access_token included, and a log line must never hold the token.
+function safeErr(err) {
+  if (!err || typeof err !== 'object') return err ?? null
+  return { code: err.code ?? null, message: err.message ?? null }
+}
+
+// Postgres unique_violation. On the connect write it is the one-studio-one-
+// location index (channel_connections_un1t_online_studio_unique, mig 726),
+// unless it is the one-active-per-location index (a double click racing itself).
+function isUniqueViolation(err) {
+  return err?.code === '23505'
+}
+function conflictResponse(err) {
+  if (/one_active/.test(err?.message || '')) {
+    return NextResponse.json({
+      success: false,
+      error: 'connection_conflict',
+      code: 'connection_conflict',
+      message: 'Another connect for this studio was in progress. Reload and try again.',
+    }, { status: 409 })
+  }
+  return studioAlreadyConnected()
+}
+function studioAlreadyConnected() {
+  return NextResponse.json({
+    success: false,
+    error: 'studio_already_connected',
+    code: 'studio_already_connected',
+    message: 'That un1t.online studio is already connected to another location. One studio can feed only one location.',
+  }, { status: 409 })
+}
+
 // 401 / 404 / 403, in that order, or null when the caller may act on this studio.
 async function gate(props) {
   const params = await props.params
@@ -70,7 +109,7 @@ export async function GET(request, props) {
 
   const { conn, error } = await readConnection(db, g.locationId, PLATFORM)
   if (error || !conn) {
-    logError(LOG, 'connection read failed', { locationId: g.locationId, err: error })
+    logError(LOG, 'connection read failed', { locationId: g.locationId, err: safeErr(error) })
     return NextResponse.json({ success: false, error: 'Could not read the connection.' }, { status: 500 })
   }
 
@@ -82,7 +121,7 @@ export async function GET(request, props) {
     .limit(1)
   if (runErr) {
     // The run summary is advisory: the connection itself answered.
-    logError(LOG, 'last run read failed', { locationId: g.locationId, err: runErr })
+    logError(LOG, 'last run read failed', { locationId: g.locationId, err: safeErr(runErr) })
   }
   const lastRun = Array.isArray(runs) ? runs[0] ?? null : null
 
@@ -143,7 +182,7 @@ export async function PUT(request, props) {
     .eq('id', locationId)
     .maybeSingle()
   if (locErr) {
-    logError(LOG, 'location read failed', { locationId, err: locErr })
+    logError(LOG, 'location read failed', { locationId, err: safeErr(locErr) })
     return NextResponse.json({ success: false, error: 'Could not read the location.' }, { status: 500 })
   }
   if (!location) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
@@ -165,19 +204,48 @@ export async function PUT(request, props) {
     updated_at: new Date().toISOString(),
   }
 
+  const studioId = String(self.studio.id)
+
   // Select-then-write (the one-active guarantee is a PARTIAL unique index,
   // which PostgREST upsert cannot target; syncConnectionFromLegacy does the same).
   const { data: existing, error: readErr } = await db
     .from('channel_connections')
-    .select('id')
+    .select('id, external_account_id')
     .eq('location_id', locationId)
     .eq('platform', PLATFORM)
     .eq('is_active', true)
     .maybeSingle()
   if (readErr) {
-    logError(LOG, 'registry read failed', { locationId, err: readErr })
+    logError(LOG, 'registry read failed', { locationId, err: safeErr(readErr) })
     return NextResponse.json({ success: false, error: 'Could not read the connection.' }, { status: 500 })
   }
+
+  // A replacement token must be for the SAME studio. Rewriting
+  // external_account_id would defeat the sync's studio_mismatch guard (it
+  // compares the token's studio with the stored one) and the next run would
+  // end every Hatch membership. Switching studio = disconnect first.
+  if (existing?.external_account_id && existing.external_account_id !== studioId) {
+    return NextResponse.json({
+      success: false,
+      error: 'studio_changed',
+      code: 'studio_changed',
+      message: 'That token is for a different un1t.online studio than the one connected here. Disconnect first, then connect the new token.',
+    }, { status: 409 })
+  }
+
+  // One un1t.online studio feeds ONE CRM location. Judged in code so the
+  // refusal is readable; mig 726's partial unique index is the backstop.
+  const { data: sameStudio, error: bindErr } = await db
+    .from('channel_connections')
+    .select('location_id')
+    .eq('platform', PLATFORM)
+    .eq('is_active', true)
+    .eq('external_account_id', studioId)
+  if (bindErr) {
+    logError(LOG, 'studio binding read failed', { locationId, err: safeErr(bindErr) })
+    return NextResponse.json({ success: false, error: 'Could not read the connection.' }, { status: 500 })
+  }
+  if ((sameStudio || []).some((r) => r.location_id !== locationId)) return studioAlreadyConnected()
 
   if (existing) {
     const { data, error } = await db
@@ -185,8 +253,9 @@ export async function PUT(request, props) {
       .update(fields)
       .eq('id', existing.id)
       .select('id')
+    if (isUniqueViolation(error)) return conflictResponse(error)
     if (error || !Array.isArray(data) || data.length === 0) {
-      logError(LOG, 'registry update failed', { locationId, err: error || 'no row updated' })
+      logError(LOG, 'registry update failed', { locationId, err: error ? safeErr(error) : 'no row updated' })
       return NextResponse.json({ success: false, error: 'Could not save the connection.' }, { status: 500 })
     }
   } else {
@@ -194,26 +263,31 @@ export async function PUT(request, props) {
       .from('channel_connections')
       .insert({ location_id: locationId, platform: PLATFORM, is_active: true, ...fields })
       .select('id')
+    if (isUniqueViolation(error)) return conflictResponse(error)
     if (error || !Array.isArray(data) || data.length === 0) {
-      logError(LOG, 'registry insert failed', { locationId, err: error || 'no row inserted' })
+      logError(LOG, 'registry insert failed', { locationId, err: error ? safeErr(error) : 'no row inserted' })
       return NextResponse.json({ success: false, error: 'Could not save the connection.' }, { status: 500 })
     }
   }
 
   // membership_source follows the connection, only off 'none' (a studio on
-  // glofox, or already here, is left alone). The credential is saved either
-  // way, so a failed flip is logged and reported, never a failed connect.
-  let flipped = false
+  // glofox is left alone). The update is conditional on the value still being
+  // 'none' and judged by the rows it touched, so a change made since the read
+  // above wins. The credential is saved either way: a failed or lost flip is
+  // logged and reported (membership_source_set:false), never a failed connect.
   const previous = location.membership_source ?? 'none'
+  let sourceSet = previous === SOURCE_KEY
   if (previous === 'none') {
-    const { error: flipErr } = await db
+    const { data: flipRows, error: flipErr } = await db
       .from('locations')
       .update({ membership_source: SOURCE_KEY, updated_at: new Date().toISOString() })
       .eq('id', locationId)
+      .eq('membership_source', 'none')
+      .select('id')
     if (flipErr) {
-      logError(LOG, 'locations.membership_source update failed', { locationId, err: flipErr })
-    } else {
-      flipped = true
+      logError(LOG, 'locations.membership_source update failed', { locationId, err: safeErr(flipErr) })
+    } else if (Array.isArray(flipRows) && flipRows.length > 0) {
+      sourceSet = true
       resetMembershipStateCache(locationId)
       await logMembershipSourceChange({ user, location, from: previous, to: SOURCE_KEY, via: 'integrations/un1t-online', request })
     }
@@ -228,7 +302,7 @@ export async function PUT(request, props) {
         is_active: true,
         ...fields,
       })),
-      membership_source_set: flipped,
+      membership_source_set: sourceSet,
     },
   }
   if (hasWritePermissions(permissions)) body.warning = 'write_permissions'
@@ -248,7 +322,7 @@ export async function DELETE(request, props) {
     .eq('is_active', true)
     .select('id')
   if (error) {
-    logError(LOG, 'disconnect failed', { locationId: g.locationId, err: error })
+    logError(LOG, 'disconnect failed', { locationId: g.locationId, err: safeErr(error) })
     return NextResponse.json({ success: false, error: 'Could not disconnect.' }, { status: 500 })
   }
   // Zero rows is fine: already disconnected. membership_source is deliberately
