@@ -456,6 +456,9 @@ const config = [
       'src/lib/booking-self-service.js',
       'src/app/api/public/booking-manage/**',
       'src/lib/event-reminders.js',
+      // UN1TSYNC.4 — the un1t.online contact resolver: born clean; every
+      // contact update/insert reads its error and the rows it touched.
+      'src/lib/un1t-online-contacts.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
