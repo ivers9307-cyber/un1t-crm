@@ -45,6 +45,12 @@
 ### P0.4 Retire the 20 export membership rows
 All 20 active `un1t_online_export` rows have an active `un1t_online_api` row for the same contact and studio (verified). End them (`status 'ended'`, `ended_at now()`) in one migration that self-checks it touched exactly the overlapping rows. Don't delete them: ending can be undone, and member pricing reads active rows only. Once ended, the "(import)" label stops appearing on contact pages.
 
+### P0.6 Glofox-shaped dashboards now render at Hatch (regression, added 2026-10-17)
+Connecting un1t.online made Hatch `configured`. `/dashboard/studio` and `/dashboard/business` check state rather than capabilities, and the radar, snapshot, digest and briefing crons skip only `'none'`. So all of them now build Glofox-shaped zeros for Hatch. Fix: gate on `capabilities.memberships`. Detail and file references: `2026-10-17-un1t-online-p1-plan.md` §P1.0.
+
+### P0.4 status
+**Done 2026-10-17:** mig 728 applied (20 export rows ended, 26 API rows active), PR #2071.
+
 ### P0.5 Watch the first 48 hours
 - `un1t_sync_runs`: every run `ok`, duration under 30 s, no growth in `contact_errors`.
 - `memberships.ended` per run: a sudden jump means an upstream fault, not mass cancellations. The `no_subscriptions_pulled` guard covers only the empty-pull case.
@@ -53,6 +59,8 @@ All 20 active `un1t_online_export` rows have an active `un1t_online_api` row for
 ---
 
 ## P1: next 2–4 weeks (one spec + plan each)
+
+**Detailed P1 plan:** `2026-10-17-un1t-online-p1-plan.md` (audits of every class-table reader, every membership surface and the dual-studio gaps; ordering; decisions).
 
 ### P1.1 Hatch classes into the shared class spine
 Hatch classes live only in `un1t_events` / `un1t_bookings`. `class_occurrences` feeds about 20 readers, and several of them act on the physical studio or message customers. Audit each one, decide whether it should run for Hatch, then project `un1t_events` into `class_occurrences` with a new `source_platform` column (the external id goes into the misnamed `glofox_event_id`, as spec §3.3 already accepts).
