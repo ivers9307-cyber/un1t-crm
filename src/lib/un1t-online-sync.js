@@ -27,13 +27,18 @@
 // Two guards on step 7, because an ended membership is customer-facing (event
 // member pricing reads contact_memberships) and a wrongly ended one charges a
 // member the non-member fee:
-//   - If any client FAILED to resolve (a contacts read or write error), the
-//     end step is skipped: that client's subscription cannot be attributed, so
-//     "this contact has no subscription" is unknown, not false.
+//   - A client that FAILED to resolve (a contacts read or write error) has a
+//     subscription that cannot be attributed, so "its contact has no
+//     subscription" is unknown, not false. Only THAT contact's active row is
+//     spared (matched through contacts.un1t_user_id); every other cancellation
+//     at the studio still ends. A persistent one-client failure therefore
+//     never freezes the studio's endings. Counted in end_skipped_unresolved.
+//     If the contacts read that makes this match fails, the whole end step
+//     waits for the next run (end_skipped 'contacts_unreadable').
 //   - If the pull carried no subscriptions at all, the end step is skipped:
 //     an empty list ending every member is far likelier an upstream fault
-//     than every member cancelling at once.
-//   Both are recorded in counts.memberships.end_skipped.
+//     than every member cancelling at once (end_skipped
+//     'no_subscriptions_pulled').
 //
 // Bookkeeping writes (the connection's status, the run row's close) are
 // logged when they fail and never change the run's result: the data written
@@ -316,7 +321,11 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
       organizationId,
       subscriptions: mapped.un1t_subscriptions,
       contactIdOf,
-      contactsFailed: (resolved.counts?.failed || 0) > 0,
+      // Every client the resolver could not attribute (its errors carry the
+      // un1t_user_id): only these contacts' rows are spared from ending.
+      unresolvedUserIds: new Set(
+        (resolved.errors || []).map((e) => e?.un1t_user_id).filter((id) => id != null).map(String),
+      ),
       nowIso,
     })
     counts.memberships = membership.counts
@@ -343,7 +352,7 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
  * first_seen_at is never in the upsert payload, so its column default sets it
  * on insert only and a re-activation keeps the original date.
  */
-async function reconcileMemberships(db, { locationId, organizationId, subscriptions, contactIdOf, contactsFailed, nowIso }) {
+async function reconcileMemberships(db, { locationId, organizationId, subscriptions, contactIdOf, unresolvedUserIds, nowIso }) {
   const counts = { active: 0, ended: 0, skipped_no_contact: 0 }
 
   // One plan per contact: the best active subscription.
@@ -395,15 +404,9 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
     if (rows.length < PAGE) break
   }
 
-  const toEnd = activeRows.filter((r) => !best.has(r.contact_id)).map((r) => r.id)
+  let toEnd = activeRows.filter((r) => !best.has(r.contact_id))
   if (toEnd.length === 0) return { counts, error: null }
 
-  if (contactsFailed) {
-    counts.end_skipped = 'contacts_unresolved'
-    counts.would_end = toEnd.length
-    logWarn('un1t-online-sync', 'not ending memberships: some clients failed to resolve to a contact', { locationId, wouldEnd: toEnd.length })
-    return { counts, error: null }
-  }
   if (subscriptions.length === 0) {
     counts.end_skipped = 'no_subscriptions_pulled'
     counts.would_end = toEnd.length
@@ -411,7 +414,39 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
     return { counts, error: null }
   }
 
-  for (const ids of chunks(toEnd, CHUNK)) {
+  // Spare only the contacts of clients that failed to resolve: their
+  // subscriptions are unknown this run. Matched by contacts.un1t_user_id,
+  // read by id in chunks (under the 1,000-row cap).
+  if (unresolvedUserIds.size > 0) {
+    const spared = new Set()
+    const contactIds = [...new Set(toEnd.map((r) => r.contact_id))]
+    for (const ids of chunks(contactIds, CHUNK)) {
+      const { data, error } = await db
+        .from('contacts')
+        .select('id, un1t_user_id')
+        .in('id', ids)
+      if (error) {
+        // Which rows to spare is unknown: end nothing this run, rather than
+        // risk ending a member whose client merely failed to resolve.
+        counts.end_skipped = 'contacts_unreadable'
+        counts.would_end = toEnd.length
+        logWarn('un1t-online-sync', 'not ending memberships: could not read contacts to spare unresolved clients', { locationId, wouldEnd: toEnd.length, err: error })
+        return { counts, error: null }
+      }
+      for (const c of data || []) {
+        if (c.un1t_user_id != null && unresolvedUserIds.has(String(c.un1t_user_id))) spared.add(c.id)
+      }
+    }
+    const before = toEnd.length
+    toEnd = toEnd.filter((r) => !spared.has(r.contact_id))
+    counts.end_skipped_unresolved = before - toEnd.length
+    if (counts.end_skipped_unresolved > 0) {
+      logWarn('un1t-online-sync', 'not ending memberships of clients that failed to resolve', { locationId, spared: counts.end_skipped_unresolved })
+    }
+    if (toEnd.length === 0) return { counts, error: null }
+  }
+
+  for (const ids of chunks(toEnd.map((r) => r.id), CHUNK)) {
     const { data, error } = await db
       .from('contact_memberships')
       .update({ status: 'ended', ended_at: nowIso, updated_at: nowIso })

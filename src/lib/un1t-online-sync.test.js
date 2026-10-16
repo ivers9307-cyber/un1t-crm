@@ -21,7 +21,7 @@ const AUTH_MSG =
 // which tables were written. Writes resolve { data, error } like PostgREST;
 // nothing throws.
 // ---------------------------------------------------------------------------
-function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [] } = {}) {
+function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], failUpdateIds = [] } = {}) {
   const tables = {}
   for (const [t, rows] of Object.entries(seed)) tables[t] = rows.map((r) => ({ ...r }))
   const log = []
@@ -94,6 +94,9 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [] }
       }
       if (s.op === 'update') {
         if (failUpdate.includes(table)) return { data: null, error: { message: `${table} update boom` } }
+        if (s.filters.some(([k, c, v]) => k === 'eq' && c === 'id' && failUpdateIds.includes(v))) {
+          return { data: null, error: { message: 'row update boom' } }
+        }
         const hit = rows.filter((r) => matches(r, s.filters))
         for (const r of hit) Object.assign(r, s.payload)
         return { data: hit.map((r) => ({ id: r.id })), error: null }
@@ -606,20 +609,68 @@ describe('runUn1tSync', () => {
     expect(tables.contact_memberships[0].plan_name).toBe('Membership')
   })
 
-  it('does not end memberships when some contacts failed to resolve (a read failure is not "no subscription")', async () => {
+  it('a failed contacts read leaves every membership active this run (unknown is not cancelled)', async () => {
     const seed = baseSeed({
       contact_memberships: [
         { id: 'm-old', organization_id: ORG, location_id: HATCH, contact_id: 'c-old', source: 'un1t_online_api', plan_name: 'X', status: 'active', ended_at: null },
       ],
     })
-    // Every contacts read fails → every client fails to resolve.
+    // Every contacts read fails → every client fails to resolve, and the read
+    // that would pick out their contacts fails too.
     const { db, tables } = makeDb(seed, { failSelect: ['contacts'] })
     const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
     const r = await runUn1tSync(db, HATCH, opts(factory))
     expect(r.ok).toBe(true)
     expect(tables.contact_memberships.find((m) => m.id === 'm-old').status).toBe('active')
-    expect(r.counts.memberships.end_skipped).toBe('contacts_unresolved')
+    expect(r.counts.memberships.end_skipped).toBe('contacts_unreadable')
     expect(r.counts.contacts.failed).toBe(3)
+  })
+
+  describe('one client that keeps failing to resolve', () => {
+    // u1 is linked to c-fail and has a null first_name, so the resolver's
+    // null-fill UPDATE runs — and is rejected on every run. u2 is linked to
+    // c-other (nothing to fill) and its subscription s2 is cancelled.
+    const seed = () =>
+      baseSeed({
+        contacts: [
+          { id: 'c-fail', organization_id: ORG, location_id: HATCH, email: 'one@x.ie', un1t_user_id: 'u1', first_name: null, last_name: 'One', phone: '+353870000001' },
+          { id: 'c-other', organization_id: ORG, location_id: HATCH, email: 'two@x.ie', un1t_user_id: 'u2', first_name: 'Two', last_name: 'Two', phone: '+353870000002' },
+        ],
+        contact_memberships: [
+          { id: 'm-fail', organization_id: ORG, location_id: HATCH, contact_id: 'c-fail', source: 'un1t_online_api', plan_name: 'Unlimited', status: 'active', ended_at: null },
+          { id: 'm-other', organization_id: ORG, location_id: HATCH, contact_id: 'c-other', source: 'un1t_online_api', plan_name: 'Unlimited', status: 'active', ended_at: null },
+        ],
+      })
+
+    it("still ends a DIFFERENT contact's cancelled membership", async () => {
+      const { db, tables } = makeDb(seed(), { failUpdateIds: ['c-fail'] })
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(r.counts.contacts.failed).toBe(1)
+      expect(tables.contact_memberships.find((m) => m.id === 'm-other')).toMatchObject({ status: 'ended', ended_at: NOW_ISO })
+      expect(r.counts.memberships.ended).toBe(1)
+      expect(r.counts.memberships.end_skipped).toBeUndefined()
+    })
+
+    it("does not end the failed client's own active membership", async () => {
+      const { db, tables } = makeDb(seed(), { failUpdateIds: ['c-fail'] })
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(tables.contact_memberships.find((m) => m.id === 'm-fail')).toMatchObject({ status: 'active', ended_at: null })
+      expect(r.counts.memberships.end_skipped_unresolved).toBe(1)
+      // Its active subscription could not be attributed this run.
+      expect(r.counts.memberships.skipped_no_contact).toBe(1)
+    })
+
+    it('keeps doing so on every run while the failure persists', async () => {
+      const { db, tables } = makeDb(seed(), { failUpdateIds: ['c-fail'] })
+      for (const day of ['2026-10-16', '2026-10-17']) {
+        await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: fixtureLists() }).factory, new Date(`${day}T10:00:00.000Z`)))
+      }
+      expect(tables.contact_memberships.find((m) => m.id === 'm-fail').status).toBe('active')
+      expect(tables.contact_memberships.find((m) => m.id === 'm-other').status).toBe('ended')
+    })
   })
 
   it('does not end every membership on an empty subscription pull', async () => {
