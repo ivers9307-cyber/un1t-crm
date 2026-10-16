@@ -1,0 +1,448 @@
+// UN1TSYNC.6 — the un1t.online → CRM sync engine for one studio.
+//
+// One run is a FULL pull (the API ignores `updated_since`), in this order:
+//
+//   1. Open a un1t_sync_runs row (status 'running').
+//   2. Read the studio's connection from the registry. No active row or no
+//      token → not_connected; the connection row is left alone. A registry
+//      read that FAILED is 'db', never "not connected" (REGISTRYREAD.1).
+//   3. GET /api-token. Its studio must be the stored external_account_id,
+//      else studio_mismatch. The token's expiry is recorded on the connection.
+//   4. Pull EVERY list before ANY table write: a list that fails, a list cut
+//      off by the page cap, or a row from another studio refuses the whole
+//      run with nothing written (the mirror is never half one pull and half
+//      the last).
+//   5. Resolve un1t.online clients to org-scoped contacts (Task 4).
+//   6. Upsert the seven un1t_* tables in chunks of 200. The first failed
+//      upsert stops the run ('db'); later tables wait for the next run.
+//   7. Reconcile contact_memberships (source 'un1t_online_api' at this
+//      location only; the operator export's rows are never touched): a
+//      contact with an active subscription is upserted active; an active row
+//      whose contact no longer has one is ENDED, never deleted.
+//   8. Record the outcome on the connection; 9. close the run row.
+//
+// NEVER DELETES. Nothing in a run issues a delete: a row absent from a pull
+// stays, and a membership absent from a pull is ended.
+//
+// Two guards on step 7, because an ended membership is customer-facing (event
+// member pricing reads contact_memberships) and a wrongly ended one charges a
+// member the non-member fee:
+//   - If any client FAILED to resolve (a contacts read or write error), the
+//     end step is skipped: that client's subscription cannot be attributed, so
+//     "this contact has no subscription" is unknown, not false.
+//   - If the pull carried no subscriptions at all, the end step is skipped:
+//     an empty list ending every member is far likelier an upstream fault
+//     than every member cancelling at once.
+//   Both are recorded in counts.memberships.end_skipped.
+//
+// Bookkeeping writes (the connection's status, the run row's close) are
+// logged when they fail and never change the run's result: the data written
+// is still written.
+
+import { createUn1tClient, Un1tAuthError } from './un1t-online.js'
+import {
+  mapClient,
+  mapProduct,
+  mapSubscription,
+  mapTransaction,
+  mapInvoice,
+  mapEvent,
+  mapBooking,
+  rowStudioId,
+  MEMBERSHIP_ACTIVE_STATUSES,
+} from './un1t-online-map.js'
+import { resolveUn1tContacts } from './un1t-online-contacts.js'
+import { readConnection } from './connection-registry.js'
+import { logError, logWarn } from './log'
+
+export const UN1T_LISTS = Object.freeze([
+  '/products',
+  '/events',
+  '/users/clients',
+  '/subscriptions',
+  '/transactions',
+  '/invoices',
+  '/bookings',
+])
+
+const MEMBERSHIP_SOURCE = 'un1t_online_api'
+const PLATFORM = 'un1t_online'
+const CHUNK = 200
+const PAGE = 1000
+const MAX_ERROR_LEN = 500
+
+const AUTH_ERROR =
+  'un1t.online token rejected (revoked or expired). Paste a new token in Settings → Integrations → un1t.online.'
+
+// API path → { kind for rowStudioId, short name in counts }.
+const LIST_META = Object.freeze({
+  '/products': { kind: 'product', name: 'products' },
+  '/events': { kind: 'event', name: 'events' },
+  '/users/clients': { kind: 'client', name: 'clients' },
+  '/subscriptions': { kind: 'subscription', name: 'subscriptions' },
+  '/transactions': { kind: 'transaction', name: 'transactions' },
+  '/invoices': { kind: 'invoice', name: 'invoices' },
+  '/bookings': { kind: 'booking', name: 'bookings' },
+})
+
+// Upsert order (step 6). `contact` = the row carries un1t_user_id → contact_id.
+const TABLES = Object.freeze([
+  { table: 'un1t_products', list: '/products', map: mapProduct, key: 'un1t_id', contact: false },
+  { table: 'un1t_events', list: '/events', map: mapEvent, key: 'un1t_id', contact: false },
+  { table: 'un1t_clients', list: '/users/clients', map: mapClient, key: 'un1t_user_id', contact: true },
+  { table: 'un1t_subscriptions', list: '/subscriptions', map: mapSubscription, key: 'un1t_id', contact: true },
+  { table: 'un1t_transactions', list: '/transactions', map: mapTransaction, key: 'un1t_id', contact: true },
+  { table: 'un1t_invoices', list: '/invoices', map: mapInvoice, key: 'un1t_id', contact: true },
+  { table: 'un1t_bookings', list: '/bookings', map: mapBooking, key: 'un1t_id', contact: true },
+])
+
+function messageOf(err) {
+  const raw = err?.message || err?.code || (typeof err === 'string' ? err : '') || 'unknown error'
+  const s = String(raw)
+  return s.length > MAX_ERROR_LEN ? `${s.slice(0, MAX_ERROR_LEN)}…` : s
+}
+
+function chunks(list, size) {
+  const out = []
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size))
+  return out
+}
+
+/** Last row wins per conflict key, so one upsert never touches a row twice. */
+function dedupeBy(rows, key) {
+  const byKey = new Map()
+  for (const r of rows) byKey.set(r[key], r)
+  return [...byKey.values()]
+}
+
+// Highest-priority active status first, then the latest period end.
+function preferSubscription(a, b) {
+  const ra = MEMBERSHIP_ACTIVE_STATUSES.indexOf(a.status)
+  const rb = MEMBERSHIP_ACTIVE_STATUSES.indexOf(b.status)
+  if (ra !== rb) return ra < rb ? a : b
+  return String(b.current_period_end || '') > String(a.current_period_end || '') ? b : a
+}
+
+/**
+ * Run one full un1t.online sync for a location.
+ *
+ * @param {object} db           supabase service-role client
+ * @param {string} locationId
+ * @param {object} [opts]
+ * @param {Function} [opts.clientFactory]  createUn1tClient-compatible factory
+ * @param {Function} [opts.now]            () => Date
+ * @returns {Promise<{ ok: boolean, reason?: 'not_connected'|'auth'|'studio_mismatch'|'api'|'truncated'|'db', counts: object, runId: string|null }>}
+ */
+export async function runUn1tSync(db, locationId, { clientFactory = createUn1tClient, now = () => new Date() } = {}) {
+  const startedAt = now()
+  const nowIso = startedAt.toISOString()
+  const counts = { pulled: {}, tables: {}, contacts: null, contact_errors: [], memberships: null, api: null }
+
+  // 1. The run row.
+  let runId = null
+  {
+    const { data, error } = await db
+      .from('un1t_sync_runs')
+      .insert({ location_id: locationId, status: 'running', started_at: nowIso })
+      .select('id')
+    const row = Array.isArray(data) ? data[0] : null
+    if (error || !row?.id) {
+      // Nothing has been read or written yet, and the next tick retries.
+      logError('un1t-online-sync', 'could not open a sync run row', { locationId, err: error || 'no row returned' })
+      return { ok: false, reason: 'db', counts, runId: null }
+    }
+    runId = row.id
+  }
+
+  let client = null
+  // `connectionPatch` is the connection write for this outcome; null leaves
+  // the connection untouched (not_connected, or no connection to identify).
+  const finish = async ({ ok, reason, firstError, connectionPatch }) => {
+    if (client) {
+      try {
+        counts.api = client.stats()
+      } catch {
+        counts.api = null
+      }
+    }
+    if (connectionPatch) {
+      const cerr = await updateConnection(db, locationId, connectionPatch)
+      if (cerr) counts.connection_update_error = cerr
+    }
+    const finishedAt = now()
+    const { error } = await db
+      .from('un1t_sync_runs')
+      .update({
+        finished_at: finishedAt.toISOString(),
+        duration_ms: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
+        status: ok ? 'ok' : 'error',
+        counts,
+        first_error: firstError ?? null,
+      })
+      .eq('id', runId)
+      .select('id')
+    if (error) logError('un1t-online-sync', 'could not close the sync run row', { locationId, runId, err: error })
+    const result = { ok, counts, runId }
+    if (!ok) result.reason = reason
+    return result
+  }
+
+  const failure = (reason, firstError, connectionPatch) => {
+    if (reason !== 'auth' && reason !== 'not_connected') {
+      logWarn('un1t-online-sync', 'sync run failed', { locationId, runId, reason, firstError })
+    }
+    return finish({ ok: false, reason, firstError, connectionPatch })
+  }
+  const errorPatch = (lastError, extra = {}) => ({ status: 'error', last_error: lastError, ...extra })
+
+  // 2. The connection.
+  const { conn, error: connError } = await readConnection(db, locationId, PLATFORM)
+  if (connError || !conn) {
+    return failure('db', `connection read failed: ${messageOf(connError)}`, null)
+  }
+  if (conn.source !== 'registry' || !conn.isActive || !conn.accessToken) {
+    return failure('not_connected', 'un1t.online is not connected for this location', null)
+  }
+  const storedStudio = conn.externalAccountId == null ? null : String(conn.externalAccountId)
+
+  // 3. Who the token is.
+  let self
+  try {
+    client = clientFactory({ token: conn.accessToken })
+    self = await client.getSelf()
+  } catch (err) {
+    if (err instanceof Un1tAuthError) {
+      return failure('auth', `GET /api-token: ${messageOf(err)}`, { status: 'action_needed', last_error: AUTH_ERROR })
+    }
+    const msg = `un1t.online sync failed at /api-token: ${messageOf(err)}`
+    return failure('api', msg, errorPatch(msg))
+  }
+  const tokenStudio = self?.studio?.id == null ? null : String(self.studio.id)
+  if (!tokenStudio) {
+    const msg = 'un1t.online sync failed at /api-token: the answer named no studio'
+    return failure('api', msg, errorPatch(msg))
+  }
+  if (tokenStudio !== storedStudio) {
+    const msg = `un1t.online token is for studio ${tokenStudio}, but this location is connected to studio ${storedStudio ?? '(none)'}. Nothing was synced.`
+    return failure('studio_mismatch', msg, errorPatch(msg))
+  }
+  // From here on every connection write also records the token's expiry.
+  const tokenFields = { token_expires_at: self.expires_at ?? null }
+
+  // 4. Pull every list before any write.
+  const pulled = {}
+  for (const path of UN1T_LISTS) {
+    const meta = LIST_META[path]
+    let res
+    try {
+      res = await client.listAll(path)
+    } catch (err) {
+      if (err instanceof Un1tAuthError) {
+        return failure('auth', `GET ${path}: ${messageOf(err)}`, { status: 'action_needed', last_error: AUTH_ERROR, ...tokenFields })
+      }
+      const msg = `un1t.online sync failed at list ${path}: ${messageOf(err)}. Nothing was written.`
+      return failure('api', msg, errorPatch(msg, tokenFields))
+    }
+    const rows = Array.isArray(res?.rows) ? res.rows : []
+    counts.pulled[meta.name] = rows.length
+
+    const foreign = rows.find((row) => {
+      const sid = rowStudioId(meta.kind, row)
+      return sid != null && sid !== tokenStudio
+    })
+    if (foreign) {
+      const msg = `un1t.online list ${path} returned a row from studio ${rowStudioId(meta.kind, foreign)}, but this location is connected to studio ${tokenStudio}. Nothing was synced.`
+      return failure('studio_mismatch', msg, errorPatch(msg, tokenFields))
+    }
+    if (res?.truncated) {
+      const msg = `un1t.online sync refused: list ${path} exceeded the page cap (${rows.length} of ${res.total ?? '?'} rows read). Nothing was written.`
+      return failure('truncated', msg, errorPatch(msg, tokenFields))
+    }
+    pulled[path] = rows
+  }
+
+  // 5–7. Every database step. A thrown exception here (a builder never
+  // throws; a bug might) is reported as 'db' rather than escaping the run.
+  try {
+    // 5. Organisation + contacts.
+    const { data: loc, error: locError } = await db
+      .from('locations')
+      .select('id, organization_id')
+      .eq('id', locationId)
+      .maybeSingle()
+    if (locError || !loc?.organization_id) {
+      const msg = `un1t.online sync failed reading the location's organisation: ${locError ? messageOf(locError) : 'no organisation'}`
+      return failure('db', msg, errorPatch(msg, tokenFields))
+    }
+    const organizationId = loc.organization_id
+
+    const resolved = await resolveUn1tContacts(db, {
+      locationId,
+      organizationId,
+      clients: pulled['/users/clients'],
+      now: nowIso,
+    })
+    counts.contacts = resolved.counts
+    // un1t user ids and reasons only: no names or emails in the run row.
+    counts.contact_errors = (resolved.errors || []).slice(0, 20)
+    const contactIdOf = (userId) => (userId == null ? null : resolved.contactIdByUserId.get(String(userId)) ?? null)
+
+    // 6. The mirror tables.
+    const mapped = {}
+    for (const spec of TABLES) {
+      const rows = []
+      for (const apiRow of pulled[spec.list]) {
+        const row = spec.map(apiRow, { locationId, now: nowIso })
+        if (!row) continue
+        if (spec.contact) row.contact_id = contactIdOf(row.un1t_user_id)
+        rows.push(row)
+      }
+      const unique = dedupeBy(rows, spec.key)
+      mapped[spec.table] = unique
+      const onConflict = `location_id,${spec.key}`
+      for (const chunk of chunks(unique, CHUNK)) {
+        const { error } = await db.from(spec.table).upsert(chunk, { onConflict })
+        if (error) {
+          const msg = `un1t.online sync failed writing ${spec.table}: ${messageOf(error)}`
+          return failure('db', msg, errorPatch(msg, tokenFields))
+        }
+      }
+      counts.tables[spec.table] = unique.length
+    }
+
+    // 7. Memberships.
+    const membership = await reconcileMemberships(db, {
+      locationId,
+      organizationId,
+      subscriptions: mapped.un1t_subscriptions,
+      contactIdOf,
+      contactsFailed: (resolved.counts?.failed || 0) > 0,
+      nowIso,
+    })
+    counts.memberships = membership.counts
+    if (membership.error) {
+      const msg = `un1t.online sync failed writing contact_memberships: ${membership.error}`
+      return failure('db', msg, errorPatch(msg, tokenFields))
+    }
+  } catch (err) {
+    const msg = `un1t.online sync failed: ${messageOf(err)}`
+    logError('un1t-online-sync', 'unexpected exception in a sync run', { locationId, runId, err })
+    return failure('db', msg, errorPatch(msg, tokenFields))
+  }
+
+  // 8–9. Success.
+  return finish({
+    ok: true,
+    firstError: null,
+    connectionPatch: { status: 'connected', last_ok_at: nowIso, last_error: null, ...tokenFields },
+  })
+}
+
+/**
+ * Step 7. Returns { counts, error } where error is a message or null.
+ * first_seen_at is never in the upsert payload, so its column default sets it
+ * on insert only and a re-activation keeps the original date.
+ */
+async function reconcileMemberships(db, { locationId, organizationId, subscriptions, contactIdOf, contactsFailed, nowIso }) {
+  const counts = { active: 0, ended: 0, skipped_no_contact: 0 }
+
+  // One plan per contact: the best active subscription.
+  const best = new Map()
+  for (const sub of subscriptions) {
+    if (!MEMBERSHIP_ACTIVE_STATUSES.includes(sub.status)) continue
+    const contactId = contactIdOf(sub.un1t_user_id)
+    if (!contactId) {
+      counts.skipped_no_contact += 1
+      continue
+    }
+    const prev = best.get(contactId)
+    best.set(contactId, prev ? preferSubscription(prev, sub) : sub)
+  }
+
+  const payload = [...best.entries()].map(([contactId, sub]) => ({
+    organization_id: organizationId,
+    location_id: locationId,
+    contact_id: contactId,
+    source: MEMBERSHIP_SOURCE,
+    plan_name: (sub.product_title && sub.product_title.trim()) || 'Membership',
+    status: 'active',
+    ended_at: null,
+    last_seen_at: nowIso,
+    updated_at: nowIso,
+  }))
+  for (const chunk of chunks(payload, CHUNK)) {
+    const { error } = await db
+      .from('contact_memberships')
+      .upsert(chunk, { onConflict: 'contact_id,location_id,source' })
+    if (error) return { counts, error: messageOf(error) }
+    counts.active += chunk.length
+  }
+
+  // Active rows for this source here, read in full (1,000-row pages).
+  const activeRows = []
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from('contact_memberships')
+      .select('id, contact_id')
+      .eq('location_id', locationId)
+      .eq('source', MEMBERSHIP_SOURCE)
+      .eq('status', 'active')
+      .order('id')
+      .range(from, from + PAGE - 1)
+    if (error) return { counts, error: `reading active memberships: ${messageOf(error)}` }
+    const rows = Array.isArray(data) ? data : []
+    activeRows.push(...rows)
+    if (rows.length < PAGE) break
+  }
+
+  const toEnd = activeRows.filter((r) => !best.has(r.contact_id)).map((r) => r.id)
+  if (toEnd.length === 0) return { counts, error: null }
+
+  if (contactsFailed) {
+    counts.end_skipped = 'contacts_unresolved'
+    counts.would_end = toEnd.length
+    logWarn('un1t-online-sync', 'not ending memberships: some clients failed to resolve to a contact', { locationId, wouldEnd: toEnd.length })
+    return { counts, error: null }
+  }
+  if (subscriptions.length === 0) {
+    counts.end_skipped = 'no_subscriptions_pulled'
+    counts.would_end = toEnd.length
+    logWarn('un1t-online-sync', 'not ending memberships: the pull carried no subscriptions', { locationId, wouldEnd: toEnd.length })
+    return { counts, error: null }
+  }
+
+  for (const ids of chunks(toEnd, CHUNK)) {
+    const { data, error } = await db
+      .from('contact_memberships')
+      .update({ status: 'ended', ended_at: nowIso, updated_at: nowIso })
+      .in('id', ids)
+      .eq('location_id', locationId)
+      .eq('source', MEMBERSHIP_SOURCE)
+      .eq('status', 'active')
+      .select('id')
+    if (error) return { counts, error: `ending memberships: ${messageOf(error)}` }
+    // Fewer rows than asked = a row changed under us; not an error.
+    counts.ended += Array.isArray(data) ? data.length : 0
+  }
+  return { counts, error: null }
+}
+
+/** The active un1t_online registry row for the location. Returns an error message or null. */
+async function updateConnection(db, locationId, patch) {
+  const { data, error } = await db
+    .from('channel_connections')
+    .update(patch)
+    .eq('location_id', locationId)
+    .eq('platform', PLATFORM)
+    .eq('is_active', true)
+    .select('id')
+  if (error) {
+    logError('un1t-online-sync', 'could not record the sync outcome on the connection', { locationId, status: patch.status, err: error })
+    return messageOf(error)
+  }
+  if (!Array.isArray(data) || data.length === 0) {
+    logWarn('un1t-online-sync', 'no active un1t_online connection row to record the sync outcome on', { locationId, status: patch.status })
+    return 'no active connection row'
+  }
+  return null
+}
