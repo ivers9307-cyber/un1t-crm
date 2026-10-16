@@ -6,7 +6,9 @@
 // the editor). This suite makes the omission a CI failure instead of a silent
 // prod drop: every SettingsSchema key must survive into the built blob.
 import { describe, it, expect } from 'vitest'
-import { SettingsSchema, DEFAULTS, buildCustomerAgentSettings } from './settings-contract'
+import {
+  SettingsSchema, DEFAULTS, buildCustomerAgentSettings, STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS,
+} from './settings-contract'
 
 // social_enabled is a top-level sibling on locations.settings (written next to
 // customer_agent, not inside it) — the one documented exception.
@@ -119,5 +121,56 @@ describe('settings write-through contract', () => {
     expect(built.tone).toBe(null)
     expect(built.agent_name).toBe(DEFAULTS.agent_name)
     expect(built.followups).toEqual({ ...DEFAULTS.followups, enabled: true })
+  })
+
+  // MIAORG.1 — the keys a studio decides for itself; the org layer never supplies them.
+  it('STUDIO_ONLY_KEYS is exactly the agreed list, all real settings keys', () => {
+    expect([...STUDIO_ONLY_KEYS].sort()).toEqual([
+      'booking_cta_label', 'booking_mode', 'booking_url', 'cancellation_form',
+      'consultation_event_type_id', 'enabled', 'membership_cta_label',
+      'membership_signup_url', 'test_mode', 'test_phones',
+    ])
+    for (const k of STUDIO_ONLY_KEYS) expect(k in DEFAULTS).toBe(true)
+    expect(INHERITABLE_OBJECT_KEYS).toEqual(['limits', 'followups', 'first_class_checkin', 'inline_suggestion', 'quiet_hours'])
+  })
+
+  it('booking_url: http(s) only, <= 500, blank -> null, round-trips; default null', () => {
+    expect(DEFAULTS.booking_url).toBe(null)
+    expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, booking_url: 'https://un1t.online/hatch' })).booking_url).toBe('https://un1t.online/hatch')
+    expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, booking_url: '' })).booking_url).toBe(null)
+    expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true })).booking_url).toBe(null)
+    expect(SettingsSchema.safeParse({ enabled: true, booking_url: 'javascript:alert(1)' }).success).toBe(false)
+    expect(SettingsSchema.safeParse({ enabled: true, booking_url: 'not a url' }).success).toBe(false)
+    expect(SettingsSchema.safeParse({ enabled: true, booking_url: 'https://example.com/' + 'a'.repeat(500) }).success).toBe(false)
+  })
+
+  it('booking_cta_label: trimmed, <= 40, blank -> null; default null', () => {
+    expect(DEFAULTS.booking_cta_label).toBe(null)
+    expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, booking_cta_label: '  Book a class  ' })).booking_cta_label).toBe('Book a class')
+    expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, booking_cta_label: '   ' })).booking_cta_label).toBe(null)
+    expect(SettingsSchema.safeParse({ enabled: true, booking_cta_label: 'x'.repeat(41) }).success).toBe(false)
+  })
+
+  // The handoff SLA was read by handoff-sla.js but missing from the schema, so
+  // every editor save erased it.
+  it('handoff_sla_minutes survives a build; 5..1440 integer; absent -> null', () => {
+    expect(DEFAULTS.handoff_sla_minutes).toBe(null)
+    expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, handoff_sla_minutes: 90 })).handoff_sla_minutes).toBe(90)
+    expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true })).handoff_sla_minutes).toBe(null)
+    expect(SettingsSchema.safeParse({ enabled: true, handoff_sla_minutes: 4 }).success).toBe(false)
+    expect(SettingsSchema.safeParse({ enabled: true, handoff_sla_minutes: 1441 }).success).toBe(false)
+    expect(SettingsSchema.safeParse({ enabled: true, handoff_sla_minutes: 10.5 }).success).toBe(false)
+  })
+
+  it('{ only } builds a partial blob of just those keys; without it the build is unchanged', () => {
+    const parsed = SettingsSchema.parse({ enabled: true, tone: ' warm ', handoff_sla_minutes: 60, agent_name: 'Zed' })
+    const full = buildCustomerAgentSettings(parsed)
+    const partial = buildCustomerAgentSettings(parsed, { only: new Set(['tone', 'handoff_sla_minutes']) })
+    expect(partial).toEqual({ tone: 'warm', handoff_sla_minutes: 60 })
+    expect(buildCustomerAgentSettings(parsed, {})).toEqual(full)
+    expect(buildCustomerAgentSettings(parsed, { only: undefined })).toEqual(full)
+    // a key the builder does not know is ignored, not invented
+    expect(buildCustomerAgentSettings(parsed, { only: new Set(['tone', 'nope']) })).toEqual({ tone: 'warm' })
+    expect(buildCustomerAgentSettings(parsed, { only: new Set() })).toEqual({})
   })
 })

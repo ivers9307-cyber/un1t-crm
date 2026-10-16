@@ -50,9 +50,11 @@ describe('PUT /api/settings/customer-agent — CTA fields', () => {
       membership_signup_url: 'https://join.example',
       membership_cta_label: 'Join us',
     })
-    // Pulse stays out of booking — no booking CTA plumbing is persisted.
-    expect(written.settings.customer_agent).not.toHaveProperty('booking_url')
-    expect(written.settings.customer_agent).not.toHaveProperty('booking_cta_label')
+    // Pulse stays out of booking. MIAORG.1 added Mia's own booking link (for a
+    // studio with no booking integration), so the keys now exist in the blob,
+    // but a save that does not supply one persists none.
+    expect(written.settings.customer_agent.booking_url).toBe(null)
+    expect(written.settings.customer_agent.booking_cta_label).toBe(null)
   })
 
   it('coerces blank/invalid membership CTA to null', async () => {

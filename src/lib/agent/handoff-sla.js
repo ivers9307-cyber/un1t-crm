@@ -62,7 +62,11 @@ const TAKEOVER_SKEW_MS = 5_000
 
 /** Resolve the per-location SLA in minutes (0/negative disables). Pure. */
 export function resolveHandoffSlaMinutes(settings) {
-  const raw = Number(settings?.handoff_sla_minutes)
+  const stored = settings?.handoff_sla_minutes
+  // null / '' = "not set" (MIAORG.1: the settings contract writes null). Number(null) is 0,
+  // which would read as the explicit 0-disables switch below.
+  if (stored == null || (typeof stored === 'string' && stored.trim() === '')) return HANDOFF_SLA_DEFAULT_MINUTES
+  const raw = Number(stored)
   if (!Number.isFinite(raw)) return HANDOFF_SLA_DEFAULT_MINUTES
   return raw > 0 ? Math.round(raw) : 0
 }

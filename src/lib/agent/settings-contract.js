@@ -101,7 +101,39 @@ export const DEFAULTS = {
   // CANCELLATION_FORM_DEFAULTS); the resolver merges per key so a partial
   // object only overrides what the operator actually typed.
   cancellation_form: null,
+  // MIAORG.1 — where a studio WITHOUT a booking integration (Hatch Street, on
+  // un1t.online) sends a customer who wants to book: Mia shares this link
+  // instead of booking herself. Studio-only (an org cannot hold one link for
+  // every studio). Null = no link set; Mia hands the thread to staff instead.
+  booking_url: null,
+  booking_cta_label: null,
+  // MIAORG.1 — minutes before an unanswered handoff escalates. Read by
+  // lib/agent/handoff-sla.js (resolveHandoffSlaMinutes) but never part of this
+  // contract, so every editor save erased it. Null = the code default.
+  handoff_sla_minutes: null,
 }
+
+// MIAORG.1 — keys that belong to ONE studio and are never read from the
+// organisation layer (resolveAgentSettings / mergeAgentSettings). An org-level
+// `enabled: true` must never switch a studio on (enabled+test_mode is live
+// for everyone), and the booking/membership/consultation links point at one
+// studio's own systems.
+export const STUDIO_ONLY_KEYS = new Set([
+  'enabled',
+  'test_mode',
+  'test_phones',
+  'consultation_event_type_id',
+  'booking_mode',
+  'cancellation_form',
+  'booking_url',
+  'booking_cta_label',
+  'membership_signup_url',
+  'membership_cta_label',
+])
+
+// Object-valued keys that merge PER FIELD (org fields under studio fields)
+// rather than the studio's object replacing the org's wholesale.
+export const INHERITABLE_OBJECT_KEYS = ['limits', 'followups', 'first_class_checkin', 'inline_suggestion', 'quiet_hours']
 
 export const SettingsSchema = z.object({
   enabled: z.boolean(),
@@ -167,6 +199,14 @@ export const SettingsSchema = z.object({
   // thread to a human (AGENT-VERIFY-HANDOFF.1). Bounded so a typo can't
   // effectively disable the safety net by setting it to 500.
   handoff_after_verify_failures: z.number().int().min(1).max(5).nullable().optional(),
+  // MIAORG.1 — booking link for a studio with no booking integration. http(s)
+  // only: it is sent to customers as a tappable link.
+  booking_url: z.string().max(500).url()
+    .refine((u) => /^https?:\/\//i.test(u), 'Must be an http(s) URL')
+    .nullable().optional()
+    .or(z.literal('').transform(() => null)),
+  booking_cta_label: z.string().max(40).nullable().optional(),
+  handoff_sla_minutes: z.number().int().min(5).max(1440).nullable().optional(),
   social_enabled: z.boolean().optional().default(false),
   // CANCEL-FORM.2 — SIBLING like social_enabled: this is the
   // locations.glofox_auto_cancel_memberships COLUMN (mig 585), written by the
@@ -235,9 +275,21 @@ function buildCancellationFormBlock(cf) {
  * to schema⊆blob.
  *
  * @param {object} data  SettingsSchema-parsed body
+ * @param {{ only?: Set<string> }} [opts]  MIAORG.1 — when `only` is given, the
+ *   blob holds just those keys (an override-only save: a studio stores only
+ *   the fields it overrides, so inherited values are never frozen into it).
+ *   Without it the full blob is built, unchanged.
  * @returns {object} the customer_agent blob
  */
-export function buildCustomerAgentSettings(data = {}) {
+export function buildCustomerAgentSettings(data = {}, { only } = {}) {
+  const full = buildFullBlob(data)
+  if (!only) return full
+  const out = {}
+  for (const k of only) if (k in full) out[k] = full[k]
+  return out
+}
+
+function buildFullBlob(data) {
   return {
     enabled: data.enabled,
     test_mode: !!data.test_mode,
@@ -261,6 +313,9 @@ export function buildCustomerAgentSettings(data = {}) {
     agent_name: data.agent_name?.trim() || DEFAULTS.agent_name,
     membership_signup_url: data.membership_signup_url || null,
     membership_cta_label: data.membership_cta_label?.trim() || null,
+    booking_url: data.booking_url || null,
+    booking_cta_label: data.booking_cta_label?.trim() || null,
+    handoff_sla_minutes: data.handoff_sla_minutes ?? null,
     handoff_cooldown_hours: data.handoff_cooldown_hours ?? DEFAULTS.handoff_cooldown_hours,
     auto_resolve_after_reply_hours: data.auto_resolve_after_reply_hours ?? DEFAULTS.auto_resolve_after_reply_hours,
     auto_resolve_stale_hours: data.auto_resolve_stale_hours ?? DEFAULTS.auto_resolve_stale_hours,
