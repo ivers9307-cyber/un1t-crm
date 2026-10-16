@@ -40,6 +40,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { Un1tOnlineConnectSchema } from '@/lib/schemas'
 import { createUn1tClient, Un1tAuthError } from '@/lib/un1t-online'
+import { tokenFingerprint } from '@/lib/un1t-online-token'
 import { readConnection, normalizeConnectionRow } from '@/lib/connection-registry'
 import { presentUn1tConnection, hasWritePermissions } from '@/lib/un1t-online-status'
 import { logMembershipSourceChange } from '@/lib/membership/audit'
@@ -197,6 +198,8 @@ export async function PUT(request, props) {
     last_error: null,
     config: {
       token_id: self.id ?? null,
+      // Rotation keeps token_id; this tells a rotated secret from the old one.
+      token_fingerprint: tokenFingerprint(token),
       token_name: self.name ?? null,
       studio_title: self.studio.title ?? null,
       permissions,

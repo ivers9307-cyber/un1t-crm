@@ -34,6 +34,7 @@ vi.mock('@/lib/un1t-online', async () => {
 })
 
 import { GET, PUT, DELETE } from './route.js'
+import { tokenFingerprint } from '@/lib/un1t-online-token'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { logAuditEvent } from '@/lib/audit'
@@ -160,7 +161,7 @@ describe('PUT connect', () => {
       token_expires_at: EXPIRES,
       status: 'connected',
       last_error: null,
-      config: { token_id: 'tok-1', token_name: 'CRM sync', studio_title: 'UN1T Hatch Street', permissions: READ_ONLY },
+      config: { token_id: 'tok-1', token_fingerprint: tokenFingerprint(TOKEN), token_name: 'CRM sync', studio_title: 'UN1T Hatch Street', permissions: READ_ONLY },
     })
     const body = await res.json()
     expect(body.success).toBe(true)
@@ -183,6 +184,21 @@ describe('PUT connect', () => {
     expect(res.status).toBe(200)
     expect(db.tables.channel_connections).toHaveLength(1)
     expect(db.tables.channel_connections[0]).toMatchObject({ id: 'old', access_token: TOKEN, status: 'connected', last_error: null })
+  })
+
+  it('rotating to a new secret under the same token id changes the stored fingerprint, and no response carries it', async () => {
+    db.tables.channel_connections.push({
+      id: 'old', location_id: LOC_A, platform: 'un1t_online', is_active: true, access_token: 'un1t_old_old_old_old_old_old', status: 'connected',
+      external_account_id: 'studio-9', config: { token_id: 'tok-1', token_fingerprint: tokenFingerprint('un1t_old_old_old_old_old_old') },
+    })
+    const res = await PUT(putReq({ token: TOKEN }), params(LOC_A))
+    expect(res.status).toBe(200)
+    const cfg = db.tables.channel_connections[0].config
+    expect(cfg.token_id).toBe('tok-1')
+    expect(cfg.token_fingerprint).toBe(tokenFingerprint(TOKEN))
+    expect(cfg.token_fingerprint).not.toBe(tokenFingerprint('un1t_old_old_old_old_old_old'))
+    expect(cfg.token_fingerprint).toMatch(/^[0-9a-f]{16}$/)
+    expect(JSON.stringify(await res.json())).not.toContain(cfg.token_fingerprint)
   })
 
   it('refuses a rejected token with 400 token_rejected and writes nothing', async () => {

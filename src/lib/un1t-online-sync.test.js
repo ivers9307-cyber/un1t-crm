@@ -6,6 +6,7 @@ import { runUn1tSync, UN1T_LISTS } from './un1t-online-sync.js'
 import { logError, logWarn } from './log'
 import { Un1tAuthError, Un1tApiError } from './un1t-online.js'
 import { ilikeMatches } from './like-escape.test-helpers.js'
+import { tokenFingerprint } from './un1t-online-token.js'
 
 const ORG = 'org-1'
 const HATCH = 'loc-hatch'
@@ -210,7 +211,7 @@ function baseSeed(extra = {}) {
         status: 'connected',
         access_token: 'un1t_secret_token_value',
         external_account_id: STUDIO,
-        config: { token_id: 'tok-1', token_name: 'CRM read-only' },
+        config: { token_id: 'tok-1', token_name: 'CRM read-only', token_fingerprint: tokenFingerprint('un1t_secret_token_value') },
       },
     ],
     contacts: [],
@@ -308,7 +309,7 @@ describe('runUn1tSync', () => {
         ['eq', 'location_id', HATCH],
         ['eq', 'platform', 'un1t_online'],
         ['eq', 'is_active', true],
-        ['eq', 'config->>token_id', 'tok-1'],
+        ['eq', 'config->>token_fingerprint', tokenFingerprint('un1t_secret_token_value')],
       ]),
     )
     // The token is never a filter value (filters are URL query parameters).
@@ -807,7 +808,7 @@ describe('runUn1tSync', () => {
     const swap = (tables) => {
       const row = tables.channel_connections.find((c) => c.id === 'cc-1')
       row.access_token = 'un1t_new_token_value'
-      row.config = { token_id: 'tok-2' }
+      row.config = { token_id: 'tok-2', token_fingerprint: tokenFingerprint('un1t_new_token_value') }
       row.status = 'connected'
       row.last_error = null
     }
@@ -850,7 +851,29 @@ describe('runUn1tSync', () => {
       expect(runRow(tables).status).toBe('ok')
     })
 
-    it('a row without a token_id is matched by reading the token, never by filtering on it', async () => {
+    it('a ROTATED token (same token_id, new secret) supersedes the old run', async () => {
+      const { db, tables, log } = makeDb(baseSeed())
+      const client = {
+        async getSelf() {
+          // Rotation keeps the token id; only the secret and its fingerprint change.
+          const row = tables.channel_connections[0]
+          row.access_token = 'un1t_rotated_token_value'
+          row.config = { ...row.config, token_fingerprint: tokenFingerprint('un1t_rotated_token_value') }
+          throw new Un1tAuthError('refused', 401)
+        },
+        async listAll() { throw new Error('not reached') },
+        stats: () => ({ requests: 1, waitedMs: 0, retries: 0 }),
+      }
+      const r = await runUn1tSync(db, HATCH, opts(() => client))
+      expect(r.reason).toBe('auth')
+      expect(connRow(tables)).toMatchObject({ status: 'connected', access_token: 'un1t_rotated_token_value' })
+      expect(connRow(tables).config.token_id).toBe('tok-1')
+      expect(r.counts.connection_update_skipped).toBe('superseded')
+      // The fingerprint is non-secret; the token is still never a filter value.
+      expect(JSON.stringify(log.map((e) => e.filters))).not.toContain('un1t_secret_token_value')
+    })
+
+    it('a row without a fingerprint is matched by reading the token, never by filtering on it', async () => {
       const seed = baseSeed()
       seed.channel_connections[0].config = {}
       const { db, tables, log } = makeDb(seed)
@@ -863,7 +886,7 @@ describe('runUn1tSync', () => {
       expect(JSON.stringify(log.map((e) => e.filters))).not.toContain('un1t_secret_token_value')
     })
 
-    it('a row without a token_id whose token changed is superseded', async () => {
+    it('a row without a fingerprint whose token changed is superseded', async () => {
       const seed = baseSeed()
       seed.channel_connections[0].config = {}
       const { db, tables } = makeDb(seed)

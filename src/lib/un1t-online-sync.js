@@ -57,6 +57,7 @@ import {
   MEMBERSHIP_ACTIVE_STATUSES,
 } from './un1t-online-map.js'
 import { resolveUn1tContacts } from './un1t-online-contacts.js'
+import { tokenFingerprint } from './un1t-online-token.js'
 import { readConnection } from './connection-registry.js'
 import { logError, logWarn } from './log'
 
@@ -225,9 +226,11 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
   if (conn.source !== 'registry' || !conn.isActive || !conn.accessToken) {
     return failure('not_connected', 'un1t.online is not connected for this location', null)
   }
+  // The fingerprint is stored by the connect route; a row from before it has
+  // none and falls back to comparing the token in memory.
   connIdentity = {
     token: conn.accessToken,
-    tokenId: conn.config?.token_id == null ? null : String(conn.config.token_id),
+    fingerprint: conn.config?.token_fingerprint ? tokenFingerprint(conn.accessToken) : null,
   }
   const storedStudio = conn.externalAccountId == null ? null : String(conn.externalAccountId)
 
@@ -520,10 +523,11 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
  *
  * The guard never puts the token itself in a filter: a PostgREST filter is a
  * URL query parameter, and request URLs are kept in the API logs. It matches
- * the token's non-secret id (config.token_id, written by the connect route
- * with the token) atomically in the UPDATE. A row without a token_id falls
- * back to reading the row and comparing the token in memory before updating
- * it by id.
+ * the token's non-secret fingerprint (config.token_fingerprint, a truncated
+ * SHA-256 written by the connect route with the token) atomically in the
+ * UPDATE. The token's id would not do: rotating a token keeps its id. A row
+ * without a fingerprint falls back to reading the row and comparing the token
+ * in memory before updating it by id.
  *
  * @returns {Promise<{ superseded?: true, error?: string }>} a zero-row result
  *   means the token was replaced (or the row deactivated) mid-run: superseded,
@@ -546,8 +550,8 @@ async function updateConnection(db, locationId, patch, identity) {
     .eq('platform', PLATFORM)
     .eq('is_active', true)
 
-  if (identity?.tokenId) {
-    query = query.eq('config->>token_id', identity.tokenId)
+  if (identity?.fingerprint) {
+    query = query.eq('config->>token_fingerprint', identity.fingerprint)
   } else {
     const { data: rows, error: readError } = await db
       .from('channel_connections')
