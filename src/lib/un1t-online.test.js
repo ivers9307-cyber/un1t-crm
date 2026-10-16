@@ -135,6 +135,31 @@ describe('createUn1tClient', () => {
     expect(sleeps).toEqual([3000])
   })
 
+  it('refuses a Retry-After longer than 90s instead of sleeping, and allows exactly 90s', async () => {
+    const long = setup([res(429, {}, { 'retry-after': '91' })])
+    const err = await long.client.listAll('/bookings').catch((e) => e)
+    expect(err).toBeInstanceOf(Un1tApiError)
+    expect(err).toMatchObject({ status: 429, code: 'wait_too_long' })
+    expect(long.sleeps).toEqual([])
+    expect(long.fetchImpl.calls.length).toBe(1)
+
+    const edge = setup([res(429, {}, { 'retry-after': '90' }), page([], 1, 1, 0)])
+    await edge.client.listAll('/bookings')
+    expect(edge.sleeps).toEqual([90000])
+  })
+
+  it('refuses a rate-limit reset longer than 90s, on a 429 and on a spent window', async () => {
+    const onRetry = setup([res(503, {}, { 'x-ratelimit-reset': '600' })])
+    const e1 = await onRetry.client.listAll('/bookings').catch((e) => e)
+    expect(e1).toMatchObject({ status: 503, code: 'wait_too_long' })
+    expect(onRetry.sleeps).toEqual([])
+
+    const spent = setup([page(rowsOf(1, 100), 1, 2, 150, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '600' })])
+    const e2 = await spent.client.listAll('/bookings').catch((e) => e)
+    expect(e2).toMatchObject({ status: 429, code: 'wait_too_long' })
+    expect(spent.sleeps).toEqual([])
+  })
+
   it('backs off exponentially on a 5xx with no rate-limit headers', async () => {
     const { client, sleeps } = setup([res(503, {}), res(503, {}), page([], 1, 1, 0)])
     await client.listAll('/bookings')

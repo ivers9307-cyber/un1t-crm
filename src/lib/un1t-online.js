@@ -20,6 +20,9 @@ import { logWarn } from './log'
 const DEFAULT_BASE_URL = 'https://api.un1t.online'
 const PAGE_SIZE = 100
 const MAX_RETRIES = 3
+// The longest single rate-limit / Retry-After wait the client will sit through.
+// A server demanding more is a failed request, not a hung cron invocation.
+export const MAX_WAIT_MS = 90_000
 
 export class Un1tAuthError extends Error {
   constructor(message, status) {
@@ -64,8 +67,14 @@ export function createUn1tClient({
   // sleeps it off first.
   let pendingWaitMs = 0
 
-  async function wait(ms) {
+  async function wait(ms, status = 429) {
     if (!(ms > 0)) return
+    if (ms > MAX_WAIT_MS) {
+      throw new Un1tApiError(
+        `un1t.online asked the client to wait ${Math.ceil(ms / 1000)}s, longer than the ${MAX_WAIT_MS / 1000}s limit`,
+        { status, code: 'wait_too_long' },
+      )
+    }
     counters.waitedMs += ms
     await sleep(ms)
   }
@@ -78,7 +87,7 @@ export function createUn1tClient({
       if (pendingWaitMs > 0) {
         const ms = pendingWaitMs
         pendingWaitMs = 0
-        await wait(ms)
+        await wait(ms, 429)
       }
 
       counters.requests += 1
@@ -113,7 +122,7 @@ export function createUn1tClient({
             ? Math.max(0, retryAfter) * 1000
             : (resetWaitMs(response.headers) ?? 1000 * 2 ** attempt)
           logWarn('un1t-online', 'retrying after rate limit or server error', { path, status, attempt: attempt + 1, waitMs: ms })
-          await wait(ms)
+          await wait(ms, status)
           continue
         }
         throw new Un1tApiError(`un1t.online answered HTTP ${status} after ${MAX_RETRIES} retries`, { status })
