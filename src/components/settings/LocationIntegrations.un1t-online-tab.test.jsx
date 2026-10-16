@@ -35,8 +35,23 @@ describe('LocationIntegrations — un1t.online tab', () => {
     expect(tab()).toBeTruthy()
   })
 
-  it('is not offered on a bare studio (no bookings, no contacts) that has no source and no connection', () => {
+  // UN1TTAB.1 — Hatch Street itself has membership_source 'none' and features
+  // { assistant: false, car_processing: false } (no bookings/contacts flags), so
+  // the old Glofox-mirroring rule hid the tab at the one studio it was built for.
+  it('is offered to an owner or master on a studio with no source, whatever its feature flags (Hatch Street\'s real shape)', () => {
+    const hatch = loc('none', { assistant: false, car_processing: false })
+    render(<LocationIntegrations location={hatch} user={MASTER} />)
+    expect(tab()).toBeTruthy()
+    cleanup()
+    render(<LocationIntegrations location={hatch} user={OWNER} />)
+    expect(tab()).toBeTruthy()
+    cleanup()
     render(<LocationIntegrations location={loc('none')} user={MASTER} />)
+    expect(tab()).toBeTruthy()
+  })
+
+  it('is still not offered to a manager on a studio with no source', () => {
+    render(<LocationIntegrations location={loc('none', { contacts: true })} user={MANAGER} />)
     expect(tab()).toBeNull()
   })
 
