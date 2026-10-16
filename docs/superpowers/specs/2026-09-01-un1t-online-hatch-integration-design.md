@@ -1,7 +1,13 @@
 # un1t.online (Hatch Street) platform integration — design
 
 **Date:** 2026-09-01 (live findings added 2026-10-16)
-**Status:** design approved; credentials received 2026-10-16; implementation planned
+**Status:** implemented in UN1TSYNC.1–.8 on branch `un1t-online-hatch-sync` (credentials received 2026-10-16). Not yet shipped: migrations 726 (schema; edited in place during review to add the per-organisation `contacts_un1t_user_id_unique (organization_id, un1t_user_id)` and `channel_connections_un1t_online_studio_unique`) and 727 (heartbeat row) are NOT yet applied, and the production dry run is held for the operator.
+
+**Implementation notes and deferrals (2026-10-16):**
+- **Hatch classes are deferred from `class_occurrences`** (operator decision 2026-10-16). Events and bookings are stored in `un1t_events` / `un1t_bookings` only; every reader of the shared class spine is unchanged until the follow-up audit.
+- **Provider capabilities are all `false`** in the integration registry row (`platform='un1t_online'`), so no KPI, churn, arrears or Mia surface reads `un1t_*` yet. They are flipped one by one as each surface learns the new tables.
+- **Stale-write guard:** a sync run writes only while the connection's `config->>token_id` still matches the token it started with, so a reconnect with a new token supersedes an in-flight run.
+- **Membership endings fail closed:** an ending that cannot be attributed to a resolved contact (an unattributable resolver error) is spared, never inferred; the sync never deletes.
 **Scope:** full CRM parity for UN1T Hatch Street, whose booking platform is `un1t.online` rather than Glofox
 
 ---
