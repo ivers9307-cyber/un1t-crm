@@ -615,6 +615,45 @@ describe('runUn1tSync', () => {
     expect(tables.un1t_subscriptions.find((s) => s.un1t_id === 's9').contact_id).toBeNull()
   })
 
+  describe('an active subscription whose user is missing from the client pull', () => {
+    const seed = () =>
+      baseSeed({
+        contacts: [
+          { id: 'c-ghost', organization_id: ORG, location_id: HATCH, email: 'ghost@x.ie', un1t_user_id: 'u-ghost', first_name: 'Ghost', last_name: 'G', phone: '+353870000009' },
+          { id: 'c-gone', organization_id: ORG, location_id: HATCH, email: 'gone@x.ie', un1t_user_id: 'u-gone', first_name: 'Gone', last_name: 'G', phone: '+353870000008' },
+        ],
+        contact_memberships: [
+          { id: 'm-ghost', organization_id: ORG, location_id: HATCH, contact_id: 'c-ghost', source: 'un1t_online_api', plan_name: 'Unlimited', status: 'active', ended_at: null },
+          { id: 'm-gone', organization_id: ORG, location_id: HATCH, contact_id: 'c-gone', source: 'un1t_online_api', plan_name: 'Unlimited', status: 'active', ended_at: null },
+        ],
+      })
+
+    it("does not end that user's contact's existing active membership, but still ends an unrelated one", async () => {
+      const lists = fixtureLists()
+      lists['/subscriptions'].push({ id: 's-ghost', user_id: 'u-ghost', status: 'active', product: { title: 'Unlimited' }, studio_id: STUDIO })
+      const { db, tables } = makeDb(seed())
+      const { factory } = makeClient({ self: SELF, lists })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(tables.contact_memberships.find((m) => m.id === 'm-ghost')).toMatchObject({ status: 'active', ended_at: null })
+      expect(tables.contact_memberships.find((m) => m.id === 'm-gone')).toMatchObject({ status: 'ended', ended_at: NOW_ISO })
+      expect(r.counts.memberships.end_skipped_unresolved).toBe(1)
+    })
+
+    it('freezes every ending when an active subscription carries no user id at all', async () => {
+      const lists = fixtureLists()
+      lists['/subscriptions'].push({ id: 's-null', user_id: null, status: 'active', product: { title: 'Unlimited' }, studio_id: STUDIO })
+      const { db, tables } = makeDb(seed())
+      const { factory } = makeClient({ self: SELF, lists })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(tables.contact_memberships.find((m) => m.id === 'm-gone').status).toBe('active')
+      expect(tables.contact_memberships.find((m) => m.id === 'm-ghost').status).toBe('active')
+      expect(r.counts.memberships).toMatchObject({ end_skipped: 'contacts_unresolved', ended: 0 })
+      expect(r.counts.memberships.would_end).toBeGreaterThan(0)
+    })
+  })
+
   it('a plan with no product title is recorded as Membership', async () => {
     const lists = fixtureLists()
     lists['/subscriptions'][0].product = null

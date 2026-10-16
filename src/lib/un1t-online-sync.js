@@ -374,11 +374,18 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
 
   // One plan per contact: the best active subscription.
   const best = new Map()
+  // An active subscription whose user did not resolve to a contact this run
+  // (not in the client pull, or null user id) has an unknown owner: its
+  // contact's existing row must not end on the strength of its absence.
+  const skippedUserIds = new Set()
+  let skippedWithoutUser = false
   for (const sub of subscriptions) {
     if (!MEMBERSHIP_ACTIVE_STATUSES.includes(sub.status)) continue
     const contactId = contactIdOf(sub.un1t_user_id)
     if (!contactId) {
       counts.skipped_no_contact += 1
+      if (sub.un1t_user_id == null) skippedWithoutUser = true
+      else skippedUserIds.add(String(sub.un1t_user_id))
       continue
     }
     const prev = best.get(contactId)
@@ -441,11 +448,11 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
   //     (b) every contact whose un1t_user_id is a failed client's, read by id
   //     in chunks (under the 1,000-row cap). Every other row ends, so one
   //     client failing on every run never freezes the studio's endings.
-  if (resolverErrors.length > 0) {
-    if (resolverErrors.some((e) => e?.un1t_user_id == null)) {
+  if (resolverErrors.length > 0 || skippedUserIds.size > 0 || skippedWithoutUser) {
+    if (skippedWithoutUser || resolverErrors.some((e) => e?.un1t_user_id == null)) {
       counts.end_skipped = 'contacts_unresolved'
       counts.would_end = toEnd.length
-      logWarn('un1t-online-sync', 'not ending memberships: a client failed to resolve and carries no id', { locationId, wouldEnd: toEnd.length })
+      logWarn('un1t-online-sync', 'not ending memberships: a client or subscription could not be attributed to a user id', { locationId, wouldEnd: toEnd.length })
       return { counts, error: null }
     }
     const spared = new Set()
@@ -453,7 +460,7 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
       if (e.contact_id != null) spared.add(String(e.contact_id))
       for (const id of Array.isArray(e.contact_ids) ? e.contact_ids : []) spared.add(String(id))
     }
-    const unresolvedUserIds = new Set(resolverErrors.map((e) => String(e.un1t_user_id)))
+    const unresolvedUserIds = new Set([...resolverErrors.map((e) => String(e.un1t_user_id)), ...skippedUserIds])
     const contactIds = [...new Set(toEnd.map((r) => r.contact_id))].filter((id) => !spared.has(String(id)))
     for (const ids of chunks(contactIds, CHUNK)) {
       const { data, error } = await db
