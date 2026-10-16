@@ -13,7 +13,7 @@
 // window for the "current BPM" moving average, and that must still page past the
 // 1000-row db-max-rows cap (a 33+-strap class breaches it).
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/bridge-samples', () => ({
@@ -23,10 +23,13 @@ vi.mock('@/lib/bridge-samples', () => ({
 }))
 vi.mock('@/lib/live-class', () => ({ getAvailableStraps: vi.fn(() => Promise.resolve([])) }))
 vi.mock('@/lib/class-occurrences', () => ({ resolveCurrentClassForTv: vi.fn(() => Promise.resolve(null)) }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
 
 import { GET } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { getAvailableStraps } from '@/lib/live-class'
+import { logWarn } from '@/lib/log'
+import { __resetIdleLogThrottle, __resetIdleCache } from '@/lib/tv-idle-content'
 
 const PAGE = 1000
 const TOKEN = 'tok-1'
@@ -36,7 +39,27 @@ const TOKEN = 'tok-1'
 // paging loop is exercised for real. The session rows carry the running
 // aggregate columns the route renders from. The token resolves through an
 // active tv_displays row to loc-1.
-function makeDb({ samples, sessions, location = { id: 'loc-1', name: 'Stillorgan' } }) {
+// `idle` serves the three idle-scene tables (TVSCENE.1). Omitted, those tables
+// are not served at all: db.from() throws for them, which is how the
+// fail-to-absent case below exercises every catch in buildIdleContent. Filters
+// are ignored here on purpose; the query shape is asserted in
+// src/lib/tv-idle-content.test.js.
+function makeDb({ samples, sessions, idle, location = { id: 'loc-1', name: 'Stillorgan' } }) {
+  function idleTable(rows) {
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      is: () => chain,
+      gte: () => chain,
+      lte: () => chain,
+      order: () => chain,
+      limit: () => chain,
+      maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
+      then: (resolve) => resolve({ data: rows, error: null }),
+    }
+    return chain
+  }
+
   function hrSamplesQuery() {
     const chain = {
       select: () => chain,
@@ -68,7 +91,7 @@ function makeDb({ samples, sessions, location = { id: 'loc-1', name: 'Stillorgan
     rpc: vi.fn(() => Promise.resolve({ data: 1, error: null })), // rate_limit_hit → count 1
     from: vi.fn((table) => {
       if (table === 'tv_displays') {
-        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { location_id: 'loc-1', active: true }, error: null }) }) }) }
+        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { id: 'disp-1', location_id: 'loc-1', active: true }, error: null }) }) }) }
       }
       if (table === 'locations') {
         return { select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: location, error: null }) }) }) }
@@ -85,6 +108,9 @@ function makeDb({ samples, sessions, location = { id: 'loc-1', name: 'Stillorgan
       if (table === 'hr_samples') {
         return hrSamplesQuery()
       }
+      if (idle && table === 'class_occurrences') return idleTable(idle.occurrences || [])
+      if (idle && table === 'contact_achievements') return idleTable(idle.achievements || [])
+      if (idle && table === 'tv_content') return idleTable(idle.content ? [idle.content] : [])
       throw new Error(`unexpected table: ${table}`)
     }),
   }
@@ -96,7 +122,10 @@ async function callRoute(db) {
   return GET(request, { params: Promise.resolve({ token: TOKEN }) })
 }
 
-beforeEach(() => { vi.clearAllMocks() })
+// Both are module-level state in tv-idle-content: the throttle would silence a
+// later test's log, and the read cache would hand it an earlier test's rows.
+beforeEach(() => { vi.clearAllMocks(); __resetIdleLogThrottle(); __resetIdleCache() })
+afterEach(() => { vi.unstubAllEnvs() })
 
 describe('GET /api/public/tv-live/[token] — board payload', () => {
   it('renders the cumulative aggregate straight off the session row (no per-poll scan)', async () => {
@@ -216,5 +245,87 @@ describe('GET /api/public/tv-live/[token] — TZ.12 board zone', () => {
     expect(ny.location).toEqual({ id: 'loc-1', name: 'NY' })
     const dub = await (await callRoute(makeDb({ samples: [] }))).json()
     expect(dub.timezone).toBe('Europe/Dublin')
+  })
+})
+
+describe('TVSCENE.1 — idle block', () => {
+  // A read that does NOT throw, end to end: rows served through the token route
+  // arrive as the populated block the scenes render, and the storage push comes
+  // out as a URL an <img> can use. Class entries carry the studio-zone time and
+  // the name, nothing else.
+  it('carries a populated idle block when there are no open sessions', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://proj.supabase.co')
+    const db = makeDb({
+      samples: [],
+      sessions: [],
+      idle: {
+        occurrences: [{ name: 'BU1LD — Strength', program: 'BU1LD', starts_at: '2026-10-16T05:00:00Z' }],
+        achievements: [{
+          earned_at: '2026-10-15T18:00:00Z',
+          metadata: {},
+          achievement_rules: { name: '50 classes', tier: 4 },
+          contacts: { name: 'Saoirse Murphy', location_id: 'loc-1', hr_leaderboard_opt_out: false },
+        }],
+        content: { source_type: 'storage', source_ref: 'offer.png', label: 'Summer offer', template_values: null },
+      },
+    })
+    const res = await callRoute(db)
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.sessions).toEqual([])
+    expect(body.idle).toEqual({
+      up_next: [
+        { starts_at: '2026-10-16T05:00:00Z', starts_at_label: '06:00', class_name: 'BU1LD — Strength', program: 'BU1LD' },
+      ],
+      earned: [
+        { display_name: 'Saoirse M.', achievement: '50 classes', tier: 4, earned_at: '2026-10-15T18:00:00Z' },
+      ],
+      operator: {
+        source_type: 'storage',
+        source_ref: 'https://proj.supabase.co/storage/v1/object/public/tv-content/offer.png',
+        label: 'Summer offer',
+        template_values: null,
+      },
+    })
+    expect(JSON.stringify(body)).not.toContain('Murphy')
+  })
+
+  // Fail-to-absent, end to end: this stub serves no class_occurrences,
+  // contact_achievements or tv_content, so every read inside buildIdleContent
+  // throws and is caught. The block must still arrive, empty: a scene the
+  // scheduler skips is correct; a 500 on a studio TV is not. Content
+  // correctness is covered by src/lib/tv-idle-content.test.js.
+  it('returns an empty idle block rather than failing when the reads cannot be served', async () => {
+    const db = makeDb({ samples: [], sessions: [] })
+    const res = await callRoute(db)
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.idle.up_next).toEqual([])
+    expect(body.idle.earned).toEqual([])
+    expect(body.idle.operator).toBeNull()
+    // Absent, but not silent: each failed read left one structured line.
+    expect(logWarn.mock.calls.map(([module, , meta]) => `${module}:${meta.read}`).sort())
+      .toEqual(['tv-idle:earned', 'tv-idle:operator', 'tv-idle:up_next'])
+  })
+
+  it('omits idle entirely while a session is open', async () => {
+    const db = makeDb({ samples: [] }) // the file's default fixture carries one session
+    const res = await callRoute(db)
+    const body = await res.json()
+
+    expect(body.sessions.length).toBeGreaterThan(0)
+    expect(body.idle).toBeUndefined()
+  })
+
+  it('does not even read the idle tables while a session is open', async () => {
+    const db = makeDb({ samples: [] })
+    await callRoute(db)
+    const tables = db.from.mock.calls.map(([t]) => t)
+    expect(tables).not.toContain('class_occurrences')
+    expect(tables).not.toContain('contact_achievements')
+    expect(tables).not.toContain('tv_content')
   })
 })
