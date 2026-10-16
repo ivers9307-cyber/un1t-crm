@@ -224,6 +224,7 @@ export function emailDomainHref(orgId) {
 // Card labels used by the attention strip.
 const CARD_LABELS = {
   glofox: 'Glofox',
+  un1t_online: 'un1t.online',
   whatsapp: 'WhatsApp',
   instagram: 'Instagram',
   xero: 'Xero',
@@ -496,7 +497,7 @@ const REGISTRY_HUB_COLUMNS =
   'id, location_id, platform, status, is_active, label, display_name, ' +
   'external_account_id, config, token_expires_at, last_error, last_ok_at'
 
-const REGISTRY_PLATFORMS = ['glofox', 'unifi', 'sensibo', 'thinq', 'bca', 'instagram']
+const REGISTRY_PLATFORMS = ['glofox', 'unifi', 'sensibo', 'thinq', 'bca', 'instagram', 'un1t_online']
 
 // ── Shelly plugs (SHELLY-UI.7) ────────────────────────────────────────
 //
@@ -936,6 +937,33 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
     return row
   })
 
+  // ── un1t.online (UN1TSYNC.5) — registry-only, one row per location ──
+  // The registry row holds the API token in access_token, but REGISTRY_HUB_COLUMNS
+  // never selects it, and this row is built field by field (never a spread of
+  // the registry row or its config: token_id / token_name / permissions stay
+  // server-side). Only the non-secret studio title is surfaced.
+  const un1tOnline = regErr
+    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'un1t-online') }))
+    : locs.map((loc) => {
+    const reg = pickRegistry(regRows, loc.id, 'un1t_online')
+    const status = reg ? reg.status : 'not_connected'
+    const row = {
+      locationId: loc.id,
+      status,
+      studioTitle: plainSlice(reg?.config).studio_title ?? null,
+      tokenExpiresAt: reg?.token_expires_at ?? null,
+      lastOkAt: reg?.last_ok_at ?? null,
+      lastError: reg?.last_error ?? null,
+      href: locationTabHref(loc.id, 'un1t-online'),
+    }
+    attentionInputs.push({
+      cardKey: 'un1t_online', locationId: loc.id, locationName: nameById[loc.id],
+      status, message: row.lastError, tokenExpiresAt: row.tokenExpiresAt,
+      partialSetup: !!reg && status === 'not_connected', href: row.href,
+    })
+    return row
+  })
+
   // ── WhatsApp — per-location numbers + optional tier budget meter ──
   const whatsapp = waErr
     ? locs.map((loc) => unknownRow(loc.id, { numbers: [], budget: null, href: locationTabHref(loc.id, 'whatsapp') }))
@@ -1298,6 +1326,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
     expirySoonDays: EXPIRY_SOON_DAYS,
     locations: locs.map((l) => ({ id: l.id, name: l.name })),
     glofox,
+    un1t_online: un1tOnline,
     whatsapp,
     instagram,
     xero,

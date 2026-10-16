@@ -23,6 +23,7 @@ import {
   permissionsSchema, audienceFilterSchema,
   passwordSchema, tenantDomainBrandConfigSchema,
   giversEnquirySchema,
+  Un1tOnlineConnectSchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 import { PLATFORM_NAME } from './brand-name.js'
@@ -9286,7 +9287,7 @@ registry.registerPath({
     'Response data is membershipSourceState(): { source, state: none|configured|unconfigured|unknown, missing?, readError?, previous }.',
   request: {
     params: z.object({ id: uuidLike }),
-    body: { content: { 'application/json': { schema: z.object({ membership_source: z.enum(['none', 'glofox', 'un1t']) }).openapi('MembershipSourceSave') } } },
+    body: { content: { 'application/json': { schema: z.object({ membership_source: z.enum(['none', 'glofox', 'un1t', 'un1t_online']) }).openapi('MembershipSourceSave') } } },
   },
   responses: {
     200: { description: 'Saved (or already set) — the resolved membership-source state, plus `warning` when Glofox credentials were kept', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
@@ -9294,6 +9295,110 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — owner or master at this location', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// UN1TSYNC.7 — Hatch Street's un1t.online connection (migs 726, channel_connections
+// platform 'un1t_online'). Owner/master AT the location on every method; the
+// token is write-only and appears in no response.
+const Un1tOnlineStatus = z.object({
+  connected: z.boolean(),
+  status: z.enum(['connected', 'action_needed', 'error', 'not_connected']),
+  studio_title: z.string().nullable().optional(),
+  token_name: z.string().nullable().optional(),
+  permissions_count: z.number().int().optional(),
+  has_write_permissions: z.boolean().optional(),
+  expires_at: z.string().nullable().optional(),
+  last_error: z.string().nullable().optional(),
+  last_ok_at: z.string().nullable().optional(),
+  last_run: z.object({
+    status: z.enum(['running', 'ok', 'error']),
+    started_at: z.string(),
+    finished_at: z.string().nullable(),
+    duration_ms: z.number().int().nullable(),
+    first_error: z.string().nullable(),
+    counts: z.object({}).passthrough(),
+  }).nullable(),
+}).openapi('Un1tOnlineStatus')
+
+const Un1tOnlineGate = {
+  401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  403: { description: 'Forbidden: owner or master at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+}
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/un1t-online',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Masked un1t.online connection status and the last sync run (owner or master)',
+  description:
+    'Studio title, token name, permission count, `has_write_permissions` (any permission ending :create, :update or :delete), ' +
+    'token expiry, last error and the newest un1t_sync_runs row (status, times, pulled/contacts/memberships counts). ' +
+    'The token is never returned. Gate: membership (404) then owner-or-master AT the location (403).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Masked connection status', content: { 'application/json': { schema: SuccessResponse(Un1tOnlineStatus) } } },
+    ...Un1tOnlineGate,
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/un1t-online',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Connect or replace the un1t.online API token (owner or master)',
+  description:
+    'Checks the token against un1t.online (GET /api-token) before writing anything: `token_rejected` (400) when it refuses it, ' +
+    '`browser_token` (400) when the token has allowed origins, `un1t_unreachable` (502) when un1t.online cannot be asked. ' +
+    'On success the active channel_connections row (platform un1t_online) is updated or created with the token, studio id, ' +
+    'expiry and { token_id, token_name, studio_title, permissions }, and a studio whose membership_source is `none` moves to ' +
+    '`un1t_online` (audited). A studio on any other source is left alone. The response carries `warning: "write_permissions"` ' +
+    'when the token can change data on un1t.online. The token is never echoed.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: Un1tOnlineConnectSchema.extend({}).openapi('Un1tOnlineConnect') } } },
+  },
+  responses: {
+    200: { description: 'Connected: the masked status, plus `warning` when the token can write', content: { 'application/json': { schema: SuccessResponse(Un1tOnlineStatus.passthrough()) } } },
+    400: { description: 'Malformed body, `token_rejected` or `browser_token`', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: '`un1t_unreachable`: un1t.online could not be asked', content: { 'application/json': { schema: ErrorResponse } } },
+    ...Un1tOnlineGate,
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/locations/{id}/un1t-online',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Disconnect un1t.online (owner or master)',
+  description:
+    'Deactivates the channel_connections row and blanks its token. Never touches locations.membership_source (the ' +
+    'Membership source card owns it) and never deletes synced data. Disconnecting when nothing is connected is a 200.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ disconnected: true }', content: { 'application/json': { schema: SuccessResponse(z.object({ disconnected: z.boolean() })) } } },
+    ...Un1tOnlineGate,
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations/{id}/un1t-online/sync',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Run the un1t.online sync now for one location (owner or master)',
+  description:
+    'Runs the same full pull as the */15 cron for this location (maxDuration 120 s). A run that did not go through ' +
+    '(auth, studio_mismatch, api, truncated, db, not_connected) is still a 200 with `data.ok: false` and `data.reason`.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ ok, reason?, counts, runId }', content: { 'application/json': { schema: SuccessResponse(z.object({ ok: z.boolean(), reason: z.string().optional(), counts: z.object({}).passthrough(), runId: z.string().nullable() })) } } },
+    500: { description: 'The sync threw unexpectedly', content: { 'application/json': { schema: ErrorResponse } } },
+    ...Un1tOnlineGate,
   },
 })
 

@@ -193,6 +193,21 @@ const PROVIDERS = {
       }
     },
   },
+
+  // UN1TSYNC.5 — un1t.online (Hatch Street's gym platform). REGISTRY-ONLY:
+  // there is no legacy column or settings slice to read or mirror, so it is
+  // deliberately NOT in DUAL_READ_PLATFORMS (the refresh route and the
+  // legacy->registry sync loop walk that list). A location with no active row
+  // reads { source: 'legacy', status: 'not_connected' } from the null
+  // rowFromLegacy; legacySelect is just 'id' so that read never touches
+  // `settings`. The registry row (written by the connect route) carries the
+  // token in access_token, the studio id in external_account_id and
+  // { token_id, token_name, studio_title, permissions } in config.
+  un1t_online: {
+    legacySelect: 'id',
+    rowFromLegacy: () => null,
+    applyRow: (location) => location,
+  },
 }
 
 /**
@@ -343,6 +358,10 @@ export async function readConnection(db, locationId, platform) {
   const reg = await readActiveConnections(db, locationId, [platform])
   if (reg.rows[0]) return { conn: normalizeConnectionRow(reg.rows[0]), error: null }
   if (reg.error) {
+    // A registry-only provider has no legacy to fall back to, so a failed
+    // registry read is an unanswered question, never "not connected"
+    // (REGISTRYREAD.1). The dual-read platforms keep the fail-open fallback.
+    if (!DUAL_READ_PLATFORMS.includes(platform)) return { conn: null, error: reg.error }
     logWarn('connection-registry', 'registry read failed; serving legacy config', { locationId, platform, err: reg.error })
   }
   if (!db || !locationId) {

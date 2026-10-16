@@ -63,7 +63,7 @@ const ORG_B = 'c0000000-0000-0000-0000-000000000003'
 
 // Records every table touched AND every filter, so "never reached the
 // database" and "read only ITS OWN org" are assertions, not assumptions.
-function makeDb({ errors = {}, location = null, locationError = null } = {}) {
+function makeDb({ errors = {}, location = null, locationError = null, un1tConn = null } = {}) {
   const touched = []
   const filters = []
   const from = (table) => {
@@ -78,6 +78,10 @@ function makeDb({ errors = {}, location = null, locationError = null } = {}) {
           ? (location || { id: LOC_B, organization_id: ORG_B, name: 'Someone else', features: {} })
           : null,
       })
+    // UN1TSYNC.7 — the page head-counts the studio's active un1t.online row.
+    if (table === 'channel_connections') {
+      c.then = (res, rej) => Promise.resolve(un1tConn || { count: 0, error: null }).then(res, rej)
+    }
     c.maybeSingle = () => Promise.resolve(errors[table]
       ? { data: null, error: errors[table] }
       : { data: table === 'organizations' ? { id: ORG_B, name: 'Another Org' } : null })
@@ -397,5 +401,37 @@ describe('/settings/locations/[id] — membershipSettingsHref lands on the Membe
     const el = findElement(tree, 'LocationIntegrations')
     expect(el).toBeTruthy()
     expect(el.props.membershipSource).toMatchObject({ source: 'none', state: 'none' })
+  })
+})
+
+// UN1TSYNC.7 — the un1t.online tab must stay reachable (so Disconnect works)
+// whenever the studio holds an ACTIVE token, whatever its membership source.
+describe('/settings/locations/[id] — hasUn1tOnlineConnection', () => {
+  const owner = () => user({ role: 'owner', rolesByLocation: { [LOC_B]: 'owner' }, locations: [{ id: LOC_B }] })
+  const render = async (un1tConn) => {
+    getCurrentUser.mockResolvedValue(owner())
+    const db = makeDb({
+      location: { id: LOC_B, organization_id: ORG_B, name: 'S', features: {}, settings: {}, membership_source: 'glofox' },
+      un1tConn,
+    })
+    createServerClient.mockReturnValue(db)
+    const tree = await EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve({ tab: 'integrations' }) })
+    return { el: findElement(tree, 'LocationIntegrations'), db }
+  }
+
+  it('is true for a studio with an active un1t.online row (count only, scoped to the studio)', async () => {
+    const { el, db } = await render({ count: 1, error: null })
+    expect(el.props.hasUn1tOnlineConnection).toBe(true)
+    expect(db.filters).toContainEqual({ table: 'channel_connections', col: 'location_id', val: LOC_B })
+    expect(db.filters).toContainEqual({ table: 'channel_connections', col: 'platform', val: 'un1t_online' })
+    expect(db.filters).toContainEqual({ table: 'channel_connections', col: 'is_active', val: true })
+  })
+
+  it('is false for a clean zero', async () => {
+    expect((await render({ count: 0, error: null })).el.props.hasUn1tOnlineConnection).toBe(false)
+  })
+
+  it('fails open to true when the count could not be read', async () => {
+    expect((await render({ count: null, error: { code: 'XX000' } })).el.props.hasUn1tOnlineConnection).toBe(true)
   })
 })

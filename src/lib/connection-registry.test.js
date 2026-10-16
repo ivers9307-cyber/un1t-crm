@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   DUAL_READ_PLATFORMS,
   registryRowFromLegacy,
@@ -276,6 +276,44 @@ describe('readConnection', () => {
     expect(conn.source).toBe('legacy')
     expect(conn.accessToken).toBe('leg-key')
     expect(conn.config).toEqual({ pod_id: 'p1' })
+  })
+
+  it('serves un1t_online from the registry and answers not_connected with no row (no legacy settings read)', async () => {
+    const row = rowFor('un1t_online', {
+      access_token: 'un1t_tok', external_account_id: 'studio-9', display_name: 'UN1T Hatch Street',
+      token_expires_at: '2027-01-01T00:00:00Z', config: { token_id: 't1', studio_title: 'Hatch Street' },
+    })
+    const reg = await readConnection(mockDb({ rows: [row] }), 'loc-1', 'un1t_online')
+    expect(reg.error).toBeNull()
+    expect(reg.conn).toMatchObject({
+      source: 'registry', platform: 'un1t_online', status: 'connected', accessToken: 'un1t_tok',
+      externalAccountId: 'studio-9', tokenExpiresAt: '2027-01-01T00:00:00Z', config: { token_id: 't1', studio_title: 'Hatch Street' },
+    })
+
+    const select = vi.fn()
+    const db = mockDb({ rows: [], location: { id: 'loc-1', settings: { glofox: { api_key: 'leaky' } } } })
+    const orig = db.from
+    db.from = (t) => { const c = orig(t); if (t === 'locations') { const s0 = c.select; c.select = (cols) => { select(cols); return s0(cols) } } return c }
+    const none = await readConnection(db, 'loc-1', 'un1t_online')
+    expect(none.error).toBeNull()
+    expect(none.conn).toMatchObject({ source: 'legacy', platform: 'un1t_online', status: 'not_connected', isActive: false, accessToken: null, config: {} })
+    expect(select).toHaveBeenCalledTimes(1)
+    expect(select).toHaveBeenCalledWith('id') // never settings
+  })
+
+  it('a failed registry read for un1t_online is an error, never "not connected" (no legacy to answer)', async () => {
+    const db = mockDb({ failRegistry: true, location: { id: 'loc-1' } })
+    const { conn, error } = await readConnection(db, 'loc-1', 'un1t_online')
+    expect(conn).toBeNull()
+    expect(error).toBeTruthy()
+    expect(db.queries).not.toContain('locations')
+  })
+
+  it('un1t_online is registry-only: a provider for overlays, but not a dual-read platform', () => {
+    expect(DUAL_READ_PLATFORMS).not.toContain('un1t_online')
+    expect(registryRowFromLegacy('un1t_online', { id: 'loc-1', settings: { un1t_online: { x: 1 } } })).toBeNull()
+    const loc = { id: 'loc-1', settings: { a: 1 } }
+    expect(applyConnectionRow(loc, rowFor('un1t_online', { access_token: 'tok' }))).toEqual(loc)
   })
 
   it('throws on an unknown platform', async () => {

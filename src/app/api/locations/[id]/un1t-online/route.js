@@ -1,0 +1,336 @@
+// GET / PUT / DELETE /api/locations/[id]/un1t-online
+//
+// UN1TSYNC.7 — connect, inspect and disconnect Hatch Street's un1t.online
+// token. The token is a per-studio bearer the operator creates at un1t.online
+// (Settings > API tokens); it lives in the active channel_connections row
+// (platform 'un1t_online') beside the studio it was issued for. The sync
+// (src/lib/un1t-online-sync.js) and the membership-source provider read it from
+// there.
+//
+// Gate on EVERY method, the membership-source route's order: getCurrentUser
+// (401) -> assertLocationAccessOr404 (a detail route never confirms an id to a
+// caller who is not at the studio) -> guardMasterOrOwner AT THE TARGET (a
+// manager gets 403; it judges rolesByLocation[params.id], never `user.role`).
+//
+// PUT validates the token's SHAPE, then asks un1t.online who it is
+// (GET /api-token): a refusal is 400 token_rejected, a token with allowed
+// origins is a browser token that has no business in a server config (400
+// browser_token), anything else upstream is 502 un1t_unreachable. Nothing is
+// written on any of those. On success the active row is updated in place (or
+// inserted), status reset to connected, and a studio still on membership_source
+// 'none' moves to 'un1t_online' (audited, cache dropped) exactly as the Glofox
+// connect does; a studio on any other source is left alone.
+//
+// A replacement token must be for the studio already connected here (409
+// studio_changed; disconnect first), and a studio already active at ANOTHER
+// location is refused (409 studio_already_connected; mig 726's partial unique
+// index is the backstop, its 23505 maps to the same answer).
+//
+// DELETE deactivates the row and blanks the token. It never touches
+// membership_source: that is the Membership source card's job.
+//
+// NO RESPONSE CONTAINS THE TOKEN (presentUn1tConnection picks fields; it never
+// copies access_token). The `write_permissions` warning rides a connect whose
+// token can change data on un1t.online: the CRM only reads, so a read-only
+// token is safer.
+
+import { NextResponse } from 'next/server'
+import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
+import { createServerClient } from '@/lib/supabase'
+import { validateBody } from '@/lib/validate'
+import { Un1tOnlineConnectSchema } from '@/lib/schemas'
+import { createUn1tClient, Un1tAuthError } from '@/lib/un1t-online'
+import { tokenFingerprint } from '@/lib/un1t-online-token'
+import { readConnection, normalizeConnectionRow } from '@/lib/connection-registry'
+import { presentUn1tConnection, hasWritePermissions } from '@/lib/un1t-online-status'
+import { logMembershipSourceChange } from '@/lib/membership/audit'
+import { resetMembershipStateCache } from '@/lib/membership/state-for-page'
+import { logError } from '@/lib/log'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+const PLATFORM = 'un1t_online'
+const SOURCE_KEY = 'un1t_online'
+const LOG = 'un1t-online-connect'
+
+// Log a Supabase/PostgREST error as { code, message } ONLY. The raw error's
+// `details` ("Failing row contains (...)") carries the whole channel_connections
+// row, access_token included, and a log line must never hold the token.
+function safeErr(err) {
+  if (!err || typeof err !== 'object') return err ?? null
+  return { code: err.code ?? null, message: err.message ?? null }
+}
+
+// Postgres unique_violation. On the connect write it is the one-studio-one-
+// location index (channel_connections_un1t_online_studio_unique, mig 726),
+// unless it is the one-active-per-location index (a double click racing itself).
+function isUniqueViolation(err) {
+  return err?.code === '23505'
+}
+function conflictResponse(err) {
+  if (/one_active/.test(err?.message || '')) {
+    return NextResponse.json({
+      success: false,
+      error: 'connection_conflict',
+      code: 'connection_conflict',
+      message: 'Another connect for this studio was in progress. Reload and try again.',
+    }, { status: 409 })
+  }
+  return studioAlreadyConnected()
+}
+function studioAlreadyConnected() {
+  return NextResponse.json({
+    success: false,
+    error: 'studio_already_connected',
+    code: 'studio_already_connected',
+    message: 'That un1t.online studio is already connected to another location. One studio can feed only one location.',
+  }, { status: 409 })
+}
+
+// 401 / 404 / 403, in that order, or null when the caller may act on this studio.
+async function gate(props) {
+  const params = await props.params
+  const user = await getCurrentUser()
+  if (!user) return { refusal: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
+  const locationId = params.id
+  const access = assertLocationAccessOr404(user, locationId)
+  if (access) return { refusal: access }
+  const role = guardMasterOrOwner(user, locationId)
+  if (role) {
+    return { refusal: NextResponse.json({ success: false, error: 'Only owners and masters can manage the un1t.online connection.' }, { status: 403 }) }
+  }
+  return { user, locationId }
+}
+
+export async function GET(request, props) {
+  const g = await gate(props)
+  if (g.refusal) return g.refusal
+  const db = createServerClient()
+
+  const { conn, error } = await readConnection(db, g.locationId, PLATFORM)
+  if (error || !conn) {
+    logError(LOG, 'connection read failed', { locationId: g.locationId, err: safeErr(error) })
+    return NextResponse.json({ success: false, error: 'Could not read the connection.' }, { status: 500 })
+  }
+
+  const { data: runs, error: runErr } = await db
+    .from('un1t_sync_runs')
+    .select('id, started_at, finished_at, duration_ms, status, counts, first_error')
+    .eq('location_id', g.locationId)
+    .order('started_at', { ascending: false })
+    .limit(1)
+  if (runErr) {
+    // The run summary is advisory: the connection itself answered.
+    logError(LOG, 'last run read failed', { locationId: g.locationId, err: safeErr(runErr) })
+  }
+  const lastRun = Array.isArray(runs) ? runs[0] ?? null : null
+
+  return NextResponse.json({ success: true, data: presentUn1tConnection(conn, lastRun) })
+}
+
+export async function PUT(request, props) {
+  const g = await gate(props)
+  if (g.refusal) return g.refusal
+  const { user, locationId } = g
+
+  const validation = await validateBody(request, Un1tOnlineConnectSchema)
+  if (!validation.ok) return validation.response
+  const { token } = validation.data
+
+  // Who does un1t.online say this token is? Nothing is written until it answers.
+  let self
+  try {
+    self = await createUn1tClient({ token }).getSelf()
+  } catch (err) {
+    if (err instanceof Un1tAuthError) {
+      return NextResponse.json({
+        success: false,
+        code: 'token_rejected',
+        error: 'un1t.online rejected that token. Check it was copied whole and has not been revoked or expired.',
+      }, { status: 400 })
+    }
+    logError(LOG, 'un1t.online token check failed', { locationId, errName: err?.name, status: err?.status ?? null })
+    return NextResponse.json({
+      success: false,
+      code: 'un1t_unreachable',
+      error: 'Could not reach un1t.online to check that token. Try again in a minute.',
+    }, { status: 502 })
+  }
+
+  if (!self?.studio?.id) {
+    logError(LOG, 'un1t.online answered with no studio', { locationId })
+    return NextResponse.json({
+      success: false,
+      code: 'un1t_unreachable',
+      error: 'un1t.online did not say which studio that token belongs to.',
+    }, { status: 502 })
+  }
+  if (Array.isArray(self.allowed_origins) && self.allowed_origins.length > 0) {
+    return NextResponse.json({
+      success: false,
+      code: 'browser_token',
+      error: 'That token is restricted to browser origins, so a server cannot use it. Create a server token with no allowed origins and paste that.',
+    }, { status: 400 })
+  }
+
+  const db = createServerClient()
+
+  // `id` is the primary key; null = gone between the gate and now.
+  const { data: location, error: locErr } = await db
+    .from('locations')
+    .select('id, name, membership_source')
+    .eq('id', locationId)
+    .maybeSingle()
+  if (locErr) {
+    logError(LOG, 'location read failed', { locationId, err: safeErr(locErr) })
+    return NextResponse.json({ success: false, error: 'Could not read the location.' }, { status: 500 })
+  }
+  if (!location) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+
+  const permissions = Array.isArray(self.permissions) ? self.permissions : []
+  const fields = {
+    access_token: token,
+    external_account_id: String(self.studio.id),
+    display_name: self.studio.title ?? null,
+    token_expires_at: self.expires_at ?? null,
+    status: 'connected',
+    last_error: null,
+    config: {
+      token_id: self.id ?? null,
+      // Rotation keeps token_id; this tells a rotated secret from the old one.
+      token_fingerprint: tokenFingerprint(token),
+      token_name: self.name ?? null,
+      studio_title: self.studio.title ?? null,
+      permissions,
+    },
+    updated_at: new Date().toISOString(),
+  }
+
+  const studioId = String(self.studio.id)
+
+  // Select-then-write (the one-active guarantee is a PARTIAL unique index,
+  // which PostgREST upsert cannot target; syncConnectionFromLegacy does the same).
+  const { data: existing, error: readErr } = await db
+    .from('channel_connections')
+    .select('id, external_account_id')
+    .eq('location_id', locationId)
+    .eq('platform', PLATFORM)
+    .eq('is_active', true)
+    .maybeSingle()
+  if (readErr) {
+    logError(LOG, 'registry read failed', { locationId, err: safeErr(readErr) })
+    return NextResponse.json({ success: false, error: 'Could not read the connection.' }, { status: 500 })
+  }
+
+  // A replacement token must be for the SAME studio. Rewriting
+  // external_account_id would defeat the sync's studio_mismatch guard (it
+  // compares the token's studio with the stored one) and the next run would
+  // end every Hatch membership. Switching studio = disconnect first.
+  if (existing?.external_account_id && existing.external_account_id !== studioId) {
+    return NextResponse.json({
+      success: false,
+      error: 'studio_changed',
+      code: 'studio_changed',
+      message: 'That token is for a different un1t.online studio than the one connected here. Disconnect first, then connect the new token.',
+    }, { status: 409 })
+  }
+
+  // One un1t.online studio feeds ONE CRM location. Judged in code so the
+  // refusal is readable; mig 726's partial unique index is the backstop.
+  const { data: sameStudio, error: bindErr } = await db
+    .from('channel_connections')
+    .select('location_id')
+    .eq('platform', PLATFORM)
+    .eq('is_active', true)
+    .eq('external_account_id', studioId)
+  if (bindErr) {
+    logError(LOG, 'studio binding read failed', { locationId, err: safeErr(bindErr) })
+    return NextResponse.json({ success: false, error: 'Could not read the connection.' }, { status: 500 })
+  }
+  if ((sameStudio || []).some((r) => r.location_id !== locationId)) return studioAlreadyConnected()
+
+  if (existing) {
+    const { data, error } = await db
+      .from('channel_connections')
+      .update(fields)
+      .eq('id', existing.id)
+      .select('id')
+    if (isUniqueViolation(error)) return conflictResponse(error)
+    if (error || !Array.isArray(data) || data.length === 0) {
+      logError(LOG, 'registry update failed', { locationId, err: error ? safeErr(error) : 'no row updated' })
+      return NextResponse.json({ success: false, error: 'Could not save the connection.' }, { status: 500 })
+    }
+  } else {
+    const { data, error } = await db
+      .from('channel_connections')
+      .insert({ location_id: locationId, platform: PLATFORM, is_active: true, ...fields })
+      .select('id')
+    if (isUniqueViolation(error)) return conflictResponse(error)
+    if (error || !Array.isArray(data) || data.length === 0) {
+      logError(LOG, 'registry insert failed', { locationId, err: error ? safeErr(error) : 'no row inserted' })
+      return NextResponse.json({ success: false, error: 'Could not save the connection.' }, { status: 500 })
+    }
+  }
+
+  // membership_source follows the connection, only off 'none' (a studio on
+  // glofox is left alone). The update is conditional on the value still being
+  // 'none' and judged by the rows it touched, so a change made since the read
+  // above wins. The credential is saved either way: a failed or lost flip is
+  // logged and reported (membership_source_set:false), never a failed connect.
+  const previous = location.membership_source ?? 'none'
+  let sourceSet = previous === SOURCE_KEY
+  if (previous === 'none') {
+    const { data: flipRows, error: flipErr } = await db
+      .from('locations')
+      .update({ membership_source: SOURCE_KEY, updated_at: new Date().toISOString() })
+      .eq('id', locationId)
+      .eq('membership_source', 'none')
+      .select('id')
+    if (flipErr) {
+      logError(LOG, 'locations.membership_source update failed', { locationId, err: safeErr(flipErr) })
+    } else if (Array.isArray(flipRows) && flipRows.length > 0) {
+      sourceSet = true
+      resetMembershipStateCache(locationId)
+      await logMembershipSourceChange({ user, location, from: previous, to: SOURCE_KEY, via: 'integrations/un1t-online', request })
+    }
+  }
+
+  const body = {
+    success: true,
+    data: {
+      ...presentUn1tConnection(normalizeConnectionRow({
+        platform: PLATFORM,
+        location_id: locationId,
+        is_active: true,
+        ...fields,
+      })),
+      membership_source_set: sourceSet,
+    },
+  }
+  if (hasWritePermissions(permissions)) body.warning = 'write_permissions'
+  return NextResponse.json(body)
+}
+
+export async function DELETE(request, props) {
+  const g = await gate(props)
+  if (g.refusal) return g.refusal
+  const db = createServerClient()
+
+  const { error } = await db
+    .from('channel_connections')
+    .update({ is_active: false, access_token: null, status: 'not_connected', updated_at: new Date().toISOString() })
+    .eq('location_id', g.locationId)
+    .eq('platform', PLATFORM)
+    .eq('is_active', true)
+    .select('id')
+  if (error) {
+    logError(LOG, 'disconnect failed', { locationId: g.locationId, err: safeErr(error) })
+    return NextResponse.json({ success: false, error: 'Could not disconnect.' }, { status: 500 })
+  }
+  // Zero rows is fine: already disconnected. membership_source is deliberately
+  // untouched (the Membership source card owns it); the page's membership
+  // state may read "unconfigured" now, so drop the cached answer.
+  resetMembershipStateCache(g.locationId)
+  return NextResponse.json({ success: true, data: { disconnected: true } })
+}

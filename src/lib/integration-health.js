@@ -58,6 +58,41 @@ export function registryHealth(status) {
   return REGISTRY_TO_HEALTH[status] || 'unknown'
 }
 
+// UN1TSYNC.5 — un1t.online tokens are pasted by an operator and expire. Warn
+// this long before the expiry date (an already-expired token is inside it).
+export const UN1T_ONLINE_EXPIRY_WARN_DAYS = 30
+
+/**
+ * Grade one normalised un1t.online connection (readConnection's conn). Pure.
+ * Registry status first; then a token inside the warn window lifts an 'ok'
+ * to 'warn' (it never softens a 'warn'/'down'). The detail names the studio
+ * title and expiry date from the row's non-secret config — never the token.
+ */
+export function un1tOnlineHealth(conn, now = Date.now()) {
+  if (!conn || conn.status === 'not_connected') return { status: 'unknown', detail: 'Not connected' }
+  let status = registryHealth(conn.status)
+  const expMs = conn.tokenExpiresAt ? Date.parse(conn.tokenExpiresAt) : NaN
+  const expiryKnown = Number.isFinite(expMs)
+  const expiringSoon = expiryKnown && expMs - now <= UN1T_ONLINE_EXPIRY_WARN_DAYS * 24 * 60 * 60 * 1000
+  if (status === 'ok' && expiringSoon) status = 'warn'
+  // A run that synced but could not match some members to contacts keeps the
+  // row 'connected' and says so in last_error: that is a warning, not 'ok'.
+  const syncedWithProblems = conn.status === 'connected' && !!conn.lastError
+  if (status === 'ok' && syncedWithProblems) status = 'warn'
+  if (conn.status !== 'connected') {
+    return { status, detail: conn.lastError ? String(conn.lastError).slice(0, 120) : 'Needs attention' }
+  }
+  if (syncedWithProblems) return { status, detail: String(conn.lastError).slice(0, 160) }
+  const parts = ['Connected']
+  const title = conn.config?.studio_title
+  if (title) parts.push(String(title))
+  if (expiryKnown) {
+    const day = new Date(expMs).toISOString().slice(0, 10)
+    parts.push(expMs <= now ? `token expired ${day}` : `token expires ${day}`)
+  }
+  return { status, detail: parts.join(' · ') }
+}
+
 // Payment health over a 7d window (lower volume than email). race_payments
 // records a hard failure as failed_at — a genuine provider error, distinct
 // from customer 'abandoned' (walking away isn't a fault). Small-sample
@@ -366,6 +401,32 @@ export async function getIntegrationHealth(db, locationId) {
     })
   } catch { rows.push({ key: 'glofox', name: 'Glofox', status: 'unknown', detail: 'Unavailable' }) }
 
+  // 4b. un1t.online (UN1TSYNC.5) — registry-only. Shown when the location has
+  // an active connection, or when its membership source IS un1t_online (so a
+  // chosen-but-unconnected studio reads "Not connected" rather than nothing).
+  // Every other location has no such row at all: this integration is not part
+  // of its estate. An unreadable registry is "Unavailable", never absent.
+  try {
+    const { conn, error: connErr } = await readConnection(db, locationId, 'un1t_online')
+    if (connErr) throw connErr
+    let show = conn.source === 'registry'
+    if (!show) {
+      const { data: loc, error: locErr } = await db.from('locations').select('membership_source').eq('id', locationId).maybeSingle()
+      if (locErr) throw locErr
+      show = loc?.membership_source === 'un1t_online'
+    }
+    if (show) {
+      const g = un1tOnlineHealth(conn)
+      rows.push({
+        key: 'un1t_online',
+        name: 'un1t.online',
+        status: g.status,
+        lastSuccess: conn.lastOkAt || null,
+        detail: g.detail,
+      })
+    }
+  } catch { rows.push({ key: 'un1t_online', name: 'un1t.online', status: 'unknown', detail: 'Unavailable' }) }
+
   // 5. Xero — OAuth binding + last sync error (per location). Token expiry is
   // NOT graded (tokens refresh lazily on use — see gradeXeroConnection).
   try {
@@ -558,6 +619,7 @@ const REMEDIES = {
   wa: { text: 'Re-authorise the WhatsApp number, or address the Meta message-quality rating, in Settings → Integrations.', href: '/settings/integrations-hub' },
   webhooks: { text: 'Review the captured events in the dead-letter queue (master/owner) — replay the replayable, resolve the rest by hand.', href: '/admin/webhook-dead-letter' },
   glofox: { text: 'Reconnect Glofox in Settings → Integrations.', href: '/settings/integrations-hub' },
+  un1t_online: { text: 'Paste a new un1t.online token in Settings → Integrations.', href: '/settings/integrations-hub' },
   xero: { text: 'Reconnect Xero in Settings → Integrations if the sync error persists.', href: '/settings/integrations-hub' },
   email: { text: 'A high bounce/complaint rate hurts deliverability — review recipients and your sending domain.', href: '/settings/email-domain' },
   email_inbound: { text: 'Inbound email may have stopped arriving. Probe the webhook: POST a bogus token to the shim URL — 404 = healthy, 500 missing_secret = secrets lost. Full runbook in docs/architecture/INTEGRATIONS.md; check the Postmark Activity page for undelivered inbound.', href: null },

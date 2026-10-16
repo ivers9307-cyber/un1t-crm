@@ -456,6 +456,11 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
   const inScope = (locationId) => scope === 'all' || locationId === scope
 
   const glofox = (data.glofox || []).filter((r) => inScope(r.locationId))
+  // UN1TSYNC.5 — shown only where there is something to show: a studio that
+  // has never connected un1t.online (every tenant but Hatch Street) sees no
+  // card at all, and an unreadable registry is the registry attention row's
+  // job, not a card of "Try again" on a platform it never used.
+  const un1tOnline = (data.un1t_online || []).filter((r) => inScope(r.locationId) && r.status !== 'not_connected' && r.status !== 'unknown')
   const whatsapp = (data.whatsapp || []).filter((r) => inScope(r.locationId))
   const instagram = (data.instagram || []).filter((r) => inScope(r.locationId))
   const xero = (data.xero || []).filter((r) => inScope(r.locationId))
@@ -639,6 +644,33 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
           </div>
           )}
         </HubCard>
+
+        {/* un1t.online — Hatch Street's gym platform; a read-only sync with an
+            API token pasted on the location's un1t.online tab (deep link, no drawer) */}
+        {un1tOnline.length > 0 && (
+          <HubCard
+            icon={Activity}
+            title="un1t.online"
+            locTag={scopeTag(un1tOnline)}
+            provider="Members, subscriptions, payments & bookings (read-only)"
+            chip={<StatusChip status={worstOf(un1tOnline.map((r) => r.status))} />}
+          >
+            <div className="divide-y divide-un1t-border border-t border-un1t-border text-sm">
+              {un1tOnline.map((r) => (
+                <div key={r.locationId} className="flex items-center gap-3 py-2">
+                  <span className="font-semibold min-w-[88px]">{nameById[r.locationId]}</span>
+                  <span className="flex-1 text-xs text-un1t-subtle truncate">
+                    {r.studioTitle ? `${r.studioTitle}` : 'Connected'}
+                    {r.lastOkAt ? ` · last OK ${fmtDate(r.lastOkAt)}` : ''}
+                    {r.tokenExpiresAt ? ` · token expires ${fmtDate(r.tokenExpiresAt)}` : ''}
+                    {r.lastError ? ` · ${r.lastError}` : ''}
+                  </span>
+                  <Link href={r.href} className={linkBtn()}>Open</Link>
+                </div>
+              ))}
+            </div>
+          </HubCard>
+        )}
 
         {/* WhatsApp — per-location numbers + tier budget meter */}
         <HubCard

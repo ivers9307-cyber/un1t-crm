@@ -19,7 +19,7 @@
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageCircle,
-  AlertCircle, CheckCircle2, Megaphone, CreditCard,
+  AlertCircle, CheckCircle2, Megaphone, CreditCard, PlugZap,
 } from 'lucide-react'
 import { Instagram } from '@/components/icons/InstagramIcon'
 import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
@@ -28,6 +28,7 @@ import { hasRoleAtLocation } from '@/lib/role-at-location'
 
 import XeroIntegrationTab from './integrations/XeroIntegrationTab'
 import GlofoxIntegrationTab from './integrations/GlofoxIntegrationTab'
+import Un1tOnlineIntegrationTab from './integrations/Un1tOnlineIntegrationTab'
 import UnifiIntegrationTab from './integrations/UnifiIntegrationTab'
 import AcDevicesIntegrationTab from './integrations/AcDevicesIntegrationTab'
 import BcaIntegrationTab from './integrations/BcaIntegrationTab'
@@ -47,7 +48,17 @@ function glofoxTabStatus(membershipSource) {
   return 'not-configured'
 }
 
-export default function LocationIntegrations({ location, xeroConnection, xeroReadFailed = false, user, sampleBcaCar, membershipSource = null }) {
+// UN1TSYNC.7 — the un1t.online tab's dot, from the same membership-source
+// STATE the Glofox tab reads. Only a studio whose source IS un1t_online can be
+// 'connected'; on 'none' (the tab is shown so an owner can connect) it is grey.
+function un1tOnlineTabStatus(membershipSource) {
+  if (!membershipSource || membershipSource.source !== 'un1t_online') return 'not-configured'
+  if (membershipSource.state === 'configured') return 'connected'
+  if (membershipSource.state === 'unknown') return 'unknown'
+  return 'not-configured'
+}
+
+export default function LocationIntegrations({ location, xeroConnection, xeroReadFailed = false, user, sampleBcaCar, membershipSource = null, hasUn1tOnlineConnection = false }) {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -94,6 +105,23 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
       label: 'Glofox',
       Icon: Zap,
       status: glofoxTabStatus(membershipSource),
+    })
+  }
+  // UN1TSYNC.7 — un1t.online (Hatch Street's gym platform). Owner/master only
+  // (the connect route's gate). Shown where it is, or can become, the
+  // membership source: a studio already on un1t_online, or on 'none' where
+  // connecting selects it. A Glofox studio is not offered it, UNLESS it holds
+  // an active un1t.online token (the page reads that): a connected token can
+  // always be disconnected, even after the source was changed elsewhere. On
+  // 'none' it follows the Glofox tab's rule: only a studio that books or holds
+  // contacts has a membership source to choose (a bare studio is offered neither).
+  const source = location.membership_source ?? 'none'
+  if (isOwnerOrMaster && (hasUn1tOnlineConnection || source === 'un1t_online' || (source === 'none' && (features.bookings || features.contacts)))) {
+    tabs.push({
+      key: 'un1t-online',
+      label: 'un1t.online',
+      Icon: PlugZap,
+      status: un1tOnlineTabStatus(membershipSource),
     })
   }
   // PAID-INTRO-P3C.5 — payments settings (Stripe Connect for the class
@@ -238,6 +266,9 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
           )}
           {activeKey === 'glofox' && (
             <GlofoxIntegrationTab location={location} canEdit={isOwnerOrMaster} />
+          )}
+          {activeKey === 'un1t-online' && (
+            <Un1tOnlineIntegrationTab location={location} canEdit={isOwnerOrMaster} />
           )}
           {activeKey === 'ads' && (
             <AdsIntegrationTab location={location} canEdit={isOwnerOrMaster} />

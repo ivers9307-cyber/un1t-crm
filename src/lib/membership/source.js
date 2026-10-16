@@ -21,11 +21,12 @@
 import { logWarn, logError } from '@/lib/log'
 import { noneSource } from './sources/none'
 import { glofoxSource } from './sources/glofox'
+import { un1tOnlineSource } from './sources/un1t-online'
 
-export const MEMBERSHIP_SOURCES = Object.freeze({ none: noneSource, glofox: glofoxSource })
+export const MEMBERSHIP_SOURCES = Object.freeze({ none: noneSource, glofox: glofoxSource, un1t_online: un1tOnlineSource })
 
-/** Every value the mig 717 CHECK admits, registered provider or not. */
-export const MEMBERSHIP_SOURCE_KEYS = Object.freeze(['none', 'glofox', 'un1t'])
+/** Every value the CHECK admits (mig 717, widened by mig 726), registered provider or not. */
+export const MEMBERSHIP_SOURCE_KEYS = Object.freeze(['none', 'glofox', 'un1t', 'un1t_online'])
 
 /** A failed read of locations.membership_source. Reported as state 'unknown', never as 'none'. */
 export const MEMBERSHIP_SOURCE_UNREADABLE = 'MEMBERSHIP_SOURCE_UNREADABLE'

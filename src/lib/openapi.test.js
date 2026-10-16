@@ -607,4 +607,15 @@ describe('getOpenApiSpec', () => {
     expect(spec.paths['/api/cars/{id}/documents/finalise']).toHaveProperty('post')
     expect(spec.paths['/api/cars/{id}/documents/finalise'].post.responses).toHaveProperty('409')
   })
+
+  it('documents the un1t.online connect, disconnect and sync-now routes (UN1TSYNC.7)', () => {
+    const conn = spec.paths['/api/locations/{id}/un1t-online']
+    expect(conn).toHaveProperty('get')
+    expect(conn).toHaveProperty('put')
+    expect(conn).toHaveProperty('delete')
+    expect(conn.put.requestBody).toBeDefined()
+    expect(conn.put.description).toMatch(/never echoed/)
+    expect(conn.put.responses).toHaveProperty('502')
+    expect(spec.paths['/api/locations/{id}/un1t-online/sync']).toHaveProperty('post')
+  })
 })
