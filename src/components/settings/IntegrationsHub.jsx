@@ -456,11 +456,13 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
   const inScope = (locationId) => scope === 'all' || locationId === scope
 
   const glofox = (data.glofox || []).filter((r) => inScope(r.locationId))
-  // UN1TSYNC.5 — shown only where there is something to show: a studio that
-  // has never connected un1t.online (every tenant but Hatch Street) sees no
-  // card at all, and an unreadable registry is the registry attention row's
-  // job, not a card of "Try again" on a platform it never used.
-  const un1tOnline = (data.un1t_online || []).filter((r) => inScope(r.locationId) && r.status !== 'not_connected' && r.status !== 'unknown')
+  // UN1TSYNC.5 — shown only where there is something to show: a connection, or
+  // (UN1THUB.1) a studio the assembler marks offerConnect (no row yet, membership
+  // source 'none' or 'un1t_online'), since the hub is the only way in before a
+  // first connect. Every other unconnected studio sees no card, and an unreadable
+  // registry is the registry attention row's job, not a card of "Try again".
+  const un1tOnline = (data.un1t_online || []).filter((r) => inScope(r.locationId) && r.status !== 'unknown'
+    && (r.status !== 'not_connected' || r.offerConnect === true))
   const whatsapp = (data.whatsapp || []).filter((r) => inScope(r.locationId))
   const instagram = (data.instagram || []).filter((r) => inScope(r.locationId))
   const xero = (data.xero || []).filter((r) => inScope(r.locationId))
@@ -660,12 +662,18 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
                 <div key={r.locationId} className="flex items-center gap-3 py-2">
                   <span className="font-semibold min-w-[88px]">{nameById[r.locationId]}</span>
                   <span className="flex-1 text-xs text-un1t-subtle truncate">
-                    {r.studioTitle ? `${r.studioTitle}` : 'Connected'}
-                    {r.lastOkAt ? ` · last OK ${fmtDate(r.lastOkAt)}` : ''}
-                    {r.tokenExpiresAt ? ` · token expires ${fmtDate(r.tokenExpiresAt)}` : ''}
-                    {r.lastError ? ` · ${r.lastError}` : ''}
+                    {r.status === 'not_connected' ? 'Not connected' : (
+                      <>
+                        {r.studioTitle ? `${r.studioTitle}` : 'Connected'}
+                        {r.lastOkAt ? ` · last OK ${fmtDate(r.lastOkAt)}` : ''}
+                        {r.tokenExpiresAt ? ` · token expires ${fmtDate(r.tokenExpiresAt)}` : ''}
+                        {r.lastError ? ` · ${r.lastError}` : ''}
+                      </>
+                    )}
                   </span>
-                  <Link href={r.href} className={linkBtn()}>Open</Link>
+                  <Link href={r.href} className={linkBtn(r.status === 'not_connected')}>
+                    {r.status === 'not_connected' ? 'Connect' : 'Open'}
+                  </Link>
                 </div>
               ))}
             </div>

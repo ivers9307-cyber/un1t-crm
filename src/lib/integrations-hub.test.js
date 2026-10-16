@@ -1004,11 +1004,12 @@ describe('assembleIntegrationsHub — un1t.online card', () => {
     expect(data.un1t_online).toEqual([
       {
         locationId: LOC_A.id, status: 'not_connected', studioTitle: null, tokenExpiresAt: null,
-        lastOkAt: null, lastError: null, href: locationTabHref(LOC_A.id, 'un1t-online'),
+        lastOkAt: null, lastError: null, href: locationTabHref(LOC_A.id, 'un1t-online'), offerConnect: false,
       },
       {
         locationId: LOC_B.id, status: 'connected', studioTitle: 'Hatch Street', tokenExpiresAt: '2026-07-29T00:00:00Z',
         lastOkAt: '2026-07-19T11:45:00Z', lastError: null, href: `/settings/locations/${LOC_B.id}?tab=un1t-online`,
+        offerConnect: false,
       },
     ])
   })
@@ -1021,8 +1022,32 @@ describe('assembleIntegrationsHub — un1t.online card', () => {
     expect(json).not.toContain('APP_SECRET_VALUE')
     expect(json).not.toContain('CRM sync')
     expect(Object.keys(data.un1t_online[1]).sort()).toEqual(
-      ['href', 'lastError', 'lastOkAt', 'locationId', 'status', 'studioTitle', 'tokenExpiresAt'],
+      ['href', 'lastError', 'lastOkAt', 'locationId', 'offerConnect', 'status', 'studioTitle', 'tokenExpiresAt'],
     )
+  })
+
+  // UN1THUB.1 — before its first connect a studio had no way in from the hub
+  // (the bare Integrations tab redirects here). offerConnect marks the rows that
+  // may connect: no registry row, and a membership source of 'none' or
+  // 'un1t_online'. A Glofox studio, or a row whose source the caller did not
+  // select, is never offered it.
+  it('offers Connect only to a studio with no row whose membership source is none or un1t_online', async () => {
+    const locs = [
+      { ...LOC_A, membership_source: 'none' },
+      { ...LOC_B, membership_source: 'un1t_online' },
+      { ...LOC_A, id: 'loc-glofox', name: 'Glofox studio', membership_source: 'glofox' },
+      { ...LOC_A, id: 'loc-unread', name: 'Unselected', membership_source: undefined },
+    ]
+    const data = await assembleIntegrationsHub(tableDb({ channel_connections: { data: [], error: null } }), locs, { now: NOW })
+    expect(data.un1t_online.map((r) => [r.locationId, r.offerConnect])).toEqual([
+      [LOC_A.id, true], [LOC_B.id, true], ['loc-glofox', false], ['loc-unread', false],
+    ])
+    const connected = await assembleIntegrationsHub(
+      tableDb({ channel_connections: { data: [UN1T_ROW], error: null } }),
+      [{ ...LOC_B, membership_source: 'un1t_online' }], { now: NOW },
+    )
+    expect(connected.un1t_online[0]).toMatchObject({ status: 'connected', offerConnect: false })
+    expect(data.attention.some((x) => x.cardKey === 'un1t_online')).toBe(false)
   })
 
   it('asks the registry for the un1t_online platform', async () => {

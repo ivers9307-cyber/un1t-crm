@@ -40,6 +40,14 @@ describe('IntegrationsHub — un1t.online card (UN1TSYNC.5)', () => {
     expect(html).toContain('/settings/locations/loc-h?tab=un1t-online')
   })
 
+  it('offers Connect on a studio that may connect but has not yet (UN1THUB.1), linking to its un1t-online tab', () => {
+    const html = renderToStaticMarkup(<IntegrationsHub data={{ ...BASE, un1t_online: [row({ status: 'not_connected', studioTitle: null, tokenExpiresAt: null, lastOkAt: null, offerConnect: true })] }} isMaster />)
+    expect(html).toContain('Members, subscriptions, payments')
+    expect(html).toContain('Not connected')
+    expect(html).toContain('>Connect<')
+    expect(html).toContain('/settings/locations/loc-h?tab=un1t-online')
+  })
+
   it('shows no card for a studio that never connected it, or when the payload predates the key', () => {
     for (const un1t_online of [[row({ status: 'not_connected', studioTitle: null, tokenExpiresAt: null, lastOkAt: null })], [row({ status: 'unknown' })], undefined]) {
       const html = renderToStaticMarkup(<IntegrationsHub data={{ ...BASE, un1t_online }} isMaster />)

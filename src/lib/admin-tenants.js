@@ -316,7 +316,7 @@ const PIN_EMBED =
 const LOCATION_COLUMNS =
   'id, name, organization_id, active, created_at, settings, features, ' +
   'sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id, ' +
-  'thinq_country_code, bca_config, timezone'
+  'thinq_country_code, bca_config, timezone, membership_source'
 
 // Hub assembly is decorative on this surface — a hub failure must not
 // take down the tenants console (same posture as the WA budget meter
