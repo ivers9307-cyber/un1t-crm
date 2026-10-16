@@ -17,7 +17,7 @@ vi.mock('next/navigation', () => ({
 import LocationIntegrations from './LocationIntegrations.jsx'
 
 const ID = 'a0000000-0000-4000-8000-000000000001'
-const loc = (membership_source) => ({ id: ID, name: 'Hatch', features: {}, settings: {}, membership_source })
+const loc = (membership_source, features = {}) => ({ id: ID, name: 'Hatch', features, settings: {}, membership_source })
 const MASTER = { role: 'master' }
 const MANAGER = { role: 'manager', profileRole: 'manager', rolesByLocation: { [ID]: 'manager' }, locations: [{ id: ID }] }
 const OWNER = { role: 'owner', profileRole: 'owner', rolesByLocation: { [ID]: 'owner' }, locations: [{ id: ID }] }
@@ -27,8 +27,21 @@ afterEach(() => cleanup())
 const tab = () => screen.queryByRole('button', { name: /un1t\.online/ })
 
 describe('LocationIntegrations — un1t.online tab', () => {
-  it('is offered to a master on a studio with no membership source (connecting selects it)', () => {
+  it('is offered to a master on a booking/contacts studio with no membership source (connecting selects it)', () => {
+    render(<LocationIntegrations location={loc('none', { contacts: true })} user={MASTER} />)
+    expect(tab()).toBeTruthy()
+    cleanup()
+    render(<LocationIntegrations location={loc('none', { bookings: true })} user={MASTER} />)
+    expect(tab()).toBeTruthy()
+  })
+
+  it('is not offered on a bare studio (no bookings, no contacts) that has no source and no connection', () => {
     render(<LocationIntegrations location={loc('none')} user={MASTER} />)
+    expect(tab()).toBeNull()
+  })
+
+  it('stays reachable on a bare studio that holds an active un1t.online connection', () => {
+    render(<LocationIntegrations location={loc('none')} user={MASTER} hasUn1tOnlineConnection />)
     expect(tab()).toBeTruthy()
   })
 
@@ -62,7 +75,7 @@ describe('LocationIntegrations — un1t.online tab', () => {
       <LocationIntegrations location={loc('un1t_online')} user={MASTER} membershipSource={{ source: 'un1t_online', state: 'configured' }} />,
     )
     expect(tab().querySelector('svg.text-green-500')).toBeTruthy()
-    rerender(<LocationIntegrations location={loc('none')} user={MASTER} membershipSource={{ source: 'none', state: 'none' }} />)
+    rerender(<LocationIntegrations location={loc('none', { contacts: true })} user={MASTER} membershipSource={{ source: 'none', state: 'none' }} />)
     expect(tab().querySelector('svg.text-green-500')).toBeNull()
     rerender(<LocationIntegrations location={loc('un1t_online')} user={MASTER} membershipSource={{ source: 'un1t_online', state: 'unknown' }} />)
     expect(screen.getByRole('img', { name: 'Could not load' })).toBeTruthy()
