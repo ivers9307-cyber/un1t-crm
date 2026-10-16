@@ -23,7 +23,9 @@
 
 ## P0: this week (small, decisions first)
 
-### P0.1 Marketing consent for contacts the sync creates (DECISION)
+### P0.1 Marketing consent for contacts the sync creates (DECIDED 2026-10-17: leave marketing on)
+**Decision (Richard, 2026-10-17):** keep the estate default. Sync-created contacts stay opted in, as Glofox-created contacts are. No code change. The analysis below is kept for the record.
+
 **Evidence:** all 15 sync-created contacts have `email_marketing`, the location-level email flag and `whatsapp_marketing` set to **true**. The DB defaults set this when a contact is inserted; the sync writes no consent field. A un1t.online client accepted the platform's terms (`accepted_terms`), but has not consented to marketing from the CRM.
 **Why it matters:** the next Hatch campaign or broadcast would reach people who never opted in (GDPR / ePrivacy). It is the same default every Glofox-created contact gets, so this is also an estate policy question.
 **Options:**
@@ -31,7 +33,9 @@
 2. Keep the estate default and rely on un1t.online's own consent capture (it has none we can see).
 **Not affected:** the 172 attached contacts keep whatever consent they already had.
 
-### P0.2 Token hygiene
+### P0.2 Token hygiene (DECIDED 2026-10-17: keep the current token)
+**Decision (Richard, 2026-10-17):** keep "Repset CRM" as issued; no Read-only reissue. The expiry reminder still applies.
+
 - In the un1t.online owner console, create a **Read-only** token and paste it on the tab. It is the same studio, so the connect route accepts it as a replacement. Then revoke "Repset CRM".
 - Calendar the expiry. Integration health warns from **2027-09-16**. Renewing means rotating in un1t.online and pasting the new token. The fingerprint guard handles a rotated secret.
 
@@ -104,8 +108,8 @@ Once P1.2 step 2 lands, Mia can answer billing questions ("when do I renew", "wh
 
 ## Decisions needed from Richard
 
-1. **P0.1:** create sync contacts with marketing off and backfill the 15? *(recommended: yes)*
-2. **P0.2:** reissue the token as Read-only?
+1. ~~**P0.1:** marketing off for sync-created contacts?~~ Decided: leave marketing on.
+2. ~~**P0.2:** reissue the token as Read-only?~~ Decided: keep the current token.
 3. **P0.4:** end (not delete) the 20 export rows?
 4. **P1.1:** for each customer-messaging or device-switching reader, should it run for Hatch?
 5. **P1.2:** which surface first? *(suggested: memberships, then invoices for Mia)*
