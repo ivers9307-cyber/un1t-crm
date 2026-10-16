@@ -165,10 +165,23 @@ describe('resolveUn1tContacts', () => {
     expect(r.counts.created).toBe(1)
     expect(r.counts.no_email).toBe(0)
     expect(Object.keys(log.inserts[0]).sort()).toEqual(
-      ['location_id', 'source', 'email', 'first_name', 'last_name', 'phone', 'un1t_user_id', 'un1t_synced_at'].sort(),
+      ['location_id', 'source', 'name', 'email', 'first_name', 'last_name', 'phone', 'un1t_user_id', 'un1t_synced_at'].sort(),
     )
     expect(log.inserts[0]).toMatchObject({ location_id: HATCH, source: 'un1t_online', email: 'new@x.ie', un1t_user_id: 'u1', un1t_synced_at: NOW })
     expect(r.contactIdByUserId.get('u1')).toBe('new-1')
+  })
+
+  it('names the contact from first and last name (contacts.name is NOT NULL)', async () => {
+    const { db, log } = makeDb([])
+    await resolveUn1tContacts(db, args([{ id: 'u1', email: 'new@x.ie', first_name: 'New', last_name: 'Person' }]))
+    expect(log.inserts[0].name).toBe('New Person')
+  })
+
+  it('falls back to the email, then a fixed label, when a client has no name', async () => {
+    const { db, log } = makeDb([])
+    await resolveUn1tContacts(db, args([{ id: 'u1', email: 'only@x.ie' }, { id: 'u2' }]))
+    expect(log.inserts[0].name).toBe('only@x.ie')
+    expect(log.inserts[1].name).toBe('un1t.online member')
   })
 
   it('a client with no email is still inserted and counts as created and no_email', async () => {

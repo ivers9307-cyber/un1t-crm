@@ -174,9 +174,11 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
     }
 
     // Rule 3 — a new contact. Name-only (email null) contacts are allowed.
+    // contacts.name is TEXT NOT NULL (mig 001), so a create must always carry one.
     const payload = {
       location_id: locationId,
       source: 'un1t_online',
+      name: [fields.first_name, fields.last_name].filter(Boolean).join(' ') || fields.email || 'un1t.online member',
       email: fields.email,
       first_name: fields.first_name,
       last_name: fields.last_name,
