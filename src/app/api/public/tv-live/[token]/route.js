@@ -50,7 +50,7 @@ export async function GET(request, props) {
   // token or inactive display → 404 (don't confirm existence of either).
   const { data: display } = await db
     .from('tv_displays')
-    .select('location_id, active')
+    .select('id, location_id, active')
     .eq('token', token)
     .maybeSingle()
   if (!display || !display.active) {
@@ -85,7 +85,7 @@ export async function GET(request, props) {
   // This endpoint is polled every few seconds, so it reads the per-location
   // cache (host-brand.js), never a fresh walk per poll.
   const [payload, brand] = await Promise.all([
-    buildLiveBoardPayload(db, { location, nowMs }),
+    buildLiveBoardPayload(db, { location, displayId: display.id, nowMs }),
     resolveLocationBrand({ locationId: location.id, db, nowMs }),
   ])
   return NextResponse.json(
