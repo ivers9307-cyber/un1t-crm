@@ -11,8 +11,8 @@
 --
 -- WHAT.
 --   (1) contacts.un1t_user_id / un1t_synced_at: the link from a CRM contact
---       to its un1t.online user. Unique per id (partial: most contacts have
---       none). Sync bookkeeping only, not an audience field.
+--       to its un1t.online user. Unique per (organisation, id) (partial: most
+--       contacts have none; a person is one contact per organisation). Sync bookkeeping only, not an audience field.
 --   (2) Eight service-role-only tables: un1t_clients (NO raw: client rows
 --       are PII, only derived counters are kept), un1t_products,
 --       un1t_subscriptions, un1t_transactions, un1t_invoices, un1t_events,
@@ -51,11 +51,11 @@ ALTER TABLE public.contacts
   ADD COLUMN IF NOT EXISTS un1t_synced_at timestamptz;
 
 CREATE UNIQUE INDEX IF NOT EXISTS contacts_un1t_user_id_unique
-  ON public.contacts (un1t_user_id)
+  ON public.contacts (organization_id, un1t_user_id)
   WHERE un1t_user_id IS NOT NULL;
 
 COMMENT ON COLUMN public.contacts.un1t_user_id IS
-  'UN1TSYNC.1 (mig 726): the contact''s user id on un1t.online (Hatch Street). Written only by the un1t.online sync. Unique when set.';
+  'UN1TSYNC.1 (mig 726): the contact''s user id on un1t.online (Hatch Street). Written only by the un1t.online sync. Unique per organisation when set.';
 COMMENT ON COLUMN public.contacts.un1t_synced_at IS
   'UN1TSYNC.1 (mig 726): when the un1t.online sync last matched this contact.';
 

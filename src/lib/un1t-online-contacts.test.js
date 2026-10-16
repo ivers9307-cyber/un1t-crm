@@ -85,7 +85,8 @@ describe('resolveUn1tContacts', () => {
     expect(r.contactIdByUserId.get('u1')).toBe('c1')
     // Only the id lookup ran: no email query.
     expect(log.selects).toHaveLength(1)
-    expect(log.selects[0].filters[0][0]).toBe('in')
+    expect(log.selects[0].filters.some((f) => f[0] === 'in')).toBe(true)
+    expect(log.selects[0].filters).toContainEqual(['eq', 'organization_id', ORG])
     // Fills null first_name only; never overwrites last_name.
     expect(log.updates[0].payload).toEqual({ first_name: 'Jane', un1t_synced_at: NOW })
   })
@@ -122,6 +123,7 @@ describe('resolveUn1tContacts', () => {
     ])
     const r = await resolveUn1tContacts(db, args([{ id: 'u1', email: 'jane@x.ie' }]))
     expect(r.counts.ambiguous_email).toBe(1)
+    expect(r.errors).toEqual([{ un1t_user_id: 'u1', reason: 'ambiguous_email' }])
     expect(r.contactIdByUserId.size).toBe(0)
     expect(log.updates).toHaveLength(0)
     expect(log.inserts).toHaveLength(0)
@@ -133,6 +135,7 @@ describe('resolveUn1tContacts', () => {
     ])
     const r = await resolveUn1tContacts(db, args([{ id: 'u1', email: 'jane@x.ie' }]))
     expect(r.counts.conflict).toBe(1)
+    expect(r.errors).toEqual([{ un1t_user_id: 'u1', reason: 'conflict' }])
     expect(r.contactIdByUserId.size).toBe(0)
     expect(log.updates).toHaveLength(0)
     expect(log.inserts).toHaveLength(0)
@@ -193,10 +196,10 @@ describe('resolveUn1tContacts', () => {
 
   it('a failed update is counted as failed, not as linked', async () => {
     const { db } = makeDb(
-      [{ id: 'c1', organization_id: ORG, location_id: HATCH, un1t_user_id: 'u1' }],
+      [{ id: 'c1', organization_id: ORG, location_id: HATCH, un1t_user_id: 'u1', first_name: null }],
       { failUpdates: true },
     )
-    const r = await resolveUn1tContacts(db, args([{ id: 'u1' }]))
+    const r = await resolveUn1tContacts(db, args([{ id: 'u1', first_name: 'Jane' }]))
     expect(r.counts.failed).toBe(1)
     expect(r.counts.linked).toBe(0)
     expect(r.contactIdByUserId.size).toBe(0)
@@ -204,10 +207,10 @@ describe('resolveUn1tContacts', () => {
 
   it('an update that touches no row is failed (a zero-row UPDATE is not an error)', async () => {
     const { db } = makeDb(
-      [{ id: 'c1', organization_id: ORG, location_id: HATCH, un1t_user_id: 'u1' }],
+      [{ id: 'c1', organization_id: ORG, location_id: HATCH, un1t_user_id: 'u1', first_name: null }],
       { zeroRowUpdates: true },
     )
-    const r = await resolveUn1tContacts(db, args([{ id: 'u1' }]))
+    const r = await resolveUn1tContacts(db, args([{ id: 'u1', first_name: 'Jane' }]))
     expect(r.counts.failed).toBe(1)
     expect(r.counts.linked).toBe(0)
   })
@@ -216,7 +219,43 @@ describe('resolveUn1tContacts', () => {
     const { db, log } = makeDb([])
     const clients = Array.from({ length: 450 }, (_, i) => ({ id: `u${i}` }))
     await resolveUn1tContacts(db, args(clients))
-    const inQueries = log.selects.filter((s) => s.filters[0][0] === 'in')
-    expect(inQueries.map((q) => q.filters[0][2].length)).toEqual([200, 200, 50])
+    const inQueries = log.selects.filter((s) => s.filters.some((f) => f[0] === 'in'))
+    expect(inQueries.map((q) => q.filters.find((f) => f[0] === 'in')[2].length)).toEqual([200, 200, 50])
+  })
+
+  it('ignores a contact with the same un1t_user_id in a different organisation', async () => {
+    const { db, log, table } = makeDb([
+      { id: 'other', organization_id: 'org-2', location_id: 'loc-other', un1t_user_id: 'u1', email: 'x@y.ie', first_name: null, last_name: null, phone: null },
+    ])
+    const r = await resolveUn1tContacts(db, args([{ id: 'u1', email: 'jane@x.ie', first_name: 'Jane' }]))
+    expect(r.counts.linked).toBe(0)
+    expect(r.counts.created).toBe(1)
+    expect(r.contactIdByUserId.get('u1')).not.toBe('other')
+    expect(log.updates).toHaveLength(0)
+    expect(table.find((t) => t.id === 'other').first_name).toBeNull()
+    // The email lookup still ran for this org's client.
+    expect(log.selects.some((s) => s.filters.some((f) => f[0] === 'ilike'))).toBe(true)
+  })
+
+  it('a linked contact with nothing to fill gets no update but still counts as linked', async () => {
+    const { db, log } = makeDb([
+      { id: 'c1', organization_id: ORG, location_id: HATCH, un1t_user_id: 'u1', first_name: 'Jane', last_name: 'Doe', phone: '+353871111111' },
+    ])
+    const r = await resolveUn1tContacts(db, args([{ id: 'u1', first_name: 'Jane', last_name: 'Doe', phone: '+353871111111' }]))
+    expect(r.counts.linked).toBe(1)
+    expect(log.updates).toHaveLength(0)
+    expect(r.contactIdByUserId.get('u1')).toBe('c1')
+  })
+
+  it('processes a client repeated across pages once', async () => {
+    const { db, log } = makeDb([])
+    const r = await resolveUn1tContacts(db, args([
+      { id: 'u1', email: 'one@x.ie' },
+      { id: 'u1', email: 'one@x.ie' },
+    ]))
+    expect(r.counts.created).toBe(1)
+    expect(r.counts.conflict).toBe(0)
+    expect(log.inserts).toHaveLength(1)
+    expect(r.errors).toEqual([])
   })
 })

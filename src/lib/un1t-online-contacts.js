@@ -63,7 +63,17 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
     errors.push({ un1t_user_id: userId, reason })
   }
 
-  const list = Array.isArray(clients) ? clients : []
+  // A client repeated across pages is processed once (first occurrence wins).
+  const list = []
+  const seenIds = new Set()
+  for (const c of Array.isArray(clients) ? clients : []) {
+    const id = c && c.id !== undefined && c.id !== null && c.id !== '' ? String(c.id) : null
+    if (id) {
+      if (seenIds.has(id)) continue
+      seenIds.add(id)
+    }
+    list.push(c)
+  }
   const userIds = []
   for (const c of list) {
     const id = c && c.id !== undefined && c.id !== null && c.id !== '' ? String(c.id) : null
@@ -81,6 +91,7 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
     const { data, error } = await db
       .from('contacts')
       .select(CONTACT_COLUMNS)
+      .eq('organization_id', organizationId)
       .in('un1t_user_id', chunk)
     if (error) {
       for (const id of chunk) unreadable.add(id)
@@ -108,10 +119,15 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
     // Rule 1 — already linked.
     const linked = byUserId.get(userId)
     if (linked) {
-      const ok = await updateContact(db, linked, fields, { now, attach: false, userId })
-      if (ok.error) {
-        fail(userId, ok.error)
-        continue
+      // Write only when there is something to write: every UPDATE bumps
+      // contacts.updated_at (a recency tiebreak in person-accounts.js), so
+      // un1t_synced_at means "last time the sync wrote this contact".
+      if (Object.keys(nullFills(linked, fields)).length > 0) {
+        const ok = await updateContact(db, linked, fields, { now, attach: false, userId })
+        if (ok.error) {
+          fail(userId, ok.error)
+          continue
+        }
       }
       counts.linked += 1
       contactIdByUserId.set(userId, linked.id)
@@ -133,12 +149,14 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
       const matches = data || []
       if (matches.length > 1) {
         counts.ambiguous_email += 1
+        errors.push({ un1t_user_id: userId, reason: 'ambiguous_email' })
         continue
       }
       if (matches.length === 1) {
         const match = matches[0]
         if (!isEmpty(match.un1t_user_id) && String(match.un1t_user_id) !== userId) {
           counts.conflict += 1
+          errors.push({ un1t_user_id: userId, reason: 'conflict' })
           continue
         }
         const ok = await updateContact(db, match, fields, { now, attach: true, userId })
