@@ -411,6 +411,14 @@ describe('getIntegrationHealth — un1t.online row', () => {
     expect(r.detail).toBe('token revoked')
   })
 
+  it('a connected row with a last_error (synced, contacts unmatched) grades warn and shows it', async () => {
+    const msg = 'Synced, but 2 un1t.online members could not be matched to contacts (1 failed, 1 conflicts, 0 ambiguous emails).'
+    const db = makeHealthDb({ channel_connections: { data: [regRow({ last_error: msg })], error: null } })
+    const r = find(await getIntegrationHealth(db, 'loc-1'))
+    expect(r.status).toBe('warn')
+    expect(r.detail).toBe(msg)
+  })
+
   it('an action_needed connection shows its last error', async () => {
     const db = makeHealthDb({ channel_connections: { data: [regRow({ status: 'action_needed', last_error: 'un1t.online refused the token (401)' })], error: null } })
     const r = find(await getIntegrationHealth(db, 'loc-1'))

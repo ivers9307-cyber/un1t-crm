@@ -114,6 +114,29 @@ describe('Un1tOnlineIntegrationTab', () => {
     expect(screen.getAllByText(/un1t\.online refused the token/).length).toBeGreaterThan(0)
   })
 
+  it('shows the contact-matching counts next to the pulled counts', async () => {
+    current = connected({
+      last_run: {
+        status: 'ok', started_at: '2026-10-02T09:00:00.000Z', finished_at: '2026-10-02T09:00:05.000Z', duration_ms: 5000, first_error: null,
+        counts: { pulled: { clients: 120 }, contacts: { created: 5, attached_by_email: 3, linked: 100, failed: 2, conflict: 1, ambiguous_email: 4 } },
+      },
+    })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    const el = await screen.findByTestId('un1t-contact-counts')
+    expect(el.textContent).toBe('Contacts: 5 created, 3 attached, 2 failed, 1 conflicts, 4 ambiguous emails')
+  })
+
+  it('on a 400 with issues, shows the first issue message', async () => {
+    fetchMock.mockImplementation(async (url, init) => (init?.method === 'PUT'
+      ? { ok: false, status: 400, json: async () => ({ success: false, error: 'Invalid request body', issues: [{ path: ['token'], message: 'That does not look like an un1t.online token.' }] }) }
+      : reply(NOT_CONNECTED)))
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    fireEvent.change(await screen.findByLabelText(/API token/i), { target: { value: TOKEN } })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    expect(await screen.findByText('That does not look like an un1t.online token.')).toBeTruthy()
+    expect(screen.queryByText('Invalid request body')).toBeNull()
+  })
+
   it('Connect posts the token and clears the field', async () => {
     render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
     const input = await screen.findByLabelText(/API token/i)

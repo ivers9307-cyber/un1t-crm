@@ -75,9 +75,14 @@ export function un1tOnlineHealth(conn, now = Date.now()) {
   const expiryKnown = Number.isFinite(expMs)
   const expiringSoon = expiryKnown && expMs - now <= UN1T_ONLINE_EXPIRY_WARN_DAYS * 24 * 60 * 60 * 1000
   if (status === 'ok' && expiringSoon) status = 'warn'
+  // A run that synced but could not match some members to contacts keeps the
+  // row 'connected' and says so in last_error: that is a warning, not 'ok'.
+  const syncedWithProblems = conn.status === 'connected' && !!conn.lastError
+  if (status === 'ok' && syncedWithProblems) status = 'warn'
   if (conn.status !== 'connected') {
     return { status, detail: conn.lastError ? String(conn.lastError).slice(0, 120) : 'Needs attention' }
   }
+  if (syncedWithProblems) return { status, detail: String(conn.lastError).slice(0, 160) }
   const parts = ['Connected']
   const title = conn.config?.studio_title
   if (title) parts.push(String(title))

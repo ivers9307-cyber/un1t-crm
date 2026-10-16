@@ -356,11 +356,21 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
     return failure('db', msg, errorPatch(msg, tokenFields))
   }
 
-  // 8–9. Success.
+  // 8–9. Success. A run that synced but could not match some members to
+  // contacts stays 'connected' (the data is fresh) and says so in last_error,
+  // which the health row grades as a warning. Counts only: no names or emails.
+  const cc = counts.contacts || {}
+  const failedN = cc.failed || 0
+  const conflictN = cc.conflict || 0
+  const ambiguousN = cc.ambiguous_email || 0
+  const unmatched = failedN + conflictN + ambiguousN
+  const warning = unmatched > 0
+    ? `Synced, but ${unmatched} un1t.online member${unmatched === 1 ? '' : 's'} could not be matched to contacts (${failedN} failed, ${conflictN} conflicts, ${ambiguousN} ambiguous emails).`
+    : null
   return finish({
     ok: true,
     firstError: null,
-    connectionPatch: { status: 'connected', last_ok_at: nowIso, last_error: null, ...tokenFields },
+    connectionPatch: { status: 'connected', last_ok_at: nowIso, last_error: warning, ...tokenFields },
   })
 }
 

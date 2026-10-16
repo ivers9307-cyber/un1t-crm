@@ -615,6 +615,34 @@ describe('runUn1tSync', () => {
     expect(tables.un1t_subscriptions.find((s) => s.un1t_id === 's9').contact_id).toBeNull()
   })
 
+  describe('contact-resolution problems on an otherwise ok run', () => {
+    it('stays connected but records a counts-only last_error', async () => {
+      const seed = baseSeed({
+        contacts: [
+          { id: 'c-fail', organization_id: ORG, location_id: HATCH, email: 'one@x.ie', un1t_user_id: 'u1', first_name: null, last_name: 'One', phone: '+353870000001' },
+        ],
+      })
+      const { db, tables } = makeDb(seed, { failUpdateIds: ['c-fail'] })
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      const conn = connRow(tables)
+      expect(conn.status).toBe('connected')
+      expect(conn.last_error).toBe('Synced, but 1 un1t.online member could not be matched to contacts (1 failed, 0 conflicts, 0 ambiguous emails).')
+      expect(conn.last_error).not.toContain('one@x.ie')
+    })
+
+    it('a clean run leaves last_error null (and clears an earlier warning)', async () => {
+      const seed = baseSeed()
+      seed.channel_connections[0].last_error = 'Synced, but 1 un1t.online member could not be matched to contacts (1 failed, 0 conflicts, 0 ambiguous emails).'
+      const { db, tables } = makeDb(seed)
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(connRow(tables).last_error).toBeNull()
+    })
+  })
+
   describe('an active subscription whose user is missing from the client pull', () => {
     const seed = () =>
       baseSeed({

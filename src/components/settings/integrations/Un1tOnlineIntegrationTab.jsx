@@ -54,6 +54,15 @@ function describeCounts(counts) {
   return parts.length ? parts.join(', ') : null
 }
 
+// Contact matching, from the run's counts: how many members became contacts
+// and how many could not be matched (those need a human).
+function describeContacts(counts) {
+  const c = counts?.contacts
+  if (!c || typeof c !== 'object') return null
+  const n = (v) => (Number.isFinite(v) ? v : 0)
+  return `${n(c.created)} created, ${n(c.attached_by_email)} attached, ${n(c.failed)} failed, ${n(c.conflict)} conflicts, ${n(c.ambiguous_email)} ambiguous emails`
+}
+
 export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
   const router = useRouter()
 
@@ -92,7 +101,7 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
     } catch (e) {
       return { ok: false, error: `Request failed: ${e?.message || 'network error'}` }
     }
-    if (!res.ok || !json?.success) return { ok: false, error: json?.message || json?.error || `Request failed (${res.status})` }
+    if (!res.ok || !json?.success) return { ok: false, error: json?.issues?.[0]?.message || json?.message || json?.error || `Request failed (${res.status})` }
     return { ok: true, json }
   }
 
@@ -148,6 +157,7 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
   const expiry = connected ? describeExpiry(data.expires_at, Date.now(), location.timezone) : null
   const run = data?.last_run || null
   const runCounts = describeCounts(run?.counts)
+  const contactCounts = describeContacts(run?.counts)
   const shownError = error || state.error
 
   return (
@@ -205,6 +215,7 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
             </span>
           </div>
           {runCounts && <div className="text-un1t-subtle">Pulled: {runCounts}</div>}
+          {contactCounts && <div data-testid="un1t-contact-counts" className="text-un1t-subtle">Contacts: {contactCounts}</div>}
           {run.first_error && <div className="text-red-700">{run.first_error}</div>}
         </div>
       )}
