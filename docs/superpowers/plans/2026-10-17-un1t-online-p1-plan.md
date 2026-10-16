@@ -1,7 +1,7 @@
 # un1t.online (Hatch Street): P1 plan
 
 **Date:** 2026-10-17
-**Status:** proposed; needs the decisions in the last section before implementation plans are written.
+**Status:** decisions made 2026-10-17 (last section); implementation plans follow per workstream, P1.0 first.
 **Parent:** `docs/superpowers/plans/2026-10-17-un1t-online-followups.md` (roadmap). This document turns its P1 into ordered, evidence-backed workstreams. Each workstream below becomes its own implementation plan (writing-plans format) once its decisions are made.
 
 **Evidence:** three code audits of `main` at `a54175cd`, plus live database reads on 2026-10-17. File references are to `main`.
@@ -138,14 +138,16 @@ The tools dispatch on the **member's** provider, not the conversation's. For one
 3. **P1.1a** occurrences projection (TVs and dashboards)
 4. **P1.3** dual-studio visibility (clp rows, crossover, RLS)
 5. **P1.2** classifier + `invoices` → **P1.4** Mia read-only tools
-6. **P1.1b** bookings projection: only after decision 1
+6. **P1.1b** bookings projection, with CRM class reminders and attendance pushes hard-off for un1t.online locations (decision 1)
 
 ---
 
-## Decisions needed
+## Decisions (Richard, 2026-10-17)
 
-1. **Class reminders and attendance pushes at Hatch.** Projecting bookings makes the CRM push "class starting soon" and post-class achievement and goal notifications to Hatch members with the app. Does the un1t.online app already send its own reminders? If so, members get duplicates. *Options:* keep bookings unprojected (P1.1b never ships); project with reminders off; project everything.
-2. **TVs and dashboards from Hatch's timetable (P1.1a).** Go? *(Recommended: yes. No device or customer effect today.)*
-3. **Hatch staff visibility.** Should Hatch-only staff see Hatch members whose contact lives at Stillorgan (an RLS widening)? *(Recommended: yes, membership-scoped.)*
-4. **Hatch pipeline driven by un1t data.** Members and attendance from un1t.online place Hatch contacts in member, converted and trial stages? *(Recommended: yes; it is wrong today.)*
-5. **Mia for dual-studio members:** answer from the studio where they hold an active membership? *(Recommended: yes.)*
+1. **Class reminders and attendance pushes at Hatch: the CRM must NOT send them.** The un1t.online app already sends its own reminders, so CRM pushes would duplicate them. Consequence for P1.1b: bookings may be projected only with `send-class-booking-reminders` and `credit-attendance` (its session, achievement, goal and tier pushes) **off for every un1t.online location**, enforced in code per location, not by an optional setting. If that cannot be guaranteed, bookings stay unprojected.
+2. **TVs and dashboards from Hatch's timetable (P1.1a): yes, needed.**
+3. **Hatch staff see Hatch members whose contact lives at Stillorgan: yes**, scoped to studios where the person holds an active membership (RLS helper + crossover + `canViewContact`).
+4. **Hatch pipeline driven by un1t.online data: yes.**
+5. **Mia answers dual-studio members from the studio where they hold an active membership: yes.**
+
+P1.0 needs no decision and goes first.
