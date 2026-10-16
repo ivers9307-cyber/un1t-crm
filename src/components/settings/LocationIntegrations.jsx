@@ -113,10 +113,12 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
   // connecting selects it. A Glofox studio is not offered it, UNLESS it holds
   // an active un1t.online token (the page reads that): a connected token can
   // always be disconnected, even after the source was changed elsewhere. On
-  // 'none' it follows the Glofox tab's rule: only a studio that books or holds
-  // contacts has a membership source to choose (a bare studio is offered neither).
+  // 'none' it is offered whatever the studio's feature flags (UN1TTAB.1): the
+  // Glofox tab's bookings/contacts rule hid it at Hatch Street, whose features
+  // carry neither flag. Offering it wider is safe because the connect route
+  // binds a token to its own studio and refuses one already active elsewhere.
   const source = location.membership_source ?? 'none'
-  if (isOwnerOrMaster && (hasUn1tOnlineConnection || source === 'un1t_online' || (source === 'none' && (features.bookings || features.contacts)))) {
+  if (isOwnerOrMaster && (hasUn1tOnlineConnection || source === 'un1t_online' || source === 'none')) {
     tabs.push({
       key: 'un1t-online',
       label: 'un1t.online',
