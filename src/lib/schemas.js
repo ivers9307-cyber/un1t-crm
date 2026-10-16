@@ -418,3 +418,11 @@ export const giversEnquirySchema = z.object({
   email: email.or(z.literal('')).optional(),
   message: z.string().trim().max(2000).optional(),
 })
+
+// UN1TSYNC.7 — PUT /api/locations/[id]/un1t-online. The per-studio API token
+// from un1t.online (Settings > API tokens). Shape only: whether it is accepted,
+// read-only, and a server-side (no browser origins) token is judged by calling
+// un1t.online with it. Never echoed in a response or a validation issue.
+export const Un1tOnlineConnectSchema = z.object({
+  token: z.string().trim().regex(/^un1t_[A-Za-z0-9_-]{20,}$/, 'That does not look like an un1t.online API token'),
+})

@@ -1,0 +1,190 @@
+// @vitest-environment jsdom
+// UN1TSYNC.7 — the un1t.online tab: connected studio, token name, expiry,
+// last sync, and the connect / sync now / disconnect actions. Everything goes
+// through /api/locations/[id]/un1t-online*; the token is typed into a password
+// field, posted, and cleared, never rendered back.
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+
+const refresh = vi.fn()
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh, push: vi.fn(), replace: vi.fn() }) }))
+
+import Un1tOnlineIntegrationTab from './Un1tOnlineIntegrationTab.jsx'
+
+const LOC = { id: 'a0000000-0000-4000-8000-000000000001', name: 'Hatch' }
+const TOKEN = 'un1t_ABCDEFGHIJKLMNOPQRSTUVWX_abc'
+const DAY = 24 * 60 * 60 * 1000
+const inDays = (n) => new Date(Date.now() + n * DAY).toISOString()
+
+const NOT_CONNECTED = { connected: false, status: 'not_connected', last_run: null }
+function connected(overrides = {}) {
+  return {
+    connected: true,
+    status: 'connected',
+    studio_title: 'UN1T Hatch Street',
+    token_name: 'CRM sync',
+    permissions_count: 4,
+    has_write_permissions: false,
+    expires_at: inDays(200),
+    last_error: null,
+    last_ok_at: null,
+    last_run: null,
+    ...overrides,
+  }
+}
+
+let fetchMock
+let current
+function reply(data, { ok = true, status = 200, extra = {} } = {}) {
+  return { ok, status, json: async () => (ok ? { success: true, data, ...extra } : { success: false, ...data }) }
+}
+beforeEach(() => {
+  refresh.mockReset()
+  current = NOT_CONNECTED
+  fetchMock = vi.fn(async (url, init) => {
+    const method = init?.method || 'GET'
+    if (method === 'GET') return reply(current)
+    if (method === 'PUT') { current = connected(); return reply(current) }
+    if (method === 'DELETE') { current = NOT_CONNECTED; return reply({ disconnected: true }) }
+    if (method === 'POST') return reply({ ok: true, counts: {}, runId: 'r1' })
+    throw new Error(`unexpected ${method}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+})
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+const callsOf = (method) => fetchMock.mock.calls.filter(([, init]) => (init?.method || 'GET') === method)
+
+describe('Un1tOnlineIntegrationTab', () => {
+  it('shows the connected studio, token name and permission count', async () => {
+    current = connected()
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    expect(await screen.findByText('UN1T Hatch Street')).toBeTruthy()
+    expect(screen.getByText(/CRM sync/)).toBeTruthy()
+    expect(screen.getByText(/4 permissions/)).toBeTruthy()
+    expect(document.body.innerHTML).not.toContain(TOKEN)
+  })
+
+  it('renders an expiry warning when the token expires within 30 days', async () => {
+    current = connected({ expires_at: inDays(10) })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    const note = await screen.findByTestId('un1t-expiry')
+    expect(note.getAttribute('data-expiring')).toBe('true')
+    expect(note.className).toMatch(/amber-700/)
+  })
+
+  it('does not warn about expiry for a token with plenty of time left', async () => {
+    current = connected({ expires_at: inDays(200) })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    const note = await screen.findByTestId('un1t-expiry')
+    expect(note.getAttribute('data-expiring')).toBe('false')
+  })
+
+  it('shows the write-permission note when the token can change data', async () => {
+    current = connected({ has_write_permissions: true })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    expect(await screen.findByText(/This token can change data on un1t\.online\. The CRM only reads, so a read-only token is safer: create one with the Read-only preset and paste it here\./)).toBeTruthy()
+  })
+
+  it('omits the write-permission note for a read-only token', async () => {
+    current = connected()
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    await screen.findByText('UN1T Hatch Street')
+    expect(screen.queryByText(/can change data on un1t\.online/)).toBeNull()
+  })
+
+  it('shows the last sync time, status, counts and last_error', async () => {
+    current = connected({
+      status: 'action_needed',
+      last_error: 'un1t.online refused the token',
+      last_run: {
+        status: 'error', started_at: '2026-10-02T09:00:00.000Z', finished_at: '2026-10-02T09:00:05.000Z', duration_ms: 5000,
+        first_error: 'un1t.online refused the token', counts: { pulled: { clients: 120, subscriptions: 40 } },
+      },
+    })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    expect(await screen.findByTestId('un1t-last-run')).toBeTruthy()
+    expect(screen.getByTestId('un1t-last-run').textContent).toMatch(/error/i)
+    expect(screen.getByTestId('un1t-last-run').textContent).toMatch(/clients 120/)
+    expect(screen.getAllByText(/un1t\.online refused the token/).length).toBeGreaterThan(0)
+  })
+
+  it('Connect posts the token and clears the field', async () => {
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    const input = await screen.findByLabelText(/API token/i)
+    expect(input.getAttribute('type')).toBe('password')
+    expect(input.getAttribute('autocomplete')).toBe('new-password')
+    fireEvent.change(input, { target: { value: `  ${TOKEN}  ` } })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(callsOf('PUT')).toHaveLength(1))
+    const [url, init] = callsOf('PUT')[0]
+    expect(url).toBe(`/api/locations/${LOC.id}/un1t-online`)
+    expect(JSON.parse(init.body)).toEqual({ token: TOKEN })
+    await waitFor(() => expect(screen.getByText('UN1T Hatch Street')).toBeTruthy())
+    expect(screen.getByLabelText(/API token/i).value).toBe('')
+    expect(document.body.innerHTML).not.toContain(TOKEN)
+    expect(refresh).toHaveBeenCalled()
+  })
+
+  it('shows the route\'s error when the token is refused and keeps nothing', async () => {
+    fetchMock.mockImplementation(async (url, init) => (init?.method === 'PUT'
+      ? { ok: false, status: 400, json: async () => ({ success: false, code: 'token_rejected', error: 'un1t.online rejected that token.' }) }
+      : reply(NOT_CONNECTED)))
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    fireEvent.change(await screen.findByLabelText(/API token/i), { target: { value: TOKEN } })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    expect(await screen.findByText('un1t.online rejected that token.')).toBeTruthy()
+  })
+
+  it('Connect is the only submit button; every other button is type="button"', async () => {
+    current = connected()
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    await screen.findByText('UN1T Hatch Street')
+    const buttons = [...document.querySelectorAll('button')]
+    const submits = buttons.filter((b) => b.getAttribute('type') === 'submit')
+    expect(submits.map((b) => b.textContent.trim())).toEqual(['Connect'])
+    for (const b of buttons.filter((x) => !submits.includes(x))) expect(b.getAttribute('type')).toBe('button')
+  })
+
+  it('Sync now posts to the sync route and shows the outcome', async () => {
+    current = connected()
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    fireEvent.click(await screen.findByRole('button', { name: /Sync now/ }))
+    await waitFor(() => expect(callsOf('POST')).toHaveLength(1))
+    expect(callsOf('POST')[0][0]).toBe(`/api/locations/${LOC.id}/un1t-online/sync`)
+    expect(await screen.findByText(/Sync finished/)).toBeTruthy()
+  })
+
+  it('Sync now shows the failure reason when the run did not go through', async () => {
+    current = connected()
+    fetchMock.mockImplementation(async (url, init) => (init?.method === 'POST'
+      ? reply({ ok: false, reason: 'auth', counts: {}, runId: 'r2' })
+      : reply(current)))
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    fireEvent.click(await screen.findByRole('button', { name: /Sync now/ }))
+    expect(await screen.findByText(/Sync failed \(auth\)/)).toBeTruthy()
+  })
+
+  it('Disconnect asks for confirmation and only then DELETEs', async () => {
+    current = connected()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    const btn = await screen.findByRole('button', { name: 'Disconnect' })
+    fireEvent.click(btn)
+    expect(callsOf('DELETE')).toHaveLength(0)
+    fireEvent.click(btn)
+    await waitFor(() => expect(callsOf('DELETE')).toHaveLength(1))
+    expect(callsOf('DELETE')[0][0]).toBe(`/api/locations/${LOC.id}/un1t-online`)
+    await waitFor(() => expect(screen.queryByText('UN1T Hatch Street')).toBeNull())
+    expect(confirm).toHaveBeenCalledTimes(2)
+  })
+
+  it('without edit rights it offers no actions', async () => {
+    current = connected()
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit={false} />)
+    await screen.findByText('UN1T Hatch Street')
+    expect(screen.queryByRole('button', { name: /Sync now|Disconnect/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Connect' })).toBeNull()
+    expect(screen.queryByLabelText(/API token/i)).toBeNull()
+  })
+})
