@@ -43,9 +43,9 @@ const dbWith = (source, error = null) => ({
 })
 
 describe('membership source (W1.M1)', () => {
-  it('registers none and glofox; un1t is a known key with no provider yet', () => {
-    expect(Object.keys(MEMBERSHIP_SOURCES)).toEqual(['none', 'glofox'])
-    expect(MEMBERSHIP_SOURCE_KEYS).toEqual(['none', 'glofox', 'un1t'])
+  it('registers none, glofox and un1t_online; un1t is a known key with no provider yet', () => {
+    expect(Object.keys(MEMBERSHIP_SOURCES)).toEqual(['none', 'glofox', 'un1t_online'])
+    expect(MEMBERSHIP_SOURCE_KEYS).toEqual(['none', 'glofox', 'un1t', 'un1t_online'])
     expect(MEMBERSHIP_SOURCES.none.capabilities).toEqual({ memberships: false, bookings: false, credits: false, invoices: false, schedule: false })
     expect(MEMBERSHIP_SOURCES.none.label).toBe('No membership source')
     expect(Object.isFrozen(MEMBERSHIP_SOURCES)).toBe(true)
@@ -70,6 +70,27 @@ describe('membership source (W1.M1)', () => {
     expect(await membershipSourceState(dbWith('glofox'), 'loc-ok')).toEqual({ source: 'glofox', state: 'configured' })
     expect(await membershipSourceState(dbWith('glofox'), 'loc-missing')).toEqual({ source: 'glofox', state: 'unconfigured', missing: ['API Key'] })
     expect(await membershipSourceState(dbWith('glofox'), 'loc-err')).toEqual({ source: 'glofox', state: 'unknown', readError: 'GLOFOX_SETTINGS_UNREADABLE' })
+  })
+
+  it('un1t_online is registered with every capability false and resolves as itself', async () => {
+    expect(MEMBERSHIP_SOURCES.un1t_online.key).toBe('un1t_online')
+    expect(MEMBERSHIP_SOURCES.un1t_online.label).toBe('un1t.online')
+    expect(MEMBERSHIP_SOURCES.un1t_online.capabilities).toEqual({ memberships: false, bookings: false, credits: false, invoices: false, schedule: false })
+    expect((await resolveMembershipSource(dbWith('un1t_online'), 'loc-ok')).key).toBe('un1t_online')
+  })
+
+  it('membershipSourceState answers unconfigured with missing api_token when un1t_online has no registry row', async () => {
+    // The real un1t_online provider over a db with no channel_connections row.
+    const chain = (res) => {
+      const c = { select: () => c, eq: () => c, in: () => c, maybeSingle: async () => res, then: (ok, bad) => Promise.resolve(res).then(ok, bad) }
+      return c
+    }
+    const db = {
+      from: (table) => chain(table === 'channel_connections'
+        ? { data: [], error: null }
+        : { data: { membership_source: 'un1t_online', id: 'loc-1' }, error: null }),
+    }
+    expect(await membershipSourceState(db, 'loc-1')).toEqual({ source: 'un1t_online', state: 'unconfigured', missing: ['api_token', 'studio'] })
   })
 
   it('an unregistered value (a future "un1t" before its module lands) resolves to the none PROVIDER with a warning, never throws', async () => {

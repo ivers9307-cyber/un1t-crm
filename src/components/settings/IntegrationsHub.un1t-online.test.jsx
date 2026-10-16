@@ -1,0 +1,49 @@
+// @vitest-environment jsdom
+//
+// UN1TSYNC.5 — the un1t.online hub card renders only where there is a
+// connection to show, deep-links to the location's un1t-online tab, and
+// carries nothing but the non-secret fields the assembler gives it.
+
+import { describe, it, expect, vi } from 'vitest'
+import { renderToStaticMarkup } from 'react-dom/server'
+
+vi.mock('next/link', () => ({
+  default: ({ href, children, className }) => <a href={typeof href === 'string' ? href : ''} className={className}>{children}</a>,
+}))
+vi.mock('./IntegrationsHubDrawer', () => ({ default: () => null }))
+vi.mock('next/navigation', () => ({
+  useSearchParams: () => new URLSearchParams(''),
+  usePathname: () => '/settings/integrations-hub',
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn(), refresh: vi.fn() }),
+}))
+
+import IntegrationsHub from './IntegrationsHub'
+
+const LOC = { id: 'loc-h', name: 'Hatch Street' }
+const BASE = {
+  generatedAt: '2026-10-16T09:00:00Z',
+  expirySoonDays: 10,
+  locations: [LOC],
+  glofox: [], whatsapp: [], instagram: [], xero: [], ads: [], shelly: [], agent: [], email: [],
+  unifi: [], climate: [], bca: [], billing: [], attention: [],
+}
+const row = (extra = {}) => ({
+  locationId: LOC.id, status: 'connected', studioTitle: 'Hatch Street', tokenExpiresAt: '2027-03-01T00:00:00Z',
+  lastOkAt: '2026-10-16T08:45:00Z', lastError: null, href: `/settings/locations/${LOC.id}?tab=un1t-online`, ...extra,
+})
+
+describe('IntegrationsHub — un1t.online card (UN1TSYNC.5)', () => {
+  it('renders the studio title and links to the un1t-online tab', () => {
+    const html = renderToStaticMarkup(<IntegrationsHub data={{ ...BASE, un1t_online: [row()] }} isMaster />)
+    expect(html).toContain('un1t.online')
+    expect(html).toContain('Hatch Street')
+    expect(html).toContain('/settings/locations/loc-h?tab=un1t-online')
+  })
+
+  it('shows no card for a studio that never connected it, or when the payload predates the key', () => {
+    for (const un1t_online of [[row({ status: 'not_connected', studioTitle: null, tokenExpiresAt: null, lastOkAt: null })], [row({ status: 'unknown' })], undefined]) {
+      const html = renderToStaticMarkup(<IntegrationsHub data={{ ...BASE, un1t_online }} isMaster />)
+      expect(html).not.toContain('Members, subscriptions, payments')
+    }
+  })
+})

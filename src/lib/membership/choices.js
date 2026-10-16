@@ -33,6 +33,15 @@ export const MEMBERSHIP_SOURCE_CHOICES = Object.freeze([
     hint: 'Memberships run inside this platform, with no external system. Coming soon.',
     registered: false,
   }),
+  // UN1TSYNC.5 — Hatch Street's gym platform. Registered (src/lib/membership/
+  // sources/un1t-online.js); its label must equal that provider's, which
+  // source.test.js pins. 'un1t' above stays reserved for built-in memberships.
+  Object.freeze({
+    key: 'un1t_online',
+    label: 'un1t.online',
+    hint: 'Members, subscriptions, payments and bookings are read from un1t.online every 15 minutes. Connect it on the un1t.online tab.',
+    registered: true,
+  }),
 ])
 
 export const NOT_AVAILABLE_YET_LABEL = 'not available yet'

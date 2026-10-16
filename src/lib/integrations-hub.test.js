@@ -985,3 +985,80 @@ describe('assembleIntegrationsHub — plan & wallet strip is organisation-admin 
     expect(data.billing.map((r) => r.locationId)).toEqual([LOC_A.id, LOC_B.id])
   })
 })
+
+// ── un1t.online card (UN1TSYNC.5) ──
+describe('assembleIntegrationsHub — un1t.online card', () => {
+  const UN1T_ROW = {
+    id: 'row-u', location_id: LOC_B.id, platform: 'un1t_online', status: 'connected', is_active: true,
+    label: null, display_name: 'UN1T Hatch Street', external_account_id: 'studio-9',
+    // A hub select never asks for these two; the fixture carries them anyway
+    // so the leak test would catch a spread of the raw row onto the card.
+    access_token: 'un1t_SECRET_TOKEN', app_secret: 'APP_SECRET_VALUE',
+    config: { token_id: 'tok-1', token_name: 'CRM sync', studio_title: 'Hatch Street', permissions: ['members:read'] },
+    token_expires_at: '2026-07-29T00:00:00Z', last_error: null, last_ok_at: '2026-07-19T11:45:00Z',
+  }
+
+  it('builds one row per location from the registry, linking to the un1t-online tab', async () => {
+    const db = tableDb({ channel_connections: { data: [UN1T_ROW], error: null } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    expect(data.un1t_online).toEqual([
+      {
+        locationId: LOC_A.id, status: 'not_connected', studioTitle: null, tokenExpiresAt: null,
+        lastOkAt: null, lastError: null, href: locationTabHref(LOC_A.id, 'un1t-online'),
+      },
+      {
+        locationId: LOC_B.id, status: 'connected', studioTitle: 'Hatch Street', tokenExpiresAt: '2026-07-29T00:00:00Z',
+        lastOkAt: '2026-07-19T11:45:00Z', lastError: null, href: `/settings/locations/${LOC_B.id}?tab=un1t-online`,
+      },
+    ])
+  })
+
+  it('the card never carries the token (or any other column of the raw row)', async () => {
+    const db = tableDb({ channel_connections: { data: [UN1T_ROW], error: null } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    const json = JSON.stringify(data)
+    expect(json).not.toContain('SECRET_TOKEN')
+    expect(json).not.toContain('APP_SECRET_VALUE')
+    expect(json).not.toContain('CRM sync')
+    expect(Object.keys(data.un1t_online[1]).sort()).toEqual(
+      ['href', 'lastError', 'lastOkAt', 'locationId', 'status', 'studioTitle', 'tokenExpiresAt'],
+    )
+  })
+
+  it('asks the registry for the un1t_online platform', async () => {
+    const db = tableDb({ channel_connections: { data: [], error: null } })
+    await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+    expect(db.inCalls.channel_connections.some(([col, vals]) => col === 'platform' && vals.includes('un1t_online'))).toBe(true)
+  })
+
+  it('feeds the attention strip: a token expiring within the window nags, naming the un1t.online card', async () => {
+    const db = tableDb({ channel_connections: { data: [UN1T_ROW], error: null } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    const a = data.attention.find((x) => x.cardKey === 'un1t_online')
+    expect(a).toMatchObject({
+      label: 'un1t.online', locationId: LOC_B.id, severity: 'warning',
+      message: 'Access token expires in 10 days.', href: locationTabHref(LOC_B.id, 'un1t-online'),
+    })
+  })
+
+  it('an error connection earns an error attention row with its last error', async () => {
+    const dead = { ...UN1T_ROW, status: 'error', last_error: 'un1t.online refused the token (401)', token_expires_at: null }
+    const data = await assembleIntegrationsHub(tableDb({ channel_connections: { data: [dead], error: null } }), [LOC_B], { now: NOW })
+    expect(data.attention.find((x) => x.cardKey === 'un1t_online')).toMatchObject({
+      severity: 'error', message: 'un1t.online refused the token (401)',
+    })
+    expect(data.un1t_online[0]).toMatchObject({ status: 'error', lastError: 'un1t.online refused the token (401)' })
+  })
+
+  it('a bare absence does not nag', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [LOC_A, LOC_B], { now: NOW })
+    expect(data.un1t_online.every((r) => r.status === 'not_connected')).toBe(true)
+    expect(data.attention.some((x) => x.cardKey === 'un1t_online')).toBe(false)
+  })
+
+  it('an unreadable registry grades the rows unknown, never not_connected', async () => {
+    const db = tableDb({ channel_connections: { error: { message: 'db exploded' } } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    expect(data.un1t_online.map((r) => [r.locationId, r.status])).toEqual([[LOC_A.id, 'unknown'], [LOC_B.id, 'unknown']])
+  })
+})

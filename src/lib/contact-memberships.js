@@ -7,6 +7,7 @@
 
 export const MEMBERSHIP_SOURCE_LABELS = Object.freeze({
   un1t_online_export: 'un1t.online',
+  un1t_online_api: 'un1t.online',
 })
 
 /**

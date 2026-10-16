@@ -371,3 +371,73 @@ describe('getIntegrationHealth — Glofox settings read', () => {
     expect(rows.find((r) => r.key === 'glofox').detail).toBe('Not connected')
   })
 })
+
+// ── getIntegrationHealth — the un1t.online row (UN1TSYNC.5) ──
+describe('getIntegrationHealth — un1t.online row', () => {
+  const DAY = 24 * 60 * 60 * 1000
+  const regRow = (over = {}) => ({
+    id: 'row-1', location_id: 'loc-1', platform: 'un1t_online', status: 'connected', is_active: true,
+    label: null, display_name: 'UN1T Hatch Street', external_account_id: 'studio-9', access_token: 'un1t_SECRET_TOKEN',
+    app_secret: null, config: { token_id: 't1', studio_title: 'Hatch Street' },
+    token_expires_at: new Date(Date.now() + 200 * DAY).toISOString(), last_error: null, last_ok_at: '2026-10-16T09:00:00Z',
+    ...over,
+  })
+  const find = (rows) => rows.find((r) => r.key === 'un1t_online')
+
+  it('a healthy connection reads ok with the studio title and the expiry date, and never carries the token', async () => {
+    const exp = new Date(Date.now() + 200 * DAY).toISOString()
+    const db = makeHealthDb({ channel_connections: { data: [regRow({ token_expires_at: exp })], error: null } })
+    const rows = await getIntegrationHealth(db, 'loc-1')
+    const r = find(rows)
+    expect(r).toMatchObject({ key: 'un1t_online', name: 'un1t.online', status: 'ok', lastSuccess: '2026-10-16T09:00:00Z' })
+    expect(r.detail).toBe(`Connected · Hatch Street · token expires ${exp.slice(0, 10)}`)
+    expect(JSON.stringify(rows)).not.toContain('SECRET_TOKEN')
+  })
+
+  it('warns 30 days before token expiry and attaches the remedy', async () => {
+    const db = makeHealthDb({ channel_connections: { data: [regRow({ token_expires_at: new Date(Date.now() + 10 * DAY).toISOString() })], error: null } })
+    const r = find(await getIntegrationHealth(db, 'loc-1'))
+    expect(r.status).toBe('warn')
+    expect(r.remedy).toBe('Paste a new un1t.online token in Settings → Integrations.')
+    expect(r.href).toBe('/settings/integrations-hub')
+  })
+
+  it('does not warn when the token has more than 30 days left, and never downgrades a down status', async () => {
+    const far = new Date(Date.now() + 31 * DAY).toISOString()
+    expect(find(await getIntegrationHealth(makeHealthDb({ channel_connections: { data: [regRow({ token_expires_at: far })], error: null } }), 'loc-1')).status).toBe('ok')
+    const dead = regRow({ status: 'error', last_error: 'token revoked', token_expires_at: new Date(Date.now() + 2 * DAY).toISOString() })
+    const r = find(await getIntegrationHealth(makeHealthDb({ channel_connections: { data: [dead], error: null } }), 'loc-1'))
+    expect(r.status).toBe('down')
+    expect(r.detail).toBe('token revoked')
+  })
+
+  it('an action_needed connection shows its last error', async () => {
+    const db = makeHealthDb({ channel_connections: { data: [regRow({ status: 'action_needed', last_error: 'un1t.online refused the token (401)' })], error: null } })
+    const r = find(await getIntegrationHealth(db, 'loc-1'))
+    expect(r.status).toBe('warn')
+    expect(r.detail).toBe('un1t.online refused the token (401)')
+  })
+
+  it('is absent for a location with no row that is not on the un1t_online source', async () => {
+    const db = makeHealthDb({
+      channel_connections: { data: [], error: null },
+      locations: { data: { id: 'loc-1', membership_source: 'glofox', settings: {} }, error: null },
+    })
+    expect(find(await getIntegrationHealth(db, 'loc-1'))).toBeUndefined()
+  })
+
+  it('shows "Not connected" for a location on the un1t_online source with no row yet', async () => {
+    const db = makeHealthDb({
+      channel_connections: { data: [], error: null },
+      locations: { data: { id: 'loc-1', membership_source: 'un1t_online' }, error: null },
+    })
+    const r = find(await getIntegrationHealth(db, 'loc-1'))
+    expect(r).toMatchObject({ status: 'unknown', detail: 'Not connected' })
+  })
+
+  it('an unreadable registry is "Unavailable", never "Not connected"', async () => {
+    const db = makeHealthDb({ channel_connections: { data: null, error: { message: 'boom' } } })
+    const r = find(await getIntegrationHealth(db, 'loc-1'))
+    expect(r).toMatchObject({ status: 'unknown', detail: 'Unavailable' })
+  })
+})

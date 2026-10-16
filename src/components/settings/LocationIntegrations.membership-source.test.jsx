@@ -43,11 +43,11 @@ afterEach(() => {
 })
 
 describe('LocationIntegrations — Membership source card', () => {
-  it('renders the three CHECK values with un1t disabled and labelled not available yet', () => {
+  it('renders the four CHECK values with un1t disabled and labelled not available yet', () => {
     render(<LocationIntegrations location={LOC} xeroConnection={null} user={MASTER} membershipSource={{ source: 'none', state: 'none' }} />)
     const select = screen.getByRole('combobox', { name: /membership source/i })
     const options = Array.from(select.querySelectorAll('option'))
-    expect(options.map((o) => o.value)).toEqual(['none', 'glofox', 'un1t'])
+    expect(options.map((o) => o.value)).toEqual(['none', 'glofox', 'un1t', 'un1t_online'])
     expect(options.find((o) => o.value === 'un1t').disabled).toBe(true)
     // A neutral, tenant-safe label: the KEY is un1t (schema), the copy is not.
     expect(options.find((o) => o.value === 'un1t').textContent).toMatch(/built-in memberships/i)
@@ -55,6 +55,8 @@ describe('LocationIntegrations — Membership source card', () => {
     expect(options.find((o) => o.value === 'un1t').textContent).toMatch(/not available yet/i)
     expect(options.find((o) => o.value === 'glofox').disabled).toBe(false)
     expect(options.find((o) => o.value === 'none').disabled).toBe(false)
+    expect(options.find((o) => o.value === 'un1t_online').disabled).toBe(false)
+    expect(options.find((o) => o.value === 'un1t_online').textContent).toBe('un1t.online')
     expect(select.value).toBe('none')
   })
 

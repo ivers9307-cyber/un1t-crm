@@ -9286,7 +9286,7 @@ registry.registerPath({
     'Response data is membershipSourceState(): { source, state: none|configured|unconfigured|unknown, missing?, readError?, previous }.',
   request: {
     params: z.object({ id: uuidLike }),
-    body: { content: { 'application/json': { schema: z.object({ membership_source: z.enum(['none', 'glofox', 'un1t']) }).openapi('MembershipSourceSave') } } },
+    body: { content: { 'application/json': { schema: z.object({ membership_source: z.enum(['none', 'glofox', 'un1t', 'un1t_online']) }).openapi('MembershipSourceSave') } } },
   },
   responses: {
     200: { description: 'Saved (or already set) — the resolved membership-source state, plus `warning` when Glofox credentials were kept', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
