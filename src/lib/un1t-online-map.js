@@ -123,7 +123,7 @@ export function mapSubscription(row, ctx) {
   return {
     location_id: ctx.locationId,
     un1t_id: String(row.id),
-    un1t_user_id: text(row.user_id),
+    un1t_user_id: text(row.user_id ?? (isObj(row.user) ? row.user.id : undefined)),
     product_id: text(row.product_id ?? p.id),
     product_title: text(p.title),
     status: text(row.status),
@@ -152,7 +152,7 @@ export function mapTransaction(row, ctx) {
   return {
     location_id: ctx.locationId,
     un1t_id: String(row.id),
-    un1t_user_id: text(row.user_id),
+    un1t_user_id: text(row.user_id ?? (isObj(row.user) ? row.user.id : undefined)),
     product_id: text(row.product_id ?? p.id),
     product_title: text(p.title),
     invoice_id: text(row.invoice_id),
@@ -174,7 +174,7 @@ export function mapInvoice(row, ctx) {
   return {
     location_id: ctx.locationId,
     un1t_id: String(row.id),
-    un1t_user_id: text(row.user_id),
+    un1t_user_id: text(row.user_id ?? (isObj(row.user) ? row.user.id : undefined)),
     subscription_id: text(row.subscription_id ?? sub.id),
     status: text(row.status),
     amount_cents: int(row.amount),
@@ -209,7 +209,7 @@ export function mapBooking(row, ctx) {
   return {
     location_id: ctx.locationId,
     un1t_id: String(row.id),
-    un1t_user_id: text(row.user_id),
+    un1t_user_id: text(row.user_id ?? (isObj(row.user) ? row.user.id : undefined)),
     event_id: text(row.event_id),
     status: text(row.status),
     source: text(row.source),

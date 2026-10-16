@@ -95,6 +95,17 @@ describe('raw hygiene', () => {
     })
   }
 
+  for (const [name, fn, row] of cases) {
+    it(`${name} reads the user id from the embed when user_id is absent`, () => {
+      const embedOnly = { ...row, user_id: undefined, user: { id: 'u-embed', email: 'test.person@example.ie' } }
+      const r = fn(embedOnly, ctx)
+      expect(r.un1t_user_id).toBe('u-embed')
+      expect(JSON.stringify(r)).not.toContain('test.person@example.ie')
+      // A flat user_id still wins.
+      expect(fn({ ...embedOnly, user_id: 'u-flat' }, ctx).un1t_user_id).toBe('u-flat')
+    })
+  }
+
   it('raw keeps the non-PII fields', () => {
     expect(mapInvoice(invoice, ctx).raw.stripe_invoice_id).toBe('in_test')
     expect(mapBooking(booking, ctx).raw.source).toBe('app')

@@ -23,7 +23,7 @@ export default function StudioMembershipsCard({ memberships }) {
                 </span>
               </div>
               <div className="text-[11px] text-un1t-subtle">
-                {m.locations?.name || 'Studio'} · from the {source} export of {formatDate(m.last_seen_at)}
+                {m.locations?.name || 'Studio'} · {source}, last seen {formatDate(m.last_seen_at)}
                 {!active && m.ended_at ? ` · ended ${formatDate(m.ended_at)}` : ''}
               </div>
             </li>

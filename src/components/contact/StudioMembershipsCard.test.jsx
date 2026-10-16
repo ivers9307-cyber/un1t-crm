@@ -21,7 +21,7 @@ describe('StudioMembershipsCard', () => {
     const text = container.textContent
     expect(text).toContain('Founding Membership — Unlimited')
     expect(text).toContain('Active')
-    expect(text).toContain('UN1T Hatch Street · from the un1t.online export of 12 Oct 2026')
+    expect(text).toContain('UN1T Hatch Street · un1t.online (import), last seen 12 Oct 2026')
     expect(text).toContain('Ended')
     expect(text).toContain('ended 12 Oct 2026')
   })
