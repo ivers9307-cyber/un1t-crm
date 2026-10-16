@@ -123,7 +123,7 @@ describe('resolveUn1tContacts', () => {
     ])
     const r = await resolveUn1tContacts(db, args([{ id: 'u1', email: 'jane@x.ie' }]))
     expect(r.counts.ambiguous_email).toBe(1)
-    expect(r.errors).toEqual([{ un1t_user_id: 'u1', reason: 'ambiguous_email' }])
+    expect(r.errors).toEqual([{ un1t_user_id: 'u1', reason: 'ambiguous_email', contact_ids: ['c1', 'c2'] }])
     expect(r.contactIdByUserId.size).toBe(0)
     expect(log.updates).toHaveLength(0)
     expect(log.inserts).toHaveLength(0)
@@ -135,7 +135,7 @@ describe('resolveUn1tContacts', () => {
     ])
     const r = await resolveUn1tContacts(db, args([{ id: 'u1', email: 'jane@x.ie' }]))
     expect(r.counts.conflict).toBe(1)
-    expect(r.errors).toEqual([{ un1t_user_id: 'u1', reason: 'conflict' }])
+    expect(r.errors).toEqual([{ un1t_user_id: 'u1', reason: 'conflict', contact_id: 'c1' }])
     expect(r.contactIdByUserId.size).toBe(0)
     expect(log.updates).toHaveLength(0)
     expect(log.inserts).toHaveLength(0)
@@ -203,6 +203,18 @@ describe('resolveUn1tContacts', () => {
     expect(r.counts.failed).toBe(1)
     expect(r.counts.linked).toBe(0)
     expect(r.contactIdByUserId.size).toBe(0)
+    // The linked contact is named, so the sync can spare its membership.
+    expect(r.errors).toEqual([{ un1t_user_id: 'u1', reason: expect.stringContaining('update boom'), contact_id: 'c1' }])
+  })
+
+  it('a failed attach-by-email update names the contact it would have attached', async () => {
+    const { db } = makeDb(
+      [{ id: 'c1', organization_id: ORG, location_id: STILLORGAN, email: 'jane@x.ie', un1t_user_id: null, first_name: null }],
+      { failUpdates: true },
+    )
+    const r = await resolveUn1tContacts(db, args([{ id: 'u1', email: 'jane@x.ie', first_name: 'Jane' }]))
+    expect(r.counts.failed).toBe(1)
+    expect(r.errors).toEqual([{ un1t_user_id: 'u1', reason: expect.stringContaining('update boom'), contact_id: 'c1' }])
   })
 
   it('an update that touches no row is failed (a zero-row UPDATE is not an error)', async () => {
@@ -213,6 +225,7 @@ describe('resolveUn1tContacts', () => {
     const r = await resolveUn1tContacts(db, args([{ id: 'u1', first_name: 'Jane' }]))
     expect(r.counts.failed).toBe(1)
     expect(r.counts.linked).toBe(0)
+    expect(r.errors[0].contact_id).toBe('c1')
   })
 
   it('loads existing links in chunks of 200', async () => {

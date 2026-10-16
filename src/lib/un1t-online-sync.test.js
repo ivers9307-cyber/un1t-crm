@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { runUn1tSync, UN1T_LISTS } from './un1t-online-sync.js'
+import { logError, logWarn } from './log'
 import { Un1tAuthError, Un1tApiError } from './un1t-online.js'
 import { ilikeMatches } from './like-escape.test-helpers.js'
 
@@ -21,7 +22,7 @@ const AUTH_MSG =
 // which tables were written. Writes resolve { data, error } like PostgREST;
 // nothing throws.
 // ---------------------------------------------------------------------------
-function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], failUpdateIds = [] } = {}) {
+function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], failUpdateIds = [], updateError = null } = {}) {
   const tables = {}
   for (const [t, rows] of Object.entries(seed)) tables[t] = rows.map((r) => ({ ...r }))
   const log = []
@@ -29,9 +30,16 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
   const nextId = (t) => `${t}-${++seq}`
   const rowsOf = (t) => (tables[t] ||= [])
 
+  // `config->>token_id` style JSON paths resolve into the jsonb column.
+  const valueOf = (row, col) => {
+    if (!col.includes('->>')) return row[col]
+    const [root, key] = col.split('->>')
+    const v = row[root]?.[key]
+    return v == null ? null : String(v)
+  }
   function matches(row, filters) {
     return filters.every(([kind, col, val]) => {
-      if (kind === 'eq') return row[col] === val
+      if (kind === 'eq') return valueOf(row, col) === val
       if (kind === 'in') return val.includes(row[col])
       if (kind === 'ilike') return ilikeMatches(val, row[col])
       return true
@@ -93,7 +101,7 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
         return { data: out, error: null }
       }
       if (s.op === 'update') {
-        if (failUpdate.includes(table)) return { data: null, error: { message: `${table} update boom` } }
+        if (failUpdate.includes(table)) return { data: null, error: updateError || { message: `${table} update boom` } }
         if (s.filters.some(([k, c, v]) => k === 'eq' && c === 'id' && failUpdateIds.includes(v))) {
           return { data: null, error: { message: 'row update boom' } }
         }
@@ -202,7 +210,7 @@ function baseSeed(extra = {}) {
         status: 'connected',
         access_token: 'un1t_secret_token_value',
         external_account_id: STUDIO,
-        config: {},
+        config: { token_id: 'tok-1', token_name: 'CRM read-only' },
       },
     ],
     contacts: [],
@@ -296,8 +304,15 @@ describe('runUn1tSync', () => {
     expect(conn.last_error).toBeNull()
     const connUpdate = log.find((e) => e.table === 'channel_connections' && e.op === 'update')
     expect(connUpdate.filters).toEqual(
-      expect.arrayContaining([['eq', 'location_id', HATCH], ['eq', 'platform', 'un1t_online'], ['eq', 'is_active', true]]),
+      expect.arrayContaining([
+        ['eq', 'location_id', HATCH],
+        ['eq', 'platform', 'un1t_online'],
+        ['eq', 'is_active', true],
+        ['eq', 'config->>token_id', 'tok-1'],
+      ]),
     )
+    // The token is never a filter value (filters are URL query parameters).
+    expect(JSON.stringify(log.map((e) => e.filters))).not.toContain('un1t_secret_token_value')
 
     // Run row.
     const run = runRow(tables)
@@ -717,6 +732,170 @@ describe('runUn1tSync', () => {
     const r = await runUn1tSync(db, HATCH, opts(factory))
     expect(r).toMatchObject({ ok: false, reason: 'db' })
     expect(writtenTables(log)).toEqual(['channel_connections', 'un1t_sync_runs'])
+  })
+
+  describe('the token is replaced while a run is in flight', () => {
+    // The connect route replaces the token in place: same row, new token and
+    // new token_id. Simulated inside the fake client, mid-run.
+    const swap = (tables) => {
+      const row = tables.channel_connections.find((c) => c.id === 'cc-1')
+      row.access_token = 'un1t_new_token_value'
+      row.config = { token_id: 'tok-2' }
+      row.status = 'connected'
+      row.last_error = null
+    }
+
+    it('an old-token 401 does not mark the new token action_needed', async () => {
+      const { db, tables } = makeDb(baseSeed())
+      const client = {
+        async getSelf() { swap(tables); throw new Un1tAuthError('refused', 401) },
+        async listAll() { throw new Error('not reached') },
+        stats: () => ({ requests: 1, waitedMs: 0, retries: 0 }),
+      }
+      const r = await runUn1tSync(db, HATCH, opts(() => client))
+      expect(r).toMatchObject({ ok: false, reason: 'auth' })
+      expect(connRow(tables)).toMatchObject({ status: 'connected', last_error: null, access_token: 'un1t_new_token_value' })
+      expect(r.counts.connection_update_skipped).toBe('superseded')
+      expect(r.counts.connection_update_error).toBeUndefined()
+      expect(runRow(tables).status).toBe('error')
+      expect(logWarn).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('connection changed'), expect.any(Object))
+      expect(JSON.stringify([logWarn.mock.calls, logError.mock.calls])).not.toContain('un1t_new_token_value')
+      expect(JSON.stringify([logWarn.mock.calls, logError.mock.calls])).not.toContain('un1t_secret_token_value')
+    })
+
+    it('an old-token success does not stamp last_ok_at or the old expiry on the new token', async () => {
+      const { db, tables } = makeDb(baseSeed())
+      const lists = fixtureLists()
+      const client = {
+        async getSelf() { return SELF },
+        async listAll(path) {
+          if (path === '/bookings') swap(tables)
+          return { rows: lists[path], total: lists[path].length, truncated: false }
+        },
+        stats: () => ({ requests: 8, waitedMs: 0, retries: 0 }),
+      }
+      const r = await runUn1tSync(db, HATCH, opts(() => client))
+      expect(r.ok).toBe(true)
+      const conn = connRow(tables)
+      expect(conn.last_ok_at).toBeUndefined()
+      expect(conn.token_expires_at).toBeUndefined()
+      expect(r.counts.connection_update_skipped).toBe('superseded')
+      expect(runRow(tables).status).toBe('ok')
+    })
+
+    it('a row without a token_id is matched by reading the token, never by filtering on it', async () => {
+      const seed = baseSeed()
+      seed.channel_connections[0].config = {}
+      const { db, tables, log } = makeDb(seed)
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(connRow(tables)).toMatchObject({ status: 'connected', last_ok_at: NOW_ISO })
+      const upd = log.find((e) => e.table === 'channel_connections' && e.op === 'update')
+      expect(upd.filters).toEqual(expect.arrayContaining([['eq', 'id', 'cc-1']]))
+      expect(JSON.stringify(log.map((e) => e.filters))).not.toContain('un1t_secret_token_value')
+    })
+
+    it('a row without a token_id whose token changed is superseded', async () => {
+      const seed = baseSeed()
+      seed.channel_connections[0].config = {}
+      const { db, tables } = makeDb(seed)
+      const client = {
+        async getSelf() {
+          const row = tables.channel_connections[0]
+          row.access_token = 'un1t_new_token_value'
+          throw new Un1tAuthError('refused', 401)
+        },
+        async listAll() { throw new Error('not reached') },
+        stats: () => ({ requests: 1, waitedMs: 0, retries: 0 }),
+      }
+      const r = await runUn1tSync(db, HATCH, opts(() => client))
+      expect(r.reason).toBe('auth')
+      expect(connRow(tables).status).toBe('connected')
+      expect(r.counts.connection_update_skipped).toBe('superseded')
+    })
+  })
+
+  it("a failed channel_connections write never puts the token (in the error's details) in a log, the run row or the result", async () => {
+    const leaky = {
+      code: '23514',
+      message: 'new row for relation "channel_connections" violates check constraint "channel_connections_status_check"',
+      details: 'Failing row contains (cc-1, loc-hatch, un1t_online, un1t_secret_token_value, ...).',
+      hint: 'token un1t_secret_token_value',
+    }
+    const { db, tables } = makeDb(baseSeed(), { failUpdate: ['channel_connections', 'un1t_sync_runs'], updateError: leaky })
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    expect(r.counts.connection_update_error).toContain('violates check constraint')
+    expect(logError).toHaveBeenCalled()
+    const logged = JSON.stringify([logError.mock.calls, logWarn.mock.calls])
+    expect(logged).not.toContain('un1t_secret_token_value')
+    expect(logged).not.toContain('Failing row')
+    expect(logged).toContain('23514')
+    expect(JSON.stringify(tables.un1t_sync_runs)).not.toContain('un1t_secret_token_value')
+    expect(JSON.stringify(r)).not.toContain('un1t_secret_token_value')
+  })
+
+  it('a failed mirror upsert reports only the message in first_error and last_error', async () => {
+    const leaky = { code: '23505', message: 'duplicate key value', details: 'Key (x)=(secret-ish) already exists.', hint: 'h' }
+    const { db, tables } = makeDb(baseSeed(), { failUpsert: ['un1t_products'] })
+    // Swap the generic upsert error for a detailed one.
+    const from = db.from
+    db.from = (t) => {
+      const b = from(t)
+      if (t !== 'un1t_products') return b
+      const then = b.then
+      b.then = (res, rej) => then.call(b, (out) => res(out.error ? { data: null, error: leaky } : out), rej)
+      return b
+    }
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.reason).toBe('db')
+    expect(runRow(tables).first_error).toContain('duplicate key value')
+    expect(runRow(tables).first_error).not.toContain('secret-ish')
+    expect(connRow(tables).last_error).not.toContain('secret-ish')
+  })
+
+  it('a resolver error with no un1t_user_id ends nothing this run (fail closed)', async () => {
+    const lists = fixtureLists()
+    lists['/users/clients'] = [...lists['/users/clients'], { email: 'noid@x.ie', first_name: 'No Id' }]
+    const seed = baseSeed({
+      contact_memberships: [
+        { id: 'm-old', organization_id: ORG, location_id: HATCH, contact_id: 'c-old', source: 'un1t_online_api', plan_name: 'X', status: 'active', ended_at: null },
+      ],
+    })
+    const { db, tables } = makeDb(seed)
+    const { factory } = makeClient({ self: SELF, lists })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    expect(r.counts.contacts.failed).toBe(1)
+    expect(tables.contact_memberships.find((m) => m.id === 'm-old').status).toBe('active')
+    expect(r.counts.memberships).toMatchObject({ end_skipped: 'contacts_unresolved', would_end: 1, ended: 0 })
+  })
+
+  it("spares a failing client's contact named by contact_id even when its un1t_user_id is not set", async () => {
+    // u1's email matches c-att (un1t_user_id NULL); attaching it fails. u2 is
+    // linked to c-other and its subscription is cancelled.
+    const seed = baseSeed({
+      contacts: [
+        { id: 'c-att', organization_id: ORG, location_id: STILLORGAN, email: 'one@x.ie', un1t_user_id: null, first_name: 'One', last_name: 'One', phone: '+353870000001' },
+        { id: 'c-other', organization_id: ORG, location_id: HATCH, email: 'two@x.ie', un1t_user_id: 'u2', first_name: 'Two', last_name: 'Two', phone: '+353870000002' },
+      ],
+      contact_memberships: [
+        { id: 'm-att', organization_id: ORG, location_id: HATCH, contact_id: 'c-att', source: 'un1t_online_api', plan_name: 'Unlimited', status: 'active', ended_at: null },
+        { id: 'm-other', organization_id: ORG, location_id: HATCH, contact_id: 'c-other', source: 'un1t_online_api', plan_name: 'Unlimited', status: 'active', ended_at: null },
+      ],
+    })
+    const { db, tables } = makeDb(seed, { failUpdateIds: ['c-att'] })
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    expect(r.counts.contact_errors).toEqual([expect.objectContaining({ un1t_user_id: 'u1', contact_id: 'c-att' })])
+    expect(tables.contacts.find((c) => c.id === 'c-att').un1t_user_id).toBeNull()
+    expect(tables.contact_memberships.find((m) => m.id === 'm-att')).toMatchObject({ status: 'active', ended_at: null })
+    expect(tables.contact_memberships.find((m) => m.id === 'm-other').status).toBe('ended')
+    expect(r.counts.memberships.end_skipped_unresolved).toBe(1)
   })
 
   it('never issues a delete anywhere in a run', async () => {

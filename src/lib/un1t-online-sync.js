@@ -107,6 +107,18 @@ function messageOf(err) {
   return s.length > MAX_ERROR_LEN ? `${s.slice(0, MAX_ERROR_LEN)}…` : s
 }
 
+/**
+ * What may be logged of a PostgREST / thrown error: its code and message,
+ * never `details` or `hint`. A constraint violation's details is
+ * "Failing row contains (…)", which on channel_connections includes the
+ * access token.
+ */
+function safeErr(err) {
+  if (err == null) return null
+  if (typeof err === 'string') return { code: null, message: err }
+  return { code: err.code ?? null, message: messageOf(err) }
+}
+
 function chunks(list, size) {
   const out = []
   for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size))
@@ -153,13 +165,17 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
     const row = Array.isArray(data) ? data[0] : null
     if (error || !row?.id) {
       // Nothing has been read or written yet, and the next tick retries.
-      logError('un1t-online-sync', 'could not open a sync run row', { locationId, err: error || 'no row returned' })
+      logError('un1t-online-sync', 'could not open a sync run row', { locationId, err: safeErr(error || 'no row returned') })
       return { ok: false, reason: 'db', counts, runId: null }
     }
     runId = row.id
   }
 
   let client = null
+  // The token this run read. Every connection write is guarded on it, so a
+  // run still in flight when the connect route replaces the token in place
+  // cannot stamp the NEW token's row with the old token's outcome.
+  let connIdentity = null
   // `connectionPatch` is the connection write for this outcome; null leaves
   // the connection untouched (not_connected, or no connection to identify).
   const finish = async ({ ok, reason, firstError, connectionPatch }) => {
@@ -171,8 +187,9 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
       }
     }
     if (connectionPatch) {
-      const cerr = await updateConnection(db, locationId, connectionPatch)
-      if (cerr) counts.connection_update_error = cerr
+      const res = await updateConnection(db, locationId, connectionPatch, connIdentity)
+      if (res.superseded) counts.connection_update_skipped = 'superseded'
+      else if (res.error) counts.connection_update_error = res.error
     }
     const finishedAt = now()
     const { error } = await db
@@ -186,7 +203,7 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
       })
       .eq('id', runId)
       .select('id')
-    if (error) logError('un1t-online-sync', 'could not close the sync run row', { locationId, runId, err: error })
+    if (error) logError('un1t-online-sync', 'could not close the sync run row', { locationId, runId, err: safeErr(error) })
     const result = { ok, counts, runId }
     if (!ok) result.reason = reason
     return result
@@ -207,6 +224,10 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
   }
   if (conn.source !== 'registry' || !conn.isActive || !conn.accessToken) {
     return failure('not_connected', 'un1t.online is not connected for this location', null)
+  }
+  connIdentity = {
+    token: conn.accessToken,
+    tokenId: conn.config?.token_id == null ? null : String(conn.config.token_id),
   }
   const storedStudio = conn.externalAccountId == null ? null : String(conn.externalAccountId)
 
@@ -321,11 +342,7 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
       organizationId,
       subscriptions: mapped.un1t_subscriptions,
       contactIdOf,
-      // Every client the resolver could not attribute (its errors carry the
-      // un1t_user_id): only these contacts' rows are spared from ending.
-      unresolvedUserIds: new Set(
-        (resolved.errors || []).map((e) => e?.un1t_user_id).filter((id) => id != null).map(String),
-      ),
+      resolverErrors: resolved.errors || [],
       nowIso,
     })
     counts.memberships = membership.counts
@@ -335,7 +352,7 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
     }
   } catch (err) {
     const msg = `un1t.online sync failed: ${messageOf(err)}`
-    logError('un1t-online-sync', 'unexpected exception in a sync run', { locationId, runId, err })
+    logError('un1t-online-sync', 'unexpected exception in a sync run', { locationId, runId, err: safeErr(err) })
     return failure('db', msg, errorPatch(msg, tokenFields))
   }
 
@@ -352,7 +369,7 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
  * first_seen_at is never in the upsert payload, so its column default sets it
  * on insert only and a re-activation keeps the original date.
  */
-async function reconcileMemberships(db, { locationId, organizationId, subscriptions, contactIdOf, unresolvedUserIds, nowIso }) {
+async function reconcileMemberships(db, { locationId, organizationId, subscriptions, contactIdOf, resolverErrors, nowIso }) {
   const counts = { active: 0, ended: 0, skipped_no_contact: 0 }
 
   // One plan per contact: the best active subscription.
@@ -414,12 +431,30 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
     return { counts, error: null }
   }
 
-  // Spare only the contacts of clients that failed to resolve: their
-  // subscriptions are unknown this run. Matched by contacts.un1t_user_id,
-  // read by id in chunks (under the 1,000-row cap).
-  if (unresolvedUserIds.size > 0) {
+  // Every client the resolver could not attribute has an unknown
+  // subscription this run, so its contact's row must not end.
+  //   - An error with no un1t_user_id cannot be attributed to anyone: end
+  //     NOTHING this run (fail closed).
+  //   - Otherwise spare (a) every contact the resolver named on an error
+  //     (contact_id / contact_ids: a failed attach or null-fill, a conflict,
+  //     an ambiguous email), even one whose un1t_user_id is not set, and
+  //     (b) every contact whose un1t_user_id is a failed client's, read by id
+  //     in chunks (under the 1,000-row cap). Every other row ends, so one
+  //     client failing on every run never freezes the studio's endings.
+  if (resolverErrors.length > 0) {
+    if (resolverErrors.some((e) => e?.un1t_user_id == null)) {
+      counts.end_skipped = 'contacts_unresolved'
+      counts.would_end = toEnd.length
+      logWarn('un1t-online-sync', 'not ending memberships: a client failed to resolve and carries no id', { locationId, wouldEnd: toEnd.length })
+      return { counts, error: null }
+    }
     const spared = new Set()
-    const contactIds = [...new Set(toEnd.map((r) => r.contact_id))]
+    for (const e of resolverErrors) {
+      if (e.contact_id != null) spared.add(String(e.contact_id))
+      for (const id of Array.isArray(e.contact_ids) ? e.contact_ids : []) spared.add(String(id))
+    }
+    const unresolvedUserIds = new Set(resolverErrors.map((e) => String(e.un1t_user_id)))
+    const contactIds = [...new Set(toEnd.map((r) => r.contact_id))].filter((id) => !spared.has(String(id)))
     for (const ids of chunks(contactIds, CHUNK)) {
       const { data, error } = await db
         .from('contacts')
@@ -430,15 +465,15 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
         // risk ending a member whose client merely failed to resolve.
         counts.end_skipped = 'contacts_unreadable'
         counts.would_end = toEnd.length
-        logWarn('un1t-online-sync', 'not ending memberships: could not read contacts to spare unresolved clients', { locationId, wouldEnd: toEnd.length, err: error })
+        logWarn('un1t-online-sync', 'not ending memberships: could not read contacts to spare unresolved clients', { locationId, wouldEnd: toEnd.length, err: safeErr(error) })
         return { counts, error: null }
       }
       for (const c of data || []) {
-        if (c.un1t_user_id != null && unresolvedUserIds.has(String(c.un1t_user_id))) spared.add(c.id)
+        if (c.un1t_user_id != null && unresolvedUserIds.has(String(c.un1t_user_id))) spared.add(String(c.id))
       }
     }
     const before = toEnd.length
-    toEnd = toEnd.filter((r) => !spared.has(r.contact_id))
+    toEnd = toEnd.filter((r) => !spared.has(String(r.contact_id)))
     counts.end_skipped_unresolved = before - toEnd.length
     if (counts.end_skipped_unresolved > 0) {
       logWarn('un1t-online-sync', 'not ending memberships of clients that failed to resolve', { locationId, spared: counts.end_skipped_unresolved })
@@ -462,22 +497,55 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
   return { counts, error: null }
 }
 
-/** The active un1t_online registry row for the location. Returns an error message or null. */
-async function updateConnection(db, locationId, patch) {
-  const { data, error } = await db
+/**
+ * Record the run's outcome on the active un1t_online registry row, but only
+ * while that row still holds the token this run used.
+ *
+ * The guard never puts the token itself in a filter: a PostgREST filter is a
+ * URL query parameter, and request URLs are kept in the API logs. It matches
+ * the token's non-secret id (config.token_id, written by the connect route
+ * with the token) atomically in the UPDATE. A row without a token_id falls
+ * back to reading the row and comparing the token in memory before updating
+ * it by id.
+ *
+ * @returns {Promise<{ superseded?: true, error?: string }>} a zero-row result
+ *   means the token was replaced (or the row deactivated) mid-run: superseded,
+ *   logged at warn, never an error.
+ */
+async function updateConnection(db, locationId, patch, identity) {
+  const superseded = () => {
+    logWarn('un1t-online-sync', 'connection changed during the run; not recording this run\'s outcome on it', { locationId, status: patch.status })
+    return { superseded: true }
+  }
+  const failed = (error) => {
+    logError('un1t-online-sync', 'could not record the sync outcome on the connection', { locationId, status: patch.status, err: safeErr(error) })
+    return { error: messageOf(error) }
+  }
+
+  let query = db
     .from('channel_connections')
     .update(patch)
     .eq('location_id', locationId)
     .eq('platform', PLATFORM)
     .eq('is_active', true)
-    .select('id')
-  if (error) {
-    logError('un1t-online-sync', 'could not record the sync outcome on the connection', { locationId, status: patch.status, err: error })
-    return messageOf(error)
+
+  if (identity?.tokenId) {
+    query = query.eq('config->>token_id', identity.tokenId)
+  } else {
+    const { data: rows, error: readError } = await db
+      .from('channel_connections')
+      .select('id, access_token')
+      .eq('location_id', locationId)
+      .eq('platform', PLATFORM)
+      .eq('is_active', true)
+    if (readError) return failed(readError)
+    const row = (rows || []).find((r) => identity?.token && r.access_token === identity.token)
+    if (!row) return superseded()
+    query = query.eq('id', row.id)
   }
-  if (!Array.isArray(data) || data.length === 0) {
-    logWarn('un1t-online-sync', 'no active un1t_online connection row to record the sync outcome on', { locationId, status: patch.status })
-    return 'no active connection row'
-  }
-  return null
+
+  const { data, error } = await query.select('id')
+  if (error) return failed(error)
+  if (!Array.isArray(data) || data.length === 0) return superseded()
+  return {}
 }

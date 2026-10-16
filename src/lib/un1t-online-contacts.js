@@ -58,9 +58,12 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
   }
   const errors = []
 
-  const fail = (userId, reason) => {
+  // `extra` carries the candidate contact(s) when the resolver knew them
+  // (contact_id, or contact_ids for an ambiguous email), so the sync can
+  // spare that contact's membership even when its un1t_user_id is not set.
+  const fail = (userId, reason, extra = {}) => {
     counts.failed += 1
-    errors.push({ un1t_user_id: userId, reason })
+    errors.push({ un1t_user_id: userId, reason, ...extra })
   }
 
   // A client repeated across pages is processed once (first occurrence wins).
@@ -125,7 +128,7 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
       if (Object.keys(nullFills(linked, fields)).length > 0) {
         const ok = await updateContact(db, linked, fields, { now, attach: false, userId })
         if (ok.error) {
-          fail(userId, ok.error)
+          fail(userId, ok.error, { contact_id: linked.id })
           continue
         }
       }
@@ -149,19 +152,19 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
       const matches = data || []
       if (matches.length > 1) {
         counts.ambiguous_email += 1
-        errors.push({ un1t_user_id: userId, reason: 'ambiguous_email' })
+        errors.push({ un1t_user_id: userId, reason: 'ambiguous_email', contact_ids: matches.map((m) => m.id) })
         continue
       }
       if (matches.length === 1) {
         const match = matches[0]
         if (!isEmpty(match.un1t_user_id) && String(match.un1t_user_id) !== userId) {
           counts.conflict += 1
-          errors.push({ un1t_user_id: userId, reason: 'conflict' })
+          errors.push({ un1t_user_id: userId, reason: 'conflict', contact_id: match.id })
           continue
         }
         const ok = await updateContact(db, match, fields, { now, attach: true, userId })
         if (ok.error) {
-          fail(userId, ok.error)
+          fail(userId, ok.error, { contact_id: match.id })
           continue
         }
         counts.attached_by_email += 1
