@@ -811,7 +811,7 @@ async function assembleEmailDelivery(db, locs, orgIds) {
  * @param {object} db  createServerClient() — service role
  * @param {Array<object>} locations  full location rows (id, name, organization_id,
  *   settings, sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id,
- *   thinq_country_code, bca_config, features)
+ *   thinq_country_code, bca_config, features, membership_source)
  * @param {{ now?: Date, billingFor?: (loc: object) => boolean }} [opts]
  *   billingFor — C141 ORGROLE.2: which locations get a plan & wallet strip
  *   row (organisation admins only); omitted = every location.
@@ -955,6 +955,12 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
       lastOkAt: reg?.last_ok_at ?? null,
       lastError: reg?.last_error ?? null,
       href: locationTabHref(loc.id, 'un1t-online'),
+      // UN1THUB.1 — the hub is the only way in before a first connect (the bare
+      // Integrations tab redirects here), so a studio that may connect is offered
+      // it: no registry row, and a membership source of 'none' or 'un1t_online'
+      // (the tab's own rule). Explicit values only: a caller that did not select
+      // membership_source offers nothing rather than everything.
+      offerConnect: !reg && (loc.membership_source === 'none' || loc.membership_source === 'un1t_online'),
     }
     attentionInputs.push({
       cardKey: 'un1t_online', locationId: loc.id, locationName: nameById[loc.id],
