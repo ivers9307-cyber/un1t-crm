@@ -80,6 +80,8 @@ const BASE_SCHEMA = `
   CREATE TABLE public.profiles (id uuid PRIMARY KEY, role text NOT NULL, active boolean DEFAULT true, deleted_at timestamptz);
   CREATE TABLE public.profile_locations (profile_id uuid, location_id uuid, role text NOT NULL, PRIMARY KEY (profile_id, location_id));
   CREATE TABLE public.contacts (id uuid PRIMARY KEY, location_id uuid, user_id uuid);
+  -- mig 726 widens this table's source CHECK (its self-check reads the constraint).
+  CREATE TABLE public.contact_memberships (id uuid PRIMARY KEY, source text NOT NULL CONSTRAINT contact_memberships_source_check CHECK (source IN ('un1t_online_export')));
 
   -- Prod column order (information_schema.columns, 28 Sep 2026).
   CREATE TABLE public.locations (

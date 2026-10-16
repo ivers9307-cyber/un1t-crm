@@ -34,10 +34,14 @@ const VIRTUAL_TYPES = new Set(['tag', 'event', 'location_list'])
 
 /**
  * contacts columns deliberately NOT on the view: column → { why, expires }
- * (YYYY-MM-DD). Empty on purpose since mig 689. An entry is a decision that a
+ * (YYYY-MM-DD). Empty on purpose since mig 689, bar the two un1t.online
+ * sync-bookkeeping columns (mig 726). An entry is a decision that a
  * send path must never filter on or receive this column; say why.
  */
-export const AUDIENCE_VIEW_EXCLUDED = Object.freeze({})
+export const AUDIENCE_VIEW_EXCLUDED = Object.freeze({
+  un1t_user_id: { why: 'sync bookkeeping for un1t.online, not an audience field', expires: '2027-10-16' },
+  un1t_synced_at: { why: 'sync bookkeeping for un1t.online, not an audience field', expires: '2027-10-16' },
+})
 
 /** contacts columns the replayed view lacks, minus the exclusions. */
 export function missingFromView(schema, excluded = AUDIENCE_VIEW_EXCLUDED) {
