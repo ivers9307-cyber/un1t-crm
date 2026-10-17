@@ -2863,6 +2863,21 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/mobile/contacts/crossover-ids',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Crossover contact ids for the phone directory',
+  description: 'UN1THARD.8 — the active studio\'s crossover contact ids (owned by another studio, with an active membership, a un1t.online client row or a deal here), capped at 100. Ids only: the phone reads the rows through RLS. Gated on the mobile `contacts` permission at the active studio (x-active-location). An empty list on a failed lookup.',
+  responses: {
+    200: { description: 'Crossover ids', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ ids: z.array(z.string()) }) }).openapi('MobileCrossoverIdsResponse') } } },
+    400: { description: 'No active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No mobile contacts permission', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/mobile/radar',
   tags: ['Mobile'],
   security: [{ CookieAuth: [] }],

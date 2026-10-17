@@ -49,17 +49,52 @@ const CONTACT_DETAIL_SELECT = `${CONTACT_SELECT}, location_id, joined_at,
   glofox_membership_price_cents, glofox_billing_interval, glofox_membership_type,
   glofox_membership_expiry, glofox_synced_at, recent_bookings`
 
+// UN1THARD.8 — the studio's crossovers: contacts owned by another studio who
+// hold an active membership, a un1t.online client row or a deal here (a
+// Stillorgan member with a Hatch Street membership). The web contacts list
+// shows them; the phone directory used to filter on location_id alone and
+// missed them. The ids come from GET /api/mobile/contacts/crossover-ids (the
+// RPC behind them is service-role only); the rows are still read here through
+// RLS, which admits a membership or un1t client crossover to a caller holding
+// Contacts at the studio (migs 731/732) and returns nothing for an id it does
+// not admit. Best-effort: a failed or refused call lists own contacts only,
+// as before. Cached per studio for a minute, because search runs per keystroke.
+const CROSSOVER_TTL_MS = 60 * 1000
+const crossoverCache = new Map()
+
+export async function crossoverIdsFor(locationId, now = Date.now()) {
+  const hit = crossoverCache.get(locationId)
+  if (hit && now - hit.at < CROSSOVER_TTL_MS) return hit.ids
+  const res = await api('/api/mobile/contacts/crossover-ids', { locationId })
+  const raw = res?.success ? res.data?.ids : null
+  // Only a real answer is cached, so a dropped call is retried next search.
+  if (!Array.isArray(raw)) return []
+  // uuid-shaped only: the ids go into a PostgREST or() filter.
+  const ids = raw.filter((id) => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id))
+  crossoverCache.set(locationId, { ids, at: now })
+  return ids
+}
+
+/** Test seam: forget the cached crossover ids. */
+export function _resetCrossoverCache() {
+  crossoverCache.clear()
+}
+
 /**
  * Search contacts at a location by name / phone / email. Empty query
  * returns the most-recent contacts (a cheap default before the operator
  * types). Capped at `limit` — this is a lookup tool, not a bulk export.
+ * Includes the studio's crossovers (UN1THARD.8), as the web list does.
  */
 export async function searchContacts({ locationId, query = '', limit = 40 }) {
   if (!locationId) return { success: false, error: 'locationId required' }
+  const crossIds = await crossoverIdsFor(locationId)
   // CONTACT-DEDUP (mig 334) — the directory shows one profile per linked
   // person (the group primary); the folded accounts are reachable from it.
-  let q = supabase.from('contacts').select(CONTACT_SELECT).eq('location_id', locationId)
-    .eq('is_primary_contact', true)
+  let q = supabase.from('contacts').select(CONTACT_SELECT).eq('is_primary_contact', true)
+  q = crossIds.length > 0
+    ? q.or(`location_id.eq.${locationId},id.in.(${crossIds.join(',')})`)
+    : q.eq('location_id', locationId)
   const term = (query || '').trim()
   if (term) {
     // Commas + % are PostgREST .or()/ilike control chars — strip them so
