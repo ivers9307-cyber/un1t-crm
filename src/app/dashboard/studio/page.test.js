@@ -11,6 +11,11 @@ vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true), hasPermi
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 vi.mock('next/navigation', () => ({ redirect: vi.fn((u) => { throw new Error(`NEXT_REDIRECT:${u}`) }) }))
 vi.mock('@/lib/membership/state-for-page', async (importOriginal) => ({ ...(await importOriginal()), membershipStateForPage: vi.fn() }))
+// Wraps the real seam so one test can hand the page a source the registry does not know.
+vi.mock('@/lib/membership/reads', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, membershipReadsFor: vi.fn(actual.membershipReadsFor) }
+})
 vi.mock('@/lib/churn-radar-data', () => ({ loadRadar: vi.fn(async () => ({ summary: null })) }))
 // UN1TREAD.4 — the un1t adapter's own queries are covered by its tests; here its
 // reads are stubs so the column's wiring is what is under test.
@@ -29,6 +34,7 @@ import { membershipStateForPage } from '@/lib/membership/state-for-page'
 import * as kpis from '@shared/studio-kpis'
 import { un1tOnlineReads as un1t } from '@/lib/membership/reads/un1t-online'
 import { loadRadar } from '@/lib/churn-radar-data'
+import { membershipReadsFor } from '@/lib/membership/reads'
 
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
 const LOC2 = 'a0000000-0000-4000-8000-00000000000b'
@@ -222,14 +228,17 @@ describe('/dashboard/studio — un1t.online column reads through the seam (UN1TR
     expect(html).not.toContain('Meta spend ÷ new members')
   })
 
-  // UN1TCLASS.3 — Hatch's class_occurrences come from its un1t.online timetable
-  // (raw.booked = bookings_count), but nothing writes class_bookings there, so the
-  // booking-derived figures can only ever be absent. They must read '— unavailable',
-  // never the 0% / 0 that an empty class_bookings table would compute.
-  describe('floor for a non-Glofox source (UN1TCLASS.3)', () => {
+  // UN1TCLASS.3 / UN1TBOOK.4 — Hatch's class_occurrences come from its un1t.online
+  // timetable (raw.booked = bookings_count) and, since UN1TBOOK.3, its bookings are
+  // projected into class_bookings (BOOKED + attended boolean, like Glofox), so
+  // no-show and attended visits draw from them. Activation stays '— unavailable':
+  // its cohort is contacts.converted_at, which the un1t sync never writes. A source
+  // with neither projection keeps all three booking cells unavailable, never the
+  // 0% / 0 that an empty class_bookings table would compute.
+  describe('floor for a non-Glofox source (UN1TCLASS.3, UN1TBOOK.4)', () => {
     const FLOOR = {
-      classes: 100, fillPct: 72, fillPct7d: 65, noShowPct: 0, attendedVisits: 0, groupedBy: 'class',
-      groupTable: [{ label: 'HYROX', classes: 40, fillPct: 80, noShowPct: 0 }, { label: 'Strength', classes: 60, fillPct: 66, noShowPct: 0 }],
+      classes: 100, fillPct: 72, fillPct7d: 65, noShowPct: 12, attendedVisits: 88, groupedBy: 'class',
+      groupTable: [{ label: 'HYROX', classes: 40, fillPct: 80, noShowPct: 12 }, { label: 'Strength', classes: 60, fillPct: 66, noShowPct: 5 }],
       activation: { cohort: 0, pending: 0, activatedPct: 0 }, noData: false,
     }
 
@@ -241,7 +250,7 @@ describe('/dashboard/studio — un1t.online column reads through the seam (UN1TR
       return html.slice(from, next === -1 ? undefined : next)
     }
 
-    it('un1t column: fill and classes render from occurrences; no-show, activation and attended visits are unavailable', async () => {
+    it('un1t column: no-show and attended visits render from projected bookings; activation stays unavailable', async () => {
       membershipStateForPage.mockImplementation(async (_db, id) => (id === LOC ? CONFIGURED : UN1T))
       kpis.fetchFloor.mockResolvedValue(ok(structuredClone(FLOOR)))
       const [, hatch] = await renderColumns()
@@ -253,30 +262,68 @@ describe('/dashboard/studio — un1t.online column reads through the seam (UN1TR
       expect(fill).toContain('65% last 7d')
       expect(hatch).toContain('HYROX')
       expect(hatch).toContain('80%')
-      // booking-derived cells: '—' + unavailable, never 0%
-      for (const label of ['No-show rate 28d', 'New-joiner activation', 'Attended visits 28d']) {
-        const cell = ownCell(hatch, label)
-        expect(cell).toContain('—')
-        expect(cell).toContain('unavailable')
-        expect(cell).not.toMatch(/>0%?</)
-        expect(cell).not.toContain('target under')
-        expect(cell).not.toContain('no complete cohort')
-        expect(cell).not.toContain('across')
-      }
+      // no-show + attended visits from the projected class_bookings
+      const noShow = ownCell(hatch, 'No-show rate 28d')
+      expect(noShow).toContain('12%')
+      expect(noShow).toContain('target under 10%')
+      expect(noShow).not.toContain('unavailable')
+      const visits = ownCell(hatch, 'Attended visits 28d')
+      expect(visits).toContain('88')
+      expect(visits).toContain('across 100 classes')
+      expect(visits).not.toContain('unavailable')
+      // activation: '—' + unavailable (contacts.converted_at is never written by the un1t sync)
+      const activation = ownCell(hatch, 'New-joiner activation')
+      expect(activation).toContain('—')
+      expect(activation).toContain('unavailable')
+      expect(activation).not.toMatch(/>0%?</)
+      expect(activation).not.toContain('no complete cohort')
+      expect(activation).not.toContain('visits in first 14d')
     })
 
-    it('un1t column: the by-class table keeps fill and draws no-show as —', async () => {
+    it('un1t column: the by-class table shows per-class no-show', async () => {
       membershipStateForPage.mockResolvedValue(UN1T)
       kpis.fetchFloor.mockResolvedValue(ok(structuredClone(FLOOR)))
       const [hatch] = await renderColumns()
       const rows = hatch.match(/<tr[^>]*>.*?<\/tr>/g).filter((r) => r.includes('HYROX') || r.includes('Strength'))
       expect(rows).toHaveLength(2)
-      for (const row of rows) {
-        const cells = [...row.matchAll(/<td[^>]*>(.*?)<\/td>/g)].map((m) => m[1])
-        expect(cells[3]).toBe('—')
-      }
+      const noShowOf = (row) => [...row.matchAll(/<td[^>]*>(.*?)<\/td>/g)].map((m) => m[1])[3]
+      expect(noShowOf(rows[0])).toBe('12%')
+      expect(noShowOf(rows[1])).toBe('5%')
       expect(rows[0]).toContain('80%')
       expect(rows[1]).toContain('66%')
+    })
+
+    it('un1t column: an unmarked past class is a no-show, exactly as an unmarked Glofox booking is (Review Focus 5)', async () => {
+      // The page only renders what fetchFloor computed; the projection leaves an
+      // unmarked past booking BOOKED / attended=false, which computeFloor counts as
+      // a no-show. The cell must show that figure, not hide it.
+      membershipStateForPage.mockResolvedValue(UN1T)
+      kpis.fetchFloor.mockResolvedValue(ok({ ...structuredClone(FLOOR), noShowPct: 40, attendedVisits: 3 }))
+      const [hatch] = await renderColumns()
+      expect(ownCell(hatch, 'No-show rate 28d')).toContain('40%')
+      expect(ownCell(hatch, 'Attended visits 28d')).toContain('3')
+    })
+
+    it('a non-Glofox, non-un1t source keeps all three booking cells unavailable', async () => {
+      // A configured source the registry knows nothing about, but whose reads can
+      // draw the column: its class_bookings (if any) are not a projection we vouch for.
+      membershipReadsFor.mockImplementationOnce(async () => ({
+        source: 'other_pms', label: 'Other PMS', state: 'configured', reads: un1t, error: null, capabilities: {},
+      }))
+      kpis.fetchFloor.mockResolvedValue(ok(structuredClone({ ...FLOOR, noShowPct: 0, attendedVisits: 0 })))
+      const [html] = await renderColumns()
+      for (const label of ['No-show rate 28d', 'New-joiner activation', 'Attended visits 28d']) {
+        const cell = ownCell(html, label)
+        expect(cell).toContain('—')
+        expect(cell).toContain('unavailable')
+        expect(cell).not.toMatch(/>0%?</)
+        expect(cell).not.toContain('target under')
+        expect(cell).not.toContain('across')
+      }
+      const rows = html.match(/<tr[^>]*>.*?<\/tr>/g).filter((r) => r.includes('HYROX') || r.includes('Strength'))
+      for (const row of rows) {
+        expect([...row.matchAll(/<td[^>]*>(.*?)<\/td>/g)].map((m) => m[1])[3]).toBe('—')
+      }
     })
 
     it('footer: the Glofox trainer-name note is Glofox-only (UN1TCLASS.5)', async () => {
