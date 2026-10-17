@@ -272,9 +272,11 @@ describe('RLSACTIVE.1 — inline policies that read a profile table carry the ac
     // less the three allowlisted "Owners can … branding" storage policies
     // (dropped by mig 675 BRANDINGBUCKET.1, no client writes the bucket),
     // less the four allowlisted staff_allowances policies (dropped by mig 692
-    // MEMBERWRITESWEEP.2, staff_allowances is service-role only).
-    expect(inline.length).toBeGreaterThanOrEqual(44)
-    expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(44)
+    // MEMBERWRITESWEEP.2, staff_allowances is service-role only), less the
+    // four org_settings policies (gated; dropped by mig 730
+    // ORGSETCLIENTWRITE.1, org_settings is service-role only).
+    expect(inline.length).toBeGreaterThanOrEqual(40)
+    expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(40)
     expect(inline.map((p) => `${p.table} :: ${p.name}`)).toContain('public.invoices_queue :: inbound_invoices_read')
   })
 
