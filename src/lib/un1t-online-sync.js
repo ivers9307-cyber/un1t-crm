@@ -60,6 +60,7 @@ import {
 } from './un1t-online-map.js'
 import { projectUn1tOccurrences } from './un1t-online-occurrences.js'
 import { resolveUn1tContacts } from './un1t-online-contacts.js'
+import { ensureStudioPreferences } from './un1t-online-studio-preferences.js'
 import { tokenFingerprint } from './un1t-online-token.js'
 import { readConnection } from './connection-registry.js'
 import { logError, logWarn } from './log'
@@ -318,6 +319,21 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
     // un1t user ids and reasons only: no names or emails in the run row.
     counts.contact_errors = (resolved.errors || []).slice(0, 20)
     const contactIdOf = (userId) => (userId == null ? null : resolved.contactIdByUserId.get(String(userId)) ?? null)
+
+    // 5b. A client linked to ANOTHER studio's contact has no marketing-
+    // preferences row here, and a missing row means no send (UN1TDUAL.3).
+    // Insert-if-missing only; informational like 6b: a failure is recorded in
+    // counts and never changes the run's status or the connection's.
+    const linkedElsewhere = []
+    for (const [userId, contactId] of resolved.contactIdByUserId) {
+      const home = resolved.contactLocationByUserId?.get(userId)
+      if (home && home !== locationId) linkedElsewhere.push(contactId)
+    }
+    const studioPrefs = await ensureStudioPreferences(db, { locationId, contactIds: linkedElsewhere, nowIso })
+    counts.studio_preferences = studioPrefs
+    if (studioPrefs.error) {
+      logWarn('un1t-online-sync', 'could not create marketing-preference rows for linked contacts', { locationId, runId, err: studioPrefs.error })
+    }
 
     // 6. The mirror tables.
     const mapped = {}
