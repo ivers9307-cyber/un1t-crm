@@ -20,7 +20,8 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { writeMembershipSnapshot } from '@/lib/membership-snapshot'
-import { locationIdsWithoutCapability } from '@/lib/membership/locations-for-source'
+import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
+import { logError } from '@/lib/log'
 import { zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
@@ -44,22 +45,33 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
   }
 
-  // W1.M3b — a location with NO membership source has no Glofox-shaped data
-  // to read: skipped with a counted skipped_no_source. A failed seam read is a
-  // 500 with no heartbeat, never "nobody to skip".
-  const { ids: noSource, error: srcErr } = await locationIdsWithoutCapability(db, 'memberships') // UN1TCAP.1: a configured source can lack memberships (un1t.online)
-  if (srcErr) {
-    console.warn(`[cron][membership-snapshot] failed to read membership sources: ${srcErr.message}`)
-    return NextResponse.json({ success: false, error: srcErr.message }, { status: 500 })
-  }
+  // UN1TREAD.5 — a location is snapshotted when its membership source
+  // provides member counts through the read seam (Glofox, un1t.online); one
+  // seam call per location decides. A source that does not (none, unconfigured)
+  // is skipped with a counted skipped_no_source. A location whose source state
+  // could not be read ('unknown') is skipped and logged too — never
+  // snapshotted with zeros. NOTE: unlike the #2072 capability skip this does
+  // not read the static provider table, so it sees configuration: a Glofox
+  // location missing credentials is skipped rather than snapshotted from stale
+  // contacts. (The four other Glofox crons keep the capability skip.)
   let skippedNoSource = 0
+  let skippedUnknown = 0
 
   const results = []
   let firstError = null
   for (const loc of locations || []) {
-    if (noSource.has(loc.id)) { skippedNoSource++; continue }
     try {
-      const snap = await writeMembershipSnapshot(db, loc.id, { zone: zoneOfLocation(loc) })
+      const r = await membershipReadsFor(db, loc.id)
+      if (r.state === 'unknown') {
+        skippedUnknown++
+        logError('membership-snapshot', 'membership source state unknown; location skipped this tick', {
+          locationId: loc.id, readError: r.error ?? null,
+        })
+        continue
+      }
+      if (!supportsRead(r, 'membershipCounts')) { skippedNoSource++; continue }
+      const counts = await r.reads.membershipCounts(db, loc.id)
+      const snap = await writeMembershipSnapshot(db, loc.id, { zone: zoneOfLocation(loc), counts })
       results.push({ location_id: loc.id, location_name: loc.name, ...snap })
     } catch (e) {
       if (!firstError) firstError = `[${loc.id}] ${e?.message || 'threw'}`
@@ -73,6 +85,7 @@ export async function GET(request) {
     success: !firstError,
     locations_processed: results.length,
     skipped_no_source: skippedNoSource,
+    skipped_unknown: skippedUnknown,
     first_error: firstError,
     snapshots: results,
   })
