@@ -169,10 +169,12 @@ Changed:
 
 D writes the mirror row straight after a CRM book or cancel, using this spec's exported `mapUn1tBookingToClassBooking` on the API's response, upserting on `location_id,glofox_booking_id`, with `raw.un1t.written_by: 'crm'` and `raw.un1t.updated_at` set **only** from the response (null if absent). Same key, so the sync's next write is an update of the same row, never a second row.
 
-Rule, applied by the projection's pre-read (step in §3):
-1. A **terminal** status from the sync (`ATTENDED`, `NO_SHOW`, `CANCELLED`, rank 1) always overwrites a stored `BOOKED` (rank 0), whoever wrote it.
+Rule, applied by the projection's pre-read (step in §3) (Richard, 17 Oct):
+0. A stored row the **sync** wrote (`raw.un1t.written_by` not `'crm'`, a missing value included) is always replaced by the newer sync pull. So cancel-then-rebook shows the rebooking, and attendance un-marked in un1t.online follows un1t.online.
+Rules 1-3 apply ONLY when the stored row was written by the CRM (`raw.un1t.written_by = 'crm'`):
+1. A **terminal** status from the sync (`ATTENDED`, `NO_SHOW`, `CANCELLED`, rank 1) always overwrites a stored CRM `BOOKED` (rank 0).
 2. A lower rank never overwrites a higher one: a sync `BOOKED` pulled just before a CRM cancel does not undo D's `CANCELLED`.
-3. Same rank: the newer un1t.online `updated_at` wins. If either side has no un1t.online timestamp, the sync's row wins. Our clock is never compared with un1t.online's.
+3. Same rank: the newer un1t.online `updated_at` wins. If either side has no un1t.online timestamp, the sync's row wins. Our clock is never compared with un1t.online's: D's `updated_at` is null when the API gives none, never our request time.
 
 The namespace CHECK means D cannot write a `un1t:` row tagged `glofox`.
 
@@ -196,7 +198,7 @@ The namespace CHECK means D cannot write a `un1t:` row tagged `glofox`.
 4. **Claude's call (C-1): keep the branch's campaign-stats `CANCELLED` fix, and also exclude `NO_SHOW`.** A no-show is not an attendance; no Glofox number moves.
 5. **Claude's call (C-2): every reader re-checked for the new statuses** (table above), since no stored row has ever carried them.
 6. **Claude's call (C-3): the roster stays on `/live/<id>`, behind `class_roster`, with its 20-minute window; no phone screen.** Smallest change that gives coaches the list without door unlock.
-7. **Claude's call (C-4): terminal sync statuses beat a CRM `BOOKED`; newer-wins only within a rank, on un1t.online's clock only.** Avoids clock-skew bugs on the statuses that matter.
+7. **Claude's call (C-4), narrowed by Richard 17 Oct: against a CRM-written row, terminal sync statuses beat a CRM `BOOKED` and newer-wins applies only within a rank, on un1t.online's clock only; a sync-written row is always replaced by the newer pull.** Avoids clock-skew bugs on the statuses that matter without freezing un1t.online's own corrections.
 8. **Claude's call: no per-location projection switch.** A switch beside the code rule would read as a second safety it is not; rollback is a revert, and leftover rows are inert.
 9. **Claude's call: the journey reads exclude Hatch rows** (as the branch does), so the member's journey and the coach's lane agree.
 10. **Claude's call: `glofox_member_id` stays null on un1t rows**, so strap linking and Apple Health class linking stay inert at Hatch on top of the guards.
@@ -205,16 +207,16 @@ The namespace CHECK means D cannot write a `un1t:` row tagged `glofox`.
 
 ## Left to the builder
 
-1. Read-only: how many past un1t bookings are still `booked`. If many, Hatch's no-show reads "unavailable" until staff mark attendance in un1t.online; tell Richard.
-2. Read-only: whether every Glofox `glofox_booking_id` is 24-hex. If so, add `CHECK (source_platform <> 'glofox' OR glofox_booking_id ~ '^[0-9a-f]{24}$')`.
+1. ~~Read-only: how many past un1t bookings are still `booked`.~~ Answered 17 Oct: 0 past `booked` (attended 229, cancelled 59, no_show 10; future booked 30), so Hatch's no-show rate works from day one.
+2. ~~24-hex CHECK on Glofox ids.~~ Dropped (Richard, 17 Oct): only the `un1t:` ↔ `un1t_online` CHECKs.
 3. Whether spec A stamps `contacts.converted_at` for Hatch members; if so, switch activation on at Hatch in the same change.
 4. champ-app `claim-candidates` (if still on champ-app `origin/main`): filter `source_platform = 'glofox'` or the member's location, in that repo.
-5. With MIA TEST, whether un1t.online reuses a booking id when someone cancels and re-books. If it does, allow a sync `BOOKED` to replace a sync `CANCELLED` when un1t.online's `updated_at` is newer (rule 2 of §7 relaxed for sync-written rows only).
+5. ~~Whether un1t.online reuses a booking id on cancel and re-book.~~ Settled by §7 rule 0 (Richard, 17 Oct): a sync-written row is always replaced by the newer pull, so a reused id shows the rebooking either way.
 
 ## Tests
 
 - Branch tests kept and updated: the migration test (new filter text, new number), `route.un1t-off.test.js`, `route.membership-source.test.js` (fixtures gain `source_platform: 'glofox'`), journey tests, sync tests (replace main's "class_bookings is never written", `src/lib/un1t-online-sync.test.js:555`, :582-587).
-- `un1t-online-bookings.test.js`: every row of the status table; unknown status skipped; `raw` holds only the listed keys; dual-studio booking keeps its Stillorgan `contact_id` and Hatch `location_id`; the three §7 rules, including a sync `BOOKED` against a CRM `CANCELLED` and a CRM row with no un1t.online timestamp; failed pre-read writes nothing.
+- `un1t-online-bookings.test.js`: every row of the status table; unknown status skipped; `raw` holds only the listed keys; dual-studio booking keeps its Stillorgan `contact_id` and Hatch `location_id`; the §7 rules, including a sync `BOOKED` against a CRM `CANCELLED` (kept), a CRM row with no un1t.online timestamp, a sync `BOOKED` replacing a sync-written `CANCELLED` (cancel then rebook) and a sync `BOOKED` replacing a sync-written `ATTENDED` (un-marked); failed pre-read writes nothing.
 - `class-booking-platform.test.js`: glofox row at a Glofox studio true; un1t row false; glofox-tagged row at a un1t studio false; missing column false.
 - Behaviour, with a fake db that **ignores** query filters: reminders send nothing for a due un1t row with lead times set at Hatch and `capabilities.bookings` mocked true; credit-attendance creates no session for an attended un1t row with the capability mocked true; Glofox rows unchanged.
 - `shared/studio-kpi-math.test.js` and a rewritten `un1t-online-bookings.floor.test.js`: Glofox numbers unchanged; un1t `ATTENDED`/`NO_SHOW` counted, past `BOOKED` excluded, all undecided gives `null`.
