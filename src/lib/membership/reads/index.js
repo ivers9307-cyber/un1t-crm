@@ -17,12 +17,13 @@
 import { membershipStateForPage } from '@/lib/membership/state-for-page'
 import { glofoxReads } from './glofox'
 import { noneReads } from './none'
+import { un1tOnlineReads } from './un1t-online'
 
 export const READ_KEYS = Object.freeze([
   'membershipCounts', 'mrr', 'membershipFlows', 'growth', 'engagement', 'revenueMtd', 'arrears',
 ])
 
-export const READS_BY_SOURCE = { glofox: glofoxReads, none: noneReads }
+export const READS_BY_SOURCE = Object.freeze({ glofox: glofoxReads, none: noneReads, un1t_online: un1tOnlineReads })
 
 /**
  * The adapter that serves a location's membership reads.
@@ -38,7 +39,7 @@ export const READS_BY_SOURCE = { glofox: glofoxReads, none: noneReads }
  */
 export async function membershipReadsFor(db, locationId) {
   const s = await membershipStateForPage(db, locationId)
-  const reads = s.state === 'configured' ? (READS_BY_SOURCE[s.source] || noneReads) : null
+  const reads = s.state === 'configured' ? (Object.hasOwn(READS_BY_SOURCE, s.source) ? READS_BY_SOURCE[s.source] : noneReads) : null
   return {
     source: s.source ?? null,
     label: s.label,

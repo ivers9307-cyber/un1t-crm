@@ -5,6 +5,7 @@ vi.mock('@/lib/membership/state-for-page', async (importOriginal) => {
   const real = await importOriginal()
   return { ...real, membershipStateForPage: vi.fn() }
 })
+// Stub the four Glofox modules glofox.js imports, so the seam test loads no real Glofox/Supabase code.
 vi.mock('@/lib/membership-snapshot', () => ({ computeMembershipCounts: vi.fn() }))
 vi.mock('@/lib/membership-flows', () => ({ fetchMembershipFlows: vi.fn() }))
 vi.mock('@shared/studio-kpis', () => ({ fetchMrr: vi.fn(), fetchGrowth: vi.fn(), fetchEngagement: vi.fn() }))
@@ -14,6 +15,7 @@ import { membershipStateForPage } from '@/lib/membership/state-for-page'
 import { READ_KEYS, READS_BY_SOURCE, membershipReadsFor, supportsRead } from './index'
 import { glofoxReads } from './glofox'
 import { noneReads } from './none'
+import { un1tOnlineReads } from './un1t-online'
 
 const db = {}
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
@@ -59,9 +61,26 @@ describe('membershipReadsFor', () => {
     for (const k of READ_KEYS) expect(supportsRead(r, k)).toBe(false)
   })
 
-  it('registry maps glofox and none', () => {
+  it('configured un1t_online → reads is the un1t adapter (no arrears)', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: {} })
+    const r = await membershipReadsFor(db, LOC)
+    expect(r).toMatchObject({ source: 'un1t_online', state: 'configured', error: null })
+    expect(r.reads).toBe(un1tOnlineReads)
+    for (const k of READ_KEYS.filter((k) => k !== 'arrears')) expect(supportsRead(r, k)).toBe(true)
+    expect(supportsRead(r, 'arrears')).toBe(false)
+  })
+
+  it('an inherited key (e.g. "constructor") is not a registered source', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'constructor', state: 'configured', label: 'x' })
+    const r = await membershipReadsFor(db, LOC)
+    expect(r.reads).toBe(noneReads)
+  })
+
+  it('registry maps glofox, none and un1t_online, and is frozen', () => {
     expect(READS_BY_SOURCE.glofox).toBe(glofoxReads)
     expect(READS_BY_SOURCE.none).toBe(noneReads)
+    expect(READS_BY_SOURCE.un1t_online).toBe(un1tOnlineReads)
+    expect(Object.isFrozen(READS_BY_SOURCE)).toBe(true)
   })
 })
 

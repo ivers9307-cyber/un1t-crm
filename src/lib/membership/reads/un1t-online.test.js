@@ -1,0 +1,271 @@
+// UN1TREAD.2 — the un1t.online reads: scoping, pagination, failure contract
+// and return envelopes (each identical to the Glofox function it mirrors).
+import { describe, it, expect } from 'vitest'
+import { un1tOnlineReads } from './un1t-online'
+
+const HATCH = 'loc-hatch'
+const STILLORGAN = 'loc-stillorgan'
+const NOW = new Date('2026-10-17T12:00:00.000Z')
+
+// ---------------------------------------------------------------------------
+// A recording, in-memory supabase fake: select/eq/in/gt/gte/lt/order/range.
+// `head:true` + `count:'exact'` selects answer { count }.
+// ---------------------------------------------------------------------------
+function makeDb(seed = {}, { fail = [] } = {}) {
+  const log = []
+  function builder(table) {
+    const s = { filters: [], order: null, range: null, cols: null, opts: null }
+    const run = () => {
+      log.push({ table, cols: s.cols, filters: s.filters, order: s.order, range: s.range, opts: s.opts })
+      if (fail.includes(table)) return { data: null, count: null, error: { message: `${table} boom` } }
+      let rows = (seed[table] || []).filter((r) => s.filters.every(([k, c, v]) => {
+        if (k === 'eq') return r[c] === v
+        if (k === 'in') return v.includes(r[c])
+        if (k === 'gt') return r[c] != null && r[c] > v
+        if (k === 'gte') return r[c] != null && String(r[c]) >= String(v)
+        if (k === 'lt') return r[c] != null && String(r[c]) < String(v)
+        return true
+      }))
+      if (s.opts?.head) return { data: null, count: rows.length, error: null }
+      if (s.order) rows = [...rows].sort((a, b) => String(a[s.order]).localeCompare(String(b[s.order])))
+      if (s.range) rows = rows.slice(s.range[0], s.range[1] + 1)
+      return { data: rows.map((r) => ({ ...r })), count: null, error: null }
+    }
+    const api = {
+      select(cols, opts) { s.cols = cols; s.opts = opts || null; return api },
+      eq(c, v) { s.filters.push(['eq', c, v]); return api },
+      in(c, v) { s.filters.push(['in', c, v]); return api },
+      gt(c, v) { s.filters.push(['gt', c, v]); return api },
+      gte(c, v) { s.filters.push(['gte', c, v]); return api },
+      lt(c, v) { s.filters.push(['lt', c, v]); return api },
+      order(c) { s.order = c; return api },
+      range(a, b) { s.range = [a, b]; return api },
+      then(res, rej) { return Promise.resolve().then(run).then(res, rej) },
+    }
+    return api
+  }
+  return { db: { from: (t) => builder(t) }, log }
+}
+
+const sub = (over = {}) => ({
+  location_id: HATCH, un1t_user_id: 'u1', status: 'active', price_cents: 18900,
+  billing_interval: 'month', billing_interval_count: 1, paused_at: null, past_due_at: null,
+  remote_created_at: '2026-10-10T10:00:00Z', ...over,
+})
+
+function seed(extra = {}) {
+  return {
+    un1t_subscriptions: [
+      sub({ un1t_user_id: 'a' }),
+      sub({ un1t_user_id: 'b', paused_at: '2026-10-12T00:00:00Z' }),
+      sub({ un1t_user_id: 'c', status: 'canceled' }),
+      sub({ location_id: STILLORGAN, un1t_user_id: 'other' }),
+    ],
+    un1t_clients: [
+      { location_id: HATCH, un1t_user_id: 'a', credit_balance: 0, credit_unlimited: true, bookings_30d_attended: 8 },
+      { location_id: HATCH, un1t_user_id: 'b', credit_balance: 0, credit_unlimited: true, bookings_30d_attended: 0 },
+      { location_id: HATCH, un1t_user_id: 'p', credit_balance: 4, credit_unlimited: false, bookings_30d_attended: 1 },
+      { location_id: STILLORGAN, un1t_user_id: 'o', credit_balance: 9, credit_unlimited: false, bookings_30d_attended: 5 },
+    ],
+    un1t_products: [
+      { location_id: HATCH, un1t_id: 'pk', type: 'one_time', price_cents: 5400 },
+      { location_id: HATCH, un1t_id: 'trial', type: 'one_time', price_cents: 0 },
+    ],
+    un1t_transactions: [
+      { id: 't1', location_id: HATCH, un1t_id: 't1', un1t_user_id: 'p', product_id: 'pk', product_type: 'pack', type: 'one_time', amount_cents: 5400, refunded: false, remote_created_at: '2026-10-02T09:00:00Z' },
+      { id: 't2', location_id: HATCH, un1t_id: 't2', un1t_user_id: 'a', product_id: 'm', product_type: 'subscription', type: 'sub_initial', amount_cents: 18900, refunded: false, remote_created_at: '2026-10-05T09:00:00Z' },
+      { id: 't3', location_id: HATCH, un1t_id: 't3', un1t_user_id: 'a', product_id: 'm', product_type: 'subscription', type: 'sub_renewal', amount_cents: 18900, refunded: false, remote_created_at: '2026-10-12T09:00:00Z' },
+      { id: 't4', location_id: HATCH, un1t_id: 't4', un1t_user_id: 'b', product_id: 'm', product_type: 'subscription', type: 'sub_initial', amount_cents: 18900, refunded: true, remote_created_at: '2026-10-06T09:00:00Z' },
+      { id: 't5', location_id: HATCH, un1t_id: 't5', un1t_user_id: 'x', product_id: 'm', product_type: 'subscription', type: 'sub_initial', amount_cents: 18900, refunded: false, remote_created_at: '2026-09-14T09:00:00Z' },
+      { id: 't6', location_id: STILLORGAN, un1t_id: 't6', un1t_user_id: 'o', product_id: 'm', product_type: 'subscription', type: 'sub_initial', amount_cents: 99999, refunded: false, remote_created_at: '2026-10-04T09:00:00Z' },
+    ],
+    contact_memberships: [
+      { location_id: HATCH, source: 'un1t_online_api', status: 'ended', ended_at: '2026-10-16T08:00:00Z' },
+      { location_id: HATCH, source: 'un1t_online_api', status: 'ended', ended_at: '2026-09-30T08:00:00Z' },
+      { location_id: HATCH, source: 'un1t_online_export', status: 'ended', ended_at: '2026-10-16T08:00:00Z' },
+      { location_id: STILLORGAN, source: 'un1t_online_api', status: 'ended', ended_at: '2026-10-16T08:00:00Z' },
+    ],
+    ...extra,
+  }
+}
+
+const READS = ['membershipCounts', 'mrr', 'membershipFlows', 'growth', 'engagement', 'revenueMtd']
+const call = (db, key) => ({
+  membershipCounts: () => un1tOnlineReads.membershipCounts(db, HATCH),
+  mrr: () => un1tOnlineReads.mrr(db, HATCH),
+  membershipFlows: () => un1tOnlineReads.membershipFlows(db, HATCH, 3, NOW.getTime(), { zone: 'Europe/Dublin' }),
+  growth: () => un1tOnlineReads.growth(db, HATCH, NOW),
+  engagement: () => un1tOnlineReads.engagement(db, HATCH),
+  revenueMtd: () => un1tOnlineReads.revenueMtd(db, HATCH, NOW, 'Europe/Dublin'),
+})[key]()
+
+describe('un1tOnlineReads surface', () => {
+  it('implements six reads and deliberately no arrears', () => {
+    expect(Object.keys(un1tOnlineReads).sort()).toEqual([...READS].sort())
+    expect(Object.isFrozen(un1tOnlineReads)).toBe(true)
+    expect(un1tOnlineReads.arrears).toBeUndefined()
+  })
+})
+
+describe('scoping', () => {
+  it("every read filters .eq('location_id', loc) on every table it touches, and never reads contacts", async () => {
+    for (const key of READS) {
+      const { db, log } = makeDb(seed())
+      await call(db, key)
+      expect(log.length, key).toBeGreaterThan(0)
+      for (const q of log) {
+        expect(q.table, key).not.toBe('contacts')
+        expect(q.filters, `${key} ${q.table}`).toContainEqual(['eq', 'location_id', HATCH])
+      }
+    }
+  })
+
+  it('a contact living at Stillorgan with an active Hatch subscription is counted at Hatch', async () => {
+    // The membership row carries contact_id of a contact whose contacts.location_id is Stillorgan.
+    const { db, log } = makeDb(seed({
+      un1t_subscriptions: [sub({ un1t_user_id: 'dual', contact_id: 'contact-at-stillorgan' })],
+      un1t_clients: [{ location_id: HATCH, un1t_user_id: 'dual', contact_id: 'contact-at-stillorgan', credit_balance: 0, credit_unlimited: true, bookings_30d_attended: 3 }],
+    }))
+    const counts = await un1tOnlineReads.membershipCounts(db, HATCH)
+    expect(counts.monthly_recurring).toBe(1)
+    expect(counts.total_members).toBe(1)
+    expect((await un1tOnlineReads.mrr(db, HATCH)).data.mrrCents).toBe(18900)
+    expect((await un1tOnlineReads.engagement(db, HATCH)).data.members).toBe(1)
+    expect(log.some((q) => q.table === 'contacts')).toBe(false)
+  })
+
+  it("another studio's rows never leak in", async () => {
+    const { db } = makeDb(seed())
+    expect((await un1tOnlineReads.membershipCounts(db, HATCH)).monthly_recurring).toBe(2)
+    expect((await un1tOnlineReads.revenueMtd(db, HATCH, NOW, 'Europe/Dublin')).data.totalCents).toBe(5400 + 18900 + 18900)
+  })
+})
+
+describe('pagination', () => {
+  it('lists paginate with range + order', async () => {
+    const { db, log } = makeDb(seed())
+    await un1tOnlineReads.membershipCounts(db, HATCH)
+    await un1tOnlineReads.membershipFlows(db, HATCH, 3, NOW.getTime(), { zone: 'Europe/Dublin' })
+    await un1tOnlineReads.engagement(db, HATCH)
+    await un1tOnlineReads.revenueMtd(db, HATCH, NOW, 'Europe/Dublin')
+    const lists = log.filter((q) => !q.opts?.head)
+    expect(lists.length).toBeGreaterThan(0)
+    for (const q of lists) {
+      expect(q.range, q.table).not.toBeNull()
+      expect(q.order, q.table).toBeTruthy()
+    }
+  })
+
+  it('reads past the 1,000-row cap (a second page is fetched)', async () => {
+    const many = Array.from({ length: 1500 }, (_, i) => sub({ un1t_user_id: `u${String(i).padStart(4, '0')}` }))
+    const { db, log } = makeDb(seed({ un1t_subscriptions: many, un1t_clients: [] }))
+    const counts = await un1tOnlineReads.membershipCounts(db, HATCH)
+    expect(counts.monthly_recurring).toBe(1500)
+    expect(log.filter((q) => q.table === 'un1t_subscriptions').length).toBe(2)
+  })
+})
+
+describe('return shapes (identical to the Glofox functions)', () => {
+  it('membershipCounts → bare object', async () => {
+    const { db } = makeDb(seed())
+    expect(await un1tOnlineReads.membershipCounts(db, HATCH)).toEqual({
+      total_members: 3, monthly_recurring: 2, class_packs: 1, payg: 0, active_recurring: 1, dead_packs: 0,
+      detail: { recurring_by_interval: { '1 month': 2, '3 months': 0, '6 months': 0, '12 months': 0 } },
+    })
+  })
+
+  it('mrr → { success, data: { mrrCents, recurringMembers, yieldCents } }', async () => {
+    const { db } = makeDb(seed())
+    expect(await un1tOnlineReads.mrr(db, HATCH)).toEqual({ success: true, data: { mrrCents: 37800, recurringMembers: 2, yieldCents: 18900 } })
+  })
+
+  it('membershipFlows → { months, cancelTrackingStart }', async () => {
+    const { db } = makeDb(seed())
+    expect(await un1tOnlineReads.membershipFlows(db, HATCH, 3, NOW.getTime(), { zone: 'Europe/Dublin' })).toEqual({
+      months: [
+        { month: '2026-08', sales: 0, cancellations: null },
+        { month: '2026-09', sales: 1, cancellations: null },
+        { month: '2026-10', sales: 2, cancellations: 1 }, // 'a' + 'b' (refund does not erase a sale); one api cancel
+      ],
+      cancelTrackingStart: '2026-10-16',
+    })
+  })
+
+  it('growth → { success, data } over the 28-day windows; delta null while the previous window predates tracking', async () => {
+    const { db } = makeDb(seed())
+    const r = await un1tOnlineReads.growth(db, HATCH, NOW)
+    expect(r).toEqual({
+      success: true,
+      data: { windowDays: 28, recurringStarts: 2, recurringCancels: 2, netRecurring: 0, netRecurringDelta: null },
+    })
+  })
+
+  it('growth delta is real once the previous window is fully tracked', async () => {
+    const { db } = makeDb(seed())
+    const later = new Date('2026-12-20T12:00:00.000Z')
+    const r = await un1tOnlineReads.growth(db, HATCH, later)
+    expect(r.data.netRecurringDelta).toBe(0)
+  })
+
+  it('engagement → { success, data: { members, activeMembers, activeRatePct, visitsPerMemberWeek } }', async () => {
+    const { db } = makeDb(seed())
+    expect(await un1tOnlineReads.engagement(db, HATCH)).toEqual({
+      success: true, data: { members: 2, activeMembers: 1, activeRatePct: 50, visitsPerMemberWeek: 0.9 },
+    })
+  })
+
+  it('revenueMtd → { success, data: { totalCents, paidCount, deltaPct } }, refunds excluded', async () => {
+    const { db } = makeDb(seed())
+    const r = await un1tOnlineReads.revenueMtd(db, HATCH, NOW, 'Europe/Dublin')
+    expect(r.success).toBe(true)
+    expect(r.data).toMatchObject({ totalCents: 43200, paidCount: 3 })
+    expect(Object.keys(r.data).sort()).toEqual(['deltaPct', 'paidCount', 'totalCents'])
+  })
+
+  it('revenueMtd deltaPct is null when the same window last month had nothing', async () => {
+    const s0 = seed()
+    s0.un1t_transactions = s0.un1t_transactions.filter((t) => t.un1t_id !== 't5')
+    const r = await un1tOnlineReads.revenueMtd(makeDb(s0).db, HATCH, NOW, 'Europe/Dublin')
+    expect(r.data.deltaPct).toBeNull()
+  })
+
+  it('revenueMtd deltaPct compares the same window last month', async () => {
+    const { db } = makeDb(seed())
+    // 1-17 Oct = 43200; 1-17 Sep holds t5 (14 Sep, 18900)
+    const r = await un1tOnlineReads.revenueMtd(db, HATCH, NOW, 'Europe/Dublin')
+    expect(r.data.deltaPct).toBeCloseTo(((43200 - 18900) / 18900) * 100)
+  })
+})
+
+describe('failure contract (same as the Glofox function each mirrors)', () => {
+  it('membershipCounts and membershipFlows THROW', async () => {
+    for (const table of ['un1t_subscriptions', 'un1t_clients', 'un1t_transactions', 'un1t_products']) {
+      await expect(un1tOnlineReads.membershipCounts(makeDb(seed(), { fail: [table] }).db, HATCH)).rejects.toThrow(/boom/)
+    }
+    await expect(un1tOnlineReads.membershipFlows(makeDb(seed(), { fail: ['un1t_transactions'] }).db, HATCH, 3, NOW.getTime(), { zone: 'Europe/Dublin' })).rejects.toThrow(/boom/)
+    await expect(un1tOnlineReads.membershipFlows(makeDb(seed(), { fail: ['contact_memberships'] }).db, HATCH, 3, NOW.getTime(), { zone: 'Europe/Dublin' })).rejects.toThrow(/boom/)
+  })
+
+  it('mrr, growth, engagement and revenueMtd RETURN { success:false, error }', async () => {
+    const cases = [
+      ['mrr', 'un1t_subscriptions'],
+      ['growth', 'un1t_transactions'],
+      ['growth', 'contact_memberships'],
+      ['engagement', 'un1t_clients'],
+      ['engagement', 'un1t_subscriptions'],
+      ['revenueMtd', 'un1t_transactions'],
+    ]
+    for (const [key, table] of cases) {
+      const r = await call(makeDb(seed(), { fail: [table] }).db, key)
+      expect(r, `${key}/${table}`).toEqual({ success: false, error: `${table} boom` })
+    }
+  })
+
+  it('the fetch-style reads refuse a missing location without querying', async () => {
+    const { db, log } = makeDb(seed())
+    expect(await un1tOnlineReads.mrr(db, null)).toEqual({ success: false, error: 'No location' })
+    expect(await un1tOnlineReads.growth(db, '', NOW)).toEqual({ success: false, error: 'No location' })
+    expect(await un1tOnlineReads.engagement(db, undefined)).toEqual({ success: false, error: 'No location' })
+    expect(log).toEqual([])
+  })
+})
