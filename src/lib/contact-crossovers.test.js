@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { crossoverContactIds, fetchCrossoverContext, canViewContact, fetchListMembershipFlags, CROSSOVER_ID_CAP } from './contact-crossovers'
 
 // Minimal chainable stub of the supabase builder. `result` is what the
@@ -43,7 +43,19 @@ describe('crossoverContactIds', () => {
   it('caps the list at CROSSOVER_ID_CAP so the id.in() URL can never blow up', async () => {
     const many = Array.from({ length: CROSSOVER_ID_CAP + 50 }, (_, i) => ({ contact_id: `c${i}` }))
     const db = stubFrom({ crossover_contact_ids: () => ({ data: many }) })
-    expect((await crossoverContactIds(db, 'loc1')).length).toBe(CROSSOVER_ID_CAP)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect((await crossoverContactIds(db, 'loc1')).length).toBe(CROSSOVER_ID_CAP)
+      // structured logWarn: the location and the counts, never a contact id
+      expect(warn).toHaveBeenCalledTimes(1)
+      const logged = JSON.stringify(warn.mock.calls[0])
+      expect(logged).toContain('contact-crossovers')
+      expect(logged).toContain('loc1')
+      expect(logged).toContain(String(CROSSOVER_ID_CAP + 50))
+      expect(logged).not.toMatch(/"c\d+"/)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
 

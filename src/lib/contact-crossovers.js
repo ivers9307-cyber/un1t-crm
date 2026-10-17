@@ -1,13 +1,16 @@
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 
 // Crossover-contact helpers for the studio contacts list.
 //
 // A "crossover" is a contact OWNED by a different studio that nonetheless
-// has a deal at the active studio. contacts.email is globally unique, so a
-// person who's already a contact (e.g. a Stillorgan member) signing up via
-// another studio's public lead form reuses their existing contact + gets a
-// deal at the new studio. These helpers let the destination studio's
-// contacts list surface those leads with their origin context.
+// has a deal OR an ACTIVE contact_memberships row at the active studio
+// (UN1TDUAL, mig 731). contacts.email is globally unique, so a person who's
+// already a contact (e.g. a Stillorgan member) signing up via another
+// studio's public lead form reuses their existing contact + gets a deal at
+// the new studio, and a Stillorgan member who also buys a Hatch Street
+// membership keeps their one contact + gains an active membership there.
+// These helpers let the destination studio's contacts list surface those
+// people with their origin context.
 
 // Cap on the crossover id list. The contacts list query builds an
 // `id.in.(...)` filter from these ids; PostgREST sends that as a GET URL, so
@@ -16,12 +19,13 @@ import { logError } from '@/lib/log'
 export const CROSSOVER_ID_CAP = 100
 
 // Contact ids that are GENUINE crossovers at this location: a contact with a
-// deal here but OWNED by a DIFFERENT studio. Computed by the
-// crossover_contact_ids RPC (mig 251) — a server-side join, so the location's
-// (possibly enormous: 8k+ at Stillorgan) OWN deal-holder set never travels
-// back as an id.in() URL. The location's own deal-holders are deliberately
-// excluded: the list query already matches them via location_id = L, so
-// including them in id.in() was pure redundancy AND the source of the 414.
+// deal OR an ACTIVE membership here but OWNED by a DIFFERENT studio. Computed
+// by the crossover_contact_ids RPC (mig 251, widened to active memberships
+// by mig 731) — a server-side join, so the location's (possibly enormous: 8k+
+// at Stillorgan) OWN deal-holder set never travels back as an id.in() URL.
+// The location's own contacts are deliberately excluded: the list query
+// already matches them via location_id = L, so including them in id.in() was
+// pure redundancy AND the source of the 414.
 // Best-effort — returns [] on error/missing args (the list then falls back to
 // owned-only).
 export async function crossoverContactIds(db, locationId) {
@@ -31,7 +35,11 @@ export async function crossoverContactIds(db, locationId) {
     if (error || !Array.isArray(data)) return []
     const ids = data.map((r) => r && r.contact_id).filter(Boolean)
     if (ids.length > CROSSOVER_ID_CAP) {
-      console.warn(`[crossovers] ${ids.length} crossover ids at ${locationId} exceeds cap ${CROSSOVER_ID_CAP} — truncating for URL-length safety`)
+      logWarn('contact-crossovers', 'crossover ids exceed cap; truncating for URL-length safety', {
+        locationId,
+        total: ids.length,
+        cap: CROSSOVER_ID_CAP,
+      })
       return ids.slice(0, CROSSOVER_ID_CAP)
     }
     return ids
@@ -70,10 +78,11 @@ export async function fetchCrossoverContext(db, contacts, activeLocationId) {
 
 // Authorisation gate for the contact DETAIL view. Returns true when the
 // caller may open this contact: they're master, they OWN it (its location
-// is one of theirs), they hold an ACTIVE membership at one of the caller's
-// studios (UN1TDUAL.2), or it's a crossover INTO one of their studios (the
-// contact has a deal there). The crossover branch is what keeps this in
-// step with the list's owned ∪ crossover visibility — gating the detail
+// is one of theirs), the contact holds an ACTIVE membership at one of the
+// caller's studios (UN1TDUAL.2), or it's a crossover INTO one of their
+// studios (the contact has a deal there). The membership and deal branches
+// are what keep this in step with the list's owned ∪ crossover visibility
+// (mig 731's crossover_contact_ids returns both) — gating the detail
 // page strictly by ownership would 404 every crossover row an operator
 // can see in the list and click. The owner/master branches are pure (no
 // query); only a genuine crossover candidate pays for the deal probe.
@@ -128,14 +137,16 @@ export async function canViewContact(db, user, contact) {
 // ── LISTFLAG.1 — "this person is also on another studio's list" ──────────
 //
 // Deliberately NOT the crossover mechanism above, and the gap between the two
-// is the whole reason this exists. `crossover_contact_ids` keys on **deals**,
-// so at Hatch Street it finds exactly ONE person — while 33 Stillorgan-owned
+// is the whole reason this exists. `crossover_contact_ids` keys on **deals or
+// ACTIVE memberships** (deals only until mig 731), so at Hatch Street it
+// found exactly ONE person when this was written — while 33 Stillorgan-owned
 // contacts had registered interest in Hatch and were invisible in every list
-// view. Those 33 exist only as `contact_location_preferences` rows: the
+// view. Those 33 existed only as `contact_location_preferences` rows: the
 // per-location comms model, where a row's PRESENCE is what makes a location
-// allowed to mail that person at all. Flagging deals answers "who has bought
-// here"; flagging preference rows answers "who is on this list", which is the
-// question an operator staring at a pre-opening waitlist is actually asking.
+// allowed to mail that person at all. Flagging deals or memberships answers
+// "who has bought here"; flagging preference rows answers "who is on this
+// list", which is the question an operator staring at a pre-opening waitlist
+// is actually asking.
 //
 // Returns { [contactId]: [{ id, name, emailMarketing }] } — every ACTIVE,
 // non-host-anchor studio the contact holds a preferences row at, EXCLUDING
