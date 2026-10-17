@@ -138,6 +138,8 @@ export async function GET() {
       rail,
       membership_source: membershipStatePayload(sourceState, {
         canManage: canManageMembershipSource(user, locationId),
+        // This route serves the seam's member counts (membershipBlock above).
+        countsRead: true,
       }),
     },
   })

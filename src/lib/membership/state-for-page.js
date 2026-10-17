@@ -117,9 +117,13 @@ export function canManageMembershipSource(user, locationId) {
  *
  * @param {{ source?: string|null, state?: string, missing?: string[], label?: string, capabilities?: object }|null|undefined} s
  *   membershipStateForPage()'s answer
- * @param {{ canManage?: boolean }} [opts]
+ * @param {{ canManage?: boolean, countsRead?: boolean }} [opts]
+ *   countsRead: the CALLER reads member counts through the seam (only
+ *   /api/dashboard/business does). Studio-contacts does not, so it keeps the
+ *   capability alone and the phone's funnel note still says a configured
+ *   un1t.online "does not provide membership data".
  */
-export function membershipStatePayload(s, { canManage = false } = {}) {
+export function membershipStatePayload(s, { canManage = false, countsRead = false } = {}) {
   const state = s && typeof s.state === 'string' ? s.state : 'unknown'
   const out = {
     source: s?.source ?? null,
@@ -128,12 +132,17 @@ export function membershipStatePayload(s, { canManage = false } = {}) {
     // the none provider's ("No membership source"), which would mix unknown
     // with a known none.
     label: state === 'unknown' ? null : (s?.label || null),
-    // UN1TREAD.3 — DELIBERATE OR. `capabilities.memberships` stays false for
-    // un1t.online (its radars, engagement page and Mia read Glofox tables), but
-    // its adapter DOES read member counts, so a configured source that
-    // implements 'membershipCounts' shows its numbers on the phone too.
+    // UN1TREAD.3 — DELIBERATE, OPT-IN OR. `capabilities.memberships` stays
+    // false for un1t.online (its radars, engagement page and Mia read Glofox
+    // tables), but its adapter DOES read member counts, so on a route that
+    // serves those counts (`countsRead`) a configured source that implements
+    // 'membershipCounts' shows its numbers on the phone too. UN1TREAD.7: other
+    // routes (studio-contacts, whose funnel stages come from Glofox) get the
+    // capability alone, or the phone would drop the "does not provide
+    // membership data" note for a funnel that cannot move.
     provides_memberships: s?.capabilities?.memberships !== false
-      || (state === 'configured' && typeof READS_BY_SOURCE[s?.source]?.membershipCounts === 'function'),
+      || (countsRead === true && state === 'configured'
+        && typeof READS_BY_SOURCE[s?.source]?.membershipCounts === 'function'),
     can_manage: Boolean(canManage),
   }
   if (Array.isArray(s?.missing) && s.missing.length) out.missing = s.missing.map(String)
