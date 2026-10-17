@@ -279,6 +279,19 @@ describe('/dashboard/studio — un1t.online column reads through the seam (UN1TR
       expect(rows[1]).toContain('66%')
     })
 
+    it('footer: the Glofox trainer-name note is Glofox-only (UN1TCLASS.5)', async () => {
+      membershipStateForPage.mockResolvedValue(UN1T)
+      kpis.fetchFloor.mockResolvedValue(ok(structuredClone(FLOOR)))
+      const [hatch] = await renderColumns()
+      expect(hatch).toContain('Split by class.')
+      expect(hatch).not.toContain('Glofox trainer names')
+
+      membershipStateForPage.mockResolvedValue(CONFIGURED)
+      kpis.fetchFloor.mockResolvedValue(ok(structuredClone(FLOOR)))
+      const [glofox] = await renderColumns()
+      expect(glofox).toContain('per-coach arrives once Glofox trainer names are mapped')
+    })
+
     it('un1t column: noData is passed through as computed', async () => {
       membershipStateForPage.mockResolvedValue(UN1T)
       kpis.fetchFloor.mockResolvedValue(ok({ ...structuredClone(FLOOR), classes: 0, fillPct: null, fillPct7d: null, groupTable: [], noData: true }))

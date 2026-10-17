@@ -363,7 +363,7 @@ async function LocationColumn({ user, location }) {
           />
         </ScoreGrid>
         <div className="mt-2">
-          <FloorTable rows={floor?.groupTable || []} groupedBy={floor?.groupedBy} />
+          <FloorTable rows={floor?.groupTable || []} groupedBy={floor?.groupedBy} bookingKpis={bookingKpis} />
         </div>
       </RoleSection>
     </div>
