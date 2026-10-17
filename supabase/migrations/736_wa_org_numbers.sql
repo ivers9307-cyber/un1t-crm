@@ -118,14 +118,19 @@ CREATE TRIGGER trg_whatsapp_numbers_fill_organization
   FOR EACH ROW EXECUTE FUNCTION private.whatsapp_numbers_fill_organization();
 
 -- SECURITY DEFINER: the link table is closed to clients and the inserting role
--- may be any role that can insert a number.
+-- may be any role that can insert a number. The advisory lock (per home studio,
+-- released at commit) serialises two numbers inserted at one studio, so both
+-- cannot see "no default yet": the partial unique index would then swallow the
+-- second link row through ON CONFLICT DO NOTHING and leave that number switched
+-- off. A conflict on the PK (the code already linked it) is still a quiet no-op.
 CREATE OR REPLACE FUNCTION private.whatsapp_numbers_switch_on_at_home()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('wa_link_default:' || NEW.location_id::text));
   INSERT INTO public.location_whatsapp_numbers (location_id, whatsapp_number_id, is_default)
   VALUES (
     NEW.location_id, NEW.id,
@@ -141,6 +146,37 @@ DROP TRIGGER IF EXISTS trg_whatsapp_numbers_switch_on_at_home ON public.whatsapp
 CREATE TRIGGER trg_whatsapp_numbers_switch_on_at_home
   AFTER INSERT ON public.whatsapp_numbers
   FOR EACH ROW EXECUTE FUNCTION private.whatsapp_numbers_switch_on_at_home();
+
+-- The other half of the organisation fence: the link trigger judges a link when
+-- it is written, so changing a NUMBER's organization_id afterwards (or its home
+-- studio into another organisation) could leave a link pointing across
+-- organisations. Refuse that change while any such link exists. Moving the home
+-- studio within the same organisation stays allowed.
+CREATE OR REPLACE FUNCTION private.whatsapp_numbers_org_change_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM public.location_whatsapp_numbers l
+      JOIN public.locations loc ON loc.id = l.location_id
+     WHERE l.whatsapp_number_id = NEW.id
+       AND loc.organization_id IS DISTINCT FROM NEW.organization_id) THEN
+    RAISE EXCEPTION 'whatsapp number % belongs to another organisation than a studio it is switched on at', NEW.id
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION private.whatsapp_numbers_org_change_guard() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_whatsapp_numbers_org_change_guard ON public.whatsapp_numbers;
+CREATE TRIGGER trg_whatsapp_numbers_org_change_guard
+  BEFORE UPDATE OF organization_id, location_id ON public.whatsapp_numbers
+  FOR EACH ROW EXECUTE FUNCTION private.whatsapp_numbers_org_change_guard();
 
 -- 7-8. What the columns mean now.
 COMMENT ON COLUMN public.whatsapp_numbers.location_id IS

@@ -86,6 +86,8 @@ export const CLOSED_FUNCTIONS = [
     why: 'WAORGNUMBER.1: BEFORE INSERT trigger filling whatsapp_numbers.organization_id for code that predates it; a trigger fires without EXECUTE' },
   { fn: 'private.whatsapp_numbers_switch_on_at_home', args: '()', closedBy: 736,
     why: 'WAORGNUMBER.1: SECURITY DEFINER AFTER INSERT trigger that writes the closed link table; a trigger fires without EXECUTE' },
+  { fn: 'private.whatsapp_numbers_org_change_guard', args: '()', closedBy: 736,
+    why: 'WAORGNUMBER.1: BEFORE UPDATE trigger refusing a number organisation change that would leave a cross-organisation link; a trigger fires without EXECUTE' },
 ]
 
 /** The client roles a closed function is closed to. */

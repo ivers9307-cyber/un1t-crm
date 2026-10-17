@@ -172,9 +172,46 @@ describe('736 organisation-owned WhatsApp numbers', () => {
       ])
   })
 
+  it('the definer trigger switches a number on even when a client-role session inserts it', async () => {
+    const db = await boot()
+    await db.exec(`SET ROLE authenticated`)
+    try {
+      await db.exec(`INSERT INTO public.whatsapp_numbers (id, location_id, label) VALUES ('${NUM2}', '${HATCH}', 'hatch')`)
+      // the session itself still cannot touch the closed link table
+      await expect(db.exec(`INSERT INTO public.location_whatsapp_numbers (location_id, whatsapp_number_id) VALUES ('${HATCH}', '${NUM}')`))
+        .rejects.toThrow(/permission denied/)
+    } finally {
+      await db.exec(`RESET ROLE`)
+    }
+    expect(await rows(db, `SELECT location_id, whatsapp_number_id, is_default FROM location_whatsapp_numbers WHERE whatsapp_number_id = '${NUM2}'`))
+      .toEqual([{ location_id: HATCH, whatsapp_number_id: NUM2, is_default: true }])
+  })
+
+  it('an insert with an explicit foreign organization_id is refused (its home link would cross organisations)', async () => {
+    const db = await boot()
+    await expect(db.exec(`INSERT INTO public.whatsapp_numbers (id, location_id, label, organization_id) VALUES ('${NUM2}', '${HATCH}', 'x', '${ORG2}')`))
+      .rejects.toThrow(/another organisation/)
+    expect((await one(db, `SELECT count(*)::int AS n FROM whatsapp_numbers WHERE id = '${NUM2}'`)).n).toBe(0)
+  })
+
+  it('refuses an organisation change that would leave a cross-organisation link, allows a same-organisation home move', async () => {
+    const db = await boot()
+    await expect(db.exec(`UPDATE public.whatsapp_numbers SET organization_id = '${ORG2}' WHERE id = '${NUM}'`))
+      .rejects.toThrow(/another organisation/)
+    await expect(db.exec(`UPDATE public.whatsapp_numbers SET location_id = '${OTHER}', organization_id = '${ORG2}' WHERE id = '${NUM}'`))
+      .rejects.toThrow(/another organisation/)
+    // moving the home studio inside the organisation is fine
+    await db.exec(`UPDATE public.whatsapp_numbers SET location_id = '${HATCH}' WHERE id = '${NUM}'`)
+    expect(await one(db, `SELECT location_id, organization_id FROM whatsapp_numbers WHERE id = '${NUM}'`)).toEqual({ location_id: HATCH, organization_id: ORG })
+    // once the number is switched on nowhere, its organisation may change
+    await db.exec(`DELETE FROM location_whatsapp_numbers WHERE whatsapp_number_id = '${NUM}'`)
+    await db.exec(`UPDATE public.whatsapp_numbers SET organization_id = '${ORG2}', location_id = '${OTHER}' WHERE id = '${NUM}'`)
+    expect(await one(db, `SELECT organization_id FROM whatsapp_numbers WHERE id = '${NUM}'`)).toEqual({ organization_id: ORG2 })
+  })
+
   it('the trigger functions are closed to anon and authenticated', async () => {
     const db = await boot()
-    for (const fn of ['private.location_whatsapp_numbers_same_org()', 'private.whatsapp_numbers_fill_organization()', 'private.whatsapp_numbers_switch_on_at_home()']) {
+    for (const fn of ['private.location_whatsapp_numbers_same_org()', 'private.whatsapp_numbers_fill_organization()', 'private.whatsapp_numbers_switch_on_at_home()', 'private.whatsapp_numbers_org_change_guard()']) {
       for (const role of ['anon', 'authenticated']) {
         expect((await one(db, `SELECT has_function_privilege('${role}', '${fn}', 'EXECUTE') AS ok`)).ok, `${role} ${fn}`).toBe(false)
       }
