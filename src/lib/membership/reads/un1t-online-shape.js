@@ -301,15 +301,22 @@ function survivingOpen(invoices) {
  * Who is behind on payment at one studio, from FRESH rows the caller has
  * already filtered (see freshCutoff). A row per (un1t_user_id, subscription):
  *   - a surviving open invoice (see survivingOpen), or
- *   - a subscription with status 'past_due' or `past_due_at` set that has NOT
- *     ended (UN1T_ENDED_SUB_STATUSES: a cancelled subscription's old
- *     past_due_at is history, though an invoice still open on it is real money).
+ *   - a subscription whose own flag (status 'past_due', or `past_due_at` set)
+ *     is raised while its status is on the live allowlist
+ *     (UN1T_LIVE_SUB_STATUSES: active, past_due, trialing, paused, unpaid;
+ *     compared trimmed and lower-cased). FAIL CLOSED: any other status (an
+ *     ended spelling in UN1T_ENDED_SUB_STATUSES, or one we have never seen)
+ *     cannot raise a row on its flag alone, so a cancelled subscription's old
+ *     past_due_at is history; an invoice still open on it is real money and
+ *     still raises a row.
  * `since` = earliest of `past_due_at` and the oldest surviving open invoice.
  * `amountCents` = the surviving open invoices' sum, or null when the only
- * signal is the subscription flag (no debt is ever estimated) or when the
- * survivors span more than one currency (amounts are summed only across like
- * currencies). Sorted by
- * `since` ascending (no date last). Reads nothing but the rows it is given.
+ * signal is the subscription flag (no debt is ever estimated). When the
+ * survivors span more than one currency (a missing currency beside a named one
+ * counts as a second currency) BOTH `amountCents` and `currency` are null:
+ * amounts are summed only across like currencies, and no label is shown on a
+ * sum that was not made. Sorted by `since` ascending (no date last). Reads
+ * nothing but the rows it is given.
  *
  * @param {object} a
  * @param {object[]} a.subs      un1t_subscriptions
@@ -368,7 +375,9 @@ export function shapePastDue({ subs = [], invoices = [] } = {}) {
     // subscription row, else an invoice naming the same member.
     const userPart = k.split('\u0000')[0]
     const own = orphanKeys.has(k) ? group : group.filter((i) => String(i.un1t_user_id ?? '') === userPart)
-    const mixedCurrency = new Set(owed.map(currencyOf).filter(Boolean)).size > 1
+    // null is a currency of its own here: a survivor with no currency beside a
+    // named one cannot be added to it.
+    const mixedCurrency = new Set(owed.map(currencyOf)).size > 1
     rows.push({
       contactId: sub?.contact_id ?? own.find((i) => i.contact_id)?.contact_id ?? null,
       un1tUserId: sub?.un1t_user_id ?? own[0]?.un1t_user_id ?? null,
@@ -376,11 +385,262 @@ export function shapePastDue({ subs = [], invoices = [] } = {}) {
       productTitle: sub?.product_title ?? null,
       since,
       amountCents: owed.length && !mixedCurrency ? owed.reduce((sum, o) => sum + (Number(o.amount_cents) || 0), 0) : null,
-      currency: currency ? String(currency).toUpperCase() : null,
+      currency: currency && !mixedCurrency ? String(currency).toUpperCase() : null,
       openInvoiceIds: owed.map((o) => o.un1t_id),
       cancelAtPeriodEnd: sub?.cancel_at_period_end === true,
       pausedUntil: sub?.paused_until ?? null,
     })
   }
   return rows.sort((a, b) => (msOf(a.since) ?? Infinity) - (msOf(b.since) ?? Infinity))
+}
+
+// ---------------------------------------------------------------------------
+// HATCHPIPE.2 — the pipeline snapshot and trial eligibility (spec A §6.2).
+//
+// Membership and the pipeline are separate per studio; only the contact is
+// shared (Richard, 17 Oct 2026). So the snapshot is built from this studio's
+// un1t_* rows alone, and the `contact` row given in lends exactly two fields
+// (and only when this studio owns the contact). A dual-studio contact's
+// Glofox columns never reach it.
+// ---------------------------------------------------------------------------
+
+/** Booking sources that put an aggregator user in the Gympass pile. */
+export const UN1T_AGGREGATOR_GYMPASS_SOURCES = Object.freeze(['wellhub', 'gympass'])
+
+/** gympass_member_id for a Wellhub / Gympass user whose booking carries no member ref. */
+export const UN1T_AGGREGATOR_MARKER = 'un1t:aggregator'
+
+const RECENT_BOOKINGS_LIMIT = 10
+const RECURRING_TX_TYPES = Object.freeze(['sub_initial', 'sub_renewal'])
+
+const lower = (v) => String(v ?? '').trim().toLowerCase()
+const productOf = (productsById, id) => productsById?.get?.(id) ?? null
+
+/** The latest / earliest of some timestamps (unreadable ones ignored), as given. */
+const latestOf = (values) => values.reduce((best, v) => (
+  msOf(v) != null && (best == null || msOf(v) > msOf(best)) ? v : best), null)
+const earliestOf = (values) => values.reduce((best, v) => (
+  msOf(v) != null && (best == null || msOf(v) < msOf(best)) ? v : best), null)
+
+/**
+ * A paid class pack: product_type 'pack', amount_cents > 0, not refunded, and
+ * not a trial product (a trial is never a pack customer, whatever it cost). A
+ * product we cannot read (deleted upstream) is not a trial product.
+ */
+function isPaidPack(t, productsById) {
+  return lower(t?.product_type) === 'pack' && Number(t.amount_cents) > 0 && t.refunded !== true
+    && !isTrialProduct(productOf(productsById, t.product_id))
+}
+
+/** A recurring purchase: a sub_initial / sub_renewal, or a subscription product. */
+const isRecurringTx = (t) => RECURRING_TX_TYPES.includes(lower(t?.type)) || lower(t?.product_type) === 'subscription'
+
+/**
+ * Every trial this person took at the studio, as { at, product_id }: a
+ * transaction for a trial product (keyed on product id, never the title), and
+ * each of spec D's ledger trial rows.
+ */
+function trialsTaken({ transactions = [], productsById, ledgerTrials = [] }) {
+  const out = []
+  for (const t of transactions) {
+    if (t && isTrialProduct(productOf(productsById, t.product_id))) out.push({ at: t.remote_created_at ?? null, product_id: t.product_id })
+  }
+  for (const l of ledgerTrials) if (l) out.push({ at: l.at ?? null, product_id: l.product_id ?? null })
+  return out
+}
+
+/**
+ * How a un1t.online credit balance splits between the trial and paid packs.
+ *
+ * Trial credits left = the newest trial product's `credits_per_period` minus
+ * the `credit_charged` bookings made (`remote_created_at`) at or after that
+ * trial, floored at 0 and capped at `credit_balance`. A trial whose product we
+ * cannot read grants 0; one with no readable date counts every charged booking.
+ * Paid credits = `credit_balance` minus trial credits left, and only when a
+ * paid pack exists (A-2: the whole balance is never read as "trial", and a
+ * balance with no paid pack behind it is never read as paid).
+ *
+ * @returns {{ trialCreditsLeft: number, paidCredits: number, hasPaidPack: boolean,
+ *   tookTrial: boolean, newestTrialAt: string|null }}
+ */
+export function splitUn1tCredits({ client, transactions = [], productsById = new Map(), bookings = [], ledgerTrials = [] } = {}) {
+  const balance = Math.max(0, Number(client?.credit_balance) || 0)
+  const trials = trialsTaken({ transactions, productsById, ledgerTrials })
+  const newestTrialAt = latestOf(trials.map((t) => t.at))
+  const newest = trials.find((t) => t.at === newestTrialAt && newestTrialAt != null) ?? trials[0] ?? null
+  const hasPaidPack = transactions.some((t) => isPaidPack(t, productsById))
+
+  let trialCreditsLeft = 0
+  if (newest) {
+    const granted = Math.max(0, Number(productOf(productsById, newest.product_id)?.credits_per_period) || 0)
+    const trialMs = msOf(newest.at)
+    const used = bookings.filter((b) => b?.credit_charged === true
+      && (trialMs == null || (msOf(b.remote_created_at) ?? -Infinity) >= trialMs)).length
+    trialCreditsLeft = Math.min(Math.max(0, granted - used), balance)
+  }
+  return {
+    trialCreditsLeft,
+    paidCredits: hasPaidPack ? Math.max(0, balance - trialCreditsLeft) : 0,
+    hasPaidPack,
+    tookTrial: trials.length > 0,
+    newestTrialAt,
+  }
+}
+
+/**
+ * Aggregator users (A-3): a booking whose `source` is set and not 'direct', or
+ * that carries an `external_member_ref`. A booking with no source at all is not
+ * one. Wellhub / Gympass sources take the Gympass pile (the newest such
+ * booking's ref, else the marker); every other aggregator the ClassPass pile.
+ */
+function aggregatorOf(bookings) {
+  let classpass = false
+  let gympass = false
+  let ref = null
+  let refMs = -Infinity
+  for (const b of bookings) {
+    if (!b) continue
+    const source = lower(b.source)
+    const extRef = b.external_member_ref != null && String(b.external_member_ref).trim() !== ''
+      ? String(b.external_member_ref) : null
+    if (!((source !== '' && source !== 'direct') || extRef != null)) continue
+    if (UN1T_AGGREGATOR_GYMPASS_SOURCES.includes(source)) {
+      gympass = true
+      const at = msOf(b.starts_at) ?? msOf(b.remote_created_at) ?? -Infinity
+      if (extRef != null && (ref == null || at > refMs)) { ref = extRef; refMs = at }
+    } else {
+      classpass = true
+    }
+  }
+  return { classpass, gympassMemberId: gympass ? (ref ?? UN1T_AGGREGATOR_MARKER) : null }
+}
+
+/**
+ * One person's classifier input at one un1t.online studio: exactly the keys
+ * `classifyContact` (shared/pipeline-classifier.js) reads, built from this
+ * studio's rows only. Pure; reads nothing but its arguments.
+ *
+ * Every list is this person's rows at `locationId` (the caller groups them):
+ * `freshSubs` the FRESH un1t_subscriptions (see freshCutoff; a stale row never
+ * makes a member), `transactions` all of them, `bookings` with their event's
+ * `starts_at`, `memberships` contact_memberships with source 'un1t_online_api'
+ * (a row naming another source is ignored), `ledgerTrials` spec D's
+ * `op='trial'` done rows ([] until D ships).
+ *
+ * glofox_membership_status, first match wins (Glofox's order, spec §6.2):
+ *   member        a fresh subscription in MEMBER_STATUSES, or paused and not ended
+ *   credit_member paid credits > 0 (splitUn1tCredits)
+ *   classpass_payg a non-Gympass aggregator user
+ *   trial         a fresh 'trialing' subscription, or trial credits > 0
+ *   ex_member     an ended membership, none active, and since its (latest) end
+ *                 no paid pack bought and no class attended
+ *   lead          everyone else
+ *
+ * `contact` lends ONLY pipeline_dismissed_at and last_lead_source_at, and only
+ * when `contact.location_id === locationId` (a Stillorgan dismissal is a
+ * Stillorgan judgement). Nothing else on it is read.
+ *
+ * @param {object} a
+ * @param {object} a.client       un1t_clients row (un1t_user_id, credit_balance, credit_unlimited, last_attended_at, remote_created_at)
+ * @param {object|null} a.contact { id, location_id, pipeline_dismissed_at, last_lead_source_at }
+ * @param {string} a.locationId
+ * @param {number} [a.now]        accepted for the interface; no rule here reads the clock
+ *                                (classifyContact applies every time window itself)
+ */
+export function shapePipelineSnapshot({
+  client, contact, locationId, freshSubs = [], transactions = [], productsById = new Map(),
+  bookings = [], memberships = [], ledgerTrials = [], now: _now = Date.now(),
+} = {}) {
+  const credits = splitUn1tCredits({ client, transactions, productsById, bookings, ledgerTrials })
+  const aggregator = aggregatorOf(bookings)
+  const attendedStarts = bookings.filter((b) => lower(b?.status) === 'attended').map((b) => b.starts_at)
+  const lastAttendedAt = latestOf([client?.last_attended_at, ...attendedStarts])
+
+  const status = (() => {
+    const subs = freshSubs.filter(Boolean)
+    const member = subs.some((s) => MEMBER_STATUSES.includes(lower(s.status))
+      || (s.paused_at != null && !UN1T_ENDED_SUB_STATUSES.includes(lower(s.status))))
+    if (member) return 'member'
+    if (credits.paidCredits > 0) return 'credit_member'
+    if (aggregator.classpass) return 'classpass_payg'
+    if (subs.some((s) => lower(s.status) === 'trialing') || credits.trialCreditsLeft > 0) return 'trial'
+
+    const own = memberships.filter((m) => m && (m.source == null || m.source === 'un1t_online_api'))
+    const ended = own.filter((m) => lower(m.status) === 'ended')
+    if (ended.length && !own.some((m) => lower(m.status) === 'active')) {
+      const endMs = msOf(latestOf(ended.map((m) => m.ended_at)))
+      const since = (v) => msOf(v) != null && (endMs == null || msOf(v) > endMs)
+      const packSince = transactions.some((t) => isPaidPack(t, productsById) && since(t.remote_created_at))
+      const attendedSince = since(client?.last_attended_at) || attendedStarts.some(since)
+      if (!packSince && !attendedSince) return 'ex_member'
+    }
+    return 'lead'
+  })()
+
+  const recentBookings = bookings
+    .filter((b) => msOf(b?.starts_at) != null)
+    .sort((a, b) => msOf(b.starts_at) - msOf(a.starts_at))
+    .slice(0, RECENT_BOOKINGS_LIMIT)
+    .map((b) => ({
+      attended: lower(b.status) === 'attended',
+      status: String(b.status ?? '').toUpperCase(),
+      time_start: Math.floor(msOf(b.starts_at) / 1000),
+    }))
+
+  // Unlimited → null; with a paid pack, the whole balance (null when unread);
+  // else only the trial's own credits.
+  const balance = client?.credit_balance == null ? null : Number(client.credit_balance)
+  const trialCreditsRemaining = client?.credit_unlimited === true
+    ? null
+    : credits.hasPaidPack
+      ? (Number.isFinite(balance) ? balance : null)
+      : credits.trialCreditsLeft
+
+  const owned = locationId != null && contact?.location_id != null && contact.location_id === locationId
+
+  return {
+    glofox_membership_status: status,
+    glofox_membership_state: null,
+    glofox_membership_expiry: null,
+    last_attended_at: lastAttendedAt,
+    total_attended_7d: null,
+    total_attended_30d: null,
+    last_payment_at: null,
+    joined_at: latestOf([client?.remote_created_at, credits.newestTrialAt]),
+    created_at: null,
+    trial_credits_remaining: trialCreditsRemaining,
+    recent_bookings: recentBookings,
+    converted_at: firstSales(transactions.filter(Boolean))[0]?.remote_created_at ?? null,
+    pack_customer_at: earliestOf(transactions.filter((t) => isPaidPack(t, productsById)).map((t) => t.remote_created_at)),
+    pipeline_dismissed_at: owned ? (contact.pipeline_dismissed_at ?? null) : null,
+    last_lead_source_at: owned ? (contact.last_lead_source_at ?? null) : null,
+    gympass_member_id: aggregator.gympassMemberId,
+  }
+}
+
+/**
+ * May this person get the free trial at this studio? One definition for the
+ * board, spec D's grant and spec E's upsell (R1, Richard 17 Oct 2026). Not
+ * eligible, with the reasons in this order and each once:
+ *   trial_used          a transaction for any trial product, or any ledger trial row
+ *   membership_history  any subscription row (any status, no freshness), any
+ *                       membership row given (the caller passes sources
+ *                       un1t_online_api and un1t_online_export, any status), or a
+ *                       recurring transaction (sub_initial / sub_renewal /
+ *                       product_type 'subscription') even with no subscription row
+ *   paid_pack           a paid pack (isPaidPack: the snapshot's definition)
+ * Pure. A failed READ is the caller's to answer as "not eligible"; this only
+ * judges rows it was given.
+ *
+ * @returns {{ eligible: boolean, reasons: Array<'trial_used'|'membership_history'|'paid_pack'> }}
+ */
+export function shapeTrialEligibility({
+  transactions = [], productsById = new Map(), ledgerTrials = [], subscriptions = [], memberships = [],
+} = {}) {
+  const txs = transactions.filter(Boolean)
+  const reasons = []
+  if (trialsTaken({ transactions: txs, productsById, ledgerTrials }).length > 0) reasons.push('trial_used')
+  if (subscriptions.some(Boolean) || memberships.some(Boolean) || txs.some(isRecurringTx)) reasons.push('membership_history')
+  if (txs.some((t) => isPaidPack(t, productsById))) reasons.push('paid_pack')
+  return { eligible: reasons.length === 0, reasons }
 }
