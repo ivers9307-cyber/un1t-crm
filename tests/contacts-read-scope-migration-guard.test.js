@@ -14,8 +14,10 @@
 //      Contacts helper branch; anything else (auth_is_in_location, true, a
 //      raw contact_memberships subquery, another helper) is a breaker. Also
 //      breakers: a (re)definition of the membership helper whose body is not
-//      exactly 731's (it must take its studios from
-//      auth_contact_read_location_ids and count only active rows), or that is
+//      exactly 731's or 732's (UN1TDUAL.4, which adds un1t_clients rows
+//      linked to a contact; EVERY branch must take its studios from
+//      auth_contact_read_location_ids, and the membership branch counts only
+//      active rows), or that is
 //      not SECURITY DEFINER with SET search_path = '' (EVERY CREATE of it is
 //      read, whatever its body's quoting, attributes after the body included),
 //      an ALTER FUNCTION on either helper in a migration after 731 (SECURITY
@@ -59,13 +61,36 @@ export const READ_BRANCHES = Object.freeze({
   own: 'user_id=(selectauth.uid())',                                       // members: their own row
   membership: `id=any((selectprivate.${MEMBERSHIP_HELPER}())::uuid[])`,     // 731: active member of a studio where the caller holds Contacts
 })
-// Mig 731's membership helper body, normalised the same way: studios from the
-// Contacts resolver, active rows only. A redefinition must match it exactly.
-export const MEMBERSHIP_HELPER_BODY = norm(`
+// The membership helper's accepted bodies, normalised the same way. A
+// redefinition must match one of them exactly. Every branch takes its
+// studios from the Contacts resolver (InitPlan form); adding one is a
+// reviewed change here.
+export const MEMBERSHIP_HELPER_BODIES = Object.freeze({
+  // 731 (UN1TDUAL.1): active memberships only
+  731: norm(`
   SELECT coalesce(array_agg(DISTINCT cm.contact_id), '{}'::uuid[])
     FROM public.contact_memberships cm
    WHERE cm.status = 'active'
-     AND cm.location_id = ANY ((SELECT private.${HELPER}())::uuid[])`)
+     AND cm.location_id = ANY ((SELECT private.${HELPER}())::uuid[])`),
+  // 732 (UN1TDUAL.4): plus un1t_clients rows linked to a contact, any status
+  732: norm(`
+  SELECT coalesce(array_agg(DISTINCT x.contact_id), '{}'::uuid[])
+    FROM (
+      SELECT cm.contact_id
+        FROM public.contact_memberships cm
+       WHERE cm.status = 'active'
+         AND cm.location_id = ANY ((SELECT private.${HELPER}())::uuid[])
+      UNION
+      SELECT uc.contact_id
+        FROM public.un1t_clients uc
+       WHERE uc.contact_id IS NOT NULL
+         AND uc.location_id = ANY ((SELECT private.${HELPER}())::uuid[])
+    ) x`),
+})
+// The body the LATEST migration that creates the helper must carry.
+export const LATEST_MEMBERSHIP_HELPER_MIGRATION = 732
+export const MEMBERSHIP_HELPER_BODY = MEMBERSHIP_HELPER_BODIES[LATEST_MEMBERSHIP_HELPER_MIGRATION]
+const ACCEPTED_HELPER_BODIES = Object.values(MEMBERSHIP_HELPER_BODIES)
 
 function norm(s) {
   let t = s.toLowerCase().replace(/\s+/g, '').replace(/"/g, '').replace(/\)as[a-z_][a-z0-9_]*\)/g, '))')
@@ -187,7 +212,7 @@ function definerAttrProblems(attrs) {
   return why
 }
 
-/** Every CREATE of the membership helper in `code` (comments already blanked) that is not exactly 731's. */
+/** Every CREATE of the membership helper in `code` (comments already blanked) whose body is not exactly 731's or 732's. */
 export function membershipHelperDefBreakers(code) {
   const hits = []
   const creates = new RegExp(`\\bcreate\\s+(?:or\\s+replace\\s+)?function\\s+${fnRef(MEMBERSHIP_HELPER)}`, 'gi')
@@ -196,7 +221,7 @@ export function membershipHelperDefBreakers(code) {
     const why = []
     if (!parts) why.push('no AS body the guard can read')
     else {
-      if (norm(parts.body) !== MEMBERSHIP_HELPER_BODY) why.push('body differs from mig 731')
+      if (!ACCEPTED_HELPER_BODIES.includes(norm(parts.body))) why.push('body is neither mig 731\'s nor mig 732\'s')
       why.push(...definerAttrProblems(parts.attrs))
     }
     if (why.length) hits.push(`create function private.${MEMBERSHIP_HELPER} (${why.join('; ')})`)
@@ -232,7 +257,7 @@ export function contactReadScopeBreakers(sql) {
       hits.push(m[0].trim().replace(/\s+/g, ' '))
     }
   }
-  // the membership helper (re)defined with any body but 731's, or not
+  // the membership helper (re)defined with any body but 731's or 732's, or not
   // SECURITY DEFINER with SET search_path = '' (every CREATE of it)
   hits.push(...membershipHelperDefBreakers(code))
   // contacts' row level security toggled (any ALTER TABLE action list on contacts)
@@ -350,6 +375,50 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     expect(contactReadScopeBreakers(`DROP FUNCTION IF EXISTS private.${MEMBERSHIP_HELPER}(); ${def(ok)}`)).toEqual([])
   })
 
+  it('732 (UN1TDUAL.4) passes: its helper body (memberships + un1t clients, both on the Contacts resolver) is accepted', () => {
+    const f732 = migrationFiles().find((f) => migNum(f) === 732)
+    expect(f732, 'mig 732 missing').toBeTruthy()
+    const sql732 = readFileSync(path.join(MIGRATIONS, f732), 'utf8')
+    expect(contactReadScopeBreakers(sql732)).toEqual([])
+    // the body really is read and is 732's (not waved through by a loose match)
+    expect(membershipHelperDefBreakers(sqlCode(sql732))).toEqual([])
+    const code = sqlCode(sql732)
+    expect(norm(definitionParts(statementAt(code, code.search(createsFn(MEMBERSHIP_HELPER)))).body)).toBe(MEMBERSHIP_HELPER_BODIES[732])
+    // 732 never touches the policy
+    expect(code).not.toMatch(/\balter\s+policy\b/i)
+  })
+
+  it('a 732-shaped helper body is a breaker when EITHER branch loses the Contacts restriction', () => {
+    const def = (body) => `CREATE OR REPLACE FUNCTION private.${MEMBERSHIP_HELPER}() RETURNS uuid[] LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $function$ ${body} $function$;`
+    const R = `((SELECT private.${HELPER}())::uuid[])`
+    const MEM = `SELECT cm.contact_id FROM public.contact_memberships cm WHERE cm.status = 'active' AND cm.location_id = ANY ${R}`
+    const CLI = `SELECT uc.contact_id FROM public.un1t_clients uc WHERE uc.contact_id IS NOT NULL AND uc.location_id = ANY ${R}`
+    const wrap = (...branches) => `SELECT coalesce(array_agg(DISTINCT x.contact_id), '{}'::uuid[]) FROM (${branches.join(' UNION ')}) x`
+    // the accepted body, reformatted
+    expect(contactReadScopeBreakers(def(wrap(MEM, CLI)))).toEqual([])
+    expect(contactReadScopeBreakers(def(`
+      SELECT coalesce(array_agg(DISTINCT x.contact_id), '{}'::uuid[])
+        FROM ( ${MEM}
+               UNION
+               ${CLI} ) x`))).toEqual([])
+    for (const [why, body] of [
+      // an unrestricted un1t_clients branch: every linked client of every studio
+      ['un1t branch, no studio restriction', wrap(MEM, `SELECT uc.contact_id FROM public.un1t_clients uc WHERE uc.contact_id IS NOT NULL`)],
+      ['un1t branch on membership, not Contacts', wrap(MEM, `SELECT uc.contact_id FROM public.un1t_clients uc WHERE uc.contact_id IS NOT NULL AND private.auth_is_in_location(uc.location_id)`)],
+      ['un1t branch on the resolver per row', wrap(MEM, `SELECT uc.contact_id FROM public.un1t_clients uc WHERE uc.contact_id IS NOT NULL AND uc.location_id = ANY (private.${HELPER}())`)],
+      ['un1t branch on another studio list', wrap(MEM, `SELECT uc.contact_id FROM public.un1t_clients uc WHERE uc.contact_id IS NOT NULL AND uc.location_id IS NOT NULL`)],
+      // the membership branch losing its restriction inside the union
+      ['membership branch, no studio restriction', wrap(`SELECT cm.contact_id FROM public.contact_memberships cm WHERE cm.status = 'active'`, CLI)],
+      ['membership branch, ended rows too', wrap(`SELECT cm.contact_id FROM public.contact_memberships cm WHERE cm.location_id = ANY ${R}`, CLI)],
+      // a third branch
+      ['a third branch', wrap(MEM, CLI, 'SELECT c.id FROM public.contacts c')],
+      ['un1t branch OR-widened', wrap(MEM, `SELECT uc.contact_id FROM public.un1t_clients uc WHERE uc.contact_id IS NOT NULL AND (uc.location_id = ANY ${R} OR true)`)],
+    ]) expect(contactReadScopeBreakers(def(body)), why).toHaveLength(1)
+    // and 732's body as INVOKER, or without the pinned search_path, is still a breaker
+    expect(contactReadScopeBreakers(def(wrap(MEM, CLI)).replace('SECURITY DEFINER', 'SECURITY INVOKER'))).toHaveLength(1)
+    expect(contactReadScopeBreakers(def(wrap(MEM, CLI)).replace(`SET search_path = ''`, 'SET search_path = public'))).toHaveLength(1)
+  })
+
   it('EVERY create of the membership helper is read: a \'…\' body, attributes after the body, a second CREATE, quoted names', () => {
     const ok = `SELECT coalesce(array_agg(DISTINCT cm.contact_id), '{}'::uuid[]) FROM public.contact_memberships cm WHERE cm.status = 'active' AND cm.location_id = ANY ((SELECT private.${HELPER}())::uuid[])`
     const bad = `SELECT coalesce(array_agg(DISTINCT cm.contact_id), '{}'::uuid[]) FROM public.contact_memberships cm WHERE cm.status = 'active'`
@@ -413,11 +482,14 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     expect(contactHelperAlterBreakers(readFileSync(path.join(MIGRATIONS, f731), 'utf8'))).toEqual([])
   })
 
-  it('the latest definition of the membership helper in the migrations is 731\'s', () => {
+  it('the latest definition of the membership helper in the migrations is 732\'s', () => {
     const creators = migrationFiles().filter((f) => createsFn(MEMBERSHIP_HELPER).test(sqlCode(readFileSync(path.join(MIGRATIONS, f), 'utf8'))))
     expect(creators.at(-1), 'no migration creates the membership helper').toBeTruthy()
     // every definition passes the body check (contactReadScopeBreakers above runs on every file after 690)
-    expect(migNum(creators.at(-1))).toBe(731)
+    expect(migNum(creators.at(-1))).toBe(LATEST_MEMBERSHIP_HELPER_MIGRATION)
+    const code = sqlCode(readFileSync(path.join(MIGRATIONS, creators.at(-1)), 'utf8'))
+    const parts = definitionParts(statementAt(code, code.search(createsFn(MEMBERSHIP_HELPER))))
+    expect(norm(parts.body), 'the latest helper body must be the one LATEST_MEMBERSHIP_HELPER_MIGRATION names').toBe(MEMBERSHIP_HELPER_BODY)
   })
 
   it('the detector catches row level security toggled on contacts (SEC-3), and nothing else', () => {

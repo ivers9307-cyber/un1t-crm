@@ -77,7 +77,7 @@ const FUNCTIONS = {
   'private.auth_is_master': { class: 'predicate' },
   'private.auth_is_in_location': { class: 'predicate' },
   'private.auth_contact_read_location_ids': { class: 'predicate' }, // mig 690: studios where the caller holds Contacts; reads profiles with the predicate
-  'private.auth_contact_membership_contact_ids': { class: 'delegates', to: ['private.auth_contact_read_location_ids'] }, // mig 731: active members of the studios the Contacts resolver returns
+  'private.auth_contact_membership_contact_ids': { class: 'delegates', to: ['private.auth_contact_read_location_ids'] }, // mig 731: active members of the studios the Contacts resolver returns; mig 732: plus their un1t.online clients
   'private.auth_is_owner_at': { class: 'predicate' },
   'private.auth_is_admin_at': { class: 'predicate' },
   'private.auth_is_manager_at': { class: 'predicate' },
