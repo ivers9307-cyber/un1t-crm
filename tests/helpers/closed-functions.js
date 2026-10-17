@@ -80,6 +80,12 @@ export const CLOSED_FUNCTIONS = [
   // that file.
   { fn: 'public.campaign_outcome_stats', args: '(uuid, int)', closedBy: 737,
     why: 'INVOKER campaign outcome report over a bare campaign id; only the service-role outcomes route calls it, after its own access check' },
+  { fn: 'private.location_whatsapp_numbers_same_org', args: '()', closedBy: 736,
+    why: 'WAORGNUMBER.1: the cross-organisation fence trigger on location_whatsapp_numbers; a trigger fires without EXECUTE' },
+  { fn: 'private.whatsapp_numbers_fill_organization', args: '()', closedBy: 736,
+    why: 'WAORGNUMBER.1: BEFORE INSERT trigger filling whatsapp_numbers.organization_id for code that predates it; a trigger fires without EXECUTE' },
+  { fn: 'private.whatsapp_numbers_switch_on_at_home', args: '()', closedBy: 736,
+    why: 'WAORGNUMBER.1: SECURITY DEFINER AFTER INSERT trigger that writes the closed link table; a trigger fires without EXECUTE' },
 ]
 
 /** The client roles a closed function is closed to. */
