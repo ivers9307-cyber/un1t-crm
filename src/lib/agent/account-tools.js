@@ -25,6 +25,7 @@ import { formatClassTime } from './dublin-format'
 import { DEFAULT_TZ } from '@/lib/location-time'
 import { escapeLikePattern } from '../like-escape'
 import { linkedAccountsForContact, hasBookableMembership, electWriteAccount } from '@/lib/person-accounts'
+import { refuseAtNoBookingStudio } from './tool-capability'
 
 // ── Anthropic tool definitions ──────────────────────────────────────
 export const ACCOUNT_TOOLS = [
@@ -629,6 +630,11 @@ async function getMyPaymentReminder(db, { verifiedId, locationId }) {
 // ctx: { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId, channel }
 export async function executeAccountTool(toolName, input, ctx) {
   const { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId } = ctx
+
+  // MIAORG.1 Task 5 — defence in depth: a Glofox-backed tool at a studio whose
+  // source takes no bookings (never offered there) is refused before any read.
+  const refused = refuseAtNoBookingStudio(toolName, ctx)
+  if (refused) return refused
 
   if (toolName === 'verify_identity') {
     // AGENT-AUTH — what "linked" actually means: the sender's PHONE NUMBER is

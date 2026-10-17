@@ -13,8 +13,9 @@
 // {class} becomes what was booked ("HIIT, Tue 3 Oct 18:30"); with nothing to
 // say the "for {class}" clause is dropped, as notify.js does.
 //
-// No imports: BookPanel (a client component) renders the text, and the booking
-// routes read the template with readBookChatTemplate.
+// No static imports: BookPanel (a client component) renders the text, and the
+// booking routes read the template with readBookChatTemplate, which loads the
+// (server-side) settings resolver lazily so the panel's bundle never carries it.
 
 export const DEFAULT_BOOK_CHAT_TEXT = "Good news, you're booked in for {class}. See you there."
 
@@ -51,9 +52,14 @@ export function bookChatConfirmationText({ what, template } = {}) {
 export async function readBookChatTemplate(db, locationId) {
   if (!locationId) return { template: null, error: null }
   try {
-    const { data, error } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
-    if (error) return { template: null, error: error.message || String(error) }
-    const text = String(data?.settings?.customer_agent?.booking_confirmation_text || '').trim()
+    // MIAORG.1 — the studio's resolved Mia settings (DEFAULTS <- org <-
+    // studio), so an org-wide confirmation text reaches the panel too. The
+    // resolver logs the underlying read error; a failed read is reported here
+    // as `read_failed`, never as "unset".
+    const { resolveAgentSettings } = await import('./agent/settings-resolve')
+    const resolved = await resolveAgentSettings(db, locationId)
+    if (!resolved.ok) return { template: null, error: resolved.reason === 'read_failed' ? 'read_failed' : null }
+    const text = String(resolved.settings.booking_confirmation_text || '').trim()
     return { template: text || null, error: null }
   } catch (e) {
     return { template: null, error: e?.message || String(e) }

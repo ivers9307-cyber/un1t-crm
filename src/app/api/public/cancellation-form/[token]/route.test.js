@@ -170,3 +170,26 @@ describe('POST', () => {
     expect(penaliseInvalidToken).toHaveBeenCalled()
   })
 })
+
+// MIAORG.1 Task 2 — the form copy comes from the studio's RESOLVED Mia
+// settings; cancellation_form is studio-only, so an org's never reaches it.
+describe('GET — copy from resolved settings (MIAORG.1)', () => {
+  it("an org's cancellation_form never reaches the studio's form", async () => {
+    resolveLink.mockResolvedValue({ link: LINK, contact: CONTACT })
+    dbMock = {
+      from: (table) => {
+        const c = {
+          select() { return c }, eq() { return c },
+          maybeSingle: () => Promise.resolve(
+            table === 'locations' ? { data: { id: 'loc-1', name: 'Stillorgan', organization_id: 'org-1', settings: { customer_agent: { enabled: true } } }, error: null }
+              : table === 'org_settings' ? { data: { customer_agent: { cancellation_form: { form_intro: 'Org intro.' } } }, error: null }
+                : { data: null, error: null }),
+        }
+        return c
+      },
+    }
+    const body = await (await get()).json()
+    expect(body.data.copy.form_intro).not.toContain('Org intro.')
+    expect(body.data.copy.form_intro).toMatch(/^Hi Aoife\./)
+  })
+})

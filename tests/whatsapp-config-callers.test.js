@@ -196,9 +196,9 @@ const CALLERS = {
     why: 'Mia confirmations into an EXISTING thread at its location; caught → { sent:false, reason }. Unreachable at a location that never had a number (no threads there).',
   },
   'src/lib/agent/followups.js': {
-    calls: { sendTextMessage: 2, sendTemplateMessage: 2 },
-    decision: 'refuse-quiet',
-    why: 'Mia nudges / first-class check-ins: only at locations with the agent enabled, into existing threads or with location-owned templates; per-contact catch → skipped, counted.',
+    calls: { sendTextMessage: 2, sendTemplateMessage: 2, getConversationNumberConfig: 1, templateLocationIdFor: 1 },
+    decision: 'refuse-skip',
+    why: 'Mia nudges / first-class check-ins: only at locations with the agent enabled. A studio with its own active number (one whatsapp_numbers read per studio per tick; a failed read counts as owning one, logged) sends exactly as before: { locationId }, its own templates, per-contact catch → skipped, counted. MIAORG.1 Task 6 (WAHOMESTUDIO.1): a number-less studio sends only through an existing thread whose stamped number getConversationNumberConfig resolves (replyInConversation; none → skip no_thread_number / no_conversation, nothing composed, never getOrCreateConversation), with templates from templateLocationIdFor; a refusal there is a recorded skip (no_number; a check-in claim is released). followups-through-thread.test.js.',
   },
   'src/lib/automations/booking-whatsapp-confirm.js': {
     calls: { sendTemplateMessage: 1 },

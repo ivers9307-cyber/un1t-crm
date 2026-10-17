@@ -33,6 +33,8 @@ import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { notifyAgentApprovalRequest } from './approval-notify'
 import { formatClassTime } from './dublin-format'
 import { DEFAULT_TZ } from '@/lib/location-time'
+import { logError } from '@/lib/log'
+import { refuseAtNoBookingStudio } from './tool-capability'
 
 // REGISTRYREAD.1b — what Mia is told when the auto lane has no usable Glofox
 // credentials. A failed settings READ (creds.readError) is a blip, not "this
@@ -276,6 +278,70 @@ export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST, zo
   return out.slice(0, limit).map(({ start_sec: _omitted, ...rest }) => rest)
 }
 
+// MIAORG.1 Task 5 — the timetable at an un1t.online studio (Hatch Street),
+// from the rows the un1t-online-sync cron upserts (mig 726). Classes in the
+// next UN1T_TIMETABLE_DAYS, earliest first, capped.
+//
+// Status filter: ONLY `status = 'scheduled'`. The sync stores the API's event
+// status verbatim (un1t-online-map.js mapEvent, text(row.status)); the live
+// table holds 'scheduled' (every upcoming row) and 'completed' (past), and the
+// API spec names no other value. An allow-list keeps out cancelled, draft and
+// hidden events, a null status, and any value un1t.online adds later, until
+// someone decides it is a class customers may be told about.
+//
+// CAPACITY-SECRECY.1 — the payload is the class name and start time, nothing
+// else: capacity, bookings_count, access_mode and raw are never selected, so
+// they cannot reach the model.
+//
+// Cap (final review): Hatch Street runs ~59 classes in 14 days, so the old 40
+// cut the end of the window and Mia could say a later day had nothing on. The
+// cap is 100, and a list that reaches it says `truncated: true` (the tool
+// description tells Mia the list then stops before the end of the window).
+export const UN1T_TIMETABLE_DAYS = 14
+export const UN1T_TIMETABLE_LIMIT = 100
+export const UN1T_SCHEDULED_STATUS = 'scheduled'
+
+/**
+ * Shape un1t_events rows for the agent: `{ name, starts_at }` with starts_at
+ * the studio's wall-clock label (formatClassTime, as the Glofox list's
+ * `time`). Rows without a parseable start are dropped. Pure.
+ */
+export function shapeUn1tClassesForAgent(rows, zone = DEFAULT_TZ) {
+  const out = []
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const ms = Date.parse(r?.starts_at || '')
+    if (!Number.isFinite(ms)) continue
+    out.push({ name: String(r?.title || '').trim() || 'Class', starts_at: formatClassTime(Math.floor(ms / 1000), zone) })
+  }
+  return out
+}
+
+async function listUn1tOnlineClasses(db, locationId, zone, nowMs = Date.now()) {
+  const fromIso = new Date(nowMs).toISOString()
+  const toIso = new Date(nowMs + UN1T_TIMETABLE_DAYS * 86400_000).toISOString()
+  try {
+    const { data, error } = await db.from('un1t_events')
+      .select('title, starts_at')
+      .eq('location_id', locationId)
+      .eq('status', UN1T_SCHEDULED_STATUS)
+      .gte('starts_at', fromIso)
+      .lte('starts_at', toIso)
+      .order('starts_at', { ascending: true })
+      .limit(UN1T_TIMETABLE_LIMIT)
+    if (error) {
+      logError('agent-timetable', 'un1t_events unreadable; Mia hands off for the timetable', { locationId, err: error })
+      return noBookingSystemAnswer(null, { state: 'none' })
+    }
+    const rows = Array.isArray(data) ? data : []
+    const classes = shapeUn1tClassesForAgent(rows, zone)
+    // A full page means there may be more after the last class shown.
+    return rows.length >= UN1T_TIMETABLE_LIMIT ? { classes, truncated: true } : { classes }
+  } catch (err) {
+    logError('agent-timetable', 'un1t_events read threw; Mia hands off for the timetable', { locationId, err })
+    return noBookingSystemAnswer(null, { state: 'none' })
+  }
+}
+
 const MAX_MEMBER_BOOKINGS = 10
 
 /**
@@ -387,7 +453,12 @@ export function findSlot(slots, startTime) {
 // Resolve the location's consultation booking type: the explicit
 // settings.customer_agent.consultation_event_type_id wins; otherwise
 // the first active event type whose name mentions consult/intro/taster.
-async function resolveConsultationEventType(db, locationId, settings) {
+//
+// MIAORG.1 Task 5 — the pinned type must be THIS studio's. A pinned id whose
+// event type belongs to another studio (a Stillorgan id pinned at Hatch, say)
+// is ignored and discovery runs, so Mia never offers or books another
+// studio's consultation slots.
+export async function resolveConsultationEventType(db, locationId, settings) {
   const cols = 'id, name, slug, duration_minutes, buffer_minutes, availability, max_advance_days, location_id'
   if (settings?.consultation_event_type_id) {
     const { data } = await db.from('event_types')
@@ -395,7 +466,7 @@ async function resolveConsultationEventType(db, locationId, settings) {
       .eq('id', settings.consultation_event_type_id)
       .eq('active', true)
       .maybeSingle()
-    if (data) return data
+    if (data && data.location_id === locationId) return data
   }
   const { data: candidates } = await db.from('event_types')
     .select(cols)
@@ -588,6 +659,18 @@ async function reelectSiblingWithCredits({
 //        verifiedContactId, locationId, channel, nameHint, settings }
 export async function executeBookingTool(toolName, input, ctx) {
   const { db, locationId, verifiedContactId, settings } = ctx
+
+  // MIAORG.1 Task 5 — defence in depth: a booking-system tool at a studio
+  // whose source takes no bookings is refused before any read or Glofox call.
+  const refused = refuseAtNoBookingStudio(toolName, ctx)
+  if (refused) return refused
+
+  if (toolName === 'list_upcoming_classes' && ctx.canBook === false) {
+    // MIAORG.1 Task 5 — no Glofox here. un1t.online studios answer from their
+    // synced un1t_events; any other no-booking studio has no timetable.
+    if (ctx.membershipSourceKey !== 'un1t_online') return noBookingSystemAnswer(null, { state: 'none' })
+    return listUn1tOnlineClasses(db, locationId, ctx.zone || DEFAULT_TZ)
+  }
 
   if (toolName === 'list_upcoming_classes') {
     if (!verifiedContactId) {

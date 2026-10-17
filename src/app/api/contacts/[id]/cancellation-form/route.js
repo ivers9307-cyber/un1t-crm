@@ -44,6 +44,7 @@ import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { manualTakeoverPatch } from '@/lib/agent/core'
 import { issueLink, revokeLink, latestLinkForContact } from '@/lib/cancellation-form/links'
 import { resolveCancellationFormCopy } from '@/lib/cancellation-form/copy'
+import { resolveAgentSettings } from '@/lib/agent/settings-resolve'
 import { linkVars, renderLinkTexts, buildLinkEmailHtml, templateUrlPrefixOk } from '@/lib/cancellation-form/deliver'
 
 export const runtime = 'nodejs'
@@ -71,9 +72,12 @@ function channelPermittedAnywhere(user, channel) {
 async function loadContext(db, contactId) {
   const { data: contact, error } = await db.from('contacts').select(CONTACT_COLUMNS).eq('id', contactId).single()
   if (error || !contact) return { contact: null }
-  const { data: loc } = await db.from('locations').select('name, settings').eq('id', contact.location_id).maybeSingle()
-  const copy = resolveCancellationFormCopy(loc?.settings?.customer_agent?.cancellation_form)
-  return { contact, locationName: loc?.name || '', copy }
+  // MIAORG.1 — the form copy from the studio's RESOLVED Mia settings
+  // (cancellation_form is studio-only, so it is the studio's own). Unreadable =
+  // every code default, as before.
+  const resolved = await resolveAgentSettings(db, contact.location_id)
+  const copy = resolveCancellationFormCopy(resolved.ok ? resolved.settings.cancellation_form : null)
+  return { contact, locationName: (resolved.ok && resolved.location.name) || '', copy }
 }
 
 // W1.L3b — the per-location `public_base_url` override stays first; else the

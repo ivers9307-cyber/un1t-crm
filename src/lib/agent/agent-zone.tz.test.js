@@ -237,8 +237,8 @@ describe('TZ.5 America/New_York follows New York across DST', () => {
 // ── the runners: the daytime gate is per location ────────────────────────────
 
 const agentOn = (extra) => ({ customer_agent: { enabled: true, followups: { enabled: true }, first_class_checkin: { enabled: true }, ...extra } })
-const LOC_DUB = { id: 'loc-dub', name: 'Dublin studio', settings: agentOn() }
-const LOC_NY = { id: 'loc-ny', name: 'New York studio', settings: agentOn() }
+const LOC_DUB = { id: 'loc-dub', name: 'Dublin studio', organization_id: null, settings: agentOn() }
+const LOC_NY = { id: 'loc-ny', name: 'New York studio', organization_id: null, settings: agentOn() }
 const ZONES = { 'loc-dub': DUB, 'loc-ny': NY }
 
 // Records every chain; the locations list, the zone read and everything else
@@ -251,6 +251,7 @@ function runnerDb({ locations, zoneError = null, zones = ZONES } = {}) {
     from(table) {
       const q = { table, cols: '', op: 'select', filters: [], opts: null }
       const answer = () => {
+        if (table === 'whatsapp_numbers') return { data: [{ id: 'num-own' }], error: null } // MIAORG.1 Task 6: the studio owns its number
         if (table === 'locations') {
           if (q.cols.includes('timezone')) {
             if (zoneError) return { data: null, error: zoneError }
@@ -380,6 +381,7 @@ function reviewDb({ locations, messages, reviews = [], zoneError = null }) {
       const q = { table, cols: '', filters: [] }
       const val = (name, col) => q.filters.find((f) => f[0] === name && f[1] === col)?.[2]
       const answer = () => {
+        if (table === 'whatsapp_numbers') return { data: [{ id: 'num-own' }], error: null } // MIAORG.1 Task 6: the studio owns its number
         if (table === 'locations') return zoneError ? { data: null, error: zoneError } : { data: locations, error: null }
         if (table === 'whatsapp_messages' && val('eq', 'source') === 'agent') {
           const from = val('gte', 'created_at'); const to = val('lt', 'created_at')

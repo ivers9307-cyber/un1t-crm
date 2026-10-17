@@ -26,7 +26,9 @@ vi.mock('next/navigation', () => ({
 
 // Client component stub — this test asserts on the server-side gate only.
 vi.mock('./CustomerAgentClient', () => ({
-  default: ({ canEdit }) => <div>customer-agent-client-rendered can-edit={String(canEdit)}</div>,
+  default: ({ canEdit, orgDefaults }) => (
+    <div>customer-agent-client-rendered can-edit={String(canEdit)} org-defaults={JSON.stringify(orgDefaults ?? null)}</div>
+  ),
 }))
 
 import CustomerAgentSettingsPage from './page.js'
@@ -77,4 +79,46 @@ describe('/settings/customer-agent page', () => {
       expect(html).toContain(`can-edit=${expected}`)
     })
   }
+})
+
+// MIAORG.1 Task 4 (T4-E) — the organisation defaults section: decided on the
+// server (resolveAdminOrgId), and only the organisation's id and name go to
+// the client. Fictional ids.
+describe('/settings/customer-agent page — organisation defaults (MIAORG.1 Task 4)', () => {
+  const ORG_A = 'a0000000-0000-0000-0000-00000000a0a1'
+  const ORG_B = 'a0000000-0000-0000-0000-00000000a0b2'
+  const orgUser = (over) => ({
+    ...user('owner'),
+    activeLocation: { id: 'loc1', organization_id: ORG_A },
+    activeOrganization: { id: ORG_A, name: 'Org A' },
+    organizationsById: { [ORG_A]: { id: ORG_A, name: 'Org A', settings: { secret_token: 'x' } }, [ORG_B]: { id: ORG_B, name: 'Org B' } },
+    orgAdminOrgIds: [],
+    ...over,
+  })
+  const orgProp = (html) => {
+    const m = html.replace(/&quot;/g, '"').match(/org-defaults=(\{.*?\}|null)</)
+    return m && JSON.parse(m[1])
+  }
+
+  it('a master gets the active organisation (id and name only)', async () => {
+    getCurrentUser.mockResolvedValue(orgUser({ role: 'master', profileRole: 'master', rolesByLocation: {} }))
+    const html = renderToStaticMarkup(await CustomerAgentSettingsPage())
+    expect(orgProp(html)).toEqual({ organizationId: ORG_A, organizationName: 'Org A' })
+    expect(html).not.toContain('secret_token')
+  })
+
+  it('an org admin of the active organisation gets it', async () => {
+    getCurrentUser.mockResolvedValue(orgUser({ orgAdminOrgIds: [ORG_A] }))
+    expect(orgProp(renderToStaticMarkup(await CustomerAgentSettingsPage()))).toEqual({ organizationId: ORG_A, organizationName: 'Org A' })
+  })
+
+  it('an owner without an org admin grant sees the page exactly as before', async () => {
+    getCurrentUser.mockResolvedValue(orgUser())
+    expect(orgProp(renderToStaticMarkup(await CustomerAgentSettingsPage()))).toBe(null)
+  })
+
+  it('an org admin of ANOTHER organisation gets nothing here', async () => {
+    getCurrentUser.mockResolvedValue(orgUser({ orgAdminOrgIds: [ORG_B] }))
+    expect(orgProp(renderToStaticMarkup(await CustomerAgentSettingsPage()))).toBe(null)
+  })
 })
