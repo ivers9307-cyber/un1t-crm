@@ -44,6 +44,7 @@ function checkinDb({ conversation, contacts = [CONTACT], onInsert = () => {} }) 
     from(table) {
       const state = { selectOpts: null }
       const finish = () => {
+        if (table === 'whatsapp_numbers') return { data: [{ id: 'num-own' }], error: null } // MIAORG.1 Task 6: the studio owns its number
         if (table === 'locations') return { data: [LOCATION], error: null }
         if (table === 'contacts') {
           if (state.selectOpts?.head) return { count: 0, error: null }

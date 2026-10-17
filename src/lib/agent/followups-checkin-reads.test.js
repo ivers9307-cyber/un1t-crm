@@ -43,6 +43,7 @@ function stubDb({ conversation = CONV, messages = [], errors = {}, prefs = { wha
       const state = { head: false }
       const finish = () => {
         if (errors[table]) return { data: null, error: errors[table] }
+        if (table === 'whatsapp_numbers') return { data: [{ id: 'num-own' }], error: null } // MIAORG.1 Task 6: the studio owns its number
         if (table === 'locations') return { data: [LOCATION], error: null }
         if (table === 'contacts') return state.head ? { count: 0, error: null } : { data: [CONTACT], error: null }
         if (table === 'whatsapp_conversations') return { data: conversation ? [conversation] : [], error: null }

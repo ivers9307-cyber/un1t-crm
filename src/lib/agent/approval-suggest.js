@@ -18,7 +18,9 @@ import { formatHistoryForClaude, isSkipResponse, parseAgentResponse } from './co
 import { formatNextClass } from './account-tools'
 import { getLocationBranding } from '@/lib/location-branding'
 import { instantToZonedParts, zoneOfLocation } from '@/lib/location-time'
-import { resolveMembershipSource } from '@/lib/membership/source'
+import { providerFor } from '@/lib/membership/source'
+import { noneSource } from '@/lib/membership/sources/none'
+import { providerTakesBookings } from './tool-capability'
 import { anthropicMessages } from '@/lib/anthropic'
 import { resolveAgentSettings } from './settings-resolve'
 
@@ -134,7 +136,10 @@ export function zonedDateString(nowMs, zone) {
 // model/max_tokens/system-cache shape) — see file header. Returns
 // { text } or { error }; never throws.
 // Exported for tests (repo convention) — see compose-effort.test.js.
-export async function composeAgentText(location, settings, historyRows, instruction, companyName, signal, membershipSource = null) {
+// MIAORG.1 Task 6 (T6-D) — `capability` is what the prompt may offer at this
+// studio: { bookings, bookingUrl }. Absent or bookings true is the Glofox
+// render, byte-identical to before (the link is ignored).
+export async function composeAgentText(location, settings, historyRows, instruction, companyName, signal, membershipSource = null, { bookings = true, bookingUrl = null } = {}) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   const system = buildCachedSystem({
@@ -143,6 +148,8 @@ export async function composeAgentText(location, settings, historyRows, instruct
     agentName: settings?.agent_name || null,
     membershipUrl: settings?.membership_signup_url || null,
     membershipSource, // W1.M3b — null renders the Glofox default
+    bookings,
+    bookingUrl: bookings ? null : bookingUrl,
     tone: settings?.tone || null,
     extraRules: settings?.extra_rules || null,
     today: zonedDateString(Date.now(), zoneOfLocation(location)),
@@ -225,8 +232,16 @@ export async function composeApprovalSuggestion(db, row, { signal } = {}) {
 
   const instruction = buildSuggestionInstruction(row.kind, row.status, ctx)
   const branding = await getLocationBranding(db, location.id)
-  const provider = await resolveMembershipSource(db, location.id) // W1.M3b
-  const composed = await composeAgentText(location, settings, historyRows, instruction, branding.companyName, signal, { key: provider.key, label: provider.label })
+  // W1.M3b / MIAORG.1 Task 6 (T6-D) — the provider comes off the location row
+  // the resolver already read (locations.membership_source), the same way the
+  // reply path derives it; no second read that could fail on its own.
+  const provider = location?.membership_source ? providerFor(location.membership_source) : noneSource
+  const bookings = providerTakesBookings(provider)
+  const composed = await composeAgentText(
+    location, settings, historyRows, instruction, branding.companyName, signal,
+    { key: provider.key, label: provider.label },
+    { bookings, bookingUrl: bookings ? null : (settings?.booking_url || null) },
+  )
   if (composed.error) return { error: composed.error }
 
   const text = sanitizeSuggestion(composed.text)

@@ -4,7 +4,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/anthropic', () => ({ anthropicMessages: vi.fn() }))
 vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn().mockResolvedValue({ companyName: 'UN1T' }) }))
-vi.mock('@/lib/membership/source', () => ({ resolveMembershipSource: vi.fn().mockResolvedValue({ key: 'glofox', label: 'Glofox' }) }))
+// MIAORG.1 Task 6 — the source comes off the resolver's location row
+// (membership_source below), through the real providerFor.
+vi.mock('@/lib/membership/source', async (importOriginal) => ({ ...(await importOriginal()), resolveMembershipSource: vi.fn().mockRejectedValue(new Error('separate source read')) }))
 
 import { anthropicMessages } from '@/lib/anthropic'
 import { composeApprovalSuggestion } from './approval-suggest'
@@ -17,7 +19,7 @@ function db({ customerAgent, org = null, locationError = null }) {
   const inner = {
     from(table) {
       const result = table === 'locations'
-        ? (locationError ? { data: null, error: locationError } : { data: { id: LOC, name: 'Studio', timezone: 'Europe/Dublin', organization_id: 'org1', settings: { customer_agent: customerAgent } }, error: null })
+        ? (locationError ? { data: null, error: locationError } : { data: { id: LOC, name: 'Studio', timezone: 'Europe/Dublin', organization_id: 'org1', membership_source: 'glofox', settings: { customer_agent: customerAgent } }, error: null })
         : { data: [], error: null }
       const b = { select: () => b, eq: () => b, order: () => b, limit: () => b, maybeSingle: () => Promise.resolve(result), then: (ok, bad) => Promise.resolve(result).then(ok, bad) }
       return b
@@ -44,6 +46,7 @@ describe('composeApprovalSuggestion — resolved settings', () => {
     await composeApprovalSuggestion(db({ customerAgent: STILLORGAN_BLOB }), ROW)
     expect(systemText()).toContain(STILLORGAN_BLOB.tone)
     expect(systemText()).toContain(STILLORGAN_BLOB.agent_name)
+    expect(systemText()).toContain('You CAN book classes') // Glofox render, from the row
   })
 
   it('an unreadable studio is location_not_found, as before', async () => {

@@ -23,6 +23,7 @@ function tickDb({ locations, org }) {
       const q = { table, filters: {} }
       queries.push(q)
       const finish = () => {
+        if (table === 'whatsapp_numbers') return { data: [{ id: 'num-own' }], error: null } // MIAORG.1 Task 6: the studio owns its number
         if (table === 'locations') return { data: locations, error: null }
         if (table === 'org_settings') return { data: org == null ? null : { customer_agent: org }, error: null }
         return { data: [], error: null }
