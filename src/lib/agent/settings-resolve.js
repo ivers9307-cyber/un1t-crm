@@ -1,4 +1,4 @@
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import { DEFAULTS, STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS } from './settings-contract'
 
 // MIAORG.1 — the ONE place Mia's effective settings for a studio are decided:
@@ -122,7 +122,9 @@ export async function resolveAgentSettings(db, locationId, { orgCache } = {}) {
 
   // The row was read BY this id, so it is this location's even if a narrow
   // select (or a test fake) left `id` off it.
-  return resolveAgentSettingsForLocation(db, { ...location, id: location.id ?? locationId }, { orgCache })
+  // organization_id is pinned to a present key (null when the row has none) so
+  // the row variant below never mistakes it for a caller's narrow select.
+  return resolveAgentSettingsForLocation(db, { ...location, id: location.id ?? locationId, organization_id: location.organization_id ?? null }, { orgCache })
 }
 
 // The org layer for one organisation, or null (no row, NULL column, or a
@@ -148,8 +150,11 @@ async function readOrgLayer(db, organizationId, locationId) {
  * MIAORG.1 Task 2 — resolve from a `locations` row the caller already holds
  * (the sweeps and runners that loop every studio). The row must carry
  * `id`, `organization_id` and `settings` (and `name` / `timezone` if the
- * caller wants them back on `location`); a row read without
- * `organization_id` silently resolves without the org layer, so select it.
+ * caller wants them back on `location`). `organization_id: null` means the
+ * studio has no organisation (no org layer). A row whose select left
+ * `organization_id` OFF (the key absent) is never silently resolved without
+ * the org layer: it is re-read by id (resolveAgentSettings) and logged, so the
+ * caller's select gets fixed.
  *
  * `orgCache` (a Map, one per run): each organisation's layer is read once and
  * shared by its studios. A failed org read is cached as "no org layer" for the
@@ -159,6 +164,10 @@ async function readOrgLayer(db, organizationId, locationId) {
  */
 export async function resolveAgentSettingsForLocation(db, location, { orgCache } = {}) {
   if (!location || !location.id) return { ok: false, reason: 'not_found' }
+  if (location.organization_id === undefined) {
+    logWarn('agent-settings', 'location row has no organization_id key; re-reading it by id (select organization_id)', { locationId: location.id })
+    return resolveAgentSettings(db, location.id, { orgCache })
+  }
 
   const studioRaw = location.settings?.customer_agent
   const studio = isPlainObject(studioRaw) ? studioRaw : null

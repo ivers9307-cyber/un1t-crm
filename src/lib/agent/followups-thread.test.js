@@ -71,7 +71,7 @@ describe('runAgentFollowups — a failed thread read (CHECKINSTALL.1)', () => {
       from(table) {
         read.push(table)
         const finish = () => {
-          if (table === 'locations') return { data: [{ id: 'loc1', settings: { customer_agent: { enabled: true, followups: { enabled: true } } } }], error: null }
+          if (table === 'locations') return { data: [{ id: 'loc1', organization_id: null, settings: { customer_agent: { enabled: true, followups: { enabled: true } } } }], error: null }
           if (table === 'whatsapp_conversations') return { data: [{ id: 'conv1', contact_id: 'c1', location_id: 'loc1', agent_followup_stage: 0, contacts: { first_name: 'A', wa_phone: '353870000000', wa_status: 'active' } }], error: null }
           if (table === 'whatsapp_messages') return { data: null, error: { message: 'canceling statement due to statement timeout', code: '57014' } }
           return { data: [], error: null }

@@ -15,7 +15,7 @@ const H = 3600_000
 const NOW = Date.UTC(2026, 8, 25, 13, 0, 0) // 14:00 Dublin
 // No template configured: a candidate that gets PAST the human check lands on
 // no_template_configured (Case B) without any send being mocked.
-const LOCATION = { id: 'loc1', name: 'Stillorgan', settings: { customer_agent: { enabled: true, first_class_checkin: { enabled: true, delay_hours: 2 } } } }
+const LOCATION = { id: 'loc1', name: 'Stillorgan', organization_id: null, settings: { customer_agent: { enabled: true, first_class_checkin: { enabled: true, delay_hours: 2 } } } }
 const CONTACT = {
   id: 'c1', first_name: 'Alex', name: 'Alex Example', wa_phone: '353870000000', phone: '353870000000',
   pipeline_stage_slug: 'first_class', last_attended_at: new Date(NOW - 3 * H).toISOString(),

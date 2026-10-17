@@ -237,8 +237,8 @@ describe('TZ.5 America/New_York follows New York across DST', () => {
 // ── the runners: the daytime gate is per location ────────────────────────────
 
 const agentOn = (extra) => ({ customer_agent: { enabled: true, followups: { enabled: true }, first_class_checkin: { enabled: true }, ...extra } })
-const LOC_DUB = { id: 'loc-dub', name: 'Dublin studio', settings: agentOn() }
-const LOC_NY = { id: 'loc-ny', name: 'New York studio', settings: agentOn() }
+const LOC_DUB = { id: 'loc-dub', name: 'Dublin studio', organization_id: null, settings: agentOn() }
+const LOC_NY = { id: 'loc-ny', name: 'New York studio', organization_id: null, settings: agentOn() }
 const ZONES = { 'loc-dub': DUB, 'loc-ny': NY }
 
 // Records every chain; the locations list, the zone read and everything else

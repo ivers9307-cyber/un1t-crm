@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import { mergeAgentSettings, resolveAgentSettings, resolveAgentSettingsForLocation } from './settings-resolve'
 import { DEFAULTS, STUDIO_ONLY_KEYS } from './settings-contract'
 
@@ -284,6 +284,37 @@ describe('resolveAgentSettingsForLocation + orgCache', () => {
     expect(r.settings.enabled).toBe(true)
     expect(r.settings.tone).toBe('Org')
     expect(db.calls.map((c) => c.table)).toEqual(['org_settings'])
+  })
+
+  it('a row whose select left organization_id OFF is re-read by id (logged), so the org layer still arrives', async () => {
+    const db = fakeDb({ locations: { data: locRow({ customer_agent: { enabled: true } }), error: null }, orgSettings: { data: { customer_agent: { tone: 'Org' } }, error: null } })
+    const narrow = { id: LOC, name: 'Hatch', settings: { customer_agent: { enabled: true } } } // no organization_id key
+    const r = await resolveAgentSettingsForLocation(db, narrow)
+    expect(r.ok).toBe(true)
+    expect(r.settings.tone).toBe('Org')
+    expect(r.location.organization_id).toBe(ORG)
+    expect(db.calls.map((c) => c.table)).toEqual(['locations', 'org_settings'])
+    expect(db.calls[0].filters).toEqual({ id: LOC })
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    expect(logWarn.mock.calls[0][0]).toBe('agent-settings')
+  })
+
+  it('organization_id: null means no organisation: no org layer, no extra read, nothing logged', async () => {
+    const db = fakeDb({ locations: { data: null, error: { message: 'must not be read' } }, orgSettings: { data: { customer_agent: { tone: 'Org' } }, error: null } })
+    const r = await resolveAgentSettingsForLocation(db, { ...locRow({ customer_agent: { enabled: true } }), organization_id: null })
+    expect(r.ok).toBe(true)
+    expect(r.org).toBe(null)
+    expect(r.settings.tone).toBe(null)
+    expect(db.calls).toHaveLength(0)
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('a studio row read without an organization_id column (a narrow fake) never loops', async () => {
+    const db = fakeDb({ locations: { data: { id: LOC, settings: { customer_agent: { enabled: true } } }, error: null }, orgSettings: { data: null, error: null } })
+    const r = await resolveAgentSettings(db, LOC)
+    expect(r.ok).toBe(true)
+    expect(r.location.organization_id).toBe(null)
+    expect(db.calls).toHaveLength(1)
   })
 
   it('a missing row is not_found, with no query', async () => {

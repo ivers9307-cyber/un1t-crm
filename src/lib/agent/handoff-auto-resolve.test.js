@@ -117,7 +117,7 @@ describe('runHandoffAutoResolve', () => {
         const finish = () => {
           if (state.op === 'update') return { data: null, error: null }
           if (table === 'locations') {
-            return { data: [{ id: 'loc-1', name: 'Stillorgan', settings: { customer_agent: { enabled: true } } }], error: null }
+            return { data: [{ id: 'loc-1', name: 'Stillorgan', organization_id: null, settings: { customer_agent: { enabled: true } } }], error: null }
           }
           if (table === 'whatsapp_conversations') return { data: convs, error: null }
           if (table === 'instagram_conversations') return { data: [], error: null }

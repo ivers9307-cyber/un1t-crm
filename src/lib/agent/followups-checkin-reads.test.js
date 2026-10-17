@@ -22,7 +22,7 @@ import { runFirstClassCheckins } from './followups'
 const H = 3600_000
 const NOW = Date.UTC(2026, 8, 25, 13, 0, 0) // 14:00 Dublin
 const LOCATION = {
-  id: 'loc1', name: 'Stillorgan',
+  id: 'loc1', name: 'Stillorgan', organization_id: null,
   settings: { customer_agent: { enabled: true, first_class_checkin: { enabled: true, delay_hours: 2, template_name: 'agent_first_class_checkin_v1' } } },
 }
 const CONTACT = {
