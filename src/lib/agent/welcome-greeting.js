@@ -8,6 +8,7 @@ import { getLocationBranding } from '@/lib/location-branding'
 import { phoneMatchesAllowlist, isWithinQuietHours, stripEmDashes, resolveAgentGate, AGENT_MESSAGE_SOURCE } from './core'
 import { defaultWelcomeGreeting } from './default-copy'
 import { DEFAULTS } from './settings-contract'
+import { resolveAgentSettings } from './settings-resolve'
 import { zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
 
 // HUMANIZE.1 — no em dash, no emoji, low-key: this is shipped customer copy on
@@ -39,10 +40,13 @@ export function shouldSendWelcome({ settings, senderPhone, now = new Date(), zon
 export async function maybeSendWelcomeGreeting(db, { conversationId, locationId, senderPhone, contactId }) {
   try {
     if (!conversationId || !locationId || !senderPhone) return { sent: false, reason: 'missing_context' }
-    const { data: loc } = await db.from('locations').select('settings, timezone').eq('id', locationId).single()
-    const settings = loc?.settings?.customer_agent || null
+    // MIAORG.1 — DEFAULTS <- org <- studio (resolveAgentSettings; the on/off
+    // switches are the studio's own). A failed studio read is no settings, so
+    // the gate answers 'disabled', as it always did.
+    const resolved = await resolveAgentSettings(db, locationId)
+    const settings = resolved.ok ? resolved.settings : null
     // TZ.5 — the zone rides the row already read (no second query).
-    const gate = shouldSendWelcome({ settings, senderPhone, zone: zoneOfLocation({ id: locationId, timezone: loc?.timezone }) })
+    const gate = shouldSendWelcome({ settings, senderPhone, zone: zoneOfLocation({ id: locationId, timezone: resolved.ok ? resolved.location.timezone : null }) })
     if (!gate.send) return { sent: false, reason: gate.reason }
 
     // Idempotency: greet a thread once — skip if ANY outbound already exists.

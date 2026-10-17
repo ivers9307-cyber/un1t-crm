@@ -68,6 +68,8 @@ export const CLOSED_FUNCTIONS = [
     why: 're-files or merges a WhatsApp thread at another studio of its organisation; service-role route and backfill only' },
   { fn: 'public.wa_message_location_from_conversation', args: '()', closedBy: 723,
     why: 'a trigger function (a message row follows its thread’s studio); a trigger fires without EXECUTE' },
+  { fn: 'private.org_settings_customer_agent_fence', args: '()', closedBy: 729,
+    why: 'a trigger function (only service_role writes org_settings.customer_agent); a trigger fires without EXECUTE' },
 ]
 
 /** The client roles a closed function is closed to. */

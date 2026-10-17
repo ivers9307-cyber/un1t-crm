@@ -810,7 +810,12 @@ export const VERIFY_FAIL_HANDOFF_DEFAULT = 2
 // Per-location threshold from the agent settings blob. 0/negative disables the
 // auto-handoff. Mirrors resolveHandoffSlaMinutes. Pure.
 export function resolveVerifyFailHandoff(settings) {
-  const raw = Number(settings?.handoff_after_verify_failures)
+  const stored = settings?.handoff_after_verify_failures
+  // MIAORG.1 T2-A — null / blank = "not set" (resolved settings carry DEFAULTS'
+  // null where a blob has no key). Number(null) is 0, the disable switch below:
+  // it would have turned this safety net OFF at Stillorgan on deploy.
+  if (stored == null || (typeof stored === 'string' && stored.trim() === '')) return VERIFY_FAIL_HANDOFF_DEFAULT
+  const raw = Number(stored)
   if (!Number.isFinite(raw)) return VERIFY_FAIL_HANDOFF_DEFAULT
   return raw > 0 ? Math.round(raw) : 0
 }

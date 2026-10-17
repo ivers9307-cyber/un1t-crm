@@ -14,7 +14,7 @@
 //   shelly_connections / per-location smart-plug account + adopted device
 //   shelly_devices       counts (migs 562/563) — non-secret columns only,
 //                        deep-linking to /automations/shelly.
-//   locations.settings   customer_agent block → the AI-agent live signal.
+//   Mia's resolved settings (agent/settings-resolve) → the AI-agent live signal.
 //   location_plans /     the plan & wallet strip (INTEG-C4) — pinned
 //   wallets / usage      tier + wallet balance + MTD meter usage vs
 //                        allowance; read-only and PINNING-GATED (an
@@ -45,6 +45,7 @@
 // table holds at most a handful of rows per location).
 
 import { logWarn } from '@/lib/log'
+import { resolveAgentSettingsForLocation } from '@/lib/agent/settings-resolve'
 import { registryRowFromLegacy } from '@/lib/connection-registry'
 import { EXPIRY_SOON_DAYS } from '@/lib/connection-health'
 import { getSendBudget, tierDailyLimit } from '@/lib/whatsapp-budget'
@@ -169,7 +170,7 @@ export function gradeShellyConnection(row) {
 }
 
 /**
- * The AI-agent live signal from locations.settings.customer_agent.
+ * The AI-agent live signal from a studio's (resolved) Mia settings.
  * INVARIANT (CLAUDE.md): enabled=true is LIVE FOR EVERYONE regardless
  * of test_mode — real test mode is enabled=false + test_mode=true. Pure.
  */
@@ -1213,11 +1214,19 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
     }
   })
 
-  // ── AI agent live signal (locations.settings.customer_agent) ──
-  const agent = locs.map((loc) => ({
-    locationId: loc.id,
-    mode: agentSignal(loc.settings?.customer_agent),
-    agentName: loc.settings?.customer_agent?.agent_name || null,
+  // ── AI agent live signal (Mia's resolved settings, MIAORG.1) ──
+  // DEFAULTS <- org <- studio, one org read per organisation. The mode is the
+  // studio's own switches (enabled/test_mode are studio-only); the name may be
+  // the organisation's. A studio that never set Mia up stays unnamed.
+  const agentOrgCache = new Map()
+  const agent = await Promise.all(locs.map(async (loc) => {
+    const resolved = await resolveAgentSettingsForLocation(db, loc, { orgCache: agentOrgCache })
+    const s = resolved.ok ? resolved.settings : null
+    return {
+      locationId: loc.id,
+      mode: agentSignal(s),
+      agentName: (resolved.ok && resolved.studio && s.agent_name) || null,
+    }
   }))
 
   // ── Hidden tier: UniFi / Climate / BCA from the registry ──

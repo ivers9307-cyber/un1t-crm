@@ -66,19 +66,27 @@ describe('shouldSendWelcome', () => {
 // Chainable fake db covering the two whatsapp_messages shapes the module
 // uses: the head-count select (awaited builder resolves { count }) and the
 // insert. locations returns the settings blob.
-function fakeDb({ customerAgent, outboundCount = 0 } = {}) {
+// MIAORG.1 — the settings now come through resolveAgentSettings, which reads
+// the location row (maybeSingle) and then its organisation's layer (`org`).
+function fakeDb({ customerAgent, outboundCount = 0, org = null, locationError = null } = {}) {
   const inserted = []
+  const locRow = { id: 'loc1', timezone: 'Europe/Dublin', organization_id: 'org1', settings: customerAgent === undefined ? {} : { customer_agent: customerAgent } }
   return {
     inserted,
     from(table) {
       if (table === 'locations') {
+        const result = locationError ? { data: null, error: locationError } : { data: locRow, error: null }
         return {
           select: () => ({
             eq: () => ({
-              single: async () => ({ data: { settings: { customer_agent: customerAgent } } }),
+              single: async () => result,
+              maybeSingle: async () => result,
             }),
           }),
         }
+      }
+      if (table === 'org_settings') {
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: org ? { customer_agent: org } : null, error: null }) }) }) }
       }
       if (table === 'whatsapp_messages') {
         return {
@@ -216,5 +224,36 @@ describe('maybeSendWelcomeGreeting — no WhatsApp number (WACONFIGFALLBACK.1)',
     const r = await maybeSendWelcomeGreeting(db, CTX)
     expect(r).toEqual({ sent: false, reason: 'exception' })
     expect(db.inserted).toEqual([])
+  })
+})
+
+// MIAORG.1 Task 2 — the greeting reads resolved settings (DEFAULTS <- org <- studio).
+describe('maybeSendWelcomeGreeting — resolved settings (MIAORG.1)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('an org-only welcome_greeting reaches a studio that sets none', async () => {
+    const db = fakeDb({ customerAgent: { enabled: true, welcome_greeting: null }, org: { welcome_greeting: 'Hello from the org.' } })
+    expect(await maybeSendWelcomeGreeting(db, CTX)).toEqual({ sent: true })
+    expect(sendTextMessage.mock.calls[0][1]).toBe('Hello from the org.')
+  })
+
+  it('an org enabled:true never greets for a studio with no blob (Hatch)', async () => {
+    const db = fakeDb({ customerAgent: undefined, org: { enabled: true, welcome_greeting: 'Hi' } })
+    expect(await maybeSendWelcomeGreeting(db, CTX)).toEqual({ sent: false, reason: 'disabled' })
+    expect(sendTextMessage).not.toHaveBeenCalled()
+  })
+
+  it("no behaviour change: Stillorgan's blob with no org layer sends its own greeting", async () => {
+    const { STILLORGAN_BLOB } = await import('./settings-fixtures.test-helpers')
+    const db = fakeDb({ customerAgent: STILLORGAN_BLOB, org: null })
+    expect(await maybeSendWelcomeGreeting(db, CTX)).toEqual({ sent: true })
+    expect(sendTextMessage.mock.calls[0][1]).toBe(STILLORGAN_BLOB.welcome_greeting)
+  })
+
+  it('a failed studio read sends nothing (disabled), as before', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = fakeDb({ customerAgent: { enabled: true }, locationError: { message: 'down' } })
+    expect(await maybeSendWelcomeGreeting(db, CTX)).toEqual({ sent: false, reason: 'disabled' })
+    errSpy.mockRestore()
   })
 })

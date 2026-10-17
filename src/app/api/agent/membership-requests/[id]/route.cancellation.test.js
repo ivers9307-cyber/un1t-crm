@@ -36,7 +36,7 @@ const ROW = {
 const CONTACT = { id: 'c1', first_name: 'Aoife', name: 'Aoife Byrne', email: 'a@example.com', email_status: 'active', glofox_member_id: '6a0219cee62c0c6c980bc95f', glofox_user_membership_id: null, glofox_membership_plan: 'Unlimited' }
 
 let updates
-function makeDb(row, { autoCancel = false } = {}) {
+function makeDb(row, { autoCancel = false, cancellationForm = {}, org = null } = {}) {
   updates = []
   return {
     from(table) {
@@ -47,7 +47,9 @@ function makeDb(row, { autoCancel = false } = {}) {
         async maybeSingle() {
           if (patch) return { data: { id: row.id }, error: null }
           if (table === 'contacts') return { data: CONTACT, error: null }
-          if (table === 'locations') return { data: { name: 'UN1T Stillorgan', glofox_auto_cancel_memberships: autoCancel, settings: { customer_agent: { cancellation_form: {} } } }, error: null }
+          if (table === 'locations') return { data: { id: 'L1', name: 'UN1T Stillorgan', organization_id: 'O1', glofox_auto_cancel_memberships: autoCancel, settings: { customer_agent: { cancellation_form: cancellationForm } } }, error: null }
+          // MIAORG.1 — the copy is read through resolveAgentSettingsForLocation.
+          if (table === 'org_settings') return { data: org ? { customer_agent: org } : null, error: null }
           return { data: row, error: null }
         },
         async single() {
@@ -160,5 +162,18 @@ describe('toggle ON', () => {
     db = makeDb(ROW, { autoCancel: true })
     await patch({ status: 'saved' })
     expect(executeMembershipCancellation).not.toHaveBeenCalled()
+  })
+})
+
+// MIAORG.1 Task 2 — the confirmation copy comes from the studio's RESOLVED Mia
+// settings; cancellation_form is a studio-only key, so an org's never lands.
+describe('confirmation copy from resolved settings (MIAORG.1)', () => {
+  it("the studio's own form copy reaches the confirmation; an org's never does", async () => {
+    db = makeDb(ROW, { cancellationForm: { cancel_confirmation_text: 'Studio says bye.' }, org: { cancellation_form: { cancel_confirmation_text: 'Org says bye.' } } })
+    await patch({ status: 'approved' })
+    expect(sendMembershipOutcomeMessage.mock.calls[0][1].copy.cancel_confirmation_text).toBe('Studio says bye.')
+    db = makeDb(ROW, { cancellationForm: null, org: { cancellation_form: { cancel_confirmation_text: 'Org says bye.' } } })
+    await patch({ status: 'approved' })
+    expect(sendMembershipOutcomeMessage.mock.calls[1][1].copy.cancel_confirmation_text).not.toBe('Org says bye.')
   })
 })
