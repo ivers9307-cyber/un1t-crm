@@ -13,8 +13,7 @@ import { fetchFunnelCounts, fetchAdsSummary, fetchTodayOps } from '@shared/dashb
 import { buildNeedsYouRail } from '@/lib/dashboard/business-rail'
 import { buildBusinessKpis } from '@/lib/dashboard/business-kpis'
 import { adsDayZoneForDisplay } from '@/lib/ads/account-day'
-import { computeMembershipCounts } from '@/lib/membership-snapshot'
-import { fetchMembershipFlows } from '@/lib/membership-flows'
+import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
 import { KpiCard, KpiRow, formatCurrency } from '@/components/dashboard/Cards'
 import { MembershipPanel } from '@/components/dashboard/MembershipPanel'
 import {
@@ -22,7 +21,7 @@ import {
 } from '@/components/dashboard/BusinessBlocks'
 import { LabourBlock } from '@/components/dashboard/LabourBlock'
 import { canSeeLabour, labourStudiosFor } from '@/lib/labour-month-model'
-import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource, providesCapability } from '@/lib/membership/state-for-page'
+import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
 import MembershipSourceGate from '@/components/MembershipSourceGate'
 import { zoneOfLocation } from '@/lib/location-time'
 
@@ -44,14 +43,20 @@ async function KpiBriefingBlock({ user, locationId }) {
   // four honest-looking zeros. The briefing line stays (pending approvals
   // are source-independent); the row renders only behind the gate. The
   // state is read alongside the numbers (cached 60 s per location).
-  const [vm, membership] = await Promise.all([
+  // UN1TREAD.3 — the row renders when the source's adapter reads member counts
+  // and revenue (Glofox, un1t.online), not when its Glofox-shaped capability
+  // flag is true: un1t.online keeps memberships:false (its radars still read
+  // Glofox tables) yet supplies these two numbers. Churn risk and In arrears
+  // come back null there and draw '—'.
+  const [vm, membership, reads] = await Promise.all([
     buildBusinessKpis(db, user, locationId),
     membershipStateForPage(db, locationId),
+    membershipReadsFor(db, locationId),
   ])
   if (!vm) return <BlockError label="Headline numbers" />
 
   const { revenue, arrearsData, memberCount, churnCount, churnDelta, briefing } = vm
-  if (!providesCapability(membership, 'memberships')) { // UN1TCAP.1: configured is not enough
+  if (!(supportsRead(reads, 'membershipCounts') && supportsRead(reads, 'revenueMtd'))) { // a source with no revenue + member-count reads gets the gate
     return (
       <>
         <BriefingLine text={briefing} />
@@ -125,8 +130,11 @@ async function MembershipBlock({ user, locationId, zone }) {
   // source it is a flat zero. Gated like the KPI row above; the funnel,
   // today and rail blocks are source-independent and stay ungated. The
   // trend queries do not run for a studio that has nothing to count.
-  const membership = await membershipStateForPage(db, locationId)
-  if (!providesCapability(membership, 'memberships')) { // UN1TCAP.1: configured is not enough
+  const [membership, reads] = await Promise.all([
+    membershipStateForPage(db, locationId),
+    membershipReadsFor(db, locationId),
+  ])
+  if (!(supportsRead(reads, 'membershipCounts') && supportsRead(reads, 'membershipFlows'))) { // UN1TREAD.3: the adapter reads counts + flows, not a capability flag
     return (
       <MembershipSourceGate
         state={membership}
@@ -141,8 +149,8 @@ async function MembershipBlock({ user, locationId, zone }) {
   let data = null
   try {
     const [live, flows] = await Promise.all([
-      computeMembershipCounts(db, locationId),
-      fetchMembershipFlows(db, locationId, 12, undefined, { zone }),
+      reads.reads.membershipCounts(db, locationId),
+      reads.reads.membershipFlows(db, locationId, 12, undefined, { zone }),
     ])
     // Falsy counts are a failure too — fall through to the error cell
     // rather than rendering nothing (JSX built after the try per the

@@ -151,3 +151,18 @@ describe('membershipStatePayload (W1.M3c: what the phone routes carry)', () => {
     expect(membershipStatePayload({ source: 'none' }).state).toBe('unknown')
   })
 })
+
+// UN1TREAD.3 — the phone shows a configured source's numbers when its adapter reads member counts.
+describe('membershipStatePayload.provides_memberships (UN1TREAD.3)', () => {
+  const NO_CAPS = { memberships: false, bookings: false, credits: false, invoices: false, schedule: false }
+  it('configured un1t.online: true although its memberships capability stays false (deliberate OR with the adapter)', () => {
+    expect(membershipStatePayload({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: NO_CAPS }).provides_memberships).toBe(true)
+  })
+  it('none and unregistered sources stay false; a source that reads nothing stays false', () => {
+    expect(membershipStatePayload({ source: 'none', state: 'none', label: 'No membership source', capabilities: { memberships: false } }).provides_memberships).toBe(false)
+    expect(membershipStatePayload({ source: 'unregistered', state: 'configured', label: 'x', capabilities: NO_CAPS }).provides_memberships).toBe(false)
+  })
+  it('an un1t.online row that is not configured is not rescued by the adapter', () => {
+    expect(membershipStatePayload({ source: 'un1t_online', state: 'unconfigured', label: 'un1t.online', capabilities: NO_CAPS }).provides_memberships).toBe(false)
+  })
+})

@@ -9,6 +9,10 @@ vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
 vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 vi.mock('next/navigation', () => ({ redirect: vi.fn((u) => { throw new Error(`NEXT_REDIRECT:${u}`) }) }))
+// UN1TREAD.3 — the un1t adapter's own reads are tested in reads/un1t-online.test.js; here they are stubs.
+vi.mock('@/lib/membership/reads/un1t-online', () => ({
+  un1tOnlineReads: Object.freeze({ membershipCounts: vi.fn(), membershipFlows: vi.fn() , revenueMtd: vi.fn() }),
+}))
 vi.mock('@/lib/membership/state-for-page', async (importOriginal) => ({ ...(await importOriginal()), membershipStateForPage: vi.fn() }))
 vi.mock('@/lib/membership-snapshot', () => ({ computeMembershipCounts: vi.fn() }))
 vi.mock('@/lib/membership-flows', () => ({ fetchMembershipFlows: vi.fn() }))
@@ -21,6 +25,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { membershipStateForPage } from '@/lib/membership/state-for-page'
 import { computeMembershipCounts } from '@/lib/membership-snapshot'
 import { fetchMembershipFlows } from '@/lib/membership-flows'
+import { un1tOnlineReads } from '@/lib/membership/reads/un1t-online'
 import { buildBusinessKpis } from '@/lib/dashboard/business-kpis'
 
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
@@ -77,12 +82,12 @@ describe('/dashboard/business — membership trend gate (W1.M3a)', () => {
   })
 
   // UN1TCAP.1 — configured on un1t.online, which supplies no membership data yet.
-  it('configured but the source provides no memberships (un1t.online): the "does not provide" gate, no trend queries', async () => {
-    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: false, bookings: false, credits: false, invoices: false, schedule: false } })
+  it('configured, source reads no counts or flows (an adapter with neither): the "does not provide" gate, no trend queries', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'unregistered', state: 'configured', label: 'Other', capabilities: { memberships: false } })
     const html = await renderMembershipBlock()
     expect(computeMembershipCounts).not.toHaveBeenCalled()
     expect(fetchMembershipFlows).not.toHaveBeenCalled()
-    expect(html).toContain('un1t.online does not provide membership data')
+    expect(html).toContain('Other does not provide membership data')
     expect(html).not.toContain('membership-panel')
   })
 
@@ -150,5 +155,56 @@ describe('/dashboard/business — the active studio zone (TZ.11a)', () => {
     membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS })
     await renderMembershipBlock()
     expect(fetchMembershipFlows).toHaveBeenCalledWith(expect.anything(), LOC, 12, undefined, { zone: 'America/New_York' })
+  })
+})
+
+// UN1TREAD.3 — un1t.online (Hatch Street) is configured with every Glofox-shaped
+// capability false, yet its adapter reads member counts, flows and revenue.
+describe('/dashboard/business — un1t.online reads through the seam (UN1TREAD.3)', () => {
+  const UN1T = { source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: false, bookings: false, credits: false, invoices: false, schedule: false } }
+  beforeEach(() => {
+    un1tOnlineReads.membershipCounts.mockReset().mockResolvedValue({ active: 33 })
+    un1tOnlineReads.membershipFlows.mockReset().mockResolvedValue({ months: [], cancelTrackingStart: '2026-10-16' })
+    membershipStateForPage.mockResolvedValue(UN1T)
+  })
+
+  it('un1t.online: KPI row shows Revenue and Members from the un1t reads, Churn risk and In arrears render —', async () => {
+    buildBusinessKpis.mockResolvedValue({
+      revenue: { totalCents: 640_000, deltaPct: null, paidCount: 31 },
+      arrearsData: null, memberCount: 33, churnCount: null, churnDelta: null, briefing: 'Nothing urgent.',
+    })
+    const html = await renderBlock('KpiBriefingBlock')
+    for (const label of ['Revenue MTD', 'Members', 'Churn risk', 'In arrears']) expect(html).toContain(`>${label}<`)
+    expect(html).toContain('31 payments')
+    expect(html).toContain('>33<')
+    expect(html).toContain('radar unavailable')
+    expect(html).toContain('arrears unavailable')
+    expect(html).not.toContain('does not provide membership data')
+  })
+
+  it('un1t.online: MembershipBlock renders MembershipPanel with un1t counts and flows', async () => {
+    const html = await renderMembershipBlock()
+    expect(un1tOnlineReads.membershipCounts).toHaveBeenCalledWith(expect.anything(), LOC)
+    expect(un1tOnlineReads.membershipFlows).toHaveBeenCalledWith(expect.anything(), LOC, 12, undefined, { zone: 'Europe/Dublin' })
+    expect(computeMembershipCounts).not.toHaveBeenCalled() // never the Glofox function
+    expect(fetchMembershipFlows).not.toHaveBeenCalled()
+    expect(html).toContain('membership-panel:33')
+  })
+
+  it('un1t.online: a throwing un1t read is the block error, never Glofox zeros', async () => {
+    un1tOnlineReads.membershipCounts.mockRejectedValue(new Error('un1t down'))
+    const html = await renderMembershipBlock()
+    expect(html).toContain('Membership sales')
+    expect(html).not.toContain('membership-panel')
+  })
+
+  it('unknown state: no membership read runs and the retry copy shows in both blocks', async () => {
+    membershipStateForPage.mockResolvedValue({ source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE', label: 'No membership source', capabilities: {} })
+    const block = await renderMembershipBlock()
+    const kpi = await renderBlock('KpiBriefingBlock')
+    for (const html of [block, kpi]) expect(html).toContain('Membership data could not be read right now')
+    expect(un1tOnlineReads.membershipCounts).not.toHaveBeenCalled()
+    expect(computeMembershipCounts).not.toHaveBeenCalled()
+    expect(fetchMembershipFlows).not.toHaveBeenCalled()
   })
 })

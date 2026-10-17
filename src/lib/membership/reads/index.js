@@ -15,15 +15,14 @@
 // Server-side only (src/lib): shared/ cannot import this, so phones get these
 // numbers through /api/* routes.
 import { membershipStateForPage } from '@/lib/membership/state-for-page'
-import { glofoxReads } from './glofox'
 import { noneReads } from './none'
-import { un1tOnlineReads } from './un1t-online'
+import { READS_BY_SOURCE } from './registry'
 
 export const READ_KEYS = Object.freeze([
   'membershipCounts', 'mrr', 'membershipFlows', 'growth', 'engagement', 'revenueMtd', 'arrears',
 ])
 
-export const READS_BY_SOURCE = Object.freeze({ glofox: glofoxReads, none: noneReads, un1t_online: un1tOnlineReads })
+export { READS_BY_SOURCE }
 
 /**
  * The adapter that serves a location's membership reads.

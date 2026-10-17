@@ -20,6 +20,10 @@ vi.mock('@/lib/dashboard/business-kpis', () => ({ buildBusinessKpis: vi.fn() }))
 vi.mock('@/lib/ads/account-day', () => ({ adsDayZoneForDisplay: vi.fn(async () => 'America/New_York') }))
 vi.mock('@/lib/dashboard/business-rail', () => ({ buildNeedsYouRail: vi.fn() }))
 vi.mock('@/lib/membership-snapshot', () => ({ computeMembershipCounts: vi.fn(), fetchMembershipTrend: vi.fn() }))
+// UN1TREAD.3 — the un1t adapter's own reads are tested in reads/un1t-online.test.js; here they are stubs.
+vi.mock('@/lib/membership/reads/un1t-online', () => ({
+  un1tOnlineReads: Object.freeze({ membershipCounts: vi.fn(), revenueMtd: vi.fn() }),
+}))
 // The state resolver is stubbed; the payload shaping and the manage bit are the real ones.
 vi.mock('@/lib/membership/state-for-page', async (importOriginal) => {
   const real = await importOriginal()
@@ -33,6 +37,7 @@ const { buildBusinessKpis } = await import('@/lib/dashboard/business-kpis')
 const { buildNeedsYouRail } = await import('@/lib/dashboard/business-rail')
 const { computeMembershipCounts, fetchMembershipTrend } = await import('@/lib/membership-snapshot')
 const { membershipStateForPage } = await import('@/lib/membership/state-for-page')
+const { un1tOnlineReads } = await import('@/lib/membership/reads/un1t-online')
 const { GET } = await import('./route.js')
 const { NextResponse } = await import('next/server')
 
@@ -53,13 +58,15 @@ const TODAY = { bookedToday: 40, classesToday: 6, staffToday: 3, labourWeekCents
 const RAIL = [{ key: 'approvals', chip: '2', text: '2 approvals', tone: 'purple' }]
 const GLOFOX_CAPS = { memberships: true, bookings: true, credits: true, invoices: true, schedule: true }
 
-// Every block the phone rendered before W1.M3c, unchanged.
+// Every block the phone rendered before W1.M3c, unchanged. UN1TREAD.3: for a
+// source that is not configured the membership block is null (no membership
+// read runs; the phone already handles a null block), not Glofox zeros.
 const OLD_BLOCKS = {
   locationName: 'Test Studio',
   kpis: KPIS,
   funnel: FUNNEL,
   ads: ADS,
-  membership: { live: LIVE, trend: TREND },
+  membership: null,
   today: TODAY,
   rail: RAIL,
 }
@@ -76,6 +83,44 @@ beforeEach(() => {
   computeMembershipCounts.mockReset().mockResolvedValue(LIVE)
   fetchMembershipTrend.mockReset().mockResolvedValue(TREND)
   membershipStateForPage.mockReset().mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: GLOFOX_CAPS })
+})
+
+describe('GET /api/dashboard/business: un1t.online (UN1TREAD.3)', () => {
+  const UN1T_STATE = { source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: false, bookings: false, credits: false, invoices: false, schedule: false } }
+  const UN1T_LIVE = { monthly_recurring: 30, active_recurring: 28, class_packs: 5, dead_packs: 0, payg: 0, total_members: 35 }
+  beforeEach(() => {
+    membershipStateForPage.mockResolvedValue(UN1T_STATE)
+    un1tOnlineReads.membershipCounts.mockReset().mockResolvedValue(UN1T_LIVE)
+  })
+
+  it('phone route: un1t.online returns membership.live from the un1t adapter and membership_source.provides_memberships true', async () => {
+    const res = await GET()
+    expect(res.status).toBe(200)
+    const { data } = await res.json()
+    expect(data.membership).toEqual({ live: UN1T_LIVE, trend: TREND })
+    expect(data.membership_source).toEqual({ source: 'un1t_online', state: 'configured', label: 'un1t.online', provides_memberships: true, can_manage: false })
+    expect(un1tOnlineReads.membershipCounts).toHaveBeenCalledWith({ tag: 'service-role' }, LOC)
+    expect(computeMembershipCounts).not.toHaveBeenCalled() // never the Glofox function
+  })
+
+  it('a throwing un1t read is a null membership block, still a 200 with every other block', async () => {
+    un1tOnlineReads.membershipCounts.mockRejectedValue(new Error('un1t down'))
+    const res = await GET()
+    expect(res.status).toBe(200)
+    const { data } = await res.json()
+    expect(data.membership).toBeNull()
+    expect(data.kpis).toEqual(KPIS)
+    expect(data.membership_source.state).toBe('configured')
+  })
+
+  it('unknown state: no counts read runs, membership is null, 200', async () => {
+    membershipStateForPage.mockResolvedValue({ source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE', label: 'No membership source', capabilities: {} })
+    const res = await GET()
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.membership).toBeNull()
+    expect(un1tOnlineReads.membershipCounts).not.toHaveBeenCalled()
+    expect(computeMembershipCounts).not.toHaveBeenCalled()
+  })
 })
 
 describe('GET /api/dashboard/business: the ads block (TZ.11c)', () => {

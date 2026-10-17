@@ -21,6 +21,7 @@
 // resetMembershipStateCache(locationId) after a write.
 import { logError } from '@/lib/log'
 import { membershipSourceState, MEMBERSHIP_SOURCES } from './source'
+import { READS_BY_SOURCE } from './reads/registry'
 
 export const MEMBERSHIP_STATE_TTL_MS = 60_000
 
@@ -127,7 +128,12 @@ export function membershipStatePayload(s, { canManage = false } = {}) {
     // the none provider's ("No membership source"), which would mix unknown
     // with a known none.
     label: state === 'unknown' ? null : (s?.label || null),
-    provides_memberships: s?.capabilities?.memberships !== false,
+    // UN1TREAD.3 — DELIBERATE OR. `capabilities.memberships` stays false for
+    // un1t.online (its radars, engagement page and Mia read Glofox tables), but
+    // its adapter DOES read member counts, so a configured source that
+    // implements 'membershipCounts' shows its numbers on the phone too.
+    provides_memberships: s?.capabilities?.memberships !== false
+      || (state === 'configured' && typeof READS_BY_SOURCE[s?.source]?.membershipCounts === 'function'),
     can_manage: Boolean(canManage),
   }
   if (Array.isArray(s?.missing) && s.missing.length) out.missing = s.missing.map(String)

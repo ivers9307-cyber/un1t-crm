@@ -11,15 +11,41 @@
 // a compact error cell on null — the web page's DASH-REBUILD error
 // posture, mirrored by the route as a null block key).
 
-import { fetchRevenueMTD, fetchArrearsSummary } from '@shared/dashboard-data'
 import { buildBusinessBriefing } from '@shared/business-briefing'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
-import { computeMembershipCounts } from '@/lib/membership-snapshot'
+import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
+import { membershipStateForPage, providesCapability } from '@/lib/membership/state-for-page'
 import { loadRadar } from '@/lib/churn-radar-data'
 import { displayZoneFor } from '@/lib/display-zone'
 
+// UN1TREAD.3 — the numbers come through the membership read seam, not from
+// the Glofox functions directly. A Glofox studio's adapter forwards the same
+// arguments to the same functions, so its view-model is deep-equal to before;
+// un1t.online supplies revenue + member counts and no arrears; the radar-derived
+// cells (Churn risk) stay behind providesCapability(membership, 'memberships'),
+// because the radars read Glofox tables.
+//
+// A source that is not `configured` has no reads at all (membershipReadsFor
+// gives reads: null). The surface then draws its MembershipSourceGate, which
+// still wants the briefing line (approvals are source-independent), so that
+// case returns a view-model of nulls with an approvals-only briefing and runs
+// no membership read. A CONFIGURED source that lacks revenueMtd is a whole-
+// block failure (null), as a failed revenue read always was.
 export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()) {
   try {
+    const [m, membership] = await Promise.all([
+      membershipReadsFor(db, locationId),
+      membershipStateForPage(db, locationId),
+    ])
+    if (!m.reads) {
+      const approvals = await getPendingApprovalsCount(db, user).catch(() => 0)
+      const briefing = approvals > 0
+        ? `Watch: ${approvals} pending approval${approvals === 1 ? '' : 's'}.`
+        : 'Nothing urgent.'
+      return { revenue: null, arrearsData: null, memberCount: null, churnCount: null, churnDelta: null, briefing }
+    }
+    if (!supportsRead(m, 'revenueMtd')) return null
+    const radarOk = providesCapability(membership, 'memberships')
     // DASH-REBUILD.6b — derive the briefing's attention labels locally
     // from data this block already holds (approvals count + arrears +
     // churn). The full rail is built once, in the rail block — calling
@@ -29,7 +55,7 @@ export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()
     // recent snapshot at least ~a week old. Guarded so any failure
     // yields null (quiet) rather than rejecting the whole fan-out.
     const sixDaysAgoIso = new Date(nowMs - 6 * 24 * 60 * 60 * 1000).toISOString()
-    const churnSnapshot = db.from('churn_radar_snapshots')
+    const churnSnapshot = !radarOk ? Promise.resolve(null) : db.from('churn_radar_snapshots')
       .select('high_risk, captured_at')
       .eq('location_id', locationId)
       .lte('captured_at', sixDaysAgoIso)
@@ -38,20 +64,21 @@ export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()
     // TZ.11a — Revenue MTD is the studio's calendar month.
     const zone = await displayZoneFor(db, user, locationId, 'business-kpis')
     const [revenue, arrears, membershipLive, radar, approvalsCount, churnPrev] = await Promise.all([
-      fetchRevenueMTD(db, locationId, new Date(nowMs), zone),
-      fetchArrearsSummary(db, locationId),
+      m.reads.revenueMtd(db, locationId, new Date(nowMs), zone),
+      // un1t has no arrears read (past-due amounts are not synced): null, not a Glofox zero.
+      supportsRead(m, 'arrears') ? m.reads.arrears(db, locationId) : Promise.resolve(null),
       // Guarded like radar/approvals — any of its internal count
       // queries throwing must not reject the whole Promise.all and
       // discard four healthy data points.
-      computeMembershipCounts(db, locationId).catch(() => null),
-      loadRadar(db, locationId).catch(() => null),
+      (supportsRead(m, 'membershipCounts') ? m.reads.membershipCounts(db, locationId) : Promise.resolve(null)).catch(() => null),
+      radarOk ? loadRadar(db, locationId).catch(() => null) : Promise.resolve(null),
       getPendingApprovalsCount(db, user).catch(() => 0),
       churnSnapshot,
     ])
     if (!revenue.success) throw new Error(revenue.error)
     // null (not a fake {0,0}) when arrears failed — the card shows '—',
     // not a dishonest "€0 · 0 members" (DASH-REBUILD.6c pattern).
-    const arrearsData = arrears.success ? arrears.data : null
+    const arrearsData = arrears?.success ? arrears.data : null
     // null (not 0) when membership failed — the card shows '—', not a
     // fake zero; the briefing's own `|| 0` handles its degradation.
     const memberCount = membershipLive

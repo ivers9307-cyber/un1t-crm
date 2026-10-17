@@ -37,7 +37,8 @@ import { fetchFunnelCounts, fetchAdsSummary, fetchTodayOps } from '@shared/dashb
 import { buildBusinessKpis } from '@/lib/dashboard/business-kpis'
 import { adsDayZoneForDisplay } from '@/lib/ads/account-day'
 import { buildNeedsYouRail } from '@/lib/dashboard/business-rail'
-import { computeMembershipCounts, fetchMembershipTrend } from '@/lib/membership-snapshot'
+import { fetchMembershipTrend } from '@/lib/membership-snapshot'
+import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
 import { membershipStateForPage, membershipStatePayload, canManageMembershipSource } from '@/lib/membership/state-for-page'
 import { zoneOfLocation } from '@/lib/location-time'
 
@@ -52,8 +53,13 @@ export const maxDuration = 60
 // OR falsy live counts = failure (null), never a fake-zero panel.
 async function membershipBlock(db, locationId, zone) {
   try {
+    // UN1TREAD.3 — the live counts come through the read seam (Glofox or
+    // un1t.online); a source with no counts read, or an unreadable one, is
+    // the same null as a failed read, never a 500 and never Glofox zeros.
+    const r = await membershipReadsFor(db, locationId)
+    if (!supportsRead(r, 'membershipCounts')) return null
     const [live, trend] = await Promise.all([
-      computeMembershipCounts(db, locationId),
+      r.reads.membershipCounts(db, locationId),
       fetchMembershipTrend(db, locationId, 12, { zone }),
     ])
     if (!live) return null
