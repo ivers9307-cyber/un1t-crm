@@ -8,8 +8,9 @@
 // runUn1tSync never throws on a bad token or a bad pull; a throw here is a
 // bug, answered 500 without its message.
 //
-// A manual run can overlap the cron's. The engine upserts and never deletes,
-// so a double run costs API budget (60 req/min per token), not data.
+// A manual run never overlaps the cron's (UN1THARD.1, mig 735): if a run is
+// already in flight for this studio, the answer is data.ok false with reason
+// 'in_progress', and nothing was read or written.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'

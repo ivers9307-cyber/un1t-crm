@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
-import { runUn1tSync, UN1T_LISTS } from './un1t-online-sync.js'
-import { logError, logWarn } from './log'
+import { runUn1tSync, UN1T_LISTS, STALE_RUN_MS } from './un1t-online-sync.js'
+import { logError, logWarn, logInfo } from './log'
 import { Un1tAuthError, Un1tApiError } from './un1t-online.js'
 import { ilikeMatches } from './like-escape.test-helpers.js'
 import { tokenFingerprint } from './un1t-online-token.js'
@@ -43,6 +43,7 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
       if (kind === 'eq') return valueOf(row, col) === val
       if (kind === 'in') return val.includes(row[col])
       if (kind === 'ilike') return ilikeMatches(val, row[col])
+      if (kind === 'lt') return row[col] != null && String(row[col]) < String(val)
       return true
     })
   }
@@ -62,7 +63,7 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
   }
 
   function builder(table) {
-    const s = { op: 'select', filters: [], payload: null, options: null, order: null, range: null, limit: null, single: false }
+    const s = { op: 'select', filters: [], payload: null, options: null, order: null, range: null, limit: null, single: false, head: false }
     const run = () => {
       const entry = { table, op: s.op, payload: s.payload, filters: s.filters, options: s.options }
       log.push(entry)
@@ -70,6 +71,7 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
       if (s.op === 'select') {
         if (failSelect.includes(table)) return { data: null, error: { message: `${table} read boom` } }
         let out = rows.filter((r) => matches(r, s.filters))
+        if (s.head) return { data: null, count: out.length, error: null }
         if (s.order) out = [...out].sort((a, b) => String(a[s.order]).localeCompare(String(b[s.order])))
         if (s.range) out = out.slice(s.range[0], s.range[1] + 1)
         if (s.limit != null) out = out.slice(0, s.limit)
@@ -79,6 +81,11 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
       }
       if (s.op === 'insert') {
         const list = Array.isArray(s.payload) ? s.payload : [s.payload]
+        // Mig 735: at most one 'running' run per location (partial unique index).
+        if (table === 'un1t_sync_runs' && list.some((r) => r.status === 'running'
+          && rows.some((x) => x.status === 'running' && x.location_id === r.location_id))) {
+          return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "un1t_sync_runs_one_running"' } }
+        }
         const created = list.map((r) => withDefaults(table, r))
         rows.push(...created)
         return { data: created.map((r) => ({ ...r })), error: null }
@@ -117,7 +124,8 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
       throw new Error(`unknown op ${s.op}`)
     }
     const api = {
-      select() { return api },
+      select(_cols, o) { if (o?.head) s.head = true; return api },
+      lt(c, v) { s.filters.push(['lt', c, v]); return api },
       insert(p) { s.op = 'insert'; s.payload = p; return api },
       upsert(p, o) { s.op = 'upsert'; s.payload = p; s.options = o || null; return api },
       update(p) { s.op = 'update'; s.payload = p; return api },
@@ -1153,5 +1161,88 @@ describe('runUn1tSync', () => {
         locationId: HATCH, count: 0, code: null, message: 'contact_location_preferences upsert boom',
       }))
     })
+  })
+})
+
+// UN1THARD.1 / .2 — one run per studio, abandoned runs, and the history window.
+describe('runUn1tSync — overlap guard and history window', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('a second run while one is running returns in_progress having read and written nothing', async () => {
+    const running = { id: 'run-live', location_id: HATCH, status: 'running', started_at: new Date(NOW.getTime() - 60_000).toISOString() }
+    const { db, tables, log } = makeDb(baseSeed({ un1t_sync_runs: [running] }))
+    const { factory, calls } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r).toEqual({ ok: false, reason: 'in_progress', counts: expect.any(Object), runId: null })
+    expect(factory).not.toHaveBeenCalled()
+    expect(calls).toEqual([])
+    // Only the abandoned-run sweep ran (it matched nothing: the live run is recent).
+    expect(writes(log).map((e) => `${e.table}:${e.op}`)).toEqual(['un1t_sync_runs:update', 'un1t_sync_runs:insert'])
+    expect(tables.un1t_sync_runs).toEqual([running])
+    expect(connRow(tables).status).toBe('connected')
+    expect(logInfo).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('already running'), { locationId: HATCH })
+  })
+
+  it("another studio's running sync does not block this one", async () => {
+    const other = { id: 'run-other', location_id: STILLORGAN, status: 'running', started_at: NOW_ISO }
+    const { db } = makeDb(baseSeed({ un1t_sync_runs: [other] }))
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+  })
+
+  it('closes a run left running longer than STALE_RUN_MS as abandoned, then runs', async () => {
+    const dead = { id: 'run-dead', location_id: HATCH, status: 'running', started_at: new Date(NOW.getTime() - STALE_RUN_MS - 1000).toISOString() }
+    const { db, tables } = makeDb(baseSeed({ un1t_sync_runs: [dead] }))
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    const closed = tables.un1t_sync_runs.find((x) => x.id === 'run-dead')
+    expect(closed).toMatchObject({ status: 'error', finished_at: NOW_ISO })
+    expect(closed.first_error).toMatch(/^abandoned/)
+    expect(runRow(tables)).toMatchObject({ status: 'ok' })
+    expect(logWarn).toHaveBeenCalledWith('un1t-online-sync', 'closed abandoned sync runs', { locationId: HATCH, count: 1 })
+  })
+
+  it('records the oldest row pulled and that nothing held is missing from a full pull', async () => {
+    const lists = fixtureLists()
+    lists['/bookings'] = [
+      { id: 'b1', user_id: 'u1', event_id: 'e1', studio_id: STUDIO, created_at: '2026-09-28T10:00:00Z' },
+      { id: 'b2', user_id: 'u2', event_id: 'e1', studio_id: STUDIO, created_at: '2026-09-27T18:35:40Z' },
+    ]
+    const { db } = makeDb(baseSeed())
+    const { factory } = makeClient({ self: SELF, lists })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    expect(r.counts.history).toEqual({
+      un1t_bookings: { absent_from_pull: 0, oldest_pulled: '2026-09-27T18:35:40Z' },
+      un1t_events: { absent_from_pull: 0, oldest_pulled: '2026-10-20T17:30:00Z' },
+    })
+    expect(logInfo).not.toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('did not return'), expect.anything())
+  })
+
+  it('counts held rows the pull did not return (a rolling window) and says so', async () => {
+    const heldOld = {
+      id: 'held-1', location_id: HATCH, un1t_id: 'b-old', status: 'attended',
+      remote_created_at: '2026-09-01T09:00:00Z', synced_at: '2026-10-01T00:00:00.000Z',
+    }
+    const elsewhere = { ...heldOld, id: 'held-2', location_id: STILLORGAN, un1t_id: 'b-x' }
+    const { db } = makeDb(baseSeed({ un1t_bookings: [heldOld, elsewhere] }))
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    expect(r.counts.history.un1t_bookings.absent_from_pull).toBe(1) // only this studio's
+    expect(r.counts.history.un1t_events.absent_from_pull).toBe(0)
+    expect(logInfo).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('did not return'),
+      expect.objectContaining({ locationId: HATCH }))
+  })
+
+  it('a failed history count is recorded and never fails the run', async () => {
+    const { db, tables } = makeDb(baseSeed(), { failSelect: ['un1t_events'] })
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    expect(connRow(tables).status).toBe('connected')
+    expect(r.counts.history.un1t_events).toEqual({ absent_from_pull: null, oldest_pulled: '2026-10-20T17:30:00Z', error: 'un1t_events read boom' })
   })
 })

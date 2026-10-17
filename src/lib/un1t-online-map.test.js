@@ -229,3 +229,34 @@ describe('MEMBERSHIP_ACTIVE_STATUSES', () => {
     expect(Object.isFrozen(MEMBERSHIP_ACTIVE_STATUSES)).toBe(true)
   })
 })
+
+// UN1THARD.3 — the raw strip reaches every depth, and a transaction drops its
+// free-text description.
+describe('raw payload stripping at depth', () => {
+  const ctx = { locationId: 'loc', now: '2026-10-17T00:00:00.000Z' }
+
+  it('drops a stripped key inside an embedded object and inside array elements', () => {
+    const row = mapSubscription({
+      id: 's1', user_id: 'u1', status: 'active', studio_id: 'st',
+      product: { id: 'p1', title: 'Unlimited', user: { id: 'u1', email: 'x@example.invalid' } },
+      history: [{ at: '2026-10-01', guest_email: 'g@example.invalid', next_of_kin: 'K' }],
+    }, ctx)
+    expect(row.raw.product).toEqual({ id: 'p1', title: 'Unlimited' })
+    expect(row.raw.history).toEqual([{ at: '2026-10-01' }])
+    expect(JSON.stringify(row.raw)).not.toMatch(/example\.invalid|next_of_kin/)
+  })
+
+  it("a transaction's raw drops description; other tables keep theirs", () => {
+    const t = mapTransaction({ id: 't1', user_id: 'u1', amount: 100, description: 'Paid for Jane Doe', studio_id: 'st' }, ctx)
+    expect(t.raw).not.toHaveProperty('description')
+    const p = mapProduct({ id: 'p1', title: 'Unlimited', description: 'All classes', studio_id: 'st' }, ctx)
+    expect(p.raw.description).toBe('All classes')
+  })
+
+  it('cuts anything nested deeper than the cap instead of copying it unchecked', () => {
+    let deep = { leaf: 'x', user: { email: 'deep@example.invalid' } }
+    for (let i = 0; i < 10; i++) deep = { child: deep }
+    const e = mapEvent({ id: 'e1', studio_id: 'st', extra: deep }, ctx)
+    expect(JSON.stringify(e.raw)).not.toContain('deep@example.invalid')
+  })
+})

@@ -3,6 +3,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { createUn1tClient, Un1tAuthError, Un1tApiError } from './un1t-online'
+import { logWarn } from './log'
 
 vi.mock('./log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 
@@ -207,6 +208,64 @@ describe('createUn1tClient', () => {
     const bad = { status: 200, headers: new Headers(), json: async () => { throw new SyntaxError('bad') } }
     const { client } = setup([bad])
     await expect(client.getSelf()).rejects.toBeInstanceOf(Un1tApiError)
+  })
+
+  it('gives up after 3 retries on a 429 that never clears, with the rate-limit wait each time', async () => {
+    const limited = () => res(429, {}, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '2' })
+    const { client, fetchImpl, sleeps } = setup([limited(), limited(), limited(), limited()])
+    const err = await client.listAll('/bookings').catch((e) => e)
+    expect(err).toBeInstanceOf(Un1tApiError)
+    expect(err.status).toBe(429)
+    expect(err.message).toMatch(/HTTP 429 after 3 retries/)
+    expect(fetchImpl.calls.length).toBe(4)
+    expect(sleeps).toEqual([3000, 3000, 3000])
+    expect(client.stats()).toMatchObject({ requests: 4, retries: 3, waitedMs: 9000 })
+  })
+
+  it('retries a network fault with backoff, and recovers', async () => {
+    const boom = () => { throw new TypeError('fetch failed') }
+    const { client, fetchImpl, sleeps } = setup([boom, boom, page([{ id: 'r1' }], 1, 1, 1)])
+    const { rows } = await client.listAll('/bookings')
+    expect(rows).toEqual([{ id: 'r1' }])
+    expect(fetchImpl.calls.length).toBe(3)
+    expect(sleeps).toEqual([1000, 2000])
+    expect(client.stats().retries).toBe(2)
+  })
+
+  it('a network fault that never clears is Un1tApiError status 0 after 3 retries', async () => {
+    const boom = () => { throw new TypeError('fetch failed') }
+    const { client, fetchImpl } = setup([boom, boom, boom, boom])
+    const err = await client.getSelf().catch((e) => e)
+    expect(err).toBeInstanceOf(Un1tApiError)
+    expect(err.status).toBe(0)
+    expect(fetchImpl.calls.length).toBe(4)
+  })
+
+  it('never puts a realistic token in any error, on any failure path, or in any warning log', async () => {
+    const TOKEN = 'un1t_' + 'A1b2C3d4'.repeat(6)
+    const boom = () => { throw new TypeError(`fetch failed`) }
+    const paths = [
+      [res(401, { success: false })],
+      [res(403, {})],
+      [res(404, { success: false, error: { message: 'not found' } })],
+      [res(200, { success: false, error: { status: 400, message: 'bad' } })],
+      [{ status: 200, headers: new Headers(), json: async () => { throw new SyntaxError('bad') } }],
+      [res(503, {}), res(503, {}), res(503, {}), res(503, {})],
+      [boom, boom, boom, boom],
+    ]
+    for (const queue of paths) {
+      vi.mocked(logWarn).mockClear()
+      const fetchImpl = fakeFetch(queue)
+      const client = createUn1tClient({ token: TOKEN, fetchImpl, sleep: async () => {} })
+      const err = await client.getSelf().catch((e) => e)
+      expect(err).toBeInstanceOf(Error)
+      // The token really was sent, so its absence below means something.
+      expect(fetchImpl.calls[0].headers.Authorization).toBe(`Bearer ${TOKEN}`)
+      const surfaced = JSON.stringify({ message: err.message, name: err.name, status: err.status, code: err.code, stack: err.stack })
+      expect(surfaced).not.toContain(TOKEN)
+      expect(surfaced).not.toContain('Bearer')
+      expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain(TOKEN)
+    }
   })
 
   it('never puts the token in an error message', async () => {

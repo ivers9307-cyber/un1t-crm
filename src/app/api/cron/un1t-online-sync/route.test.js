@@ -5,7 +5,9 @@
 //   4. a location-level failure (auth, studio mismatch) is COUNTED, not fatal:
 //      the cron is healthy, the location is not, so the heartbeat still stamps;
 //   5. a thrown exception from one location never stops the next one;
-//   6. the heartbeat outcome carries counts by reason only.
+//   6. the heartbeat outcome carries counts by reason only;
+//   7. a studio whose sync is already running is skipped, never a failure (UN1THARD.1);
+//   8. once the wall-clock budget is spent no further location starts (UN1THARD.4).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const h = vi.hoisted(() => ({ discovery: null }))
@@ -19,7 +21,7 @@ vi.mock('@/lib/membership/locations-for-source', async (importOriginal) => ({
 }))
 vi.mock('@/lib/un1t-online-sync', () => ({ runUn1tSync: vi.fn() }))
 
-import { GET } from './route.js'
+import { GET, BUDGET_MS } from './route.js'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
 import { locationsWithSource } from '@/lib/membership/locations-for-source'
@@ -73,7 +75,7 @@ describe('GET /api/cron/un1t-online-sync', () => {
     expect(res.status).toBe(200)
     expect(runUn1tSync).not.toHaveBeenCalled()
     expect(stampHeartbeat).toHaveBeenCalledWith('un1t-online-sync', {
-      locations_processed: 0, failed_locations: 0, failed_by_reason: {}, skipped: 1,
+      locations_processed: 0, failed_locations: 0, failed_by_reason: {}, skipped: 1, skipped_in_progress: 0, deferred_budget: 0,
     })
   })
 
@@ -89,7 +91,7 @@ describe('GET /api/cron/un1t-online-sync', () => {
     ])
     expect(stampHeartbeat).toHaveBeenCalledTimes(1)
     expect(stampHeartbeat).toHaveBeenCalledWith('un1t-online-sync', {
-      locations_processed: 2, failed_locations: 0, failed_by_reason: {}, skipped: 0,
+      locations_processed: 2, failed_locations: 0, failed_by_reason: {}, skipped: 0, skipped_in_progress: 0, deferred_budget: 0,
     })
     expect(body).toMatchObject({ success: true, locations_processed: 2, failed_locations: 0 })
   })
@@ -104,7 +106,7 @@ describe('GET /api/cron/un1t-online-sync', () => {
     // The failed location does not stamp its tenant row; the healthy one does.
     expect(stampTenantHeartbeat.mock.calls).toEqual([['un1t-online-sync', 'other']])
     expect(stampHeartbeat).toHaveBeenCalledWith('un1t-online-sync', {
-      locations_processed: 1, failed_locations: 1, failed_by_reason: { auth: 1 }, skipped: 0,
+      locations_processed: 1, failed_locations: 1, failed_by_reason: { auth: 1 }, skipped: 0, skipped_in_progress: 0, deferred_budget: 0,
     })
   })
 
@@ -117,7 +119,7 @@ describe('GET /api/cron/un1t-online-sync', () => {
       locations_processed: 0,
       failed_locations: 4,
       failed_by_reason: { studio_mismatch: 1, auth: 2, not_connected: 1 },
-      skipped: 0,
+      skipped: 0, skipped_in_progress: 0, deferred_budget: 0,
     })
     expect(stampTenantHeartbeat).not.toHaveBeenCalled()
   })
@@ -134,7 +136,7 @@ describe('GET /api/cron/un1t-online-sync', () => {
     expect(stampTenantHeartbeat.mock.calls).toEqual([['un1t-online-sync', 'fine']])
     const outcome = stampHeartbeat.mock.calls[0][1]
     expect(outcome).toEqual({
-      locations_processed: 1, failed_locations: 1, failed_by_reason: { exception: 1 }, skipped: 0,
+      locations_processed: 1, failed_locations: 1, failed_by_reason: { exception: 1 }, skipped: 0, skipped_in_progress: 0, deferred_budget: 0,
     })
     // No exception text reaches the heartbeat or the response.
     expect(JSON.stringify(outcome)).not.toContain('secret-token')
@@ -147,7 +149,38 @@ describe('GET /api/cron/un1t-online-sync', () => {
     await GET(req())
     expect(runUn1tSync).toHaveBeenCalledTimes(1)
     expect(stampHeartbeat).toHaveBeenCalledWith('un1t-online-sync', {
-      locations_processed: 1, failed_locations: 0, failed_by_reason: {}, skipped: 2,
+      locations_processed: 1, failed_locations: 0, failed_by_reason: {}, skipped: 2, skipped_in_progress: 0, deferred_budget: 0,
     })
+  })
+
+  it('a location whose sync is already running is skipped_in_progress, not failed', async () => {
+    h.discovery = found([loc('hatch'), loc('other')])
+    runUn1tSync.mockImplementation(async (_db, id) =>
+      id === 'hatch' ? { ok: false, reason: 'in_progress', counts: {}, runId: null } : { ok: true, counts: {}, runId: 'r' })
+    await GET(req())
+    expect(stampTenantHeartbeat.mock.calls).toEqual([['un1t-online-sync', 'other']])
+    expect(stampHeartbeat).toHaveBeenCalledWith('un1t-online-sync', {
+      locations_processed: 1, failed_locations: 0, failed_by_reason: {}, skipped: 0, skipped_in_progress: 1, deferred_budget: 0,
+    })
+  })
+
+  it('stops starting locations once the time budget is spent and counts the rest as deferred', async () => {
+    h.discovery = found([loc('a'), loc('b'), loc('c')])
+    let t = 1_000_000
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => t)
+    try {
+      runUn1tSync.mockImplementation(async (_db, id) => {
+        if (id === 'a') t += BUDGET_MS + 1 // the first location runs past the budget
+        return { ok: true, counts: {}, runId: 'r' }
+      })
+      const res = await GET(req())
+      expect(res.status).toBe(200)
+      expect(runUn1tSync.mock.calls.map((c) => c[1])).toEqual(['a'])
+      expect(stampHeartbeat).toHaveBeenCalledWith('un1t-online-sync', {
+        locations_processed: 1, failed_locations: 0, failed_by_reason: {}, skipped: 0, skipped_in_progress: 0, deferred_budget: 2,
+      })
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

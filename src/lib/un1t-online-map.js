@@ -7,7 +7,10 @@
 // reset_password_token / reset_password_expire / next_of_kin / guest_name /
 // guest_email / guest_phone / invoice_url or an embedded `user` object. Client
 // rows get NO raw payload at all (un1t_clients keeps derived counters only);
-// every other table's `raw` is the API row minus STRIPPED_KEYS.
+// every other table's `raw` is the API row minus STRIPPED_KEYS, removed at
+// EVERY depth (an embedded object or array element included: UN1THARD.3),
+// and a transaction's raw also drops `description` (free text a studio can
+// fill with anything about the payer).
 
 import { normalizeEmail } from './email-inbox.js'
 import { normalizePhone } from './glofox-sync.js'
@@ -57,13 +60,28 @@ function nonEmpty(v) {
   return typeof v === 'string' ? v.trim() !== '' : v !== undefined && v !== null
 }
 
-function rawOf(row) {
+// Deep enough for every shape seen (embedded product / subscription.product);
+// anything deeper is dropped rather than copied unchecked.
+const MAX_RAW_DEPTH = 6
+
+function stripDeep(v, drop, depth) {
+  if (Array.isArray(v)) return depth >= MAX_RAW_DEPTH ? [] : v.map((x) => stripDeep(x, drop, depth + 1))
+  if (!isObj(v)) return v
+  if (depth >= MAX_RAW_DEPTH) return {}
   const out = {}
-  for (const [k, v] of Object.entries(row)) {
-    if (!STRIPPED_KEYS.includes(k)) out[k] = v
+  for (const [k, x] of Object.entries(v)) {
+    if (!drop.includes(k)) out[k] = stripDeep(x, drop, depth + 1)
   }
   return out
 }
+
+/** The API row minus STRIPPED_KEYS (and `extra`) at every depth. */
+function rawOf(row, extra = []) {
+  return stripDeep(row, extra.length ? [...STRIPPED_KEYS, ...extra] : STRIPPED_KEYS, 0)
+}
+
+/** Keys dropped from a transaction's raw on top of STRIPPED_KEYS. */
+export const TRANSACTION_RAW_DROP = Object.freeze(['description'])
 
 /** un1t_clients row. Derived counters only; no raw (client rows are PII). */
 export function mapClient(row, ctx) {
@@ -163,7 +181,7 @@ export function mapTransaction(row, ctx) {
     refunded: bool(row.refunded),
     refund_status: text(row.refund_status),
     remote_created_at: ts(row.created_at),
-    raw: rawOf(row),
+    raw: rawOf(row, TRANSACTION_RAW_DROP),
     synced_at: ctx.now,
   }
 }
