@@ -293,10 +293,11 @@ describe('/dashboard/studio — un1t.online column reads through the seam (UN1TR
       expect(rows[1]).toContain('66%')
     })
 
-    it('un1t column: an unmarked past class is a no-show, exactly as an unmarked Glofox booking is (Review Focus 5)', async () => {
-      // The page only renders what fetchFloor computed; the projection leaves an
-      // unmarked past booking BOOKED / attended=false, which computeFloor counts as
-      // a no-show. The cell must show that figure, not hide it.
+    it('un1t column: renders fetchFloor\'s no-show and attended figures as given (pass-through)', async () => {
+      // Render check only: the page shows what fetchFloor computed, never hides
+      // it for a un1t column. That an unmarked past un1t booking IS a no-show
+      // (Review Focus 5) is pinned through the real projections and the real
+      // computeFloor in src/lib/un1t-online-bookings.floor.test.js.
       membershipStateForPage.mockResolvedValue(UN1T)
       kpis.fetchFloor.mockResolvedValue(ok({ ...structuredClone(FLOOR), noShowPct: 40, attendedVisits: 3 }))
       const [hatch] = await renderColumns()

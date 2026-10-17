@@ -5,7 +5,7 @@
 // un1t_online location is dropped and counted before a reminder is chosen.
 // A failed un1t_online locations read never costs Stillorgan its reminders
 // (louder-failure rule): it is logged and the row filter alone still applies.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const h = vi.hoisted(() => ({ db: null }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => h.db }))
@@ -61,6 +61,8 @@ beforeEach(() => {
   vi.setSystemTime(NOW)
   process.env.CRON_SECRET = 'shh'
 })
+
+afterEach(() => { vi.useRealTimers() })
 
 describe('send-class-booking-reminders — un1t.online hard-off (UN1TBOOK.2, Decision 1)', () => {
   it('a un1t_online booking in the window is never pushed or claimed; Stillorgan in the same tick is', async () => {
