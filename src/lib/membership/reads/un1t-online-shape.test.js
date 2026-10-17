@@ -191,6 +191,49 @@ describe('flows', () => {
   })
 })
 
+// UN1TREAD.7 — a member whose card failed (status 'past_due') still holds the
+// membership; 'trialing' is not a paying member here and counts nowhere.
+describe('status handling (UN1TREAD.7)', () => {
+  const subs = [
+    sub({ un1t_user_id: 'a' }),
+    sub({ un1t_user_id: 'pd', status: 'past_due' }),
+    sub({ un1t_user_id: 'tr', status: 'trialing' }),
+    sub({ un1t_user_id: 'gone', status: 'canceled' }),
+  ]
+  it("counts: past_due is a member (monthly_recurring, total_members, interval) but not active_recurring; trialing counts nowhere", () => {
+    const r = shapeCounts({ subs })
+    expect(r.monthly_recurring).toBe(2)
+    expect(r.total_members).toBe(2)
+    expect(r.active_recurring).toBe(1)
+    expect(r.detail.recurring_by_interval['1 month']).toBe(2)
+  })
+  it('a trialing member with a paid pack is still a pack holder (not shadowed by the trial)', () => {
+    const r = shapeCounts({
+      subs: [sub({ un1t_user_id: 'tr', status: 'trialing' })],
+      clients: [client({ un1t_user_id: 'tr' })],
+      packTxs: [ptx({ un1t_user_id: 'tr' })],
+      products: PRODUCTS,
+    })
+    expect(r.monthly_recurring).toBe(0)
+    expect(r.class_packs).toBe(1)
+  })
+  it('MRR and recurringMembers: only status active, not paused, not past due', () => {
+    const r = shapeMrr(subs)
+    expect(r).toEqual({ mrrCents: 18900, recurringMembers: 1, yieldCents: 18900 })
+  })
+  it('engagement rows include a past_due holder, never a trialing one', () => {
+    const rows = engagementRows({
+      subs,
+      clients: [
+        { un1t_user_id: 'a', bookings_30d_attended: 4 },
+        { un1t_user_id: 'pd', bookings_30d_attended: 2 },
+        { un1t_user_id: 'tr', bookings_30d_attended: 9 },
+      ],
+    })
+    expect(rows).toEqual([{ total_attended_30d: 4 }, { total_attended_30d: 2 }])
+  })
+})
+
 describe('engagement rows', () => {
   it('only clients holding an active subscription', () => {
     const rows = engagementRows({

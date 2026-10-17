@@ -13,11 +13,18 @@ import { dayStrIn } from '@/lib/location-time'
 // transaction history was pulled whole.
 export const UN1T_CANCEL_TRACKING_START = '2026-10-16'
 
-/** True for a subscription that is billing a member: status 'active'. */
-export const isActiveSub = (s) => s?.status === 'active'
+// The statuses that hold a membership here: the sync's MEMBERSHIP_ACTIVE_STATUSES
+// (src/lib/un1t-online-map.js: active, trialing, past_due) MINUS 'trialing'. A
+// trialing subscription is a free trial in progress, not a paying member, and
+// the Glofox numbers these mirror do not count a trialist as a member either.
+// 'past_due' is a member whose payment failed: still a member, not yet income.
+export const MEMBER_STATUSES = Object.freeze(['active', 'past_due'])
 
-/** An active subscription that is neither paused nor past due. */
-export const isActiveRecurring = (s) => isActiveSub(s) && !s.paused_at && !s.past_due_at
+/** True for a subscription that holds a membership: status 'active' or 'past_due'. */
+export const isActiveSub = (s) => MEMBER_STATUSES.includes(s?.status)
+
+/** A subscription that is billing NOW: status 'active', neither paused nor past due. */
+export const isActiveRecurring = (s) => s?.status === 'active' && !s.paused_at && !s.past_due_at
 
 /** A €0 one-time product is the free trial, never a class pack. */
 export const isTrialProduct = (p) => p?.type === 'one_time' && Number(p.price_cents) === 0
@@ -108,7 +115,7 @@ export function shapeCounts({ subs = [], clients = [], packTxs = [], products = 
 
 /**
  * Same data as fetchMrr(): { mrrCents, recurringMembers, yieldCents }.
- * Only BILLING subscriptions count (active, not paused, not past due: fetchMrr
+ * Only BILLING subscriptions count (status 'active', not paused, not past due: fetchMrr
  * keeps glofox_membership_state = 'active' for the same reason). MRR sums every
  * such subscription's price (it is revenue); recurringMembers counts distinct
  * members, as Glofox counts contacts.

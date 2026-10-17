@@ -6,6 +6,7 @@ import { un1tOnlineReads } from './un1t-online'
 const HATCH = 'loc-hatch'
 const STILLORGAN = 'loc-stillorgan'
 const NOW = new Date('2026-10-17T12:00:00.000Z')
+const SYNCED = '2026-10-17T11:50:00.000Z' // the last sync run stamps every row it pulled with one time
 
 // ---------------------------------------------------------------------------
 // A recording, in-memory supabase fake: select/eq/in/gt/gte/lt/order/range.
@@ -14,7 +15,7 @@ const NOW = new Date('2026-10-17T12:00:00.000Z')
 function makeDb(seed = {}, { fail = [] } = {}) {
   const log = []
   function builder(table) {
-    const s = { filters: [], order: null, range: null, cols: null, opts: null }
+    const s = { filters: [], order: null, desc: false, range: null, cols: null, opts: null }
     const run = () => {
       log.push({ table, cols: s.cols, filters: s.filters, order: s.order, range: s.range, opts: s.opts })
       if (fail.includes(table)) return { data: null, count: null, error: { message: `${table} boom` } }
@@ -27,7 +28,7 @@ function makeDb(seed = {}, { fail = [] } = {}) {
         return true
       }))
       if (s.opts?.head) return { data: null, count: rows.length, error: null }
-      if (s.order) rows = [...rows].sort((a, b) => String(a[s.order]).localeCompare(String(b[s.order])))
+      if (s.order) rows = [...rows].sort((a, b) => (s.desc ? -1 : 1) * String(a[s.order]).localeCompare(String(b[s.order])))
       if (s.range) rows = rows.slice(s.range[0], s.range[1] + 1)
       return { data: rows.map((r) => ({ ...r })), count: null, error: null }
     }
@@ -38,7 +39,7 @@ function makeDb(seed = {}, { fail = [] } = {}) {
       gt(c, v) { s.filters.push(['gt', c, v]); return api },
       gte(c, v) { s.filters.push(['gte', c, v]); return api },
       lt(c, v) { s.filters.push(['lt', c, v]); return api },
-      order(c) { s.order = c; return api },
+      order(c, o) { s.order = c; s.desc = o?.ascending === false; return api },
       range(a, b) { s.range = [a, b]; return api },
       then(res, rej) { return Promise.resolve().then(run).then(res, rej) },
     }
@@ -50,7 +51,7 @@ function makeDb(seed = {}, { fail = [] } = {}) {
 const sub = (over = {}) => ({
   location_id: HATCH, un1t_user_id: 'u1', status: 'active', price_cents: 18900,
   billing_interval: 'month', billing_interval_count: 1, paused_at: null, past_due_at: null,
-  remote_created_at: '2026-10-10T10:00:00Z', ...over,
+  remote_created_at: '2026-10-10T10:00:00Z', synced_at: SYNCED, ...over,
 })
 
 function seed(extra = {}) {
@@ -141,6 +142,81 @@ describe('scoping', () => {
   })
 })
 
+// UN1TREAD.7 — which subscriptions count.
+describe('status and staleness (UN1TREAD.7)', () => {
+  const subsDb = (subs, extra = {}) => makeDb({ ...seed(extra), un1t_subscriptions: subs }).db
+
+  it("past_due counts in monthly_recurring/total_members/engagement but not MRR/active_recurring; trialing counts nowhere", async () => {
+    const subs = [
+      sub({ un1t_user_id: 'a' }),
+      sub({ un1t_user_id: 'pd', status: 'past_due' }),
+      sub({ un1t_user_id: 'tr', status: 'trialing' }),
+    ]
+    const clients = [
+      { location_id: HATCH, un1t_user_id: 'a', credit_balance: 0, credit_unlimited: true, bookings_30d_attended: 4 },
+      { location_id: HATCH, un1t_user_id: 'pd', credit_balance: 0, credit_unlimited: true, bookings_30d_attended: 2 },
+      { location_id: HATCH, un1t_user_id: 'tr', credit_balance: 0, credit_unlimited: true, bookings_30d_attended: 9 },
+    ]
+    const db = subsDb(subs, { un1t_clients: clients })
+    const counts = await un1tOnlineReads.membershipCounts(db, HATCH)
+    expect(counts).toMatchObject({ monthly_recurring: 2, total_members: 2, active_recurring: 1 })
+    expect((await un1tOnlineReads.mrr(db, HATCH)).data).toEqual({ mrrCents: 18900, recurringMembers: 1, yieldCents: 18900 })
+    expect((await un1tOnlineReads.engagement(db, HATCH)).data.members).toBe(2)
+  })
+
+  it("the subscription query asks for status IN ('active','past_due') only", async () => {
+    const { db, log } = makeDb(seed())
+    await un1tOnlineReads.membershipCounts(db, HATCH)
+    const q = log.filter((x) => x.table === 'un1t_subscriptions' && x.filters.some((f) => f[0] === 'in'))
+    expect(q.length).toBeGreaterThan(0)
+    for (const x of q) expect(x.filters).toContainEqual(['in', 'status', ['active', 'past_due']])
+  })
+
+  it('a row 30 min older than the newest is a stale active (absent from the latest pull) and is excluded everywhere', async () => {
+    const subs = [
+      sub({ un1t_user_id: 'fresh' }),
+      sub({ un1t_user_id: 'edge', synced_at: '2026-10-17T11:40:00.000Z' }), // exactly 10 min older: counted
+      sub({ un1t_user_id: 'stale', synced_at: '2026-10-17T11:20:00.000Z' }), // 30 min older
+    ]
+    const clients = subs.map((x) => ({ location_id: HATCH, un1t_user_id: x.un1t_user_id, credit_balance: 0, credit_unlimited: true, bookings_30d_attended: 1 }))
+    const db = subsDb(subs, { un1t_clients: clients })
+    expect((await un1tOnlineReads.membershipCounts(db, HATCH)).monthly_recurring).toBe(2)
+    expect((await un1tOnlineReads.mrr(db, HATCH)).data.mrrCents).toBe(2 * 18900)
+    expect((await un1tOnlineReads.engagement(db, HATCH)).data.members).toBe(2)
+  })
+
+  it('the newest row decides, across every status: a canceled row that synced last keeps the rest fresh', async () => {
+    const subs = [
+      sub({ un1t_user_id: 'a', synced_at: '2026-10-17T11:30:00.000Z' }),
+      sub({ un1t_user_id: 'x', status: 'canceled', synced_at: '2026-10-17T11:50:00.000Z' }),
+    ]
+    // 'a' is 20 min older than the newest row (the canceled one): stale
+    expect((await un1tOnlineReads.membershipCounts(subsDb(subs), HATCH)).monthly_recurring).toBe(0)
+  })
+
+  it('all rows equally old (the sync stopped): all are counted, none excluded', async () => {
+    const old = '2026-10-10T08:00:00.000Z'
+    const subs = [sub({ un1t_user_id: 'a', synced_at: old }), sub({ un1t_user_id: 'b', synced_at: old })]
+    const db = subsDb(subs)
+    expect((await un1tOnlineReads.membershipCounts(db, HATCH)).monthly_recurring).toBe(2)
+    expect((await un1tOnlineReads.mrr(db, HATCH)).data.mrrCents).toBe(2 * 18900)
+  })
+
+  it("the newest sync time is per location: Stillorgan's fresher rows do not age out Hatch", async () => {
+    const subs = [
+      sub({ un1t_user_id: 'a', synced_at: '2026-10-10T08:00:00.000Z' }),
+      sub({ location_id: STILLORGAN, un1t_user_id: 'o', synced_at: '2026-10-17T11:50:00.000Z' }),
+    ]
+    expect((await un1tOnlineReads.membershipCounts(subsDb(subs), HATCH)).monthly_recurring).toBe(1)
+  })
+
+  it('no subscriptions at all is an honest zero (the failed-read contract below covers the freshness read too)', async () => {
+    const empty = subsDb([])
+    expect((await un1tOnlineReads.membershipCounts(empty, HATCH)).monthly_recurring).toBe(0)
+    expect((await un1tOnlineReads.mrr(empty, HATCH)).data.mrrCents).toBe(0)
+  })
+})
+
 describe('pagination', () => {
   it('lists paginate with range + order', async () => {
     const { db, log } = makeDb(seed())
@@ -161,7 +237,8 @@ describe('pagination', () => {
     const { db, log } = makeDb(seed({ un1t_subscriptions: many, un1t_clients: [] }))
     const counts = await un1tOnlineReads.membershipCounts(db, HATCH)
     expect(counts.monthly_recurring).toBe(1500)
-    expect(log.filter((q) => q.table === 'un1t_subscriptions').length).toBe(2)
+    // one freshness read, then two pages of subscriptions
+    expect(log.filter((q) => q.table === 'un1t_subscriptions' && q.filters.some((f) => f[0] === 'in')).length).toBe(2)
   })
 })
 

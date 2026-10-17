@@ -25,7 +25,7 @@ import { monthKeys } from '@/lib/membership-flows'
 import { windowBounds, windowDelta, computeEngagement, WINDOW_DAYS } from '@shared/studio-kpi-math'
 import {
   shapeCounts, shapeMrr, shapeFlows, shapeRevenue,
-  firstSales, engagementRows, cancelsComparable,
+  firstSales, engagementRows, cancelsComparable, MEMBER_STATUSES,
 } from './un1t-online-shape'
 
 const PAGE = 1000
@@ -35,13 +35,38 @@ const API_SOURCE = 'un1t_online_api'
 // Paginated list readers. All throw on a failed page (selectAll); the
 // fetch-style reads catch that and return { success:false, error }.
 // ---------------------------------------------------------------------------
-const listActiveSubs = (db, loc) => selectAll((from, to) => db
-  .from('un1t_subscriptions')
-  .select('un1t_user_id, status, price_cents, billing_interval, billing_interval_count, paused_at, past_due_at')
-  .eq('location_id', loc)
-  .eq('status', 'active')
-  .order('id', { ascending: true })
-  .range(from, to), { pageSize: PAGE })
+// STALE-ACTIVE GUARD. The sync (every 15 min) stamps each subscription it
+// pulled with the run time, and a subscription the API stopped returning is
+// never touched again, so its status stays 'active' for ever. A row absent from
+// the latest pull therefore lags the newest by >= 15 min: only rows within
+// STALE_WINDOW_MS (10 min) of the studio's newest `synced_at` are counted. If
+// the sync itself stopped, every row is equally old and all still count (the
+// freshness is relative, never against the clock; a dead sync is the sync
+// health check's job).
+const STALE_WINDOW_MS = 10 * 60 * 1000
+
+// The statuses that hold a membership: see MEMBER_STATUSES in un1t-online-shape.js
+// (the sync's MEMBERSHIP_ACTIVE_STATUSES minus 'trialing').
+const listActiveSubs = async (db, loc) => {
+  const { data: newest, error } = await db
+    .from('un1t_subscriptions')
+    .select('synced_at')
+    .eq('location_id', loc)
+    .order('synced_at', { ascending: false })
+    .range(0, 0)
+  if (error) throw new Error(error.message)
+  const newestAt = Date.parse(newest?.[0]?.synced_at)
+  if (!Number.isFinite(newestAt)) return [] // no subscription rows at all
+  const cutoffIso = new Date(newestAt - STALE_WINDOW_MS).toISOString()
+  return selectAll((from, to) => db
+    .from('un1t_subscriptions')
+    .select('un1t_user_id, status, price_cents, billing_interval, billing_interval_count, paused_at, past_due_at')
+    .eq('location_id', loc)
+    .in('status', MEMBER_STATUSES)
+    .gte('synced_at', cutoffIso)
+    .order('id', { ascending: true })
+    .range(from, to), { pageSize: PAGE })
+}
 
 const listPackClients = (db, loc) => selectAll((from, to) => db
   .from('un1t_clients')
