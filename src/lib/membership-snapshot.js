@@ -91,11 +91,13 @@ export async function computeMembershipCounts(db, locationId) {
  * snapshot_date) unique constraint — the daily cron re-running just
  * refreshes the same day's row. snapshot_date is a calendar key written in
  * the location's zone at write time; a later zone change does not rewrite
- * history.
+ * history. opts.counts (UN1TREAD.5): counts already read for the location.
  */
 export async function writeMembershipSnapshot(db, locationId, opts = {}) {
   const snapshotDate = opts.snapshotDate || dayStrIn(opts.now ? new Date(opts.now) : Date.now(), opts.zone || DEFAULT_TZ)
-  const counts = await computeMembershipCounts(db, locationId)
+  // UN1TREAD.5 — a caller whose source is not Glofox hands the counts it read
+  // through the membership seam; omitted, this is the Glofox-contacts count.
+  const counts = opts.counts || await computeMembershipCounts(db, locationId)
   const row = { location_id: locationId, snapshot_date: snapshotDate, ...counts }
   const { error } = await db
     .from('membership_snapshots')

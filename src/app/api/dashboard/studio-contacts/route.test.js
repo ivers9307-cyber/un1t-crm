@@ -124,6 +124,18 @@ describe('GET /api/dashboard/studio-contacts', () => {
     expect(membershipStateForPage).toHaveBeenCalledWith({ tag: 'service-role' }, LOC)
   })
 
+  // UN1TREAD.7 — this route reads no member counts, so a configured un1t.online
+  // keeps the capability alone: the phone's funnel note ("does not provide
+  // membership data, so stages after New will not move") must still show.
+  it('a configured un1t.online: provides_memberships false (no counts-read opt-in on this route)', async () => {
+    membershipStateForPage.mockResolvedValue({
+      source: 'un1t_online', state: 'configured', label: 'un1t.online',
+      capabilities: { memberships: false, bookings: false, credits: false, invoices: false, schedule: false },
+    })
+    const body = await (await GET(req({ location_id: LOC }))).json()
+    expect(body.data.membership_source).toEqual({ source: 'un1t_online', state: 'configured', label: 'un1t.online', provides_memberships: false, can_manage: false })
+  })
+
   it('an owner at the studio gets can_manage (the phone says "Choose one in…")', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u1', profileRole: 'staff', rolesByLocation: { [LOC]: 'owner' } })
     const body = await (await GET(req({ location_id: LOC }))).json()
