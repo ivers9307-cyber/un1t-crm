@@ -5,12 +5,21 @@
 // private.auth_contact_read_location_ids(), whose last tier is a role-default
 // list written inline in SQL (the JS maps cannot be read from SQL). Pinned:
 //
-//  (c) no migration after 690 puts contacts' SELECT back on membership
-//      (a contacts policy that does not call the helper, or that ORs
-//      auth_is_in_location back in), drops the helper without re-creating
-//      it in the same file, or toggles contacts' row level security
-//      (DISABLE turns every policy off; FORCE / NO FORCE changes whether
-//      the owner's DEFINER functions and triggers are bound by it) (SEC-3);
+//  (c) no migration after 690 widens contacts' SELECT. A contacts policy
+//      that covers SELECT may OR together ONLY the known branches
+//      (READ_BRANCHES below: the Contacts helper by the contact's studio,
+//      the member's own row, and since mig 731 (UN1TDUAL.1) an active
+//      membership at a studio where the caller holds Contacts, through
+//      private.auth_contact_membership_contact_ids()), and must keep the
+//      Contacts helper branch; anything else (auth_is_in_location, true, a
+//      raw contact_memberships subquery, another helper) is a breaker. Also
+//      breakers: a (re)definition of the membership helper whose body is not
+//      exactly 731's (it must take its studios from
+//      auth_contact_read_location_ids and count only active rows), dropping
+//      either helper without re-creating it in the same file, or toggling
+//      contacts' row level security (DISABLE turns every policy off; FORCE /
+//      NO FORCE changes whether the owner's DEFINER functions and triggers
+//      are bound by it) (SEC-3);
 //  (d) the helper's two default-role lists (web, then phone), read from the
 //      LATEST migration that creates it, equal the roles for which
 //      DEFAULT_WEB_PERMISSIONS_BY_ROLE / DEFAULT_MOBILE_PERMISSIONS_BY_ROLE
@@ -35,10 +44,88 @@ const ROOT = path.resolve(import.meta.dirname, '..')
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
 export const CONTACT_READ_SCOPE_MIGRATION = 690
 const HELPER = 'auth_contact_read_location_ids'
+const MEMBERSHIP_HELPER = 'auth_contact_membership_contact_ids'
+
+// The only branches a contacts policy covering SELECT may OR together,
+// normalised (lowercase, no whitespace or double quotes, redundant parens and
+// pg_policies' `AS alias` dropped). Adding one is a reviewed change here.
+export const READ_BRANCHES = Object.freeze({
+  contacts: `location_id=any((selectprivate.${HELPER}())::uuid[])`,        // 690: Contacts at the contact's studio
+  own: 'user_id=(selectauth.uid())',                                       // members: their own row
+  membership: `id=any((selectprivate.${MEMBERSHIP_HELPER}())::uuid[])`,     // 731: active member of a studio where the caller holds Contacts
+})
+// Mig 731's membership helper body, normalised the same way: studios from the
+// Contacts resolver, active rows only. A redefinition must match it exactly.
+export const MEMBERSHIP_HELPER_BODY = norm(`
+  SELECT coalesce(array_agg(DISTINCT cm.contact_id), '{}'::uuid[])
+    FROM public.contact_memberships cm
+   WHERE cm.status = 'active'
+     AND cm.location_id = ANY ((SELECT private.${HELPER}())::uuid[])`)
+
+function norm(s) {
+  let t = s.toLowerCase().replace(/\s+/g, '').replace(/"/g, '').replace(/\)as[a-z_][a-z0-9_]*\)/g, '))')
+  for (;;) {
+    const inner = stripOuter(t)
+    if (inner === t) return t
+    t = inner
+  }
+}
+/** `(x)` -> `x` when the first paren closes at the very end. */
+function stripOuter(s) {
+  if (!s.startsWith('(')) return s
+  let depth = 0
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '(') depth++
+    else if (s[i] === ')') { depth--; if (depth === 0) return i === s.length - 1 ? s.slice(1, -1).trim() : s }
+  }
+  return s
+}
+/** The text inside the first `USING ( … )` of a policy body, or null. Quotes are skipped. */
+function usingExpr(body) {
+  const m = /\busing\s*\(/i.exec(body)
+  if (!m) return null
+  let depth = 0
+  let q = null
+  for (let i = m.index + m[0].length - 1; i < body.length; i++) {
+    const c = body[i]
+    if (q) { if (c === q) q = null; continue }
+    if (c === "'" || c === '"') { q = c; continue }
+    if (c === '(') depth++
+    else if (c === ')') { depth--; if (depth === 0) return body.slice(m.index + m[0].length, i) }
+  }
+  return null
+}
+/** Top-level OR operands, flattened through parenthesised ORs. */
+export function orBranches(expr) {
+  const out = []
+  const parts = []
+  let depth = 0
+  let q = null
+  let start = 0
+  for (let i = 0; i < expr.length; i++) {
+    const c = expr[i]
+    if (q) { if (c === q) q = null; continue }
+    if (c === "'" || c === '"') { q = c; continue }
+    if (c === '(') depth++
+    else if (c === ')') depth--
+    else if (depth === 0 && /^or\b/i.test(expr.slice(i, i + 3)) && /[\s)]/.test(expr[i - 1] ?? ' ') && /[\s(]/.test(expr[i + 2] ?? ' ')) {
+      parts.push(expr.slice(start, i)); start = i + 2
+    }
+  }
+  parts.push(expr.slice(start))
+  if (parts.length === 1) {
+    const t = parts[0].trim()
+    const inner = t.startsWith('(') ? stripOuter(t) : t
+    return inner !== t ? orBranches(inner) : [t]
+  }
+  for (const p of parts) out.push(...orBranches(p.trim()))
+  return out
+}
 const migNum = (f) => Number.parseInt(f, 10)
 const migrationFiles = () => readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql'))
   .sort((a, b) => (migNum(a) - migNum(b)) || a.localeCompare(b))
 const CREATES_HELPER = new RegExp(`\\bcreate\\s+(or\\s+replace\\s+)?function\\s+private\\s*\\.\\s*${HELPER}\\b`, 'i')
+const createsFn = (name) => new RegExp(`\\bcreate\\s+(or\\s+replace\\s+)?function\\s+private\\s*\\.\\s*${name}\\b`, 'i')
 
 /** Statements in `sql` that would put contacts' SELECT back on membership, or remove the helper. */
 export function contactReadScopeBreakers(sql) {
@@ -50,16 +137,28 @@ export function contactReadScopeBreakers(sql) {
     // a write policy is the 653 guard's business; a policy that only renames is fine
     if (/\bfor\s+(insert|update|delete)\b/i.test(body)) continue
     if (/^\s*rename\b/i.test(body)) continue
-    if (!new RegExp(`\\b${HELPER}\\b`).test(body) || /\bauth_is_in_location\b/.test(body)) hits.push(m[0].trim().replace(/\s+/g, ' '))
+    const using = usingExpr(body)
+    const branches = using === null ? null : orBranches(using).map(norm)
+    const allowed = Object.values(READ_BRANCHES)
+    if (!branches || !branches.includes(READ_BRANCHES.contacts) || branches.some((b) => !allowed.includes(b))) {
+      hits.push(m[0].trim().replace(/\s+/g, ' '))
+    }
+  }
+  // the membership helper (re)defined with any body but 731's, or not SECURITY DEFINER
+  const membershipDefs = new RegExp(`\\bcreate\\s+(?:or\\s+replace\\s+)?function\\s+private\\s*\\.\\s*${MEMBERSHIP_HELPER}\\b([\\s\\S]*?)\\bas\\s+(\\$\\w*\\$)([\\s\\S]*?)\\2`, 'gi')
+  for (const m of code.matchAll(membershipDefs)) {
+    if (norm(m[3]) !== MEMBERSHIP_HELPER_BODY || !/\bsecurity\s+definer\b/i.test(m[1])) hits.push(`create function private.${MEMBERSHIP_HELPER} (body or SECURITY DEFINER differs from mig 731)`)
   }
   // contacts' row level security toggled (any ALTER TABLE action list on contacts)
   const alters = /\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(?:"?public"?\s*\.\s*)?"?contacts"?(?![\w"])([^;]*)/gi
   for (const m of code.matchAll(alters)) {
     if (/\b(disable|no\s+force|force)\s+row\s+level\s+security\b/i.test(m[1])) hits.push(m[0].trim().replace(/\s+/g, ' '))
   }
-  const drops = new RegExp(`\\bdrop\\s+function\\s+(?:if\\s+exists\\s+)?private\\s*\\.\\s*${HELPER}\\b[^;]*`, 'gi')
-  for (const m of code.matchAll(drops)) {
-    if (!CREATES_HELPER.test(code.slice(m.index))) hits.push(m[0].trim())
+  for (const name of [HELPER, MEMBERSHIP_HELPER]) {
+    const drops = new RegExp(`\\bdrop\\s+function\\s+(?:if\\s+exists\\s+)?private\\s*\\.\\s*${name}\\b[^;]*`, 'gi')
+    for (const m of code.matchAll(drops)) {
+      if (!createsFn(name).test(code.slice(m.index))) hits.push(m[0].trim())
+    }
   }
   return hits
 }
@@ -103,6 +202,73 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     expect(contactReadScopeBreakers(`ALTER POLICY contacts_select ON public.contacts RENAME TO contacts_read;`)).toEqual([])
     expect(contactReadScopeBreakers(`CREATE POLICY contact_goals_read ON public.contact_goals FOR SELECT USING (private.auth_is_in_location(location_id));`)).toEqual([])
     expect(contactReadScopeBreakers(`CREATE POLICY x ON public.contacts_archive FOR SELECT USING (true);`)).toEqual([])
+  })
+
+  it('731 (UN1TDUAL.1) passes: exactly its membership branch and helper are accepted', () => {
+    const f731 = migrationFiles().find((f) => migNum(f) === 731)
+    expect(f731, 'mig 731 missing').toBeTruthy()
+    const sql731 = readFileSync(path.join(MIGRATIONS, f731), 'utf8')
+    expect(contactReadScopeBreakers(sql731)).toEqual([])
+    // the branch really is read (not waved through by a loose match)
+    const using = sqlCode(sql731).match(/alter\s+policy\s+contacts_select\s+on\s+public\.contacts\s+using\s*\(([\s\S]*?)\);/i)[1]
+    expect(orBranches(using).length).toBe(3)
+    // the same branches in any order, extra parens, pg_policies' deparse
+    const M = `id = ANY ((SELECT private.${MEMBERSHIP_HELPER}())::uuid[])`
+    const C = `location_id = ANY ((SELECT private.${HELPER}())::uuid[])`
+    expect(contactReadScopeBreakers(`ALTER POLICY contacts_select ON public.contacts USING ((${M}) OR (${C} OR user_id = (SELECT auth.uid())));`)).toEqual([])
+    expect(contactReadScopeBreakers(`ALTER POLICY contacts_select ON public.contacts USING ((location_id = ANY (( SELECT private.${HELPER}() AS ${HELPER})::uuid[])) OR (id = ANY (( SELECT private.${MEMBERSHIP_HELPER}() AS ${MEMBERSHIP_HELPER})::uuid[])));`)).toEqual([])
+  })
+
+  it('every other widening of the read is still a breaker', () => {
+    const C = `location_id = ANY ((SELECT private.${HELPER}())::uuid[])`
+    const OWN = 'user_id = (SELECT auth.uid())'
+    const M = `id = ANY ((SELECT private.${MEMBERSHIP_HELPER}())::uuid[])`
+    for (const extra of [
+      'private.auth_is_in_location(location_id)',
+      'true',
+      '1 = 1',
+      // a membership branch WITHOUT the Contacts-readable restriction
+      `id IN (SELECT cm.contact_id FROM public.contact_memberships cm WHERE cm.status = 'active')`,
+      `EXISTS (SELECT 1 FROM public.contact_memberships cm WHERE cm.contact_id = contacts.id AND private.auth_is_in_location(cm.location_id))`,
+      // the membership helper called per row, or under another name
+      `id = ANY (private.${MEMBERSHIP_HELPER}())`,
+      'id = ANY ((SELECT private.auth_contact_membership_ids_all())::uuid[])',
+      // a widened form of an allowed branch
+      `(${M} OR true)`,
+      `location_id IS NULL`,
+    ]) {
+      const sql = `ALTER POLICY contacts_select ON public.contacts USING (${C} OR ${OWN} OR ${M} OR ${extra});`
+      expect(contactReadScopeBreakers(sql), extra).toHaveLength(1)
+    }
+    expect(contactReadScopeBreakers('CREATE POLICY contacts_select ON public.contacts FOR SELECT USING (true);')).toHaveLength(1)
+    // the membership branch must not REPLACE the Contacts branch
+    expect(contactReadScopeBreakers(`ALTER POLICY contacts_select ON public.contacts USING (${OWN} OR ${M});`)).toHaveLength(1)
+    // a role change with no USING is still reviewed
+    expect(contactReadScopeBreakers('ALTER POLICY contacts_select ON public.contacts TO anon;')).toHaveLength(1)
+  })
+
+  it('the membership helper must keep 731\'s body (Contacts studios, active rows, DEFINER); dropping it needs a re-create', () => {
+    const def = (body, extra = 'SECURITY DEFINER') => `CREATE OR REPLACE FUNCTION private.${MEMBERSHIP_HELPER}() RETURNS uuid[] LANGUAGE sql STABLE ${extra} SET search_path = '' AS $function$ ${body} $function$;`
+    const ok = `SELECT coalesce(array_agg(DISTINCT cm.contact_id), '{}'::uuid[]) FROM public.contact_memberships cm WHERE cm.status = 'active' AND cm.location_id = ANY ((SELECT private.${HELPER}())::uuid[])`
+    expect(contactReadScopeBreakers(def(ok))).toEqual([])
+    for (const body of [
+      // no Contacts-readable restriction: every active member anywhere
+      `SELECT coalesce(array_agg(DISTINCT cm.contact_id), '{}'::uuid[]) FROM public.contact_memberships cm WHERE cm.status = 'active'`,
+      // membership instead of Contacts
+      `SELECT coalesce(array_agg(DISTINCT cm.contact_id), '{}'::uuid[]) FROM public.contact_memberships cm WHERE cm.status = 'active' AND private.auth_is_in_location(cm.location_id)`,
+      // ended memberships too
+      `SELECT coalesce(array_agg(DISTINCT cm.contact_id), '{}'::uuid[]) FROM public.contact_memberships cm WHERE cm.location_id = ANY ((SELECT private.${HELPER}())::uuid[])`,
+    ]) expect(contactReadScopeBreakers(def(body)), body).toHaveLength(1)
+    expect(contactReadScopeBreakers(def(ok, 'SECURITY INVOKER'))).toHaveLength(1)
+    expect(contactReadScopeBreakers(`DROP FUNCTION private.${MEMBERSHIP_HELPER}();`)).toHaveLength(1)
+    expect(contactReadScopeBreakers(`DROP FUNCTION IF EXISTS private.${MEMBERSHIP_HELPER}(); ${def(ok)}`)).toEqual([])
+  })
+
+  it('the latest definition of the membership helper in the migrations is 731\'s', () => {
+    const creators = migrationFiles().filter((f) => createsFn(MEMBERSHIP_HELPER).test(sqlCode(readFileSync(path.join(MIGRATIONS, f), 'utf8'))))
+    expect(creators.at(-1), 'no migration creates the membership helper').toBeTruthy()
+    // every definition passes the body check (contactReadScopeBreakers above runs on every file after 690)
+    expect(migNum(creators[0])).toBe(731)
   })
 
   it('the detector catches row level security toggled on contacts (SEC-3), and nothing else', () => {
