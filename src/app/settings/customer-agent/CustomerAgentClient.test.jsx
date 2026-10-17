@@ -7,8 +7,10 @@
 // "Loading…" forever).
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
-import { DEFAULTS } from '@/lib/agent/settings-contract'
+import { render, screen, fireEvent, waitFor, cleanup, within, act } from '@testing-library/react'
+import { DEFAULTS, buildCustomerAgentSettings, SettingsSchema } from '@/lib/agent/settings-contract'
+import { mergeAgentSettings } from '@/lib/agent/settings-resolve'
+import { initialOverridden } from '@/lib/agent/settings-overrides'
 import CustomerAgentClient from './CustomerAgentClient.jsx'
 
 const NOTE = 'Could not load the customer agent settings just now, so nothing is shown and nothing can be changed here until it loads.'
@@ -226,5 +228,494 @@ describe('CustomerAgentClient — quiet hours follow the studio zone (TZ.5)', ()
     await waitFor(() => expect(screen.getByText('Europe/Dublin — agent stays quiet, a human replies.')).toBeTruthy())
     fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
     await waitFor(() => expect(savedQuietHours()).toEqual({ start: '21:00', end: '08:00', tz: 'Europe/Dublin' }))
+  })
+})
+
+// MIAORG.1 Task 3 — inherited fields show their source, editing one makes it
+// the studio's own, "Use organisation default" hands it back, and Save sends
+// `overridden` so only the studio's own fields are stored (Review Focus 1).
+describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', () => {
+  const ORG = { tone: 'Org tone', extra_rules: 'Org rule', followups: { daily_cap: 80 } }
+  const STUDIO = { enabled: true, tone: 'Studio tone' }
+  function answer({ studio = STUDIO, org = ORG } = {}) {
+    const { settings, sources } = mergeAgentSettings({ org, studio })
+    return reply(200, {
+      success: true,
+      settings: { ...settings, social_enabled: false, glofox_auto_cancel: false },
+      studio, org, sources,
+      inherited: mergeAgentSettings({ org, studio: null }).settings,
+      location: { id: 'loc1', name: 'Test Studio' },
+      checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
+    })
+  }
+  const labelRow = (text) => screen.getByText(text).parentElement
+  const putBody = () => {
+    const put = global.fetch.mock.calls.find(([url, init]) => String(url).startsWith('/api/settings/customer-agent') && init?.method === 'PUT')
+    return put && JSON.parse(put[1].body)
+  }
+  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+  const save = () => fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+
+  it('tags each inherited field with its source; the studio\'s own field offers the way back', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(labelRow('Extra rules (optional)')).getByText('Organisation default')).toBeTruthy()
+    expect(within(labelRow('Hand-off message')).getByText('Default')).toBeTruthy()
+    expect(within(labelRow('Tone & voice')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy()
+    // an org value fills the inherited field
+    expect(screen.getByPlaceholderText('e.g. Never discuss competitor pricing.').value).toBe('Org rule')
+  })
+
+  it('studio-only fields carry no tag', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const signup = screen.getByText('Membership sign-up link').parentElement
+    expect(within(signup).queryByText('Default')).toBeNull()
+    expect(within(signup).queryByText('Organisation default')).toBeNull()
+    expect(within(signup).queryByRole('button', { name: /Use/ })).toBeNull()
+    // the on/off switch sits straight in the section, with no tag beside it
+    const live = screen.getByRole('checkbox', { name: /Live — reply to all customers/ }).closest('label')
+    expect(live.parentElement.tagName).toBe('SECTION')
+    expect(live.nextElementSibling?.textContent).not.toMatch(/^(Default|Organisation default|Use (organisation )?default)$/)
+  })
+
+  it('saving without touching inherited fields sends only the studio\'s own', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual(['tone'])
+  })
+
+  it('editing an inherited field marks just it as the studio\'s own', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.change(screen.getByPlaceholderText('e.g. Never discuss competitor pricing.'), { target: { value: 'Studio rule' } })
+    expect(within(labelRow('Extra rules (optional)')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual(['extra_rules', 'tone'])
+    expect(putBody().extra_rules).toBe('Studio rule')
+  })
+
+  it('an object field is overridden per field', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(screen.getByText('Enable proactive follow-ups').closest('label').parentElement).getByText('Default')).toBeTruthy()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Enable proactive follow-ups' }))
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual(['followups.enabled', 'tone'])
+    // the inherited cap is sent for display parity but not overridden
+    expect(putBody().followups.daily_cap).toBe(80)
+  })
+
+  it('"Use organisation default" removes the override and shows the inherited value', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const tone = screen.getByPlaceholderText('e.g. Warm, upbeat, brief. Use first names. No emojis.')
+    expect(tone.value).toBe('Studio tone')
+    fireEvent.click(within(labelRow('Tone & voice')).getByRole('button', { name: 'Use organisation default' }))
+    expect(tone.value).toBe('Org tone')
+    expect(within(labelRow('Tone & voice')).getByText('Organisation default')).toBeTruthy()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual([])
+    // the studio-only switches still go in the body (the PUT always saves them)
+    expect(putBody()).toMatchObject({ enabled: true, test_mode: false })
+  })
+
+  it('a studio value with no org value behind it offers "Use default"', async () => {
+    mockFetch([answer({ org: null })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(labelRow('Tone & voice')).getByRole('button', { name: 'Use default' })).toBeTruthy()
+    expect(within(labelRow('Extra rules (optional)')).getByText('Default')).toBeTruthy()
+  })
+
+  it('T3-D: a legacy full blob marks every value it stores, so the first Save keeps all of it', async () => {
+    const legacy = buildCustomerAgentSettings(SettingsSchema.parse({
+      enabled: true, tone: 'Warm', handoff_cooldown_hours: 0, monthly_points_target: 600,
+      followups: { enabled: true, nudge_after_hours: 4, template_name: 'nudge_v2', daily_cap: 40 },
+      quiet_hours: { start: '21:00', end: '07:00' },
+    }))
+    mockFetch([answer({ studio: legacy, org: null })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual(initialOverridden(legacy))
+    expect(putBody().overridden).toEqual(expect.arrayContaining([
+      'tone', 'agent_name', 'handoff_cooldown_hours',
+      'followups.enabled', 'followups.nudge_after_hours', 'followups.template_name', 'followups.daily_cap',
+      'quiet_hours.start', 'quiet_hours.end', 'inline_suggestion.enabled',
+    ]))
+    // studio-only since the final review: always in the body, never an override path
+    expect(putBody().overridden).not.toContain('monthly_points_target')
+    expect(putBody().monthly_points_target).toBe(600)
+  })
+
+  it('a studio with no blob (Hatch) overrides nothing until someone edits', async () => {
+    mockFetch([answer({ studio: null })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual([])
+  })
+
+  it('after a save the settings are re-read, so the tags show what was stored', async () => {
+    // GET (studio tone) -> PUT ok -> GET again (the studio dropped its tone)
+    mockFetch([answer(), reply(200, { success: true, settings: { enabled: true } }), answer({ studio: { enabled: true } })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(labelRow('Tone & voice')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy()
+    save()
+    await waitFor(() => expect(within(labelRow('Tone & voice')).getByText('Organisation default')).toBeTruthy())
+    expect(screen.getByPlaceholderText('e.g. Warm, upbeat, brief. Use first names. No emojis.').value).toBe('Org tone')
+  })
+
+  it('"Use organisation default" on quiet hours clears start, end and tz together', async () => {
+    const studio = { enabled: true, quiet_hours: { start: '21:00', end: '07:00', tz: 'America/New_York' } }
+    mockFetch([answer({ studio, org: null })])
+    const { container } = render(<CustomerAgentClient canEdit />)
+    await ready()
+    const [start, end] = container.querySelectorAll('input[type="time"]')
+    expect(start.value).toBe('21:00')
+    expect(screen.getByText('America/New_York — agent stays quiet, a human replies.')).toBeTruthy()
+    fireEvent.click(within(labelRow('Quiet hours (optional)')).getByRole('button', { name: 'Use default' }))
+    expect(start.value).toBe('')
+    expect(end.value).toBe('')
+    expect(within(labelRow('Quiet hours (optional)')).getByText('Default')).toBeTruthy()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual([])
+    expect(putBody().quiet_hours).toBe(null)
+  })
+
+  it('quiet hours revert to the org\'s pair, and the tag needs a set org FIELD, not just the key', async () => {
+    const studio = { enabled: true, quiet_hours: { start: '21:00', end: '07:00', tz: 'America/New_York' } }
+    mockFetch([answer({ studio, org: { quiet_hours: { start: '22:00', end: '06:00', tz: null } } })])
+    const { container } = render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.click(within(labelRow('Quiet hours (optional)')).getByRole('button', { name: 'Use organisation default' }))
+    const [start, end] = container.querySelectorAll('input[type="time"]')
+    expect([start.value, end.value]).toEqual(['22:00', '06:00'])
+    expect(within(labelRow('Quiet hours (optional)')).getByText('Organisation default')).toBeTruthy()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden.filter(p => p.startsWith('quiet_hours'))).toEqual([])
+  })
+
+  it('an org quiet_hours object with no field set does not count as an org value', async () => {
+    const studio = { enabled: true, quiet_hours: { start: '21:00', end: '07:00' } }
+    mockFetch([answer({ studio, org: { quiet_hours: { start: null, end: null, tz: null } } })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(labelRow('Quiet hours (optional)')).getByRole('button', { name: 'Use default' })).toBeTruthy()
+  })
+
+  it('a cleared follow-up cap shows the inherited value as its placeholder and is left out of the PUT', async () => {
+    mockFetch([answer()])
+    const { container } = render(<CustomerAgentClient canEdit />)
+    await ready()
+    const caps = [...container.querySelectorAll('input[type="number"][max="500"]')]
+    expect(caps).toHaveLength(1)
+    fireEvent.change(caps[0], { target: { value: '' } })
+    expect(caps[0].value).toBe('')
+    expect(caps[0].placeholder).toBe('80')
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().followups).not.toHaveProperty('daily_cap')
+  })
+
+  it('a read-only viewer sees the tags but no way back', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit={false} />)
+    await waitFor(() => expect(screen.getByText(/Live — reply to all customers/)).toBeTruthy())
+    expect(within(labelRow('Extra rules (optional)')).getByText('Organisation default')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Use organisation default' })).toBeNull()
+  })
+})
+
+// MIAORG.1 Task 4 (T4-A) — "No quiet hours (ignore the organisation's)": null
+// cannot say "none" once the org sets quiet hours, so the studio stores
+// quiet_hours.off. And the organisation defaults section, for org admins.
+describe('CustomerAgentClient — quiet hours opt-out and org defaults (MIAORG.1 Task 4)', () => {
+  const ORG_QUIET = { quiet_hours: { start: '22:00', end: '07:00' } }
+  function answer({ studio = { enabled: true }, org = ORG_QUIET } = {}) {
+    const { settings, sources } = mergeAgentSettings({ org, studio })
+    return reply(200, {
+      success: true,
+      settings: { ...settings, social_enabled: false, glofox_auto_cancel: false },
+      studio, org, sources,
+      inherited: mergeAgentSettings({ org, studio: null }).settings,
+      location: { id: 'loc1', name: 'Test Studio', timezone: 'Europe/Dublin' },
+      checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
+    })
+  }
+  const putBody = () => {
+    const put = global.fetch.mock.calls.find(([url, init]) => String(url) === '/api/settings/customer-agent' && init?.method === 'PUT')
+    return put && JSON.parse(put[1].body)
+  }
+  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+  const save = () => fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+  const optOut = () => screen.getByRole('checkbox', { name: "No quiet hours (ignore the organisation's)" })
+
+  it('ticking it clears the window and saves quiet_hours.off alone', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const start = screen.getByLabelText('Quiet hours start')
+    expect(start.value).toBe('22:00')
+    fireEvent.click(optOut())
+    expect(start.value).toBe('')
+    expect(start.disabled).toBe(true)
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().quiet_hours).toEqual({ off: true })
+    expect(putBody().overridden).toEqual(['quiet_hours.off'])
+  })
+
+  it('a studio that stored the opt-out shows it ticked and keeps it on the next save', async () => {
+    mockFetch([answer({ studio: { enabled: true, quiet_hours: { off: true } } })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(optOut().checked).toBe(true)
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().quiet_hours).toEqual({ off: true })
+    expect(putBody().overridden).toEqual(['quiet_hours.off'])
+  })
+
+  it('"Use organisation default" clears the opt-out too', async () => {
+    mockFetch([answer({ studio: { enabled: true, quiet_hours: { off: true } } })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.click(within(screen.getByText('Quiet hours (optional)').parentElement).getByRole('button', { name: 'Use organisation default' }))
+    expect(optOut().checked).toBe(false)
+    expect(screen.getByLabelText('Quiet hours start').value).toBe('22:00')
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden.filter((p) => p.startsWith('quiet_hours'))).toEqual([])
+  })
+
+  it('unticking it hands the window back to the organisation', async () => {
+    mockFetch([answer({ studio: { enabled: true, quiet_hours: { off: true } } })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.click(optOut())
+    expect(screen.getByLabelText('Quiet hours end').value).toBe('07:00')
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual([])
+  })
+
+  it('no org defaults section without orgDefaults (everyone but masters and org admins)', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.queryByText('Organisation defaults (all studios)')).toBeNull()
+    expect(global.fetch.mock.calls.some(([url]) => String(url).includes('/customer-agent/org'))).toBe(false)
+  })
+
+  it('with orgDefaults the section renders, and an org save re-reads what the studio inherits', async () => {
+    const ORG_ID = 'a0000000-0000-0000-0000-00000000a0a1'
+    let studioReads = 0
+    global.fetch = vi.fn(async (url, init) => {
+      const u = String(url)
+      if (u.startsWith('/api/settings/customer-agent/org')) {
+        const raw = init?.method === 'PUT' ? { tone: 'New org tone' } : null
+        return reply(200, { success: true, data: { organization: { id: ORG_ID, name: 'Org A' }, settings: { ...mergeAgentSettings({ org: raw }).settings }, raw, defaults: DEFAULTS, studios: [] } })
+      }
+      if (u.startsWith('/api/settings/customer-agent')) {
+        studioReads += 1
+        return studioReads === 1 ? answer({ org: null }) : answer({ org: { tone: 'New org tone' } })
+      }
+      if (u.startsWith('/api/agent/knowledge')) return reply(200, { success: true, entries: [] })
+      return reply(200, { success: true, templates: [] })
+    })
+    const { container } = render(<CustomerAgentClient canEdit orgDefaults={{ organizationId: ORG_ID, organizationName: 'Org A' }} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save organisation defaults' })).toBeTruthy())
+    expect(screen.getByRole('heading', { name: 'Organisation defaults (all studios)' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Save organisation defaults' }))
+    await waitFor(() => expect(studioReads).toBe(2))
+    // the studio's own tone field (not the org one) now shows the new org value
+    const toneInputs = [...container.querySelectorAll('textarea[placeholder="e.g. Warm, upbeat, brief. Use first names. No emojis."]')]
+    await waitFor(() => expect(toneInputs.at(-1).value).toBe('New org tone'))
+  })
+})
+
+// MIAORG.1 Task 4 fix round — a studio edit made while an ORG save is in
+// flight survives the re-read that follows it; a half quiet-hours window
+// holds Save.
+describe('CustomerAgentClient — fix round (MIAORG.1 Task 4)', () => {
+  const ORG_ID = 'a0000000-0000-0000-0000-00000000a0a1'
+  const TONE_PH = 'e.g. Warm, upbeat, brief. Use first names. No emojis.'
+  function studioAnswer(org) {
+    const studio = { enabled: true }
+    const { settings, sources } = mergeAgentSettings({ org, studio })
+    return reply(200, {
+      success: true,
+      settings: { ...settings, social_enabled: false, glofox_auto_cancel: false },
+      studio, org, sources,
+      inherited: mergeAgentSettings({ org, studio: null }).settings,
+      location: { id: 'loc1', name: 'Test Studio', timezone: 'Europe/Dublin' },
+      checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
+    })
+  }
+  const orgState = (raw) => reply(200, { success: true, data: { organization: { id: ORG_ID, name: 'Org A' }, settings: mergeAgentSettings({ org: raw }).settings, raw, defaults: DEFAULTS, studios: [] } })
+
+  it('a studio field edited while the org save is pending keeps the edit and stays overridden', async () => {
+    let studioReads = 0
+    let releasePut
+    const putGate = new Promise((resolve) => { releasePut = resolve })
+    global.fetch = vi.fn(async (url, init) => {
+      const u = String(url)
+      if (u.startsWith('/api/settings/customer-agent/org')) {
+        if (init?.method === 'PUT') { await putGate; return orgState({ tone: 'New org tone' }) }
+        return orgState(null)
+      }
+      if (u === '/api/settings/customer-agent' && init?.method === 'PUT') return reply(200, { success: true, settings: {} })
+      if (u.startsWith('/api/settings/customer-agent')) {
+        studioReads += 1
+        return studioAnswer(studioReads === 1 ? null : { tone: 'New org tone' })
+      }
+      if (u.startsWith('/api/agent/knowledge')) return reply(200, { success: true, entries: [] })
+      return reply(200, { success: true, templates: [] })
+    })
+    const { container } = render(<CustomerAgentClient canEdit orgDefaults={{ organizationId: ORG_ID, organizationName: 'Org A' }} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save organisation defaults' })).toBeTruthy())
+    const tones = () => [...container.querySelectorAll(`textarea[placeholder="${TONE_PH}"]`)]
+    // org tone first (the section sits above), the studio's last
+    fireEvent.change(tones()[0], { target: { value: 'New org tone' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save organisation defaults' }))
+    // while the org PUT is in flight, the operator edits the STUDIO's tone
+    fireEvent.change(tones().at(-1), { target: { value: 'My studio tone' } })
+    await act(async () => { releasePut() })
+    await waitFor(() => expect(studioReads).toBe(2))
+    await waitFor(() => expect(within(screen.getByText('Tone & voice').parentElement).getByRole('button', { name: 'Use organisation default' })).toBeTruthy())
+    expect(tones().at(-1).value).toBe('My studio tone')
+    fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+    await waitFor(() => expect(global.fetch.mock.calls.some(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')).toBe(true))
+    const [, init] = global.fetch.mock.calls.find(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')
+    const body = JSON.parse(init.body)
+    expect(body.tone).toBe('My studio tone')
+    expect(body.overridden).toContain('tone')
+  })
+
+  it('a half-entered quiet-hours window says "Set both times" and holds Save', async () => {
+    mockFetch([studioAnswer(null)])
+    render(<CustomerAgentClient canEdit />)
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+    fireEvent.change(screen.getByLabelText('Quiet hours start'), { target: { value: '21:00' } })
+    expect(screen.getByText('Set both times')).toBeTruthy()
+    for (const b of screen.getAllByRole('button', { name: /Save settings/ })) expect(b.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Quiet hours end'), { target: { value: '07:00' } })
+    expect(screen.queryByText('Set both times')).toBeNull()
+    for (const b of screen.getAllByRole('button', { name: /Save settings/ })) expect(b.disabled).toBe(false)
+  })
+})
+
+describe('CustomerAgentClient — booking link fields (MIAORG.1 final review)', () => {
+  function answer({ bookings, studio = { enabled: true } } = {}) {
+    const { settings, sources } = mergeAgentSettings({ org: null, studio })
+    return reply(200, {
+      success: true,
+      settings: { ...settings, social_enabled: false, glofox_auto_cancel: false },
+      studio, org: null, sources,
+      inherited: mergeAgentSettings({ org: null, studio: null }).settings,
+      ...(bookings === undefined ? {} : { bookings }),
+      location: { id: 'loc1', name: 'Test Studio' },
+      checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
+    })
+  }
+  const puts = () => global.fetch.mock.calls.filter(([url, init]) => String(url).startsWith('/api/settings/customer-agent') && init?.method === 'PUT')
+  const putBody = () => { const p = puts()[0]; return p && JSON.parse(p[1].body) }
+  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+  const saveButton = () => screen.getAllByRole('button', { name: /Save settings/ })[0]
+
+  it('a studio that takes no bookings shows the fields; an edit goes into the PUT body', async () => {
+    mockFetch([answer({ bookings: false }), reply(200, { success: true, settings: {} }), answer({ bookings: false })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByText('Mia sends this link when a customer wants to book.', { exact: false })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Booking link'), { target: { value: ' https://book.example.test/hatch ' } })
+    fireEvent.change(screen.getByLabelText('Booking button label'), { target: { value: 'Book now' } })
+    expect(screen.getByLabelText('Booking button label').getAttribute('placeholder')).toBe('Book a class')
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody()).toMatchObject({ booking_url: 'https://book.example.test/hatch', booking_cta_label: 'Book now' })
+    // studio-only: never an override path, always saved
+    expect(putBody().overridden).not.toContain('booking_url')
+  })
+
+  it('a blank link saves null', async () => {
+    mockFetch([answer({ bookings: false, studio: { enabled: true, booking_url: 'https://old.example.test' } }), reply(200, { success: true, settings: {} })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByLabelText('Booking link').value).toBe('https://old.example.test')
+    fireEvent.change(screen.getByLabelText('Booking link'), { target: { value: '   ' } })
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().booking_url).toBe(null)
+    expect(putBody().booking_cta_label).toBe(null)
+  })
+
+  it('an invalid link shows inline and holds Save', async () => {
+    mockFetch([answer({ bookings: false })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.change(screen.getByLabelText('Booking link'), { target: { value: 'javascript:alert(1)' } })
+    expect(screen.getByText('Enter a full link starting with https:// (or http://).')).toBeTruthy()
+    expect(saveButton().disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Booking link'), { target: { value: 'https://ok.example.test' } })
+    expect(screen.queryByText('Enter a full link starting with https:// (or http://).')).toBeNull()
+    expect(saveButton().disabled).toBe(false)
+  })
+
+  it("the PUT's 400 on a booking field shows beside it", async () => {
+    mockFetch([answer({ bookings: false }), reply(400, { success: false, error: 'Invalid request body', issues: [{ path: 'booking_cta_label', message: 'Too long' }] })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(screen.getByText('Too long')).toBeTruthy())
+  })
+
+  it('a studio that takes bookings (Glofox) does not show them; a stored link is still echoed on Save', async () => {
+    mockFetch([answer({ bookings: true, studio: { enabled: true, booking_url: 'https://kept.example.test' } }), reply(200, { success: true, settings: {} })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.queryByLabelText('Booking link')).toBeNull()
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().booking_url).toBe('https://kept.example.test')
+  })
+
+  it('an older GET without `bookings` shows the fields (never hides a link)', async () => {
+    mockFetch([answer({})])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByLabelText('Booking link')).toBeTruthy()
+  })
+
+  it('the monthly points target is the studio\'s own: no source tag, edited and saved as typed', async () => {
+    mockFetch([answer({ bookings: true, studio: { enabled: true, monthly_points_target: 3000 } }), reply(200, { success: true, settings: {} })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const row = screen.getByText('Monthly Points target').parentElement
+    expect(within(row).queryByRole('button')).toBeNull()
+    const input = row.querySelector('input[type="number"]')
+    expect(input.value).toBe('3000')
+    fireEvent.change(input, { target: { value: '3500' } })
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().monthly_points_target).toBe(3500)
   })
 })

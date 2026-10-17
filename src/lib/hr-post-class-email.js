@@ -38,6 +38,7 @@ import { getAppUrl, getMemberAppUrl } from '@/lib/app-url'
 import { getLocationBranding } from '@/lib/location-branding'
 import { productName } from '@/lib/brand-name'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
+import { resolveAgentSettings } from '@/lib/agent/settings-resolve'
 
 const HISTORY_LOOKBACK_DAYS = 90
 
@@ -120,9 +121,13 @@ export async function loadContextForSession(db, sessionId) {
 
   // TZ.13 — `timezone` rides the same read: the studio's zone labels the
   // session start and buckets the streak highlight (D7, the member's studio).
-  const { data: loc } = await db.from('locations').select('settings, timezone').eq('id', session.location_id).single()
+  // MIAORG.1 — Mia's settings resolved DEFAULTS <- org <- studio (the
+  // membership link + label are studio-only keys, so they are always the
+  // studio's own). An unreadable row is no CTA and the default zone, as before.
+  const resolved = await resolveAgentSettings(db, session.location_id)
+  const loc = resolved.ok ? resolved.location : null
   const zone = zoneOfLocation(loc)
-  const ca = loc?.settings?.customer_agent || {}
+  const ca = resolved.ok ? resolved.settings : {}
   // Pulse stays out of booking (Glofox owns it), so no booking CTA is passed —
   // only the membership/join conversion action for non-members. See buildNextAction.
   const cta = {
