@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import {
   UN1T_CANCEL_TRACKING_START, glofoxInterval, shapeCounts, shapeMrr, shapeFlows,
   shapeRevenue, firstSales, engagementRows, isTrialProduct, cancelsComparable,
-  UN1T_ENDED_SUB_STATUSES, normaliseUn1tInvoiceStatus, shapePastDue,
+  UN1T_ENDED_SUB_STATUSES, UN1T_LIVE_SUB_STATUSES, UN1T_RETRY_NET_WINDOW_MS, normaliseUn1tInvoiceStatus, shapePastDue,
 } from './un1t-online-shape'
 
 const sub = (over = {}) => ({
@@ -318,9 +318,69 @@ describe('shapePastDue', () => {
   it('open invoice netted by a later paid invoice of the same amount on the same subscription → no row', () => {
     const rows = shapePastDue({
       subs: [psub()],
-      invoices: [inv(), inv({ un1t_id: 'i2', status: 'paid', remote_created_at: '2026-10-03T10:00:00Z' })],
+      invoices: [inv(), inv({ un1t_id: 'i2', status: 'paid', remote_created_at: '2026-10-01T10:05:00Z' })],
     })
     expect(rows).toEqual([])
+  })
+
+  it('an equal-amount paid invoice 30 days after the open one does NOT net it (outside the retry window)', () => {
+    const rows = shapePastDue({
+      subs: [psub()],
+      invoices: [inv(), inv({ un1t_id: 'p1', status: 'paid', remote_created_at: '2026-10-31T10:00:00Z' })],
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows[0].openInvoiceIds).toEqual(['i1'])
+  })
+
+  it('the retry window is the Glofox arrears one: a payment just inside nets, just past does not', () => {
+    const at = (ms) => new Date(Date.parse('2026-10-01T10:00:00Z') + ms).toISOString()
+    const run = (ms) => shapePastDue({ subs: [psub()], invoices: [inv(), inv({ un1t_id: 'p1', status: 'paid', remote_created_at: at(ms) })] })
+    expect(run(UN1T_RETRY_NET_WINDOW_MS)).toEqual([])
+    expect(run(UN1T_RETRY_NET_WINDOW_MS + 1000)).toHaveLength(1)
+  })
+
+  it('invoices naming neither a member nor a subscription each stand alone, never in a shared bucket', () => {
+    const orphan = (over) => inv({ un1t_user_id: null, subscription_id: null, contact_id: null, ...over })
+    const rows = shapePastDue({
+      subs: [],
+      invoices: [
+        orphan({ un1t_id: 'o1', amount_cents: 100, remote_created_at: '2026-10-01T10:00:00Z' }),
+        orphan({ un1t_id: 'o2', amount_cents: 100, remote_created_at: '2026-10-02T10:00:00Z' }),
+        // a paid orphan of the same amount must not net a different orphan
+        orphan({ un1t_id: 'p1', status: 'paid', amount_cents: 100, remote_created_at: '2026-10-01T10:05:00Z' }),
+      ],
+    })
+    expect(rows.map((r) => r.openInvoiceIds)).toEqual([['o1'], ['o2']])
+    expect(rows.every((r) => r.contactId === null && r.un1tUserId === null && r.subscriptionId === null)).toBe(true)
+  })
+
+  it('identity comes from the group\'s own rows: the subscription first, else an invoice of the same member', () => {
+    const fromSub = shapePastDue({
+      subs: [psub({ contact_id: 'c-sub' })],
+      invoices: [inv({ contact_id: 'c-invoice' })],
+    })
+    expect(fromSub[0]).toMatchObject({ contactId: 'c-sub', un1tUserId: 'u1' })
+    const fromInvoice = shapePastDue({ subs: [], invoices: [inv({ contact_id: null }), inv({ un1t_id: 'i2', contact_id: 'c-late' })] })
+    expect(fromInvoice[0]).toMatchObject({ contactId: 'c-late', un1tUserId: 'u1' })
+  })
+
+  it('a status with stray case/whitespace is normalised; an ended one carrying past_due_at raises no row', () => {
+    expect(shapePastDue({ subs: [psub({ status: ' canceled ', past_due_at: '2026-10-05T09:00:00Z' })], invoices: [] })).toEqual([])
+    expect(shapePastDue({ subs: [psub({ status: ' Canceled', past_due_at: '2026-10-05T09:00:00Z' })], invoices: [] })).toEqual([])
+    const live = shapePastDue({ subs: [psub({ status: ' PAST_DUE ' })], invoices: [] })
+    expect(live).toHaveLength(1)
+  })
+
+  it('an unrecognised subscription status fails closed: its past_due_at raises no row, but an open invoice still does', () => {
+    const sub = psub({ status: 'mystery', past_due_at: '2026-10-05T09:00:00Z' })
+    expect(shapePastDue({ subs: [sub], invoices: [] })).toEqual([])
+    expect(shapePastDue({ subs: [psub({ status: null, past_due_at: '2026-10-05T09:00:00Z' })], invoices: [] })).toEqual([])
+    const withInvoice = shapePastDue({ subs: [sub], invoices: [inv()] })
+    expect(withInvoice).toHaveLength(1)
+    expect(withInvoice[0]).toMatchObject({ openInvoiceIds: ['i1'], since: '2026-10-01T10:00:00Z' })
+    for (const status of UN1T_LIVE_SUB_STATUSES.filter((x) => x !== 'past_due')) {
+      expect(shapePastDue({ subs: [psub({ status, past_due_at: '2026-10-05T09:00:00Z' })], invoices: [] })).toHaveLength(1)
+    }
   })
 
   it('a paid invoice of a different amount does not net', () => {
@@ -344,13 +404,47 @@ describe('shapePastDue', () => {
     expect(rows.map((r) => r.subscriptionId)).toEqual(['s1'])
   })
 
+  it('a paid invoice in another currency does not net, and currency is compared upper-cased', () => {
+    const other = shapePastDue({
+      subs: [psub()],
+      invoices: [inv(), inv({ un1t_id: 'p1', status: 'paid', currency: 'usd', remote_created_at: '2026-10-01T10:05:00Z' })],
+    })
+    expect(other).toHaveLength(1)
+    expect(other[0].openInvoiceIds).toEqual(['i1'])
+    const same = shapePastDue({
+      subs: [psub()],
+      invoices: [inv({ currency: 'EUR' }), inv({ un1t_id: 'p1', status: 'paid', currency: 'eur', remote_created_at: '2026-10-01T10:05:00Z' })],
+    })
+    expect(same).toEqual([])
+  })
+
+  it('surviving open invoices in more than one currency → amountCents null (amounts sum only across like currencies)', () => {
+    const rows = shapePastDue({
+      subs: [psub()],
+      invoices: [
+        inv({ un1t_id: 'o1', currency: 'eur', amount_cents: 100 }),
+        inv({ un1t_id: 'o2', currency: 'EUR', amount_cents: 250, remote_created_at: '2026-10-02T10:00:00Z' }),
+        inv({ un1t_id: 'o3', currency: 'usd', amount_cents: 400, remote_created_at: '2026-10-03T10:00:00Z' }),
+      ],
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows[0].amountCents).toBeNull()
+    expect(rows[0].openInvoiceIds).toEqual(['o1', 'o2', 'o3'])
+    // like currencies (case aside) still sum
+    const like = shapePastDue({
+      subs: [psub()],
+      invoices: [inv({ un1t_id: 'o1', currency: 'eur', amount_cents: 100 }), inv({ un1t_id: 'o2', currency: 'EUR', amount_cents: 250 })],
+    })
+    expect(like[0].amountCents).toBe(350)
+  })
+
   it('one paid invoice nets only one of two equal open invoices → amountCents = one amount, since = the surviving one', () => {
     const rows = shapePastDue({
       subs: [psub()],
       invoices: [
         inv({ un1t_id: 'o1', remote_created_at: '2026-09-01T10:00:00Z' }),
         inv({ un1t_id: 'o2', remote_created_at: '2026-10-01T10:00:00Z' }),
-        inv({ un1t_id: 'p1', status: 'paid', remote_created_at: '2026-10-10T10:00:00Z' }),
+        inv({ un1t_id: 'p1', status: 'paid', remote_created_at: '2026-10-01T12:00:00Z' }),
       ],
     })
     expect(rows).toHaveLength(1)

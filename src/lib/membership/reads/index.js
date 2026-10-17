@@ -20,6 +20,7 @@ import { READS_BY_SOURCE } from './registry'
 
 export const READ_KEYS = Object.freeze([
   'membershipCounts', 'mrr', 'membershipFlows', 'growth', 'engagement', 'revenueMtd', 'arrears',
+  'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility',
 ])
 
 export { READS_BY_SOURCE }

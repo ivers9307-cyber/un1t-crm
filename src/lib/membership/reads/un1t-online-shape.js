@@ -6,6 +6,7 @@
 import { computeMrr } from '@shared/studio-kpi-math'
 import { pctDelta } from '@shared/dashboard-metrics'
 import { dayStrIn } from '@/lib/location-time'
+import { RETRY_NET_WINDOW_DAYS } from '@/lib/glofox-arrears'
 
 // The first un1t.online sync (UN1TSYNC.1). contact_memberships only learned
 // to END a membership from this day, so an earlier month has no cancellation
@@ -25,6 +26,16 @@ export const MEMBER_STATUSES = Object.freeze(['active', 'past_due'])
 // ended state 'canceled', other sources 'cancelled', 'ended' or 'expired'.
 // A past_due_at on one of these is history, not a debt.
 export const UN1T_ENDED_SUB_STATUSES = Object.freeze(['canceled', 'cancelled', 'ended', 'expired', 'incomplete_expired'])
+
+// The subscription statuses whose `past_due_at` / 'past_due' flag is a live
+// signal. FAIL CLOSED: a status outside this list (an ended spelling we did not
+// foresee, a new one the API grows) cannot raise a past-due row on its own.
+export const UN1T_LIVE_SUB_STATUSES = Object.freeze(['active', 'past_due', 'trialing', 'paused', 'unpaid'])
+
+// A paid invoice only pays off an open one inside the same retry window the
+// Glofox arrears code uses (RETRY_NET_WINDOW_DAYS): a same-amount payment weeks
+// later is the next period's bill, not the retry.
+export const UN1T_RETRY_NET_WINDOW_MS = RETRY_NET_WINDOW_DAYS * 86_400_000
 
 /** True for a subscription that holds a membership: status 'active' or 'past_due'. */
 export const isActiveSub = (s) => MEMBER_STATUSES.includes(s?.status)
@@ -253,9 +264,12 @@ const msOf = (v) => {
   return Number.isFinite(n) ? n : null
 }
 
+const currencyOf = (i) => (i?.currency ? String(i.currency).toUpperCase() : null)
+
 /**
  * The open invoices that survive netting. An open invoice is paid off when a
- * paid invoice on the same subscription has the same amount and a LATER
+ * paid invoice on the same subscription has the same amount, the same currency
+ * (upper-cased) and a LATER
  * `remote_created_at` (a retry that took). Each paid invoice nets at most one
  * open invoice: the latest earlier one still standing. An invoice with no
  * readable date can neither net nor be netted.
@@ -271,8 +285,9 @@ function survivingOpen(invoices) {
     let pick = null
     for (const o of open) {
       const oAt = msOf(o.remote_created_at)
-      if (netted.has(o) || oAt == null || oAt >= pAt) continue
+      if (netted.has(o) || oAt == null || oAt >= pAt || pAt - oAt > UN1T_RETRY_NET_WINDOW_MS) continue
       if (Number(o.amount_cents) !== Number(p.amount_cents)) continue
+      if (currencyOf(o) !== currencyOf(p)) continue
       if (pick == null || oAt > msOf(pick.remote_created_at)) pick = o
     }
     if (pick) netted.add(pick)
@@ -291,7 +306,9 @@ function survivingOpen(invoices) {
  *     past_due_at is history, though an invoice still open on it is real money).
  * `since` = earliest of `past_due_at` and the oldest surviving open invoice.
  * `amountCents` = the surviving open invoices' sum, or null when the only
- * signal is the subscription flag: no debt is ever estimated. Sorted by
+ * signal is the subscription flag (no debt is ever estimated) or when the
+ * survivors span more than one currency (amounts are summed only across like
+ * currencies). Sorted by
  * `since` ascending (no date last). Reads nothing but the rows it is given.
  *
  * @param {object} a
@@ -306,15 +323,28 @@ export function shapePastDue({ subs = [], invoices = [] } = {}) {
   const subByKey = new Map()
   for (const s of subs) subByKey.set(keyOf(s.un1t_user_id, s.un1t_id), s)
 
+  // An invoice naming neither a member nor a subscription cannot be grouped with
+  // anything: it gets a bucket of its own, never the shared ''/'' one.
+  const nameless = (v) => v == null || v === ''
+  const invoiceKey = (i) => (nameless(i.un1t_user_id) && nameless(i.subscription_id)
+    ? `orphan\u0000${i.un1t_id}`
+    : keyOf(i.un1t_user_id, i.subscription_id))
+
+  const orphanKeys = new Set()
   const invoicesByKey = new Map()
   for (const i of invoices) {
-    const k = keyOf(i.un1t_user_id, i.subscription_id)
+    const k = invoiceKey(i)
+    if (nameless(i.un1t_user_id) && nameless(i.subscription_id)) orphanKeys.add(k)
     if (!invoicesByKey.has(k)) invoicesByKey.set(k, [])
     invoicesByKey.get(k).push(i)
   }
 
-  const flagged = (s) => !UN1T_ENDED_SUB_STATUSES.includes(String(s.status ?? '').toLowerCase())
-    && (String(s.status ?? '').toLowerCase() === 'past_due' || s.past_due_at != null)
+  // Fail closed: only a status on the live allowlist lets the subscription's own
+  // flag (status 'past_due', or a past_due_at) raise a row.
+  const flagged = (s) => {
+    const status = String(s.status ?? '').trim().toLowerCase()
+    return UN1T_LIVE_SUB_STATUSES.includes(status) && (status === 'past_due' || s.past_due_at != null)
+  }
 
   const keys = new Set(invoicesByKey.keys())
   for (const [k, s] of subByKey) if (flagged(s)) keys.add(k)
@@ -334,14 +364,18 @@ export function shapePastDue({ subs = [], invoices = [] } = {}) {
       : null
 
     const currency = owed.find((o) => o.currency)?.currency ?? sub?.currency ?? group.find((i) => i.currency)?.currency ?? null
-    const first = sub ?? group[0]
+    // Identity comes only from rows that carry this group's own identifier: the
+    // subscription row, else an invoice naming the same member.
+    const userPart = k.split('\u0000')[0]
+    const own = orphanKeys.has(k) ? group : group.filter((i) => String(i.un1t_user_id ?? '') === userPart)
+    const mixedCurrency = new Set(owed.map(currencyOf).filter(Boolean)).size > 1
     rows.push({
-      contactId: sub?.contact_id ?? group.find((i) => i.contact_id)?.contact_id ?? null,
-      un1tUserId: first.un1t_user_id ?? null,
+      contactId: sub?.contact_id ?? own.find((i) => i.contact_id)?.contact_id ?? null,
+      un1tUserId: sub?.un1t_user_id ?? own[0]?.un1t_user_id ?? null,
       subscriptionId: sub?.un1t_id ?? group[0]?.subscription_id ?? null,
       productTitle: sub?.product_title ?? null,
       since,
-      amountCents: owed.length ? owed.reduce((sum, o) => sum + (Number(o.amount_cents) || 0), 0) : null,
+      amountCents: owed.length && !mixedCurrency ? owed.reduce((sum, o) => sum + (Number(o.amount_cents) || 0), 0) : null,
       currency: currency ? String(currency).toUpperCase() : null,
       openInvoiceIds: owed.map((o) => o.un1t_id),
       cancelAtPeriodEnd: sub?.cancel_at_period_end === true,

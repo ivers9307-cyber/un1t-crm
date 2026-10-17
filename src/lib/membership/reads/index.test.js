@@ -18,13 +18,18 @@ import { noneReads } from './none'
 import { un1tOnlineReads } from './un1t-online'
 
 const db = {}
+const GLOFOX_KEYS = ['membershipCounts', 'mrr', 'membershipFlows', 'growth', 'engagement', 'revenueMtd', 'arrears']
+const NEW_KEYS = ['pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility']
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
 
 beforeEach(() => vi.clearAllMocks())
 
 describe('membershipReadsFor', () => {
-  it('exposes the seven read keys', () => {
-    expect(READ_KEYS).toEqual(['membershipCounts', 'mrr', 'membershipFlows', 'growth', 'engagement', 'revenueMtd', 'arrears'])
+  it('exposes the eleven read keys', () => {
+    expect(READ_KEYS).toEqual([
+      'membershipCounts', 'mrr', 'membershipFlows', 'growth', 'engagement', 'revenueMtd', 'arrears',
+      'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility',
+    ])
     expect(Object.isFrozen(READ_KEYS)).toBe(true)
   })
 
@@ -34,7 +39,8 @@ describe('membershipReadsFor', () => {
     expect(membershipStateForPage).toHaveBeenCalledWith(db, LOC)
     expect(r).toMatchObject({ source: 'glofox', label: 'Glofox', state: 'configured', error: null })
     expect(r.reads).toBe(glofoxReads)
-    for (const k of READ_KEYS) expect(supportsRead(r, k)).toBe(true)
+    for (const k of GLOFOX_KEYS) expect(supportsRead(r, k)).toBe(true)
+    for (const k of NEW_KEYS) expect(supportsRead(r, k)).toBe(false)
   })
 
   for (const [source, state] of [['none', 'none'], ['glofox', 'unconfigured'], [null, 'unknown'], [null, 'no_location']]) {
@@ -70,12 +76,14 @@ describe('membershipReadsFor', () => {
     for (const k of READ_KEYS) expect(supportsRead(r, k)).toBe(false)
   })
 
-  it('configured un1t_online → reads is the un1t adapter (no arrears)', async () => {
+  it('configured un1t_online → reads is the un1t adapter (no arrears; pastDue and paymentsFor yes)', async () => {
     membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: {} })
     const r = await membershipReadsFor(db, LOC)
     expect(r).toMatchObject({ source: 'un1t_online', state: 'configured', error: null })
     expect(r.reads).toBe(un1tOnlineReads)
-    for (const k of READ_KEYS.filter((k) => k !== 'arrears')) expect(supportsRead(r, k)).toBe(true)
+    for (const k of GLOFOX_KEYS.filter((k) => k !== 'arrears')) expect(supportsRead(r, k)).toBe(true)
+    expect(supportsRead(r, 'pastDue')).toBe(true)
+    expect(supportsRead(r, 'paymentsFor')).toBe(true)
     expect(supportsRead(r, 'arrears')).toBe(false)
   })
 

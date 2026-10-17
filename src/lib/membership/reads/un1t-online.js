@@ -11,21 +11,29 @@
 //   engagement        ← fetchEngagement           { success, data } | { success:false, error }
 //   revenueMtd        ← fetchRevenueMTD           { success, data } | { success:false, error }
 //
-// There is no `arrears`: un1t past-due amounts are not synced, so the surface
-// shows "unavailable" rather than a Glofox-shaped zero (supportsRead false).
+//   pastDue           { success, data: PastDueRow[] } | { success:false, error }
+//   paymentsFor       { success, data: { subscriptions, transactions, invoices, pastDue } } | { success:false, error }
+//
+// There is no `arrears`: the Glofox arrears summary is a different number from
+// the per-subscription `pastDue` below (surviving open invoices, netted), so the
+// surface shows "unavailable" rather than a Glofox-shaped zero (supportsRead
+// false). `pastDue` / `paymentsFor` are un1t-only reads (HATCHPIPE.2): the
+// Glofox adapter lacks them.
 //
 // SCOPE. Every query filters `<table>.location_id = locationId`, the studio the
 // MEMBERSHIP is held at. Nothing here reads `contacts`, so a contact who lives
 // at Stillorgan with an active Hatch subscription counts at Hatch (and still
 // counts at Stillorgan if they are a Glofox member there). Service-role client;
 // reads only, no writes. Every list read is range()+order() paginated.
-import { selectAll } from '@/lib/select-all'
+import { selectAll, selectAllByKeys } from '@/lib/select-all'
+import { logWarn } from '@/lib/log'
 import { dayStrIn, dateKeyIn, monthStartMsIn, dayRangeMsIn, DEFAULT_TZ } from '@/lib/location-time'
 import { monthKeys } from '@/lib/membership-flows'
 import { windowBounds, windowDelta, computeEngagement, WINDOW_DAYS } from '@shared/studio-kpi-math'
 import {
   shapeCounts, shapeMrr, shapeFlows, shapeRevenue,
   firstSales, engagementRows, cancelsComparable, MEMBER_STATUSES,
+  shapePastDue, normaliseUn1tInvoiceStatus, glofoxInterval,
 } from './un1t-online-shape'
 
 const PAGE = 1000
@@ -145,6 +153,66 @@ const listTransactionAmounts = (db, loc, fromIso, toIso) => selectAll((from, to)
 }, { pageSize: PAGE })
 
 const errMessage = (e) => (e && e.message) || String(e)
+
+// ---------------------------------------------------------------------------
+// HATCHPIPE.2 — past due and per-contact payments. Subscriptions and invoices
+// are read FRESH (see freshCutoff): a row the API stopped returning keeps its
+// last status for ever, and a stale 'open' invoice is a debt that was settled
+// (or never was) upstream. Freshness is judged against the STUDIO's newest
+// pull, never the contact's, so a contactIds filter cannot make a row look new.
+// ---------------------------------------------------------------------------
+const SUB_COLS = 'un1t_id, un1t_user_id, contact_id, product_title, status, price_cents, currency, billing_interval, billing_interval_count, current_period_end, cancel_at_period_end, paused_until, past_due_at'
+const INVOICE_COLS = 'un1t_id, un1t_user_id, contact_id, subscription_id, status, amount_cents, currency, remote_created_at'
+const TX_COLS = 'remote_created_at, product_title, type, amount_cents, currency, refunded'
+const KEY_CHUNK = 300
+const DEFAULT_PAYMENTS_LIMIT = 25
+
+/** Fresh rows of one sync-stamped table at a studio; `contactIds` (array) narrows to those contacts. */
+async function listFresh(db, loc, table, cols, contactIds) {
+  const cutoffIso = await freshCutoff(db, table, loc)
+  if (cutoffIso === null) return []
+  const page = (q, from, to) => q
+    .eq('location_id', loc)
+    .gte('synced_at', cutoffIso)
+    .order('id', { ascending: true })
+    .range(from, to)
+  if (!contactIds) {
+    return selectAll((from, to) => page(db.from(table).select(cols), from, to), { pageSize: PAGE })
+  }
+  return selectAllByKeys(
+    contactIds,
+    (keys, from, to) => page(db.from(table).select(cols).in('contact_id', keys), from, to),
+    { chunkSize: KEY_CHUNK, pageSize: PAGE },
+  )
+}
+
+const cleanIds = (ids) => [...new Set(ids.filter((id) => id != null && id !== ''))]
+
+// Each distinct unknown spelling logs once per call, so a studio full of one
+// odd status is one line, not one per invoice.
+function warnUnknownStatuses(locationId, invoices) {
+  const seen = new Set()
+  for (const i of invoices) {
+    if (seen.has(i.status) || normaliseUn1tInvoiceStatus(i.status) !== 'unknown') continue
+    seen.add(i.status)
+    logWarn('un1t-billing', 'unknown invoice status', { locationId, status: i.status })
+  }
+}
+
+async function loadBilling(db, locationId, contactIds) {
+  const [subs, invoices] = await Promise.all([
+    listFresh(db, locationId, 'un1t_subscriptions', SUB_COLS, contactIds),
+    listFresh(db, locationId, 'un1t_invoices', INVOICE_COLS, contactIds),
+  ])
+  warnUnknownStatuses(locationId, invoices)
+  return { subs, invoices, pastDue: shapePastDue({ subs, invoices }) }
+}
+
+const newestFirst = (a, b) => {
+  const am = Date.parse(a)
+  const bm = Date.parse(b)
+  return (Number.isFinite(bm) ? bm : -Infinity) - (Number.isFinite(am) ? am : -Infinity)
+}
 
 // ---------------------------------------------------------------------------
 // The reads
@@ -279,6 +347,102 @@ async function revenueMtd(db, locationId, now = new Date(), zone = DEFAULT_TZ) {
   }
 }
 
+/**
+ * Who is behind on payment at `locationId` (see shapePastDue): one row per
+ * (member, subscription) with a surviving open invoice or a live past-due
+ * subscription. `contactIds` narrows to those contacts (an empty list is an
+ * empty answer with no query; a non-array is refused rather than widened to
+ * the whole studio). Reads no `contacts`.
+ */
+async function pastDue(db, locationId, { contactIds } = {}) {
+  if (!locationId) return { success: false, error: 'No location' }
+  if (contactIds != null && !Array.isArray(contactIds)) return { success: false, error: 'contactIds must be an array' }
+  const ids = contactIds == null ? null : cleanIds(contactIds)
+  if (ids && ids.length === 0) return { success: true, data: [] }
+  try {
+    const { pastDue: rows } = await loadBilling(db, locationId, ids)
+    return { success: true, data: rows }
+  } catch (e) {
+    return { success: false, error: errMessage(e) }
+  }
+}
+
+/**
+ * The payments picture for a contact (or a merged set of contacts) at one
+ * studio: fresh subscriptions, the newest `limit` transactions and fresh
+ * invoices, and the earliest-`since` past-due row (or null).
+ */
+async function paymentsFor(db, locationId, contactIds, { limit = DEFAULT_PAYMENTS_LIMIT } = {}) {
+  if (!locationId) return { success: false, error: 'No location' }
+  const ids = Array.isArray(contactIds) ? cleanIds(contactIds) : []
+  if (ids.length === 0) {
+    return { success: true, data: { subscriptions: [], transactions: [], invoices: [], pastDue: null } }
+  }
+  const n = Number.isFinite(Number(limit)) && Number(limit) >= 1 ? Math.floor(Number(limit)) : DEFAULT_PAYMENTS_LIMIT
+  try {
+    const [billing, txRows] = await Promise.all([
+      loadBilling(db, locationId, ids),
+      listNewestTransactions(db, locationId, ids, n),
+    ])
+    return {
+      success: true,
+      data: {
+        subscriptions: billing.subs.map((s) => ({
+          productTitle: s.product_title ?? null,
+          status: s.status ?? null,
+          priceCents: s.price_cents ?? null,
+          currency: s.currency ?? null,
+          interval: glofoxInterval(s.billing_interval, s.billing_interval_count),
+          periodEnd: s.current_period_end ?? null,
+          cancelAtPeriodEnd: s.cancel_at_period_end === true,
+          pausedUntil: s.paused_until ?? null,
+          pastDueAt: s.past_due_at ?? null,
+        })),
+        transactions: txRows.map((t) => ({
+          at: t.remote_created_at ?? null,
+          productTitle: t.product_title ?? null,
+          type: t.type ?? null,
+          amountCents: t.amount_cents ?? null,
+          currency: t.currency ?? null,
+          refunded: t.refunded === true,
+        })),
+        invoices: [...billing.invoices]
+          .sort((a, b) => newestFirst(a.remote_created_at, b.remote_created_at))
+          .slice(0, n)
+          .map((i) => ({
+            at: i.remote_created_at ?? null,
+            status: normaliseUn1tInvoiceStatus(i.status),
+            rawStatus: i.status ?? null,
+            amountCents: i.amount_cents ?? null,
+            currency: i.currency ?? null,
+          })),
+        pastDue: billing.pastDue[0] ?? null,
+      },
+    }
+  } catch (e) {
+    return { success: false, error: errMessage(e) }
+  }
+}
+
+// The newest `limit` transactions across the contacts: each key chunk returns
+// its own newest `limit` (one capped page, no pagination needed), then the
+// union is cut again. Transactions are history, so they are not freshness-gated.
+async function listNewestTransactions(db, loc, contactIds, limit) {
+  const out = []
+  for (let i = 0; i < contactIds.length; i += KEY_CHUNK) {
+    const { data, error } = await db
+      .from('un1t_transactions')
+      .select(TX_COLS)
+      .eq('location_id', loc)
+      .in('contact_id', contactIds.slice(i, i + KEY_CHUNK))
+      .order('remote_created_at', { ascending: false, nullsFirst: false })
+      .range(0, limit - 1)
+    if (error) throw new Error(error.message || String(error))
+    out.push(...(data || []))
+  }
+  return out.sort((a, b) => newestFirst(a.remote_created_at, b.remote_created_at)).slice(0, limit)
+}
+
 export const un1tOnlineReads = Object.freeze({
   membershipCounts,
   mrr,
@@ -286,4 +450,6 @@ export const un1tOnlineReads = Object.freeze({
   growth,
   engagement,
   revenueMtd,
+  pastDue,
+  paymentsFor,
 })

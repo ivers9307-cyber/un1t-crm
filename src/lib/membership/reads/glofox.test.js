@@ -22,8 +22,9 @@ const now = new Date('2026-10-17T10:00:00Z')
 beforeEach(() => vi.clearAllMocks())
 
 describe('glofoxReads (pass-through)', () => {
-  it('implements exactly the READ_KEYS', () => {
-    expect(Object.keys(glofoxReads).sort()).toEqual([...READ_KEYS].sort())
+  it('implements the original seven READ_KEYS and none of the un1t-only four', () => {
+    expect(Object.keys(glofoxReads).sort()).toEqual([...READ_KEYS.slice(0, 7)].sort())
+    for (const k of ['pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility']) expect(glofoxReads[k]).toBeUndefined()
     expect(Object.isFrozen(glofoxReads)).toBe(true)
   })
 

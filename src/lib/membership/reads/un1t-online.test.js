@@ -1,6 +1,10 @@
 // UN1TREAD.2 — the un1t.online reads: scoping, pagination, failure contract
 // and return envelopes (each identical to the Glofox function it mirrors).
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+
+import { logWarn } from '@/lib/log'
 import { un1tOnlineReads, freshCutoff } from './un1t-online'
 
 const HATCH = 'loc-hatch'
@@ -100,9 +104,11 @@ const call = (db, key) => ({
   revenueMtd: () => un1tOnlineReads.revenueMtd(db, HATCH, NOW, 'Europe/Dublin'),
 })[key]()
 
+beforeEach(() => vi.clearAllMocks())
+
 describe('un1tOnlineReads surface', () => {
-  it('implements six reads and deliberately no arrears', () => {
-    expect(Object.keys(un1tOnlineReads).sort()).toEqual([...READS].sort())
+  it('implements six reads plus pastDue and paymentsFor, and deliberately no arrears', () => {
+    expect(Object.keys(un1tOnlineReads).sort()).toEqual([...READS, 'pastDue', 'paymentsFor'].sort())
     expect(Object.isFrozen(un1tOnlineReads)).toBe(true)
     expect(un1tOnlineReads.arrears).toBeUndefined()
   })
@@ -403,5 +409,228 @@ describe('freshCutoff', () => {
     await freshCutoff(db, 'un1t_subscriptions', HATCH)
     expect(log[0]).toMatchObject({ table: 'un1t_subscriptions', cols: 'synced_at', order: 'synced_at', range: [0, 0] })
     expect(log[0].filters).toContainEqual(['eq', 'location_id', HATCH])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// HATCHPIPE.2 — pastDue and paymentsFor
+// ---------------------------------------------------------------------------
+describe('pastDue and paymentsFor', () => {
+  const psub = (over = {}) => ({
+    location_id: HATCH, un1t_id: 's1', un1t_user_id: 'u1', contact_id: 'c1', product_title: 'Unlimited',
+    status: 'active', price_cents: 18900, currency: 'eur', billing_interval: 'month', billing_interval_count: 1,
+    current_period_end: '2026-11-01T00:00:00Z', cancel_at_period_end: false, paused_at: null, paused_until: null,
+    past_due_at: null, synced_at: SYNCED, ...over,
+  })
+  const pinv = (over = {}) => ({
+    id: over.un1t_id ?? 'i1', location_id: HATCH, un1t_id: 'i1', un1t_user_id: 'u1', contact_id: 'c1', subscription_id: 's1',
+    status: 'open', amount_cents: 18900, currency: 'eur', remote_created_at: '2026-10-01T10:00:00Z', synced_at: SYNCED, ...over,
+  })
+  const ptx = (over = {}) => ({
+    id: over.un1t_id ?? 't1', location_id: HATCH, un1t_id: 't1', un1t_user_id: 'u1', contact_id: 'c1', product_title: 'Unlimited',
+    type: 'sub_renewal', amount_cents: 18900, currency: 'eur', refunded: false, remote_created_at: '2026-10-01T09:00:00Z', ...over,
+  })
+  const ids = (rows) => rows.map((r) => r.subscriptionId)
+
+  const base = () => ({
+    un1t_subscriptions: [
+      psub({ id: 'a', status: 'past_due', past_due_at: '2026-10-05T09:00:00Z' }),
+      psub({ id: 'b', un1t_id: 's2', un1t_user_id: 'u2', contact_id: 'c2', status: 'past_due', past_due_at: '2026-10-06T09:00:00Z' }),
+      psub({ id: 'c', location_id: STILLORGAN, un1t_id: 's9', un1t_user_id: 'o', contact_id: 'c9', status: 'past_due', past_due_at: '2026-10-07T09:00:00Z' }),
+    ],
+    un1t_invoices: [pinv({ id: 'x' })],
+    un1t_transactions: [ptx()],
+  })
+
+  it('pastDue and paymentsFor filter .eq("location_id", loc) on every table and never read contacts', async () => {
+    for (const run of [
+      (db) => un1tOnlineReads.pastDue(db, HATCH),
+      (db) => un1tOnlineReads.pastDue(db, HATCH, { contactIds: ['c1'] }),
+      (db) => un1tOnlineReads.paymentsFor(db, HATCH, ['c1']),
+    ]) {
+      const { db, log } = makeDb(base())
+      const out = await run(db)
+      expect(out.success).toBe(true)
+      expect(log.length).toBeGreaterThan(0)
+      for (const q of log) {
+        expect(q.table).not.toBe('contacts')
+        expect(q.filters, q.table).toContainEqual(['eq', 'location_id', HATCH])
+      }
+    }
+  })
+
+  it('pastDue returns rows for the studio, and honours contactIds (only those contacts)', async () => {
+    const { db, log } = makeDb(base())
+    const all = await un1tOnlineReads.pastDue(db, HATCH)
+    expect(all.success).toBe(true)
+    expect(ids(all.data)).toEqual(['s1', 's2'])
+    const some = await un1tOnlineReads.pastDue(db, HATCH, { contactIds: ['c2'] })
+    expect(ids(some.data)).toEqual(['s2'])
+    const scoped = log.filter((q) => q.filters.some(([k, c]) => k === 'in' && c === 'contact_id'))
+    expect(scoped.length).toBeGreaterThan(0)
+    expect(scoped.map((q) => q.table).sort()).toEqual(['un1t_invoices', 'un1t_subscriptions'])
+  })
+
+  it('pastDue with an empty contactIds list succeeds with no rows and no query; a non-array refuses', async () => {
+    const { db, log } = makeDb(base())
+    expect(await un1tOnlineReads.pastDue(db, HATCH, { contactIds: [] })).toEqual({ success: true, data: [] })
+    expect(log).toHaveLength(0)
+    const bad = await un1tOnlineReads.pastDue(db, HATCH, { contactIds: 'c1' })
+    expect(bad.success).toBe(false)
+    expect(log).toHaveLength(0)
+  })
+
+  it('pastDue refuses a missing location without querying', async () => {
+    const { db, log } = makeDb(base())
+    expect(await un1tOnlineReads.pastDue(db, null)).toMatchObject({ success: false })
+    expect(await un1tOnlineReads.paymentsFor(db, undefined, ['c1'])).toMatchObject({ success: false })
+    expect(log).toHaveLength(0)
+  })
+
+  it('pastDue paginates past 1,000 rows with range + order', async () => {
+    const invoices = Array.from({ length: 1100 }, (_, n) => pinv({
+      id: `inv-${String(n).padStart(4, '0')}`, un1t_id: `inv-${n}`, un1t_user_id: `u${n}`, contact_id: `c${n}`,
+      subscription_id: `s${n}`,
+    }))
+    const { db, log } = makeDb({ un1t_subscriptions: [psub()], un1t_invoices: invoices })
+    const out = await un1tOnlineReads.pastDue(db, HATCH)
+    expect(out.success).toBe(true)
+    expect(out.data).toHaveLength(1100)
+    const pages = log.filter((q) => q.table === 'un1t_invoices' && q.cols !== 'synced_at')
+    expect(pages.map((q) => q.range)).toEqual([[0, 999], [1000, 1999]])
+    for (const q of pages) expect(q.order).toBe('id')
+  })
+
+  it('pastDue chunks a long contactIds list and keeps every chunk scoped', async () => {
+    const contactIds = Array.from({ length: 650 }, (_, n) => `c${n}`)
+    const { db, log } = makeDb({ un1t_subscriptions: [psub({ contact_id: 'c649', status: 'past_due', past_due_at: '2026-10-05T09:00:00Z' })], un1t_invoices: [] })
+    const out = await un1tOnlineReads.pastDue(db, HATCH, { contactIds })
+    expect(ids(out.data)).toEqual(['s1'])
+    const subPages = log.filter((q) => q.table === 'un1t_subscriptions' && q.cols !== 'synced_at')
+    expect(subPages).toHaveLength(3)
+    for (const q of subPages) expect(q.filters).toContainEqual(['eq', 'location_id', HATCH])
+  })
+
+  it('pastDue ignores a stale past_due subscription row (older than the freshness window)', async () => {
+    const { db } = makeDb({
+      un1t_subscriptions: [
+        psub({ un1t_id: 'live', un1t_user_id: 'ua', contact_id: 'ca' }), // the newest row sets the cutoff
+        psub({ un1t_id: 'gone', un1t_user_id: 'ub', contact_id: 'cb', status: 'past_due', past_due_at: '2026-10-01T00:00:00Z', synced_at: '2026-10-17T11:00:00.000Z' }),
+      ],
+      un1t_invoices: [pinv({ un1t_id: 'live-inv', synced_at: SYNCED })],
+    })
+    const out = await un1tOnlineReads.pastDue(db, HATCH)
+    expect(ids(out.data)).toEqual(['s1']) // the invoice's own subscription id, not the stale 'gone'
+    expect(out.data.every((r) => r.un1tUserId !== 'ub')).toBe(true)
+  })
+
+  it('pastDue ignores a stale open invoice too', async () => {
+    const { db } = makeDb({
+      un1t_subscriptions: [psub()],
+      un1t_invoices: [pinv({ un1t_id: 'new', status: 'paid' }), pinv({ un1t_id: 'old', synced_at: '2026-10-17T10:00:00.000Z' })],
+    })
+    expect((await un1tOnlineReads.pastDue(db, HATCH)).data).toEqual([])
+  })
+
+  it('pastDue is an empty list when the studio has no subscription or invoice rows', async () => {
+    const { db } = makeDb({})
+    expect(await un1tOnlineReads.pastDue(db, HATCH)).toEqual({ success: true, data: [] })
+  })
+
+  it('paymentsFor returns the documented shape; transactions newest first, capped at limit; refunded flag kept', async () => {
+    const { db } = makeDb({
+      un1t_subscriptions: [psub({ paused_until: '2026-11-15T00:00:00Z', cancel_at_period_end: true, status: 'past_due', past_due_at: '2026-10-05T09:00:00Z' })],
+      un1t_invoices: [
+        pinv({ un1t_id: 'i1', status: 'paid', remote_created_at: '2026-09-01T10:00:00Z' }),
+        pinv({ un1t_id: 'i2', remote_created_at: '2026-10-01T10:00:00Z' }),
+        pinv({ un1t_id: 'i3', status: 'paid', remote_created_at: '2026-08-01T10:00:00Z' }),
+      ],
+      un1t_transactions: [
+        ptx({ un1t_id: 't1', remote_created_at: '2026-08-01T09:00:00Z' }),
+        ptx({ un1t_id: 't2', remote_created_at: '2026-10-01T09:00:00Z', refunded: true, type: 'sub_initial' }),
+        ptx({ un1t_id: 't3', remote_created_at: '2026-09-01T09:00:00Z' }),
+        ptx({ un1t_id: 't4', contact_id: 'c-other', remote_created_at: '2026-10-09T09:00:00Z' }),
+      ],
+    })
+    const out = await un1tOnlineReads.paymentsFor(db, HATCH, ['c1'], { limit: 2 })
+    expect(out.success).toBe(true)
+    expect(out.data.subscriptions).toEqual([{
+      productTitle: 'Unlimited', status: 'past_due', priceCents: 18900, currency: 'eur', interval: '1 month',
+      periodEnd: '2026-11-01T00:00:00Z', cancelAtPeriodEnd: true, pausedUntil: '2026-11-15T00:00:00Z', pastDueAt: '2026-10-05T09:00:00Z',
+    }])
+    expect(out.data.transactions).toEqual([
+      { at: '2026-10-01T09:00:00Z', productTitle: 'Unlimited', type: 'sub_initial', amountCents: 18900, currency: 'eur', refunded: true },
+      { at: '2026-09-01T09:00:00Z', productTitle: 'Unlimited', type: 'sub_renewal', amountCents: 18900, currency: 'eur', refunded: false },
+    ])
+    expect(out.data.invoices.map((i) => i.at)).toEqual(['2026-10-01T10:00:00Z', '2026-09-01T10:00:00Z'])
+    expect(out.data.pastDue).toMatchObject({ subscriptionId: 's1', since: '2026-10-01T10:00:00Z', amountCents: 18900 })
+  })
+
+  it('paymentsFor defaults to 25, and pastDue is null when nothing is owed', async () => {
+    const txs = Array.from({ length: 30 }, (_, n) => ptx({ un1t_id: `t${n}`, remote_created_at: `2026-09-${String(n + 1).padStart(2, '0')}T09:00:00Z` }))
+    const { db } = makeDb({ un1t_subscriptions: [psub()], un1t_invoices: [pinv({ status: 'paid' })], un1t_transactions: txs })
+    const out = await un1tOnlineReads.paymentsFor(db, HATCH, ['c1'])
+    expect(out.data.transactions).toHaveLength(25)
+    expect(out.data.transactions[0].at).toBe('2026-09-30T09:00:00Z')
+    expect(out.data.pastDue).toBeNull()
+  })
+
+  it('paymentsFor drops stale subscription and invoice rows', async () => {
+    const { db } = makeDb({
+      un1t_subscriptions: [psub(), psub({ un1t_id: 'old', product_title: 'Gone', synced_at: '2026-10-17T10:00:00.000Z' })],
+      un1t_invoices: [pinv({ status: 'paid' }), pinv({ un1t_id: 'old-inv', status: 'open', synced_at: '2026-10-17T10:00:00.000Z' })],
+    })
+    const out = await un1tOnlineReads.paymentsFor(db, HATCH, ['c1'])
+    expect(out.data.subscriptions.map((s) => s.productTitle)).toEqual(['Unlimited'])
+    expect(out.data.invoices).toHaveLength(1)
+    expect(out.data.pastDue).toBeNull()
+  })
+
+  it('paymentsFor with no contacts succeeds with empty lists and no query', async () => {
+    const { db, log } = makeDb(base())
+    const out = await un1tOnlineReads.paymentsFor(db, HATCH, [])
+    expect(out).toEqual({ success: true, data: { subscriptions: [], transactions: [], invoices: [], pastDue: null } })
+    expect(log).toHaveLength(0)
+  })
+
+  it('paymentsFor invoices carry normalised status and rawStatus; an unknown status logs once with { locationId, status }', async () => {
+    const { db } = makeDb({
+      un1t_subscriptions: [psub()],
+      un1t_invoices: [
+        pinv({ un1t_id: 'i1', status: 'Past_Due', remote_created_at: '2026-10-03T10:00:00Z' }),
+        pinv({ un1t_id: 'i2', status: 'weird', remote_created_at: '2026-10-02T10:00:00Z' }),
+        pinv({ un1t_id: 'i3', status: 'weird', remote_created_at: '2026-10-01T10:00:00Z' }),
+        pinv({ un1t_id: 'i4', status: 'paid', amount_cents: 5, remote_created_at: '2026-09-01T10:00:00Z' }),
+      ],
+    })
+    const out = await un1tOnlineReads.paymentsFor(db, HATCH, ['c1'])
+    expect(out.data.invoices.map((i) => [i.status, i.rawStatus])).toEqual([
+      ['open', 'Past_Due'], ['unknown', 'weird'], ['unknown', 'weird'], ['paid', 'paid'],
+    ])
+    expect(out.data.invoices[0]).toEqual({ at: '2026-10-03T10:00:00Z', status: 'open', rawStatus: 'Past_Due', amountCents: 18900, currency: 'eur' })
+    const warns = logWarn.mock.calls.filter((c) => c[1] === 'unknown invoice status')
+    expect(warns).toEqual([['un1t-billing', 'unknown invoice status', { locationId: HATCH, status: 'weird' }]])
+  })
+
+  it('pastDue logs an unknown invoice status once per call', async () => {
+    const { db } = makeDb({
+      un1t_subscriptions: [psub()],
+      un1t_invoices: [pinv({ un1t_id: 'i1', status: 'weird' }), pinv({ un1t_id: 'i2', status: 'weird' })],
+    })
+    await un1tOnlineReads.pastDue(db, HATCH)
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    await un1tOnlineReads.pastDue(db, HATCH)
+    expect(logWarn).toHaveBeenCalledTimes(2)
+  })
+
+  it('a failed page returns { success:false, error }, never throws', async () => {
+    for (const table of ['un1t_subscriptions', 'un1t_invoices']) {
+      const { db } = makeDb(base(), { fail: [table] })
+      expect(await un1tOnlineReads.pastDue(db, HATCH)).toEqual({ success: false, error: `${table} boom` })
+      expect(await un1tOnlineReads.pastDue(db, HATCH, { contactIds: ['c1'] })).toMatchObject({ success: false })
+      expect(await un1tOnlineReads.paymentsFor(db, HATCH, ['c1'])).toMatchObject({ success: false })
+    }
+    const { db } = makeDb(base(), { fail: ['un1t_transactions'] })
+    expect(await un1tOnlineReads.paymentsFor(db, HATCH, ['c1'])).toEqual({ success: false, error: 'un1t_transactions boom' })
   })
 })
