@@ -79,7 +79,28 @@ function soft(promise) {
 // fetchAcquisition counts contacts.converted_at / joined_at / pipeline_stage_slug,
 // which only the Glofox sync and classifier set, so New members, Trial
 // conversion, New leads, Trials done and CAC are Glofox-fed too. The floor
-// reads class tables and stays source-agnostic.
+// reads class tables and stays source-agnostic, EXCEPT that its booking-derived
+// figures only exist for Glofox (UN1TCLASS.3): see withoutBookingKpis().
+
+// UN1TCLASS.3 — Hatch Street's class_occurrences are projected from its
+// un1t.online timetable (raw.booked = bookings_count), so Classes and Fill
+// compute honestly. Nothing writes class_bookings there, which makes the
+// no-show rate, new-joiner activation and attended visits "no data", not 0:
+// an empty table would compute 0% / 0, a plausible-looking wrong number.
+// Null them so the cells draw '— unavailable'. Per-group fill is kept; the
+// per-group no-show is nulled (FloorTable draws '—'). Everything else (classes,
+// fill, 7-day fill, noData, groupedBy) passes through as fetchFloor computed it.
+function withoutBookingKpis(floor) {
+  if (!floor) return floor
+  return {
+    ...floor,
+    noShowPct: null,
+    activation: null,
+    attendedVisits: null,
+    groupTable: (floor.groupTable || []).map((g) => ({ ...g, noShowPct: null })),
+  }
+}
+
 async function loadLocationScorecard(locationId, r) {
   const db = createServerClient()
   const glofox = r.source === 'glofox'
@@ -95,7 +116,7 @@ async function loadLocationScorecard(locationId, r) {
       glofox ? soft(fetchRevenueChurn(db, locationId, estYield)) : null,
       glofox ? soft(fetchAcquisition(db, locationId)) : null,
       supportsRead(r, 'engagement') ? soft(r.reads.engagement(db, locationId)) : null,
-      soft(fetchFloor(db, locationId)),
+      soft(fetchFloor(db, locationId)).then((f) => (glofox ? f : withoutBookingKpis(f))),
       soft(fetchAdSpend(db, locationId)),
       radarOk ? loadRadar(db, locationId).catch(() => null) : null,
     ])
@@ -103,6 +124,8 @@ async function loadLocationScorecard(locationId, r) {
   if (!mrr && !growth && !acq && !engagement && !floor) return null
   return {
     mrr, growth, churn, acq, engagement, floor, spend,
+    // Booking-derived floor cells exist only where class_bookings is written.
+    bookingKpis: glofox,
     radarSummary: radar?.summary || null,
   }
 }
@@ -143,7 +166,7 @@ async function LocationColumn({ user, location }) {
   }
   if (!vm) return <BlockError label={`${location.name} scorecard`} />
 
-  const { mrr, growth, churn, acq, engagement, floor, spend, radarSummary } = vm
+  const { mrr, growth, churn, acq, engagement, floor, spend, radarSummary, bookingKpis } = vm
   const W = WINDOW_DAYS
 
   // A CONFIGURED source with no recurring base AND no class sync has not
@@ -321,13 +344,13 @@ async function LocationColumn({ user, location }) {
           <ScoreCell
             label="No-show rate 28d"
             value={floor?.noShowPct != null ? `${floor.noShowPct}%` : null}
-            sublabel={floor ? `target under ${TARGETS.noShowPct}%` : UNAVAILABLE}
+            sublabel={floor && bookingKpis ? `target under ${TARGETS.noShowPct}%` : UNAVAILABLE}
             accent={toneBelow(floor?.noShowPct, TARGETS.noShowPct)}
           />
           <ScoreCell
             label="New-joiner activation"
-            value={floor?.activation.activatedPct != null ? `${floor.activation.activatedPct}%` : null}
-            sublabel={floor
+            value={floor?.activation?.activatedPct != null ? `${floor.activation.activatedPct}%` : null}
+            sublabel={floor && bookingKpis
               ? (floor.activation.cohort > 0
                 ? `≥3 visits in first 14d · ${floor.activation.cohort} joiner${floor.activation.cohort === 1 ? '' : 's'}`
                 : 'no complete cohort yet')
@@ -336,11 +359,11 @@ async function LocationColumn({ user, location }) {
           <ScoreCell
             label="Attended visits 28d"
             value={floor ? floor.attendedVisits : null}
-            sublabel={floor ? `across ${floor.classes} classes` : UNAVAILABLE}
+            sublabel={floor && bookingKpis ? `across ${floor.classes} classes` : UNAVAILABLE}
           />
         </ScoreGrid>
         <div className="mt-2">
-          <FloorTable rows={floor?.groupTable || []} groupedBy={floor?.groupedBy} />
+          <FloorTable rows={floor?.groupTable || []} groupedBy={floor?.groupedBy} bookingKpis={bookingKpis} />
         </div>
       </RoleSection>
     </div>

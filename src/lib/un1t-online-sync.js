@@ -15,6 +15,8 @@
 //   5. Resolve un1t.online clients to org-scoped contacts (Task 4).
 //   6. Upsert the seven un1t_* tables in chunks of 200. The first failed
 //      upsert stops the run ('db'); later tables wait for the next run.
+//      The events are then projected into class_occurrences (UN1TCLASS.2): a
+//      projection failure is recorded in counts and never fails the run.
 //   7. Reconcile contact_memberships (source 'un1t_online_api' at this
 //      location only; the operator export's rows are never touched): a
 //      contact with an active subscription is upserted active; an active row
@@ -56,7 +58,9 @@ import {
   rowStudioId,
   MEMBERSHIP_ACTIVE_STATUSES,
 } from './un1t-online-map.js'
+import { projectUn1tOccurrences } from './un1t-online-occurrences.js'
 import { resolveUn1tContacts } from './un1t-online-contacts.js'
+import { ensureStudioPreferences } from './un1t-online-studio-preferences.js'
 import { tokenFingerprint } from './un1t-online-token.js'
 import { readConnection } from './connection-registry.js'
 import { logError, logWarn } from './log'
@@ -296,7 +300,7 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
     // 5. Organisation + contacts.
     const { data: loc, error: locError } = await db
       .from('locations')
-      .select('id, organization_id')
+      .select('id, organization_id, membership_source')
       .eq('id', locationId)
       .maybeSingle()
     if (locError || !loc?.organization_id) {
@@ -315,6 +319,25 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
     // un1t user ids and reasons only: no names or emails in the run row.
     counts.contact_errors = (resolved.errors || []).slice(0, 20)
     const contactIdOf = (userId) => (userId == null ? null : resolved.contactIdByUserId.get(String(userId)) ?? null)
+
+    // 5b. A client linked to ANOTHER studio's contact has no marketing-
+    // preferences row here, and a missing row means no send (UN1TDUAL.3).
+    // Insert-if-missing only; informational like 6b: a failure is recorded in
+    // counts and never changes the run's status or the connection's.
+    const linkedElsewhere = []
+    for (const [userId, contactId] of resolved.contactIdByUserId) {
+      const home = resolved.contactLocationByUserId?.get(userId)
+      if (home && home !== locationId) linkedElsewhere.push(contactId)
+    }
+    const studioPrefs = await ensureStudioPreferences(db, { locationId, contactIds: linkedElsewhere, nowIso })
+    counts.studio_preferences = studioPrefs
+    if (studioPrefs.error) {
+      // created > 0 means rows exist whose consent_log opt_in may be missing
+      // (a later run skips them, so nothing retries): structured and loud.
+      logError('un1t-online-sync', 'could not create marketing-preference rows for linked contacts', {
+        locationId, runId, count: studioPrefs.created, code: studioPrefs.error.code, message: studioPrefs.error.message,
+      })
+    }
 
     // 6. The mirror tables.
     const mapped = {}
@@ -337,6 +360,23 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
         }
       }
       counts.tables[spec.table] = unique.length
+
+      // 6b. Project the events just written into class_occurrences (UN1TCLASS.2),
+      // so the studio's timetable reaches the TVs and dashboards. Informational
+      // only: it never changes the run's status or the connection's, because
+      // the membership and contact data are this run's primary payload.
+      // Only where this studio's timetable IS un1t.online: a Glofox studio that
+      // also holds a un1t.online connection must not get un1t classes beside
+      // its Glofox ones (TVs, climate, bridge linking all read the table).
+      if (spec.table === 'un1t_events' && loc.membership_source !== 'un1t_online') {
+        counts.class_occurrences = { skipped: 'membership_source' }
+      } else if (spec.table === 'un1t_events') {
+        const projected = await projectUn1tOccurrences(db, { locationId, events: unique, nowIso })
+        counts.class_occurrences = projected
+        if (projected.error) {
+          logWarn('un1t-online-sync', 'could not project events into class_occurrences', { locationId, runId, err: projected.error })
+        }
+      }
     }
 
     // 7. Memberships.

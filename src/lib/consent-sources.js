@@ -114,6 +114,10 @@ export const CONSENT_SOURCE_CATEGORY = Object.freeze({
   // decision, and counting it once per duplicate record would inflate the
   // NET LIST CHANGE headline by however many duplicates we happen to hold.
   duplicate_propagation:          POLICY,
+  // UN1TDUAL.3 — the un1t.online sync gave a contact linked from another
+  // studio its marketing-preferences row here. A sync rule created it, not the
+  // person's choice, so it must not move the NET LIST CHANGE headline.
+  un1t_online_sync:               POLICY,
 
   // ── bulk: one-off migrations and corrections ──────────────────────
   bulk_import:                    BULK,

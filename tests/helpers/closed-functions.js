@@ -70,6 +70,11 @@ export const CLOSED_FUNCTIONS = [
     why: 'a trigger function (a message row follows its thread’s studio); a trigger fires without EXECUTE' },
   { fn: 'private.org_settings_customer_agent_fence', args: '()', closedBy: 729,
     why: 'a trigger function (only service_role writes org_settings.customer_agent); a trigger fires without EXECUTE' },
+  // Closed since mig 251; 731 rewrites it with CREATE OR REPLACE (UN1TDUAL.1)
+  // and restates the REVOKE, so it is registered from that file. 732
+  // (UN1TDUAL.4) rewrites it again the same way.
+  { fn: 'public.crossover_contact_ids', args: '(uuid)', closedBy: 731,
+    why: 'contact ids at a studio by deal, active membership or un1t.online client; only the contacts list and search call it, on the service role' },
 ]
 
 /** The client roles a closed function is closed to. */

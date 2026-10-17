@@ -27,6 +27,7 @@ export default function ContactNextRail({
   upcomingBookings = [],
   deals = [],
   admin, // contactActionGates(user, contact).admin (src/lib/contact-page-gates.js): { canPasswordOverride, canEdit, canDelete, canInvite, hasUserAccount, canEditDevices, canLinkAccount }
+  canReadStudioCards = false, // contactWorkGates(user, contact).canReadStudioCards: Events + HR devices read at the contact's studio
 }) {
   return (
     <>
@@ -106,15 +107,21 @@ export default function ContactNextRail({
       </div>
 
       {/* Race-event history (mig 086; HOST-MASTER.6b — host + internal
-          events, hence "Events"). Always rendered; the component shows
-          a "no races yet" message when empty. */}
-      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Events</h3>
-        <ContactRaceHistory contactId={contact.id} />
-      </div>
+          events, hence "Events"). Rendered for members of the contact's
+          studio (the route 404s anyone else, e.g. a crossover viewer); the
+          component shows a "no races yet" message when empty. */}
+      {canReadStudioCards && (
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Events</h3>
+          <ContactRaceHistory contactId={contact.id} />
+        </div>
+      )}
 
-      {/* HR devices: chest strap MAC registry. */}
-      <ContactDevicesCard contactId={contact.id} canEdit={admin.canEditDevices} />
+      {/* HR devices: chest strap MAC registry (the route 403s a non-member
+          of the contact's studio). */}
+      {canReadStudioCards && (
+        <ContactDevicesCard contactId={contact.id} canEdit={admin.canEditDevices} />
+      )}
 
       {/* REPSET-P5 — App account link state + admin link/unlink tool.
           Master/owner only (staff never self-link their member contact —

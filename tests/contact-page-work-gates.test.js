@@ -30,6 +30,8 @@ describe('ROLEUI.2 — the contact page wires contactWorkGates into each compone
     ['Start WhatsApp', /\{work\.canStartWhatsApp && \( <StartWhatsAppButton/],
     ['the Book card', /\{work\.canBook && \( <ContactBookingCard/],
     ['the consent history', /\{work\.canReadConsent && \( <div className="mt-8"> <ContactConsentHistoryCard/],
+    ['Marketing preferences (UN1TDUAL)', /<ContactWhoRail[^>]*canReadStudioCards=\{work\.canReadStudioCards\}/],
+    ['Events + HR devices (UN1TDUAL)', /<ContactNextRail[^>]*canReadStudioCards=\{work\.canReadStudioCards\}/],
   ])('%s', (_label, re) => {
     expect(src).toMatch(re)
   })

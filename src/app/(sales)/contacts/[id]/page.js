@@ -62,9 +62,13 @@ export default async function ContactDetailPage(props) {
   // membership, LTV, DOB, message history — by enumerating ids. Load the
   // contact FIRST, authorise, and only THEN fetch its sub-resources, so a
   // stranger's deals / notes / bookings / WhatsApp are never queried at
-  // all. canViewContact allows owned ∪ crossover (a deal at the caller's
-  // studio) ∪ master, mirroring the contacts list so crossover rows the
-  // operator can see stay openable.
+  // all. canViewContact allows owned ∪ crossover (a deal, an ACTIVE
+  // membership since UN1TDUAL / mig 731, or a un1t.online client row of any
+  // status since UN1TDUAL.4 / mig 732, at one of the caller's studios) ∪
+  // master, mirroring the contacts list so crossover rows the operator can
+  // see stay openable. A crossover viewer is not a member of the contact's
+  // studio, so the cards whose routes require that are hidden through
+  // contactWorkGates (canBook, canReadConsent, canReadStudioCards).
   const { data: contact } = await db.from('contacts').select('*').eq('id', id).single()
   if (!contact) notFound()
   if (!(await canViewContact(db, user, contact))) notFound()
@@ -413,6 +417,7 @@ export default async function ContactDetailPage(props) {
             canEditPrefs={actions.canEditPrefs}
             canLinkAccounts={work.canLinkAccounts}
             studioMemberships={studioMemberships.rows}
+            canReadStudioCards={work.canReadStudioCards}
           />
         </div>
 
@@ -536,6 +541,7 @@ export default async function ContactDetailPage(props) {
             upcomingBookings={upcomingBookings}
             deals={deals}
             admin={actions.admin}
+            canReadStudioCards={work.canReadStudioCards}
           />
 
           {/* BOOK-ON-PROFILE.1 — book this contact into a consultation or

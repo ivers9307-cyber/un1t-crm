@@ -222,6 +222,98 @@ describe('/dashboard/studio — un1t.online column reads through the seam (UN1TR
     expect(html).not.toContain('Meta spend ÷ new members')
   })
 
+  // UN1TCLASS.3 — Hatch's class_occurrences come from its un1t.online timetable
+  // (raw.booked = bookings_count), but nothing writes class_bookings there, so the
+  // booking-derived figures can only ever be absent. They must read '— unavailable',
+  // never the 0% / 0 that an empty class_bookings table would compute.
+  describe('floor for a non-Glofox source (UN1TCLASS.3)', () => {
+    const FLOOR = {
+      classes: 100, fillPct: 72, fillPct7d: 65, noShowPct: 0, attendedVisits: 0, groupedBy: 'class',
+      groupTable: [{ label: 'HYROX', classes: 40, fillPct: 80, noShowPct: 0 }, { label: 'Strength', classes: 60, fillPct: 66, noShowPct: 0 }],
+      activation: { cohort: 0, pending: 0, activatedPct: 0 }, noData: false,
+    }
+
+    // One ScoreCell only: cellOf() reads 600 chars, which spills into the next cell.
+    const ownCell = (html, label) => {
+      const from = html.indexOf(label)
+      expect(from).toBeGreaterThan(-1)
+      const next = html.indexOf('uppercase tracking-wider', from)
+      return html.slice(from, next === -1 ? undefined : next)
+    }
+
+    it('un1t column: fill and classes render from occurrences; no-show, activation and attended visits are unavailable', async () => {
+      membershipStateForPage.mockImplementation(async (_db, id) => (id === LOC ? CONFIGURED : UN1T))
+      kpis.fetchFloor.mockResolvedValue(ok(structuredClone(FLOOR)))
+      const [, hatch] = await renderColumns()
+
+      expect(kpis.fetchFloor).toHaveBeenCalledWith(expect.anything(), LOC2)
+      // fill + classes from the projected timetable
+      const fill = ownCell(hatch, 'Fill rate 28d')
+      expect(fill).toContain('72%')
+      expect(fill).toContain('65% last 7d')
+      expect(hatch).toContain('HYROX')
+      expect(hatch).toContain('80%')
+      // booking-derived cells: '—' + unavailable, never 0%
+      for (const label of ['No-show rate 28d', 'New-joiner activation', 'Attended visits 28d']) {
+        const cell = ownCell(hatch, label)
+        expect(cell).toContain('—')
+        expect(cell).toContain('unavailable')
+        expect(cell).not.toMatch(/>0%?</)
+        expect(cell).not.toContain('target under')
+        expect(cell).not.toContain('no complete cohort')
+        expect(cell).not.toContain('across')
+      }
+    })
+
+    it('un1t column: the by-class table keeps fill and draws no-show as —', async () => {
+      membershipStateForPage.mockResolvedValue(UN1T)
+      kpis.fetchFloor.mockResolvedValue(ok(structuredClone(FLOOR)))
+      const [hatch] = await renderColumns()
+      const rows = hatch.match(/<tr[^>]*>.*?<\/tr>/g).filter((r) => r.includes('HYROX') || r.includes('Strength'))
+      expect(rows).toHaveLength(2)
+      for (const row of rows) {
+        const cells = [...row.matchAll(/<td[^>]*>(.*?)<\/td>/g)].map((m) => m[1])
+        expect(cells[3]).toBe('—')
+      }
+      expect(rows[0]).toContain('80%')
+      expect(rows[1]).toContain('66%')
+    })
+
+    it('footer: the Glofox trainer-name note is Glofox-only (UN1TCLASS.5)', async () => {
+      membershipStateForPage.mockResolvedValue(UN1T)
+      kpis.fetchFloor.mockResolvedValue(ok(structuredClone(FLOOR)))
+      const [hatch] = await renderColumns()
+      expect(hatch).toContain('Split by class.')
+      expect(hatch).not.toContain('Glofox trainer names')
+
+      membershipStateForPage.mockResolvedValue(CONFIGURED)
+      kpis.fetchFloor.mockResolvedValue(ok(structuredClone(FLOOR)))
+      const [glofox] = await renderColumns()
+      expect(glofox).toContain('per-coach arrives once Glofox trainer names are mapped')
+    })
+
+    it('un1t column: noData is passed through as computed', async () => {
+      membershipStateForPage.mockResolvedValue(UN1T)
+      kpis.fetchFloor.mockResolvedValue(ok({ ...structuredClone(FLOOR), classes: 0, fillPct: null, fillPct7d: null, groupTable: [], noData: true }))
+      un1t.mrr.mockResolvedValue(ok({ mrrCents: 0, recurringMembers: 0, yieldCents: 0 }))
+      const [html] = await renderColumns()
+      expect(html).toContain('No membership data has synced yet')
+    })
+
+    it('glofox column floor unchanged', async () => {
+      membershipStateForPage.mockResolvedValue(CONFIGURED)
+      kpis.fetchFloor.mockResolvedValue(ok({ ...structuredClone(FLOOR), noShowPct: 8, attendedVisits: 900, activation: { cohort: 4, pending: 1, activatedPct: 50 }, groupTable: [{ label: 'HYROX', classes: 40, fillPct: 80, noShowPct: 6 }] }))
+      const [html] = await renderColumns()
+      expect(ownCell(html, 'No-show rate 28d')).toContain('8%')
+      expect(ownCell(html, 'No-show rate 28d')).toContain('target under 10%')
+      expect(ownCell(html, 'New-joiner activation')).toContain('50%')
+      expect(ownCell(html, 'New-joiner activation')).toContain('4 joiners')
+      expect(ownCell(html, 'Attended visits 28d')).toContain('900')
+      expect(ownCell(html, 'Attended visits 28d')).toContain('across 100 classes')
+      expect(html).toContain('6%')
+    })
+  })
+
   it('one membership state read per column (the gate and the numbers share one answer)', async () => {
     membershipStateForPage.mockResolvedValue(UN1T)
     await renderColumns()

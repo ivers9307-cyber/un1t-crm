@@ -94,7 +94,7 @@ describe('contactWorkGates — what the page hands the formerly ungated componen
     const u = person({ [LOC_A]: { role: 'staff', permissions: { whatsapp: true } }, [LOC_B]: { role: 'owner' } }, LOC_A)
     expect(contactWorkGates(u, contactAt(LOC_B))).toEqual({
       canNote: true, canTask: true, canSequence: true, canCancelForm: true, canCold: true,
-      canLinkAccounts: true, canStartWhatsApp: true, canBook: true, canReadConsent: true,
+      canLinkAccounts: true, canStartWhatsApp: true, canBook: true, canReadConsent: true, canReadStudioCards: true,
     })
   })
   it('owner at the active studio, a member of the contact\'s with every key off there: only the membership actions', () => {
@@ -102,7 +102,7 @@ describe('contactWorkGates — what the page hands the formerly ungated componen
     const u = person({ [LOC_A]: { role: 'owner' }, [LOC_B]: { role: 'owner', permissions: off } }, LOC_A)
     expect(contactWorkGates(u, contactAt(LOC_B))).toEqual({
       canNote: false, canTask: true, canSequence: false, canCancelForm: false, canCold: false,
-      canLinkAccounts: false, canStartWhatsApp: false, canBook: true, canReadConsent: true,
+      canLinkAccounts: false, canStartWhatsApp: false, canBook: true, canReadConsent: true, canReadStudioCards: true,
     })
   })
   it('a crossover viewer: nothing shows', () => {
@@ -110,5 +110,33 @@ describe('contactWorkGates — what the page hands the formerly ungated componen
   })
   it('no user: nothing shows', () => {
     expect(Object.values(contactWorkGates(null, contactAt(LOC_B))).some(Boolean)).toBe(false)
+  })
+})
+
+// UN1TDUAL — Events, HR devices and Marketing preferences were rendered for
+// every viewer, and their GET routes (/api/contacts/[id]/events and
+// …/marketing-preferences: assertLocationAccessOr404; …/devices: a location
+// scope 403) refuse anyone who is not a member of the CONTACT's studio. A
+// crossover viewer (mig 731: the contact holds an active membership at the
+// viewer's studio; or a deal there) opened the page and saw three error boxes.
+describe('contactWorkGates.canReadStudioCards — the Events / HR devices / Marketing preferences cards', () => {
+  it('a crossover viewer, a member of another studio only (Hatch staff on a Stillorgan contact): hidden', () => {
+    const hatchStaff = person({ [LOC_A]: { role: 'owner' } }, LOC_A)
+    expect(contactWorkGates(hatchStaff, contactAt(LOC_B)).canReadStudioCards).toBe(false)
+    expect(contactWorkGates(OUTSIDER, contactAt(LOC_B)).canReadStudioCards).toBe(false)
+  })
+  it('a member of the contact\'s studio, even as plain staff with every key off: shows (the routes judge membership only)', () => {
+    const off = { pipeline: false, contacts: false, email: false, whatsapp: false, contact_linking: false }
+    const staff = person({ [LOC_A]: { role: 'owner' }, [LOC_B]: { role: 'staff', permissions: off } }, LOC_A)
+    expect(contactWorkGates(staff, contactAt(LOC_B)).canReadStudioCards).toBe(true)
+  })
+  it('a master: shows', () => {
+    expect(contactWorkGates(MASTER, contactAt(LOC_B)).canReadStudioCards).toBe(true)
+  })
+  it('follows the consent-history rule exactly', () => {
+    for (const u of [MASTER, OUTSIDER, null, person({ [LOC_B]: { role: 'staff' } }, LOC_B), person({ [LOC_A]: { role: 'owner' } }, LOC_A)]) {
+      const g = contactWorkGates(u, contactAt(LOC_B))
+      expect(g.canReadStudioCards).toBe(g.canReadConsent)
+    }
   })
 })

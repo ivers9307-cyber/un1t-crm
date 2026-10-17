@@ -163,8 +163,9 @@ export function contactActionGates(user, contact) {
 /**
  * A member of the contact's studio (masters are members everywhere). The
  * whole rule for the Book card
- * (/api/bookings/create, /api/glofox/classes/*: assertLocationAccess) and the
- * consent history card (/api/contacts/[id]/consent-log: assertLocationAccessOr404).
+ * (/api/bookings/create, /api/glofox/classes/*: assertLocationAccess), the
+ * consent history card (/api/contacts/[id]/consent-log: assertLocationAccessOr404)
+ * and the studio-private read cards (canReadStudioCards in contactWorkGates).
  * Membership only, never a role or key: those paths judge nothing more. (The
  * Task/Activity writes used to share this rule; canAddContactTask below adds
  * the Contacts key mig 700 put on them. Since mig 691 the SQL resolves phone
@@ -249,5 +250,14 @@ export function contactWorkGates(user, contact) {
     canStartWhatsApp: canStartWhatsAppThread(user, loc),
     canBook: isMemberOfContactStudio(user, loc),
     canReadConsent: isMemberOfContactStudio(user, loc),
+    // UN1TDUAL — the three always-rendered read cards whose GET routes gate on
+    // membership of the CONTACT's studio: Events (/api/contacts/[id]/events,
+    // assertLocationAccessOr404), HR devices (/api/contacts/[id]/devices, a
+    // location-scope 403) and Marketing preferences
+    // (/api/contacts/[id]/marketing-preferences, assertLocationAccessOr404).
+    // A crossover viewer (a deal, an active membership or a un1t.online client
+    // row at their studio, none of the contact's) opens the page but would
+    // see three error boxes.
+    canReadStudioCards: isMemberOfContactStudio(user, loc),
   }
 }

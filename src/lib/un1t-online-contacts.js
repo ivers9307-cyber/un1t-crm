@@ -17,7 +17,7 @@ import { contactFieldsFromClient } from './un1t-online-map.js'
 import { escapeLikePattern } from './like-escape.js'
 
 const CHUNK = 200
-const CONTACT_COLUMNS = 'id, un1t_user_id, first_name, last_name, phone'
+const CONTACT_COLUMNS = 'id, location_id, un1t_user_id, first_name, last_name, phone'
 
 function isEmpty(v) {
   return v === undefined || v === null || v === ''
@@ -43,10 +43,13 @@ function reasonOf(error) {
  * @param {string} args.organizationId
  * @param {Array<object>} args.clients  raw un1t.online client rows
  * @param {string} args.now          ISO timestamp for un1t_synced_at
- * @returns {Promise<{contactIdByUserId: Map<string,string>, counts: object, errors: Array}>}
+ * @returns {Promise<{contactIdByUserId: Map<string,string>, contactLocationByUserId: Map<string,string|null>, counts: object, errors: Array}>}
+ *   contactLocationByUserId is the resolved contact's OWN location_id, which
+ *   differs from `locationId` when the client was linked to another studio's contact.
  */
 export async function resolveUn1tContacts(db, { locationId, organizationId, clients, now }) {
   const contactIdByUserId = new Map()
+  const contactLocationByUserId = new Map()
   const counts = {
     linked: 0,
     attached_by_email: 0,
@@ -134,6 +137,7 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
       }
       counts.linked += 1
       contactIdByUserId.set(userId, linked.id)
+      contactLocationByUserId.set(userId, linked.location_id ?? null)
       continue
     }
 
@@ -169,6 +173,7 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
         }
         counts.attached_by_email += 1
         contactIdByUserId.set(userId, match.id)
+        contactLocationByUserId.set(userId, match.location_id ?? null)
         continue
       }
     }
@@ -199,9 +204,10 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
     counts.created += 1
     if (!fields.email) counts.no_email += 1
     contactIdByUserId.set(userId, created.id)
+    contactLocationByUserId.set(userId, locationId)
   }
 
-  return { contactIdByUserId, counts, errors }
+  return { contactIdByUserId, contactLocationByUserId, counts, errors }
 }
 
 async function updateContact(db, contact, fields, { now, attach, userId }) {

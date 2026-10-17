@@ -102,11 +102,14 @@ function makeDb(tables = {}) {
   return { from: (t) => builder(t), _store: store, _calls: calls }
 }
 
-function occ(id, { startOffsetMin = 10, durMin = 45, cancelled_at = null } = {}) {
+// source_platform defaults to 'glofox' like the column (mig 730); the sync's
+// reconcile filters on it, and this fake honours `.eq`.
+function occ(id, { startOffsetMin = 10, durMin = 45, cancelled_at = null, source_platform = 'glofox' } = {}) {
   const start = NOW + startOffsetMin * 60_000
   return {
     glofox_event_id: id,
     location_id: LOC,
+    source_platform,
     name: 'Strength 45',
     starts_at: new Date(start).toISOString(),
     ends_at: new Date(start + durMin * 60_000).toISOString(),
@@ -246,6 +249,23 @@ describe('syncOccurrencesForLocation: cancellation reconciliation', () => {
     const live = db._store.class_occurrences.find((r) => r.glofox_event_id === 'evt-live')
     expect(gone.cancelled_at).not.toBeNull()
     expect(live.cancelled_at).toBeNull()
+  })
+
+  it('never cancels a un1t_online row at the same location, only the Glofox rows Glofox dropped (UN1TCLASS.5)', async () => {
+    const db = makeDb({
+      class_occurrences: [
+        occ('evt-live', { startOffsetMin: 60 }),
+        occ('evt-gone', { startOffsetMin: 90 }),
+        occ('un1t:e1', { startOffsetMin: 75, source_platform: 'un1t_online' }),
+      ],
+    })
+    fetchUpcomingEvents.mockResolvedValue({ ok: true, events: [glofoxEvent('evt-live', 60)] })
+
+    const out = await syncOccurrencesForLocation(db, { locationId: LOC, creds, nowMs: NOW })
+    expect(out.cancelled).toBe(1)
+    const byId = (id) => db._store.class_occurrences.find((r) => r.glofox_event_id === id)
+    expect(byId('evt-gone').cancelled_at).not.toBeNull()
+    expect(byId('un1t:e1').cancelled_at).toBeNull()
   })
 
   it('does NOT cancel private events — they still run', async () => {

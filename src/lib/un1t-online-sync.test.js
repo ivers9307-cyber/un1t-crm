@@ -90,6 +90,7 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
         const out = []
         for (const r of list) {
           const existing = rows.find((x) => keys.every((k) => x[k] === r[k]))
+          if (existing && s.options?.ignoreDuplicates) continue // DO NOTHING: returns no row
           if (existing) {
             Object.assign(existing, r)
             out.push({ ...existing })
@@ -177,7 +178,7 @@ function fixtureLists() {
       { id: 'p1', title: 'Unlimited', studio_id: STUDIO, price_amount: 12000 },
       { id: 'p2', title: '10 pack', studio_id: STUDIO },
     ],
-    '/events': [{ id: 'e1', title: 'HYROX', studio_id: STUDIO }],
+    '/events': [{ id: 'e1', title: 'HYROX', studio_id: STUDIO, status: 'scheduled', start_time: '2026-10-20T17:30:00Z', end_time: '2026-10-20T18:30:00Z' }],
     '/users/clients': [
       { id: 'u1', email: 'one@x.ie', first_name: 'One', studio: { id: STUDIO } },
       { id: 'u2', email: 'two@x.ie', first_name: 'Two', studio: { id: STUDIO } },
@@ -199,7 +200,7 @@ function fixtureLists() {
 function baseSeed(extra = {}) {
   return {
     locations: [
-      { id: HATCH, organization_id: ORG },
+      { id: HATCH, organization_id: ORG, membership_source: 'un1t_online' },
       { id: STILLORGAN, organization_id: ORG },
     ],
     channel_connections: [
@@ -261,6 +262,7 @@ describe('runUn1tSync', () => {
     expect(order).toEqual([
       ['un1t_products', 'location_id,un1t_id'],
       ['un1t_events', 'location_id,un1t_id'],
+      ['class_occurrences', 'location_id,glofox_event_id'],
       ['un1t_clients', 'location_id,un1t_user_id'],
       ['un1t_subscriptions', 'location_id,un1t_id'],
       ['un1t_transactions', 'location_id,un1t_id'],
@@ -504,7 +506,78 @@ describe('runUn1tSync', () => {
     const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
     const r = await runUn1tSync(db, HATCH, opts(factory))
     expect(r.reason).toBe('db')
-    expect(upserts(log).map((e) => e.table)).toEqual(['un1t_products', 'un1t_events', 'un1t_clients', 'un1t_subscriptions'])
+    expect(upserts(log).map((e) => e.table)).toEqual(['un1t_products', 'un1t_events', 'class_occurrences', 'un1t_clients', 'un1t_subscriptions'])
+  })
+
+  describe('class_occurrences projection (UN1TCLASS.2)', () => {
+    it('projects the pulled events and counts them', async () => {
+      const { db, tables } = makeDb(baseSeed())
+      const lists = fixtureLists()
+      lists['/events'] = [
+        { id: 'e1', title: 'HYROX', studio_id: STUDIO, status: 'scheduled', start_time: '2026-10-20T17:30:00Z', end_time: '2026-10-20T18:30:00Z', clients_limit: 14 },
+        { id: 'e2', title: 'Strength', studio_id: STUDIO, status: 'cancelled', start_time: '2026-10-21T17:30:00Z', end_time: '2026-10-21T18:30:00Z' },
+      ]
+      const { factory } = makeClient({ self: SELF, lists })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(r.counts.class_occurrences).toEqual({ upserted: 2 })
+      expect(tables.class_occurrences.map((o) => o.glofox_event_id).sort()).toEqual(['un1t:e1', 'un1t:e2'])
+      expect(tables.class_occurrences.every((o) => o.source_platform === 'un1t_online' && o.location_id === HATCH)).toBe(true)
+      expect(tables.class_occurrences.find((o) => o.glofox_event_id === 'un1t:e2').cancelled_at).toBe(NOW_ISO)
+      expect(runRow(tables).counts.class_occurrences).toEqual({ upserted: 2 })
+    })
+
+    it('a projection failure leaves the run ok and the connection connected, with counts.class_occurrences.error', async () => {
+      const { db, tables, log } = makeDb(baseSeed(), { failUpsert: ['class_occurrences'] })
+      const lists = fixtureLists()
+      lists['/events'] = [{ id: 'e1', title: 'HYROX', studio_id: STUDIO, status: 'scheduled', start_time: '2026-10-20T17:30:00Z', end_time: '2026-10-20T18:30:00Z' }]
+      const { factory } = makeClient({ self: SELF, lists })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(r.reason).toBeUndefined()
+      expect(r.counts.class_occurrences).toEqual({ error: { code: null, message: 'class_occurrences upsert boom' } })
+      expect(connRow(tables).status).toBe('connected')
+      expect(connRow(tables).last_error).toBeNull()
+      expect(runRow(tables).status).toBe('ok')
+      expect(runRow(tables).counts.class_occurrences.error).toBeTruthy()
+      // The rest of the run carried on: later tables and memberships still wrote.
+      expect(tables.un1t_bookings).toHaveLength(2)
+      expect(tables.contact_memberships).toHaveLength(1)
+      expect(logWarn).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('class_occurrences'), expect.objectContaining({ err: { code: null, message: 'class_occurrences upsert boom' } }))
+      expect(log.some((e) => e.table === 'class_bookings')).toBe(false)
+    })
+
+    it('does not project when the un1t_events upsert fails (the run stops with db)', async () => {
+      const { db, log } = makeDb(baseSeed(), { failUpsert: ['un1t_events'] })
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r).toMatchObject({ ok: false, reason: 'db' })
+      expect(log.some((e) => e.table === 'class_occurrences')).toBe(false)
+      expect(r.counts.class_occurrences).toBeUndefined()
+    })
+
+    it('a studio whose membership_source is glofox is NOT projected: skipped is recorded, status unchanged (UN1TCLASS.5)', async () => {
+      const seed = baseSeed()
+      seed.locations = seed.locations.map((l) => (l.id === HATCH ? { ...l, membership_source: 'glofox' } : l))
+      const { db, tables, log } = makeDb(seed)
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(r.counts.class_occurrences).toEqual({ skipped: 'membership_source' })
+      expect(log.some((e) => e.table === 'class_occurrences')).toBe(false)
+      expect(runRow(tables).status).toBe('ok')
+      expect(runRow(tables).counts.class_occurrences).toEqual({ skipped: 'membership_source' })
+      expect(connRow(tables).status).toBe('connected')
+      expect(tables.contact_memberships).toHaveLength(1)
+    })
+
+    it('class_bookings is never written', async () => {
+      const { db, log } = makeDb(baseSeed())
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      await runUn1tSync(db, HATCH, opts(factory))
+      expect(log.some((e) => e.table === 'class_bookings')).toBe(false)
+      expect(writtenTables(log)).not.toContain('class_bookings')
+    })
   })
 
   it('upserts in chunks of 200', async () => {
@@ -998,5 +1071,87 @@ describe('runUn1tSync', () => {
     const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
     await runUn1tSync(db, HATCH, opts(factory))
     expect(log.some((e) => e.op === 'delete')).toBe(false)
+  })
+
+  describe('marketing-preference rows for contacts linked from another studio (UN1TDUAL.3)', () => {
+    const stillorganContact = (extra = {}) => ({
+      id: 'c-still', organization_id: ORG, location_id: STILLORGAN, email: 'one@x.ie', un1t_user_id: null,
+      first_name: 'One', last_name: 'X', phone: '+353870000001', email_status: 'active', ...extra,
+    })
+    const prefRows = (tables, contactId) => (tables.contact_location_preferences || []).filter((r) => r.contact_id === contactId)
+
+    it('creates a Hatch preference row + consent_log for a Stillorgan contact linked at Hatch', async () => {
+      const { db, tables } = makeDb(baseSeed({ contacts: [stillorganContact()] }))
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(r.counts.studio_preferences).toEqual({ created: 1 })
+      const rows = prefRows(tables, 'c-still')
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({
+        location_id: HATCH, email_marketing: true, sms_marketing: true, whatsapp_marketing: true, source: 'un1t_online_sync',
+      })
+      const logged = (tables.consent_log || []).filter((l) => l.contact_id === 'c-still')
+      expect(logged.map((l) => l.channel).sort()).toEqual(['email_marketing', 'sms_marketing', 'whatsapp_marketing'])
+      for (const l of logged) expect(l).toMatchObject({ action: 'opt_in', source: 'un1t_online_sync', location_id: HATCH })
+    })
+
+    it('an ALREADY-linked Stillorgan contact (rule 1, every later run): created once, then 0', async () => {
+      const { db, tables } = makeDb(baseSeed({ contacts: [stillorganContact({ un1t_user_id: 'u1' })] }))
+      const first = await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: fixtureLists() }).factory))
+      expect(first.ok).toBe(true)
+      expect(first.counts.studio_preferences).toEqual({ created: 1 })
+      expect(prefRows(tables, 'c-still')).toHaveLength(1)
+      expect(prefRows(tables, 'c-still')[0]).toMatchObject({ location_id: HATCH, source: 'un1t_online_sync' })
+      // the contact stayed at Stillorgan and stayed linked
+      expect(tables.contacts.find((c) => c.id === 'c-still')).toMatchObject({ location_id: STILLORGAN, un1t_user_id: 'u1' })
+      const logged = (tables.consent_log || []).length
+
+      const second = await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: fixtureLists() }).factory))
+      expect(second.ok).toBe(true)
+      expect(second.counts.studio_preferences).toEqual({ created: 0 })
+      expect(prefRows(tables, 'c-still')).toHaveLength(1)
+      expect((tables.consent_log || []).length).toBe(logged)
+    })
+
+    it('never touches an existing Hatch row (an unsubscribed member stays unsubscribed)', async () => {
+      const existing = {
+        contact_id: 'c-still', location_id: HATCH, email_marketing: false, sms_marketing: false, whatsapp_marketing: false,
+        source: 'preference_centre', unsubscribed_at: '2026-09-01T00:00:00.000Z',
+      }
+      const { db, tables, log } = makeDb(baseSeed({ contacts: [stillorganContact()], contact_location_preferences: [{ ...existing }] }))
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(r.counts.studio_preferences).toEqual({ created: 0 })
+      expect(prefRows(tables, 'c-still')).toEqual([existing])
+      expect(tables.consent_log || []).toHaveLength(0)
+      expect(log.some((e) => e.table === 'contact_location_preferences' && e.op !== 'select')).toBe(false)
+    })
+
+    it('does nothing for contacts already at Hatch', async () => {
+      const { db, tables, log } = makeDb(baseSeed())
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(r.counts.studio_preferences).toEqual({ created: 0 })
+      expect(tables.contact_location_preferences || []).toHaveLength(0)
+      expect(log.some((e) => e.table === 'consent_log')).toBe(false)
+    })
+
+    it('a failure leaves the run ok and is recorded in counts', async () => {
+      const { db, tables } = makeDb(baseSeed({ contacts: [stillorganContact()] }), { failUpsert: ['contact_location_preferences'] })
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(connRow(tables).status).toBe('connected')
+      expect(r.counts.studio_preferences).toEqual({
+        created: 0,
+        error: { code: null, message: 'contact_location_preferences upsert boom' },
+      })
+      expect(logError).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('marketing-preference'), expect.objectContaining({
+        locationId: HATCH, count: 0, code: null, message: 'contact_location_preferences upsert boom',
+      }))
+    })
   })
 })

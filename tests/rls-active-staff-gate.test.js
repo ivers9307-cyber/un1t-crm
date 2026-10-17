@@ -77,6 +77,7 @@ const FUNCTIONS = {
   'private.auth_is_master': { class: 'predicate' },
   'private.auth_is_in_location': { class: 'predicate' },
   'private.auth_contact_read_location_ids': { class: 'predicate' }, // mig 690: studios where the caller holds Contacts; reads profiles with the predicate
+  'private.auth_contact_membership_contact_ids': { class: 'delegates', to: ['private.auth_contact_read_location_ids'] }, // mig 731: active members of the studios the Contacts resolver returns; mig 732: plus their un1t.online clients
   'private.auth_is_owner_at': { class: 'predicate' },
   'private.auth_is_admin_at': { class: 'predicate' },
   'private.auth_is_manager_at': { class: 'predicate' },
@@ -272,9 +273,11 @@ describe('RLSACTIVE.1 — inline policies that read a profile table carry the ac
     // less the three allowlisted "Owners can … branding" storage policies
     // (dropped by mig 675 BRANDINGBUCKET.1, no client writes the bucket),
     // less the four allowlisted staff_allowances policies (dropped by mig 692
-    // MEMBERWRITESWEEP.2, staff_allowances is service-role only).
-    expect(inline.length).toBeGreaterThanOrEqual(44)
-    expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(44)
+    // MEMBERWRITESWEEP.2, staff_allowances is service-role only), less the
+    // four org_settings policies (gated; dropped by mig 730
+    // ORGSETCLIENTWRITE.1, org_settings is service-role only).
+    expect(inline.length).toBeGreaterThanOrEqual(40)
+    expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(40)
     expect(inline.map((p) => `${p.table} :: ${p.name}`)).toContain('public.invoices_queue :: inbound_invoices_read')
   })
 

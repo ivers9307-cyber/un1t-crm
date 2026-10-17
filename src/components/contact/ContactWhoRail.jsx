@@ -20,7 +20,7 @@ function InfoRow({ label, value }) {
   )
 }
 
-export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, studioMemberships = [] }) {
+export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, studioMemberships = [], canReadStudioCards = false }) {
   return (
     <>
       {/* PERSON-LINK.1 — linked accounts (or "not linked" CTA when single). */}
@@ -71,12 +71,16 @@ export default function ContactWhoRail({ contact, person, identityEmails, identi
       <GlofoxProfileCard contact={contact} />
 
       {/* CONSENT.1 — operator toggles for marketing email / SMS /
-          WhatsApp. Transactional sends stay on regardless. */}
-      <ContactMarketingPreferencesCard
-        contactId={contact.id}
-        canEdit={canEditPrefs}
-        glofoxMembershipStatus={contact.glofox_membership_status}
-      />
+          WhatsApp. Transactional sends stay on regardless. Members of the
+          contact's studio only (contactWorkGates.canReadStudioCards): the
+          route 404s anyone else, e.g. a crossover viewer. */}
+      {canReadStudioCards && (
+        <ContactMarketingPreferencesCard
+          contactId={contact.id}
+          canEdit={canEditPrefs}
+          glofoxMembershipStatus={contact.glofox_membership_status}
+        />
+      )}
     </>
   )
 }

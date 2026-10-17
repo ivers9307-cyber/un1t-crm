@@ -411,6 +411,10 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
       .from('class_occurrences')
       .select('glofox_event_id')
       .eq('location_id', locationId)
+      // Glofox's view only: a studio holding both connections has un1t rows
+      // here too (UN1TCLASS), and Glofox never reports those, so they would
+      // all read as "gone" and be cancelled every tick.
+      .eq('source_platform', 'glofox')
       .gte('starts_at', windowStartIso)
       .lte('starts_at', windowEndIso)
       .is('cancelled_at', null)
@@ -427,6 +431,7 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
           .from('class_occurrences')
           .update({ cancelled_at: new Date().toISOString() })
           .eq('location_id', locationId)
+          .eq('source_platform', 'glofox')
           .in('glofox_event_id', goneIds)
           .is('cancelled_at', null)
         if (cancelErr) {
