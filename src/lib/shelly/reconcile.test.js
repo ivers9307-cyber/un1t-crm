@@ -954,7 +954,7 @@ describe('planning', () => {
       })
       // No loadOccurrences override: the production reader runs against the fake db.
       const out = await runShellyReconcile(db, { now: () => NOW, sleep: async () => {}, makeClient: factory })
-      return { out, calls }
+      return { out, calls, db }
     }
     const glofox = await run({ glofox_event_id: '5f1d2c3b4a5e6f7081920a1b', source_platform: 'glofox' })
     const un1t = await run({ glofox_event_id: 'un1t:evt_123', source_platform: 'un1t_online' })
@@ -962,6 +962,18 @@ describe('planning', () => {
     expect(un1t.calls.setGroups[0]).toMatchObject({ on: true, gids: ['mac1_0'] })
     expect(un1t.calls.setGroups).toEqual(glofox.calls.setGroups)
     expect(un1t.out).toEqual(glofox.out)
+
+    // The fake select ignores filters and columns, so the equality above cannot
+    // notice a reader that starts discriminating on the source. Pin the QUERY:
+    // exactly these columns, and no filter on source_platform or glofox_event_id
+    // (a glofox-only or id-keyed reader would stop opening windows at Hatch).
+    for (const { db } of [glofox, un1t]) {
+      const q = db.reads.occurrenceCalls
+      expect(q.find((c) => c[0] === 'select')[1]).toEqual(['starts_at, ends_at, cancelled_at'])
+      const filters = q.filter((c) => !['select', 'limit'].includes(c[0])).map((c) => `${c[0]}:${c[1][0]}`)
+      expect(filters.sort()).toEqual(['eq:location_id', 'gte:starts_at', 'is:cancelled_at', 'lt:starts_at'])
+      expect(JSON.stringify(q)).not.toMatch(/source_platform|glofox_event_id/)
+    }
   })
 
   it('applies a live override to a DISABLED device exactly once', async () => {
