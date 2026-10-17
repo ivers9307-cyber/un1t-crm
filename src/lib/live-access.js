@@ -168,13 +168,16 @@ export function canMutateLiveAt(user, locationId) {
  *
  * @param {object|null} user            getCurrentUser() result
  * @param {string} locationId           the route's [locationId]
- * @param {{ roles?: readonly string[] }} [opts]
+ * @param {{ roles?: readonly string[], permission?: string }} [opts]
  *   `roles` — when present, the caller must ALSO hold one of these roles at
  *   the location (the mutation routes). Omit for read routes.
+ *   `permission` — the permission to resolve AT the location; defaults to
+ *   `studio_management`. Only `/roster` passes `class_roster` (UN1TBOOK.12):
+ *   the who's-coming list without HR data, straps or door control.
  * @returns {import('next/server').NextResponse|null} a response to return, or
  *   null when the caller is allowed through.
  */
-export function guardLiveLocation(user, locationId, { roles = null } = {}) {
+export function guardLiveLocation(user, locationId, { roles = null, permission = LIVE_PERMISSION } = {}) {
   if (!user) {
     return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
   }
@@ -185,9 +188,14 @@ export function guardLiveLocation(user, locationId, { roles = null } = {}) {
   if (roles && !isMaster && !roles.includes(roleAtLocation(user, locationId))) {
     return NextResponse.json({ ok: false, error: 'Coach only' }, { status: 403 })
   }
-  if (!hasPermissionForLocation(user, locationId, LIVE_PERMISSION)) {
+  if (!hasPermissionForLocation(user, locationId, permission)) {
     return NextResponse.json(
-      { ok: false, error: 'Studio management permission required' },
+      {
+        ok: false,
+        error: permission === 'class_roster'
+          ? 'Class roster permission required'
+          : 'Studio management permission required',
+      },
       { status: 403 },
     )
   }
