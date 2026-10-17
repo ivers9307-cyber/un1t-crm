@@ -85,16 +85,23 @@ function soft(promise) {
 // UN1TCLASS.3 / UN1TBOOK.4 — Hatch Street's class_occurrences are projected from
 // its un1t.online timetable (raw.booked = bookings_count), so Classes and Fill
 // compute honestly. Since UN1TBOOK.3 its bookings are projected into
-// class_bookings too (source_platform 'un1t_online', status BOOKED with the
-// `attended` boolean, CANCELLED for cancelled: the Glofox shape, so computeFloor
-// counts them), and the no-show rate and attended visits (and the per-group
-// no-show) are real there: keepAttendance. Review Focus 5: a past un1t class
-// nobody marked stays booked, so it projects BOOKED / attended=false and counts
-// as a no-show, exactly like an unmarked Glofox booking.
+// class_bookings too (source_platform 'un1t_online'), and the no-show rate and
+// attended visits (and the per-group no-show) are real there: keepAttendance.
+// A un1t row carries an explicit verdict: ATTENDED and NO_SHOW count, and a
+// past un1t BOOKED is UNDECIDED, outside the numerator and the denominator
+// (bookingOutcome, shared/studio-kpi-math.js). So an unmarked past un1t class
+// is not a no-show, unlike an unmarked Glofox booking.
+//
+// Until the projection has decided anything (the window between this deploy
+// and the projection landing, or a studio whose past rows are all undecided)
+// computeFloor returns noShowPct null but attendedVisits 0 (pastBooked minus
+// noShows). That 0 is not a count of visits, so when keepAttendance and
+// noShowPct is null the attended figure is null too: both cells draw
+// '— unavailable', never a plausible-looking 0.
 //
 // New-joiner activation stays unavailable for un1t_online: its cohort is
-// contacts.converted_at at the location, which the un1t sync never writes (and
-// which would miss the dual-studio members). A source with no projection at all
+// contacts.converted_at, which spec A never writes (A, Anti-goals), and which
+// would miss the dual-studio members. A source with no projection at all
 // keeps all three booking cells "no data", not 0: an empty class_bookings table
 // would compute 0% / 0, a plausible-looking wrong number. Null them so the cells
 // draw '— unavailable'. Per-group fill is kept; the per-group no-show follows
@@ -106,7 +113,7 @@ function withoutBookingKpis(floor, { keepAttendance = false } = {}) {
     ...floor,
     activation: null,
     ...(keepAttendance
-      ? {}
+      ? (floor.noShowPct == null ? { attendedVisits: null } : {})
       : {
         noShowPct: null,
         attendedVisits: null,
@@ -187,6 +194,10 @@ async function LocationColumn({ user, location }) {
 
   const { mrr, growth, churn, acq, engagement, floor, spend, radarSummary, bookingKpis, attendanceKpis } = vm
   const W = WINDOW_DAYS
+  // A projected (non-Glofox) column with nothing decided yet has no no-show
+  // rate and no attended count: both cells say unavailable, sublabels too.
+  // Glofox keeps its long-standing cells (its floor is never null-attended).
+  const attendanceShown = Boolean(floor && attendanceKpis && (bookingKpis || floor.noShowPct != null))
 
   // A CONFIGURED source with no recurring base AND no class sync has not
   // synced anything yet (a studio in its first hours) — say so instead
@@ -363,7 +374,7 @@ async function LocationColumn({ user, location }) {
           <ScoreCell
             label="No-show rate 28d"
             value={floor?.noShowPct != null ? `${floor.noShowPct}%` : null}
-            sublabel={floor && attendanceKpis ? `target under ${TARGETS.noShowPct}%` : UNAVAILABLE}
+            sublabel={attendanceShown ? `target under ${TARGETS.noShowPct}%` : UNAVAILABLE}
             accent={toneBelow(floor?.noShowPct, TARGETS.noShowPct)}
           />
           <ScoreCell
@@ -378,7 +389,7 @@ async function LocationColumn({ user, location }) {
           <ScoreCell
             label="Attended visits 28d"
             value={floor ? floor.attendedVisits : null}
-            sublabel={floor && attendanceKpis ? `across ${floor.classes} classes` : UNAVAILABLE}
+            sublabel={attendanceShown ? `across ${floor.classes} classes` : UNAVAILABLE}
           />
         </ScoreGrid>
         <div className="mt-2">

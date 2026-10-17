@@ -230,7 +230,7 @@ describe('/dashboard/studio — un1t.online column reads through the seam (UN1TR
 
   // UN1TCLASS.3 / UN1TBOOK.4 — Hatch's class_occurrences come from its un1t.online
   // timetable (raw.booked = bookings_count) and, since UN1TBOOK.3, its bookings are
-  // projected into class_bookings (BOOKED + attended boolean, like Glofox), so
+  // projected into class_bookings (ATTENDED / NO_SHOW verdicts; a past BOOKED is undecided), so
   // no-show and attended visits draw from them. Activation stays '— unavailable':
   // its cohort is contacts.converted_at, which the un1t sync never writes. A source
   // with neither projection keeps all three booking cells unavailable, never the
@@ -295,14 +295,46 @@ describe('/dashboard/studio — un1t.online column reads through the seam (UN1TR
 
     it('un1t column: renders fetchFloor\'s no-show and attended figures as given (pass-through)', async () => {
       // Render check only: the page shows what fetchFloor computed, never hides
-      // it for a un1t column. That an unmarked past un1t booking IS a no-show
-      // (Review Focus 5) is pinned through the real projections and the real
-      // computeFloor in src/lib/un1t-online-bookings.floor.test.js.
+      // it for a un1t column. How a row is counted (a past un1t BOOKED is
+      // undecided, ATTENDED / NO_SHOW count) is pinned in
+      // shared/studio-kpi-math.test.js.
       membershipStateForPage.mockResolvedValue(UN1T)
       kpis.fetchFloor.mockResolvedValue(ok({ ...structuredClone(FLOOR), noShowPct: 40, attendedVisits: 3 }))
       const [hatch] = await renderColumns()
       expect(ownCell(hatch, 'No-show rate 28d')).toContain('40%')
       expect(ownCell(hatch, 'Attended visits 28d')).toContain('3')
+    })
+
+    it('un1t column with no decided bookings shows no-show and attended visits unavailable, never 0', async () => {
+      // Before the projection lands (and while every past booking is still an
+      // undecided BOOKED) computeFloor returns noShowPct null with
+      // attendedVisits = pastBooked - noShows = 0. Both cells must draw '—'.
+      membershipStateForPage.mockResolvedValue(UN1T)
+      kpis.fetchFloor.mockResolvedValue(ok(structuredClone({
+        ...FLOOR,
+        noShowPct: null,
+        attendedVisits: 0,
+        groupTable: [{ label: 'HYROX', classes: 40, fillPct: 80, noShowPct: null }],
+      })))
+      const [hatch] = await renderColumns()
+      for (const label of ['No-show rate 28d', 'Attended visits 28d']) {
+        const cell = ownCell(hatch, label)
+        expect(cell).toContain('—')
+        expect(cell).toContain('unavailable')
+        expect(cell).not.toMatch(/>0%?</)
+        expect(cell).not.toContain('target under')
+        expect(cell).not.toContain('across')
+      }
+    })
+
+    it('activation stays unavailable at Hatch', async () => {
+      membershipStateForPage.mockResolvedValue(UN1T)
+      kpis.fetchFloor.mockResolvedValue(ok(structuredClone(FLOOR)))
+      const [hatch] = await renderColumns()
+      const activation = ownCell(hatch, 'New-joiner activation')
+      expect(activation).toContain('—')
+      expect(activation).toContain('unavailable')
+      expect(activation).not.toMatch(/>0%?</)
     })
 
     it('a non-Glofox, non-un1t source keeps all three booking cells unavailable', async () => {

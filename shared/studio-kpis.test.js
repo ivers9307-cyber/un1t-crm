@@ -6,7 +6,7 @@
 // flattering improvement that never occurred.
 
 import { describe, it, expect } from 'vitest'
-import { fetchGrowth } from './studio-kpis.js'
+import { fetchGrowth, fetchFloor } from './studio-kpis.js'
 
 // Serves a canned { count } per from() call, in call order, and records
 // the filters each builder saw.
@@ -70,5 +70,38 @@ describe('fetchGrowth', () => {
   it('refuses without a location', async () => {
     const res = await fetchGrowth(countingSupabase([]), null)
     expect(res).toEqual({ success: false, error: 'No location' })
+  })
+})
+
+describe('fetchFloor', () => {
+  // Serves canned rows per table and records each select() column list.
+  function floorSupabase({ occurrences = [], bookings = [] } = {}) {
+    const selects = {}
+    return {
+      selects,
+      from(table) {
+        const rows = { class_occurrences: occurrences, class_bookings: bookings, contacts: [] }[table]
+        const b = {}
+        for (const m of ['eq', 'gte', 'lte', 'is', 'order', 'range', 'limit']) b[m] = () => b
+        b.select = (cols) => { selects[table] = cols; return b }
+        b.then = (resolve, reject) => Promise.resolve({ data: rows, error: null }).then(resolve, reject)
+        return b
+      },
+    }
+  }
+
+  it('selects source_platform on class_bookings', async () => {
+    const supabase = floorSupabase()
+    await fetchFloor(supabase, 'loc1', new Date('2026-10-01T12:00:00Z'))
+    expect(supabase.selects.class_bookings.split(',').map((c) => c.trim())).toContain('source_platform')
+  })
+
+  it('a un1t location with only undecided bookings gets null no-show, not 0', async () => {
+    const supabase = floorSupabase({
+      occurrences: [{ glofox_event_id: 'u1', name: 'HYROX', instructor: null, capacity: 10, starts_at: '2026-09-25T06:00:00Z', raw: { booked: 5 } }],
+      bookings: [{ glofox_event_id: 'u1', contact_id: 'c1', source_platform: 'un1t_online', status: 'BOOKED', attended: false, starts_at: '2026-09-25T06:00:00Z' }],
+    })
+    const res = await fetchFloor(supabase, 'loc1', new Date('2026-10-01T12:00:00Z'))
+    expect(res.data.noShowPct).toBe(null)
   })
 })

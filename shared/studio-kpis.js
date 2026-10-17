@@ -296,7 +296,7 @@ export async function fetchFloor(supabase, locationId, now = new Date()) {
       .range(from, to)),
     selectAll((from, to) => supabase
       .from('class_bookings')
-      .select('glofox_event_id, contact_id, status, attended, starts_at')
+      .select('glofox_event_id, contact_id, source_platform, status, attended, starts_at')
       .eq('location_id', locationId)
       .gte('starts_at', cutCohort)
       .lte('starts_at', nowIso)
