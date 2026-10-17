@@ -151,6 +151,6 @@ describe('TZ.13 the post-class email reads the studio clock', () => {
     const out = await loadContextForSession({ from: chain }, 'sess-1')
     expect(out.ok).toBe(true)
     expect(out.zone).toBe(NY)
-    expect(selects.filter(([t]) => t === 'locations')).toEqual([['locations', 'id, name, timezone, organization_id, settings']])
+    expect(selects.filter(([t]) => t === 'locations')).toEqual([['locations', 'id, name, timezone, organization_id, membership_source, settings']])
   })
 })
