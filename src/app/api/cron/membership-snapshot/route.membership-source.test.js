@@ -5,7 +5,7 @@
 // per-location failure is recorded and the run continues and stamps.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const h = vi.hoisted(() => ({ db: null, rows: [], unknown: new Set() }))
+const h = vi.hoisted(() => ({ db: null, rows: [], unknown: new Set(), override: new Map() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => h.db }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: vi.fn(async () => {}) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
@@ -22,6 +22,7 @@ vi.mock('@/lib/membership/state-for-page', async (importOriginal) => {
   return {
     ...real,
     membershipStateForPage: vi.fn(async (_db, id) => {
+      if (h.override.has(id)) return { label: 'x', capabilities: {}, ...h.override.get(id) }
       if (h.unknown.has(id)) return { source: null, state: 'unknown', label: 'No membership source', readError: 'MEMBERSHIP_SOURCE_UNREADABLE', capabilities: {} }
       const src = h.rows.find((r) => r.id === id)?.membership_source ?? 'none'
       return { source: src, state: src === 'none' ? 'none' : 'configured', label: src, capabilities: {} }
@@ -33,6 +34,7 @@ import { GET } from './route.js'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { writeMembershipSnapshot, computeMembershipCounts } from '@/lib/membership-snapshot'
 import { un1tOnlineReads } from '@/lib/membership/reads/un1t-online'
+import { logError } from '@/lib/log'
 import { fakeDb } from '@/lib/time-off.test-helpers'
 import { ESTATE_2026_10, ESTATE_2026_10_17, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
 
@@ -40,7 +42,7 @@ const HATCH_ID = '28c78d6b-0000-0000-0000-000000000002'
 const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } })
 const visited = () => writeMembershipSnapshot.mock.calls.map(([, id]) => id)
 const useEstate = (rows, opts) => { h.rows = rows; h.db = fakeDb(locationsResolver(rows, opts)) }
-beforeEach(() => { process.env.CRON_SECRET = 'test-secret'; vi.clearAllMocks(); h.unknown = new Set() })
+beforeEach(() => { process.env.CRON_SECRET = 'test-secret'; vi.clearAllMocks(); h.unknown = new Set(); h.override = new Map() })
 
 describe('GET /api/cron/membership-snapshot — snapshots sources that provide member counts', () => {
   it('snapshots Stillorgan, skips the five none locations with a count, stamps', async () => {
@@ -78,14 +80,49 @@ describe('GET /api/cron/membership-snapshot — snapshots sources that provide m
     expect(stampHeartbeat).toHaveBeenCalledWith('membership-snapshot')
   })
 
-  it('a location whose source state is unknown is skipped (counted, never zeros); the others still snapshot and stamp', async () => {
+  it('a Glofox location in state unconfigured (credentials missing) IS snapshotted from stored contacts', async () => {
+    useEstate(ESTATE_2026_10)
+    h.override.set(STILLORGAN_ID, { source: 'glofox', state: 'unconfigured', missing: ['api_key'] })
+    const out = await (await GET(req())).json()
+    expect(visited()).toEqual([STILLORGAN_ID])
+    expect(out).toMatchObject({ success: true, locations_processed: 1, skipped_no_source: 5 })
+    expect(stampHeartbeat).toHaveBeenCalled()
+  })
+
+  it('a Glofox location whose credential read failed (state unknown, source glofox) IS snapshotted', async () => {
+    useEstate(ESTATE_2026_10)
+    h.override.set(STILLORGAN_ID, { source: 'glofox', state: 'unknown', readError: 'GLOFOX_CREDENTIALS_UNREADABLE' })
+    const out = await (await GET(req())).json()
+    expect(visited()).toEqual([STILLORGAN_ID])
+    expect(out).toMatchObject({ success: true, locations_processed: 1, skipped_unknown: 0 })
+  })
+
+  it("a registered-but-unserved key ('un1t') is skipped_no_source, not snapshotted", async () => {
+    useEstate(ESTATE_2026_10)
+    h.override.set(HATCH_ID, { source: 'un1t', state: 'unconfigured', missing: ['provider'] })
+    const out = await (await GET(req())).json()
+    expect(visited()).toEqual([STILLORGAN_ID])
+    expect(out).toMatchObject({ locations_processed: 1, skipped_no_source: 5 })
+  })
+
+  it('one location whose source key is unreadable (source null) is skipped, counted, logged; the rest snapshot and stamp', async () => {
     useEstate(ESTATE_2026_10_17)
     h.unknown.add(HATCH_ID)
     const out = await (await GET(req())).json()
     expect(visited()).toEqual([STILLORGAN_ID])
     expect(un1tOnlineReads.membershipCounts).not.toHaveBeenCalled()
-    expect(out).toMatchObject({ locations_processed: 1, skipped_no_source: 4, skipped_unknown: 1 })
+    expect(out).toMatchObject({ success: true, locations_processed: 1, skipped_no_source: 4, skipped_unknown: 1 })
+    expect(logError).toHaveBeenCalled()
     expect(stampHeartbeat).toHaveBeenCalledWith('membership-snapshot')
+  })
+
+  it('every location unreadable (source null) visits nobody: 500 and NO heartbeat', async () => {
+    useEstate(ESTATE_2026_10_17)
+    for (const r of ESTATE_2026_10_17) h.unknown.add(r.id)
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    expect(visited()).toEqual([])
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
   it('a failed locations read answers 500 and does NOT stamp', async () => {
