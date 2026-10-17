@@ -91,6 +91,37 @@ describe('resolveUn1tContacts', () => {
     expect(log.updates[0].payload).toEqual({ first_name: 'Jane', un1t_synced_at: NOW })
   })
 
+  it('contactLocationByUserId is each resolved contact\'s OWN studio, by every rule (UN1TDUAL.3)', async () => {
+    const { db } = makeDb([
+      // rule 1: already linked, row at Stillorgan
+      { id: 'c-linked-still', organization_id: ORG, location_id: STILLORGAN, un1t_user_id: 'u1', email: 'one@x.ie', first_name: 'One', last_name: 'X', phone: '+353870000001' },
+      // rule 1: already linked, row at Hatch
+      { id: 'c-linked-hatch', organization_id: ORG, location_id: HATCH, un1t_user_id: 'u2', email: 'two@x.ie', first_name: 'Two', last_name: 'X', phone: '+353870000002' },
+      // rule 2: attached by email, row at Stillorgan
+      { id: 'c-email-still', organization_id: ORG, location_id: STILLORGAN, un1t_user_id: null, email: 'three@x.ie', first_name: 'Three', last_name: 'X', phone: '+353870000003' },
+      // a conflict: never resolved, so never in either map
+      { id: 'c-conflict', organization_id: ORG, location_id: STILLORGAN, un1t_user_id: 'u-other', email: 'five@x.ie', first_name: 'Five', last_name: 'X', phone: null },
+    ])
+    const r = await resolveUn1tContacts(db, args([
+      { id: 'u1', email: 'one@x.ie', first_name: 'One', last_name: 'X' },
+      { id: 'u2', email: 'two@x.ie', first_name: 'Two', last_name: 'X' },
+      { id: 'u3', email: 'three@x.ie', first_name: 'Three', last_name: 'X' },
+      { id: 'u4', email: 'four@x.ie', first_name: 'Four', last_name: 'X' },
+      { id: 'u5', email: 'five@x.ie', first_name: 'Five', last_name: 'X' },
+    ]))
+    expect(r.contactLocationByUserId).toBeInstanceOf(Map)
+    expect(Object.fromEntries(r.contactLocationByUserId)).toEqual({
+      u1: STILLORGAN, // linked, lives elsewhere: the sync's preference-row candidate
+      u2: HATCH,
+      u3: STILLORGAN,
+      u4: HATCH, // created at the syncing studio
+    })
+    // the two maps resolve the same users
+    expect([...r.contactLocationByUserId.keys()].sort()).toEqual([...r.contactIdByUserId.keys()].sort())
+    expect(r.contactIdByUserId.get('u1')).toBe('c-linked-still')
+    expect(r.contactLocationByUserId.has('u5')).toBe(false)
+  })
+
   it('attaches to a Stillorgan contact across studios by email, case-insensitively', async () => {
     const { db, log } = makeDb([
       { id: 'c1', organization_id: ORG, location_id: STILLORGAN, email: 'Jane@x.ie', un1t_user_id: null, first_name: 'Jane', last_name: null, phone: null },
