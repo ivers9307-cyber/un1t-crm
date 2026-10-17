@@ -28,9 +28,15 @@ import { displayZoneFor } from '@/lib/display-zone'
 // A source that is not `configured` has no reads at all (membershipReadsFor
 // gives reads: null). The surface then draws its MembershipSourceGate, which
 // still wants the briefing line (approvals are source-independent), so that
-// case returns a view-model of nulls with an approvals-only briefing and runs
-// no membership read. A CONFIGURED source that lacks revenueMtd is a whole-
-// block failure (null), as a failed revenue read always was.
+// case returns a numberless view-model (revenue keeps the pre-change ZERO
+// shape, never null: pre-M3c phones read kpis.revenue.totalCents unguarded)
+// with an approvals-only briefing and runs no membership read. A CONFIGURED
+// source that lacks revenueMtd is a whole-block failure (null), as a failed
+// revenue read always was.
+//
+// `gate: { state, showNumbers }` is computed from the SAME membershipReadsFor
+// result the numbers came from, so a surface decides "numbers or gate" from the
+// view-model itself, not from a second (possibly diverging) state read.
 export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()) {
   try {
     const [m, membership] = await Promise.all([
@@ -42,10 +48,14 @@ export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()
       const briefing = approvals > 0
         ? `Watch: ${approvals} pending approval${approvals === 1 ? '' : 's'}.`
         : 'Nothing urgent.'
-      return { revenue: null, arrearsData: null, memberCount: null, churnCount: null, churnDelta: null, briefing }
+      return {
+        revenue: { totalCents: 0, paidCount: 0, deltaPct: null },
+        arrearsData: null, memberCount: null, churnCount: null, churnDelta: null, briefing,
+        gate: { state: m.state, showNumbers: false },
+      }
     }
     if (!supportsRead(m, 'revenueMtd')) return null
-    const radarOk = providesCapability(membership, 'memberships')
+    const radarOk = m.state === 'configured' && providesCapability(membership, 'memberships')
     // DASH-REBUILD.6b — derive the briefing's attention labels locally
     // from data this block already holds (approvals count + arrears +
     // churn). The full rail is built once, in the rail block — calling
@@ -103,7 +113,8 @@ export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()
       members: { count: memberCount, netChange: null },
       attention: labels.slice(0, 3).map(l => ({ label: l })),
     })
-    return { revenue: revenue.data, arrearsData, memberCount, churnCount, churnDelta, briefing }
+    const showNumbers = supportsRead(m, 'membershipCounts') && supportsRead(m, 'revenueMtd')
+    return { revenue: revenue.data, arrearsData, memberCount, churnCount, churnDelta, briefing, gate: { state: m.state, showNumbers } }
   } catch {
     return null
   }

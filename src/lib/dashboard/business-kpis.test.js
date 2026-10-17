@@ -168,6 +168,7 @@ describe('buildBusinessKpis: through the read seam (UN1TREAD.3)', () => {
       briefing:
         'Solid month so far: €12,345 MTD (+12%), 210 members. ' +
         'Watch: 2 pending approvals, 3 in arrears (€450), 5 at churn risk.',
+      gate: { state: 'configured', showNumbers: true },
     })
     expect(fetchRevenueMTD).toHaveBeenCalledWith(db, LOC, new Date(now), expect.any(String))
     expect(fetchArrearsSummary).toHaveBeenCalledWith(db, LOC)
@@ -182,7 +183,7 @@ describe('buildBusinessKpis: through the read seam (UN1TREAD.3)', () => {
     {
       const db = mockDb({ data: [{ high_risk: 3 }] })
       const vm = await buildBusinessKpis(db, USER, LOC)
-      expect(vm).toMatchObject({ revenue: { totalCents: 500000 }, arrearsData: null, memberCount: 40, churnCount: null, churnDelta: null })
+      expect(vm).toMatchObject({ revenue: { totalCents: 500000 }, arrearsData: null, memberCount: 40, churnCount: null, churnDelta: null, gate: { state: 'configured', showNumbers: true } })
       expect(vm.briefing).toBe('Solid month so far: €5,000 MTD, 40 members. Watch: 2 pending approvals.')
       expect(un1t.revenueMtd).toHaveBeenCalledOnce()
       expect(fetchArrearsSummary).not.toHaveBeenCalled()
@@ -213,7 +214,13 @@ describe('buildBusinessKpis: through the read seam (UN1TREAD.3)', () => {
     membershipStateForPage.mockResolvedValue(state)
     const db = mockDb({ data: [] })
     const vm = await buildBusinessKpis(db, USER, LOC)
-    expect(vm).toEqual({ revenue: null, arrearsData: null, memberCount: null, churnCount: null, churnDelta: null, briefing: 'Watch: 2 pending approvals.' })
+    // Never revenue: null (pre-M3c phones read kpis.revenue.totalCents unguarded).
+    expect(vm).toEqual({
+      revenue: { totalCents: 0, paidCount: 0, deltaPct: null },
+      arrearsData: null, memberCount: null, churnCount: null, churnDelta: null,
+      briefing: 'Watch: 2 pending approvals.',
+      gate: { state: state.state, showNumbers: false },
+    })
     for (const fn of [fetchRevenueMTD, fetchArrearsSummary, computeMembershipCounts, loadRadar]) expect(fn).not.toHaveBeenCalled()
     expect(db.from).not.toHaveBeenCalled()
   })

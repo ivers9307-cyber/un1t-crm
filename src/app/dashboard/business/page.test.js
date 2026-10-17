@@ -56,7 +56,16 @@ beforeEach(() => {
     revenue: { totalCents: 1_234_500, deltaPct: 4, paidCount: 300 },
     arrearsData: { totalCents: 45_000, memberCount: 3 },
     memberCount: 412, churnCount: 7, churnDelta: 2, briefing: '2 pending approvals',
+    gate: { state: 'configured', showNumbers: true },
   })
+})
+
+// What the real buildBusinessKpis returns when the source is not configured:
+// zero revenue (never null) and gate.showNumbers false.
+const numberless = (state) => ({
+  revenue: { totalCents: 0, paidCount: 0, deltaPct: null },
+  arrearsData: null, memberCount: null, churnCount: null, churnDelta: null, briefing: '2 pending approvals',
+  gate: { state, showNumbers: false },
 })
 
 describe('/dashboard/business — membership trend gate (W1.M3a)', () => {
@@ -125,6 +134,7 @@ describe('/dashboard/business — KPI row gate (W1.M3a review)', () => {
 
   it('none: the briefing line stays, the tiles are replaced by the gate (no zeros)', async () => {
     membershipStateForPage.mockResolvedValue({ source: 'none', state: 'none', label: 'No membership source', capabilities: {} })
+    buildBusinessKpis.mockResolvedValue(numberless('none'))
     const html = await renderBlock('KpiBriefingBlock')
     expect(html).toContain('2 pending approvals')
     expect(html).toContain('No membership source connected')
@@ -134,6 +144,7 @@ describe('/dashboard/business — KPI row gate (W1.M3a review)', () => {
 
   it('unknown: the retry copy, never the none copy', async () => {
     membershipStateForPage.mockResolvedValue({ source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE', label: 'No membership source', capabilities: {} })
+    buildBusinessKpis.mockResolvedValue(numberless('unknown'))
     const html = await renderBlock('KpiBriefingBlock')
     expect(html).toContain('Membership data could not be read right now')
     expect(html).not.toContain('No membership source connected')
@@ -172,6 +183,7 @@ describe('/dashboard/business — un1t.online reads through the seam (UN1TREAD.3
     buildBusinessKpis.mockResolvedValue({
       revenue: { totalCents: 640_000, deltaPct: null, paidCount: 31 },
       arrearsData: null, memberCount: 33, churnCount: null, churnDelta: null, briefing: 'Nothing urgent.',
+      gate: { state: 'configured', showNumbers: true },
     })
     const html = await renderBlock('KpiBriefingBlock')
     for (const label of ['Revenue MTD', 'Members', 'Churn risk', 'In arrears']) expect(html).toContain(`>${label}<`)
@@ -200,11 +212,47 @@ describe('/dashboard/business — un1t.online reads through the seam (UN1TREAD.3
 
   it('unknown state: no membership read runs and the retry copy shows in both blocks', async () => {
     membershipStateForPage.mockResolvedValue({ source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE', label: 'No membership source', capabilities: {} })
+    buildBusinessKpis.mockResolvedValue(numberless('unknown'))
     const block = await renderMembershipBlock()
     const kpi = await renderBlock('KpiBriefingBlock')
     for (const html of [block, kpi]) expect(html).toContain('Membership data could not be read right now')
     expect(un1tOnlineReads.membershipCounts).not.toHaveBeenCalled()
     expect(computeMembershipCounts).not.toHaveBeenCalled()
     expect(fetchMembershipFlows).not.toHaveBeenCalled()
+  })
+
+  // The page's own state read and the vm's gate come from different calls and can
+  // disagree (cache expiry between them, a source changed mid-render). The vm
+  // decides, and nothing dereferences a missing number.
+  it('page state says configured but the vm gate says not: the gate copy renders, no tiles, no crash', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS })
+    buildBusinessKpis.mockResolvedValue(numberless('none'))
+    const html = await renderBlock('KpiBriefingBlock')
+    expect(html).toContain('2 pending approvals')
+    expect(html).toContain('No membership source connected')
+    for (const label of ['Revenue MTD', 'Members', 'Churn risk', 'In arrears']) expect(html).not.toContain(`>${label}<`)
+  })
+
+  it('page state says configured, the vm is configured but shows no numbers: the "does not provide" copy, never an empty block', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS })
+    buildBusinessKpis.mockResolvedValue({ ...numberless('configured') })
+    const html = await renderBlock('KpiBriefingBlock')
+    expect(html).toContain('Glofox does not provide membership data')
+    expect(html).not.toContain('>Revenue MTD<')
+  })
+
+  it('a vm without a gate fails closed to the gate copy', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS })
+    buildBusinessKpis.mockResolvedValue({ revenue: { totalCents: 1, paidCount: 1, deltaPct: null }, arrearsData: null, memberCount: 1, churnCount: null, churnDelta: null, briefing: 'b' })
+    const html = await renderBlock('KpiBriefingBlock')
+    expect(html).not.toContain('>Revenue MTD<')
+    expect(html).toContain('does not provide membership data')
+  })
+
+  it('a failed revenue read (vm null) is the BlockError even when the page state is configured', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: false } })
+    buildBusinessKpis.mockResolvedValue(null)
+    const html = await renderBlock('KpiBriefingBlock')
+    expect(html).toContain('Headline numbers')
   })
 })

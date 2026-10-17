@@ -43,25 +43,36 @@ async function KpiBriefingBlock({ user, locationId }) {
   // four honest-looking zeros. The briefing line stays (pending approvals
   // are source-independent); the row renders only behind the gate. The
   // state is read alongside the numbers (cached 60 s per location).
-  // UN1TREAD.3 — the row renders when the source's adapter reads member counts
-  // and revenue (Glofox, un1t.online), not when its Glofox-shaped capability
-  // flag is true: un1t.online keeps memberships:false (its radars still read
-  // Glofox tables) yet supplies these two numbers. Churn risk and In arrears
-  // come back null there and draw '—'.
-  const [vm, membership, reads] = await Promise.all([
+  // UN1TREAD.3 — numbers or gate is decided by the view-model itself
+  // (vm.gate, computed from the same membershipReadsFor result the numbers
+  // came from), so the state this page reads for the gate COPY can never
+  // disagree with the numbers it shows. The row renders when the source's
+  // adapter reads member counts and revenue (Glofox, un1t.online), not when its
+  // Glofox-shaped capability flag is true: un1t.online keeps memberships:false
+  // (its radars still read Glofox tables) yet supplies these two numbers.
+  // Churn risk and In arrears come back null there and draw '—'. A vm with no
+  // gate fails closed to the gate copy.
+  const [vm, membership] = await Promise.all([
     buildBusinessKpis(db, user, locationId),
     membershipStateForPage(db, locationId),
-    membershipReadsFor(db, locationId),
   ])
   if (!vm) return <BlockError label="Headline numbers" />
 
   const { revenue, arrearsData, memberCount, churnCount, churnDelta, briefing } = vm
-  if (!(supportsRead(reads, 'membershipCounts') && supportsRead(reads, 'revenueMtd'))) { // a source with no revenue + member-count reads gets the gate
+  if (!vm.gate?.showNumbers || !revenue) {
+    // The gate copy is drawn from the vm's own state; capability forced false
+    // so a state that reads as configured-and-providing elsewhere still draws
+    // the "does not provide" copy rather than rendering nothing.
+    const gateState = {
+      ...membership,
+      state: vm.gate?.state ?? membership.state,
+      capabilities: { ...(membership.capabilities || {}), memberships: false },
+    }
     return (
       <>
         <BriefingLine text={briefing} />
         <MembershipSourceGate
-          state={membership}
+          state={gateState}
           capability="memberships"
           settingsHref={membershipSettingsHref(locationId)}
           canManage={canManageMembershipSource(user, locationId)}

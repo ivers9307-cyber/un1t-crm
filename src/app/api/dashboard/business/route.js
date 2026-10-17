@@ -69,6 +69,22 @@ async function membershipBlock(db, locationId, zone) {
   }
 }
 
+// UN1TREAD.3 — the phone's `kpis`. buildBusinessKpis attaches `gate` (decided
+// from the reads result its numbers came from); the phone does not get it.
+// When the state this route read says the source is CONFIGURED but the vm
+// carries no numbers (a diverging state read, or a configured source with no
+// counts/revenue read), the phone gets null (its existing BlockError path), not
+// a numberless vm that would draw zeros as if they were figures. A source that
+// is not configured keeps the numberless vm (zero revenue, never null) that
+// pre-M3c phones read unguarded; 2.4.0 draws the state card from
+// membership_source instead.
+function kpisForPhone(vm, sourceState) {
+  if (!vm) return null
+  const { gate, ...kpis } = vm
+  if (sourceState?.state === 'configured' && !gate?.showNumbers) return null
+  return kpis
+}
+
 // { success, data } fetchers → block data or null. The fetchers only
 // reject on programmer error; the (r, err) pair keeps a rejection
 // isolated to its own block either way.
@@ -114,7 +130,7 @@ export async function GET() {
     success: true,
     data: {
       locationName: user.activeLocation?.name || null,
-      kpis,
+      kpis: kpisForPhone(kpis, sourceState),
       funnel,
       ads,
       membership,
