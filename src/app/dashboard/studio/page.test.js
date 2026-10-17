@@ -164,9 +164,21 @@ describe('/dashboard/studio — un1t.online column reads through the seam (UN1TR
     // no Glofox-only read ran for Hatch
     expect(kpis.fetchRevenueChurn).not.toHaveBeenCalledWith(expect.anything(), LOC2, expect.anything())
     expect(loadRadar).not.toHaveBeenCalledWith(expect.anything(), LOC2)
-    // source-agnostic reads still run for Hatch
-    expect(kpis.fetchAcquisition).toHaveBeenCalledWith(expect.anything(), LOC2)
+    // UN1TREAD.7 — the acquisition cells are Glofox-fed (contacts.converted_at /
+    // pipeline_stage_slug come from the Glofox sync + classifier; joined_at is
+    // the Glofox join date), so they are unavailable at Hatch, never zeros
+    for (const label of ['New members', 'Trial conversion', 'New leads', 'Trials done', 'CAC']) {
+      expect(cellOf(hatch, label)).toContain('unavailable')
+    }
+    expect(kpis.fetchAcquisition).not.toHaveBeenCalledWith(expect.anything(), LOC2)
+    expect(hatch).not.toContain('became members')
+    expect(hatch).not.toContain('entered the funnel')
+    expect(hatch).not.toContain('Meta spend ÷ new members')
+    // class-table reads still run for Hatch
     expect(kpis.fetchFloor).toHaveBeenCalledWith(expect.anything(), LOC2)
+    // the Glofox column keeps its acquisition cells
+    expect(kpis.fetchAcquisition).toHaveBeenCalledWith(expect.anything(), LOC)
+    expect(stillorgan).toContain('became members')
 
     // Glofox column: same fetchers, same arguments, Glofox churn + radar still run
     expect(kpis.fetchMrr).toHaveBeenCalledTimes(1)
@@ -197,6 +209,17 @@ describe('/dashboard/studio — un1t.online column reads through the seam (UN1TR
     expect(html).toContain('6 started')
     expect(html).toContain('55%')
     expect(html).toContain('Grow the base')
+  })
+
+  // CAC divides ad spend by Glofox-stamped new members: with spend present but
+  // no new-member count it must say unavailable, not print a sublabel over a blank.
+  it('un1t.online with ad spend: CAC is unavailable (no Glofox new-member count to divide by)', async () => {
+    membershipStateForPage.mockResolvedValue(UN1T)
+    kpis.fetchAdSpend.mockResolvedValue(ok({ spend: 900, prevSpend: 800 }))
+    const [html] = await renderColumns()
+    expect(cellOf(html, 'Ad spend')).toContain('Meta, campaign level')
+    expect(cellOf(html, 'CAC')).toContain('unavailable')
+    expect(html).not.toContain('Meta spend ÷ new members')
   })
 
   it('one membership state read per column (the gate and the numbers share one answer)', async () => {

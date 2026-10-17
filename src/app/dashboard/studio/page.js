@@ -75,8 +75,11 @@ function soft(promise) {
 // fetchers, so a Glofox column is unchanged. un1t.online supplies those three;
 // revenue churn needs membership_transitions.price_cents (Glofox only) and the
 // radar cells read Glofox tables (behind the memberships capability), so both
-// are null there and draw '— unavailable'. Acquisition and the floor read
-// contacts / class tables and stay source-agnostic.
+// are null there and draw '— unavailable'. So does acquisition (UN1TREAD.7):
+// fetchAcquisition counts contacts.converted_at / joined_at / pipeline_stage_slug,
+// which only the Glofox sync and classifier set, so New members, Trial
+// conversion, New leads, Trials done and CAC are Glofox-fed too. The floor
+// reads class tables and stays source-agnostic.
 async function loadLocationScorecard(locationId, r) {
   const db = createServerClient()
   const glofox = r.source === 'glofox'
@@ -90,7 +93,7 @@ async function loadLocationScorecard(locationId, r) {
     await Promise.all([
       supportsRead(r, 'growth') ? soft(r.reads.growth(db, locationId)) : null,
       glofox ? soft(fetchRevenueChurn(db, locationId, estYield)) : null,
-      soft(fetchAcquisition(db, locationId)),
+      glofox ? soft(fetchAcquisition(db, locationId)) : null,
       supportsRead(r, 'engagement') ? soft(r.reads.engagement(db, locationId)) : null,
       soft(fetchFloor(db, locationId)),
       soft(fetchAdSpend(db, locationId)),
@@ -257,7 +260,7 @@ async function LocationColumn({ user, location }) {
           <ScoreCell
             label="CAC"
             value={cac != null ? `€${cac}` : null}
-            sublabel={spend ? `Meta spend ÷ new members, ${W}d` : UNAVAILABLE}
+            sublabel={spend && acq ? `Meta spend ÷ new members, ${W}d` : UNAVAILABLE}
             delta={cacDelta}
             deltaHigherIsBetter={false}
             deltaFormat={n => `€${n}`}
