@@ -15,6 +15,8 @@
 //   5. Resolve un1t.online clients to org-scoped contacts (Task 4).
 //   6. Upsert the seven un1t_* tables in chunks of 200. The first failed
 //      upsert stops the run ('db'); later tables wait for the next run.
+//      The events are then projected into class_occurrences (UN1TCLASS.2): a
+//      projection failure is recorded in counts and never fails the run.
 //   7. Reconcile contact_memberships (source 'un1t_online_api' at this
 //      location only; the operator export's rows are never touched): a
 //      contact with an active subscription is upserted active; an active row
@@ -56,6 +58,7 @@ import {
   rowStudioId,
   MEMBERSHIP_ACTIVE_STATUSES,
 } from './un1t-online-map.js'
+import { projectUn1tOccurrences } from './un1t-online-occurrences.js'
 import { resolveUn1tContacts } from './un1t-online-contacts.js'
 import { tokenFingerprint } from './un1t-online-token.js'
 import { readConnection } from './connection-registry.js'
@@ -337,6 +340,18 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
         }
       }
       counts.tables[spec.table] = unique.length
+
+      // 6b. Project the events just written into class_occurrences (UN1TCLASS.2),
+      // so the studio's timetable reaches the TVs and dashboards. Informational
+      // only: it never changes the run's status or the connection's, because
+      // the membership and contact data are this run's primary payload.
+      if (spec.table === 'un1t_events') {
+        const projected = await projectUn1tOccurrences(db, { locationId, events: unique, nowIso })
+        counts.class_occurrences = projected
+        if (projected.error) {
+          logWarn('un1t-online-sync', 'could not project events into class_occurrences', { locationId, runId, err: projected.error })
+        }
+      }
     }
 
     // 7. Memberships.
