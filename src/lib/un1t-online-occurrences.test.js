@@ -104,9 +104,9 @@ describe('projectUn1tOccurrences', () => {
     const ups = upsertEntries(log)
     expect(ups.map((u) => u.payload.length)).toEqual([200, 200, 50])
     for (const u of ups) expect(u.options).toEqual({ onConflict: 'location_id,glofox_event_id' })
-    // The existing-cancelled read is chunked at 200 too and scoped to the location.
+    // The existing-cancelled read is chunked at 100 (a long PostgREST IN-list URL) and scoped to the location.
     const sels = selectEntries(log)
-    expect(sels.map((s) => s.filters.find((f) => f[0] === 'in')[2].length)).toEqual([200, 200, 50])
+    expect(sels.map((s) => s.filters.find((f) => f[0] === 'in')[2].length)).toEqual([100, 100, 100, 100, 50])
     for (const s of sels) expect(s.filters).toContainEqual(['eq', 'location_id', LOC])
     expect(log.some((e) => e.op === 'delete')).toBe(false)
   })

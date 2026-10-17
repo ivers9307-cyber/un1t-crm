@@ -19,6 +19,9 @@
 //     whose membership and contact data are the primary payload.
 
 const CHUNK = 200
+// The existing-cancelled read puts every id in the URL's IN-list, so it takes
+// smaller chunks than the upsert (whose ids travel in the body).
+const READ_CHUNK = 100
 const PREFIX = 'un1t:'
 const SOURCE_PLATFORM = 'un1t_online'
 const MAX_ERROR_LEN = 500
@@ -89,7 +92,7 @@ export async function projectUn1tOccurrences(db, { locationId, events, nowIso })
     const ids = [...byId.keys()]
 
     const cancelledAt = new Map()
-    for (const idChunk of chunks(ids, CHUNK)) {
+    for (const idChunk of chunks(ids, READ_CHUNK)) {
       const { data, error } = await db
         .from('class_occurrences')
         .select('glofox_event_id, cancelled_at')
