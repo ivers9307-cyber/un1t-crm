@@ -29,3 +29,10 @@ export function defaultWelcomeGreeting({ agentName, brand } = {}) {
   const where = b ? ` at ${b}` : ''
   return `Hi, ${who}${where}. Ask me anything, or tell me if you'd like to book a free class or a consultation.`
 }
+
+/**
+ * MIAORG.1 Task 5 — the button on Mia's message carrying the studio's booking
+ * link (settings.customer_agent.booking_url) at a studio Mia cannot book for.
+ * The operator's booking_cta_label overrides it.
+ */
+export const DEFAULT_BOOKING_CTA_LABEL = 'Book a class'

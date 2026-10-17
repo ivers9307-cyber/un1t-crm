@@ -55,6 +55,8 @@ import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account
 import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
+import { deriveNoBookingTools, providerTakesBookings, refuseAtNoBookingStudio } from './tool-capability'
+import { DEFAULT_BOOKING_CTA_LABEL } from './default-copy'
 import { anthropicMessages } from '@/lib/anthropic'
 // MIA-HYGIENE.4 — the agent's own caught failures never reached error_events
 // (mig 435 only ever saw errors that escaped Next), so Vercel log retention
@@ -121,6 +123,21 @@ export const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
     ? { ...tool, cache_control: { type: 'ephemeral', ttl: '1h' } }
     : tool,
 )
+// MIAORG.1 Task 5 — the tool block for a studio whose membership source takes
+// no bookings (un1t.online, none): the Glofox tools gone, the timetable tool
+// re-described (tool-capability.js). Derived ONCE here, like the full block,
+// so each variant is a byte-stable cached prefix of its own. The full block
+// above is untouched: Glofox studios send exactly what they sent before.
+export const NO_BOOKING_AGENT_TOOLS = deriveNoBookingTools(ALL_AGENT_TOOLS)
+export const CACHED_NO_BOOKING_TOOLS = NO_BOOKING_AGENT_TOOLS.map((tool, i) =>
+  i === NO_BOOKING_AGENT_TOOLS.length - 1
+    ? { ...tool, cache_control: { type: 'ephemeral', ttl: '1h' } }
+    : tool,
+)
+/** The cached tool block for a turn: the full one where the studio takes bookings. */
+export function agentToolsFor(canBook) {
+  return canBook ? CACHED_ACCOUNT_TOOLS : CACHED_NO_BOOKING_TOOLS
+}
 // Don't re-acknowledge a burst of non-text messages — one soft handoff
 // per minute is enough.
 const SOFT_NOTIFY_GAP_MS = 60_000
@@ -490,6 +507,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   // W1.M3b — the base prompt names the studio's membership source (its app
   // and payment page); a studio with none gets no app rules.
   const membershipSource = await resolveMembershipSource(db, locationId)
+  // MIAORG.1 Task 5 — what Mia can do follows THIS studio (the thread's, the
+  // locationId this turn is answered at), never the contact's home studio.
+  // A provider without bookings gets the no-booking tool block and prompt.
+  const canBook = providerTakesBookings(membershipSource)
 
   // Conversation state: kill switch + linked contact + verification.
   const nameCol = adapter.nameColumn
@@ -797,6 +818,11 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       agentName: settings?.agent_name || DEFAULTS.agent_name,
       membershipUrl: settings?.membership_signup_url || null,
       membershipSource: { key: membershipSource.key, label: membershipSource.label },
+      // MIAORG.1 Task 5 — a studio without bookings gets the no-booking
+      // rules (timetable only, booking link or the team). A Glofox studio's
+      // prompt is byte-identical to before (bookings true ignores bookingUrl).
+      bookings: canBook,
+      bookingUrl: canBook ? null : (settings?.booking_url || null),
       tone: settings?.tone || null,
       extraRules: settings?.extra_rules || null,
       knowledge: knowledge || [],
@@ -842,6 +868,11 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // AGENT-HANDS.1 — booking tools read the autonomy mode +
       // consultation type from the agent settings blob.
       settings,
+      // MIAORG.1 Task 5 — the studio's booking capability and membership
+      // source: the executors refuse a booking-system tool where canBook is
+      // false, and list_upcoming_classes reads un1t_events at un1t.online.
+      canBook,
+      membershipSourceKey: membershipSource.key,
     }
     // MIA-REVIEW.3 — surface the acting account to the decision log.
     trace.actingContactId = toolCtx.verifiedContactId || null
@@ -881,7 +912,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
             output_config: { effort: agentEffort },
             system,
             messages,
-            tools: CACHED_ACCOUNT_TOOLS,
+            tools: agentToolsFor(canBook),
           },
           { apiKey, locationId, source: 'mia_auto_reply' },
           {
@@ -943,13 +974,16 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
             // words; ops keep the real signal in the log line.
             let result
             try {
-              result = ACCOUNT_TOOL_NAMES.has(block.name)
+              // MIAORG.1 Task 5 — a booking-system tool named at a studio
+              // without one (never offered there, so the model invented it)
+              // is refused before any executor runs: no Glofox call, no read.
+              result = refuseAtNoBookingStudio(block.name, toolCtx) || (ACCOUNT_TOOL_NAMES.has(block.name)
                 ? await executeAccountTool(block.name, block.input || {}, toolCtx)
                 : EVENT_TOOL_NAMES.has(block.name)
                   ? await executeEventTool(block.name, block.input || {}, toolCtx)
                   : CARD_TOOL_NAMES.has(block.name)
                     ? await executeCardTool(block.name, block.input || {}, toolCtx)
-                    : await executeBookingTool(block.name, block.input || {}, toolCtx)
+                    : await executeBookingTool(block.name, block.input || {}, toolCtx))
             } catch (err) {
               const throws = (toolThrows.get(block.name) || 0) + 1
               toolThrows.set(block.name, throws)
@@ -1460,6 +1494,21 @@ const waReplyOpts = (locationId, conversationId) => (conversationId
   ? { locationId, replyInConversation: conversationId }
   : { locationId })
 
+// MIAORG.1 Task 5 — the trailing-link button's text. The studio's booking link
+// (booking_url, sent where Mia cannot book) carries booking_cta_label, default
+// "Book a class"; every other link keeps link_button_text, default "Open link".
+// A studio with no booking_url (every Glofox studio today) is unchanged.
+function sameLink(a, b) {
+  const norm = (u) => String(u || '').trim().replace(/\/+$/, '')
+  return !!norm(a) && norm(a) === norm(b)
+}
+export function linkButtonText(url, settings) {
+  if (sameLink(url, settings?.booking_url)) {
+    return (settings?.booking_cta_label || '').trim() || DEFAULT_BOOKING_CTA_LABEL
+  }
+  return (settings?.link_button_text || '').trim() || 'Open link'
+}
+
 export const whatsappAdapter = {
   name: 'whatsapp',
   label: 'WhatsApp',
@@ -1489,7 +1538,7 @@ export const whatsappAdapter = {
   send: async (recipient, text, { locationId, settings, conversationId }) => {
     const split = splitTrailingUrl(text)
     if (split) {
-      const buttonText = (settings?.link_button_text || '').trim() || 'Open link'
+      const buttonText = linkButtonText(split.url, settings)
       try {
         return await sendCtaUrlMessage(recipient, { bodyText: split.body, buttonText, url: split.url }, waReplyOpts(locationId, conversationId))
       } catch (e) {

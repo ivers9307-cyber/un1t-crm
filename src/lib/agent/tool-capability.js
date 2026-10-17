@@ -1,0 +1,90 @@
+// MIAORG.1 Task 5 — Mia's tool set follows the THREAD's studio.
+//
+// A studio whose membership source cannot take bookings (un1t.online at Hatch
+// Street, or no source at all: every capability false, src/lib/membership/
+// sources/*) gets a smaller tool block: nothing that reads or writes Glofox,
+// or reads the Glofox-synced columns on contacts, and nothing whose APPROVAL
+// runs a Glofox action. The studio is the one the turn is answered AT (the
+// conversation's location_id, which is what the runner's locationId is),
+// never the contact's home studio: a Hatch thread bound to a Stillorgan
+// contact must not report Stillorgan's membership as Hatch's.
+//
+// Two layers, on purpose. The model is never OFFERED these tools at such a
+// studio (the no-booking tool block, built once from the full one), and the
+// executor REFUSES them if the model names one anyway: Sonnet 5 has invented
+// tool names before, and a tool missing from the list is not a tool it cannot
+// call.
+//
+// Pure and dependency-free so the eval harness and tests can load it.
+
+/**
+ * Tools dropped (and refused) at a studio whose provider has
+ * `capabilities.bookings === false`. Each reads Glofox or Glofox-synced
+ * data, writes Glofox, or files a card whose approval can execute in Glofox.
+ */
+export const BOOKING_SYSTEM_TOOL_NAMES = Object.freeze(new Set([
+  // Glofox-synced reads off the contact row (membership state, plan, payment
+  // reminder standing, recent_bookings, attendance rollups).
+  'get_my_membership',
+  'get_my_payment_reminder',
+  'get_my_next_class',
+  'get_my_recent_attendance',
+  // CANCEL-FORM.5: approving a cancellation executes it in Glofox when the
+  // row's studio opted in (glofox_auto_cancel_memberships).
+  'request_cancellation',
+  // Glofox writes and reads; book_class's approval card books in Glofox and
+  // can buy a trial membership first (grantTrialBeforeBooking).
+  'book_class',
+  'list_my_upcoming_bookings',
+  'cancel_class_booking',
+]))
+
+/** The timetable tool's description at a studio without a booking system. */
+export const NO_BOOKING_CLASS_LIST_DESCRIPTION =
+  "List the studio's upcoming classes over the next two weeks (class name and start time " +
+  'only). No identity verification needed. Use when someone asks "what classes are on", ' +
+  '"is there a class tomorrow morning". You cannot book or cancel classes at this studio, ' +
+  'and the list never says whether a class is full or has spaces, so never say either.'
+
+/** Does this provider take bookings? Anything but an explicit true is no. */
+export function providerTakesBookings(provider) {
+  return provider?.capabilities?.bookings === true
+}
+
+/**
+ * The no-booking tool list, derived from the full one: the booking-system
+ * tools removed, and list_upcoming_classes re-described (a new object; the
+ * full list's objects are never touched). Order is kept, so the last tool is
+ * the same tool in both lists. Pure.
+ */
+export function deriveNoBookingTools(tools) {
+  return tools
+    .filter((t) => !BOOKING_SYSTEM_TOOL_NAMES.has(t.name))
+    .map((t) => (t.name === 'list_upcoming_classes'
+      ? {
+        ...t,
+        description: NO_BOOKING_CLASS_LIST_DESCRIPTION,
+        input_schema: { type: 'object', properties: {} },
+      }
+      : t))
+}
+
+/** What Mia is told when she calls a booking-system tool at a studio without one. */
+export const TOOL_NOT_AT_THIS_STUDIO = Object.freeze({
+  error: 'not_available_at_this_studio',
+  message:
+    'That is not available at this studio. Nothing was looked up, booked or cancelled, so never ' +
+    "say it was. For a class booking, send the studio's booking link if your rules give you one, " +
+    'otherwise hand off to the team. For membership, payments or account questions, hand off to the team.',
+})
+
+/**
+ * The executor-side refusal. `ctx.canBook === false` is the only "no": a
+ * caller that never set it (an older caller, the eval harness) keeps today's
+ * behaviour. Returns the refusal result, or null when the tool may run.
+ */
+export function refuseAtNoBookingStudio(toolName, ctx) {
+  if (ctx?.canBook !== false) return null
+  if (!BOOKING_SYSTEM_TOOL_NAMES.has(toolName)) return null
+  return { ...TOOL_NOT_AT_THIS_STUDIO }
+}
