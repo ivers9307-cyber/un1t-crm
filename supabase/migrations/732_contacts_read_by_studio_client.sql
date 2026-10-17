@@ -4,7 +4,7 @@
 -- that studio. And the contacts list's crossover RPC counts those clients as
 -- crossovers.
 --
--- NOT YET APPLIED. Proven ahead of apply by
+-- APPLIED to prod 2026-10-17 (before merge; self-check passed). Proven by
 -- tests/migration-732-contacts-read-by-studio-client.test.js (PGlite; the
 -- real 690, 691, 699 and 731 files first, then this one).
 --
