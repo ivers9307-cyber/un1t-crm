@@ -63,7 +63,9 @@ function copiedLoaderFiles() {
     .sort()
 }
 
-describe('ffmpeg.wasm loader stays unbundled (FFMPEGLOADER.1)', () => {
+// The whole-repo scan is parse-bound; give it room on a slow runner (as the
+// other client-code guards do).
+describe('ffmpeg.wasm loader stays unbundled (FFMPEGLOADER.1)', { timeout: 120_000 }, () => {
   it('no src/, shared/ or mobile/ file imports @ffmpeg/ffmpeg through the bundler', () => {
     const files = [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'shared')), ...walk(path.join(ROOT, 'mobile'))]
     expect(files.length).toBeGreaterThan(500) // not vacuous
