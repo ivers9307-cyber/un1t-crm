@@ -62,6 +62,8 @@ const RESOLVING = {
   'src/lib/whatsapp-config': [
     'getWhatsAppConfig', 'getLocationWhatsAppNumberConfig', 'getWhatsAppConfigById', 'resolveWhatsAppNumberByPhoneNumberId',
     'getConversationReplyConfig', 'getConversationNumberConfig', 'templateLocationIdFor',
+    // WAORGNUMBER.1 (R2, R5) — S's switched-on number on one WABA (template sends).
+    'getLocationNumberForWaba',
   ],
   'src/lib/whatsapp-own-number': ['ownNumberOrRefusal'],
 }

@@ -14,43 +14,17 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const state = { conversations: [], numbers: [], locations: [], faults: {} }
-const reads = []
-vi.mock('./supabase', () => ({
-  createServerClient: () => ({
-    from: (table) => {
-      const filters = []
-      const orders = []
-      let cap = Infinity
-      const run = () => {
-        reads.push(table)
-        if (state.faults[table]) return { data: null, error: state.faults[table] }
-        const src = table === 'whatsapp_conversations' ? state.conversations
-          : table === 'whatsapp_numbers' ? state.numbers
-          : table === 'locations' ? state.locations : []
-        let rows = src.filter((r) => filters.every((f) => f(r)))
-        for (const [col, asc] of orders.slice().reverse()) {
-          rows = rows.slice().sort((a, b) => (a[col] === b[col] ? 0 : (a[col] > b[col] ? 1 : -1) * (asc ? 1 : -1)))
-        }
-        return { data: rows.slice(0, cap), error: null }
-      }
-      const b = {
-        select: () => b,
-        eq: (c, v) => { filters.push((r) => r[c] === v); return b },
-        in: (c, vals) => { filters.push((r) => vals.includes(r[c])); return b },
-        order: (c, o) => { orders.push([c, o?.ascending !== false]); return b },
-        limit: (n) => { cap = n; return b },
-        maybeSingle: async () => { const out = run(); return out.error ? out : { data: out.data[0] ?? null, error: null } },
-        then: (res, rej) => Promise.resolve(run()).then(res, rej),
-      }
-      return b
-    },
-  }),
-}))
+const state = { conversations: [], numbers: [], links: undefined, locations: [], faults: {}, reads: [] }
+const reads = state.reads
+vi.mock('./supabase', async () => {
+  const { fakeWhatsAppDb } = await import('./whatsapp-numbers-fake-db.test-helpers.js')
+  return { createServerClient: () => fakeWhatsAppDb(state) }
+})
 vi.mock('./log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 const wa = await import('./whatsapp.js')
-const { getConversationReplyConfig, getConversationNumberConfig, classifyInboundOwner } = await import('./whatsapp-config.js')
+const { getConversationReplyConfig, getConversationNumberConfig, templateLocationIdFor, classifyInboundOwner } = await import('./whatsapp-config.js')
+const { link } = await import('./whatsapp-numbers-fake-db.test-helpers.js')
 const { isWhatsAppNumberMissing } = await import('./whatsapp-number-missing.js')
 const { logWarn } = await import('./log')
 
@@ -59,7 +33,7 @@ const LOC2 = 'a0000000-0000-4000-8000-000000000002'
 const LOC3 = 'a0000000-0000-4000-8000-000000000003'
 const CONV = 'c0000000-0000-4000-8000-000000000001'
 const num = (id, extra = {}) => ({
-  id, location_id: LOC, label: id, phone_number_id: `PNI-${id}`, business_account_id: 'WABA-1', app_id: 'APP',
+  id, location_id: LOC, organization_id: 'ORG-1', label: id, phone_number_id: `PNI-${id}`, business_account_id: 'WABA-1', app_id: 'APP',
   access_token: `tok-${id}`, source: 'cloud_api', is_default: false, is_active: true, updated_at: '2026-09-01', ...extra,
 })
 const DEFAULT = num('n-default', { is_default: true })
@@ -72,6 +46,7 @@ beforeEach(() => {
   reads.length = 0
   state.conversations = []
   state.numbers = [DEFAULT, SECOND]
+  state.links = undefined
   state.locations = [{ id: LOC, organization_id: 'ORG-1' }, { id: LOC2, organization_id: 'ORG-1' }, { id: LOC3, organization_id: 'ORG-2' }]
   state.faults = {}
   sentFrom = []
@@ -163,7 +138,7 @@ describe('WAHOMESTUDIO.1 — a number-less studio replies through a same-organis
   })
 
   it('a number in ANOTHER organisation is never used; the number-less studio still refuses', async () => {
-    state.numbers = [num('n-foreign', { location_id: LOC3, is_default: true })]
+    state.numbers = [num('n-foreign', { location_id: LOC3, organization_id: 'ORG-2', is_default: true })]
     state.conversations = [hatchConv('n-foreign')]
     expect(await getConversationNumberConfig(LOC2, CONV)).toBeNull()
     await expect(getConversationReplyConfig(LOC2, CONV)).rejects.toSatisfy(isWhatsAppNumberMissing)
@@ -183,6 +158,75 @@ describe('WAHOMESTUDIO.1 — a number-less studio replies through a same-organis
     state.conversations = [conv('n-second')]
     expect(await templateLocationIdFor(LOC, CONV)).toBe(LOC)
     expect(await templateLocationIdFor(LOC2, null)).toBe(LOC2)
+  })
+})
+
+// WAORGNUMBER.1 (R2) — the thread's stamped number is used only while it is
+// switched on at the thread's studio (location_whatsapp_numbers). The
+// WAHOMESTUDIO.1 sibling clause stays, transitionally, for a studio with no
+// number switched on at all.
+describe('WAORGNUMBER.1 — the thread number must be switched on at the thread’s studio', () => {
+  it('switched-off stamp is not used (Review Focus 1)', async () => {
+    // LOC has DEFAULT switched on; the thread's stamp SECOND is active but was
+    // switched off at LOC (still on at LOC2).
+    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC2, 'n-second', { is_default: true })]
+    state.conversations = [conv('n-second')]
+    expect(await getConversationNumberConfig(LOC, CONV)).toBeNull()
+    expect((await getConversationReplyConfig(LOC, CONV)).phoneNumberId).toBe('PNI-n-default')
+    expect((await getConversationReplyConfig(LOC, CONV, { template: true })).phoneNumberId).toBe('PNI-n-default')
+  })
+
+  it('a stamp switched on at the thread’s studio resolves FOR that studio, whatever its home', async () => {
+    // Stillorgan's DEFAULT switched on at LOC2 too; a thread at LOC2 stamped with it.
+    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC2, 'n-default', { is_default: true })]
+    state.conversations = [conv('n-default', { location_id: LOC2 })]
+    expect(await getConversationNumberConfig(LOC2, CONV)).toMatchObject({ id: 'n-default', locationId: LOC2, homeLocationId: LOC, viaSibling: false })
+    expect((await getConversationReplyConfig(LOC2, CONV, { template: true })).phoneNumberId).toBe('PNI-n-default')
+  })
+
+  it('sibling clause applies only while the studio has no link rows', async () => {
+    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC, 'n-second')]
+    state.conversations = [conv('n-default', { location_id: LOC2 })]
+    expect(await getConversationNumberConfig(LOC2, CONV)).toMatchObject({ id: 'n-default', locationId: LOC2, homeLocationId: LOC, viaSibling: true })
+    expect((await getConversationReplyConfig(LOC2, CONV, { template: true })).phoneNumberId).toBe('PNI-n-default')
+    // LOC2 gets a number of its own switched on: the sibling stamp is no longer used.
+    state.numbers = [DEFAULT, SECOND, num('n-hatch', { location_id: LOC2 })]
+    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC2, 'n-hatch', { is_default: true })]
+    expect(await getConversationNumberConfig(LOC2, CONV)).toBeNull()
+    expect((await getConversationReplyConfig(LOC2, CONV)).phoneNumberId).toBe('PNI-n-hatch')
+  })
+
+  it('a studio whose only link is to an inactive number is still number-less (the clause is unchanged)', async () => {
+    state.numbers = [DEFAULT, num('n-hatch-off', { location_id: LOC2, is_active: false })]
+    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC2, 'n-hatch-off', { is_default: true })]
+    state.conversations = [conv('n-default', { location_id: LOC2 })]
+    expect(await getConversationNumberConfig(LOC2, CONV)).toMatchObject({ id: 'n-default', viaSibling: true })
+  })
+
+  it('other organisation never', async () => {
+    state.numbers = [num('n-foreign', { location_id: LOC3, organization_id: 'ORG-2' })]
+    state.links = [link(LOC3, 'n-foreign', { is_default: true })]
+    state.conversations = [conv('n-foreign', { location_id: LOC2 })]
+    expect(await getConversationNumberConfig(LOC2, CONV)).toBeNull()
+    await expect(getConversationReplyConfig(LOC2, CONV)).rejects.toSatisfy(isWhatsAppNumberMissing)
+    // The org is judged on the NUMBER's organization_id, not its home studio's row.
+    state.numbers = [num('n-moved', { location_id: LOC, organization_id: 'ORG-2' })]
+    state.links = [link(LOC, 'n-moved', { is_default: true })]
+    state.conversations = [conv('n-moved', { location_id: LOC2 })]
+    expect(await getConversationNumberConfig(LOC2, CONV)).toBeNull()
+  })
+
+  it('templateLocationIdFor returns the number home only via sibling', async () => {
+    // Via sibling: the number's home studio's templates.
+    state.links = [link(LOC, 'n-default', { is_default: true })]
+    state.conversations = [conv('n-default', { location_id: LOC2 })]
+    expect(await templateLocationIdFor(LOC2, CONV)).toBe(LOC)
+    // Switched on at LOC2: LOC2's own templates, though the number's home is LOC.
+    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC2, 'n-default', { is_default: true })]
+    expect(await templateLocationIdFor(LOC2, CONV)).toBe(LOC2)
+    // No usable stamp: the thread's studio.
+    state.conversations = [conv(null, { location_id: LOC2 })]
+    expect(await templateLocationIdFor(LOC2, CONV)).toBe(LOC2)
   })
 })
 
@@ -225,7 +269,7 @@ describe('whatsapp.js senders honour opts.replyInConversation', () => {
 
 describe('classifyInboundOwner names the receiving number', () => {
   it('returns the owning row id with the location', () => {
-    expect(classifyInboundOwner({ source: 'db', id: 'n-second', locationId: LOC })).toEqual({ action: 'location', locationId: LOC, numberId: 'n-second' })
+    expect(classifyInboundOwner({ source: 'db', id: 'n-second', locationId: LOC, homeLocationId: LOC })).toEqual({ action: 'location', locationId: LOC, numberId: 'n-second' })
     expect(classifyInboundOwner(null)).toEqual({ action: 'drop' })
   })
 })
@@ -243,7 +287,7 @@ describe('getConversationNumberConfig', () => {
     state.conversations = [conv(null)]
     expect(await getConversationNumberConfig(LOC, CONV)).toBeNull()
     state.conversations = [conv('n-second')]
-    state.faults.whatsapp_numbers = { message: 'boom' }
+    state.faults.location_whatsapp_numbers = { message: 'boom' }
     await expect(getConversationNumberConfig(LOC, CONV)).resolves.toBeNull()
     expect(logWarn).toHaveBeenCalled()
   })

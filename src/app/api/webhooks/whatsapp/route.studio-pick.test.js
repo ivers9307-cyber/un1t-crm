@@ -90,7 +90,8 @@ function makeDb(handlers = {}) {
 
 const REGISTERED_PNI = '1233588839827698'
 // The resolver's config shape for an active whatsapp_numbers row.
-const STILLORGAN = { source: 'db', id: 'wn-1', locationId: 'loc-still', phoneNumberId: REGISTERED_PNI, token: 'tok' }
+// WAORGNUMBER.1 — the resolver's config names the number's home studio (classifyInboundOwner routes on it).
+const STILLORGAN = { source: 'db', id: 'wn-1', locationId: 'loc-still', homeLocationId: 'loc-still', phoneNumberId: REGISTERED_PNI, token: 'tok' }
 
 function reqFor(body) {
   return { text: async () => JSON.stringify(body), headers: { get: () => 'sha256=sig' } }
