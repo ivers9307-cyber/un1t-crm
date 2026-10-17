@@ -5,9 +5,9 @@ import { Button, Field } from '@/components/ui'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
 // MIAORG.1 Task 4 — the same override bookkeeping as the studio editor (which
 // paths a layer sets), zod-free.
-import { initialOverridden, withOverride, withoutOverride, isOverridden, valueAt } from '@/lib/agent/settings-overrides'
+import { initialOverridden, withOverride, withoutOverride, isOverridden, valueAt, isHalfQuietWindow } from '@/lib/agent/settings-overrides'
 import {
-  describeInheritance, newlyAppliedFields, describeNewlyApplied, copyablePaths,
+  describeInheritance, newlyAppliedFields, describeNewlyApplied, copyablePaths, nonBlankSetPaths,
 } from '@/lib/agent/settings-org'
 import { buildOrgSavePayload } from './save-payload'
 import { ORG_FIELD_GROUPS, ORG_FIELDS } from './org-fields'
@@ -116,7 +116,11 @@ export default function OrgDefaultsClient({ organizationId, organizationName = n
   }
 
   const orgSets = (field) => field.paths.some(p => isOverridden(set, p))
-  const pending = values ? newlyAppliedFields(ORG_FIELDS, loadedSet, set, studios) : []
+  // Only values that will actually be stored count (a field marked set but
+  // left blank stores nothing).
+  const pending = values ? newlyAppliedFields(ORG_FIELDS, loadedSet, nonBlankSetPaths(set, values), studios) : []
+  // A half-entered window would be dropped on Save: say so and hold Save.
+  const quietHalf = !!values && isHalfQuietWindow(values.quiet_hours)
 
   async function save() {
     setSaving(true); setError(null)
@@ -140,7 +144,8 @@ export default function OrgDefaultsClient({ organizationId, organizationName = n
     ? ORG_FIELDS.filter(f => f.paths.some(p => isOverridden(copyablePaths(source.sets), p)))
     : []
   const copyNewlyApplied = source
-    ? newlyAppliedFields(copyFields, set, withOverride(set, ...copyablePaths(source.sets)), studios)
+    // Against what is STORED (the copy merges into the stored layer).
+    ? newlyAppliedFields(copyFields, loadedSet, withOverride(loadedSet, ...copyablePaths(source.sets)), studios)
     : []
 
   async function copyNow() {
@@ -198,6 +203,7 @@ export default function OrgDefaultsClient({ organizationId, organizationName = n
           <span className="text-un1t-muted">to</span>
           <input type="time" aria-label="Quiet hours end" className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text"
             value={values.quiet_hours?.end || ''} onChange={e => editQuiet('end', e.target.value)} />
+          {quietHalf && <span className="text-xs text-red-600" role="alert">Set both times</span>}
         </div>
       )
     }
@@ -304,7 +310,7 @@ export default function OrgDefaultsClient({ organizationId, organizationName = n
 
           {error && <div className="text-sm text-red-600">{error}</div>}
           <div>
-            <Button loading={saving} onClick={save}>Save organisation defaults</Button>
+            <Button loading={saving} disabled={quietHalf} onClick={save}>Save organisation defaults</Button>
             {savedAt && <span className="ml-3 text-sm text-green-600">Saved</span>}
           </div>
         </div>

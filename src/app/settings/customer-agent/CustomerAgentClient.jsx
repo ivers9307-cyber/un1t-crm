@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { BarChart3 } from 'lucide-react'
 import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-form/defaults'
@@ -13,7 +13,7 @@ import { Button } from '@/components/ui'
 // with the PUT's contract).
 import {
   initialOverridden, withOverride, withoutOverride, valueAt, fieldSource, sourceTagLabel, orgSetsAny,
-  isOverridden, INHERITABLE_SCALAR_KEYS, INHERITABLE_OBJECT_KEYS, INHERITABLE_OBJECT_FIELDS,
+  isOverridden, INHERITABLE_SCALAR_KEYS, INHERITABLE_OBJECT_KEYS, INHERITABLE_OBJECT_FIELDS, isHalfQuietWindow,
 } from '@/lib/agent/settings-overrides'
 import { buildSavePayload } from './save-payload'
 // MIAORG.1 Task 4 — the organisation defaults, for masters and org admins.
@@ -74,6 +74,11 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   // the stored blob: every value it holds counts as the studio's own (T3-D),
   // so the first save of a legacy full blob keeps all of it.
   const [overridden, setOverridden] = useState([])
+  // The CURRENT override set, for work that finishes after an await
+  // (refreshInherited runs after the org PUT; that render's `overridden`
+  // would be stale if the operator edited a field meanwhile).
+  const overriddenRef = useRef(overridden)
+  useEffect(() => { overriddenRef.current = overridden }, [overridden])
   // The org layer (raw) and what each key resolves to with no override.
   const [org, setOrg] = useState(null)
   const [inherited, setInherited] = useState(null)
@@ -152,6 +157,9 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
     }
   }
   const noQuietHours = settings?.quiet_hours?.off === true
+  // MIAORG.1 Task 4 — one end of the window only: the payload would drop it
+  // silently, so the editor says "Set both times" and holds Save.
+  const quietHalf = isHalfQuietWindow(settings?.quiet_hours)
 
   // "Use organisation default": the field stops being the studio's own and
   // shows the value it now inherits (GET's `inherited`).
@@ -261,6 +269,9 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
       setInherited(nextInherited)
       setSettings(s => {
         if (!s) return s
+        // Read when React applies the update, so an edit made while the org
+        // save was in flight keeps the operator's value.
+        const overridden = overriddenRef.current
         const next = { ...s }
         for (const k of INHERITABLE_SCALAR_KEYS) {
           if (!isOverridden(overridden, k)) next[k] = nextInherited?.[k] ?? null
@@ -751,6 +762,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
               onChange={e => setQuietHours('end', e.target.value)} />
             <span className="text-xs text-un1t-muted">{settings.quiet_hours?.tz || location?.timezone || "the studio's timezone"} — agent stays quiet, a human replies.</span>
           </div>
+          {quietHalf && <p className="text-xs text-red-600 mt-1" role="alert">Set both times</p>}
           <label className="flex items-center gap-2 text-sm text-un1t-text mt-2">
             <input type="checkbox" className="h-4 w-4" checked={noQuietHours}
               onChange={e => setNoQuietHours(e.target.checked)} />
@@ -761,7 +773,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
         {error && <div className="text-sm text-red-600">{error}</div>}
         {canEdit && (
           <div>
-            <button type="button" onClick={saveSettings} disabled={saving}
+            <button type="button" onClick={saveSettings} disabled={saving || quietHalf}
               className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
               {saving ? 'Saving…' : 'Save settings'}
             </button>
@@ -970,7 +982,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
 
         {canEdit && (
           <div className="mt-5">
-            <button type="button" onClick={saveSettings} disabled={saving}
+            <button type="button" onClick={saveSettings} disabled={saving || quietHalf}
               className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
               {saving ? 'Saving…' : 'Save settings'}
             </button>

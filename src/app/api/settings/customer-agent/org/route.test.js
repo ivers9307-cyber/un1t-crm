@@ -96,6 +96,22 @@ describe('GET — who may read', () => {
     expect(db.calls).toEqual([])
   })
 
+  it('a malformed organisation id is a 404 before any read, never a database error', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = serveDb({})
+    expect((await GET(getReq('not-a-uuid'))).status).toBe(404)
+    expect((await GET(getReq("x' or 1=1"))).status).toBe(404)
+    expect(db.calls).toEqual([])
+  })
+
+  it('PUT: a malformed organisation id is refused by the body schema (400) before any read', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = serveDb({})
+    expect((await PUT(putReq({ organization_id: 'not-a-uuid', settings: { tone: 'x' } }))).status).toBe(400)
+    expect((await PUT(putReq({ copy_from_location_id: 'not-a-uuid' }))).status).toBe(400)
+    expect(db.calls).toEqual([])
+  })
+
   it('a master naming an organisation that does not exist is a 404', async () => {
     getCurrentUser.mockResolvedValue(MASTER)
     serveDb(stateAnswers({ org: null, studios: [] }))
@@ -269,7 +285,8 @@ describe('PUT copy_from_location_id — Start from a studio\'s settings (T4-C)',
       locations: [(chain) => {
         const orgEq = chain.find(([m, col]) => m === 'eq' && col === 'organization_id')
         const idEq = chain.find(([m, col]) => m === 'eq' && col === 'id')
-        const row = (source || []).find((r) => r.id === idEq?.[2] && r.organization_id === orgEq?.[2])
+        const activeOnly = chain.some(([m, col, v]) => m === 'eq' && col === 'active' && v === true)
+        const row = (source || []).find((r) => r.id === idEq?.[2] && r.organization_id === orgEq?.[2] && (!activeOnly || r.active !== false))
         return ok(row || null)
       }, ...state.locations],
     })
@@ -291,13 +308,20 @@ describe('PUT copy_from_location_id — Start from a studio\'s settings (T4-C)',
       expect(c.some(([m]) => ['update', 'upsert', 'insert', 'delete'].includes(m))).toBe(false)
     }
     const source = chainsFor(db, 'locations')[0]
-    expect(source.filter(([m]) => m === 'eq')).toEqual([['eq', 'id', NORTH], ['eq', 'organization_id', ORG_A]])
+    expect(source.filter(([m]) => m === 'eq')).toEqual([['eq', 'id', NORTH], ['eq', 'organization_id', ORG_A], ['eq', 'active', true]])
   })
 
   it('a studio of another organisation is a 404 and nothing is written', async () => {
     getCurrentUser.mockResolvedValue(ORG_ADMIN)
     const db = copyDb({ source: [{ id: FOREIGN, organization_id: ORG_B, customer_agent: NORTH_BLOB }] })
     expect((await PUT(putReq({ organization_id: ORG_A, copy_from_location_id: FOREIGN }))).status).toBe(404)
+    expect(chainsFor(db, 'org_settings').some((c) => argsOf(c, 'upsert'))).toBe(false)
+  })
+
+  it('an inactive studio of the organisation is a 404 (the picker never offers one)', async () => {
+    getCurrentUser.mockResolvedValue(ORG_ADMIN)
+    const db = copyDb({ source: [{ id: SOUTH, organization_id: ORG_A, active: false, customer_agent: { agent_name: 'Ava' } }] })
+    expect((await PUT(putReq({ organization_id: ORG_A, copy_from_location_id: SOUTH }))).status).toBe(404)
     expect(chainsFor(db, 'org_settings').some((c) => argsOf(c, 'upsert'))).toBe(false)
   })
 

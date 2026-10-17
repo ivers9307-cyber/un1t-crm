@@ -7,7 +7,7 @@
 // "Loading…" forever).
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, within, act } from '@testing-library/react'
 import { DEFAULTS, buildCustomerAgentSettings, SettingsSchema } from '@/lib/agent/settings-contract'
 import { mergeAgentSettings } from '@/lib/agent/settings-resolve'
 import { initialOverridden } from '@/lib/agent/settings-overrides'
@@ -546,5 +546,76 @@ describe('CustomerAgentClient — quiet hours opt-out and org defaults (MIAORG.1
     // the studio's own tone field (not the org one) now shows the new org value
     const toneInputs = [...container.querySelectorAll('textarea[placeholder="e.g. Warm, upbeat, brief. Use first names. No emojis."]')]
     await waitFor(() => expect(toneInputs.at(-1).value).toBe('New org tone'))
+  })
+})
+
+// MIAORG.1 Task 4 fix round — a studio edit made while an ORG save is in
+// flight survives the re-read that follows it; a half quiet-hours window
+// holds Save.
+describe('CustomerAgentClient — fix round (MIAORG.1 Task 4)', () => {
+  const ORG_ID = 'a0000000-0000-0000-0000-00000000a0a1'
+  const TONE_PH = 'e.g. Warm, upbeat, brief. Use first names. No emojis.'
+  function studioAnswer(org) {
+    const studio = { enabled: true }
+    const { settings, sources } = mergeAgentSettings({ org, studio })
+    return reply(200, {
+      success: true,
+      settings: { ...settings, social_enabled: false, glofox_auto_cancel: false },
+      studio, org, sources,
+      inherited: mergeAgentSettings({ org, studio: null }).settings,
+      location: { id: 'loc1', name: 'Test Studio', timezone: 'Europe/Dublin' },
+      checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
+    })
+  }
+  const orgState = (raw) => reply(200, { success: true, data: { organization: { id: ORG_ID, name: 'Org A' }, settings: mergeAgentSettings({ org: raw }).settings, raw, defaults: DEFAULTS, studios: [] } })
+
+  it('a studio field edited while the org save is pending keeps the edit and stays overridden', async () => {
+    let studioReads = 0
+    let releasePut
+    const putGate = new Promise((resolve) => { releasePut = resolve })
+    global.fetch = vi.fn(async (url, init) => {
+      const u = String(url)
+      if (u.startsWith('/api/settings/customer-agent/org')) {
+        if (init?.method === 'PUT') { await putGate; return orgState({ tone: 'New org tone' }) }
+        return orgState(null)
+      }
+      if (u === '/api/settings/customer-agent' && init?.method === 'PUT') return reply(200, { success: true, settings: {} })
+      if (u.startsWith('/api/settings/customer-agent')) {
+        studioReads += 1
+        return studioAnswer(studioReads === 1 ? null : { tone: 'New org tone' })
+      }
+      if (u.startsWith('/api/agent/knowledge')) return reply(200, { success: true, entries: [] })
+      return reply(200, { success: true, templates: [] })
+    })
+    const { container } = render(<CustomerAgentClient canEdit orgDefaults={{ organizationId: ORG_ID, organizationName: 'Org A' }} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save organisation defaults' })).toBeTruthy())
+    const tones = () => [...container.querySelectorAll(`textarea[placeholder="${TONE_PH}"]`)]
+    // org tone first (the section sits above), the studio's last
+    fireEvent.change(tones()[0], { target: { value: 'New org tone' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save organisation defaults' }))
+    // while the org PUT is in flight, the operator edits the STUDIO's tone
+    fireEvent.change(tones().at(-1), { target: { value: 'My studio tone' } })
+    await act(async () => { releasePut() })
+    await waitFor(() => expect(studioReads).toBe(2))
+    await waitFor(() => expect(within(screen.getByText('Tone & voice').parentElement).getByRole('button', { name: 'Use organisation default' })).toBeTruthy())
+    expect(tones().at(-1).value).toBe('My studio tone')
+    fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+    await waitFor(() => expect(global.fetch.mock.calls.some(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')).toBe(true))
+    const [, init] = global.fetch.mock.calls.find(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')
+    const body = JSON.parse(init.body)
+    expect(body.tone).toBe('My studio tone')
+    expect(body.overridden).toContain('tone')
+  })
+
+  it('a half-entered quiet-hours window says "Set both times" and holds Save', async () => {
+    mockFetch([studioAnswer(null)])
+    render(<CustomerAgentClient canEdit />)
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+    fireEvent.change(screen.getByLabelText('Quiet hours start'), { target: { value: '21:00' } })
+    expect(screen.getByText('Set both times')).toBeTruthy()
+    for (const b of screen.getAllByRole('button', { name: /Save settings/ })) expect(b.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Quiet hours end'), { target: { value: '07:00' } })
+    expect(screen.queryByText('Set both times')).toBeNull()
+    for (const b of screen.getAllByRole('button', { name: /Save settings/ })) expect(b.disabled).toBe(false)
   })
 })

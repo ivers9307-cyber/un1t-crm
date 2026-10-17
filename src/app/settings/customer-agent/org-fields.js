@@ -94,3 +94,10 @@ export const ORG_FIELD_GROUPS = [
 ]
 
 export const ORG_FIELDS = ORG_FIELD_GROUPS.flatMap((g) => g.fields)
+
+// Inheritable settings the org editor deliberately does NOT show (no editor at
+// the studio either). A stored value is echoed on Save, never dropped
+// (buildOrgSavePayload). A whole object key stands for all of its fields.
+// org-fields.test.js pins ORG_FIELDS + this list to the inheritable catalogue,
+// so a new inheritable setting fails CI until it is shown here or listed.
+export const ORG_FIELDS_NOT_EDITED = Object.freeze(['handoff_sla_minutes', 'limits'])

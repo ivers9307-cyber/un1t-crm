@@ -80,6 +80,24 @@ export function newlyAppliedFields(fields, before, after, studios = []) {
   return out
 }
 
+/**
+ * The paths the organisation sets that actually hold a value in the editor:
+ * a path marked set but left blank (or a half quiet-hours window) stores
+ * nothing, so it must not appear in the pre-save notice.
+ * @param {string[]} set
+ * @param {object} values  the editor's state
+ * @returns {string[]}
+ */
+export function nonBlankSetPaths(set = [], values = {}) {
+  const filled = (v) => (typeof v === 'string' ? v.trim() !== '' : v !== null && v !== undefined)
+  const quietWhole = filled(valueAt(values, 'quiet_hours.start')) && filled(valueAt(values, 'quiet_hours.end'))
+  return (set || []).filter((p) => {
+    if (p === 'quiet_hours.start' || p === 'quiet_hours.end') return quietWhole
+    if (ORG_EXCLUDED_FIELDS.has(p)) return false
+    return filled(valueAt(values, p))
+  })
+}
+
 /** The notice text for one newly applied field (staff copy, no em-dashes). */
 export function describeNewlyApplied({ field, studios }) {
   return `${field.label}: ${joinNames(studios.map(studioLabel))} will start using this.`

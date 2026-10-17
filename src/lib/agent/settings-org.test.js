@@ -106,3 +106,24 @@ describe('Start from a studio\'s settings (T4-C)', () => {
     expect(copyStudioIntoOrg(null, STUDIO).copied).toEqual(copyablePaths(initialOverridden(STUDIO)))
   })
 })
+
+describe('fix round — blank values and half windows', () => {
+  it('nonBlankSetPaths keeps only set paths that hold a value; quiet hours only as a pair', async () => {
+    const { nonBlankSetPaths } = await import('./settings-org')
+    const values = { tone: '  ', agent_name: 'Ava', handoff_cooldown_hours: 0, extra_rules: null, quiet_hours: { start: '22:00', end: '' } }
+    expect(nonBlankSetPaths(['tone', 'agent_name', 'handoff_cooldown_hours', 'extra_rules', 'quiet_hours.start', 'quiet_hours.end'], values))
+      .toEqual(['agent_name', 'handoff_cooldown_hours'])
+    expect(nonBlankSetPaths(['quiet_hours.start', 'quiet_hours.end', 'quiet_hours.tz'], { quiet_hours: { start: '22:00', end: '07:00', tz: 'UTC' } }))
+      .toEqual(['quiet_hours.start', 'quiet_hours.end'])
+  })
+
+  it('isHalfQuietWindow: one end only, not when off or empty or whole', async () => {
+    const { isHalfQuietWindow } = await import('./settings-overrides')
+    expect(isHalfQuietWindow({ start: '22:00', end: '' })).toBe(true)
+    expect(isHalfQuietWindow({ start: null, end: '07:00' })).toBe(true)
+    expect(isHalfQuietWindow({ start: '22:00', end: '07:00' })).toBe(false)
+    expect(isHalfQuietWindow({ start: '', end: null })).toBe(false)
+    expect(isHalfQuietWindow({ start: '22:00', off: true })).toBe(false)
+    expect(isHalfQuietWindow(null)).toBe(false)
+  })
+})

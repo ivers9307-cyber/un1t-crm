@@ -168,3 +168,32 @@ describe('OrgDefaultsClient — Start from a studio\'s settings (T4-C)', () => {
     expect(screen.queryByRole('button', { name: 'Copy now' })).toBeNull()
   })
 })
+
+describe('OrgDefaultsClient — fix round', () => {
+  it('a half-entered quiet-hours window says "Set both times" and holds Save', async () => {
+    mockFetch([reply(200, state())])
+    const { container } = render(<OrgDefaultsClient organizationId={ORG} />)
+    await ready()
+    const box = fieldBox('quiet_hours', container)
+    fireEvent.change(within(box).getByLabelText('Quiet hours start'), { target: { value: '22:00' } })
+    expect(within(box).getByText('Set both times')).toBeTruthy()
+    const saveBtn = screen.getByRole('button', { name: 'Save organisation defaults' })
+    expect(saveBtn.disabled).toBe(true)
+    // a half window stores nothing, so it is not in the notice either
+    expect(screen.queryByTestId('org-newly-applied')).toBeNull()
+    fireEvent.change(within(box).getByLabelText('Quiet hours end'), { target: { value: '07:00' } })
+    expect(within(box).queryByText('Set both times')).toBeNull()
+    expect(saveBtn.disabled).toBe(false)
+  })
+
+  it('a field typed and then cleared is not in the pre-save notice', async () => {
+    mockFetch([reply(200, state())])
+    const { container } = render(<OrgDefaultsClient organizationId={ORG} />)
+    await ready()
+    const tone = within(fieldBox('tone', container)).getByRole('textbox')
+    fireEvent.change(tone, { target: { value: 'Warm' } })
+    expect(screen.getByTestId('org-newly-applied')).toBeTruthy()
+    fireEvent.change(tone, { target: { value: '' } })
+    expect(screen.queryByTestId('org-newly-applied')).toBeNull()
+  })
+})

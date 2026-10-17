@@ -199,6 +199,17 @@ export function orgSetsAny(paths, org) {
   return paths.some((p) => leafPaths(p).some((leaf) => isSet(valueAt(org, leaf))))
 }
 
+/**
+ * MIAORG.1 Task 4 — a quiet-hours window with only one end filled in (and not
+ * switched off). Neither editor can save one (the payload would silently drop
+ * it), so both show "Set both times" and hold Save until it is fixed.
+ */
+export function isHalfQuietWindow(q) {
+  if (!isPlainObject(q) || q.off === true) return false
+  const has = (v) => typeof v === 'string' ? v.trim() !== '' : isSet(v)
+  return has(q.start) !== has(q.end)
+}
+
 /** Staff-facing tag text for a source (T3-F). Null for 'studio'. */
 export function sourceTagLabel(source) {
   if (source === 'org') return 'Organisation default'

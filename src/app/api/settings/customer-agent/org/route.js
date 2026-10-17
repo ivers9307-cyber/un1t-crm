@@ -34,8 +34,8 @@ import { copyStudioIntoOrg } from '@/lib/agent/settings-org'
 // PUT { organization_id?, copy_from_location_id } → "Start from a studio's
 //   settings" (T4-C): that studio's inheritable values, present and non-null,
 //   overwrite the matching org fields; the other org fields are kept. The
-//   studio must be in the organisation (404 otherwise); its blob is never
-//   written.
+//   studio must be an ACTIVE studio of the organisation (404 otherwise); its
+//   blob is never written.
 // The write is an upsert on organization_id (the table's primary key, mig
 // 317) naming ONLY customer_agent, so no other org_settings column (branding,
 // caps, legal identity) is touched, and a missing row is inserted.
@@ -108,7 +108,11 @@ async function readOrgState(db, orgId) {
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  const orgId = orgFor(user, new URL(request.url).searchParams.get('organization_id'))
+  // A malformed id is "no such organisation" (404), never a database error
+  // (a master's id goes straight into the query; Postgres refuses a non-uuid).
+  const requested = new URL(request.url).searchParams.get('organization_id')
+  if (requested && !uuidLike.safeParse(requested).success) return notFound()
+  const orgId = orgFor(user, requested)
   if (!orgId) return notFound()
   const db = createServerClient()
   const state = await readOrgState(db, orgId)
@@ -159,11 +163,13 @@ export async function PUT(request) {
 
   let layer
   if (copyFrom) {
-    // T4-C / T4-D — the source studio only from THIS organisation.
+    // T4-C / T4-D — the source studio only from THIS organisation, and only
+    // an active one (the studios the picker offers); anything else is a 404.
     const { data: loc, error: locErr } = await db.from('locations')
       .select('id, organization_id, customer_agent:settings->customer_agent')
       .eq('id', copyFrom)
       .eq('organization_id', orgId)
+      .eq('active', true)
       .maybeSingle()
     if (locErr) {
       logError('settings-customer-agent-org', 'copy source read failed', { organizationId: orgId, locationId: copyFrom, err: locErr })
