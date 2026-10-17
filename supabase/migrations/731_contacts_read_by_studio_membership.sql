@@ -3,7 +3,7 @@
 -- if the contact lived there. And the contacts list's crossover RPC counts
 -- those members as crossovers.
 --
--- NOT APPLIED YET when this file was written. Proven ahead of apply by
+-- APPLIED to prod 2026-10-17 (before merge; self-check passed). Proven ahead of apply by
 -- tests/migration-731-contacts-read-by-membership.test.js (PGlite; the real
 -- 690, 691 and 699 files first, then this one).
 --
