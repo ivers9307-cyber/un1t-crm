@@ -202,7 +202,17 @@ const HUB_STATUS_SECTIONS = [
   ['unifi', 'UniFi'],
   ['climate', 'Climate'],
   ['bca', 'BCA'],
+  ['un1t_online', 'un1t.online'],
 ]
+
+// UN1THARD.6 — sections whose hub rows exist for EVERY in-scope location
+// (assembleIntegrationsHub emits a not_connected row for a studio that never
+// connected). Listing those rows would give every bare location a
+// "un1t.online: Not connected" line, so they are dropped here, keeping the
+// "omit what was never configured" contract above. A studio that did connect
+// keeps its line in every other state, and an unreadable read ('unknown')
+// still shows.
+const OMIT_NOT_CONNECTED = new Set(['un1t_online'])
 
 /**
  * One location's integrations summary, DERIVED from the assembled hub
@@ -224,6 +234,7 @@ export function summariseHubForLocation(hub, locationId) {
   for (const [key, label] of HUB_STATUS_SECTIONS) {
     const row = (hub[key] || []).find((r) => r.locationId === locationId)
     if (!row) continue
+    if (OMIT_NOT_CONNECTED.has(key) && row.status === 'not_connected') continue
     connections.push({ key, label, status: row.status })
   }
   return {

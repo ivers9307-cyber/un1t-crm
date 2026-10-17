@@ -73,7 +73,8 @@ const MASTER = {
 //   PATCH .select('platform').eq('id').eq('location_id').maybeSingle()
 //         .update({is_active:false}).eq×3.neq     (bare await — the sweep)
 //         .update(patch).eq('id').eq('location_id').select().single()
-//   DELETE .delete().eq('id').eq('location_id')
+//   DELETE .select('platform').eq('id').eq('location_id').maybeSingle()
+//          .delete().eq('id').eq('location_id')
 // Every mutating call is logged AT THE CALL, so a refusal that reached the DB
 // at all shows up as a non-empty log. Fail LOUD on any other table.
 function makeDb({ existing = { platform: 'instagram', agent_enabled: false }, stored = {} } = {}) {
@@ -84,7 +85,7 @@ function makeDb({ existing = { platform: 'instagram', agent_enabled: false }, st
       if (table !== 'channel_connections') throw new Error(`unexpected db.from('${table}') in channel-detail test`)
       return {
         select(cols) {
-          if (cols !== 'platform, agent_enabled') throw new Error(`unexpected .select('${cols}') in channel-detail test`)
+          if (cols !== 'platform, agent_enabled' && cols !== 'platform') throw new Error(`unexpected .select('${cols}') in channel-detail test`)
           const filters = {}
           const builder = {
             eq(col, val) { filters[col] = val; return builder },
@@ -356,5 +357,46 @@ describe('PATCH /api/locations/[id]/channels/[connId] — Mia on/off is owner-on
     createServerClient.mockReturnValue(db = makeDb({ existing: { platform: 'instagram', agent_enabled: true } }))
     const res = await PATCH(patchReq(LOC_A, CONN, { label: 'New name', agent_enabled: true }), props(LOC_A, CONN))
     expect(res.status).toBe(200)
+  })
+})
+
+
+// UN1THARD.5 — the route manages only what its POST creates (Instagram,
+// Messenger). Registry rows with their own routes are refused, untouched.
+describe('PATCH/DELETE /api/locations/[id]/channels/[connId] — only Instagram and Messenger rows', () => {
+  for (const platform of ['un1t_online', 'glofox', 'unifi', 'sensibo', 'shelly']) {
+    it(`PATCH refuses a ${platform} row with 409, writing nothing`, async () => {
+      db = makeDb({ existing: { platform, agent_enabled: false } })
+      createServerClient.mockReturnValue(db)
+      const res = await PATCH(patchReq(LOC_A, CONN, { is_active: false }), props(LOC_A, CONN))
+      expect(res.status).toBe(409)
+      expect((await res.json()).error).toMatch(new RegExp(`${platform} connection is managed in Settings`))
+      expect(db.writes).toEqual([])
+    })
+
+    it(`DELETE refuses a ${platform} row with 409, deleting nothing (a master too)`, async () => {
+      getCurrentUser.mockResolvedValue(MASTER)
+      db = makeDb({ existing: { platform, agent_enabled: false } })
+      createServerClient.mockReturnValue(db)
+      const res = await DELETE(delReq(LOC_A, CONN), props(LOC_A, CONN))
+      expect(res.status).toBe(409)
+      expect(db.writes).toEqual([])
+    })
+  }
+
+  it('DELETE 404s a connection that is not at this location, deleting nothing', async () => {
+    db = makeDb({ existing: null })
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE(delReq(LOC_A, CONN), props(LOC_A, CONN))
+    expect(res.status).toBe(404)
+    expect(db.writes).toEqual([])
+  })
+
+  it('a Messenger row is still managed here', async () => {
+    db = makeDb({ existing: { platform: 'messenger', agent_enabled: false } })
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE(delReq(LOC_A, CONN), props(LOC_A, CONN))
+    expect(res.status).toBe(200)
+    expect(db.writes).toEqual([{ op: 'delete', filters: { id: CONN, location_id: LOC_A } }])
   })
 })
