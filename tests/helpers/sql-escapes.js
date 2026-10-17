@@ -63,6 +63,7 @@ export const CLOSED_TABLES = Object.freeze({
   blocked_times: 692, contact_events: 692, contact_tags: 692, shift_block_removals: 692, staff_allowances: 692,
   scheduled_reports: 692, race_checkins: 692, event_type_reminders: 692, promo_codes: 692, event_reminder_sends: 692,
   host_contacts: 692, host_campaigns: 692,
+  org_settings: 730, // ORGSETCLIENTWRITE.1
 })
 
 const NAME = String.raw`((?:"?[a-z_][\w]*"?\s*\.\s*)?"?[a-z_][\w]*"?)(?![\w."%$])`
