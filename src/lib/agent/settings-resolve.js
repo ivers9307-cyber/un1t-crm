@@ -21,6 +21,18 @@ import { DEFAULTS, STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS } from './settings-
 //   fields, else 'org' when the org did, else 'default'.
 // * With org_settings.customer_agent NULL everywhere every studio resolves
 //   exactly to DEFAULTS <- its own blob, as before this layer existed.
+// * Task 4 (T4-A) — `quiet_hours.off` is studio-only in effect. At the STUDIO
+//   layer `off: true` means "no quiet hours here, whatever the organisation
+//   says": the effective quiet_hours is start/end null (so
+//   core.isWithinQuietHours is never true) and its source is 'studio'. Any
+//   other `off` value, and `off` at the org layer, is ignored.
+
+// The quiet-hours opt-out read off one layer (see the header).
+function withoutOff(q) {
+  if (!isPlainObject(q) || !('off' in q)) return q
+  const { off: _off, ...rest } = q
+  return rest
+}
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isSet = (v) => v !== null && v !== undefined
@@ -56,8 +68,18 @@ export function mergeAgentSettings({ org = null, studio = null } = {}) {
 
   const keys = new Set([...Object.keys(DEFAULTS), ...Object.keys(orgBlob), ...Object.keys(studioBlob)])
   for (const key of keys) {
-    const orgValue = STUDIO_ONLY_KEYS.has(key) ? undefined : orgBlob[key]
-    const studioValue = studioBlob[key]
+    let orgValue = STUDIO_ONLY_KEYS.has(key) ? undefined : orgBlob[key]
+    let studioValue = studioBlob[key]
+
+    if (key === 'quiet_hours') {
+      if (isPlainObject(studioValue) && studioValue.off === true) {
+        settings.quiet_hours = { start: null, end: null, tz: null, off: true }
+        sources.quiet_hours = 'studio'
+        continue
+      }
+      orgValue = withoutOff(orgValue)
+      studioValue = withoutOff(studioValue)
+    }
 
     if (INHERITABLE_OBJECT_KEYS.includes(key)) {
       const hasStudio = Object.keys(setFields(studioValue)).length > 0

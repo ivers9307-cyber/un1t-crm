@@ -72,7 +72,7 @@ describe('withOverride / withoutOverride / isOverridden', () => {
   })
   it('a whole object key is shorthand for its fields, both ways', () => {
     const all = withOverride([], 'quiet_hours')
-    expect(all).toEqual(['quiet_hours.end', 'quiet_hours.start', 'quiet_hours.tz'])
+    expect(all).toEqual(['quiet_hours.end', 'quiet_hours.off', 'quiet_hours.start', 'quiet_hours.tz'])
     expect(withoutOverride(['followups'], 'followups.enabled')).toEqual(['followups.daily_cap', 'followups.nudge_after_hours', 'followups.template_name'])
     expect(withoutOverride(all, 'quiet_hours')).toEqual([])
     expect(isOverridden(['followups'], 'followups.daily_cap')).toBe(true)

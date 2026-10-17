@@ -13,8 +13,11 @@ import { Button } from '@/components/ui'
 // with the PUT's contract).
 import {
   initialOverridden, withOverride, withoutOverride, valueAt, fieldSource, sourceTagLabel, orgSetsAny,
+  isOverridden, INHERITABLE_SCALAR_KEYS, INHERITABLE_OBJECT_KEYS, INHERITABLE_OBJECT_FIELDS,
 } from '@/lib/agent/settings-overrides'
 import { buildSavePayload } from './save-payload'
+// MIAORG.1 Task 4 — the organisation defaults, for masters and org admins.
+import OrgDefaultsClient from './OrgDefaultsClient'
 
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
 // Instagram agent. Manager+ only. Two parts: behaviour settings + the
@@ -45,7 +48,11 @@ function FieldLabel({ tag, children }) {
 // owner at the active studio, or master), the same predicate the PUT gates
 // on. Omitted, it fails closed: the settings render read-only, with no Save.
 // The knowledge editor below is outside that rule.
-export default function CustomerAgentClient({ canEdit = false } = {}) {
+// MIAORG.1 Task 4 — `orgDefaults` ({ organizationId, organizationName }) is
+// set by the server page only for a master or an admin of the organisation
+// (resolveAdminOrgId); it shows the organisation defaults section above this
+// studio's settings. Null for everyone else: the page is exactly as before.
+export default function CustomerAgentClient({ canEdit = false, orgDefaults = null } = {}) {
   const [settings, setSettings] = useState(null)
   const [location, setLocation] = useState(null)
   // W1.S3 — the studio's resolved brand (GET payload), for the placeholders.
@@ -119,11 +126,32 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
   // sibling keys are ignored by withOverride: they are always saved).
   function markOverridden(...paths) { setOverridden(o => withOverride(o, ...paths)) }
   function setField(k, v) { setSettings(s => ({ ...s, [k]: v })); markOverridden(k) }
-  // Quiet hours are a pair: editing either end makes both the studio's own.
+  // Quiet hours are a pair: editing either end makes both the studio's own
+  // (and ends a "no quiet hours" opt-out).
   function setQuietHours(k, v) {
-    setSettings(s => ({ ...s, quiet_hours: { ...(s.quiet_hours || {}), [k]: v } }))
-    markOverridden('quiet_hours.start', 'quiet_hours.end')
+    setSettings(s => {
+      const { off: _off, ...q } = s.quiet_hours || {}
+      return { ...s, quiet_hours: { ...q, [k]: v } }
+    })
+    setOverridden(o => withOverride(withoutOverride(o, 'quiet_hours.off'), 'quiet_hours.start', 'quiet_hours.end'))
   }
+  // MIAORG.1 Task 4 (T4-A) — "No quiet hours (ignore the organisation's)".
+  // Null cannot say "none" once the organisation sets quiet hours, so the
+  // studio stores `quiet_hours.off`. Ticking clears start and end; unticking
+  // drops the opt-out, so the window is inherited again.
+  function setNoQuietHours(on) {
+    if (on) {
+      setSettings(s => ({ ...s, quiet_hours: { start: null, end: null, tz: null, off: true } }))
+      setOverridden(o => withOverride(withoutOverride(o, 'quiet_hours.start', 'quiet_hours.end', 'quiet_hours.tz'), 'quiet_hours.off'))
+    } else {
+      setOverridden(o => withoutOverride(o, 'quiet_hours'))
+      setSettings(s => {
+        const q = inherited?.quiet_hours
+        return { ...s, quiet_hours: q && typeof q === 'object' ? { ...q } : null }
+      })
+    }
+  }
+  const noQuietHours = settings?.quiet_hours?.off === true
 
   // "Use organisation default": the field stops being the studio's own and
   // shows the value it now inherits (GET's `inherited`).
@@ -219,6 +247,36 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
       const sRes = await fetch('/api/settings/customer-agent').then(r => r.json())
       if (sRes?.success && sRes.settings) applySettingsResponse(sRes)
     } catch { /* keep the edited state; the save went through */ }
+  }
+
+  // MIAORG.1 Task 4 — after an ORGANISATION save: re-read what this studio
+  // inherits and show it in every field the studio does not set, without
+  // touching the studio's own (possibly unsaved) edits.
+  async function refreshInherited() {
+    try {
+      const sRes = await fetch('/api/settings/customer-agent').then(r => r.json())
+      if (!sRes?.success || !sRes.settings) return
+      const nextInherited = sRes.inherited || null
+      setOrg(sRes.org || null)
+      setInherited(nextInherited)
+      setSettings(s => {
+        if (!s) return s
+        const next = { ...s }
+        for (const k of INHERITABLE_SCALAR_KEYS) {
+          if (!isOverridden(overridden, k)) next[k] = nextInherited?.[k] ?? null
+        }
+        for (const key of INHERITABLE_OBJECT_KEYS) {
+          // A studio that switched quiet hours off keeps showing none.
+          if (key === 'quiet_hours' && isOverridden(overridden, 'quiet_hours.off')) continue
+          const obj = { ...(next[key] || {}) }
+          for (const f of INHERITABLE_OBJECT_FIELDS[key]) {
+            if (!isOverridden(overridden, `${key}.${f}`)) obj[f] = valueAt(nextInherited, `${key}.${f}`) ?? null
+          }
+          next[key] = obj
+        }
+        return next
+      })
+    } catch { /* the org save went through; this studio's screen keeps what it shows */ }
   }
 
   // AGENT-FOLLOWUP.1 — approved templates for the stage-2 picker. The
@@ -356,6 +414,14 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
           </div>
           <span className="text-xs text-un1t-text underline">Manage</span>
         </Link>
+      )}
+
+      {orgDefaults?.organizationId && (
+        <OrgDefaultsClient
+          organizationId={orgDefaults.organizationId}
+          organizationName={orgDefaults.organizationName || null}
+          onSaved={refreshInherited}
+        />
       )}
 
       {!canEdit && (
@@ -675,14 +741,21 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
           <FieldLabel tag={sourceTag(['quiet_hours'])}>Quiet hours (optional)</FieldLabel>
           <div className="flex items-center gap-2 text-sm">
             <input type="time" className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text"
+              aria-label="Quiet hours start" disabled={noQuietHours}
               value={settings.quiet_hours?.start || ''}
               onChange={e => setQuietHours('start', e.target.value)} />
             <span className="text-un1t-muted">to</span>
             <input type="time" className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text"
+              aria-label="Quiet hours end" disabled={noQuietHours}
               value={settings.quiet_hours?.end || ''}
               onChange={e => setQuietHours('end', e.target.value)} />
             <span className="text-xs text-un1t-muted">{settings.quiet_hours?.tz || location?.timezone || "the studio's timezone"} — agent stays quiet, a human replies.</span>
           </div>
+          <label className="flex items-center gap-2 text-sm text-un1t-text mt-2">
+            <input type="checkbox" className="h-4 w-4" checked={noQuietHours}
+              onChange={e => setNoQuietHours(e.target.checked)} />
+            No quiet hours (ignore the organisation&apos;s)
+          </label>
         </div>
 
         {error && <div className="text-sm text-red-600">{error}</div>}

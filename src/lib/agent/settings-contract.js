@@ -140,12 +140,22 @@ export const SettingsSchema = z.object({
   welcome_greeting: z.string().max(500).nullable().optional(),
   link_button_text: z.string().max(25).nullable().optional(),
   quiet_hours: z.object({
-    start: z.string().regex(/^\d{1,2}:\d{2}$/),
-    end: z.string().regex(/^\d{1,2}:\d{2}$/),
+    start: z.string().regex(/^\d{1,2}:\d{2}$/).nullable().optional(),
+    end: z.string().regex(/^\d{1,2}:\d{2}$/).nullable().optional(),
     // TZ.5 — null = the studio's own zone (locations.timezone), resolved at
     // read time (core.isWithinQuietHours). A stored zone, incl. a legacy
     // 'Europe/Dublin', is kept and still wins.
     tz: z.string().max(64).nullable().optional().default(null),
+    // MIAORG.1 Task 4 (T4-A) — a STUDIO's "no quiet hours, ignore the
+    // organisation's". true = start/end are ignored and Mia is never quiet
+    // here (the resolver nulls them). Studio-only in effect: the resolver
+    // ignores it at the org layer and the org PUT refuses it.
+    off: z.boolean().nullable().optional(),
+  }).superRefine((q, ctx) => {
+    // Both ends, or `off`. (start and end used to be required outright.)
+    if (q.off === true) return
+    if (!q.start) ctx.addIssue({ code: 'custom', path: ['start'], message: 'Set both a start and an end time' })
+    if (!q.end) ctx.addIssue({ code: 'custom', path: ['end'], message: 'Set both a start and an end time' })
   }).nullable().optional(),
   // Cost/abuse ceilings. Omitted → code defaults (20/conv/hr, 500/loc/day).
   limits: z.object({
@@ -251,6 +261,17 @@ function buildCancellationFormBlock(cf) {
   return out
 }
 
+// MIAORG.1 Task 4 (T4-A) — the stored quiet-hours shape: `{ off: true }`
+// alone (a studio's "no quiet hours"), or the start/end/tz window with no
+// `off` key (false is the same as absent, so it is never stored). Null stays
+// null.
+function normalizeQuietHours(q) {
+  if (!q || typeof q !== 'object') return null
+  if (q.off === true) return { off: true }
+  const { off: _off, ...window } = q
+  return window
+}
+
 /**
  * Build the object persisted at locations.settings.customer_agent from
  * validated PUT data. Pure — the route owns the DB read/merge/write.
@@ -294,7 +315,7 @@ function buildFullBlob(data) {
     approval_decline_text: data.approval_decline_text?.trim() || null,
     welcome_greeting: data.welcome_greeting?.trim() || null,
     link_button_text: data.link_button_text?.trim() || null,
-    quiet_hours: data.quiet_hours || null,
+    quiet_hours: normalizeQuietHours(data.quiet_hours),
     limits: data.limits || null,
     booking_mode: data.booking_mode === 'draft' ? 'draft' : 'auto',
     agent_name: data.agent_name?.trim() || DEFAULTS.agent_name,
@@ -384,7 +405,74 @@ export function buildStudioOverrideBlob(data = {}, overridden = [], { sent = dat
       if (v === null || v === undefined || (typeof v === 'string' && !v.trim())) continue
       part[f] = typeof v === 'string' ? v.trim() : v
     }
+    if (key === 'quiet_hours') {
+      // `off: true` stands alone (the window is ignored under it); `off`
+      // false is never stored (T4-A).
+      if (part.off === true) { blob.quiet_hours = { off: true }; continue }
+      delete part.off
+    }
     if (Object.keys(part).length) blob[key] = part
   }
   return blob
+}
+
+// ── MIAORG.1 Task 4 — the ORGANISATION layer (org_settings.customer_agent) ──
+
+// Keys an organisation can never hold: the studio-only keys, plus the two
+// studio siblings the studio PUT writes elsewhere (social_enabled lives on
+// locations.settings, glofox_auto_cancel is a locations column).
+export const ORG_REFUSED_KEYS = new Set([...STUDIO_ONLY_KEYS, 'social_enabled', 'glofox_auto_cancel'])
+
+// The org editor's settings: SettingsSchema minus every refused key.
+export const OrgSettingsSchema = SettingsSchema.omit(
+  Object.fromEntries([...ORG_REFUSED_KEYS].map((k) => [k, true])),
+)
+
+/**
+ * The refusals for a raw org `settings` body, as validateBody-shaped issues
+ * (empty = none). A studio-only key, and a studio's quiet-hours opt-out
+ * (`quiet_hours.off`, T4-A), are 400s rather than silently dropped, so a
+ * client that sends one learns it did nothing.
+ * @param {object} settings  the raw body's `settings`
+ * @param {string[]} [overridden]
+ */
+export function orgSettingsRefusals(settings, overridden = []) {
+  const issues = []
+  if (settings && typeof settings === 'object') {
+    for (const k of Object.keys(settings)) {
+      if (ORG_REFUSED_KEYS.has(k)) issues.push({ path: `settings.${k}`, message: 'Set per studio, not for the organisation' })
+    }
+    const q = settings.quiet_hours
+    if (q && typeof q === 'object' && 'off' in q) {
+      issues.push({ path: 'settings.quiet_hours.off', message: 'Only a studio can switch quiet hours off' })
+    }
+  }
+  overridden.forEach((p, i) => {
+    if (p === 'quiet_hours.off') issues.push({ path: `overridden.${i}`, message: 'Only a studio can switch quiet hours off' })
+  })
+  return issues
+}
+
+/**
+ * The org layer an org-editor save stores: only the fields the organisation
+ * sets (`overridden`), built exactly like a studio's override blob
+ * (buildStudioOverrideBlob, so blanks are "not set" and a schema default is
+ * never stored), with every refused key dropped and quiet hours stored as a
+ * start/end pair with NO zone (T4-B: each studio reads them on its own
+ * clock, locations.timezone). Null when the organisation sets nothing.
+ * @param {object} data  OrgSettingsSchema-parsed settings
+ * @param {string[]} overridden  validated paths the organisation sets
+ * @param {{ sent?: object }} [opts]  the raw `settings` body
+ * @returns {object|null}
+ */
+export function buildOrgLayer(data = {}, overridden = [], { sent = data } = {}) {
+  const paths = overridden.filter((p) => p !== 'quiet_hours.off' && p !== 'quiet_hours.tz')
+  const blob = buildStudioOverrideBlob(data, paths, { sent })
+  for (const k of ORG_REFUSED_KEYS) delete blob[k]
+  if (blob.quiet_hours) {
+    const { start, end } = blob.quiet_hours
+    if (start && end) blob.quiet_hours = { start, end }
+    else delete blob.quiet_hours
+  }
+  return Object.keys(blob).length ? blob : null
 }

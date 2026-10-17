@@ -48,6 +48,15 @@ export function numberOrNull(v) {
 // since the schema refuses null there.
 const numberOrOmit = (v) => numberOrNull(v) ?? undefined
 
+// MIAORG.1 Task 4 (T4-A) — `{ off: true }` is a studio's "no quiet hours
+// (ignore the organisation's)": the window is not sent with it. Otherwise
+// both ends or nothing. TZ.5 — no zone is written when none was stored: null
+// means the studio's own zone (locations.timezone), read at decision time.
+export function buildQuietHoursPayload(q) {
+  if (q?.off === true) return { off: true }
+  return q?.start && q?.end ? { start: q.start, end: q.end, tz: q.tz || null } : null
+}
+
 /**
  * @param {object} settings  the editor's state (the resolved settings, as edited)
  * @param {string[]} overridden  the fields this studio sets itself
@@ -73,11 +82,7 @@ export function buildSavePayload(settings, overridden) {
     approval_decline_text: settings.approval_decline_text || null,
     welcome_greeting: settings.welcome_greeting || null,
     link_button_text: (settings.link_button_text || '').trim() || null,
-    quiet_hours: settings.quiet_hours?.start && settings.quiet_hours?.end
-      // TZ.5 — no zone is written when none was stored: null means the
-      // studio's own zone (locations.timezone), read at decision time.
-      ? { start: settings.quiet_hours.start, end: settings.quiet_hours.end, tz: settings.quiet_hours.tz || null }
-      : null,
+    quiet_hours: buildQuietHoursPayload(settings.quiet_hours),
     booking_mode: settings.booking_mode === 'draft' ? 'draft' : 'auto',
     agent_name: (settings.agent_name || '').trim() || null,
     membership_signup_url: (settings.membership_signup_url || '').trim() || null,
@@ -121,5 +126,36 @@ export function buildSavePayload(settings, overridden) {
     inline_suggestion: {
       enabled: settings.inline_suggestion?.enabled !== false,
     },
+  }
+}
+
+// MIAORG.1 Task 4 — keys the ORG editor never sends (the PUT refuses them):
+// the studio-only keys and the two studio siblings. Kept in step with
+// ORG_REFUSED_KEYS in settings-contract.js (pinned by save-payload.test.js);
+// listed here so this client file stays zod-free.
+export const ORG_PAYLOAD_DROPPED_KEYS = Object.freeze([
+  'enabled', 'test_mode', 'test_phones', 'consultation_event_type_id', 'booking_mode', 'cancellation_form',
+  'booking_url', 'booking_cta_label', 'membership_signup_url', 'membership_cta_label',
+  'social_enabled', 'glofox_auto_cancel',
+])
+
+/**
+ * MIAORG.1 Task 4 — the org editor's PUT body: the same number and blank
+ * rules as the studio editor (buildSavePayload), minus every key an
+ * organisation cannot hold. Quiet hours go as a start/end pair with no zone
+ * (T4-B: each studio reads them on its own clock) and never as `off`.
+ * @param {object} values  the org editor's state (the org layer over the defaults, as edited)
+ * @param {string[]} set   the paths the organisation sets
+ * @param {string} organizationId
+ */
+export function buildOrgSavePayload(values, set, organizationId) {
+  const { overridden: _o, ...full } = buildSavePayload(values || {}, set)
+  for (const k of ORG_PAYLOAD_DROPPED_KEYS) delete full[k]
+  const q = values?.quiet_hours
+  full.quiet_hours = q?.start && q?.end ? { start: q.start, end: q.end, tz: null } : null
+  return {
+    organization_id: organizationId,
+    settings: full,
+    overridden: (set || []).filter((p) => p !== 'quiet_hours.off' && p !== 'quiet_hours.tz'),
   }
 }

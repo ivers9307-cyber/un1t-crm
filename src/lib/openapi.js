@@ -4983,6 +4983,50 @@ registry.registerPath({
   },
 })
 
+// MIAORG.1 Task 4 — Mia's organisation defaults (org_settings.customer_agent, mig 728)
+registry.registerPath({
+  method: 'get',
+  path: '/api/settings/customer-agent/org',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Mia organisation defaults (masters and organisation admins only)',
+  description: 'The organisation layer every studio resolves under its own settings (DEFAULTS <- org <- studio; studio-only keys such as enabled, test_mode, booking_mode and the booking/membership links are never inherited). Returns { organization, settings (the layer over the defaults, studio-only keys left out), raw (the stored layer, null when none), defaults, studios: [{ id, name, sets, mia_on }] } for every active studio of the organisation; `sets` lists the setting paths that studio stores itself, so the editor can say which studios use each organisation value. ?organization_id targets another organisation the caller administers (a master: any). Anyone else, or a foreign organisation, is a 404.',
+  request: { query: z.object({ organization_id: uuidLike.optional() }) },
+  responses: {
+    200: { description: 'Organisation defaults' },
+    404: { description: 'Not an admin of that organisation, or no such organisation', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/settings/customer-agent/org',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save Mia organisation defaults, or start them from a studio (masters and organisation admins only)',
+  description: 'Either { settings, overridden? }: stores only the fields the organisation sets (overridden; defaults to every non-null value sent). A studio-only key or quiet_hours.off (a studio\'s "no quiet hours") is a 400; quiet_hours.tz is never stored, so each studio reads organisation quiet hours on its own clock. Or { copy_from_location_id }: that studio\'s own inheritable values (present and non-null) overwrite the matching organisation fields and the rest are kept; the studio must belong to the organisation (404 otherwise) and is never changed. Upserts org_settings.customer_agent only (no other column is written). Answers the same shape as the GET.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            organization_id: uuidLike.optional(),
+            settings: z.record(z.string(), z.unknown()).optional(),
+            overridden: z.array(z.string()).optional(),
+            copy_from_location_id: uuidLike.optional(),
+          }).openapi('MiaOrgDefaultsPut'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Saved; the new organisation layer' },
+    400: { description: 'Invalid body, or a studio-only key', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not an admin of that organisation, or the studio is not in it', content: { 'application/json': { schema: ErrorResponse } } },
+    422: { description: 'The source studio holds a value the organisation layer cannot take', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Tenant Billing & usage page (INTEG-D1)
 registry.registerPath({
   method: 'get',

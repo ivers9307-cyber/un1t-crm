@@ -440,3 +440,111 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     expect(screen.queryByRole('button', { name: 'Use organisation default' })).toBeNull()
   })
 })
+
+// MIAORG.1 Task 4 (T4-A) — "No quiet hours (ignore the organisation's)": null
+// cannot say "none" once the org sets quiet hours, so the studio stores
+// quiet_hours.off. And the organisation defaults section, for org admins.
+describe('CustomerAgentClient — quiet hours opt-out and org defaults (MIAORG.1 Task 4)', () => {
+  const ORG_QUIET = { quiet_hours: { start: '22:00', end: '07:00' } }
+  function answer({ studio = { enabled: true }, org = ORG_QUIET } = {}) {
+    const { settings, sources } = mergeAgentSettings({ org, studio })
+    return reply(200, {
+      success: true,
+      settings: { ...settings, social_enabled: false, glofox_auto_cancel: false },
+      studio, org, sources,
+      inherited: mergeAgentSettings({ org, studio: null }).settings,
+      location: { id: 'loc1', name: 'Test Studio', timezone: 'Europe/Dublin' },
+      checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
+    })
+  }
+  const putBody = () => {
+    const put = global.fetch.mock.calls.find(([url, init]) => String(url) === '/api/settings/customer-agent' && init?.method === 'PUT')
+    return put && JSON.parse(put[1].body)
+  }
+  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+  const save = () => fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+  const optOut = () => screen.getByRole('checkbox', { name: "No quiet hours (ignore the organisation's)" })
+
+  it('ticking it clears the window and saves quiet_hours.off alone', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const start = screen.getByLabelText('Quiet hours start')
+    expect(start.value).toBe('22:00')
+    fireEvent.click(optOut())
+    expect(start.value).toBe('')
+    expect(start.disabled).toBe(true)
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().quiet_hours).toEqual({ off: true })
+    expect(putBody().overridden).toEqual(['quiet_hours.off'])
+  })
+
+  it('a studio that stored the opt-out shows it ticked and keeps it on the next save', async () => {
+    mockFetch([answer({ studio: { enabled: true, quiet_hours: { off: true } } })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(optOut().checked).toBe(true)
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().quiet_hours).toEqual({ off: true })
+    expect(putBody().overridden).toEqual(['quiet_hours.off'])
+  })
+
+  it('"Use organisation default" clears the opt-out too', async () => {
+    mockFetch([answer({ studio: { enabled: true, quiet_hours: { off: true } } })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.click(within(screen.getByText('Quiet hours (optional)').parentElement).getByRole('button', { name: 'Use organisation default' }))
+    expect(optOut().checked).toBe(false)
+    expect(screen.getByLabelText('Quiet hours start').value).toBe('22:00')
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden.filter((p) => p.startsWith('quiet_hours'))).toEqual([])
+  })
+
+  it('unticking it hands the window back to the organisation', async () => {
+    mockFetch([answer({ studio: { enabled: true, quiet_hours: { off: true } } })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.click(optOut())
+    expect(screen.getByLabelText('Quiet hours end').value).toBe('07:00')
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual([])
+  })
+
+  it('no org defaults section without orgDefaults (everyone but masters and org admins)', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.queryByText('Organisation defaults (all studios)')).toBeNull()
+    expect(global.fetch.mock.calls.some(([url]) => String(url).includes('/customer-agent/org'))).toBe(false)
+  })
+
+  it('with orgDefaults the section renders, and an org save re-reads what the studio inherits', async () => {
+    const ORG_ID = 'a0000000-0000-0000-0000-00000000a0a1'
+    let studioReads = 0
+    global.fetch = vi.fn(async (url, init) => {
+      const u = String(url)
+      if (u.startsWith('/api/settings/customer-agent/org')) {
+        const raw = init?.method === 'PUT' ? { tone: 'New org tone' } : null
+        return reply(200, { success: true, data: { organization: { id: ORG_ID, name: 'Org A' }, settings: { ...mergeAgentSettings({ org: raw }).settings }, raw, defaults: DEFAULTS, studios: [] } })
+      }
+      if (u.startsWith('/api/settings/customer-agent')) {
+        studioReads += 1
+        return studioReads === 1 ? answer({ org: null }) : answer({ org: { tone: 'New org tone' } })
+      }
+      if (u.startsWith('/api/agent/knowledge')) return reply(200, { success: true, entries: [] })
+      return reply(200, { success: true, templates: [] })
+    })
+    const { container } = render(<CustomerAgentClient canEdit orgDefaults={{ organizationId: ORG_ID, organizationName: 'Org A' }} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save organisation defaults' })).toBeTruthy())
+    expect(screen.getByRole('heading', { name: 'Organisation defaults (all studios)' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Save organisation defaults' }))
+    await waitFor(() => expect(studioReads).toBe(2))
+    // the studio's own tone field (not the org one) now shows the new org value
+    const toneInputs = [...container.querySelectorAll('textarea[placeholder="e.g. Warm, upbeat, brief. Use first names. No emojis."]')]
+    await waitFor(() => expect(toneInputs.at(-1).value).toBe('New org tone'))
+  })
+})

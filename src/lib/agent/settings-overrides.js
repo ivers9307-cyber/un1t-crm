@@ -44,7 +44,11 @@ export const INHERITABLE_OBJECT_FIELDS = Object.freeze({
   followups: Object.freeze(['enabled', 'nudge_after_hours', 'template_name', 'daily_cap']),
   first_class_checkin: Object.freeze(['enabled', 'delay_hours', 'template_name', 'daily_cap']),
   inline_suggestion: Object.freeze(['enabled']),
-  quiet_hours: Object.freeze(['start', 'end', 'tz']),
+  // MIAORG.1 Task 4 (T4-A) — `off` is studio-only IN EFFECT: a studio sets
+  // `quiet_hours.off: true` to run with NO quiet hours whatever the
+  // organisation says (null cannot say "none" once an org value exists). The
+  // resolver ignores it at the org layer and the org editor refuses it.
+  quiet_hours: Object.freeze(['start', 'end', 'tz', 'off']),
 })
 
 // Every other DEFAULTS key: a plain value the org may supply (pinned against

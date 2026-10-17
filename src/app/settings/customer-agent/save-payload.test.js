@@ -111,3 +111,45 @@ describe('a cleared number is "not stored", never the code default', () => {
     expect(compactObject(null)).toBe(null)
   })
 })
+
+// MIAORG.1 Task 4 — the quiet-hours opt-out and the ORG editor's body.
+describe('quiet hours opt-out in the studio body (T4-A)', () => {
+  it('{ off: true } is sent alone; otherwise both ends or nothing', async () => {
+    const { buildQuietHoursPayload } = await import('./save-payload')
+    expect(buildQuietHoursPayload({ start: null, end: null, tz: null, off: true })).toEqual({ off: true })
+    expect(buildQuietHoursPayload({ start: '21:00', end: '07:00', off: false })).toEqual({ start: '21:00', end: '07:00', tz: null })
+    expect(buildQuietHoursPayload({ start: '21:00' })).toBe(null)
+    expect(buildQuietHoursPayload(null)).toBe(null)
+  })
+
+  it('a studio that ticks "No quiet hours" stores { off: true } and resolves to none under an org window', () => {
+    const shown = { ...shownFor({ enabled: true }), quiet_hours: { start: null, end: null, tz: null, off: true } }
+    const { blob } = saveThroughPut(shown, ['quiet_hours.off'])
+    expect(blob.quiet_hours).toEqual({ off: true })
+    const resolved = mergeAgentSettings({ org: { quiet_hours: { start: '22:00', end: '07:00' } }, studio: blob }).settings
+    expect([resolved.quiet_hours.start, resolved.quiet_hours.end]).toEqual([null, null])
+  })
+})
+
+describe('buildOrgSavePayload (the org editor body)', () => {
+  it('drops exactly the keys an organisation cannot hold', async () => {
+    const { ORG_PAYLOAD_DROPPED_KEYS } = await import('./save-payload')
+    const { ORG_REFUSED_KEYS } = await import('@/lib/agent/settings-contract')
+    expect([...ORG_PAYLOAD_DROPPED_KEYS].sort()).toEqual([...ORG_REFUSED_KEYS].sort())
+  })
+
+  it('round trip: a stored org layer, loaded and saved untouched, stores the same layer', async () => {
+    const { buildOrgSavePayload } = await import('./save-payload')
+    const { OrgSettingsSchema, buildOrgLayer, orgSettingsRefusals } = await import('@/lib/agent/settings-contract')
+    const layer = {
+      tone: 'Org tone', agent_name: 'Ava', handoff_cooldown_hours: 0, effort: 'high',
+      followups: { enabled: true, daily_cap: 80 }, inline_suggestion: { enabled: false },
+      quiet_hours: { start: '22:00', end: '07:00' }, limits: { max_replies_per_location_per_day: 300 },
+    }
+    const shown = mergeAgentSettings({ org: layer, studio: null }).settings
+    const body = JSON.parse(JSON.stringify(buildOrgSavePayload(shown, initialOverridden(layer), 'org-1')))
+    expect(orgSettingsRefusals(body.settings, body.overridden)).toEqual([])
+    const parsed = OrgSettingsSchema.parse(body.settings)
+    expect(buildOrgLayer(parsed, body.overridden, { sent: body.settings })).toEqual(layer)
+  })
+})

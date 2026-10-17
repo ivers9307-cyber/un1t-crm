@@ -31,6 +31,7 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { canEditMiaSettings } from '@/lib/agent/settings-access'
+import { resolveAdminOrgId } from '@/lib/org-admin'
 import CustomerAgentClient from './CustomerAgentClient'
 
 export const dynamic = 'force-dynamic'
@@ -41,5 +42,15 @@ export default async function CustomerAgentSettingsPage() {
   if (!MANAGER_ROLES.includes(user.role)) redirect('/settings')
   // MIAROLE.1 (C80) — reading stays manager+; changing Mia's settings is an
   // owner at this studio (or a master), the PUT's own predicate.
-  return <CustomerAgentClient canEdit={canEditMiaSettings(user, user.activeLocation?.id)} />
+  // MIAORG.1 Task 4 (T4-E) — the organisation defaults section, for a master
+  // or an admin of the organisation they are working in (the active
+  // studio's; resolveAdminOrgId, the org route's own rule). Only the
+  // organisation's id and name go to the client, never a settings blob or a
+  // location row: the section fetches its data from the guarded route.
+  // Everyone else gets null and sees the page exactly as before.
+  const { orgId = null } = resolveAdminOrgId(user, null)
+  const orgDefaults = orgId
+    ? { organizationId: orgId, organizationName: user.organizationsById?.[orgId]?.name || null }
+    : null
+  return <CustomerAgentClient canEdit={canEditMiaSettings(user, user.activeLocation?.id)} orgDefaults={orgDefaults} />
 }
