@@ -130,6 +130,7 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
     if (!r.ok) { setBusy(null); setError(r.error); return }
     const result = r.json.data || {}
     if (result.ok) setNotice('Sync finished.')
+    else if (result.reason === 'in_progress') setNotice('A sync is already running for this studio. It will finish in a moment.')
     else setError(`Sync failed (${result.reason || 'unknown'}).`)
     await load()
     setBusy(null)

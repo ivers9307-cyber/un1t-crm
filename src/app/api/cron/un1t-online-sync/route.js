@@ -8,7 +8,12 @@
 //   1. Discovery goes through the membership seam: active locations whose
 //      membership_source is 'un1t_online' and whose provider is configured.
 //      A failed seam read is a 500 with NO heartbeat, never "no locations".
-//   2. Locations run SEQUENTIALLY (one token, one rate budget each).
+//   2. Locations run SEQUENTIALLY (one token, one rate budget each), within
+//      a wall-clock budget (UN1THARD.4): once BUDGET_MS has passed, no further
+//      location starts this invocation; the rest are counted as
+//      `deferred_budget` and run on the next tick (every 15 min). A location
+//      whose sync is already running (Sync now, mig 735) is `skipped_in_progress`,
+//      not a failure.
 //   3. ok → stamp the tenant heartbeat. Not ok (auth, studio_mismatch, api,
 //      truncated, db, not_connected) is COUNTED by reason, not fatal: the cron
 //      is healthy, the location is not, and the connection row already carries
@@ -33,6 +38,9 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 const CRON_NAME = 'un1t-online-sync'
+// Stop STARTING locations after this long, leaving room under maxDuration for
+// the one in flight (a run takes seconds today; the slowest seen was 14.5 s).
+export const BUDGET_MS = 240_000
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -48,15 +56,23 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: locErr.message || 'Could not list locations' }, { status: 500 })
   }
 
+  const started = Date.now()
   let processed = 0
   let failed = 0
+  let skippedInProgress = 0
+  let deferredBudget = 0
   const failedByReason = {}
   const countFailure = (reason) => {
     failed++
     failedByReason[reason] = (failedByReason[reason] || 0) + 1
   }
 
-  for (const loc of eligible) {
+  for (const [i, loc] of eligible.entries()) {
+    if (Date.now() - started > BUDGET_MS) {
+      deferredBudget = eligible.length - i
+      logWarn(CRON_NAME, 'time budget spent; deferring the remaining locations to the next tick', { deferred: deferredBudget })
+      break
+    }
     let result
     try {
       result = await runUn1tSync(db, loc.id)
@@ -72,6 +88,9 @@ export async function GET(request) {
       processed++
       // SAAS4-O1 — only a location whose sync completed stamps its tenant row.
       await stampTenantHeartbeat(CRON_NAME, loc.id)
+    } else if (result?.reason === 'in_progress') {
+      // A Sync now (or another invocation) is running this studio right now.
+      skippedInProgress++
     } else {
       const reason = result?.reason || 'unknown'
       logWarn(CRON_NAME, 'location sync did not complete', { locationId: loc.id, reason })
@@ -84,6 +103,8 @@ export async function GET(request) {
     failed_locations: failed,
     failed_by_reason: failedByReason,
     skipped: (skipped || []).length,
+    skipped_in_progress: skippedInProgress,
+    deferred_budget: deferredBudget,
   }
   await stampHeartbeat(CRON_NAME, outcome)
 

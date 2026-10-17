@@ -9437,7 +9437,8 @@ registry.registerPath({
   summary: 'Run the un1t.online sync now for one location (owner or master)',
   description:
     'Runs the same full pull as the */15 cron for this location (maxDuration 120 s). A run that did not go through ' +
-    '(auth, studio_mismatch, api, truncated, db, not_connected) is still a 200 with `data.ok: false` and `data.reason`.',
+    '(in_progress: another run for this location is in flight; auth, studio_mismatch, api, truncated, db, not_connected) ' +
+    'is still a 200 with `data.ok: false` and `data.reason`.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ ok, reason?, counts, runId }', content: { 'application/json': { schema: SuccessResponse(z.object({ ok: z.boolean(), reason: z.string().optional(), counts: z.object({}).passthrough(), runId: z.string().nullable() })) } } },

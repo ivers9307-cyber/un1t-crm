@@ -2,7 +2,12 @@
 //
 // One run is a FULL pull (the API ignores `updated_since`), in this order:
 //
-//   1. Open a un1t_sync_runs row (status 'running').
+//   1. Open a un1t_sync_runs row (status 'running'). At most ONE runs per
+//      studio (UN1THARD.1, mig 735's partial unique index): a second run's
+//      insert fails 23505 and that run returns reason 'in_progress' having
+//      read and written nothing. Rows left 'running' longer than
+//      STALE_RUN_MS (a killed process) are closed as abandoned first, so a
+//      dead run never blocks the studio for good.
 //   2. Read the studio's connection from the registry. No active row or no
 //      token → not_connected; the connection row is left alone. A registry
 //      read that FAILED is 'db', never "not connected" (REGISTRYREAD.1).
@@ -17,6 +22,13 @@
 //      upsert stops the run ('db'); later tables wait for the next run.
 //      The events are then projected into class_occurrences (UN1TCLASS.2): a
 //      projection failure is recorded in counts and never fails the run.
+//   6c. Measure the history window (UN1THARD.2): per dated table, how many
+//      rows the mirror holds that this pull did not return (every pulled row
+//      was just upserted with synced_at = this run's start, so an older
+//      synced_at means "not in this pull"), and the oldest row pulled. A
+//      non-zero `absent_from_pull` on bookings or events means un1t.online's
+//      list is a rolling window (or deleted rows): the mirror is then the only
+//      full history, which is why it never prunes. Informational only.
 //   7. Reconcile contact_memberships (source 'un1t_online_api' at this
 //      location only; the operator export's rows are never touched): a
 //      contact with an active subscription is upserted active; an active row
@@ -63,7 +75,7 @@ import { resolveUn1tContacts } from './un1t-online-contacts.js'
 import { ensureStudioPreferences } from './un1t-online-studio-preferences.js'
 import { tokenFingerprint } from './un1t-online-token.js'
 import { readConnection } from './connection-registry.js'
-import { logError, logWarn } from './log'
+import { logError, logWarn, logInfo } from './log'
 
 export const UN1T_LISTS = Object.freeze([
   '/products',
@@ -80,6 +92,14 @@ const PLATFORM = 'un1t_online'
 const CHUNK = 200
 const PAGE = 1000
 const MAX_ERROR_LEN = 500
+// A run row still 'running' after this long belongs to a process that died
+// (the cron's maxDuration is 300 s, the Sync now route's 120 s).
+export const STALE_RUN_MS = 15 * 60 * 1000
+const ABANDONED = 'abandoned: the run never finished (the process stopped before closing it)'
+
+// Dated tables whose history window is measured each run (step 6c), and the
+// column that dates a row.
+const HISTORY_TABLES = Object.freeze({ un1t_bookings: 'remote_created_at', un1t_events: 'starts_at' })
 
 const AUTH_ERROR =
   'un1t.online token rejected (revoked or expired). Paste a new token in Settings → Integrations → un1t.online.'
@@ -153,14 +173,32 @@ function preferSubscription(a, b) {
  * @param {object} [opts]
  * @param {Function} [opts.clientFactory]  createUn1tClient-compatible factory
  * @param {Function} [opts.now]            () => Date
- * @returns {Promise<{ ok: boolean, reason?: 'not_connected'|'auth'|'studio_mismatch'|'api'|'truncated'|'db', counts: object, runId: string|null }>}
+ * @returns {Promise<{ ok: boolean, reason?: 'in_progress'|'not_connected'|'auth'|'studio_mismatch'|'api'|'truncated'|'db', counts: object, runId: string|null }>}
  */
 export async function runUn1tSync(db, locationId, { clientFactory = createUn1tClient, now = () => new Date() } = {}) {
   const startedAt = now()
   const nowIso = startedAt.toISOString()
   const counts = { pulled: {}, tables: {}, contacts: null, contact_errors: [], memberships: null, api: null }
 
-  // 1. The run row.
+  // 1. The run row. First close this studio's abandoned runs (a killed
+  // process never closes its row, and mig 735 allows one 'running' row per
+  // location). Best-effort: a failure here only means a dead row may refuse
+  // this run as in_progress until the next tick retries.
+  {
+    const staleBefore = new Date(startedAt.getTime() - STALE_RUN_MS).toISOString()
+    const { data: closed, error: closeError } = await db
+      .from('un1t_sync_runs')
+      .update({ status: 'error', finished_at: nowIso, first_error: ABANDONED })
+      .eq('location_id', locationId)
+      .eq('status', 'running')
+      .lt('started_at', staleBefore)
+      .select('id')
+    if (closeError) {
+      logWarn('un1t-online-sync', 'could not close abandoned sync runs', { locationId, err: safeErr(closeError) })
+    } else if (Array.isArray(closed) && closed.length > 0) {
+      logWarn('un1t-online-sync', 'closed abandoned sync runs', { locationId, count: closed.length })
+    }
+  }
   let runId = null
   {
     const { data, error } = await db
@@ -168,6 +206,13 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
       .insert({ location_id: locationId, status: 'running', started_at: nowIso })
       .select('id')
     const row = Array.isArray(data) ? data[0] : null
+    if (error?.code === '23505') {
+      // Another run for this studio is in flight (the cron and Sync now, or
+      // two clicks). Not a fault: nothing was read or written, and the run in
+      // flight brings the mirror up to date.
+      logInfo('un1t-online-sync', 'a sync is already running for this location; not starting another', { locationId })
+      return { ok: false, reason: 'in_progress', counts, runId: null }
+    }
     if (error || !row?.id) {
       // Nothing has been read or written yet, and the next tick retries.
       logError('un1t-online-sync', 'could not open a sync run row', { locationId, err: safeErr(error || 'no row returned') })
@@ -379,6 +424,15 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
       }
     }
 
+    // 6c. The history window (UN1THARD.2). Informational: a failed count is
+    // recorded and never changes the run's status or the connection's.
+    counts.history = await measureHistory(db, { locationId, mapped, nowIso })
+    if (Object.values(counts.history).some((h) => h.absent_from_pull > 0)) {
+      logInfo('un1t-online-sync', 'the mirror holds rows this pull did not return (rolling window or upstream delete)', {
+        locationId, runId, history: counts.history,
+      })
+    }
+
     // 7. Memberships.
     const membership = await reconcileMemberships(db, {
       locationId,
@@ -415,6 +469,32 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
     firstError: null,
     connectionPatch: { status: 'connected', last_ok_at: nowIso, last_error: warning, ...tokenFields },
   })
+}
+
+/**
+ * Step 6c. Per dated table: rows held at this location that this pull did not
+ * return (synced_at older than this run's start), and the oldest row pulled.
+ * @returns {Promise<Record<string, { absent_from_pull: number|null, oldest_pulled: string|null, error?: string }>>}
+ */
+async function measureHistory(db, { locationId, mapped, nowIso }) {
+  const out = {}
+  for (const [table, dateCol] of Object.entries(HISTORY_TABLES)) {
+    const rows = Array.isArray(mapped[table]) ? mapped[table] : []
+    let oldest = null
+    for (const r of rows) {
+      const v = r[dateCol]
+      if (typeof v === 'string' && v !== '' && (oldest === null || v < oldest)) oldest = v
+    }
+    const { count, error } = await db
+      .from(table)
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId)
+      .lt('synced_at', nowIso)
+    out[table] = error
+      ? { absent_from_pull: null, oldest_pulled: oldest, error: messageOf(error) }
+      : { absent_from_pull: Number.isFinite(count) ? count : null, oldest_pulled: oldest }
+  }
+  return out
 }
 
 /**
