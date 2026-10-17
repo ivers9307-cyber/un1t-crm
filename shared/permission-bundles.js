@@ -163,6 +163,9 @@ export const KEY_BUNDLES = Object.freeze({
   // unions list `studio_management`.
   studio_management: ['bundle_members', 'bundle_operations'],
   class_timer: ['bundle_members'],
+  // UN1TBOOK.11 — web-only; same home as class_timer. Behaviour-neutral in
+  // SQL (auth_mobile_can is never asked about a web-only key).
+  class_roster: ['bundle_members'],
   challenges: ['bundle_members'],
   // Mobile-only Hyrox planner. Its webEquivalent is
   // 'approvals_hyrox_sessions' (an EXEMPT approval sub-permission, for

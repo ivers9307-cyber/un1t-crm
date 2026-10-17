@@ -129,7 +129,9 @@ export const HUB_INDEX_CHAINS = Object.freeze({
       // would bounce them.
       { keys: ['challenges'], roles: CHALLENGE_ADMIN_ROLES, target: '/challenges' },
       { keys: ['pulse_admin'], target: '/pulse' },
-      { keys: ['studio_management'], target: '/live' },
+      // UN1TBOOK.11 — class_roster opens /live too (the who's-coming list,
+      // no door unlock); the Live HR tab shows for either key.
+      { keys: ['studio_management', 'class_roster'], target: '/live' },
       { keys: ['class_timer'], target: '/studio-management/timer' },
       { keys: ['approvals_hyrox_sessions'], target: '/hyrox' },
     ]),
