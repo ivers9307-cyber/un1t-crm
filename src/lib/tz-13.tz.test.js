@@ -143,13 +143,14 @@ describe('TZ.13 the post-class email reads the studio clock', () => {
         locations: { data: { id: 'loc-1', settings: {}, timezone: NY }, error: null },
       }
       b.single = async () => rows[table] || { data: null, error: null }
-      b.maybeSingle = async () => ({ data: null, error: null })
+      // MIAORG.1 — the row comes through resolveAgentSettings (maybeSingle).
+      b.maybeSingle = async () => (table === 'locations' ? rows.locations : { data: null, error: null })
       b.then = (res) => Promise.resolve({ data: [], error: null }).then(res)
       return b
     }
     const out = await loadContextForSession({ from: chain }, 'sess-1')
     expect(out.ok).toBe(true)
     expect(out.zone).toBe(NY)
-    expect(selects.filter(([t]) => t === 'locations')).toEqual([['locations', 'settings, timezone']])
+    expect(selects.filter(([t]) => t === 'locations')).toEqual([['locations', 'id, name, timezone, organization_id, membership_source, settings']])
   })
 })

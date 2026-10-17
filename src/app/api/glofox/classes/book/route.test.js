@@ -76,7 +76,9 @@ describe('POST /api/glofox/classes/book: chat confirmation template', () => {
     const r = await book()
     expect(r.status).toBe(200)
     expect(await r.json()).toMatchObject({ success: true, glofox_booking_id: BOOKING, chat_template: null })
-    expect(logWarn).toHaveBeenCalledWith('glofox-classes-book', expect.any(String), expect.objectContaining({ err: 'read refused' }))
+    // MIAORG.1 — the template comes through resolveAgentSettings, which logs the
+    // underlying read error itself; the route logs that the default was used.
+    expect(logWarn).toHaveBeenCalledWith('glofox-classes-book', expect.any(String), expect.objectContaining({ err: 'read_failed' }))
   })
 })
 

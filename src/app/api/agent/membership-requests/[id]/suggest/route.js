@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { composeApprovalSuggestion } from '@/lib/agent/approval-suggest'
+import { resolveAgentSettings } from '@/lib/agent/settings-resolve'
 
 // POST /api/agent/membership-requests/[id]/suggest — INBOX-APPROVALS-AI.2.
 // Wave 3: after staff decide a queued agent request, fire this to get ONE
@@ -37,11 +38,10 @@ export async function POST(request, { params }) {
     return NextResponse.json({ success: false, error: 'Not decided yet' }, { status: 400 })
   }
 
-  const { data: location } = await db.from('locations')
-    .select('settings')
-    .eq('id', row.location_id)
-    .maybeSingle()
-  const agentSettings = location?.settings?.customer_agent || null
+  // MIAORG.1 — the studio's resolved Mia settings (DEFAULTS <- org <-
+  // studio; `enabled` is the studio's own). Unreadable = no suggestion.
+  const resolved = await resolveAgentSettings(db, row.location_id)
+  const agentSettings = resolved.ok ? resolved.settings : null
   const inlineSuggestion = agentSettings?.inline_suggestion || null
   if (!agentSettings?.enabled || inlineSuggestion?.enabled === false) {
     return NextResponse.json({ success: true, suggestion: null })

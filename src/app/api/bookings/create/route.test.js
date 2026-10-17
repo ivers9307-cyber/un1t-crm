@@ -39,7 +39,7 @@ vi.mock('@/lib/supabase', () => ({
 }))
 
 import { POST } from './route.js'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 
 const create = () => POST(new Request('http://crm.test/api/bookings/create', {
   method: 'POST', headers: { 'content-type': 'application/json' },
@@ -68,6 +68,9 @@ describe('POST /api/bookings/create: chat confirmation template (BOOKCHATCOPY.1)
     const r = await create()
     expect(r.status).toBe(200)
     expect(await r.json()).toMatchObject({ success: true, data: { id: 'bk-1' }, chat_template: null })
-    expect(logWarn).toHaveBeenCalledWith('booking.staff', expect.any(String), expect.objectContaining({ err: 'read refused' }))
+    // MIAORG.1 — the template comes through resolveAgentSettings, which logs the
+    // underlying read error itself; the route logs that the default was used.
+    expect(logWarn).toHaveBeenCalledWith('booking.staff', expect.any(String), expect.objectContaining({ err: 'read_failed' }))
+    expect(logError).toHaveBeenCalledWith('agent-settings', expect.any(String), expect.objectContaining({ err: { message: 'read refused' } }))
   })
 })

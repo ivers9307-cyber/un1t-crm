@@ -45,7 +45,7 @@ function sweepDb({ convs, updateError = null, readErrors = {}, replies = [] } = 
               for (const row of convs || []) if (row.id === state.eqs.id && casHolds(row)) Object.assign(row, state.patch)
             }
           } else if (readErrors[table]) out = { data: null, error: readErrors[table] }
-          else if (table === 'locations') out = { data: [{ id: 'loc-1', name: 'Studio', settings: { customer_agent: { enabled: true } } }], error: null }
+          else if (table === 'locations') out = { data: [{ id: 'loc-1', name: 'Studio', organization_id: null, settings: { customer_agent: { enabled: true } } }], error: null }
           else if (table === 'whatsapp_conversations') out = { data: (convs || []).filter(casHolds), error: null }
           else if (table === 'whatsapp_messages') out = { data: replies, error: null }
           else out = { data: [], error: null } // no Instagram threads
