@@ -20,6 +20,7 @@ const SOURCE_LABELS = {
   admin_panel:              { label: 'Admin panel',               tone: 'amber' },
   auto_classpass:           { label: 'Auto (ClassPass)',          tone: 'purple' },
   auto_classpass_backfill:  { label: 'Auto (ClassPass backfill)', tone: 'purple' },
+  un1t_online_sync:         { label: 'un1t.online sync',          tone: 'purple' },
   // `one_click_unsubscribe` is the slug the unsubscribe route actually writes
   // (src/app/api/unsubscribe/[token]/route.js). A transposed
   // `unsubscribe_one_click` sat here too until GAPS-P7.2 — a label for a value

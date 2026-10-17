@@ -12,6 +12,9 @@
 //   - INSERT-IF-MISSING only. An existing row is never updated: someone who
 //     unsubscribed at this studio stays unsubscribed. (upsert with
 //     ignoreDuplicates; .select('contact_id') says which rows it created.)
+//   - unsubscribed_at stays NULL even when email starts OFF: the sync did not
+//     unsubscribe anyone and holds no moment of the person's global opt-out
+//     (mig 543 allows null; no CHECK pairs it with email_marketing).
 //   - A channel the person has ALREADY withdrawn globally (contact_preferences
 //     false, or contacts.email_status 'unsubscribed' for email) starts OFF, the
 //     same derivation mig 488 used. A row born ON would re-subscribe them.
@@ -23,8 +26,6 @@
 //     and does not let it change the run's status.
 
 import { CONSENT_ACTIONS } from './consent-actions.js'
-
-export const STUDIO_PREFERENCES_SOURCE = 'un1t_online_sync'
 
 const CHUNK = 200
 // Reads put every id in the URL's IN-list, so they take smaller chunks.
@@ -107,9 +108,10 @@ export async function ensureStudioPreferences(db, { locationId, contactIds, nowI
           contact_id: contactId,
           location_id: locationId,
           ...on,
-          source: STUDIO_PREFERENCES_SOURCE,
+          // Literal, not a constant: consent-sources.test.js scans for `source:` literals.
+          source: 'un1t_online_sync',
           subscribed_at: nowIso,
-          unsubscribed_at: on.email_marketing ? null : nowIso,
+          unsubscribed_at: null,
         }
       })
       const { data, error } = await db
@@ -129,7 +131,7 @@ export async function ensureStudioPreferences(db, { locationId, contactIds, nowI
             contact_id: row.contact_id,
             channel: ch,
             action: CONSENT_ACTIONS.OPT_IN,
-            source: STUDIO_PREFERENCES_SOURCE,
+            source: 'un1t_online_sync',
             location_id: locationId,
           })
         }

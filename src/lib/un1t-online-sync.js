@@ -332,7 +332,11 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
     const studioPrefs = await ensureStudioPreferences(db, { locationId, contactIds: linkedElsewhere, nowIso })
     counts.studio_preferences = studioPrefs
     if (studioPrefs.error) {
-      logWarn('un1t-online-sync', 'could not create marketing-preference rows for linked contacts', { locationId, runId, err: studioPrefs.error })
+      // created > 0 means rows exist whose consent_log opt_in may be missing
+      // (a later run skips them, so nothing retries): structured and loud.
+      logError('un1t-online-sync', 'could not create marketing-preference rows for linked contacts', {
+        locationId, runId, count: studioPrefs.created, code: studioPrefs.error.code, message: studioPrefs.error.message,
+      })
     }
 
     // 6. The mirror tables.

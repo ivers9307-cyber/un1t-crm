@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ensureStudioPreferences, initialChannels, STUDIO_PREFERENCES_SOURCE } from './un1t-online-studio-preferences.js'
+import { ensureStudioPreferences, initialChannels } from './un1t-online-studio-preferences.js'
 
 const HATCH = 'loc-hatch'
 const NOW = '2026-10-17T09:00:00.000Z'
@@ -76,7 +76,7 @@ describe('ensureStudioPreferences', () => {
     expect(up.options).toEqual({ onConflict: 'contact_id,location_id', ignoreDuplicates: true })
     expect(tables.contact_location_preferences).toHaveLength(2)
     expect(tables.contact_location_preferences[0]).toMatchObject({
-      location_id: HATCH, source: STUDIO_PREFERENCES_SOURCE, subscribed_at: NOW, unsubscribed_at: null,
+      location_id: HATCH, source: 'un1t_online_sync', subscribed_at: NOW, unsubscribed_at: null,
     })
     expect(tables.consent_log).toHaveLength(6)
     expect(tables.consent_log[0]).toMatchObject({ action: 'opt_in', source: 'un1t_online_sync', location_id: HATCH })
@@ -89,7 +89,7 @@ describe('ensureStudioPreferences', () => {
     })
     expect(await call(db, ['c1', 'c2'])).toEqual({ created: 2 })
     const byId = Object.fromEntries(tables.contact_location_preferences.map((r) => [r.contact_id, r]))
-    expect(byId.c1).toMatchObject({ email_marketing: false, sms_marketing: true, unsubscribed_at: NOW })
+    expect(byId.c1).toMatchObject({ email_marketing: false, sms_marketing: true, unsubscribed_at: null })
     expect(byId.c2.email_marketing).toBe(false)
     const channels = (id) => tables.consent_log.filter((l) => l.contact_id === id).map((l) => l.channel).sort()
     expect(channels('c1')).toEqual(['sms_marketing', 'whatsapp_marketing'])

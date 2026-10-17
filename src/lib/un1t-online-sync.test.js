@@ -1131,7 +1131,9 @@ describe('runUn1tSync', () => {
         created: 0,
         error: { code: null, message: 'contact_location_preferences upsert boom' },
       })
-      expect(logWarn).toHaveBeenCalled()
+      expect(logError).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('marketing-preference'), expect.objectContaining({
+        locationId: HATCH, count: 0, code: null, message: 'contact_location_preferences upsert boom',
+      }))
     })
   })
 })
