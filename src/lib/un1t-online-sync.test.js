@@ -199,7 +199,7 @@ function fixtureLists() {
 function baseSeed(extra = {}) {
   return {
     locations: [
-      { id: HATCH, organization_id: ORG },
+      { id: HATCH, organization_id: ORG, membership_source: 'un1t_online' },
       { id: STILLORGAN, organization_id: ORG },
     ],
     channel_connections: [
@@ -553,6 +553,21 @@ describe('runUn1tSync', () => {
       expect(r).toMatchObject({ ok: false, reason: 'db' })
       expect(log.some((e) => e.table === 'class_occurrences')).toBe(false)
       expect(r.counts.class_occurrences).toBeUndefined()
+    })
+
+    it('a studio whose membership_source is glofox is NOT projected: skipped is recorded, status unchanged (UN1TCLASS.5)', async () => {
+      const seed = baseSeed()
+      seed.locations = seed.locations.map((l) => (l.id === HATCH ? { ...l, membership_source: 'glofox' } : l))
+      const { db, tables, log } = makeDb(seed)
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(r.counts.class_occurrences).toEqual({ skipped: 'membership_source' })
+      expect(log.some((e) => e.table === 'class_occurrences')).toBe(false)
+      expect(runRow(tables).status).toBe('ok')
+      expect(runRow(tables).counts.class_occurrences).toEqual({ skipped: 'membership_source' })
+      expect(connRow(tables).status).toBe('connected')
+      expect(tables.contact_memberships).toHaveLength(1)
     })
 
     it('class_bookings is never written', async () => {

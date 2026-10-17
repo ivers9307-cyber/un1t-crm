@@ -299,7 +299,7 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
     // 5. Organisation + contacts.
     const { data: loc, error: locError } = await db
       .from('locations')
-      .select('id, organization_id')
+      .select('id, organization_id, membership_source')
       .eq('id', locationId)
       .maybeSingle()
     if (locError || !loc?.organization_id) {
@@ -345,7 +345,12 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
       // so the studio's timetable reaches the TVs and dashboards. Informational
       // only: it never changes the run's status or the connection's, because
       // the membership and contact data are this run's primary payload.
-      if (spec.table === 'un1t_events') {
+      // Only where this studio's timetable IS un1t.online: a Glofox studio that
+      // also holds a un1t.online connection must not get un1t classes beside
+      // its Glofox ones (TVs, climate, bridge linking all read the table).
+      if (spec.table === 'un1t_events' && loc.membership_source !== 'un1t_online') {
+        counts.class_occurrences = { skipped: 'membership_source' }
+      } else if (spec.table === 'un1t_events') {
         const projected = await projectUn1tOccurrences(db, { locationId, events: unique, nowIso })
         counts.class_occurrences = projected
         if (projected.error) {
