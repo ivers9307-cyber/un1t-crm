@@ -1,4 +1,7 @@
 import { z } from 'zod'
+import {
+  STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS, isKnownOverridePath, expandOverridden,
+} from './settings-overrides'
 
 // MIA-HYGIENE.1 — the customer-agent settings CONTRACT, extracted from the
 // settings route so the schema, the defaults and the persisted-object builder
@@ -113,27 +116,11 @@ export const DEFAULTS = {
   handoff_sla_minutes: null,
 }
 
-// MIAORG.1 — keys that belong to ONE studio and are never read from the
-// organisation layer (resolveAgentSettings / mergeAgentSettings). An org-level
-// `enabled: true` must never switch a studio on (enabled+test_mode is live
-// for everyone), and the booking/membership/consultation links point at one
-// studio's own systems.
-export const STUDIO_ONLY_KEYS = new Set([
-  'enabled',
-  'test_mode',
-  'test_phones',
-  'consultation_event_type_id',
-  'booking_mode',
-  'cancellation_form',
-  'booking_url',
-  'booking_cta_label',
-  'membership_signup_url',
-  'membership_cta_label',
-])
-
-// Object-valued keys that merge PER FIELD (org fields under studio fields)
-// rather than the studio's object replacing the org's wholesale.
-export const INHERITABLE_OBJECT_KEYS = ['limits', 'followups', 'first_class_checkin', 'inline_suggestion', 'quiet_hours']
+// MIAORG.1 — STUDIO_ONLY_KEYS (never read from the organisation layer) and
+// INHERITABLE_OBJECT_KEYS (merged per field) are defined in the zod-free
+// settings-overrides.js, so the studio editor can use them without shipping
+// zod to the browser. Re-exported here: one definition, the same import path.
+export { STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS } from './settings-overrides'
 
 export const SettingsSchema = z.object({
   enabled: z.boolean(),
@@ -328,4 +315,66 @@ function buildFullBlob(data) {
     handoff_after_verify_failures: data.handoff_after_verify_failures ?? null,
     cancellation_form: buildCancellationFormBlock(data.cancellation_form),
   }
+}
+
+// MIAORG.1 Task 3 — the studio editor's PUT names the fields the STUDIO sets
+// (`overridden`); everything else is left out of the studio blob so it keeps
+// inheriting from the organisation layer. Each entry is a top-level key, an
+// object key's field as `<key>.<field>`, or a whole object key (shorthand for
+// all of its fields). A studio-only key is accepted and changes nothing (they
+// are always saved). Anything else is a 400 with the offending entry named.
+export const OverriddenSchema = z.array(
+  z.string().max(80).refine(isKnownOverridePath, { message: 'Unknown setting' }),
+).max(200)
+
+// The studio editor's PUT body: the settings plus an optional `overridden`.
+export const StudioSettingsSchema = SettingsSchema.extend({
+  overridden: OverriddenSchema.optional(),
+})
+
+/**
+ * MIAORG.1 Task 3 — the blob a studio stores when its editor names what it
+ * overrides. Pure; the route owns the read/merge/write.
+ *
+ * * Studio-only keys present in the parsed body are ALWAYS kept, whatever
+ *   `overridden` says (T3-B). The parsed body carries the schema defaults
+ *   for enabled / test_mode / test_phones / booking_mode, so those four are
+ *   always written, exactly as the full build writes them today.
+ * * An overridden top-level key is kept only when the body gives it a value
+ *   (not null / blank). The full build fills some blanks with a code default
+ *   (agent_name 'Mia', handoff_cooldown_hours 12, the auto-resolve windows);
+ *   storing that would freeze the default over the org's value. A blank
+ *   simply means "not set here", which is what null means to the resolver.
+ * * An object key is stored with ONLY its overridden fields, read from the
+ *   body (never buildFullBlob's filled-in object, whose frozen defaults would
+ *   beat the org's values). mergeAgentSettings overlays a partial studio
+ *   object field by field, so the missing fields keep inheriting.
+ *
+ * @param {object} data  StudioSettingsSchema-parsed body
+ * @param {string[]} overridden  validated override paths
+ * @returns {object} the customer_agent blob
+ */
+export function buildStudioOverrideBlob(data = {}, overridden = []) {
+  const { scalars, fields } = expandOverridden(overridden)
+  const only = new Set()
+  for (const k of STUDIO_ONLY_KEYS) if (k in data) only.add(k)
+  for (const k of scalars) {
+    const v = data[k]
+    if (v === null || v === undefined || (typeof v === 'string' && !v.trim())) continue
+    only.add(k)
+  }
+  const blob = buildCustomerAgentSettings(data, { only })
+  for (const key of INHERITABLE_OBJECT_KEYS) {
+    const wanted = fields.get(key)
+    const given = data[key]
+    if (!wanted || !given || typeof given !== 'object') continue
+    const part = {}
+    for (const f of wanted) {
+      const v = given[f]
+      if (v === null || v === undefined || (typeof v === 'string' && !v.trim())) continue
+      part[f] = typeof v === 'string' ? v.trim() : v
+    }
+    if (Object.keys(part).length) blob[key] = part
+  }
+  return blob
 }

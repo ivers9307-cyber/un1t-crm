@@ -7,8 +7,10 @@
 // "Loading…" forever).
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
-import { DEFAULTS } from '@/lib/agent/settings-contract'
+import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
+import { DEFAULTS, buildCustomerAgentSettings, SettingsSchema } from '@/lib/agent/settings-contract'
+import { mergeAgentSettings } from '@/lib/agent/settings-resolve'
+import { initialOverridden } from '@/lib/agent/settings-overrides'
 import CustomerAgentClient from './CustomerAgentClient.jsx'
 
 const NOTE = 'Could not load the customer agent settings just now, so nothing is shown and nothing can be changed here until it loads.'
@@ -226,5 +228,161 @@ describe('CustomerAgentClient — quiet hours follow the studio zone (TZ.5)', ()
     await waitFor(() => expect(screen.getByText('Europe/Dublin — agent stays quiet, a human replies.')).toBeTruthy())
     fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
     await waitFor(() => expect(savedQuietHours()).toEqual({ start: '21:00', end: '08:00', tz: 'Europe/Dublin' }))
+  })
+})
+
+// MIAORG.1 Task 3 — inherited fields show their source, editing one makes it
+// the studio's own, "Use organisation default" hands it back, and Save sends
+// `overridden` so only the studio's own fields are stored (Review Focus 1).
+describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', () => {
+  const ORG = { tone: 'Org tone', extra_rules: 'Org rule', followups: { daily_cap: 80 } }
+  const STUDIO = { enabled: true, tone: 'Studio tone' }
+  function answer({ studio = STUDIO, org = ORG } = {}) {
+    const { settings, sources } = mergeAgentSettings({ org, studio })
+    return reply(200, {
+      success: true,
+      settings: { ...settings, social_enabled: false, glofox_auto_cancel: false },
+      studio, org, sources,
+      inherited: mergeAgentSettings({ org, studio: null }).settings,
+      location: { id: 'loc1', name: 'Test Studio' },
+      checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
+    })
+  }
+  const labelRow = (text) => screen.getByText(text).parentElement
+  const putBody = () => {
+    const put = global.fetch.mock.calls.find(([url, init]) => String(url).startsWith('/api/settings/customer-agent') && init?.method === 'PUT')
+    return put && JSON.parse(put[1].body)
+  }
+  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+  const save = () => fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+
+  it('tags each inherited field with its source; the studio\'s own field offers the way back', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(labelRow('Extra rules (optional)')).getByText('Organisation default')).toBeTruthy()
+    expect(within(labelRow('Hand-off message')).getByText('Default')).toBeTruthy()
+    expect(within(labelRow('Tone & voice')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy()
+    // an org value fills the inherited field
+    expect(screen.getByPlaceholderText('e.g. Never discuss competitor pricing.').value).toBe('Org rule')
+  })
+
+  it('studio-only fields carry no tag', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const signup = screen.getByText('Membership sign-up link').parentElement
+    expect(within(signup).queryByText('Default')).toBeNull()
+    expect(within(signup).queryByText('Organisation default')).toBeNull()
+    expect(within(signup).queryByRole('button', { name: /Use/ })).toBeNull()
+    // the on/off switch sits straight in the section, with no tag beside it
+    const live = screen.getByRole('checkbox', { name: /Live — reply to all customers/ }).closest('label')
+    expect(live.parentElement.tagName).toBe('SECTION')
+    expect(live.nextElementSibling?.textContent).not.toMatch(/^(Default|Organisation default|Use (organisation )?default)$/)
+  })
+
+  it('saving without touching inherited fields sends only the studio\'s own', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual(['tone'])
+  })
+
+  it('editing an inherited field marks just it as the studio\'s own', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.change(screen.getByPlaceholderText('e.g. Never discuss competitor pricing.'), { target: { value: 'Studio rule' } })
+    expect(within(labelRow('Extra rules (optional)')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual(['extra_rules', 'tone'])
+    expect(putBody().extra_rules).toBe('Studio rule')
+  })
+
+  it('an object field is overridden per field', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(screen.getByText('Enable proactive follow-ups').closest('label').parentElement).getByText('Default')).toBeTruthy()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Enable proactive follow-ups' }))
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual(['followups.enabled', 'tone'])
+    // the inherited cap is sent for display parity but not overridden
+    expect(putBody().followups.daily_cap).toBe(80)
+  })
+
+  it('"Use organisation default" removes the override and shows the inherited value', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const tone = screen.getByPlaceholderText('e.g. Warm, upbeat, brief. Use first names. No emojis.')
+    expect(tone.value).toBe('Studio tone')
+    fireEvent.click(within(labelRow('Tone & voice')).getByRole('button', { name: 'Use organisation default' }))
+    expect(tone.value).toBe('Org tone')
+    expect(within(labelRow('Tone & voice')).getByText('Organisation default')).toBeTruthy()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual([])
+    // the studio-only switches still go in the body (the PUT always saves them)
+    expect(putBody()).toMatchObject({ enabled: true, test_mode: false })
+  })
+
+  it('a studio value with no org value behind it offers "Use default"', async () => {
+    mockFetch([answer({ org: null })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(labelRow('Tone & voice')).getByRole('button', { name: 'Use default' })).toBeTruthy()
+    expect(within(labelRow('Extra rules (optional)')).getByText('Default')).toBeTruthy()
+  })
+
+  it('T3-D: a legacy full blob marks every value it stores, so the first Save keeps all of it', async () => {
+    const legacy = buildCustomerAgentSettings(SettingsSchema.parse({
+      enabled: true, tone: 'Warm', handoff_cooldown_hours: 0, monthly_points_target: 600,
+      followups: { enabled: true, nudge_after_hours: 4, template_name: 'nudge_v2', daily_cap: 40 },
+      quiet_hours: { start: '21:00', end: '07:00' },
+    }))
+    mockFetch([answer({ studio: legacy, org: null })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual(initialOverridden(legacy))
+    expect(putBody().overridden).toEqual(expect.arrayContaining([
+      'tone', 'agent_name', 'handoff_cooldown_hours', 'monthly_points_target',
+      'followups.enabled', 'followups.nudge_after_hours', 'followups.template_name', 'followups.daily_cap',
+      'quiet_hours.start', 'quiet_hours.end', 'inline_suggestion.enabled',
+    ]))
+  })
+
+  it('a studio with no blob (Hatch) overrides nothing until someone edits', async () => {
+    mockFetch([answer({ studio: null })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual([])
+  })
+
+  it('after a save the settings are re-read, so the tags show what was stored', async () => {
+    // GET (studio tone) -> PUT ok -> GET again (the studio dropped its tone)
+    mockFetch([answer(), reply(200, { success: true, settings: { enabled: true } }), answer({ studio: { enabled: true } })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(labelRow('Tone & voice')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy()
+    save()
+    await waitFor(() => expect(within(labelRow('Tone & voice')).getByText('Organisation default')).toBeTruthy())
+    expect(screen.getByPlaceholderText('e.g. Warm, upbeat, brief. Use first names. No emojis.').value).toBe('Org tone')
+  })
+
+  it('a read-only viewer sees the tags but no way back', async () => {
+    mockFetch([answer()])
+    render(<CustomerAgentClient canEdit={false} />)
+    await waitFor(() => expect(screen.getByText(/Live — reply to all customers/)).toBeTruthy())
+    expect(within(labelRow('Extra rules (optional)')).getByText('Organisation default')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Use organisation default' })).toBeNull()
   })
 })
