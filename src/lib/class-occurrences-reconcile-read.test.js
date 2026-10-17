@@ -33,17 +33,20 @@ const glofoxEvent = (id, startOffsetMin = 60) => ({
 // UPDATEs answer `updateResult` and are recorded; the upsert succeeds.
 function makeDb({ readResult = { data: [], error: null }, updateResult = { data: null, error: null } } = {}) {
   const updates = []
+  const eqs = []
   return {
     updates,
+    eqs,
     from(table) {
-      const b = { op: 'select', patch: null }
-      for (const m of ['select', 'eq', 'neq', 'gte', 'lte', 'in', 'is', 'not', 'order', 'limit']) b[m] = () => b
+      const b = { op: 'select', patch: null, table, eqs: [] }
+      for (const m of ['select', 'neq', 'gte', 'lte', 'in', 'is', 'not', 'order', 'limit']) b[m] = () => b
+      b.eq = (col, val) => { b.eqs.push([col, val]); return b }
       b.update = (patch) => { b.op = 'update'; b.patch = patch; return b }
       b.upsert = () => { b.op = 'upsert'; return b }
       b.then = (resolve, reject) => {
         let out = { data: null, error: null }
-        if (b.op === 'update') { updates.push(b.patch); out = updateResult }
-        else if (b.op === 'select' && table === 'class_occurrences') out = readResult
+        if (b.op === 'update') { updates.push(b.patch); eqs.push({ op: 'update', table, eqs: b.eqs }); out = updateResult }
+        else if (b.op === 'select' && table === 'class_occurrences') { eqs.push({ op: 'select', table, eqs: b.eqs }); out = readResult }
         return Promise.resolve(out).then(resolve, reject)
       }
       return b
@@ -74,6 +77,17 @@ describe('syncOccurrencesForLocation — reconcile read errors (CRONREADERR.1)',
     const out = await syncOccurrencesForLocation(db, { locationId: LOC, creds, nowMs: NOW })
     expect(out).toMatchObject({ ok: true, cancelled: 1, reconcileFailed: false })
     expect(logError).not.toHaveBeenCalled()
+  })
+
+  it('the reconcile read and the cancel UPDATE are both restricted to source_platform = glofox (UN1TCLASS.5)', async () => {
+    const db = makeDb({ readResult: { data: [{ glofox_event_id: 'evt-gone' }], error: null } })
+    const out = await syncOccurrencesForLocation(db, { locationId: LOC, creds, nowMs: NOW })
+    expect(out).toMatchObject({ ok: true, cancelled: 1 })
+    const read = db.eqs.find((e) => e.op === 'select')
+    const update = db.eqs.find((e) => e.op === 'update' && e.table === 'class_occurrences')
+    expect(read.eqs).toContainEqual(['source_platform', 'glofox'])
+    expect(update.eqs).toContainEqual(['source_platform', 'glofox'])
+    expect(update.eqs).toContainEqual(['location_id', LOC])
   })
 
   it('a failed cancel UPDATE is reported too (reconcileFailed), logged at error with the whole error like the read branch', async () => {

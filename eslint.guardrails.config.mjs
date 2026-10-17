@@ -463,6 +463,10 @@ const config = [
       // membership end and bookkeeping write reads its error (and the end
       // and connection updates read the rows they touched).
       'src/lib/un1t-online-sync.js',
+      // UN1TCLASS.2 — the un1t.online events → class_occurrences projection:
+      // born clean; the read and every upsert chunk read their error, which
+      // is returned (never thrown) for the sync to record in its counts.
+      'src/lib/un1t-online-occurrences.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
