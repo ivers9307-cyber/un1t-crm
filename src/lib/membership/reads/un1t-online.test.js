@@ -176,7 +176,7 @@ describe('return shapes (identical to the Glofox functions)', () => {
 
   it('mrr → { success, data: { mrrCents, recurringMembers, yieldCents } }', async () => {
     const { db } = makeDb(seed())
-    expect(await un1tOnlineReads.mrr(db, HATCH)).toEqual({ success: true, data: { mrrCents: 37800, recurringMembers: 2, yieldCents: 18900 } })
+    expect(await un1tOnlineReads.mrr(db, HATCH)).toEqual({ success: true, data: { mrrCents: 18900, recurringMembers: 1, yieldCents: 18900 } })
   })
 
   it('membershipFlows → { months, cancelTrackingStart }', async () => {
@@ -220,6 +220,17 @@ describe('return shapes (identical to the Glofox functions)', () => {
     expect(r.success).toBe(true)
     expect(r.data).toMatchObject({ totalCents: 43200, paidCount: 3 })
     expect(Object.keys(r.data).sort()).toEqual(['deltaPct', 'paidCount', 'totalCents'])
+  })
+
+  it('revenueMtd zone boundary: 2026-09-30T23:30:00Z is October in Europe/Dublin and September in UTC', async () => {
+    const edge = [{ location_id: HATCH, un1t_id: 'edge', type: 'one_time', amount_cents: 7700, refunded: false, remote_created_at: '2026-09-30T23:30:00Z' }]
+    const now = new Date('2026-10-17T12:00:00.000Z')
+    const dublin = await un1tOnlineReads.revenueMtd(makeDb({ un1t_transactions: edge }).db, HATCH, now, 'Europe/Dublin')
+    expect(dublin.data).toMatchObject({ totalCents: 7700, paidCount: 1 })
+    const utc = await un1tOnlineReads.revenueMtd(makeDb({ un1t_transactions: edge }).db, HATCH, now, 'UTC')
+    expect(utc.data).toMatchObject({ totalCents: 0, paidCount: 0 })
+    // 30 Sep is outside the comparator (1-17 Sep) either way
+    expect(utc.data.deltaPct).toBeNull()
   })
 
   it('revenueMtd deltaPct is null when the same window last month had nothing', async () => {

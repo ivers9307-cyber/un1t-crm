@@ -112,6 +112,32 @@ describe('counts', () => {
 })
 
 describe('mrr', () => {
+  it('a paused and a past-due active sub are excluded from mrr but still counted in monthly_recurring / total_members', () => {
+    const subs = [
+      sub({ un1t_user_id: 'a' }),
+      sub({ un1t_user_id: 'b', paused_at: '2026-10-10T00:00:00Z' }),
+      sub({ un1t_user_id: 'c', past_due_at: '2026-10-11T00:00:00Z' }),
+    ]
+    expect(shapeMrr(subs)).toEqual({ mrrCents: 18900, recurringMembers: 1, yieldCents: 18900 })
+    const c = shapeCounts({ subs })
+    expect(c.monthly_recurring).toBe(3)
+    expect(c.total_members).toBe(3)
+    expect(c.active_recurring).toBe(1)
+  })
+
+  it('one member with two active monthly subs is ONE member; MRR still sums both prices', () => {
+    const subs = [
+      sub({ un1t_user_id: 'a', price_cents: 18900 }),
+      sub({ un1t_user_id: 'a', price_cents: 9900 }),
+    ]
+    expect(shapeMrr(subs)).toEqual({ mrrCents: 28800, recurringMembers: 1, yieldCents: 28800 })
+    const c = shapeCounts({ subs })
+    expect(c.monthly_recurring).toBe(1)
+    expect(c.active_recurring).toBe(1)
+    expect(c.total_members).toBe(1)
+    expect(c.detail.recurring_by_interval['1 month']).toBe(1)
+  })
+
   it('a 3-month €567 sub adds 18900/month; a 12-month €2268 sub adds 18900/month', () => {
     expect(shapeMrr([sub({ price_cents: 56700, billing_interval_count: 3 })]).mrrCents).toBe(18900)
     expect(shapeMrr([sub({ price_cents: 226800, billing_interval: 'year', billing_interval_count: 1 })]).mrrCents).toBe(18900)

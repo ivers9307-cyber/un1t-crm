@@ -22,6 +22,11 @@ export const isActiveRecurring = (s) => isActiveSub(s) && !s.paused_at && !s.pas
 /** A €0 one-time product is the free trial, never a class pack. */
 export const isTrialProduct = (p) => p?.type === 'one_time' && Number(p.price_cents) === 0
 
+// Glofox counts CONTACTS, so a member with two active subscriptions is one
+// member. A row with no un1t_user_id cannot be matched and stands alone.
+const memberKey = (s, i) => (s.un1t_user_id != null ? `u:${s.un1t_user_id}` : `row:${i}`)
+const distinctMembers = (subs) => new Set(subs.map(memberKey)).size
+
 const GLOFOX_INTERVALS = ['1 month', '3 months', '6 months', '12 months']
 
 const plural = (n, unit) => (n === 1 ? `1 ${unit}` : `${n} ${unit}s`)
@@ -81,30 +86,45 @@ export function shapeCounts({ subs = [], clients = [], packTxs = [], products = 
     if (t && paidPack(t)) holders.add(c.un1t_user_id)
   }
 
-  const byInterval = Object.fromEntries(GLOFOX_INTERVALS.map((k) => [k, 0]))
-  for (const s of active) {
+  // Members per interval: a member is counted once under each interval they hold.
+  const perInterval = Object.fromEntries(GLOFOX_INTERVALS.map((k) => [k, new Set()]))
+  active.forEach((s, i) => {
     const k = glofoxInterval(s.billing_interval, s.billing_interval_count)
-    if (k in byInterval) byInterval[k] += 1
-  }
+    if (k in perInterval) perInterval[k].add(memberKey(s, i))
+  })
+  const byInterval = Object.fromEntries(GLOFOX_INTERVALS.map((k) => [k, perInterval[k].size]))
 
-  const monthly = active.length
+  const monthly = distinctMembers(active)
   return {
     total_members: monthly + holders.size,
     monthly_recurring: monthly,
     class_packs: holders.size,
     payg: 0,
-    active_recurring: active.filter(isActiveRecurring).length,
+    active_recurring: distinctMembers(active.filter(isActiveRecurring)),
     dead_packs: 0,
     detail: { recurring_by_interval: byInterval },
   }
 }
 
-/** Same data as fetchMrr(): { mrrCents, recurringMembers, yieldCents }. */
+/**
+ * Same data as fetchMrr(): { mrrCents, recurringMembers, yieldCents }.
+ * Only BILLING subscriptions count (active, not paused, not past due: fetchMrr
+ * keeps glofox_membership_state = 'active' for the same reason). MRR sums every
+ * such subscription's price (it is revenue); recurringMembers counts distinct
+ * members, as Glofox counts contacts.
+ */
 export function shapeMrr(subs = []) {
-  return computeMrr(subs.filter(isActiveSub).map((s) => ({
+  const billing = subs.filter(isActiveRecurring)
+  const { mrrCents } = computeMrr(billing.map((s) => ({
     price_cents: s.price_cents,
     interval: glofoxInterval(s.billing_interval, s.billing_interval_count),
   })))
+  const members = distinctMembers(billing)
+  return {
+    mrrCents,
+    recurringMembers: members,
+    yieldCents: members > 0 ? Math.round(mrrCents / members) : null,
+  }
 }
 
 /**
