@@ -1096,6 +1096,24 @@ describe('runUn1tSync', () => {
       for (const l of logged) expect(l).toMatchObject({ action: 'opt_in', source: 'un1t_online_sync', location_id: HATCH })
     })
 
+    it('an ALREADY-linked Stillorgan contact (rule 1, every later run): created once, then 0', async () => {
+      const { db, tables } = makeDb(baseSeed({ contacts: [stillorganContact({ un1t_user_id: 'u1' })] }))
+      const first = await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: fixtureLists() }).factory))
+      expect(first.ok).toBe(true)
+      expect(first.counts.studio_preferences).toEqual({ created: 1 })
+      expect(prefRows(tables, 'c-still')).toHaveLength(1)
+      expect(prefRows(tables, 'c-still')[0]).toMatchObject({ location_id: HATCH, source: 'un1t_online_sync' })
+      // the contact stayed at Stillorgan and stayed linked
+      expect(tables.contacts.find((c) => c.id === 'c-still')).toMatchObject({ location_id: STILLORGAN, un1t_user_id: 'u1' })
+      const logged = (tables.consent_log || []).length
+
+      const second = await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: fixtureLists() }).factory))
+      expect(second.ok).toBe(true)
+      expect(second.counts.studio_preferences).toEqual({ created: 0 })
+      expect(prefRows(tables, 'c-still')).toHaveLength(1)
+      expect((tables.consent_log || []).length).toBe(logged)
+    })
+
     it('never touches an existing Hatch row (an unsubscribed member stays unsubscribed)', async () => {
       const existing = {
         contact_id: 'c-still', location_id: HATCH, email_marketing: false, sms_marketing: false, whatsapp_marketing: false,
