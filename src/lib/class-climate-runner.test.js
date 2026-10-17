@@ -102,7 +102,7 @@ function makeDb(tables = {}) {
   return { from: (t) => builder(t), _store: store, _calls: calls }
 }
 
-// source_platform defaults to 'glofox' like the column (mig 730); the sync's
+// source_platform defaults to 'glofox' like the column (mig 734); the sync's
 // reconcile filters on it, and this fake honours `.eq`.
 function occ(id, { startOffsetMin = 10, durMin = 45, cancelled_at = null, source_platform = 'glofox' } = {}) {
   const start = NOW + startOffsetMin * 60_000

@@ -1,5 +1,12 @@
--- 730 — UN1TCLASS.1: class_occurrences.source_platform — which platform a
+-- 734 — UN1TCLASS.1: class_occurrences.source_platform — which platform a
 -- projected class occurrence came from.
+--
+-- NUMBERING: applied live 17 Oct 10:38 UTC as `730_class_occurrences_source_platform`
+-- (the schema_migrations name stays that); renumbered FILE-ONLY to 734
+-- because `730_org_settings_client_closed` (#2075) was applied and merged
+-- first, and 731-733 were taken. The two COMMENT strings below still say
+-- "mig 730": Postgres stores them in pg_description, so they are left as
+-- applied. Nothing depends on this file, so the move changes no replay order.
 --
 -- WHY. class_occurrences (mig 284, + cancelled_at mig 344) is the local class
 -- spine the TV "Up next", Shelly class mode, the climate automations and the
@@ -92,7 +99,7 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'UN1TCLASS.1: class_occurrences has a write (INSERT/UPDATE/DELETE/ALL) policy; it must be service-role-write only';
   END IF;
-  RAISE NOTICE 'UN1TCLASS.1 mig 730: class_occurrences.source_platform added.';
+  RAISE NOTICE 'UN1TCLASS.1 mig 734: class_occurrences.source_platform added.';
 END $$;
 
 COMMIT;
