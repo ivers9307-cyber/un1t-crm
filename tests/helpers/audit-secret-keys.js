@@ -19,6 +19,7 @@ export const isAuditSecretKey = isSecretKeyName
 /** The tables mig 191 attached `audit_mutation` to (prod, 28 Sep 2026). */
 export const AUDITED_TABLES = Object.freeze([
   'cars', 'invoices_queue', 'locations', 'organizations', 'profile_locations', 'profiles',
+  'org_settings', // mig 733 (ORGSETAUDIT.1): log_mutation('organization_id', 'updated_by')
 ])
 
 /** Every secret-bearing name found on prod, 28 Sep 2026: audited columns and
