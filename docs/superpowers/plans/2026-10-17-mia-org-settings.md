@@ -21,7 +21,7 @@
 - Follow-up / check-in sends use `{ locationId }` (followups.js:433, 473-475, 956, 1015-1017) and template lookups by studio (454-458, 989-993): they fail at Hatch. First-class check-ins can't fire at Hatch (they need Glofox `last_attended_at`).
 
 ## Global Constraints
-- **Studio-only keys, never inherited from the org (controller's call on the list):** `enabled`, `test_mode`, `test_phones`, `consultation_event_type_id`, `booking_mode`, `cancellation_form`, `booking_url`, `booking_cta_label`, `membership_signup_url`, `membership_cta_label`. Everything else in `DEFAULTS` is inheritable.
+- **Studio-only keys, never inherited from the org (controller's call on the list):** `enabled`, `test_mode`, `test_phones`, `consultation_event_type_id`, `booking_mode`, `cancellation_form`, `booking_url`, `booking_cta_label`, `membership_signup_url`, `membership_cta_label`, `monthly_points_target` (added by the final review: champ-app reads it off the raw studio blob, and it starts tier pushes). Everything else in `DEFAULTS` is inheritable.
 - Object keys (`limits`, `followups`, `first_class_checkin`, `inline_suggestion`, `quiet_hours`) merge per field (org fields under studio fields).
 - **No behaviour change on deploy:** with `org_settings.customer_agent` NULL everywhere, every studio resolves exactly as today (Stillorgan's blob is complete; Hatch has none ⇒ off).
 - A failed STUDIO read keeps today's behaviour for that caller (most skip / 500). A failed ORG read: log `logError('agent-settings', …)` and resolve without the org layer (a reply in the studio's own settings beats no reply; CLAUDE.md "never a louder failure").
