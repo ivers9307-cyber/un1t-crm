@@ -20,6 +20,12 @@ export const UN1T_CANCEL_TRACKING_START = '2026-10-16'
 // 'past_due' is a member whose payment failed: still a member, not yet income.
 export const MEMBER_STATUSES = Object.freeze(['active', 'past_due'])
 
+// A subscription spelled as ended. The live 18 Oct 2026 data only carries
+// 'active' (26 rows), so every spelling here is defensive: Stripe spells the
+// ended state 'canceled', other sources 'cancelled', 'ended' or 'expired'.
+// A past_due_at on one of these is history, not a debt.
+export const UN1T_ENDED_SUB_STATUSES = Object.freeze(['canceled', 'cancelled', 'ended', 'expired', 'incomplete_expired'])
+
 /** True for a subscription that holds a membership: status 'active' or 'past_due'. */
 export const isActiveSub = (s) => MEMBER_STATUSES.includes(s?.status)
 
@@ -219,4 +225,128 @@ export function shapeRevenue({ current = [], previous = [] }) {
     paidCount: cur.paidCount,
     deltaPct: pctDelta(cur.totalCents, prev.totalCents),
   }
+}
+
+// ---------------------------------------------------------------------------
+// HATCHPIPE.2 — invoices and past due.
+// ---------------------------------------------------------------------------
+const INVOICE_STATUS = Object.freeze({
+  paid: 'paid',
+  open: 'open', past_due: 'open', unpaid: 'open', failed: 'open', uncollectible: 'open',
+  void: 'void', draft: 'void', deleted: 'void',
+  refunded: 'refunded',
+})
+
+/**
+ * un1t.online invoice status (a bare string, no published enum) →
+ * 'paid' | 'open' | 'void' | 'refunded' | 'unknown'. Case-insensitive. Only
+ * 'open' is ever owed; 'unknown' is shown verbatim to staff and never counted.
+ * Live 18 Oct 2026: every invoice is 'paid', so the other spellings are defensive.
+ */
+export function normaliseUn1tInvoiceStatus(raw) {
+  if (typeof raw !== 'string') return 'unknown'
+  return INVOICE_STATUS[raw.trim().toLowerCase()] ?? 'unknown'
+}
+
+const msOf = (v) => {
+  const n = Date.parse(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * The open invoices that survive netting. An open invoice is paid off when a
+ * paid invoice on the same subscription has the same amount and a LATER
+ * `remote_created_at` (a retry that took). Each paid invoice nets at most one
+ * open invoice: the latest earlier one still standing. An invoice with no
+ * readable date can neither net nor be netted.
+ */
+function survivingOpen(invoices) {
+  const open = invoices.filter((i) => normaliseUn1tInvoiceStatus(i.status) === 'open')
+  const paid = invoices
+    .filter((i) => normaliseUn1tInvoiceStatus(i.status) === 'paid' && msOf(i.remote_created_at) != null)
+    .sort((a, b) => msOf(a.remote_created_at) - msOf(b.remote_created_at))
+  const netted = new Set()
+  for (const p of paid) {
+    const pAt = msOf(p.remote_created_at)
+    let pick = null
+    for (const o of open) {
+      const oAt = msOf(o.remote_created_at)
+      if (netted.has(o) || oAt == null || oAt >= pAt) continue
+      if (Number(o.amount_cents) !== Number(p.amount_cents)) continue
+      if (pick == null || oAt > msOf(pick.remote_created_at)) pick = o
+    }
+    if (pick) netted.add(pick)
+  }
+  return open
+    .filter((o) => !netted.has(o))
+    .sort((a, b) => (msOf(a.remote_created_at) ?? Infinity) - (msOf(b.remote_created_at) ?? Infinity))
+}
+
+/**
+ * Who is behind on payment at one studio, from FRESH rows the caller has
+ * already filtered (see freshCutoff). A row per (un1t_user_id, subscription):
+ *   - a surviving open invoice (see survivingOpen), or
+ *   - a subscription with status 'past_due' or `past_due_at` set that has NOT
+ *     ended (UN1T_ENDED_SUB_STATUSES: a cancelled subscription's old
+ *     past_due_at is history, though an invoice still open on it is real money).
+ * `since` = earliest of `past_due_at` and the oldest surviving open invoice.
+ * `amountCents` = the surviving open invoices' sum, or null when the only
+ * signal is the subscription flag: no debt is ever estimated. Sorted by
+ * `since` ascending (no date last). Reads nothing but the rows it is given.
+ *
+ * @param {object} a
+ * @param {object[]} a.subs      un1t_subscriptions
+ * @param {object[]} a.invoices  un1t_invoices
+ * @returns {{contactId: string|null, un1tUserId: string|null, subscriptionId: string|null,
+ *   productTitle: string|null, since: string|null, amountCents: number|null, currency: string|null,
+ *   openInvoiceIds: string[], cancelAtPeriodEnd: boolean, pausedUntil: string|null}[]}
+ */
+export function shapePastDue({ subs = [], invoices = [] } = {}) {
+  const keyOf = (user, subscription) => `${user ?? ''}\u0000${subscription ?? ''}`
+  const subByKey = new Map()
+  for (const s of subs) subByKey.set(keyOf(s.un1t_user_id, s.un1t_id), s)
+
+  const invoicesByKey = new Map()
+  for (const i of invoices) {
+    const k = keyOf(i.un1t_user_id, i.subscription_id)
+    if (!invoicesByKey.has(k)) invoicesByKey.set(k, [])
+    invoicesByKey.get(k).push(i)
+  }
+
+  const flagged = (s) => !UN1T_ENDED_SUB_STATUSES.includes(String(s.status ?? '').toLowerCase())
+    && (String(s.status ?? '').toLowerCase() === 'past_due' || s.past_due_at != null)
+
+  const keys = new Set(invoicesByKey.keys())
+  for (const [k, s] of subByKey) if (flagged(s)) keys.add(k)
+
+  const rows = []
+  for (const k of keys) {
+    const sub = subByKey.get(k) ?? null
+    const group = invoicesByKey.get(k) ?? []
+    const owed = survivingOpen(group)
+    const subFlag = sub != null && flagged(sub)
+    if (owed.length === 0 && !subFlag) continue
+
+    const candidates = owed.map((o) => o.remote_created_at).filter((v) => msOf(v) != null)
+    if (subFlag && msOf(sub.past_due_at) != null) candidates.push(sub.past_due_at)
+    const since = candidates.length
+      ? candidates.reduce((min, v) => (msOf(v) < msOf(min) ? v : min))
+      : null
+
+    const currency = owed.find((o) => o.currency)?.currency ?? sub?.currency ?? group.find((i) => i.currency)?.currency ?? null
+    const first = sub ?? group[0]
+    rows.push({
+      contactId: sub?.contact_id ?? group.find((i) => i.contact_id)?.contact_id ?? null,
+      un1tUserId: first.un1t_user_id ?? null,
+      subscriptionId: sub?.un1t_id ?? group[0]?.subscription_id ?? null,
+      productTitle: sub?.product_title ?? null,
+      since,
+      amountCents: owed.length ? owed.reduce((sum, o) => sum + (Number(o.amount_cents) || 0), 0) : null,
+      currency: currency ? String(currency).toUpperCase() : null,
+      openInvoiceIds: owed.map((o) => o.un1t_id),
+      cancelAtPeriodEnd: sub?.cancel_at_period_end === true,
+      pausedUntil: sub?.paused_until ?? null,
+    })
+  }
+  return rows.sort((a, b) => (msOf(a.since) ?? Infinity) - (msOf(b.since) ?? Infinity))
 }

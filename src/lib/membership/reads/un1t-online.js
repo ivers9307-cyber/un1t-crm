@@ -45,19 +45,36 @@ const API_SOURCE = 'un1t_online_api'
 // health check's job).
 const STALE_WINDOW_MS = 10 * 60 * 1000
 
-// The statuses that hold a membership: see MEMBER_STATUSES in un1t-online-shape.js
-// (the sync's MEMBERSHIP_ACTIVE_STATUSES minus 'trialing').
-const listActiveSubs = async (db, loc) => {
+const FRESH_TABLES = Object.freeze(['un1t_subscriptions', 'un1t_invoices', 'un1t_clients'])
+
+/**
+ * The freshness cutoff for one studio's rows in `table`: its newest `synced_at`
+ * minus STALE_WINDOW_MS, as an ISO string. A row below it was not in the latest
+ * pull. `null` when the studio has no rows in the table (or no readable
+ * `synced_at`). Throws on a read error; any table but the three the sync stamps
+ * with a run time is refused.
+ */
+export async function freshCutoff(db, table, locationId) {
+  if (!FRESH_TABLES.includes(table)) {
+    throw new Error(`freshCutoff: ${table} is not one of ${FRESH_TABLES.join(', ')}`)
+  }
   const { data: newest, error } = await db
-    .from('un1t_subscriptions')
+    .from(table)
     .select('synced_at')
-    .eq('location_id', loc)
+    .eq('location_id', locationId)
     .order('synced_at', { ascending: false })
     .range(0, 0)
   if (error) throw new Error(error.message)
   const newestAt = Date.parse(newest?.[0]?.synced_at)
-  if (!Number.isFinite(newestAt)) return [] // no subscription rows at all
-  const cutoffIso = new Date(newestAt - STALE_WINDOW_MS).toISOString()
+  if (!Number.isFinite(newestAt)) return null
+  return new Date(newestAt - STALE_WINDOW_MS).toISOString()
+}
+
+// The statuses that hold a membership: see MEMBER_STATUSES in un1t-online-shape.js
+// (the sync's MEMBERSHIP_ACTIVE_STATUSES minus 'trialing').
+const listActiveSubs = async (db, loc) => {
+  const cutoffIso = await freshCutoff(db, 'un1t_subscriptions', loc)
+  if (cutoffIso === null) return [] // no subscription rows at all
   return selectAll((from, to) => db
     .from('un1t_subscriptions')
     .select('un1t_user_id, status, price_cents, billing_interval, billing_interval_count, paused_at, past_due_at')

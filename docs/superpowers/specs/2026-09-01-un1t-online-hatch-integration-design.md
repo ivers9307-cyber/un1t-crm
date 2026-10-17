@@ -41,6 +41,8 @@ Measured with the issued credential using GET requests only (one `GET /api-token
 - Events: `status` scheduled/completed, `access_mode` open/community, `is_free`, `series_id`, `timeslot_id`, `workout_id`, `clients_limit`, `bookings_count`; **no coach field** in the list row (the spec's `coaches[]` is not present), so `class_occurrences.instructor` stays null from the list read.
 - Subscriptions embed `user{id,name,email}` and `product{title, price_amount, billing_interval…}`; transactions embed `user` and `product`; invoices embed `user` and `subscription.product`.
 
+**Live statuses, 18 Oct 2026 (HATCHPIPE.2):** `un1t_invoices.status` holds only `paid` (37 rows, all studios) and `un1t_subscriptions.status` only `active` (26 rows). The other spellings in `normaliseUn1tInvoiceStatus` and `UN1T_ENDED_SUB_STATUSES` (`reads/un1t-online-shape.js`) are defensive, not observed.
+
 **Aggregators (§7.1):** the operator confirms ClassPass/Wellhub members arrive as **separate placeholder accounts**, as on Glofox. None exist yet (0 aggregator email domains, 0 non-`direct` bookings, 0 guest or external refs), and the partner configs (`/integrations/partners`, `/webhooks/wellhub`) are new. The sync therefore records `source`, guest fields and external refs from day one, and the person-linking layer is wired to Hatch as a follow-up once the first aggregator rows appear.
 
 **Still no outbound webhooks to us**, so polling stands (§3).

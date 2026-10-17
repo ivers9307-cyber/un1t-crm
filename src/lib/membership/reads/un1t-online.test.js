@@ -1,7 +1,7 @@
 // UN1TREAD.2 — the un1t.online reads: scoping, pagination, failure contract
 // and return envelopes (each identical to the Glofox function it mirrors).
 import { describe, it, expect } from 'vitest'
-import { un1tOnlineReads } from './un1t-online'
+import { un1tOnlineReads, freshCutoff } from './un1t-online'
 
 const HATCH = 'loc-hatch'
 const STILLORGAN = 'loc-stillorgan'
@@ -355,5 +355,53 @@ describe('failure contract (same as the Glofox function each mirrors)', () => {
     expect(await un1tOnlineReads.growth(db, '', NOW)).toEqual({ success: false, error: 'No location' })
     expect(await un1tOnlineReads.engagement(db, undefined)).toEqual({ success: false, error: 'No location' })
     expect(log).toEqual([])
+  })
+})
+
+// HATCHPIPE.2 — the freshness cutoff, shared by every un1t read that must ignore rows the sync stopped returning.
+describe('freshCutoff', () => {
+  const at = (loc, iso) => ({ location_id: loc, synced_at: iso })
+
+  it('returns the newest synced_at minus 10 minutes, per location', async () => {
+    const { db } = makeDb({
+      un1t_subscriptions: [
+        at(HATCH, '2026-10-17T11:50:00.000Z'), at(HATCH, '2026-10-17T11:35:00.000Z'),
+        at(STILLORGAN, '2026-10-16T08:00:00.000Z'),
+      ],
+    })
+    expect(await freshCutoff(db, 'un1t_subscriptions', HATCH)).toBe('2026-10-17T11:40:00.000Z')
+    expect(await freshCutoff(db, 'un1t_subscriptions', STILLORGAN)).toBe('2026-10-16T07:50:00.000Z')
+  })
+
+  it('works for the invoice and client tables', async () => {
+    const { db } = makeDb({
+      un1t_invoices: [at(HATCH, '2026-10-17T11:50:00.000Z')],
+      un1t_clients: [at(HATCH, '2026-10-17T10:00:00.000Z')],
+    })
+    expect(await freshCutoff(db, 'un1t_invoices', HATCH)).toBe('2026-10-17T11:40:00.000Z')
+    expect(await freshCutoff(db, 'un1t_clients', HATCH)).toBe('2026-10-17T09:50:00.000Z')
+  })
+
+  it('is null when the table has no rows at that location', async () => {
+    const { db } = makeDb({ un1t_invoices: [at(STILLORGAN, '2026-10-17T11:50:00.000Z')] })
+    expect(await freshCutoff(db, 'un1t_invoices', HATCH)).toBeNull()
+  })
+
+  it('throws on a read error', async () => {
+    const { db } = makeDb({ un1t_invoices: [at(HATCH, SYNCED)] }, { fail: ['un1t_invoices'] })
+    await expect(freshCutoff(db, 'un1t_invoices', HATCH)).rejects.toThrow(/boom/)
+  })
+
+  it('refuses any other table', async () => {
+    const { db, log } = makeDb({})
+    await expect(freshCutoff(db, 'contacts', HATCH)).rejects.toThrow(/un1t_/)
+    expect(log).toHaveLength(0)
+  })
+
+  it('reads one row, newest first, scoped to the location', async () => {
+    const { db, log } = makeDb({ un1t_subscriptions: [at(HATCH, SYNCED)] })
+    await freshCutoff(db, 'un1t_subscriptions', HATCH)
+    expect(log[0]).toMatchObject({ table: 'un1t_subscriptions', cols: 'synced_at', order: 'synced_at', range: [0, 0] })
+    expect(log[0].filters).toContainEqual(['eq', 'location_id', HATCH])
   })
 })

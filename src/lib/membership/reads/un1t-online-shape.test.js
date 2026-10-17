@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import {
   UN1T_CANCEL_TRACKING_START, glofoxInterval, shapeCounts, shapeMrr, shapeFlows,
   shapeRevenue, firstSales, engagementRows, isTrialProduct, cancelsComparable,
+  UN1T_ENDED_SUB_STATUSES, normaliseUn1tInvoiceStatus, shapePastDue,
 } from './un1t-online-shape'
 
 const sub = (over = {}) => ({
@@ -265,5 +266,166 @@ describe('revenueMtd', () => {
   it('deltaPct against the same window last month', () => {
     const r = shapeRevenue({ current: [{ amount_cents: 11000 }], previous: [{ amount_cents: 10000 }] })
     expect(r.deltaPct).toBeCloseTo(10)
+  })
+})
+
+// HATCHPIPE.2 — invoice status normaliser and past-due shaping.
+describe('normaliseUn1tInvoiceStatus', () => {
+  it.each([
+    ['paid', 'paid'], ['PAID', 'paid'], ['open', 'open'], ['past_due', 'open'], ['unpaid', 'open'],
+    ['failed', 'open'], ['uncollectible', 'open'], ['void', 'void'], ['draft', 'void'],
+    ['deleted', 'void'], ['refunded', 'refunded'], ['weird', 'unknown'], [null, 'unknown'],
+    [undefined, 'unknown'], ['  Open ', 'open'],
+  ])('normaliseUn1tInvoiceStatus(%s) → %s', (raw, want) => {
+    expect(normaliseUn1tInvoiceStatus(raw)).toBe(want)
+  })
+})
+
+describe('UN1T_ENDED_SUB_STATUSES', () => {
+  it('is a frozen list of the ended spellings', () => {
+    expect(Object.isFrozen(UN1T_ENDED_SUB_STATUSES)).toBe(true)
+    expect(UN1T_ENDED_SUB_STATUSES).toEqual(['canceled', 'cancelled', 'ended', 'expired', 'incomplete_expired'])
+  })
+})
+
+describe('shapePastDue', () => {
+  const psub = (over = {}) => ({
+    un1t_id: 's1', un1t_user_id: 'u1', contact_id: 'c1', product_title: 'Unlimited', status: 'active',
+    currency: 'eur', past_due_at: null, cancel_at_period_end: false, paused_until: null, ...over,
+  })
+  const inv = (over = {}) => ({
+    un1t_id: 'i1', un1t_user_id: 'u1', contact_id: 'c1', subscription_id: 's1', status: 'open',
+    amount_cents: 18900, currency: 'eur', remote_created_at: '2026-10-01T10:00:00Z', ...over,
+  })
+
+  it('past_due subscription with no open invoice → amountCents null, since = past_due_at', () => {
+    const rows = shapePastDue({
+      subs: [psub({ status: 'past_due', past_due_at: '2026-10-05T09:00:00Z' })], invoices: [],
+    })
+    expect(rows).toEqual([{
+      contactId: 'c1', un1tUserId: 'u1', subscriptionId: 's1', productTitle: 'Unlimited',
+      since: '2026-10-05T09:00:00Z', amountCents: null, currency: 'EUR', openInvoiceIds: [],
+      cancelAtPeriodEnd: false, pausedUntil: null,
+    }])
+  })
+
+  it('an open invoice with no netting paid invoice is owed', () => {
+    const rows = shapePastDue({ subs: [psub()], invoices: [inv()] })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ amountCents: 18900, openInvoiceIds: ['i1'], since: '2026-10-01T10:00:00Z' })
+  })
+
+  it('open invoice netted by a later paid invoice of the same amount on the same subscription → no row', () => {
+    const rows = shapePastDue({
+      subs: [psub()],
+      invoices: [inv(), inv({ un1t_id: 'i2', status: 'paid', remote_created_at: '2026-10-03T10:00:00Z' })],
+    })
+    expect(rows).toEqual([])
+  })
+
+  it('a paid invoice of a different amount does not net', () => {
+    const rows = shapePastDue({
+      subs: [psub()],
+      invoices: [inv(), inv({ un1t_id: 'i2', status: 'paid', amount_cents: 5000, remote_created_at: '2026-10-03T10:00:00Z' })],
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows[0].openInvoiceIds).toEqual(['i1'])
+  })
+
+  it('an earlier paid invoice, or one on another subscription, does not net', () => {
+    const rows = shapePastDue({
+      subs: [psub()],
+      invoices: [
+        inv(),
+        inv({ un1t_id: 'p1', status: 'paid', remote_created_at: '2026-09-20T10:00:00Z' }),
+        inv({ un1t_id: 'p2', status: 'paid', subscription_id: 's2', remote_created_at: '2026-10-03T10:00:00Z' }),
+      ],
+    })
+    expect(rows.map((r) => r.subscriptionId)).toEqual(['s1'])
+  })
+
+  it('one paid invoice nets only one of two equal open invoices → amountCents = one amount, since = the surviving one', () => {
+    const rows = shapePastDue({
+      subs: [psub()],
+      invoices: [
+        inv({ un1t_id: 'o1', remote_created_at: '2026-09-01T10:00:00Z' }),
+        inv({ un1t_id: 'o2', remote_created_at: '2026-10-01T10:00:00Z' }),
+        inv({ un1t_id: 'p1', status: 'paid', remote_created_at: '2026-10-10T10:00:00Z' }),
+      ],
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ amountCents: 18900, openInvoiceIds: ['o1'], since: '2026-09-01T10:00:00Z' })
+  })
+
+  it('since = earliest of past_due_at and oldest surviving open invoice; openInvoiceIds lists survivors', () => {
+    const early = shapePastDue({
+      subs: [psub({ status: 'past_due', past_due_at: '2026-09-15T00:00:00Z' })],
+      invoices: [
+        inv({ un1t_id: 'o1', remote_created_at: '2026-10-01T10:00:00Z', amount_cents: 100 }),
+        inv({ un1t_id: 'o2', remote_created_at: '2026-10-08T10:00:00Z', amount_cents: 250 }),
+      ],
+    })
+    expect(early[0]).toMatchObject({ since: '2026-09-15T00:00:00Z', amountCents: 350, openInvoiceIds: ['o1', 'o2'] })
+    const late = shapePastDue({
+      subs: [psub({ status: 'past_due', past_due_at: '2026-10-09T00:00:00Z' })],
+      invoices: [inv({ un1t_id: 'o1', remote_created_at: '2026-10-01T10:00:00Z' })],
+    })
+    expect(late[0].since).toBe('2026-10-01T10:00:00Z')
+  })
+
+  it('a canceled subscription carrying past_due_at and no open invoice → no row', () => {
+    for (const status of UN1T_ENDED_SUB_STATUSES) {
+      expect(shapePastDue({ subs: [psub({ status, past_due_at: '2026-10-05T09:00:00Z' })], invoices: [] })).toEqual([])
+    }
+  })
+
+  it('a canceled subscription that still has a surviving open invoice keeps the money owed', () => {
+    const rows = shapePastDue({
+      subs: [psub({ status: 'canceled', past_due_at: '2026-09-01T00:00:00Z' })],
+      invoices: [inv()],
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ amountCents: 18900, since: '2026-10-01T10:00:00Z' })
+  })
+
+  it('unknown invoice status is never owed', () => {
+    expect(shapePastDue({ subs: [psub()], invoices: [inv({ status: 'weird' }), inv({ un1t_id: 'i2', status: null })] })).toEqual([])
+  })
+
+  it('void and refunded invoices are never owed', () => {
+    expect(shapePastDue({ subs: [psub()], invoices: [inv({ status: 'void' }), inv({ un1t_id: 'i2', status: 'refunded' })] })).toEqual([])
+  })
+
+  it('currency is upper-cased: eur → EUR', () => {
+    const rows = shapePastDue({ subs: [psub()], invoices: [inv({ currency: 'eur' })] })
+    expect(rows[0].currency).toBe('EUR')
+  })
+
+  it('carries cancelAtPeriodEnd and pausedUntil from the subscription', () => {
+    const rows = shapePastDue({
+      subs: [psub({ cancel_at_period_end: true, paused_until: '2026-11-01T00:00:00Z' })], invoices: [inv()],
+    })
+    expect(rows[0]).toMatchObject({ cancelAtPeriodEnd: true, pausedUntil: '2026-11-01T00:00:00Z' })
+  })
+
+  it('groups by (user, subscription) and sorts by since ascending', () => {
+    const rows = shapePastDue({
+      subs: [psub(), psub({ un1t_id: 's2', un1t_user_id: 'u2', contact_id: 'c2' })],
+      invoices: [
+        inv({ un1t_id: 'a', remote_created_at: '2026-10-09T00:00:00Z' }),
+        inv({ un1t_id: 'b', un1t_user_id: 'u2', contact_id: 'c2', subscription_id: 's2', remote_created_at: '2026-10-02T00:00:00Z' }),
+      ],
+    })
+    expect(rows.map((r) => r.un1tUserId)).toEqual(['u2', 'u1'])
+  })
+
+  it('an open invoice whose subscription row is missing still shows, with a null product title', () => {
+    const rows = shapePastDue({ subs: [], invoices: [inv()] })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ productTitle: null, contactId: 'c1', cancelAtPeriodEnd: false, pausedUntil: null })
+  })
+
+  it('tolerates no arguments', () => {
+    expect(shapePastDue({})).toEqual([])
   })
 })
