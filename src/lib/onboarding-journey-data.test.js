@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { loadJourneyLane, loadContactJourney } from './onboarding-journey-data'
+import { scopeToCrmActionable } from '@/lib/class-booking-platform'
+
+// Pass-through spy: the real wrapper still runs, so the recorded eq is real.
+vi.mock('@/lib/class-booking-platform', async (importOriginal) => {
+  const real = await importOriginal()
+  return { ...real, scopeToCrmActionable: vi.fn(real.scopeToCrmActionable) }
+})
 
 // PULSE-90.2 — mocked-db tests for the journey data layer. The pace math
 // itself is covered exhaustively in onboarding-journey.test.js; these
@@ -368,8 +375,10 @@ describe('journey reads count only glofox bookings (UN1TBOOK.2)', () => {
       ],
       churn_radar_actions: [],
     })
+    scopeToCrmActionable.mockClear()
     const row = await loadContactJourney(db, 'c-dual', NOW)
     expect(db.bookingQueries).toHaveLength(1)
+    expect(scopeToCrmActionable).toHaveBeenCalledTimes(1)
     expect(db.bookingQueries[0]).toContainEqual(['source_platform', 'glofox'])
     expect(row.attended).toBe(1)
   })
@@ -384,8 +393,10 @@ describe('journey reads count only glofox bookings (UN1TBOOK.2)', () => {
       ],
       churn_radar_actions: [],
     })
+    scopeToCrmActionable.mockClear()
     const { lane } = await loadJourneyLane(db, LOC, NOW)
     expect(db.bookingQueries.length).toBeGreaterThan(0)
+    expect(scopeToCrmActionable).toHaveBeenCalledTimes(db.bookingQueries.length)
     for (const q of db.bookingQueries) expect(q).toContainEqual(['source_platform', 'glofox'])
     expect(lane[0].attended).toBe(1)
   })
