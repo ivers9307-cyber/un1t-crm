@@ -26,6 +26,7 @@ import {
 import { zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
 import { MEMBER_STATUSES } from '@/lib/churn-radar'
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
+import { CRM_CLASS_MESSAGING_PLATFORM } from '@/lib/class-bookings'
 
 // The lane keeps members visible for a couple of weeks past their window
 // end, so coaches see who just fell through (expired) and who just finished
@@ -119,7 +120,7 @@ async function fetchLastTouch(db, locationId, nowMs) {
 }
 
 /**
- * Attended, non-cancelled class_bookings for a set of contacts, chunked
+ * Attended, non-cancelled Glofox class_bookings for a set of contacts, chunked
  * (IN-list URL cap) + paginated (1k row cap). `.not('status','eq',…)` also
  * drops NULL-status rows (Postgres NULL semantics) — matching
  * lookupBookedMember in class-bookings.js.
@@ -132,6 +133,10 @@ async function fetchAttendanceByContact(db, locationId, contactIds, sinceIso) {
   const rows = await selectAllByKeys(contactIds, (keys, from, to) => db
     .from('class_bookings')
     .select('contact_id, starts_at')
+    // Decision 1 (2026-10-17): the CRM never sends class reminders or
+    // attendance rewards for un1t.online; the un1t.online app does. The pace
+    // push reads this lane, so it counts Glofox classes only.
+    .eq('source_platform', CRM_CLASS_MESSAGING_PLATFORM)
     .eq('location_id', locationId)
     .eq('attended', true)
     .not('status', 'eq', 'CANCELLED')
@@ -248,6 +253,10 @@ export async function loadContactJourney(db, contactId, nowMs = Date.now()) {
   const bookings = await selectAll((from, to) => db
     .from('class_bookings')
     .select('contact_id, starts_at')
+    // Decision 1 (2026-10-17): the CRM never sends class reminders or
+    // attendance rewards for un1t.online; the un1t.online app does. Glofox
+    // classes only, so the member app and the pace push (the lane) agree.
+    .eq('source_platform', CRM_CLASS_MESSAGING_PLATFORM)
     .eq('contact_id', contactId)
     .eq('attended', true)
     .not('status', 'eq', 'CANCELLED')

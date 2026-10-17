@@ -17,6 +17,16 @@
 // "unreachable" with nothing said (now counted in `reachability_failed` and
 // logged; still retried next tick), and a failed claim INSERT read as
 // "already reminded" (now logged; still retried next tick).
+//
+// UN1TBOOK.2 — Decision 1 (2026-10-17): the CRM never reminds a un1t.online
+// booking or a booking at a un1t.online studio; the un1t.online app does. Two
+// unconditional locks (no setting, capability or env flag reopens them): the
+// read filters source_platform = CRM_CLASS_MESSAGING_PLATFORM, and a row at a
+// un1t_online location is dropped and counted (`skipped_un1t_online`) before
+// any reminder is chosen. A failed un1t_online locations read is logged and
+// the tick goes on with the row filter alone (which, with mig 733's namespace
+// CHECK, already excludes every un1t row): failing closed would cost
+// Stillorgan its reminders.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { sendNudgeOnce, readReachableContacts, nudgeFailed } from '@/lib/customer-nudge-claim'
@@ -24,9 +34,11 @@ import { buildClassReminderPush } from '@/lib/customer-notifications'
 import {
   resolveClassReminderLeadTimes, selectDueClassReminders, classTimeLabel,
 } from '@/lib/class-reminders'
-import { logInfo, logWarn } from '@/lib/log'
+import { logInfo, logWarn, logError } from '@/lib/log'
 import { zoneOfLocation } from '@/lib/location-time'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { CRM_CLASS_MESSAGING_PLATFORM } from '@/lib/class-bookings'
+import { listLocationsByMembershipSource } from '@/lib/membership/source'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -67,8 +79,16 @@ export async function GET(request) {
   }
   if (maxLead === 0) {
     await stampHeartbeat('send-class-booking-reminders').catch(() => {})
-    return NextResponse.json({ ok: true, due: 0, sent: 0 })
+    return NextResponse.json({ ok: true, due: 0, sent: 0, skipped_un1t_online: 0 })
   }
+
+  // Decision 1 (2026-10-17): the CRM never sends class reminders or attendance
+  // rewards for un1t.online; the un1t.online app does. Read once per tick.
+  const { ids: un1tOnlineIds, error: un1tErr } = await listLocationsByMembershipSource(db, 'un1t_online')
+  if (un1tErr) {
+    logError('cron-class-reminders', 'un1t_online locations unreadable; reminding with the source_platform row filter alone', { err: un1tErr })
+  }
+  const un1tOnline = new Set(un1tOnlineIds || [])
 
   // Lower bound stays `now` on purpose: the late fire-window may reach
   // classes that already STARTED (lead - LATE_WINDOW_MIN < 0 for short
@@ -84,6 +104,9 @@ export async function GET(request) {
     const { data, error } = await db
       .from('class_bookings')
       .select('id, contact_id, location_id, class_name, starts_at')
+      // Decision 1 (2026-10-17): the CRM never sends class reminders or
+      // attendance rewards for un1t.online; the un1t.online app does.
+      .eq('source_platform', CRM_CLASS_MESSAGING_PLATFORM)
       .not('contact_id', 'is', null)
       .not('status', 'eq', 'CANCELLED')
       .gte('starts_at', fromIso)
@@ -97,20 +120,26 @@ export async function GET(request) {
   }
   if (bookings.length === 0) {
     await stampHeartbeat('send-class-booking-reminders').catch(() => {})
-    return NextResponse.json({ ok: true, due: 0, sent: 0 })
+    return NextResponse.json({ ok: true, due: 0, sent: 0, skipped_un1t_online: 0 })
   }
+
+  // Decision 1 (2026-10-17): the CRM never sends class reminders or attendance
+  // rewards for un1t.online; the un1t.online app does. A row at a un1t_online
+  // studio is dropped whatever its source_platform says.
+  const remindable = bookings.filter((b) => !un1tOnline.has(b.location_id))
+  const skippedUn1tOnline = bookings.length - remindable.length
 
   // Which (booking, lead) pairs are due now — per the booking's own location
   // lead times.
   const due = []
-  for (const b of bookings) {
+  for (const b of remindable) {
     const loc = locById.get(b.location_id)
     const leadTimes = resolveClassReminderLeadTimes(loc?.notification_config)
     due.push(...selectDueClassReminders([b], nowMs, leadTimes, WINDOW_MIN, LATE_WINDOW_MIN))
   }
   if (due.length === 0) {
     await stampHeartbeat('send-class-booking-reminders').catch(() => {})
-    return NextResponse.json({ ok: true, due: 0, sent: 0 })
+    return NextResponse.json({ ok: true, due: 0, sent: 0, skipped_un1t_online: skippedUn1tOnline })
   }
 
   // Keep only reachable members (have a push token). Filter BEFORE dedup —
@@ -147,7 +176,7 @@ export async function GET(request) {
     else if (nudgeFailed(status)) sendFailed++
   }
 
-  const summary = { bookings: bookings.length, due: due.length, sent, send_failed: sendFailed, reachability_failed: reachabilityFailed }
+  const summary = { bookings: bookings.length, due: due.length, sent, send_failed: sendFailed, reachability_failed: reachabilityFailed, skipped_un1t_online: skippedUn1tOnline }
   logInfo('cron-class-reminders', 'tick', summary)
   await stampHeartbeat('send-class-booking-reminders').catch((err) =>
     logWarn('cron-class-reminders', 'heartbeat failed', { err }))

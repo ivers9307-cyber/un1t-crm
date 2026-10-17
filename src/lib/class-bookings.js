@@ -11,6 +11,17 @@ import { toMillis, occurrenceIsLive, resolveCurrentOccurrence } from '@/lib/clas
 import { logWarn } from '@/lib/log'
 
 /**
+ * UN1TBOOK.2 — the one class_bookings.source_platform the CRM ever messages
+ * or rewards from. Decision 1 (2026-10-17): the CRM never sends class
+ * reminders or attendance rewards for un1t.online; the un1t.online app does.
+ * Every customer-messaging or attendance-crediting read of class_bookings
+ * filters `.eq('source_platform', CRM_CLASS_MESSAGING_PLATFORM)`
+ * (tests/class-bookings-readers-guard.test.js). Not a setting: nothing turns
+ * it on for un1t.online.
+ */
+export const CRM_CLASS_MESSAGING_PLATFORM = 'glofox'
+
+/**
  * Pure: shape one Glofox Booking (per /2.0/bookings) into a class_bookings
  * upsert row. Returns null when it lacks the bits we need (booking id, event
  * id, or location). `ctx` carries the resolved contact linkage.
