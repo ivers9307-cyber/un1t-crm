@@ -202,7 +202,8 @@ export const SettingsSchema = z.object({
     .refine((u) => /^https?:\/\//i.test(u), 'Must be an http(s) URL')
     .nullable().optional()
     .or(z.literal('').transform(() => null)),
-  booking_cta_label: z.string().max(40).nullable().optional(),
+  // 20 = Meta's cta_url button text limit (display_text); the label is that button.
+  booking_cta_label: z.string().max(20).nullable().optional(),
   handoff_sla_minutes: z.number().int().min(5).max(1440).nullable().optional(),
   social_enabled: z.boolean().optional().default(false),
   // CANCEL-FORM.2 — SIBLING like social_enabled: this is the

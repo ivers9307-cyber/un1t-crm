@@ -147,11 +147,12 @@ describe('settings write-through contract', () => {
     expect(SettingsSchema.safeParse({ enabled: true, booking_url: 'https://example.com/' + 'a'.repeat(500) }).success).toBe(false)
   })
 
-  it('booking_cta_label: trimmed, <= 40, blank -> null; default null', () => {
+  it('booking_cta_label: trimmed, <= 20 (Meta button text), blank -> null; default null', () => {
     expect(DEFAULTS.booking_cta_label).toBe(null)
     expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, booking_cta_label: '  Book a class  ' })).booking_cta_label).toBe('Book a class')
     expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, booking_cta_label: '   ' })).booking_cta_label).toBe(null)
-    expect(SettingsSchema.safeParse({ enabled: true, booking_cta_label: 'x'.repeat(41) }).success).toBe(false)
+    expect(SettingsSchema.safeParse({ enabled: true, booking_cta_label: 'x'.repeat(20) }).success).toBe(true)
+    expect(SettingsSchema.safeParse({ enabled: true, booking_cta_label: 'x'.repeat(21) }).success).toBe(false)
   })
 
   // The handoff SLA was read by handoff-sla.js but missing from the schema, so

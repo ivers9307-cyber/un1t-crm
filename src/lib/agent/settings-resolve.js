@@ -119,7 +119,7 @@ export function mergeAgentSettings({ org = null, studio = null } = {}) {
  *   organisation's layer is read once per run (see resolveAgentSettingsForLocation).
  * @returns {Promise<
  *   { ok: true, settings: object, sources: object, studio: object|null, org: object|null,
- *     location: { id: string, name: string, timezone: string|null, organization_id: string|null, settings: object|null } }
+ *     location: { id: string, name: string, timezone: string|null, organization_id: string|null, membership_source: string|null, settings: object|null } }
  *   | { ok: false, reason: 'read_failed'|'not_found' }>}
  */
 export async function resolveAgentSettings(db, locationId, { orgCache } = {}) {
@@ -128,7 +128,11 @@ export async function resolveAgentSettings(db, locationId, { orgCache } = {}) {
   let location
   try {
     const { data, error } = await db.from('locations')
-      .select('id, name, timezone, organization_id, settings')
+      // MIAORG.1 Task 5 — membership_source rides on the same row (mig 717:
+      // NOT NULL DEFAULT 'none'), so Mia's capability for the turn comes from
+      // the read that already gates the turn, never a second read that could
+      // fail on its own and flip a Glofox studio to no-booking.
+      .select('id, name, timezone, organization_id, membership_source, settings')
       .eq('id', locationId)
       .maybeSingle()
     if (error) {
@@ -217,6 +221,8 @@ export async function resolveAgentSettingsForLocation(db, location, { orgCache }
       name: location.name,
       timezone: location.timezone ?? null,
       organization_id: location.organization_id ?? null,
+      // MIAORG.1 Task 5 — null when the caller's row did not select it.
+      membership_source: location.membership_source ?? null,
       settings: location.settings ?? null,
     },
   }

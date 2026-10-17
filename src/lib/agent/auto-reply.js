@@ -27,7 +27,8 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { isWhatsAppStaffAuthored } from '@/lib/whatsapp-staff-sources'
 import { buildCachedSystem } from './prompt'
 import { getLocationBranding } from '@/lib/location-branding'
-import { resolveMembershipSource } from '@/lib/membership/source'
+import { providerFor } from '@/lib/membership/source'
+import { noneSource } from '@/lib/membership/sources/none'
 import { DEFAULTS } from './settings-contract'
 import { resolveAgentSettings } from './settings-resolve'
 import {
@@ -506,7 +507,13 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   const branding = await getLocationBranding(db, locationId)
   // W1.M3b — the base prompt names the studio's membership source (its app
   // and payment page); a studio with none gets no app rules.
-  const membershipSource = await resolveMembershipSource(db, locationId)
+  // MIAORG.1 Task 5 — the source comes off the location row the settings
+  // resolver already read (locations.membership_source, NOT NULL), through the
+  // sanctioned mapper. No second read: a separate one could fail on its own
+  // and answer `none`, flipping a Glofox studio to no-booking for a turn. A
+  // failed location read never gets here with settings (the gate below says
+  // 'disabled'). Tools, prompt and executors all use this one value.
+  const membershipSource = loc?.membership_source ? providerFor(loc.membership_source) : noneSource
   // MIAORG.1 Task 5 — what Mia can do follows THIS studio (the thread's, the
   // locationId this turn is answered at), never the contact's home studio.
   // A provider without bookings gets the no-booking tool block and prompt.
@@ -1502,11 +1509,15 @@ function sameLink(a, b) {
   const norm = (u) => String(u || '').trim().replace(/\/+$/, '')
   return !!norm(a) && norm(a) === norm(b)
 }
+// Capped at 20, Meta's cta_url display_text limit (as the card-set buttons in
+// whatsapp.js are): a longer label would be refused and the link sent as plain
+// text. Covers link_button_text too (its schema allows 25).
+const CTA_BUTTON_TEXT_MAX = 20
 export function linkButtonText(url, settings) {
-  if (sameLink(url, settings?.booking_url)) {
-    return (settings?.booking_cta_label || '').trim() || DEFAULT_BOOKING_CTA_LABEL
-  }
-  return (settings?.link_button_text || '').trim() || 'Open link'
+  const text = sameLink(url, settings?.booking_url)
+    ? ((settings?.booking_cta_label || '').trim() || DEFAULT_BOOKING_CTA_LABEL)
+    : ((settings?.link_button_text || '').trim() || 'Open link')
+  return text.slice(0, CTA_BUTTON_TEXT_MAX)
 }
 
 export const whatsappAdapter = {

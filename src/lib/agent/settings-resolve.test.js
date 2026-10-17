@@ -172,7 +172,8 @@ function fakeDb({ locations, orgSettings }) {
     },
   }
 }
-const locRow = (settings = null) => ({ id: LOC, name: 'Hatch', timezone: 'Europe/Dublin', organization_id: ORG, settings })
+// MIAORG.1 Task 5 — membership_source rides on the row (Mia's capability).
+const locRow = (settings = null) => ({ id: LOC, name: 'Hatch', timezone: 'Europe/Dublin', organization_id: ORG, membership_source: 'un1t_online', settings })
 
 describe('resolveAgentSettings', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -192,6 +193,8 @@ describe('resolveAgentSettings', () => {
     expect(r.org).toEqual({ tone: 'Org', extra_rules: 'Org rules' })
     expect(r.location).toEqual(locRow({ customer_agent: { enabled: true, tone: 'Studio' }, wa_card_sets: { a: 1 } }))
     expect(db.calls[0].filters).toEqual({ id: LOC })
+    expect(db.calls[0].cols).toBe('id, name, timezone, organization_id, membership_source, settings')
+    expect(r.location.membership_source).toBe('un1t_online')
     expect(db.calls[1].filters).toEqual({ organization_id: ORG })
   })
 

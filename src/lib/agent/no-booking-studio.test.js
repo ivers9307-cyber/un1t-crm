@@ -37,6 +37,12 @@ vi.mock('@/lib/glofox', () => ({
   cancelBooking: vi.fn(async () => ({ ok: true })),
   interpretBookingResult: vi.fn(() => ({ success: true })),
 }))
+// The separate source read the turn used to make: a spy that fails, so a
+// turn that still called it would fall back to `none` (no booking).
+vi.mock('@/lib/membership/source', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolveMembershipSource: vi.fn(async () => { throw new Error('membership_source read failed') }),
+}))
 vi.mock('@/lib/log', async (importOriginal) => ({
   ...(await importOriginal()),
   logError: vi.fn(),
@@ -64,7 +70,7 @@ import {
 } from './booking-tools'
 import { executeAccountTool } from './account-tools'
 import { formatClassTime } from './dublin-format'
-import { MEMBERSHIP_SOURCES } from '@/lib/membership/source'
+import { MEMBERSHIP_SOURCES, resolveMembershipSource } from '@/lib/membership/source'
 import { STILLORGAN_BLOB } from './settings-fixtures.test-helpers'
 
 const FIX_DIR = path.join(__dirname, '__fixtures__')
@@ -418,6 +424,8 @@ function turnDb({ locationId, source, settings, conv, rows = [] }) {
       if (state.op === 'update') return { data: [{ id: 'conv-1' }], error: null }
       reads.push({ table, cols: state.cols })
       if (table === 'locations') {
+        // A narrow source-only read (the old separate lookup) fails here.
+        if (state.cols === 'membership_source') return { data: null, error: { message: 'statement timeout', code: '57014' } }
         return { data: { id: locationId, name: 'Studio', membership_source: source, settings: { customer_agent: settings } }, error: null }
       }
       if (table === 'whatsapp_conversations') return { data: conv, error: null }
@@ -557,6 +565,32 @@ describe('whole turns', () => {
     const result = toolResultOf(bodies[1])
     expect(result).toEqual({ classes: [{ name: 'HYROX', starts_at: 'Tue 20 Oct, 08:00' }] })
     expect(JSON.stringify(bodies[1].messages.at(-1))).not.toMatch(/capacity|bookings_count|access_mode/)
+  })
+
+  it('the source comes off the resolver\'s location row: no separate source read, so a failing one cannot flip Stillorgan', async () => {
+    const { fetchFn, bodies } = modelTurns([textTurn('Hi!')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, reads } = turnDb({ locationId: STILLORGAN, source: 'glofox', settings: { enabled: true }, conv: HATCH_THREAD })
+
+    await runChannelAgent(db, makeAdapter(), turnCtx(STILLORGAN))
+
+    expect(resolveMembershipSource).not.toHaveBeenCalled()
+    const locReads = reads.filter((r) => r.table === 'locations')
+    expect(locReads.map((r) => r.cols)).toEqual(['id, name, timezone, organization_id, membership_source, settings'])
+    expect(bodies[0].tools).toEqual(JSON.parse(JSON.stringify(CACHED_ACCOUNT_TOOLS)))
+    expect(bodies[0].system[0].text).toContain('You CAN book classes for verified members')
+    // The prompt's app rules use the same value (Glofox payment page / app).
+    expect(bodies[0].system[0].text).toContain('the Glofox app')
+  })
+
+  it('a location row with no source (a narrow select) is none: no booking, never a guess', async () => {
+    const { fetchFn, bodies } = modelTurns([textTurn('Hi!')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db } = turnDb({ locationId: HATCH, source: undefined, settings: { enabled: true }, conv: HATCH_THREAD })
+
+    await runChannelAgent(db, makeAdapter(), turnCtx(HATCH))
+
+    expect(bodies[0].tools.map((t) => t.name)).toEqual(NO_BOOKING_NAMES)
   })
 
   it('a Glofox studio turn sends the very same cached tool block and the booking prompt', async () => {
