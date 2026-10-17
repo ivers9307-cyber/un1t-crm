@@ -273,12 +273,19 @@ describe('canViewContact', () => {
       expect(await canViewContact(db, user, contact)).toBe(false)
       expect(seen.filters.status).toBe('active')
     })
-    it('a membership read error fails closed, even when a deal would grant', async () => {
+    it('a membership read error fails closed when there is no deal', async () => {
       const db = stubFrom({
-        contact_memberships: () => ({ data: null, error: { message: 'boom' } }),
-        deals: () => ({ data: [{ id: 'd1' }] }),
+        contact_memberships: () => ({ data: null, error: { code: '42501', message: 'boom' } }),
+        deals: () => ({ data: [] }),
       })
       expect(await canViewContact(db, user, contact)).toBe(false)
+    })
+    it('a membership read error still opens a deal crossover', async () => {
+      const db = stubFrom({
+        contact_memberships: () => ({ data: null, error: { code: '42501', message: 'boom' } }),
+        deals: () => ({ data: [{ id: 'd1' }] }),
+      })
+      expect(await canViewContact(db, user, contact)).toBe(true)
     })
     it('a thrown membership read fails closed', async () => {
       const db = stubFrom({

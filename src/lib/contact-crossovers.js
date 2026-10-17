@@ -1,3 +1,5 @@
+import { logError } from '@/lib/log'
+
 // Crossover-contact helpers for the studio contacts list.
 //
 // A "crossover" is a contact OWNED by a different studio that nonetheless
@@ -91,7 +93,9 @@ export async function canViewContact(db, user, contact) {
     // the contact even though its row is owned elsewhere (a Stillorgan
     // member who also holds a Hatch Street membership). Mirrors the RLS /
     // crossover widening in mig 731. An ended membership grants nothing.
-    // A read error DENIES: this gate is the boundary on a service-role read.
+    // A read error denies only THIS branch (logged, no PII), then falls
+    // through to the deal probe, so a contact_memberships outage cannot hide
+    // a deal crossover. It never grants.
     const { data: memberships, error: membershipErr } = await db
       .from('contact_memberships')
       .select('id')
@@ -99,8 +103,15 @@ export async function canViewContact(db, user, contact) {
       .eq('status', 'active')
       .in('location_id', locIds)
       .limit(1)
-    if (membershipErr) return false
-    if (Array.isArray(memberships) && memberships.length > 0) return true
+    if (membershipErr) {
+      logError('contact-crossovers', 'membership probe failed; falling through to deal probe', {
+        contactId: contact.id,
+        code: membershipErr.code,
+        message: membershipErr.message,
+      })
+    } else if (Array.isArray(memberships) && memberships.length > 0) {
+      return true
+    }
 
     const { data } = await db
       .from('deals')
