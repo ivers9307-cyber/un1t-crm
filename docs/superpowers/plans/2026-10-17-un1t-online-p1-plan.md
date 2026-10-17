@@ -81,6 +81,8 @@ Connecting un1t.online made Hatch's state `configured`. Several surfaces check *
 
 ## P1.2 Turn on membership surfaces through a real read seam
 
+**Status (2026-10-17):** P1.2a is in #2076: the read seam (`src/lib/membership/reads/`), the Glofox pass-through adapter, and the un1t.online adapter (counts, billing-only MRR, flows, growth, engagement, revenue; no arrears or radar). The business and studio dashboards and the phone business route read through it, and membership snapshots include un1t.online. Capabilities stay false, so radars, the engagement page and Mia are unchanged. Plan: `2026-10-17-un1t-online-membership-reads.md`. Next: the radar adapter, the classifier fed from the seam (decision 4), then `memberships` flips true.
+
 ### Seam
 Add `src/lib/membership/reads/`, a per-source adapter with only the reads the surfaces need:
 
