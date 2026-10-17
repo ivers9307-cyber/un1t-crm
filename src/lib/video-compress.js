@@ -9,6 +9,13 @@
 //     (those would break the app's embeds / Revolut / Unlayer).
 //   - ffmpeg is loaded LAZILY via dynamic import() the first time a clip
 //     actually needs transcoding — never on the public page, never SSR.
+//   - The FFmpeg class is imported at RUNTIME from /ffmpeg/index.js (copied
+//     there by the postinstall script), never from '@ffmpeg/ffmpeg' through
+//     the bundler (FFMPEGLOADER.1). Next 16.4's Turbopack resolves classes.js's
+//     `new Worker(new URL(<runtime value>, import.meta.url))` at build time
+//     and fails "Module not found"; unbundled, that line runs as the browser
+//     wrote it. tests/ffmpeg-loader-unbundled-guard.test.js fails a bundled
+//     import.
 //   - FAIL-OPEN: any load/transcode error returns the ORIGINAL file, so
 //     the caller's size check / bucket gives a clear ceiling error rather
 //     than crashing. Small MP4/WebM clips pass through untouched.
@@ -53,14 +60,23 @@ export function ffmpegAssetURLs(origin) {
   }
 }
 
+/**
+ * The self-hosted ESM loader (the FFmpeg class), origin-absolute like the
+ * assets above. Imported by URL at runtime, never bundled.
+ * @param {string} origin e.g. 'https://crm.un1tdublin.com'
+ */
+export function ffmpegLoaderURL(origin) {
+  return `${origin || ''}/ffmpeg/index.js`
+}
+
 // Module-level singleton so the ~25MB core loads at most once per session.
 let _ffmpegPromise = null
 async function getFfmpeg() {
   if (_ffmpegPromise) return _ffmpegPromise
   _ffmpegPromise = (async () => {
-    const { FFmpeg } = await import('@ffmpeg/ffmpeg')
-    const ff = new FFmpeg()
     const origin = (typeof window !== 'undefined' && window.location && window.location.origin) || ''
+    const { FFmpeg } = await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ ffmpegLoaderURL(origin))
+    const ff = new FFmpeg()
     await ff.load(ffmpegAssetURLs(origin))
     return ff
   })().catch((e) => { _ffmpegPromise = null; throw e })
