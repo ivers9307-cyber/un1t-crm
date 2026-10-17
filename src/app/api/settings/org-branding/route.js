@@ -32,7 +32,7 @@ const OrgBrandingSchema = z.object({
 
 // MIAORG.1 final review — the columns this route answers with: every
 // org_settings column it returned while it read `*`, named, so a column added
-// later (mig 728's customer_agent, Mia's organisation defaults, which has its
+// later (mig 729's customer_agent, Mia's organisation defaults, which has its
 // own editor and route) never rides along to the branding page.
 const ORG_BRANDING_COLUMNS = [
   'organization_id', 'logo_url', 'favicon_url', 'company_name', 'updated_at', 'updated_by', // mig 317

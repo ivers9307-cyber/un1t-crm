@@ -1,4 +1,4 @@
-// MIAORG.1 — migration 728 adds org_settings.customer_agent (organisation-level
+// MIAORG.1 — migration 729 adds org_settings.customer_agent (organisation-level
 // Mia defaults). Fictional ids only.
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -7,7 +7,7 @@ import { PGlite } from '@electric-sql/pglite'
 
 const ORG = 'b0000000-0000-0000-0000-000000000001'
 const ORG2 = 'b0000000-0000-0000-0000-000000000002'
-const MIG = readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations/728_org_settings_customer_agent.sql'), 'utf8')
+const MIG = readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations/729_org_settings_customer_agent.sql'), 'utf8')
 const SCHEMA = `
   CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS;
   CREATE SCHEMA private;
@@ -41,7 +41,7 @@ async function asRole(db, role, sql) {
   }
 }
 
-describe('728', () => {
+describe('729', () => {
   it('adds a nullable jsonb column with no default, existing rows NULL; a second run passes', async () => {
     const db = await boot()
     await db.exec(MIG)

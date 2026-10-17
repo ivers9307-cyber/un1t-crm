@@ -246,7 +246,7 @@ describe('resolveAgentSettings', () => {
     expect(logError).toHaveBeenCalledTimes(1)
   })
 
-  // MIAORG.1 final review — defence in depth behind mig 728's write fence.
+  // MIAORG.1 final review — defence in depth behind mig 729's write fence.
   it('an INVALID org layer (one the org editor would refuse) is logged and treated as no org layer', async () => {
     const studio = { enabled: true, tone: 'Studio' }
     for (const bad of [

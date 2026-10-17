@@ -28,7 +28,7 @@
 - **Never surface class capacity to customers:** timetable answers carry class name + start time only, never `capacity`, `bookings_count` or "spaces left".
 - Customer copy operator-editable with defaults; no em-dashes in defaults.
 - Org editor: master or org admin via `resolveAdminOrgId` (`org-admin.js`). Studio editor: unchanged rule (`canEditMiaSettings`).
-- `tests/whatsapp-config-callers.test.js` is EXACT; migrations forward-only; mig 728 applied BEFORE merge.
+- `tests/whatsapp-config-callers.test.js` is EXACT; migrations forward-only; mig 729 applied BEFORE merge.
 - Fictional ids in tests; supabase builders are thenables (destructure + check `error`).
 
 ## Review Focus
@@ -40,9 +40,9 @@
 
 ---
 
-### Task 1: Migration 728 + resolver + contract
+### Task 1: Migration 729 + resolver + contract
 
-**Files:** create `supabase/migrations/728_org_settings_customer_agent.sql`, `tests/migration-728-org-customer-agent.test.js`, `src/lib/agent/settings-resolve.js` (+ test); modify `src/lib/agent/settings-contract.js` (+ its test).
+**Files:** create `supabase/migrations/729_org_settings_customer_agent.sql`, `tests/migration-729-org-customer-agent.test.js`, `src/lib/agent/settings-resolve.js` (+ test); modify `src/lib/agent/settings-contract.js` (+ its test).
 
 **Interfaces — produces:**
 - `org_settings.customer_agent jsonb NULL` (no default). Comment: readable by org members through the existing `org_settings_select` policy; it holds copy and tuning, no secrets (decision, stated in the migration).
@@ -52,9 +52,9 @@
 - `mergeAgentSettings({ org, studio }) → { settings, sources }` (pure): `settings = DEFAULTS ← org (minus STUDIO_ONLY_KEYS) ← studio`, object keys merged per field; `sources[key]` ∈ `'studio'|'org'|'default'`.
 - `resolveAgentSettings(db, locationId) → Promise<{ ok: true, settings, sources, studio, org, location } | { ok: false, reason: 'read_failed'|'not_found' }>` where `location = { id, name, timezone, organization_id, settings }` (the full row's settings for callers needing siblings like `wa_card_sets`). Studio read failure → `{ ok:false }`; org read failure → logged, `org = null`.
 
-- [ ] Tests first: merge precedence; studio-only keys ignored from org (incl. `enabled: true` at org never turns a studio on); object per-field merge; sources; org read failure → ok with org null + logError; studio missing → not_found; mig 728 PGlite (column added, nullable, idempotent); contract: new keys validated/round-tripped, `handoff_sla_minutes` survives a build, `only` builds a partial blob.
-- [ ] Implement; run `npx vitest run src/lib/agent/settings-* tests/migration-728*`, `check:select-columns`, `check:guardrails`.
-- [ ] Commit `MIAORG.1 — mig 728 org_settings.customer_agent; resolveAgentSettings; contract gains booking link + handoff_sla_minutes`.
+- [ ] Tests first: merge precedence; studio-only keys ignored from org (incl. `enabled: true` at org never turns a studio on); object per-field merge; sources; org read failure → ok with org null + logError; studio missing → not_found; mig 729 PGlite (column added, nullable, idempotent); contract: new keys validated/round-tripped, `handoff_sla_minutes` survives a build, `only` builds a partial blob.
+- [ ] Implement; run `npx vitest run src/lib/agent/settings-* tests/migration-729*`, `check:select-columns`, `check:guardrails`.
+- [ ] Commit `MIAORG.1 — mig 729 org_settings.customer_agent; resolveAgentSettings; contract gains booking link + handoff_sla_minutes`.
 
 ### Task 2: Every runtime reader uses the resolver
 
@@ -111,5 +111,5 @@
 - [ ] Each CI-mirror command + `npm run build`; final whole-branch review (Opus); one fix wave; push; PR; changelog entry.
 
 ### Task 8: Rollout (Richard's go-ahead)
-- [ ] Apply mig 728 (before merge), `get_advisors`. Merge (Richard). Verify Stillorgan resolves identically (diff resolved vs raw blob = no change).
+- [ ] Apply mig 729 (before merge), `get_advisors`. Merge (Richard). Verify Stillorgan resolves identically (diff resolved vs raw blob = no change).
 - [ ] Richard: Organisation defaults → "Start from Stillorgan"; Hatch studio settings: booking link, holding message, welcome; Hatch knowledge (Settings → Customer agent → Knowledge at Hatch); then switch Hatch on (test mode first with his phone, `enabled=false` + `test_mode=true`).

@@ -13,7 +13,7 @@ import { initialOverridden } from '@/lib/agent/settings-overrides'
 import { copyStudioIntoOrg } from '@/lib/agent/settings-org'
 
 // MIAORG.1 Task 4 — Mia's ORGANISATION defaults (org_settings.customer_agent,
-// mig 728). Every studio resolves DEFAULTS <- this layer <- its own blob
+// mig 729). Every studio resolves DEFAULTS <- this layer <- its own blob
 // (resolveAgentSettings), never inheriting a studio-only key.
 //
 // Who: a master, or an org admin of the organisation (resolveAdminOrgId,
@@ -39,7 +39,7 @@ import { copyStudioIntoOrg } from '@/lib/agent/settings-org'
 // The write is an upsert on organization_id (the table's primary key, mig
 // 317) naming ONLY customer_agent (and updated_by), so no other org_settings
 // column (branding, caps, legal identity) is touched, and a missing row is
-// inserted. It runs as service_role, the only role mig 728's fence lets
+// inserted. It runs as service_role, the only role mig 729's fence lets
 // change customer_agent.
 
 const notFound = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })

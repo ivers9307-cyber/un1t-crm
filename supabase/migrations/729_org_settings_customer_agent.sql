@@ -1,4 +1,4 @@
--- 728_org_settings_customer_agent.sql
+-- 729_org_settings_customer_agent.sql
 -- MIAORG.1 — Mia's settings at ORGANISATION level. One blob per organisation,
 -- the same shape as locations.settings.customer_agent (src/lib/agent/
 -- settings-contract.js), resolved under each studio's own blob by
@@ -49,7 +49,7 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 ALTER TABLE public.org_settings ADD COLUMN IF NOT EXISTS customer_agent jsonb;
 COMMENT ON COLUMN public.org_settings.customer_agent IS
-  'MIAORG.1 (mig 728): organisation-level Mia defaults, same shape as locations.settings.customer_agent; studio-only keys are never read from here. NULL = none set. Readable by every org member through org_settings_select, so copy and tuning only, no secrets. Written only by the server (service_role): org_settings_customer_agent_fence refuses a client write.';
+  'MIAORG.1 (mig 729): organisation-level Mia defaults, same shape as locations.settings.customer_agent; studio-only keys are never read from here. NULL = none set. Readable by every org member through org_settings_select, so copy and tuning only, no secrets. Written only by the server (service_role): org_settings_customer_agent_fence refuses a client write.';
 
 CREATE OR REPLACE FUNCTION private.org_settings_customer_agent_fence()
 RETURNS trigger

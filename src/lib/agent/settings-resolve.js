@@ -169,7 +169,7 @@ async function readOrgLayer(db, organizationId, locationId) {
     }
     const layer = isPlainObject(data?.customer_agent) ? data.customer_agent : null
     if (!layer) return null
-    // MIAORG.1 final review — defence in depth behind mig 728's write fence: a
+    // MIAORG.1 final review — defence in depth behind mig 729's write fence: a
     // layer the org editor itself would refuse (written by hand, or before the
     // fence) never reaches a studio's turn. A bad org row must never break or
     // weaken a studio, so an invalid layer is logged and treated as no layer
