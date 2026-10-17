@@ -26,7 +26,7 @@ vi.mock('@/lib/morning-briefing', () => ({
 vi.mock('@/lib/churn-radar-data', () => ({ loadRadar: vi.fn(async (_db, id) => { acted.push(['churn-radar-digest', id]); return { summary: {} } }) }))
 vi.mock('@/lib/lead-radar-data', () => ({ loadFunnel: vi.fn(async () => ({ summary: {} })) }))
 vi.mock('@/lib/churn-radar-digest', () => ({ buildDigestEmail: vi.fn(() => ({ subject: 's', html: '<p/>' })) }))
-vi.mock('@/lib/membership/locations-for-source', () => ({ noSourceLocationIds: vi.fn(async () => ({ ids: new Set(), error: null })) }))
+vi.mock('@/lib/membership/locations-for-source', () => ({ locationIdsWithoutCapability: vi.fn(async () => ({ ids: new Set(), error: null })) }))
 vi.mock('@/lib/ads/read', () => ({ loadAdsDashboard: vi.fn(async (_db, id) => { acted.push(['ad-report-email', id]); return { kpis: {}, perAd: [] } }) }))
 vi.mock('@/lib/ads/report', () => ({ buildAdReportEmail: vi.fn(({ date }) => ({ subject: date, html: '<p/>' })) }))
 vi.mock('@/lib/report-generator', () => ({
@@ -71,7 +71,8 @@ const ROUTES = {
 const { stampHeartbeat } = await import('@/lib/cron-heartbeat')
 const { buildMorningBriefingEmail } = await import('@/lib/morning-briefing')
 const { buildAdReportEmail } = await import('@/lib/ads/report')
-const { noSourceLocationIds } = await import('@/lib/membership/locations-for-source')
+const { locationIdsWithoutCapability } = await import('@/lib/membership/locations-for-source')
+const { fetchStudioPulse } = await import('@/lib/studio-pulse-data')
 const req = () => new Request('https://x.test/api/cron/x', { headers: { authorization: 'Bearer shh' } })
 
 async function ticks(cron, isos) {
@@ -156,7 +157,7 @@ describe('TZ.6 location-loop daily crons act once per location, at its slot', ()
   })
 
   it('a slot tick that crashes does not stamp', async () => {
-    noSourceLocationIds.mockRejectedValueOnce(new Error('boom'))
+    locationIdsWithoutCapability.mockRejectedValueOnce(new Error('boom'))
     vi.setSystemTime(Date.parse('2026-07-06T07:00:00Z'))
     await expect(ROUTES['churn-radar-digest'].GET(req())).rejects.toThrow('boom')
     expect(stampHeartbeat).not.toHaveBeenCalled()
@@ -171,5 +172,28 @@ describe('TZ.6 location-loop daily crons act once per location, at its slot', ()
     ])
     await ticks('ad-report-email', ['2026-12-31T07:00:00Z', '2027-01-01T04:00:00Z', '2026-12-31T12:00:00Z'])
     expect(buildAdReportEmail.mock.calls.map(([a]) => a.date)).toEqual(['2026-12-31', '2026-12-31'])
+  })
+})
+
+// UN1TCAP.1 — the briefing's pulse strip is membership numbers: a studio whose
+// source provides none (un1t.online today) gets the briefing without it.
+describe('morning-briefing — no pulse strip for a studio without membership data (UN1TCAP.1)', () => {
+  it('skips the pulse read for that studio and still sends its briefing', async () => {
+    locationIdsWithoutCapability.mockResolvedValue({ ids: new Set([DUB]), error: null })
+    expect(await ticks('morning-briefing', ['2026-07-06T06:00:00Z'])).toEqual([DUB])
+    expect(fetchStudioPulse.mock.calls.map(([, id]) => id)).not.toContain(DUB)
+    expect(buildMorningBriefingEmail).toHaveBeenCalled()
+    locationIdsWithoutCapability.mockResolvedValue({ ids: new Set(), error: null })
+  })
+
+  it('reads the pulse for a studio that has membership data', async () => {
+    expect(await ticks('morning-briefing', ['2026-07-06T06:00:00Z'])).toEqual([DUB])
+    expect(fetchStudioPulse.mock.calls.map(([, id]) => id)).toContain(DUB)
+  })
+
+  it('an unreadable capability list sends the briefing without any pulse strip', async () => {
+    locationIdsWithoutCapability.mockResolvedValueOnce({ ids: null, error: { message: 'down' } })
+    expect(await ticks('morning-briefing', ['2026-07-06T06:00:00Z'])).toEqual([DUB])
+    expect(fetchStudioPulse).not.toHaveBeenCalled()
   })
 })

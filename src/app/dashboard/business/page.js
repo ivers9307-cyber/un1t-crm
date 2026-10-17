@@ -22,7 +22,7 @@ import {
 } from '@/components/dashboard/BusinessBlocks'
 import { LabourBlock } from '@/components/dashboard/LabourBlock'
 import { canSeeLabour, labourStudiosFor } from '@/lib/labour-month-model'
-import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource, providesCapability } from '@/lib/membership/state-for-page'
 import MembershipSourceGate from '@/components/MembershipSourceGate'
 import { zoneOfLocation } from '@/lib/location-time'
 
@@ -51,7 +51,7 @@ async function KpiBriefingBlock({ user, locationId }) {
   if (!vm) return <BlockError label="Headline numbers" />
 
   const { revenue, arrearsData, memberCount, churnCount, churnDelta, briefing } = vm
-  if (membership.state !== 'configured') {
+  if (!providesCapability(membership, 'memberships')) { // UN1TCAP.1: configured is not enough
     return (
       <>
         <BriefingLine text={briefing} />
@@ -126,7 +126,7 @@ async function MembershipBlock({ user, locationId, zone }) {
   // today and rail blocks are source-independent and stay ungated. The
   // trend queries do not run for a studio that has nothing to count.
   const membership = await membershipStateForPage(db, locationId)
-  if (membership.state !== 'configured') {
+  if (!providesCapability(membership, 'memberships')) { // UN1TCAP.1: configured is not enough
     return (
       <MembershipSourceGate
         state={membership}

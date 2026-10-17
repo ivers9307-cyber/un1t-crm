@@ -85,6 +85,18 @@ describe('/dashboard/studio — per-column membership gate (W1.M3a)', () => {
     expect(kpis.fetchMrr).toHaveBeenCalledWith(expect.anything(), LOC)
   })
 
+  // UN1TCAP.1 — #2068 made Hatch Street CONFIGURED on un1t.online, whose provider
+  // supplies no membership data yet; the column gated on state alone and
+  // rendered a Glofox-shaped scorecard of zeros.
+  it('configured but the source provides no memberships (un1t.online): the "does not provide" gate, no KPI queries', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: false, bookings: false, credits: false, invoices: false, schedule: false } })
+    const [html] = await renderColumns()
+    expect(html).toContain('un1t.online does not provide membership data')
+    expect(html).not.toContain('MRR')
+    expect(kpis.fetchMrr).not.toHaveBeenCalled()
+    expect(kpis.fetchFloor).not.toHaveBeenCalled()
+  })
+
   it('unknown: the retry copy, never the none copy, no queries', async () => {
     membershipStateForPage.mockResolvedValue({ source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE', label: 'No membership source', capabilities: {} })
     const [html] = await renderColumns()

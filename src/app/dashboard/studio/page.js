@@ -37,7 +37,7 @@ import {
   ScoreCell, ScoreGrid, RoleSection, FloorTable, LocationEmptyState,
   NotTrackedYet, euros,
 } from '@/components/dashboard/StudioScorecard'
-import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource, providesCapability } from '@/lib/membership/state-for-page'
 import MembershipSourceGate from '@/components/MembershipSourceGate'
 
 export const dynamic = 'force-dynamic'
@@ -99,7 +99,7 @@ async function LocationColumn({ user, location }) {
   // runs (the board is per-studio: Stillorgan's column is unchanged while
   // Hatch Street's says why it is empty). The state read is cached 60 s.
   const membership = await membershipStateForPage(createServerClient(), location.id)
-  if (membership.state !== 'configured') {
+  if (!providesCapability(membership, 'memberships')) { // UN1TCAP.1: configured is not enough
     return (
       <MembershipSourceGate
         state={membership}

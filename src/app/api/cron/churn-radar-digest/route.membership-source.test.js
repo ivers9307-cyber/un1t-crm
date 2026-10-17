@@ -24,11 +24,12 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { sendEmail } from '@/lib/postmark'
 import { loadRadar } from '@/lib/churn-radar-data'
 import { fakeDb } from '@/lib/time-off.test-helpers'
-import { ESTATE_2026_10, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
+import { ESTATE_2026_10, ESTATE_2026_10_17, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
 
 const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } })
 // Every location has a digest recipient, so only the seam decides who is skipped.
 const ROWS = ESTATE_2026_10.map((r) => ({ ...r, churn_digest_recipients: ['ops@example.test'] }))
+const ROWS_UN1T = ESTATE_2026_10_17.map((r) => ({ ...r, churn_digest_recipients: ['ops@example.test'] }))
 const dbFor = (rows, opts) => { const loc = locationsResolver(rows, opts); return fakeDb((q) => (q.table === 'locations' ? loc(q) : { data: [], error: null })) }
 const visited = () => loadRadar.mock.calls.map(([, id]) => id)
 beforeEach(() => { process.env.CRON_SECRET = 'test-secret'; vi.clearAllMocks() })
@@ -36,6 +37,15 @@ beforeEach(() => { process.env.CRON_SECRET = 'test-secret'; vi.clearAllMocks() }
 describe('GET /api/cron/churn-radar-digest — skips locations with no membership source (W1.M3b)', () => {
   it('emails Stillorgan only, counts the five skips, stamps', async () => {
     h.db = dbFor(ROWS)
+    const out = await (await GET(req())).json()
+    expect(visited()).toEqual([STILLORGAN_ID])
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+    expect(out).toMatchObject({ success: true, emails_sent: 1, skipped_no_source: 5 })
+    expect(stampHeartbeat).toHaveBeenCalledWith('churn-radar-digest')
+  })
+
+  it('UN1TCAP.1 — Hatch on un1t.online (configured, no data) is still skipped: emails Stillorgan only, counts the five skips, stamps', async () => {
+    h.db = dbFor(ROWS_UN1T)
     const out = await (await GET(req())).json()
     expect(visited()).toEqual([STILLORGAN_ID])
     expect(sendEmail).toHaveBeenCalledTimes(1)

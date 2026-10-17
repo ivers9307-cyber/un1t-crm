@@ -24,7 +24,7 @@ import { getAppUrl } from '@/lib/app-url'
 import { loadRadar } from '@/lib/churn-radar-data'
 import { loadFunnel } from '@/lib/lead-radar-data'
 import { buildDigestEmail } from '@/lib/churn-radar-digest'
-import { noSourceLocationIds } from '@/lib/membership/locations-for-source'
+import { locationIdsWithoutCapability } from '@/lib/membership/locations-for-source'
 import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
@@ -63,7 +63,7 @@ export async function GET(request) {
   // W1.M3b — a location with NO membership source has no Glofox-shaped data
   // to read: skipped with a counted skipped_no_source. A failed seam read is a
   // 500 with no heartbeat, never "nobody to skip".
-  const { ids: noSource, error: srcErr } = await noSourceLocationIds(db)
+  const { ids: noSource, error: srcErr } = await locationIdsWithoutCapability(db, 'memberships') // UN1TCAP.1: a configured source can lack memberships (un1t.online)
   if (srcErr) {
     console.warn(`[cron][churn-radar-digest] failed to read membership sources: ${srcErr.message}`)
     return NextResponse.json({ success: false, error: srcErr.message }, { status: 500 })

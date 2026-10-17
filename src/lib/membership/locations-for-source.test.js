@@ -21,7 +21,7 @@ vi.mock('./sources/glofox', () => ({
 import { logWarn, logError } from '@/lib/log'
 import { fakeDb } from '@/lib/time-off.test-helpers'
 import { answerLocations, locationRow, FULL_GLOFOX_SLICE } from './locations-for-source.test-helpers'
-import { locationsWithSource, skippedSummary, noSourceLocationIds } from './locations-for-source'
+import { locationsWithSource, skippedSummary, noSourceLocationIds, locationIdsWithoutCapability } from './locations-for-source'
 
 const ROWS = [
   locationRow({ id: 'loc-a', name: 'Stillorgan', source: 'glofox', settings: FULL_GLOFOX_SLICE }),
@@ -105,6 +105,39 @@ describe('noSourceLocationIds (W1.M3b)', () => {
 
   it('a failed read is ids null with the error — never an empty set', async () => {
     const out = await noSourceLocationIds(dbOf(ROWS, { listError: { message: 'boom' } }))
+    expect(out).toEqual({ ids: null, error: { message: 'boom' } })
+  })
+})
+
+// UN1TCAP.1 — a CONFIGURED source can still lack a capability (un1t.online
+// provides no membership data yet), so the Glofox-shaped crons skip by
+// capability, not by 'none' alone.
+describe('locationIdsWithoutCapability (UN1TCAP.1)', () => {
+  const MIXED = [
+    ...ROWS,
+    locationRow({ id: 'loc-u1', name: 'Hatch on un1t', source: 'un1t_online' }),
+    locationRow({ id: 'loc-reserved', name: 'Reserved key', source: 'un1t' }),
+  ]
+
+  it('is every location whose source does not provide the capability: none, un1t_online (all false) and an unregistered key', async () => {
+    const out = await locationIdsWithoutCapability(dbOf(MIXED), 'memberships')
+    expect(out.error).toBeNull()
+    expect([...out.ids].sort()).toEqual(['loc-b', 'loc-reserved', 'loc-u1'])
+  })
+
+  it('never includes a Glofox location (Glofox provides every capability)', async () => {
+    for (const cap of ['memberships', 'bookings', 'credits', 'invoices', 'schedule']) {
+      const out = await locationIdsWithoutCapability(dbOf(MIXED), cap)
+      expect([...out.ids].some((id) => ['loc-a', 'loc-registry', 'loc-err', 'loc-missing'].includes(id))).toBe(false)
+    }
+  })
+
+  it('an unknown capability name is a programming error', async () => {
+    await expect(locationIdsWithoutCapability(dbOf(MIXED), 'bogus')).rejects.toThrow(TypeError)
+  })
+
+  it('a failed read is ids null with the error — never an empty set', async () => {
+    const out = await locationIdsWithoutCapability(dbOf(MIXED, { listError: { message: 'boom' } }), 'memberships')
     expect(out).toEqual({ ids: null, error: { message: 'boom' } })
   })
 })

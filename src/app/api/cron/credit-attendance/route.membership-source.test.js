@@ -17,7 +17,7 @@ import { GET } from './route.js'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { createParticipationSession } from '@/lib/live-class'
 import { fakeDb } from '@/lib/time-off.test-helpers'
-import { ESTATE_2026_10, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
+import { ESTATE_2026_10, ESTATE_2026_10_17, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
 
 const HATCH_ID = ESTATE_2026_10[1].id
 const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } })
@@ -37,6 +37,14 @@ beforeEach(() => { process.env.CRON_SECRET = 'test-secret'; vi.clearAllMocks() }
 describe('GET /api/cron/credit-attendance — skips bookings at locations with no membership source (W1.M3b)', () => {
   it('credits the Stillorgan booking, skips the Hatch one with a count, stamps', async () => {
     h.db = dbFor(ESTATE_2026_10)
+    const out = await (await GET(req())).json()
+    expect(createParticipationSession.mock.calls.map(([, a]) => a.locationId)).toEqual([STILLORGAN_ID])
+    expect(out).toMatchObject({ success: true, scanned: 2, credited: 1, skipped_no_source: 1 })
+    expect(stampHeartbeat).toHaveBeenCalledWith('credit-attendance')
+  })
+
+  it('UN1TCAP.1 — Hatch on un1t.online (configured, no data) is still skipped: credits the Stillorgan booking, skips the Hatch one with a count, stamps', async () => {
+    h.db = dbFor(ESTATE_2026_10_17)
     const out = await (await GET(req())).json()
     expect(createParticipationSession.mock.calls.map(([, a]) => a.locationId)).toEqual([STILLORGAN_ID])
     expect(out).toMatchObject({ success: true, scanned: 2, credited: 1, skipped_no_source: 1 })

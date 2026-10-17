@@ -11,7 +11,7 @@
 // A failed read is `{ error }` with every list null, never "no locations": the
 // caller must answer 500 and NOT stamp its heartbeat (a quiet tick that visited
 // nobody would read as healthy).
-import { listLocationsByMembershipSource, membershipSourceState } from './source'
+import { listLocationsByMembershipSource, membershipSourceState, MEMBERSHIP_SOURCES, MEMBERSHIP_SOURCE_KEYS } from './source'
 import { logWarn, logError } from '@/lib/log'
 
 // PostgREST `.in()` is a URL; keep each chunk short.
@@ -107,4 +107,32 @@ export async function noSourceLocationIds(db) {
   const { ids, error } = await listLocationsByMembershipSource(db, 'none')
   if (error) return { ids: null, error }
   return { ids: new Set(ids), error: null }
+}
+
+const CAPABILITY_KEYS = Object.freeze(['memberships', 'bookings', 'credits', 'invoices', 'schedule'])
+
+/**
+ * UN1TCAP.1 — the ids of every location whose membership source does NOT
+ * provide `capability`: 'none', a source whose provider has it false (un1t.online
+ * today), and a key the CHECK admits but no provider serves yet ('un1t'). A
+ * CONFIGURED source can still lack a capability, so a cron that reads
+ * Glofox-shaped data skips by capability, never by 'none' alone (#2068 made
+ * Hatch Street configured, and these crons then built zero-filled snapshots for
+ * it). Read from the static provider table (no per-location call, and no
+ * "unregistered key" warning every tick). A failed read is `{ ids: null, error }`.
+ *
+ * @param {object} db  service-role client
+ * @param {'memberships'|'bookings'|'credits'|'invoices'|'schedule'} capability
+ * @returns {Promise<{ ids: Set<string>|null, error: any }>}
+ */
+export async function locationIdsWithoutCapability(db, capability) {
+  if (!CAPABILITY_KEYS.includes(capability)) throw new TypeError(`locationIdsWithoutCapability: unknown capability '${capability}'`)
+  const keys = MEMBERSHIP_SOURCE_KEYS.filter((k) => MEMBERSHIP_SOURCES[k]?.capabilities?.[capability] !== true)
+  const out = new Set()
+  for (const key of keys) {
+    const { ids, error } = await listLocationsByMembershipSource(db, key)
+    if (error) return { ids: null, error }
+    for (const id of ids) out.add(id)
+  }
+  return { ids: out, error: null }
 }
