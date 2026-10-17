@@ -14,6 +14,7 @@ import { zoneOfLocation } from '@/lib/location-time'
 // prevents).
 import {
   StudioSettingsSchema,
+  STUDIO_ONLY_KEYS,
   buildCustomerAgentSettings,
   buildStudioOverrideBlob,
 } from '@/lib/agent/settings-contract'
@@ -34,6 +35,12 @@ import { mergeAgentSettings, resolveAgentSettingsForLocation } from '@/lib/agent
 // `inherited` (what each key would be with no studio override). PUT takes an
 // optional `overridden` list and then stores only those fields plus the
 // studio-only keys; a body without it saves the whole blob, exactly as before.
+
+// The org layer minus the keys a studio never inherits (null stays null).
+function withoutStudioOnlyKeys(org) {
+  if (!org) return null
+  return Object.fromEntries(Object.entries(org).filter(([k]) => !STUDIO_ONLY_KEYS.has(k)))
+}
 
 export async function GET() {
   const user = await getCurrentUser()
@@ -115,7 +122,10 @@ export async function GET() {
     success: true,
     settings,
     studio: resolved.studio,
-    org: resolved.org,
+    // The org layer as it applies to THIS studio: studio-only keys are never
+    // inherited, so they are not shown either (an org-level enabled:true
+    // would only mislead).
+    org: withoutStudioOnlyKeys(resolved.org),
     sources: resolved.sources,
     // What each key resolves to with NO studio override: the editor's "Use
     // organisation default" puts this value back in the field.
@@ -152,6 +162,10 @@ export async function PUT(request) {
   }
   const db = createServerClient()
 
+  // The raw body too: the override build keeps an object field only when the
+  // client SENT it (a schema default filled in by parsing is never stored).
+  // Unreadable JSON is validateBody's 400 below.
+  const sent = await request.clone().json().catch(() => null)
   const v = await validateBody(request, StudioSettingsSchema)
   if (!v.ok) return v.response
   // MIAORG.1 Task 3 — with `overridden`, store only the studio's own fields
@@ -159,7 +173,7 @@ export async function PUT(request) {
   // Without it (an editor tab opened before this shipped), the whole blob is
   // saved as before: it freezes values, it never wipes them.
   const { overridden, ...data } = v.data
-  const blob = overridden ? buildStudioOverrideBlob(data, overridden) : buildCustomerAgentSettings(data)
+  const blob = overridden ? buildStudioOverrideBlob(data, overridden, { sent }) : buildCustomerAgentSettings(data)
 
   // MIA-HYGIENE.1 — ONE writer of the blob, in the contract module (#495;
   // then effort / handoff_after_verify_failures); settings-contract.test.js

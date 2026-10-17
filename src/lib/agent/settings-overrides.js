@@ -183,8 +183,16 @@ export function valueAt(obj, path) {
 export function fieldSource(paths, { overridden = [], org = null } = {}) {
   if (paths.some((p) => STUDIO_ONLY_KEYS.has(p))) return 'studio'
   if (paths.some((p) => isOverridden(overridden, p))) return 'studio'
-  const orgHas = paths.some((p) => leafPaths(p).some((leaf) => isSet(valueAt(org, leaf))))
-  return orgHas ? 'org' : 'default'
+  return orgSetsAny(paths, org) ? 'org' : 'default'
+}
+
+/**
+ * Does the org layer hold a value for any of these paths? A whole object key
+ * counts only when one of its FIELDS is set (an org `quiet_hours` of all-null
+ * fields sets nothing).
+ */
+export function orgSetsAny(paths, org) {
+  return paths.some((p) => leafPaths(p).some((leaf) => isSet(valueAt(org, leaf))))
 }
 
 /** Staff-facing tag text for a source (T3-F). Null for 'studio'. */

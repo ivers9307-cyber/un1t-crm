@@ -407,6 +407,17 @@ describe('MIAORG.1 Task 3 — PUT with `overridden` saves overrides only', () =>
     expect(db.writes).toEqual([])
   })
 
+  it('an overridden follow-up number the editor cleared (left out of the body) is not stored as the schema default', async () => {
+    const { res, blob } = await save({ ...BODY, followups: { enabled: true, template_name: null }, overridden: ['followups.enabled', 'followups.daily_cap', 'followups.nudge_after_hours'] })
+    expect(res.status).toBe(200)
+    expect(blob.followups).toEqual({ enabled: true })
+  })
+
+  it('a cleared top-level number (null) is not stored with overridden; the legacy body still writes the code default', async () => {
+    expect((await save({ ...BODY, handoff_cooldown_hours: null, overridden: ['handoff_cooldown_hours'] })).blob).not.toHaveProperty('handoff_cooldown_hours')
+    expect((await save({ ...BODY, handoff_cooldown_hours: null })).blob.handoff_cooldown_hours).toBe(12)
+  })
+
   it('a body WITHOUT overridden saves the whole blob, as before (an old editor tab)', async () => {
     const { blob } = await save(BODY)
     expect(blob).toMatchObject({ tone: 'Org tone', extra_rules: 'Org rule', agent_name: 'Mia', handoff_cooldown_hours: 12 })
@@ -418,7 +429,8 @@ describe('MIAORG.1 Task 3 — PUT with `overridden` saves overrides only', () =>
 describe('MIAORG.1 Task 3 — GET returns the resolved settings and both raw layers', () => {
   const manager = { id: 'u', role: 'manager', activeLocation: { id: 'loc1' }, locations: [{ id: 'loc1' }] }
   const studioRow = (extra = {}) => ({ data: { name: 'Studio', settings: { customer_agent: { enabled: false, tone: 'Studio tone', followups: { enabled: true } } }, ...extra }, error: null })
-  const ORG = { tone: 'Org tone', extra_rules: 'Org rule', enabled: true, followups: { daily_cap: 80 } }
+  // An org layer that (wrongly) holds studio-only keys: they never reach a studio.
+  const ORG = { tone: 'Org tone', extra_rules: 'Org rule', enabled: true, test_mode: true, booking_url: 'https://org.example/book', followups: { daily_cap: 80 } }
 
   it('merges the org layer under the studio; studio-only keys never come from the org', async () => {
     getCurrentUser.mockResolvedValue(manager)
@@ -434,7 +446,9 @@ describe('MIAORG.1 Task 3 — GET returns the resolved settings and both raw lay
     expect(body.settings.enabled).toBe(false)
     expect(body.settings.followups).toMatchObject({ enabled: true, daily_cap: 80 })
     expect(body.studio).toEqual({ enabled: false, tone: 'Studio tone', followups: { enabled: true } })
-    expect(body.org).toEqual(ORG)
+    // the org layer as it applies here: studio-only keys stripped (enabled)
+    expect(body.org).toEqual({ tone: 'Org tone', extra_rules: 'Org rule', followups: { daily_cap: 80 } })
+    expect(body.org).not.toHaveProperty('enabled')
     expect(body.sources).toMatchObject({ tone: 'studio', extra_rules: 'org', enabled: 'studio', agent_name: 'default' })
     // "Use organisation default" restores this
     expect(body.inherited.tone).toBe('Org tone')

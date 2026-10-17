@@ -378,6 +378,60 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     expect(screen.getByPlaceholderText('e.g. Warm, upbeat, brief. Use first names. No emojis.').value).toBe('Org tone')
   })
 
+  it('"Use organisation default" on quiet hours clears start, end and tz together', async () => {
+    const studio = { enabled: true, quiet_hours: { start: '21:00', end: '07:00', tz: 'America/New_York' } }
+    mockFetch([answer({ studio, org: null })])
+    const { container } = render(<CustomerAgentClient canEdit />)
+    await ready()
+    const [start, end] = container.querySelectorAll('input[type="time"]')
+    expect(start.value).toBe('21:00')
+    expect(screen.getByText('America/New_York — agent stays quiet, a human replies.')).toBeTruthy()
+    fireEvent.click(within(labelRow('Quiet hours (optional)')).getByRole('button', { name: 'Use default' }))
+    expect(start.value).toBe('')
+    expect(end.value).toBe('')
+    expect(within(labelRow('Quiet hours (optional)')).getByText('Default')).toBeTruthy()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toEqual([])
+    expect(putBody().quiet_hours).toBe(null)
+  })
+
+  it('quiet hours revert to the org\'s pair, and the tag needs a set org FIELD, not just the key', async () => {
+    const studio = { enabled: true, quiet_hours: { start: '21:00', end: '07:00', tz: 'America/New_York' } }
+    mockFetch([answer({ studio, org: { quiet_hours: { start: '22:00', end: '06:00', tz: null } } })])
+    const { container } = render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.click(within(labelRow('Quiet hours (optional)')).getByRole('button', { name: 'Use organisation default' }))
+    const [start, end] = container.querySelectorAll('input[type="time"]')
+    expect([start.value, end.value]).toEqual(['22:00', '06:00'])
+    expect(within(labelRow('Quiet hours (optional)')).getByText('Organisation default')).toBeTruthy()
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden.filter(p => p.startsWith('quiet_hours'))).toEqual([])
+  })
+
+  it('an org quiet_hours object with no field set does not count as an org value', async () => {
+    const studio = { enabled: true, quiet_hours: { start: '21:00', end: '07:00' } }
+    mockFetch([answer({ studio, org: { quiet_hours: { start: null, end: null, tz: null } } })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(labelRow('Quiet hours (optional)')).getByRole('button', { name: 'Use default' })).toBeTruthy()
+  })
+
+  it('a cleared follow-up cap shows the inherited value as its placeholder and is left out of the PUT', async () => {
+    mockFetch([answer()])
+    const { container } = render(<CustomerAgentClient canEdit />)
+    await ready()
+    const caps = [...container.querySelectorAll('input[type="number"][max="500"]')]
+    expect(caps).toHaveLength(1)
+    fireEvent.change(caps[0], { target: { value: '' } })
+    expect(caps[0].value).toBe('')
+    expect(caps[0].placeholder).toBe('80')
+    save()
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().followups).not.toHaveProperty('daily_cap')
+  })
+
   it('a read-only viewer sees the tags but no way back', async () => {
     mockFetch([answer()])
     render(<CustomerAgentClient canEdit={false} />)

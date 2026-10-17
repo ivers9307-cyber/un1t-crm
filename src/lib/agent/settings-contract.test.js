@@ -303,6 +303,16 @@ describe('buildStudioOverrideBlob (MIAORG.1 Task 3)', () => {
     expect(resaved.followups).toEqual({ enabled: true, nudge_after_hours: 4, template_name: 'nudge_v2', daily_cap: 40 })
   })
 
+  it('an object field the client did not SEND is never stored, even with the schema default parsed in', () => {
+    const sent = { enabled: true, followups: { enabled: true } }
+    const data = parse(sent)
+    expect(data.followups.daily_cap).toBe(50)
+    expect(buildStudioOverrideBlob(data, ['followups'], { sent }).followups).toEqual({ enabled: true })
+    expect(buildStudioOverrideBlob(data, ['followups.daily_cap'], { sent })).not.toHaveProperty('followups')
+    // no body at all reaching the builder: nothing object-shaped is stored
+    expect(buildStudioOverrideBlob(data, ['followups'], { sent: null })).not.toHaveProperty('followups')
+  })
+
   it('without overridden the route still builds the whole blob (buildCustomerAgentSettings, unchanged)', () => {
     const data = parse({ enabled: true, tone: 'x' })
     expect(Object.keys(buildCustomerAgentSettings(data)).length).toBeGreaterThan(30)

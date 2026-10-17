@@ -350,11 +350,19 @@ export const StudioSettingsSchema = SettingsSchema.extend({
  *   beat the org's values). mergeAgentSettings overlays a partial studio
  *   object field by field, so the missing fields keep inheriting.
  *
+ * * An object field counts only when the client actually SENT a value for
+ *   it (`sent`, the raw JSON body). The schema refuses null for the numeric
+ *   fields (nudge_after_hours, daily_cap, delay_hours), so the editor omits a
+ *   cleared one, and parsing then fills in the schema default. Without this
+ *   check that default would be stored as the studio's override. The full
+ *   (legacy) build is unaffected: it still gets the schema default, as today.
+ *
  * @param {object} data  StudioSettingsSchema-parsed body
  * @param {string[]} overridden  validated override paths
+ * @param {{ sent?: object }} [opts]  the raw request body; defaults to `data`
  * @returns {object} the customer_agent blob
  */
-export function buildStudioOverrideBlob(data = {}, overridden = []) {
+export function buildStudioOverrideBlob(data = {}, overridden = [], { sent = data } = {}) {
   const { scalars, fields } = expandOverridden(overridden)
   const only = new Set()
   for (const k of STUDIO_ONLY_KEYS) if (k in data) only.add(k)
@@ -367,9 +375,11 @@ export function buildStudioOverrideBlob(data = {}, overridden = []) {
   for (const key of INHERITABLE_OBJECT_KEYS) {
     const wanted = fields.get(key)
     const given = data[key]
-    if (!wanted || !given || typeof given !== 'object') continue
+    const raw = sent && typeof sent === 'object' ? sent[key] : undefined
+    if (!wanted || !given || typeof given !== 'object' || !raw || typeof raw !== 'object') continue
     const part = {}
     for (const f of wanted) {
+      if (raw[f] === null || raw[f] === undefined) continue // not sent: never a schema default
       const v = given[f]
       if (v === null || v === undefined || (typeof v === 'string' && !v.trim())) continue
       part[f] = typeof v === 'string' ? v.trim() : v

@@ -12,8 +12,9 @@ import { Button } from '@/components/ui'
 // MIAORG.1 Task 3 — which fields this studio sets itself (zod-free, shared
 // with the PUT's contract).
 import {
-  initialOverridden, withOverride, withoutOverride, valueAt, fieldSource, sourceTagLabel,
+  initialOverridden, withOverride, withoutOverride, valueAt, fieldSource, sourceTagLabel, orgSetsAny,
 } from '@/lib/agent/settings-overrides'
+import { buildSavePayload } from './save-payload'
 
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
 // Instagram agent. Manager+ only. Two parts: behaviour settings + the
@@ -29,26 +30,6 @@ const CATEGORIES = ['sales', 'account', 'pause', 'cancellation', 'hours', 'gener
 const CF_DEFAULTS = CANCELLATION_FORM_DEFAULTS
 const CF_REASON_CODES = REASON_CODES
 
-// Echo the whole block back exactly as edited: strings as typed (the contract
-// trims/nulls blanks), numbers as numbers, the toggle as a boolean, reason
-// labels per code. Null when the operator has never touched it.
-function buildCancellationFormPayload(cf) {
-  if (!cf || typeof cf !== 'object') return null
-  const out = {}
-  for (const [k, v] of Object.entries(cf)) {
-    if (k === 'reason_labels') {
-      out.reason_labels = Object.fromEntries(Object.entries(v || {}).filter(([, l]) => typeof l === 'string'))
-    } else if (k === 'pause_offer_enabled') {
-      out[k] = v !== false
-    } else if (k === 'pause_max_weeks' || k === 'notice_days') {
-      out[k] = v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v)
-    } else {
-      out[k] = typeof v === 'string' ? v : (v ?? null)
-    }
-  }
-  return out
-}
-
 // MIAORG.1 Task 3 — a field label with its source tag ("Organisation
 // default" / "Default", or the "Use organisation default" link) beside it.
 function FieldLabel({ tag, children }) {
@@ -58,13 +39,6 @@ function FieldLabel({ tag, children }) {
       {tag}
     </div>
   )
-}
-
-// Drop the unset fields of an object (the schema refuses a null limit).
-function compactObject(o) {
-  if (!o || typeof o !== 'object') return null
-  const out = Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined))
-  return Object.keys(out).length ? out : null
 }
 
 // MIAROLE.1 (C80) — `canEdit` comes from the server page (canEditMiaSettings:
@@ -171,12 +145,16 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
     })
   }
 
+  // A cleared number field shows what it then inherits, as its placeholder.
+  const inheritedNumber = (path, fallback) => String(valueAt(inherited, path) ?? fallback)
+
   // The tag beside an inheritable field's label (staff copy, T3-F).
   function sourceTag(paths) {
     const source = fieldSource(paths, { overridden, org })
     if (source === 'studio') {
       if (!canEdit) return null
-      const orgHas = paths.some(p => valueAt(org, p) != null)
+      // a whole object key (quiet_hours) counts only on a set FIELD
+      const orgHas = orgSetsAny(paths, org)
       return (
         <Button variant="ghost" size="sm" className="h-6 px-2 text-xs underline" onClick={() => revertToInherited(paths)}>
           {orgHas ? 'Use organisation default' : 'Use default'}
@@ -218,72 +196,9 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
   async function saveSettings() {
     setSaving(true); setError(null)
     try {
-      const payload = {
-        // MIAORG.1 Task 3 — only these (plus the studio-only keys) are stored.
-        overridden,
-        enabled: !!settings.enabled,
-        test_mode: !!settings.test_mode,
-        test_phones: (settings.test_phones || []),
-        tone: settings.tone || null,
-        extra_rules: settings.extra_rules || null,
-        holding_message: settings.holding_message || null,
-        booking_confirmation_text: settings.booking_confirmation_text || null,
-        cancellation_confirmation_text: settings.cancellation_confirmation_text || null,
-        event_move_confirmation_text: settings.event_move_confirmation_text || null,
-        event_move_failed_text: settings.event_move_failed_text || null,
-        booking_issue_handoff_text: settings.booking_issue_handoff_text || null,
-        no_credits_handoff_text: settings.no_credits_handoff_text || null,
-        account_conflict_handoff_text: settings.account_conflict_handoff_text || null,
-        approval_decline_text: settings.approval_decline_text || null,
-        welcome_greeting: settings.welcome_greeting || null,
-        link_button_text: (settings.link_button_text || '').trim() || null,
-        quiet_hours: settings.quiet_hours?.start && settings.quiet_hours?.end
-          // TZ.5 — no zone is written when none was stored: null means the
-          // studio's own zone (locations.timezone), read at decision time.
-          ? { start: settings.quiet_hours.start, end: settings.quiet_hours.end, tz: settings.quiet_hours.tz || null }
-          : null,
-        booking_mode: settings.booking_mode === 'draft' ? 'draft' : 'auto',
-        agent_name: (settings.agent_name || '').trim() || null,
-        membership_signup_url: (settings.membership_signup_url || '').trim() || null,
-        membership_cta_label: (settings.membership_cta_label || '').trim() || null,
-        handoff_cooldown_hours: settings.handoff_cooldown_hours ?? 12,
-        // MIA-BOARD.1 — handoff auto-resolve windows (0 disables a case).
-        auto_resolve_after_reply_hours: settings.auto_resolve_after_reply_hours ?? 8,
-        auto_resolve_stale_hours: settings.auto_resolve_stale_hours ?? 48,
-        // MIA-HYGIENE.1 — both were read live by the agent but had no editor,
-        // so they sat permanently on their code defaults. Null = "use default".
-        effort: settings.effort || null,
-        handoff_after_verify_failures: settings.handoff_after_verify_failures ?? null,
-        consultation_event_type_id: settings.consultation_event_type_id || null,
-        monthly_points_target: settings.monthly_points_target ?? null,
-        // MIAORG.1 — no editor here yet; echoed so a Save never erases them
-        // (handoff_sla_minutes used to be dropped by every save).
-        limits: compactObject(settings.limits),
-        handoff_sla_minutes: settings.handoff_sla_minutes ?? null,
-        booking_url: settings.booking_url || null,
-        booking_cta_label: settings.booking_cta_label || null,
-        social_enabled: !!settings.social_enabled,
-        // CANCEL-FORM.2 — the toggle is a locations COLUMN (sibling, like
-        // social_enabled); the block MUST be echoed whole, because the PUT
-        // rebuilds the customer_agent blob and an omitted key resets it.
-        glofox_auto_cancel: !!settings.glofox_auto_cancel,
-        cancellation_form: buildCancellationFormPayload(settings.cancellation_form),
-        followups: {
-          enabled: !!settings.followups?.enabled,
-          nudge_after_hours: Number(settings.followups?.nudge_after_hours) || 3,
-          template_name: settings.followups?.template_name || null,
-          daily_cap: Number(settings.followups?.daily_cap) || 50,
-        },
-        first_class_checkin: {
-          enabled: !!settings.first_class_checkin?.enabled,
-          delay_hours: Number(settings.first_class_checkin?.delay_hours) || 2,
-          template_name: settings.first_class_checkin?.template_name || null,
-          daily_cap: Number(settings.first_class_checkin?.daily_cap) || 20,
-        },
-        inline_suggestion: {
-          enabled: settings.inline_suggestion?.enabled !== false,
-        },
-      }
+      // MIAORG.1 Task 3 — pure (./save-payload.js), so the Stillorgan round
+      // trip test runs this exact body.
+      const payload = buildSavePayload(settings, overridden)
       const res = await fetch('/api/settings/customer-agent', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       })
@@ -503,7 +418,8 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
         <div>
           <FieldLabel tag={sourceTag(['handoff_cooldown_hours'])}>Hand back to the agent after (hours)</FieldLabel>
           <input type="number" min={0} max={168} className={inputCls}
-            value={settings.handoff_cooldown_hours ?? 12}
+            value={settings.handoff_cooldown_hours ?? ''}
+            placeholder={inheritedNumber('handoff_cooldown_hours', 12)}
             onChange={e => setField('handoff_cooldown_hours', e.target.value === '' ? null : Number(e.target.value))} />
           <p className="text-xs text-un1t-subtle mt-1">
             After the agent hands a conversation to a human, it stays out of that thread until a staff member
@@ -519,7 +435,8 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
           <div>
             <FieldLabel tag={sourceTag(['auto_resolve_after_reply_hours'])}>Auto-resolve after a reply + quiet (hours)</FieldLabel>
             <input type="number" min={0} max={720} className={inputCls}
-              value={settings.auto_resolve_after_reply_hours ?? 8}
+              value={settings.auto_resolve_after_reply_hours ?? ''}
+              placeholder={inheritedNumber('auto_resolve_after_reply_hours', 8)}
               onChange={e => setField('auto_resolve_after_reply_hours', e.target.value === '' ? null : Number(e.target.value))} />
             <p className="text-xs text-un1t-subtle mt-1">
               Once a team member has replied to a handed-off conversation and it then goes quiet for this long,
@@ -529,7 +446,8 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
           <div>
             <FieldLabel tag={sourceTag(['auto_resolve_stale_hours'])}>Auto-resolve when fully stale (hours)</FieldLabel>
             <input type="number" min={0} max={720} className={inputCls}
-              value={settings.auto_resolve_stale_hours ?? 48}
+              value={settings.auto_resolve_stale_hours ?? ''}
+              placeholder={inheritedNumber('auto_resolve_stale_hours', 48)}
               onChange={e => setField('auto_resolve_stale_hours', e.target.value === '' ? null : Number(e.target.value))} />
             <p className="text-xs text-un1t-subtle mt-1">
               If nothing at all happens in a handed-off conversation for this long, it resolves on its own so
@@ -1008,8 +926,9 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
           <div>
             <FieldLabel tag={sourceTag(['followups.nudge_after_hours'])}>Nudge after (hours)</FieldLabel>
             <input type="number" min={1} max={18} className={inputCls}
-              value={settings.followups?.nudge_after_hours ?? 3}
-              onChange={e => setFollowup('nudge_after_hours', e.target.value === '' ? 3 : Number(e.target.value))} />
+              value={settings.followups?.nudge_after_hours ?? ''}
+              placeholder={inheritedNumber('followups.nudge_after_hours', 3)}
+              onChange={e => setFollowup('nudge_after_hours', e.target.value === '' ? null : Number(e.target.value))} />
             <p className="text-xs text-un1t-subtle mt-1">How long they&apos;re quiet before the in-window nudge (sent up to 20h after, daytime only).</p>
           </div>
           <div>
@@ -1030,8 +949,9 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
           <div>
             <FieldLabel tag={sourceTag(['followups.daily_cap'])}>Daily cap (per studio)</FieldLabel>
             <input type="number" min={1} max={500} className={inputCls}
-              value={settings.followups?.daily_cap ?? 50}
-              onChange={e => setFollowup('daily_cap', e.target.value === '' ? 50 : Number(e.target.value))} />
+              value={settings.followups?.daily_cap ?? ''}
+              placeholder={inheritedNumber('followups.daily_cap', 50)}
+              onChange={e => setFollowup('daily_cap', e.target.value === '' ? null : Number(e.target.value))} />
             <p className="text-xs text-un1t-subtle mt-1">Hard ceiling on proactive sends per day.</p>
           </div>
         </div>
@@ -1095,8 +1015,9 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
           <div>
             <FieldLabel tag={sourceTag(['first_class_checkin.delay_hours'])}>Send after (hours)</FieldLabel>
             <input type="number" min={1} max={24} className={inputCls}
-              value={settings.first_class_checkin?.delay_hours ?? 2}
-              onChange={e => setCheckin('delay_hours', e.target.value === '' ? 2 : Number(e.target.value))} />
+              value={settings.first_class_checkin?.delay_hours ?? ''}
+              placeholder={inheritedNumber('first_class_checkin.delay_hours', 2)}
+              onChange={e => setCheckin('delay_hours', e.target.value === '' ? null : Number(e.target.value))} />
             <p className="text-xs text-un1t-subtle mt-1">Hours after the class before the check-in (daytime only; evening classes roll to next morning).</p>
           </div>
           <div>
@@ -1117,8 +1038,9 @@ export default function CustomerAgentClient({ canEdit = false } = {}) {
           <div>
             <FieldLabel tag={sourceTag(['first_class_checkin.daily_cap'])}>Daily cap (per studio)</FieldLabel>
             <input type="number" min={1} max={200} className={inputCls}
-              value={settings.first_class_checkin?.daily_cap ?? 20}
-              onChange={e => setCheckin('daily_cap', e.target.value === '' ? 20 : Number(e.target.value))} />
+              value={settings.first_class_checkin?.daily_cap ?? ''}
+              placeholder={inheritedNumber('first_class_checkin.daily_cap', 20)}
+              onChange={e => setCheckin('daily_cap', e.target.value === '' ? null : Number(e.target.value))} />
             <p className="text-xs text-un1t-subtle mt-1">Each contact only ever gets one check-in.</p>
           </div>
         </div>

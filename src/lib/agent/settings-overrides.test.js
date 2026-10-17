@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   isKnownOverridePath, expandOverridden, initialOverridden, isOverridden,
-  withOverride, withoutOverride, valueAt, fieldSource, sourceTagLabel,
+  withOverride, withoutOverride, valueAt, fieldSource, sourceTagLabel, orgSetsAny,
 } from './settings-overrides'
 
 describe('isKnownOverridePath', () => {
@@ -100,6 +100,12 @@ describe('fieldSource + sourceTagLabel (T3-F)', () => {
   })
   it('a studio-only key is always the studio\'s own', () => {
     expect(fieldSource(['enabled'], { overridden: [], org: { enabled: true } })).toBe('studio')
+  })
+  it('orgSetsAny: a whole object key counts only on a set field', () => {
+    expect(orgSetsAny(['quiet_hours'], { quiet_hours: { start: null, end: null, tz: null } })).toBe(false)
+    expect(orgSetsAny(['quiet_hours'], { quiet_hours: { start: '22:00' } })).toBe(true)
+    expect(fieldSource(['quiet_hours'], { overridden: [], org: { quiet_hours: { start: null } } })).toBe('default')
+    expect(orgSetsAny(['tone'], null)).toBe(false)
   })
   it('valueAt reads top-level and dotted paths', () => {
     expect(valueAt(org, 'tone')).toBe('Org tone')
