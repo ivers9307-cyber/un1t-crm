@@ -1,5 +1,5 @@
 import { logError, logWarn } from '@/lib/log'
-import { DEFAULTS, STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS } from './settings-contract'
+import { DEFAULTS, STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS, OrgSettingsSchema } from './settings-contract'
 
 // MIAORG.1 — the ONE place Mia's effective settings for a studio are decided:
 //
@@ -7,7 +7,8 @@ import { DEFAULTS, STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS } from './settings-
 //
 // * The org layer never supplies a STUDIO_ONLY_KEYS key (enabled, test_mode,
 //   test_phones, booking_mode, consultation_event_type_id, cancellation_form,
-//   booking_url / booking_cta_label, membership_signup_url / membership_cta_label):
+//   booking_url / booking_cta_label, membership_signup_url / membership_cta_label,
+//   monthly_points_target):
 //   an org-level `enabled: true` must never switch a studio on.
 // * `null` / `undefined` at the studio means "not set here", so the org value
 //   (then the default) shows through. A set value, including 0 / false / [],
@@ -153,8 +154,9 @@ export async function resolveAgentSettings(db, locationId, { orgCache } = {}) {
   return resolveAgentSettingsForLocation(db, { ...location, id: location.id ?? locationId, organization_id: location.organization_id ?? null }, { orgCache })
 }
 
-// The org layer for one organisation, or null (no row, NULL column, or a
-// failed read, which is logged: the studio then resolves without it).
+// The org layer for one organisation, or null (no row, NULL column, a failed
+// read, or a layer OrgSettingsSchema refuses; the last two are logged, and the
+// studio then resolves without it).
 async function readOrgLayer(db, organizationId, locationId) {
   try {
     const { data, error } = await db.from('org_settings')
@@ -165,7 +167,25 @@ async function readOrgLayer(db, organizationId, locationId) {
       logError('agent-settings', 'org settings read failed; resolving without the org layer', { locationId, organizationId, err: error })
       return null
     }
-    return isPlainObject(data?.customer_agent) ? data.customer_agent : null
+    const layer = isPlainObject(data?.customer_agent) ? data.customer_agent : null
+    if (!layer) return null
+    // MIAORG.1 final review — defence in depth behind mig 728's write fence: a
+    // layer the org editor itself would refuse (written by hand, or before the
+    // fence) never reaches a studio's turn. A bad org row must never break or
+    // weaken a studio, so an invalid layer is logged and treated as no layer
+    // (the studio resolves on its own blob over DEFAULTS). Validation only:
+    // the RAW layer is used when it passes, never the parsed copy, whose
+    // schema defaults (followups.enabled false, daily_cap 50, ...) would fill
+    // fields the organisation never set.
+    const check = OrgSettingsSchema.safeParse(layer)
+    if (!check.success) {
+      logError('agent-settings', 'org settings layer is invalid; resolving without the org layer', {
+        locationId, organizationId,
+        issues: check.error.issues.slice(0, 10).map((i) => ({ path: i.path.join('.'), message: i.message })),
+      })
+      return null
+    }
+    return layer
   } catch (err) {
     logError('agent-settings', 'org settings read threw; resolving without the org layer', { locationId, organizationId, err })
     return null

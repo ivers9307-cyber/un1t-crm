@@ -9,7 +9,7 @@ import { StudioSettingsSchema, buildStudioOverrideBlob, buildCustomerAgentSettin
 import { mergeAgentSettings } from '@/lib/agent/settings-resolve'
 import { initialOverridden } from '@/lib/agent/settings-overrides'
 import { STILLORGAN_BLOB } from '@/lib/agent/settings-fixtures.test-helpers'
-import { buildSavePayload, numberOrNull, compactObject } from './save-payload'
+import { buildSavePayload, numberOrNull, compactObject, bookingLinkErrors, bookingIssuesFromResponse } from './save-payload'
 
 // What GET hands the editor (the resolved settings + the two siblings).
 const shownFor = (studio, org = null) => ({
@@ -151,5 +151,57 @@ describe('buildOrgSavePayload (the org editor body)', () => {
     expect(orgSettingsRefusals(body.settings, body.overridden)).toEqual([])
     const parsed = OrgSettingsSchema.parse(body.settings)
     expect(buildOrgLayer(parsed, body.overridden, { sent: body.settings })).toEqual(layer)
+  })
+})
+
+// MIAORG.1 final review — the Booking link fields (studio-only, always saved).
+describe('booking link: editor state -> PUT body -> stored blob', () => {
+  const HATCH = { enabled: false, test_mode: true, test_phones: ['+353870000000'] }
+
+  it('an edited link and label are stored, trimmed, whatever `overridden` says', () => {
+    const shown = { ...shownFor(HATCH), booking_url: ' https://book.example.test/hatch ', booking_cta_label: ' Book now ' }
+    const { blob } = saveThroughPut(shown, [])
+    expect(blob.booking_url).toBe('https://book.example.test/hatch')
+    expect(blob.booking_cta_label).toBe('Book now')
+    expect(mergeAgentSettings({ org: { booking_url: 'https://org.example.test' }, studio: blob }).settings.booking_url).toBe('https://book.example.test/hatch')
+  })
+
+  it('a blank link (or label) saves null', () => {
+    const shown = { ...shownFor({ ...HATCH, booking_url: 'https://old.example.test', booking_cta_label: 'Go' }), booking_url: '  ', booking_cta_label: '' }
+    const { blob } = saveThroughPut(shown, [])
+    expect(blob.booking_url).toBe(null)
+    expect(blob.booking_cta_label).toBe(null)
+  })
+
+  it('a non-http(s) link or a 21-character label is refused by the PUT schema', () => {
+    for (const bad of [{ booking_url: 'javascript:alert(1)' }, { booking_url: 'ftp://x.example.test' }, { booking_cta_label: 'x'.repeat(21) }]) {
+      const sent = JSON.parse(JSON.stringify(buildSavePayload({ ...shownFor(HATCH), ...bad }, [])))
+      expect(StudioSettingsSchema.safeParse(sent).success, JSON.stringify(bad)).toBe(false)
+    }
+  })
+
+  it('bookingLinkErrors agrees with the PUT schema on the cases the editor checks', () => {
+    for (const [settings, ok] of [
+      [{}, true], [{ booking_url: '' }, true], [{ booking_url: 'https://a.example.test/x' }, true], [{ booking_url: 'http://a.example.test' }, true],
+      [{ booking_url: 'javascript:alert(1)' }, false], [{ booking_url: 'ftp://a.example.test' }, false], [{ booking_url: 'book.example.test' }, false],
+      [{ booking_url: 'https://' + 'a'.repeat(500) + '.test' }, false],
+      [{ booking_cta_label: 'Book a class' }, true], [{ booking_cta_label: 'x'.repeat(20) }, true], [{ booking_cta_label: 'x'.repeat(21) }, false],
+    ]) {
+      const sent = JSON.parse(JSON.stringify(buildSavePayload({ ...shownFor(HATCH), ...settings }, [])))
+      expect(Object.keys(bookingLinkErrors(settings)).length === 0, JSON.stringify(settings)).toBe(ok)
+      expect(StudioSettingsSchema.safeParse(sent).success, JSON.stringify(settings)).toBe(ok)
+    }
+  })
+
+  it('bookingIssuesFromResponse maps the two fields and ignores the rest', () => {
+    expect(bookingIssuesFromResponse([{ path: 'booking_url', message: 'Invalid input' }, { path: 'booking_cta_label', message: 'Too long' }, { path: 'tone', message: 'x' }]))
+      .toEqual({ booking_url: 'Enter a full link starting with https:// (or http://).', booking_cta_label: 'Too long' })
+    expect(bookingIssuesFromResponse(undefined)).toEqual({})
+  })
+
+  it('Stillorgan (no link stored) still saves no link', () => {
+    const { blob } = saveThroughPut(shownFor(STILLORGAN_BLOB), initialOverridden(STILLORGAN_BLOB))
+    expect(blob.booking_url ?? null).toBe(STILLORGAN_BLOB.booking_url ?? null)
+    expect(blob.monthly_points_target).toBe(STILLORGAN_BLOB.monthly_points_target)
   })
 })

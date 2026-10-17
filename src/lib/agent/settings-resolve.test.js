@@ -246,6 +246,44 @@ describe('resolveAgentSettings', () => {
     expect(logError).toHaveBeenCalledTimes(1)
   })
 
+  // MIAORG.1 final review — defence in depth behind mig 728's write fence.
+  it('an INVALID org layer (one the org editor would refuse) is logged and treated as no org layer', async () => {
+    const studio = { enabled: true, tone: 'Studio' }
+    for (const bad of [
+      { handoff_after_verify_failures: 0, tone: 'Org' }, // would switch off the verify-fail net
+      { effort: 'turbo' },
+      { limits: { max_replies_per_location_per_day: -5 } },
+      { quiet_hours: { start: '22:00' } }, // half a window
+      { tone: 42 },
+    ]) {
+      vi.clearAllMocks()
+      const db = fakeDb({ locations: { data: locRow({ customer_agent: studio }), error: null }, orgSettings: { data: { customer_agent: bad }, error: null } })
+      const r = await resolveAgentSettings(db, LOC)
+      expect(r.ok).toBe(true)
+      expect(r.org).toBe(null)
+      expect(r.settings).toEqual({ ...DEFAULTS, ...studio })
+      expect(r.settings.handoff_after_verify_failures).toBe(null) // core.js's default (2) applies, never 0
+      expect(logError).toHaveBeenCalledTimes(1)
+      expect(logError.mock.calls[0][0]).toBe('agent-settings')
+      expect(logError.mock.calls[0][1]).toMatch(/invalid/)
+      expect(logError.mock.calls[0][2]).toMatchObject({ locationId: LOC, organizationId: ORG })
+      expect(logError.mock.calls[0][2].issues.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('a VALID org layer is used RAW: no schema default fills a field the organisation never set', async () => {
+    const db = fakeDb({
+      locations: { data: locRow({ customer_agent: { enabled: true } }), error: null },
+      orgSettings: { data: { customer_agent: { followups: { template_name: 'nudge_v2' }, enabled: true } }, error: null },
+    })
+    const r = await resolveAgentSettings(db, LOC)
+    expect(r.org).toEqual({ followups: { template_name: 'nudge_v2' }, enabled: true })
+    // DEFAULTS' followups under the org's one field; nothing the parse would add
+    expect(r.settings.followups).toEqual({ ...DEFAULTS.followups, template_name: 'nudge_v2' })
+    expect(r.settings.enabled).toBe(true) // the studio's own, never the org's
+    expect(logError).not.toHaveBeenCalled()
+  })
+
   it('studio read error -> { ok:false, reason:"read_failed" } and the org is not even read', async () => {
     const db = fakeDb({ locations: { data: null, error: { message: 'down' } }, orgSettings: { data: { customer_agent: { tone: 'x' } }, error: null } })
     expect(await resolveAgentSettings(db, LOC)).toEqual({ ok: false, reason: 'read_failed' })

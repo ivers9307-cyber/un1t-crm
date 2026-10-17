@@ -103,8 +103,11 @@ export function buildSavePayload(settings, overridden) {
     // (handoff_sla_minutes used to be dropped by every save).
     limits: compactObject(settings.limits),
     handoff_sla_minutes: numberOrNull(settings.handoff_sla_minutes),
-    booking_url: settings.booking_url || null,
-    booking_cta_label: settings.booking_cta_label || null,
+    // MIAORG.1 — studio-only, always saved (the studio editor's Booking link
+    // fields). A blank link or label is null: Mia then hands bookings to the
+    // team / uses the default button text.
+    booking_url: (settings.booking_url || '').trim() || null,
+    booking_cta_label: (settings.booking_cta_label || '').trim() || null,
     social_enabled: !!settings.social_enabled,
     // CANCEL-FORM.2 — the toggle is a locations COLUMN (sibling, like
     // social_enabled); the block MUST be echoed whole, because the PUT
@@ -135,7 +138,7 @@ export function buildSavePayload(settings, overridden) {
 // listed here so this client file stays zod-free.
 export const ORG_PAYLOAD_DROPPED_KEYS = Object.freeze([
   'enabled', 'test_mode', 'test_phones', 'consultation_event_type_id', 'booking_mode', 'cancellation_form',
-  'booking_url', 'booking_cta_label', 'membership_signup_url', 'membership_cta_label',
+  'booking_url', 'booking_cta_label', 'membership_signup_url', 'membership_cta_label', 'monthly_points_target',
   'social_enabled', 'glofox_auto_cancel',
 ])
 
@@ -158,4 +161,38 @@ export function buildOrgSavePayload(values, set, organizationId) {
     settings: full,
     overridden: (set || []).filter((p) => p !== 'quiet_hours.off' && p !== 'quiet_hours.tz'),
   }
+}
+
+// MIAORG.1 final review — the studio editor's Booking link fields, checked as
+// the PUT checks them (SettingsSchema: booking_url an http(s) URL of at most
+// 500 characters, booking_cta_label at most 20, Meta's button text limit), so
+// the operator sees what is wrong beside the field before saving. Blank is
+// fine (null: no link). Staff copy.
+export const BOOKING_CTA_LABEL_MAX = 20
+export const BOOKING_URL_ERROR = 'Enter a full link starting with https:// (or http://).'
+
+export function bookingLinkErrors(settings) {
+  const errors = {}
+  const url = String(settings?.booking_url ?? '').trim()
+  if (url) {
+    let ok = /^https?:\/\/\S+$/i.test(url) && url.length <= 500
+    if (ok) { try { ok = !!new URL(url).hostname } catch { ok = false } }
+    if (!ok) errors.booking_url = BOOKING_URL_ERROR
+  }
+  const label = String(settings?.booking_cta_label ?? '').trim()
+  if (label.length > BOOKING_CTA_LABEL_MAX) errors.booking_cta_label = `At most ${BOOKING_CTA_LABEL_MAX} characters.`
+  return errors
+}
+
+// The PUT's 400 issues for the two booking fields, as inline messages (the
+// URL's own issue is zod's generic "Invalid input" from the union, so it is
+// worded here).
+export function bookingIssuesFromResponse(issues) {
+  const out = {}
+  for (const i of Array.isArray(issues) ? issues : []) {
+    const path = String(i?.path || '')
+    if (path === 'booking_url' || path.startsWith('booking_url.')) out.booking_url = BOOKING_URL_ERROR
+    else if (path === 'booking_cta_label' || path.startsWith('booking_cta_label.')) out.booking_cta_label = i?.message || `At most ${BOOKING_CTA_LABEL_MAX} characters.`
+  }
+  return out
 }

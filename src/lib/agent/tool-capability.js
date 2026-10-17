@@ -44,7 +44,10 @@ export const NO_BOOKING_CLASS_LIST_DESCRIPTION =
   "List the studio's upcoming classes over the next two weeks (class name and start time " +
   'only). No identity verification needed. Use when someone asks "what classes are on", ' +
   '"is there a class tomorrow morning". You cannot book or cancel classes at this studio, ' +
-  'and the list never says whether a class is full or has spaces, so never say either.'
+  'and the list never says whether a class is full or has spaces, so never say either. ' +
+  'If the result has truncated: true, the list stops before the end of the two weeks (it holds ' +
+  'only the earliest classes), so never say a later day has nothing on; say you can only see ' +
+  'the nearer dates and offer the booking link or the team for later ones.'
 
 /** Does this provider take bookings? Anything but an explicit true is no. */
 export function providerTakesBookings(provider) {

@@ -30,6 +30,19 @@ const OrgBrandingSchema = z.object({
   privacy_contact_email: z.string().email().max(200).nullable().optional(),
 })
 
+// MIAORG.1 final review — the columns this route answers with: every
+// org_settings column it returned while it read `*`, named, so a column added
+// later (mig 728's customer_agent, Mia's organisation defaults, which has its
+// own editor and route) never rides along to the branding page.
+const ORG_BRANDING_COLUMNS = [
+  'organization_id', 'logo_url', 'favicon_url', 'company_name', 'updated_at', 'updated_by', // mig 317
+  'ai_cap_notice_month', 'email_cap_notice_month', // mig 416
+  'ai_hard_cap_cents', 'email_hard_cap_sends', // mig 421
+  'ops_alert_emails', // mig 424
+  'legal_entity_name', 'legal_trading_name', 'legal_address', 'privacy_contact_email', // mig 425
+  'short_name', // mig 715
+].join(', ')
+
 // Resolve the org the caller may act on (resolveAdminOrgId). Returns null when
 // the caller is not an admin of the requested/active org.
 function resolveOrgId(user, requested) {
@@ -47,7 +60,7 @@ export async function GET(request) {
 
   const db = createServerClient()
   const { data, error } = await db.from('org_settings')
-    .select('*')
+    .select(ORG_BRANDING_COLUMNS)
     .eq('organization_id', orgId)
     .maybeSingle()
   if (error) {
@@ -95,7 +108,7 @@ export async function PUT(request) {
 
   const { data, error } = await db.from('org_settings')
     .upsert(record, { onConflict: 'organization_id' })
-    .select()
+    .select(ORG_BRANDING_COLUMNS)
     .single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })

@@ -1,7 +1,8 @@
 // MIAORG.1 Task 4 — the fields the ORGANISATION defaults editor shows: every
 // inheritable field the studio editor edits (CustomerAgentClient.jsx), with
 // the same labels, limits and help, and none of the studio-only ones
-// (enabled, test mode, booking mode, the links, the cancellation form). One
+// (enabled, test mode, booking mode, the links, the cancellation form, the
+// monthly points target). One
 // declarative list rendered by OrgDefaultsClient, rather than 30 hand-written
 // inputs. `limits` and `handoff_sla_minutes` have no editor here, as at the
 // studio; a stored value is echoed on Save, never dropped.
@@ -27,8 +28,6 @@ export const ORG_FIELD_GROUPS = [
         placeholder: '2', help: 'After this many failed identity checks in a row, the agent hands the conversation to a human. Blank = the default (2).' },
       { id: 'agent_name', paths: ['agent_name'], kind: 'text', maxLength: 40, label: 'Agent name', placeholder: 'Mia',
         help: 'The agent introduces itself by this name as the studio\'s AI assistant on first contact.' },
-      { id: 'monthly_points_target', paths: ['monthly_points_target'], kind: 'number', min: 0, step: 50, label: 'Monthly points target',
-        help: 'Shared monthly goal that drives member tiers. Blank = tiers off.' },
       { id: 'tone', paths: ['tone'], kind: 'textarea', maxLength: 2000, label: 'Tone and voice', placeholder: 'e.g. Warm, upbeat, brief. Use first names. No emojis.' },
       { id: 'extra_rules', paths: ['extra_rules'], kind: 'textarea', maxLength: 2000, label: 'Extra rules (optional)', placeholder: 'e.g. Never discuss competitor pricing.' },
       { id: 'quiet_hours', paths: ['quiet_hours'], kind: 'quiet_hours', label: 'Quiet hours (optional)',

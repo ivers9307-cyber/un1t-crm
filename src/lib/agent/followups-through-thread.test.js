@@ -37,7 +37,7 @@ const resolveMembershipSource = vi.fn(async () => { throw new Error('separate me
 vi.mock('@/lib/membership/source', async (importOriginal) => ({ ...(await importOriginal()), resolveMembershipSource }))
 
 const { runAgentFollowups, runFirstClassCheckins, composeAgentText, promptCapabilityFor } = await import('./followups')
-const { composeAgentText: composeSuggestionText, composeApprovalSuggestion } = await import('./approval-suggest')
+const { composeAgentText: composeSuggestionText, composeApprovalSuggestion, zonedDateString } = await import('./approval-suggest')
 const { buildCachedSystem } = await import('./prompt')
 const { WhatsAppNumberMissingError } = await import('@/lib/whatsapp-number-missing')
 const { todayStrIn } = await import('@/lib/location-time')
@@ -439,12 +439,22 @@ describe('T6-D — the approval suggestion prompt follows the studio’s members
   })
   const locRow = (source) => ({ id: HATCH, name: 'Hatch Street', timezone: 'Europe/Dublin', organization_id: null, membership_source: source, settings: { customer_agent: { agent_name: 'Mia', booking_url: BOOK_URL } } })
 
-  it('Glofox: byte-identical to the old positional call', async () => {
-    await composeSuggestionText(PROMPT_LOC, PROMPT_SETTINGS, [], 'x', 'UN1T', undefined, { key: 'glofox', label: 'Glofox' }, { bookings: true, bookingUrl: BOOK_URL })
-    const withCapability = JSON.stringify(anthropicMessages.mock.calls.at(-1)[0].system)
-    await composeSuggestionText(PROMPT_LOC, PROMPT_SETTINGS, [], 'x', 'UN1T', undefined, { key: 'glofox', label: 'Glofox' })
-    expect(withCapability).toBe(JSON.stringify(anthropicMessages.mock.calls.at(-1)[0].system))
+  // The pre-Task-6 approval-suggest call, argument for argument: a DIRECT
+  // buildCachedSystem with no bookings keys (Task 6 review, Minor 1: the old
+  // test compared the new function against itself).
+  const oldSuggestionSystem = () => buildCachedSystem({
+    businessName: 'UN1T', locationName: 'Stillorgan', agentName: 'Mia', membershipUrl: 'https://join.example.test',
+    membershipSource: { key: 'glofox', label: 'Glofox' }, tone: 'Warm and brief.', extraRules: null,
+    today: zonedDateString(Date.now(), 'Europe/Dublin'),
+  })
+
+  it('Glofox: byte-identical to a direct buildCachedSystem with no bookings keys (the pre-Task-6 call)', async () => {
+    for (const capability of [{ bookings: true, bookingUrl: BOOK_URL }, undefined]) {
+      await composeSuggestionText(PROMPT_LOC, PROMPT_SETTINGS, [], 'x', 'UN1T', undefined, { key: 'glofox', label: 'Glofox' }, capability)
+      expect(JSON.stringify(anthropicMessages.mock.calls.at(-1)[0].system)).toBe(JSON.stringify(oldSuggestionSystem()))
+    }
     expect(systemText()).toContain('You CAN book classes')
+    expect(systemText()).not.toContain(BOOK_URL)
   })
 
   it('a Glofox studio’s suggestion books; no separate source read', async () => {

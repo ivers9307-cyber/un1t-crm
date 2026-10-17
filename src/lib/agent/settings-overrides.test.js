@@ -46,7 +46,7 @@ describe('initialOverridden (T3-D: the first save of a legacy full blob keeps ev
       'handoff_cooldown_hours',
       'inline_suggestion.enabled',
       'limits.max_replies_per_conversation_per_hour',
-      'monthly_points_target',
+      // monthly_points_target is studio-only (final review): always saved, never an override path
       'tone',
     ])
   })

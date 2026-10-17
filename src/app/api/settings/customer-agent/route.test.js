@@ -490,3 +490,56 @@ describe('MIAORG.1 Task 3 — GET returns the resolved settings and both raw lay
     expect(body.live_despite_test_mode).toBe(false)
   })
 })
+
+// MIAORG.1 final review — the studio editor's Booking link fields: studio-only,
+// always saved from the body, and the GET says whether this studio's
+// membership source takes bookings (the editor shows the fields when not).
+describe('MIAORG.1 final review — booking link + bookings flag', () => {
+  const STORED = { settings: { glofox: { branch_id: 'b1' }, customer_agent: { enabled: false } } }
+  const save = async (body) => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    const db = fakeLocationsDb({ reads: { data: STORED, error: null } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putReq(body))
+    return { res, blob: db.writes[0]?.patch.settings.customer_agent }
+  }
+  const BODY = { enabled: false, test_mode: true, test_phones: ['+353870000000'], booking_mode: 'auto', social_enabled: false, glofox_auto_cancel: false }
+
+  it('the link and label are stored with no override path (studio-only keys always save)', async () => {
+    const { res, blob } = await save({ ...BODY, booking_url: 'https://book.example.test/hatch', booking_cta_label: 'Book now', overridden: [] })
+    expect(res.status).toBe(200)
+    expect(blob).toMatchObject({ booking_url: 'https://book.example.test/hatch', booking_cta_label: 'Book now' })
+  })
+
+  it('a null link (the editor\'s blank) stores null', async () => {
+    const { blob } = await save({ ...BODY, booking_url: null, booking_cta_label: null, overridden: [] })
+    expect(blob.booking_url).toBe(null)
+    expect(blob.booking_cta_label).toBe(null)
+  })
+
+  it('a non-http(s) link and a 21-character label are 400s naming the field, and nothing is written', async () => {
+    for (const [bad, path] of [[{ booking_url: 'javascript:alert(1)' }, 'booking_url'], [{ booking_cta_label: 'x'.repeat(21) }, 'booking_cta_label']]) {
+      const { res, blob } = await save({ ...BODY, ...bad, overridden: [] })
+      expect(res.status).toBe(400)
+      expect((await res.json()).issues.map((i) => i.path)).toContain(path)
+      expect(blob).toBeUndefined()
+    }
+  })
+
+  it('a monthly points target is stored from the body, with no override path (studio-only)', async () => {
+    const { blob } = await save({ ...BODY, monthly_points_target: 3000, overridden: [] })
+    expect(blob.monthly_points_target).toBe(3000)
+  })
+
+  it('GET: bookings true at a Glofox studio, false at un1t.online / none', async () => {
+    const manager = { id: 'u', role: 'manager', activeLocation: { id: 'loc1' }, locations: [{ id: 'loc1' }] }
+    getCurrentUser.mockResolvedValue(manager)
+    for (const [source, want] of [['glofox', true], ['un1t_online', false], ['none', false]]) {
+      const db = fakeLocationsDb({ reads: { data: { name: 'S', settings: {}, organization_id: null, membership_source: source }, error: null } })
+      createServerClient.mockReturnValue(db)
+      const body = await (await GET()).json()
+      expect(body.bookings, source).toBe(want)
+    }
+  })
+
+})

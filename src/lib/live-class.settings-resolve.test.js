@@ -43,10 +43,19 @@ const bankedTarget = (d) => d.inserts.find((i) => i.table === 'member_monthly_ta
 beforeEach(() => vi.clearAllMocks())
 
 describe('finalizeSessionRewards — monthly target from resolved settings', () => {
-  it('an org-only monthly_points_target reaches a studio that sets none', async () => {
+  // MIAORG.1 final review — monthly_points_target is studio-only: an org value
+  // would start tier pushes at every studio while champ-app (which reads the
+  // raw studio blob) saw none.
+  it('an org-only monthly_points_target does NOT reach a studio that sets none (studio-only)', async () => {
     const d = db({ customerAgent: { enabled: true }, org: { monthly_points_target: 4500 } })
     await finalizeSessionRewards(d, 's1')
-    expect(bankedTarget(d)).toBe(4500)
+    expect(bankedTarget(d)).toBe(null)
+  })
+
+  it("the studio's own target wins regardless of an org value", async () => {
+    const d = db({ customerAgent: { enabled: true, monthly_points_target: 3000 }, org: { monthly_points_target: 4500 } })
+    await finalizeSessionRewards(d, 's1')
+    expect(bankedTarget(d)).toBe(3000)
   })
 
   it("no behaviour change: Stillorgan's own 3000 banks; Hatch (no blob) has no target, org layer null", async () => {

@@ -310,7 +310,7 @@ function timetableDb({ rows = [], error = null } = {}) {
 const HATCH_CTX = { canBook: false, membershipSourceKey: 'un1t_online', locationId: HATCH, zone: 'Europe/Dublin' }
 
 describe('list_upcoming_classes at an un1t.online studio (T5-F)', () => {
-  it('reads THIS studio\'s scheduled un1t_events, next 14 days, earliest first, 40 max, two columns', async () => {
+  it('reads THIS studio\'s scheduled un1t_events, next 14 days, earliest first, 100 max, two columns', async () => {
     const { db, calls } = timetableDb()
     const before = Date.now()
     await executeBookingTool('list_upcoming_classes', {}, { ...HATCH_CTX, db })
@@ -322,7 +322,8 @@ describe('list_upcoming_classes at an un1t.online studio (T5-F)', () => {
     expect(ops).toContainEqual(['eq', 'status', 'scheduled'])
     expect(ops).toContainEqual(['order', 'starts_at', { ascending: true }])
     expect(ops).toContainEqual(['limit', UN1T_TIMETABLE_LIMIT])
-    expect(UN1T_TIMETABLE_LIMIT).toBe(40)
+    // Final review: Hatch runs ~59 classes in 14 days; 40 cut the window short.
+    expect(UN1T_TIMETABLE_LIMIT).toBe(100)
     const gte = Date.parse(ops.find((o) => o[0] === 'gte')[2])
     const lte = Date.parse(ops.find((o) => o[0] === 'lte')[2])
     expect(ops.find((o) => o[0] === 'gte')[1]).toBe('starts_at')
@@ -332,6 +333,26 @@ describe('list_upcoming_classes at an un1t.online studio (T5-F)', () => {
     // Never a verification gate on the public timetable, and never Glofox.
     expect(glofox.glofoxCredentialsForLocation).not.toHaveBeenCalled()
     expect(glofox.fetchUpcomingEvents).not.toHaveBeenCalled()
+  })
+
+  it('a full page (Hatch: 59+ classes in 14 days) says truncated: true; a shorter one does not; still name + time only', async () => {
+    const at = (i) => new Date(Date.UTC(2026, 9, 20, 6) + i * 3600_000).toISOString()
+    const many = Array.from({ length: UN1T_TIMETABLE_LIMIT }, (_, i) => ({ title: `Class ${i}`, starts_at: at(i), capacity: 12, bookings_count: 3 }))
+    const full = await executeBookingTool('list_upcoming_classes', {}, { ...HATCH_CTX, db: timetableDb({ rows: many }).db })
+    expect(Object.keys(full)).toEqual(['classes', 'truncated'])
+    expect(full.truncated).toBe(true)
+    expect(full.classes).toHaveLength(UN1T_TIMETABLE_LIMIT)
+    for (const c of full.classes) expect(Object.keys(c)).toEqual(['name', 'starts_at'])
+    const hatchFortnight = many.slice(0, 59)
+    const part = await executeBookingTool('list_upcoming_classes', {}, { ...HATCH_CTX, db: timetableDb({ rows: hatchFortnight }).db })
+    expect(Object.keys(part)).toEqual(['classes'])
+    expect(part.classes).toHaveLength(59)
+  })
+
+  it('the no-booking timetable description tells Mia a truncated list is partial', () => {
+    expect(NO_BOOKING_CLASS_LIST_DESCRIPTION).toMatch(/truncated: true/)
+    expect(NO_BOOKING_CLASS_LIST_DESCRIPTION).toMatch(/never say a later day has nothing on/)
+    expect(NO_BOOKING_CLASS_LIST_DESCRIPTION).not.toMatch(/\u2014|\u2013/)
   })
 
   it('answers { classes: [{ name, starts_at }] } ONLY, never capacity or bookings (Review Focus 5)', async () => {

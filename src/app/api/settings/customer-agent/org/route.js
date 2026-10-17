@@ -37,8 +37,10 @@ import { copyStudioIntoOrg } from '@/lib/agent/settings-org'
 //   studio must be an ACTIVE studio of the organisation (404 otherwise); its
 //   blob is never written.
 // The write is an upsert on organization_id (the table's primary key, mig
-// 317) naming ONLY customer_agent, so no other org_settings column (branding,
-// caps, legal identity) is touched, and a missing row is inserted.
+// 317) naming ONLY customer_agent (and updated_by), so no other org_settings
+// column (branding, caps, legal identity) is touched, and a missing row is
+// inserted. It runs as service_role, the only role mig 728's fence lets
+// change customer_agent.
 
 const notFound = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 const unreadable = () => NextResponse.json({
@@ -202,7 +204,10 @@ export async function PUT(request) {
   }
 
   const { error: writeErr } = await db.from('org_settings')
-    .upsert({ organization_id: orgId, customer_agent: layer }, { onConflict: 'organization_id' })
+    // updated_by: org_settings.updated_by REFERENCES profiles(id) (mig 317);
+    // user.id is the caller's profiles id (getCurrentUser, as org-branding).
+    // updated_at is the touch trigger's on UPDATE, the column default on INSERT.
+    .upsert({ organization_id: orgId, customer_agent: layer, updated_by: user.id }, { onConflict: 'organization_id' })
     .select('organization_id')
     .single()
   if (writeErr) {

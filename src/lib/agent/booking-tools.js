@@ -292,8 +292,13 @@ export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST, zo
 // CAPACITY-SECRECY.1 — the payload is the class name and start time, nothing
 // else: capacity, bookings_count, access_mode and raw are never selected, so
 // they cannot reach the model.
+//
+// Cap (final review): Hatch Street runs ~59 classes in 14 days, so the old 40
+// cut the end of the window and Mia could say a later day had nothing on. The
+// cap is 100, and a list that reaches it says `truncated: true` (the tool
+// description tells Mia the list then stops before the end of the window).
 export const UN1T_TIMETABLE_DAYS = 14
-export const UN1T_TIMETABLE_LIMIT = 40
+export const UN1T_TIMETABLE_LIMIT = 100
 export const UN1T_SCHEDULED_STATUS = 'scheduled'
 
 /**
@@ -327,7 +332,10 @@ async function listUn1tOnlineClasses(db, locationId, zone, nowMs = Date.now()) {
       logError('agent-timetable', 'un1t_events unreadable; Mia hands off for the timetable', { locationId, err: error })
       return noBookingSystemAnswer(null, { state: 'none' })
     }
-    return { classes: shapeUn1tClassesForAgent(data, zone) }
+    const rows = Array.isArray(data) ? data : []
+    const classes = shapeUn1tClassesForAgent(rows, zone)
+    // A full page means there may be more after the last class shown.
+    return rows.length >= UN1T_TIMETABLE_LIMIT ? { classes, truncated: true } : { classes }
   } catch (err) {
     logError('agent-timetable', 'un1t_events read threw; Mia hands off for the timetable', { locationId, err })
     return noBookingSystemAnswer(null, { state: 'none' })

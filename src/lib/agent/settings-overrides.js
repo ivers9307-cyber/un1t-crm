@@ -19,7 +19,10 @@
 // layer (resolveAgentSettings / mergeAgentSettings). An org-level
 // `enabled: true` must never switch a studio on (enabled+test_mode is live
 // for everyone), and the booking/membership/consultation links point at one
-// studio's own systems.
+// studio's own systems. monthly_points_target (final review) is per studio
+// too: a value in the org layer would start CRM tier pushes at every studio
+// (live-class.js reads the resolved value), while champ-app reads the raw
+// studio blob and would not see it, so the two would disagree.
 export const STUDIO_ONLY_KEYS = new Set([
   'enabled',
   'test_mode',
@@ -31,6 +34,7 @@ export const STUDIO_ONLY_KEYS = new Set([
   'booking_cta_label',
   'membership_signup_url',
   'membership_cta_label',
+  'monthly_points_target',
 ])
 
 // Object-valued keys that merge PER FIELD (org fields under studio fields)
@@ -67,7 +71,6 @@ export const INHERITABLE_SCALAR_KEYS = Object.freeze([
   'approval_decline_text',
   'welcome_greeting',
   'link_button_text',
-  'monthly_points_target',
   'agent_name',
   'handoff_cooldown_hours',
   'auto_resolve_after_reply_hours',

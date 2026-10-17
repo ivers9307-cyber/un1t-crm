@@ -352,10 +352,13 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     await waitFor(() => expect(putBody()).toBeTruthy())
     expect(putBody().overridden).toEqual(initialOverridden(legacy))
     expect(putBody().overridden).toEqual(expect.arrayContaining([
-      'tone', 'agent_name', 'handoff_cooldown_hours', 'monthly_points_target',
+      'tone', 'agent_name', 'handoff_cooldown_hours',
       'followups.enabled', 'followups.nudge_after_hours', 'followups.template_name', 'followups.daily_cap',
       'quiet_hours.start', 'quiet_hours.end', 'inline_suggestion.enabled',
     ]))
+    // studio-only since the final review: always in the body, never an override path
+    expect(putBody().overridden).not.toContain('monthly_points_target')
+    expect(putBody().monthly_points_target).toBe(600)
   })
 
   it('a studio with no blob (Hatch) overrides nothing until someone edits', async () => {
@@ -617,5 +620,102 @@ describe('CustomerAgentClient — fix round (MIAORG.1 Task 4)', () => {
     fireEvent.change(screen.getByLabelText('Quiet hours end'), { target: { value: '07:00' } })
     expect(screen.queryByText('Set both times')).toBeNull()
     for (const b of screen.getAllByRole('button', { name: /Save settings/ })) expect(b.disabled).toBe(false)
+  })
+})
+
+describe('CustomerAgentClient — booking link fields (MIAORG.1 final review)', () => {
+  function answer({ bookings, studio = { enabled: true } } = {}) {
+    const { settings, sources } = mergeAgentSettings({ org: null, studio })
+    return reply(200, {
+      success: true,
+      settings: { ...settings, social_enabled: false, glofox_auto_cancel: false },
+      studio, org: null, sources,
+      inherited: mergeAgentSettings({ org: null, studio: null }).settings,
+      ...(bookings === undefined ? {} : { bookings }),
+      location: { id: 'loc1', name: 'Test Studio' },
+      checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
+    })
+  }
+  const puts = () => global.fetch.mock.calls.filter(([url, init]) => String(url).startsWith('/api/settings/customer-agent') && init?.method === 'PUT')
+  const putBody = () => { const p = puts()[0]; return p && JSON.parse(p[1].body) }
+  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+  const saveButton = () => screen.getAllByRole('button', { name: /Save settings/ })[0]
+
+  it('a studio that takes no bookings shows the fields; an edit goes into the PUT body', async () => {
+    mockFetch([answer({ bookings: false }), reply(200, { success: true, settings: {} }), answer({ bookings: false })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByText('Mia sends this link when a customer wants to book.', { exact: false })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Booking link'), { target: { value: ' https://book.example.test/hatch ' } })
+    fireEvent.change(screen.getByLabelText('Booking button label'), { target: { value: 'Book now' } })
+    expect(screen.getByLabelText('Booking button label').getAttribute('placeholder')).toBe('Book a class')
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody()).toMatchObject({ booking_url: 'https://book.example.test/hatch', booking_cta_label: 'Book now' })
+    // studio-only: never an override path, always saved
+    expect(putBody().overridden).not.toContain('booking_url')
+  })
+
+  it('a blank link saves null', async () => {
+    mockFetch([answer({ bookings: false, studio: { enabled: true, booking_url: 'https://old.example.test' } }), reply(200, { success: true, settings: {} })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByLabelText('Booking link').value).toBe('https://old.example.test')
+    fireEvent.change(screen.getByLabelText('Booking link'), { target: { value: '   ' } })
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().booking_url).toBe(null)
+    expect(putBody().booking_cta_label).toBe(null)
+  })
+
+  it('an invalid link shows inline and holds Save', async () => {
+    mockFetch([answer({ bookings: false })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.change(screen.getByLabelText('Booking link'), { target: { value: 'javascript:alert(1)' } })
+    expect(screen.getByText('Enter a full link starting with https:// (or http://).')).toBeTruthy()
+    expect(saveButton().disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Booking link'), { target: { value: 'https://ok.example.test' } })
+    expect(screen.queryByText('Enter a full link starting with https:// (or http://).')).toBeNull()
+    expect(saveButton().disabled).toBe(false)
+  })
+
+  it("the PUT's 400 on a booking field shows beside it", async () => {
+    mockFetch([answer({ bookings: false }), reply(400, { success: false, error: 'Invalid request body', issues: [{ path: 'booking_cta_label', message: 'Too long' }] })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(screen.getByText('Too long')).toBeTruthy())
+  })
+
+  it('a studio that takes bookings (Glofox) does not show them; a stored link is still echoed on Save', async () => {
+    mockFetch([answer({ bookings: true, studio: { enabled: true, booking_url: 'https://kept.example.test' } }), reply(200, { success: true, settings: {} })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.queryByLabelText('Booking link')).toBeNull()
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().booking_url).toBe('https://kept.example.test')
+  })
+
+  it('an older GET without `bookings` shows the fields (never hides a link)', async () => {
+    mockFetch([answer({})])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByLabelText('Booking link')).toBeTruthy()
+  })
+
+  it('the monthly points target is the studio\'s own: no source tag, edited and saved as typed', async () => {
+    mockFetch([answer({ bookings: true, studio: { enabled: true, monthly_points_target: 3000 } }), reply(200, { success: true, settings: {} })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const row = screen.getByText('Monthly Points target').parentElement
+    expect(within(row).queryByRole('button')).toBeNull()
+    const input = row.querySelector('input[type="number"]')
+    expect(input.value).toBe('3000')
+    fireEvent.change(input, { target: { value: '3500' } })
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().monthly_points_target).toBe(3500)
   })
 })

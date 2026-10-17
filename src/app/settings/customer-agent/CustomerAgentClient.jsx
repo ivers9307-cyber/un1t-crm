@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { BarChart3 } from 'lucide-react'
 import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-form/defaults'
-import { defaultHoldingMessage, defaultWelcomeGreeting } from '@/lib/agent/default-copy'
+import { defaultHoldingMessage, defaultWelcomeGreeting, DEFAULT_BOOKING_CTA_LABEL } from '@/lib/agent/default-copy'
 import { productName } from '@/lib/brand-name'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
 import { zoneCity } from '@/lib/record-time'
@@ -15,7 +15,7 @@ import {
   initialOverridden, withOverride, withoutOverride, valueAt, fieldSource, sourceTagLabel, orgSetsAny,
   isOverridden, INHERITABLE_SCALAR_KEYS, INHERITABLE_OBJECT_KEYS, INHERITABLE_OBJECT_FIELDS, isHalfQuietWindow,
 } from '@/lib/agent/settings-overrides'
-import { buildSavePayload } from './save-payload'
+import { buildSavePayload, bookingLinkErrors, bookingIssuesFromResponse, BOOKING_CTA_LABEL_MAX } from './save-payload'
 // MIAORG.1 Task 4 — the organisation defaults, for masters and org admins.
 import OrgDefaultsClient from './OrgDefaultsClient'
 
@@ -82,6 +82,12 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   // The org layer (raw) and what each key resolves to with no override.
   const [org, setOrg] = useState(null)
   const [inherited, setInherited] = useState(null)
+  // MIAORG.1 final review — false at a studio whose membership source takes
+  // no bookings (GET `bookings`): the Booking link fields show there. An
+  // older GET without the key shows them too (never hides a saved link).
+  const [bookings, setBookings] = useState(null)
+  // The PUT's 400 issues on the booking fields, shown beside them.
+  const [serverFieldErrors, setServerFieldErrors] = useState({})
 
   // After a save (refreshSettings). load() sets the same state inline.
   function applySettingsResponse(sRes) {
@@ -90,6 +96,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
     setOverridden(initialOverridden(sRes.studio))
     setOrg(sRes.org || null)
     setInherited(sRes.inherited || null)
+    setBookings(typeof sRes.bookings === 'boolean' ? sRes.bookings : null)
   }
 
   async function load(isCancelled = () => false) {
@@ -108,6 +115,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
         setSettings(sRes.settings); setLocation(sRes.location || null); setCheckinStats(sRes.checkin_stats || null)
         setBrand(sRes.brand || { companyName: '', shortName: '' })
         setOverridden(initialOverridden(sRes.studio)); setOrg(sRes.org || null); setInherited(sRes.inherited || null)
+        setBookings(typeof sRes.bookings === 'boolean' ? sRes.bookings : null)
         setLoadFailed(false)
       } else {
         setSettings(null); setLoadFailed(true)
@@ -130,7 +138,10 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   // Editing an inheritable field makes it this studio's own (studio-only and
   // sibling keys are ignored by withOverride: they are always saved).
   function markOverridden(...paths) { setOverridden(o => withOverride(o, ...paths)) }
-  function setField(k, v) { setSettings(s => ({ ...s, [k]: v })); markOverridden(k) }
+  function setField(k, v) {
+    setSettings(s => ({ ...s, [k]: v })); markOverridden(k)
+    setServerFieldErrors(e => (k in e ? Object.fromEntries(Object.entries(e).filter(([f]) => f !== k)) : e))
+  }
   // Quiet hours are a pair: editing either end makes both the studio's own
   // (and ends a "no quiet hours" opt-out).
   function setQuietHours(k, v) {
@@ -160,6 +171,11 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   // MIAORG.1 Task 4 — one end of the window only: the payload would drop it
   // silently, so the editor says "Set both times" and holds Save.
   const quietHalf = isHalfQuietWindow(settings?.quiet_hours)
+  // MIAORG.1 final review — the Booking link fields, checked as the PUT
+  // checks them; an invalid value shows beside its field and holds Save.
+  const showBookingLink = bookings !== true
+  const bookingErrors = { ...serverFieldErrors, ...bookingLinkErrors(settings) }
+  const bookingInvalid = showBookingLink && Object.keys(bookingLinkErrors(settings)).length > 0
 
   // "Use organisation default": the field stops being the studio's own and
   // shows the value it now inherits (GET's `inherited`).
@@ -240,9 +256,12 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
       })
       const j = await res.json()
       if (j.success) {
-        setSavedAt(Date.now())
+        setSavedAt(Date.now()); setServerFieldErrors({})
         await refreshSettings()
-      } else setError(j.error || 'Failed to save')
+      } else {
+        setServerFieldErrors(bookingIssuesFromResponse(j.issues))
+        setError(j.error || 'Failed to save')
+      }
     } catch { setError('Failed to save') } finally { setSaving(false) }
   }
 
@@ -589,8 +608,39 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
           </p>
         </div>
 
+        {/* MIAORG.1 — booking link, at a studio whose membership source takes
+            no bookings (Hatch Street on un1t.online): Mia cannot book there,
+            so she sends this link. Studio-only, always saved; blank = no link
+            (Mia hands bookings to the team). */}
+        {showBookingLink && (
+          <>
+            <div>
+              <label htmlFor="mia-booking-url" className="block text-sm font-medium text-un1t-text mb-1">Booking link</label>
+              <input id="mia-booking-url" type="url" className={inputCls} maxLength={500} value={settings.booking_url || ''}
+                onChange={e => setField('booking_url', e.target.value)}
+                aria-invalid={bookingErrors.booking_url ? 'true' : undefined}
+                placeholder="https://…" />
+              {bookingErrors.booking_url && <p className="text-xs text-red-600 mt-1" role="alert">{bookingErrors.booking_url}</p>}
+              <p className="text-xs text-un1t-subtle mt-1">
+                Mia sends this link when a customer wants to book. Used where class booking isn&apos;t connected.
+                Leave blank and Mia hands bookings to the team instead.
+              </p>
+            </div>
+            <div>
+              <label htmlFor="mia-booking-cta" className="block text-sm font-medium text-un1t-text mb-1">Booking button label</label>
+              <input id="mia-booking-cta" className={inputCls} maxLength={BOOKING_CTA_LABEL_MAX} value={settings.booking_cta_label || ''}
+                onChange={e => setField('booking_cta_label', e.target.value)}
+                aria-invalid={bookingErrors.booking_cta_label ? 'true' : undefined}
+                placeholder={DEFAULT_BOOKING_CTA_LABEL} />
+              {bookingErrors.booking_cta_label && <p className="text-xs text-red-600 mt-1" role="alert">{bookingErrors.booking_cta_label}</p>}
+              <p className="text-xs text-un1t-subtle mt-1">The text on the link&apos;s button, up to {BOOKING_CTA_LABEL_MAX} characters.</p>
+            </div>
+          </>
+        )}
+
         <div>
-          <FieldLabel tag={sourceTag(['monthly_points_target'])}>Monthly {productName(brand.shortName, 'points')} target</FieldLabel>
+          {/* Studio-only (final review): champ-app reads this studio's own value. */}
+          <label className="block text-sm font-medium text-un1t-text mb-1">Monthly {productName(brand.shortName, 'points')} target</label>
           <p className="text-xs text-un1t-text-2 mb-1">Shared monthly goal that drives member tiers. Blank = tiers off.</p>
           <input type="number" min={0} step={50} className={inputCls}
             value={settings.monthly_points_target ?? ''}
@@ -773,7 +823,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
         {error && <div className="text-sm text-red-600">{error}</div>}
         {canEdit && (
           <div>
-            <button type="button" onClick={saveSettings} disabled={saving || quietHalf}
+            <button type="button" onClick={saveSettings} disabled={saving || quietHalf || bookingInvalid}
               className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
               {saving ? 'Saving…' : 'Save settings'}
             </button>

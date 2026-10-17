@@ -131,7 +131,7 @@ describe('settings write-through contract', () => {
     expect([...STUDIO_ONLY_KEYS].sort()).toEqual([
       'booking_cta_label', 'booking_mode', 'booking_url', 'cancellation_form',
       'consultation_event_type_id', 'enabled', 'membership_cta_label',
-      'membership_signup_url', 'test_mode', 'test_phones',
+      'membership_signup_url', 'monthly_points_target', 'test_mode', 'test_phones',
     ])
     for (const k of STUDIO_ONLY_KEYS) expect(k in DEFAULTS).toBe(true)
     expect(INHERITABLE_OBJECT_KEYS).toEqual(['limits', 'followups', 'first_class_checkin', 'inline_suggestion', 'quiet_hours'])

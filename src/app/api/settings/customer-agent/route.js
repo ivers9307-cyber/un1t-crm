@@ -21,6 +21,10 @@ import {
 // MIAORG.1 Task 3 — the editor shows the RESOLVED settings (org defaults under
 // the studio's own), the raw layers, and where each key comes from.
 import { mergeAgentSettings, resolveAgentSettingsForLocation } from '@/lib/agent/settings-resolve'
+// MIAORG.1 final review — whether this studio's membership source takes
+// bookings decides whether the editor shows the booking link fields.
+import { providerFor } from '@/lib/membership/source'
+import { providerTakesBookings } from '@/lib/agent/tool-capability'
 
 // RADAR-AGENT.0 — customer agent settings. Stored on
 // locations.settings.customer_agent (jsonb), mirroring ai_assistant.
@@ -52,7 +56,7 @@ export async function GET() {
   // SETTINGSWIPE.1 — a failed read is NOT "Mia on her defaults". Answering
   // { ...DEFAULTS } here showed enabled:false as her saved state, and the
   // editor's Save wrote it back, switching her off.
-  const { data: loc, error: locErr } = await db.from('locations').select('name, settings, glofox_auto_cancel_memberships, timezone, organization_id').eq('id', locationId).single()
+  const { data: loc, error: locErr } = await db.from('locations').select('name, settings, glofox_auto_cancel_memberships, timezone, organization_id, membership_source').eq('id', locationId).single()
   if (locErr || !loc) {
     logError('settings-customer-agent', 'settings read failed', { locationId, err: locErr?.message || 'no row' })
     return NextResponse.json({
@@ -139,6 +143,12 @@ export async function GET() {
     // TZ.5 — the studio's zone: quiet hours with no stored tz are read in it,
     // and the editor names it next to the quiet-hours fields.
     location: { id: locationId, name: loc?.name || null, timezone: zoneOfLocation({ id: locationId, timezone: loc?.timezone }) },
+    // MIAORG.1 final review — false at a studio whose membership source takes
+    // no bookings (un1t.online at Hatch Street, or none): Mia sends the
+    // booking link there, so the editor shows the booking link fields. Same
+    // derivation as the reply path (providerFor / providerTakesBookings off
+    // locations.membership_source, mig 717 NOT NULL).
+    bookings: providerTakesBookings(loc.membership_source ? providerFor(loc.membership_source) : null),
     // W1.S3 — the editor's placeholders render the studio's own brand
     // (default hand-off / welcome copy, the "{Brand} Points" label).
     brand: { companyName: branding.companyName, shortName: branding.shortName },

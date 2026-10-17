@@ -184,6 +184,15 @@ describe('PUT settings — who may write, what is refused', () => {
     expect(chainsFor(db, 'org_settings').some((c) => argsOf(c, 'upsert'))).toBe(false)
   })
 
+  it('monthly_points_target is studio-only (final review): a 400 at the organisation', async () => {
+    getCurrentUser.mockResolvedValue(ORG_ADMIN)
+    const db = serveDb({ organizations: [ok({ id: ORG_A })], org_settings: [ok(null)] })
+    const res = await PUT(putReq({ organization_id: ORG_A, settings: { monthly_points_target: 3000 }, overridden: [] }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).issues.map((i) => i.path)).toEqual(['settings.monthly_points_target'])
+    expect(chainsFor(db, 'org_settings').some((c) => argsOf(c, 'upsert'))).toBe(false)
+  })
+
   it('quiet_hours.off (a studio\'s opt-out) is a 400', async () => {
     getCurrentUser.mockResolvedValue(ORG_ADMIN)
     serveDb({ organizations: [ok({ id: ORG_A })], org_settings: [ok(null)] })
@@ -225,7 +234,7 @@ describe('PUT settings — the write', () => {
     expect(res.status).toBe(200)
     const upsert = chainsFor(db, 'org_settings').map((c) => argsOf(c, 'upsert')).find(Boolean)
     expect(upsert).toEqual([
-      { organization_id: ORG_A, customer_agent: { tone: 'Warm', quiet_hours: { start: '22:00', end: '07:00' } } },
+      { organization_id: ORG_A, customer_agent: { tone: 'Warm', quiet_hours: { start: '22:00', end: '07:00' } }, updated_by: ORG_ADMIN.id },
       { onConflict: 'organization_id' },
     ])
     const { data } = await res.json()
@@ -243,7 +252,7 @@ describe('PUT settings — the write', () => {
     })
     expect((await PUT(putReq({ settings: { agent_name: 'Ava', tone: null } }))).status).toBe(200)
     const upsert = chainsFor(db, 'org_settings').map((c) => argsOf(c, 'upsert')).find(Boolean)
-    expect(upsert[0]).toEqual({ organization_id: ORG_A, customer_agent: { agent_name: 'Ava' } })
+    expect(upsert[0]).toEqual({ organization_id: ORG_A, customer_agent: { agent_name: 'Ava' }, updated_by: MASTER.id })
   })
 
   it('clearing everything stores NULL (the organisation sets nothing)', async () => {
@@ -256,7 +265,7 @@ describe('PUT settings — the write', () => {
     })
     expect((await PUT(putReq({ organization_id: ORG_A, settings: { tone: null }, overridden: [] }))).status).toBe(200)
     const upsert = chainsFor(db, 'org_settings').map((c) => argsOf(c, 'upsert')).find(Boolean)
-    expect(upsert[0]).toEqual({ organization_id: ORG_A, customer_agent: null })
+    expect(upsert[0]).toEqual({ organization_id: ORG_A, customer_agent: null, updated_by: ORG_ADMIN.id })
   })
 
   it('a failed write is a 500, logged', async () => {
@@ -303,6 +312,8 @@ describe('PUT copy_from_location_id — Start from a studio\'s settings (T4-C)',
       // tone overwritten; extra_rules kept; never enabled/test_mode/booking_url
       // or the studio's quiet-hours opt-out
       customer_agent: { extra_rules: 'Org rule', tone: 'North tone', followups: { daily_cap: 30 } },
+      // final review: who saved it (org_settings.updated_by -> profiles.id, mig 317)
+      updated_by: ORG_ADMIN.id,
     })
     for (const c of chainsFor(db, 'locations')) {
       expect(c.some(([m]) => ['update', 'upsert', 'insert', 'delete'].includes(m))).toBe(false)
@@ -337,7 +348,7 @@ describe('PUT copy_from_location_id — Start from a studio\'s settings (T4-C)',
     const db = copyDb({ current: null, source: [{ id: SOUTH, organization_id: ORG_A, customer_agent: { enabled: false, agent_name: 'Ava' } }] })
     expect((await PUT(putReq({ organization_id: ORG_A, copy_from_location_id: SOUTH }))).status).toBe(200)
     const upsert = chainsFor(db, 'org_settings').map((c) => argsOf(c, 'upsert')).find(Boolean)
-    expect(upsert).toEqual([{ organization_id: ORG_A, customer_agent: { agent_name: 'Ava' } }, { onConflict: 'organization_id' }])
+    expect(upsert).toEqual([{ organization_id: ORG_A, customer_agent: { agent_name: 'Ava' }, updated_by: MASTER.id }, { onConflict: 'organization_id' }])
   })
 
   it('a studio value the org layer cannot take is a 422 and nothing is written', async () => {
