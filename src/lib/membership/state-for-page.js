@@ -39,6 +39,20 @@ function withProvider(s) {
 }
 
 /**
+ * UN1TCAP.1 — may a page or loader read `capability` data for this state? A
+ * source can be CONFIGURED and still not provide it (un1t.online supplies no
+ * membership data yet), so a gate that checks `state === 'configured'` alone
+ * renders Glofox-shaped zeros. Pages ask this; MembershipSourceGate renders the
+ * "<label> does not provide …" copy when it is false.
+ *
+ * @param {{ state?: string, capabilities?: object }|null|undefined} membership  membershipStateForPage()'s value
+ * @param {'memberships'|'bookings'|'credits'|'invoices'|'schedule'} capability
+ */
+export function providesCapability(membership, capability) {
+  return membership?.state === 'configured' && membership?.capabilities?.[capability] !== false
+}
+
+/**
  * @param {object} db  service-role client
  * @param {string|null|undefined} locationId
  * @param {{ now?: () => number }} [opts]  test seam for the clock

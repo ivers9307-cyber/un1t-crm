@@ -19,7 +19,7 @@ import { dedupeKey, filterUncredited } from '@/lib/credit-attendance'
 import { DEFAULT_CLASS_MINUTES } from '@/lib/class-occurrences'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { noSourceLocationIds } from '@/lib/membership/locations-for-source'
+import { locationIdsWithoutCapability } from '@/lib/membership/locations-for-source'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -57,7 +57,7 @@ export async function GET(request) {
   // W1.M3b — a booking at a location with NO membership source is never
   // credited (its class_bookings would be stale residue): skipped with a
   // counted skipped_no_source. A failed seam read is a 500 with no heartbeat.
-  const { ids: noSource, error: srcErr } = await noSourceLocationIds(db)
+  const { ids: noSource, error: srcErr } = await locationIdsWithoutCapability(db, 'bookings') // UN1TCAP.1: a configured source can lack bookings (un1t.online)
   if (srcErr) {
     logWarn('cron-credit-attendance', 'membership sources read failed', { err: srcErr })
     return NextResponse.json({ success: false, error: 'membership sources read failed' }, { status: 500 })

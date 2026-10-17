@@ -55,3 +55,10 @@ export function locationsResolver(rows, { listError = null } = {}) {
     return answerLocations(q, rows)
   }
 }
+
+// UN1TCAP.1 — the estate after #2068 connected Hatch Street to un1t.online:
+// CONFIGURED, but its provider supplies no membership or booking data, so every
+// Glofox-shaped cron must still skip it.
+export const ESTATE_2026_10_17 = Object.freeze(
+  ESTATE_2026_10.map((r) => (r.name === 'UN1T Hatch Street' ? { ...r, membership_source: 'un1t_online' } : r)),
+)

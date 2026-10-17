@@ -54,6 +54,16 @@ describe('/dashboard/engagement — membership source gate (W1.M3a)', () => {
     expect(html).not.toContain('No engagement data yet')
   })
 
+  // UN1TCAP.1 — configured on un1t.online, which supplies no membership data yet:
+  // the page already gated the display, but the report query still ran.
+  it('configured but the source provides no memberships (un1t.online): the gate shows and the report query does not run', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: false, bookings: false, credits: false, invoices: false, schedule: false } })
+    const html = renderToStaticMarkup(await Page())
+    expect(loadEngagementChurn).not.toHaveBeenCalled()
+    expect(html).toContain('un1t.online does not provide membership data')
+    expect(html).not.toContain('report:')
+  })
+
   it('unknown: the retry copy, never the none copy', async () => {
     membershipStateForPage.mockResolvedValue({ source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE', label: 'No membership source', capabilities: {} })
     const html = renderToStaticMarkup(await Page())

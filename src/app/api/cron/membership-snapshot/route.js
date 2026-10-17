@@ -20,7 +20,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { writeMembershipSnapshot } from '@/lib/membership-snapshot'
-import { noSourceLocationIds } from '@/lib/membership/locations-for-source'
+import { locationIdsWithoutCapability } from '@/lib/membership/locations-for-source'
 import { zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
@@ -47,7 +47,7 @@ export async function GET(request) {
   // W1.M3b — a location with NO membership source has no Glofox-shaped data
   // to read: skipped with a counted skipped_no_source. A failed seam read is a
   // 500 with no heartbeat, never "nobody to skip".
-  const { ids: noSource, error: srcErr } = await noSourceLocationIds(db)
+  const { ids: noSource, error: srcErr } = await locationIdsWithoutCapability(db, 'memberships') // UN1TCAP.1: a configured source can lack memberships (un1t.online)
   if (srcErr) {
     console.warn(`[cron][membership-snapshot] failed to read membership sources: ${srcErr.message}`)
     return NextResponse.json({ success: false, error: srcErr.message }, { status: 500 })

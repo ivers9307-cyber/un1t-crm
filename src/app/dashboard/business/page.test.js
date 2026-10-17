@@ -76,6 +76,16 @@ describe('/dashboard/business — membership trend gate (W1.M3a)', () => {
     expect(html).not.toContain('membership-panel')
   })
 
+  // UN1TCAP.1 — configured on un1t.online, which supplies no membership data yet.
+  it('configured but the source provides no memberships (un1t.online): the "does not provide" gate, no trend queries', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: false, bookings: false, credits: false, invoices: false, schedule: false } })
+    const html = await renderMembershipBlock()
+    expect(computeMembershipCounts).not.toHaveBeenCalled()
+    expect(fetchMembershipFlows).not.toHaveBeenCalled()
+    expect(html).toContain('un1t.online does not provide membership data')
+    expect(html).not.toContain('membership-panel')
+  })
+
   it('unknown: the retry copy, never the none copy', async () => {
     membershipStateForPage.mockResolvedValue({ source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE', label: 'No membership source', capabilities: {} })
     const html = await renderMembershipBlock()
