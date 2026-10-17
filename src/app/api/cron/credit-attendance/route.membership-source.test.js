@@ -35,6 +35,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { createParticipationSession } from '@/lib/live-class'
 import { logError } from '@/lib/log'
 import { fakeDb, queriesOf } from '@/lib/time-off.test-helpers'
+import { MEMBERSHIP_SOURCES } from '@/lib/membership/source'
 import { ESTATE_2026_10, ESTATE_2026_10_17, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
 
 const HATCH_ID = ESTATE_2026_10[1].id
@@ -95,6 +96,8 @@ describe('GET /api/cron/credit-attendance — un1t.online hard-off (UN1TBOOK.2, 
 
   it('with the un1t_online provider\'s bookings capability forced true, a Hatch attended row is still not credited', async () => {
     h.un1tBookings = true
+    // The mock must reach the registry the route reads, or this test proves nothing.
+    expect(MEMBERSHIP_SOURCES.un1t_online.capabilities.bookings).toBe(true)
     // A glofox-tagged row at Hatch: neither the row filter nor the capability
     // skip catches it, so only the un1t_online location drop stands between it
     // and a credit.

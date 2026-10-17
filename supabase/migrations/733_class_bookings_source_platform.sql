@@ -41,6 +41,12 @@
 -- as before). CREATE OR REPLACE keeps the ACL and the comment; the EXECUTE
 -- decision is restated anyway (FNEXECSWEEP.1, mig 667).
 --
+-- COMMENTS. Besides the new column, this file refreshes the comments that
+-- went stale with the projection: class_bookings (mig 288, Glofox-only),
+-- un1t_bookings (mig 726), and class_occurrences.source_platform and
+-- un1t_events (mig 730, which said un1t_online classes had no
+-- class_bookings rows).
+--
 -- GRANT. None. class_bookings is NOT column-granted: authenticated holds
 -- table-level SELECT (with INSERT/UPDATE/DELETE, kept by mig 677) and RLS has
 -- only the location-scoped SELECT policy of mig 288, so the new column is
@@ -73,6 +79,18 @@ COMMENT ON COLUMN public.class_bookings.source_platform IS
 -- Refresh mig 726's table comment, which said the projection was not written.
 COMMENT ON TABLE public.un1t_bookings IS
   'UN1TSYNC.1 (mig 726) / UN1TBOOK.1 (mig 733): un1t.online bookings, without guest details. Projected into class_bookings with source_platform = ''un1t_online'', glofox_booking_id = ''un1t:'' || un1t_id and glofox_event_id = ''un1t:'' || event_id; the CRM never reminds or credits those rows. Service role only; the sync upserts and never deletes.';
+
+-- Refresh mig 288's table comment, which described a Glofox-only roster.
+COMMENT ON TABLE public.class_bookings IS
+  'HR-CLASS-ALLOC.2 (mig 288) / UN1TBOOK.1 (mig 733): per-event booking roster from Glofox (assembled from per-member /2.0/bookings fetches) and un1t.online (projected by the un1t.online sync), distinguished by source_platform. Drives the booked tag, the coach roster panel and the scorecard''s no-show and attended visits. The CRM reminds and credits only source_platform = ''glofox'' rows.';
+
+-- Refresh mig 730's column and table comments, which said un1t_online
+-- classes had no class_bookings rows (they do from this migration on).
+COMMENT ON COLUMN public.class_occurrences.source_platform IS
+  'UN1TCLASS.1 (mig 730) / UN1TBOOK.1 (mig 733) — glofox | un1t_online. Where the occurrence was projected from. un1t_online rows carry glofox_event_id = ''un1t:'' || un1t_events.un1t_id (the prefix cannot collide with a Glofox 24-hex id). Their bookings are projected into class_bookings (source_platform = ''un1t_online'', same un1t: event id), so no-show and attended come from those rows; the CRM never reminds or credits them.';
+
+COMMENT ON TABLE public.un1t_events IS
+  'UN1TSYNC.1 (mig 726) / UN1TCLASS.1 (mig 730) / UN1TBOOK.1 (mig 733): un1t.online classes and events, projected into class_occurrences with source_platform = ''un1t_online'' and glofox_event_id = ''un1t:'' || un1t_id; their bookings are projected into class_bookings with the same event id. Service role only; the sync upserts and never deletes.';
 
 -- mig 513's function, verbatim except the class_bookings status filter.
 create or replace function public.campaign_outcome_stats(

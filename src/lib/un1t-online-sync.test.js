@@ -573,7 +573,6 @@ describe('runUn1tSync', () => {
       expect(connRow(tables).status).toBe('connected')
       expect(tables.contact_memberships).toHaveLength(1)
     })
-
   })
 
   describe('class_bookings projection (UN1TBOOK.3)', () => {

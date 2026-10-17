@@ -12,8 +12,10 @@
 //     projection that forgets source_platform on a un1t: row is REFUSED by
 //     the database (review focus 4); un1t_online needs the prefix on BOTH
 //     ids; the stats RPC stops counting a 'CANCELLED' booking (and still
-//     refuses anon/authenticated); the self-check aborts the WHOLE file on a
-//     write policy or a pre-existing mismatched row; a second run passes.
+//     refuses anon/authenticated); the file aborts WHOLE on a write policy
+//     (the self-check) or a pre-existing mismatched row (VALIDATE
+//     CONSTRAINT); the stale mig 288/726/730 comments are refreshed; a
+//     second run passes.
 // Fictional ids only: the repo is public.
 
 import { describe, it, expect, afterEach } from 'vitest'
@@ -161,8 +163,14 @@ const BASE_SCHEMA = `
   GRANT SELECT ON public.campaign_link_clicks, public.campaign_recipients, public.race_registrations,
     public.offer_purchases, public.race_payments TO service_role;
 
-  -- mig 726's table (reduced) so 733 can refresh its comment.
+  -- mig 726's tables (reduced) and mig 730's column, so 733 can refresh their comments.
   CREATE TABLE public.un1t_bookings (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
+  CREATE TABLE public.un1t_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
+  CREATE TABLE public.class_occurrences (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), source_platform text NOT NULL DEFAULT 'glofox');
+  COMMENT ON COLUMN public.class_occurrences.source_platform IS
+    'UN1TCLASS.1 (mig 730) — glofox | un1t_online. un1t_online rows have NO class_bookings rows, so booking-derived metrics (no-show, attended) are unavailable for them, never zero.';
+  COMMENT ON TABLE public.un1t_events IS
+    'UN1TSYNC.1 (mig 726) / UN1TCLASS.1 (mig 730): un1t.online classes and events. NOT written to class_bookings. Service role only.';
 `
 
 const SEED = `
@@ -246,7 +254,7 @@ describe('mig 733 — class_bookings behaviour', () => {
       .toBe('23502:')
   }, 60_000)
 
-  it('the self-check aborts the whole file on a pre-existing mismatched row', async () => {
+  it('VALIDATE CONSTRAINT aborts the whole file on a pre-existing mismatched row', async () => {
     await boot({ migrate: false, before: `
       INSERT INTO public.class_bookings (location_id, glofox_event_id, glofox_booking_id)
         VALUES ('${LOC}', 'un1t:evt-early', 'un1t:bk-early');` })
@@ -276,7 +284,7 @@ describe('mig 733 — class_bookings behaviour', () => {
     // revoke stripped out after a grant.
     await runSql('GRANT EXECUTE ON FUNCTION public.campaign_outcome_stats(uuid, int) TO authenticated')
     const withoutRevoke = readMig733().replace(/revoke execute on function public\.campaign_outcome_stats[^;]*;/i, '')
-    await expect(runSql(withoutRevoke)).rejects.toThrow(/campaign_outcome_stats/)
+    await expect(runSql(withoutRevoke)).rejects.toThrow(/a client role can execute campaign_outcome_stats; it is service_role only/)
     await runSql('ROLLBACK')
   }, 60_000)
 
@@ -299,6 +307,26 @@ describe('mig 733 — class_bookings behaviour', () => {
     expect(rows[0].col).toMatch(/send-class-booking-reminders and credit-attendance filter source_platform = 'glofox'/)
     expect(rows[0].tbl).not.toMatch(/NOT written to class_bookings/)
     expect(rows[0].tbl).toMatch(/class_bookings/)
+  }, 60_000)
+
+  it("refreshes mig 288's and mig 730's comments, which said un1t_online classes had no class_bookings rows", async () => {
+    await boot()
+    const { rows } = await db.query(`
+      SELECT obj_description('public.class_bookings'::regclass, 'pg_class') AS bookings,
+             col_description('public.class_occurrences'::regclass,
+               (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.class_occurrences'::regclass AND attname = 'source_platform')) AS occ_col,
+             obj_description('public.un1t_events'::regclass, 'pg_class') AS events`)
+    const { bookings, occ_col: occCol, events } = rows[0]
+    expect(bookings).toMatch(/Glofox .*and un1t\.online .*distinguished by source_platform/)
+    expect(bookings).toMatch(/reminds and credits only source_platform = 'glofox'/)
+    expect(occCol).toMatch(/^UN1TCLASS\.1 \(mig 730\) \/ UN1TBOOK\.1 \(mig 733\) — glofox \| un1t_online\./)
+    expect(occCol).toMatch(/projected into class_bookings/)
+    expect(occCol).toMatch(/never reminds or credits/)
+    expect(occCol).not.toMatch(/NO class_bookings rows/i)
+    expect(occCol).not.toMatch(/unavailable/i)
+    expect(events).toMatch(/projected into class_occurrences/)
+    expect(events).toMatch(/bookings are projected into class_bookings/)
+    expect(events).not.toMatch(/NOT written to class_bookings/i)
   }, 60_000)
 })
 
