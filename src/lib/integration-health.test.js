@@ -408,22 +408,36 @@ describe('getIntegrationHealth — un1t.online row', () => {
     const dead = regRow({ status: 'error', last_error: 'token revoked', token_expires_at: new Date(Date.now() + 2 * DAY).toISOString() })
     const r = find(await getIntegrationHealth(makeHealthDb({ channel_connections: { data: [dead], error: null } }), 'loc-1'))
     expect(r.status).toBe('down')
-    expect(r.detail).toBe('token revoked')
+    expect(r.detail).toBe(`token revoked · token expires ${dead.token_expires_at.slice(0, 10)}`)
   })
 
   it('a connected row with a last_error (synced, contacts unmatched) grades warn and shows it', async () => {
     const msg = 'Synced, but 2 un1t.online members could not be matched to contacts (1 failed, 1 conflicts, 0 ambiguous emails).'
-    const db = makeHealthDb({ channel_connections: { data: [regRow({ last_error: msg })], error: null } })
+    const row = regRow({ last_error: msg })
+    const db = makeHealthDb({ channel_connections: { data: [row], error: null } })
     const r = find(await getIntegrationHealth(db, 'loc-1'))
     expect(r.status).toBe('warn')
-    expect(r.detail).toBe(msg)
+    expect(r.detail).toBe(`${msg} · token expires ${row.token_expires_at.slice(0, 10)}`)
+  })
+
+  // UN1THARD.7 — a warning about something else must not hide the expiry.
+  it('keeps the expiry date on a warning, and leaves it off when the date is unknown', async () => {
+    const soon = new Date(Date.now() + 5 * DAY).toISOString()
+    const refused = regRow({ status: 'action_needed', last_error: 'un1t.online refused the token (401)', token_expires_at: soon })
+    const r = find(await getIntegrationHealth(makeHealthDb({ channel_connections: { data: [refused], error: null } }), 'loc-1'))
+    expect(r.detail).toBe(`un1t.online refused the token (401) · token expires ${soon.slice(0, 10)}`)
+    const past = new Date(Date.now() - 2 * DAY).toISOString()
+    const expired = find(await getIntegrationHealth(makeHealthDb({ channel_connections: { data: [regRow({ token_expires_at: past })], error: null } }), 'loc-1'))
+    expect(expired.detail).toBe(`Connected · Hatch Street · token expired ${past.slice(0, 10)}`)
+    const noDate = find(await getIntegrationHealth(makeHealthDb({ channel_connections: { data: [regRow({ status: 'error', last_error: 'boom', token_expires_at: null })], error: null } }), 'loc-1'))
+    expect(noDate.detail).toBe('boom')
   })
 
   it('an action_needed connection shows its last error', async () => {
     const db = makeHealthDb({ channel_connections: { data: [regRow({ status: 'action_needed', last_error: 'un1t.online refused the token (401)' })], error: null } })
     const r = find(await getIntegrationHealth(db, 'loc-1'))
     expect(r.status).toBe('warn')
-    expect(r.detail).toBe('un1t.online refused the token (401)')
+    expect(r.detail).toMatch(/^un1t\.online refused the token \(401\) · token expires \d{4}-\d{2}-\d{2}$/)
   })
 
   it('is absent for a location with no row that is not on the un1t_online source', async () => {
@@ -443,9 +457,29 @@ describe('getIntegrationHealth — un1t.online row', () => {
     expect(r).toMatchObject({ status: 'unknown', detail: 'Not connected' })
   })
 
-  it('an unreadable registry is "Unavailable", never "Not connected"', async () => {
-    const db = makeHealthDb({ channel_connections: { data: null, error: { message: 'boom' } } })
+  it('an unreadable registry is "Unavailable" on a un1t_online studio, never "Not connected"', async () => {
+    const db = makeHealthDb({
+      channel_connections: { data: null, error: { message: 'boom' } },
+      locations: { data: { id: 'loc-1', membership_source: 'un1t_online' }, error: null },
+    })
     const r = find(await getIntegrationHealth(db, 'loc-1'))
     expect(r).toMatchObject({ status: 'unknown', detail: 'Unavailable' })
+  })
+
+  // UN1THARD.7 — a failed registry read used to paint the row on every location.
+  it('an unreadable registry adds no row to a studio that is not on the un1t_online source', async () => {
+    const db = makeHealthDb({
+      channel_connections: { data: null, error: { message: 'boom' } },
+      locations: { data: { id: 'loc-1', membership_source: 'glofox', settings: {} }, error: null },
+    })
+    expect(find(await getIntegrationHealth(db, 'loc-1'))).toBeUndefined()
+  })
+
+  it('is "Unavailable" when neither the registry nor the membership source can be read', async () => {
+    const db = makeHealthDb({
+      channel_connections: { data: null, error: { message: 'boom' } },
+      locations: { data: null, error: { message: 'boom' } },
+    })
+    expect(find(await getIntegrationHealth(db, 'loc-1'))).toMatchObject({ status: 'unknown', detail: 'Unavailable' })
   })
 })
