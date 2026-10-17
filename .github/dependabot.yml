@@ -45,18 +45,6 @@ updates:
       # when prod itself moves to PG 18, together with the test fixes.
       - dependency-name: '@electric-sql/pglite'
         update-types: ['version-update:semver-minor', 'version-update:semver-major']
-      # NEXT STAYS ON 16.3.x (2026-10-17, #2029). Next 16.4.0's Turbopack
-      # resolves `new Worker(new URL(<runtime value>, import.meta.url))` at
-      # build time and fails "Module not found" on @ffmpeg/ffmpeg's
-      # dist/esm/classes.js:105 (the browser video compressor,
-      # src/lib/video-compress.js, passes the worker URL at runtime). 16.3.x
-      # patches still flow. Lift this in the PR that stops Turbopack bundling
-      # ffmpeg's loader (served from /public/ffmpeg like the core), together
-      # with the Next bump. eslint-config-next moves with next.
-      - dependency-name: 'next'
-        versions: ['>=16.4.0']
-      - dependency-name: 'eslint-config-next'
-        versions: ['>=16.4.0']
     labels: [dependencies]
 
   # Mobile (Expo/RN). CAUTION: EAS runs a strict `npm ci` and the app tracks a
