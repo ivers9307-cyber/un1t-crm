@@ -81,11 +81,30 @@ function member({ id, name = 'Member', joined_at, location_id = LOC, status = 'm
 }
 
 let bookingSeq = 0
-function booking(contact_id, starts_at, { attended = true, status = 'ATTENDED' } = {}) {
+function booking(contact_id, starts_at, { attended = true, status = 'ATTENDED', source_platform = 'glofox' } = {}) {
   bookingSeq += 1
   return {
     id: `b-${String(bookingSeq).padStart(5, '0')}`,
-    contact_id, location_id: LOC, starts_at, attended, status,
+    contact_id, location_id: LOC, starts_at, attended, status, source_platform,
+  }
+}
+
+// UN1TBOOK.2 — wrap makeDb so a test can read the filters each class_bookings
+// query was built with (the PostgREST-faithful mock still applies them).
+function recordingDb(tables) {
+  const inner = makeDb(tables)
+  const bookingQueries = []
+  return {
+    bookingQueries,
+    from(table) {
+      const b = inner.from(table)
+      if (table !== 'class_bookings') return b
+      const calls = []
+      bookingQueries.push(calls)
+      const realEq = b.eq
+      b.eq = (col, val) => { calls.push([col, val]); return realEq(col, val) }
+      return b
+    },
   }
 }
 
@@ -332,5 +351,42 @@ describe('loadContactJourney', () => {
   it('throws on a contact DB error (route turns it into a 500)', async () => {
     const db = makeDb({ locations: location(), contacts: { __error: 'boom' }, class_bookings: [] })
     await expect(loadContactJourney(db, 'c-any', NOW)).rejects.toThrow('boom')
+  })
+})
+
+// UN1TBOOK.2 — Decision 1 (2026-10-17): the CRM never sends class reminders or
+// attendance rewards for un1t.online. The journey counts Glofox bookings only,
+// so the member app, the profile panel and the pace push (the lane) agree.
+describe('journey reads count only glofox bookings (UN1TBOOK.2)', () => {
+  it('loadContactJourney counts only glofox bookings', async () => {
+    const db = recordingDb({
+      locations: location(),
+      contacts: [member({ id: 'c-dual', joined_at: '2026-05-20T09:00:00Z' })],
+      class_bookings: [
+        booking('c-dual', '2026-05-25T18:00:00Z'),
+        booking('c-dual', '2026-06-01T18:00:00Z', { source_platform: 'un1t_online' }), // a Hatch class
+      ],
+      churn_radar_actions: [],
+    })
+    const row = await loadContactJourney(db, 'c-dual', NOW)
+    expect(db.bookingQueries).toHaveLength(1)
+    expect(db.bookingQueries[0]).toContainEqual(['source_platform', 'glofox'])
+    expect(row.attended).toBe(1)
+  })
+
+  it('loadJourneyLane (the pace push\'s read) counts only glofox bookings', async () => {
+    const db = recordingDb({
+      locations: location(),
+      contacts: [member({ id: 'c-dual', joined_at: '2026-05-20T09:00:00Z' })],
+      class_bookings: [
+        booking('c-dual', '2026-05-25T18:00:00Z'),
+        booking('c-dual', '2026-06-01T18:00:00Z', { source_platform: 'un1t_online' }),
+      ],
+      churn_radar_actions: [],
+    })
+    const { lane } = await loadJourneyLane(db, LOC, NOW)
+    expect(db.bookingQueries.length).toBeGreaterThan(0)
+    for (const q of db.bookingQueries) expect(q).toContainEqual(['source_platform', 'glofox'])
+    expect(lane[0].attended).toBe(1)
   })
 })
