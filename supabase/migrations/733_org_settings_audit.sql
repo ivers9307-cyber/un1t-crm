@@ -1,11 +1,18 @@
--- 731 — ORGSETAUDIT.1: every change to public.org_settings leaves an
+-- 733 — ORGSETAUDIT.1: every change to public.org_settings leaves an
 -- audit_events row naming the organisation and, for an admin's save, the
 -- admin.
 --
 -- NOT APPLIED YET when this file was written. "VERIFIED LIVE" below is the
 -- state of prod BEFORE this file runs (read-only, Supabase MCP, 17 Oct 2026).
 -- Behaviour is proven ahead of apply by a PGlite replay
--- (tests/migration-731-org-settings-audit.test.js).
+-- (tests/migration-733-org-settings-audit.test.js).
+--
+-- NUMBERING: applied live 17 Oct 10:50 UTC as `731_org_settings_audit` (the
+-- schema_migrations name stays that); renumbered FILE-ONLY to 733 because
+-- #2079 merged `731_contacts_read_by_studio_membership` to main first. The two
+-- '-- 731:' comments inside log_mutation's body are left as applied: Postgres
+-- stores a function's comments, so the file's body stays byte-identical to
+-- prod's. Nothing depends on this file, so the move changes no replay order.
 --
 -- ===========================================================================
 -- THE FINDING
@@ -78,7 +85,7 @@
 -- APPLY: before the code (the cron's updated_by change is harmless either
 -- way: until it deploys, a notice-month row credits the last admin).
 -- Rollback: DROP TRIGGER audit_mutation ON public.org_settings, then mig
--- 647/655's log_mutation body (the test's ROLLBACK_731).
+-- 647/655's log_mutation body (the test's ROLLBACK_733).
 -- ===========================================================================
 
 BEGIN;
@@ -229,16 +236,16 @@ BEGIN
   -- 1. The function kept its posture: DEFINER, pinned search_path, owner
   --    postgres, and no EXECUTE for anon or PUBLIC (mig 678).
   IF NOT (SELECT prosecdef FROM pg_proc WHERE oid = v_fn) THEN
-    RAISE EXCEPTION 'mig 731: private.log_mutation() is no longer SECURITY DEFINER';
+    RAISE EXCEPTION 'mig 733: private.log_mutation() is no longer SECURITY DEFINER';
   END IF;
   IF NOT coalesce((SELECT proconfig @> ARRAY['search_path=""'] FROM pg_proc WHERE oid = v_fn), false) THEN
-    RAISE EXCEPTION 'mig 731: private.log_mutation() lost its empty search_path';
+    RAISE EXCEPTION 'mig 733: private.log_mutation() lost its empty search_path';
   END IF;
   IF (SELECT proowner::regrole::text FROM pg_proc WHERE oid = v_fn) <> 'postgres' THEN
-    RAISE EXCEPTION 'mig 731: private.log_mutation() is not owned by postgres';
+    RAISE EXCEPTION 'mig 733: private.log_mutation() is not owned by postgres';
   END IF;
   IF has_function_privilege('anon', v_fn, 'EXECUTE') OR has_function_privilege('public', v_fn, 'EXECUTE') THEN
-    RAISE EXCEPTION 'mig 731: anon or PUBLIC can execute private.log_mutation()';
+    RAISE EXCEPTION 'mig 733: anon or PUBLIC can execute private.log_mutation()';
   END IF;
 
   -- 2. It runs on exactly the six tables of mig 191, with no arguments, plus
@@ -249,7 +256,7 @@ BEGIN
    WHERE t.tgfoid = v_fn AND NOT t.tgisinternal;
   IF v_tables IS DISTINCT FROM
      'cars(0), invoices_queue(0), locations(0), org_settings(2), organizations(0), profile_locations(0), profiles(0)' THEN
-    RAISE EXCEPTION 'mig 731: private.log_mutation() runs on %, expected the six of mig 191 plus org_settings(2)', v_tables;
+    RAISE EXCEPTION 'mig 733: private.log_mutation() runs on %, expected the six of mig 191 plus org_settings(2)', v_tables;
   END IF;
 
   -- 3. Every one is the same trigger shape: AFTER, FOR EACH ROW, INSERT +
@@ -259,7 +266,7 @@ BEGIN
     FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
    WHERE t.tgfoid = v_fn AND NOT t.tgisinternal AND (t.tgtype <> 29 OR t.tgenabled = 'D');
   IF v_bad IS NOT NULL THEN
-    RAISE EXCEPTION 'mig 731: log_mutation trigger of the wrong shape or disabled: %', v_bad;
+    RAISE EXCEPTION 'mig 733: log_mutation trigger of the wrong shape or disabled: %', v_bad;
   END IF;
 
   -- 4. org_settings' arguments are its key and its actor column, and both
@@ -267,14 +274,14 @@ BEGIN
   IF (SELECT encode(tgargs, 'escape') FROM pg_trigger
        WHERE tgrelid = 'public.org_settings'::regclass AND tgname = 'audit_mutation')
      IS DISTINCT FROM E'organization_id\\000updated_by\\000' THEN
-    RAISE EXCEPTION 'mig 731: org_settings.audit_mutation does not pass (organization_id, updated_by)';
+    RAISE EXCEPTION 'mig 733: org_settings.audit_mutation does not pass (organization_id, updated_by)';
   END IF;
   IF (SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.org_settings'::regclass
        AND attname IN ('organization_id', 'updated_by') AND NOT attisdropped) <> 2 THEN
-    RAISE EXCEPTION 'mig 731: org_settings is missing organization_id or updated_by';
+    RAISE EXCEPTION 'mig 733: org_settings is missing organization_id or updated_by';
   END IF;
 
-  RAISE NOTICE 'mig 731: org_settings is audited (audit_mutation, keyed on organization_id, actor from updated_by on service-role writes).';
+  RAISE NOTICE 'mig 733: org_settings is audited (audit_mutation, keyed on organization_id, actor from updated_by on service-role writes).';
 END $$;
 
 COMMIT;

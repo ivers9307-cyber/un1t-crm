@@ -1,4 +1,4 @@
-// ORGSETAUDIT.1 — behavioural test for migration 731.
+// ORGSETAUDIT.1 — behavioural test for migration 733.
 //
 // Boots PGlite with the audit machinery exactly as prod has it, by replaying
 // the real migrations 191 (log_mutation + the six audit_mutation triggers),
@@ -37,9 +37,9 @@ const MIG_DIR = path.resolve(import.meta.dirname, '../supabase/migrations')
 const MIG_191 = readFileSync(path.join(MIG_DIR, '191_audit_mutation_triggers.sql'), 'utf8')
 const MIG_647 = readFileSync(path.join(MIG_DIR, '647_audit_redact_secrets.sql'), 'utf8')
 const MIG_655 = readFileSync(path.join(MIG_DIR, '655_audit_events_client_closed.sql'), 'utf8')
-const MIG_731 = readFileSync(path.join(MIG_DIR, '731_org_settings_audit.sql'), 'utf8')
+const MIG_733 = readFileSync(path.join(MIG_DIR, '733_org_settings_audit.sql'), 'utf8')
 
-// Mig 647's log_mutation, verbatim: the live body before 731 (655 changed only
+// Mig 647's log_mutation, verbatim: the live body before 733 (655 changed only
 // the redaction helpers). The rollback re-runs it.
 const LOG_MUTATION_647 = (() => {
   const start = MIG_647.search(/create or replace function private\.log_mutation\(\)/i)
@@ -47,7 +47,7 @@ const LOG_MUTATION_647 = (() => {
   if (start < 0 || end < 0) throw new Error('mig 647 log_mutation not found')
   return MIG_647.slice(start, end + 4)
 })()
-const ROLLBACK_731 = `
+const ROLLBACK_733 = `
 BEGIN;
 DROP TRIGGER IF EXISTS audit_mutation ON public.org_settings;
 ${LOG_MUTATION_647}
@@ -149,7 +149,7 @@ async function freshDb({ migrate = true, before = '' } = {}) {
   await runSql(db, SEED)
   await runSql(db, 'TRUNCATE public.audit_events')
   if (before) await runSql(db, before)
-  if (migrate) await runSql(db, MIG_731)
+  if (migrate) await runSql(db, MIG_733)
   return db
 }
 
@@ -182,7 +182,7 @@ const last = async (action) => (await rows(action)).at(-1)
 const CREATE_ROW = `INSERT INTO public.org_settings (organization_id, company_name, ai_hard_cap_cents, ops_alert_emails, legal_entity_name, updated_by)
   VALUES ('${ORG_A}', 'Synthetic Group', 5000, ARRAY['ops@example.invalid'], 'Synthetic Ltd', '${ADMIN}')`
 
-describe('before 731 — log_mutation as mig 647 left it', () => {
+describe('before 733 — log_mutation as mig 647 left it', () => {
   it("names every org_settings row 'org_settings/?' and credits a service-role write to nobody", async () => {
     await freshDb({ migrate: false })
     await runSql(db, `CREATE TRIGGER audit_mutation AFTER INSERT OR UPDATE OR DELETE ON public.org_settings
@@ -195,7 +195,7 @@ describe('before 731 — log_mutation as mig 647 left it', () => {
   }, 60_000)
 })
 
-describe('after 731 — org_settings', () => {
+describe('after 733 — org_settings', () => {
   it('an admin save (service role) is created/updated under the org, credited to updated_by, values kept', async () => {
     await freshDb()
     await asService(CREATE_ROW)
@@ -291,7 +291,7 @@ describe('after 731 — org_settings', () => {
   }, 60_000)
 })
 
-describe('after 731 — the six existing triggers are unchanged', () => {
+describe('after 733 — the six existing triggers are unchanged', () => {
   it('target <table>/<id>, actor auth.uid() only; no fallback without arguments', async () => {
     await freshDb()
     await asService(`UPDATE public.organizations SET name = 'Org A2' WHERE id = '${ORG_A}'`)
@@ -311,7 +311,7 @@ describe('after 731 — the six existing triggers are unchanged', () => {
     await freshDb({ migrate: false })
     const q = `SELECT prosecdef, proconfig, proacl::text AS acl, proowner::regrole::text AS owner FROM pg_proc WHERE oid = 'private.log_mutation()'::regprocedure`
     const before = (await db.query(q)).rows[0]
-    await runSql(db, MIG_731)
+    await runSql(db, MIG_733)
     expect((await db.query(q)).rows[0]).toEqual(before)
     expect(before.prosecdef).toBe(true)
   }, 60_000)
@@ -321,7 +321,7 @@ describe('the self-check aborts the whole file', () => {
   async function expectAbort(before, message) {
     await freshDb({ migrate: false, before })
     const fnBefore = (await db.query(`SELECT pg_get_functiondef('private.log_mutation()'::regprocedure) AS d`)).rows[0].d
-    await expect(runSql(db, MIG_731)).rejects.toThrow(message)
+    await expect(runSql(db, MIG_733)).rejects.toThrow(message)
     await runSql(db, 'ROLLBACK')
     expect((await db.query(`SELECT pg_get_functiondef('private.log_mutation()'::regprocedure) AS d`)).rows[0].d).toBe(fnBefore)
     expect((await db.query(`SELECT count(*)::int AS n FROM pg_trigger WHERE tgrelid = 'public.org_settings'::regclass AND tgname = 'audit_mutation'`)).rows[0].n).toBe(0)
@@ -330,22 +330,22 @@ describe('the self-check aborts the whole file', () => {
   it('when log_mutation runs on a table the file does not know', () => expectAbort(
     `CREATE TABLE public.xero_connections (id uuid PRIMARY KEY);
      CREATE TRIGGER log_changes AFTER INSERT OR UPDATE OR DELETE ON public.xero_connections FOR EACH ROW EXECUTE FUNCTION private.log_mutation();`,
-    /mig 731: private\.log_mutation\(\) runs on .*xero_connections\(0\)/,
+    /mig 733: private\.log_mutation\(\) runs on .*xero_connections\(0\)/,
   ), 60_000)
 
   it('when one of the six audit triggers is disabled', () => expectAbort(
     `ALTER TABLE public.cars DISABLE TRIGGER audit_mutation;`,
-    /mig 731: log_mutation trigger of the wrong shape or disabled: cars/,
+    /mig 733: log_mutation trigger of the wrong shape or disabled: cars/,
   ), 60_000)
 
   it('when the function is owned by another role', () => expectAbort(
     `ALTER FUNCTION private.log_mutation() OWNER TO other_owner;`,
-    /mig 731: private\.log_mutation\(\) is not owned by postgres/,
+    /mig 733: private\.log_mutation\(\) is not owned by postgres/,
   ), 60_000)
 
   it('a second run passes its own self-check (idempotent)', async () => {
     await freshDb()
-    await expect(runSql(db, MIG_731)).resolves.toBeDefined()
+    await expect(runSql(db, MIG_733)).resolves.toBeDefined()
   }, 60_000)
 })
 
@@ -354,9 +354,9 @@ describe('the rollback record', () => {
     await freshDb({ migrate: false })
     const q = `SELECT pg_get_functiondef('private.log_mutation()'::regprocedure) AS d`
     const before = (await db.query(q)).rows[0].d
-    await runSql(db, MIG_731)
+    await runSql(db, MIG_733)
     expect((await db.query(q)).rows[0].d).not.toBe(before)
-    await runSql(db, ROLLBACK_731)
+    await runSql(db, ROLLBACK_733)
     expect((await db.query(q)).rows[0].d).toBe(before)
     expect((await db.query(`SELECT count(*)::int AS n FROM pg_trigger WHERE tgrelid = 'public.org_settings'::regclass AND NOT tgisinternal AND tgname = 'audit_mutation'`)).rows[0].n).toBe(0)
   }, 60_000)

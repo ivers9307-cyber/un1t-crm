@@ -126,7 +126,7 @@ async function sendCapNotices(db, todayStr) {
         htmlBody: `<p>${check.body}</p>`,
         pushBody: check.body,
       })
-      // updated_by: null so the org_settings audit row (mig 731) records this
+      // updated_by: null so the org_settings audit row (mig 733) records this
       // as the cron's write, never as the last admin's save.
       await db
         .from('org_settings')
