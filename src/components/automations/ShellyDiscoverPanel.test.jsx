@@ -33,11 +33,15 @@ function mockFetch(reply) {
 const json = (status, body) => ({ ok: status < 400, status, json: async () => body })
 const discovery = (devices) => json(200, { success: true, devices, row_count: devices.length })
 
+// Waits for the count sentence, which exists only once discovery has rendered.
+// Not /relay/: the idle intro ("…adopt the relays you want to schedule")
+// matches that before the click, so the wait passed on its first check and
+// every assertion after it raced React's render of the fetched rows.
 async function find(devices) {
   mockFetch(() => discovery(devices))
   render(<ShellyDiscoverPanel adoptedIds={new Set()} />)
   fireEvent.click(screen.getByRole('button', { name: /Find devices/ }))
-  await waitFor(() => expect(screen.queryByText(/relay/)).toBeTruthy())
+  await screen.findByText(/^\d+ relays? across \d+ devices?$/)
 }
 
 beforeEach(() => { vi.clearAllMocks() })
