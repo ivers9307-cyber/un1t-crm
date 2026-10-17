@@ -461,7 +461,8 @@ export async function findStageIdBySlug(db, pipelineId, stageSlug) {
  * status. Four terminal states:
  *
  *   { action: 'create',  deal_id, stage_slug }              fresh deal made
- *   { action: 'move',    deal_id, from_slug, to_slug }       existing deal moved
+ *   { action: 'move',    deal_id, from_slug, to_slug,        existing deal moved
+ *                        pipeline_id, location_id }          (HATCHPIPE.1: the board it moved on)
  *   { action: 'leave',   deal_id, stage_slug }               nothing to do (no status
  *                                                             change, operator-only slot,
  *                                                             or already at target)
@@ -552,7 +553,17 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     .update({ stage_id: targetStageId })
     .eq('id', existing.id)
   if (moveErr) return { action: 'error', deal_id: existing.id, error: moveErr.message }
-  return { action: 'move', deal_id: existing.id, from_slug: existing.stage_slug, to_slug: targetSlug }
+  // HATCHPIPE.1 — name the board the move happened on. The sequence fence
+  // (triggerSequencesForDealPlacement) refuses a move whose board it cannot
+  // place at the contact's own studio.
+  return {
+    action: 'move',
+    deal_id: existing.id,
+    from_slug: existing.stage_slug,
+    to_slug: targetSlug,
+    pipeline_id: pipelineId,
+    location_id: locationId,
+  }
 }
 
 const ID_PATHS = [['_id'], ['id'], ['member_id']]
@@ -2292,7 +2303,10 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
   if (dealResult?.action === 'move') {
     try {
       const { triggerSequencesForDealPlacement } = await import('./sequences/triggers.js')
-      await triggerSequencesForDealPlacement(contactId, dealResult)
+      await triggerSequencesForDealPlacement(contactId, dealResult, {
+        dealLocationId: dealResult?.location_id,
+        pipelineId: dealResult?.pipeline_id,
+      })
       stageChangeTriggerResult = { fired: true, from: dealResult.from_slug ?? null, to: dealResult.to_slug ?? null }
     } catch (e) {
       stageChangeTriggerResult = { error: e?.message || 'pipeline_stage_change trigger threw' }

@@ -130,7 +130,7 @@ export async function POST(request, props) {
       action: 'move',
       from_slug: fromStage?.slug ?? null,
       to_slug: stage.slug,
-    })
+    }, { dealLocationId: deal.location_id, pipelineId: deal.pipeline_id })
   } catch (e) {
     logWarn('deals.stage', `pipeline_stage_change trigger failed for deal ${id}`, { err: e })
   }

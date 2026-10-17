@@ -22,6 +22,7 @@ import {
   extractMembershipPlan,
   extractMembershipState,
   extractMemberProfile,
+  ensureDealForContact,
 } from './glofox-sync.js'
 
 // Helper: build a Plan A ctx for tests. Real call site fetches via
@@ -2352,5 +2353,48 @@ describe('syncGlofoxInteractions — echo reconciliation (GLOFOX-NOTES)', () => 
     const r2 = await syncGlofoxInteractions(db2, 'l1', 'c1', [echo2])
     expect(claimSpy2).toHaveBeenCalledTimes(1)
     expect(r2.reconciled).toBe(1)
+  })
+})
+
+// HATCHPIPE.1 — the sequence fence needs to know WHICH board a placement
+// happened on, so the 'move' result names it.
+describe('ensureDealForContact — move result names the board (HATCHPIPE.1)', () => {
+  function boardDb({ pipelineId = 'p-primary' } = {}) {
+    const from = (table) => {
+      let mode = null
+      const c = {}
+      c.select = () => c
+      c.update = () => { mode = 'update'; return c }
+      c.eq = (col) => {
+        if (table === 'pipeline_stages' && col === 'id') mode = 'stage_by_id'
+        else if (table === 'pipeline_stages' && col === 'slug') mode = 'stage_by_slug'
+        return c
+      }
+      c.order = () => c
+      c.limit = () => c
+      c.then = (resolve) => {
+        let data = []
+        if (table === 'pipelines') data = [{ id: pipelineId, mode: 'derived' }]
+        else if (table === 'deals' && mode !== 'update') data = [{ id: 'd1', stage_id: 's-old', pipeline_id: pipelineId }]
+        else if (mode === 'stage_by_id') data = [{ slug: 'member' }]
+        else if (mode === 'stage_by_slug') data = [{ id: 's-new' }]
+        resolve({ data, error: null })
+      }
+      return c
+    }
+    return { from }
+  }
+
+  it('carries pipeline_id and location_id of the primary board on a move', async () => {
+    // A bare snapshot classifies as 'dormant'; the deal sits at 'member'.
+    const out = await ensureDealForContact(boardDb(), 'loc-1', 'c1', {}, 'Wendy')
+    expect(out).toEqual({
+      action: 'move',
+      deal_id: 'd1',
+      from_slug: 'member',
+      to_slug: 'dormant',
+      pipeline_id: 'p-primary',
+      location_id: 'loc-1',
+    })
   })
 })
