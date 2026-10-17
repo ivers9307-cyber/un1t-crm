@@ -1,6 +1,6 @@
 // UN1TBOOK.2 guard — every reader of public.class_bookings is classified.
 //
-// From UN1TBOOK (mig 733) class_bookings holds un1t.online bookings as well as
+// From UN1TBOOK (mig 737) class_bookings holds un1t.online bookings as well as
 // Glofox ones (source_platform 'un1t_online', ids namespaced 'un1t:'). Decision
 // 1 (2026-10-17, binding): the CRM never sends a class reminder or credits
 // attendance (sessions, points, achievement / goal / tier pushes) for a
@@ -57,7 +57,7 @@ const MANIFEST = Object.freeze({
   },
   'src/lib/class-bookings.js': {
     kind: 'data-writing',
-    reason: 'Audit rows 6-8 and 11: upsertClassBookings (Glofox writer, 24-hex ids; the mig 733 CHECK refuses a mis-tagged row), getClassRoster (staff /live display: a un1t row is meant to show), lookupBookedMember and resolveBookedOccurrenceForMember (device / HR linking, keyed on glofox_member_id, which un1t rows never carry).',
+    reason: 'Audit rows 6-8 and 11: upsertClassBookings (Glofox writer, 24-hex ids; the mig 737 CHECK refuses a mis-tagged row), getClassRoster (staff /live display: a un1t row is meant to show), lookupBookedMember and resolveBookedOccurrenceForMember (device / HR linking, keyed on glofox_member_id, which un1t rows never carry).',
   },
   'shared/studio-kpis.js': {
     kind: 'display',
@@ -65,7 +65,7 @@ const MANIFEST = Object.freeze({
   },
   'sql:public.campaign_outcome_stats': {
     kind: 'display',
-    reason: 'Audit row 10: the campaign outcomes RPC (mig 513, re-created by mig 733 with a case-correct CANCELLED filter) behind the staff /api/campaigns/[id]/outcomes report.',
+    reason: 'Audit row 10: the campaign outcomes RPC (mig 513, re-created by mig 737 with a case-correct CANCELLED filter) behind the staff /api/campaigns/[id]/outcomes report.',
   },
 })
 
@@ -230,7 +230,7 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
 
   it('every file that calls .from(\'class_bookings\') is in the manifest', () => {
     const unlisted = [...jsReaders().keys()].filter((p) => !MANIFEST[p])
-    expect(unlisted, `New class_bookings reader(s): ${unlisted.join(', ')}. Since mig 733 the table holds un1t.online bookings too (source_platform 'un1t_online'). Decide what such a row means for this reader (a customer message or an attendance credit must filter .eq('source_platform', CRM_CLASS_MESSAGING_PLATFORM)) and add it to MANIFEST in tests/class-bookings-readers-guard.test.js.`).toEqual([])
+    expect(unlisted, `New class_bookings reader(s): ${unlisted.join(', ')}. Since mig 737 the table holds un1t.online bookings too (source_platform 'un1t_online'). Decide what such a row means for this reader (a customer message or an attendance credit must filter .eq('source_platform', CRM_CLASS_MESSAGING_PLATFORM)) and add it to MANIFEST in tests/class-bookings-readers-guard.test.js.`).toEqual([])
   })
 
   it('every SQL function / view that reads class_bookings is in the manifest', () => {
@@ -269,7 +269,7 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
     const bad = []
     for (const [p, { chains }] of jsReaders()) for (const c of unscopedWrites(chains)) bad.push(`${p}: ${c.replace(/\s+/g, ' ').slice(0, 120)}`)
     for (const [k, e] of sqlReadersAll()) for (const f of e.unscopedWrite) bad.push(`${k} (${f})`)
-    expect(bad, `class_bookings holds un1t.online rows since mig 733: an update or delete must filter source_platform. ${bad.join('; ')}`).toEqual([])
+    expect(bad, `class_bookings holds un1t.online rows since mig 737: an update or delete must filter source_platform. ${bad.join('; ')}`).toEqual([])
   })
 })
 

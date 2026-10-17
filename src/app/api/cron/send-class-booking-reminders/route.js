@@ -24,7 +24,7 @@
 // read filters source_platform = CRM_CLASS_MESSAGING_PLATFORM, and a row at a
 // un1t_online location is dropped and counted (`skipped_un1t_online`) before
 // any reminder is chosen. A failed un1t_online locations read is logged and
-// the tick goes on with the row filter alone (which, with mig 733's namespace
+// the tick goes on with the row filter alone (which, with mig 737's namespace
 // CHECK, already excludes every un1t row): failing closed would cost
 // Stillorgan its reminders.
 import { NextResponse } from 'next/server'

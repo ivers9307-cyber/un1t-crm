@@ -1,4 +1,4 @@
-// UN1TBOOK.1 — migration 733: class_bookings.source_platform, the un1t:
+// UN1TBOOK.1 — migration 737: class_bookings.source_platform, the un1t:
 // namespace CHECK, and campaign_outcome_stats counting CANCELLED correctly.
 //
 // Two halves:
@@ -7,14 +7,14 @@
 //   * behaviour on PGlite (PostgreSQL 17; prod is 17.6): class_bookings as
 //     mig 288 created it, with prod's ACL (authenticated arwd, service_role
 //     all, no anon) and its one SELECT policy; mig 513's file run verbatim so
-//     733 replaces a real function. It proves an existing Glofox row takes
+//     737 replaces a real function. It proves an existing Glofox row takes
 //     the 'glofox' default and the namespace CHECK validates over it; a
 //     projection that forgets source_platform on a un1t: row is REFUSED by
 //     the database (review focus 4); un1t_online needs the prefix on BOTH
 //     ids; the stats RPC stops counting a 'CANCELLED' booking (and still
 //     refuses anon/authenticated); the file aborts WHOLE on a write policy
 //     (the self-check) or a pre-existing mismatched row (VALIDATE
-//     CONSTRAINT); the stale mig 288/726/730 comments are refreshed; a
+//     CONSTRAINT); the stale mig 288/726/734 comments are refreshed; a
 //     second run passes.
 // Fictional ids only: the repo is public.
 
@@ -25,9 +25,9 @@ import { PGlite } from '@electric-sql/pglite'
 import { sqlCode } from './helpers/sql-code.js'
 
 const MIGRATIONS = path.resolve(import.meta.dirname, '../supabase/migrations')
-const MIG_733_PATH = path.join(MIGRATIONS, '733_class_bookings_source_platform.sql')
+const MIG_737_PATH = path.join(MIGRATIONS, '737_class_bookings_source_platform.sql')
 const MIG_513 = readFileSync(path.join(MIGRATIONS, '513_campaign_outcome_stats.sql'), 'utf8')
-const readMig733 = () => readFileSync(MIG_733_PATH, 'utf8')
+const readMig737 = () => readFileSync(MIG_737_PATH, 'utf8')
 
 /** SQL with its comments blanked by the quote-aware scanner (GUARDSTRIP.1). */
 const code = (sql) => sqlCode(sql)
@@ -42,9 +42,9 @@ function fnBody(sql) {
   return sql.slice(open + 2, close)
 }
 
-describe('mig 733 — file text', () => {
+describe('mig 737 — file text', () => {
   it('adds source_platform with the glofox default and the two-value CHECK', () => {
-    const sql = squash(code(readMig733()))
+    const sql = squash(code(readMig737()))
     expect(sql).toContain(
       "ALTER TABLE public.class_bookings ADD COLUMN IF NOT EXISTS source_platform text NOT NULL DEFAULT 'glofox' " +
       "CONSTRAINT class_bookings_source_platform_check CHECK (source_platform IN ('glofox', 'un1t_online'));")
@@ -53,7 +53,7 @@ describe('mig 733 — file text', () => {
   })
 
   it('the namespace CHECK ties un1t_online to the un1t: prefix on BOTH ids', () => {
-    const sql = squash(code(readMig733()))
+    const sql = squash(code(readMig737()))
     expect(sql).toContain(
       'ADD CONSTRAINT class_bookings_source_namespace_check CHECK (' +
       "(source_platform = 'un1t_online') = (glofox_booking_id LIKE 'un1t:%') " +
@@ -63,16 +63,16 @@ describe('mig 733 — file text', () => {
     expect(sql.indexOf('NOT VALID;')).toBeLessThan(sql.indexOf('VALIDATE CONSTRAINT'))
   })
 
-  it("campaign_outcome_stats keeps mig 513's body except the CANCELLED filter", () => {
-    const sql = readMig733()
+  it("campaign_outcome_stats keeps mig 513's body except the CANCELLED / NO_SHOW filter", () => {
+    const sql = readMig737()
     const before = fnBody(MIG_513)
     const after = fnBody(sql)
-    expect(after).toContain("and upper(coalesce(b.status, '')) <> 'CANCELLED'")
+    expect(after).toContain("and upper(coalesce(b.status, '')) NOT IN ('CANCELLED', 'NO_SHOW')")
     expect(after).not.toMatch(/is\s+distinct\s+from\s+'cancelled'/i)
     // Byte-for-byte mig 513 apart from that one line.
     expect(after).toBe(before.replace(
       "and b.status is distinct from 'cancelled'",
-      "and upper(coalesce(b.status, '')) <> 'CANCELLED'"))
+      "and upper(coalesce(b.status, '')) NOT IN ('CANCELLED', 'NO_SHOW')"))
     // Same signature, return shape and attributes as 513.
     const head = (s) => squash(s.slice(
       s.search(/create\s+or\s+replace\s+function\s+public\.campaign_outcome_stats/i),
@@ -84,21 +84,29 @@ describe('mig 733 — file text', () => {
     expect(c).toContain('grant execute on function public.campaign_outcome_stats(uuid, int) to service_role;')
   })
 
+  it('adds no id-shape CHECK on Glofox ids (dropped, Richard 17 Oct): only the two un1t: namespace CHECKs', () => {
+    const sql = squash(code(readMig737()))
+    expect(sql).not.toMatch(/\[0-9a-f\]\{24\}|\^\[0-9a-f\]|a-f0-9\]\{24\}/i)
+    // the platform-value CHECK and the namespace CHECK; nothing else
+    expect(sql.match(/\bcheck \(/gi)).toHaveLength(2)
+  })
+
   it('self-check reads the catalog', () => {
-    const sql = code(readMig733())
+    const sql = code(readMig737())
     const doBlock = sql.slice(sql.indexOf('DO $$'))
     expect(doBlock).toContain('information_schema.columns')
     expect(doBlock).toContain('pg_constraint')
     expect(doBlock).toContain("'class_bookings_source_platform_check'")
     expect(doBlock).toContain("'class_bookings_source_namespace_check'")
     expect(doBlock).toContain("has_table_privilege('authenticated', 'public.class_bookings', 'SELECT')")
+    expect(doBlock).toContain('attacl')
     expect(doBlock).toMatch(/pg_policy[\s\S]*polcmd IN \('a', 'w', 'd', '\*'\)/)
     expect(doBlock).toMatch(/has_function_privilege\('anon', 'public\.campaign_outcome_stats\(uuid, integer\)', 'EXECUTE'\)/)
     expect(doBlock).toMatch(/has_function_privilege\('authenticated', 'public\.campaign_outcome_stats\(uuid, integer\)', 'EXECUTE'\)/)
   })
 
   it('says it is applied to prod by the controller before merge and before the code deploys', () => {
-    const header = readMig733().split('\n').filter((l) => l.startsWith('--')).map((l) => l.replace(/^--\s?/, '')).join(' ')
+    const header = readMig737().split('\n').filter((l) => l.startsWith('--')).map((l) => l.replace(/^--\s?/, '')).join(' ')
     expect(squash(header)).toMatch(/applied to prod by the controller BEFORE merge/i)
     expect(squash(header)).toMatch(/before the code (that filters on it )?deploys/i)
   })
@@ -113,6 +121,8 @@ const C_BOOKED = 'c0000000-0000-0000-0000-000000000001'
 const C_CANCELLED = 'c0000000-0000-0000-0000-000000000002'
 const C_LOWER = 'c0000000-0000-0000-0000-000000000003'
 const C_NULL = 'c0000000-0000-0000-0000-000000000004'
+const C_NOSHOW = 'c0000000-0000-0000-0000-000000000005'
+const C_WAITING = 'c0000000-0000-0000-0000-000000000006'
 const CAMPAIGN = 'd0000000-0000-0000-0000-000000000001'
 const GLOFOX_EVENT = '0123456789abcdef01234567'
 const GLOFOX_BOOKING = '89abcdef0123456789abcdef'
@@ -163,7 +173,7 @@ const BASE_SCHEMA = `
   GRANT SELECT ON public.campaign_link_clicks, public.campaign_recipients, public.race_registrations,
     public.offer_purchases, public.race_payments TO service_role;
 
-  -- mig 726's tables (reduced) and mig 730's column, so 733 can refresh their comments.
+  -- mig 726's tables (reduced) and mig 734's column, so 737 can refresh their comments.
   CREATE TABLE public.un1t_bookings (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
   CREATE TABLE public.un1t_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
   CREATE TABLE public.class_occurrences (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), source_platform text NOT NULL DEFAULT 'glofox');
@@ -175,7 +185,7 @@ const BASE_SCHEMA = `
 
 const SEED = `
   INSERT INTO public.locations (id) VALUES ('${LOC}');
-  INSERT INTO public.contacts (id) VALUES ('${C_BOOKED}'), ('${C_CANCELLED}'), ('${C_LOWER}'), ('${C_NULL}');
+  INSERT INTO public.contacts (id) VALUES ('${C_BOOKED}'), ('${C_CANCELLED}'), ('${C_LOWER}'), ('${C_NULL}'), ('${C_NOSHOW}'), ('${C_WAITING}');
   INSERT INTO public.class_bookings (location_id, glofox_event_id, glofox_booking_id, status, attended)
     VALUES ('${LOC}', '${GLOFOX_EVENT}', '${GLOFOX_BOOKING}', 'BOOKED', true);
 `
@@ -190,7 +200,7 @@ async function boot({ migrate = true, before = '' } = {}) {
   await runSql(MIG_513)
   await runSql(SEED)
   if (before) await runSql(before)
-  if (migrate) await runSql(readMig733())
+  if (migrate) await runSql(readMig737())
 }
 
 afterEach(async () => { await db?.close(); db = undefined })
@@ -219,7 +229,7 @@ async function insertAs(fields) {
   }
 }
 
-describe('mig 733 — class_bookings behaviour', () => {
+describe('mig 737 — class_bookings behaviour', () => {
   it('an existing Glofox row takes the glofox default and the namespace CHECK is validated', async () => {
     await boot()
     const { rows } = await db.query('SELECT source_platform FROM public.class_bookings')
@@ -258,7 +268,7 @@ describe('mig 733 — class_bookings behaviour', () => {
     await boot({ migrate: false, before: `
       INSERT INTO public.class_bookings (location_id, glofox_event_id, glofox_booking_id)
         VALUES ('${LOC}', 'un1t:evt-early', 'un1t:bk-early');` })
-    await expect(runSql(readMig733())).rejects.toThrow(/class_bookings_source_namespace_check/)
+    await expect(runSql(readMig737())).rejects.toThrow(/class_bookings_source_namespace_check/)
     await runSql('ROLLBACK')
     const { rows } = await db.query(`
       SELECT count(*)::int AS n FROM information_schema.columns
@@ -269,7 +279,7 @@ describe('mig 733 — class_bookings behaviour', () => {
   it('the self-check aborts the whole file on a write policy', async () => {
     await boot({ migrate: false, before: `
       CREATE POLICY class_bookings_sneaky_write ON public.class_bookings FOR INSERT TO authenticated WITH CHECK (true);` })
-    await expect(runSql(readMig733())).rejects.toThrow(/write .*policy/i)
+    await expect(runSql(readMig737())).rejects.toThrow(/write .*policy/i)
     await runSql('ROLLBACK')
     const { rows } = await db.query(`
       SELECT count(*)::int AS n FROM information_schema.columns
@@ -279,18 +289,46 @@ describe('mig 733 — class_bookings behaviour', () => {
 
   it('the self-check aborts the whole file if a client can execute the stats RPC', async () => {
     await boot({ migrate: false })
-    // A later file re-opening EXECUTE after 733 is what the guard test catches;
-    // here prove the catalog check itself fires by running 733 with the
+    // A later file re-opening EXECUTE after 737 is what the guard test catches;
+    // here prove the catalog check itself fires by running 737 with the
     // revoke stripped out after a grant.
     await runSql('GRANT EXECUTE ON FUNCTION public.campaign_outcome_stats(uuid, int) TO authenticated')
-    const withoutRevoke = readMig733().replace(/revoke execute on function public\.campaign_outcome_stats[^;]*;/i, '')
+    const withoutRevoke = readMig737().replace(/revoke execute on function public\.campaign_outcome_stats[^;]*;/i, '')
     await expect(runSql(withoutRevoke)).rejects.toThrow(/a client role can execute campaign_outcome_stats; it is service_role only/)
     await runSql('ROLLBACK')
   }, 60_000)
 
+  it('the self-check aborts the whole file when campaign_outcome_stats lacks the NO_SHOW filter', async () => {
+    await boot({ migrate: false })
+    // Only the function body (single quotes) changes; the self-check's own
+    // search text is quote-doubled and untouched, so it must be the one to fire.
+    const cancelledOnly = readMig737().replace(
+      "and upper(coalesce(b.status, '')) NOT IN ('CANCELLED', 'NO_SHOW')",
+      "and upper(coalesce(b.status, '')) <> 'CANCELLED'")
+    expect(cancelledOnly).not.toBe(readMig737())
+    await expect(runSql(cancelledOnly)).rejects.toThrow(/does not carry the CANCELLED \/ NO_SHOW filter/)
+    await runSql('ROLLBACK')
+    const { rows } = await db.query(`
+      SELECT count(*)::int AS n FROM information_schema.columns
+       WHERE table_name = 'class_bookings' AND column_name = 'source_platform'`)
+    expect(rows[0].n).toBe(0)
+  }, 60_000)
+
+  it('the self-check aborts the whole file if class_bookings has been column-granted', async () => {
+    await boot({ migrate: false, before: 'GRANT SELECT (status) ON public.class_bookings TO authenticated;' })
+    await expect(runSql(readMig737())).rejects.toThrow(/column-granted/)
+    await runSql('ROLLBACK')
+  }, 60_000)
+
+  it('a glofox row with a non-hex booking id is still accepted (no id-shape CHECK)', async () => {
+    await boot()
+    expect(await insertAs({ source_platform: 'glofox', glofox_event_id: 'not-hex-event', glofox_booking_id: 'not-hex-booking' })).toBe('ok')
+    expect(await insertAs({ glofox_event_id: 'ZZ-evt', glofox_booking_id: 'ZZ-bk' })).toBe('ok')
+  }, 60_000)
+
   it('is re-runnable', async () => {
     await boot()
-    await runSql(readMig733())
+    await runSql(readMig737())
     const { rows } = await db.query(`
       SELECT count(*)::int AS n FROM pg_constraint
        WHERE conrelid = 'public.class_bookings'::regclass AND conname = 'class_bookings_source_namespace_check'`)
@@ -309,7 +347,7 @@ describe('mig 733 — class_bookings behaviour', () => {
     expect(rows[0].tbl).toMatch(/class_bookings/)
   }, 60_000)
 
-  it("refreshes mig 288's and mig 730's comments, which said un1t_online classes had no class_bookings rows", async () => {
+  it("refreshes mig 288's and mig 734's comments, which said un1t_online classes had no class_bookings rows", async () => {
     await boot()
     const { rows } = await db.query(`
       SELECT obj_description('public.class_bookings'::regclass, 'pg_class') AS bookings,
@@ -319,7 +357,7 @@ describe('mig 733 — class_bookings behaviour', () => {
     const { bookings, occ_col: occCol, events } = rows[0]
     expect(bookings).toMatch(/Glofox .*and un1t\.online .*distinguished by source_platform/)
     expect(bookings).toMatch(/reminds and credits only source_platform = 'glofox'/)
-    expect(occCol).toMatch(/^UN1TCLASS\.1 \(mig 730\) \/ UN1TBOOK\.1 \(mig 733\) — glofox \| un1t_online\./)
+    expect(occCol).toMatch(/^UN1TCLASS\.1 \(mig 734\) \/ UN1TBOOK\.1 \(mig 737\) — glofox \| un1t_online\./)
     expect(occCol).toMatch(/projected into class_bookings/)
     expect(occCol).toMatch(/never reminds or credits/)
     expect(occCol).not.toMatch(/NO class_bookings rows/i)
@@ -330,18 +368,21 @@ describe('mig 733 — class_bookings behaviour', () => {
   }, 60_000)
 })
 
-describe('mig 733 — campaign_outcome_stats', () => {
+describe('mig 737 — campaign_outcome_stats', () => {
   const T0 = '2026-10-01T09:00:00Z'
   const IN_WINDOW = '2026-10-03T09:00:00Z'
   const SEED_STATS = `
     INSERT INTO public.campaign_link_clicks (campaign_id, contact_id, clicked_at) VALUES
       ('${CAMPAIGN}', '${C_BOOKED}', '${T0}'), ('${CAMPAIGN}', '${C_CANCELLED}', '${T0}'),
-      ('${CAMPAIGN}', '${C_LOWER}', '${T0}'), ('${CAMPAIGN}', '${C_NULL}', '${T0}');
+      ('${CAMPAIGN}', '${C_LOWER}', '${T0}'), ('${CAMPAIGN}', '${C_NULL}', '${T0}'),
+      ('${CAMPAIGN}', '${C_NOSHOW}', '${T0}'), ('${CAMPAIGN}', '${C_WAITING}', '${T0}');
     INSERT INTO public.class_bookings (location_id, glofox_event_id, glofox_booking_id, contact_id, starts_at, status) VALUES
       ('${LOC}', 'ev-a', 'bk-a', '${C_BOOKED}', '${IN_WINDOW}', 'BOOKED'),
       ('${LOC}', 'ev-b', 'bk-b', '${C_CANCELLED}', '${IN_WINDOW}', 'CANCELLED'),
       ('${LOC}', 'ev-c', 'bk-c', '${C_LOWER}', '${IN_WINDOW}', 'cancelled'),
-      ('${LOC}', 'ev-d', 'bk-d', '${C_NULL}', '${IN_WINDOW}', NULL);
+      ('${LOC}', 'ev-d', 'bk-d', '${C_NULL}', '${IN_WINDOW}', NULL),
+      ('${LOC}', 'ev-e', 'bk-e', '${C_NOSHOW}', '${IN_WINDOW}', 'NO_SHOW'),
+      ('${LOC}', 'ev-f', 'bk-f', '${C_WAITING}', '${IN_WINDOW}', 'WAITING');
   `
   const attendances = async () => {
     const rows = await asRole('service_role',
@@ -349,14 +390,14 @@ describe('mig 733 — campaign_outcome_stats', () => {
     return rows.find((r) => r.cohort === 'clicked')
   }
 
-  it("before 733 an upper-case 'CANCELLED' booking counted as an attendance", async () => {
+  it("before 737 an upper-case 'CANCELLED' booking and a NO_SHOW counted as an attendance", async () => {
     await boot({ migrate: false, before: SEED_STATS })
-    expect(await attendances()).toEqual({ cohort: 'clicked', contacts: 4, class_attendances: 3 })
+    expect(await attendances()).toEqual({ cohort: 'clicked', contacts: 6, class_attendances: 5 })
   }, 60_000)
 
-  it('after 733 neither spelling of cancelled counts; BOOKED and a null status still do', async () => {
+  it('after 737 neither cancelled spelling nor NO_SHOW counts; BOOKED, WAITING and a null status still do', async () => {
     await boot({ before: SEED_STATS })
-    expect(await attendances()).toEqual({ cohort: 'clicked', contacts: 4, class_attendances: 2 })
+    expect(await attendances()).toEqual({ cohort: 'clicked', contacts: 6, class_attendances: 3 })
   }, 60_000)
 
   it('stays service_role only and security invoker', async () => {
