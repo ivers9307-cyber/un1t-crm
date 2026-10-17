@@ -68,7 +68,8 @@ export async function fetchCrossoverContext(db, contacts, activeLocationId) {
 
 // Authorisation gate for the contact DETAIL view. Returns true when the
 // caller may open this contact: they're master, they OWN it (its location
-// is one of theirs), or it's a crossover INTO one of their studios (the
+// is one of theirs), they hold an ACTIVE membership at one of the caller's
+// studios (UN1TDUAL.2), or it's a crossover INTO one of their studios (the
 // contact has a deal there). The crossover branch is what keeps this in
 // step with the list's owned ∪ crossover visibility — gating the detail
 // page strictly by ownership would 404 every crossover row an operator
@@ -86,6 +87,21 @@ export async function canViewContact(db, user, contact) {
   if (contact.location_id && locIds.includes(contact.location_id)) return true
   if (locIds.length === 0 || !contact.id) return false
   try {
+    // UN1TDUAL.2 — an ACTIVE membership at one of the caller's studios opens
+    // the contact even though its row is owned elsewhere (a Stillorgan
+    // member who also holds a Hatch Street membership). Mirrors the RLS /
+    // crossover widening in mig 731. An ended membership grants nothing.
+    // A read error DENIES: this gate is the boundary on a service-role read.
+    const { data: memberships, error: membershipErr } = await db
+      .from('contact_memberships')
+      .select('id')
+      .eq('contact_id', contact.id)
+      .eq('status', 'active')
+      .in('location_id', locIds)
+      .limit(1)
+    if (membershipErr) return false
+    if (Array.isArray(memberships) && memberships.length > 0) return true
+
     const { data } = await db
       .from('deals')
       .select('id')
