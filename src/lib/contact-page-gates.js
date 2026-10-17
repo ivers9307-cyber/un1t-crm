@@ -255,8 +255,9 @@ export function contactWorkGates(user, contact) {
     // assertLocationAccessOr404), HR devices (/api/contacts/[id]/devices, a
     // location-scope 403) and Marketing preferences
     // (/api/contacts/[id]/marketing-preferences, assertLocationAccessOr404).
-    // A crossover viewer (a deal or an active membership at their studio, none
-    // of the contact's) opens the page but would see three error boxes.
+    // A crossover viewer (a deal, an active membership or a un1t.online client
+    // row at their studio, none of the contact's) opens the page but would
+    // see three error boxes.
     canReadStudioCards: isMemberOfContactStudio(user, loc),
   }
 }

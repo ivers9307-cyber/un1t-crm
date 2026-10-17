@@ -3,12 +3,15 @@ import { logError, logWarn } from '@/lib/log'
 // Crossover-contact helpers for the studio contacts list.
 //
 // A "crossover" is a contact OWNED by a different studio that nonetheless
-// has a deal OR an ACTIVE contact_memberships row at the active studio
-// (UN1TDUAL, mig 731). contacts.email is globally unique, so a person who's
+// has a deal, an ACTIVE contact_memberships row (UN1TDUAL, mig 731) or a
+// un1t_clients row (any un1t status; UN1TDUAL.4, mig 732) at the active
+// studio. contacts.email is globally unique, so a person who's
 // already a contact (e.g. a Stillorgan member) signing up via another
 // studio's public lead form reuses their existing contact + gets a deal at
-// the new studio, and a Stillorgan member who also buys a Hatch Street
-// membership keeps their one contact + gains an active membership there.
+// the new studio, a Stillorgan member who also buys a Hatch Street
+// membership keeps their one contact + gains an active membership there,
+// and a Hatch un1t.online client, lapsed or not, is linked to that one
+// contact by the un1t sync.
 // These helpers let the destination studio's contacts list surface those
 // people with their origin context.
 
@@ -19,9 +22,10 @@ import { logError, logWarn } from '@/lib/log'
 export const CROSSOVER_ID_CAP = 100
 
 // Contact ids that are GENUINE crossovers at this location: a contact with a
-// deal OR an ACTIVE membership here but OWNED by a DIFFERENT studio. Computed
-// by the crossover_contact_ids RPC (mig 251, widened to active memberships
-// by mig 731) — a server-side join, so the location's (possibly enormous: 8k+
+// deal, an ACTIVE membership or a un1t_clients row here but OWNED by a
+// DIFFERENT studio. Computed by the crossover_contact_ids RPC (mig 251,
+// widened to active memberships by mig 731 and to un1t clients by mig 732)
+// — a server-side join, so the location's (possibly enormous: 8k+
 // at Stillorgan) OWN deal-holder set never travels back as an id.in() URL.
 // The location's own contacts are deliberately excluded: the list query
 // already matches them via location_id = L, so including them in id.in() was
@@ -79,10 +83,11 @@ export async function fetchCrossoverContext(db, contacts, activeLocationId) {
 // Authorisation gate for the contact DETAIL view. Returns true when the
 // caller may open this contact: they're master, they OWN it (its location
 // is one of theirs), the contact holds an ACTIVE membership at one of the
-// caller's studios (UN1TDUAL.2), or it's a crossover INTO one of their
-// studios (the contact has a deal there). The membership and deal branches
-// are what keep this in step with the list's owned ∪ crossover visibility
-// (mig 731's crossover_contact_ids returns both) — gating the detail
+// caller's studios (UN1TDUAL.2), one of the caller's studios lists it as a
+// un1t.online client (UN1TDUAL.4), or it's a crossover INTO one of their
+// studios (the contact has a deal there). The membership, client and deal
+// branches are what keep this in step with the list's owned ∪ crossover
+// visibility (crossover_contact_ids returns all three since mig 732) — gating the detail
 // page strictly by ownership would 404 every crossover row an operator
 // can see in the list and click. The owner/master branches are pure (no
 // query); only a genuine crossover candidate pays for the deal probe.
@@ -113,12 +118,35 @@ export async function canViewContact(db, user, contact) {
       .in('location_id', locIds)
       .limit(1)
     if (membershipErr) {
-      logError('contact-crossovers', 'membership probe failed; falling through to deal probe', {
+      logError('contact-crossovers', 'membership probe failed; falling through to the client probe', {
         contactId: contact.id,
         code: membershipErr.code,
         message: membershipErr.message,
       })
     } else if (Array.isArray(memberships) && memberships.length > 0) {
+      return true
+    }
+
+    // UN1TDUAL.4 — a contact the studio's un1t.online account lists as a
+    // client (a un1t_clients row at one of the caller's studios linked to
+    // this contact) opens it too, whatever the un1t status: lapsed clients
+    // still get that studio's marketing. Mirrors mig 732. The live row is
+    // read, so a relink by the un1t sync moves access with it. Same failure
+    // rule as the membership probe: an error is logged (no PII) and falls
+    // through to the deal probe; it never grants.
+    const { data: clients, error: clientErr } = await db
+      .from('un1t_clients')
+      .select('id')
+      .eq('contact_id', contact.id)
+      .in('location_id', locIds)
+      .limit(1)
+    if (clientErr) {
+      logError('contact-crossovers', 'un1t client probe failed; falling through to deal probe', {
+        contactId: contact.id,
+        code: clientErr.code,
+        message: clientErr.message,
+      })
+    } else if (Array.isArray(clients) && clients.length > 0) {
       return true
     }
 
@@ -137,8 +165,9 @@ export async function canViewContact(db, user, contact) {
 // ── LISTFLAG.1 — "this person is also on another studio's list" ──────────
 //
 // Deliberately NOT the crossover mechanism above, and the gap between the two
-// is the whole reason this exists. `crossover_contact_ids` keys on **deals or
-// ACTIVE memberships** (deals only until mig 731), so at Hatch Street it
+// is the whole reason this exists. `crossover_contact_ids` keys on **deals,
+// ACTIVE memberships or un1t.online clients** (deals only until mig 731;
+// clients since mig 732), so at Hatch Street it
 // found exactly ONE person when this was written — while 33 Stillorgan-owned
 // contacts had registered interest in Hatch and were invisible in every list
 // view. Those 33 existed only as `contact_location_preferences` rows: the

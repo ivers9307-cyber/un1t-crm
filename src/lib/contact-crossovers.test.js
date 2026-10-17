@@ -228,9 +228,11 @@ describe('fetchListMembershipFlags', () => {
 describe('canViewContact', () => {
   // deals stub: resolves whatever rows the crossover deal-probe should see.
   // contact_memberships stub: no membership rows unless a test says so.
-  const dealStub = (rows, memberships = []) => stubFrom({
+  // un1t_clients stub: no client rows unless a test says so.
+  const dealStub = (rows, memberships = [], clients = []) => stubFrom({
     deals: () => ({ data: rows }),
     contact_memberships: () => ({ data: memberships }),
+    un1t_clients: () => ({ data: clients }),
   })
 
   it('master sees any contact without a db probe', async () => {
@@ -269,6 +271,7 @@ describe('canViewContact', () => {
       const db = stubFrom({
         contact_memberships: (calls) => { seen = calls; return { data: [{ id: 'm1' }] } },
         // deals would deny: proves the membership branch alone grants access.
+        un1t_clients: () => { throw new Error('should not be probed after a membership grants') },
         deals: () => ({ data: [] }),
       })
       expect(await canViewContact(db, user, contact)).toBe(true)
@@ -280,6 +283,7 @@ describe('canViewContact', () => {
       let seen = null
       const db = stubFrom({
         contact_memberships: (calls) => { seen = calls; return { data: [] } },
+        un1t_clients: () => ({ data: [] }),
         deals: () => ({ data: [] }),
       })
       expect(await canViewContact(db, user, contact)).toBe(false)
@@ -288,6 +292,7 @@ describe('canViewContact', () => {
     it('a membership read error fails closed when there is no deal', async () => {
       const db = stubFrom({
         contact_memberships: () => ({ data: null, error: { code: '42501', message: 'boom' } }),
+        un1t_clients: () => ({ data: [] }),
         deals: () => ({ data: [] }),
       })
       expect(await canViewContact(db, user, contact)).toBe(false)
@@ -295,6 +300,7 @@ describe('canViewContact', () => {
     it('a membership read error still opens a deal crossover', async () => {
       const db = stubFrom({
         contact_memberships: () => ({ data: null, error: { code: '42501', message: 'boom' } }),
+        un1t_clients: () => ({ data: [] }),
         deals: () => ({ data: [{ id: 'd1' }] }),
       })
       expect(await canViewContact(db, user, contact)).toBe(true)
@@ -309,6 +315,7 @@ describe('canViewContact', () => {
     it('owner / master / deal branches are unchanged', async () => {
       const noMembership = (rows) => stubFrom({
         contact_memberships: () => ({ data: [] }),
+        un1t_clients: () => ({ data: [] }),
         deals: () => ({ data: rows }),
       })
       expect(await canViewContact(null, { isMaster: true }, contact)).toBe(true)
@@ -319,6 +326,84 @@ describe('canViewContact', () => {
     it('never probes memberships for master, owner, or a caller with no studios', async () => {
       const db = stubFrom({
         contact_memberships: () => { throw new Error('should not be probed') },
+      })
+      expect(await canViewContact(db, { isMaster: true }, contact)).toBe(true)
+      expect(await canViewContact(db, { isMaster: false, locations: [{ id: 'L2' }] }, contact)).toBe(true)
+      expect(await canViewContact(db, { isMaster: false, locations: [] }, contact)).toBe(false)
+    })
+  })
+
+  describe('UN1TDUAL.4 — a un1t.online client of one of the caller studios', () => {
+    const user = { isMaster: false, locations: [{ id: 'L1' }, { id: 'L3' }] }
+    const contact = { id: 'c1', location_id: 'L2' }
+    const err = { data: null, error: { code: '42501', message: 'boom' } }
+
+    it('opens a contact linked as a un1t client at one of the user\'s studios', async () => {
+      let seen = null
+      const db = stubFrom({
+        contact_memberships: () => ({ data: [] }),
+        un1t_clients: (calls) => { seen = calls; return { data: [{ id: 'u1' }] } },
+        // deals would deny: proves the client branch alone grants access.
+        deals: () => ({ data: [] }),
+      })
+      expect(await canViewContact(db, user, contact)).toBe(true)
+      expect(seen.filters).toEqual({ contact_id: 'c1', location_id: ['L1', 'L3'] })
+      // any un1t status counts: the probe never filters on it
+      expect(seen.filters).not.toHaveProperty('status')
+      expect(seen.limit).toBe(1)
+    })
+    it('a client row at another studio does not open it', async () => {
+      // The query is scoped to the caller's studios, so a row at L2 comes back empty.
+      let seen = null
+      const db = stubFrom({
+        contact_memberships: () => ({ data: [] }),
+        un1t_clients: (calls) => { seen = calls; return { data: [] } },
+        deals: () => ({ data: [] }),
+      })
+      expect(await canViewContact(db, user, contact)).toBe(false)
+      expect(seen.filters.location_id).toEqual(['L1', 'L3'])
+    })
+    it('a un1t_clients read error falls through to the deal probe and never grants', async () => {
+      const noDeal = stubFrom({ contact_memberships: () => ({ data: [] }), un1t_clients: () => err, deals: () => ({ data: [] }) })
+      expect(await canViewContact(noDeal, user, contact)).toBe(false)
+      // an error that also carries rows still never grants
+      const errWithRows = stubFrom({
+        contact_memberships: () => ({ data: [] }),
+        un1t_clients: () => ({ data: [{ id: 'u1' }], error: { code: '500', message: 'boom' } }),
+        deals: () => ({ data: [] }),
+      })
+      expect(await canViewContact(errWithRows, user, contact)).toBe(false)
+      const deal = stubFrom({ contact_memberships: () => ({ data: [] }), un1t_clients: () => err, deals: () => ({ data: [{ id: 'd1' }] }) })
+      expect(await canViewContact(deal, user, contact)).toBe(true)
+    })
+    it('a un1t_clients read error never hides a membership crossover (the membership probe runs first)', async () => {
+      const db = stubFrom({
+        contact_memberships: () => ({ data: [{ id: 'm1' }] }),
+        un1t_clients: () => err,
+        deals: () => ({ data: [] }),
+      })
+      expect(await canViewContact(db, user, contact)).toBe(true)
+    })
+    it('a membership read error still lets a client row open it', async () => {
+      const db = stubFrom({
+        contact_memberships: () => err,
+        un1t_clients: () => ({ data: [{ id: 'u1' }] }),
+        deals: () => ({ data: [] }),
+      })
+      expect(await canViewContact(db, user, contact)).toBe(true)
+    })
+    it('a thrown un1t_clients read fails closed', async () => {
+      const db = stubFrom({
+        contact_memberships: () => ({ data: [] }),
+        un1t_clients: () => { throw new Error('network') },
+        deals: () => ({ data: [{ id: 'd1' }] }),
+      })
+      expect(await canViewContact(db, user, contact)).toBe(false)
+    })
+    it('never probes un1t_clients for master, owner, or a caller with no studios', async () => {
+      const db = stubFrom({
+        contact_memberships: () => ({ data: [] }),
+        un1t_clients: () => { throw new Error('should not be probed') },
       })
       expect(await canViewContact(db, { isMaster: true }, contact)).toBe(true)
       expect(await canViewContact(db, { isMaster: false, locations: [{ id: 'L2' }] }, contact)).toBe(true)
