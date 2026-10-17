@@ -1,4 +1,5 @@
 import { logError, logWarn } from '@/lib/log'
+import { hasPermissionForLocation, hasMobilePermissionForLocation } from '@/lib/permissions'
 
 // Crossover-contact helpers for the studio contacts list.
 //
@@ -83,14 +84,22 @@ export async function fetchCrossoverContext(db, contacts, activeLocationId) {
 // Authorisation gate for the contact DETAIL view. Returns true when the
 // caller may open this contact: they're master, they OWN it (its location
 // is one of theirs), the contact holds an ACTIVE membership at one of the
-// caller's studios (UN1TDUAL.2), one of the caller's studios lists it as a
-// un1t.online client (UN1TDUAL.4), or it's a crossover INTO one of their
-// studios (the contact has a deal there). The membership, client and deal
-// branches are what keep this in step with the list's owned ∪ crossover
-// visibility (crossover_contact_ids returns all three since mig 732) — gating the detail
-// page strictly by ownership would 404 every crossover row an operator
-// can see in the list and click. The owner/master branches are pure (no
-// query); only a genuine crossover candidate pays for the deal probe.
+// caller's studios where they hold Contacts (UN1TDUAL.2), one of those
+// studios lists it as a un1t.online client (UN1TDUAL.4), or it's a
+// crossover INTO one of their studios (the contact has a deal there). The
+// membership, client and deal branches are what keep this in step with the
+// list's owned ∪ crossover visibility (crossover_contact_ids returns all
+// three since mig 732) — gating the detail page strictly by ownership would
+// 404 every crossover row an operator can see in the list and click. The
+// owner/master branches are pure (no query); only a genuine crossover
+// candidate pays for the probes.
+//
+// The membership and client probes mirror RLS (migs 731/732), which admits
+// them only at studios in private.auth_contact_read_location_ids(): where
+// the caller holds Contacts on the web OR the phone. So they probe only
+// those studios (contactStudioIds), judged by the same resolvers mig 690's
+// parity test checks that SQL against. The owned branch and the deal probe
+// keep their older studio-membership rule (unchanged here).
 //
 // Security-critical, so it FAILS CLOSED: a missing user/contact, no
 // location assignments, or a query error all deny. Reads via the
@@ -102,52 +111,12 @@ export async function canViewContact(db, user, contact) {
   const locIds = (user.locations || []).map((l) => l && l.id).filter(Boolean)
   if (contact.location_id && locIds.includes(contact.location_id)) return true
   if (locIds.length === 0 || !contact.id) return false
+  // The caller's studios where they hold Contacts (web or phone), the set
+  // RLS's membership/client branch reads. Empty → both probes are skipped.
+  const contactLocIds = contactStudioIds(user, locIds)
   try {
-    // UN1TDUAL.2 — an ACTIVE membership at one of the caller's studios opens
-    // the contact even though its row is owned elsewhere (a Stillorgan
-    // member who also holds a Hatch Street membership). Mirrors the RLS /
-    // crossover widening in mig 731. An ended membership grants nothing.
-    // A read error denies only THIS branch (logged, no PII), then falls
-    // through to the deal probe, so a contact_memberships outage cannot hide
-    // a deal crossover. It never grants.
-    const { data: memberships, error: membershipErr } = await db
-      .from('contact_memberships')
-      .select('id')
-      .eq('contact_id', contact.id)
-      .eq('status', 'active')
-      .in('location_id', locIds)
-      .limit(1)
-    if (membershipErr) {
-      logError('contact-crossovers', 'membership probe failed; falling through to the client probe', {
-        contactId: contact.id,
-        code: membershipErr.code,
-        message: membershipErr.message,
-      })
-    } else if (Array.isArray(memberships) && memberships.length > 0) {
-      return true
-    }
-
-    // UN1TDUAL.4 — a contact the studio's un1t.online account lists as a
-    // client (a un1t_clients row at one of the caller's studios linked to
-    // this contact) opens it too, whatever the un1t status: lapsed clients
-    // still get that studio's marketing. Mirrors mig 732. The live row is
-    // read, so a relink by the un1t sync moves access with it. Same failure
-    // rule as the membership probe: an error is logged (no PII) and falls
-    // through to the deal probe; it never grants.
-    const { data: clients, error: clientErr } = await db
-      .from('un1t_clients')
-      .select('id')
-      .eq('contact_id', contact.id)
-      .in('location_id', locIds)
-      .limit(1)
-    if (clientErr) {
-      logError('contact-crossovers', 'un1t client probe failed; falling through to deal probe', {
-        contactId: contact.id,
-        code: clientErr.code,
-        message: clientErr.message,
-      })
-    } else if (Array.isArray(clients) && clients.length > 0) {
-      return true
+    if (contactLocIds.length > 0) {
+      if (await probeMembershipOrClient(db, contact.id, contactLocIds)) return true
     }
 
     const { data } = await db
@@ -160,6 +129,70 @@ export async function canViewContact(db, user, contact) {
   } catch {
     return false
   }
+}
+
+/** The caller's studios where they hold Contacts, web OR phone (mig 690's rule). */
+function contactStudioIds(user, locIds) {
+  return locIds.filter(
+    (id) =>
+      hasPermissionForLocation(user, id, 'contacts') ||
+      hasMobilePermissionForLocation(user, id, 'contacts')
+  )
+}
+
+/**
+ * True when the contact has an ACTIVE membership or a un1t_clients row at one
+ * of `locIds`. A read error is logged and treated as "no" for that probe
+ * only; it never grants. A thrown read propagates (the caller denies).
+ */
+async function probeMembershipOrClient(db, contactId, locIds) {
+  // UN1TDUAL.2 — an ACTIVE membership at one of the caller's Contacts
+  // studios opens the contact even though its row is owned elsewhere (a
+  // Stillorgan member who also holds a Hatch Street membership). Mirrors the
+  // RLS / crossover widening in mig 731. An ended membership grants nothing.
+  // A read error denies only THIS branch (logged, no PII), then falls
+  // through to the deal probe, so a contact_memberships outage cannot hide
+  // a deal crossover. It never grants.
+  const { data: memberships, error: membershipErr } = await db
+    .from('contact_memberships')
+    .select('id')
+    .eq('contact_id', contactId)
+    .eq('status', 'active')
+    .in('location_id', locIds)
+    .limit(1)
+  if (membershipErr) {
+    logError('contact-crossovers', 'membership probe failed; falling through to the client probe', {
+      contactId,
+      code: membershipErr.code,
+      message: membershipErr.message,
+    })
+  } else if (Array.isArray(memberships) && memberships.length > 0) {
+    return true
+  }
+
+  // UN1TDUAL.4 — a contact the studio's un1t.online account lists as a
+  // client (a un1t_clients row at one of the caller's Contacts studios
+  // linked to this contact) opens it too, whatever the un1t status: lapsed
+  // clients still get that studio's marketing. Mirrors mig 732. The live row is
+  // read, so a relink by the un1t sync moves access with it. Same failure
+  // rule as the membership probe: an error is logged (no PII) and falls
+  // through to the deal probe; it never grants.
+  const { data: clients, error: clientErr } = await db
+    .from('un1t_clients')
+    .select('id')
+    .eq('contact_id', contactId)
+    .in('location_id', locIds)
+    .limit(1)
+  if (clientErr) {
+    logError('contact-crossovers', 'un1t client probe failed; falling through to deal probe', {
+      contactId,
+      code: clientErr.code,
+      message: clientErr.message,
+    })
+  } else if (Array.isArray(clients) && clients.length > 0) {
+    return true
+  }
+  return false
 }
 
 // ── LISTFLAG.1 — "this person is also on another studio's list" ──────────
