@@ -3,7 +3,7 @@
 // the studio's booking confirmation message (settings.customer_agent
 // .booking_confirmation_text, the field Mia's approved bookings already use),
 // with the same default.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { DEFAULT_BOOK_CHAT_TEXT, bookChatConfirmationText, readBookChatTemplate } from './book-chat-copy.js'
 import { DEFAULT_BOOKING_CONFIRMATION_TEXT } from './agent/notify.js'
 
@@ -44,10 +44,13 @@ describe('bookChatConfirmationText', () => {
 })
 
 describe('readBookChatTemplate', () => {
-  const dbWith = (result) => ({
+  // MIAORG.1 — the template now comes through resolveAgentSettings: the
+  // location row, then its organisation's layer (`org`).
+  const dbWith = (result, org = null) => ({
     from: (t) => {
-      expect(t).toBe('locations')
-      const b = { select: () => b, eq: () => b, maybeSingle: async () => result }
+      expect(['locations', 'org_settings']).toContain(t)
+      const r = t === 'org_settings' ? { data: org ? { customer_agent: org } : null, error: null } : result
+      const b = { select: () => b, eq: () => b, maybeSingle: async () => r }
       return b
     },
   })
@@ -62,13 +65,29 @@ describe('readBookChatTemplate', () => {
   })
 
   it('a failed read is reported as an error, not as "unset"', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const r = await readBookChatTemplate(dbWith({ data: null, error: { message: 'boom' } }), 'L1')
     expect(r.template).toBeNull()
-    expect(r.error).toBe('boom')
+    expect(r.error).toBe('read_failed') // the resolver logs 'boom' itself
+    err.mockRestore()
   })
 
   it('a throwing client is reported as an error too', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const r = await readBookChatTemplate({ from: () => { throw new Error('down') } }, 'L1')
-    expect(r).toEqual({ template: null, error: 'down' })
+    expect(r).toEqual({ template: null, error: 'read_failed' })
+    err.mockRestore()
+  })
+
+  // MIAORG.1 Task 2 — resolved settings.
+  it('an org-only booking_confirmation_text reaches a studio that sets none', async () => {
+    const r = await readBookChatTemplate(dbWith({ data: { id: 'L1', organization_id: 'O1', settings: { customer_agent: { enabled: true } } }, error: null }, { booking_confirmation_text: 'Org: {class}.' }), 'L1')
+    expect(r).toEqual({ template: 'Org: {class}.', error: null })
+  })
+
+  it("no behaviour change: Stillorgan's blob (no text) and Hatch (no blob) are unset with the org layer null", async () => {
+    const { STILLORGAN_BLOB } = await import('./agent/settings-fixtures.test-helpers')
+    expect(await readBookChatTemplate(dbWith({ data: { id: 'L1', organization_id: 'O1', settings: { customer_agent: STILLORGAN_BLOB } }, error: null }), 'L1')).toEqual({ template: null, error: null })
+    expect(await readBookChatTemplate(dbWith({ data: { id: 'L1', organization_id: 'O1', settings: {} }, error: null }), 'L1')).toEqual({ template: null, error: null })
   })
 })

@@ -20,6 +20,7 @@ import { zoneOfLocation } from '@/lib/location-time'
 import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { staffActorName } from '@/lib/staff-actor-name'
+import { resolveAgentSettingsForLocation } from '@/lib/agent/settings-resolve'
 
 // PATCH /api/agent/membership-requests/[id] — staff decides a queued
 // agent request. Decision rights follow the comms surface (any staff
@@ -130,7 +131,7 @@ export async function PATCH(request, { params }) {
   let locationRow = null
   if (isMembershipKind) {
     const { data } = await db.from('locations')
-      .select('name, glofox_auto_cancel_memberships, settings')
+      .select('id, name, organization_id, glofox_auto_cancel_memberships, settings')
       .eq('id', row.location_id)
       .maybeSingle()
     locationRow = data || null
@@ -750,7 +751,7 @@ export async function PATCH(request, { params }) {
         finalStatus,
         endDate: details?.result?.local_planned_end_date || details?.requested_end_date || null,
         contact: membershipContact,
-        copy: resolveCancellationFormCopy(locationRow?.settings?.customer_agent?.cancellation_form),
+        copy: resolveCancellationFormCopy(await membershipFormBlock(db, row.location_id, locationRow)),
         locationName: locationRow?.name || '',
         declineTemplate: finalStatus === 'declined' ? await confirmationTemplate('decline') : null,
       })
@@ -797,4 +798,13 @@ export async function PATCH(request, { params }) {
     ? (details?.result?.local_planned_end_date || details?.requested_end_date || details?.end_date || null)
     : null
   return NextResponse.json({ success: true, request: data, executed, customer_notified: customerNotified, planned_end_date: plannedEndDate })
+}
+
+// MIAORG.1 — the cancellation form's copy block from the studio's RESOLVED Mia
+// settings (cancellation_form is studio-only, so it is the studio's own). No
+// row (an unreadable location) = every code default, as before.
+async function membershipFormBlock(db, locationId, locationRow) {
+  if (!locationRow) return null
+  const resolved = await resolveAgentSettingsForLocation(db, { ...locationRow, id: locationRow.id ?? locationId })
+  return resolved.ok ? resolved.settings.cancellation_form : null
 }

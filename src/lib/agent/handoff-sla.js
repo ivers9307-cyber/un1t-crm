@@ -43,6 +43,7 @@ import { pushOutcome } from '@/lib/push-outcome'
 import { logWarn, logError } from '@/lib/log'
 import { resolveRearmPatch } from './core'
 import { WA_STAFF_OUTBOUND_OR_FILTER } from '@/lib/whatsapp-staff-sources'
+import { resolveAgentSettingsForLocation } from './settings-resolve'
 
 export const HANDOFF_SLA_DEFAULT_MINUTES = 60
 // C21 PUSHDONE.1 — how long past the breach a failed escalation keeps being
@@ -73,6 +74,10 @@ export function resolveHandoffSlaMinutes(settings) {
 
 /**
  * Should this location be swept at all, and with what SLA? Pure.
+ *
+ * MIAORG.1 — pass the RESOLVED settings for a studio that has its own
+ * customer_agent config, and null for one that has none (the sweep does this
+ * from resolveAgentSettingsForLocation's `studio`).
  *
  * MIA-REVIEW.3 — deliberately NOT gated on the agent being ENABLED any more.
  * Conversations handed off while Mia was live still have customers waiting for
@@ -153,6 +158,8 @@ const HOUR_MS = 3_600_000
  */
 export function resolveAutoResolveHours(settings) {
   const read = (raw, fallback) => {
+    // MIAORG.1 T2-A — null / blank = "not set"; Number(null) is 0 (disabled).
+    if (raw == null || (typeof raw === 'string' && raw.trim() === '')) return fallback
     const n = Number(raw)
     if (!Number.isFinite(n)) return fallback
     return n > 0 ? Math.round(n) : 0
@@ -208,10 +215,14 @@ export async function runHandoffAutoResolve(db, { nowMs = Date.now() } = {}) {
 
   const locations = await readActiveLocations(db, 'auto-resolve', results)
 
+  const orgCache = new Map() // MIAORG.1 — one org read per organisation per tick
   for (const location of locations || []) {
-    const settings = location?.settings?.customer_agent || null
-    if (!settings) continue
-    const { afterReplyHours, staleHours } = resolveAutoResolveHours(settings)
+    // MIAORG.1 — windows from the resolved settings (DEFAULTS <- org <-
+    // studio), but only for a studio with its OWN config: one that never set
+    // Mia up has no Mia handoffs to chase.
+    const resolved = await resolveAgentSettingsForLocation(db, location, { orgCache })
+    if (!resolved.ok || !resolved.studio) continue
+    const { afterReplyHours, staleHours } = resolveAutoResolveHours(resolved.settings)
     if (!afterReplyHours && !staleHours) continue
 
     for (const channel of CHANNELS) {
@@ -339,7 +350,7 @@ async function readHumanRepliedAtMs(db, channel, conversationId, handedOffAtMs) 
 /** Active locations, or [] with the failure logged and counted (never a quiet run). */
 async function readActiveLocations(db, sweep, results) {
   const { data, error } = await db.from('locations')
-    .select('id, name, settings')
+    .select('id, name, organization_id, settings')
     .eq('active', true)
   if (error) {
     results.locations_unread = 1
@@ -358,9 +369,15 @@ export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
 
   const locations = await readActiveLocations(db, 'sla', results)
 
+  const orgCache = new Map() // MIAORG.1 — one org read per organisation per tick
   for (const location of locations || []) {
-    const settings = location?.settings?.customer_agent || null
-    const gate = shouldSweepLocation(settings)
+    // MIAORG.1 — the SLA comes from the resolved settings (an org-level
+    // handoff_sla_minutes reaches its studios), but the gate stays "the STUDIO
+    // has its own config": resolved settings always exist (DEFAULTS), so
+    // passing them for a studio with no blob would sweep every studio.
+    const resolved = await resolveAgentSettingsForLocation(db, location, { orgCache })
+    if (!resolved.ok) continue
+    const gate = shouldSweepLocation(resolved.studio ? resolved.settings : null)
     if (!gate.sweep) continue
     const slaMinutes = gate.slaMinutes
     const cutoffIso = new Date(nowMs - slaMinutes * MIN_MS).toISOString()

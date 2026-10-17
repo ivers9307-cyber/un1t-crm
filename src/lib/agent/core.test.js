@@ -883,6 +883,16 @@ describe('resolveVerifyFailHandoff', () => {
     expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: 3 })).toBe(3)
     expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: 2.6 })).toBe(3)
   })
+  // MIAORG.1 T2-A — null means UNSET. Resolved settings carry DEFAULTS'
+  // `handoff_after_verify_failures: null` where Stillorgan's blob has no key
+  // at all; Number(null) is 0, which read as "disabled" and would have
+  // switched the verify-fail handoff OFF at Stillorgan on deploy.
+  it('null / blank is unset (the default), never the 0 that disables it', () => {
+    expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: null })).toBe(2)
+    expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: undefined })).toBe(2)
+    expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: '' })).toBe(2)
+    expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: '  ' })).toBe(2)
+  })
   it('treats 0 / negative as disabled', () => {
     expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: 0 })).toBe(0)
     expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: -1 })).toBe(0)

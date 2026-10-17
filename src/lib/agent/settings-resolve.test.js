@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { logError } from '@/lib/log'
-import { mergeAgentSettings, resolveAgentSettings } from './settings-resolve'
+import { mergeAgentSettings, resolveAgentSettings, resolveAgentSettingsForLocation } from './settings-resolve'
 import { DEFAULTS, STUDIO_ONLY_KEYS } from './settings-contract'
 
 const LOC = 'a0000000-0000-0000-0000-0000000000a1'
@@ -267,5 +267,57 @@ describe('resolveAgentSettings', () => {
     expect(r.ok).toBe(true)
     expect(r.org).toBe(null)
     expect(db.calls).toHaveLength(1)
+  })
+})
+
+// MIAORG.1 Task 2 — callers that loop every location resolve per row and read
+// each organisation's layer once per run (orgCache), never once per studio.
+describe('resolveAgentSettingsForLocation + orgCache', () => {
+  beforeEach(() => vi.clearAllMocks())
+  const LOC2 = 'a0000000-0000-0000-0000-0000000000a2'
+  const ORG2 = 'b0000000-0000-0000-0000-0000000000b2'
+
+  it('resolves a location row already in hand without re-reading the studio', async () => {
+    const db = fakeDb({ locations: { data: null, error: { message: 'must not be read' } }, orgSettings: { data: { customer_agent: { tone: 'Org' } }, error: null } })
+    const r = await resolveAgentSettingsForLocation(db, locRow({ customer_agent: { enabled: true } }))
+    expect(r.ok).toBe(true)
+    expect(r.settings.enabled).toBe(true)
+    expect(r.settings.tone).toBe('Org')
+    expect(db.calls.map((c) => c.table)).toEqual(['org_settings'])
+  })
+
+  it('a missing row is not_found, with no query', async () => {
+    const db = fakeDb({ locations: { data: null, error: null }, orgSettings: { data: null, error: null } })
+    expect(await resolveAgentSettingsForLocation(db, null)).toEqual({ ok: false, reason: 'not_found' })
+    expect(db.calls).toHaveLength(0)
+  })
+
+  it('orgCache: one org read per organisation per run, shared across its studios', async () => {
+    const db = fakeDb({ locations: { data: null, error: null }, orgSettings: { data: { customer_agent: { tone: 'Org' } }, error: null } })
+    const orgCache = new Map()
+    const rows = [locRow({ customer_agent: { enabled: true } }), { ...locRow({}), id: LOC2 }, { ...locRow({}), id: 'a3', organization_id: ORG2 }]
+    const out = []
+    for (const row of rows) out.push(await resolveAgentSettingsForLocation(db, row, { orgCache }))
+    expect(out.every((r) => r.ok && r.settings.tone === 'Org')).toBe(true)
+    expect(db.calls.filter((c) => c.table === 'org_settings').map((c) => c.filters.organization_id)).toEqual([ORG, ORG2])
+  })
+
+  it('orgCache: a failed org read is logged once and the run resolves without the org layer', async () => {
+    const db = fakeDb({ locations: { data: null, error: null }, orgSettings: { data: null, error: { message: 'boom' } } })
+    const orgCache = new Map()
+    const a = await resolveAgentSettingsForLocation(db, locRow({ customer_agent: { enabled: true, tone: 'Studio' } }), { orgCache })
+    const b = await resolveAgentSettingsForLocation(db, { ...locRow({}), id: LOC2 }, { orgCache })
+    expect(a.settings).toEqual({ ...DEFAULTS, enabled: true, tone: 'Studio' })
+    expect(b.settings).toEqual(DEFAULTS)
+    expect(logError).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolveAgentSettings takes the same orgCache (backwards-compatible optional param)', async () => {
+    const db = fakeDb({ locations: { data: locRow({ customer_agent: { enabled: true } }), error: null }, orgSettings: { data: { customer_agent: { tone: 'Org' } }, error: null } })
+    const orgCache = new Map()
+    await resolveAgentSettings(db, LOC, { orgCache })
+    const r = await resolveAgentSettings(db, LOC, { orgCache })
+    expect(r.settings.tone).toBe('Org')
+    expect(db.calls.filter((c) => c.table === 'org_settings')).toHaveLength(1)
   })
 })

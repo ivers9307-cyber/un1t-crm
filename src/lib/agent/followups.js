@@ -30,6 +30,7 @@ import { instantToZonedParts, todayStrIn, getLocationZones, LocationZoneReadErro
 import { logError, logWarn } from '@/lib/log'
 import { countCheckinSends, readCheckinSendsToday, checkinDayStartIso } from './checkin-counts'
 import { isWhatsAppStaffOutbound } from '@/lib/whatsapp-staff-sources'
+import { resolveAgentSettingsForLocation } from './settings-resolve'
 
 // MIA-SONNET5 — kept in step with the inbound reply path so a nudge sounds
 // like the same person who answers the thread.
@@ -511,6 +512,16 @@ function anyStudioInDaytime(nowMs, locations, zones) {
   return list.some((l) => withinLocalDaytime(nowMs, zones.get(l?.id) ?? DEFAULT_TZ))
 }
 
+// MIAORG.1 — a studio's effective Mia settings for this tick: DEFAULTS <- its
+// organisation's <- its own (resolveAgentSettingsForLocation, on the row the
+// tick already read). enabled / test_mode / test_phones are studio-only, so an
+// org layer with follow-ups or check-ins on can never start sends at a studio
+// that is off: the runners' own gate below reads the studio's switches.
+async function tickSettings(db, location, orgCache) {
+  const resolved = await resolveAgentSettingsForLocation(db, location, { orgCache })
+  return resolved.ok ? resolved.settings : null
+}
+
 /**
  * One cron tick: for every location with follow-ups enabled, find
  * quiet open agent conversations and run the ladder. Never throws.
@@ -519,13 +530,16 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
   const results = { nudges: 0, templates: 0, skipped: 0 }
 
   const { data: locations } = await db.from('locations')
-    .select('id, name, settings')
+    .select('id, name, organization_id, settings')
     .eq('active', true)
   const zones = await readTickZones(db, locations, 'followups')
   if (zones && !anyStudioInDaytime(nowMs, locations, zones)) return { ...results, reason: 'quiet_hours' }
 
+  // MIAORG.1 — one org read per organisation per tick, shared by its studios.
+  const orgCache = new Map()
   for (const location of locations || []) {
-    const settings = location?.settings?.customer_agent || null
+    const settings = await tickSettings(db, location, orgCache)
+    if (!settings) continue
     const followups = { ...FOLLOWUP_DEFAULTS, ...(settings?.followups || {}) }
     if (!followups.enabled) continue
     // Follow-ups ride the agent: agent fully off ⇒ no proactive sends.
@@ -816,13 +830,15 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
   const bump = (reason) => { results.reasons[reason] = (results.reasons[reason] || 0) + 1 }
 
   const { data: locations } = await db.from('locations')
-    .select('id, name, settings')
+    .select('id, name, organization_id, settings')
     .eq('active', true)
   const zones = await readTickZones(db, locations, 'checkins')
   if (zones && !anyStudioInDaytime(nowMs, locations, zones)) return { ...results, reason: 'quiet_hours' }
 
+  const orgCache = new Map() // MIAORG.1 — one org read per organisation per tick
   for (const location of locations || []) {
-    const settings = location?.settings?.customer_agent || null
+    const settings = await tickSettings(db, location, orgCache)
+    if (!settings) continue
     const checkin = { ...CHECKIN_DEFAULTS, ...(settings?.first_class_checkin || {}) }
     if (!checkin.enabled) continue
     if (!settings?.enabled && !settings?.test_mode) continue

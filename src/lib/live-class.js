@@ -30,6 +30,7 @@ import { GOAL_DEFS, computeProgress, startOfMonth, startOfIsoWeek } from '@/lib/
 import { tierForMonths, nextTier, tierWindowMonths, windowedMonthsHit } from '@/lib/tiers'
 import { getLocationZone, monthStrIn } from '@/lib/location-time'
 import { getLocationBranding } from '@/lib/location-branding'
+import { resolveAgentSettings } from '@/lib/agent/settings-resolve'
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
@@ -644,9 +645,12 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
   // this-month points cross the gym target; tier is derived from the count of
   // banked months. Idempotent per (contact, month) via the unique constraint.
   try {
-    const { data: loc } = await db
-      .from('locations').select('settings').eq('id', session.location_id).maybeSingle()
-    const target = Number(loc?.settings?.customer_agent?.monthly_points_target) || 0
+    // MIAORG.1 — the target is a Mia setting, resolved DEFAULTS <- org <-
+    // studio (an org-wide target reaches a studio that sets none). `loc` keeps
+    // the raw row for tierWindowMonths (settings.scoring). Unreadable = no target.
+    const resolved = await resolveAgentSettings(db, session.location_id)
+    const loc = resolved.ok ? resolved.location : null
+    const target = (resolved.ok && Number(resolved.settings.monthly_points_target)) || 0
     if (target > 0) {
       // TZ.13 (D7) — the banked month is the studio's calendar month. An
       // unreadable zone throws into the catch below: no bank this session, the

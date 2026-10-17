@@ -92,12 +92,15 @@ export function mergeAgentSettings({ org = null, studio = null } = {}) {
  *
  * @param {object} db  service-role supabase client
  * @param {string} locationId
+ * @param {{ orgCache?: Map<string, Promise<object|null>> }} [opts]  MIAORG.1
+ *   Task 2 — pass one Map per run when resolving many studios so each
+ *   organisation's layer is read once per run (see resolveAgentSettingsForLocation).
  * @returns {Promise<
  *   { ok: true, settings: object, sources: object, studio: object|null, org: object|null,
  *     location: { id: string, name: string, timezone: string|null, organization_id: string|null, settings: object|null } }
  *   | { ok: false, reason: 'read_failed'|'not_found' }>}
  */
-export async function resolveAgentSettings(db, locationId) {
+export async function resolveAgentSettings(db, locationId, { orgCache } = {}) {
   if (!locationId) return { ok: false, reason: 'not_found' }
 
   let location
@@ -117,24 +120,58 @@ export async function resolveAgentSettings(db, locationId) {
     return { ok: false, reason: 'read_failed' }
   }
 
+  // The row was read BY this id, so it is this location's even if a narrow
+  // select (or a test fake) left `id` off it.
+  return resolveAgentSettingsForLocation(db, { ...location, id: location.id ?? locationId }, { orgCache })
+}
+
+// The org layer for one organisation, or null (no row, NULL column, or a
+// failed read, which is logged: the studio then resolves without it).
+async function readOrgLayer(db, organizationId, locationId) {
+  try {
+    const { data, error } = await db.from('org_settings')
+      .select('customer_agent')
+      .eq('organization_id', organizationId)
+      .maybeSingle()
+    if (error) {
+      logError('agent-settings', 'org settings read failed; resolving without the org layer', { locationId, organizationId, err: error })
+      return null
+    }
+    return isPlainObject(data?.customer_agent) ? data.customer_agent : null
+  } catch (err) {
+    logError('agent-settings', 'org settings read threw; resolving without the org layer', { locationId, organizationId, err })
+    return null
+  }
+}
+
+/**
+ * MIAORG.1 Task 2 — resolve from a `locations` row the caller already holds
+ * (the sweeps and runners that loop every studio). The row must carry
+ * `id`, `organization_id` and `settings` (and `name` / `timezone` if the
+ * caller wants them back on `location`); a row read without
+ * `organization_id` silently resolves without the org layer, so select it.
+ *
+ * `orgCache` (a Map, one per run): each organisation's layer is read once and
+ * shared by its studios. A failed org read is cached as "no org layer" for the
+ * rest of that run, logged once; the next run reads again.
+ *
+ * Same return shape as resolveAgentSettings; a missing row is not_found.
+ */
+export async function resolveAgentSettingsForLocation(db, location, { orgCache } = {}) {
+  if (!location || !location.id) return { ok: false, reason: 'not_found' }
+
   const studioRaw = location.settings?.customer_agent
   const studio = isPlainObject(studioRaw) ? studioRaw : null
 
   let org = null
-  if (location.organization_id) {
-    try {
-      const { data, error } = await db.from('org_settings')
-        .select('customer_agent')
-        .eq('organization_id', location.organization_id)
-        .maybeSingle()
-      if (error) {
-        logError('agent-settings', 'org settings read failed; resolving without the org layer', { locationId, organizationId: location.organization_id, err: error })
-      } else if (isPlainObject(data?.customer_agent)) {
-        org = data.customer_agent
-      }
-    } catch (err) {
-      logError('agent-settings', 'org settings read threw; resolving without the org layer', { locationId, organizationId: location.organization_id, err })
+  const orgId = location.organization_id
+  if (orgId) {
+    let pending = orgCache?.get(orgId)
+    if (!pending) {
+      pending = readOrgLayer(db, orgId, location.id)
+      orgCache?.set(orgId, pending)
     }
+    org = await pending
   }
 
   const { settings, sources } = mergeAgentSettings({ org, studio })

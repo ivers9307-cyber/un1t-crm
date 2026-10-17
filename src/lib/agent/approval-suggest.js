@@ -20,6 +20,7 @@ import { getLocationBranding } from '@/lib/location-branding'
 import { instantToZonedParts, zoneOfLocation } from '@/lib/location-time'
 import { resolveMembershipSource } from '@/lib/membership/source'
 import { anthropicMessages } from '@/lib/anthropic'
+import { resolveAgentSettings } from './settings-resolve'
 
 // MIA-SONNET5 — in step with the inbound reply path (see auto-reply.js).
 const AGENT_MODEL = 'claude-sonnet-5'
@@ -187,13 +188,12 @@ export async function composeApprovalSuggestion(db, row, { signal } = {}) {
   if (!messagesTable) return { error: 'unknown_channel' }
   if (!row?.location_id) return { error: 'no_location' }
 
-  const { data: location } = await db.from('locations')
-    .select('id, name, settings, timezone')
-    .eq('id', row.location_id)
-    .maybeSingle()
-  if (!location) return { error: 'location_not_found' }
-
-  const settings = location.settings?.customer_agent || null
+  // MIAORG.1 — Mia's settings resolved DEFAULTS <- org <- studio. An
+  // unreadable or missing studio is location_not_found, as it always was.
+  const resolved = await resolveAgentSettings(db, row.location_id)
+  if (!resolved.ok) return { error: 'location_not_found' }
+  const location = resolved.location
+  const settings = resolved.settings
 
   let historyRows = []
   if (row.conversation_id) {

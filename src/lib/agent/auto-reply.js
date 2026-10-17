@@ -29,6 +29,7 @@ import { buildCachedSystem } from './prompt'
 import { getLocationBranding } from '@/lib/location-branding'
 import { resolveMembershipSource } from '@/lib/membership/source'
 import { DEFAULTS } from './settings-contract'
+import { resolveAgentSettings } from './settings-resolve'
 import {
   shouldAgentReply,
   buildReplyTurnMessages,
@@ -167,12 +168,16 @@ const MODEL_MAX_TOKENS_RETRY = 2400
 const DEFAULT_LIMITS = { convHour: 20, locDay: 500 }
 
 function clampInt(v, fallback, min, max) {
+  // MIAORG.1 T2-A — null / blank = "not set": Number(null) is 0, which clamps
+  // to the floor of 1 (one reply an hour). A per-field org/studio merge of
+  // `limits` can carry a null field.
+  if (v == null || (typeof v === 'string' && v.trim() === '')) return fallback
   const n = Number(v)
   if (!Number.isFinite(n)) return fallback
   return Math.max(min, Math.min(max, Math.round(n)))
 }
 
-function resolveLimits(settings) {
+export function resolveLimits(settings) {
   const l = (settings && settings.limits) || {}
   return {
     convHour: clampInt(l.max_replies_per_conversation_per_hour, DEFAULT_LIMITS.convHour, 1, 1000),
@@ -465,11 +470,13 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   if (!apiKey) return { handled: false, reason: 'no_api_key' }
   if (!conversationId || !locationId) return { handled: false, reason: 'missing_context' }
 
-  const { data: loc } = await db.from('locations')
-    .select('name, settings, timezone')
-    .eq('id', locationId)
-    .single()
-  const settings = loc?.settings?.customer_agent || null
+  // MIAORG.1 — Mia's settings are DEFAULTS <- the organisation's <- this
+  // studio's (resolveAgentSettings; enabled/test_mode never come from the
+  // org). A failed studio read is what it always was: no settings, so the gate
+  // below answers 'disabled' and nothing is sent.
+  const resolved = await resolveAgentSettings(db, locationId)
+  const loc = resolved.ok ? resolved.location : null
+  const settings = resolved.ok ? resolved.settings : null
   // TZ.5 — the studio's clock, from the row already in hand (no second read):
   // quiet hours with no stored tz, "today" in the prompt, and every time or
   // date the tools hand the model (toolCtx.zone). An invalid or NULL column is
