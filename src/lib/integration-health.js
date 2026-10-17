@@ -79,18 +79,21 @@ export function un1tOnlineHealth(conn, now = Date.now()) {
   // row 'connected' and says so in last_error: that is a warning, not 'ok'.
   const syncedWithProblems = conn.status === 'connected' && !!conn.lastError
   if (status === 'ok' && syncedWithProblems) status = 'warn'
+  // UN1THARD.7 — the expiry date rides along on every detail, not only the
+  // healthy one: a warning that is about something else (unmatched contacts,
+  // a refused token) must not hide that the token also runs out next week.
+  const expiry = expiryKnown
+    ? `${expMs <= now ? 'token expired' : 'token expires'} ${new Date(expMs).toISOString().slice(0, 10)}`
+    : null
+  const withExpiry = (text) => (expiry ? `${text} · ${expiry}` : text)
   if (conn.status !== 'connected') {
-    return { status, detail: conn.lastError ? String(conn.lastError).slice(0, 120) : 'Needs attention' }
+    return { status, detail: withExpiry(conn.lastError ? String(conn.lastError).slice(0, 120) : 'Needs attention') }
   }
-  if (syncedWithProblems) return { status, detail: String(conn.lastError).slice(0, 160) }
+  if (syncedWithProblems) return { status, detail: withExpiry(String(conn.lastError).slice(0, 160)) }
   const parts = ['Connected']
   const title = conn.config?.studio_title
   if (title) parts.push(String(title))
-  if (expiryKnown) {
-    const day = new Date(expMs).toISOString().slice(0, 10)
-    parts.push(expMs <= now ? `token expired ${day}` : `token expires ${day}`)
-  }
-  return { status, detail: parts.join(' · ') }
+  return { status, detail: withExpiry(parts.join(' · ')) }
 }
 
 // Payment health over a 7d window (lower volume than email). race_payments
@@ -405,15 +408,21 @@ export async function getIntegrationHealth(db, locationId) {
   // an active connection, or when its membership source IS un1t_online (so a
   // chosen-but-unconnected studio reads "Not connected" rather than nothing).
   // Every other location has no such row at all: this integration is not part
-  // of its estate. An unreadable registry is "Unavailable", never absent.
+  // of its estate. An unreadable registry is "Unavailable", never absent, but
+  // only where the row would otherwise have shown (UN1THARD.7): a failed read
+  // used to paint "un1t.online: Unavailable" on every location in the estate,
+  // Stillorgan included. So a failed read falls through to the membership
+  // source check, and only a un1t_online studio (or one whose source cannot be
+  // read either) reads "Unavailable". A connect flips a 'none' studio to
+  // un1t_online, so every connected studio but one whose flip failed is caught.
   try {
     const { conn, error: connErr } = await readConnection(db, locationId, 'un1t_online')
-    if (connErr) throw connErr
-    let show = conn.source === 'registry'
+    let show = !connErr && conn.source === 'registry'
     if (!show) {
       const { data: loc, error: locErr } = await db.from('locations').select('membership_source').eq('id', locationId).maybeSingle()
       if (locErr) throw locErr
       show = loc?.membership_source === 'un1t_online'
+      if (show && connErr) throw connErr
     }
     if (show) {
       const g = un1tOnlineHealth(conn)

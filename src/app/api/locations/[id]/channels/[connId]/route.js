@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
-import { maskConnectionRow, buildConnectionPatch } from '@/lib/agent/channels'
+import { maskConnectionRow, buildConnectionPatch, SUPPORTED_PLATFORMS } from '@/lib/agent/channels'
 import { validateBody } from '@/lib/validate'
 import { canEditMiaSettings } from '@/lib/agent/settings-access'
 
@@ -13,6 +13,17 @@ import { canEditMiaSettings } from '@/lib/agent/settings-access'
 // MANAGER_ROLES gate, and a form echoing the stored value unchanged passes.
 // DELETE is not gated here: removing a connection is channel management.
 const MIA_SWITCH_OWNER_ONLY = 'Only an owner can switch the customer agent on or off for a channel.'
+
+// UN1THARD.5 — this route manages the connections its sibling POST creates
+// (SUPPORTED_PLATFORMS: Instagram, Messenger) and nothing else.
+// channel_connections also holds the registry rows that have their own,
+// stricter routes: un1t.online (/api/locations/[id]/un1t-online: owner or
+// master, token fingerprint, studio check), Glofox, UniFi, Sensibo, ThinQ,
+// BCA, Shelly, Sonos. A manager could PATCH or DELETE those here, past the
+// owner gate and the dedicated route's checks (a deleted un1t.online row stops
+// Hatch's sync). They are refused with a 409 that says where they are managed.
+const NOT_MANAGED_HERE = (platform) =>
+  `The ${platform} connection is managed in Settings → Integrations, not here.`
 
 const ChannelPatchSchema = z.object({
   label: z.string().optional(),
@@ -70,6 +81,9 @@ export async function PATCH(request, props) {
     .eq('location_id', locationId)
     .maybeSingle()
   if (!existing) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  if (!SUPPORTED_PLATFORMS.includes(existing.platform)) {
+    return NextResponse.json({ success: false, error: NOT_MANAGED_HERE(existing.platform) }, { status: 409 })
+  }
   if (typeof body.agent_enabled === 'boolean' && body.agent_enabled !== !!existing.agent_enabled &&
       !canEditMiaSettings(user, locationId)) {
     return NextResponse.json({ success: false, error: MIA_SWITCH_OWNER_ONLY }, { status: 403 })
@@ -116,6 +130,18 @@ export async function DELETE(request, props) {
   }
 
   const db = createServerClient()
+  // Which platform this row is decides whether this route may remove it.
+  const { data: existing, error: readError } = await db.from('channel_connections')
+    .select('platform')
+    .eq('id', connId)
+    .eq('location_id', locationId)
+    .maybeSingle()
+  if (readError) return NextResponse.json({ success: false, error: 'Could not read the connection.' }, { status: 500 })
+  if (!existing) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  if (!SUPPORTED_PLATFORMS.includes(existing.platform)) {
+    return NextResponse.json({ success: false, error: NOT_MANAGED_HERE(existing.platform) }, { status: 409 })
+  }
+
   const { error } = await db.from('channel_connections')
     .delete()
     .eq('id', connId)
