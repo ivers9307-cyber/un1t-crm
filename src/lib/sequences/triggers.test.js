@@ -664,24 +664,32 @@ describe('triggerSequencesForSegmentRemoved', () => {
 // from_slug, to_slug } — so this adapter is the one place that decides
 // when a placement result is a stage change worth firing.
 describe('triggerSequencesForDealPlacement (STAGETRIG.1)', () => {
-  const movedDb = () => mockDb({
-    contacts: { single: { id: 'c1', location_id: 'loc-1' } },
+  // HATCHPIPE.1 — the fence. A stage move only enrols when it happened on
+  // the primary board at the contact's OWN studio and is the source of the
+  // contact's pipeline_stage_slug (mig 736). Two reads of `contacts`: the
+  // fence re-read (maybeSingle) and the trigger's own (single).
+  const OPTS = { dealLocationId: 'loc-1', pipelineId: 'pl-1' }
+  const movedDb = (contactOverrides = {}) => mockDb({
+    contacts: {
+      maybeSingle: { id: 'c1', location_id: 'loc-1', pipeline_stage_slug: 'converted', ...contactOverrides },
+      single: { id: 'c1', location_id: 'loc-1' },
+    },
     email_sequences: { list: [
       { id: 's-welcome', trigger_config: { to_status: 'converted' }, audience_filter: null },
     ] },
   })
+  const MOVE = { action: 'move', deal_id: 'd1', from_slug: 'active_trial', to_slug: 'converted' }
 
   it('fires on a real move, with the from/to slugs the placement reported', async () => {
     createServerClient.mockReturnValue(movedDb())
-    await triggers.triggerSequencesForDealPlacement('c1', {
-      action: 'move', deal_id: 'd1', from_slug: 'active_trial', to_slug: 'converted',
-    })
+    await triggers.triggerSequencesForDealPlacement('c1', MOVE, OPTS)
     expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({
       sequenceId: 's-welcome',
       contactIds: ['c1'],
       sourceType: 'pipeline_stage_change',
       sourceRef: 'active_trial→converted',
     }))
+    expect(logWarn).not.toHaveBeenCalled()
   })
 
   // The no-op guard. The classifier is idempotent, so every sync of an
@@ -695,7 +703,7 @@ describe('triggerSequencesForDealPlacement (STAGETRIG.1)', () => {
     ['null', null],
     ['undefined', undefined],
   ])('does not fire for a %s placement result', async (_label, dealResult) => {
-    await triggers.triggerSequencesForDealPlacement('c1', dealResult)
+    await triggers.triggerSequencesForDealPlacement('c1', dealResult, OPTS)
     expect(createServerClient).not.toHaveBeenCalled()
     expect(enrolContacts).not.toHaveBeenCalled()
   })
@@ -703,14 +711,15 @@ describe('triggerSequencesForDealPlacement (STAGETRIG.1)', () => {
   it('does not fire when a move reports the same slug on both sides', async () => {
     await triggers.triggerSequencesForDealPlacement('c1', {
       action: 'move', from_slug: 'converted', to_slug: 'converted',
-    })
+    }, OPTS)
+    expect(createServerClient).not.toHaveBeenCalled()
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 
   it('does not fire without a contactId', async () => {
     await triggers.triggerSequencesForDealPlacement(null, {
       action: 'move', from_slug: 'a', to_slug: 'b',
-    })
+    }, OPTS)
     expect(createServerClient).not.toHaveBeenCalled()
   })
 
@@ -720,15 +729,99 @@ describe('triggerSequencesForDealPlacement (STAGETRIG.1)', () => {
     createServerClient.mockImplementation(() => { throw new Error('db down') })
     await expect(triggers.triggerSequencesForDealPlacement('c1', {
       action: 'move', from_slug: 'a', to_slug: 'b',
-    })).resolves.toBeUndefined()
+    }, OPTS)).resolves.toBeUndefined()
   })
 
   it('goes through the same enrolment guards as any other trigger (audience gate honoured)', async () => {
     contactMatchesSequenceAudience.mockResolvedValue(false)
     createServerClient.mockReturnValue(movedDb())
-    await triggers.triggerSequencesForDealPlacement('c1', {
-      action: 'move', from_slug: 'active_trial', to_slug: 'converted',
-    })
+    await triggers.triggerSequencesForDealPlacement('c1', MOVE, OPTS)
     expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  describe('HATCHPIPE.1 fence', () => {
+    it.each([
+      ['no options at all', undefined],
+      ['an empty options object', {}],
+      ['dealLocationId absent', { pipelineId: 'pl-1' }],
+      ['pipelineId absent', { dealLocationId: 'loc-1' }],
+    ])('refuses with missing_board when %s', async (_label, opts) => {
+      await triggers.triggerSequencesForDealPlacement('c1', MOVE, opts)
+      expect(createServerClient).not.toHaveBeenCalled()
+      expect(enrolContacts).not.toHaveBeenCalled()
+      expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_trigger_skipped', {
+        reason: 'missing_board',
+        dealLocationId: opts?.dealLocationId,
+      })
+    })
+
+    it('refuses cross_location when the deal is at another studio than the contact', async () => {
+      createServerClient.mockReturnValue(movedDb({ location_id: 'loc-2' }))
+      await triggers.triggerSequencesForDealPlacement('c1', MOVE, OPTS)
+      expect(enrolContacts).not.toHaveBeenCalled()
+      expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_trigger_skipped', {
+        reason: 'cross_location',
+        dealLocationId: 'loc-1',
+      })
+    })
+
+    it('refuses not_slug_source when the re-read slug differs from to_slug', async () => {
+      createServerClient.mockReturnValue(movedDb({ pipeline_stage_slug: 'lapsed' }))
+      await triggers.triggerSequencesForDealPlacement('c1', MOVE, OPTS)
+      expect(enrolContacts).not.toHaveBeenCalled()
+      expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_trigger_skipped', {
+        reason: 'not_slug_source',
+        dealLocationId: 'loc-1',
+      })
+    })
+
+    it('refuses contact_unreadable when the contact cannot be read', async () => {
+      createServerClient.mockReturnValue(mockDb({ contacts: { maybeSingle: null } }))
+      await triggers.triggerSequencesForDealPlacement('c1', MOVE, OPTS)
+      expect(enrolContacts).not.toHaveBeenCalled()
+      expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_trigger_skipped', {
+        reason: 'contact_unreadable',
+        dealLocationId: 'loc-1',
+      })
+    })
+
+    it('refuses contact_unreadable when the contact read errors', async () => {
+      const db = mockDb({ contacts: { maybeSingle: { id: 'c1' } } })
+      const from = db.from
+      db.from = vi.fn((t) => {
+        const b = from(t)
+        b.maybeSingle = vi.fn().mockResolvedValue({ data: null, error: { message: 'boom' } })
+        return b
+      })
+      createServerClient.mockReturnValue(db)
+      await triggers.triggerSequencesForDealPlacement('c1', MOVE, OPTS)
+      expect(enrolContacts).not.toHaveBeenCalled()
+      expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_trigger_skipped', {
+        reason: 'contact_unreadable',
+        dealLocationId: 'loc-1',
+      })
+    })
+
+    it('own-studio move that is the slug source enrols at that studio', async () => {
+      const db = movedDb()
+      createServerClient.mockReturnValue(db)
+      await triggers.triggerSequencesForDealPlacement('c1', MOVE, OPTS)
+      expect(db.from).toHaveBeenCalledWith('contacts')
+      const seqBuilder = db.from.mock.results
+        .map((r, i) => ({ r: r.value, t: db.from.mock.calls[i][0] }))
+        .find((x) => x.t === 'email_sequences').r
+      expect(seqBuilder.eq).toHaveBeenCalledWith('location_id', 'loc-1')
+      expect(enrolContacts).toHaveBeenCalledTimes(1)
+    })
+
+    it.each([
+      ['leave', { action: 'leave', stage_slug: 'x' }],
+      ['create', { action: 'create', stage_slug: 'x' }],
+      ['equal slugs', { action: 'move', from_slug: 'x', to_slug: 'x' }],
+    ])('%s still never enrols, fence or no fence', async (_label, dealResult) => {
+      createServerClient.mockReturnValue(movedDb())
+      await triggers.triggerSequencesForDealPlacement('c1', dealResult, OPTS)
+      expect(enrolContacts).not.toHaveBeenCalled()
+    })
   })
 })
