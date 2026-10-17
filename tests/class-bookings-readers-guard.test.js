@@ -13,11 +13,14 @@
 //  1. A new reader (a file, or a SQL object, not in MANIFEST) fails with its
 //     path: decide what a un1t.online row means for it, then list it.
 //  2. A listed reader that no longer reads the table fails as stale.
-//  3. Every `customer-messaging` file filters EVERY class_bookings chain on
-//     `.eq('source_platform', CRM_CLASS_MESSAGING_PLATFORM)` (or the literal
-//     'glofox'). The two that remind or credit (HARD_OFF) also name
-//     'un1t_online' in code (they drop rows at un1t_online studios) and use
-//     the constant, never a hard-coded 'glofox'.
+//  3. Every `customer-messaging` file scopes EVERY class_bookings chain: it
+//     carries `.eq('source_platform', CRM_CLASS_MESSAGING_PLATFORM)` (or the
+//     literal 'glofox'), or is the argument of `scopeToCrmActionable(` (UN1TBOOK.7,
+//     src/lib/class-booking-platform.js). The two that remind or credit
+//     (HARD_OFF) decide through that module (UN1TBOOK.8): every chain is wrapped
+//     in scopeToCrmActionable, the studios come from readUn1tOnlineLocationIds,
+//     and every returned row goes through crmMayActOnClassBooking, never a
+//     hard-coded 'glofox' or an inline un1t_online location read.
 //  4. A `.update(` or `.delete(` chained on class_bookings fails unless the
 //     chain names source_platform (nothing updates or deletes the table today;
 //     a Glofox reconcile that did would reach un1t rows). The same holds for
@@ -77,7 +80,11 @@ const HARD_OFF = Object.freeze([
 
 const FROM_CLASS_BOOKINGS = /\.from\(\s*(['"`])class_bookings\1\s*\)/g
 const SOURCE_FILTER = /\.eq\(\s*['"]source_platform['"]\s*,\s*(?:CRM_CLASS_MESSAGING_PLATFORM|['"]glofox['"])\s*\)/
-const SOURCE_FILTER_CONSTANT = /\.eq\(\s*['"]source_platform['"]\s*,\s*CRM_CLASS_MESSAGING_PLATFORM\s*\)/
+// UN1TBOOK.8 — the other way a chain is scoped: it is the argument of
+// scopeToCrmActionable(db.from('class_bookings')...), which classBookingsChains
+// reads back to the wrapper's opening so the chain text starts with it.
+const WRAPPED_SCOPE = /^scopeToCrmActionable\(/
+const isScoped = (chain) => SOURCE_FILTER.test(chain) || WRAPPED_SCOPE.test(chain)
 
 // ── JS: chains on class_bookings ─────────────────────────────────────────
 
@@ -104,7 +111,7 @@ function skipGroup(code, open) {
 function classBookingsChains(code) {
   const chains = []
   for (const m of code.matchAll(FROM_CLASS_BOOKINGS)) {
-    const start = m.index
+    let start = m.index
     let i = start + m[0].length
     for (;;) {
       let j = i
@@ -115,6 +122,10 @@ function classBookingsChains(code) {
       if (code[j] !== '(') break
       i = skipGroup(code, j)
     }
+    // `scopeToCrmActionable(db.from('class_bookings')...)`: the chain is the
+    // wrapper's whole argument (the receiver, then nothing but `)` / `,` after).
+    const before = /scopeToCrmActionable\(\s*[\w$.]+\s*$/.exec(code.slice(0, start))
+    if (before && /^\s*,?\s*\)/.test(code.slice(i))) start = before.index
     chains.push(code.slice(start, i))
   }
   return chains
@@ -250,18 +261,21 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
       if (e.kind !== 'customer-messaging') continue
       const reader = jsReaders().get(p)
       if (!reader) continue // the stale test reports it
-      reader.chains.forEach((c, i) => { if (!SOURCE_FILTER.test(c)) missing.push(`${p} (chain ${i + 1})`) })
+      reader.chains.forEach((c, i) => { if (!isScoped(c)) missing.push(`${p} (chain ${i + 1})`) })
     }
-    expect(missing, `Customer-messaging class_bookings reads without .eq('source_platform', CRM_CLASS_MESSAGING_PLATFORM): ${missing.join(', ')}`).toEqual([])
+    expect(missing, `Customer-messaging class_bookings reads neither carrying .eq('source_platform', CRM_CLASS_MESSAGING_PLATFORM) nor wrapped in scopeToCrmActionable(: ${missing.join(', ')}`).toEqual([])
   })
 
-  it('the reminder and crediting crons also drop un1t_online studios and use the constant', () => {
+  it('the reminder and crediting crons decide through the class-booking-platform predicate', () => {
     for (const p of HARD_OFF) {
       const reader = jsReaders().get(p)
       expect(reader, `${p} no longer reads class_bookings`).toBeTruthy()
-      expect(reader.code, `${p} must name 'un1t_online' in code (drop rows at un1t_online studios)`).toMatch(/['"]un1t_online['"]/)
-      for (const c of reader.chains) expect(c, `${p} must filter on CRM_CLASS_MESSAGING_PLATFORM, never a hard-coded 'glofox'`).toMatch(SOURCE_FILTER_CONSTANT)
-      expect(reader.code, `${p} must import CRM_CLASS_MESSAGING_PLATFORM from @/lib/class-bookings`).toMatch(/import\s*\{[^}]*\bCRM_CLASS_MESSAGING_PLATFORM\b[^}]*\}\s*from\s*['"]@\/lib\/class-bookings['"]/)
+      expect(reader.code, `${p} must read the un1t_online studios with readUn1tOnlineLocationIds(`).toMatch(/\breadUn1tOnlineLocationIds\(/)
+      expect(reader.code, `${p} must judge every returned row with crmMayActOnClassBooking(`).toMatch(/\bcrmMayActOnClassBooking\(/)
+      for (const c of reader.chains) expect(c, `${p} must wrap every class_bookings chain in scopeToCrmActionable(, never a hard-coded 'glofox'`).toMatch(WRAPPED_SCOPE)
+      for (const name of ['scopeToCrmActionable', 'crmMayActOnClassBooking', 'readUn1tOnlineLocationIds']) {
+        expect(reader.code, `${p} must import ${name} from @/lib/class-booking-platform`).toMatch(new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*['"]@/lib/class-booking-platform['"]`))
+      }
     }
   })
 
@@ -296,6 +310,27 @@ describe('class_bookings guard detectors', () => {
         .eq('attended', true)
     `)
     expect(classBookingsChains(code).every((c) => SOURCE_FILTER.test(c))).toBe(false)
+  })
+
+  it('a chain wrapped as scopeToCrmActionable(db.from(\'class_bookings\')…) counts as scoped; an unwrapped one does not', () => {
+    const chains = classBookingsChains(codeOf(`
+      const a = await scopeToCrmActionable(
+        db.from('class_bookings').select('id, source_platform'),
+      )
+        .eq('attended', true)
+        .range(from, from + PAGE - 1)
+      const b = await db
+        .from('class_bookings')
+        .select('id')
+        .eq('attended', true)
+      const c = await other(db.from('class_bookings').select('id'))
+      const d = await scopeToCrmActionable(db.from('class_bookings').select('id'))
+      const e = await scopeToCrmActionable(x).from('class_bookings').select('id')
+    `))
+    expect(chains).toHaveLength(5)
+    expect(chains.map(isScoped)).toEqual([true, false, false, true, false])
+    // The wrapped chain still reads as one chain (the .eq beyond the wrapper is not part of it).
+    expect(chains[0]).toMatch(/^scopeToCrmActionable\(\s*db\s*\.from\('class_bookings'\)\.select\('id, source_platform'\)$/)
   })
 
   it('flags an unscoped update / delete and passes a scoped one', () => {

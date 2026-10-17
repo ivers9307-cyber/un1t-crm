@@ -24,7 +24,7 @@ vi.mock('@/lib/supabase', () => ({
       // answers no studio: these test locations carry no membership_source.
       b.then = (res, rej) => Promise.resolve(table === 'locations'
         ? { data: eq.membership_source ? [] : locations, error: null }
-        : { data: [{ id: 'cb-1', contact_id: 'c-1', location_id: 'loc-1', class_name: 'HIIT', starts_at: STARTS }], error: null }).then(res, rej)
+        : { data: [{ id: 'cb-1', contact_id: 'c-1', location_id: 'loc-1', class_name: 'HIIT', starts_at: STARTS, source_platform: 'glofox' }], error: null }).then(res, rej)
       return b
     },
   }),
