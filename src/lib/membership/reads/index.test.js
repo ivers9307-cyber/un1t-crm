@@ -54,6 +54,15 @@ describe('membershipReadsFor', () => {
     expect(r.error).toBe('MEMBERSHIP_SOURCE_UNREADABLE')
   })
 
+  it('carries the state capabilities and missing names through (one state read serves a gate and radar flags)', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'unconfigured', label: 'Glofox', capabilities: { memberships: true }, missing: ['api_key'] })
+    const r = await membershipReadsFor(db, LOC)
+    expect(r.capabilities).toEqual({ memberships: true })
+    expect(r.missing).toEqual(['api_key'])
+    membershipStateForPage.mockResolvedValue({ source: 'none', state: 'none', label: 'X' })
+    expect(await membershipReadsFor(db, LOC)).toMatchObject({ capabilities: {}, missing: undefined })
+  })
+
   it('an unregistered source key → noneReads (supportsRead false)', async () => {
     membershipStateForPage.mockResolvedValue({ source: 'mystery', state: 'configured', label: 'mystery' })
     const r = await membershipReadsFor(db, LOC)

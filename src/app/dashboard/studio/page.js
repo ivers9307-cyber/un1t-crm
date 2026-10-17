@@ -28,7 +28,7 @@ import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadRadar } from '@/lib/churn-radar-data'
 import {
-  fetchMrr, fetchGrowth, fetchRevenueChurn, fetchEngagement,
+  fetchRevenueChurn,
   fetchFloor, fetchAdSpend, fetchAcquisition,
 } from '@shared/studio-kpis'
 import { BlockSkeleton, BlockError } from '@/components/dashboard/BusinessBlocks'
@@ -37,7 +37,8 @@ import {
   ScoreCell, ScoreGrid, RoleSection, FloorTable, LocationEmptyState,
   NotTrackedYet, euros,
 } from '@/components/dashboard/StudioScorecard'
-import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource, providesCapability } from '@/lib/membership/state-for-page'
+import { membershipSettingsHref, canManageMembershipSource, providesCapability } from '@/lib/membership/state-for-page'
+import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
 import MembershipSourceGate from '@/components/MembershipSourceGate'
 
 export const dynamic = 'force-dynamic'
@@ -68,22 +69,32 @@ function soft(promise) {
   return promise.then(r => (r?.success ? r.data : null)).catch(() => null)
 }
 
-async function loadLocationScorecard(locationId) {
+// UN1TREAD.4 — MRR, net growth and the active-member rate come through the
+// membership read seam (`r` is membershipReadsFor()'s answer, resolved ONCE by
+// the column). A Glofox adapter forwards the same arguments to the same
+// fetchers, so a Glofox column is unchanged. un1t.online supplies those three;
+// revenue churn needs membership_transitions.price_cents (Glofox only) and the
+// radar cells read Glofox tables (behind the memberships capability), so both
+// are null there and draw '— unavailable'. Acquisition and the floor read
+// contacts / class tables and stay source-agnostic.
+async function loadLocationScorecard(locationId, r) {
   const db = createServerClient()
+  const glofox = r.source === 'glofox'
+  const radarOk = providesCapability(r, 'memberships')
   // MRR first — its average yield prices unstamped (pre-mig-480)
   // cancels in the revenue-churn figure. Everything else is parallel.
-  const mrr = await soft(fetchMrr(db, locationId))
+  const mrr = await soft(r.reads.mrr(db, locationId))
   const estYield = mrr?.yieldCents || 0
 
   const [growth, churn, acq, engagement, floor, spend, radar] =
     await Promise.all([
-      soft(fetchGrowth(db, locationId)),
-      soft(fetchRevenueChurn(db, locationId, estYield)),
+      supportsRead(r, 'growth') ? soft(r.reads.growth(db, locationId)) : null,
+      glofox ? soft(fetchRevenueChurn(db, locationId, estYield)) : null,
       soft(fetchAcquisition(db, locationId)),
-      soft(fetchEngagement(db, locationId)),
+      supportsRead(r, 'engagement') ? soft(r.reads.engagement(db, locationId)) : null,
       soft(fetchFloor(db, locationId)),
       soft(fetchAdSpend(db, locationId)),
-      loadRadar(db, locationId).catch(() => null),
+      radarOk ? loadRadar(db, locationId).catch(() => null) : null,
     ])
   // Wholesale failure (e.g. DB unreachable) → column-level error.
   if (!mrr && !growth && !acq && !engagement && !floor) return null
@@ -98,11 +109,20 @@ async function LocationColumn({ user, location }) {
   // column gates on THIS studio's membership source before any query
   // runs (the board is per-studio: Stillorgan's column is unchanged while
   // Hatch Street's says why it is empty). The state read is cached 60 s.
-  const membership = await membershipStateForPage(createServerClient(), location.id)
-  if (!providesCapability(membership, 'memberships')) { // UN1TCAP.1: configured is not enough
+  // UN1TREAD.4 — asked ONCE through the read seam: the gate copy and the
+  // numbers are drawn from the same answer, so they cannot disagree. The
+  // column renders when the adapter reads MRR (Glofox and un1t.online);
+  // otherwise the gate, with capability forced off so a CONFIGURED source
+  // that cannot read MRR says "does not provide" rather than rendering nothing.
+  const r = await membershipReadsFor(createServerClient(), location.id)
+  if (!supportsRead(r, 'mrr')) {
+    const gateState = {
+      source: r.source, state: r.state, label: r.label, readError: r.error,
+      missing: r.missing, capabilities: { ...(r.capabilities || {}), memberships: false },
+    }
     return (
       <MembershipSourceGate
-        state={membership}
+        state={gateState}
         capability="memberships"
         settingsHref={membershipSettingsHref(location.id)}
         canManage={canManageMembershipSource(user, location.id)}
@@ -114,7 +134,7 @@ async function LocationColumn({ user, location }) {
 
   let vm = null
   try {
-    vm = await loadLocationScorecard(location.id)
+    vm = await loadLocationScorecard(location.id, r)
   } catch {
     vm = null
   }

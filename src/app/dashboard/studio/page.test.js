@@ -12,6 +12,12 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
 vi.mock('next/navigation', () => ({ redirect: vi.fn((u) => { throw new Error(`NEXT_REDIRECT:${u}`) }) }))
 vi.mock('@/lib/membership/state-for-page', async (importOriginal) => ({ ...(await importOriginal()), membershipStateForPage: vi.fn() }))
 vi.mock('@/lib/churn-radar-data', () => ({ loadRadar: vi.fn(async () => ({ summary: null })) }))
+// UN1TREAD.4 — the un1t adapter's own queries are covered by its tests; here its
+// reads are stubs so the column's wiring is what is under test.
+vi.mock('@/lib/membership/reads/un1t-online', () => {
+  const reads = { mrr: vi.fn(), growth: vi.fn(), engagement: vi.fn(), membershipCounts: vi.fn(), membershipFlows: vi.fn(), revenueMtd: vi.fn() }
+  return { un1tOnlineReads: Object.freeze(reads) }
+})
 vi.mock('@shared/studio-kpis', () => ({
   fetchMrr: vi.fn(), fetchGrowth: vi.fn(), fetchRevenueChurn: vi.fn(), fetchEngagement: vi.fn(),
   fetchFloor: vi.fn(), fetchAdSpend: vi.fn(), fetchAcquisition: vi.fn(),
@@ -21,11 +27,14 @@ import Page from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { membershipStateForPage } from '@/lib/membership/state-for-page'
 import * as kpis from '@shared/studio-kpis'
+import { un1tOnlineReads as un1t } from '@/lib/membership/reads/un1t-online'
+import { loadRadar } from '@/lib/churn-radar-data'
 
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
 const LOC2 = 'a0000000-0000-4000-8000-00000000000b'
 const CAPS = { memberships: true, bookings: true, credits: true, invoices: true, schedule: true }
 const CONFIGURED = { source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS }
+const UN1T = { source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: false, bookings: false, credits: false, invoices: false, schedule: false } }
 const NONE = { source: 'none', state: 'none', label: 'No membership source', capabilities: {} }
 
 function findElements(node, name, out = []) {
@@ -61,6 +70,9 @@ beforeEach(() => {
   kpis.fetchEngagement.mockResolvedValue(ok({ activeRatePct: 70, activeMembers: 140, members: 200, visitsPerMemberWeek: 2.1 }))
   kpis.fetchFloor.mockResolvedValue(ok({ fillPct: 72, noShowPct: 8, activation: { activatedPct: 50, cohort: 4 }, attendedVisits: 900, classes: 100, groupTable: [], noData: false }))
   kpis.fetchAdSpend.mockResolvedValue(ok({ spend: 0, prevSpend: 0 }))
+  un1t.mrr.mockResolvedValue(ok({ mrrCents: 250_000, recurringMembers: 40, yieldCents: 6250 }))
+  un1t.growth.mockResolvedValue(ok({ netRecurring: 4, recurringStarts: 6, recurringCancels: 2 }))
+  un1t.engagement.mockResolvedValue(ok({ activeRatePct: 55, activeMembers: 22, members: 40, visitsPerMemberWeek: 1.5 }))
 })
 
 describe('/dashboard/studio — per-column membership gate (W1.M3a)', () => {
@@ -85,16 +97,25 @@ describe('/dashboard/studio — per-column membership gate (W1.M3a)', () => {
     expect(kpis.fetchMrr).toHaveBeenCalledWith(expect.anything(), LOC)
   })
 
-  // UN1TCAP.1 — #2068 made Hatch Street CONFIGURED on un1t.online, whose provider
-  // supplies no membership data yet; the column gated on state alone and
-  // rendered a Glofox-shaped scorecard of zeros.
-  it('configured but the source provides no memberships (un1t.online): the "does not provide" gate, no KPI queries', async () => {
-    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: false, bookings: false, credits: false, invoices: false, schedule: false } })
+  // UN1TCAP.1 — a CONFIGURED source whose adapter cannot read MRR must not render a
+  // Glofox-shaped scorecard of zeros. (un1t.online used to be this case; since
+  // UN1TREAD.4 it reads MRR, so a source nothing registers stands in.)
+  it('configured but the adapter reads no MRR: the "does not provide" gate, no KPI queries', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'mystery', state: 'configured', label: 'Mystery', capabilities: { memberships: false } })
     const [html] = await renderColumns()
-    expect(html).toContain('un1t.online does not provide membership data')
+    expect(html).toContain('Mystery does not provide membership data')
     expect(html).not.toContain('MRR')
     expect(kpis.fetchMrr).not.toHaveBeenCalled()
     expect(kpis.fetchFloor).not.toHaveBeenCalled()
+  })
+
+  it('unconfigured: keeps the "selected but not fully configured" copy with the missing names, no queries', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'unconfigured', missing: ['api_key'], label: 'Glofox', capabilities: CAPS })
+    const [html] = await renderColumns()
+    expect(html).toContain('Glofox is selected but not fully configured')
+    expect(html).toContain('api_key')
+    expect(kpis.fetchMrr).not.toHaveBeenCalled()
+    expect(kpis.fetchAcquisition).not.toHaveBeenCalled()
   })
 
   it('unknown: the retry copy, never the none copy, no queries', async () => {
@@ -113,5 +134,74 @@ describe('/dashboard/studio — per-column membership gate (W1.M3a)', () => {
     expect(html).toContain('No membership data has synced yet')
     expect(html).not.toContain('Glofox')
     expect(html).not.toContain('No membership source connected')
+  })
+})
+
+describe('/dashboard/studio — un1t.online column reads through the seam (UN1TREAD.4)', () => {
+  const cellOf = (html, label) => {
+    const i = html.indexOf(label)
+    expect(i).toBeGreaterThan(-1)
+    return html.slice(i, i + 600)
+  }
+
+  it('un1t.online column: MRR, net growth and active-member rate render from the un1t reads; revenue churn, arrears, at-risk and saves render — (unavailable); the Glofox column is unchanged', async () => {
+    membershipStateForPage.mockImplementation(async (_db, id) => (id === LOC ? CONFIGURED : UN1T))
+    const [stillorgan, hatch] = await renderColumns()
+
+    // un1t numbers from the un1t adapter
+    expect(un1t.mrr).toHaveBeenCalledWith(expect.anything(), LOC2)
+    expect(un1t.growth).toHaveBeenCalledWith(expect.anything(), LOC2)
+    expect(un1t.engagement).toHaveBeenCalledWith(expect.anything(), LOC2)
+    expect(hatch).toContain('€2.5k')
+    expect(hatch).toContain('40 billing now')
+    expect(hatch).toContain('6 started')
+    expect(hatch).toContain('55%')
+    expect(hatch).toContain('22 of 40 monthly recurring')
+    // not available on un1t: draw '—' + unavailable, never a Glofox zero
+    for (const label of ['Revenue churn', 'Arrears', 'At risk', 'At-risk saves']) {
+      expect(cellOf(hatch, label)).toContain('unavailable')
+    }
+    // no Glofox-only read ran for Hatch
+    expect(kpis.fetchRevenueChurn).not.toHaveBeenCalledWith(expect.anything(), LOC2, expect.anything())
+    expect(loadRadar).not.toHaveBeenCalledWith(expect.anything(), LOC2)
+    // source-agnostic reads still run for Hatch
+    expect(kpis.fetchAcquisition).toHaveBeenCalledWith(expect.anything(), LOC2)
+    expect(kpis.fetchFloor).toHaveBeenCalledWith(expect.anything(), LOC2)
+
+    // Glofox column: same fetchers, same arguments, Glofox churn + radar still run
+    expect(kpis.fetchMrr).toHaveBeenCalledTimes(1)
+    expect(kpis.fetchMrr).toHaveBeenCalledWith(expect.anything(), LOC)
+    expect(kpis.fetchGrowth).toHaveBeenCalledWith(expect.anything(), LOC)
+    expect(kpis.fetchEngagement).toHaveBeenCalledWith(expect.anything(), LOC)
+    expect(kpis.fetchRevenueChurn).toHaveBeenCalledWith(expect.anything(), LOC, 5000)
+    expect(loadRadar).toHaveBeenCalledWith(expect.anything(), LOC)
+    expect(stillorgan).toContain('200 billing now')
+    expect(stillorgan).toContain('70%')
+    expect(un1t.mrr).toHaveBeenCalledTimes(1)
+  })
+
+  it('un1t.online with 0 subs and no classes: LocationEmptyState', async () => {
+    membershipStateForPage.mockResolvedValue(UN1T)
+    un1t.mrr.mockResolvedValue(ok({ mrrCents: 0, recurringMembers: 0, yieldCents: 0 }))
+    kpis.fetchFloor.mockResolvedValue(ok({ fillPct: null, noShowPct: null, activation: { activatedPct: null, cohort: 0 }, attendedVisits: 0, classes: 0, groupTable: [], noData: true }))
+    const [html] = await renderColumns()
+    expect(html).toContain('No membership data has synced yet')
+    expect(html).not.toContain('Glofox')
+  })
+
+  it('a failed un1t mrr read renders — for MRR and keeps the other cells', async () => {
+    membershipStateForPage.mockResolvedValue(UN1T)
+    un1t.mrr.mockResolvedValue({ success: false, error: 'boom' })
+    const [html] = await renderColumns()
+    expect(cellOf(html, 'MRR')).toContain('unavailable')
+    expect(html).toContain('6 started')
+    expect(html).toContain('55%')
+    expect(html).toContain('Grow the base')
+  })
+
+  it('one membership state read per column (the gate and the numbers share one answer)', async () => {
+    membershipStateForPage.mockResolvedValue(UN1T)
+    await renderColumns()
+    expect(membershipStateForPage).toHaveBeenCalledTimes(2) // two columns, one read each
   })
 })

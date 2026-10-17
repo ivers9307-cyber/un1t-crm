@@ -34,7 +34,7 @@ export { READS_BY_SOURCE }
  *
  * @param {object} db  service-role client
  * @param {string|null|undefined} locationId
- * @returns {Promise<{ source: string|null, label: string, state: string, reads: object|null, error: any }>}
+ * @returns {Promise<{ source: string|null, label: string, state: string, reads: object|null, error: any, capabilities: object, missing?: string[] }>}
  */
 export async function membershipReadsFor(db, locationId) {
   const s = await membershipStateForPage(db, locationId)
@@ -45,6 +45,11 @@ export async function membershipReadsFor(db, locationId) {
     state: s.state,
     reads,
     error: s.readError ?? null,
+    // UN1TREAD.4 — carried so a surface that already asked the seam does not
+    // read the (cached, but separately resolved) state a second time for the
+    // capability flags and the "missing credentials" copy.
+    capabilities: s.capabilities ?? {},
+    missing: Array.isArray(s.missing) ? s.missing : undefined,
   }
 }
 
