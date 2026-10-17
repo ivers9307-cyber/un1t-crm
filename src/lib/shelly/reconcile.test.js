@@ -938,6 +938,32 @@ describe('planning', () => {
     expect(calls.setGroups[0]).toMatchObject({ on: true, gids: ['mac1_0'] })
   })
 
+  // UN1TCLASS.3 — Hatch Street's timetable is projected from un1t.online with an
+  // 'un1t:'-namespaced glofox_event_id and source_platform 'un1t_online'. The
+  // reader selects only starts_at/ends_at/cancelled_at, so the id and the source
+  // must make no difference: this pins that a un1t row drives a class-mode window
+  // exactly like a Glofox one, through the REAL loadTodayOccurrences.
+  it('a un1t: occurrence drives the class-mode window like a Glofox one', async () => {
+    const row = { starts_at: iso(NOW + 10 * 60_000), ends_at: iso(NOW + 55 * 60_000), cancelled_at: null }
+    const run = async (extra) => {
+      const { factory, calls } = makeClientFactory()
+      const db = makeDb({
+        connections: [conn()],
+        devices: [classDev({ device_id: 'mac1' })],
+        occurrences: [{ ...row, ...extra }],
+      })
+      // No loadOccurrences override: the production reader runs against the fake db.
+      const out = await runShellyReconcile(db, { now: () => NOW, sleep: async () => {}, makeClient: factory })
+      return { out, calls }
+    }
+    const glofox = await run({ glofox_event_id: '5f1d2c3b4a5e6f7081920a1b', source_platform: 'glofox' })
+    const un1t = await run({ glofox_event_id: 'un1t:evt_123', source_platform: 'un1t_online' })
+
+    expect(un1t.calls.setGroups[0]).toMatchObject({ on: true, gids: ['mac1_0'] })
+    expect(un1t.calls.setGroups).toEqual(glofox.calls.setGroups)
+    expect(un1t.out).toEqual(glofox.out)
+  })
+
   it('applies a live override to a DISABLED device exactly once', async () => {
     const override = { state: 'on', until: iso(NOW + HOUR), set_at: 'S1' }
     const first = makeClientFactory()
