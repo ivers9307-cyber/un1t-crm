@@ -1087,3 +1087,39 @@ describe('assembleIntegrationsHub — un1t.online card', () => {
     expect(data.un1t_online.map((r) => [r.locationId, r.status])).toEqual([[LOC_A.id, 'unknown'], [LOC_B.id, 'unknown']])
   })
 })
+
+// MIAORG.1 Task 2 — the AI-agent row reads the studio's RESOLVED Mia
+// settings: the mode comes from the studio's own switches (enabled/test_mode
+// are studio-only), the name may come from the organisation.
+describe('assembleIntegrationsHub — AI agent row from resolved settings (MIAORG.1)', () => {
+  const ORG = 'org-hub-1'
+  const withOrg = (org) => {
+    const inner = emptyDb()
+    return {
+      from: (t) => {
+        if (t !== 'org_settings') return inner.from(t)
+        const b = { select: () => b, eq: () => b, maybeSingle: () => Promise.resolve({ data: org ? { customer_agent: org } : null, error: null }) }
+        return b
+      },
+    }
+  }
+  const still = (customerAgent) => ({ id: 'loc-s', name: 'Stillorgan', organization_id: ORG, settings: { customer_agent: customerAgent } })
+  const hatch = { id: 'loc-h', name: 'Hatch Street', organization_id: ORG, settings: {} }
+
+  it('an org-only agent_name reaches a live studio; an org enabled:true never makes a studio live', async () => {
+    const data = await assembleIntegrationsHub(withOrg({ agent_name: 'Org Mia', enabled: true }), [still({ enabled: true }), hatch], { now: NOW })
+    expect(data.agent).toEqual([
+      { locationId: 'loc-s', mode: 'live', agentName: 'Org Mia' },
+      { locationId: 'loc-h', mode: 'off', agentName: null },
+    ])
+  })
+
+  it('no behaviour change (org null): Stillorgan live under its own name, Hatch off and unnamed', async () => {
+    const { STILLORGAN_BLOB } = await import('./agent/settings-fixtures.test-helpers')
+    const data = await assembleIntegrationsHub(withOrg(null), [still(STILLORGAN_BLOB), hatch], { now: NOW })
+    expect(data.agent).toEqual([
+      { locationId: 'loc-s', mode: 'live', agentName: STILLORGAN_BLOB.agent_name },
+      { locationId: 'loc-h', mode: 'off', agentName: null },
+    ])
+  })
+})

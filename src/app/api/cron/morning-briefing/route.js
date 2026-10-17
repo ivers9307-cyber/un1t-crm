@@ -33,6 +33,7 @@ import { fetchStudioPulse } from '@/lib/studio-pulse-data'
 import { buildMorningBriefingEmail, shapePulseMetrics } from '@/lib/morning-briefing'
 import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 import { formatInZone } from '@/lib/location-time'
+import { locationIdsWithoutCapability } from '@/lib/membership/locations-for-source'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -69,6 +70,15 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
   }
 
+  // UN1TCAP.1 — the pulse strip is membership numbers (members, at-risk,
+  // trend): a studio whose source provides no membership data (none, or
+  // un1t.online today) gets the briefing WITHOUT the strip, not a row of
+  // Glofox-shaped zeros. Best-effort like the strip itself: an unreadable
+  // capability list drops every strip this tick and still sends the briefing.
+  const { ids: noMembershipData, error: capErr } = await locationIdsWithoutCapability(db, 'memberships')
+  if (capErr) console.warn(`[cron][morning-briefing] membership capability unreadable; sending without the pulse strip: ${capErr.message || capErr}`)
+  const pulseAllowed = (locationId) => !capErr && !noMembershipData.has(locationId)
+
   let emailsSent = 0
   const perLocation = []
 
@@ -86,7 +96,7 @@ export async function GET(request) {
       const [rows, pulseBundle] = await Promise.all([
         // TZ.17 — the feed's "today" is this studio's day (the slot's zone).
         fetchLocationTodayFeed(db, loc.id, nowMs, { zone: slot.zone }),
-        fetchStudioPulse(db, loc.id),
+        pulseAllowed(loc.id) ? fetchStudioPulse(db, loc.id) : null,
       ])
       const { subject, html } = buildMorningBriefingEmail(rows, {
         locationName: loc.name,

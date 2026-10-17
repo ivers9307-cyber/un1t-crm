@@ -28,6 +28,7 @@ import { logWarn } from '@/lib/log'
 import { notifyAgentApprovalRequest } from '@/lib/agent/approval-notify'
 import { resolveLink, markOpened, claimLink, unclaimLink, attachRequest } from '@/lib/cancellation-form/links'
 import { resolveCancellationFormCopy, renderCopy } from '@/lib/cancellation-form/copy'
+import { resolveAgentSettings } from '@/lib/agent/settings-resolve'
 import { SubmitSchema, formOptions, validateSubmission } from '@/lib/cancellation-form/rules'
 
 export const runtime = 'nodejs'
@@ -58,15 +59,20 @@ async function gate(db, request, token) {
 // bounds on GET, validation on POST) is the link location's day. A failed read
 // still answers the member: copy falls back to the defaults, as it always did,
 // and the zone to DEFAULT_TZ, explicitly and with a warning.
+// MIAORG.1 — the copy comes from the studio's RESOLVED Mia settings
+// (cancellation_form is studio-only, so it is the studio's own); the resolver
+// logs the underlying read error.
 async function loadCopy(db, locationId) {
-  const { data: loc, error } = await db.from('locations').select('name, settings, timezone').eq('id', locationId).maybeSingle()
-  if (error) {
-    logWarn('cancellation-form', 'location unreadable; default copy and the platform zone used', { locationId, err: error })
+  const resolved = await resolveAgentSettings(db, locationId)
+  const readFailed = !resolved.ok && resolved.reason === 'read_failed'
+  if (readFailed) {
+    logWarn('cancellation-form', 'location unreadable; default copy and the platform zone used', { locationId, err: resolved.reason })
   }
+  const loc = resolved.ok ? resolved.location : null
   return {
     locationName: loc?.name || null,
-    copy: resolveCancellationFormCopy(loc?.settings?.customer_agent?.cancellation_form),
-    zone: error ? DEFAULT_TZ : zoneOfLocation({ id: locationId, timezone: loc?.timezone }),
+    copy: resolveCancellationFormCopy(resolved.ok ? resolved.settings.cancellation_form : null),
+    zone: readFailed ? DEFAULT_TZ : zoneOfLocation({ id: locationId, timezone: loc?.timezone }),
   }
 }
 

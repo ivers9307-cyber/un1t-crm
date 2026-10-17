@@ -48,7 +48,8 @@ function zoneDb({ timezone, settings }) {
     const finish = () => {
       // the turn's in-flight claim (and every other update) lands on one row
       if (state.op === 'update') return { data: [{ id: 'conv-1' }], error: null }
-      if (table === 'locations') return { data: { name: 'Studio', settings: { customer_agent: settings }, timezone }, error: null }
+      // MIAORG.1 Task 5 — a Glofox studio: the zone tests run the booking tools.
+      if (table === 'locations') return { data: { name: 'Studio', membership_source: 'glofox', settings: { customer_agent: settings }, timezone }, error: null }
       if (table === 'whatsapp_conversations') return { data: { agent_active: true, contact_id: null, agent_last_reply_at: null }, error: null }
       if (state.opts?.head) return { count: 0, error: null }
       if (table === 'whatsapp_messages' && String(state.cols).includes('direction')) {

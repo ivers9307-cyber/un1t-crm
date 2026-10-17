@@ -13,6 +13,7 @@
 
 import { stripEmDashes } from './core'
 import { formatMoneyMinor } from '@/lib/money-format'
+import { resolveAgentSettings } from './settings-resolve'
 
 // HUMANIZE.1 — customer-visible copy: no em dashes, no emoji, low-key. Both
 // texts are operator-editable (settings.customer_agent.booking_confirmation_text
@@ -138,8 +139,11 @@ export async function agentConfirmationTemplates(db, locationId) {
   const none = { booking: null, cancellation: null, decline: null, eventMove: null, eventMoveFailed: null }
   if (!locationId) return none
   try {
-    const { data } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
-    const s = data?.settings?.customer_agent || {}
+    // MIAORG.1 — DEFAULTS <- org <- studio, so an org-wide confirmation text
+    // reaches every studio that sets none. Unreadable = the defaults.
+    const resolved = await resolveAgentSettings(db, locationId)
+    if (!resolved.ok) return none
+    const s = resolved.settings
     return {
       booking: String(s.booking_confirmation_text || '').trim() || null,
       cancellation: String(s.cancellation_confirmation_text || '').trim() || null,

@@ -19,7 +19,7 @@ const H = 3600_000
 const NOW = Date.UTC(2026, 5, 12, 13, 0, 0) // 14:00 Dublin — inside the band
 
 const LOCATION = {
-  id: 'loc1',
+  id: 'loc1', organization_id: null,
   name: 'Stillorgan',
   settings: { customer_agent: { enabled: true, first_class_checkin: { enabled: true, delay_hours: 2 } } },
 }
@@ -44,6 +44,7 @@ function checkinDb({ conversation, contacts = [CONTACT], onInsert = () => {} }) 
     from(table) {
       const state = { selectOpts: null }
       const finish = () => {
+        if (table === 'whatsapp_numbers') return { data: [{ id: 'num-own' }], error: null } // MIAORG.1 Task 6: the studio owns its number
         if (table === 'locations') return { data: [LOCATION], error: null }
         if (table === 'contacts') {
           if (state.selectOpts?.head) return { count: 0, error: null }

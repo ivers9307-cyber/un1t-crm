@@ -17,7 +17,7 @@ vi.mock('@/lib/auth', async () => {
   return { ...actual, getCurrentUser: vi.fn() }
 })
 
-import { PUT } from './route.js'
+import { PUT, GET } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
@@ -35,14 +35,18 @@ const MASTER = {
 
 function makeDb() {
   const upserts = []
+  const selects = []
   return {
     upserts,
+    selects,
     from(table) {
       if (table !== 'org_settings') throw new Error(`unexpected db.from('${table}') in org-branding PUT test`)
       const b = {
         upsert: (payload, opts) => { upserts.push({ payload, opts }); return b },
-        select: () => b,
+        select: (cols) => { selects.push(cols); return b },
+        eq: () => b,
         single: () => Promise.resolve({ data: { organization_id: ORG }, error: null }),
+        maybeSingle: () => Promise.resolve({ data: { organization_id: ORG, company_name: 'Example Group' }, error: null }),
       }
       return b
     },
@@ -133,5 +137,30 @@ describe('PUT /api/settings/org-branding — short_name (W1.B1)', () => {
     expect(res.status).toBe(400)
     expect((await res.json()).issues[0].path).toBe('short_name')
     expect(db.upserts).toEqual([])
+  })
+})
+
+// MIAORG.1 final review — the branding route names its columns, so mig 729's
+// customer_agent (Mia's organisation defaults) never rides along.
+describe('org-branding — named columns, never customer_agent', () => {
+  const BEFORE_729 = [
+    'organization_id', 'logo_url', 'favicon_url', 'company_name', 'updated_at', 'updated_by',
+    'ai_cap_notice_month', 'email_cap_notice_month', 'ai_hard_cap_cents', 'email_hard_cap_sends',
+    'ops_alert_emails', 'legal_entity_name', 'legal_trading_name', 'legal_address', 'privacy_contact_email', 'short_name',
+  ]
+  const cols = (sel) => sel.split(',').map((c) => c.trim())
+
+  it('GET selects every pre-729 column and not customer_agent', async () => {
+    const res = await GET(new Request(`http://localhost/api/settings/org-branding?organization_id=${ORG}`))
+    expect(res.status).toBe(200)
+    expect(db.selects).toHaveLength(1)
+    expect(cols(db.selects[0]).sort()).toEqual([...BEFORE_729].sort())
+    expect(db.selects[0]).not.toMatch(/customer_agent|\*/)
+  })
+
+  it('PUT answers with the same named columns', async () => {
+    expect((await PUT(put({ organization_id: ORG, company_name: 'X' }))).status).toBe(200)
+    expect(db.selects).toHaveLength(1)
+    expect(cols(db.selects[0]).sort()).toEqual([...BEFORE_729].sort())
   })
 })

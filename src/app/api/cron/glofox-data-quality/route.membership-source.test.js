@@ -15,7 +15,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { fakeDb, queriesOf } from '@/lib/time-off.test-helpers'
-import { ESTATE_2026_10, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
+import { ESTATE_2026_10, ESTATE_2026_10_17, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
 
 const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } })
 // Every location answers a FRESH pack sync, so only the seam decides who is evaluated.
@@ -28,6 +28,17 @@ beforeEach(() => { process.env.CRON_SECRET = 'test-secret'; vi.clearAllMocks() }
 describe('GET /api/cron/glofox-data-quality — skips locations with no membership source (W1.M3b)', () => {
   it('evaluates Stillorgan only, counts the five skips, stamps tenant + global', async () => {
     h.db = dbFor(ESTATE_2026_10)
+    const out = await (await GET(req())).json()
+    expect(queriesOf(h.db, 'contacts').map((q) => q.eq.location_id)).toEqual([STILLORGAN_ID])
+    expect(stampTenantHeartbeat.mock.calls.map(([, id]) => id)).toEqual([STILLORGAN_ID])
+    expect(out).toMatchObject({ success: true, healthy: true, skipped_no_source: 5 })
+    expect(out.locations.map((l) => l.location_id)).toEqual([STILLORGAN_ID])
+    expect(sendOpsAlert).not.toHaveBeenCalled()
+    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-data-quality')
+  })
+
+  it('UN1TCAP.1 — Hatch on un1t.online (configured, no data) is still skipped: evaluates Stillorgan only, counts the five skips, stamps tenant + global', async () => {
+    h.db = dbFor(ESTATE_2026_10_17)
     const out = await (await GET(req())).json()
     expect(queriesOf(h.db, 'contacts').map((q) => q.eq.location_id)).toEqual([STILLORGAN_ID])
     expect(stampTenantHeartbeat.mock.calls.map(([, id]) => id)).toEqual([STILLORGAN_ID])

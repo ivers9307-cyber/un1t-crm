@@ -10,7 +10,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadEngagementChurn } from '@/lib/engagement-analytics-data'
 import EngagementReport from '@/components/dashboard/EngagementReport'
-import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource, providesCapability } from '@/lib/membership/state-for-page'
 import MembershipSourceGate from '@/components/MembershipSourceGate'
 
 export const dynamic = 'force-dynamic'
@@ -28,7 +28,7 @@ export default async function DashboardEngagementPage() {
   // engagement data yet".
   const membership = await membershipStateForPage(db, locId)
   let report = null
-  if (membership.state === 'configured') {
+  if (providesCapability(membership, 'memberships')) { // UN1TCAP.1: configured is not enough
     // Best-effort — a query failure must not blank the dashboard chrome.
     try {
       report = await loadEngagementChurn(db, locId)

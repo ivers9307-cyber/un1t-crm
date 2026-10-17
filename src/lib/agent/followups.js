@@ -22,7 +22,10 @@
 // structured reason — silence must always be explainable (#478).
 
 import { buildCachedSystem, SKIP_PREFIX } from './prompt'
-import { resolveMembershipSource } from '@/lib/membership/source'
+import { providerFor } from '@/lib/membership/source'
+import { noneSource } from '@/lib/membership/sources/none'
+import { providerTakesBookings } from './tool-capability'
+import { isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { formatHistoryForClaude, parseAgentResponse, phoneMatchesAllowlist, isSkipResponse, isWithinQuietHours } from './core'
 import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
@@ -30,6 +33,7 @@ import { instantToZonedParts, todayStrIn, getLocationZones, LocationZoneReadErro
 import { logError, logWarn } from '@/lib/log'
 import { countCheckinSends, readCheckinSendsToday, checkinDayStartIso } from './checkin-counts'
 import { isWhatsAppStaffOutbound } from '@/lib/whatsapp-staff-sources'
+import { resolveAgentSettingsForLocation } from './settings-resolve'
 
 // MIA-SONNET5 — kept in step with the inbound reply path so a nudge sounds
 // like the same person who answers the thread.
@@ -354,6 +358,71 @@ async function loadAgentKnowledge(db, locationId) {
 // W1.M3b — what the prompt needs of a membership provider.
 const promptSourceFor = (provider) => ({ key: provider.key, label: provider.label })
 
+// MIAORG.1 Task 6 (T6-D) — what Mia's prompt may offer at this studio, from
+// the location row the tick already read, the same way the reply path does
+// (auto-reply.js): the provider of locations.membership_source through the
+// sanctioned mapper, whether it takes bookings, and the studio's booking link.
+// No separate source read: one could fail on its own and answer `none`. A
+// Glofox studio renders exactly the prompt it did before (bookings true; the
+// link is ignored).
+export function promptCapabilityFor(location, settings) {
+  const provider = location?.membership_source ? providerFor(location.membership_source) : noneSource
+  const bookings = providerTakesBookings(provider)
+  return {
+    membershipSource: promptSourceFor(provider),
+    bookings,
+    bookingUrl: bookings ? null : (settings?.booking_url || null),
+  }
+}
+
+// MIAORG.1 Task 6 (T6-A) — does this studio own an active WhatsApp number?
+// Read once per studio per tick. A studio that does sends exactly as it always
+// has ({ locationId }, its own templates). One that does not (Hatch Street:
+// its threads carry a sibling studio's stamped number, WAHOMESTUDIO.1) sends
+// only through a thread that number can reply in. A failed read is "owns a
+// number", logged: that is today's path, where a number-less studio's send is
+// refused before any Meta call and counted as a skip, so the doubt can never
+// be louder than today.
+async function studioOwnsWhatsAppNumber(db, locationId) {
+  const { data, error } = await db.from('whatsapp_numbers')
+    .select('id')
+    .eq('location_id', locationId)
+    .eq('is_active', true)
+    .limit(1)
+  if (error || !Array.isArray(data)) {
+    logError('agent-followups', 'studio WhatsApp number unreadable; sending as a studio with its own number this tick', {
+      locationId, err: error || { message: 'no rows returned' },
+    })
+    return true
+  }
+  return data.length > 0
+}
+
+// MIAORG.1 Task 6 (T6-B) — can a send in this thread go out? At a studio with
+// no number of its own, only through the number stamped on the thread when it
+// belongs to a studio of the same organisation (getConversationNumberConfig,
+// which never throws: a failed read is null, logged inside).
+async function threadCanReply(locationId, conversationId) {
+  const { getConversationNumberConfig } = await import('@/lib/whatsapp-config')
+  return Boolean(await getConversationNumberConfig(locationId, conversationId))
+}
+
+// The studio whose whatsapp_templates a send uses. A studio with its own
+// number: itself, exactly as before (no extra read). A number-less studio: the
+// owner of the thread's stamped number, whose WABA the template must belong to
+// (templateLocationIdFor, WAHOMESTUDIO.1 R5; never throws).
+async function templateStudioFor(ownsNumber, locationId, conversationId) {
+  if (ownsNumber) return locationId
+  const { templateLocationIdFor } = await import('@/lib/whatsapp-config')
+  return templateLocationIdFor(locationId, conversationId)
+}
+
+// The send options. A studio with its own number: { locationId }, today's
+// exact call. A number-less studio: through the thread (replyInConversation).
+function sendOptsFor(ownsNumber, locationId, conversationId) {
+  return ownsNumber ? { locationId } : { locationId, replyInConversation: conversationId }
+}
+
 // One short proactive message in Mia's voice, given the thread + an
 // instruction. Returns the text or null (callers log the reason).
 //
@@ -366,7 +435,7 @@ const promptSourceFor = (provider) => ({ key: provider.key, label: provider.labe
 // Exported for tests (repo convention) — compose-effort.test.js asserts the
 // request body, which is how MIA-HYGIENE.2 caught this path running at the
 // API-default effort.
-export async function composeAgentText({ location, settings, historyRows, instruction, companyName, knowledge, membershipSource = null, zone = DEFAULT_TZ }) {
+export async function composeAgentText({ location, settings, historyRows, instruction, companyName, knowledge, membershipSource = null, bookings = true, bookingUrl = null, zone = DEFAULT_TZ }) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   // CACHE.2 — cache the stable prefix (no tools on this path, so it caches the
@@ -377,6 +446,10 @@ export async function composeAgentText({ location, settings, historyRows, instru
     agentName: settings?.agent_name || null,
     membershipUrl: settings?.membership_signup_url || null,
     membershipSource, // W1.M3b — null renders the Glofox default
+    // MIAORG.1 Task 6 (T6-D) — a studio without bookings gets the no-booking
+    // rules; absent/true is the Glofox render, byte-identical (link ignored).
+    bookings,
+    bookingUrl: bookings ? null : bookingUrl,
     tone: settings?.tone || null,
     extraRules: settings?.extra_rules || null,
     knowledge: knowledge || [],
@@ -408,13 +481,13 @@ export async function composeAgentText({ location, settings, historyRows, instru
   }
 }
 
-async function sendNudge(db, conv, location, settings, facts, zone) {
+async function sendNudge(db, conv, location, settings, facts, zone, ownsNumber) {
   const branding = await getLocationBranding(db, location.id)
   const composed = await composeAgentText({
     location, settings, historyRows: facts.rows, instruction: NUDGE_INSTRUCTION, zone,
     companyName: branding.companyName,
     knowledge: await loadAgentKnowledge(db, location.id),
-    membershipSource: promptSourceFor(await resolveMembershipSource(db, location.id)),
+    ...promptCapabilityFor(location, settings),
   })
   if (composed.error) return skipLog(conv.id, `nudge_${composed.error}`)
   const text = composed.text
@@ -430,14 +503,14 @@ async function sendNudge(db, conv, location, settings, facts, zone) {
   }
 
   const { sendTextMessage } = await import('@/lib/whatsapp')
-  const res = await sendTextMessage(conv.to, parsed.text, { locationId: conv.location_id })
+  const res = await sendTextMessage(conv.to, parsed.text, sendOptsFor(ownsNumber, conv.location_id, conv.id))
   if (!res?.messageId) return skipLog(conv.id, 'nudge_send_failed')
   await recordProactiveMessage(db, conv, { body: parsed.text, waMessageId: res.messageId, messageType: 'text' })
   await stampStage(db, conv.id, 1, true)
   return { sent: 'nudge' }
 }
 
-async function sendFollowupTemplate(db, conv, settings, facts) {
+async function sendFollowupTemplate(db, conv, settings, facts, ownsNumber) {
   const followups = { ...FOLLOWUP_DEFAULTS, ...(settings?.followups || {}) }
   if (!followups.template_name) return skipLog(conv.id, 'no_template_configured')
 
@@ -451,9 +524,12 @@ async function sendFollowupTemplate(db, conv, settings, facts) {
     return skipLog(conv.id, 'no_marketing_consent')
   }
 
+  // MIAORG.1 Task 6 — a number-less studio's template comes from the owner of
+  // the thread's number (the WABA it is sent from); its own studio otherwise.
+  const templateStudio = await templateStudioFor(ownsNumber, conv.location_id, conv.id)
   const { data: rows } = await db.from('whatsapp_templates')
     .select('name, language, status, components, header_media_url')
-    .eq('location_id', conv.location_id)
+    .eq('location_id', templateStudio)
     .eq('name', followups.template_name)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -470,9 +546,8 @@ async function sendFollowupTemplate(db, conv, settings, facts) {
   const headerComponent = headerComponentFor(template.components, template.header_media_url)
   if (headerComponent) components.unshift(headerComponent)
 
-  const res = await sendTemplateMessage(conv.to, template.name, template.language || 'en', components, {
-    locationId: conv.location_id,
-  })
+  const res = await sendTemplateMessage(conv.to, template.name, template.language || 'en', components,
+    sendOptsFor(ownsNumber, conv.location_id, conv.id))
   if (!res?.messageId) return skipLog(conv.id, 'template_send_failed')
   await recordProactiveMessage(db, conv, {
     body: renderFollowupBody(template, values) || `[Template: ${template.name}]`,
@@ -511,6 +586,16 @@ function anyStudioInDaytime(nowMs, locations, zones) {
   return list.some((l) => withinLocalDaytime(nowMs, zones.get(l?.id) ?? DEFAULT_TZ))
 }
 
+// MIAORG.1 — a studio's effective Mia settings for this tick: DEFAULTS <- its
+// organisation's <- its own (resolveAgentSettingsForLocation, on the row the
+// tick already read). enabled / test_mode / test_phones are studio-only, so an
+// org layer with follow-ups or check-ins on can never start sends at a studio
+// that is off: the runners' own gate below reads the studio's switches.
+async function tickSettings(db, location, orgCache) {
+  const resolved = await resolveAgentSettingsForLocation(db, location, { orgCache })
+  return resolved.ok ? resolved.settings : null
+}
+
 /**
  * One cron tick: for every location with follow-ups enabled, find
  * quiet open agent conversations and run the ladder. Never throws.
@@ -518,14 +603,19 @@ function anyStudioInDaytime(nowMs, locations, zones) {
 export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
   const results = { nudges: 0, templates: 0, skipped: 0 }
 
+  // MIAORG.1 Task 6 — membership_source rides on the row (T6-D: the prompt's
+  // capability), so no separate source read.
   const { data: locations } = await db.from('locations')
-    .select('id, name, settings')
+    .select('id, name, organization_id, membership_source, settings')
     .eq('active', true)
   const zones = await readTickZones(db, locations, 'followups')
   if (zones && !anyStudioInDaytime(nowMs, locations, zones)) return { ...results, reason: 'quiet_hours' }
 
+  // MIAORG.1 — one org read per organisation per tick, shared by its studios.
+  const orgCache = new Map()
   for (const location of locations || []) {
-    const settings = location?.settings?.customer_agent || null
+    const settings = await tickSettings(db, location, orgCache)
+    if (!settings) continue
     const followups = { ...FOLLOWUP_DEFAULTS, ...(settings?.followups || {}) }
     if (!followups.enabled) continue
     // Follow-ups ride the agent: agent fully off ⇒ no proactive sends.
@@ -542,6 +632,8 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
       console.warn('[radar-agent] followup-skip', JSON.stringify({ locationId: location.id, reason: window.reason }))
       continue
     }
+    // MIAORG.1 Task 6 (T6-A) — decided once for this studio this tick.
+    const ownsNumber = await studioOwnsWhatsAppNumber(db, location.id)
 
     const sinceIso = new Date(nowMs - (TEMPLATE_MAX_H + 2) * H_MS).toISOString()
     // wa_status is the hard opt-out signal (whatsapp-consent.js) — there is
@@ -598,6 +690,15 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
           results.skipped++; skipLog(c.id, 'human_resolved'); continue
         }
 
+        // MIAORG.1 Task 6 (T6-B) — a number-less studio sends only through a
+        // thread its stamped number can reply in; checked before any compose,
+        // so an unanswerable thread never costs a model call. Not stamped: a
+        // stamp only arrives with an inbound, which resets the cycle anyway,
+        // and a failed read is null too.
+        if (!ownsNumber && !(await threadCanReply(c.location_id, c.id))) {
+          results.skipped++; skipLog(c.id, 'no_thread_number'); continue
+        }
+
         if ((await sentTodayCount(db, location.id, nowMs)) >= followups.daily_cap) {
           skipLog(c.id, 'daily_cap'); break // cap is per location — stop this location
         }
@@ -607,13 +708,17 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
           firstName: (contact.first_name || String(contact.name || '').split(/\s+/)[0] || 'there').trim(),
         }
         const out = decision.action === 'nudge'
-          ? await sendNudge(db, conv, location, settings, facts, zone)
-          : await sendFollowupTemplate(db, conv, settings, facts)
+          ? await sendNudge(db, conv, location, settings, facts, zone, ownsNumber)
+          : await sendFollowupTemplate(db, conv, settings, facts, ownsNumber)
         if (out?.sent === 'nudge') results.nudges++
         else if (out?.sent === 'template') results.templates++
         else results.skipped++
       } catch (e) {
         results.skipped++
+        // MIAORG.1 Task 6 (T6-B) — at a number-less studio a number refusal
+        // (the thread's number gone between the check and the send) is a
+        // recorded skip, never a throw through the runner.
+        if (!ownsNumber && isWhatsAppNumberMissing(e)) { skipLog(c.id, 'no_number'); continue }
         console.error('[radar-agent] followup error:', e?.message || e)
       }
     }
@@ -816,13 +921,15 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
   const bump = (reason) => { results.reasons[reason] = (results.reasons[reason] || 0) + 1 }
 
   const { data: locations } = await db.from('locations')
-    .select('id, name, settings')
+    .select('id, name, organization_id, membership_source, settings')
     .eq('active', true)
   const zones = await readTickZones(db, locations, 'checkins')
   if (zones && !anyStudioInDaytime(nowMs, locations, zones)) return { ...results, reason: 'quiet_hours' }
 
+  const orgCache = new Map() // MIAORG.1 — one org read per organisation per tick
   for (const location of locations || []) {
-    const settings = location?.settings?.customer_agent || null
+    const settings = await tickSettings(db, location, orgCache)
+    if (!settings) continue
     const checkin = { ...CHECKIN_DEFAULTS, ...(settings?.first_class_checkin || {}) }
     if (!checkin.enabled) continue
     if (!settings?.enabled && !settings?.test_mode) continue
@@ -832,6 +939,8 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
     // the daytime band is THIS studio's.
     const window = proactiveWindowOpen(nowMs, settings, zone)
     if (!window.open) { bump(window.reason); continue }
+    // MIAORG.1 Task 6 (T6-A) — decided once for this studio this tick.
+    const ownsNumber = await studioOwnsWhatsAppNumber(db, location.id)
 
     // CHECKINRISKS.1 — the claim's lease: re-open claims that never recorded
     // an outcome, before the candidate query, so they are picked up this tick.
@@ -858,7 +967,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
 
     const branding = await getLocationBranding(db, location.id)
     const knowledge = await loadAgentKnowledge(db, location.id)
-    const membershipSource = promptSourceFor(await resolveMembershipSource(db, location.id))
+    const capability = promptCapabilityFor(location, settings) // T6-D
 
     for (const contact of contacts || []) {
       try {
@@ -914,6 +1023,15 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         if (existingConv?.agent_handed_off_at) { bump('handed_off'); results.skipped++; continue }
         if (existingConv?.agent_paused_at) { bump('agent_paused'); results.skipped++; continue }
         if (existingConv && existingConv.agent_active === false) { bump('agent_inactive'); results.skipped++; continue }
+        // MIAORG.1 Task 6 (T6-B) — a number-less studio sends only into the
+        // contact's existing thread there, and only when its stamped number can
+        // reply in it. Never getOrCreateConversation here: a new thread at such
+        // a studio carries no stamp and could never be answered. Not stamped
+        // once-ever: a later inbound can bring a thread, and a failed number
+        // read is null too (a blip must not cost the check-in for good).
+        if (!ownsNumber && !(existingConv && await threadCanReply(location.id, existingConv.id))) {
+          bump('no_conversation'); results.skipped++; continue
+        }
 
         let facts = { rows: [], lastInboundAtMs: null, humanSpokeAfterInbound: false, staffSpokeAfterInbound: false, readFailed: false }
         if (existingConv) facts = await lastInboundFacts(db, existingConv.id)
@@ -934,7 +1052,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           const composed = await composeAgentText({
             location, settings, historyRows: facts.rows,
             instruction: checkinInstruction(className),
-            companyName: branding.companyName, knowledge, membershipSource, zone,
+            companyName: branding.companyName, knowledge, ...capability, zone,
           })
           if (composed.error) {
             console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: composed.error }))
@@ -953,7 +1071,18 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           // A throw is an unknown outcome (a timeout may have been delivered):
           // the claim stays and the lease re-opens it. A clean "no id" is a
           // refusal: release, so the next tick retries.
-          const res = await sendTextMessage(to, parsed.text, { locationId: location.id })
+          let res
+          try {
+            res = await sendTextMessage(to, parsed.text, sendOptsFor(ownsNumber, location.id, existingConv?.id))
+          } catch (e) {
+            // MIAORG.1 Task 6 (T6-B) — a number refusal at a number-less
+            // studio is refused before any Meta call: release and record a
+            // skip. Anything else (and any throw at a studio with its own
+            // number) is unchanged: the claim stays for the lease.
+            if (ownsNumber || !isWhatsAppNumberMissing(e)) throw e
+            await releaseCheckinClaim(db, contact.id, claim.at)
+            bump('no_number'); results.skipped++; continue
+          }
           if (!res?.messageId) {
             await releaseCheckinClaim(db, contact.id, claim.at)
             bump('send_failed'); results.skipped++; continue
@@ -986,9 +1115,12 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           const stamp = await stampCheckinSkip(db, contact, location.id, className, 'skipped — no marketing consent')
           bump(stamp.ok ? 'no_marketing_consent' : stamp.reason); results.skipped++; continue
         }
+        // MIAORG.1 Task 6 — a number-less studio's template comes from the
+        // owner of the thread's number; its own studio otherwise (unchanged).
+        const templateStudio = await templateStudioFor(ownsNumber, location.id, existingConv?.id)
         const { data: tRows, error: tError } = await db.from('whatsapp_templates')
           .select('name, language, status, components, header_media_url')
-          .eq('location_id', location.id)
+          .eq('location_id', templateStudio)
           .eq('name', checkin.template_name)
           .order('created_at', { ascending: false })
           .limit(1)
@@ -1012,13 +1144,20 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         // CHECKINRISKS.1 — claim, then send, then record the outcome (as Case A).
         const claim = await claimCheckin(db, contact.id)
         if (!claim.ok) { bump(claim.reason); results.skipped++; continue }
-        const res = await sendTemplateMessage(to, template.name, template.language || 'en', components, {
-          locationId: location.id,
-        })
+        let res
+        try {
+          res = await sendTemplateMessage(to, template.name, template.language || 'en', components,
+            sendOptsFor(ownsNumber, location.id, existingConv?.id))
+        } catch (e) {
+          if (ownsNumber || !isWhatsAppNumberMissing(e)) throw e // as Case A
+          await releaseCheckinClaim(db, contact.id, claim.at)
+          bump('no_number'); results.skipped++; continue
+        }
         if (!res?.messageId) {
           await releaseCheckinClaim(db, contact.id, claim.at)
           bump('send_failed'); results.skipped++; continue
         }
+        // A number-less studio always has existingConv here (checked above).
         const conversationId = existingConv?.id
           || await getOrCreateConversation(db, { id: contact.id, wa_phone: contact.wa_phone, phone: contact.phone, name: contact.name }, location.id)
         if (conversationId) {

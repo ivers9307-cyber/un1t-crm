@@ -22,6 +22,7 @@ vi.mock('@/lib/tenant-host', async () => {
 })
 
 import { composeEmail, sendPostClassEmail, loadContextForSession } from './hr-post-class-email.js'
+import { withOrgLayer, STILLORGAN_BLOB, ORG_LAYER } from './agent/settings-fixtures.test-helpers'
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
@@ -333,6 +334,8 @@ describe('sendPostClassEmail', () => {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({
                 single: vi.fn(() => Promise.resolve({ data: { settings: {} }, error: null })),
+                // MIAORG.1 — read through resolveAgentSettings (maybeSingle).
+                maybeSingle: vi.fn(() => Promise.resolve({ data: { settings: {} }, error: null })),
               })),
             })),
           }
@@ -552,5 +555,49 @@ describe('loadContextForSession', () => {
     }
     const out = await loadContextForSession(db, 's')
     expect(out).toEqual({ ok: false, error: 'already-sent', alreadySent: true })
+  })
+})
+
+// MIAORG.1 Task 2 — the membership CTA comes from the studio's RESOLVED Mia
+// settings. membership_signup_url / membership_cta_label are STUDIO-ONLY keys:
+// an org layer never supplies them (each studio's join link is its own).
+describe('loadContextForSession — resolved settings (MIAORG.1)', () => {
+  const SESSION = {
+    id: 'sess-1', contact_id: 'c-1', location_id: 'loc-1', booking_id: null, started_at: '2026-05-08T18:00:00Z',
+    ended_at: '2026-05-08T18:45:00Z', email_sent_at: null, class_name: 'RIDE',
+    contact: { id: 'c-1', name: 'Sam', email: 's@example.test', hr_post_class_emails_enabled: true, pipeline_stage_slug: 'trial_done' },
+    booking: null,
+  }
+  function ctxDb({ customerAgent, org = null }) {
+    const inner = {
+      from(table) {
+        let single = { data: null, error: null }
+        if (table === 'heart_rate_sessions') single = { data: SESSION, error: null }
+        if (table === 'locations') single = { data: { id: 'loc-1', organization_id: 'org-1', timezone: 'Europe/Dublin', settings: customerAgent === undefined ? {} : { customer_agent: customerAgent } }, error: null }
+        const b = {
+          select: () => b, eq: () => b, gte: () => b, not: () => b,
+          single: () => Promise.resolve(single), maybeSingle: () => Promise.resolve(single),
+          then: (ok, bad) => Promise.resolve({ data: [], error: null }).then(ok, bad),
+        }
+        return b
+      },
+    }
+    return withOrgLayer(inner, org)
+  }
+
+  it("the studio's own join link is used; an org's (studio-only key) never is", async () => {
+    const own = await loadContextForSession(ctxDb({ customerAgent: { membership_signup_url: 'https://studio.example.test/join', membership_cta_label: 'Join' }, org: ORG_LAYER }), 'sess-1')
+    expect(own.cta).toMatchObject({ membershipSignupUrl: 'https://studio.example.test/join', membershipLabel: 'Join' })
+    const none = await loadContextForSession(ctxDb({ customerAgent: { enabled: true }, org: ORG_LAYER }), 'sess-1')
+    expect(none.cta).toMatchObject({ membershipSignupUrl: null, membershipLabel: null })
+  })
+
+  it("no behaviour change: Stillorgan's blob and Hatch (no blob) carry no CTA link, org layer null", async () => {
+    for (const customerAgent of [STILLORGAN_BLOB, undefined]) {
+      const r = await loadContextForSession(ctxDb({ customerAgent }), 'sess-1')
+      expect(r.ok).toBe(true)
+      expect(r.cta).toEqual({ stage: 'trial_done', membershipSignupUrl: null, membershipLabel: null })
+      expect(r.zone).toBe('Europe/Dublin')
+    }
   })
 })

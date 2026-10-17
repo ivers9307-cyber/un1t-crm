@@ -1,4 +1,7 @@
 import { z } from 'zod'
+import {
+  STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS, isKnownOverridePath, expandOverridden,
+} from './settings-overrides'
 
 // MIA-HYGIENE.1 — the customer-agent settings CONTRACT, extracted from the
 // settings route so the schema, the defaults and the persisted-object builder
@@ -101,7 +104,23 @@ export const DEFAULTS = {
   // CANCELLATION_FORM_DEFAULTS); the resolver merges per key so a partial
   // object only overrides what the operator actually typed.
   cancellation_form: null,
+  // MIAORG.1 — where a studio WITHOUT a booking integration (Hatch Street, on
+  // un1t.online) sends a customer who wants to book: Mia shares this link
+  // instead of booking herself. Studio-only (an org cannot hold one link for
+  // every studio). Null = no link set; Mia hands the thread to staff instead.
+  booking_url: null,
+  booking_cta_label: null,
+  // MIAORG.1 — minutes before an unanswered handoff escalates. Read by
+  // lib/agent/handoff-sla.js (resolveHandoffSlaMinutes) but never part of this
+  // contract, so every editor save erased it. Null = the code default.
+  handoff_sla_minutes: null,
 }
+
+// MIAORG.1 — STUDIO_ONLY_KEYS (never read from the organisation layer) and
+// INHERITABLE_OBJECT_KEYS (merged per field) are defined in the zod-free
+// settings-overrides.js, so the studio editor can use them without shipping
+// zod to the browser. Re-exported here: one definition, the same import path.
+export { STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS } from './settings-overrides'
 
 export const SettingsSchema = z.object({
   enabled: z.boolean(),
@@ -121,12 +140,22 @@ export const SettingsSchema = z.object({
   welcome_greeting: z.string().max(500).nullable().optional(),
   link_button_text: z.string().max(25).nullable().optional(),
   quiet_hours: z.object({
-    start: z.string().regex(/^\d{1,2}:\d{2}$/),
-    end: z.string().regex(/^\d{1,2}:\d{2}$/),
+    start: z.string().regex(/^\d{1,2}:\d{2}$/).nullable().optional(),
+    end: z.string().regex(/^\d{1,2}:\d{2}$/).nullable().optional(),
     // TZ.5 — null = the studio's own zone (locations.timezone), resolved at
     // read time (core.isWithinQuietHours). A stored zone, incl. a legacy
     // 'Europe/Dublin', is kept and still wins.
     tz: z.string().max(64).nullable().optional().default(null),
+    // MIAORG.1 Task 4 (T4-A) — a STUDIO's "no quiet hours, ignore the
+    // organisation's". true = start/end are ignored and Mia is never quiet
+    // here (the resolver nulls them). Studio-only in effect: the resolver
+    // ignores it at the org layer and the org PUT refuses it.
+    off: z.boolean().nullable().optional(),
+  }).superRefine((q, ctx) => {
+    // Both ends, or `off`. (start and end used to be required outright.)
+    if (q.off === true) return
+    if (!q.start) ctx.addIssue({ code: 'custom', path: ['start'], message: 'Set both a start and an end time' })
+    if (!q.end) ctx.addIssue({ code: 'custom', path: ['end'], message: 'Set both a start and an end time' })
   }).nullable().optional(),
   // Cost/abuse ceilings. Omitted → code defaults (20/conv/hr, 500/loc/day).
   limits: z.object({
@@ -167,6 +196,15 @@ export const SettingsSchema = z.object({
   // thread to a human (AGENT-VERIFY-HANDOFF.1). Bounded so a typo can't
   // effectively disable the safety net by setting it to 500.
   handoff_after_verify_failures: z.number().int().min(1).max(5).nullable().optional(),
+  // MIAORG.1 — booking link for a studio with no booking integration. http(s)
+  // only: it is sent to customers as a tappable link.
+  booking_url: z.string().max(500).url()
+    .refine((u) => /^https?:\/\//i.test(u), 'Must be an http(s) URL')
+    .nullable().optional()
+    .or(z.literal('').transform(() => null)),
+  // 20 = Meta's cta_url button text limit (display_text); the label is that button.
+  booking_cta_label: z.string().max(20).nullable().optional(),
+  handoff_sla_minutes: z.number().int().min(5).max(1440).nullable().optional(),
   social_enabled: z.boolean().optional().default(false),
   // CANCEL-FORM.2 — SIBLING like social_enabled: this is the
   // locations.glofox_auto_cancel_memberships COLUMN (mig 585), written by the
@@ -224,6 +262,17 @@ function buildCancellationFormBlock(cf) {
   return out
 }
 
+// MIAORG.1 Task 4 (T4-A) — the stored quiet-hours shape: `{ off: true }`
+// alone (a studio's "no quiet hours"), or the start/end/tz window with no
+// `off` key (false is the same as absent, so it is never stored). Null stays
+// null.
+function normalizeQuietHours(q) {
+  if (!q || typeof q !== 'object') return null
+  if (q.off === true) return { off: true }
+  const { off: _off, ...window } = q
+  return window
+}
+
 /**
  * Build the object persisted at locations.settings.customer_agent from
  * validated PUT data. Pure — the route owns the DB read/merge/write.
@@ -235,9 +284,21 @@ function buildCancellationFormBlock(cf) {
  * to schema⊆blob.
  *
  * @param {object} data  SettingsSchema-parsed body
+ * @param {{ only?: Set<string> }} [opts]  MIAORG.1 — when `only` is given, the
+ *   blob holds just those keys (an override-only save: a studio stores only
+ *   the fields it overrides, so inherited values are never frozen into it).
+ *   Without it the full blob is built, unchanged.
  * @returns {object} the customer_agent blob
  */
-export function buildCustomerAgentSettings(data = {}) {
+export function buildCustomerAgentSettings(data = {}, { only } = {}) {
+  const full = buildFullBlob(data)
+  if (!only) return full
+  const out = {}
+  for (const k of only) if (k in full) out[k] = full[k]
+  return out
+}
+
+function buildFullBlob(data) {
   return {
     enabled: data.enabled,
     test_mode: !!data.test_mode,
@@ -255,12 +316,15 @@ export function buildCustomerAgentSettings(data = {}) {
     approval_decline_text: data.approval_decline_text?.trim() || null,
     welcome_greeting: data.welcome_greeting?.trim() || null,
     link_button_text: data.link_button_text?.trim() || null,
-    quiet_hours: data.quiet_hours || null,
+    quiet_hours: normalizeQuietHours(data.quiet_hours),
     limits: data.limits || null,
     booking_mode: data.booking_mode === 'draft' ? 'draft' : 'auto',
     agent_name: data.agent_name?.trim() || DEFAULTS.agent_name,
     membership_signup_url: data.membership_signup_url || null,
     membership_cta_label: data.membership_cta_label?.trim() || null,
+    booking_url: data.booking_url || null,
+    booking_cta_label: data.booking_cta_label?.trim() || null,
+    handoff_sla_minutes: data.handoff_sla_minutes ?? null,
     handoff_cooldown_hours: data.handoff_cooldown_hours ?? DEFAULTS.handoff_cooldown_hours,
     auto_resolve_after_reply_hours: data.auto_resolve_after_reply_hours ?? DEFAULTS.auto_resolve_after_reply_hours,
     auto_resolve_stale_hours: data.auto_resolve_stale_hours ?? DEFAULTS.auto_resolve_stale_hours,
@@ -273,4 +337,143 @@ export function buildCustomerAgentSettings(data = {}) {
     handoff_after_verify_failures: data.handoff_after_verify_failures ?? null,
     cancellation_form: buildCancellationFormBlock(data.cancellation_form),
   }
+}
+
+// MIAORG.1 Task 3 — the studio editor's PUT names the fields the STUDIO sets
+// (`overridden`); everything else is left out of the studio blob so it keeps
+// inheriting from the organisation layer. Each entry is a top-level key, an
+// object key's field as `<key>.<field>`, or a whole object key (shorthand for
+// all of its fields). A studio-only key is accepted and changes nothing (they
+// are always saved). Anything else is a 400 with the offending entry named.
+export const OverriddenSchema = z.array(
+  z.string().max(80).refine(isKnownOverridePath, { message: 'Unknown setting' }),
+).max(200)
+
+// The studio editor's PUT body: the settings plus an optional `overridden`.
+export const StudioSettingsSchema = SettingsSchema.extend({
+  overridden: OverriddenSchema.optional(),
+})
+
+/**
+ * MIAORG.1 Task 3 — the blob a studio stores when its editor names what it
+ * overrides. Pure; the route owns the read/merge/write.
+ *
+ * * Studio-only keys present in the parsed body are ALWAYS kept, whatever
+ *   `overridden` says (T3-B). The parsed body carries the schema defaults
+ *   for enabled / test_mode / test_phones / booking_mode, so those four are
+ *   always written, exactly as the full build writes them today.
+ * * An overridden top-level key is kept only when the body gives it a value
+ *   (not null / blank). The full build fills some blanks with a code default
+ *   (agent_name 'Mia', handoff_cooldown_hours 12, the auto-resolve windows);
+ *   storing that would freeze the default over the org's value. A blank
+ *   simply means "not set here", which is what null means to the resolver.
+ * * An object key is stored with ONLY its overridden fields, read from the
+ *   body (never buildFullBlob's filled-in object, whose frozen defaults would
+ *   beat the org's values). mergeAgentSettings overlays a partial studio
+ *   object field by field, so the missing fields keep inheriting.
+ *
+ * * An object field counts only when the client actually SENT a value for
+ *   it (`sent`, the raw JSON body). The schema refuses null for the numeric
+ *   fields (nudge_after_hours, daily_cap, delay_hours), so the editor omits a
+ *   cleared one, and parsing then fills in the schema default. Without this
+ *   check that default would be stored as the studio's override. The full
+ *   (legacy) build is unaffected: it still gets the schema default, as today.
+ *
+ * @param {object} data  StudioSettingsSchema-parsed body
+ * @param {string[]} overridden  validated override paths
+ * @param {{ sent?: object }} [opts]  the raw request body; defaults to `data`
+ * @returns {object} the customer_agent blob
+ */
+export function buildStudioOverrideBlob(data = {}, overridden = [], { sent = data } = {}) {
+  const { scalars, fields } = expandOverridden(overridden)
+  const only = new Set()
+  for (const k of STUDIO_ONLY_KEYS) if (k in data) only.add(k)
+  for (const k of scalars) {
+    const v = data[k]
+    if (v === null || v === undefined || (typeof v === 'string' && !v.trim())) continue
+    only.add(k)
+  }
+  const blob = buildCustomerAgentSettings(data, { only })
+  for (const key of INHERITABLE_OBJECT_KEYS) {
+    const wanted = fields.get(key)
+    const given = data[key]
+    const raw = sent && typeof sent === 'object' ? sent[key] : undefined
+    if (!wanted || !given || typeof given !== 'object' || !raw || typeof raw !== 'object') continue
+    const part = {}
+    for (const f of wanted) {
+      if (raw[f] === null || raw[f] === undefined) continue // not sent: never a schema default
+      const v = given[f]
+      if (v === null || v === undefined || (typeof v === 'string' && !v.trim())) continue
+      part[f] = typeof v === 'string' ? v.trim() : v
+    }
+    if (key === 'quiet_hours') {
+      // `off: true` stands alone (the window is ignored under it); `off`
+      // false is never stored (T4-A).
+      if (part.off === true) { blob.quiet_hours = { off: true }; continue }
+      delete part.off
+    }
+    if (Object.keys(part).length) blob[key] = part
+  }
+  return blob
+}
+
+// ── MIAORG.1 Task 4 — the ORGANISATION layer (org_settings.customer_agent) ──
+
+// Keys an organisation can never hold: the studio-only keys, plus the two
+// studio siblings the studio PUT writes elsewhere (social_enabled lives on
+// locations.settings, glofox_auto_cancel is a locations column).
+export const ORG_REFUSED_KEYS = new Set([...STUDIO_ONLY_KEYS, 'social_enabled', 'glofox_auto_cancel'])
+
+// The org editor's settings: SettingsSchema minus every refused key.
+export const OrgSettingsSchema = SettingsSchema.omit(
+  Object.fromEntries([...ORG_REFUSED_KEYS].map((k) => [k, true])),
+)
+
+/**
+ * The refusals for a raw org `settings` body, as validateBody-shaped issues
+ * (empty = none). A studio-only key, and a studio's quiet-hours opt-out
+ * (`quiet_hours.off`, T4-A), are 400s rather than silently dropped, so a
+ * client that sends one learns it did nothing.
+ * @param {object} settings  the raw body's `settings`
+ * @param {string[]} [overridden]
+ */
+export function orgSettingsRefusals(settings, overridden = []) {
+  const issues = []
+  if (settings && typeof settings === 'object') {
+    for (const k of Object.keys(settings)) {
+      if (ORG_REFUSED_KEYS.has(k)) issues.push({ path: `settings.${k}`, message: 'Set per studio, not for the organisation' })
+    }
+    const q = settings.quiet_hours
+    if (q && typeof q === 'object' && 'off' in q) {
+      issues.push({ path: 'settings.quiet_hours.off', message: 'Only a studio can switch quiet hours off' })
+    }
+  }
+  overridden.forEach((p, i) => {
+    if (p === 'quiet_hours.off') issues.push({ path: `overridden.${i}`, message: 'Only a studio can switch quiet hours off' })
+  })
+  return issues
+}
+
+/**
+ * The org layer an org-editor save stores: only the fields the organisation
+ * sets (`overridden`), built exactly like a studio's override blob
+ * (buildStudioOverrideBlob, so blanks are "not set" and a schema default is
+ * never stored), with every refused key dropped and quiet hours stored as a
+ * start/end pair with NO zone (T4-B: each studio reads them on its own
+ * clock, locations.timezone). Null when the organisation sets nothing.
+ * @param {object} data  OrgSettingsSchema-parsed settings
+ * @param {string[]} overridden  validated paths the organisation sets
+ * @param {{ sent?: object }} [opts]  the raw `settings` body
+ * @returns {object|null}
+ */
+export function buildOrgLayer(data = {}, overridden = [], { sent = data } = {}) {
+  const paths = overridden.filter((p) => p !== 'quiet_hours.off' && p !== 'quiet_hours.tz')
+  const blob = buildStudioOverrideBlob(data, paths, { sent })
+  for (const k of ORG_REFUSED_KEYS) delete blob[k]
+  if (blob.quiet_hours) {
+    const { start, end } = blob.quiet_hours
+    if (start && end) blob.quiet_hours = { start, end }
+    else delete blob.quiet_hours
+  }
+  return Object.keys(blob).length ? blob : null
 }

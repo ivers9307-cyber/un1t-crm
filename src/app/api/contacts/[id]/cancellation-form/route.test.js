@@ -64,6 +64,7 @@ const LOC = 'c0000000-0000-0000-0000-000000000003'
 const USER = { id: 'u-1', role: 'manager', locations: [{ id: LOC }] }
 let dbMock, contactRow, templateRow, writes, publicBaseUrl
 
+let orgLayer = null
 function makeDb() {
   writes = []
   return {
@@ -78,7 +79,9 @@ function makeDb() {
           return Promise.resolve({ data: { id: 'x' }, error: null })
         },
         maybeSingle() {
-          if (table === 'locations') return Promise.resolve({ data: { name: 'UN1T Stillorgan', settings: { customer_agent: { cancellation_form: { whatsapp_template_name: templateRow ? templateRow.name : null, ...(publicBaseUrl ? { public_base_url: publicBaseUrl } : {}) } } } }, error: null })
+          // MIAORG.1 — read through resolveAgentSettings; `orgLayer` is the org's blob.
+          if (table === 'org_settings') return Promise.resolve({ data: orgLayer ? { customer_agent: orgLayer } : null, error: null })
+          if (table === 'locations') return Promise.resolve({ data: { id: LOC, organization_id: 'org-1', name: 'UN1T Stillorgan', settings: { customer_agent: { cancellation_form: { whatsapp_template_name: templateRow ? templateRow.name : null, ...(publicBaseUrl ? { public_base_url: publicBaseUrl } : {}) } } } }, error: null })
           return Promise.resolve({ data: null, error: null })
         },
         then(res, rej) {
@@ -97,6 +100,7 @@ beforeEach(() => {
   contactRow = { id: 'c-1', name: 'Aoife Byrne', first_name: 'Aoife', email: 'a@example.com', email_status: 'active', phone: '+353871234567', wa_phone: '+353871234567', location_id: LOC, glofox_membership_plan: 'Unlimited' }
   templateRow = null
   publicBaseUrl = null
+  orgLayer = null
   dbMock = makeDb()
   getCurrentUser.mockResolvedValue(USER)
   hasPermission.mockReturnValue(true)
@@ -150,6 +154,14 @@ describe('POST email', () => {
     expect((await post({ channel: 'email' })).status).toBe(200)
     expect(resolveCustomerBaseUrl).not.toHaveBeenCalled()
     expect(issueLink).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ baseUrl: 'https://forms.example' }))
+  })
+  // MIAORG.1 Task 2 — cancellation_form is studio-only: an org's override
+  // never reaches a studio's form link.
+  it("an org's public_base_url never wins over the studio's tenant host", async () => {
+    orgLayer = { cancellation_form: { public_base_url: 'https://org-forms.example' } }
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    expect((await post({ channel: 'email' })).status).toBe(200)
+    expect(issueLink).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ baseUrl: 'https://gym-a.repset.ie' }))
   })
   it('sends a transactional email with the link (no marketing-consent gate) and logs the activity', async () => {
     const res = await post({ channel: 'email' })

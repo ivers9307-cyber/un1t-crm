@@ -30,7 +30,7 @@ import { runFirstClassCheckins, CHECKIN_CLAIM_LEASE_MS } from './followups'
 const H = 3600_000
 const NOW = Date.UTC(2026, 8, 25, 13, 0, 0) // 14:00 Dublin
 const LOCATION = {
-  id: 'loc1', name: 'Stillorgan',
+  id: 'loc1', name: 'Stillorgan', organization_id: null,
   settings: { customer_agent: { enabled: true, first_class_checkin: { enabled: true, delay_hours: 2, template_name: 'agent_first_class_checkin_v1' } } },
 }
 const CONTACT = {
@@ -51,6 +51,7 @@ function stubDb(answer = () => undefined) {
     from(table) {
       const q = { table, op: 'select', patch: null, filters: [], opts: null, order: null, limit: null }
       const def = () => {
+        if (table === 'whatsapp_numbers') return { data: [{ id: 'num-own' }], error: null } // MIAORG.1 Task 6: the studio owns its number
         if (table === 'locations') return { data: [LOCATION], error: null }
         if (table === 'contacts' && q.op === 'select') {
           if (q.opts?.head) return { count: 0, error: null }
