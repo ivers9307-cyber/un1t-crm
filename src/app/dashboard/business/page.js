@@ -141,14 +141,19 @@ async function MembershipBlock({ user, locationId, zone }) {
   // source it is a flat zero. Gated like the KPI row above; the funnel,
   // today and rail blocks are source-independent and stay ungated. The
   // trend queries do not run for a studio that has nothing to count.
-  const [membership, reads] = await Promise.all([
-    membershipStateForPage(db, locationId),
-    membershipReadsFor(db, locationId),
-  ])
+  // UN1TREAD.7 — asked ONCE through the seam: the gate copy is drawn from the
+  // same answer the numbers would come from (capability forced off, as the
+  // studio column does), so a second, separately cached state read can never
+  // disagree with it and leave a blank section.
+  const reads = await membershipReadsFor(db, locationId)
   if (!(supportsRead(reads, 'membershipCounts') && supportsRead(reads, 'membershipFlows'))) { // UN1TREAD.3: the adapter reads counts + flows, not a capability flag
+    const gateState = {
+      source: reads.source, state: reads.state, label: reads.label, readError: reads.error,
+      missing: reads.missing, capabilities: { ...(reads.capabilities || {}), memberships: false },
+    }
     return (
       <MembershipSourceGate
-        state={membership}
+        state={gateState}
         capability="memberships"
         settingsHref={membershipSettingsHref(locationId)}
         canManage={canManageMembershipSource(user, locationId)}

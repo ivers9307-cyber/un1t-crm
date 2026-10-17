@@ -192,6 +192,17 @@ describe('buildBusinessKpis: through the read seam (UN1TREAD.3)', () => {
     }
   })
 
+  // UN1TREAD.7 — radarOk comes from the reads result's own capabilities; a second
+  // state read (cache expiry between the two) can no longer flip it.
+  it('asks the membership state once, and decides the radar from that answer', async () => {
+    let calls = 0
+    membershipStateForPage.mockImplementation(async () => (++calls === 1 ? GLOFOX_STATE : UN1T_STATE))
+    const vm = await buildBusinessKpis(mockDb({ data: [] }), USER, LOC)
+    expect(calls).toBe(1)
+    expect(loadRadar).toHaveBeenCalledWith(expect.anything(), LOC)
+    expect(vm.churnCount).toBe(5)
+  })
+
   it('un1t.online: a failed revenue read is the whole-block failure (null), a failed count read just a null count', async () => {
     membershipStateForPage.mockResolvedValue(UN1T_STATE)
     const base = un1t

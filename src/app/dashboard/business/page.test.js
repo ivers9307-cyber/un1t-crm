@@ -160,6 +160,32 @@ describe('/dashboard/business — KPI row gate (W1.M3a review)', () => {
   })
 })
 
+// UN1TREAD.7 — the trend block asks the seam ONCE and draws its gate from that
+// same answer (as the studio column does): a second, separately resolved state
+// could disagree with the reads and draw a blank section.
+describe('/dashboard/business — MembershipBlock gate comes from the reads result (UN1TREAD.7)', () => {
+  it('asks the membership state exactly once (no parallel state read)', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS })
+    await renderMembershipBlock()
+    expect(membershipStateForPage).toHaveBeenCalledTimes(1)
+  })
+
+  it('divergent case: a configured source whose capabilities say memberships:true but whose adapter reads nothing draws the "does not provide" copy, never a blank section', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'unregistered', state: 'configured', label: 'Other', capabilities: CAPS })
+    const html = await renderMembershipBlock()
+    expect(html).toContain('Other does not provide membership data')
+    expect(html).not.toContain('membership-panel')
+    expect(computeMembershipCounts).not.toHaveBeenCalled()
+  })
+
+  it('the seam answer carries the gate copy for the missing-credentials and unknown states', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'unconfigured', missing: ['api_key'], label: 'Glofox', capabilities: CAPS })
+    const html = await renderMembershipBlock()
+    expect(html).toContain('Glofox is selected but not fully configured')
+    expect(html).toContain('api_key')
+  })
+})
+
 describe('/dashboard/business — the active studio zone (TZ.11a)', () => {
   it('a New York studio buckets its membership flows on New York months', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u1', profileRole: 'staff', rolesByLocation: { [LOC]: 'owner' }, activeLocation: { id: LOC, name: 'Studio', timezone: 'America/New_York' }, locations: [] })

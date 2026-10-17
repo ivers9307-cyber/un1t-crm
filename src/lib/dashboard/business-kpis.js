@@ -14,7 +14,7 @@
 import { buildBusinessBriefing } from '@shared/business-briefing'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
-import { membershipStateForPage, providesCapability } from '@/lib/membership/state-for-page'
+import { providesCapability } from '@/lib/membership/state-for-page'
 import { loadRadar } from '@/lib/churn-radar-data'
 import { displayZoneFor } from '@/lib/display-zone'
 
@@ -39,10 +39,7 @@ import { displayZoneFor } from '@/lib/display-zone'
 // view-model itself, not from a second (possibly diverging) state read.
 export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()) {
   try {
-    const [m, membership] = await Promise.all([
-      membershipReadsFor(db, locationId),
-      membershipStateForPage(db, locationId),
-    ])
+    const m = await membershipReadsFor(db, locationId)
     if (!m.reads) {
       const approvals = await getPendingApprovalsCount(db, user).catch(() => 0)
       const briefing = approvals > 0
@@ -55,7 +52,8 @@ export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()
       }
     }
     if (!supportsRead(m, 'revenueMtd')) return null
-    const radarOk = m.state === 'configured' && providesCapability(membership, 'memberships')
+    // UN1TREAD.7 — from the reads result's own state + capabilities, not a second state read.
+    const radarOk = providesCapability(m, 'memberships')
     // DASH-REBUILD.6b — derive the briefing's attention labels locally
     // from data this block already holds (approvals count + arrears +
     // churn). The full rail is built once, in the rail block — calling
