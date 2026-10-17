@@ -15,7 +15,12 @@
 //      raw contact_memberships subquery, another helper) is a breaker. Also
 //      breakers: a (re)definition of the membership helper whose body is not
 //      exactly 731's (it must take its studios from
-//      auth_contact_read_location_ids and count only active rows), dropping
+//      auth_contact_read_location_ids and count only active rows), or that is
+//      not SECURITY DEFINER with SET search_path = '' (EVERY CREATE of it is
+//      read, whatever its body's quoting, attributes after the body included),
+//      an ALTER FUNCTION on either helper in a migration after 731 (SECURITY
+//      INVOKER, OWNER TO, SET / RESET search_path all change what the policy
+//      runs without re-creating it), dropping
 //      either helper without re-creating it in the same file, or toggling
 //      contacts' row level security (DISABLE turns every policy off; FORCE /
 //      NO FORCE changes whether the owner's DEFINER functions and triggers
@@ -124,8 +129,91 @@ export function orBranches(expr) {
 const migNum = (f) => Number.parseInt(f, 10)
 const migrationFiles = () => readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql'))
   .sort((a, b) => (migNum(a) - migNum(b)) || a.localeCompare(b))
-const CREATES_HELPER = new RegExp(`\\bcreate\\s+(or\\s+replace\\s+)?function\\s+private\\s*\\.\\s*${HELPER}\\b`, 'i')
-const createsFn = (name) => new RegExp(`\\bcreate\\s+(or\\s+replace\\s+)?function\\s+private\\s*\\.\\s*${name}\\b`, 'i')
+// The migration that created the membership helper; an ALTER FUNCTION on
+// either helper after it is a breaker.
+export const MEMBERSHIP_SCOPE_MIGRATION = 731
+/** `private.<name>`, either part optionally double-quoted, not a longer name. */
+const fnRef = (name) => `"?private"?\\s*\\.\\s*"?${name}"?(?![\\w"])`
+const createsFn = (name) => new RegExp(`\\bcreate\\s+(or\\s+replace\\s+)?function\\s+${fnRef(name)}`, 'i')
+const CREATES_HELPER = createsFn(HELPER)
+
+/** The statement of `code` starting at `from`, up to its top-level `;` ('…', "…" and $tag$ bodies skipped). */
+function statementAt(code, from) {
+  let i = from
+  while (i < code.length) {
+    const c = code[i]
+    if (c === ';') return code.slice(from, i)
+    if (c === "'" || c === '"') {
+      let j = i + 1
+      while (j < code.length) { if (code[j] === c) { if (code[j + 1] === c) { j += 2; continue } break } j++ }
+      i = j + 1
+      continue
+    }
+    if (c === '$' && !/[\w$]/.test(code[i - 1] ?? '')) {
+      const m = /^\$(?:[A-Za-z_]\w*)?\$/.exec(code.slice(i, i + 256))
+      if (m) {
+        const end = code.indexOf(m[0], i + m[0].length)
+        if (end === -1) return code.slice(from)
+        i = end + m[0].length
+        continue
+      }
+    }
+    i++
+  }
+  return code.slice(from)
+}
+
+/**
+ * A function definition's body and the rest of its statement (every
+ * attribute, before or after the body), or null when no `AS $tag$…$tag$` or
+ * `AS '…'` body can be read (e.g. BEGIN ATOMIC).
+ */
+function definitionParts(stmt) {
+  const b = /\bas\s+(?:(\$(?:[A-Za-z_]\w*)?\$)([\s\S]*?)\1|'((?:[^']|'')*)')/i.exec(stmt)
+  if (!b) return null
+  return {
+    body: b[2] ?? b[3].replace(/''/g, "'"),
+    attrs: `${stmt.slice(0, b.index)} ${stmt.slice(b.index + b[0].length)}`,
+  }
+}
+
+/** Why a definition's attributes are not SECURITY DEFINER with SET search_path = '' (empty when they are). */
+function definerAttrProblems(attrs) {
+  const why = []
+  if (!/\bsecurity\s+definer\b/i.test(attrs) || /\bsecurity\s+invoker\b/i.test(attrs)) why.push('not SECURITY DEFINER')
+  const sets = [...attrs.matchAll(/\bset\s+search_path\b[^,;]*?(?=\b(?:set|security|language|stable|immutable|volatile|strict|called|returns|cost|rows|parallel|leakproof|not|as)\b|$)/gi)].map((m) => m[0])
+  const empty = /^set\s+search_path\s*(?:=|to\b)\s*(?:''|"")\s*$/i
+  if (sets.length === 0 || sets.some((x) => !empty.test(x.trim()))) why.push("no SET search_path = ''")
+  return why
+}
+
+/** Every CREATE of the membership helper in `code` (comments already blanked) that is not exactly 731's. */
+export function membershipHelperDefBreakers(code) {
+  const hits = []
+  const creates = new RegExp(`\\bcreate\\s+(?:or\\s+replace\\s+)?function\\s+${fnRef(MEMBERSHIP_HELPER)}`, 'gi')
+  for (const m of code.matchAll(creates)) {
+    const parts = definitionParts(statementAt(code, m.index))
+    const why = []
+    if (!parts) why.push('no AS body the guard can read')
+    else {
+      if (norm(parts.body) !== MEMBERSHIP_HELPER_BODY) why.push('body differs from mig 731')
+      why.push(...definerAttrProblems(parts.attrs))
+    }
+    if (why.length) hits.push(`create function private.${MEMBERSHIP_HELPER} (${why.join('; ')})`)
+  }
+  return hits
+}
+
+/** ALTER FUNCTION / ALTER ROUTINE on either contacts read helper (a breaker after mig 731). */
+export function contactHelperAlterBreakers(sql) {
+  const code = sqlCode(sql)
+  const hits = []
+  for (const name of [HELPER, MEMBERSHIP_HELPER]) {
+    const alters = new RegExp(`\\balter\\s+(?:function|routine)\\s+${fnRef(name)}[^;]*`, 'gi')
+    for (const m of code.matchAll(alters)) hits.push(m[0].trim().replace(/\s+/g, ' '))
+  }
+  return hits
+}
 
 /** Statements in `sql` that would put contacts' SELECT back on membership, or remove the helper. */
 export function contactReadScopeBreakers(sql) {
@@ -144,11 +232,9 @@ export function contactReadScopeBreakers(sql) {
       hits.push(m[0].trim().replace(/\s+/g, ' '))
     }
   }
-  // the membership helper (re)defined with any body but 731's, or not SECURITY DEFINER
-  const membershipDefs = new RegExp(`\\bcreate\\s+(?:or\\s+replace\\s+)?function\\s+private\\s*\\.\\s*${MEMBERSHIP_HELPER}\\b([\\s\\S]*?)\\bas\\s+(\\$\\w*\\$)([\\s\\S]*?)\\2`, 'gi')
-  for (const m of code.matchAll(membershipDefs)) {
-    if (norm(m[3]) !== MEMBERSHIP_HELPER_BODY || !/\bsecurity\s+definer\b/i.test(m[1])) hits.push(`create function private.${MEMBERSHIP_HELPER} (body or SECURITY DEFINER differs from mig 731)`)
-  }
+  // the membership helper (re)defined with any body but 731's, or not
+  // SECURITY DEFINER with SET search_path = '' (every CREATE of it)
+  hits.push(...membershipHelperDefBreakers(code))
   // contacts' row level security toggled (any ALTER TABLE action list on contacts)
   const alters = /\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(?:"?public"?\s*\.\s*)?"?contacts"?(?![\w"])([^;]*)/gi
   for (const m of code.matchAll(alters)) {
@@ -264,11 +350,74 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     expect(contactReadScopeBreakers(`DROP FUNCTION IF EXISTS private.${MEMBERSHIP_HELPER}(); ${def(ok)}`)).toEqual([])
   })
 
+  it('EVERY create of the membership helper is read: a \'…\' body, attributes after the body, a second CREATE, quoted names', () => {
+    const ok = `SELECT coalesce(array_agg(DISTINCT cm.contact_id), '{}'::uuid[]) FROM public.contact_memberships cm WHERE cm.status = 'active' AND cm.location_id = ANY ((SELECT private.${HELPER}())::uuid[])`
+    const bad = `SELECT coalesce(array_agg(DISTINCT cm.contact_id), '{}'::uuid[]) FROM public.contact_memberships cm WHERE cm.status = 'active'`
+    const quoted = (b) => `'${b.replace(/'/g, "''")}'`
+    const head = `CREATE OR REPLACE FUNCTION private.${MEMBERSHIP_HELPER}() RETURNS uuid[] LANGUAGE sql STABLE`
+    const good = `${head} SECURITY DEFINER SET search_path = '' AS $function$ ${ok} $function$;`
+    expect(contactReadScopeBreakers(good)).toEqual([])
+    // a single-quoted body: read and judged like a dollar-quoted one
+    expect(contactReadScopeBreakers(`${head} SECURITY DEFINER SET search_path = '' AS ${quoted(ok)};`)).toEqual([])
+    expect(contactReadScopeBreakers(`${head} SECURITY DEFINER SET search_path = '' AS ${quoted(bad)};`)).toHaveLength(1)
+    // attributes AFTER the body are read too
+    expect(contactReadScopeBreakers(`${head} SECURITY DEFINER SET search_path = '' AS $function$ ${ok} $function$ SECURITY INVOKER;`)).toHaveLength(1)
+    expect(contactReadScopeBreakers(`${head} AS $function$ ${ok} $function$ SECURITY DEFINER SET search_path = '';`)).toEqual([])
+    expect(contactReadScopeBreakers(`${head} SECURITY DEFINER SET search_path = '' AS $function$ ${ok} $function$ SET search_path = public;`)).toHaveLength(1)
+    // a body the guard cannot read is a breaker, not a pass
+    expect(contactReadScopeBreakers(`${head} SECURITY DEFINER SET search_path = '' BEGIN ATOMIC ${ok}; END;`)).toHaveLength(1)
+    // every CREATE in a file counts: one good then one bad, and two bad
+    expect(contactReadScopeBreakers(`${good}\n${head} SECURITY DEFINER SET search_path = '' AS $b$ ${bad} $b$;`)).toHaveLength(1)
+    expect(contactReadScopeBreakers(`${head} SECURITY DEFINER SET search_path = '' AS ${quoted(bad)};\n${head} SECURITY INVOKER SET search_path = '' AS $b$ ${ok} $b$;`)).toHaveLength(2)
+    // a quoted schema/function name is the same function
+    expect(contactReadScopeBreakers(`CREATE OR REPLACE FUNCTION "private"."${MEMBERSHIP_HELPER}"() RETURNS uuid[] LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $f$ ${bad} $f$;`)).toHaveLength(1)
+    // a longer name is another function
+    expect(contactReadScopeBreakers(`CREATE FUNCTION private.${MEMBERSHIP_HELPER}_v2() RETURNS uuid[] LANGUAGE sql AS $f$ ${bad} $f$;`)).toEqual([])
+  })
+
+  it('the membership helper must set search_path to \'\' (SECURITY DEFINER)', () => {
+    const ok = `SELECT coalesce(array_agg(DISTINCT cm.contact_id), '{}'::uuid[]) FROM public.contact_memberships cm WHERE cm.status = 'active' AND cm.location_id = ANY ((SELECT private.${HELPER}())::uuid[])`
+    const def = (attrs) => `CREATE OR REPLACE FUNCTION private.${MEMBERSHIP_HELPER}() RETURNS uuid[] LANGUAGE sql STABLE SECURITY DEFINER ${attrs} AS $function$ ${ok} $function$;`
+    expect(contactReadScopeBreakers(def(`SET search_path = ''`))).toEqual([])
+    expect(contactReadScopeBreakers(def(`SET search_path TO ''`))).toEqual([])
+    for (const attrs of ['', 'SET search_path = public', `SET search_path = '', public`, 'SET search_path FROM CURRENT', `SET search_path = 'public'`]) {
+      expect(contactReadScopeBreakers(def(attrs)), attrs || '(none)').toHaveLength(1)
+    }
+  })
+
+  it('no migration after 731 ALTERs either helper', () => {
+    const offenders = migrationFiles().filter((f) => migNum(f) > MEMBERSHIP_SCOPE_MIGRATION)
+      .flatMap((f) => contactHelperAlterBreakers(readFileSync(path.join(MIGRATIONS, f), 'utf8')).map((h) => `${f}: ${h}`))
+    expect(offenders, 're-create the helper (CREATE OR REPLACE, the guarded form) instead of ALTERing it').toEqual([])
+  })
+
+  it('the ALTER detector catches every ALTER FUNCTION / ROUTINE on either helper, and nothing else', () => {
+    for (const sql of [
+      `ALTER FUNCTION private.${MEMBERSHIP_HELPER}() SECURITY INVOKER;`,
+      `ALTER FUNCTION private.${MEMBERSHIP_HELPER}() OWNER TO authenticated;`,
+      `ALTER FUNCTION private.${MEMBERSHIP_HELPER}() RESET search_path;`,
+      `ALTER FUNCTION private.${HELPER}() SET search_path = public;`,
+      `alter function "private"."${HELPER}" security invoker`,
+      `ALTER ROUTINE private.${HELPER}() RESET ALL;`,
+      `DO $$ BEGIN EXECUTE 'ALTER FUNCTION private.${MEMBERSHIP_HELPER}() SECURITY INVOKER'; END $$;`,
+    ]) expect(contactHelperAlterBreakers(sql), sql).toHaveLength(1)
+    for (const sql of [
+      `-- ALTER FUNCTION private.${MEMBERSHIP_HELPER}() SECURITY INVOKER;`,
+      `ALTER FUNCTION private.auth_contact_ids_other() SECURITY INVOKER;`,
+      `ALTER FUNCTION private.${HELPER}_v2() SECURITY INVOKER;`,
+      `COMMENT ON FUNCTION private.${HELPER}() IS 'x';`,
+      `REVOKE ALL ON FUNCTION private.${MEMBERSHIP_HELPER}() FROM PUBLIC, anon;`,
+    ]) expect(contactHelperAlterBreakers(sql), sql).toEqual([])
+    // 731 itself creates, never alters
+    const f731 = migrationFiles().find((f) => migNum(f) === MEMBERSHIP_SCOPE_MIGRATION)
+    expect(contactHelperAlterBreakers(readFileSync(path.join(MIGRATIONS, f731), 'utf8'))).toEqual([])
+  })
+
   it('the latest definition of the membership helper in the migrations is 731\'s', () => {
     const creators = migrationFiles().filter((f) => createsFn(MEMBERSHIP_HELPER).test(sqlCode(readFileSync(path.join(MIGRATIONS, f), 'utf8'))))
     expect(creators.at(-1), 'no migration creates the membership helper').toBeTruthy()
     // every definition passes the body check (contactReadScopeBreakers above runs on every file after 690)
-    expect(migNum(creators[0])).toBe(731)
+    expect(migNum(creators.at(-1))).toBe(731)
   })
 
   it('the detector catches row level security toggled on contacts (SEC-3), and nothing else', () => {
@@ -308,6 +457,13 @@ describe("(d) the helper's role defaults are the JS defaults", () => {
     expect(body).toMatch(/role\s*=\s*'org_admin'/)
     expect(body).toMatch(/coalesce\(\s*l\.active\s*,\s*false\s*\)/i)
     expect(body).toMatch(/then\s+'owner'/i)
+  })
+
+  it('the latest helper is SECURITY DEFINER with SET search_path = \'\'', () => {
+    const { sql } = helperDefaultRoles()
+    const parts = definitionParts(statementAt(sql, sql.search(CREATES_HELPER)))
+    expect(parts, 'the latest auth_contact_read_location_ids definition has no readable body').toBeTruthy()
+    expect(definerAttrProblems(parts.attrs)).toEqual([])
   })
 
   it('the web and phone maps know the same roles (no role silently defaults to no on one side)', () => {

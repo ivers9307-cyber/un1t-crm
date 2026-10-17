@@ -228,6 +228,28 @@ describe('the file aborts as a whole', () => {
     expect(await abortMessage(db, MIG_731)).toMatch(/mig 731: contact_memberships is readable by a client/)
     expect(await helperGone()).toBe(true)
   }, 60_000)
+
+  it('when a client holds a COLUMN-level SELECT on contact_memberships (has_table_privilege cannot see it)', async () => {
+    db = await prep(`GRANT SELECT (contact_id) ON public.contact_memberships TO authenticated;`)
+    expect((await db.query(`SELECT has_table_privilege('authenticated', 'public.contact_memberships', 'SELECT') AS t`)).rows[0].t).toBe(false)
+    await signedOut(db)
+    expect(await abortMessage(db, MIG_731)).toMatch(/mig 731: contact_memberships is readable by a client/)
+    expect(await helperGone()).toBe(true)
+  }, 60_000)
+
+  it('when anon holds a COLUMN-level SELECT on contact_memberships', async () => {
+    db = await prep(`GRANT SELECT (status) ON public.contact_memberships TO anon;`)
+    await signedOut(db)
+    expect(await abortMessage(db, MIG_731)).toMatch(/mig 731: contact_memberships is readable by a client/)
+    expect(await helperGone()).toBe(true)
+  }, 60_000)
+})
+
+describe('the file carries no placeholder', () => {
+  it('no "later sections go here" marker left above COMMIT', () => {
+    expect(MIG_731).not.toMatch(/Later UN1TDUAL sections/i)
+    expect(MIG_731).toMatch(/END \$\$;\s*COMMIT;\s*$/)
+  })
 })
 
 describe("the header's rollback record", () => {

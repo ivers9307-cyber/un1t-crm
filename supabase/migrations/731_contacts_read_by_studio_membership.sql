@@ -108,9 +108,11 @@ BEGIN
         AND column_name IN ('contact_id', 'location_id', 'status')) <> 3 THEN
     RAISE EXCEPTION 'mig 731: public.contact_memberships is missing or lacks contact_id / location_id / status; apply 722 first';
   END IF;
+  -- has_any_column_privilege also catches a column-level grant, which
+  -- has_table_privilege does not see
   IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.contact_memberships'::regclass)
-     OR has_table_privilege('anon', 'public.contact_memberships', 'SELECT')
-     OR has_table_privilege('authenticated', 'public.contact_memberships', 'SELECT') THEN
+     OR has_any_column_privilege('anon', 'public.contact_memberships', 'SELECT')
+     OR has_any_column_privilege('authenticated', 'public.contact_memberships', 'SELECT') THEN
     RAISE EXCEPTION 'mig 731: contact_memberships is readable by a client or has RLS off (722 closed it); find out why first';
   END IF;
   -- crossover_contact_ids: replaced whole, so a hand edit on prod aborts this file
@@ -255,7 +257,5 @@ BEGIN
 
   RAISE NOTICE 'mig 731: contacts_select also admits active members of a studio where the caller holds Contacts; crossover_contact_ids counts them; privileges unchanged.';
 END $$;
-
--- (Later UN1TDUAL sections of this file go here, above COMMIT.)
 
 COMMIT;
