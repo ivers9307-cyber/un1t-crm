@@ -42,6 +42,10 @@ ALTER TABLE public.class_occurrences
 COMMENT ON COLUMN public.class_occurrences.source_platform IS
   'UN1TCLASS.1 (mig 730) — glofox | un1t_online. Where the occurrence was projected from. un1t_online rows carry glofox_event_id = ''un1t:'' || un1t_events.un1t_id (the prefix cannot collide with a Glofox 24-hex id) and have NO class_bookings rows, so booking-derived metrics (no-show, attended) are unavailable for them, never zero.';
 
+-- Refresh mig 726's table comment, which said the projection was not written.
+COMMENT ON TABLE public.un1t_events IS
+  'UN1TSYNC.1 (mig 726) / UN1TCLASS.1 (mig 730): un1t.online classes and events, projected into class_occurrences with source_platform = ''un1t_online'' and glofox_event_id = ''un1t:'' || un1t_id. NOT written to class_bookings. Service role only; the sync upserts and never deletes.';
+
 -- ---------------------------------------------------------------------------
 -- Self-check: the catalog, never this file's text (mig 153's lesson).
 -- ---------------------------------------------------------------------------
@@ -75,9 +79,18 @@ BEGIN
   IF NOT has_table_privilege('authenticated', 'public.class_occurrences', 'SELECT') THEN
     RAISE EXCEPTION 'UN1TCLASS.1: authenticated lost table-level SELECT on class_occurrences';
   END IF;
-  IF has_column_privilege('authenticated', 'public.class_occurrences', 'source_platform', 'UPDATE')
-     OR has_column_privilege('anon', 'public.class_occurrences', 'source_platform', 'SELECT') THEN
-    RAISE EXCEPTION 'UN1TCLASS.1: a client role holds a privilege on source_platform it must not';
+  IF has_column_privilege('anon', 'public.class_occurrences', 'source_platform', 'SELECT') THEN
+    RAISE EXCEPTION 'UN1TCLASS.1: anon can read class_occurrences.source_platform';
+  END IF;
+  -- authenticated keeps a table-level UPDATE (mig 677 kept it), so the real
+  -- write barrier is RLS: the only policy must be the SELECT one. A write
+  -- policy appearing here would let a signed-in session rewrite the column.
+  IF EXISTS (
+    SELECT 1 FROM pg_policy
+     WHERE polrelid = 'public.class_occurrences'::regclass
+       AND polcmd IN ('a', 'w', 'd', '*')
+  ) THEN
+    RAISE EXCEPTION 'UN1TCLASS.1: class_occurrences has a write (INSERT/UPDATE/DELETE/ALL) policy; it must be service-role-write only';
   END IF;
   RAISE NOTICE 'UN1TCLASS.1 mig 730: class_occurrences.source_platform added.';
 END $$;
