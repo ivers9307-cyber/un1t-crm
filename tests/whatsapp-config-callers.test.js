@@ -97,7 +97,7 @@ const CALLERS = {
   'src/lib/whatsapp.js': {
     calls: { getWhatsAppConfig: 1, getConversationReplyConfig: 1, getLocationWhatsAppNumberConfig: 1, getLocationNumberForWaba: 1 },
     decision: 'resolver',
-    why: 'WAORGNUMBER.2 (R5): opts.businessAccountId (the template row’s WABA) resolves the studio’s number on that WABA (getLocationNumberForWaba; none → WhatsAppNumberMissingError), and with opts.replyInConversation the thread number when it is on that WABA (getConversationReplyConfig); sendBroadcast / sendDripChunk resolve through resolveConfig with their template’s WABA, so their refusal paths are unchanged (blast: throw before the flip; drip: pause no_whatsapp_number); a row with no WABA keeps the old rules. whatsapp-reply-number.test.js, whatsapp-no-number-senders.test.js. WAORGNUMBER.1: getOrCreateConversation’s sendingNumberId is the number switched on at the sending studio (link default first); a throwing lookup is logged and files the thread unstamped, never thrown (whatsapp-get-or-create-conversation.test.js). resolveConfig (every Meta helper; getWhatsAppConfig reads the studio’s switched-on numbers, none → WhatsAppNumberMissingError; opts.replyInConversation → getConversationReplyConfig, which falls back to getWhatsAppConfig and so refuses a studio with nothing switched on the same way, unless the thread carries a same-organisation sibling’s stamp, a transitional clause (WAHOMESTUDIO.1 R4, WAREPLYNUMBER.1, whatsapp-reply-number.test.js) that goes at WAORGNUMBER.6 once every studio switches its own numbers on). sendBroadcast (blast: throws BEFORE the status flip → route 409 / cron pushes managers), sendDripChunk (pauses the drip). src/lib/whatsapp-no-number-senders.test.js, whatsapp-no-number-broadcasts.test.js.',
+    why: 'WAORGNUMBER.4 (R7): sendBroadcast / sendDripChunk budget per NUMBER (getSendBudget { numberId: config.id }, counted over every studio with it switched on), and an unsigned broadcast inside the studio’s blast sign-off window is refused before any status flip (blast: BlastSignoffRequiredError → route 409 / cron pushes managers) or paused (drip: needs_signoff), before either resolves a number; no resolver call count changed. whatsapp-blast-signoff-engine.test.js. WAORGNUMBER.2 (R5): opts.businessAccountId (the template row’s WABA) resolves the studio’s number on that WABA (getLocationNumberForWaba; none → WhatsAppNumberMissingError), and with opts.replyInConversation the thread number when it is on that WABA (getConversationReplyConfig); sendBroadcast / sendDripChunk resolve through resolveConfig with their template’s WABA, so their refusal paths are unchanged (blast: throw before the flip; drip: pause no_whatsapp_number); a row with no WABA keeps the old rules. whatsapp-reply-number.test.js, whatsapp-no-number-senders.test.js. WAORGNUMBER.1: getOrCreateConversation’s sendingNumberId is the number switched on at the sending studio (link default first); a throwing lookup is logged and files the thread unstamped, never thrown (whatsapp-get-or-create-conversation.test.js). resolveConfig (every Meta helper; getWhatsAppConfig reads the studio’s switched-on numbers, none → WhatsAppNumberMissingError; opts.replyInConversation → getConversationReplyConfig, which falls back to getWhatsAppConfig and so refuses a studio with nothing switched on the same way, unless the thread carries a same-organisation sibling’s stamp, a transitional clause (WAHOMESTUDIO.1 R4, WAREPLYNUMBER.1, whatsapp-reply-number.test.js) that goes at WAORGNUMBER.6 once every studio switches its own numbers on). sendBroadcast (blast: throws BEFORE the status flip → route 409 / cron pushes managers), sendDripChunk (pauses the drip). src/lib/whatsapp-no-number-senders.test.js, whatsapp-no-number-broadcasts.test.js.',
   },
   'src/app/api/whatsapp/spend/route.js': {
     calls: { getLocationWhatsAppNumberConfig: 1 },
@@ -132,7 +132,7 @@ const CALLERS = {
   'src/app/api/whatsapp/conversational-automation/route.js': {
     calls: { setConversationalAutomation: 1, ownNumberOrRefusal: 1 },
     decision: 'own-number',
-    why: 'chat openers on the location’s own number (C33 WAROLE.1), 409 / 500 before Meta.',
+    why: 'WAORGNUMBER.4 (R8): the openers are the number’s, shared by every studio using it, so after the own-number check (no extra resolver call) a studio that is not the number’s home answers 403 unless the caller is an organisation admin (master passes); Meta is not called. route.test.js. chat openers on the location’s own number (C33 WAROLE.1), 409 / 500 before Meta.',
   },
   'src/app/api/whatsapp/templates/route.js': {
     calls: { createTemplate: 1, getTemplates: 1, ownNumberOrRefusal: 1, templateLocationIdFor: 1, listLocationNumberConfigs: 1 },
@@ -157,27 +157,27 @@ const CALLERS = {
   'src/app/api/contacts/[id]/whatsapp/route.js': {
     calls: { sendTextMessage: 1, sendTemplateMessage: 1, ownNumberOrRefusal: 1, getConversationNumberConfig: 1 },
     decision: 'refuse-409',
-    why: 'contact composer: own number checked BEFORE a thread is opened (no empty thread); the send carries that checked { config } (one lookup, no check-then-send gap), or the thread\'s own number while it is active here (WAREPLYNUMBER.1: getConversationNumberConfig never throws, null → the checked default; a template only within the default\'s WABA). WAORGNUMBER.2 (R5): a template goes from the thread number or the checked default only when it is on the template\'s WABA (pickTemplateConfig); when neither is, the send resolves by location + WABA (sendTemplateMessage { locationId, businessAccountId }) and can refuse: WhatsAppNumberMissingError → 409 (whatsappErrorStatus), nothing logged. route.test.js.',
+    why: 'WAORGNUMBER.4 (R3): the thread files at the contact’s HOME studio through getOrCreateConversation(db, contact, contact.location_id) (getOrCreateContactConversation, which took the most recent thread at any studio, is gone); same resolver calls, same 409 when home has nothing switched on. contact composer: own number checked BEFORE a thread is opened (no empty thread); the send carries that checked { config } (one lookup, no check-then-send gap), or the thread\'s own number while it is active here (WAREPLYNUMBER.1: getConversationNumberConfig never throws, null → the checked default; a template only within the default\'s WABA). WAORGNUMBER.2 (R5): a template goes from the thread number or the checked default only when it is on the template\'s WABA (pickTemplateConfig); when neither is, the send resolves by location + WABA (sendTemplateMessage { locationId, businessAccountId }) and can refuse: WhatsAppNumberMissingError → 409 (whatsappErrorStatus), nothing logged. route.test.js.',
   },
   'src/app/api/contacts/[id]/cancellation-form/route.js': {
     calls: { sendCtaUrlMessage: 1, sendTemplateMessage: 1, ownNumberOrRefusal: 1 },
     decision: 'refuse-409',
-    why: 'WhatsApp channel only: own number checked before a thread or a link, and the send carries that checked { config }; email unaffected. WAORGNUMBER.2 (R5): a template goes from the checked default only when it is on the template\'s WABA (pickTemplateConfig); otherwise the send resolves by location + WABA (sendTemplateMessage { locationId, businessAccountId }) and can refuse: WhatsAppNumberMissingError → the minted link is revoked and the route answers 409 (whatsappErrorStatus). route.test.js.',
+    why: 'WAORGNUMBER.4 (R3): the composer’s thread, at the contact’s HOME studio (getOrCreateConversation at contact.location_id); same resolver calls. WhatsApp channel only: own number checked before a thread or a link, and the send carries that checked { config }; email unaffected. WAORGNUMBER.2 (R5): a template goes from the checked default only when it is on the template\'s WABA (pickTemplateConfig); otherwise the send resolves by location + WABA (sendTemplateMessage { locationId, businessAccountId }) and can refuse: WhatsAppNumberMissingError → the minted link is revoked and the route answers 409 (whatsappErrorStatus). route.test.js.',
   },
   'src/app/api/churn-radar/action/route.js': {
     calls: { sendTextMessage: 1 },
     decision: 'refuse-409',
-    why: 'win-back: 409 with the resolver message (the copy blamed the member’s message window); outreach via sendRadarOutreach: 409. route.no-number.test.js.',
+    why: 'WAORGNUMBER.4 (R8): the 409 now names the radar’s studio, “No WhatsApp number is switched on at {studio}.” (locations.name; a failed read refuses without the name); same resolver path. win-back: 409 with the resolver message (the copy blamed the member’s message window); outreach via sendRadarOutreach: 409. route.no-number.test.js.',
   },
   'src/app/api/whatsapp/broadcasts/[id]/send/route.js': {
     calls: { sendBroadcast: 1 },
     decision: 'refuse-409',
-    why: 'blast refused before any status flip → 409. route.test.js.',
+    why: 'WAORGNUMBER.4 (R7): inside the studio’s blast sign-off window an unsigned broadcast is a 403 for anyone but an organisation admin (whose send stamps it) before sendBroadcast runs; the engine’s own sign-off refusal is a 409. route.test.js. blast refused before any status flip → 409. route.test.js.',
   },
   'src/app/api/cron/run-whatsapp-broadcasts/route.js': {
     calls: { sendDripChunk: 2, sendBroadcast: 3 },
     decision: 'refuse-skip',
-    why: 'scheduled blast or (C138 b) scheduled drip start refusal: row stays draft, managers pushed; drip: paused by sendDripChunk (no error loop); a resumed chunked blast logs per tick (existing path).',
+    why: 'WAORGNUMBER.4 (R7): an unsigned scheduled blast at a studio inside its sign-off window is a refused start like any other (draft, managers pushed with the sign-off copy); an unsigned drip pauses inside sendDripChunk. route.signoff.test.js. scheduled blast or (C138 b) scheduled drip start refusal: row stays draft, managers pushed; drip: paused by sendDripChunk (no error loop); a resumed chunked blast logs per tick (existing path).',
   },
   'src/app/api/whatsapp/conversations/[id]/send/route.js': {
     calls: { sendTemplateMessage: 1, sendMediaMessage: 1, sendTextMessage: 1, templateLocationIdFor: 1 },
