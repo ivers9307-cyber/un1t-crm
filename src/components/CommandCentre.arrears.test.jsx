@@ -93,7 +93,7 @@ describe('CommandCentre Arrears tile', () => {
   it('overdue with no reported amount: "amount not reported", never €0', async () => {
     const tile = await arrearsTile(bundle({
       signals: { churnClass: 'overdue', churnLabel: 'Payment overdue' },
-      un1t_billing: { overdue: true, arrears_cents: 0, studios: [{ location_id: 'loc2', since: '2026-10-03' }] },
+      un1t_billing: { overdue: true, arrears_cents: 0, amount_unreported: true, studios: [{ location_id: 'loc2', since: '2026-10-03' }] },
     }))
     expect(tile.textContent).toBe('amount not reported')
     expect(tile.textContent).not.toContain('€')
@@ -103,5 +103,34 @@ describe('CommandCentre Arrears tile', () => {
   it('not overdue with no arrears stays €0', async () => {
     const tile = await arrearsTile(bundle({ un1t_billing: { overdue: false, arrears_cents: 0, studios: [] } }))
     expect(tile.textContent).toBe('€0')
+  })
+
+  it('Glofox arrears plus an un1t overdue with no amount: "€50 + amount not reported"', async () => {
+    const tile = await arrearsTile(bundle({
+      signals: { arrearsCents: 5000, arrearsCount: 1 },
+      un1t_billing: { overdue: true, arrears_cents: 0, amount_unreported: true, amount_not_eur: false, studios: [{ location_id: 'loc2', since: '2026-10-03' }] },
+    }))
+    expect(tile.textContent).toBe('€50 + amount not reported')
+  })
+
+  it('a partial un1t sum (one row has an amount, one does not): "€89 + amount not reported"', async () => {
+    const tile = await arrearsTile(bundle({
+      un1t_billing: { overdue: true, arrears_cents: 8900, amount_unreported: true, amount_not_eur: false, studios: [{ location_id: 'loc2', since: '2026-10-03' }] },
+    }))
+    expect(tile.textContent).toBe('€89 + amount not reported')
+  })
+
+  it('a known but non-EUR amount says "amount not in EUR", alone or beside a sum', async () => {
+    const un1t = (cents) => ({ overdue: true, arrears_cents: cents, amount_unreported: true, amount_not_eur: true, studios: [{ location_id: 'loc2', since: '2026-10-03' }] })
+    expect((await arrearsTile(bundle({ un1t_billing: un1t(0) }))).textContent).toBe('amount not in EUR')
+    cleanup()
+    expect((await arrearsTile(bundle({ un1t_billing: un1t(8900) }))).textContent).toBe('€89 + amount not in EUR')
+  })
+
+  it('a fully reported EUR overdue has no suffix', async () => {
+    const tile = await arrearsTile(bundle({
+      un1t_billing: { overdue: true, arrears_cents: 8900, amount_unreported: false, amount_not_eur: false, studios: [{ location_id: 'loc2', since: '2026-10-03' }] },
+    }))
+    expect(tile.textContent).toBe('€89')
   })
 })

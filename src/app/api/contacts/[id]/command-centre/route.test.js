@@ -54,7 +54,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadUn1tBilling } from '@/lib/contact-un1t-billing'
 
-const NO_BILLING = { studios: [], overdue: false, arrearsCentsByCurrency: {} }
+const NO_BILLING = { studios: [], overdue: false, arrearsCentsByCurrency: {}, amountUnreported: false, amountNotEur: false }
 
 const USER = { id: 'u1', locations: [{ id: 'loc1' }] }
 const CONTACT = { id: 'c1', location_id: 'loc1', name: 'Emma Byrne' }
@@ -239,6 +239,8 @@ describe('GET /api/contacts/[id]/command-centre', () => {
         ],
         overdue: true,
         arrearsCentsByCurrency: { EUR: 4500, GBP: 1000 },
+        amountUnreported: true,
+        amountNotEur: true,
       })
     }))
 
@@ -257,6 +259,8 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     expect(j.un1t_billing).toEqual({
       overdue: true,
       arrears_cents: 4500,
+      amount_unreported: true,
+      amount_not_eur: true,
       studios: [
         { location_id: 'loc1', since: '2026-10-01' },
         { location_id: 'loc3', since: '2026-09-20' },
@@ -280,11 +284,15 @@ describe('GET /api/contacts/[id]/command-centre', () => {
       ] }],
       overdue: true,
       arrearsCentsByCurrency: { EUR: 5500 },
+      amountUnreported: true,
+      amountNotEur: false,
     })
     const j = await (await GET(req(), props)).json()
     expect(j.un1t_billing).toEqual({
       overdue: true,
       arrears_cents: 5500,
+      amount_unreported: true,
+      amount_not_eur: false,
       studios: [{ location_id: 'loc1', since: '2026-09-20T09:00:00Z' }],
     })
   })
@@ -300,6 +308,8 @@ describe('GET /api/contacts/[id]/command-centre', () => {
       studios: [{ locationId: 'loc1', locationName: 'Hatch', pastDues: [{ since: '2026-10-01', amountCents: null, currency: null }] }],
       overdue: true,
       arrearsCentsByCurrency: {},
+      amountUnreported: true,
+      amountNotEur: false,
     })
     const res = await GET(req(), props)
     const j = await res.json()
@@ -307,6 +317,8 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     expect(j.un1t_billing).toEqual({
       overdue: true,
       arrears_cents: 0,
+      amount_unreported: true,
+      amount_not_eur: false,
       studios: [{ location_id: 'loc1', since: '2026-10-01' }],
     })
     expect(j.signals.churnLabel).toBe('Payment overdue')
@@ -336,7 +348,7 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     const res = await GET(req(), props)
     const j = await res.json()
     expect(res.status).toBe(200)
-    expect(j.un1t_billing).toEqual({ overdue: false, arrears_cents: 0, studios: [] })
+    expect(j.un1t_billing).toEqual({ overdue: false, arrears_cents: 0, amount_unreported: false, amount_not_eur: false, studios: [] })
     // The Glofox-side label and tier are untouched.
     expect(j.signals.churnLabel).toBe('At risk')
     expect(j.signals.churnTier).toBe('low')

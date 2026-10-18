@@ -163,6 +163,24 @@ describe('loadUn1tBilling', () => {
       expect(un1tHeaderRisk(out).title).toBe('Payment overdue on un1t.online at UN1T Hatch Street since 20 Sept 2026')
     })
 
+    it('amountUnreported: true when any overdue row has no EUR amount; amountNotEur only when every such row has a known non-EUR amount', async () => {
+      const flags = async (rows) => {
+        const out = await load(rows)
+        return [out.amountUnreported, out.amountNotEur]
+      }
+      expect(await flags([pastDue({ amountCents: 4000 })])).toEqual([false, false])
+      expect(await flags([pastDue({ amountCents: 4000 }), pastDue({ amountCents: null, currency: null })])).toEqual([true, false])
+      expect(await flags([pastDue({ amountCents: 4000, currency: 'EUR' }), pastDue({ amountCents: 7000, currency: 'GBP' })])).toEqual([true, true])
+      expect(await flags([pastDue({ amountCents: 7000, currency: 'GBP' }), pastDue({ amountCents: null, currency: null })])).toEqual([true, false])
+      // an amount with no currency is unreported, not "not EUR"
+      expect(await flags([pastDue({ amountCents: 7000, currency: null })])).toEqual([true, false])
+    })
+
+    it('nothing overdue: both flags false', async () => {
+      const out = await load([])
+      expect([out.amountUnreported, out.amountNotEur]).toEqual([false, false])
+    })
+
     it('an empty pastDues is not overdue', async () => {
       const out = await load([])
       expect(out.overdue).toBe(false)
@@ -227,7 +245,7 @@ describe('loadUn1tBilling', () => {
     it('Contacts off everywhere: nothing is queried', async () => {
       const db = makeDb({ clientLocs: [HATCH] })
       const out = await loadUn1tBilling(db, viewerAt([HATCH], [HATCH]), CONTACT)
-      expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {} })
+      expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {}, amountUnreported: false, amountNotEur: false })
       expect(db.calls.tables).toEqual([])
       expect(membershipReadsFor).not.toHaveBeenCalled()
     })
@@ -243,7 +261,7 @@ describe('loadUn1tBilling', () => {
     it('a viewer with no studios reads nothing', async () => {
       const db = makeDb({ clientLocs: [HATCH] })
       const out = await loadUn1tBilling(db, viewer(), CONTACT)
-      expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {} })
+      expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {}, amountUnreported: false, amountNotEur: false })
       expect(db.calls.clients).toHaveLength(0)
       expect(membershipReadsFor).not.toHaveBeenCalled()
     })
@@ -252,7 +270,7 @@ describe('loadUn1tBilling', () => {
   it('capabilities.invoices false (today) → no studios, paymentsFor not called', async () => {
     const spies = seam({ [HATCH]: { capabilities: { invoices: false } } })
     const out = await loadUn1tBilling(makeDb({ clientLocs: [HATCH] }), viewer(HATCH), CONTACT)
-    expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {} })
+    expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {}, amountUnreported: false, amountNotEur: false })
     expect(spies[HATCH]).not.toHaveBeenCalled()
   })
 
@@ -276,7 +294,7 @@ describe('loadUn1tBilling', () => {
 
   it('Glofox-only contact (no un1t_clients rows) → empty result, no seam call', async () => {
     const out = await loadUn1tBilling(makeDb({ clientLocs: [] }), viewer(STILL, HATCH), CONTACT)
-    expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {} })
+    expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {}, amountUnreported: false, amountNotEur: false })
     expect(membershipReadsFor).not.toHaveBeenCalled()
   })
 
@@ -293,14 +311,14 @@ describe('loadUn1tBilling', () => {
   it('a throwing seam → empty result, logged "load failed"', async () => {
     membershipReadsFor.mockRejectedValue(new Error('down'))
     const out = await loadUn1tBilling(makeDb({ clientLocs: [HATCH] }), viewer(HATCH), CONTACT)
-    expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {} })
+    expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {}, amountUnreported: false, amountNotEur: false })
     expect(logWarn).toHaveBeenCalledWith('un1t-billing', 'load failed', { contactId: CONTACT })
   })
 
   it('an unreadable un1t_clients read → empty result, logged', async () => {
     const db = { from: () => { const b = { select: () => b, eq: () => b, in: () => b, then: (r) => Promise.resolve({ data: null, error: { message: 'nope' } }).then(r) }; return b } }
     const out = await loadUn1tBilling(db, viewer(HATCH), CONTACT)
-    expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {} })
+    expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {}, amountUnreported: false, amountNotEur: false })
     expect(logWarn).toHaveBeenCalledWith('un1t-billing', 'load failed', expect.objectContaining({ contactId: CONTACT }))
   })
 })

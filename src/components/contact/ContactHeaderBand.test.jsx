@@ -91,3 +91,39 @@ describe('ContactHeaderBand — Cold is hidden on a manual board', () => {
     expect(actions).toContain('cancel_form')
   })
 })
+
+// HATCHINV.1 — the Arrears tile must agree with the overdue chip. A member
+// overdue on un1t.online with no reported amount used to read "€0" here.
+describe('ContactHeaderBand — Arrears tile with un1t.online (HATCHINV.1)', () => {
+  const tile = (html) => {
+    const m = html.match(/Arrears<\/[^>]+>(?:<[^>]+>)*([^<]+)/)
+    return m ? m[1] : null
+  }
+  const un1t = (over = {}) => ({ overdue: true, amountUnreported: false, amountNotEur: false, ...over })
+
+  it('Stillorgan (no un1t facts): €0 and a Glofox figure exactly as before', () => {
+    expect(tile(render({}))).toBe('€0')
+    expect(tile(render({ metrics: { ...METRICS, arrearsCents: 5000 } }))).toBe('€50')
+    expect(tile(render({ metrics: { ...METRICS, arrearsCents: null } }))).toBe('—')
+  })
+
+  it('not overdue on un1t.online: unchanged', () => {
+    expect(tile(render({ metrics: { ...METRICS, un1t: un1t({ overdue: false }) } }))).toBe('€0')
+  })
+
+  it('overdue with no reported amount: "amount not reported", never €0', () => {
+    const html = render({ metrics: { ...METRICS, un1t: un1t({ amountUnreported: true }) } })
+    expect(tile(html)).toBe('amount not reported')
+  })
+
+  it('merged figure with a suffix when part of the debt has no EUR amount', () => {
+    const merged = { ...METRICS, arrearsCents: 13900 }
+    expect(tile(render({ metrics: { ...merged, un1t: un1t({ amountUnreported: true }) } }))).toBe('€139 + amount not reported')
+    expect(tile(render({ metrics: { ...merged, un1t: un1t({ amountUnreported: true, amountNotEur: true }) } }))).toBe('€139 + amount not in EUR')
+    expect(tile(render({ metrics: { ...merged, un1t: un1t() } }))).toBe('€139')
+  })
+
+  it('non-EUR only: "amount not in EUR"', () => {
+    expect(tile(render({ metrics: { ...METRICS, un1t: un1t({ amountUnreported: true, amountNotEur: true }) } }))).toBe('amount not in EUR')
+  })
+})

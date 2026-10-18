@@ -412,6 +412,11 @@ export default async function ContactDetailPage(props) {
         metrics={{
           ltvCents,
           arrearsCents: metricArrearsCents,
+          un1t: {
+            overdue: un1tBilling.overdue,
+            amountUnreported: un1tBilling.amountUnreported,
+            amountNotEur: un1tBilling.amountNotEur,
+          },
           attended: metricAttended,
           deals: metricDeals,
           currency: contact.lifetime_currency,

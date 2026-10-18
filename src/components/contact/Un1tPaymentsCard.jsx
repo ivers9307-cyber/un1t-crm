@@ -4,6 +4,7 @@
 // see each studio. Renders nothing when there is no studio to show.
 
 import { formatDate, formatMoney } from './format'
+import { amountNote, overdueAmountKind } from '@/components/command-centre-arrears'
 
 const MAX_TRANSACTIONS = 10
 
@@ -25,8 +26,12 @@ function invoiceChip(inv) {
 // One band per overdue subscription, each with its own amount.
 function OverdueBand({ pastDue }) {
   // formatMoney defaults a missing currency to €, so an amount with no currency
-  // is as unreported as one with no amount.
-  const amount = pastDue.currency ? formatMoney(pastDue.amountCents, pastDue.currency) : null
+  // is as unreported as one with no amount. A known foreign-currency amount is
+  // shown as it is, flagged as outside the EUR figures.
+  const kind = overdueAmountKind(pastDue)
+  const amount = kind === 'unreported'
+    ? null
+    : `${formatMoney(pastDue.amountCents, pastDue.currency)}${kind === 'not_eur' ? ` (${amountNote(true)})` : ''}`
   const since = formatDate(pastDue.since)
   return (
     <div className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-700">

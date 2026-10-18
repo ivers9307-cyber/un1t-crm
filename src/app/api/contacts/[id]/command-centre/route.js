@@ -146,6 +146,8 @@ export async function GET(request, props) {
   const un1tBillingOut = {
     overdue: un1tBilling.overdue,
     arrears_cents: Number(un1tBilling.arrearsCentsByCurrency?.EUR) || 0,
+    amount_unreported: un1tBilling.amountUnreported === true,
+    amount_not_eur: un1tBilling.amountNotEur === true,
     studios: (un1tBilling.studios || [])
       .filter((s) => s.pastDues?.length > 0)
       .map((s) => ({ location_id: s.locationId, since: earliestSince(s.pastDues) })),

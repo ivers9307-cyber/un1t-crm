@@ -18,10 +18,11 @@ import { contactStudioIds } from '@/lib/contact-crossovers'
 import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
 import { logWarn } from '@/lib/log'
 import { formatDate } from '@/components/contact/format'
+import { overdueAmountKind } from '@/components/command-centre-arrears'
 
 const TX_LIMIT = 10
 
-const emptyBilling = () => ({ studios: [], overdue: false, arrearsCentsByCurrency: {} })
+const emptyBilling = () => ({ studios: [], overdue: false, arrearsCentsByCurrency: {}, amountUnreported: false, amountNotEur: false })
 
 // An unreadable date sorts last, so a studio with a readable `since` wins.
 const sinceMs = (iso) => {
@@ -37,7 +38,7 @@ const sortedBySince = (rows) => (Array.isArray(rows) ? [...rows].sort((a, b) => 
  * @param {object} db  service-role client
  * @param {{ locations?: Array<{id: string}> }|null} user
  * @param {string} contactId
- * @returns {Promise<{ studios: Array<{ locationId: string, locationName: string, subscriptions: object[], transactions: object[], invoices: object[], pastDues: object[] }>, overdue: boolean, arrearsCentsByCurrency: Record<string, number> }>}
+ * @returns {Promise<{ studios: Array<{ locationId: string, locationName: string, subscriptions: object[], transactions: object[], invoices: object[], pastDues: object[] }>, overdue: boolean, arrearsCentsByCurrency: Record<string, number>, amountUnreported: boolean, amountNotEur: boolean }>}
  */
 export async function loadUn1tBilling(db, user, contactId) {
   try {
@@ -100,16 +101,30 @@ export async function loadUn1tBilling(db, user, contactId) {
     // Like currencies are summed; a row with no amount (or no currency) keeps
     // the member overdue but adds nothing.
     const arrearsCentsByCurrency = {}
+    let unreportedRows = 0
+    let notEurRows = 0
     for (const s of studios) {
       for (const p of s.pastDues) {
-        const cents = p?.amountCents
-        if (Number.isFinite(cents) && cents > 0 && p.currency) {
+        const kind = overdueAmountKind(p)
+        if (kind === 'unreported') unreportedRows += 1
+        if (kind === 'not_eur') notEurRows += 1
+        if (kind !== 'unreported') {
           const cur = String(p.currency).toUpperCase()
-          arrearsCentsByCurrency[cur] = (arrearsCentsByCurrency[cur] || 0) + cents
+          arrearsCentsByCurrency[cur] = (arrearsCentsByCurrency[cur] || 0) + p.amountCents
         }
       }
     }
-    return { studios, overdue: studios.some((s) => s.pastDues.length > 0), arrearsCentsByCurrency }
+    // amountUnreported: some overdue row has no EUR amount (none reported, or
+    // only another currency). amountNotEur: every such row at least has a known
+    // foreign-currency amount, so the tiles can say "not in EUR", not "not reported".
+    const amountUnreported = unreportedRows + notEurRows > 0
+    return {
+      studios,
+      overdue: studios.some((s) => s.pastDues.length > 0),
+      arrearsCentsByCurrency,
+      amountUnreported,
+      amountNotEur: amountUnreported && unreportedRows === 0,
+    }
   } catch {
     logWarn('un1t-billing', 'load failed', { contactId })
     return emptyBilling()

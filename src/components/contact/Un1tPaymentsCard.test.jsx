@@ -59,6 +59,13 @@ describe('Un1tPaymentsCard', () => {
     expect(bands[1].textContent).toContain('amount not reported by un1t.online')
   })
 
+  it('a known amount in another currency says "amount not in EUR" beside it, never "amount not reported"', () => {
+    const t = text([studio({ pastDues: [{ since: '2026-10-03T09:00:00Z', amountCents: 7000, currency: 'GBP' }] })])
+    expect(t).toContain('£70')
+    expect(t).toContain('amount not in EUR')
+    expect(t).not.toContain('amount not reported')
+  })
+
   it('no overdue band when nothing is overdue', () => {
     expect(text([studio({ transactions: [tx(1)] })])).not.toContain('Payment overdue')
   })
