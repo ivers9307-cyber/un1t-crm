@@ -25,6 +25,24 @@
 //     24h window, so a plain text reply is allowed)
 // START reverses it (opt_in / wa_status 'active').
 //
+// WAORGNUMBER.3 (R6) — A KEYWORD ACTS AT THE STUDIO WHOSE THREAD IT ARRIVES IN.
+// One number can be switched on at two studios, so "STOP" in a Hatch Street
+// thread means "stop Hatch Street's marketing", not "stop everything". With a
+// locationId the keyword writes ONLY that studio's contact_location_preferences
+// row (+ a consent_log row naming the studio) and NOT contact_preferences or
+// contacts.wa_status: both are contact-wide, and the mig 489/543 DEFINER
+// trigger fans a contact-wide whatsapp_marketing=false out to EVERY studio's
+// row. Historic wa_status='opted_out' rows from earlier contact-wide STOPs are
+// left as they are by a STOP; a studio START lifts 'opted_out' (only that
+// value) back to 'active', because the member asked to resume. Mig 747 makes
+// the trigger act only on channels that changed, so an unrelated
+// contact_preferences write no longer undoes a studio STOP or START at the
+// home studio. Without a locationId the three contact-wide writes below
+// run exactly as before (scope 'contact'). Meta's own user_preferences control
+// stays contact-wide (applyMetaUserPreference).
+//
+// The STOP/START description above is that contact-wide path.
+//
 // GAPS-P6 — the consent_log rows written here used to say 'opted_out' /
 // 'opted_in', which is the `contacts.wa_status` vocabulary, not the
 // `consent_log.action` one. 83 real opt-outs were invisible to every report
@@ -34,8 +52,14 @@
 
 import { sendTextMessage } from './whatsapp'
 import { consentActionFor } from './consent-actions'
-import { logError } from './log'
+import { logError, logWarn } from './log'
+import { consentAckText } from './whatsapp-consent-copy'
+import { orgLocationIdsFor, scopeFor } from './inbound-contact-match'
 
+export { consentAckText }
+
+// The contact-wide path's acknowledgement (no studio to name). The studio path
+// uses consentAckText (operator-editable per studio).
 const ACK_STOP =
   "You've been unsubscribed from WhatsApp marketing messages. Reply START at any time to opt back in."
 const ACK_START =
@@ -68,9 +92,17 @@ const ACK_START =
  * Either one alone suppresses real traffic. So for a STOP, "took effect" means
  * at least one of them landed — the same floor main achieved — not both.
  *
- * @returns {Promise<{prefOk: boolean, statusOk: boolean, failures: string[]}>}
+ * WAORGNUMBER.3 (R6) — with a `locationId` the keyword acts at that studio
+ * only: see applyStudioConsentWrites. Without one, the three contact-wide writes
+ * below run exactly as before (Review Focus 3).
+ *
+ * @param {object} db
+ * @param {{ contactId: string, locationId?: string|null, optingOut: boolean, source: string }} args
+ * @returns {Promise<{prefOk: boolean, statusOk: boolean, failures: string[], scope: 'studio'|'contact'}>}
  */
-async function applyConsentWrites(db, contactId, optingOut, source) {
+async function applyConsentWrites(db, { contactId, locationId = null, optingOut, source }) {
+  if (locationId) return applyStudioConsentWrites(db, { contactId, locationId, optingOut, source })
+
   const failures = []
 
   // 1. The marketing consent flag (source of truth for audiences).
@@ -85,6 +117,24 @@ async function applyConsentWrites(db, contactId, optingOut, source) {
       { onConflict: 'contact_id' },
     )
   if (prefError) failures.push(`contact_preferences.whatsapp_marketing: ${prefError.message}`)
+
+  // 1b. WAORGNUMBER.3 (R17) — a contact-wide opt-OUT also closes every studio
+  //     row of the contact. Mig 747 fans contact_preferences out to the studio
+  //     rows only on a CHANGE, so a studio row re-opened by a studio START would
+  //     otherwise survive a later contact-wide STOP (contact_preferences already
+  //     false = no change = no fan-out). Only rows that are currently true are
+  //     written. Checked and counted in `failures`; it is NOT part of the
+  //     verdict (the two gates below still decide it), and a contact with no
+  //     studio rows is the ordinary zero-row answer. An opt-IN contact-wide
+  //     never re-opens a studio row: opting back in is per studio.
+  if (optingOut) {
+    const { error: studioRowsError } = await db
+      .from('contact_location_preferences')
+      .update({ whatsapp_marketing: false, updated_at: new Date().toISOString() })
+      .eq('contact_id', contactId)
+      .eq('whatsapp_marketing', true)
+    if (studioRowsError) failures.push(`contact_location_preferences.whatsapp_marketing (all studios): ${studioRowsError.message}`)
+  }
 
   // 2. The hard wa_status signal on the contact row. ATTEMPTED WHATEVER
   //    STEP 1 DID — see the header. This is the write whose loss the early
@@ -124,7 +174,142 @@ async function applyConsentWrites(db, contactId, optingOut, source) {
     })
   }
 
-  return { prefOk, statusOk, failures }
+  return { prefOk, statusOk, failures, scope: 'contact' }
+}
+
+/**
+ * WAORGNUMBER.3 (R6) — the keyword at ONE studio: that studio's
+ * contact_location_preferences row and a consent_log row naming it. Nothing
+ * else contact-wide is written (no contact_preferences, so the mig 489/543/747
+ * fan-out never runs for it), except that a START lifts a historic wa_status
+ * 'opted_out' (see below). Never throws.
+ *
+ * WHY NOT ONE UPSERT. The row's channels default TRUE (mig 487: creating the
+ * row IS the opt-in act), so an upsert naming only whatsapp_marketing would, for
+ * a contact with no row here, OPEN email and SMS marketing at this studio. And
+ * an upsert naming all three would overwrite the email/SMS choices of a contact
+ * who already has a row. So:
+ *   1. create-if-missing (`ignoreDuplicates`, the un1t-online-studio-preferences
+ *      pattern; `.select` says whether it created): WhatsApp as asked, email and
+ *      SMS OFF, source 'whatsapp_keyword'. A WhatsApp keyword is not consent to
+ *      email or SMS.
+ *   2. otherwise flip ONLY whatsapp_marketing on the existing row, judged on the
+ *      rows it touched (a zero-row UPDATE is not an error in PostgREST).
+ * Step 2 is attempted even when step 1 errored (louder-failure rule: a failed
+ * write never costs another suppression write); the row may well exist.
+ *
+ * unsubscribed_at tracks EMAIL (mig 543: stamped when email_marketing goes
+ * false, cleared when it goes true; consent-propagation.js stamps it only for
+ * email on this table). So a WhatsApp STOP stamps it only on a row it CREATES
+ * (all three channels off there); on an existing row it is left alone, or every
+ * "when did they leave the email list" answer would read a WhatsApp STOP as an
+ * email unsubscribe.
+ *
+ * There is ONE suppression gate here, not two: a STOP is judged on `prefOk`
+ * alone. `statusOk` is about the START-only lift of a historic wa_status
+ * 'opted_out' (below); it is true whenever there was nothing to lift.
+ */
+async function applyStudioConsentWrites(db, { contactId, locationId, optingOut, source }) {
+  const failures = []
+  const nowIso = new Date().toISOString()
+  const wa = !optingOut
+
+  let created = false
+  const { data: createdRows, error: createError } = await db
+    .from('contact_location_preferences')
+    .upsert(
+      {
+        contact_id: contactId,
+        location_id: locationId,
+        email_marketing: false,
+        sms_marketing: false,
+        whatsapp_marketing: wa,
+        // Literal, not a variable: consent-sources.test.js scans for `source:` literals.
+        source: 'whatsapp_keyword',
+        subscribed_at: nowIso,
+        unsubscribed_at: optingOut ? nowIso : null,
+        updated_at: nowIso,
+      },
+      { onConflict: 'contact_id,location_id', ignoreDuplicates: true },
+    )
+    .select('contact_id')
+  // A create error is held, not yet counted: the row may exist already, and if
+  // the update below lands the end state is correct, so the error is not a
+  // failure of this keyword (it is logged as a warning in that case).
+  if (!createError) created = (createdRows || []).length > 0
+
+  let updated = false
+  if (!created) {
+    const { data: updatedRows, error: updateError } = await db
+      .from('contact_location_preferences')
+      .update({ whatsapp_marketing: wa, updated_at: nowIso })
+      .eq('contact_id', contactId)
+      .eq('location_id', locationId)
+      .select('contact_id')
+    if (updateError) failures.push(`contact_location_preferences.whatsapp_marketing: ${updateError.message}`)
+    else if ((updatedRows || []).length === 0) failures.push('contact_location_preferences.whatsapp_marketing: no row at this studio was changed')
+    else updated = true
+  }
+  if (createError) {
+    if (updated) {
+      logWarn('wa-consent', 'studio row create errored but the update landed; end state is correct', { contactId, locationId, err: createError.message })
+    } else {
+      failures.push(`contact_location_preferences (create): ${createError.message}`)
+    }
+  }
+
+  // Audit trail, naming the studio. Best-effort and never part of the verdict
+  // (same reasoning as the contact-wide path).
+  const { error: logRowError } = await db.from('consent_log').insert({
+    contact_id: contactId,
+    channel: 'whatsapp_marketing',
+    action: consentActionFor(wa),
+    source,
+    location_id: locationId,
+  })
+  if (logRowError) failures.push(`consent_log (audit only): ${logRowError.message}`)
+
+  const prefOk = created || updated
+
+  // START lifts a HISTORIC contact-wide STOP (WAORGNUMBER.3 ruling). A contact
+  // whose wa_status is 'opted_out' from an earlier contact-wide STOP is
+  // excluded by every WhatsApp send path, so a studio START alone would be
+  // acknowledged and still change nothing. The member explicitly asked to
+  // resume, so 'opted_out' goes back to 'active' (and ONLY 'opted_out':
+  // 'blocked' and 'undeliverable' are never touched). The other studios stay
+  // opted out through their own rows, which that historic STOP set false.
+  // Only once the studio row landed: an opt-in never widens on a failed write.
+  // A failed lift fails the START (the contact is still blocked everywhere, so
+  // "you're back on" would be a promise not kept); zero rows is the ordinary
+  // answer for a contact that was never opted out.
+  let statusOk = true
+  if (!optingOut && prefOk) {
+    const { error: liftError } = await db
+      .from('contacts')
+      .update({ wa_status: 'active' })
+      .eq('id', contactId)
+      .eq('wa_status', 'opted_out')
+    if (liftError) {
+      statusOk = false
+      failures.push(`contacts.wa_status (lift opted_out): ${liftError.message}`)
+    }
+  }
+
+  if (failures.length > 0) {
+    logError('wa-consent', 'consent write(s) failed', {
+      contactId,
+      locationId,
+      scope: 'studio',
+      source,
+      direction: optingOut ? 'opt_out' : 'opt_in',
+      prefOk,
+      // For a STOP: is the contact suppressed at this studio?
+      suppressed: optingOut ? prefOk : null,
+      failures,
+    })
+  }
+
+  return { prefOk, statusOk, failures, scope: 'studio' }
 }
 
 /**
@@ -140,9 +325,30 @@ async function applyConsentWrites(db, contactId, optingOut, source) {
  *         safe resting state (still suppressed) costs the customer nothing but
  *         marketing they asked for. Under-claiming is the safe error here;
  *         over-claiming is not.
+ * Both rules are for the contact-wide path's two gates.
  */
-function consentTookEffect(optingOut, { prefOk, statusOk }) {
+function consentTookEffect(optingOut, { prefOk, statusOk, scope }) {
+  // WAORGNUMBER.3 — at a studio, STOP has one gate, the studio's row (with it
+  // unwritten nothing new is suppressed). START needs the row AND the lift of a
+  // historic wa_status 'opted_out' (statusOk), for the same under-claiming
+  // reason as below.
+  if (scope === 'studio') return optingOut ? prefOk : (prefOk && statusOk)
   return optingOut ? (prefOk || statusOk) : (prefOk && statusOk)
+}
+
+/**
+ * The studio's name and settings for the acknowledgement. A failed read is
+ * logged and answers null, so the default copy goes out naming no studio: the
+ * consent change already landed, and a customer who said STOP is still owed
+ * the answer.
+ */
+async function loadAckLocation(db, locationId) {
+  const { data, error } = await db.from('locations').select('name, settings').eq('id', locationId).maybeSingle()
+  if (error) {
+    logWarn('wa-consent', 'studio read for the acknowledgement failed; default copy used', { locationId, err: error.message })
+    return null
+  }
+  return data || null
 }
 
 /**
@@ -155,7 +361,8 @@ function consentTookEffect(optingOut, { prefOk, statusOk }) {
  *   explicitly from the webhook (its contact lookup is a minimal
  *   `select('id, location_id')`, so contact.wa_phone is usually absent;
  *   relying on it silently skipped the ack on the first live STOP).
- * @param {string|null} args.locationId
+ * @param {string|null} args.locationId  the thread's studio. The keyword acts
+ *   there only (WAORGNUMBER.3, R6) and the ack names it; null = contact-wide.
  * @param {string|null} args.conversationId  thread to attribute the ack to
  * @param {'stop'|'start'} args.keyword
  * @returns {Promise<{applied: boolean, action?: string, reason?: string,
@@ -182,7 +389,10 @@ export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locati
   // BAREWRITE.4 keeps that verdict but fixes its shape: see applyConsentWrites
   // above. Every write is attempted; the early return that could leave a STOP
   // with ZERO suppression is gone.
-  const outcome = await applyConsentWrites(db, contact.id, optingOut, 'whatsapp_keyword')
+  //
+  // WAORGNUMBER.3 (R6) — with the thread's locationId this acts at that studio
+  // only; with none, contact-wide exactly as before.
+  const outcome = await applyConsentWrites(db, { contactId: contact.id, locationId, optingOut, source: 'whatsapp_keyword' })
   if (!consentTookEffect(optingOut, outcome)) {
     return {
       applied: false,
@@ -200,7 +410,9 @@ export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locati
   //    — losing them costs an inbox line, not the consent change, so they log
   //    rather than fail.
   try {
-    const ack = optingOut ? ACK_STOP : ACK_START
+    const ack = outcome.scope === 'studio'
+      ? consentAckText(await loadAckLocation(db, locationId), optingOut)
+      : (optingOut ? ACK_STOP : ACK_START)
     const to = waPhone || contact.wa_phone
     if (!to) {
       console.warn(`[wa-consent] no phone for contact ${contact.id} — consent applied but ack skipped`)
@@ -246,45 +458,85 @@ export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locati
  * consent_log) but sends NO ack: Meta shows its own confirmation UX.
  * pref = { wa_id, category, value: 'stop'|'resume' }.
  */
-export async function applyMetaUserPreference(db, pref = {}) {
+export async function applyMetaUserPreference(db, pref = {}, receivingLocationId = null) {
   if (pref.category && pref.category !== 'marketing_messages') return { applied: false, reason: 'unknown_category' }
   if (!['stop', 'resume'].includes(pref.value)) return { applied: false, reason: 'unknown_value' }
   const waId = String(pref.wa_id || '').replace(/\D/g, '')
   if (!waId) return { applied: false, reason: 'no_wa_id' }
 
-  const { data: contacts } = await db.from('contacts')
-    .select('id')
-    .or(`wa_phone.eq.${waId},wa_phone.eq.+${waId},phone.eq.${waId},phone.eq.+${waId}`)
-    .limit(1)
-  const contact = contacts?.[0]
-  if (!contact) return { applied: false, reason: 'no_contact' }
-
   const optingOut = pref.value === 'stop'
-  // Exactly the same writes and the same BAREWRITE.4 shape as the keyword path
-  // above, through one helper.
+
+  // WAORGNUMBER.3 (R6) — the lookup is scoped to the RECEIVING number's
+  // organisation. It used to be unscoped (`.limit(1)` across every contact), so
+  // a person who is a contact at two tenants could have the OTHER tenant's row
+  // opted out by a preference they set on this tenant's number.
   //
-  // AN EARLIER VERSION OF THIS COMMENT SAID THE TWO PATHS HAD ALREADY DRIFTED —
-  // "the keyword path grew an upsert while this one kept an update". That is
-  // false, and the history says so: 85afb1c0 (COMMS-AUDIT 2026-07-10) changed
-  // BOTH from `.update` to `.upsert` in the same commit, and no revision of this
-  // file has ever had one shape in one path and the other shape in the other.
-  // The real reason for the helper is smaller and true: the two paths must make
-  // the same partial-failure judgement (attempt every write, then decide), and
-  // that judgement is subtle enough — STOP needs EITHER gate, START needs BOTH —
-  // that maintaining it twice is how it would come apart. One copy, one test.
-  const outcome = await applyConsentWrites(db, contact.id, optingOut, 'meta_user_preferences')
-  if (!consentTookEffect(optingOut, outcome)) {
+  // Suppression is the safe direction, so the two directions differ when the
+  // receiving studio cannot be resolved:
+  //   • opt-OUT: applies to EVERY contact with that number (unscoped), logged
+  //     structurally. Dropping a person's "stop marketing" is worse than
+  //     over-reaching into another tenant's marketing list.
+  //   • opt-IN: not applied (logged by the route). Never widen on a guess.
+  let orgLocationIds = null
+  if (receivingLocationId) {
+    orgLocationIds = await orgLocationIdsFor(db, receivingLocationId)
+  } else if (!optingOut) {
+    return { applied: false, reason: 'no_receiving_studio' }
+  } else {
+    logError('wa-consent', 'Meta opt-out arrived with an unresolved receiving studio; applying it to every contact with the number', { waId })
+  }
+
+  // EVERY matching contact in scope, not the first: the same person is often a
+  // contact at more than one studio of the organisation, and Meta's control is
+  // the person's, not a studio's. Paginated (1,000-row cap) with an explicit order.
+  const PAGE = 1000
+  const contacts = []
+  const failures = []
+  for (let from = 0; ; from += PAGE) {
+    let q = db.from('contacts')
+      .select('id')
+      .or(`wa_phone.eq.${waId},wa_phone.eq.+${waId},phone.eq.${waId},phone.eq.+${waId}`)
+    if (orgLocationIds) q = q.in('location_id', scopeFor(orgLocationIds))
+    const { data: page, error: contactError } = await q.order('id').range(from, from + PAGE - 1)
+    if (contactError) {
+      // Suppress what was read; report the rest. Never drop an opt-out over a failed page.
+      failures.push(`contacts: ${contactError.message}`)
+      break
+    }
+    contacts.push(...(page || []))
+    if ((page || []).length < PAGE) break
+  }
+  if (contacts.length === 0) {
+    return failures.length > 0
+      ? { applied: false, reason: 'contact_read_failed', failures }
+      : { applied: false, reason: 'no_contact' }
+  }
+
+  // Exactly the same writes and the same BAREWRITE.4 shape as the keyword path
+  // above, through one helper, per contact. (See the history note there: the two
+  // paths must make the same partial-failure judgement, STOP needs EITHER gate,
+  // START needs BOTH, and one copy of that is how it stays right.)
+  // No locationId: Meta's control is number-level, so it stays contact-wide (R6).
+  const tookEffect = []
+  for (const contact of contacts) {
+    const outcome = await applyConsentWrites(db, { contactId: contact.id, optingOut, source: 'meta_user_preferences' })
+    failures.push(...outcome.failures)
+    if (consentTookEffect(optingOut, outcome)) tookEffect.push(contact.id)
+  }
+  if (tookEffect.length === 0) {
     return {
       applied: false,
       reason: optingOut ? 'no_suppression_signal_landed' : 'opt_in_incomplete',
-      failures: outcome.failures,
-      contactId: contact.id,
+      failures,
+      contactId: contacts[0].id,
     }
   }
+  const partial = failures.length > 0 || tookEffect.length < contacts.length
   return {
     applied: true,
     action: consentActionFor(!optingOut),
-    contactId: contact.id,
-    ...(outcome.failures.length > 0 ? { partial: true, failures: outcome.failures } : {}),
+    contactId: tookEffect[0],
+    contactIds: tookEffect,
+    ...(partial ? { partial: true, failures } : {}),
   }
 }

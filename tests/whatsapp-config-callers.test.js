@@ -125,9 +125,9 @@ const CALLERS = {
     why: 'WAORGNUMBER.1: inbound media fetched with the token of the number switched on at the message’s studio; transitional WAHOMESTUDIO.1 clause (until WAORGNUMBER.6): the thread’s number when the studio has none switched on and the thread replies through a same-org sibling’s. None → null (the inbox’s graceful gap). whatsapp-media-server.test.js.',
   },
   'src/app/api/webhooks/whatsapp/route.js': {
-    calls: { resolveWhatsAppNumberByPhoneNumberId: 2 },
+    calls: { resolveWhatsAppNumberByPhoneNumberId: 3 },
     decision: 'resolver',
-    why: 'inbound routing: only an active row owns inbound (classifyInboundOwner); the env branch is gone (it could only produce a location-less config, which was dropped anyway). WAORGNUMBER.1: account_update events reach every studio the number is switched on at (link rows). WAORGNUMBER.5 (R4): the thread’s studio is routeInboundThread’s (quoted message, CTWA ad, latest outbound in 7 days, home studio, else the number’s home), reading the link table itself, so the per-thread getLocationWhatsAppNumberConfig lookup is gone; the receiving number is stamped when it is switched on at the routed studio, or (transitional WAHOMESTUDIO.1 clause, until WAORGNUMBER.6) the thread is at a number-less home studio and replies through it (numberless_home). A failed read inside the router falls through, never thrown, so the webhook still 200s. route.reply-number.test.js, route.inbound-route.test.js, src/lib/whatsapp-inbound-route.test.js, route.account-update.test.js.',
+    why: 'inbound routing: only an active row owns inbound (classifyInboundOwner); the env branch is gone (it could only produce a location-less config, which was dropped anyway). WAORGNUMBER.1: account_update events reach every studio the number is switched on at (link rows). WAORGNUMBER.5 (R4): the thread’s studio is routeInboundThread’s (quoted message, CTWA ad, latest outbound in 7 days, home studio, else the number’s home), reading the link table itself, so the per-thread getLocationWhatsAppNumberConfig lookup is gone; the receiving number is stamped when it is switched on at the routed studio, or (transitional WAHOMESTUDIO.1 clause, until WAORGNUMBER.6) the thread is at a number-less home studio and replies through it (numberless_home). A failed read inside the router falls through, never thrown, so the webhook still 200s. route.reply-number.test.js, route.inbound-route.test.js, src/lib/whatsapp-inbound-route.test.js, WAORGNUMBER.3 (R6): the user_preferences handler resolves the receiving number’s home studio (the third resolver call) to scope Meta’s marketing opt-out to that studio’s organisation; an unroutable or failed lookup passes no studio and applies nothing (logged); route.user-preferences.test.js.',
   },
   'src/app/api/whatsapp/conversational-automation/route.js': {
     calls: { setConversationalAutomation: 1, ownNumberOrRefusal: 1 },
@@ -217,7 +217,7 @@ const CALLERS = {
   'src/lib/whatsapp-consent.js': {
     calls: { sendTextMessage: 1 },
     decision: 'inbound-owner',
-    why: 'STOP/START ack only; the consent change is written first and stands (louder-failure rule). whatsapp-consent.test.js. WAHOMESTUDIO.1: through the thread (replyInConversation).',
+    why: 'STOP/START ack only; the consent change is written first and stands (louder-failure rule). WAORGNUMBER.3 per-studio consent: STOP/START write the thread studio\'s contact_location_preferences row only; a contact-wide opt-out (Meta preference, or a keyword with no studio) also sets every studio row false; the ack goes through the thread (replyInConversation, WAHOMESTUDIO.1). whatsapp-consent.test.js.',
   },
   'src/lib/agent/notify.js': {
     calls: { sendTextMessage: 1 },

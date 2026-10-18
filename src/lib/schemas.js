@@ -9,6 +9,7 @@ import { sanitizePermissionsBlob } from '@shared/permissions'
 import { UUID_SHAPE } from './uuid-shape'
 import { isFreshSecret } from './integration-secret-merge'
 import { PURPOSE_KEYS } from './whatsapp-purpose-templates'
+import { CONSENT_COPY_MAX } from './whatsapp-consent-copy'
 
 // UUID-shaped string matching what Postgres's uuid type accepts. See
 // src/lib/validate.js for the rationale (Zod 4's .uuid() is RFC-strict
@@ -460,6 +461,15 @@ export const studioWhatsAppNumberSwitchSchema = z.object({
 export const studioPurposeTemplateSchema = z.object({
   purpose: z.enum(PURPOSE_KEYS),
   templateId: uuidLike.nullable(),
+})
+
+// WAORGNUMBER.3 (R6): the studio's STOP / START acknowledgement copy
+// (PUT /api/locations/[id]/whatsapp/consent-copy). Blank or null = the default.
+// {studio} is replaced with the studio's name at send time.
+const consentCopyField = z.string().trim().max(CONSENT_COPY_MAX, `Keep it to ${CONSENT_COPY_MAX} characters or fewer`).nullable()
+export const studioConsentCopySchema = z.object({
+  stop_ack: consentCopyField,
+  start_ack: consentCopyField,
 })
 
 // N8NECHO.1: the screens are handed SECRET_MASK for a stored token. A mask (or

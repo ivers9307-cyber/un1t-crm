@@ -100,6 +100,15 @@ function stubDb(cfg) {
         if (q.opts?.head) return { count: 0, error: null }
         if (has('is', 'first_class_checkin_at', null)) return { data: cfg.contacts || [], error: null }
         return { data: [], error: null }
+      // WAORGNUMBER.3 — the STUDIO's row, never the contact's global flag.
+      // cfg.studioConsent: true (default) | false | null (row absent) | 'error'.
+      case 'contact_location_preferences': {
+        const c = cfg.studioConsent === undefined ? true : cfg.studioConsent
+        if (c === 'error') return { data: null, error: { message: 'statement timeout', code: '57014' } }
+        return { data: c === null ? null : { whatsapp_marketing: c }, error: null }
+      }
+      // The global flag says YES everywhere in this file: if the runner still read it,
+      // the 'studio says no' tests below could not pass.
       case 'contact_preferences': return { data: { whatsapp_marketing: true }, error: null }
       case 'whatsapp_templates': {
         const name = q.filters.find((f) => f[0] === 'eq' && f[1] === 'name')?.[2]
@@ -189,6 +198,57 @@ describe('T6-A — a studio with its own number sends exactly as before', () => 
     expect(sendTemplateMessage.mock.calls).toEqual([['353870000001', 'agent_followup_v1', 'en', [], { locationId: STILL }]])
     expect(getConversationNumberConfig).not.toHaveBeenCalled()
     expect(templateLocationIdFor).not.toHaveBeenCalled()
+  })
+
+  // ── WAORGNUMBER.3 (R6) — template consent is the studio's ───────────────
+
+  it('follow-up template skipped when the studio row says no even though contact_preferences says yes', async () => {
+    const db = stubDb({ location: STILL_LOC, ownsNumber: true, followConvs: [CONV(STILL)], messages: TEMPLATE_THREAD, templateStudio: STILL, studioConsent: false })
+    const res = await runAgentFollowups(db, { nowMs: NOW })
+    expect(res).toMatchObject({ templates: 0 })
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+    expect(warned('no_studio_whatsapp_consent')).toBe(true)
+    expect(reads(db, 'contact_preferences')).toHaveLength(0)
+  })
+
+  it('follow-up template skipped when the studio has no row at all (absent = no)', async () => {
+    const db = stubDb({ location: STILL_LOC, ownsNumber: true, followConvs: [CONV(STILL)], messages: TEMPLATE_THREAD, templateStudio: STILL, studioConsent: null })
+    const res = await runAgentFollowups(db, { nowMs: NOW })
+    expect(res).toMatchObject({ templates: 0 })
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+    expect(warned('no_studio_whatsapp_consent')).toBe(true)
+  })
+
+  it('follow-up template sent when the studio row says yes, reading THAT studio\'s row', async () => {
+    const db = stubDb({ location: STILL_LOC, ownsNumber: true, followConvs: [CONV(STILL)], messages: TEMPLATE_THREAD, templateStudio: STILL, studioConsent: true })
+    const res = await runAgentFollowups(db, { nowMs: NOW })
+    expect(res).toMatchObject({ templates: 1 })
+    expect(sendTemplateMessage).toHaveBeenCalledTimes(1)
+    expect(reads(db, 'contact_location_preferences').map(locFilter)).toEqual([STILL])
+  })
+
+  it('a failed studio-consent read is a logged skip, never a send', async () => {
+    const db = stubDb({ location: STILL_LOC, ownsNumber: true, followConvs: [CONV(STILL)], messages: TEMPLATE_THREAD, templateStudio: STILL, studioConsent: 'error' })
+    const res = await runAgentFollowups(db, { nowMs: NOW })
+    expect(res).toMatchObject({ templates: 0 })
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+    expect(warned('consent_read_failed')).toBe(true)
+    expect(errSpy.mock.calls.some((c) => String(c[0]).includes('follow-up consent read failed'))).toBe(true)
+  })
+
+  it('check-in template skipped when the studio row says no even though contact_preferences says yes', async () => {
+    const db = stubDb({ location: STILL_LOC, ownsNumber: true, contacts: [CONTACT()], checkinConv: null, templateStudio: STILL, studioConsent: false })
+    const res = await runFirstClassCheckins(db, { nowMs: NOW })
+    expect(res.templates).toBe(0)
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+    expect(res.reasons).toMatchObject({ no_studio_whatsapp_consent: 1 })
+  })
+
+  it('check-in template sent when the studio row says yes', async () => {
+    const db = stubDb({ location: STILL_LOC, ownsNumber: true, contacts: [CONTACT()], checkinConv: null, templateStudio: STILL, studioConsent: true })
+    const res = await runFirstClassCheckins(db, { nowMs: NOW })
+    expect(res.templates).toBe(1)
+    expect(reads(db, 'contact_location_preferences').map(locFilter)).toEqual([STILL])
   })
 
   it('check-in Case A (open window): sendTextMessage(to, text, { locationId })', async () => {

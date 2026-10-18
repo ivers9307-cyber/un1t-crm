@@ -22,7 +22,7 @@
 - A studio with no number switched on keeps today's refusal for each caller: 409, quiet `sent:false`, or a recorded skip.
 - **Migrations:**
   - Forward-only, applied by me via Supabase MCP `apply_migration` on project `iyvtbjjxdggiadzwwvdj` BEFORE the code that reads them deploys. Run `get_advisors` (security) after DDL.
-  - Next free numbers at plan time: 743–746. (18 Oct: another branch took 744, so the template migration is 745, the Hatch template move 746 and the blast sign-off 747.) Re-check `ls supabase/migrations | tail` before writing; another branch may have taken them.
+  - Next free numbers at plan time: 743–746. (18 Oct: another branch took 744, so the template migration is 745, the Hatch template move 746, the consent mirror fix 747 (Task 12) and the blast sign-off 748.) Re-check `ls supabase/migrations | tail` before writing; another branch may have taken them.
   - Each migration has a PGlite behavioural test in the style of `tests/migration-723-724-wa-home-studio.test.js`, with fictional ids only (the repo is public).
 - **New tables and functions:** a table states `REVOKE ALL ON public.<t> FROM anon, authenticated`. A function states `REVOKE EXECUTE … FROM PUBLIC, anon, authenticated`. `CREATE OR REPLACE` (never DROP+CREATE) for `move_whatsapp_conversation`.
 - **Deprecated columns stay on disk** with `COMMENT … 'DEPRECATED (mig N)'`.
@@ -398,6 +398,7 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
 - [ ] **Step 3: Implement.** Add the two copy fields to the studio WhatsApp tab (a small `ConsentCopyCard.jsx`), saved through the existing location settings route if one covers `settings` keys. Otherwise add them to Task 10's purpose-templates route as `PUT …/whatsapp/consent-copy` with the same guard.
 - [ ] **Step 4: Run, expect PASS.**
 - [ ] **Step 5: Commit** `WAORGNUMBER.3 — STOP and START act at the studio whose thread they arrive in`
+- [ ] **Step 6 (added 18 Oct, review of Step 3):** mig 747 `747_consent_mirror_changed_channels_only.sql`. The mig 489/543 trigger re-mirrored ALL three channels onto the home studio row on ANY `contact_preferences` write, silently undoing a studio STOP/START at the home studio. 747 acts only on channels that changed (or every channel on INSERT). PGlite test `tests/migration-747-consent-mirror-changed-channels-only.test.js`. Also: a studio START lifts a historic `wa_status = 'opted_out'` (only that value) to `'active'`. Commit `WAORGNUMBER.3 — mig 747: consent mirror acts only on changed channels; START lifts a historic opted_out`.
 
 ### Task 13: Meta preference scoped to the organisation; Mia's template consent per studio
 
@@ -415,7 +416,8 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
 
 ### Task 14: Ship PR 3
 
-- [ ] CLAUDE.md consent invariant: add "STOP/START on WhatsApp write the thread studio's `contact_location_preferences` row only (WAORGNUMBER.3); Meta's own preference stays contact-wide within the organisation." Update the callers-table `why` for `whatsapp-consent.js`. Run the CI mirror. PR + changelog entry.
+- [ ] **Apply mig 747 (Task 12) before merge** (the code depends on it: without it a studio STOP at the home studio is undone by the next `contact_preferences` write).
+- [ ] CLAUDE.md consent invariant: add "STOP/START on WhatsApp write the thread studio's `contact_location_preferences` row only (WAORGNUMBER.3; a START also lifts a historic `wa_status = 'opted_out'`; mig 747 keeps the mirror trigger to changed channels); Meta's own preference stays contact-wide within the organisation." Update the callers-table `why` for `whatsapp-consent.js`. Run the CI mirror. PR + changelog entry.
 
 ---
 
@@ -438,14 +440,14 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
 - [ ] **Step 2: Run, expect FAIL.** **Step 3: Implement.** **Step 4: Run, expect PASS.**
 - [ ] **Step 5: Commit** `WAORGNUMBER.4 — one daily limit per number, shared by its studios`
 
-### Task 16: Migration 747 and blast sign-off
+### Task 16: Migration 748 and blast sign-off
 
 **Files:**
-- Create: `supabase/migrations/747_wa_broadcast_signoff.sql` (+ test), `src/lib/whatsapp-blast-signoff.js` (+ test), `src/app/api/whatsapp/broadcasts/[id]/sign-off/route.js` (+ test)
+- Create: `supabase/migrations/748_wa_broadcast_signoff.sql` (+ test), `src/lib/whatsapp-blast-signoff.js` (+ test), `src/app/api/whatsapp/broadcasts/[id]/sign-off/route.js` (+ test)
 - Modify: `src/app/api/whatsapp/broadcasts/[id]/send/route.js`, the schedule and start-drip routes under `src/app/api/whatsapp/broadcasts/` (grep `status: 'scheduled'` and the drip start), `src/lib/whatsapp.js` (`sendBroadcast`, `sendDripChunk`), the broadcast UI's send button (grep `broadcasts/${` in `src/components`)
 
 **Interfaces:**
-- Mig 747: `whatsapp_broadcasts.signed_off_by uuid NULL REFERENCES profiles(id)`, `signed_off_at timestamptz NULL`.
+- Mig 748: `whatsapp_broadcasts.signed_off_by uuid NULL REFERENCES profiles(id)`, `signed_off_at timestamptz NULL`.
 - `signoffWindow(location, now): { until: string } | null`. It reads `location.settings.whatsapp_blast_signoff_until`. Null when absent or past.
 - `signoffMessage(locationName, until)` gives the exact spec copy, with the date formatted `d MMM yyyy` in the studio zone.
 - In the routes: when `signoffWindow` is open, a non-org-admin gets 403 with that copy. An org admin's send, schedule or start also writes `signed_off_by` and `signed_off_at`.
@@ -483,7 +485,7 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
 
 ### Task 17b: Ship PR 4
 
-- [ ] Apply mig 747 before merge. Update the callers table. Run the CI mirror + build. PR + changelog entry.
+- [ ] Apply mig 748 before merge. Update the callers table. Run the CI mirror + build. PR + changelog entry.
 
 ---
 
