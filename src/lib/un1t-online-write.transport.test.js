@@ -16,6 +16,7 @@ import {
   Un1tWriteRefused,
   Un1tWriteUnknown,
   UN1T_WRITE_CODES,
+  UN1T_OP_POLICY,
   _resetUn1tWriteStateForTests,
 } from './un1t-online-write.js'
 
@@ -364,7 +365,7 @@ describe('send: policies', () => {
     const r = await writer.send('POST', '/bookings', bookOpts())
     expect(Object.keys(r).sort()).toEqual(CONTRACT_KEYS)
     expect(r).toMatchObject({ verdict: 'done', sent: true, id: BOOKING, recovered: null, retryable: false, alreadyBooked: false })
-    expect(r.data).toEqual(bookingDto())
+    expect(r.data).toEqual({ ...bookingDto(), created_at: null, updated_at: null })
     expect(recordErrorEvent).not.toHaveBeenCalled()
   })
 
@@ -431,7 +432,10 @@ describe('send: policies', () => {
   it('verify: a cancel the check read finds attended is refused already_happened', async () => {
     const { writer, fetchImpl } = await setup({ routes: { [`PATCH ${cancelPath}`]: [res(500, {})] } })
     const r = await writer.send('PATCH', cancelPath, cancelOpts({ verify: async () => 'already_happened' }))
-    expect(r).toMatchObject({ verdict: 'refused', code: 'already_happened', retryable: false })
+    expect(r).toMatchObject({ verdict: 'refused', code: UN1T_WRITE_CODES.ALREADY_HAPPENED, retryable: false })
+    expect(UN1T_WRITE_CODES.ALREADY_HAPPENED).toBe('UN1T_ALREADY_HAPPENED')
+    expect(typeof r.message).toBe('string')
+    expect(r.message.length).toBeGreaterThan(0)
     expect(fetchImpl.count(`PATCH ${cancelPath}`)).toBe(1)
   })
 
@@ -565,7 +569,7 @@ describe('send: the judge sees only what it should', () => {
     const r1 = await a.writer.send('POST', '/bookings', bookOpts({ verify: absent }))
     expect(absent).toHaveBeenCalledTimes(1)
     expect(a.fetchImpl.count('POST /bookings')).toBe(1)
-    expect(r1).toMatchObject({ verdict: 'unknown', alreadyBooked: false })
+    expect(r1).toMatchObject({ verdict: 'unknown', alreadyBooked: false, code: 'CONFLICT' })
 
     const landed = vi.fn(async () => ({ state: 'landed', id: BOOKING }))
     const b = await setup({ routes: { 'POST /bookings': [refusal] } })
@@ -841,6 +845,149 @@ describe('secrets and log shape', () => {
       for (const k of Object.keys(meta || {})) expect(ALLOWED_LOG_FIELDS.has(k), `${msg}: ${k}`).toBe(true)
     }
     expect(JSON.stringify(lines)).not.toContain(EMAIL)
+  })
+})
+
+describe('fix round 1', () => {
+  const KEY_TRIAL = `trial:${LOC}:${USER}:${PRODUCT}:charge`
+  const trialAttempt = { contactId: 'con-1', un1tUserId: USER, op: 'trial', origin: 'funnel', key: KEY_TRIAL, target: PRODUCT, method: 'charge' }
+  const ago = (ms) => new Date(Date.now() - ms).toISOString()
+
+  it('the op decides the policy: one shared map', () => {
+    expect(UN1T_OP_POLICY).toEqual({
+      book: 'verify', cancel: 'verify', create_client: 'verify',
+      forgot_password: 'never', trial: 'never', checkout: 'idempotent',
+    })
+    expect(Object.isFrozen(UN1T_OP_POLICY)).toBe(true)
+  })
+
+  it('openAttempt: a trial opened as idempotent is a TypeError and cannot adopt a stale row', async () => {
+    const { writer, table, fetchImpl } = await setup({
+      db: { ledger: [{ id: 'led-trial', idempotency_key: KEY_TRIAL, stage: 'unknown', op: 'trial', created_at: ago(10 * 60_000) }] },
+    })
+    await expect(writer.openAttempt(trialAttempt, { policy: 'idempotent' })).rejects.toBeInstanceOf(TypeError)
+    await expect(writer.openAttempt({ ...trialAttempt, op: 'forgot_password', key: `pw:${LOC}:${USER}`, target: null, method: null }, { policy: 'idempotent' }))
+      .rejects.toBeInstanceOf(TypeError)
+    const out = await writer.openAttempt(trialAttempt, {})
+    expect(out.row).toBeUndefined()
+    expect(out.result).toMatchObject({ verdict: 'unknown', ledgerId: 'led-trial', sent: false })
+    expect(table).toHaveLength(1)
+    expect(fetchImpl.writes()).toHaveLength(0)
+  })
+
+  it('openAttempt derives the policy when the caller gives none (checkout adopts, book checks)', async () => {
+    const { writer } = await setup({
+      db: { ledger: [{ id: 'led-chk', idempotency_key: 'chk-key-1', stage: 'unknown', op: 'checkout', created_at: ago(10 * 60_000) }] },
+    })
+    const out = await writer.openAttempt({ contactId: 'con-1', un1tUserId: USER, op: 'checkout', origin: 'mia', key: 'chk-key-1', target: PRODUCT })
+    expect(out).toMatchObject({ resumed: true, row: { id: 'led-chk' } })
+  })
+
+  it('send: a policy that does not match the op is a TypeError; an omitted one is derived', async () => {
+    const { writer, fetchImpl } = await setup({ routes: { 'POST /auth/forgot-password': [res(200, { success: true, data: {} })] } })
+    await expect(writer.send('POST', '/auth/forgot-password', forgotOpts({ policy: 'idempotent', idempotencyKey: 'k' }))).rejects.toBeInstanceOf(TypeError)
+    const r = await writer.send('POST', '/auth/forgot-password', forgotOpts({ policy: undefined }))
+    expect(r.verdict).toBe('done')
+    expect(fetchImpl.count('POST /auth/forgot-password')).toBe(1)
+  })
+
+  it('words say already booked and the dedupe read is unknown: unknown, alreadyBooked false, code already_booked_unverified', async () => {
+    const refusal = res(409, { success: false, error: { code: 'CONFLICT', message: 'User is already booked' } })
+    const { writer, fetchImpl } = await setup({ routes: { 'POST /bookings': [refusal] } })
+    const r = await writer.send('POST', '/bookings', bookOpts({ verify: async () => 'unknown' }))
+    expect(r).toMatchObject({ verdict: 'unknown', alreadyBooked: false, code: 'already_booked_unverified' })
+    expect(UN1T_WRITE_CODES.ALREADY_BOOKED_UNVERIFIED).toBe('already_booked_unverified')
+    expect(fetchImpl.count('POST /bookings')).toBe(1)
+  })
+
+  it('no result whose verdict is not done ever says alreadyBooked', async () => {
+    const refusal = res(409, { success: false, error: { code: 'CONFLICT', message: 'already booked' } })
+    for (const verify of [async () => 'unknown', async () => 'absent', async () => { throw new Error('x') }]) {
+      const { writer } = await setup({ routes: { 'POST /bookings': [refusal] } })
+      const r = await writer.send('POST', '/bookings', bookOpts({ verify }))
+      expect(r.verdict).not.toBe('done')
+      expect(r.alreadyBooked).toBe(false)
+    }
+  })
+
+  it('readAll: a walk past the page cap throws', async () => {
+    const page = res(200, { success: true, pagination: { total: 9999, page: 1, pages: 99, pageSize: 100 }, data: [{ id: 'c' }] })
+    const { writer } = await setup({ routes: { 'GET /users/clients': [page] } })
+    await expect(writer.readAll('/users/clients')).rejects.toMatchObject({ code: 'truncated' })
+  })
+
+  it('a re-send still spent after every budget wait is refused UN1T_RATE_BUDGET with sent true', async () => {
+    const { writer, fetchImpl, sleep } = await setup({
+      db: { rate: (n) => (n >= 3 ? 31 : 1) },
+      routes: { 'POST /bookings': [res(503, {})] },
+    })
+    const r = await writer.send('POST', '/bookings', bookOpts({ verify: async () => 'absent' }))
+    expect(r).toMatchObject({ verdict: 'refused', code: 'UN1T_RATE_BUDGET', retryable: true, sent: true })
+    expect(fetchImpl.count('POST /bookings')).toBe(1)
+    expect(sleep).toHaveBeenCalledTimes(2)
+  })
+
+  it('a dedupe read still spent after two windows goes ahead anyway', async () => {
+    const { writer, fetchImpl, sleep } = await setup({
+      db: { rate: (n) => (n >= 3 ? 31 : 1) },
+      routes: { 'POST /bookings': [res(500, {})], [`GET /users/${USER}/bookings`]: [res(200, { success: true, data: [] })] },
+    })
+    const r = await writer.send('POST', '/bookings', bookOpts({ verify: async () => { await writer.read(`/users/${USER}/bookings`); return 'unknown' } }))
+    expect(r.verdict).toBe('unknown')
+    expect(fetchImpl.count(`GET /users/${USER}/bookings`)).toBe(1)
+    expect(sleep).toHaveBeenCalledTimes(2)
+  })
+
+  it('book and cancel data is a picked subset: never the embedded user email or phone', async () => {
+    const dto = {
+      id: BOOKING, status: 'booked', created_at: '2026-10-18T09:00:00Z', updated_at: '2026-10-18T09:00:01Z',
+      event: { id: EVENT, title: 'Class' }, user: { id: USER, email: EMAIL, phone: '+353800000000', name: 'Test Person' },
+      studio: { id: STUDIO }, guest_email: 'guest@example.test', note: 'free text', source: 'api', credit_charged: true,
+    }
+    const { writer } = await setup({ routes: { 'POST /bookings': [res(201, { success: true, data: dto })] } })
+    const r = await writer.send('POST', '/bookings', bookOpts())
+    expect(r.verdict).toBe('done')
+    expect(r.data).toEqual({
+      id: BOOKING, event_id: EVENT, user_id: USER, studio_id: STUDIO, status: 'booked',
+      created_at: '2026-10-18T09:00:00Z', updated_at: '2026-10-18T09:00:01Z', source: 'api', credit_charged: true,
+    })
+    expect(JSON.stringify(r)).not.toMatch(/example\.test|353800000000|Test Person|free text/)
+  })
+
+  it('writer.assertAllowed validates the endpoint, op and body without sending', async () => {
+    const { writer, fetchImpl, rpcCalls } = await setup()
+    expect(() => writer.assertAllowed('book', 'POST', '/bookings', { eventId: EVENT, userId: USER })).not.toThrow()
+    expect(() => writer.assertAllowed('book', 'POST', '/credits/grant', {})).toThrow(TypeError)
+    expect(() => writer.assertAllowed('cancel', 'POST', '/bookings', { eventId: EVENT })).toThrow(TypeError)
+    expect(() => writer.assertAllowed('book', 'POST', '/bookings', { eventId: EVENT, bypassCredit: true })).toThrow(TypeError)
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(rpcCalls).toHaveLength(0)
+  })
+
+  it('a nested value in a write body is a TypeError', async () => {
+    const { writer, fetchImpl } = await setup()
+    await expect(writer.send('POST', '/bookings', bookOpts({ body: { eventId: { $ne: null }, userId: USER } }))).rejects.toBeInstanceOf(TypeError)
+    await expect(writer.send('POST', '/bookings', bookOpts({ body: { eventId: [EVENT], userId: USER } }))).rejects.toBeInstanceOf(TypeError)
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('normalised phone forms are scrubbed too: digits only, the last 9 and the +353/0 swap', async () => {
+    const msg = 'Phone 353800000000 or 0800000000 or 800000000 or +353800000000 taken'
+    const { writer } = await setup({ routes: { 'POST /users/clients': [res(400, { success: false, error: { code: 'X', message: msg } })] } })
+    const r = await writer.send('POST', '/users/clients', { body: createBody(), policy: 'verify', verify: async () => 'unknown', op: 'create_client', expect: {} })
+    expect(r.message).not.toMatch(/\d{9}/)
+    expect(r.message).toContain('[redacted]')
+  })
+
+  it('a check read that finds the class already happened names it on the openAttempt result too', async () => {
+    const KEY = `cancel:${LOC}:${BOOKING}`
+    const { writer, table } = await setup({
+      db: { ledger: [{ id: 'led-c', idempotency_key: KEY, stage: 'sent', op: 'cancel', created_at: ago(10 * 60_000) }] },
+    })
+    const out = await writer.openAttempt({ contactId: 'con-1', un1tUserId: USER, op: 'cancel', origin: 'staff', key: KEY, target: BOOKING }, { verify: async () => 'already_happened' })
+    expect(out.result).toMatchObject({ verdict: 'refused', code: 'UN1T_ALREADY_HAPPENED', ledgerId: 'led-c' })
+    expect(out.result.message).toBeTruthy()
+    expect(table[0]).toMatchObject({ stage: 'refused', code: 'UN1T_ALREADY_HAPPENED' })
   })
 })
 

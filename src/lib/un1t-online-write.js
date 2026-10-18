@@ -32,7 +32,16 @@
 //   code, recovered, attempt, waitMs }. Never the token, an email, a name, a
 //   phone, a password or a checkout URL. A checkout's result `id` IS its URL,
 //   so no log line ever carries `id`. Every message un1t.online words is
-//   scrubbed of the token and the person's email, password and phone.
+//   scrubbed of the token and the person's email, password and phone (and
+//   the phone's normalised forms).
+// - The policy belongs to the op (UN1T_OP_POLICY), never to the caller: a
+//   purchase or a reset email can never be opened or sent as re-sendable.
+//
+// A primitive calls, in this order:
+//   writer.ensureOp(op) → writer.assertAllowed(op, method, path, body)
+//   → writer.openAttempt(attempt, { verify }) → writer.send(...)
+//   → finishAttempt(db, ledgerId, ...)
+// so nothing reaches the ledger that the transport would refuse to send.
 
 import { createUn1tClient, Un1tAuthError, Un1tApiError, resetWaitMs, headerNumber, MAX_WAIT_MS, DEFAULT_BASE_URL } from './un1t-online.js'
 import { readConnection } from './connection-registry.js'
@@ -75,7 +84,32 @@ export const UN1T_WRITE_CODES = Object.freeze({
   RATE_LIMITED: 'UN1T_RATE_LIMITED',
   ATTEMPT_IN_FLIGHT: 'UN1T_ATTEMPT_IN_FLIGHT',
   AUTH: 'UN1T_AUTH',
+  // A cancel whose check read found the class attended or a no-show.
+  ALREADY_HAPPENED: 'UN1T_ALREADY_HAPPENED',
+  // An unknown book whose refusal said "already booked" in words only, and
+  // the check read could not confirm it. Never a done, never a green light.
+  ALREADY_BOOKED_UNVERIFIED: 'already_booked_unverified',
 })
+
+/** The policy each op runs under (spec 6.1). The caller never chooses it. */
+export const UN1T_OP_POLICY = Object.freeze({
+  book: 'verify',
+  cancel: 'verify',
+  create_client: 'verify',
+  forgot_password: 'never',
+  trial: 'never',
+  checkout: 'idempotent',
+})
+
+// The policy for `op`; a caller-given one must match. TypeError otherwise.
+function policyFor(op, given) {
+  const policy = Object.hasOwn(UN1T_OP_POLICY, op) ? UN1T_OP_POLICY[op] : null
+  if (!policy) throw new TypeError(`un1t.online write: unknown op '${op}'`)
+  if (given !== undefined && given !== policy) {
+    throw new TypeError(`un1t.online write: op '${op}' runs under policy '${policy}', not '${given}'`)
+  }
+  return policy
+}
 const C = UN1T_WRITE_CODES
 const RETRYABLE = new Set([C.RATE_BUDGET, C.RATE_LIMITED, C.ATTEMPT_IN_FLIGHT, C.PERMISSIONS_UNREADABLE])
 
@@ -102,39 +136,52 @@ export class Un1tWriteUnknown extends Error {
 // Method, exact path, the ops that may use it, the body keys it may carry,
 // the policies it may run under and whether it needs an idempotency-key.
 const ENDPOINTS = Object.freeze([
-  { method: 'POST', path: /^\/bookings$/, ops: { book: ['verify'] }, keys: ['eventId', 'userId'] },
-  { method: 'PATCH', path: /^\/bookings\/[A-Za-z0-9][A-Za-z0-9_-]*\/cancel$/, ops: { cancel: ['verify'] }, keys: [] },
+  { method: 'POST', path: /^\/bookings$/, ops: ['book'], keys: ['eventId', 'userId'] },
+  { method: 'PATCH', path: /^\/bookings\/[A-Za-z0-9][A-Za-z0-9_-]*\/cancel$/, ops: ['cancel'], keys: [] },
   {
-    method: 'POST', path: /^\/users\/clients$/, ops: { create_client: ['verify'] },
+    method: 'POST', path: /^\/users\/clients$/, ops: ['create_client'],
     keys: ['email', 'password', 'studioId', 'name', 'first_name', 'last_name', 'phone', 'accepted_terms', 'accepted_liability_waiver'],
   },
-  { method: 'POST', path: /^\/auth\/forgot-password$/, ops: { forgot_password: ['never'] }, keys: ['email'] },
+  { method: 'POST', path: /^\/auth\/forgot-password$/, ops: ['forgot_password'], keys: ['email'] },
   // Inside grantTrial only: a purchase is never re-sent.
-  { method: 'POST', path: /^\/purchases\/charge$/, ops: { trial: ['never'] }, keys: ['userId', 'productId'], needsKey: true },
+  { method: 'POST', path: /^\/purchases\/charge$/, ops: ['trial'], keys: ['userId', 'productId'], needsKey: true },
   {
-    method: 'POST', path: /^\/purchases\/checkout$/, ops: { checkout: ['idempotent'], trial: ['never'] },
+    method: 'POST', path: /^\/purchases\/checkout$/, ops: ['checkout', 'trial'],
     keys: ['productId', 'successUrl', 'cancelUrl', 'userId'], needsKey: true,
   },
 ])
 const BANNED_BODY_KEYS = Object.freeze(['bypassCredit', 'forceRefund', 'promoCode'])
-const POLICIES = new Set(['verify', 'never', 'idempotent'])
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+const isScalar = (v) => v === null || ['string', 'number', 'boolean'].includes(typeof v)
+
+/**
+ * The endpoint, op and body check, without the policy. Pure; throws
+ * TypeError. Exported on the writer so a primitive checks BEFORE it opens a
+ * ledger row.
+ */
+function assertEndpoint(op, method, path, body) {
+  const m = String(method || '').toUpperCase()
+  const where = `${m} ${String(path)}`
+  const ep = ENDPOINTS.find((e) => e.method === m && typeof path === 'string' && e.path.test(path))
+  if (!ep) throw new TypeError(`un1t.online write: ${where} is not an allowed endpoint`)
+  if (body !== undefined && !isObj(body)) throw new TypeError(`un1t.online write: ${where} body must be an object`)
+  const entries = Object.entries(body ?? {})
+  const banned = entries.find(([k]) => BANNED_BODY_KEYS.includes(k))
+  if (banned) throw new TypeError(`un1t.online write: '${banned[0]}' is never sent`)
+  const extra = entries.find(([k]) => !ep.keys.includes(k))
+  if (extra) throw new TypeError(`un1t.online write: '${extra[0]}' is not in the ${where} body`)
+  // Scalars only: an object or array value is never what the snapshot sends.
+  const nested = entries.find(([, v]) => !isScalar(v))
+  if (nested) throw new TypeError(`un1t.online write: '${nested[0]}' must be a plain value`)
+  if (!ep.ops.includes(op)) throw new TypeError(`un1t.online write: op '${op}' may not call ${where}`)
+  return ep
+}
 
 function assertAllowed(method, path, { body, policy, idempotencyKey, verify, op }) {
   const where = `${method} ${String(path)}`
-  const ep = ENDPOINTS.find((e) => e.method === method && typeof path === 'string' && e.path.test(path))
-  if (!ep) throw new TypeError(`un1t.online write: ${where} is not an allowed endpoint`)
-  if (body !== undefined && !isObj(body)) throw new TypeError(`un1t.online write: ${where} body must be an object`)
-  const keys = Object.keys(body ?? {})
-  const banned = keys.find((k) => BANNED_BODY_KEYS.includes(k))
-  if (banned) throw new TypeError(`un1t.online write: '${banned}' is never sent`)
-  const extra = keys.find((k) => !ep.keys.includes(k))
-  if (extra) throw new TypeError(`un1t.online write: '${extra}' is not in the ${where} body`)
-  const policies = ep.ops[op]
-  if (!policies) throw new TypeError(`un1t.online write: op '${op}' may not call ${where}`)
-  if (!POLICIES.has(policy) || !policies.includes(policy)) {
-    throw new TypeError(`un1t.online write: ${where} for '${op}' must use policy ${policies.join('|')}`)
-  }
+  const ep = assertEndpoint(op, method, path, body)
+  policyFor(op, policy)
+  policy = UN1T_OP_POLICY[op]
   if (policy === 'verify' && typeof verify !== 'function') throw new TypeError(`un1t.online write: policy verify needs a verify()`)
   if (verify !== undefined && typeof verify !== 'function') throw new TypeError('un1t.online write: verify must be a function')
   if ((ep.needsKey || policy === 'idempotent') && !(typeof idempotencyKey === 'string' && idempotencyKey)) {
@@ -144,7 +191,8 @@ function assertAllowed(method, path, { body, policy, idempotencyKey, verify, op 
 
 // ── Results ────────────────────────────────────────────────────────────────
 function result(verdict, { sent = false, id = null, code = null, message = null, alreadyBooked = false, recovered = null, retryable = false, data = null } = {}) {
-  return { verdict, sent, id, code, message, alreadyBooked, recovered, retryable, data }
+  // alreadyBooked is a done-only fact; nothing else may carry it.
+  return { verdict, sent, id, code, message, alreadyBooked: verdict === 'done' && alreadyBooked === true, recovered, retryable, data }
 }
 function refusalResult(code, message, extra = {}) {
   return result('refused', { code, message, retryable: RETRYABLE.has(code), ...extra })
@@ -162,15 +210,56 @@ function withoutLedger(r) {
 // checkout: whether it was free, never the URL a second time.
 function dataFor(op, body) {
   const data = isObj(body) && isObj(body.data) ? body.data : null
-  if (op === 'book' || op === 'cancel') return data
+  if (op === 'book' || op === 'cancel') return data ? pickBooking(data) : null
   if (op === 'checkout') return data ? { free: data.free === true } : null
   return null
+}
+
+// What the judge, mapBooking and C's class_bookings mapper read from a
+// booking, flat or nested, and nothing else: the answer can embed the user
+// (email, phone, name) and guest details.
+const scalarOr = (v) => (isScalar(v) && v !== '' ? v : null)
+function pickBooking(d) {
+  const nestedId = (o) => (isObj(o) ? o.id : undefined)
+  const out = {
+    id: scalarOr(d.id),
+    event_id: scalarOr(d.event_id ?? nestedId(d.event)),
+    user_id: scalarOr(d.user_id ?? nestedId(d.user)),
+    studio_id: scalarOr(d.studio_id ?? nestedId(d.studio)),
+    status: scalarOr(d.status),
+    created_at: scalarOr(d.created_at),
+    updated_at: scalarOr(d.updated_at),
+  }
+  // Non-personal scalars mapBooking also stores; only when present.
+  for (const k of ['source', 'credit_charged', 'external_member_ref', 'external_booking_ref']) {
+    if (d[k] !== undefined && isScalar(d[k])) out[k] = d[k]
+  }
+  return out
 }
 
 // The person's details a refusal can echo. Names are left out on purpose: a
 // short first name would redact ordinary words ("Al" in "already").
 function piiOf(body) {
-  return ['email', 'password', 'phone'].map((k) => body?.[k]).filter((v) => typeof v === 'string' && v.length > 0)
+  const out = ['email', 'password', 'phone'].map((k) => body?.[k]).filter((v) => typeof v === 'string' && v.length > 0)
+  return [...out, ...phoneForms(body?.phone)]
+}
+
+// A phone as un1t.online may echo it: digits only, with a +, the last nine
+// digits, and the Irish +353 / 0 swap.
+export function phoneForms(phone) {
+  if (typeof phone !== 'string') return []
+  const digits = phone.replace(/\D/g, '')
+  if (digits.length < 7) return []
+  const forms = new Set([digits, `+${digits}`])
+  if (digits.length >= 9) forms.add(digits.slice(-9))
+  if (digits.startsWith('353')) {
+    forms.add(`0${digits.slice(3)}`)
+    forms.add(digits.slice(3))
+  } else if (digits.startsWith('0')) {
+    forms.add(`353${digits.slice(1)}`)
+    forms.add(`+353${digits.slice(1)}`)
+  }
+  return [...forms].filter((f) => f.replace(/\D/g, '').length >= 7)
 }
 
 // ── Module state: the permission cache and the error_events cap ────────────
@@ -300,6 +389,7 @@ export async function createUn1tWriter(
     [C.RATE_LIMITED]: `un1t.online kept asking the CRM to slow down, so it was not done. Try again in a minute.`,
     [C.ATTEMPT_IN_FLIGHT]: 'Another attempt at this is still running, so nothing was sent. Try again in a few minutes.',
     [C.AUTH]: `un1t.online refused the token for ${studioName}, so nothing more was sent. Issue a new token and paste it in Settings, Integrations, un1t.online.`,
+    [C.ALREADY_HAPPENED]: 'This class has already happened in un1t.online (attended or a no-show), so the booking was not cancelled.',
   }
   const refuse = (code, message = text[code], extra) => {
     const r = withLedger(refusalResult(code, message, extra))
@@ -405,9 +495,10 @@ export async function createUn1tWriter(
    * ledgerId; rejects only with a TypeError for a call off the allowlist.
    */
   async function send(method, path, opts = {}) {
-    const { body, policy, idempotencyKey, verify, op, expect, secrets = [], origin, ledgerId } = opts
+    const { body, idempotencyKey, verify, op, expect, secrets = [], origin, ledgerId } = opts
     const m = String(method || '').toUpperCase()
-    assertAllowed(m, path, { body, policy, idempotencyKey, verify, op })
+    assertAllowed(m, path, { body, policy: opts.policy, idempotencyKey, verify, op })
+    const policy = UN1T_OP_POLICY[op]
     try {
       await ensureOp(op)
     } catch (err) {
@@ -505,9 +596,11 @@ export async function createUn1tWriter(
       return finish(result('refused', { sent, code: j.code, message: scrub(j.message) }), { status: j.status })
     }
 
-    async function unknown(j, { alreadyBooked = false } = {}) {
+    // An unknown never says alreadyBooked: an unconfirmed hint is a code.
+    async function unknown(j, { hint = false } = {}) {
       await fail(j.reason, j.status)
-      return finish(result('unknown', { sent, code: j.code, message: scrub(j.message), alreadyBooked }), { status: j.status ?? undefined })
+      const code = hint ? C.ALREADY_BOOKED_UNVERIFIED : j.code
+      return finish(result('unknown', { sent, code, message: scrub(j.message) }), { status: j.status ?? undefined })
     }
 
     const first = await request()
@@ -518,12 +611,14 @@ export async function createUn1tWriter(
     // "already booked" from words alone: the check read settles it; the
     // hint is never a reason to send again.
     if (j1.alreadyBooked) {
-      if (!verify) return unknown(j1, { alreadyBooked: true })
+      if (!verify) return unknown(j1, { hint: true })
       const chk = await runCheck(verify, meta)
       if (chk.state === 'landed') {
         return finish(result('done', { sent, id: chk.id, code: j1.code, message: scrub(j1.message), alreadyBooked: true }))
       }
-      return unknown(j1, { alreadyBooked: chk.state === 'unknown' })
+      // absent disproves the hint (un1t.online's own code stands); unknown
+      // leaves it unconfirmed.
+      return unknown(j1, { hint: chk.state !== 'absent' })
     }
 
     let j = j1
@@ -542,7 +637,7 @@ export async function createUn1tWriter(
       return finish(result('done', { sent, id, recovered: 'landed_after_5xx' }))
     }
     if (chk.state === 'already_happened') {
-      return finish(result('refused', { sent, code: 'already_happened' }))
+      return finish(result('refused', { sent, code: C.ALREADY_HAPPENED, message: text[C.ALREADY_HAPPENED] }))
     }
     if (chk.state !== 'absent' || policy === 'never') return unknown(j)
 
@@ -592,8 +687,10 @@ export async function createUn1tWriter(
    *   old row is closed and a fresh one inserted; already happened →
    *   refused; unknown, or a never op → unknown.
    */
-  async function openAttempt(attempt, { policy, verify } = {}) {
-    if (!POLICIES.has(policy)) throw new TypeError(`openAttempt: unknown policy '${policy}'`)
+  async function openAttempt(attempt, { policy: given, verify } = {}) {
+    // The op's policy, never the caller's: a trial opened as 'idempotent'
+    // would adopt a stale purchase row and be told to send it again.
+    const policy = policyFor(attempt?.op, given)
     const args = { ...attempt, locationId }
     const meta = { locationId, op: attempt?.op, origin: attempt?.origin }
 
@@ -636,8 +733,8 @@ export async function createUn1tWriter(
       return { result: withLedger(result('done', { id: chk.id, recovered: 'landed_on_resume' }), open.id) }
     }
     if (chk.state === 'already_happened') {
-      await finishAttempt(db, open.id, { stage: 'refused', code: 'already_happened' })
-      return { result: withLedger(result('refused', { code: 'already_happened' }), open.id) }
+      await finishAttempt(db, open.id, { stage: 'refused', code: C.ALREADY_HAPPENED, message: text[C.ALREADY_HAPPENED] })
+      return { result: withLedger(result('refused', { code: C.ALREADY_HAPPENED, message: text[C.ALREADY_HAPPENED] }), open.id) }
     }
     if (chk.state !== 'absent' || policy === 'never') return inDoubt()
 
@@ -649,5 +746,17 @@ export async function createUn1tWriter(
     return inFlight(again.open.id)
   }
 
-  return { locationId, studioId, studioName, ensureOp, send, read, readAll, openAttempt }
+  return {
+    locationId,
+    studioId,
+    studioName,
+    ensureOp,
+    assertAllowed: (op, method, path, body) => {
+      assertEndpoint(op, method, path, body)
+    },
+    send,
+    read,
+    readAll,
+    openAttempt,
+  }
 }
