@@ -10795,6 +10795,60 @@ registry.registerPath({
   },
 })
 
+// UN1TWRITE.12 — the un1t.online write settings (master only).
+registry.registerPath({
+  method: 'patch',
+  path: '/api/locations/{id}/un1t-online',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Set the un1t.online write settings (master only)',
+  description:
+    'Sets locations.settings.un1t_online.writes_enabled and/or trial_product_id through mergeLocationSettings, keeping ' +
+    'every other settings key. trial_product_id must be an active, free, one-time un1t.online product at this studio ' +
+    '(null clears it). An unreadable settings row is a 503 and nothing is written. A master GET of the same path also ' +
+    'carries `write`: the switch, the trial product choices and the token\'s missing write permissions.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ writes_enabled: z.boolean().optional(), trial_product_id: z.string().nullable().optional() }) } } },
+  },
+  responses: {
+    200: { description: '{ write: { writes_enabled, trial_product_id } }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'Nothing to change, or not a free one-time product at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a master', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Settings or products unreadable; nothing written', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// UN1TWRITE.13 — the master-only MIA TEST route over the un1t.online write primitives.
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/un1t-online/test-account',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Run one un1t.online write for the MIA TEST contact (master only)',
+  description:
+    'For the live verification run. op create | forgot_password | trial | trial_skip_eligibility | book | cancel | checkout, ' +
+    'origin test_account, the master as actor, every write gate still applies. The contact must be in the studio\'s ' +
+    'organisation (404) and named MIA TEST in any case (403); create needs terms_confirmed: true. The answer never carries ' +
+    'a password or un1t.online\'s create body; a checkout URL is returned to the master and logged nowhere.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      op: z.enum(['create', 'forgot_password', 'trial', 'trial_skip_eligibility', 'book', 'cancel', 'checkout']),
+      location_id: uuidLike, contact_id: uuidLike,
+      event_id: z.string().optional(), booking_id: z.string().optional(), product_id: z.string().optional(),
+      success_url: z.string().optional(), cancel_url: z.string().optional(), idempotency_key: z.string().optional(),
+      terms_confirmed: z.boolean().optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: '{ verdict | outcome, code, message, un1t_user_id?, booking_id?, checkout_url?, free?, ledger_id }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'Bad body, terms not confirmed, or no un1t.online account linked', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a master, or not the MIA TEST contact', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Studio or contact not found in the same organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A checkout refusal', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
