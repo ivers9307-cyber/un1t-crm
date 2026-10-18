@@ -10,9 +10,12 @@
 //   2. quoted     — the message quotes one (context.id) in a thread at a candidate;
 //   3. ad         — a click-to-WhatsApp ad that belongs to a candidate studio;
 //   4. recent     — the member's thread at a candidate with the latest OUTBOUND
-//                   message (staff, Mia or an automation) in RECENT_OUTBOUND_MS;
-//                   a tie goes to the higher thread id (Review Focus 4);
-//   5. home       — the member's home studio (contacts.location_id), if a candidate;
+//                   message (staff, Mia or an automation) in RECENT_OUTBOUND_MS
+//                   that Meta did not report failed (the member never got it);
+//                   a tie goes to the higher thread id, so the answer is
+//                   deterministic (ids are random, not time-ordered; Review Focus 4);
+//   5. home       — the member's home studio (contacts.location_id, which the
+//                   caller must pass), if a candidate;
 //   6. numberless_home — TRANSITIONAL (WAHOMESTUDIO.1, deleted in WAORGNUMBER.6):
 //                   a home studio of the same organisation with nothing switched
 //                   on (numberlessHomeStudio), or a thread staff moved to such a
@@ -26,7 +29,7 @@
 import { logWarn } from './log'
 import { studiosUsingNumbers, locationsWithWhatsApp } from './whatsapp-config'
 import { numberlessHomeStudio } from './whatsapp-thread-location'
-import { adSignal } from './wa-studio-pick/signals'
+import { adSignal, replySignal } from './wa-studio-pick/signals'
 
 export const RECENT_OUTBOUND_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -69,24 +72,6 @@ async function threadAt(db, { waPhone, bsuid, locationId }, known) {
   return rows.find((t) => waPhone && t.wa_phone === waPhone) || rows[0] || null
 }
 
-async function quotedStudio(db, contextMessageId, candidates) {
-  if (!contextMessageId) return null
-  try {
-    // Mig 723 files every message at its conversation's studio, so the
-    // message's location_id is its thread's.
-    const { data, error } = await db.from('whatsapp_messages')
-      .select('location_id')
-      .eq('wa_message_id', String(contextMessageId))
-      .in('location_id', candidates)
-      .limit(1)
-    if (error) throw error
-    return data?.[0]?.location_id || null
-  } catch (e) {
-    warn('quoted-message lookup failed', { contextMessageId }, e)
-    return null
-  }
-}
-
 async function recentThread(db, threads, now) {
   if (!threads.length) return null
   try {
@@ -94,6 +79,7 @@ async function recentThread(db, threads, now) {
       .select('conversation_id, sent_at')
       .in('conversation_id', threads.map((t) => t.id))
       .eq('direction', 'outbound')
+      .neq('status', 'failed')
       .gte('sent_at', new Date(now - RECENT_OUTBOUND_MS).toISOString())
       .order('sent_at', { ascending: false })
       .order('conversation_id', { ascending: false })
@@ -167,7 +153,9 @@ export async function routeInboundThread(db, {
   })
 
   try {
-    const quoted = await quotedStudio(db, contextMessageId, candidates)
+    // Mig 723 files every message at its conversation's studio, so the quoted
+    // message's location_id is its thread's (replySignal; a failed read is null).
+    const quoted = await replySignal(db, contextMessageId, candidates)
     if (quoted) return await win(quoted, 'quoted')
 
     const fromAd = await adSignal(db, referral, candidates)

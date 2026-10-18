@@ -131,6 +131,14 @@ describe('routeInboundThread — the steps, in order (R4)', () => {
     expect(r).toMatchObject({ locationId: HATCH, by: 'home', conversation: null, switchedOn: true })
   })
 
+  it('a failed outbound does not count: the earlier delivered one wins', async () => {
+    const db = makeDb({
+      conversations: [thread('conv-still', STILL), thread('conv-hatch', HATCH)],
+      messages: [outbound('conv-hatch', ago(HOUR), { status: 'failed' }), outbound('conv-still', ago(3 * DAY), { status: 'delivered' })],
+    })
+    expect(await routeInboundThread(db, base)).toMatchObject({ locationId: STILL, by: 'recent' })
+  })
+
   it('an inbound message is not "outbound": a recent customer message does not pull the reply to that studio', async () => {
     const db = makeDb({
       conversations: [thread('conv-still', STILL, { contact_id: 'c1' })],
@@ -244,10 +252,16 @@ describe('routeInboundThread — a thread staff moved to a number-less studio (t
 
 describe('routeInboundThread — never throws', () => {
   it('read error falls through: a failed messages read skips quoted and recent, logged', async () => {
+    // Without the fault this would be 'quoted' (Stillorgan): the fault is what turns it to home.
     const db = makeDb({
       conversations: [thread('conv-still', STILL)],
+      messages: [{ ...outbound('conv-still', ago(HOUR)), location_id: STILL, wa_message_id: 'wamid.x' }],
       faults: { whatsapp_messages: { message: 'messages down' } },
     })
+    expect(await routeInboundThread(makeDb({
+      conversations: [thread('conv-still', STILL)],
+      messages: [{ ...outbound('conv-still', ago(HOUR)), location_id: STILL, wa_message_id: 'wamid.x' }],
+    }), { ...base, contact: { id: 'c1', location_id: HATCH }, contextMessageId: 'wamid.x' })).toMatchObject({ locationId: STILL, by: 'quoted' })
     const r = await routeInboundThread(db, { ...base, contact: { id: 'c1', location_id: HATCH }, contextMessageId: 'wamid.x' })
     expect(r).toMatchObject({ locationId: HATCH, by: 'home' })
     expect(logWarn).toHaveBeenCalled()
