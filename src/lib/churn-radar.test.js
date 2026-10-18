@@ -940,7 +940,24 @@ describe('detectCancelling and the pinned sort', () => {
     expect(detectCancelling(base({ cancel_at_period_end: true, glofox_membership_expiry: null }), NOW_C).detail).toBe('Membership ends at the end of the current period')
   })
 
-  it('a row without the key (every Glofox row) never carries the signal, and the order is unchanged', async () => {
+  it('the Glofox fixture studio: buildRadar and radarSummary deep-equal the output captured before UN1TRADAR.3', async () => {
+    const { buildRadar, radarSummary } = await import('./churn-radar')
+    const { glofoxContacts, NOW: FNOW } = await import('./radar-glofox-fixture.test-helpers')
+    const EXPECTED = (await import('./churn-radar.glofox-expected.json')).default
+    const ctx = { pastDueIds: new Set(['c06', 'c09']), pastDueById: new Map([['c06', { amountCents: 12000, count: 1, oldestDueAt: null }], ['c09', { amountCents: 1500, count: 1, oldestDueAt: null }]]) }
+    const contacts = glofoxContacts()
+    expect(JSON.parse(JSON.stringify(buildRadar(contacts, FNOW, ctx)))).toEqual(EXPECTED.radar)
+    expect(JSON.parse(JSON.stringify(radarSummary(contacts, FNOW, ctx)))).toEqual(EXPECTED.summary)
+    expect(EXPECTED.radar.length).toBeGreaterThan(3)
+  })
+
+  it('a cancelling member never also reads "Renews in N days"', async () => {
+    const { scoreMember } = await import('./churn-radar')
+    const c = base({ id: 'c', cancel_at_period_end: true, total_attended_30d: 1, glofox_membership_expiry: new Date(NOW_C + 5 * DAYC).toISOString() })
+    expect(scoreMember(c, NOW_C).signals.map((s) => s.key)).toEqual(['cancelling'])
+  })
+
+  it('a row without the key (every Glofox row) never carries the signal', async () => {
     const { buildRadar } = await import('./churn-radar')
     const rows = [base({ id: 'a', last_attended_at: new Date(NOW_C - 20 * DAYC).toISOString(), total_attended_30d: 1 }), base({ id: 'b', total_noshow_30d: 3, total_attended_30d: 1 })]
     const out = buildRadar(rows, NOW_C)

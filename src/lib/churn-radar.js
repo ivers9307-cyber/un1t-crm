@@ -271,6 +271,9 @@ function detectNoShow(contact) {
 
 function detectRenewalCliff(contact, nowMs) {
   if (!contact.glofox_membership_expiry) return null
+  // UN1TRADAR.3 — a member who has asked to cancel will not renew; the
+  // Cancelling signal says so (no Glofox row carries the key)
+  if (contact.cancel_at_period_end === true) return null
   const d = daysSince(contact.glofox_membership_expiry, nowMs)
   if (d == null) return null
   const daysToRenewal = -d  // positive = days until the membership renews

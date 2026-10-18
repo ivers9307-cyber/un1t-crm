@@ -439,7 +439,8 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   // UN1TRADAR.3 — at a studio whose adapter pins arrears (un1t.online), the
   // past-due members' Overdue rows also go above the At-risk list ("Payment
   // failed"). Dismissed and snoozed contacts are left out; the summary counts
-  // do not change (they are the Overdue tab's).
+  // do not change (they are the Overdue tab's, where a debt does not snooze),
+  // so the block can be shorter than the Overdue badge on purpose.
   let pinned
   if (r.pinArrears) {
     const nowSnoozed = (id) => {
