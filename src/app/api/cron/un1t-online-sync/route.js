@@ -14,7 +14,9 @@
 //      `deferred_budget` and run on the next tick (every 15 min). A location
 //      whose sync is already running (Sync now, mig 735) is `skipped_in_progress`,
 //      not a failure.
-//   3. ok → stamp the tenant heartbeat. Not ok (auth, studio_mismatch, api,
+//   3. ok → stamp the tenant heartbeat, then (HATCHPIPE.2) run the hourly
+//      reclassify of the studio's board if one is due; its result never
+//      reaches the outcome or the heartbeats. Not ok (auth, studio_mismatch, api,
 //      truncated, db, not_connected) is COUNTED by reason, not fatal: the cron
 //      is healthy, the location is not, and the connection row already carries
 //      the readable last_error. A thrown exception from one location is counted
@@ -31,6 +33,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
 import { locationsWithSource } from '@/lib/membership/locations-for-source'
 import { runUn1tSync } from '@/lib/un1t-online-sync'
+import { maybeReclassifyAfterSync } from '@/lib/un1t-pipeline-cadence'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -88,6 +91,14 @@ export async function GET(request) {
       processed++
       // SAAS4-O1 — only a location whose sync completed stamps its tenant row.
       await stampTenantHeartbeat(CRON_NAME, loc.id)
+      // HATCHPIPE.2 — a good sync is followed by an hourly board pass. Its own
+      // try/catch: whatever it does (it never throws today) cannot change this
+      // location's outcome, the heartbeats, or the next location.
+      try {
+        await maybeReclassifyAfterSync(db, loc.id)
+      } catch (err) {
+        logError(CRON_NAME, 'reclassify after sync threw', { locationId: loc.id, errName: err?.name ?? null })
+      }
     } else if (result?.reason === 'in_progress') {
       // A Sync now (or another invocation) is running this studio right now.
       skippedInProgress++

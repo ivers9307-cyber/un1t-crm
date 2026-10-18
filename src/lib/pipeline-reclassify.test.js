@@ -630,6 +630,24 @@ describe('HATCHPIPE.2 — un1t.online-input boards', () => {
     expectSkipped(out, { db: rec, reason: 'read_failed', state: 'configured', err: 'socket hang up' })
   })
 
+  it('a long adapter error is cut to 200 characters in the log', async () => {
+    seamWith(vi.fn().mockResolvedValue({ success: false, error: 'x'.repeat(5000) }))
+    const rec = recordingDb({ pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals: [] })
+    await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    const call = vi.mocked(logWarn).mock.calls.find((c) => c[1] === 'inputs unavailable')
+    expect(call[2].err).toBe('x'.repeat(200))
+  })
+
+  it('a membershipReadsFor that throws logs a bounded cause and skips the run', async () => {
+    vi.mocked(membershipReadsFor).mockRejectedValue(new Error('y'.repeat(5000)))
+    const rec = recordingDb({ pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals: [] })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(out).toMatchObject({ ok: false, error: 'un1t inputs unavailable: unknown' })
+    const call = vi.mocked(logWarn).mock.calls.find((c) => c[1] === 'inputs unavailable')
+    expect(call[2]).toMatchObject({ locationId: HATCH, state: 'unknown', reason: 'unknown', err: 'y'.repeat(200) })
+    expect(rec.writesTo('deals')).toHaveLength(0)
+  })
+
   it('a configured seam on another source is skipped too, never read from contacts', async () => {
     seamWith(vi.fn(), { source: 'glofox' })
     const rec = recordingDb({ pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals: [] })

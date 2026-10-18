@@ -572,6 +572,10 @@ function un1tCounts(inputSource, un1tInputs) {
   }
 }
 
+// Free text from an adapter or a thrown error, capped before it reaches a log.
+const ERR_LOG_MAX = 200
+const boundedErr = (v) => String(v).slice(0, ERR_LOG_MAX)
+
 /**
  * HATCHPIPE.2 — resolve the un1t.online classifier inputs for a location.
  *
@@ -588,8 +592,9 @@ async function loadUn1tInputs(db, locationId, now) {
   let r
   try {
     r = await membershipReadsFor(db, locationId)
-  } catch {
-    return { ok: false, source: null, state: 'unknown', reason: 'unknown' }
+  } catch (e) {
+    // A throwing seam is not silent: the cause rides the 'inputs unavailable' log, bounded.
+    return { ok: false, source: null, state: 'unknown', reason: 'unknown', err: boundedErr(e?.message || e) }
   }
   const source = r?.source ?? null
   const state = r?.state ?? 'unknown'
@@ -604,7 +609,7 @@ async function loadUn1tInputs(db, locationId, now) {
   }
   const data = res?.success ? res.data : null
   if (!data || !Array.isArray(data.contacts) || !(data.snapshots instanceof Map)) {
-    return { ok: false, source, state, reason: 'read_failed', err: res?.error ? String(res.error) : 'malformed answer' }
+    return { ok: false, source, state, reason: 'read_failed', err: res?.error ? boundedErr(res.error) : 'malformed answer' }
   }
   return { ok: true, data }
 }

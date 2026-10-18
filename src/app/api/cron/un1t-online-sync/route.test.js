@@ -7,7 +7,10 @@
 //   5. a thrown exception from one location never stops the next one;
 //   6. the heartbeat outcome carries counts by reason only;
 //   7. a studio whose sync is already running is skipped, never a failure (UN1THARD.1);
-//   8. once the wall-clock budget is spent no further location starts (UN1THARD.4).
+//   8. once the wall-clock budget is spent no further location starts (UN1THARD.4);
+//   9. an ok location is followed by the hourly reclassify (HATCHPIPE.2), after its
+//      tenant heartbeat; a failed or in-progress one is not, and a rejection from it
+//      changes neither the outcome nor the heartbeats.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const h = vi.hoisted(() => ({ discovery: null }))
@@ -20,12 +23,15 @@ vi.mock('@/lib/membership/locations-for-source', async (importOriginal) => ({
   locationsWithSource: vi.fn(async () => h.discovery),
 }))
 vi.mock('@/lib/un1t-online-sync', () => ({ runUn1tSync: vi.fn() }))
+vi.mock('@/lib/un1t-pipeline-cadence', () => ({ maybeReclassifyAfterSync: vi.fn(async () => ({ ran: false, reason: 'recent_run' })) }))
 
 import { GET, BUDGET_MS } from './route.js'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
 import { locationsWithSource } from '@/lib/membership/locations-for-source'
 import { runUn1tSync } from '@/lib/un1t-online-sync'
+import { maybeReclassifyAfterSync } from '@/lib/un1t-pipeline-cadence'
+import { logError } from '@/lib/log'
 
 const req = (token = 'test-secret') => ({
   headers: { get: (k) => (k.toLowerCase() === 'authorization' && token ? `Bearer ${token}` : null) },
@@ -36,6 +42,8 @@ const found = (eligible, skipped = []) => ({ locations: [...eligible, ...skipped
 beforeEach(() => {
   process.env.CRON_SECRET = 'test-secret'
   vi.clearAllMocks()
+  stampTenantHeartbeat.mockReset().mockResolvedValue(undefined)
+  maybeReclassifyAfterSync.mockReset().mockResolvedValue({ ran: false, reason: 'recent_run' })
   h.discovery = found([])
 })
 
@@ -182,5 +190,46 @@ describe('GET /api/cron/un1t-online-sync', () => {
     } finally {
       spy.mockRestore()
     }
+  })
+
+  it('ok location calls maybeReclassifyAfterSync after its tenant heartbeat', async () => {
+    h.discovery = found([loc('hatch'), loc('other')])
+    runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
+    const order = []
+    stampTenantHeartbeat.mockImplementation(async (_n, id) => { order.push(`hb:${id}`) })
+    maybeReclassifyAfterSync.mockImplementation(async (_db, id) => { order.push(`re:${id}`); return { ran: false, reason: 'recent_run' } })
+    await GET(req())
+    expect(order).toEqual(['hb:hatch', 're:hatch', 'hb:other', 're:other'])
+    expect(maybeReclassifyAfterSync.mock.calls.map((c) => c[1])).toEqual(['hatch', 'other'])
+    expect(maybeReclassifyAfterSync.mock.calls[0][0]).toEqual({ marker: 'db' })
+  })
+
+  it('a not-ok or in_progress location does not call it', async () => {
+    h.discovery = found([loc('bad'), loc('busy'), loc('boom')])
+    runUn1tSync.mockImplementation(async (_db, id) => {
+      if (id === 'boom') throw new Error('x')
+      return id === 'bad' ? { ok: false, reason: 'auth', counts: {}, runId: 'r' } : { ok: false, reason: 'in_progress', counts: {}, runId: null }
+    })
+    await GET(req())
+    expect(maybeReclassifyAfterSync).not.toHaveBeenCalled()
+  })
+
+  it('maybeReclassifyAfterSync rejecting leaves the outcome, tenant heartbeat and stampHeartbeat unchanged', async () => {
+    h.discovery = found([loc('hatch'), loc('other')])
+    runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
+    maybeReclassifyAfterSync.mockRejectedValue(new Error('secret-token-abc'))
+    const res = await GET(req())
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    // The next location still ran, and both tenant rows stamped.
+    expect(runUn1tSync.mock.calls.map((c) => c[1])).toEqual(['hatch', 'other'])
+    expect(stampTenantHeartbeat.mock.calls).toEqual([['un1t-online-sync', 'hatch'], ['un1t-online-sync', 'other']])
+    const expected = { locations_processed: 2, failed_locations: 0, failed_by_reason: {}, skipped: 0, skipped_in_progress: 0, deferred_budget: 0 }
+    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
+    expect(stampHeartbeat).toHaveBeenCalledWith('un1t-online-sync', expected)
+    expect(body).toEqual({ success: true, ...expected })
+    // Logged by name only, never the message.
+    expect(logError).toHaveBeenCalledWith('un1t-online-sync', 'reclassify after sync threw', { locationId: 'hatch', errName: 'Error' })
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('secret-token')
   })
 })
