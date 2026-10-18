@@ -908,3 +908,50 @@ describe('bucketArrears and amountUnknown', () => {
     expect(row.amountUnknown).toBe(true)
   })
 })
+
+// UN1TRADAR.3 — a member who has asked to cancel is pinned to the top.
+describe('detectCancelling and the pinned sort', () => {
+  const NOW_C = Date.parse('2026-10-18T12:00:00Z')
+  const DAYC = 86_400_000
+  const base = (over) => ({
+    id: 'x', name: 'X', glofox_membership_status: 'member', glofox_membership_type: 'time',
+    glofox_membership_plan: 'Monthly', glofox_membership_state: 'active', glofox_membership_price_cents: 9000,
+    glofox_billing_interval: '1 month', last_attended_at: new Date(NOW_C - 2 * DAYC).toISOString(),
+    total_attended_30d: 8, total_attended_7d: 2, ...over,
+  })
+
+  it('cancelling signal makes the tier high and pins the row first', async () => {
+    const { buildRadar, scoreMember, detectCancelling } = await import('./churn-radar')
+    const cancelling = base({ id: 'c', cancel_at_period_end: true, glofox_membership_expiry: '2026-11-01T00:00:00Z' })
+    // a score-7 unpinned row: gone quiet (3) + no-show (3) + renewal-cliff-ish... built from detectors
+    const loud = base({ id: 'l', last_attended_at: new Date(NOW_C - 30 * DAYC).toISOString(), total_attended_30d: 1, total_noshow_30d: 4, total_attended_7d: 0, glofox_membership_expiry: new Date(NOW_C + 5 * DAYC).toISOString() })
+    const s = scoreMember(cancelling, NOW_C)
+    expect(s.tier).toBe('high')
+    expect(s.signals.map((x) => x.key)).toEqual(['cancelling'])
+    expect(s.signals[0]).toEqual({ key: 'cancelling', label: 'Cancelling', detail: 'Membership ends on 1 Nov', weight: 6, severity: 'critical', pin: true })
+    const l = scoreMember(loud, NOW_C)
+    expect(l.score).toBeGreaterThan(6)
+    expect(buildRadar([loud, cancelling], NOW_C).map((r) => r.contactId)).toEqual(['c', 'l'])
+    expect(detectCancelling(base({}), NOW_C)).toBeNull()
+  })
+
+  it('no end date: the detail says so without a date', async () => {
+    const { detectCancelling } = await import('./churn-radar')
+    expect(detectCancelling(base({ cancel_at_period_end: true, glofox_membership_expiry: null }), NOW_C).detail).toBe('Membership ends at the end of the current period')
+  })
+
+  it('a row without the key (every Glofox row) never carries the signal, and the order is unchanged', async () => {
+    const { buildRadar } = await import('./churn-radar')
+    const rows = [base({ id: 'a', last_attended_at: new Date(NOW_C - 20 * DAYC).toISOString(), total_attended_30d: 1 }), base({ id: 'b', total_noshow_30d: 3, total_attended_30d: 1 })]
+    const out = buildRadar(rows, NOW_C)
+    for (const r of out) expect(r.signals.some((s) => s.key === 'cancelling' || s.pin)).toBe(false)
+  })
+
+  it('a past-due cancelling member classifies overdue and never scores cancelling', async () => {
+    const { classifyContact, scoreMember } = await import('./churn-radar')
+    const c = base({ id: 'pd', cancel_at_period_end: true })
+    const ctx = { pastDueIds: new Set(['pd']) }
+    expect(classifyContact(c, ctx)).toBe('overdue')
+    expect(scoreMember(c, NOW_C, ctx)).toBeNull()
+  })
+})
