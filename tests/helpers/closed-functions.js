@@ -80,6 +80,8 @@ export const CLOSED_FUNCTIONS = [
   // that file.
   { fn: 'public.campaign_outcome_stats', args: '(uuid, int)', closedBy: 737,
     why: 'INVOKER campaign outcome report over a bare campaign id; only the service-role outcomes route calls it, after its own access check' },
+  { fn: 'public.un1t_mirror_keep_crm_write', args: '()', closedBy: 742,
+    why: 'a trigger function (a sync upsert pulled before a CRM write keeps the CRM’s un1t_* mirror row); a trigger fires without EXECUTE' },
 ]
 
 /** The client roles a closed function is closed to. */
