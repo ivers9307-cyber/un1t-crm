@@ -33,7 +33,7 @@
 //   - archived=false filter so retiring old stages needs no UI change.
 
 import { createServerClient } from '@/lib/supabase'
-import { pipelineDealSelect, boardDealMapper, badgeEnabledForModule, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
+import { pipelineDealSelect, boardDealMapper, boardCardOptionsForModule, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { canWriteActivitiesAt } from '@/lib/activity-write-gate'
@@ -92,7 +92,7 @@ export default async function PipelinePage(props) {
   }
 
   const manual = activePipeline.mode === 'manual'
-  const toBoard = boardDealMapper({ badge: badgeEnabledForModule(activePipeline.module) })
+  const toBoard = boardDealMapper(boardCardOptionsForModule(activePipeline.module))
   // A manual board draws no view toggle, so it can only ever be the one view —
   // otherwise a bookmarked ?view=dormant would strand the operator on a screen
   // with no way back.

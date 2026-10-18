@@ -82,3 +82,17 @@ describe('GET /api/pipeline/deals — next-class badge by board module', () => {
     expect(logWarn).toHaveBeenCalledWith('pipeline-deals', 'board read failed; badge kept', { stageId: STAGE, locationId: LOC })
   })
 })
+
+describe('GET /api/pipeline/deals — Glofox credit count by board module (HATCHPIPE.3)', () => {
+  it('a un1t.online board (acquisition_un1t) card carries no trial_credits_remaining', async () => {
+    setup({ data: { module: 'acquisition_un1t' }, error: null })
+    const body = await (await GET(req())).json()
+    expect(body.deals[0].contacts).not.toHaveProperty('trial_credits_remaining')
+  })
+
+  it('a Glofox board (acquisition) card keeps trial_credits_remaining', async () => {
+    setup({ data: { module: 'acquisition' }, error: null })
+    const body = await (await GET(req())).json()
+    expect(body.deals[0].contacts.trial_credits_remaining).toBe(0)
+  })
+})
