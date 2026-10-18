@@ -471,6 +471,12 @@ const config = [
       // clean; every read, the insert-if-missing upsert and the consent_log
       // insert read their error, which is returned (never thrown).
       'src/lib/un1t-online-studio-preferences.js',
+      // UN1TWRITE.6 — the un1t.online write primitives and the mirror after a
+      // write: born clean; every mirror write reads its error (the credits
+      // refresh and the contact link the rows they touched), logged, never
+      // thrown past the write's verdict.
+      'src/lib/un1t-online-write.js',
+      'src/lib/un1t-online-mirror-write.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

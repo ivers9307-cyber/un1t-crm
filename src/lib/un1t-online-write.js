@@ -1,6 +1,7 @@
-// UN1TWRITE.5 — the un1t.online write transport (createUn1tWriter).
-// The primitives (book, cancel, createClient, forgotPassword,
-// createCheckoutLink, grantTrial) arrive in Tasks 6 and 10 and call ONLY this.
+// UN1TWRITE.5 — the un1t.online write transport (createUn1tWriter), and
+// UN1TWRITE.6 — the primitives book, cancel, createClient, forgotPassword and
+// createCheckoutLink (grantTrial arrives in Task 10), which call ONLY the
+// transport, the ledger and the mirror (un1t-online-mirror-write.js).
 //
 // What the transport guarantees (spec 6.1, global constraints):
 // - It sends the six allowlisted calls and nothing else, with the snapshot
@@ -48,7 +49,7 @@ import { readConnection } from './connection-registry.js'
 import { tokenFingerprint } from './un1t-online-token.js'
 import { checkRateLimit } from './rate-limit.js'
 import { recordErrorEvent } from './error-events.js'
-import { logInfo, logWarn } from './log'
+import { logError, logInfo, logWarn } from './log'
 import {
   judgeUn1tWrite,
   missingPermissions,
@@ -59,7 +60,10 @@ import {
   un1tWriteFailureEvent,
 } from './un1t-online-write-judge.js'
 import { readUn1tWriteSettings, Un1tSettingsReadError } from './un1t-online-settings.js'
-import { beginAttempt, finishAttempt } from './un1t-online-write-ledger.js'
+import { beginAttempt, finishAttempt, findDone, ledgerKey } from './un1t-online-write-ledger.js'
+import { applyUn1tWriteToMirror } from './un1t-online-mirror-write.js'
+import { resolveCustomerBaseUrl } from './tenant-host.js'
+import { randomBytes } from 'node:crypto'
 
 const LOG_MODULE = 'un1t-online-write'
 const PLATFORM = 'un1t_online'
@@ -766,4 +770,581 @@ export async function createUn1tWriter(
     readAll,
     openAttempt,
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// UN1TWRITE.6 — the primitives
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Each one: writer.ensureOp → writer.assertAllowed → (a done row on the
+// ledger that settles it, read first) → writer.openAttempt → writer.send →
+// finishAttempt → the mirror on done. Throw contract (book, cancel,
+// createClient, forgotPassword): every un1t.online outcome and every switch,
+// permission and budget refusal RESOLVES as a Un1tWriteResult; the promise
+// rejects only with Un1tSettingsReadError or a ledger database error raised
+// before anything was sent (so a retry is safe), or a TypeError for a
+// programming error. createCheckoutLink rejects Un1tWriteRefused /
+// Un1tWriteUnknown instead (spec 6.7).
+//
+// The ledger stage a result is recorded as:
+//   done → done; unknown → unknown;
+//   refused with nothing sent → refused (the key is free again);
+//   refused by the transport itself (budget, throttle, token) AFTER something
+//   went out in this call → unknown, so the next attempt runs the check read
+//   before it sends anything.
+
+/** A booking "created since the send" may be stamped this much before our clock. */
+export const UN1T_LANDED_SKEW_MS = 2 * 60_000
+
+const IN_DOUBT_AFTER_SEND = new Set([C.RATE_BUDGET, C.RATE_LIMITED, C.AUTH])
+const TERMS_NOT_ACCEPTED = 'terms_not_accepted'
+const TERMS_TEXT = "This person has not accepted un1t.online's terms and liability waiver, so no account was created and nothing was sent."
+const CHECKOUT_TEXT = {
+  not_a_customer_url: "A checkout return page must be an https page on this studio's own customer site, so no checkout was opened.",
+  no_client_at_studio: 'This person has no un1t.online account at this studio, so no checkout was opened.',
+  product_not_sellable: 'That product is not on sale at this studio in un1t.online, so no checkout was opened.',
+  free_product_not_via_checkout: 'That product is free; a free product is never sold through a checkout link.',
+}
+const UNKNOWN_CHECKOUT_TEXT = 'un1t.online did not answer clearly, so no checkout link can be given. Try again in a minute.'
+
+const statusOf = (row) => String(row?.status ?? '').trim().toLowerCase()
+const isCancelledStatus = (s) => s === 'cancelled' || s === 'canceled'
+const idText = (v) => ((typeof v === 'string' && v.trim()) || (typeof v === 'number' && Number.isFinite(v)) ? String(v).trim() : null)
+const sameIdText = (a, b) => idText(a) != null && idText(a).toLowerCase() === String(idText(b) ?? '').toLowerCase()
+const plainText = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
+const normEmail = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : '')
+const actorIdOf = (actor) => (isObj(actor) && typeof actor.id === 'string' && actor.id ? actor.id : null)
+const msOf = (v) => {
+  if (v instanceof Date) return v.getTime()
+  if (typeof v === 'number') return v
+  if (typeof v === 'string') return Date.parse(v)
+  return NaN
+}
+
+function requireText(fn, name, v) {
+  if (typeof v !== 'string' || v.trim() === '') throw new TypeError(`${fn}: '${name}' is required`)
+}
+// A bare un1t.online id: never the CRM's 'un1t:' namespace.
+function requireBareId(fn, name, v) {
+  requireText(fn, name, v)
+  if (/^un1t:/i.test(v)) throw new TypeError(`${fn}: '${name}' must be the bare un1t.online id, without 'un1t:'`)
+}
+
+// ── Dedupe reads ───────────────────────────────────────────────────────────
+
+/**
+ * Did a book land? `GET /users/{id}/bookings`, every page. A booked or
+ * attended row for this event created since the send, or an older booked
+ * one, is landed; no live row (only cancelled ones, or none) is absent;
+ * anything else (an older attended row, a waitlist entry) or a failed read is
+ * unknown. Never throws.
+ * @param {{ readAll: Function, locationId: string }} writer
+ * @param {{ un1tUserId: string, eventId: string, sentAt?: number|string|Date }} args
+ * @returns {Promise<{ state: 'landed'|'absent'|'unknown', id: string|null, row: object|null }>}
+ *   row is the picked booking (no embedded user, no guest details).
+ */
+export async function findLandedBooking(writer, { un1tUserId, eventId, sentAt } = {}) {
+  let rows
+  try {
+    rows = await writer.readAll(`/users/${encodeURIComponent(un1tUserId)}/bookings`)
+  } catch (err) {
+    logWarn(LOG_MODULE, 'booking check read failed; treated as unknown', fields({ locationId: writer.locationId, op: 'book', code: err?.code ?? 'check_failed' }))
+    return { state: 'unknown', id: null, row: null }
+  }
+  const mine = (Array.isArray(rows) ? rows : []).filter((r) => {
+    if (!isObj(r)) return false
+    const event = r.event_id ?? (isObj(r.event) ? r.event.id : undefined)
+    const user = r.user_id ?? (isObj(r.user) ? r.user.id : undefined)
+    return sameIdText(event, eventId) && (user == null || sameIdText(user, un1tUserId))
+  })
+  const live = mine.filter((r) => !isCancelledStatus(statusOf(r)))
+  if (live.length === 0) return { state: 'absent', id: null, row: null }
+  const since = msOf(sentAt)
+  const fresh = Number.isFinite(since)
+    ? live.find((r) => ['booked', 'attended'].includes(statusOf(r)) && msOf(r.created_at) >= since - UN1T_LANDED_SKEW_MS)
+    : null
+  const hit = fresh ?? live.find((r) => statusOf(r) === 'booked')
+  if (hit && idText(hit.id)) return { state: 'landed', id: idText(hit.id), row: pickBooking(hit) }
+  return { state: 'unknown', id: null, row: null }
+}
+
+/**
+ * Where a cancel stands: `GET /bookings/{id}`. cancelled → landed (whoever
+ * cancelled it); booked → absent; attended / no_show → already_happened;
+ * anything else, another booking or a failed read → unknown. Never throws.
+ * @returns {Promise<'landed'|'absent'|'already_happened'|'unknown'>}
+ */
+export async function findCancelState(writer, { bookingId } = {}) {
+  let row
+  try {
+    row = await writer.read(`/bookings/${encodeURIComponent(bookingId)}`)
+  } catch (err) {
+    logWarn(LOG_MODULE, 'cancel check read failed; treated as unknown', fields({ locationId: writer.locationId, op: 'cancel', code: err?.code ?? 'check_failed' }))
+    return 'unknown'
+  }
+  if (!isObj(row) || (row.id != null && !sameIdText(row.id, bookingId))) return 'unknown'
+  const s = statusOf(row)
+  if (isCancelledStatus(s)) return 'landed'
+  if (s === 'booked') return 'absent'
+  if (s === 'attended' || s === 'no_show' || s === 'no-show') return 'already_happened'
+  return 'unknown'
+}
+
+/**
+ * Every un1t.online client whose email is this one: a full walk of
+ * `GET /users/clients` (no search parameter exists, so the address never goes
+ * in a URL), compared trimmed, lower-cased and exact. Throws when the walk
+ * fails or is cut short: "could not look" is never "no match".
+ * @returns {Promise<{ matches: string[] }>}
+ */
+export async function findClientByEmail(writer, email) {
+  const want = normEmail(email)
+  if (!want) throw new TypeError('findClientByEmail: email is required')
+  const rows = await writer.readAll('/users/clients')
+  const matches = new Set()
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (isObj(r) && normEmail(r.email) === want && idText(r.id)) matches.add(idText(r.id))
+  }
+  return { matches: [...matches] }
+}
+
+/**
+ * The latest done book on the ledger for this person and class, unless a done
+ * cancel of that booking came after it (a done book alone is not "booked":
+ * findDone(book) cannot see the cancel). null when none. Throws on a database
+ * error. A done book with no booking id (an already-booked answer) is returned
+ * as is; the caller's check read decides.
+ */
+export async function findDoneBooking(db, { locationId, un1tUserId, eventId }) {
+  const done = await findDone(db, { key: ledgerKey.book(locationId, un1tUserId, eventId) })
+  if (!done) return null
+  const bookingId = idText(done.un1t_ref)
+  if (!bookingId) return done
+  const cancelled = await findDone(db, { key: ledgerKey.cancel(locationId, bookingId) })
+  // Booking ids are never reused, so a done cancel of this one undid it.
+  return cancelled ? null : done
+}
+
+/**
+ * The done trial for this person and product, by EITHER method (the €0 charge
+ * or the free checkout): their keys differ, so findDone on one key misses the
+ * other (mig 742 one_trial is per person and product). null when none.
+ * Throws on a database error: an unreadable history is never "no trial".
+ */
+export async function findDoneTrial(db, { locationId, un1tUserId, productId }) {
+  if (!locationId || !un1tUserId || !productId) throw new TypeError('findDoneTrial: locationId, un1tUserId and productId are required')
+  const { data, error } = await db
+    .from('un1t_write_events')
+    .select('id, method, un1t_ref, created_at')
+    .eq('location_id', locationId)
+    .eq('op', 'trial')
+    .eq('un1t_user_id', un1tUserId)
+    .eq('target', productId)
+    .eq('stage', 'done')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw Object.assign(new Error(`un1t_write_events trial read failed (${error.code ?? 'no code'})`), { code: error.code ?? null })
+  return data ?? null
+}
+
+// ── The shared run ─────────────────────────────────────────────────────────
+
+// ensureOp's refusal as the result to return; anything else rethrows.
+async function opRefusal(writer, op) {
+  try {
+    await writer.ensureOp(op)
+    return null
+  } catch (err) {
+    if (err instanceof Un1tWriteRefused && err.result) return err.result
+    throw err
+  }
+}
+
+function ledgerStageOf(r) {
+  if (r.verdict === 'done') return 'done'
+  if (r.verdict === 'unknown') return 'unknown'
+  return r.sent && IN_DOUBT_AFTER_SEND.has(r.code) ? 'unknown' : 'refused'
+}
+
+// The mirror never changes the verdict, even when it throws.
+async function safely(fn, meta) {
+  try {
+    return (await fn()) ?? {}
+  } catch {
+    logError(LOG_MODULE, 'mirror threw after a done write; the next sync repairs it', fields({ ...meta, code: 'mirror_threw' }))
+    return {}
+  }
+}
+
+/**
+ * openAttempt → send → finishAttempt → onDone. `send(row)` is the primitive's
+ * own writer.send call (each states its policy literally). `onDone(result)`
+ * returns fields to merge into a done result (data, conflict).
+ */
+async function attemptWrite(db, writer, { attempt, policy, verify, send, secrets = [], onDone }) {
+  const meta = { locationId: writer.locationId, op: attempt.op, origin: attempt.origin }
+  const opened = await writer.openAttempt(attempt, { policy, verify })
+  if (opened.result) {
+    const r = opened.result
+    if (r.verdict !== 'done' || !onDone) return r
+    return { ...r, ...(await safely(() => onDone(r), { ...meta, ledgerId: r.ledgerId })) }
+  }
+  const { row } = opened
+  let r
+  try {
+    r = await send(row)
+  } catch (err) {
+    // A programming error after the write-ahead row: free the key, then fail loudly.
+    await finishAttempt(db, row.id, { stage: 'refused', code: 'not_sent' })
+    throw err
+  }
+  const isCheckout = attempt.op === 'checkout'
+  await finishAttempt(db, row.id, {
+    stage: ledgerStageOf(r),
+    // A checkout's id IS its URL: it goes in checkout_url, never un1t_ref.
+    un1tRef: !isCheckout && r.id ? r.id : undefined,
+    checkoutUrl: isCheckout && r.verdict === 'done' ? r.id : undefined,
+    code: r.code ?? null,
+    message: r.message == null ? null : scrubMessage(r.message, secrets) || null,
+    recovered: r.recovered ?? null,
+  })
+  const out = withLedger(r, row.id)
+  if (r.verdict !== 'done' || !onDone) return out
+  return { ...out, ...(await safely(() => onDone(out), { ...meta, ledgerId: row.id })) }
+}
+
+const mirrorDeps = (writer, now) => ({ read: (path) => writer.read(path), now })
+
+// ── book ───────────────────────────────────────────────────────────────────
+
+/**
+ * Book a un1t.online class for a client.
+ * @param {object} db
+ * @param {{ locationId: string, contactId?: string|null, un1tUserId: string, eventId: string,
+ *   origin: 'staff'|'funnel'|'approval'|'mia'|'test_account', originRef?: string|null, actor?: { id: string }|null }} args
+ *   eventId is the bare un1t.online uuid (no 'un1t:').
+ * @param {{ writerFactory?: typeof createUn1tWriter, now?: () => Date }} [deps]
+ * @returns {Promise<object>} Un1tWriteResult. done: id = the booking id (from
+ *   the answer, or from the check read when the answer only said "already
+ *   booked"; null when nothing named it), data = the un1t_bookings row.
+ */
+export async function book(db, args = {}, deps = {}) {
+  const { writerFactory = createUn1tWriter, now = () => new Date() } = deps
+  const { locationId, contactId = null, un1tUserId, eventId, origin, originRef = null, actor = null } = args
+  requireBareId('book', 'un1tUserId', un1tUserId)
+  requireBareId('book', 'eventId', eventId)
+  const writer = await writerFactory(db, locationId)
+  const refused = await opRefusal(writer, 'book')
+  if (refused) return refused
+  const body = { eventId, userId: un1tUserId }
+  writer.assertAllowed('book', 'POST', '/bookings', body)
+
+  // Set just before the send; NaN on a resume (the old send time is not ours
+  // to know), so only an older `booked` row counts as landed there.
+  let sentAt = NaN
+  let landedRow = null
+  const verify = async () => {
+    const chk = await findLandedBooking(writer, { un1tUserId, eventId, sentAt })
+    if (chk.state === 'landed') landedRow = chk.row
+    return chk
+  }
+  const mirror = async (r) => {
+    const data = r.data ?? landedRow
+    if (!data) return { data: null }
+    const m = await applyUn1tWriteToMirror(db, {
+      op: 'book', locationId, contactId, un1tUserId, studioId: writer.studioId, data,
+      requestedAt: Number.isFinite(sentAt) ? new Date(sentAt).toISOString() : null, ledgerId: r.ledgerId,
+    }, mirrorDeps(writer, now))
+    return { data: m.row ?? null }
+  }
+
+  // A live done book on the ledger: confirm it is still there before sending
+  // again (a member can cancel in the app, which the ledger never sees).
+  const prior = await findDoneBooking(db, { locationId, un1tUserId, eventId })
+  if (prior) {
+    const chk = await verify()
+    if (chk.state === 'landed') {
+      const r = withLedger(result('done', { id: chk.id, alreadyBooked: true }), prior.id)
+      return { ...r, ...(await safely(() => mirror(r), { locationId, op: 'book', origin, ledgerId: prior.id })) }
+    }
+  }
+
+  return attemptWrite(db, writer, {
+    attempt: {
+      op: 'book', key: ledgerKey.book(locationId, un1tUserId, eventId), contactId, un1tUserId, target: eventId,
+      origin, originRef, actorUserId: actorIdOf(actor),
+    },
+    policy: 'verify',
+    verify,
+    send: (row) => {
+      sentAt = now().getTime()
+      return writer.send('POST', '/bookings', {
+        body, policy: 'verify', verify, op: 'book', origin, ledgerId: row.id,
+        expect: { eventId, userId: un1tUserId, studioId: writer.studioId },
+      })
+    },
+    onDone: mirror,
+  })
+}
+
+// ── cancel ─────────────────────────────────────────────────────────────────
+
+/**
+ * Cancel a un1t.online booking (an empty body, no refund flag). A booking that
+ * was attended or a no-show is refused UN1T_WRITE_CODES.ALREADY_HAPPENED; one
+ * already cancelled (by anyone) is done.
+ * @param {{ locationId: string, contactId?: string|null, un1tUserId: string, bookingId: string,
+ *   origin: string, originRef?: string|null, actor?: { id: string }|null }} args
+ */
+export async function cancel(db, args = {}, deps = {}) {
+  const { writerFactory = createUn1tWriter, now = () => new Date() } = deps
+  const { locationId, contactId = null, un1tUserId, bookingId, origin, originRef = null, actor = null } = args
+  requireBareId('cancel', 'un1tUserId', un1tUserId)
+  requireBareId('cancel', 'bookingId', bookingId)
+  const writer = await writerFactory(db, locationId)
+  const refused = await opRefusal(writer, 'cancel')
+  if (refused) return refused
+  writer.assertAllowed('cancel', 'PATCH', `/bookings/${bookingId}/cancel`, {})
+
+  // A done cancel of this booking is final (a rebook is a new booking id).
+  const key = ledgerKey.cancel(locationId, bookingId)
+  const prior = await findDone(db, { key })
+  if (prior) return withLedger(result('done', { id: bookingId }), prior.id)
+
+  // The check read names the booking, so a resume reports its id too.
+  const verify = async () => {
+    const state = await findCancelState(writer, { bookingId })
+    return state === 'landed' ? { state, id: bookingId } : state
+  }
+  let requestedAt = null
+  return attemptWrite(db, writer, {
+    attempt: { op: 'cancel', key, contactId, un1tUserId, target: bookingId, origin, originRef, actorUserId: actorIdOf(actor) },
+    policy: 'verify',
+    verify,
+    send: (row) => {
+      requestedAt = now().toISOString()
+      return writer.send('PATCH', `/bookings/${bookingId}/cancel`, {
+        body: {}, policy: 'verify', verify, op: 'cancel', origin, ledgerId: row.id, expect: { bookingId },
+      })
+    },
+    onDone: async (r) => {
+      const data = isObj(r.data) && r.data.id ? r.data : { id: bookingId }
+      const m = await applyUn1tWriteToMirror(db, {
+        op: 'cancel', locationId, contactId, un1tUserId, studioId: writer.studioId, data, requestedAt, ledgerId: r.ledgerId,
+      }, mirrorDeps(writer, now))
+      return { data: m.row ?? null }
+    },
+  })
+}
+
+// ── createClient ───────────────────────────────────────────────────────────
+
+/**
+ * Create a un1t.online client for a contact. Only with a recorded acceptance
+ * of un1t.online's terms and liability waiver (refused terms_not_accepted,
+ * nothing sent, otherwise). The password is random, lives only in this call's
+ * body and is never stored, logged or returned; un1t.online's answer (which
+ * carries reset_password_token, email and phone) yields only the id.
+ * @param {{ locationId: string, contact: { id: string, email: string, first_name?: string|null,
+ *   last_name?: string|null, name?: string|null, phone?: string|null },
+ *   terms: { acceptedAt: string|Date, source: string, version?: string|null },
+ *   origin: string, originRef?: string|null, actor?: { id: string }|null }} args
+ * @returns {Promise<object>} Un1tWriteResult plus `conflict`: null, or
+ *   'un1t_link_conflict' when another contact already holds the new user
+ *   (nothing overwritten; the verdict stays done).
+ */
+export async function createClient(db, args = {}, deps = {}) {
+  const { writerFactory = createUn1tWriter, now = () => new Date() } = deps
+  const { locationId, contact, terms, origin, originRef = null, actor = null } = args
+  if (!isObj(contact)) throw new TypeError("createClient: 'contact' is required")
+  requireText('createClient', 'contact.id', contact.id)
+  const email = plainText(contact.email)
+  if (!email) throw new TypeError("createClient: 'contact.email' is required")
+
+  const acceptedMs = msOf(terms?.acceptedAt)
+  if (!Number.isFinite(acceptedMs)) return { ...withLedger(refusalResult(TERMS_NOT_ACCEPTED, TERMS_TEXT)), conflict: null }
+  const termsAcceptedAt = new Date(acceptedMs).toISOString()
+
+  const writer = await writerFactory(db, locationId)
+  const refused = await opRefusal(writer, 'create_client')
+  if (refused) return { ...refused, conflict: null }
+
+  const key = ledgerKey.create(locationId, contact.id)
+  const prior = await findDone(db, { key })
+  if (prior) return { ...withLedger(result('done', { id: idText(prior.un1t_ref) }), prior.id), conflict: null }
+
+  // Held in this call only: straight into the body, scrubbed from every text.
+  const password = randomBytes(24).toString('base64url')
+  const body = { email, password, studioId: writer.studioId, accepted_terms: true, accepted_liability_waiver: true }
+  // Optional keys only when there is a value: an undefined is never sent.
+  for (const k of ['name', 'first_name', 'last_name', 'phone']) {
+    const v = plainText(contact[k])
+    if (v) body[k] = v
+  }
+  writer.assertAllowed('create_client', 'POST', '/users/clients', body)
+  const secrets = [password, email, ...(body.phone ? [body.phone, ...phoneForms(body.phone)] : [])]
+
+  const verify = async () => {
+    const { matches } = await findClientByEmail(writer, email)
+    if (matches.length === 1) return { state: 'landed', id: matches[0] }
+    return matches.length === 0 ? 'absent' : 'unknown'
+  }
+  let requestedAt = null
+  const r = await attemptWrite(db, writer, {
+    attempt: {
+      op: 'create_client', key, contactId: contact.id, un1tUserId: null, target: null, origin, originRef,
+      actorUserId: actorIdOf(actor), termsAcceptedAt, termsSource: plainText(terms?.source),
+    },
+    policy: 'verify',
+    verify,
+    secrets,
+    send: (row) => {
+      requestedAt = now().toISOString()
+      return writer.send('POST', '/users/clients', { body, policy: 'verify', verify, op: 'create_client', origin, ledgerId: row.id, secrets, expect: {} })
+    },
+    onDone: async (done) => {
+      if (!done.id) return {}
+      const m = await applyUn1tWriteToMirror(db, {
+        op: 'create_client', locationId, contactId: contact.id, un1tUserId: done.id, studioId: writer.studioId,
+        data: null, requestedAt, ledgerId: done.ledgerId,
+      }, mirrorDeps(writer, now))
+      return { conflict: m.conflict ?? null }
+    },
+  })
+  return { conflict: null, ...r, data: null }
+}
+
+// ── forgotPassword ─────────────────────────────────────────────────────────
+
+/**
+ * Ask un1t.online to email this client a set-password code. Never re-sent (a
+ * second request is a second email): a 5xx or no reply is unknown after one
+ * request, and a done reset for this user on the ledger sends nothing. A done
+ * here does NOT prove an email went out; no copy may promise it.
+ * @param {{ locationId: string, contactId?: string|null, un1tUserId: string, email: string,
+ *   origin: string, originRef?: string|null, actor?: { id: string }|null }} args
+ */
+export async function forgotPassword(db, args = {}, deps = {}) {
+  const { writerFactory = createUn1tWriter } = deps
+  const { locationId, contactId = null, un1tUserId, email: rawEmail, origin, originRef = null, actor = null } = args
+  requireBareId('forgotPassword', 'un1tUserId', un1tUserId)
+  const email = plainText(rawEmail)
+  if (!email) throw new TypeError("forgotPassword: 'email' is required")
+  const writer = await writerFactory(db, locationId)
+  const refused = await opRefusal(writer, 'forgot_password')
+  if (refused) return refused
+  const body = { email }
+  writer.assertAllowed('forgot_password', 'POST', '/auth/forgot-password', body)
+
+  const key = ledgerKey.pw(locationId, un1tUserId)
+  const prior = await findDone(db, { key })
+  if (prior) return withLedger(result('done'), prior.id)
+
+  return attemptWrite(db, writer, {
+    attempt: { op: 'forgot_password', key, contactId, un1tUserId, target: null, origin, originRef, actorUserId: actorIdOf(actor) },
+    policy: 'never',
+    secrets: [email],
+    send: (row) => writer.send('POST', '/auth/forgot-password', {
+      body, policy: 'never', op: 'forgot_password', origin, ledgerId: row.id, secrets: [email], expect: {},
+    }),
+  })
+}
+
+// ── createCheckoutLink ─────────────────────────────────────────────────────
+
+// An https page on exactly the studio's customer host, with no credentials.
+function isCustomerUrl(value, host) {
+  if (typeof value !== 'string' || !host) return false
+  let u
+  try {
+    u = new URL(value)
+  } catch {
+    return false
+  }
+  return u.protocol === 'https:' && !u.username && !u.password && u.host.toLowerCase() === host
+}
+
+async function customerHost(db, locationId) {
+  try {
+    return new URL(await resolveCustomerBaseUrl(db, locationId)).host.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+const refuseCheckout = (code) => new Un1tWriteRefused(code, CHECKOUT_TEXT[code], withLedger(refusalResult(code, CHECKOUT_TEXT[code])))
+
+/**
+ * A hosted un1t.online checkout for a paid product (spec 6.7, for spec E).
+ * Never the admin charge endpoint, never a promo code, never a €0 product (the trial
+ * has its own path). The key is the idempotency-key header and the ledger key;
+ * a 5xx is re-sent once with the same key. The URL is stored on the ledger and
+ * never logged.
+ * @param {{ locationId: string, userId: string, productId: string, successUrl: string,
+ *   cancelUrl: string, idempotencyKey: string, origin?: string, originRef?: string|null,
+ *   actor?: { id: string }|null }} args
+ * @returns {Promise<{ checkoutUrl: string, free: boolean }>}
+ * @throws {Un1tWriteRefused} every refusal (UN1T_* codes, not_a_customer_url,
+ *   no_client_at_studio, product_not_sellable, free_product_not_via_checkout,
+ *   un1t.online's own codes)
+ * @throws {Un1tWriteUnknown} an unclear answer
+ * @throws {Un1tSettingsReadError} the switch or the mirror could not be read (nothing sent)
+ */
+export async function createCheckoutLink(db, args = {}, deps = {}) {
+  const { writerFactory = createUn1tWriter } = deps
+  const {
+    locationId, userId, productId, successUrl, cancelUrl, idempotencyKey,
+    origin = 'mia', originRef = null, actor = null,
+  } = args
+  requireBareId('createCheckoutLink', 'userId', userId)
+  requireBareId('createCheckoutLink', 'productId', productId)
+  requireText('createCheckoutLink', 'idempotencyKey', idempotencyKey)
+
+  const writer = await writerFactory(db, locationId)
+  await writer.ensureOp('checkout') // rejects Un1tWriteRefused (switch, studio, permissions)
+
+  const host = await customerHost(db, locationId)
+  if (!isCustomerUrl(successUrl, host) || !isCustomerUrl(cancelUrl, host)) throw refuseCheckout('not_a_customer_url')
+
+  const { data: client, error: clientError } = await db
+    .from('un1t_clients')
+    .select('id')
+    .eq('location_id', locationId)
+    .eq('un1t_user_id', userId)
+    .limit(1)
+    .maybeSingle()
+  if (clientError) throw new Un1tSettingsReadError(`un1t_clients read failed (${clientError.code ?? 'no code'})`, { code: 'mirror_read_failed' })
+  if (!client) throw refuseCheckout('no_client_at_studio')
+
+  const { data: product, error: productError } = await db
+    .from('un1t_products')
+    .select('un1t_id, status, price_cents')
+    .eq('location_id', locationId)
+    .eq('un1t_id', productId)
+    .limit(1)
+    .maybeSingle()
+  if (productError) throw new Un1tSettingsReadError(`un1t_products read failed (${productError.code ?? 'no code'})`, { code: 'mirror_read_failed' })
+  if (!product || statusOf(product) !== 'active' || !Number.isInteger(product.price_cents)) throw refuseCheckout('product_not_sellable')
+  if (product.price_cents <= 0) throw refuseCheckout('free_product_not_via_checkout')
+
+  const body = { productId, successUrl, cancelUrl, userId }
+  writer.assertAllowed('checkout', 'POST', '/purchases/checkout', body)
+
+  const r = await attemptWrite(db, writer, {
+    attempt: { op: 'checkout', key: idempotencyKey, contactId: null, un1tUserId: userId, target: productId, origin, originRef, actorUserId: actorIdOf(actor) },
+    policy: 'idempotent',
+    send: (row) => writer.send('POST', '/purchases/checkout', {
+      body, policy: 'idempotent', idempotencyKey, op: 'checkout', origin, ledgerId: row.id, expect: {},
+    }),
+  })
+  if (r.verdict === 'done') {
+    const free = r.data?.free === true
+    if (free) logInfo(LOG_MODULE, 'un1t.online answered the checkout as free', fields({ locationId, op: 'checkout', origin, ledgerId: r.ledgerId, code: 'checkout_free' }))
+    return { checkoutUrl: r.id, free }
+  }
+  if (r.verdict === 'refused') throw new Un1tWriteRefused(r.code, r.message ?? 'un1t.online refused the checkout.', r)
+  const err = new Un1tWriteUnknown(r.code ?? 'outcome_unknown', r.message ?? UNKNOWN_CHECKOUT_TEXT)
+  err.ledgerId = r.ledgerId
+  throw err
 }
