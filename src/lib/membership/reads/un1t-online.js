@@ -16,6 +16,9 @@
 //   pipelineInputs    { success, data: { contacts, snapshots, evidence, unlinked } } | { success:false, error }
 //   trialEligibility  { success, data: { eligible, reasons } } | { success:false, error }
 //
+//   radarMembers / winbackContacts / leadContacts (UN1TRADAR.1, ./un1t-online-radar.js):
+//   the churn / lead radar rows in the scorer's shape; each THROWS on a failed read.
+//
 // There is no `arrears`: the Glofox arrears summary is a different number from
 // the per-subscription `pastDue` below (surviving open invoices, netted), so the
 // surface shows "unavailable" rather than a Glofox-shaped zero (supportsRead
@@ -27,7 +30,9 @@
 // at Stillorgan with an active Hatch subscription counts at Hatch (and still
 // counts at Stillorgan if they are a Glofox member there). The one exception is
 // `pipelineInputs`, which reads `contacts` BY ID (never by location) for exactly
-// the people this studio's clients link to, and only six named columns.
+// the people this studio's clients link to, and only six named columns. The
+// radar reads (./un1t-online-radar.js) also read `contacts` by id (name, and
+// lead fields), and leadContacts the contacts this studio owns.
 // `pipelineInputs` and `trialEligibility` also read the CRM's own write ledger,
 // `un1t_write_events` (op 'trial' rows, via listLedgerTrials), still filtered by
 // location_id and, in `trialEligibility`, narrowed by the person's user ids and
@@ -45,6 +50,7 @@ import {
   shapePastDue, normaliseUn1tInvoiceStatus, glofoxInterval,
   shapePipelineSnapshot, shapePipelineDateEvidence, shapeTrialEligibility,
 } from './un1t-online-shape'
+import { radarMembers, winbackContacts, leadContacts } from './un1t-online-radar'
 
 const PAGE = 1000
 const API_SOURCE = 'un1t_online_api'
@@ -822,4 +828,8 @@ export const un1tOnlineReads = Object.freeze({
   paymentsFor,
   pipelineInputs,
   trialEligibility,
+  // UN1TRADAR.1 — the radar row fetches (./un1t-online-radar.js)
+  radarMembers,
+  winbackContacts,
+  leadContacts,
 })
