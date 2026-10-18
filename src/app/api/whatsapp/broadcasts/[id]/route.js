@@ -140,7 +140,12 @@ export async function PUT(request, props) {
   // clears the sign-off whatever the row held when read (a sign-off landing
   // in between must not survive it), is refused on a running send (it would
   // strand it), and their schedule of an unsigned broadcast is a 403.
+  // `signoffCleared`: a sign-off the row held when read is being cleared, so
+  // the response says so (signoff_cleared) and the editor can tell the caller
+  // it will not go out until an org admin signs it off again (review of
+  // #2108, Minor 1: it used to report plain success).
   const contentChanged = changesSignedContent(updates, row)
+  let signoffCleared = false
   if (updates.status === 'scheduled' || contentChanged) {
     let location
     try {
@@ -157,6 +162,7 @@ export async function PUT(request, props) {
           }, { status: 409 })
         }
         Object.assign(updates, { signed_off_by: null, signed_off_at: null })
+        signoffCleared = Boolean(row.signed_off_by)
       }
       if (updates.status === 'scheduled') {
         const gate = routeSignoffGate({ user, location, row: contentChanged ? { signed_off_by: null } : row })
@@ -193,7 +199,7 @@ export async function PUT(request, props) {
       error: 'The broadcast changed while you were editing it. Reload the page and try again.',
     }, { status: 409 })
   }
-  return NextResponse.json({ success: true, broadcast: data })
+  return NextResponse.json({ success: true, broadcast: data, ...(signoffCleared ? { signoff_cleared: true } : {}) })
 }
 
 // DELETE /api/whatsapp/broadcasts/[id]

@@ -47,7 +47,13 @@ export default function WABroadcastEditor({ broadcast, signoff = null, templates
   // studio's window is open: { message, canSignOff, signedOff, contentKey }.
   const [signedOff, setSignedOff] = useState(Boolean(signoff?.signedOff))
   const [signingOff, setSigningOff] = useState(false)
+  // Review of #2108, Minor 1 — set when a Save cleared the sign-off (the PUT
+  // answers signoff_cleared: a manager changed signed content in the window).
+  const [signoffCleared, setSignoffCleared] = useState(false)
   const needsSignoff = Boolean(signoff) && !signedOff && !signoff.canSignOff
+  // The Sign off button: an org admin, inside the window, on an unsigned
+  // draft or scheduled broadcast (the sign-off route accepts both).
+  const canSignOffHere = Boolean(signoff?.canSignOff) && !signedOff && Boolean(broadcastId)
   const [error, setError] = useState(null)
   const [tab, setTab] = useState(isTerminal ? 'results' : 'setup')
   // Adjust drip pacing on a running drip (mig 328 / WA-DRIP-SIZE).
@@ -109,6 +115,15 @@ export default function WABroadcastEditor({ broadcast, signoff = null, templates
 
       if (!result.success) throw new Error(result.error)
 
+      if (result.signoff_cleared) {
+        // The saved content is no longer the signed content: it will not go
+        // out until an org admin signs it off again. Refresh so the page's
+        // content key (what a sign-off is checked against) is the new one.
+        setSignedOff(false)
+        setSignoffCleared(true)
+        router.refresh()
+      }
+
       if (!broadcastId && result.broadcast?.id) {
         setBroadcastId(result.broadcast.id)
         window.history.replaceState(null, '', `/communications/sent/whatsapp/${result.broadcast.id}`)
@@ -132,6 +147,7 @@ export default function WABroadcastEditor({ broadcast, signoff = null, templates
       }).then(r => r.json())
       if (!result.success) throw new Error(result.error)
       setSignedOff(true)
+      setSignoffCleared(false)
       router.refresh()
     } catch (err) {
       setError(err.message)
@@ -310,6 +326,22 @@ export default function WABroadcastEditor({ broadcast, signoff = null, templates
                 offer cancel-schedule instead (sendBroadcast would refuse the
                 'scheduled' entry state anyway). */}
             {isScheduled ? (
+              <>
+              {/* Review of #2108, Minor 1 — an unsigned scheduled blast inside
+                  the window is refused by the cron: an org admin can sign it
+                  off here (the route accepts 'scheduled'). */}
+              {canSignOffHere && (
+                <button
+                  type="button"
+                  onClick={handleSignOff}
+                  disabled={signingOff}
+                  title={signoff.message}
+                  className="flex items-center gap-1.5 text-sm border border-un1t-border text-un1t-text font-medium px-3 py-1.5 rounded-md hover:border-un1t-text/30 transition-colors disabled:opacity-50"
+                >
+                  <ShieldCheck size={14} />
+                  {signingOff ? 'Signing off…' : 'Sign off'}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleUnschedule}
@@ -319,6 +351,7 @@ export default function WABroadcastEditor({ broadcast, signoff = null, templates
                 <Ban size={14} />
                 {cancelling ? 'Cancelling…' : 'Cancel schedule'}
               </button>
+              </>
             ) : needsSignoff ? (
               // WAORGNUMBER.4 — in place of the button: the routes would 403.
               <div className="max-w-sm text-right">
@@ -327,7 +360,7 @@ export default function WABroadcastEditor({ broadcast, signoff = null, templates
               </div>
             ) : (
               <>
-              {signoff && signoff.canSignOff && !signedOff && broadcastId && (
+              {canSignOffHere && (
                 <button
                   type="button"
                   onClick={handleSignOff}
@@ -377,6 +410,28 @@ export default function WABroadcastEditor({ broadcast, signoff = null, templates
             {broadcast?.delivery_mode === 'drip' ? ' (drip starts then and paces itself inside its daily window)' : ''}.
             {' '}Use “Cancel schedule” to stop it before then.
           </span>
+        </div>
+      )}
+
+      {/* WAORGNUMBER.4 (R7) — a scheduled blast inside the sign-off window
+          that nobody has signed off is refused when its time comes (the cron
+          tells managers). Say so on the row, not only on Send. */}
+      {isScheduled && signoff && !signedOff && !signoffCleared && (
+        <div data-testid="wa-signoff-scheduled" className="bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 text-sm px-3 py-2 mb-4 flex items-center gap-2">
+          <ShieldCheck size={14} className="shrink-0" />
+          <span>
+            {signoff.message}{' '}
+            {signoff.canSignOff
+              ? 'It will not go out until you sign it off.'
+              : 'It will not go out until an organisation admin opens this broadcast and presses Sign off.'}
+          </span>
+        </div>
+      )}
+
+      {/* Review of #2108, Minor 1 — the Save above cleared a sign-off. */}
+      {signoffCleared && !signedOff && (
+        <div data-testid="wa-signoff-cleared" role="status" className="bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-700 text-sm px-3 py-2 mb-4">
+          Saved. Your change cleared this broadcast&apos;s sign-off, so it will not go out until an organisation admin signs it off again.
         </div>
       )}
 

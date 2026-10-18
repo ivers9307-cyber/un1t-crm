@@ -132,7 +132,41 @@ describe('PUT …/[id] — a content change clears the sign-off', () => {
     world('2020-01-01')
     row().signed_off_by = ADMIN_ID
     getCurrentUser.mockResolvedValue(manager())
-    await put({ variable_mapping: { 1: 'name' } })
+    const res = await put({ variable_mapping: { 1: 'name' } })
+    expect(row().signed_off_by).toBe(ADMIN_ID)
+    expect((await res.json()).signoff_cleared).toBeUndefined()
+  })
+})
+
+// Review of #2108, Minor 1 — a manager's content edit on a SIGNED scheduled row
+// clears the stamp; the PUT says so (signoff_cleared: true) so the editor can
+// tell them it will not go out until an org admin signs it off again.
+describe('PUT …/[id] — signoff_cleared tells the caller the sign-off was cleared', () => {
+  it("a manager's content edit on a signed scheduled row: 200 with signoff_cleared: true", async () => {
+    Object.assign(row(), { status: 'scheduled', scheduled_at: FUTURE, signed_off_by: ADMIN_ID, signed_off_at: '2999-01-01T00:00:00.000Z' })
+    getCurrentUser.mockResolvedValue(manager())
+    const res = await put({ variable_mapping: { 1: 'name' } })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: true, signoff_cleared: true })
+    expect(body.broadcast).toMatchObject({ status: 'scheduled', signed_off_by: null, signed_off_at: null })
+    expect(row()).toMatchObject({ status: 'scheduled', signed_off_by: null })
+  })
+  it('the same on a signed draft', async () => {
+    row().signed_off_by = ADMIN_ID
+    getCurrentUser.mockResolvedValue(manager())
+    expect(await (await put({ variable_mapping: { 1: 'name' } })).json()).toMatchObject({ success: true, signoff_cleared: true })
+  })
+  it('not flagged when nothing was signed, when the content is unchanged, or for an org admin', async () => {
+    getCurrentUser.mockResolvedValue(manager())
+    expect((await (await put({ variable_mapping: { 1: 'name' } })).json()).signoff_cleared).toBeUndefined()
+
+    row().signed_off_by = ADMIN_ID
+    expect((await (await put({ name: 'Renamed', variable_mapping: { 1: 'name' } })).json()).signoff_cleared).toBeUndefined()
+    expect(row().signed_off_by).toBe(ADMIN_ID)
+
+    getCurrentUser.mockResolvedValue(orgAdmin())
+    expect((await (await put({ variable_mapping: { 1: 'first_name' } })).json()).signoff_cleared).toBeUndefined()
     expect(row().signed_off_by).toBe(ADMIN_ID)
   })
 })
