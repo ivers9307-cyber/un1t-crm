@@ -254,6 +254,45 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
             </select>
             <div className="text-un1t-subtle">Only active, free, one-time products are listed.</div>
           </div>
+          <label className="flex items-center gap-2 text-un1t-text">
+            <input
+              type="checkbox"
+              checked={!!write.funnel_enabled}
+              disabled={busy !== null || !write.writes_enabled}
+              onChange={(e) => saveWrite({ funnel_enabled: e.target.checked })}
+            />
+            Take new people through un1t.online
+          </label>
+          <div className="text-un1t-subtle">
+            {write.writes_enabled
+              ? 'The website class form and the WhatsApp booking flow create the account, give the free trial and book the class in un1t.online.'
+              : 'Turn writes on first.'}
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="un1t-hidden-keywords" className="block text-un1t-subtle">Classes to hide from new people</label>
+            <textarea
+              id="un1t-hidden-keywords"
+              rows={2}
+              defaultValue={write.hidden_class_keywords || ''}
+              disabled={busy !== null}
+              onBlur={(e) => { if (e.target.value !== (write.hidden_class_keywords || '')) saveWrite({ hidden_class_keywords: e.target.value }) }}
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text"
+            />
+            <div className="text-un1t-subtle">Words separated by commas. A class whose name contains one is not offered to new people.</div>
+          </div>
+          {[
+            ['un1t_sends_welcome', 'un1t.online sends its own welcome email', 'Then the CRM does not send its account email.'],
+            ['un1t_welcome_sets_login', 'That welcome email lets them set a password', 'Then the CRM does not ask un1t.online for a set-password code either.'],
+            ['un1t_sends_booking_confirmation', 'un1t.online confirms bookings itself', 'Then the CRM does not send its booking confirmation.'],
+          ].map(([key, label, hint]) => (
+            <div key={key}>
+              <label className="flex items-center gap-2 text-un1t-text">
+                <input type="checkbox" checked={!!write[key]} disabled={busy !== null} onChange={(e) => saveWrite({ [key]: e.target.checked })} />
+                {label}
+              </label>
+              <div className="text-un1t-subtle pl-6">{hint}</div>
+            </div>
+          ))}
           <div className={write.permissions?.all_present ? 'text-green-700' : 'text-amber-700'}>
             {write.permissions?.unreadable
               ? 'Write permissions could not be checked just now.'

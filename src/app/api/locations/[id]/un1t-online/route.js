@@ -221,12 +221,36 @@ async function writeSection(db, locationId) {
   const s = un1tWriteSettingsFrom(loc.settings)
   const { rows } = await trialProducts(db, locationId)
   const permissions = await permissionLine(db, locationId)
-  return { writes_enabled: s.writesEnabled, trial_product_id: s.trialProductId, trial_products: rows, permissions }
+  return { ...writeFields(loc.settings), trial_products: rows, permissions }
+}
+
+// UN1TWRITE.12/24 — what the Writes section shows: booleans and the typed
+// deny-list only, never the settings object.
+function writeFields(settings) {
+  const s = un1tWriteSettingsFrom(settings)
+  const raw = settings?.un1t_online?.hidden_class_keywords
+  return {
+    writes_enabled: s.writesEnabled,
+    // As stored, so the switch shows what a master set even while writes are off.
+    funnel_enabled: settings?.un1t_online?.funnel_enabled === true,
+    trial_product_id: s.trialProductId,
+    hidden_class_keywords: typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.join(', ') : '',
+    un1t_sends_welcome: s.sendsWelcome,
+    un1t_welcome_sets_login: s.welcomeSetsLogin,
+    un1t_sends_booking_confirmation: s.sendsBookingConfirmation,
+  }
 }
 
 const WriteSettingsSchema = z.object({
   writes_enabled: z.boolean().optional(),
   trial_product_id: z.string().trim().min(1).max(64).nullable().optional(),
+  // UN1TWRITE.24 — the funnel switch, the class deny-list and the three
+  // "un1t.online sends its own email" flags.
+  funnel_enabled: z.boolean().optional(),
+  hidden_class_keywords: z.string().max(500).optional(),
+  un1t_sends_welcome: z.boolean().optional(),
+  un1t_welcome_sets_login: z.boolean().optional(),
+  un1t_sends_booking_confirmation: z.boolean().optional(),
 }).strict().refine((b) => Object.keys(b).length > 0, { message: 'Nothing to change.' })
 
 export async function PATCH(request, props) {
@@ -249,19 +273,28 @@ export async function PATCH(request, props) {
   }
 
   const patch = {}
-  if (body.writes_enabled !== undefined) patch.writes_enabled = body.writes_enabled
-  if (body.trial_product_id !== undefined) patch.trial_product_id = body.trial_product_id
-  const merged = await mergeLocationSettings(db, g.locationId, (current) => ({
-    ...current,
-    un1t_online: { ...(current.un1t_online && typeof current.un1t_online === 'object' ? current.un1t_online : {}), ...patch },
-  }), { scope: LOG })
+  for (const k of ['writes_enabled', 'trial_product_id', 'funnel_enabled', 'hidden_class_keywords', 'un1t_sends_welcome', 'un1t_welcome_sets_login', 'un1t_sends_booking_confirmation']) {
+    if (body[k] !== undefined) patch[k] = body[k]
+  }
+  // The funnel takes new people through un1t.online, so it needs writes on
+  // (now, or in this same change). Judged inside the merge, on the row it writes.
+  let refusedFunnel = false
+  const merged = await mergeLocationSettings(db, g.locationId, (current) => {
+    const block = current.un1t_online && typeof current.un1t_online === 'object' ? current.un1t_online : {}
+    const next = { ...block, ...patch }
+    if (patch.funnel_enabled === true && next.writes_enabled !== true) {
+      refusedFunnel = true
+      return null
+    }
+    return { ...current, un1t_online: next }
+  }, { scope: LOG })
+  if (refusedFunnel) return NextResponse.json({ success: false, error: 'Turn writes on first.' }, { status: 400 })
   if (!merged.ok) {
     if (merged.reason === 'not_found') return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     if (merged.reason === 'write_failed') return NextResponse.json({ success: false, error: 'Could not save just now. Try again.' }, { status: 500 })
     return NextResponse.json({ success: false, error: 'Could not read this studio\'s settings. Nothing was saved.' }, { status: 503 })
   }
-  const s = un1tWriteSettingsFrom(merged.settings)
-  return NextResponse.json({ success: true, data: { write: { writes_enabled: s.writesEnabled, trial_product_id: s.trialProductId } } })
+  return NextResponse.json({ success: true, data: { write: writeFields(merged.settings) } })
 }
 
 export async function PUT(request, props) {

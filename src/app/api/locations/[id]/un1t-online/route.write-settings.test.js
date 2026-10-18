@@ -131,7 +131,7 @@ describe('GET adds the write block for masters', () => {
     settings = { un1t_online: { writes_enabled: true, trial_product_id: TRIAL } }
     permissionReport.mockResolvedValue({ missing: ['purchases:create', 'credits:read'], studioMatches: true })
     const j = await (await get()).json()
-    expect(j.data.write).toEqual({
+    expect(j.data.write).toMatchObject({
       writes_enabled: true,
       trial_product_id: TRIAL,
       trial_products: [{ un1t_id: 'p-a', title: 'A first' }, { un1t_id: TRIAL, title: 'Trial' }],
@@ -162,5 +162,36 @@ describe('GET adds the write block for masters', () => {
     expect(j.data).not.toHaveProperty('write')
     expect(j.data.writes_enabled).toBe(true)
     expect(createUn1tWriter).not.toHaveBeenCalled()
+  })
+})
+
+describe('UN1TWRITE.24 — funnel settings', () => {
+  it('funnel on is refused while writes are off; with writes on (or in the same change) it is stored', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    settings = { un1t_online: { writes_enabled: false } }
+    const res = await patch({ funnel_enabled: true })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('Turn writes on first.')
+    expect(writes).toHaveLength(0)
+    expect((await patch({ writes_enabled: true, funnel_enabled: true })).status).toBe(200)
+    expect(settings.un1t_online).toMatchObject({ writes_enabled: true, funnel_enabled: true })
+    settings = { un1t_online: { writes_enabled: true } }
+    expect((await patch({ funnel_enabled: true })).status).toBe(200)
+  })
+
+  it('keywords are stored as typed and parsed by parseHiddenKeywords', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    const { parseHiddenKeywords } = await import('@/lib/class-keywords')
+    expect((await patch({ hidden_class_keywords: 'Elite, Members only' })).status).toBe(200)
+    expect(settings.un1t_online.hidden_class_keywords).toBe('Elite, Members only')
+    expect(parseHiddenKeywords(settings.un1t_online.hidden_class_keywords)).toEqual(['elite', 'members only'])
+  })
+
+  it('the three email flags round-trip through PATCH and GET', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    expect((await patch({ un1t_sends_welcome: true, un1t_welcome_sets_login: true, un1t_sends_booking_confirmation: true })).status).toBe(200)
+    expect(settings.un1t_online).toMatchObject({ un1t_sends_welcome: true, un1t_welcome_sets_login: true, un1t_sends_booking_confirmation: true })
+    const j = await (await get()).json()
+    expect(j.data.write).toMatchObject({ un1t_sends_welcome: true, un1t_welcome_sets_login: true, un1t_sends_booking_confirmation: true, hidden_class_keywords: 'elite', funnel_enabled: false })
   })
 })
