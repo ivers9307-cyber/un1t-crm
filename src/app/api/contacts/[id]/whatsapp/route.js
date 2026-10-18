@@ -38,7 +38,7 @@ import {
 import { manualTakeoverPatch } from '@/lib/agent/core'
 import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
-import { getConversationNumberConfig, pickReplyConfig } from '@/lib/whatsapp-config'
+import { getConversationNumberConfig, pickReplyConfig, pickTemplateConfig } from '@/lib/whatsapp-config'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 
 export const runtime = 'nodejs'
@@ -139,7 +139,7 @@ export async function POST(request, props) {
       // template; never trust the client's pick.
       const { data: rows } = await db
         .from('whatsapp_templates')
-        .select('name, language, category, status, components, header_media_url')
+        .select('name, language, category, status, components, header_media_url, business_account_id')
         .eq('location_id', contact.location_id)
         .eq('name', template_name)
         .order('created_at', { ascending: false })
@@ -157,9 +157,13 @@ export async function POST(request, props) {
       // template needs one (stored URL from the template upload).
       const headerComponent = headerComponentFor(template.components, template.header_media_url)
       if (headerComponent) components.unshift(headerComponent)
+      // WAORGNUMBER.2 (R5) — from a number on the template's own WABA: the
+      // thread's or the checked default when either is on it, else the
+      // studio's number on that WABA (none → WhatsAppNumberMissingError → 409).
+      const held = pickTemplateConfig(threadNumber, own.config, template.business_account_id || null)
       result = await sendTemplateMessage(
         waPhone, template.name, template.language || 'en', components,
-        { config: pickReplyConfig(threadNumber, own.config, { template: true }) },
+        held ? { config: held } : { locationId: contact.location_id, businessAccountId: template.business_account_id },
       )
       messageType = 'template'
       messageBody = `[Template: ${template.name}]`

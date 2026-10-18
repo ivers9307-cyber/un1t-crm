@@ -105,7 +105,8 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
       template.name,
       template.language || 'en',
       components,
-      { locationId },
+      // WAORGNUMBER.2 (R5) — the studio's number on the template's own WABA.
+      { locationId, ...(template.business_account_id && { businessAccountId: template.business_account_id }) },
     )
 
     // Meta accepted it. NOW persist wa_phone (only if unset) so the inbox

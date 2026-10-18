@@ -20,17 +20,18 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/wa-template-access', () => ({ canManageWaTemplatesAt: vi.fn(() => true) }))
 vi.mock('@/lib/whatsapp', () => ({ deleteTemplate: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn() }))
+vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn(), getLocationNumberForWaba: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { DELETE } from './route.js'
 import { deleteTemplate as deleteMetaTemplate } from '@/lib/whatsapp'
-import { getLocationWhatsAppNumberConfig } from '@/lib/whatsapp-config'
+import { getLocationWhatsAppNumberConfig, getLocationNumberForWaba } from '@/lib/whatsapp-config'
 import { createServerClient } from '@/lib/supabase'
 
 const LOC = 'a0000000-0000-4000-8000-000000000001'
 const NUMBER = { source: 'db', id: 'n1', phoneNumberId: 'PNI-SYNTH', token: 'tok-synth', businessAccountId: 'WABA-SYNTH' }
 
+let templateRow
 function makeDb() {
   const deletes = []
   return {
@@ -41,7 +42,7 @@ function makeDb() {
         select: () => b,
         delete: () => { mode = 'delete'; return b },
         eq: (_col, val) => { if (mode === 'delete') deletes.push({ table, id: val }); return b },
-        single: async () => ({ data: { name: 'promo_x', location_id: LOC }, error: null }),
+        single: async () => ({ data: templateRow, error: null }),
         then: (res, rej) => Promise.resolve({ error: null }).then(res, rej),
       }
       return b
@@ -54,6 +55,7 @@ const call = () => DELETE(new Request('https://crm.test/api/whatsapp/templates/t
 let db
 beforeEach(() => {
   vi.clearAllMocks()
+  templateRow = { name: 'promo_x', location_id: LOC }
   db = makeDb()
   createServerClient.mockReturnValue(db)
   getLocationWhatsAppNumberConfig.mockResolvedValue(NUMBER)
@@ -82,6 +84,41 @@ describe('DELETE — Meta delete on the template’s own location’s WABA', () 
     const res = await call()
     expect(res.status).toBe(500)
     expect(deleteMetaTemplate).not.toHaveBeenCalled()
+    expect(db.deletes).toEqual([])
+  })
+})
+
+// WAORGNUMBER.2 (R5) — a studio can use numbers on two WABAs; Meta deletes by
+// name on one, so the delete runs on the template's OWN WABA.
+describe('WAORGNUMBER.2 — the template’s own WABA', () => {
+  const ON_WABA_2 = { ...NUMBER, id: 'n2', phoneNumberId: 'PNI-2', businessAccountId: 'WABA-2' }
+
+  it('delete runs on the template’s own WABA', async () => {
+    templateRow = { name: 'promo_x', location_id: LOC, business_account_id: 'WABA-2' }
+    getLocationNumberForWaba.mockResolvedValue(ON_WABA_2)
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect(getLocationNumberForWaba).toHaveBeenCalledWith(LOC, 'WABA-2')
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
+    expect(deleteMetaTemplate).toHaveBeenCalledWith('promo_x', { config: ON_WABA_2 })
+    expect(db.deletes).toEqual([{ table: 'whatsapp_templates', id: 't1' }])
+  })
+
+  it('its WABA has no number switched on at the studio: 409, Meta not called, the row KEPT', async () => {
+    templateRow = { name: 'promo_x', location_id: LOC, business_account_id: 'WABA-2' }
+    getLocationNumberForWaba.mockResolvedValue(null)
+    const res = await call()
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'The number this template lives on is switched off at this studio.' })
+    expect(deleteMetaTemplate).not.toHaveBeenCalled()
+    expect(db.deletes).toEqual([])
+  })
+
+  it('a failed lookup on its WABA: 500, the row kept', async () => {
+    templateRow = { name: 'promo_x', location_id: LOC, business_account_id: 'WABA-2' }
+    getLocationNumberForWaba.mockRejectedValue(new Error('db down'))
+    const res = await call()
+    expect(res.status).toBe(500)
     expect(db.deletes).toEqual([])
   })
 })

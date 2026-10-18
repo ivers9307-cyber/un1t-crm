@@ -122,7 +122,7 @@ export async function POST(request, props) {
     // row too. 0 rows is a real answer (not approved at this studio).
     const { data: tplRow, error: tplError } = await db
       .from('whatsapp_templates')
-      .select('name, language, components, header_media_url')
+      .select('name, language, components, header_media_url, business_account_id')
       .eq('location_id', templateLocationId)
       .eq('name', body.template_name)
       .eq('language', language)
@@ -191,7 +191,10 @@ export async function POST(request, props) {
     // shares the default's WABA, else the default (getConversationReplyConfig).
     // WAHOMESTUDIO.1 — or, for a number-less studio's thread, the same-org
     // sibling's number stamped on it, whose owner's templates were read above.
-    send = () => sendTemplateMessage(phone, templateName, language, components, replyOpts)
+    // WAORGNUMBER.2 (R5) — on the template's own WABA: the thread number when
+    // it is on it, else this studio's number on it (none → 409 below).
+    const templateOpts = { ...replyOpts, ...(tplRow.business_account_id && { businessAccountId: tplRow.business_account_id }) }
+    send = () => sendTemplateMessage(phone, templateName, language, components, templateOpts)
   } else if (['image', 'video', 'document', 'audio'].includes(messageType)) {
     // Media message — 24h window only
     if (!isWindowOpen(conversation)) {

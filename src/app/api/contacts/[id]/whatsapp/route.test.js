@@ -47,6 +47,7 @@ vi.mock('@/lib/whatsapp-config', async () => ({
   getLocationWhatsAppNumberConfig: vi.fn(async () => ({ source: 'db', id: 'n1' })),
   getConversationNumberConfig: vi.fn(async () => null),
   pickReplyConfig: (await vi.importActual('@/lib/whatsapp-config')).pickReplyConfig,
+  pickTemplateConfig: (await vi.importActual('@/lib/whatsapp-config')).pickTemplateConfig,
 }))
 
 // Stub the WhatsApp transport — no real Meta call, 24h window always open.

@@ -43,10 +43,11 @@ vi.mock('./supabase', () => ({ createServerClient: () => fakeDb }))
 vi.mock('./whatsapp-config', () => ({
   META_API_URL: 'https://graph.facebook.com/v21.0',
   getWhatsAppConfig: vi.fn(),
+  getLocationNumberForWaba: vi.fn(),
 }))
 
 import { sendBroadcast, sendDripChunk } from './whatsapp.js'
-import { getWhatsAppConfig } from './whatsapp-config'
+import { getWhatsAppConfig, getLocationNumberForWaba } from './whatsapp-config'
 import { WhatsAppNumberMissingError } from './whatsapp-number-missing.js'
 
 const TEMPLATE = { id: 'tmpl-1', name: 'promo', language: 'en', status: 'APPROVED', components: [] }
@@ -88,5 +89,29 @@ describe('drip tick at a location with no number', () => {
     tables = { whatsapp_broadcasts: [dripRow()] }
     await expect(sendDripChunk('bc-2')).rejects.toThrow(/db down/)
     expect(updates).toEqual([])
+  })
+})
+
+// WAORGNUMBER.2 (R5) — a broadcast's number is the studio's number on its
+// TEMPLATE's WABA; none switched on there refuses exactly like no number.
+describe('the template’s WABA has no number switched on at the studio', () => {
+  const ON_WABA = { ...TEMPLATE, business_account_id: 'WABA-2' }
+
+  it('blast: asks for the studio’s number on that WABA, and refuses before the flip', async () => {
+    getLocationNumberForWaba.mockResolvedValue(null)
+    tables = { whatsapp_broadcasts: [{ ...blastRow(), whatsapp_templates: ON_WABA }] }
+    const err = await sendBroadcast('bc-1').catch((e) => e)
+    expect(getLocationNumberForWaba).toHaveBeenCalledWith('loc-1', 'WABA-2')
+    expect(getWhatsAppConfig).not.toHaveBeenCalled()
+    expect(err).toBeInstanceOf(WhatsAppNumberMissingError)
+    expect(updates).toEqual([])
+  })
+
+  it('drip: pauses (no_whatsapp_number), no throw', async () => {
+    getLocationNumberForWaba.mockResolvedValue(null)
+    tables = { whatsapp_broadcasts: [{ ...dripRow(), whatsapp_templates: ON_WABA }] }
+    const r = await sendDripChunk('bc-2')
+    expect(getLocationNumberForWaba).toHaveBeenCalledWith('loc-1', 'WABA-2')
+    expect(r).toMatchObject({ skipped: 'no_whatsapp_number', paused: true })
   })
 })

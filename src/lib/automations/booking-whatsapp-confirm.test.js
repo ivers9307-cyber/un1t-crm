@@ -55,6 +55,15 @@ describe('maybeSendBookingWhatsappConfirm', () => {
     )
   })
 
+  it('WAORGNUMBER.2: a template with a recorded WABA sends from the studio’s number on it', async () => {
+    await maybeSendBookingWhatsappConfirm({
+      db: makeDb({ ...APPROVED, business_account_id: 'WABA-2' }), locationId: 'a0000000-0000-0000-0000-000000000001',
+      contact: { id: 'c1', first_name: 'Sarah', phone: '0871234567', wa_phone: null },
+      templateName: 'booking_consult_confirmed', bodyParams: ['Sarah'],
+    })
+    expect(sendTemplateMessage.mock.calls[0][4]).toEqual({ locationId: 'a0000000-0000-0000-0000-000000000001', businessAccountId: 'WABA-2' })
+  })
+
   // TENANT.8 (item 3b) — location bundle/feature gate.
   describe('location bundle/feature gate', () => {
     it('SKIPS when features.whatsapp is explicitly false', async () => {

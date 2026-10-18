@@ -139,7 +139,7 @@ export async function sendRadarOutreach({ db, contact, templateName, locationId,
   // the most recent. maybeSingle() would throw on >1, so limit(1).
   const { data: rows, error } = await db
     .from('whatsapp_templates')
-    .select('name, language, category, status, components, header_media_url')
+    .select('name, language, category, status, components, header_media_url, business_account_id')
     .eq('location_id', locationId)
     .eq('name', templateName)
     .order('created_at', { ascending: false })
@@ -163,7 +163,8 @@ export async function sendRadarOutreach({ db, contact, templateName, locationId,
     template.name,
     template.language || 'en',
     components,
-    { locationId },
+    // WAORGNUMBER.2 (R5) — the studio's number on the template's own WABA.
+    { locationId, ...(template.business_account_id && { businessAccountId: template.business_account_id }) },
   )
 
   // RADAR-THREAD.1 — land the outreach in the conversation thread, like

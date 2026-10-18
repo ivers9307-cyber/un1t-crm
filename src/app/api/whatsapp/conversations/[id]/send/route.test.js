@@ -529,6 +529,12 @@ describe('the reply goes from the thread number (C86)', () => {
     expect(sendMediaMessage.mock.calls[0][4]).toEqual(want)
     expect(sendTemplateMessage.mock.calls[0][4]).toEqual(want)
   })
+
+  it('WAORGNUMBER.2: a template with a recorded WABA also names it, so the number is picked by WABA', async () => {
+    createServerClient.mockReturnValue(makeDb({ template: { data: { ...TPL_PLAIN, business_account_id: 'WABA-2' }, error: null } }))
+    expect((await POST(templateReq(TPL_PLAIN, [bodyParams('ALPHA')]), props)).status).toBe(200)
+    expect(sendTemplateMessage.mock.calls[0][4]).toEqual({ locationId: LOC_ID, replyInConversation: CONV_ID, businessAccountId: 'WABA-2' })
+  })
 })
 
 // WAHOMESTUDIO.1 (R5) — a thread at a number-less studio replies through a

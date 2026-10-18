@@ -4,11 +4,11 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn() }))
+vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn(), getLocationNumberForWaba: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
-import { ownNumberOrRefusal } from './whatsapp-own-number.js'
-import { getLocationWhatsAppNumberConfig } from '@/lib/whatsapp-config'
+import { ownNumberOrRefusal, templateNumberOrRefusal } from './whatsapp-own-number.js'
+import { getLocationWhatsAppNumberConfig, getLocationNumberForWaba } from '@/lib/whatsapp-config'
 import { logError } from '@/lib/log'
 
 const LOC = 'a0000000-0000-4000-8000-000000000001'
@@ -44,5 +44,34 @@ describe('ownNumberOrRefusal', () => {
       ok: false, status: 409, error: 'No location was given to send this WhatsApp from.',
     })
     expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
+  })
+})
+
+// WAORGNUMBER.2 (R5) — template edit / delete run on the template's OWN WABA.
+describe('templateNumberOrRefusal', () => {
+  it('the studio’s number on the template’s WABA', async () => {
+    getLocationNumberForWaba.mockResolvedValue(NUMBER)
+    expect(await templateNumberOrRefusal({ location_id: LOC, business_account_id: 'WABA-SYNTH' }, 'scope-x')).toEqual({ ok: true, config: NUMBER })
+    expect(getLocationNumberForWaba).toHaveBeenCalledWith(LOC, 'WABA-SYNTH')
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
+  })
+
+  it('none on that WABA → 409 with the switched-off copy', async () => {
+    getLocationNumberForWaba.mockResolvedValue(null)
+    expect(await templateNumberOrRefusal({ location_id: LOC, business_account_id: 'WABA-2' }, 'scope-x')).toEqual({
+      ok: false, status: 409, error: 'The number this template lives on is switched off at this studio.',
+    })
+  })
+
+  it('a failed lookup → 500, logged', async () => {
+    getLocationNumberForWaba.mockRejectedValue(new Error('db down'))
+    expect(await templateNumberOrRefusal({ location_id: LOC, business_account_id: 'WABA-2' }, 'scope-x')).toMatchObject({ ok: false, status: 500 })
+    expect(logError).toHaveBeenCalledWith('scope-x', 'number lookup failed', { locationId: LOC, wabaId: 'WABA-2', err: 'db down' })
+  })
+
+  it('no WABA recorded → ownNumberOrRefusal (the studio default)', async () => {
+    getLocationWhatsAppNumberConfig.mockResolvedValue(NUMBER)
+    expect(await templateNumberOrRefusal({ location_id: LOC, business_account_id: null }, 'scope-x')).toEqual({ ok: true, config: NUMBER })
+    expect(getLocationNumberForWaba).not.toHaveBeenCalled()
   })
 })

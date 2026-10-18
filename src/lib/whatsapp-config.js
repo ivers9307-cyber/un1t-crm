@@ -142,6 +142,26 @@ export async function getLocationNumberForWaba(locationId, wabaId) {
 }
 
 /**
+ * WAORGNUMBER.2 (R5) — every ACTIVE number switched on at `locationId`, as
+ * configs for it, in the studio's order (link default first, then the newest
+ * switch-on). The template sync walks the distinct WABAs of these. Empty when
+ * none (or no location); throws on a failed read, so a DB blip is never read
+ * as "no number".
+ *
+ * @param {string | null | undefined} locationId
+ * @returns {Promise<object[]>}
+ */
+export async function listLocationNumberConfigs(locationId) {
+  if (!locationId) return []
+  const db = createServerClient()
+  const { data: rows, error } = await switchedOnNumbers(db, locationId)
+  if (error) {
+    throw new Error(`Failed to load the WhatsApp numbers switched on at location ${locationId}: ${error.message}`)
+  }
+  return (rows || []).map((r) => rowToConfig(r.whatsapp_numbers, locationId))
+}
+
+/**
  * WAORGNUMBER.1 — every studio a number is switched on at (distinct
  * location_whatsapp_numbers.location_id for any of `numberIds`). Health and
  * account events fan out to these. Throws on a failed read.
@@ -220,12 +240,24 @@ export async function getWhatsAppConfig(locationId) {
  * sending it from the studio's default number, which is what every reply did
  * before this.
  *
+ * WAORGNUMBER.2 (R5) — a template whose WABA is known (`businessAccountId`,
+ * whatsapp_templates.business_account_id) goes from the thread number when it
+ * is on that WABA, otherwise from the studio's number on that WABA
+ * (getLocationNumberForWaba); none switched on there → WhatsAppNumberMissingError,
+ * a failed read throws. A row with no WABA yet keeps the rule above.
+ *
  * @param {string|null|undefined} locationId  the conversation's location
  * @param {string|null|undefined} conversationId
- * @param {{ template?: boolean }} [opts]
+ * @param {{ template?: boolean, businessAccountId?: string|null }} [opts]
  */
-export async function getConversationReplyConfig(locationId, conversationId, { template = false } = {}) {
+export async function getConversationReplyConfig(locationId, conversationId, { template = false, businessAccountId = null } = {}) {
   const thread = await getConversationNumberConfig(locationId, conversationId)
+  if (businessAccountId) {
+    if (thread && thread.businessAccountId === businessAccountId) return thread
+    const byWaba = await getLocationNumberForWaba(locationId, businessAccountId)
+    if (!byWaba) throw new WhatsAppNumberMissingError(locationId)
+    return byWaba
+  }
   if (!thread) return getWhatsAppConfig(locationId)
   if (!template) return thread
   // WAHOMESTUDIO.1 — a sibling's number only reaches here for a studio with no
@@ -331,6 +363,22 @@ export function pickReplyConfig(threadConfig, defaultConfig, { template = false 
   if (defaultConfig && threadConfig.id === defaultConfig.id) return defaultConfig
   if (threadConfig.businessAccountId && threadConfig.businessAccountId === defaultConfig?.businessAccountId) return threadConfig
   return defaultConfig
+}
+
+/**
+ * WAORGNUMBER.2 (R5) — pure: of the configs a caller already holds (the
+ * thread's number, the studio's checked default), the one a template on WABA
+ * `businessAccountId` goes from: the thread number on that WABA, else the
+ * default on it. Null = neither is on it, so the caller resolves by WABA
+ * (sendTemplateMessage with `{ locationId, businessAccountId }`, which refuses
+ * a studio with no number on it). A template with no WABA recorded keeps
+ * pickReplyConfig's rule.
+ */
+export function pickTemplateConfig(threadConfig, defaultConfig, businessAccountId) {
+  if (!businessAccountId) return pickReplyConfig(threadConfig, defaultConfig, { template: true })
+  if (threadConfig?.businessAccountId === businessAccountId) return threadConfig
+  if (defaultConfig?.businessAccountId === businessAccountId) return defaultConfig
+  return null
 }
 
 /**

@@ -57,7 +57,8 @@ export async function maybeSendBookingWhatsappConfirm({ db, locationId, contact,
     // Fire-and-forget; the helper never rejects.
     logTransactionalWalletState(db, locationId, 'wa_template_send')
 
-    const result = await sendTemplateMessage(waPhone, template.name, template.language || 'en', components, { locationId })
+    // WAORGNUMBER.2 (R5) — the studio's number on the template's own WABA.
+    const result = await sendTemplateMessage(waPhone, template.name, template.language || 'en', components, { locationId, ...(template.business_account_id && { businessAccountId: template.business_account_id }) })
 
     if (!contact.wa_phone) {
       try { await db.from('contacts').update({ wa_phone: waPhone }).eq('id', contact.id).is('wa_phone', null) }
