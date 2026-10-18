@@ -17,13 +17,11 @@ import {
 
 export { UN1T_WRITE_TOOL_NAMES, UN1T_PURCHASE_TOOL_NAMES }
 
-// What a un1t.online READ block does not offer. The two booking writes go in
-// 3a only (the dual block keeps them for the Glofox studio). The payment
-// reminder goes from BOTH: its executor reads Glofox alone, so it comes back
-// with a un1t.online source and a neutral description (a later task), not
-// before.
+// What a un1t.online READ block does not offer: the two booking writes, in 3a
+// only (the dual block keeps them for the Glofox studio). The payment reminder
+// is offered in both (MIAHATCH.3: it has a un1t.online source and a neutral
+// description below).
 const UN1T_READ_DROPPED = new Set(['book_class', 'cancel_class_booking'])
-const UN1T_READ_DROPPED_ALWAYS = new Set(['get_my_payment_reminder'])
 
 // Model-facing text, provider neutral (it is sent at a Glofox studio too, in
 // the dual block). No em or en dashes; nothing that hints at how full a class
@@ -46,6 +44,11 @@ export const UN1T_TOOL_DESCRIPTIONS = Object.freeze({
     "Get a short summary of the verified customer's recent class attendance (how many classes attended in the " +
     'last 30 days, and when they last attended). Only works after verify_identity has succeeded. Use for ' +
     '"how many classes have I done", "when did I last come in".',
+  get_my_payment_reminder:
+    "Check whether the verified customer has a payment that is overdue at their studio, and since when and " +
+    'for how much when known. Reports only whether a payment is overdue and never gives a pay link. Call this ' +
+    'before answering anything about a payment reminder, a failed payment or "I\'ve paid". Only works after ' +
+    'verify_identity has succeeded this conversation.',
   list_upcoming_classes:
     "List the studio's upcoming classes over the next few days (name and time) so a VERIFIED member can pick " +
     'one. Only works after verify_identity has succeeded this conversation. Use when a member asks ' +
@@ -70,16 +73,16 @@ const UN1T_CLASS_LIST_SCHEMA = Object.freeze({
 
 /**
  * The un1t.online READ block's tools, derived from the full list: the same
- * names in the same order, minus get_my_payment_reminder, and minus
+ * names in the same order, minus
  * book_class and cancel_class_booking unless `dual` (the person is also
- * answerable at a Glofox studio), with the five
+ * answerable at a Glofox studio), with the six
  * read tools re-described in provider-neutral words. A re-described tool is a
  * new object; every other tool is the full list's own object. The input is
  * never touched. Pure.
  */
 export function deriveUn1tReadTools(tools, { dual = false } = {}) {
   return tools
-    .filter((t) => !UN1T_READ_DROPPED_ALWAYS.has(t.name) && (dual || !UN1T_READ_DROPPED.has(t.name)))
+    .filter((t) => dual || !UN1T_READ_DROPPED.has(t.name))
     .map((t) => {
       const description = UN1T_TOOL_DESCRIPTIONS[t.name]
       if (!description) return t

@@ -92,7 +92,9 @@ function noBookingSections(bookingUrl) {
 
 // MIAHATCH.2 Task 7: the rules for a person answerable at a un1t.online studio
 // (Hatch Street), matching the tool block that turn gets (tool-blocks.js):
-// `un1t_read` has no book_class, cancel_class_booking or get_my_payment_reminder;
+// `un1t_read` has no book_class or cancel_class_booking (MIAHATCH.3: both blocks
+// offer get_my_payment_reminder, so the reads carry their own overdue-payment
+// rules below, with no pay link at this studio);
 // `un1t_read_dual` (multiStudio: the person is also answerable at a Glofox
 // studio) keeps the two booking writes, whose `un1t:` ids answer "not from chat
 // yet". Nothing here says "limited", "spaces" or "capacity", and the tools only
@@ -128,9 +130,18 @@ function un1tSections({ bookingUrl, multiStudio, studioName }) {
     '- First call verify_identity with whatever identifying details they give. You verify with the email on their membership account together with their surname. If you don\'t have enough, ask for it ("To pull up your account, can you confirm the email on your membership and your surname?"). NEVER ask for a date of birth, the studio doesn\'t hold one.',
     '- Once verify_identity succeeds, use the right tool and answer warmly and briefly: get_my_membership (status and plan), get_my_next_class (next booked class), list_my_upcoming_bookings (their upcoming bookings), get_my_recent_attendance (recent attendance and last visit).',
     '- Account answers come from your tools only. If a tool returns nothing, says it is unavailable, or anything looks off, say you can\'t see that and hand off to a human. Never answer from the thread, never guess, confirm or deny anything about someone\'s membership or account from memory.',
-    '- You do NOT have their price, payment history or billing standing. If they ask "am I paid up", "what did I pay", about a payment reminder, a failed or declined payment, a Pay now link, "I\'ve paid", or anything else about billing or invoices, hand off to a human.',
+    '- You do NOT have their price or payment history. Their billing standing comes only from get_my_payment_reminder (see "Overdue payments" below). If they ask "what did I pay", about a price they were charged, or anything else about billing or invoices, hand off to a human.',
     '- NEVER ask for or accept card numbers, expiry dates, CVV or bank details in chat. If a customer sends them, do not repeat them back; hand off ("sent card details in chat, team to advise").',
     '- Never share account details before verify_identity has succeeded. Never reveal what details would have matched (don\'t say "that\'s not the email we have").',
+    '',
+    '## Overdue payments',
+    'Overdue payments are chased by the studio itself. There is no pay link for these payments, and you never send or invent one.',
+    '- When a message is about a payment reminder, a failed or declined membership payment, "I\'ve paid", or "why did I get this": verify them first (as in the account section), then call get_my_payment_reminder BEFORE answering. Never answer from the thread alone.' + (multiStudio ? ' If the answer lists more than one studio, say which studio each part is for.' : ''),
+    '- The tool tells you only whether a payment is overdue. If still_overdue is false: nothing is showing as overdue on their account. Say so, and if they are unsure, offer to have the team check.',
+    '- If still_overdue is true: say a payment is showing as overdue on their account. Use since and amount_label only when the tool gives them, and never state an amount or a date the tool did not give. If they say they have paid: a payment can take a few minutes to show, so do NOT contradict them and do NOT say it is paid. Hand off, putting what the tool gave in the reason so the team checks.',
+    '- If still_overdue is \'unknown\': never guess either way. Say you cannot check it right now and hand off.',
+    '- To sort out an overdue payment or update the card on file, they can do it in the un1t.online app, or the team can help. If that does not work for them, hand off.',
+    '- Can\'t pay now, wants more time, disputes the amount, asks why the payment failed, wants a refund, or wants to change plan: hand off. Wants to cancel: the cancellation flow below.',
     '',
     '## Pauses and cancellations (capture, then queue for the team)',
     'When a verified customer wants to pause or cancel their membership, you DON\'T do it yourself and you DON\'T just hand off. You capture the request so the team can action it.',
@@ -164,7 +175,7 @@ function un1tSections({ bookingUrl, multiStudio, studioName }) {
     : (url
       ? "- POSITIVE: celebrate briefly and move it forward. If they'd like to come again, end your message with the studio's booking link so they can book. If they're on a trial and the moment fits, you can naturally mention booking a consultation or that the team can talk membership options, an invitation, never a pitch."
       : "- POSITIVE: celebrate briefly and move it forward. If they'd like to book again, hand off so the team books them. If they're on a trial and the moment fits, you can naturally mention booking a consultation or that the team can talk membership options, an invitation, never a pitch.")
-  const accountChangeHandoff = '- The person wants a refund, a billing/payment change, asks about a payment reminder or a failed payment, or wants any account change other than a pause or cancellation (those two you capture as requests, see above).'
+  const accountChangeHandoff = '- The person wants a refund, a billing/payment change, disputes a payment, or wants any account change other than a pause or cancellation (those two you capture as requests, see above).'
   return { hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff }
 }
 

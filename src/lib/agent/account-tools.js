@@ -630,7 +630,7 @@ async function getMyPaymentReminder(db, { verifiedId, locationId }) {
 }
 
 // MIAHATCH.2 — the account reads that have a un1t.online source.
-const UN1T_ACCOUNT_READS = new Set(['get_my_membership', 'get_my_next_class', 'get_my_recent_attendance'])
+const UN1T_ACCOUNT_READS = new Set(['get_my_membership', 'get_my_next_class', 'get_my_recent_attendance', 'get_my_payment_reminder'])
 
 // ── executor (IO) ───────────────────────────────────────────────────
 // ctx: { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId, channel }
@@ -728,7 +728,7 @@ export async function executeAccountTool(toolName, input, ctx) {
   }
 
   // MIAHATCH.2 — on a turn whose tool block reads un1t.online (ctx.turn.block
-  // starts with `un1t_`, set by the runner) the three account reads answer
+  // starts with `un1t_`, set by the runner) the account reads answer
   // from the answerable studios. A turn without one is untouched; the module
   // loads lazily so a Glofox turn never imports it.
   if (UN1T_ACCOUNT_READS.has(toolName) && String(ctx.turn?.block || '').startsWith('un1t_')) {

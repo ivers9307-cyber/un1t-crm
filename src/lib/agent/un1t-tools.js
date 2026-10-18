@@ -1,6 +1,6 @@
-// MIAHATCH.2 — the four member reads at a un1t.online studio (Hatch Street):
-// get_my_membership, get_my_next_class, list_my_upcoming_bookings and
-// get_my_recent_attendance, answered from the un1t_* mirror (mig 726) and,
+// MIAHATCH.2 — the member reads at a un1t.online studio (Hatch Street):
+// get_my_membership, get_my_next_class, list_my_upcoming_bookings,
+// get_my_recent_attendance and (MIAHATCH.3) get_my_payment_reminder, answered from the un1t_* mirror (mig 726) and,
 // for bookings, from a live per-member read first.
 //
 // Called only on a turn whose tool block starts with `un1t_` (ctx.turn.block,
@@ -20,12 +20,19 @@
 //   page cap cut, falls back to / is topped up from the mirror and carries
 //   `may_be_stale: true`.
 // - A failed read is `read_failed`, never "no membership" or "nothing booked".
+// - The payment reminder at a un1t.online studio is read from Spec A's past-due
+//   seam only (never a Glofox call), narrowed to the studio's person group and
+//   its own un1t account, and never carries a pay link. Anything it cannot
+//   prove (invoices not provided, seam without pastDue, a failed read) is
+//   still_overdue 'unknown', never false.
 // - Nothing the model sees carries capacity, spaces left or a headcount.
 import { formatClassTime } from './dublin-format'
 import { DEFAULT_TZ, formatInZone, getLocationZone } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 import { MEMBERSHIP_ACTIVE_STATUSES } from '@/lib/un1t-online-map'
 import { providerFor } from '@/lib/membership/source'
+import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
+import { formatMoneyMinor } from '@/lib/money-format'
 import { chunkIds } from '@/lib/person-accounts'
 import { fetchLiveUn1tBookings } from './un1t-member-read'
 import { tagUn1tId } from './studio-ids'
@@ -48,6 +55,7 @@ export const UN1T_READ_TOOL_NAMES = Object.freeze(new Set([
   'get_my_next_class',
   'list_my_upcoming_bookings',
   'get_my_recent_attendance',
+  'get_my_payment_reminder',
 ]))
 
 const MAX_MEMBER_BOOKINGS = 10
@@ -428,6 +436,74 @@ async function readAttendance(db, studio, zone) {
   return shapeUn1tAttendance(data, zone)
 }
 
+// ── MIAHATCH.3 — the payment reminder ───────────────────────────────
+// { has_reminder: false, still_overdue: true | false | 'unknown', since?, amount_label? }.
+// has_reminder is always false here: un1t.online sends its own reminders and the
+// CRM runs no dunning for it, so there is no run to describe. There is never a
+// pay link. The question answered is only "is a payment overdue at this studio".
+const REMINDER_UNKNOWN = Object.freeze({ has_reminder: false, still_overdue: 'unknown' })
+
+function logReminderFailure(studio, status, err) {
+  logWarn(LOG_MODULE, 'payment reminder read failed', {
+    locationId: studio.locationId, op: 'get_my_payment_reminder', status, errClass: err?.name ?? null,
+  })
+}
+
+/**
+ * The reminder shape from the seam's past-due rows. Rows of another un1t
+ * account are dropped first. `since` is the earliest known `since`; the amount
+ * is shown only when every row's amount is known in one currency (a sum is
+ * made, never an estimate). Pure.
+ *
+ * @param {object[]} rows pastDue() rows
+ * @param {string} un1tUserId the studio's account
+ * @param {string} zone
+ */
+export function shapeUn1tPaymentReminder(rows, un1tUserId, zone = DEFAULT_TZ) {
+  const own = (Array.isArray(rows) ? rows : []).filter((r) => r && r.un1tUserId === un1tUserId)
+  if (!own.length) return { has_reminder: false, still_overdue: false }
+  const out = { has_reminder: false, still_overdue: true }
+  const sinceMs = own.map((r) => toMs(r.since)).filter((ms) => ms !== null)
+  const since = sinceMs.length ? dateLabel(new Date(Math.min(...sinceMs)).toISOString(), zone) : null
+  if (since) out.since = since
+  const amounts = own.map((r) => r.amountCents)
+  const currencies = new Set(own.map((r) => String(r.currency || '').toUpperCase()))
+  if (amounts.every((a) => a !== null && a !== undefined && Number.isFinite(Number(a))) && currencies.size === 1) {
+    const label = formatMoneyMinor(amounts.reduce((sum, a) => sum + Number(a), 0), [...currencies][0] || 'EUR')
+    if (label) out.amount_label = label
+  }
+  return out
+}
+
+async function readPaymentReminder(db, studio, zone) {
+  if (!studio.un1tUserId) return { ...REMINDER_UNKNOWN, account_found: false, message: NO_ACCOUNT_NOTE }
+  // The seam narrows by contact, and nothing narrower than the person group is
+  // true: with no contacts there is nothing to ask, which is unknown, not clear.
+  const contactIds = Array.isArray(studio.contactIds) ? studio.contactIds.filter(Boolean) : []
+  if (!contactIds.length) return { ...REMINDER_UNKNOWN }
+  let seam
+  try {
+    seam = await membershipReadsFor(db, studio.locationId)
+  } catch (err) {
+    logReminderFailure(studio, null, err)
+    return { ...REMINDER_UNKNOWN }
+  }
+  // Fail closed: invoices must be provided outright, and the adapter must read past-due.
+  if (seam?.capabilities?.invoices !== true || !supportsRead(seam, 'pastDue')) return { ...REMINDER_UNKNOWN }
+  let res
+  try {
+    res = await seam.reads.pastDue(db, studio.locationId, { contactIds })
+  } catch (err) {
+    logReminderFailure(studio, null, err)
+    return { ...REMINDER_UNKNOWN }
+  }
+  if (!res?.success || !Array.isArray(res.data)) {
+    logReminderFailure(studio, 'read_failed', null)
+    return { ...REMINDER_UNKNOWN }
+  }
+  return shapeUn1tPaymentReminder(res.data, studio.un1tUserId, zone)
+}
+
 async function readBookingsTool(toolName, db, studio, zone) {
   if (!studio.un1tUserId) {
     return toolName === 'get_my_next_class'
@@ -453,6 +529,7 @@ async function un1tSection(toolName, ctx, studio, zone) {
   const { db } = ctx
   if (toolName === 'get_my_membership') return readMembership(db, studio, zone)
   if (toolName === 'get_my_recent_attendance') return readAttendance(db, studio, zone)
+  if (toolName === 'get_my_payment_reminder') return readPaymentReminder(db, studio, zone)
   return readBookingsTool(toolName, db, studio, zone)
 }
 
@@ -489,7 +566,7 @@ async function glofoxSection(toolName, input, ctx, studio, zone) {
 }
 
 /**
- * Answer one of the four member reads for a verified member from the
+ * Answer one of the member reads for a verified member from the
  * answerable studios. One studio: that studio's shape. More than one:
  * `{ studios: [{ studio: name, ...shape }] }`, in the order given.
  *

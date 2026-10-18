@@ -5,6 +5,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('./un1t-member-read', () => ({ fetchLiveUn1tBookings: vi.fn() }))
+// MIAHATCH.3 — the payment reminder reads the Spec A seam; the adapter is mocked.
+vi.mock('@/lib/membership/reads', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, membershipReadsFor: vi.fn() }
+})
 vi.mock('@/lib/membership/source', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, providerFor: vi.fn(actual.providerFor) }
@@ -39,6 +44,7 @@ import { executeBookingTool, UN1T_TIMETABLE_LIMIT, noBookingSystemAnswer } from 
 import { TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
 import { fetchLiveUn1tBookings } from './un1t-member-read'
 import { providerFor } from '@/lib/membership/source'
+import { membershipReadsFor } from '@/lib/membership/reads'
 import { formatClassTime } from './dublin-format'
 import { logWarn } from '@/lib/log'
 import { resetLocationZoneCache } from '@/lib/location-time'
@@ -298,7 +304,7 @@ describe('executeUn1tRead: gates', () => {
   })
   it('an unknown tool, and no answerable studio, answer plainly', async () => {
     const db = fakeDb(tables())
-    expect(await executeUn1tRead('get_my_payment_reminder', {}, ctxFor(db), [hatchStudio])).toEqual({ error: 'unknown_tool', tool: 'get_my_payment_reminder' })
+    expect(await executeUn1tRead('request_refund', {}, ctxFor(db), [hatchStudio])).toEqual({ error: 'unknown_tool', tool: 'request_refund' })
     expect(await executeUn1tRead('get_my_membership', {}, ctxFor(db), [])).toMatchObject({ error: 'not_available_at_this_studio' })
   })
 })
@@ -585,6 +591,153 @@ describe('what the model sees', () => {
   it('logs carry the studio and a code, never an id of the member', async () => {
     await executeUn1tRead('get_my_membership', {}, ctxFor(fakeDb(tables(), { errors: { un1t_subscriptions: true } })), [hatchStudio])
     expect(JSON.stringify(logWarn.mock.calls)).not.toContain(USER)
+  })
+})
+
+// ── MIAHATCH.3: the payment reminder at a un1t.online studio ─────────
+describe('executeUn1tRead: get_my_payment_reminder', () => {
+  const pastDueFn = vi.fn()
+  const CAPS_ON = { memberships: false, bookings: false, credits: true, invoices: true, schedule: false }
+  const seam = (over = {}) => ({
+    source: 'un1t_online', label: 'un1t.online', state: 'configured', error: null, capabilities: CAPS_ON,
+    reads: { pastDue: pastDueFn }, ...over,
+  })
+  const row = (over = {}) => ({
+    contactId: 'c-h', un1tUserId: USER, subscriptionId: 'sub-1', productTitle: 'Monthly Foundation',
+    since: '2026-10-10T08:00:00Z', amountCents: 18900, currency: 'EUR', openInvoiceIds: ['inv-1'],
+    cancelAtPeriodEnd: false, pausedUntil: null, ...over,
+  })
+  const run = (studios = [hatchStudio], over = {}) => executeUn1tRead('get_my_payment_reminder', {}, ctxFor(fakeDb({}), over), studios)
+
+  beforeEach(() => {
+    pastDueFn.mockReset()
+    membershipReadsFor.mockReset()
+    membershipReadsFor.mockResolvedValue(seam())
+    pastDueFn.mockResolvedValue({ success: true, data: [] })
+  })
+
+  it('invoices false: still_overdue unknown, and pastDue is not called', async () => {
+    membershipReadsFor.mockResolvedValue(seam({ capabilities: { ...CAPS_ON, invoices: false } }))
+    expect(await run()).toEqual({ has_reminder: false, still_overdue: 'unknown' })
+    expect(pastDueFn).not.toHaveBeenCalled()
+  })
+
+  it('a seam without pastDue (or no adapter): unknown', async () => {
+    membershipReadsFor.mockResolvedValue(seam({ reads: {} }))
+    expect(await run()).toEqual({ has_reminder: false, still_overdue: 'unknown' })
+    membershipReadsFor.mockResolvedValue(seam({ state: 'unconfigured', reads: null }))
+    expect(await run()).toEqual({ has_reminder: false, still_overdue: 'unknown' })
+    expect(pastDueFn).not.toHaveBeenCalled()
+  })
+
+  it('a past due row: still_overdue true with since (studio zone) and the amount label', async () => {
+    pastDueFn.mockResolvedValue({ success: true, data: [row()] })
+    expect(await run()).toEqual({ has_reminder: false, still_overdue: true, since: 'Sat 10 Oct 2026', amount_label: '€189' })
+  })
+
+  it('an amount with cents keeps them; a null amount gives no amount_label', async () => {
+    pastDueFn.mockResolvedValue({ success: true, data: [row({ amountCents: 1250 })] })
+    expect((await run()).amount_label).toBe('€12.50')
+    pastDueFn.mockResolvedValue({ success: true, data: [row({ amountCents: null, currency: null })] })
+    const out = await run()
+    expect(out).toEqual({ has_reminder: false, still_overdue: true, since: 'Sat 10 Oct 2026' })
+    expect(out).not.toHaveProperty('amount_label')
+  })
+
+  it('a null since gives no since', async () => {
+    pastDueFn.mockResolvedValue({ success: true, data: [row({ since: null })] })
+    expect(await run()).toEqual({ has_reminder: false, still_overdue: true, amount_label: '€189' })
+  })
+
+  it('two rows: the earliest since, and a summed amount only when every amount is known in one currency', async () => {
+    pastDueFn.mockResolvedValue({ success: true, data: [row({ since: '2026-10-01T08:00:00Z', amountCents: 1000 }), row({ subscriptionId: 'sub-2', since: '2026-10-12T08:00:00Z', amountCents: 500 })] })
+    expect(await run()).toEqual({ has_reminder: false, still_overdue: true, since: 'Thu 1 Oct 2026', amount_label: '€15' })
+    pastDueFn.mockResolvedValue({ success: true, data: [row({ amountCents: 1000 }), row({ subscriptionId: 'sub-2', amountCents: null })] })
+    expect(await run()).not.toHaveProperty('amount_label')
+    pastDueFn.mockResolvedValue({ success: true, data: [row({ amountCents: 1000 }), row({ subscriptionId: 'sub-2', amountCents: 500, currency: 'GBP' })] })
+    expect(await run()).not.toHaveProperty('amount_label')
+  })
+
+  it('an empty answer: still_overdue false', async () => {
+    expect(await run()).toEqual({ has_reminder: false, still_overdue: false })
+  })
+
+  it('a failed read (success false, or a throw): unknown, logged with a status and class only', async () => {
+    pastDueFn.mockResolvedValue({ success: false, error: `relation ${USER} does not exist` })
+    expect(await run()).toEqual({ has_reminder: false, still_overdue: 'unknown' })
+    pastDueFn.mockRejectedValue(new TypeError(`boom ${USER}`))
+    expect(await run()).toEqual({ has_reminder: false, still_overdue: 'unknown' })
+    membershipReadsFor.mockRejectedValue(new RangeError('seam down'))
+    expect(await run()).toEqual({ has_reminder: false, still_overdue: 'unknown' })
+    expect(logWarn).toHaveBeenCalled()
+    for (const [mod, , fields] of logWarn.mock.calls) {
+      expect(mod).toBe('mia-un1t')
+      expect(Object.keys(fields).sort()).toEqual(['errClass', 'locationId', 'op', 'status'])
+    }
+    expect(JSON.stringify(logWarn.mock.calls)).not.toContain(USER)
+  })
+
+  it('contactIds is the studio\'s person group; rows of another un1t account are dropped', async () => {
+    const studio = { ...hatchStudio, contactIds: ['c-h', 'c-h2'] }
+    pastDueFn.mockResolvedValue({ success: true, data: [row({ un1tUserId: 'someone-else', amountCents: 99900 })] })
+    expect(await run([studio])).toEqual({ has_reminder: false, still_overdue: false })
+    expect(pastDueFn).toHaveBeenCalledWith(expect.anything(), HATCH, { contactIds: ['c-h', 'c-h2'] })
+    expect(membershipReadsFor).toHaveBeenCalledWith(expect.anything(), HATCH)
+  })
+
+  it('no un1t account or no group contacts: unknown without asking the seam', async () => {
+    expect(await run([{ ...hatchStudio, un1tUserId: undefined }])).toMatchObject({ has_reminder: false, still_overdue: 'unknown', account_found: false })
+    expect(await run([{ ...hatchStudio, contactIds: [] }])).toEqual({ has_reminder: false, still_overdue: 'unknown' })
+    expect(pastDueFn).not.toHaveBeenCalled()
+  })
+
+  it('an unverified turn gets not_verified and reads nothing', async () => {
+    expect(await run([hatchStudio], { verifiedContactId: null })).toEqual({ error: 'not_verified', message: 'Identity not verified yet. Call verify_identity first.' })
+    expect(membershipReadsFor).not.toHaveBeenCalled()
+  })
+
+  it('never carries a pay link, a url, capacity or a dash', async () => {
+    pastDueFn.mockResolvedValue({ success: true, data: [row()] })
+    const json = JSON.stringify([await run(), await run([{ ...hatchStudio, un1tUserId: undefined }])])
+    expect(json).not.toMatch(/pay_link|https?:|capacity|[–—]/i)
+  })
+
+  it('never makes a Glofox call at a un1t studio', async () => {
+    pastDueFn.mockResolvedValue({ success: true, data: [row()] })
+    await run()
+    await run([hatchStudio], { turn: { block: 'un1t_read_dual', answerable: [hatchStudio], channel: 'whatsapp', un1tWrites: false } })
+    expect(executeAccountTool).not.toHaveBeenCalled()
+    expect(executeBookingTool).not.toHaveBeenCalled()
+  })
+
+  it('two studios: the Glofox section is today\'s executor at the Glofox studio, the un1t section the new shape', async () => {
+    pastDueFn.mockResolvedValue({ success: true, data: [row()] })
+    const reminder = { has_reminder: true, status: 'active', amount: '€59', currency: 'EUR', pay_link: 'https://pay.example.test/x', still_overdue: false }
+    executeAccountTool.mockResolvedValueOnce(reminder)
+    const ctx = ctxFor(fakeDb({ locations: [{ id: STILL, timezone: 'Europe/Dublin' }] }), { turn: { block: 'un1t_read_dual', answerable: [hatchStudio, stillStudio], channel: 'whatsapp', un1tWrites: false } })
+    const out = await executeUn1tRead('get_my_payment_reminder', {}, ctx, [hatchStudio, stillStudio])
+    expect(out).toEqual({
+      studios: [
+        { studio: 'Test Studio Hatch', has_reminder: false, still_overdue: true, since: 'Sat 10 Oct 2026', amount_label: '€189' },
+        { studio: 'Test Studio Still', ...reminder },
+      ],
+    })
+    expect(executeAccountTool).toHaveBeenCalledTimes(1)
+    const [name, , glofoxCtx] = executeAccountTool.mock.calls[0]
+    expect(name).toBe('get_my_payment_reminder')
+    expect(glofoxCtx.locationId).toBe(STILL)
+    expect(glofoxCtx.turn).toBeUndefined()
+    expect(membershipReadsFor).toHaveBeenCalledTimes(1)
+    expect(membershipReadsFor).toHaveBeenCalledWith(expect.anything(), HATCH)
+  })
+
+  it('two studios: a un1t failure is only that section', async () => {
+    membershipReadsFor.mockRejectedValue(new Error('seam down'))
+    executeAccountTool.mockResolvedValueOnce({ has_reminder: false, status: 'none', still_overdue: 'unknown' })
+    const ctx = ctxFor(fakeDb({ locations: [] }), { turn: { block: 'un1t_read_dual', answerable: [hatchStudio, stillStudio], channel: 'whatsapp', un1tWrites: false } })
+    const out = await executeUn1tRead('get_my_payment_reminder', {}, ctx, [hatchStudio, stillStudio])
+    expect(out.studios[0]).toEqual({ studio: 'Test Studio Hatch', has_reminder: false, still_overdue: 'unknown' })
+    expect(out.studios[1]).toMatchObject({ studio: 'Test Studio Still', has_reminder: false })
   })
 })
 

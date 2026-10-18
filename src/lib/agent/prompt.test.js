@@ -603,6 +603,25 @@ describe('un1t.online prompt variants', () => {
     expect(render('read', false, null)).not.toMatch(/Say which studio each answer is for/)
   })
 
+  it('MIAHATCH.3: the read variant has its own overdue payment rules, with no pay link', () => {
+    for (const multi of [false, true]) {
+      const out = render('read', multi, null)
+      expect(out).toMatch(/## Overdue payments/)
+      expect(out).toMatch(/call get_my_payment_reminder BEFORE answering/)
+      expect(out).toMatch(/There is no pay link for these payments, and you never send or invent one/)
+      expect(out).toMatch(/update the card on file, they can do it in the un1t\.online app, or the team can help/)
+      expect(out).toMatch(/never state an amount or a date the tool did not give/)
+      expect(out).toMatch(/still_overdue is 'unknown': never guess/)
+      // The Glofox-only wording does not leak into the un1t render.
+      expect(out).not.toMatch(/Pay now|send pay_link|first_sent_at|Glofox/)
+      // The old blanket "hand off any payment reminder question" lines are gone.
+      expect(out).not.toMatch(/You do NOT have their price, payment history or billing standing\./)
+      expect(out).not.toMatch(/asks about a payment reminder or a failed payment/)
+    }
+    expect(render('read', true, null)).toMatch(/If the answer lists more than one studio, say which studio each part is for/)
+    expect(render('read', false, null)).not.toMatch(/If the answer lists more than one studio/)
+  })
+
   it('every line a un1t variant adds is free of em and en dashes', () => {
     const base = new Set(CUSTOMER_AGENT_BASE_PROMPT.split('\n'))
     for (const [variant, multi, url] of VARIANT_CASES) {

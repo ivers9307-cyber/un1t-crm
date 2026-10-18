@@ -38,6 +38,7 @@ const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
 const MANIFEST = Object.freeze({
   'src/lib/agent/account-tools.js': 'Glofox-only, gated on provider.key',
   'src/lib/contact-un1t-billing.js': 'un1t: paymentsFor',
+  'src/lib/agent/un1t-tools.js': 'un1t: Mia payment reminder reads pastDue; invoices must be true outright, else still_overdue unknown (MIAHATCH.3)',
 })
 
 const PATTERNS = Object.freeze([
