@@ -97,8 +97,10 @@ const UN1T_ONLY = ['request_refund', ...UN1T_PURCHASE_TOOL_NAMES]
 const NOT_OFFERED_IN_BLOCK = Object.freeze({
   glofox: new Set(UN1T_ONLY),
   no_booking: new Set([...BOOKING_SYSTEM_TOOL_NAMES, ...UN1T_ONLY]),
-  un1t_read: new Set(['book_class', 'cancel_class_booking', ...UN1T_ONLY]),
-  un1t_read_dual: new Set(UN1T_ONLY),
+  // get_my_payment_reminder reads Glofox alone: out of both un1t read blocks
+  // until it has a un1t.online source.
+  un1t_read: new Set(['book_class', 'cancel_class_booking', 'get_my_payment_reminder', ...UN1T_ONLY]),
+  un1t_read_dual: new Set(['get_my_payment_reminder', ...UN1T_ONLY]),
   un1t_full: new Set(),
 })
 

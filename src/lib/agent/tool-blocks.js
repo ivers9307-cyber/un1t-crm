@@ -17,8 +17,13 @@ import {
 
 export { UN1T_WRITE_TOOL_NAMES, UN1T_PURCHASE_TOOL_NAMES }
 
-// The two booking writes a un1t.online READ block does not offer.
+// What a un1t.online READ block does not offer. The two booking writes go in
+// 3a only (the dual block keeps them for the Glofox studio). The payment
+// reminder goes from BOTH: its executor reads Glofox alone, so it comes back
+// with a un1t.online source and a neutral description (a later task), not
+// before.
 const UN1T_READ_DROPPED = new Set(['book_class', 'cancel_class_booking'])
+const UN1T_READ_DROPPED_ALWAYS = new Set(['get_my_payment_reminder'])
 
 // Model-facing text, provider neutral (it is sent at a Glofox studio too, in
 // the dual block). No em or en dashes; nothing that hints at how full a class
@@ -65,15 +70,16 @@ const UN1T_CLASS_LIST_SCHEMA = Object.freeze({
 
 /**
  * The un1t.online READ block's tools, derived from the full list: the same
- * names in the same order, minus book_class and cancel_class_booking unless
- * `dual` (the person is also answerable at a Glofox studio), with the five
+ * names in the same order, minus get_my_payment_reminder, and minus
+ * book_class and cancel_class_booking unless `dual` (the person is also
+ * answerable at a Glofox studio), with the five
  * read tools re-described in provider-neutral words. A re-described tool is a
  * new object; every other tool is the full list's own object. The input is
  * never touched. Pure.
  */
 export function deriveUn1tReadTools(tools, { dual = false } = {}) {
   return tools
-    .filter((t) => dual || !UN1T_READ_DROPPED.has(t.name))
+    .filter((t) => !UN1T_READ_DROPPED_ALWAYS.has(t.name) && (dual || !UN1T_READ_DROPPED.has(t.name)))
     .map((t) => {
       const description = UN1T_TOOL_DESCRIPTIONS[t.name]
       if (!description) return t

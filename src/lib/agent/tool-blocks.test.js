@@ -32,6 +32,7 @@ const glofox = MEMBERSHIP_SOURCES.glofox
 const none = MEMBERSHIP_SOURCES.none
 
 const names = (tools) => tools.map((t) => t.name)
+const PAYMENT_REMINDER = 'get_my_payment_reminder'
 const TWO_BOOKING = ['book_class', 'cancel_class_booking']
 const REDESCRIBED = ['get_my_membership', 'get_my_next_class', 'list_my_upcoming_bookings', 'get_my_recent_attendance', 'list_upcoming_classes']
 
@@ -85,12 +86,21 @@ describe('cache stability', () => {
 describe('the un1t read blocks', () => {
   it('3a has no book_class/cancel_class_booking; 3a dual has both; neither has a purchase or refund tool', () => {
     const glofoxNames = names(ALL_AGENT_TOOLS)
-    expect(names(CACHED_UN1T_READ_TOOLS)).toEqual(glofoxNames.filter((n) => !TWO_BOOKING.includes(n)))
-    expect(names(CACHED_UN1T_READ_DUAL_TOOLS)).toEqual(glofoxNames)
+    expect(names(CACHED_UN1T_READ_TOOLS)).toEqual(glofoxNames.filter((n) => !TWO_BOOKING.includes(n) && n !== PAYMENT_REMINDER))
+    expect(names(CACHED_UN1T_READ_DUAL_TOOLS)).toEqual(glofoxNames.filter((n) => n !== PAYMENT_REMINDER))
     for (const block of [CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS]) {
       for (const n of [...UN1T_PURCHASE_TOOL_NAMES, 'request_refund']) expect(names(block)).not.toContain(n)
     }
     for (const n of TWO_BOOKING) expect(names(CACHED_UN1T_READ_TOOLS)).not.toContain(n)
+  })
+
+  it('get_my_payment_reminder is in neither un1t block (its executor is Glofox only) but request_cancellation is', () => {
+    for (const block of [CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS]) {
+      expect(names(block)).not.toContain(PAYMENT_REMINDER)
+      expect(names(block)).toContain('request_cancellation')
+    }
+    expect(names(CACHED_ACCOUNT_TOOLS)).toContain(PAYMENT_REMINDER)
+    expect(names(CACHED_NO_BOOKING_TOOLS)).not.toContain(PAYMENT_REMINDER)
   })
 
   it('order is kept and only the five re-described tools are new objects', () => {
@@ -213,6 +223,17 @@ describe('refuseToolForTurn', () => {
     }
     expect(refuseToolForTurn('list_upcoming_classes', { canBook: false })).toBeNull()
     expect(refuseToolForTurn('request_pause', { canBook: false })).toBeNull()
+  })
+
+  it('get_my_payment_reminder is refused under un1t_read and un1t_read_dual, allowed under glofox, before any db call', async () => {
+    const db = throwingDb()
+    for (const block of ['un1t_read', 'un1t_read_dual']) {
+      expect(refuseToolForTurn(PAYMENT_REMINDER, { db, turn: turn(block) })).toEqual(TOOL_NOT_AT_THIS_STUDIO)
+      const ctx = { db, verifiedContactId: 'c1', locationId: HATCH_ID, turn: turn(block) }
+      expect(await executeAccountTool(PAYMENT_REMINDER, {}, ctx)).toEqual(TOOL_NOT_AT_THIS_STUDIO)
+    }
+    expect(refuseToolForTurn(PAYMENT_REMINDER, { turn: turn('glofox') })).toBeNull()
+    expect(db.from).not.toHaveBeenCalled()
   })
 
   it('with a turn, the block decides and canBook is ignored', () => {
