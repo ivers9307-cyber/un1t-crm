@@ -22,6 +22,8 @@ const MIG_742 = readFileSync(
 
 const LOC = 'a0000000-0000-0000-0000-00000000000a'
 const CONTACT = 'c0000000-0000-0000-0000-00000000000c'
+const CONTACT_B = 'c0000000-0000-0000-0000-0000000000cb'
+const CONTACT_GONE = 'c0000000-0000-0000-0000-0000000000c9'
 const T = '2026-10-18T10:00:00Z'
 const at = (minutes) => new Date(Date.parse(T) + minutes * 60_000).toISOString()
 
@@ -75,9 +77,8 @@ async function syncBooking(un1tId, { status, syncedAt, eventId = 'other' }) {
 }
 const iso = (d) => new Date(d).toISOString()
 
-beforeAll(async () => {
-  db = new PGlite()
-  await runSql(`
+// The before-state, shared by the main database and the self-check probes.
+const SETUP_SQL = `
     CREATE ROLE anon NOLOGIN;
     CREATE ROLE authenticated NOLOGIN;
     CREATE ROLE service_role NOLOGIN BYPASSRLS;
@@ -87,7 +88,7 @@ beforeAll(async () => {
     CREATE TABLE public.locations (id uuid PRIMARY KEY);
     INSERT INTO public.locations VALUES ('${LOC}');
     CREATE TABLE public.contacts (id uuid PRIMARY KEY);
-    INSERT INTO public.contacts VALUES ('${CONTACT}');
+    INSERT INTO public.contacts VALUES ('${CONTACT}'), ('${CONTACT_B}'), ('${CONTACT_GONE}');
 
     CREATE TABLE public.un1t_clients (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -154,7 +155,11 @@ beforeAll(async () => {
     REVOKE ALL ON public.class_booking_requests FROM anon, authenticated;
     GRANT SELECT, INSERT, UPDATE, DELETE ON public.class_booking_requests TO authenticated;
     INSERT INTO public.class_booking_requests (location_id, glofox_event_id) VALUES ('${LOC}', 'un1t:ev-old');
-  `)
+`
+
+beforeAll(async () => {
+  db = new PGlite()
+  await runSql(SETUP_SQL)
   await runSql(MIG_742)
 }, 60_000)
 afterAll(() => db?.close())
@@ -220,6 +225,15 @@ describe('mig 742 — un1t.online write-back core', () => {
       await expect(ledgerRow({ op: 'trial', method: null })).rejects.toMatchObject({ code: '23514' })
       await expect(ledgerRow({ op: 'book', method: 'charge' })).rejects.toMatchObject({ code: '23514' })
       await expect(ledgerRow({ op: 'trial', method: 'gift' })).rejects.toMatchObject({ code: '23514' })
+    })
+
+    it('a trial row without un1t_user_id or target is refused (the one-trial index cannot be bypassed by a NULL)', async () => {
+      await expect(ledgerRow({ op: 'trial', method: 'charge', un1t_user_id: null, target: 'prod-trial', stage: 'done' }))
+        .rejects.toMatchObject({ code: '23514' })
+      await expect(ledgerRow({ op: 'trial', method: 'charge', un1t_user_id: 'u-4', target: null, stage: 'done' }))
+        .rejects.toMatchObject({ code: '23514' })
+      // Other ops may carry neither (a create_client row has no un1t user yet).
+      await expect(ledgerRow({ op: 'create_client', un1t_user_id: null, target: null })).resolves.toBeDefined()
     })
 
     it('op, origin and stage outside their lists, and a message over 500 chars, are refused', async () => {
@@ -316,6 +330,51 @@ describe('mig 742 — un1t.online write-back core', () => {
       tx = await upsertTx('Synced Title', at(2))
       expect(tx).toMatchObject({ product_title: 'Synced Title', raw: { source: 'sync' } })
     })
+
+    // A CRM-stamped row: crm_written_at (T) is newer than its synced_at (T - 30 min),
+    // so only an unchanged synced_at tells a non-sync UPDATE from a stale sync.
+    const readBooking = async (un1tId) => (await db.query(
+      `SELECT contact_id, status, event_id, synced_at FROM public.un1t_bookings WHERE location_id = $1 AND un1t_id = $2`,
+      [LOC, un1tId])).rows[0]
+
+    it('a contact_id-only UPDATE on a CRM-written row takes effect (the merge_contacts re-point)', async () => {
+      const id = await crmBooking({ status: 'booked' })
+      await db.query(`UPDATE public.un1t_bookings SET contact_id = $1 WHERE un1t_id = $2`, [CONTACT, id])
+      await db.query(`UPDATE public.un1t_bookings SET contact_id = $1 WHERE contact_id = $2 AND un1t_id = $3`, [CONTACT_B, CONTACT, id])
+      expect((await readBooking(id)).contact_id).toBe(CONTACT_B)
+    })
+
+    it('deleting the referenced contact sets contact_id NULL on CRM-written rows of all three tables', async () => {
+      const id = await crmBooking({ status: 'booked' })
+      await db.query(`UPDATE public.un1t_bookings SET contact_id = $1 WHERE un1t_id = $2`, [CONTACT_GONE, id])
+      await db.query(
+        `INSERT INTO public.un1t_clients (location_id, un1t_user_id, contact_id, synced_at, crm_written_at)
+         VALUES ($1, 'u-gone', $2, $3, $4)`, [LOC, CONTACT_GONE, at(-30), T])
+      await db.query(
+        `INSERT INTO public.un1t_transactions (location_id, un1t_id, contact_id, synced_at, crm_written_at)
+         VALUES ($1, 'tx-gone', $2, $3, $4)`, [LOC, CONTACT_GONE, at(-30), T])
+      await db.query(`DELETE FROM public.contacts WHERE id = $1`, [CONTACT_GONE])
+      expect((await readBooking(id)).contact_id).toBeNull()
+      const cl = await db.query(`SELECT contact_id FROM public.un1t_clients WHERE un1t_user_id = 'u-gone'`)
+      expect(cl.rows[0].contact_id).toBeNull()
+      const tx = await db.query(`SELECT contact_id FROM public.un1t_transactions WHERE un1t_id = 'tx-gone'`)
+      expect(tx.rows[0].contact_id).toBeNull()
+    })
+
+    it('a status-only non-sync UPDATE on a CRM-written row takes effect', async () => {
+      const id = await crmBooking({ status: 'cancelled' })
+      await db.query(`UPDATE public.un1t_bookings SET status = 'booked' WHERE un1t_id = $1`, [id])
+      const row = await readBooking(id)
+      expect(row.status).toBe('booked')
+      expect(iso(row.synced_at)).toBe(at(-30))
+    })
+
+    it('an actual stale sync upsert (an older synced_at sent) is still kept out', async () => {
+      const id = await crmBooking({ status: 'cancelled' })
+      const row = await syncBooking(id, { status: 'booked', syncedAt: at(-10) })
+      expect(row).toMatchObject({ status: 'cancelled', event_id: 'ev-crm' })
+      expect(iso(row.synced_at)).toBe(at(-10))
+    })
   })
 
   it('refund_request is an allowed kind and every kind from mig 711 still is', async () => {
@@ -364,5 +423,47 @@ describe('mig 742 — un1t.online write-back core', () => {
       auth_select: false, auth_insert: false, anon_select: false, service_insert: true,
       anon_exec: false, auth_exec: false, client_grants: 0,
     })
+  })
+
+  describe('the self-check judges CHECK definitions, not only names', () => {
+    // A ledger table left behind with the right constraint NAMES but wrong bodies
+    // (CREATE TABLE IF NOT EXISTS keeps it): the file must abort, whole.
+    const probe = async (badChecks) => {
+      const p = new PGlite()
+      try {
+        await p['exec'](SETUP_SQL)
+        await p['exec'](`
+          CREATE TABLE public.un1t_write_events (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            location_id uuid NOT NULL REFERENCES public.locations(id) ON DELETE CASCADE,
+            contact_id uuid REFERENCES public.contacts(id) ON DELETE SET NULL,
+            un1t_user_id text, op text NOT NULL, origin text NOT NULL, origin_ref text, actor_user_id uuid,
+            idempotency_key text NOT NULL, target text, stage text NOT NULL, method text, un1t_ref text,
+            terms_accepted_at timestamptz, terms_source text, checkout_url text, http_status int,
+            code text, message text, recovered text,
+            created_at timestamptz NOT NULL DEFAULT now(), finished_at timestamptz,
+            ${badChecks}
+          );`)
+        return await p['exec'](MIG_742).then(() => null, (e) => e.message)
+      } finally {
+        await p.close()
+      }
+    }
+    const GOOD_TRIAL = `CONSTRAINT un1t_write_events_trial_method_check CHECK ((op = 'trial') = (method IS NOT NULL))`
+    const GOOD_MESSAGE = `CONSTRAINT un1t_write_events_message_length_check CHECK (char_length(message) <= 500)`
+
+    it('aborts on a message-length CHECK with another limit', async () => {
+      const err = await probe(`${GOOD_TRIAL}, CONSTRAINT un1t_write_events_message_length_check CHECK (char_length(message) <= 5000)`)
+      expect(err).toMatch(/mig 742: un1t_write_events_message_length_check wrong/)
+    })
+
+    it('aborts on a trial-method CHECK that no longer ties method to the trial op', async () => {
+      const err = await probe(`CONSTRAINT un1t_write_events_trial_method_check CHECK (method IS NULL OR op = 'trial'), ${GOOD_MESSAGE}`)
+      expect(err).toMatch(/mig 742: un1t_write_events_trial_method_check wrong/)
+    })
+
+    it('passes on a left-behind table whose CHECKs are right (and adds the trial-target CHECK)', async () => {
+      expect(await probe(`${GOOD_TRIAL}, ${GOOD_MESSAGE}`)).toBeNull()
+    }, 30_000)
   })
 })

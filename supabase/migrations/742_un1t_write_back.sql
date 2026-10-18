@@ -26,7 +26,13 @@
 --       against an upsert from a pull that began before the write. Rule, in
 --       order:
 --         a. OLD.crm_written_at IS NULL, or NEW changes crm_written_at (the
---            CRM's own next write) -> NEW.
+--            CRM's own next write), or NEW leaves synced_at unchanged (not a
+--            sync upsert: the merge_contacts re-point of mig 533, the
+--            contacts FK's ON DELETE SET NULL, any other non-sync UPDATE)
+--            -> NEW. The sync always sends a fresh run-start synced_at, mig
+--            735 keeps runs from overlapping and the engine's dedupeBy keeps
+--            one run from touching a row twice, so an unchanged synced_at is
+--            never a sync.
 --         b. un1t_bookings only, RANK FIRST (the same rule as spec C-4):
 --            booked (and anything not terminal) = 0; attended, no_show,
 --            cancelled = 1. A higher rank in NEW -> NEW, whatever the times.
@@ -36,8 +42,9 @@
 --         d. Keep OLD, but take NEW.synced_at, so the sync's history-window
 --            count (absent_from_pull) stays right.
 --       Both times in (c) are the CRM's own clock (run start vs our write),
---       never un1t.online's. A non-sync writer of these tables must set a
---       fresh crm_written_at, or it is judged as a stale sync by (c)/(d).
+--       never un1t.online's. A CRM mirror write (after a un1t.online write)
+--       still stamps crm_written_at = now(), so it is protected in turn; a
+--       writer that sends a synced_at of its own is judged as a sync.
 --       class_bookings is spec C's table and does not get this trigger.
 --   (3) class_booking_requests (the /start queue) gains the terms record the
 --       create-client step copies onto the ledger (terms_accepted_at +
@@ -110,6 +117,15 @@ CREATE TABLE IF NOT EXISTS public.un1t_write_events (
   CONSTRAINT un1t_write_events_trial_method_check CHECK ((op = 'trial') = (method IS NOT NULL))
 );
 
+-- A trial row names its person and product, so a NULL can never slip past
+-- un1t_write_events_one_trial (NULLs are distinct in a unique index). Added
+-- outside CREATE TABLE so a replay over an earlier table gains it too.
+ALTER TABLE public.un1t_write_events
+  DROP CONSTRAINT IF EXISTS un1t_write_events_trial_target_check;
+ALTER TABLE public.un1t_write_events
+  ADD CONSTRAINT un1t_write_events_trial_target_check
+  CHECK (op <> 'trial' OR (un1t_user_id IS NOT NULL AND target IS NOT NULL));
+
 -- At most one attempt in flight or in doubt per key.
 CREATE UNIQUE INDEX IF NOT EXISTS un1t_write_events_one_open
   ON public.un1t_write_events (idempotency_key)
@@ -159,8 +175,12 @@ AS $fn$
 DECLARE
   v_synced timestamptz;
 BEGIN
-  -- a. Not a sync overwrite of a CRM write.
-  IF OLD.crm_written_at IS NULL OR NEW.crm_written_at IS DISTINCT FROM OLD.crm_written_at THEN
+  -- a. Not a sync overwrite of a CRM write: no CRM write on the row, the
+  --    CRM's own next write, or a non-sync UPDATE (synced_at unchanged; the
+  --    sync always sends a fresh run-start synced_at).
+  IF OLD.crm_written_at IS NULL
+     OR NEW.crm_written_at IS DISTINCT FROM OLD.crm_written_at
+     OR NEW.synced_at IS NOT DISTINCT FROM OLD.synced_at THEN
     RETURN NEW;
   END IF;
 
@@ -188,7 +208,7 @@ $fn$;
 REVOKE EXECUTE ON FUNCTION public.un1t_mirror_keep_crm_write() FROM PUBLIC, anon, authenticated;
 
 COMMENT ON FUNCTION public.un1t_mirror_keep_crm_write() IS
-  'UN1TWRITE.1 (mig 742): BEFORE UPDATE on un1t_bookings, un1t_clients, un1t_transactions. A sync upsert (crm_written_at unchanged) whose synced_at is before OLD.crm_written_at keeps every OLD column except synced_at. On un1t_bookings a terminal status (attended, no_show, cancelled) over a non-terminal one always wins first. A non-sync writer must set a fresh crm_written_at.';
+  'UN1TWRITE.1 (mig 742): BEFORE UPDATE on un1t_bookings, un1t_clients, un1t_transactions. A sync upsert (crm_written_at unchanged, synced_at changed) whose synced_at is before OLD.crm_written_at keeps every OLD column except synced_at. On un1t_bookings a terminal status (attended, no_show, cancelled) over a non-terminal one always wins first. An UPDATE that leaves synced_at unchanged is not a sync (contact re-point, FK set-null) and always passes. A CRM mirror write stamps crm_written_at = now().';
 
 CREATE OR REPLACE TRIGGER un1t_mirror_keep_crm_write
   BEFORE UPDATE ON public.un1t_bookings
@@ -278,6 +298,24 @@ BEGIN
     RAISE EXCEPTION 'mig 742: a client role holds a privilege on public.un1t_write_events';
   END IF;
 
+  -- The ledger's CHECKs, by definition.
+  d := pg_get_constraintdef((SELECT oid FROM pg_constraint
+        WHERE conrelid = 'public.un1t_write_events'::regclass AND conname = 'un1t_write_events_trial_method_check'));
+  IF d IS NULL OR replace(replace(d, '(', ''), ')', '') <> 'CHECK op = ''trial''::text = method IS NOT NULL' THEN
+    RAISE EXCEPTION 'mig 742: un1t_write_events_trial_method_check wrong or missing: %', d;
+  END IF;
+  d := pg_get_constraintdef((SELECT oid FROM pg_constraint
+        WHERE conrelid = 'public.un1t_write_events'::regclass AND conname = 'un1t_write_events_message_length_check'));
+  IF d IS NULL OR replace(replace(d, '(', ''), ')', '') <> 'CHECK char_lengthmessage <= 500' THEN
+    RAISE EXCEPTION 'mig 742: un1t_write_events_message_length_check wrong or missing: %', d;
+  END IF;
+  d := pg_get_constraintdef((SELECT oid FROM pg_constraint
+        WHERE conrelid = 'public.un1t_write_events'::regclass AND conname = 'un1t_write_events_trial_target_check'));
+  IF d IS NULL OR replace(replace(d, '(', ''), ')', '')
+       <> 'CHECK op <> ''trial''::text OR un1t_user_id IS NOT NULL AND target IS NOT NULL' THEN
+    RAISE EXCEPTION 'mig 742: un1t_write_events_trial_target_check wrong or missing: %', d;
+  END IF;
+
   -- The four indexes, with their keys and predicates.
   d := (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'un1t_write_events_one_open');
   IF d IS NULL OR d NOT ILIKE 'CREATE UNIQUE INDEX%' OR d NOT LIKE '%(idempotency_key) WHERE%'
@@ -337,10 +375,10 @@ BEGIN
   IF d IS NULL OR d NOT LIKE '%''website''%' OR d NOT LIKE '%''whatsapp_flow''%' OR d NOT LIKE '%''test_account''%' THEN
     RAISE EXCEPTION 'mig 742: class_booking_requests_terms_source_check wrong: %', d;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                  WHERE conrelid = 'public.class_booking_requests'::regclass
-                    AND conname = 'class_booking_requests_terms_pair_check') THEN
-    RAISE EXCEPTION 'mig 742: class_booking_requests_terms_pair_check missing';
+  d := pg_get_constraintdef((SELECT oid FROM pg_constraint
+        WHERE conrelid = 'public.class_booking_requests'::regclass AND conname = 'class_booking_requests_terms_pair_check'));
+  IF d IS NULL OR replace(replace(d, '(', ''), ')', '') <> 'CHECK terms_accepted_at IS NULL = terms_source IS NULL' THEN
+    RAISE EXCEPTION 'mig 742: class_booking_requests_terms_pair_check wrong or missing: %', d;
   END IF;
 
   -- The kind CHECK admits refund_request and every kind mig 711 allowed.
