@@ -3,12 +3,15 @@
 // 'un1t_online') holding both the API token and the studio it was issued for.
 // A failed registry read is `readError`, never "not configured"
 // (REGISTRYREAD.1). The sync reads members, subscriptions, payments and
-// bookings into the un1t_* tables. HATCHINV.1: `invoices` is the one capability
-// on: a member's invoices, subscriptions and past-due rows are read from
-// `un1t_invoices` through the reads' `pastDue` / `paymentsFor`. memberships,
-// bookings, credits and schedule stay false: nothing else Glofox-shaped lights
-// up for the location with empty data. Every reader of `invoices` is classified
-// in tests/invoices-capability-readers.test.js.
+// bookings into the un1t_* tables. HATCHINV.1: `invoices` is on: a member's
+// invoices, subscriptions and past-due rows are read from `un1t_invoices`
+// through the reads' `pastDue` / `paymentsFor`. MIAHATCH.2: `credits` is on: a
+// member's paid and trial credits are read from the un1t_* tables by Mia's
+// un1t read executor (src/lib/agent/un1t-tools.js), the only reader. memberships,
+// bookings and schedule stay false: nothing else Glofox-shaped lights up for
+// the location with empty data. Every reader of `invoices` is classified in
+// tests/invoices-capability-readers.test.js, every reader of `credits` in
+// tests/capability-credits-readers.test.js.
 import { readConnection } from '@/lib/connection-registry'
 
 export const UN1T_ONLINE_UNREADABLE = 'UN1T_ONLINE_CONNECTION_UNREADABLE'
@@ -16,7 +19,7 @@ export const UN1T_ONLINE_UNREADABLE = 'UN1T_ONLINE_CONNECTION_UNREADABLE'
 export const un1tOnlineSource = Object.freeze({
   key: 'un1t_online',
   label: 'un1t.online',
-  capabilities: Object.freeze({ memberships: false, bookings: false, credits: false, invoices: true, schedule: false }),
+  capabilities: Object.freeze({ memberships: false, bookings: false, credits: true, invoices: true, schedule: false }),
   /**
    * @returns {Promise<{ configured: boolean, missing?: string[], readError?: string }>}
    */

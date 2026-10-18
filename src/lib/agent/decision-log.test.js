@@ -144,3 +144,15 @@ describe('compactDecisionMeta', () => {
       .toEqual({ error: { kind: 'exception', message: 'boom' } })
   })
 })
+
+describe('compactDecisionMeta tool_block (MIAHATCH.2)', () => {
+  it('records the block name the turn sent', () => {
+    expect(compactDecisionMeta({ iterations: 1, toolBlock: 'un1t_read' })).toEqual({ iterations: 1, tool_block: 'un1t_read' })
+    expect(compactDecisionMeta({ toolBlock: 'glofox' })).toEqual({ tool_block: 'glofox' })
+  })
+  it('omits it when the turn sent nothing', () => {
+    expect(compactDecisionMeta({ iterations: 0 })).toBeNull()
+    expect(compactDecisionMeta({ toolBlock: '' })).toBeNull()
+    expect(compactDecisionMeta({ toolBlock: 7 })).toBeNull()
+  })
+})
