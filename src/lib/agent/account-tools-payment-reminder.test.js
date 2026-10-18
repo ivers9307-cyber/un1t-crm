@@ -18,9 +18,16 @@ vi.mock('@/lib/glofox', () => ({
 // must never call it anyway (read-only).
 vi.mock('@/lib/sequences/enrollment-status', () => ({ setEnrollmentStatus: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
+// Real resolver by default; a test overrides ONE call to hand back a provider
+// the registry does not (yet) serve, e.g. a un1t_online provider with invoices.
+vi.mock('@/lib/membership/source', async (importActual) => {
+  const actual = await importActual()
+  return { ...actual, resolveMembershipSource: vi.fn(actual.resolveMembershipSource) }
+})
 
 const { glofoxCredentialsForLocation, getGlofoxOverdueInvoices } = await import('@/lib/glofox')
 const { setEnrollmentStatus } = await import('@/lib/sequences/enrollment-status')
+const { resolveMembershipSource } = await import('@/lib/membership/source')
 const { executeAccountTool, ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES } = await import('./account-tools')
 
 const INVOICE = '0f187762-acc8-42d2-860c-43cbe1477df0'
@@ -229,6 +236,38 @@ describe('get_my_payment_reminder · executor', () => {
     expect((await run(db)).still_overdue).toBe('unknown')
     expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
     expect(getGlofoxOverdueInvoices).not.toHaveBeenCalled()
+  })
+
+  it('a un1t_online provider with invoices:true never calls glofoxCredentialsForLocation or getGlofoxOverdueInvoices and returns still_overdue "unknown"', async () => {
+    // HATCHPIPE.2 — the overdue check is a GLOFOX read. A capability flag alone
+    // must never route a non-Glofox studio's member id into Glofox.
+    vi.mocked(resolveMembershipSource).mockResolvedValueOnce({
+      key: 'un1t_online',
+      capabilities: { memberships: true, bookings: false, credits: false, invoices: true, schedule: false },
+    })
+    const db = stubDb({
+      contacts: [{ id: 'c1', glofox_member_id: MEMBER, location_id: 'loc1' }],
+      enrollments: [enrol()],
+    })
+    const res = await run(db)
+    expect(res.has_reminder).toBe(true)
+    expect(res.still_overdue).toBe('unknown')
+    expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
+    expect(getGlofoxOverdueInvoices).not.toHaveBeenCalled()
+  })
+
+  it('positive control: a glofox provider with invoices:true still reads Glofox overdue invoices (Stillorgan unchanged)', async () => {
+    vi.mocked(resolveMembershipSource).mockResolvedValueOnce({
+      key: 'glofox',
+      capabilities: { memberships: true, bookings: true, credits: true, invoices: true, schedule: true },
+    })
+    const db = stubDb({
+      contacts: [{ id: 'c1', glofox_member_id: MEMBER, location_id: 'loc1' }],
+      enrollments: [enrol()],
+    })
+    expect((await run(db)).still_overdue).toBe(true)
+    expect(glofoxCredentialsForLocation).toHaveBeenCalledWith(db, 'loc1')
+    expect(getGlofoxOverdueInvoices).toHaveBeenCalledWith(CREDS, { memberId: MEMBER })
   })
 
   it('missing Glofox credentials → unknown, no Glofox call', async () => {
