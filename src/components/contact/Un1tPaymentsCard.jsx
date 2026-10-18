@@ -24,7 +24,9 @@ function invoiceChip(inv) {
 
 function StudioBlock({ studio }) {
   const { locationName, subscriptions = [], transactions = [], invoices = [], pastDue } = studio
-  const overdueAmount = pastDue ? formatMoney(pastDue.amountCents, pastDue.currency) : null
+  // formatMoney defaults a missing currency to €, so an amount with no currency
+  // is as unreported as one with no amount.
+  const overdueAmount = pastDue && pastDue.currency ? formatMoney(pastDue.amountCents, pastDue.currency) : null
   const overdueSince = pastDue ? formatDate(pastDue.since) : null
   const shownTransactions = transactions.slice(0, MAX_TRANSACTIONS)
   return (

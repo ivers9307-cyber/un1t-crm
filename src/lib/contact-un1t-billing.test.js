@@ -18,16 +18,30 @@ const STILL = 'a0000000-0000-4000-8000-000000000001'
 const HATCH = 'a0000000-0000-4000-8000-000000000002'
 const NAMES = { [STILL]: 'Studio One', [HATCH]: 'UN1T Hatch Street' }
 
-const viewer = (...locs) => ({ id: 'u1', locations: locs.map((id) => ({ id })) })
+// A staff viewer assigned to `locs`, holding Contacts (web and phone) at each
+// except the `noContacts` ones, where both toggles are off.
+const viewerAt = (locs, noContacts = []) => ({
+  id: 'u1',
+  role: 'staff',
+  locations: locs.map((id) => ({ id, role: 'staff' })),
+  assignmentsByLocation: Object.fromEntries(locs.map((id) => [id, {
+    role: 'staff',
+    permissions: noContacts.includes(id)
+      ? { contacts: false, mobile: { contacts: false } }
+      : { contacts: true, mobile: { contacts: true } },
+  }])),
+})
+const viewer = (...locs) => viewerAt(locs)
 
 // `clientLocs` are the un1t_clients rows the db holds for the contact.
 // `honourIn: false` simulates a query that ignored its own .in() filter, to
 // show the assertLocationAccess check holds on its own.
 function makeDb({ clientLocs = [], honourIn = true } = {}) {
-  const calls = { clients: [], locations: [] }
+  const calls = { clients: [], locations: [], tables: [] }
   return {
     calls,
     from(table) {
+      calls.tables.push(table)
       const filters = {}
       const b = {
         select: () => b,
@@ -134,12 +148,44 @@ describe('loadUn1tBilling', () => {
       expect(membershipReadsFor).not.toHaveBeenCalledWith(expect.anything(), HATCH)
     })
 
-    it('Hatch-only viewer of a Stillorgan-owned Hatch member: Hatch studio returned', async () => {
+    it('a viewer of only the studio the client row is at gets that studio (the contact\'s owner is never consulted)', async () => {
       seam({ [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDue: pastDue() }) })) } })
-      // The contact is owned elsewhere; only the un1t_clients row ties it to Hatch.
-      const out = await loadUn1tBilling(makeDb({ clientLocs: [HATCH] }), viewer(HATCH), CONTACT)
+      const db = makeDb({ clientLocs: [HATCH] })
+      const out = await loadUn1tBilling(db, viewer(HATCH), CONTACT)
       expect(out.studios.map((s) => s.locationId)).toEqual([HATCH])
       expect(out.overdue).toBe(true)
+      expect(db.calls.tables.sort()).toEqual(['locations', 'un1t_clients'])
+    })
+
+    it('location access without Contacts at that studio: no card, nothing read for it', async () => {
+      const spies = seam({
+        [STILL]: { paymentsFor: vi.fn(async () => ({ success: true, data: data() })) },
+        [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDue: pastDue() }) })) },
+      })
+      const db = makeDb({ clientLocs: [STILL, HATCH] })
+      const out = await loadUn1tBilling(db, viewerAt([STILL, HATCH], [HATCH]), CONTACT)
+      expect(out.studios.map((s) => s.locationId)).toEqual([STILL])
+      expect(out.overdue).toBe(false)
+      expect(out.arrearsCentsByCurrency).toEqual({})
+      expect(spies[HATCH]).toBeUndefined()
+      expect(membershipReadsFor).not.toHaveBeenCalledWith(expect.anything(), HATCH)
+      expect(db.calls.clients[0].location_id).toEqual([STILL])
+    })
+
+    it('Contacts off everywhere: nothing is queried', async () => {
+      const db = makeDb({ clientLocs: [HATCH] })
+      const out = await loadUn1tBilling(db, viewerAt([HATCH], [HATCH]), CONTACT)
+      expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {} })
+      expect(db.calls.tables).toEqual([])
+      expect(membershipReadsFor).not.toHaveBeenCalled()
+    })
+
+    it('Contacts on the phone only (web off) still counts, as in canViewContact', async () => {
+      seam({ [HATCH]: {} })
+      const user = viewerAt([HATCH])
+      user.assignmentsByLocation[HATCH].permissions = { contacts: false, mobile: { contacts: true } }
+      const out = await loadUn1tBilling(makeDb({ clientLocs: [HATCH] }), user, CONTACT)
+      expect(out.studios.map((s) => s.locationId)).toEqual([HATCH])
     })
 
     it('a viewer with no studios reads nothing', async () => {
@@ -158,11 +204,22 @@ describe('loadUn1tBilling', () => {
     expect(spies[HATCH]).not.toHaveBeenCalled()
   })
 
-  it('a studio whose source is not un1t.online or not configured is skipped', async () => {
-    membershipReadsFor.mockResolvedValue({ source: 'glofox', state: 'configured', capabilities: { invoices: true }, reads: { paymentsFor: vi.fn() } })
+  it('a studio whose source is not un1t.online, or not configured, or whose adapter lacks paymentsFor, is skipped and never read', async () => {
+    const answer = { success: true, data: { pastDue: pastDue() } }
+    const glofoxSpy = vi.fn(async () => answer)
+    membershipReadsFor.mockResolvedValue({ source: 'glofox', state: 'configured', capabilities: { invoices: true }, reads: { paymentsFor: glofoxSpy } })
     expect((await loadUn1tBilling(makeDb({ clientLocs: [HATCH] }), viewer(HATCH), CONTACT)).studios).toEqual([])
-    membershipReadsFor.mockResolvedValue({ source: 'un1t_online', state: 'unconfigured', capabilities: { invoices: true }, reads: null })
+    expect(glofoxSpy).not.toHaveBeenCalled()
+
+    const unconfiguredSpy = vi.fn(async () => answer)
+    membershipReadsFor.mockResolvedValue({ source: 'un1t_online', state: 'unconfigured', capabilities: { invoices: true }, reads: { paymentsFor: unconfiguredSpy } })
     expect((await loadUn1tBilling(makeDb({ clientLocs: [HATCH] }), viewer(HATCH), CONTACT)).studios).toEqual([])
+    expect(unconfiguredSpy).not.toHaveBeenCalled()
+
+    membershipReadsFor.mockResolvedValue({ source: 'un1t_online', state: 'configured', capabilities: { invoices: true }, reads: {} })
+    expect((await loadUn1tBilling(makeDb({ clientLocs: [HATCH] }), viewer(HATCH), CONTACT)).studios).toEqual([])
+    // skipped cleanly: not by a swallowed TypeError
+    expect(logWarn).not.toHaveBeenCalled()
   })
 
   it('Glofox-only contact (no un1t_clients rows) → empty result, no seam call', async () => {
@@ -185,7 +242,7 @@ describe('loadUn1tBilling', () => {
     membershipReadsFor.mockRejectedValue(new Error('down'))
     const out = await loadUn1tBilling(makeDb({ clientLocs: [HATCH] }), viewer(HATCH), CONTACT)
     expect(out).toEqual({ studios: [], overdue: false, arrearsCentsByCurrency: {} })
-    expect(logWarn).toHaveBeenCalledWith('un1t-billing', 'load failed', expect.objectContaining({ contactId: CONTACT }))
+    expect(logWarn).toHaveBeenCalledWith('un1t-billing', 'load failed', { contactId: CONTACT })
   })
 
   it('an unreadable un1t_clients read → empty result, logged', async () => {

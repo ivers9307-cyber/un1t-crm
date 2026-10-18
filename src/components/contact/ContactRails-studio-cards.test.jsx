@@ -64,21 +64,16 @@ describe('the studio-private read cards follow canReadStudioCards', () => {
 // HATCHPIPE.2 — the un1t.online payments card.
 describe('Un1tPaymentsCard placement', () => {
   it('sits between StudioMembershipsCard and GlofoxProfileCard', () => {
-    const w = who({ un1tBilling: { studios: [{ locationId: 'x' }] } })
-    const m = w.indexOf('data-card="memberships"')
-    const p = w.indexOf('data-card="un1t-payments"')
-    const g = w.indexOf('data-card="glofox"')
-    expect(m).toBeGreaterThan(-1)
-    expect(p).toBeGreaterThan(m)
-    expect(g).toBeGreaterThan(p)
+    const cards = [...who({ un1tBilling: { studios: [{ locationId: 'x' }] } }).matchAll(/data-card="([^"]+)"/g)].map((m) => m[1])
+    expect(cards).toEqual(['linked-accounts', 'memberships', 'un1t-payments', 'glofox'])
   })
 
   it('Glofox-only contact renders exactly as before', () => {
-    const base = who({})
-    expect(base).not.toContain('un1t-payments')
-    expect(who({ un1tBilling: { studios: [] } })).toBe(base)
-    expect(who({ un1tBilling: null })).toBe(base)
-    expect(base).toContain('data-card="memberships"')
-    expect(base).toContain('data-card="glofox"')
+    const cards = (html) => [...html.matchAll(/data-card="([^"]+)"/g)].map((m) => m[1])
+    const BEFORE = ['linked-accounts', 'memberships', 'glofox']
+    expect(cards(who({}))).toEqual(BEFORE)
+    expect(cards(who({ un1tBilling: { studios: [] } }))).toEqual(BEFORE)
+    expect(cards(who({ un1tBilling: null }))).toEqual(BEFORE)
+    expect(cards(who({ canReadStudioCards: true }))).toEqual([...BEFORE, 'marketing-preferences'])
   })
 })

@@ -347,7 +347,8 @@ export default async function ContactDetailPage(props) {
   //    cross-member LTV roll-up), so we keep the primary contact's figure
   //    in both the grouped and single case.
   const ltvCents = contact.lifetime_value_cents
-  const metricArrearsCents = mergeArrearsCents(person ? person.arrearsCents : contactArrears.arrearsCents, un1tBilling)
+  const glofoxArrearsCents = person ? person.arrearsCents : contactArrears.arrearsCents
+  const metricArrearsCents = mergeArrearsCents(glofoxArrearsCents, un1tBilling)
   const metricAttended = person ? person.attended : (Number(contact.total_attended_30d) || 0)
   const metricDeals = person ? person.dealsCount : deals.length
 
@@ -372,6 +373,8 @@ export default async function ContactDetailPage(props) {
   const attention = deriveNeedsAttention({
     contact: { ...contact, next_class_at: nextClassAt },
     arrearsCents: metricArrearsCents || 0,
+    // The chase-list is Glofox's: only the Glofox part says "on the list".
+    glofoxArrearsCents: glofoxArrearsCents || 0,
     openTasks,
     todayStr: today,
     overdue: un1tBilling.overdue,

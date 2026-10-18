@@ -39,6 +39,12 @@ describe('Un1tPaymentsCard', () => {
     expect(t).toContain('amount not reported by un1t.online')
   })
 
+  it('a past-due amount with no currency is not shown as euros', () => {
+    const t = text([studio({ pastDue: { since: '2026-10-03T09:00:00Z', amountCents: 8900, currency: null } })])
+    expect(t).toContain('amount not reported by un1t.online')
+    expect(t).not.toContain('€')
+  })
+
   it('no overdue band when nothing is overdue', () => {
     expect(text([studio({ transactions: [tx(1)] })])).not.toContain('Payment overdue')
   })

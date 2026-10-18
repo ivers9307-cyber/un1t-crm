@@ -7,11 +7,14 @@
 // one shape: the studios, whether anything is overdue, and the overdue amount
 // per currency.
 //
-// Scoping (the part that can leak): every studio must pass
-// `assertLocationAccess(user, loc) === null` BEFORE any read for it, and the
-// client-row probe is itself narrowed to the viewer's own studios, so another
-// studio's billing is never queried, let alone rendered.
+// Scoping (the part that can leak): a studio is read only if the viewer holds
+// Contacts there (web OR phone: the very `contactStudioIds` canViewContact
+// narrows a crossover viewer with) AND it passes
+// `assertLocationAccess(user, loc) === null`. The client-row probe is itself
+// narrowed to those studios, so another studio's billing is never queried,
+// let alone rendered.
 import { assertLocationAccess } from '@/lib/auth'
+import { contactStudioIds } from '@/lib/contact-crossovers'
 import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
 import { logWarn } from '@/lib/log'
 import { formatDate } from '@/components/contact/format'
@@ -35,8 +38,8 @@ const sinceMs = (iso) => {
 export async function loadUn1tBilling(db, user, contactId) {
   try {
     if (!db || !user || !contactId) return emptyBilling()
-    // Only the viewer's own studios are ever asked about.
-    const viewerLocIds = [...new Set((user.locations || []).map((l) => l?.id).filter(Boolean))]
+    // Only studios where the viewer holds Contacts are ever asked about.
+    const viewerLocIds = contactStudioIds(user, [...new Set((user.locations || []).map((l) => l?.id).filter(Boolean))])
     if (viewerLocIds.length === 0) return emptyBilling()
 
     const { data: clientRows, error: clientErr } = await db
@@ -100,8 +103,8 @@ export async function loadUn1tBilling(db, user, contactId) {
       }
     }
     return { studios, overdue: studios.some((s) => s.pastDue != null), arrearsCentsByCurrency }
-  } catch (e) {
-    logWarn('un1t-billing', 'load failed', { contactId, message: e?.message ? String(e.message).slice(0, 200) : undefined })
+  } catch {
+    logWarn('un1t-billing', 'load failed', { contactId })
     return emptyBilling()
   }
 }

@@ -67,6 +67,20 @@ describe('deriveNeedsAttention', () => {
     const items = deriveNeedsAttention({ contact: { ...base, next_class_at: 'x' }, arrearsCents: 4900, openTasks: [], overdue: true })
     expect(items.filter((i) => i.key === 'arrears')).toHaveLength(1)
   })
+  // The chase-list is Glofox's, so only the Glofox part may say "on the list".
+  const arrearsDetail = (args) => deriveNeedsAttention({ contact: { ...base, next_class_at: 'x' }, openTasks: [], ...args }).find((i) => i.key === 'arrears')?.detail
+  it('Glofox arrears only: "On the Overdue chase-list"', () => {
+    expect(arrearsDetail({ arrearsCents: 4900, glofoxArrearsCents: 4900 })).toBe('On the Overdue chase-list')
+    expect(arrearsDetail({ arrearsCents: 4900 })).toBe('On the Overdue chase-list')
+  })
+  it('un1t.online only (flag, amount reported or not): "Past due on un1t.online", never the chase-list', () => {
+    expect(arrearsDetail({ arrearsCents: 0, glofoxArrearsCents: 0, overdue: true })).toBe('Past due on un1t.online')
+    // the merged total includes un1t's EUR, but the Glofox part is 0
+    expect(arrearsDetail({ arrearsCents: 8900, glofoxArrearsCents: 0, overdue: true })).toBe('Past due on un1t.online')
+  })
+  it('both: the two details are joined', () => {
+    expect(arrearsDetail({ arrearsCents: 12900, glofoxArrearsCents: 4000, overdue: true })).toBe('On the Overdue chase-list · Past due on un1t.online')
+  })
   it('overdue defaults to false', () => {
     expect(deriveNeedsAttention({ contact: { ...base, next_class_at: 'x' }, arrearsCents: 0, openTasks: [] })).toEqual([])
   })
