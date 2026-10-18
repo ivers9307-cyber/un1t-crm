@@ -218,7 +218,6 @@ async function writeSection(db, locationId) {
     logError(LOG, 'write settings read failed', { locationId, err: safeErr(error) })
     return { unreadable: true }
   }
-  const s = un1tWriteSettingsFrom(loc.settings)
   const { rows } = await trialProducts(db, locationId)
   const permissions = await permissionLine(db, locationId)
   return { ...writeFields(loc.settings), trial_products: rows, permissions }
