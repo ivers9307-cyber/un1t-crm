@@ -90,6 +90,8 @@ export const CLOSED_FUNCTIONS = [
     why: 'WAORGNUMBER.1: BEFORE UPDATE trigger refusing a number organisation change that would leave a cross-organisation link; a trigger fires without EXECUTE' },
   { fn: 'public.un1t_mirror_keep_crm_write', args: '()', closedBy: 744,
     why: 'a trigger function (a sync upsert pulled before a CRM write keeps the CRM’s un1t_* mirror row); a trigger fires without EXECUTE' },
+  { fn: 'public.sync_contact_location_preferences', args: '()', closedBy: 747,
+    why: 'a SECURITY DEFINER trigger function (closed since mig 490); 747 re-states the REVOKE after its CREATE OR REPLACE' },
 ]
 
 /** The client roles a closed function is closed to. */

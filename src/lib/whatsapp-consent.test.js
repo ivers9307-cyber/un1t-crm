@@ -397,8 +397,44 @@ describe('WAORGNUMBER.3 — the keyword writes the thread studio\'s row', () => 
       email_marketing: false, sms_marketing: false, unsubscribed_at: null,
     })
     expect(created.row.subscribed_at).toBeTruthy()
-    expect(writes.some((w) => w.table === 'contact_preferences' || w.table === 'contacts')).toBe(false)
+    expect(writes.some((w) => w.table === 'contact_preferences')).toBe(false)
     expect(writes.find((w) => w.table === 'consent_log').row).toMatchObject({ action: 'opt_in', location_id: HATCH })
+  })
+
+  // Ruling on the historic contact-wide STOP: wa_status 'opted_out' blocks every
+  // WhatsApp send, so a studio START that left it would be acknowledged and
+  // change nothing. The member asked to resume, so the START lifts it.
+  it('START at a studio lifts a historic wa_status opted_out, and only opted_out', async () => {
+    const writes = []
+    const r = await keywordAt(stubDb({ writes, location: hatch }), 'start')
+    expect(r).toEqual({ applied: true, action: 'opt_in' })
+    const lift = writes.filter((w) => w.table === 'contacts')
+    expect(lift).toHaveLength(1)
+    expect(lift[0]).toMatchObject({ op: 'update', patch: { wa_status: 'active' } })
+    // Guarded on the value: 'blocked' / 'undeliverable' rows match nothing.
+    expect(lift[0].filters).toEqual({ id: 'c1', wa_status: 'opted_out' })
+  })
+
+  it('STOP at a studio never touches wa_status', async () => {
+    const writes = []
+    await keywordAt(stubDb({ writes, location: hatch }), 'stop')
+    expect(writes.some((w) => w.table === 'contacts')).toBe(false)
+  })
+
+  it('a failed lift fails the START (still blocked everywhere): no ack', async () => {
+    const writes = []
+    const r = await keywordAt(stubDb({ writes, failOn: { contacts: 'deadlock detected' }, location: hatch }), 'start')
+    expect(writes.find((w) => w.table === 'contact_location_preferences').row).toMatchObject({ whatsapp_marketing: true })
+    expect(r).toMatchObject({ applied: false, reason: 'opt_in_incomplete' })
+    expect(r.failures.join(' ')).toContain('contacts.wa_status (lift opted_out)')
+    expect(sendTextMessage).not.toHaveBeenCalled()
+  })
+
+  it('no lift when the studio row did not land (an opt-in never widens on a failed write)', async () => {
+    const writes = []
+    const r = await keywordAt(stubDb({ writes, failOn: { contact_location_preferences: 'down' }, location: hatch }), 'start')
+    expect(r).toMatchObject({ applied: false, reason: 'opt_in_incomplete' })
+    expect(writes.some((w) => w.table === 'contacts')).toBe(false)
   })
 
   it('START on an existing row flips only WhatsApp back on', async () => {

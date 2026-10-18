@@ -33,7 +33,11 @@
 // contacts.wa_status: both are contact-wide, and the mig 489/543 DEFINER
 // trigger fans a contact-wide whatsapp_marketing=false out to EVERY studio's
 // row. Historic wa_status='opted_out' rows from earlier contact-wide STOPs are
-// left as they are. Without a locationId the three contact-wide writes below
+// left as they are by a STOP; a studio START lifts 'opted_out' (only that
+// value) back to 'active', because the member asked to resume. Mig 747 makes
+// the trigger act only on channels that changed, so an unrelated
+// contact_preferences write no longer undoes a studio STOP or START at the
+// home studio. Without a locationId the three contact-wide writes below
 // run exactly as before (scope 'contact'). Meta's own user_preferences control
 // stays contact-wide (applyMetaUserPreference).
 //
@@ -157,8 +161,9 @@ async function applyConsentWrites(db, { contactId, locationId = null, optingOut,
 /**
  * WAORGNUMBER.3 (R6) — the keyword at ONE studio: that studio's
  * contact_location_preferences row and a consent_log row naming it. Nothing
- * contact-wide (contact_preferences, contacts.wa_status) is written, so the
- * mig 489/543 fan-out never runs for it. Never throws.
+ * else contact-wide is written (no contact_preferences, so the mig 489/543/747
+ * fan-out never runs for it), except that a START lifts a historic wa_status
+ * 'opted_out' (see below). Never throws.
  *
  * WHY NOT ONE UPSERT. The row's channels default TRUE (mig 487: creating the
  * row IS the opt-in act), so an upsert naming only whatsapp_marketing would, for
@@ -181,8 +186,9 @@ async function applyConsentWrites(db, { contactId, locationId = null, optingOut,
  * "when did they leave the email list" answer would read a WhatsApp STOP as an
  * email unsubscribe.
  *
- * There is ONE suppression gate here, not two, so `prefOk` alone is the
- * verdict: `statusOk` is true because there is no contact-wide write to fail.
+ * There is ONE suppression gate here, not two: a STOP is judged on `prefOk`
+ * alone. `statusOk` is about the START-only lift of a historic wa_status
+ * 'opted_out' (below); it is true whenever there was nothing to lift.
  */
 async function applyStudioConsentWrites(db, { contactId, locationId, optingOut, source }) {
   const failures = []
@@ -237,6 +243,30 @@ async function applyStudioConsentWrites(db, { contactId, locationId, optingOut, 
 
   const prefOk = created || updated
 
+  // START lifts a HISTORIC contact-wide STOP (WAORGNUMBER.3 ruling). A contact
+  // whose wa_status is 'opted_out' from an earlier contact-wide STOP is
+  // excluded by every WhatsApp send path, so a studio START alone would be
+  // acknowledged and still change nothing. The member explicitly asked to
+  // resume, so 'opted_out' goes back to 'active' (and ONLY 'opted_out':
+  // 'blocked' and 'undeliverable' are never touched). The other studios stay
+  // opted out through their own rows, which that historic STOP set false.
+  // Only once the studio row landed: an opt-in never widens on a failed write.
+  // A failed lift fails the START (the contact is still blocked everywhere, so
+  // "you're back on" would be a promise not kept); zero rows is the ordinary
+  // answer for a contact that was never opted out.
+  let statusOk = true
+  if (!optingOut && prefOk) {
+    const { error: liftError } = await db
+      .from('contacts')
+      .update({ wa_status: 'active' })
+      .eq('id', contactId)
+      .eq('wa_status', 'opted_out')
+    if (liftError) {
+      statusOk = false
+      failures.push(`contacts.wa_status (lift opted_out): ${liftError.message}`)
+    }
+  }
+
   if (failures.length > 0) {
     logError('wa-consent', 'consent write(s) failed', {
       contactId,
@@ -251,7 +281,7 @@ async function applyStudioConsentWrites(db, { contactId, locationId, optingOut, 
     })
   }
 
-  return { prefOk, statusOk: true, failures, scope: 'studio' }
+  return { prefOk, statusOk, failures, scope: 'studio' }
 }
 
 /**
@@ -270,10 +300,11 @@ async function applyStudioConsentWrites(db, { contactId, locationId, optingOut, 
  * Both rules are for the contact-wide path's two gates.
  */
 function consentTookEffect(optingOut, { prefOk, statusOk, scope }) {
-  // WAORGNUMBER.3 — at a studio there is one gate, the studio's row, for both
-  // directions: STOP with it unwritten suppresses nothing new, START with it
-  // unwritten re-opts nobody in.
-  if (scope === 'studio') return prefOk
+  // WAORGNUMBER.3 — at a studio, STOP has one gate, the studio's row (with it
+  // unwritten nothing new is suppressed). START needs the row AND the lift of a
+  // historic wa_status 'opted_out' (statusOk), for the same under-claiming
+  // reason as below.
+  if (scope === 'studio') return optingOut ? prefOk : (prefOk && statusOk)
   return optingOut ? (prefOk || statusOk) : (prefOk && statusOk)
 }
 
