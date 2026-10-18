@@ -93,6 +93,9 @@ export const UN1T_WRITE_CODES = Object.freeze({
   // An unknown book whose refusal said "already booked" in words only, and
   // the check read could not confirm it. Never a done, never a green light.
   ALREADY_BOOKED_UNVERIFIED: 'already_booked_unverified',
+  // A cancel of a booking that belongs to another un1t.online client
+  // (refused before sending; unknown when only the answer reveals it).
+  BOOKING_NOT_THIS_CLIENT: 'UN1T_BOOKING_NOT_THIS_CLIENT',
 })
 
 /** The policy each op runs under (spec 6.1). The caller never chooses it. */
@@ -805,6 +808,11 @@ const CHECKOUT_TEXT = {
   product_not_sellable: 'That product is not on sale at this studio in un1t.online, so no checkout was opened.',
   free_product_not_via_checkout: 'That product is free; a free product is never sold through a checkout link.',
 }
+// The ledger shows a done book, and the check read could not say it still
+// stands: nothing is sent (only an `absent` check may re-send).
+const PRIOR_BOOK_UNVERIFIED_TEXT = 'The CRM booked this class before, and un1t.online could not confirm the booking still stands, so nothing was sent. Check the class in un1t.online.'
+const NOT_THIS_CLIENT_TEXT = 'That booking belongs to another un1t.online client, so it was not cancelled.'
+const NOT_THIS_CLIENT_UNKNOWN_TEXT = "un1t.online's answer named another client's booking. Check the booking in un1t.online."
 const UNKNOWN_CHECKOUT_TEXT = 'un1t.online did not answer clearly, so no checkout link can be given. Try again in a minute.'
 
 const statusOf = (row) => String(row?.status ?? '').trim().toLowerCase()
@@ -871,10 +879,11 @@ export async function findLandedBooking(writer, { un1tUserId, eventId, sentAt } 
 /**
  * Where a cancel stands: `GET /bookings/{id}`. cancelled → landed (whoever
  * cancelled it); booked → absent; attended / no_show → already_happened;
- * anything else, another booking or a failed read → unknown. Never throws.
+ * anything else, another booking, another client's booking (when
+ * un1tUserId is given) or a failed read → unknown. Never throws.
  * @returns {Promise<'landed'|'absent'|'already_happened'|'unknown'>}
  */
-export async function findCancelState(writer, { bookingId } = {}) {
+export async function findCancelState(writer, { bookingId, un1tUserId } = {}) {
   let row
   try {
     row = await writer.read(`/bookings/${encodeURIComponent(bookingId)}`)
@@ -883,6 +892,9 @@ export async function findCancelState(writer, { bookingId } = {}) {
     return 'unknown'
   }
   if (!isObj(row) || (row.id != null && !sameIdText(row.id, bookingId))) return 'unknown'
+  // Another client's booking is never ours to call landed or to re-send onto.
+  const owner = row.user_id ?? (isObj(row.user) ? row.user.id : undefined)
+  if (un1tUserId && owner != null && !sameIdText(owner, un1tUserId)) return 'unknown'
   const s = statusOf(row)
   if (isCancelledStatus(s)) return 'landed'
   if (s === 'booked') return 'absent'
@@ -1068,6 +1080,12 @@ export async function book(db, args = {}, deps = {}) {
       const r = withLedger(result('done', { id: chk.id, alreadyBooked: true }), prior.id)
       return { ...r, ...(await safely(() => mirror(r), { locationId, op: 'book', origin, ledgerId: prior.id })) }
     }
+    // Only an `absent` check may lead to a send; an unreadable or unclear one
+    // (a failed read, a waitlist row) leaves the booking in doubt.
+    if (chk.state !== 'absent') {
+      logWarn(LOG_MODULE, 'a done book on the ledger could not be confirmed; not sent', fields({ locationId, op: 'book', origin, ledgerId: prior.id, code: C.ALREADY_BOOKED_UNVERIFIED }))
+      return withLedger(result('unknown', { code: C.ALREADY_BOOKED_UNVERIFIED, message: PRIOR_BOOK_UNVERIFIED_TEXT }), prior.id)
+    }
   }
 
   return attemptWrite(db, writer, {
@@ -1112,9 +1130,24 @@ export async function cancel(db, args = {}, deps = {}) {
   const prior = await findDone(db, { key })
   if (prior) return withLedger(result('done', { id: bookingId }), prior.id)
 
+  // The booking must be this client's. The mirror answers without a request;
+  // a booking it does not hold yet is guarded by the check read and the answer.
+  const { data: mirrored, error: mirrorError } = await db
+    .from('un1t_bookings')
+    .select('un1t_user_id')
+    .eq('location_id', locationId)
+    .eq('un1t_id', bookingId)
+    .limit(1)
+    .maybeSingle()
+  if (mirrorError) throw new Un1tSettingsReadError(`un1t_bookings read failed (${mirrorError.code ?? 'no code'})`, { code: 'mirror_read_failed' })
+  if (mirrored?.un1t_user_id && !sameIdText(mirrored.un1t_user_id, un1tUserId)) {
+    logWarn(LOG_MODULE, 'a cancel for another client was refused; nothing sent', fields({ locationId, op: 'cancel', origin, code: C.BOOKING_NOT_THIS_CLIENT }))
+    return withLedger(refusalResult(C.BOOKING_NOT_THIS_CLIENT, NOT_THIS_CLIENT_TEXT))
+  }
+
   // The check read names the booking, so a resume reports its id too.
   const verify = async () => {
-    const state = await findCancelState(writer, { bookingId })
+    const state = await findCancelState(writer, { bookingId, un1tUserId })
     return state === 'landed' ? { state, id: bookingId } : state
   }
   let requestedAt = null
@@ -1122,11 +1155,18 @@ export async function cancel(db, args = {}, deps = {}) {
     attempt: { op: 'cancel', key, contactId, un1tUserId, target: bookingId, origin, originRef, actorUserId: actorIdOf(actor) },
     policy: 'verify',
     verify,
-    send: (row) => {
+    send: async (row) => {
       requestedAt = now().toISOString()
-      return writer.send('PATCH', `/bookings/${bookingId}/cancel`, {
+      const r = await writer.send('PATCH', `/bookings/${bookingId}/cancel`, {
         body: {}, policy: 'verify', verify, op: 'cancel', origin, ledgerId: row.id, expect: { bookingId },
       })
+      // An answer naming another client: it went out, so it is in doubt, never done.
+      const owner = r.verdict === 'done' && isObj(r.data) ? r.data.user_id : null
+      if (owner != null && !sameIdText(owner, un1tUserId)) {
+        logWarn(LOG_MODULE, "un1t.online's cancel answer named another client", fields({ locationId, op: 'cancel', origin, ledgerId: row.id, code: C.BOOKING_NOT_THIS_CLIENT }))
+        return result('unknown', { sent: r.sent, code: C.BOOKING_NOT_THIS_CLIENT, message: NOT_THIS_CLIENT_UNKNOWN_TEXT })
+      }
+      return r
     },
     onDone: async (r) => {
       const data = isObj(r.data) && r.data.id ? r.data : { id: bookingId }
@@ -1170,9 +1210,24 @@ export async function createClient(db, args = {}, deps = {}) {
   const refused = await opRefusal(writer, 'create_client')
   if (refused) return { ...refused, conflict: null }
 
+  const linkMirror = async (un1tUserId, ledgerId, requestedAt = null) => {
+    const m = await applyUn1tWriteToMirror(db, {
+      op: 'create_client', locationId, contactId: contact.id, un1tUserId, studioId: writer.studioId,
+      data: null, requestedAt, ledgerId,
+    }, mirrorDeps(writer, now))
+    return { conflict: m.conflict ?? null }
+  }
+
+  // A done create is final; its mirror is re-run (it is idempotent), so a
+  // contact link that failed last time is tried again.
   const key = ledgerKey.create(locationId, contact.id)
   const prior = await findDone(db, { key })
-  if (prior) return { ...withLedger(result('done', { id: idText(prior.un1t_ref) }), prior.id), conflict: null }
+  if (prior) {
+    const id = idText(prior.un1t_ref)
+    const done = withLedger(result('done', { id }), prior.id)
+    const extra = id ? await safely(() => linkMirror(id, prior.id), { locationId, op: 'create_client', origin, ledgerId: prior.id }) : {}
+    return { conflict: null, ...done, ...extra }
+  }
 
   // Held in this call only: straight into the body, scrubbed from every text.
   const password = randomBytes(24).toString('base64url')
@@ -1203,14 +1258,7 @@ export async function createClient(db, args = {}, deps = {}) {
       requestedAt = now().toISOString()
       return writer.send('POST', '/users/clients', { body, policy: 'verify', verify, op: 'create_client', origin, ledgerId: row.id, secrets, expect: {} })
     },
-    onDone: async (done) => {
-      if (!done.id) return {}
-      const m = await applyUn1tWriteToMirror(db, {
-        op: 'create_client', locationId, contactId: contact.id, un1tUserId: done.id, studioId: writer.studioId,
-        data: null, requestedAt, ledgerId: done.ledgerId,
-      }, mirrorDeps(writer, now))
-      return { conflict: m.conflict ?? null }
-    },
+    onDone: (done) => (done.id ? linkMirror(done.id, done.ledgerId, requestedAt) : {}),
   })
   return { conflict: null, ...r, data: null }
 }
@@ -1265,12 +1313,14 @@ function isCustomerUrl(value, host) {
   return u.protocol === 'https:' && !u.username && !u.password && u.host.toLowerCase() === host
 }
 
+// An unreadable customer host is an unanswered question (retry), never a
+// refusal of the caller's URLs.
 async function customerHost(db, locationId) {
   try {
-    return new URL(await resolveCustomerBaseUrl(db, locationId)).host.toLowerCase()
-  } catch {
-    return null
-  }
+    const host = new URL(await resolveCustomerBaseUrl(db, locationId)).host.toLowerCase()
+    if (host) return host
+  } catch { /* falls through */ }
+  throw new Un1tSettingsReadError("this studio's customer site could not be read", { code: 'customer_url_unreadable' })
 }
 
 const refuseCheckout = (code) => new Un1tWriteRefused(code, CHECKOUT_TEXT[code], withLedger(refusalResult(code, CHECKOUT_TEXT[code])))

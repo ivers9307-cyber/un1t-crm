@@ -19,6 +19,10 @@
 //   GET /bookings/{id} first), then one GET /credits/ledgers/{userId}/{studioId}.
 //   has_guest comes from the data: the write module's picked answer carries the
 //   flag but no guest fields, and mapBooking would derive false from it.
+//   Only the columns the source carried are written (a picked answer never
+//   NULLs source / credit_charged / the external refs), raw only from the
+//   cancel's full re-read, synced_at never (it is the sync's clock), and a
+//   re-read that names another client is not written.
 // - create_client: contacts.un1t_user_id only where it is null; a 23505 on the
 //   organisation's unique index (another contact holds that user) is
 //   conflict 'un1t_link_conflict', never an overwrite. Then the un1t_clients row
@@ -51,8 +55,9 @@ function meta({ locationId, op, ledgerId }, code) {
  * @param {{ op: 'book'|'cancel'|'create_client'|'trial'|'checkout', locationId: string,
  *   contactId?: string|null, un1tUserId?: string|null, studioId?: string|null,
  *   data?: object|null, requestedAt?: string|null, ledgerId?: string|null }} args
- *   requestedAt (when the write was sent) is the row's synced_at: the data is
- *   as of then. ledgerId only feeds log lines.
+ *   requestedAt (when the write was sent) is a NEW un1t_clients row's
+ *   synced_at; a booking write never sets synced_at (the column default on
+ *   insert, untouched on update). ledgerId only feeds log lines.
  * @param {{ read: (path: string) => Promise<object>, now?: () => Date }} deps
  *   read is the writer's budget-counted GET.
  * @returns {Promise<{ ok: boolean, conflict?: 'un1t_link_conflict', row?: object|null }>}
@@ -76,6 +81,8 @@ async function mirrorBooking(db, args, { read, stamp }) {
   const { op, locationId, contactId, un1tUserId, data, requestedAt } = args
   if (typeof read !== 'function') throw new TypeError('applyUn1tWriteToMirror: read is required for a booking')
   let source = isObj(data) ? data : null
+  // Only the booking's own full read may write raw; a picked answer never does.
+  let fromReread = false
   let ok = true
 
   if (op === 'cancel') {
@@ -83,8 +90,11 @@ async function mirrorBooking(db, args, { read, stamp }) {
     const id = idText(source?.id)
     try {
       const fresh = id ? await read(`/bookings/${encodeURIComponent(id)}`) : null
-      if (isObj(fresh) && sameId(fresh.id, id)) source = fresh
-      else {
+      const owner = isObj(fresh) ? fresh.user_id ?? (isObj(fresh.user) ? fresh.user.id : undefined) : undefined
+      if (isObj(fresh) && sameId(fresh.id, id) && (owner == null || !un1tUserId || sameId(owner, un1tUserId))) {
+        source = fresh
+        fromReread = true
+      } else {
         ok = false
         logError(LOG_MODULE, 'mirror: the cancel re-read did not describe the booking', meta(args, 'reread_mismatch'))
         source = null
@@ -98,8 +108,7 @@ async function mirrorBooking(db, args, { read, stamp }) {
   let row = null
   if (source && idText(source.id) && hasText(source.status)) {
     try {
-      row = { ...mapBooking(source, { locationId, now: requestedAt || stamp }), crm_written_at: stamp }
-      if (typeof source.has_guest === 'boolean') row.has_guest = source.has_guest
+      row = bookingWrite(source, { locationId, requestedAt, stamp, fromReread })
       if (!row.un1t_user_id && un1tUserId) row.un1t_user_id = un1tUserId
       // Only a known contact: a NULL would undo the sync's own link.
       if (contactId) row.contact_id = contactId
@@ -120,6 +129,41 @@ async function mirrorBooking(db, args, { read, stamp }) {
 
   const credited = await refreshCredits(db, args, { read, stamp })
   return { ok: ok && credited, row }
+}
+
+// mapBooking column → the source keys it is read from. A column the source
+// did not carry (or carried as null) is left out of the upsert, so a picked
+// answer never writes NULL over the sync's columns.
+const BOOKING_COLUMN_SOURCES = Object.freeze({
+  un1t_user_id: (s) => s.user_id ?? (isObj(s.user) ? s.user.id : null),
+  event_id: (s) => s.event_id ?? (isObj(s.event) ? s.event.id : null),
+  status: (s) => s.status,
+  source: (s) => s.source,
+  credit_charged: (s) => s.credit_charged,
+  external_member_ref: (s) => s.external_member_ref,
+  external_booking_ref: (s) => s.external_booking_ref,
+  remote_created_at: (s) => s.created_at,
+  remote_updated_at: (s) => s.updated_at,
+})
+const GUEST_KEYS = ['guest_name', 'guest_email', 'guest_phone']
+
+/**
+ * The un1t_bookings columns this write may set. Never synced_at: it is the
+ * sync's clock, so an insert takes the column default and an update never
+ * moves it (backwards or at all). raw only from a full re-read.
+ */
+function bookingWrite(source, { locationId, requestedAt, stamp, fromReread }) {
+  const mapped = mapBooking(source, { locationId, now: requestedAt || stamp })
+  const row = { location_id: mapped.location_id, un1t_id: mapped.un1t_id, crm_written_at: stamp }
+  for (const [col, from] of Object.entries(BOOKING_COLUMN_SOURCES)) {
+    const v = from(source)
+    if (v !== undefined && v !== null && mapped[col] !== null) row[col] = mapped[col]
+  }
+  // The guest flag: the answer's own (the pick keeps it), else the guest fields of a full read.
+  if (typeof source.has_guest === 'boolean') row.has_guest = source.has_guest
+  else if (fromReread || GUEST_KEYS.some((k) => source[k] !== undefined)) row.has_guest = mapped.has_guest
+  if (fromReread) row.raw = mapped.raw
+  return row
 }
 
 // One GET /credits/ledgers/{userId}/{studioId} → un1t_clients credit columns.

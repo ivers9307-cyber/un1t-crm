@@ -36,12 +36,37 @@ describe('book', () => {
     expect(up.opts).toMatchObject({ onConflict: 'location_id,un1t_id' })
     expect(store.un1t_bookings[0]).toMatchObject({
       location_id: LOC, un1t_id: BOOKING, un1t_user_id: USER, event_id: EVENT, status: 'booked', contact_id: CONTACT,
-      crm_written_at: NOW, synced_at: REQUESTED, remote_updated_at: '2026-10-18T09:59:59.000Z',
+      crm_written_at: NOW, remote_updated_at: '2026-10-18T09:59:59.000Z',
     })
+    // synced_at is the sync's: an insert takes the column default, an update never moves it.
+    expect(Object.keys(up.payload)).not.toContain('synced_at')
     expect(out.row).toMatchObject({ un1t_id: BOOKING, crm_written_at: NOW })
     expect(read).toHaveBeenCalledTimes(1)
     expect(read).toHaveBeenCalledWith(CREDITS)
     expect(store.un1t_clients[0]).toMatchObject({ credit_balance: 3, credit_unlimited: true, crm_written_at: NOW, status: 'active' })
+  })
+
+  it('mirrors a picked booking over a fully synced row: the sync-owned columns, raw and synced_at survive', async () => {
+    const synced = {
+      id: 'ub-1', location_id: LOC, un1t_id: BOOKING, un1t_user_id: USER, contact_id: CONTACT, event_id: EVENT, status: 'booked',
+      source: 'app', credit_charged: true, has_guest: false, external_member_ref: 'm-1', external_booking_ref: 'b-1',
+      remote_created_at: '2026-10-18T09:00:00.000Z', remote_updated_at: '2026-10-18T09:00:00.000Z',
+      raw: { id: BOOKING, source: 'app', extra: 'kept' }, synced_at: '2026-10-18T10:05:00.000Z', crm_written_at: null,
+    }
+    const { db, store, calls } = makeDb({ tables: { un1t_bookings: [synced] } })
+    const out = await applyUn1tWriteToMirror(db, bookArgs({ data: picked({ status: 'cancelled', event_id: null }) }), { read: readFrom({ [CREDITS]: { balance: 1 } }), now })
+    expect(out.ok).toBe(true)
+    const row = store.un1t_bookings[0]
+    expect(row).toMatchObject({
+      status: 'cancelled', crm_written_at: NOW, event_id: EVENT,
+      source: 'app', credit_charged: true, external_member_ref: 'm-1', external_booking_ref: 'b-1',
+      raw: { id: BOOKING, source: 'app', extra: 'kept' }, synced_at: '2026-10-18T10:05:00.000Z',
+      remote_updated_at: '2026-10-18T09:59:59.000Z',
+    })
+    const up = calls.find((c) => c.table === 'un1t_bookings' && c.op === 'upsert')
+    for (const k of ['source', 'credit_charged', 'external_member_ref', 'external_booking_ref', 'raw', 'synced_at', 'event_id']) {
+      expect(Object.keys(up.payload)).not.toContain(k)
+    }
   })
 
   it('takes has_guest from the data (the picked answer has no guest fields for mapBooking to read)', async () => {
@@ -107,7 +132,18 @@ describe('cancel', () => {
     expect(out.ok).toBe(true)
     expect(read.mock.calls.map(([p]) => p)).toEqual([`/bookings/${BOOKING}`, CREDITS])
     expect(store.un1t_bookings[0]).toMatchObject({ un1t_id: BOOKING, status: 'cancelled', has_guest: true, crm_written_at: NOW, contact_id: CONTACT })
+    // A full re-read may write raw (stripped of PII); a picked answer never does.
+    expect(store.un1t_bookings[0].raw).toMatchObject({ id: BOOKING, status: 'cancelled' })
     expect(JSON.stringify(store.un1t_bookings[0])).not.toContain('x@example.test')
+  })
+
+  it('a cancel re-read that names another client is not written', async () => {
+    const { db, store } = makeDb()
+    const out = await applyUn1tWriteToMirror(db, bookArgs({ op: 'cancel', data: { id: BOOKING } }), {
+      read: readFrom({ [`/bookings/${BOOKING}`]: picked({ status: 'cancelled', user_id: 'someone-else' }), [CREDITS]: { balance: 5 } }), now,
+    })
+    expect(out.ok).toBe(false)
+    expect(store.un1t_bookings).toHaveLength(0)
   })
 
   it('a failed re-read falls back to the answer only when it names a status; otherwise ok:false and nothing written', async () => {

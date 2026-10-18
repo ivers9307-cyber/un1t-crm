@@ -298,6 +298,38 @@ describe('cancel', () => {
     expect(t.fetchImpl.writes()).toHaveLength(0)
   })
 
+  it("a booking the mirror holds for another client is refused UN1T_BOOKING_NOT_THIS_CLIENT with nothing sent (minor 1)", async () => {
+    expect(C.BOOKING_NOT_THIS_CLIENT).toBe('UN1T_BOOKING_NOT_THIS_CLIENT')
+    const t = await setup({ routes: { [CANCEL_PATH]: [res(200, undefined)] }, db: { tables: { un1t_bookings: [{ id: 'ub-1', location_id: LOC, un1t_id: BOOKING, un1t_user_id: 'someone-else', status: 'booked' }] } } })
+    const r = await cancel(t.db, cancelArgs(), t.deps)
+    expect(r).toMatchObject({ verdict: 'refused', code: C.BOOKING_NOT_THIS_CLIENT, sent: false, retryable: false, ledgerId: null })
+    expect(t.fetchImpl.writes()).toHaveLength(0)
+    expect(ledger(t.store)).toHaveLength(0)
+  })
+
+  it('an answer that names another client is unknown UN1T_BOOKING_NOT_THIS_CLIENT, never done (minor 1)', async () => {
+    const t = await setup({ routes: { [CANCEL_PATH]: [ok(bookingDto({ status: 'cancelled', user_id: 'someone-else' }))], [BOOKING_PATH]: [ok(bookingDto({ status: 'cancelled' }))], [CREDITS_PATH]: [credits()] } })
+    const r = await cancel(t.db, cancelArgs(), t.deps)
+    expect(r).toMatchObject({ verdict: 'unknown', code: C.BOOKING_NOT_THIS_CLIENT })
+    expect(ledger(t.store)[0]).toMatchObject({ stage: 'unknown', code: C.BOOKING_NOT_THIS_CLIENT })
+    expect(t.store.un1t_bookings).toHaveLength(0)
+  })
+
+  it("a check read naming another client is unknown: never landed, never re-sent (minor 1)", async () => {
+    const t = await setup({ routes: { [CANCEL_PATH]: [res(502, {}), res(200, undefined)], [BOOKING_PATH]: [ok(bookingDto({ user_id: 'someone-else' }))] } })
+    const r = await cancel(t.db, cancelArgs(), t.deps)
+    expect(r.verdict).toBe('unknown')
+    expect(t.fetchImpl.count(CANCEL_PATH)).toBe(1)
+    const { writer } = { writer: await t.deps.writerFactory(t.db, LOC) }
+    await expect(findCancelState(writer, { bookingId: BOOKING, un1tUserId: USER })).resolves.toBe('unknown')
+  })
+
+  it('a failed mirror read before a cancel rejects Un1tSettingsReadError, nothing sent', async () => {
+    const t = await setup({ db: { fail: { 'un1t_bookings.select': { code: 'XX000' } } } })
+    await expect(cancel(t.db, cancelArgs(), t.deps)).rejects.toBeInstanceOf(Un1tSettingsReadError)
+    expect(t.fetchImpl.writes()).toHaveLength(0)
+  })
+
   it('a done cancel row for the booking sends nothing and returns done', async () => {
     const key = `cancel:${LOC}:${BOOKING}`
     const t = await setup({ db: { tables: { un1t_write_events: [{ id: 'led-done', location_id: LOC, idempotency_key: key, op: 'cancel', stage: 'done', un1t_ref: BOOKING, created_at: ago(60_000) }] } } })
@@ -446,6 +478,24 @@ describe('createClient', () => {
   })
 })
 
+describe('createClient fix round 1', () => {
+  it('the done-row short-circuit re-runs the (idempotent) mirror, so a failed contact link is retried (minor 2)', async () => {
+    const key = `create:${LOC}:${CONTACT}`
+    const doneRow = { id: 'led-c', location_id: LOC, idempotency_key: key, op: 'create_client', stage: 'done', un1t_ref: NEW_USER, created_at: ago(60_000) }
+    const a = await setup({ db: { tables: { un1t_write_events: [doneRow], contacts: [{ id: CONTACT, organization_id: ORG, un1t_user_id: null }] } } })
+    const r1 = await createClient(a.db, createArgs(), a.deps)
+    expect(r1).toMatchObject({ verdict: 'done', id: NEW_USER, sent: false, ledgerId: 'led-c', conflict: null })
+    expect(a.store.contacts[0].un1t_user_id).toBe(NEW_USER)
+    expect(a.store.un1t_clients[0]).toMatchObject({ un1t_user_id: NEW_USER, contact_id: CONTACT })
+    expect(a.fetchImpl.writes()).toHaveLength(0)
+
+    const b = await setup({ db: { tables: { un1t_write_events: [doneRow], contacts: [{ id: CONTACT, organization_id: ORG, un1t_user_id: null }, { id: OTHER_CONTACT, organization_id: ORG, un1t_user_id: NEW_USER }] } } })
+    const r2 = await createClient(b.db, createArgs(), b.deps)
+    expect(r2).toMatchObject({ verdict: 'done', id: NEW_USER, conflict: 'un1t_link_conflict' })
+    expect(b.store.contacts[0].un1t_user_id).toBeNull()
+  })
+})
+
 describe('forgotPassword', () => {
   it('forgotPassword is never re-sent: a 5xx is unknown after one request', async () => {
     const t = await setup({ routes: { 'POST /auth/forgot-password': [res(503, {}), ok({ message: 'sent' })] } })
@@ -570,6 +620,16 @@ describe('createCheckoutLink', () => {
     expect(e2).toBeInstanceOf(Un1tWriteRefused)
     expect(e2.code).toBe(C.WRITES_OFF)
     expect(b.fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('a customer host that cannot be read rejects Un1tSettingsReadError, not a refusal (minor 3)', async () => {
+    const { resolveCustomerBaseUrl } = await import('./tenant-host.js')
+    resolveCustomerBaseUrl.mockRejectedValueOnce(new Error('APP_URL is not set'))
+    const t = await setup({ routes: checkoutRoutes(), db: { tables: checkoutTables() } })
+    const err = await createCheckoutLink(t.db, checkoutArgs(), t.deps).catch((e) => e)
+    expect(err).toBeInstanceOf(Un1tSettingsReadError)
+    expect(err.code).toBe('customer_url_unreadable')
+    expect(t.fetchImpl.writes()).toHaveLength(0)
   })
 
   it('createCheckoutLink never calls /purchases/charge', async () => {
@@ -717,6 +777,20 @@ describe('carried requirements', () => {
     // A live ledger booking the member cancelled in the app: the check read says absent, so it is sent.
     const c = await setup({ routes: { [USER_BOOKINGS]: [page([bookingDto({ status: 'cancelled' })])], 'POST /bookings': [created(bookingDto({ id: 'booking-3' }))], [CREDITS_PATH]: [credits()] }, db: { tables: { un1t_write_events: [doneBook] } } })
     expect(await book(c.db, bookArgs(), c.deps)).toMatchObject({ verdict: 'done', id: 'booking-3' })
+  })
+
+  it('a live done ledger book whose check read is unknown sends nothing: unknown, tied to the prior row (fix 1)', async () => {
+    const bookKey = `book:${LOC}:${USER}:${EVENT}`
+    const doneBook = { id: 'led-b', location_id: LOC, idempotency_key: bookKey, op: 'book', stage: 'done', un1t_ref: BOOKING, created_at: ago(60 * 60_000) }
+    for (const routes of [{ [USER_BOOKINGS]: [res(500, {})] }, { [USER_BOOKINGS]: [page([bookingDto({ status: 'waitlisted', created_at: LONG_AGO })])] }]) {
+      const t = await setup({ routes: { 'POST /bookings': [created(bookingDto())], ...routes }, db: { tables: { un1t_write_events: [doneBook] } } })
+      const r = await book(t.db, bookArgs(), t.deps)
+      expect(C.ALREADY_BOOKED_UNVERIFIED).toBe('already_booked_unverified')
+      expect(r).toMatchObject({ verdict: 'unknown', code: C.ALREADY_BOOKED_UNVERIFIED, sent: false, ledgerId: 'led-b', alreadyBooked: false })
+      expect(Object.keys(r).sort()).toEqual(CONTRACT_KEYS)
+      expect(t.fetchImpl.writes()).toHaveLength(0)
+      expect(ledger(t.store)).toHaveLength(1)
+    }
   })
 
   it('the done-trial check spans both methods (one trial per person and product)', async () => {
