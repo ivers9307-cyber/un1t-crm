@@ -19,6 +19,7 @@ import {
 import { nettedOutByRetry, isMembershipInvoice } from '@/lib/glofox-arrears'
 import { combineGroupActivity, rollupByPerson } from '@/lib/person-rollup'
 import { selectAll } from '@/lib/select-all'
+import { radarReadsFor } from '@/lib/membership/reads/index'
 
 // Columns the scorer + UI need from contacts. glofox_membership_type
 // and trial_credits_remaining drive the live-membership gate (a class
@@ -34,6 +35,25 @@ const MEMBER_COLUMNS =
   'total_bookings_30d, joined_at, lifetime_value_cents, person_group_id'
 
 const CONTACTING_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'outreach_sent']
+
+/**
+ * UN1TRADAR.1 — the location's radar row reads, resolved through the
+ * membership seam BY SOURCE KEY in any state (radarReadsFor): the Glofox
+ * adapter forwards to fetchMembers / fetchWinbackContacts / fetchPastDue
+ * below, untouched; a un1t.online studio reads its un1t_* rows. Every key is
+ * checked before any read runs, so an adapter lacking one throws
+ * "radar read missing: <key>" (callers gate on the memberships capability).
+ * An unreadable source key throws MEMBERSHIP_SOURCE_UNREADABLE.
+ */
+export async function radarReads(db, locationId, keys) {
+  const { reads } = await radarReadsFor(db, locationId)
+  const out = {}
+  for (const key of keys) {
+    if (typeof reads[key] !== "function") throw new Error(`radar read missing: ${key}`)
+    out[key] = reads[key]
+  }
+  return out
+}
 
 // Actions that triage a quarantine record — once a member carries one
 // they're off the quarantine backlog (kept, or marked stale).
@@ -321,11 +341,12 @@ async function applyPersonRollup(db, locationId, rows) {
  * @returns {Promise<{ radar: object[], summary: object }>}
  */
 export async function loadRadar(db, locationId, nowMs = Date.now()) {
+  const r = await radarReads(db, locationId, ['radarMembers', 'radarPastDue'])
   const [allMembers, actions, dismissed, pastDue] = await Promise.all([
-    fetchMembers(db, locationId),
+    r.radarMembers(db, locationId, { nowMs }),
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
-    fetchPastDue(db, locationId),
+    r.radarPastDue(db, locationId, { nowMs }),
   ])
   // CHURN-CLEAN.1 — operator-dismissed "not a member" contacts drop off
   // every surface AND the summary counts (active base, at-risk, etc.).
@@ -427,8 +448,9 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
  * footprint that haven't yet been triaged (no quarantine_* action).
  */
 export async function loadQuarantine(db, locationId) {
+  const r = await radarReads(db, locationId, ['radarMembers'])
   const [allMembers, actions, dismissed] = await Promise.all([
-    fetchMembers(db, locationId),
+    r.radarMembers(db, locationId, { nowMs: Date.now() }),
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
   ])
@@ -475,8 +497,9 @@ export async function loadQuarantine(db, locationId) {
  * loadOverdue + loadUnpaidCharges + loadAwaitingAuth so they read identical data.
  */
 async function loadArrearsRows(db, locationId, nowMs) {
+  const r = await radarReads(db, locationId, ['radarPastDue'])
   const [pastDue, actions, dismissed] = await Promise.all([
-    fetchPastDue(db, locationId),
+    r.radarPastDue(db, locationId, { nowMs }),
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
   ])
@@ -636,8 +659,9 @@ export async function fetchWinbackContacts(db, locationId) {
  * @returns {Promise<{ winback: object[], summary: object }>}
  */
 export async function loadWinback(db, locationId, nowMs = Date.now()) {
+  const r = await radarReads(db, locationId, ['winbackContacts'])
   const [allContacts, actions, dismissed] = await Promise.all([
-    fetchWinbackContacts(db, locationId),
+    r.winbackContacts(db, locationId, { nowMs }),
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
   ])

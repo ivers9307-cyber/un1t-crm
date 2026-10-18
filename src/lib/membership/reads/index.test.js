@@ -1,10 +1,9 @@
 // UN1TREAD.1 — the membership read seam: which adapter serves a location.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/membership/state-for-page', async (importOriginal) => {
-  const real = await importOriginal()
-  return { ...real, membershipStateForPage: vi.fn() }
-})
+// No importOriginal: the real module reaches the registry → glofox →
+// churn-radar-data → reads/index cycle (UN1TRADAR.1) while the mock is built.
+vi.mock('@/lib/membership/state-for-page', () => ({ membershipStateForPage: vi.fn() }))
 // Stub the four Glofox modules glofox.js imports, so the seam test loads no real Glofox/Supabase code.
 vi.mock('@/lib/membership-snapshot', () => ({ computeMembershipCounts: vi.fn() }))
 vi.mock('@/lib/membership-flows', () => ({ fetchMembershipFlows: vi.fn() }))
