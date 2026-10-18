@@ -506,8 +506,11 @@ const HATCH_STAGES = [
 const leadSnap = () => ({ glofox_membership_status: 'lead', recent_bookings: [], joined_at: new Date(Date.now() - 2 * 86_400_000).toISOString() })
 const memberSnap = () => ({ glofox_membership_status: 'member', converted_at: isoBefore(200), recent_bookings: [attendedBooking(3)], last_attended_at: isoBefore(3), joined_at: isoBefore(300) })
 
-function hatchInputs({ contacts, snapshots, unlinked = 2, skipped = 1 }) {
-  return { success: true, data: { contacts, snapshots: new Map(snapshots), unlinked, skipped_no_contact: skipped } }
+function hatchInputs({ contacts, snapshots, evidence, unlinked = 2, skipped = 1 }) {
+  return {
+    success: true,
+    data: { contacts, snapshots: new Map(snapshots), ...(evidence ? { evidence: new Map(evidence) } : {}), unlinked, skipped_no_contact: skipped },
+  }
 }
 
 function seamWith(pipelineInputs, over = {}) {
@@ -782,5 +785,115 @@ describe('HATCHPIPE.2 — dry run of a disabled board (includeDisabled)', () => 
       movement_matrix: { new_lead: { member: 1 } },
     })
     expect(out.pipelines_skipped).toEqual(['waitlist'])
+  })
+})
+
+// HATCHPIPE.5 — a deal the un1t path CREATES carries the real dates; a MOVE
+// leaves them to the mig 458 trigger (now, when the CRM saw the move).
+describe('HATCHPIPE.5 — un1t create dates', () => {
+  beforeEach(() => { vi.mocked(membershipReadsFor).mockReset(); vi.mocked(logWarn).mockClear() })
+
+  const daysAgoIso = (d) => new Date(Date.now() - d * 86_400_000).toISOString()
+  const leadEvidence = (createdDaysAgo) => ({
+    client_created_at: daysAgoIso(createdDaysAgo), attended_starts: [], last_attended_at: null,
+    joined_at: daysAgoIso(createdDaysAgo), membership_status: 'lead',
+  })
+  const firstClassSnap = (attendedDaysAgo) => ({
+    glofox_membership_status: 'lead', recent_bookings: [attendedBooking(attendedDaysAgo)],
+    last_attended_at: daysAgoIso(attendedDaysAgo), joined_at: daysAgoIso(30),
+  })
+  const firstClassEvidence = (attendedDaysAgo) => ({
+    ...leadEvidence(30), attended_starts: [daysAgoIso(attendedDaysAgo)], last_attended_at: daysAgoIso(attendedDaysAgo),
+  })
+
+  it('a create sets created_at (client creation) and stage_entered_at (the stage evidence)', async () => {
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [
+        { id: 'c-lead', name: 'Lead', email: null, location_id: HATCH },
+        { id: 'c-first', name: 'First', email: null, location_id: HATCH },
+      ],
+      snapshots: [['c-lead', leadSnap()], ['c-first', firstClassSnap(4)]],
+      evidence: [['c-lead', leadEvidence(2)], ['c-first', firstClassEvidence(4)]],
+    })))
+    const { db, writesTo, argOf } = recordingDb({ pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals: [] })
+
+    const out = await reclassifyAllContacts(db, { locationId: HATCH })
+
+    const inserts = writesTo('deals').map((e) => argOf(e, 'insert')[1])
+    expect(inserts).toHaveLength(2)
+    const lead = inserts.find((r) => r.contact_id === 'c-lead')
+    const first = inserts.find((r) => r.contact_id === 'c-first')
+    expect(lead.stage_id).toBe('h-new')
+    expect(Math.abs(Date.parse(lead.created_at) - (Date.now() - 2 * 86_400_000))).toBeLessThan(5_000)
+    expect(lead.stage_entered_at).toBe(lead.created_at)
+    expect(first.stage_id).toBe('h-first')
+    expect(Math.abs(Date.parse(first.created_at) - (Date.now() - 30 * 86_400_000))).toBeLessThan(5_000)
+    expect(Math.abs(Date.parse(first.stage_entered_at) - (Date.now() - 4 * 86_400_000))).toBeLessThan(5_000)
+    expect(out).toMatchObject({ ok: true, deals_created: 2, errors: 0 })
+  })
+
+  it('missing stage evidence: created_at is still set, stage_entered_at is left to the column default (now)', async () => {
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-first', name: 'First', email: null, location_id: HATCH }],
+      snapshots: [['c-first', firstClassSnap(4)]],
+      // the evidence knows the client but no attendance at all
+      evidence: [['c-first', leadEvidence(30)]],
+    })))
+    const { db, writesTo, argOf } = recordingDb({ pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals: [] })
+
+    await reclassifyAllContacts(db, { locationId: HATCH })
+
+    const row = argOf(writesTo('deals')[0], 'insert')[1]
+    expect(row.stage_id).toBe('h-first')
+    expect(Math.abs(Date.parse(row.created_at) - (Date.now() - 30 * 86_400_000))).toBeLessThan(5_000)
+    expect(row).not.toHaveProperty('stage_entered_at')
+  })
+
+  it('no evidence for the contact: the insert is exactly today\'s (both columns default to now)', async () => {
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-lead', name: 'Lead', email: null, location_id: HATCH }],
+      snapshots: [['c-lead', leadSnap()]],
+      evidence: [],
+    })))
+    const { db, writesTo, argOf } = recordingDb({ pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals: [] })
+
+    await reclassifyAllContacts(db, { locationId: HATCH })
+
+    expect(argOf(writesTo('deals')[0], 'insert')[1]).toEqual({
+      title: 'Lead', contact_id: 'c-lead', stage_id: 'h-new', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open',
+    })
+  })
+
+  it('a move does NOT set either date: the update is stage_id only (the trigger stamps now)', async () => {
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-first', name: 'First', email: null, location_id: HATCH }],
+      snapshots: [['c-first', firstClassSnap(4)]],
+      evidence: [['c-first', firstClassEvidence(4)]],
+    })))
+    const { db, writesTo, argOf } = recordingDb({
+      pipelines: HATCH_PIPELINES,
+      pipeline_stages: HATCH_STAGES,
+      deals: [{ id: 'd-1', contact_id: 'c-first', stage_id: 'h-new', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' }],
+    })
+
+    const out = await reclassifyAllContacts(db, { locationId: HATCH })
+
+    const writes = writesTo('deals')
+    expect(writes).toHaveLength(1)
+    expect(argOf(writes[0], 'update')[1]).toEqual({ stage_id: 'h-first' })
+    expect(argOf(writes[0], 'insert')).toBeUndefined()
+    expect(out).toMatchObject({ ok: true, deals_moved: 1, deals_created: 0 })
+  })
+
+  it('the contacts (Stillorgan) path never sets dates, whatever a contact carries', async () => {
+    const { db, writesTo, argOf } = recordingDb({
+      pipelines: DEFAULT_PIPELINES,
+      pipeline_stages: STAGES,
+      contacts: [{ id: 'c-2', name: 'N', email: null, glofox_membership_status: null, joined_at: isoDaysAgo(40), created_at: isoDaysAgo(40), recent_bookings: [] }],
+      deals: [],
+    })
+    await reclassifyAllContacts(db, { locationId: 'loc-1' })
+    const row = argOf(writesTo('deals')[0], 'insert')[1]
+    expect(Object.keys(row).sort()).toEqual(['contact_id', 'location_id', 'pipeline_id', 'stage_id', 'status', 'title'])
   })
 })

@@ -24,6 +24,7 @@ import { classifyContact } from './pipeline-classifier.js'
 import { logWarn } from './log.js'
 import { getBoardModule, PIPELINE_MODES } from '../../shared/pipelines/index.js'
 import { membershipReadsFor, supportsRead } from './membership/reads/index.js'
+import { un1tDealDates } from './membership/reads/un1t-pipeline-dates.js'
 
 // HATCHPIPE.2 — a board whose module declares this inputSource is classified
 // from the location's membership read adapter (un1tOnlineReads.pipelineInputs:
@@ -415,6 +416,11 @@ export async function reclassifyAllContacts(db, args) {
         target_pipeline_id: stagePipelineById.get(targetStageId) || null,
         target_slug: targetSlug,
         contact_name: c.name || c.email || (un1tInputs ? 'Member' : 'Glofox member'),
+        // HATCHPIPE.5 — on the un1t path a NEW deal carries the real dates
+        // (client creation; the evidence for its stage). Null = the column
+        // default, now. A MOVE never sets them: the mig 458 trigger stamps
+        // stage_entered_at when stage_id changes, i.e. when the CRM saw it.
+        dates: un1tInputs ? un1tDealDates(targetSlug, un1tInputs.evidence?.get(c.id) ?? null, nowMs) : null,
       })
       continue
     }
@@ -503,6 +509,10 @@ export async function reclassifyAllContacts(db, args) {
           pipeline_id: c.target_pipeline_id,
           location_id: locationId,
           status: 'open',
+          // Mig 458's trigger is BEFORE UPDATE OF stage_id only: an insert
+          // keeps both values as given. Absent → default now(), as before.
+          ...(c.dates?.created_at ? { created_at: c.dates.created_at } : {}),
+          ...(c.dates?.stage_entered_at ? { stage_entered_at: c.dates.stage_entered_at } : {}),
         })
       if (createErr) {
         errors++
