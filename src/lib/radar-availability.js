@@ -12,6 +12,7 @@
 // its numbers are; null for any other source.
 import { logInfo } from '@/lib/log'
 import { radarReadsFor } from '@/lib/membership/reads/index'
+import { getLocationZone } from '@/lib/location-time'
 
 export const RADAR_UNAVAILABLE = Object.freeze({ success: true, data: null, unavailable: 'memberships' })
 
@@ -37,15 +38,20 @@ export async function syncDataAsOf(db, locationId) {
  * @param {object} db  service-role client
  * @param {string} locationId
  * @param {{ module: string }} opts  the log module ('churn-radar' | 'lead-radar' | …)
- * @returns {Promise<{ available: boolean, source: string|null, dataAsOf: string|null }>}
+ * @returns {Promise<{ available: boolean, source: string|null, dataAsOf: string|null, dataAsOfZone?: string|null }>}
  *   Throws when the source key is unreadable (MEMBERSHIP_SOURCE_UNREADABLE).
  */
 export async function radarAvailability(db, locationId, { module }) {
   const { source, providesMemberships } = await radarReadsFor(db, locationId)
   if (!providesMemberships) {
     logInfo(module, 'radar skipped: source lacks memberships', { locationId, source })
-    return { available: false, source, dataAsOf: null }
+    return { available: false, source, dataAsOf: null, dataAsOfZone: null }
   }
-  const dataAsOf = source === 'un1t_online' ? await syncDataAsOf(db, locationId) : null
-  return { available: true, source, dataAsOf }
+  if (source !== 'un1t_online') return { available: true, source, dataAsOf: null, dataAsOfZone: null }
+  const dataAsOf = await syncDataAsOf(db, locationId)
+  // UN1TRADAR.2 — the studio's clock for the "as of HH:MM" line; an unreadable
+  // zone is null and the page then draws no line rather than guess one.
+  let dataAsOfZone = null
+  try { dataAsOfZone = dataAsOf ? await getLocationZone(db, locationId) : null } catch { dataAsOfZone = null }
+  return { available: true, source, dataAsOf, dataAsOfZone }
 }

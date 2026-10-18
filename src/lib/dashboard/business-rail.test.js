@@ -29,6 +29,13 @@ describe('rail arrearsRow', () => {
     radarReadsFor.mockResolvedValue({ source: 'un1t_online', reads: { arrears }, providesMemberships: false, pinArrears: true })
     expect((await arrearsRow()).text).toBe('1 member owes €165, includes an estimate')
   })
+  it('un1t exact total: dash-free; all unknown: no "€0"', async () => {
+    radarReadsFor.mockResolvedValue({ source: 'un1t_online', reads: { arrears: async () => ({ success: true, data: { totalCents: 9000, memberCount: 2 } }) } })
+    expect((await arrearsRow()).text).toBe('2 members owe €90')
+    radarReadsFor.mockResolvedValue({ source: 'un1t_online', reads: { arrears: async () => ({ success: true, data: { totalCents: 0, memberCount: 1, estimated: true } }) } })
+    expect((await arrearsRow()).text).toBe('1 member owes amount not available from un1t.online')
+  })
+
   it('unsupported, failed or nobody owing → no row', async () => {
     radarReadsFor.mockResolvedValue({ source: 'none', reads: {}, providesMemberships: false, pinArrears: false })
     expect(await arrearsRow()).toBeNull()

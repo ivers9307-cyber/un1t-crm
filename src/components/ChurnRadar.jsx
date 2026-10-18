@@ -43,11 +43,6 @@ function formatMoney(cents) {
   return `€${n.toLocaleString('en-IE')}`
 }
 
-// The viewer's own zone, for the freshness line.
-function browserZone() {
-  try { return Intl.DateTimeFormat().resolvedOptions().timeZone } catch { return undefined }
-}
-
 function timeAgo(iso) {
   if (!iso) return ''
   const ms = Date.now() - new Date(iso).getTime()
@@ -65,7 +60,7 @@ export default function ChurnRadar() {
   const [tab, setTab] = useState('radar')
   const [radar, setRadar] = useState(null)
   // UN1TRADAR.2 — the response's source and data freshness (beside `data`)
-  const [radarMeta, setRadarMeta] = useState({ source: null, dataAsOf: null })
+  const [radarMeta, setRadarMeta] = useState({ source: null, dataAsOf: null, zone: null })
   const [quarantine, setQuarantine] = useState(null)
   const [winback, setWinback] = useState(null)
   const [overdue, setOverdue] = useState(null)
@@ -84,7 +79,7 @@ export default function ChurnRadar() {
       const j = await r.json()
       if (!r.ok || !j.success) throw new Error(j.error || 'Failed to load radar')
       setRadar(j.data)
-      setRadarMeta({ source: j.source ?? null, dataAsOf: j.dataAsOf ?? null })
+      setRadarMeta({ source: j.source ?? null, dataAsOf: j.dataAsOf ?? null, zone: j.dataAsOfZone ?? null })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -260,6 +255,9 @@ export default function ChurnRadar() {
   // RADAR-TREND.1 — week-over-week deltas, null until the first
   // weekly snapshot exists.
   const td = summary.trend?.deltas || null
+  const freshness = radarMeta.source === 'un1t_online' && radarMeta.zone
+    ? syncedAtLine(radarMeta.dataAsOf, radarMeta.zone)
+    : null
 
   return (
     <div>
@@ -276,11 +274,9 @@ export default function ChurnRadar() {
         <p className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>
       )}
 
-      {/* UN1TRADAR.2 — how fresh a un1t.online studio's numbers are (the
-          viewer's clock; staff sit in the studio's zone) */}
-      {radarMeta.source === 'un1t_online' && syncedAtLine(radarMeta.dataAsOf, browserZone()) && (
-        <p className="mb-3 text-xs text-un1t-subtle">{syncedAtLine(radarMeta.dataAsOf, browserZone())}</p>
-      )}
+      {/* UN1TRADAR.2 — how fresh a un1t.online studio's numbers are, on the
+          studio's clock (no zone, no line) */}
+      {freshness && <p className="mb-3 text-xs text-un1t-subtle">{freshness}</p>}
 
       {/* Summary cards — the Active base is every live membership
           (active, paused, overdue and quarantine alike), split into

@@ -30,7 +30,10 @@ export function owedLabel(cents, { estimated = false, unknown = false } = {}) {
 
 /** A summed total; one containing an estimate (or an amount with no euro figure) says so. */
 export function totalLabel(cents, { estimated = false } = {}) {
-  return estimated ? `${euros(cents)}, ${ESTIMATE_NOTE}` : euros(cents)
+  if (!estimated) return euros(cents)
+  // every figure in it unknown: no number, never "€0"
+  if (!(Number(cents) > 0)) return 'amount not available from un1t.online'
+  return `${euros(cents)}, ${ESTIMATE_NOTE}`
 }
 
 /** "un1t.online data as of HH:MM" on `zone`'s clock, or null when there is no sync time. */

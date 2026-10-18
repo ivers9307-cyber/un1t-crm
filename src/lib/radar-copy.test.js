@@ -28,6 +28,8 @@ describe('radar copy', () => {
     expect(totalLabel(16500, { estimated: true })).toBe('€165, includes an estimate')
     expect(totalLabel(16500)).toBe('€165')
     expect(ESTIMATE_NOTE).toBe('includes an estimate')
+    expect(totalLabel(0, { estimated: true })).toBe('amount not available from un1t.online')
+    expect(totalLabel(0)).toBe('€0')
   })
 
   it('no em-dash in any copy', () => {

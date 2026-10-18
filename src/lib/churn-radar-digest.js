@@ -99,8 +99,9 @@ function buildChurnSection(summary, history) {
     : ''
 
   // UN1TRADAR.2 — a source that cannot read these charges (null) says so, never 0
-  const unavailableLine = s.unpaidCharges === null
-    ? `<p style="margin:16px 0 0;color:#666;">Unpaid charges and awaiting authorization: ${UN1T_UNAVAILABLE}</p>`
+  const unread = [s.unpaidCharges === null && 'Unpaid charges', s.awaitingAuth === null && 'awaiting authorization'].filter(Boolean)
+  const unavailableLine = unread.length
+    ? `<p style="margin:16px 0 0;color:#666;">${unread.length === 2 ? 'Unpaid charges and awaiting authorization' : unread[0].charAt(0).toUpperCase() + unread[0].slice(1)}: ${UN1T_UNAVAILABLE}</p>`
     : ''
 
   return `<h3 style="margin:24px 0 8px;">Churn radar &mdash; retention</h3>
