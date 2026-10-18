@@ -1,0 +1,299 @@
+// UN1TRADAR.1 — pure shaping of un1t.online rows into the churn / lead
+// scorer's existing row contract.
+import { describe, it, expect } from 'vitest'
+import { shapeCounts, packHolderIds } from './un1t-online-shape'
+import {
+  RENEWAL_EXPIRY_RULE, expiryFor, pickLiveMembership, shapeRadarMembers,
+} from './un1t-online-radar-shape'
+import { buildRadar, classifyContact } from '@/lib/churn-radar'
+
+const NOW = Date.parse('2026-10-18T12:00:00Z')
+const DAY = 86_400_000
+const iso = (ms) => new Date(ms).toISOString()
+
+const sub = (over = {}) => ({
+  un1t_id: 's1', un1t_user_id: 'u1', contact_id: 'c1', status: 'active', product_id: 'p1',
+  product_title: 'Hatch plan', price_cents: 12000, billing_interval: 'month', billing_interval_count: 1,
+  current_period_end: '2026-11-01T00:00:00Z', cancel_at_period_end: false, paused_at: null,
+  paused_until: null, past_due_at: null, remote_created_at: '2026-08-20T00:00:00Z', ...over,
+})
+const client = (over = {}) => ({
+  un1t_user_id: 'u1', contact_id: 'c1', credit_balance: 0, credit_unlimited: false,
+  last_attended_at: '2026-10-15T09:00:00Z', bookings_30d_attended: 6, bookings_30d_no_show: 1,
+  ltv_cents: 48000, remote_created_at: '2026-08-19T10:00:00Z', ...over,
+})
+const PRODUCTS = [
+  { un1t_id: 'pk1', type: 'one_time', price_cents: 5400, title: '5 Class Pack' },
+  { un1t_id: 'pk0', type: 'one_time', price_cents: 0, title: 'Free pack' },
+  { un1t_id: 'trial', type: 'one_time', price_cents: 0, title: 'The UN1T Trial' },
+]
+const ptx = (over = {}) => ({
+  un1t_user_id: 'u2', product_id: 'pk1', product_type: 'pack', product_title: '5 Class Pack',
+  amount_cents: 5400, remote_created_at: '2026-10-01T10:00:00Z', ...over,
+})
+
+const fx = (over = {}) => ({
+  subs: [sub()],
+  clients: [client()],
+  packTxs: [],
+  products: PRODUCTS,
+  contactsById: new Map([['c1', { id: 'c1', name: 'Alex' }], ['c2', { id: 'c2', name: 'Bea' }], ['c3', { id: 'c3', name: 'Cal' }]]),
+  events: [],
+  bookings: [],
+  newestBookingAtByUser: new Map(),
+  lastPaymentAtByUser: new Map(),
+  nowMs: NOW,
+  ...over,
+})
+
+const ROW_KEYS = [
+  'id', 'name', 'glofox_membership_status', 'glofox_membership_type', 'glofox_membership_plan',
+  'glofox_membership_state', 'glofox_membership_expiry', 'glofox_membership_price_cents',
+  'glofox_billing_interval', 'trial_credits_remaining', 'last_attended_at', 'last_booked_at',
+  'total_attended_30d', 'total_noshow_30d', 'total_attended_7d', 'total_bookings_30d',
+  'last_payment_at', 'joined_at', 'lifetime_value_cents', 'person_group_id', 'cancel_at_period_end',
+]
+
+describe('RENEWAL_EXPIRY_RULE', () => {
+  it('is period_end (Stillorgan rolling monthly plans carry the next charge date: 98 of 102 within 31 days)', () => {
+    expect(RENEWAL_EXPIRY_RULE).toBe('period_end')
+  })
+})
+
+describe('expiryFor', () => {
+  const monthly = sub()
+  const annual = sub({ billing_interval: 'year', billing_interval_count: 1, current_period_end: '2027-08-20T00:00:00Z' })
+  it('period_end vs cancelling_or_long', () => {
+    expect(expiryFor(monthly, 'period_end')).toBe(monthly.current_period_end)
+    expect(expiryFor(monthly, 'cancelling_or_long')).toBeNull()
+    expect(expiryFor({ ...monthly, cancel_at_period_end: true }, 'cancelling_or_long')).toBe(monthly.current_period_end)
+    expect(expiryFor(annual, 'cancelling_or_long')).toBe(annual.current_period_end)
+  })
+  it('defaults to RENEWAL_EXPIRY_RULE; a missing period end is null', () => {
+    expect(expiryFor(monthly)).toBe(monthly.current_period_end)
+    expect(expiryFor(sub({ current_period_end: null }))).toBeNull()
+    expect(expiryFor(null)).toBeNull()
+  })
+})
+
+describe('pickLiveMembership', () => {
+  it('null when no subscription is live', () => {
+    expect(pickLiveMembership([sub({ status: 'cancelled' }), sub({ status: 'trialing' })], NOW)).toBeNull()
+    expect(pickLiveMembership([], NOW)).toBeNull()
+  })
+  it('two live subs: plan from the dearest monthly price; cancelling only when both cancel', () => {
+    const cheapMonthly = sub({ un1t_id: 'a', product_title: 'Monthly', price_cents: 9000 })
+    const dearQuarterly = sub({ un1t_id: 'b', product_title: 'Quarterly', price_cents: 24000, billing_interval_count: 3, cancel_at_period_end: true })
+    // 24000/3 = 8000 a month < 9000: the monthly is dearer once normalised
+    const one = pickLiveMembership([cheapMonthly, dearQuarterly], NOW)
+    expect(one.sub.product_title).toBe('Monthly')
+    expect(one.cancelling).toBe(false)
+    const both = pickLiveMembership([{ ...cheapMonthly, cancel_at_period_end: true }, dearQuarterly], NOW)
+    expect(both.cancelling).toBe(true)
+  })
+  it('paused when every live sub is paused and paused_until is null or future', () => {
+    const p = { paused_at: '2026-10-01T00:00:00Z' }
+    expect(pickLiveMembership([sub(p)], NOW).paused).toBe(true)
+    expect(pickLiveMembership([sub({ ...p, paused_until: iso(NOW + DAY) })], NOW).paused).toBe(true)
+    expect(pickLiveMembership([sub({ ...p, paused_until: iso(NOW - DAY) })], NOW).paused).toBe(false)
+    expect(pickLiveMembership([sub(p), sub({ un1t_id: 's2' })], NOW).paused).toBe(false)
+  })
+  it('past_due is live', () => {
+    expect(pickLiveMembership([sub({ status: 'past_due' })], NOW)).not.toBeNull()
+  })
+})
+
+describe('shapeRadarMembers', () => {
+  it('rows carry exactly the scorer contract keys', () => {
+    const { rows } = shapeRadarMembers(fx())
+    expect(Object.keys(rows[0]).sort()).toEqual([...ROW_KEYS].sort())
+  })
+
+  it('live sub maps to member/time with plan, price and glofoxInterval', () => {
+    const { rows } = shapeRadarMembers(fx({ subs: [sub({ product_title: 'Unlimited', price_cents: 12000, billing_interval: 'month', billing_interval_count: 3 })] }))
+    expect(rows[0]).toMatchObject({
+      id: 'c1', name: 'Alex',
+      glofox_membership_status: 'member', glofox_membership_type: 'time', glofox_membership_plan: 'Unlimited',
+      glofox_membership_state: 'active', glofox_membership_price_cents: 12000, glofox_billing_interval: '3 months',
+      glofox_membership_expiry: '2026-11-01T00:00:00Z', person_group_id: null, cancel_at_period_end: false,
+    })
+  })
+
+  it('maps the client and activity columns', () => {
+    const { rows } = shapeRadarMembers(fx({
+      clients: [client({ credit_balance: 3 })],
+      newestBookingAtByUser: new Map([['u1', '2026-10-16T08:00:00Z']]),
+      lastPaymentAtByUser: new Map([['u1', '2026-10-01T00:00:00Z']]),
+    }))
+    expect(rows[0]).toMatchObject({
+      trial_credits_remaining: 3, last_attended_at: '2026-10-15T09:00:00Z', last_booked_at: '2026-10-16T08:00:00Z',
+      total_attended_30d: 6, total_noshow_30d: 1, last_payment_at: '2026-10-01T00:00:00Z',
+      joined_at: '2026-08-19T10:00:00Z', lifetime_value_cents: 48000,
+    })
+  })
+
+  it('a member with no un1t_clients row still counts, activity unknown', () => {
+    const { rows } = shapeRadarMembers(fx({ clients: [] }))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: 'c1', glofox_membership_status: 'member', last_attended_at: null, total_attended_30d: null })
+  })
+
+  it('a paid pack holder with credits is credit_member/num_classes with the pack title', () => {
+    const { rows, packHolders } = shapeRadarMembers(fx({
+      subs: [],
+      clients: [client({ un1t_user_id: 'u2', contact_id: 'c2', credit_balance: 4 })],
+      packTxs: [ptx()],
+    }))
+    expect(packHolders).toBe(1)
+    expect(rows[0]).toMatchObject({
+      id: 'c2', glofox_membership_status: 'credit_member', glofox_membership_type: 'num_classes',
+      glofox_membership_plan: '5 Class Pack', trial_credits_remaining: 4, glofox_membership_expiry: null,
+      glofox_billing_interval: null, cancel_at_period_end: false,
+    })
+    // the unchanged scorer treats it as a live pack
+    expect(classifyContact(rows[0])).toBe('active')
+  })
+
+  it('pack holder set is identical to shapeCounts', () => {
+    const input = fx({
+      subs: [sub(), sub({ un1t_id: 's9', un1t_user_id: 'u3', contact_id: 'c3' })],
+      clients: [
+        client(),
+        client({ un1t_user_id: 'u2', contact_id: 'c2', credit_balance: 4 }), // paid pack → holder
+        client({ un1t_user_id: 'u3', contact_id: 'c3', credit_balance: 2 }), // member: not a holder
+        client({ un1t_user_id: 'u4', contact_id: 'c4', credit_balance: 5 }), // €0 pack: never
+        client({ un1t_user_id: 'u5', contact_id: 'c5', credit_balance: 5, credit_unlimited: true }), // unlimited: never
+        client({ un1t_user_id: 'u6', contact_id: 'c6', credit_balance: 1 }), // trial only
+      ],
+      packTxs: [
+        ptx(), ptx({ un1t_user_id: 'u3' }), ptx({ un1t_user_id: 'u4', product_id: 'pk0', amount_cents: 0 }),
+        ptx({ un1t_user_id: 'u5' }), ptx({ un1t_user_id: 'u6', product_id: 'trial', amount_cents: 0 }),
+      ],
+      contactsById: new Map(['c1', 'c2', 'c3', 'c4', 'c5', 'c6'].map((id) => [id, { id, name: id }])),
+    })
+    const holders = packHolderIds(input)
+    const rows = shapeRadarMembers(input).rows.filter((r) => r.glofox_membership_status === 'credit_member')
+    const contactOfUser = new Map(input.clients.map((c) => [c.un1t_user_id, c.contact_id]))
+    expect(new Set(rows.map((r) => r.id))).toEqual(new Set([...holders].map((u) => contactOfUser.get(u))))
+    expect(rows.length).toBe(shapeCounts(input).class_packs)
+    expect(holders).toEqual(new Set(['u2']))
+  })
+
+  it('€0 pack never becomes a holder; "The UN1T Trial" plan is kept so NON_MEMBER_PLAN_RE drops it', () => {
+    const zero = shapeRadarMembers(fx({
+      subs: [], clients: [client({ un1t_user_id: 'u2', contact_id: 'c2', credit_balance: 3 })],
+      packTxs: [ptx({ product_id: 'pk0', amount_cents: 0 })],
+    }))
+    expect(zero.rows).toHaveLength(0)
+    const trialSub = shapeRadarMembers(fx({ subs: [sub({ product_title: 'The UN1T Trial' })] }))
+    expect(trialSub.rows[0].glofox_membership_plan).toBe('The UN1T Trial')
+    expect(classifyContact(trialSub.rows[0])).toBe('out')
+  })
+
+  it('cancel_at_period_end true → row.cancel_at_period_end true', () => {
+    const { rows } = shapeRadarMembers(fx({ subs: [sub({ cancel_at_period_end: true })] }))
+    expect(rows[0].cancel_at_period_end).toBe(true)
+  })
+
+  it('paused → glofox_membership_state paused (the scorer classifies it paused)', () => {
+    const { rows } = shapeRadarMembers(fx({ subs: [sub({ paused_at: '2026-10-01T00:00:00Z' })] }))
+    expect(rows[0].glofox_membership_state).toBe('paused')
+    expect(classifyContact(rows[0])).toBe('paused')
+  })
+
+  it('unlinked client (contact_id null) excluded and counted in unlinkedClients', () => {
+    const { rows, unlinkedClients, members } = shapeRadarMembers(fx({
+      subs: [sub(), sub({ un1t_id: 's2', un1t_user_id: 'u9', contact_id: null })],
+      clients: [client(), client({ un1t_user_id: 'u9', contact_id: null })],
+    }))
+    expect(rows.map((r) => r.id)).toEqual(['c1'])
+    expect(unlinkedClients).toBe(1)
+    expect(members).toBe(1)
+  })
+
+  it('two un1t accounts linked to one contact are one row (dearest plan, summed counts, newest activity)', () => {
+    const { rows, members } = shapeRadarMembers(fx({
+      subs: [sub(), sub({ un1t_id: 's2', un1t_user_id: 'u1b', price_cents: 20000, product_title: 'Dear' })],
+      clients: [client(), client({ un1t_user_id: 'u1b', last_attended_at: '2026-10-17T09:00:00Z', bookings_30d_attended: 2, bookings_30d_no_show: 0, ltv_cents: 1000 })],
+    }))
+    expect(rows).toHaveLength(1)
+    expect(members).toBe(1)
+    expect(rows[0]).toMatchObject({
+      glofox_membership_plan: 'Dear', last_attended_at: '2026-10-17T09:00:00Z',
+      total_attended_30d: 8, total_noshow_30d: 1, lifetime_value_cents: 49000,
+    })
+  })
+
+  it('shapeRadarMembers ignores contacts.glofox_* on a dual-studio contact', () => {
+    const { rows } = shapeRadarMembers(fx({
+      contactsById: new Map([['c1', {
+        id: 'c1', name: 'A', glofox_membership_status: 'member', glofox_membership_plan: 'Stillorgan Gold',
+        glofox_membership_type: 'num_classes', last_attended_at: '2026-10-16T07:00:00Z', total_attended_30d: 40,
+        last_payment_at: '2026-09-01T00:00:00Z', joined_at: '2020-01-01T00:00:00Z',
+      }]]),
+    }))
+    expect(rows[0].glofox_membership_plan).toBe('Hatch plan')
+    expect(rows[0].glofox_membership_type).toBe('time')
+    expect(rows[0].last_attended_at).toBe(client().last_attended_at)
+    expect(rows[0].total_attended_30d).toBe(6)
+    expect(rows[0].last_payment_at).toBeNull()
+    expect(rows[0].joined_at).toBe(client().remote_created_at)
+    expect(rows[0].name).toBe('A')
+  })
+
+  describe('derived booking counts', () => {
+    const ev = (id, startsMs) => ({ un1t_id: id, starts_at: startsMs == null ? null : iso(startsMs) })
+    const bk = (eventId, status, user = 'u1') => ({ un1t_user_id: user, event_id: eventId, status })
+
+    it('total_attended_7d boundary: event at now-7d counts, at now-7d-1ms does not', () => {
+      const { rows } = shapeRadarMembers(fx({
+        events: [ev('e1', NOW - 7 * DAY), ev('e2', NOW - 7 * DAY - 1)],
+        bookings: [bk('e1', 'attended'), bk('e2', 'attended')],
+      }))
+      expect(rows[0].total_attended_7d).toBe(1)
+    })
+
+    it('an event after now is not counted', () => {
+      const { rows } = shapeRadarMembers(fx({ events: [ev('e1', NOW + 1)], bookings: [bk('e1', 'attended')] }))
+      expect(rows[0].total_attended_7d).toBe(0)
+      expect(rows[0].total_bookings_30d).toBe(0)
+    })
+
+    it('null starts_at excluded and counted in skippedEvents', () => {
+      const out = shapeRadarMembers(fx({
+        events: [ev('e1', null), ev('e2', NOW - DAY)],
+        bookings: [bk('e1', 'attended'), bk('e2', 'attended')],
+      }))
+      expect(out.skippedEvents).toBe(1)
+      expect(out.rows[0].total_attended_7d).toBe(1)
+    })
+
+    it('statuses compared lowercase: "attended" counts, "ATTENDED" does not', () => {
+      const { rows } = shapeRadarMembers(fx({
+        events: [ev('e1', NOW - DAY), ev('e2', NOW - 2 * DAY)],
+        bookings: [bk('e1', 'attended'), bk('e2', 'ATTENDED')],
+      }))
+      expect(rows[0].total_attended_7d).toBe(1)
+    })
+
+    it('total_bookings_30d excludes cancelled and events outside 30 days', () => {
+      const { rows } = shapeRadarMembers(fx({
+        events: [ev('e1', NOW - DAY), ev('e2', NOW - 2 * DAY), ev('e3', NOW - 3 * DAY), ev('e4', NOW - 31 * DAY)],
+        bookings: [bk('e1', 'booked'), bk('e2', 'cancelled'), bk('e3', 'no_show'), bk('e4', 'attended')],
+      }))
+      expect(rows[0].total_bookings_30d).toBe(2)
+    })
+
+    it('another user\'s bookings never count', () => {
+      const { rows } = shapeRadarMembers(fx({ events: [ev('e1', NOW - DAY)], bookings: [bk('e1', 'attended', 'u9')] }))
+      expect(rows[0].total_attended_7d).toBe(0)
+    })
+  })
+
+  it('a shaped member goes through the unchanged scorer', () => {
+    const { rows } = shapeRadarMembers(fx({ clients: [client({ last_attended_at: iso(NOW - 20 * DAY) })] }))
+    const radar = buildRadar(rows, NOW)
+    expect(radar).toHaveLength(1)
+    expect(radar[0].signals.map((s) => s.key)).toContain('gone_quiet')
+  })
+})

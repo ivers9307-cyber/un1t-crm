@@ -77,17 +77,14 @@ export function glofoxInterval(unit, count) {
 }
 
 /**
- * Same shape as computeMembershipCounts().
- *
- * @param {object} a
- * @param {object[]} a.subs      un1t_subscriptions (status active rows)
- * @param {object[]} a.clients   un1t_clients with credit_balance > 0
- * @param {object[]} a.packTxs   un1t_transactions with product_type 'pack'
- * @param {object[]} a.products  un1t_products
+ * UN1TRADAR.1 — the class-pack holders, as a Set of un1t_user_ids: a client
+ * with credit_balance > 0, not unlimited, holding no active subscription, whose
+ * LATEST pack transaction was a paid pack (the product's price when we can read
+ * it, else what they paid; a €0 pack is never one). shapeCounts and the radar's
+ * active base both read this one rule, so they can never disagree.
  */
-export function shapeCounts({ subs = [], clients = [], packTxs = [], products = [] }) {
-  const active = subs.filter(isActiveSub)
-  const activeUsers = new Set(active.map((s) => s.un1t_user_id))
+export function packHolderIds({ subs = [], clients = [], packTxs = [], products = [] } = {}) {
+  const activeUsers = new Set(subs.filter(isActiveSub).map((s) => s.un1t_user_id))
 
   const priceByProduct = new Map(products.map((p) => [p.un1t_id, p.price_cents]))
   const latestPack = new Map()
@@ -112,6 +109,21 @@ export function shapeCounts({ subs = [], clients = [], packTxs = [], products = 
     const t = latestPack.get(c.un1t_user_id)
     if (t && paidPack(t)) holders.add(c.un1t_user_id)
   }
+  return holders
+}
+
+/**
+ * Same shape as computeMembershipCounts().
+ *
+ * @param {object} a
+ * @param {object[]} a.subs      un1t_subscriptions (status active rows)
+ * @param {object[]} a.clients   un1t_clients with credit_balance > 0
+ * @param {object[]} a.packTxs   un1t_transactions with product_type 'pack'
+ * @param {object[]} a.products  un1t_products
+ */
+export function shapeCounts({ subs = [], clients = [], packTxs = [], products = [] }) {
+  const active = subs.filter(isActiveSub)
+  const holders = packHolderIds({ subs, clients, packTxs, products })
 
   // Members per interval: a member is counted once under each interval they hold.
   const perInterval = Object.fromEntries(GLOFOX_INTERVALS.map((k) => [k, new Set()]))
