@@ -58,12 +58,12 @@ import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
 import {
   BOOKING_SYSTEM_TOOL_NAMES, deriveNoBookingTools, membershipAtOtherStudio,
-  refuseToolForTurn,
+  refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO,
 } from './tool-capability'
 import { deriveUn1tReadTools, selectToolBlock, withCacheBreakpoint } from './tool-blocks'
 import { resolveMemberStudios, otherStudioOnly } from './member-studios'
 import {
-  threadTakesBookings, planTurnTools, turnForPlan, createActionStudios, loadAgentKnowledge,
+  threadTakesBookings, resolveTurnPlan, todayPlan, planKey, turnForPlan, createActionStudios, loadAgentKnowledge,
   promptOptionsForPlan, executorCtxFor,
 } from './turn-studios'
 import { DEFAULT_BOOKING_CTA_LABEL } from './default-copy'
@@ -845,7 +845,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // prefix (base prompt + knowledge). Caches cumulatively after the tool
     // block; the volatile suffix (today + identity override) stays uncached.
     // MIAHATCH.2 — these are TODAY's options; a turn whose plan is not today's
-    // block adds the plan's (systemForPlan below).
+    // block adds the plan's (settleTurn below).
     const systemOpts = {
       businessName: branding.companyName,
       locationName: loc?.name || null,
@@ -955,28 +955,42 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     const actionStudios = createActionStudios(db, { threadLocationId: locationId, threadSettings: settings, threadZone: zone })
     toolCtx.actionStudio = actionStudios.settings
     let plan
-    const applyTurnPlan = () => {
-      plan = planTurnTools({
-        memberStudios: toolCtx.memberStudios,
-        threadLocationId: locationId,
-        threadProvider: membershipSource,
-        channel: adapter.name,
-      })
-      toolCtx.turn = turnForPlan(plan, adapter.name)
-      toolCtx.glofoxLocationId = plan.glofoxLocationId
+    let system
+    const planArgs = () => ({
+      memberStudios: toolCtx.memberStudios,
+      threadLocationId: locationId,
+      threadProvider: membershipSource,
+      channel: adapter.name,
+    })
+    const applyPlan = (p) => {
+      plan = p
+      toolCtx.turn = turnForPlan(p, adapter.name)
+      toolCtx.glofoxLocationId = p.glofoxLocationId
     }
-    const systemForPlan = async (p) => {
-      if (p.sameAsToday) return buildCachedSystem(systemOpts)
-      let extra = {}
-      try {
-        extra = await promptOptionsForPlan(db, p, actionStudios)
-      } catch (err) {
-        console.warn('[radar-agent] turn prompt options failed', JSON.stringify({ block: p.block, message: err?.message || String(err) }))
+    // Plan the turn and build its system blocks together, so the tools and the
+    // prompt always describe the same block. A prompt that cannot be built
+    // (promptOptionsForPlan threw) drops the turn to today's block: never the
+    // un1t tools with today's prompt. `keepIfKey`: a re-plan whose key (block,
+    // named un1t studio, facts studios) is unchanged keeps the system it has.
+    const settleTurn = async ({ keepIfKey } = {}) => {
+      let next = await resolveTurnPlan(planArgs(), actionStudios)
+      if (keepIfKey !== undefined && planKey(next) === keepIfKey) {
+        applyPlan(next)
+        return
       }
-      return buildCachedSystem({ ...systemOpts, ...extra })
+      let extra = null
+      if (!next.sameAsToday) {
+        try {
+          extra = await promptOptionsForPlan(db, next, actionStudios)
+        } catch (err) {
+          console.warn('[radar-agent] turn prompt options failed; today\'s block instead', JSON.stringify({ block: next.block, message: err?.message || String(err) }))
+          next = todayPlan(planArgs())
+        }
+      }
+      applyPlan(next)
+      system = buildCachedSystem(extra && !next.sameAsToday ? { ...systemOpts, ...extra } : systemOpts)
     }
-    applyTurnPlan()
-    let system = await systemForPlan(plan)
+    await settleTurn()
 
     let verifyFails = conv?.agent_verify_attempts ?? 0
     // MIA-CREDITS.1 — set when book_class pre-flights to no_credits; the
@@ -1099,8 +1113,11 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
               // toolCtx itself on today's turn; the Glofox studio for a Glofox
               // tool when the thread is filed elsewhere; the member's
               // un1t.online studio for a pause or cancellation request there.
+              // null: the tool's studio could not be resolved, so it is refused
+              // rather than run at the wrong studio.
               const execCtx = otherStudio ? toolCtx : await executorCtxFor(block.name, block.input || {}, toolCtx, actionStudios)
               result = (otherStudio ? membershipAtOtherStudio(otherStudio.name) : null)
+                || (execCtx ? null : { ...TOOL_NOT_AT_THIS_STUDIO })
                 || refuseToolForTurn(block.name, execCtx) || (ACCOUNT_TOOL_NAMES.has(block.name)
                 ? await executeAccountTool(block.name, block.input || {}, execCtx)
                 : EVENT_TOOL_NAMES.has(block.name)
@@ -1151,12 +1168,11 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
                 // MIAHATCH.1 — a different acting account can be a member of
                 // different studios: resolve again from the verified contact.
                 applyMemberStudios(await resolveTurnMemberStudios(toolCtx.verifiedContactId))
-                // MIAHATCH.2 — and the tool block with it. A changed block
-                // sends its own tools AND matching system blocks from the next
-                // iteration; an unchanged one keeps the system built once.
-                const blockBefore = plan.block
-                applyTurnPlan()
-                if (plan.block !== blockBefore) system = await systemForPlan(plan)
+                // MIAHATCH.2 — and the tool block with it. A changed block, or
+                // a changed un1t studio or set of facts studios, sends its own
+                // tools AND matching system blocks from the next iteration; an
+                // unchanged plan keeps the system built once.
+                await settleTurn({ keepIfKey: planKey(plan) })
               }
             }
             toolResults.push({

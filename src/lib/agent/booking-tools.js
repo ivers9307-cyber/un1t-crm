@@ -35,7 +35,7 @@ import { formatClassTime } from './dublin-format'
 import { DEFAULT_TZ } from '@/lib/location-time'
 import { logError } from '@/lib/log'
 import { refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
-import { parseAgentId } from './studio-ids'
+import { UN1T_ID_PREFIX } from './studio-ids'
 import { renderMiaCopy } from './mia-copy'
 
 // REGISTRYREAD.1b — what Mia is told when the auto lane has no usable Glofox
@@ -708,8 +708,10 @@ export async function executeBookingTool(toolName, input, ctx) {
   // a block without one) it is no studio Mia answers for. Decided before any
   // read: a `un1t:` id never reaches Glofox.
   if (toolName === 'book_class' || toolName === 'cancel_class_booking') {
-    const id = parseAgentId(toolName === 'book_class' ? input?.event_id : input?.booking_id)
-    if (id?.provider === 'un1t_online') return un1tChatBookingAnswer(toolName, ctx)
+    // The prefix itself: a bare `un1t:` (no id after it) is still never a
+    // Glofox id.
+    const raw = toolName === 'book_class' ? input?.event_id : input?.booking_id
+    if (typeof raw === 'string' && raw.startsWith(UN1T_ID_PREFIX)) return un1tChatBookingAnswer(toolName, ctx)
   }
 
   // MIAHATCH.2 Task 6 — on a turn whose tool block reads un1t.online the

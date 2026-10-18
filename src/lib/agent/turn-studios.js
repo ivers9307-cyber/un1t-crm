@@ -58,6 +58,15 @@ export function planTurnTools({ memberStudios, threadLocationId, threadProvider,
     ? memberStudios.studios
     : null
   const answerable = studios ? answerableStudios(studios, threadLocationId).answerable : []
+  // Ruling 14: a Glofox thread studio where this sender has a LIVE
+  // relationship that is not "active" (ClassPass pay-as-you-go, or a member
+  // paused, locked or starting later) keeps its Glofox answers when another
+  // studio is answerable too: it joins the answerable set here (the dual
+  // block), without changing answerableStudios' own contract (member-studios.js).
+  if (studios && threadProvider?.key === 'glofox' && !answerable.some((s) => s?.locationId === threadLocationId)) {
+    const thread = studios.find((s) => s?.locationId === threadLocationId && s.providerKey === 'glofox' && s.answerable === true && s.liveRelationship === true)
+    if (thread) answerable.unshift(thread)
+  }
   const block = selectToolBlock({
     answerable,
     // The capability as this turn reads it (un1t.online never books here).
@@ -80,6 +89,40 @@ export function planTurnTools({ memberStudios, threadLocationId, threadProvider,
     glofoxLocationId: glofoxStudio?.locationId || threadLocationId,
     otherStudios: answerable.filter((s) => s?.locationId !== threadLocationId),
   }
+}
+
+/** Today's plan for the thread: no studio answerable, today's block. Pure. */
+export function todayPlan({ threadLocationId, threadProvider, channel } = {}) {
+  return planTurnTools({ memberStudios: undefined, threadLocationId, threadProvider, channel })
+}
+
+/**
+ * What the turn's system blocks depend on beyond today's options: the block,
+ * the un1t.online studio the prompt names, and the studios with a facts block.
+ * Two plans with the same key render the same prompt. Pure.
+ */
+export function planKey(plan) {
+  if (!plan) return ''
+  const others = (plan.otherStudios || []).map((s) => s?.locationId).filter(Boolean).sort()
+  return [plan.block, plan.un1tStudio?.locationId || '', others.join(',')].join('|')
+}
+
+/**
+ * The plan, with the Glofox override only where the Glofox studio's own
+ * settings resolve (Ruling 15): its booking_mode and copy are never borrowed
+ * from the thread's studio, so an unreadable Glofox studio means today's
+ * block for the thread instead.
+ */
+export async function resolveTurnPlan(args, studios) {
+  const plan = planTurnTools(args)
+  if (plan.glofoxStudio) {
+    const settings = await studios.settings(plan.glofoxStudio.locationId)
+    if (!settings) {
+      logWarn(LOG_MODULE, 'glofox studio settings unreadable; turn keeps the thread block', { locationId: plan.glofoxStudio.locationId, block: plan.block })
+      return todayPlan(args)
+    }
+  }
+  return plan
 }
 
 /**
@@ -238,19 +281,26 @@ async function glofoxStudioCtx(toolCtx, studios) {
   const verified = toolCtx.verifiedContactId
   const anchor = verified && ids.length && !ids.includes(verified) ? ids[0] : verified
   const [settings, zone] = await Promise.all([studios.settings(glofoxLocationId), studios.zone(glofoxLocationId)])
+  // Ruling 15: never the thread's settings for the Glofox studio. resolveTurnPlan
+  // only plans an override whose settings resolved (and they are cached for the
+  // turn), so this is a belt: null tells the caller to refuse the tool rather
+  // than run it with another studio's settings or at the thread's studio.
+  if (!settings) return null
   return {
     ...toolCtx,
     locationId: glofoxLocationId,
     verifiedContactId: anchor,
     canBook: true,
     membershipSourceKey: 'glofox',
-    settings: settings || toolCtx.settings,
+    settings,
     zone: zone || toolCtx.zone,
   }
 }
 
 /**
- * The context one tool runs with. Today's turn (no `toolCtx.turn`) and every
+ * The context one tool runs with, or null when it must not run at all (the
+ * Glofox studio's settings are unreadable; the caller refuses the tool).
+ * Today's turn (no `toolCtx.turn`) and every
  * tool that needs nothing else get `toolCtx` itself. Otherwise:
  *   - glofox block on a non-Glofox thread: the Glofox tools run at the Glofox
  *     studio (glofoxStudioCtx);
