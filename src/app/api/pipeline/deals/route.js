@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { logWarn } from '@/lib/log'
 import { pipelineDealSelect, boardDealMapper, badgeEnabledForModule, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
 
 export const runtime = 'nodejs'
@@ -56,8 +57,14 @@ export async function GET(request) {
       .eq('id', stage.pipeline_id)
       .eq('location_id', locationId)
       .maybeSingle()
-    if (pipelineError) return NextResponse.json({ success: false, error: pipelineError.message }, { status: 500 })
-    badge = badgeEnabledForModule(pipeline?.module)
+    if (pipelineError) {
+      // The board only decides the badge. Fail open (badge kept, today's
+      // behaviour) rather than 500 the whole Load-more page; ids only, no
+      // error text.
+      logWarn('pipeline-deals', 'board read failed; badge kept', { stageId, locationId })
+    } else {
+      badge = badgeEnabledForModule(pipeline?.module)
+    }
   }
 
   const { data, error } = await db

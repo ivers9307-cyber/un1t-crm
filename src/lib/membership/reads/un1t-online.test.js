@@ -555,15 +555,28 @@ describe('pastDue and paymentsFor', () => {
     const out = await un1tOnlineReads.paymentsFor(db, HATCH, ['c1'], { limit: 2 })
     expect(out.success).toBe(true)
     expect(out.data.subscriptions).toEqual([{
-      productTitle: 'Unlimited', status: 'past_due', priceCents: 18900, currency: 'eur', interval: '1 month',
+      productTitle: 'Unlimited', status: 'past_due', priceCents: 18900, currency: 'EUR', interval: '1 month',
       periodEnd: '2026-11-01T00:00:00Z', cancelAtPeriodEnd: true, pausedUntil: '2026-11-15T00:00:00Z', pastDueAt: '2026-10-05T09:00:00Z',
     }])
     expect(out.data.transactions).toEqual([
-      { at: '2026-10-01T09:00:00Z', productTitle: 'Unlimited', type: 'sub_initial', amountCents: 18900, currency: 'eur', refunded: true },
-      { at: '2026-09-01T09:00:00Z', productTitle: 'Unlimited', type: 'sub_renewal', amountCents: 18900, currency: 'eur', refunded: false },
+      { at: '2026-10-01T09:00:00Z', productTitle: 'Unlimited', type: 'sub_initial', amountCents: 18900, currency: 'EUR', refunded: true },
+      { at: '2026-09-01T09:00:00Z', productTitle: 'Unlimited', type: 'sub_renewal', amountCents: 18900, currency: 'EUR', refunded: false },
     ])
     expect(out.data.invoices.map((i) => i.at)).toEqual(['2026-10-01T10:00:00Z', '2026-09-01T10:00:00Z'])
     expect(out.data.pastDue).toMatchObject({ subscriptionId: 's1', since: '2026-10-01T10:00:00Z', amountCents: 18900 })
+  })
+
+  it('paymentsFor upper-cases currency on subscriptions, transactions and invoices; a null currency stays null', async () => {
+    const { db } = makeDb({
+      un1t_subscriptions: [psub({ currency: 'eur' }), psub({ un1t_id: 's2', currency: null })],
+      un1t_invoices: [pinv({ un1t_id: 'i1', status: 'paid', currency: 'eur', remote_created_at: '2026-10-01T10:00:00Z' }), pinv({ un1t_id: 'i2', status: 'paid', currency: null, remote_created_at: '2026-09-01T10:00:00Z' })],
+      un1t_transactions: [ptx({ un1t_id: 't1', currency: 'eur', remote_created_at: '2026-10-01T09:00:00Z' }), ptx({ un1t_id: 't2', currency: null, remote_created_at: '2026-09-01T09:00:00Z' })],
+    })
+    const out = await un1tOnlineReads.paymentsFor(db, HATCH, ['c1'])
+    expect(out.success).toBe(true)
+    expect(out.data.subscriptions.map((s) => s.currency).sort()).toEqual(['EUR', null])
+    expect(out.data.transactions.map((t) => t.currency)).toEqual(['EUR', null])
+    expect(out.data.invoices.map((i) => i.currency)).toEqual(['EUR', null])
   })
 
   it('paymentsFor defaults to 25, and pastDue is null when nothing is owed', async () => {
@@ -607,7 +620,7 @@ describe('pastDue and paymentsFor', () => {
     expect(out.data.invoices.map((i) => [i.status, i.rawStatus])).toEqual([
       ['open', 'Past_Due'], ['unknown', 'weird'], ['unknown', 'weird'], ['paid', 'paid'],
     ])
-    expect(out.data.invoices[0]).toEqual({ at: '2026-10-03T10:00:00Z', status: 'open', rawStatus: 'Past_Due', amountCents: 18900, currency: 'eur' })
+    expect(out.data.invoices[0]).toEqual({ at: '2026-10-03T10:00:00Z', status: 'open', rawStatus: 'Past_Due', amountCents: 18900, currency: 'EUR' })
     const warns = logWarn.mock.calls.filter((c) => c[1] === 'unknown invoice status')
     expect(warns).toEqual([['un1t-billing', 'unknown invoice status', { locationId: HATCH, status: 'weird' }]])
   })

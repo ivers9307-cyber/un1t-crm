@@ -382,6 +382,10 @@ async function pastDue(db, locationId, { contactIds } = {}) {
  * be an array (a non-array is refused, as pastDue does); `limit` is clamped to
  * 1000, the page cap a single capped read can honour.
  */
+// ISO 4217 codes arrive lowercase ('eur') from un1t.online; formatMoney wants
+// the upper-case code, as pastDue already returns via shapePastDue.
+const upperCurrency = (c) => (c ? String(c).toUpperCase() : null)
+
 async function paymentsFor(db, locationId, contactIds, { limit = DEFAULT_PAYMENTS_LIMIT } = {}) {
   if (!locationId) return { success: false, error: 'No location' }
   if (!Array.isArray(contactIds)) return { success: false, error: 'contactIds must be an array' }
@@ -404,7 +408,7 @@ async function paymentsFor(db, locationId, contactIds, { limit = DEFAULT_PAYMENT
           productTitle: s.product_title ?? null,
           status: s.status ?? null,
           priceCents: s.price_cents ?? null,
-          currency: s.currency ?? null,
+          currency: upperCurrency(s.currency),
           interval: glofoxInterval(s.billing_interval, s.billing_interval_count),
           periodEnd: s.current_period_end ?? null,
           cancelAtPeriodEnd: s.cancel_at_period_end === true,
@@ -416,7 +420,7 @@ async function paymentsFor(db, locationId, contactIds, { limit = DEFAULT_PAYMENT
           productTitle: t.product_title ?? null,
           type: t.type ?? null,
           amountCents: t.amount_cents ?? null,
-          currency: t.currency ?? null,
+          currency: upperCurrency(t.currency),
           refunded: t.refunded === true,
         })),
         invoices: [...billing.invoices]
@@ -427,7 +431,7 @@ async function paymentsFor(db, locationId, contactIds, { limit = DEFAULT_PAYMENT
             status: normaliseUn1tInvoiceStatus(i.status),
             rawStatus: i.status ?? null,
             amountCents: i.amount_cents ?? null,
-            currency: i.currency ?? null,
+            currency: upperCurrency(i.currency),
           })),
         pastDue: billing.pastDue[0] ?? null,
       },
