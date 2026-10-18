@@ -8,8 +8,14 @@ vi.mock('@/lib/whatsapp', () => ({
   getOrCreateConversation: vi.fn(async () => 'conv-1'),
 }))
 
+vi.mock('@/lib/whatsapp-purpose-templates', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolvePurposeTemplate: vi.fn(),
+}))
+
 import { maybeSendCampaignWhatsappWelcome } from './meta-ad-whatsapp-welcome'
 import { sendTemplateMessage } from '@/lib/whatsapp'
+import { resolvePurposeTemplate } from '@/lib/whatsapp-purpose-templates'
 
 // Minimal supabase-js-ish builder mock — only the chains this code uses.
 function makeDb(template) {
@@ -190,5 +196,35 @@ describe('maybeSendCampaignWhatsappWelcome — location bundle/feature gate', ()
     })
     expect(r.sent).toBe(true)
     expect(sendTemplateMessage).toHaveBeenCalled()
+  })
+})
+
+// WAORGNUMBER.2 (R5) — the studio's own pick for the ad welcome.
+describe('maybeSendCampaignWhatsappWelcome — purpose template', () => {
+  const HATCH = 'a0000000-0000-4000-8000-000000000002'
+  const contact = { id: 'c1', first_name: 'Sarah', phone: '0871234567', wa_phone: null }
+
+  it("uses the studio's purpose template, on that template's WABA", async () => {
+    resolvePurposeTemplate.mockResolvedValueOnce({ ...APPROVED, id: 'T-H', name: 'hatch_welcome', category: 'MARKETING', business_account_id: 'WABA-9' })
+    const r = await maybeSendCampaignWhatsappWelcome({ db: makeDb(null), locationId: HATCH, contact, templateName: 'meta_ad_whatsapp_lead', purpose: 'meta_ad_welcome' })
+    expect(r.sent).toBe(true)
+    // The campaign's name is only the default for a studio that picked nothing.
+    expect(resolvePurposeTemplate).toHaveBeenCalledWith(expect.anything(), HATCH, 'meta_ad_welcome', { fallbackName: 'meta_ad_whatsapp_lead' })
+    expect(sendTemplateMessage).toHaveBeenCalledWith(
+      '+353871234567', 'hatch_welcome', 'en', expect.any(Array), { locationId: HATCH, businessAccountId: 'WABA-9' },
+    )
+  })
+
+  it('no template at the studio → quiet template_not_found, nothing sent', async () => {
+    resolvePurposeTemplate.mockResolvedValueOnce(null)
+    const r = await maybeSendCampaignWhatsappWelcome({ db: makeDb(APPROVED), locationId: HATCH, contact, templateName: 'meta_ad_whatsapp_lead', purpose: 'meta_ad_welcome' })
+    expect(r).toEqual({ sent: false, reason: 'template_not_found' })
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+  })
+
+  it('a failed template read is a quiet send_failed, never thrown', async () => {
+    resolvePurposeTemplate.mockRejectedValueOnce(new Error('read failed'))
+    const r = await maybeSendCampaignWhatsappWelcome({ db: makeDb(null), locationId: HATCH, contact, templateName: 'meta_ad_whatsapp_lead', purpose: 'meta_ad_welcome' })
+    expect(r).toEqual({ sent: false, reason: 'send_failed' })
   })
 })

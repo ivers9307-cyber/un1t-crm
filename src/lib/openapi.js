@@ -26,6 +26,7 @@ import {
   Un1tOnlineConnectSchema,
   orgWhatsAppNumberCreateSchema, orgWhatsAppEmbeddedSignupSchema,
   studioWhatsAppNumberSwitchSchema,
+  studioPurposeTemplateSchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 import { PLATFORM_NAME } from './brand-name.js'
@@ -1116,7 +1117,7 @@ registry.registerPath({
   tags: ['Races'],
   security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: "Run the waitlist offer round for this event now (staff, manager+ with races at the event's studio)",
-  description: 'Forced: if any time has room, everyone still on the list is offered again at once, even if offered in the last 24 h (the cron keeps the 24 h rule). Email; WhatsApp when the studio has an APPROVED event_waitlist_offer template. Answers the round counts; no_room 1 = every time is full, nobody offered.',
+  description: 'Forced: if any time has room, everyone still on the list is offered again at once, even if offered in the last 24 h (the cron keeps the 24 h rule). Email; WhatsApp when the studio has an APPROVED offer template (its pick for the event_waitlist_offer purpose, else one named event_waitlist_offer). Answers the round counts; no_room 1 = every time is full, nobody offered.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ events, offered, expired, skipped, failed, no_room }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventWaitlistOfferResult') } } },
@@ -4460,6 +4461,50 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — owner, manager or master at this studio required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'No such number in this studio\'s organisation', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAORGNUMBER.2 (R5) — the templates a studio's automatic WhatsApp messages use
+const WaPurposeTemplates = z.object({
+  selected: z.object({
+    class_confirmed: uuidLike.nullable(),
+    consult_confirmed: uuidLike.nullable(),
+    event_waitlist_offer: uuidLike.nullable(),
+    meta_ad_welcome: uuidLike.nullable(),
+  }),
+  can_edit: z.boolean(),
+}).openapi('WaPurposeTemplates')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/whatsapp/purpose-templates',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "The templates this studio's automatic WhatsApp messages use",
+  description: "Per purpose (class_confirmed, consult_confirmed, event_waitlist_offer, meta_ad_welcome): the whatsapp_templates id the studio picked, or null (the sender then uses its default template name at the studio). can_edit is true for an owner, manager or master at this studio.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The picks', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaPurposeTemplates }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — location not in your assignments', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/whatsapp/purpose-templates',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Choose the template an automatic WhatsApp message uses at this studio",
+  description: "Owner, manager or master AT THIS STUDIO (403 otherwise). templateId must be one of this studio's own APPROVED templates in a category the purpose allows (UTILITY for the booking confirmations and the waitlist offer; MARKETING or UTILITY for the ad welcome), else 400. null clears the pick. Merged into locations.settings.whatsapp_purpose_templates without touching other settings.",
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: studioPurposeTemplateSchema } } } },
+  responses: {
+    200: { description: 'The picks after the change', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaPurposeTemplates }) } } },
+    400: { description: 'Invalid body, or the template is not this studio\'s, not approved, or the wrong category', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner, manager or master at this studio required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such studio', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

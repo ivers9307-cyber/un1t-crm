@@ -78,8 +78,10 @@ export const LEAD_CAMPAIGNS = {
     leadSource: 'meta_free_trial',
     // First-touch WhatsApp: the instant the lead signs up, send this
     // APPROVED template (asks consultation vs first class via quick-reply
-    // buttons); the reply hands off to the Mia agent who books it. Name
-    // must match a whatsapp_templates row at the campaign's location.
+    // buttons); the reply hands off to the Mia agent who books it. This is
+    // the DEFAULT name: a studio's own pick for the 'meta_ad_welcome' purpose
+    // (WAORGNUMBER.2 R5) wins; without one, it must match a
+    // whatsapp_templates row at the campaign's location.
     whatsappTemplate: 'meta_ad_whatsapp_lead',
   },
 }

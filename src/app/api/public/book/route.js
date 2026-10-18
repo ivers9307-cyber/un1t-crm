@@ -256,7 +256,7 @@ export async function POST(request) {
         const whenLabel = fmtBookingTime(data.booking_date, data.start_time)
         await maybeSendBookingWhatsappConfirm({
           db, locationId: data.location_id, contact: c,
-          templateName: 'booking_consult_confirmed', bodyParams: [firstName, whenLabel],
+          purpose: 'consult_confirmed', bodyParams: [firstName, whenLabel],
         })
       }
     }

@@ -12,7 +12,7 @@ import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { CLASS_BOOKING_MAX_ATTEMPTS } from '@/lib/class-booking-attempts'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { hasBookableMembership, personRowsForContact, corroborated, reusableSibling, electWriteAccount, chunkIds } from '@/lib/person-accounts'
-import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
+import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
 import { sendCtwaConversion, sendWebsiteConversion } from '@/lib/meta-capi'
 import { isManualEventId } from '@/lib/manual-timetable'
 import { logWarn } from '@/lib/log'
@@ -587,7 +587,7 @@ export async function processClassBookingRequest(db, request) {
   await setStatus(db, request.id, { status: 'booked', last_error: null, glofox_booking_id: bookingId })
   try {
     const zone = await requestZone(db, request)
-    await maybeSendBookingWhatsappConfirm({ db, locationId: request.location_id, contact, templateName: CLASS_CONFIRM_TEMPLATE, bodyParams: [firstName, request.class_name || 'your class', classLabel(request.starts_at, zone)] })
+    await maybeSendBookingWhatsappConfirm({ db, locationId: request.location_id, contact, purpose: 'class_confirmed', bodyParams: [firstName, request.class_name || 'your class', classLabel(request.starts_at, zone)] })
   } catch (e) { logWarn('cbp', 'class confirm failed', { err: e }) }
   // CTWA attribution: a confirmed booking is the conversion the ad campaign
   // optimises on. No-ops unless the contact carries a ctwa_clid and the

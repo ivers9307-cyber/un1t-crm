@@ -5,8 +5,14 @@ vi.mock('@/lib/whatsapp', () => ({
   getOrCreateConversation: vi.fn(async () => 'conv-1'),
 }))
 
+vi.mock('@/lib/whatsapp-purpose-templates', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolvePurposeTemplate: vi.fn(),
+}))
+
 import { maybeSendBookingWhatsappConfirm } from './booking-whatsapp-confirm'
 import { sendTemplateMessage } from '@/lib/whatsapp'
+import { resolvePurposeTemplate } from '@/lib/whatsapp-purpose-templates'
 
 function makeDb(template, { features } = {}) {
   return {
@@ -62,6 +68,43 @@ describe('maybeSendBookingWhatsappConfirm', () => {
       templateName: 'booking_consult_confirmed', bodyParams: ['Sarah'],
     })
     expect(sendTemplateMessage.mock.calls[0][4]).toEqual({ locationId: 'a0000000-0000-0000-0000-000000000001', businessAccountId: 'WABA-2' })
+  })
+
+  // WAORGNUMBER.2 (R5) — a PURPOSE resolves to the studio's own template.
+  describe('purpose templates', () => {
+    const HATCH = 'a0000000-0000-4000-8000-000000000002'
+    const contact = { id: 'c1', first_name: 'Sarah', phone: '0871234567', wa_phone: null }
+
+    it("uses the studio's purpose template, on that template's WABA", async () => {
+      resolvePurposeTemplate.mockResolvedValueOnce({ id: 'T-H', name: 'hatch_class_ok', language: 'en-GB', category: 'UTILITY', components: [], business_account_id: 'WABA-9', header_media_url: null })
+      // The db has NO template by the default name: only the resolver can supply it.
+      const r = await maybeSendBookingWhatsappConfirm({ db: makeDb(null), locationId: HATCH, contact, purpose: 'class_confirmed', bodyParams: ['Sarah', 'Spin', 'Tue 6pm'] })
+      expect(r).toEqual({ sent: true, messageId: 'wamid.OK' })
+      expect(resolvePurposeTemplate).toHaveBeenCalledWith(expect.anything(), HATCH, 'class_confirmed', {})
+      expect(sendTemplateMessage).toHaveBeenCalledWith(
+        '+353871234567', 'hatch_class_ok', 'en-GB', expect.any(Array), { locationId: HATCH, businessAccountId: 'WABA-9' },
+      )
+    })
+
+    it('no template at the studio → quiet template_not_found, nothing sent', async () => {
+      resolvePurposeTemplate.mockResolvedValueOnce(null)
+      const r = await maybeSendBookingWhatsappConfirm({ db: makeDb(APPROVED), locationId: HATCH, contact, purpose: 'consult_confirmed', bodyParams: ['Sarah'] })
+      expect(r).toEqual({ sent: false, reason: 'template_not_found' })
+      expect(sendTemplateMessage).not.toHaveBeenCalled()
+    })
+
+    it('a failed template read is a quiet send_failed, never thrown', async () => {
+      resolvePurposeTemplate.mockRejectedValueOnce(new Error('read failed'))
+      const r = await maybeSendBookingWhatsappConfirm({ db: makeDb(null), locationId: HATCH, contact, purpose: 'event_waitlist_offer', bodyParams: ['Sarah'] })
+      expect(r).toEqual({ sent: false, reason: 'send_failed' })
+      expect(sendTemplateMessage).not.toHaveBeenCalled()
+    })
+
+    it('without a purpose it still sends the named template (an event type\'s own confirmation)', async () => {
+      await maybeSendBookingWhatsappConfirm({ db: makeDb(APPROVED), locationId: HATCH, contact, templateName: 'booking_consult_confirmed', bodyParams: ['Sarah'] })
+      expect(resolvePurposeTemplate).not.toHaveBeenCalled()
+      expect(sendTemplateMessage.mock.calls[0][1]).toBe('booking_consult_confirmed')
+    })
   })
 
   // TENANT.8 (item 3b) — location bundle/feature gate.

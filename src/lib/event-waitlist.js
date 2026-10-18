@@ -44,7 +44,11 @@ import { eventToday, earliestLocalToday, eventDateLong } from './event-day'
 import { signWaitlistClaimToken, verifyWaitlistClaimToken, waitlistTokenSecret } from './event-waitlist-tokens'
 import { logError, logWarn } from './log'
 
-/** The WhatsApp template the offer goes out on. Richard creates it in Meta (UTILITY; body {{1}} name, {{2}} event, {{3}} link). */
+/**
+ * The DEFAULT name of the WhatsApp offer template (UTILITY; body {{1}} name, {{2}} event, {{3}} link).
+ * A studio picks its own template for the 'event_waitlist_offer' purpose (WAORGNUMBER.2 R5);
+ * this name is what a studio that has not picked one uses.
+ */
 export const WAITLIST_OFFER_TEMPLATE = 'event_waitlist_offer'
 /** At most one offer per row per this long. */
 export const OFFER_COOLDOWN_MS = 24 * 3600 * 1000
@@ -404,8 +408,9 @@ export async function joinWaitlist(db, { race, name, email, phone = null, headco
  * Send one offer: email always (the ADMINISTRATIVE consent gate, recoverable:
  * the cron re-runs every 10 minutes and offers again after 24 h, so a
  * suppression is not the last word), WhatsApp when there is a phone, a
- * contact, and an APPROVED `event_waitlist_offer` template at the event's
- * location, and the contact's WhatsApp state allows it. Never throws.
+ * contact, and an APPROVED offer template at the event's location (the one
+ * the studio picked for 'event_waitlist_offer', else the `event_waitlist_offer`
+ * name), and the contact's WhatsApp state allows it. Never throws.
  *
  * `commsLocationId` is the sending location, resolved once per event by the
  * round; resolved here when not given.
@@ -492,7 +497,7 @@ async function sendWaitlistOfferWhatsapp(db, { race, row, ctx }) {
       db,
       locationId: race.location_id,
       contact: { id: contact.id, first_name: contact.first_name, name: contact.name, phone: row.phone, wa_phone: contact.wa_phone },
-      templateName: WAITLIST_OFFER_TEMPLATE,
+      purpose: 'event_waitlist_offer',
       bodyParams: [ctx.firstName || 'there', ctx.eventName, ctx.claimUrl],
     })
     if (res?.sent) return 'sent'

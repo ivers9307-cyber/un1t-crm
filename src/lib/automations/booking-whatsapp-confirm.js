@@ -9,16 +9,25 @@ import { sendTemplateMessage, getOrCreateConversation } from '@/lib/whatsapp'
 import { logTransactionalWalletState } from '@/lib/wallet-enforcement'
 import { logWarn } from '@/lib/log'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+import { PURPOSES, resolvePurposeTemplate } from '@/lib/whatsapp-purpose-templates'
 
-// Live APPROVED template names (single source of truth — keep in sync with the
-// templates in WhatsApp Manager). NOTE: the class template was created with a
-// TRAILING UNDERSCORE ('booking_class_confirmed_'); the lookup below is exact,
-// so the code must match the live name. If the operator recreates a clean
-// 'booking_class_confirmed', update this one constant.
-export const CONSULT_CONFIRM_TEMPLATE = 'booking_consult_confirmed'
-export const CLASS_CONFIRM_TEMPLATE = 'booking_class_confirmed_'
+// Today's template names, now the FALLBACKS of the per-studio purpose templates
+// (WAORGNUMBER.2 R5, src/lib/whatsapp-purpose-templates.js): a studio picks its
+// own template per purpose, and only a studio that has not picked one uses the
+// name. NOTE: the class template was created with a TRAILING UNDERSCORE
+// ('booking_class_confirmed_'); the lookup is exact, so the name must match the
+// live one.
+export const CONSULT_CONFIRM_TEMPLATE = PURPOSES.consult_confirmed.fallbackName
+export const CLASS_CONFIRM_TEMPLATE = PURPOSES.class_confirmed.fallbackName
 
-export async function maybeSendBookingWhatsappConfirm({ db, locationId, contact, templateName, bodyParams = [] }) {
+/**
+ * `purpose` (class_confirmed | consult_confirmed | event_waitlist_offer): the
+ * studio's own template for that purpose (resolvePurposeTemplate), else the
+ * purpose's default name at the studio; none → a quiet `template_not_found`.
+ * `templateName` alone sends that exact template at the studio (an event
+ * type's own confirmation, picked by id and passed by name).
+ */
+export async function maybeSendBookingWhatsappConfirm({ db, locationId, contact, templateName, purpose, bodyParams = [] }) {
   try {
     // TENANT.8 (item 3b) — location bundle/feature gate, before any send
     // work. Genuinely new query here (this helper never fetched a
@@ -35,17 +44,25 @@ export async function maybeSendBookingWhatsappConfirm({ db, locationId, contact,
       return { sent: false, reason: 'bundle_disabled' }
     }
 
-    if (!templateName) return { sent: false, reason: 'no_template_configured' }
+    if (!templateName && !purpose) return { sent: false, reason: 'no_template_configured' }
     if (!contact?.phone) return { sent: false, reason: 'no_phone' }
 
     const waPhone = toE164Ireland(contact.phone)
     if (!waPhone || !/^\+\d{10,15}$/.test(waPhone)) return { sent: false, reason: 'unnormalisable_phone' }
 
-    const { data: template } = await db
-      .from('whatsapp_templates').select('*')
-      .eq('name', templateName).eq('location_id', locationId).maybeSingle()
-    if (!template) return { sent: false, reason: 'template_not_found' }
-    if (template.status !== 'APPROVED') return { sent: false, reason: `template_${template.status}` }
+    let template
+    if (purpose) {
+      // Already the studio's APPROVED template, or null.
+      template = await resolvePurposeTemplate(db, locationId, purpose, templateName ? { fallbackName: templateName } : {})
+      if (!template) return { sent: false, reason: 'template_not_found' }
+    } else {
+      const { data } = await db
+        .from('whatsapp_templates').select('*')
+        .eq('name', templateName).eq('location_id', locationId).maybeSingle()
+      template = data
+      if (!template) return { sent: false, reason: 'template_not_found' }
+      if (template.status !== 'APPROVED') return { sent: false, reason: `template_${template.status}` }
+    }
 
     const components = [{
       type: 'body',
