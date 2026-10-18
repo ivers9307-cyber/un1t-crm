@@ -29,7 +29,7 @@ import { sendTextMessage } from './whatsapp'
 // contact_location_preferences is modelled as a set of `contact|location` keys:
 // an ignoreDuplicates upsert returns the row only when it CREATED it, and an
 // update returns the rows it matched (a zero-row UPDATE is not an error).
-function stubDb({ writes, failOn = {}, studioRows = [], location = null, locationError = null }) {
+function stubDb({ writes, failOn = {}, studioRows = [], location = null, locationError = null, inScopes = [] }) {
   const rowsAt = new Set(studioRows)
   const errorFor = (table, op) => {
     const msg = failOn[`${table}.${op}`] ?? failOn[table]
@@ -71,6 +71,8 @@ function stubDb({ writes, failOn = {}, studioRows = [], location = null, locatio
         select() { return q },
         eq(col, val) { q.filters = { ...q.filters, [col]: val }; return q },
         or() { return q },
+        in(col, ids) { inScopes.push([table, col, ids]); return q },
+        neq() { return q },
         limit() { return q },
         maybeSingle() { return Promise.resolve(run()) },
         then(resolve, reject) { return Promise.resolve(run()).then(resolve, reject) },
@@ -275,7 +277,7 @@ describe('applyMetaUserPreference — same upsert semantics', () => {
     const db = stubDb({ writes })
     const r = await applyMetaUserPreference(db, {
       wa_id: '353871234567', category: 'marketing_messages', value: 'stop',
-    })
+    }, 'loc1')
     expect(r).toMatchObject({ applied: true, action: 'opt_out' })
 
     const prefWrite = writes.find(w => w.table === 'contact_preferences')
@@ -294,7 +296,7 @@ describe('applyMetaUserPreference — same upsert semantics', () => {
     const db = stubDb({ writes, failOn: { contacts: 'connection reset' } })
     const r = await applyMetaUserPreference(db, {
       wa_id: '353871234567', category: 'marketing_messages', value: 'stop',
-    })
+    }, 'loc1')
     expect(writes.find(w => w.table === 'contact_preferences').row).toMatchObject({ whatsapp_marketing: false })
     expect(writes.find(w => w.table === 'consent_log')).toBeDefined()
     expect(r).toMatchObject({ applied: true, partial: true, contactId: 'c1' })
@@ -306,10 +308,27 @@ describe('applyMetaUserPreference — same upsert semantics', () => {
     const db = stubDb({ writes, failOn: { contacts: 'down', contact_preferences: 'down' } })
     const r = await applyMetaUserPreference(db, {
       wa_id: '353871234567', category: 'marketing_messages', value: 'stop',
-    })
+    }, 'loc1')
     expect(writes.find(w => w.table === 'contact_preferences')).toBeDefined()
     expect(writes.find(w => w.table === 'contacts')).toBeDefined()
     expect(r).toMatchObject({ applied: false, reason: 'no_suppression_signal_landed' })
+  })
+
+  // WAORGNUMBER.3 (R6) — the lookup is bounded to the receiving number's organisation.
+  it('looks the contact up ONLY within the receiving studio\'s organisation (never estate-wide)', async () => {
+    const inScopes = []
+    const db = stubDb({ writes: [], inScopes })
+    await applyMetaUserPreference(db, { wa_id: '353871234567', value: 'stop' }, 'loc1')
+    expect(inScopes).toEqual([['contacts', 'location_id', ['loc1']]])
+  })
+
+  it('with no receiving studio it touches nothing', async () => {
+    const writes = []
+    const inScopes = []
+    const r = await applyMetaUserPreference(stubDb({ writes, inScopes }), { wa_id: '353871234567', value: 'stop' })
+    expect(r).toMatchObject({ applied: false, reason: 'no_receiving_studio' })
+    expect(writes).toEqual([])
+    expect(inScopes).toEqual([])
   })
 })
 

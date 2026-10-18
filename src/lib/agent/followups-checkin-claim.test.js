@@ -60,7 +60,7 @@ function stubDb(answer = () => undefined) {
         }
         if (table === 'contacts' && q.op === 'update') return { data: [{ id: 'c1' }], error: null }
         if (table === 'whatsapp_conversations') return { data: [], error: null } // no thread → Case B (template)
-        if (table === 'contact_preferences') return { data: { whatsapp_marketing: true }, error: null }
+        if (table === 'contact_location_preferences') return { data: { whatsapp_marketing: true }, error: null }
         if (table === 'whatsapp_templates') return { data: APPROVED, error: null }
         return { data: [], error: null }
       }

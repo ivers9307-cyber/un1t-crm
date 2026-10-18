@@ -128,9 +128,20 @@ export async function POST(request) {
         if (change.field === 'user_preferences') {
           // Meta's in-app "stop marketing messages" control — a consent signal
           // separate from STOP keywords. Best-effort per entry; never throws out.
+          // WAORGNUMBER.3 (R6) — the preference arrives on ONE number; the contact
+          // lookup is scoped to that number's organisation. An unroutable number
+          // resolves to no studio and applies nothing (logged below).
+          let prefStudio = null
+          try {
+            const owner = classifyInboundOwner(await resolveWhatsAppNumberByPhoneNumberId(change.value?.metadata?.phone_number_id))
+            if (owner.action === 'location') prefStudio = owner.locationId
+          } catch (e) { console.error('[wa-webhook] user_preferences number lookup failed:', e?.message) }
           for (const pref of change.value?.user_preferences || []) {
             try {
-              const r = await applyMetaUserPreference(db, pref)
+              const r = await applyMetaUserPreference(db, pref, prefStudio)
+              if (r?.reason === 'no_receiving_studio') {
+                console.error(`[wa-webhook] user_preferences ${pref?.value} NOT applied — phone_number_id ${change.value?.metadata?.phone_number_id || '(missing)'} resolves to no studio`)
+              }
               // BAREWRITE.4 — `applied: false` is the ordinary answer for an
               // unknown category / unknown value / no matching contact, so
               // gate the log on `failures` (a write actually went wrong)

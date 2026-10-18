@@ -54,6 +54,7 @@ import { sendTextMessage } from './whatsapp'
 import { consentActionFor } from './consent-actions'
 import { logError, logWarn } from './log'
 import { consentAckText } from './whatsapp-consent-copy'
+import { orgLocationIdsFor, scopeFor } from './inbound-contact-match'
 
 export { consentAckText }
 
@@ -430,16 +431,25 @@ export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locati
  * consent_log) but sends NO ack: Meta shows its own confirmation UX.
  * pref = { wa_id, category, value: 'stop'|'resume' }.
  */
-export async function applyMetaUserPreference(db, pref = {}) {
+export async function applyMetaUserPreference(db, pref = {}, receivingLocationId = null) {
   if (pref.category && pref.category !== 'marketing_messages') return { applied: false, reason: 'unknown_category' }
   if (!['stop', 'resume'].includes(pref.value)) return { applied: false, reason: 'unknown_value' }
   const waId = String(pref.wa_id || '').replace(/\D/g, '')
   if (!waId) return { applied: false, reason: 'no_wa_id' }
 
-  const { data: contacts } = await db.from('contacts')
+  // WAORGNUMBER.3 (R6) — the lookup is scoped to the RECEIVING number's
+  // organisation. It used to be unscoped (`.limit(1)` across every contact), so
+  // a person who is a contact at two tenants could have the OTHER tenant's row
+  // opted out by a preference they set on this tenant's number. No receiving
+  // studio = no scope = nothing is touched (never an unscoped fallback).
+  if (!receivingLocationId) return { applied: false, reason: 'no_receiving_studio' }
+  const orgLocationIds = await orgLocationIdsFor(db, receivingLocationId)
+  const { data: contacts, error: contactError } = await db.from('contacts')
     .select('id')
     .or(`wa_phone.eq.${waId},wa_phone.eq.+${waId},phone.eq.${waId},phone.eq.+${waId}`)
+    .in('location_id', scopeFor(orgLocationIds))
     .limit(1)
+  if (contactError) return { applied: false, reason: 'contact_read_failed', failures: [`contacts: ${contactError.message}`] }
   const contact = contacts?.[0]
   if (!contact) return { applied: false, reason: 'no_contact' }
 

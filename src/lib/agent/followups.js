@@ -514,13 +514,22 @@ async function sendFollowupTemplate(db, conv, settings, facts, ownsNumber) {
   if (!followups.template_name) return skipLog(conv.id, 'no_template_configured')
 
   // Marketing template ⇒ marketing consent, exactly like a campaign.
-  const { data: prefs } = await db.from('contact_preferences')
+  // WAORGNUMBER.3 (R6) — consent is the THREAD'S STUDIO's, not the contact's
+  // global flag: one number can serve two studios, and a STOP at one must not
+  // be undone by a yes at the other. Row absent = no. A failed read is not "no"
+  // (the no-branch stamps the cycle closed): skip unstamped, the next tick retries.
+  const { data: prefs, error: prefsError } = await db.from('contact_location_preferences')
     .select('whatsapp_marketing')
     .eq('contact_id', conv.contact_id)
+    .eq('location_id', conv.location_id)
     .maybeSingle()
+  if (prefsError) {
+    logError('agent-followups', 'follow-up consent read failed; skipped this tick', { conversationId: conv.id, err: prefsError })
+    return skipLog(conv.id, 'consent_read_failed')
+  }
   if (prefs?.whatsapp_marketing !== true) {
     await stampStage(db, conv.id, 3, false)
-    return skipLog(conv.id, 'no_marketing_consent')
+    return skipLog(conv.id, 'no_studio_whatsapp_consent')
   }
 
   // MIAORG.1 Task 6 — a number-less studio's template comes from the owner of
@@ -1099,9 +1108,11 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: 'no_template_configured' }))
           bump('no_template_configured'); results.skipped++; continue
         }
-        const { data: prefs, error: prefsError } = await db.from('contact_preferences')
+        // WAORGNUMBER.3 (R6) — this studio's WhatsApp consent; row absent = no.
+        const { data: prefs, error: prefsError } = await db.from('contact_location_preferences')
           .select('whatsapp_marketing')
           .eq('contact_id', contact.id)
+          .eq('location_id', location.id)
           .maybeSingle()
         // CHECKINSTALL.1 — a failed read is not "no consent": the branch below
         // STAMPS the contact once-ever, so a blip used to cost them the check-in
@@ -1112,7 +1123,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         }
         if (prefs?.whatsapp_marketing !== true) {
           const stamp = await stampCheckinSkip(db, contact, location.id, className, 'skipped — no marketing consent')
-          bump(stamp.ok ? 'no_marketing_consent' : stamp.reason); results.skipped++; continue
+          bump(stamp.ok ? 'no_studio_whatsapp_consent' : stamp.reason); results.skipped++; continue
         }
         // MIAORG.1 Task 6 — a number-less studio's template comes from the
         // owner of the thread's number; its own studio otherwise (unchanged).

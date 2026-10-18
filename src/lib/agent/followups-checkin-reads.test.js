@@ -48,7 +48,7 @@ function stubDb({ conversation = CONV, messages = [], errors = {}, prefs = { wha
         if (table === 'contacts') return state.head ? { count: 0, error: null } : { data: [CONTACT], error: null }
         if (table === 'whatsapp_conversations') return { data: conversation ? [conversation] : [], error: null }
         if (table === 'whatsapp_messages') return { data: [...messages].reverse(), error: null } // runner reads newest-first
-        if (table === 'contact_preferences') return { data: prefs, error: null }
+        if (table === 'contact_location_preferences') return { data: prefs, error: null }
         if (table === 'whatsapp_templates') return { data: templates, error: null }
         return { data: [], error: null }
       }
@@ -75,7 +75,7 @@ const stamped = (db) => db.updates.some((u) => u.table === 'contacts' && 'first_
 
 describe('runFirstClassCheckins — reads fail closed (CHECKINSTALL.1)', () => {
   it('counts the candidates the query returned', async () => {
-    const res = await runFirstClassCheckins(stubDb({ errors: { contact_preferences: BOOM } }), { nowMs: NOW })
+    const res = await runFirstClassCheckins(stubDb({ errors: { contact_location_preferences: BOOM } }), { nowMs: NOW })
     expect(res.candidates).toBe(1)
   })
 
@@ -94,7 +94,7 @@ describe('runFirstClassCheckins — reads fail closed (CHECKINSTALL.1)', () => {
   })
 
   it('a failed consent read never stamps "no marketing consent" for ever', async () => {
-    const db = stubDb({ conversation: null, errors: { contact_preferences: BOOM } })
+    const db = stubDb({ conversation: null, errors: { contact_location_preferences: BOOM } })
     const res = await runFirstClassCheckins(db, { nowMs: NOW })
     expect(res.reasons).toEqual({ consent_read_failed: 1 })
     expect(stamped(db)).toBe(false)
@@ -111,7 +111,7 @@ describe('runFirstClassCheckins — reads fail closed (CHECKINSTALL.1)', () => {
   it('a real no-consent answer still stamps (unchanged)', async () => {
     const db = stubDb({ conversation: null, prefs: { whatsapp_marketing: false } })
     const res = await runFirstClassCheckins(db, { nowMs: NOW })
-    expect(res.reasons).toEqual({ no_marketing_consent: 1 })
+    expect(res.reasons).toEqual({ no_studio_whatsapp_consent: 1 })
     expect(stamped(db)).toBe(true)
   })
 })
