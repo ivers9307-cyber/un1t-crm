@@ -243,10 +243,9 @@ describe('the rest', () => {
     expect(tablesTouched(calls).sort()).toEqual(['contacts', 'un1t_bookings', 'un1t_clients'])
   })
 
-  it('an unknown op, or the trial (Task 10), is a programming error', async () => {
+  it('an unknown op is a programming error', async () => {
     const { db } = makeDb()
     await expect(applyUn1tWriteToMirror(db, { op: 'refund', locationId: LOC }, { read: vi.fn(), now })).rejects.toBeInstanceOf(TypeError)
-    await expect(applyUn1tWriteToMirror(db, { op: 'trial', locationId: LOC }, { read: vi.fn(), now })).rejects.toBeInstanceOf(TypeError)
   })
 
   it('log lines carry only the contract fields', async () => {

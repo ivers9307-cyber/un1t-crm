@@ -215,7 +215,7 @@ function withoutLedger(r) {
 function dataFor(op, body) {
   const data = isObj(body) && isObj(body.data) ? body.data : null
   if (op === 'book' || op === 'cancel') return data ? pickBooking(data) : null
-  if (op === 'checkout') return data ? { free: data.free === true } : null
+  if (op === 'checkout' || op === 'trial') return data ? { free: data.free === true } : null
   return null
 }
 
