@@ -74,8 +74,9 @@ export function supportsRead(r, key) {
  * state's. `pinArrears` is the adapter's own flag (un1t studios pin past-due
  * members above the At-risk list).
  *
- * An unreadable source key throws (code MEMBERSHIP_SOURCE_UNREADABLE): a route
- * answers 500, a cron records a per-location error. Never "no members".
+ * An unreadable source key throws (code MEMBERSHIP_SOURCE_UNREADABLE): a radar
+ * read route answers 500, a radar write route 503 with nothing written
+ * (UN1TRADAR.3), a cron records a per-location error. Never "no members".
  *
  * @returns {Promise<{ source: string, reads: object, providesMemberships: boolean, pinArrears: boolean }>}
  */
