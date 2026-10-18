@@ -1017,6 +1017,14 @@ export async function executeBookingTool(toolName, input, ctx) {
     if (!verifiedContactId) {
       return { error: 'not_verified', message: 'Identity not verified yet. Call verify_identity first.' }
     }
+    // MIAHATCH.2 — on a turn whose tool block reads un1t.online (ctx.turn.block
+    // starts with `un1t_`) the list comes from the answerable studios. A turn
+    // without one is untouched; the module loads lazily so a Glofox turn never
+    // imports it.
+    if (String(ctx.turn?.block || '').startsWith('un1t_')) {
+      const { executeUn1tRead } = await import('./un1t-tools')
+      return executeUn1tRead(toolName, input, ctx, ctx.turn.answerable)
+    }
     // PERSON-ACCT.2 — one person routinely holds 2-3 `contacts` rows, each
     // linked to a DIFFERENT Glofox account, and the conversation is attached
     // to whichever one the inbound number matched. Reading that one account
