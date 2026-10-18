@@ -241,6 +241,10 @@ export function judgeUn1tWrite(op, { status, body, expect } = {}, table = UN1T_R
       return id ? verdict('done', { id }) : verdict('unknown')
     }
     case 'trial': {
+      // The trial's free checkout (UN1TWRITE.10) answering free: false is a
+      // paid checkout session, not a trial: refused, and nothing of the
+      // answer (its URL) is carried on.
+      if (data?.free === false) return verdict('refused', { code: 'checkout_not_free' })
       const id = idOf(data?.transactionId)
       return id ? verdict('done', { id }) : verdict('unknown')
     }
