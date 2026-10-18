@@ -21,6 +21,8 @@ vi.mock('@/components/MemberPasswordOverrideButton', () => stub('password'))
 vi.mock('@/components/LinkedAccountsCard', () => stub('linked-accounts'))
 vi.mock('./GlofoxProfileCard', () => stub('glofox'))
 vi.mock('./StudioMembershipsCard', () => stub('memberships'))
+// Mirrors the real card's one rule: nothing without a studio to show.
+vi.mock('./Un1tPaymentsCard', () => ({ default: ({ studios }) => (studios?.length ? <i data-card="un1t-payments" /> : null) }))
 
 const { default: ContactNextRail } = await import('./ContactNextRail.jsx')
 const { default: ContactWhoRail } = await import('./ContactWhoRail.jsx')
@@ -56,5 +58,22 @@ describe('the studio-private read cards follow canReadStudioCards', () => {
     expect(n).toContain('data-card="events"')
     expect(n).toContain('data-card="devices"')
     expect(who({ canReadStudioCards: true })).toContain('data-card="marketing-preferences"')
+  })
+})
+
+// HATCHPIPE.2 — the un1t.online payments card.
+describe('Un1tPaymentsCard placement', () => {
+  it('sits between StudioMembershipsCard and GlofoxProfileCard', () => {
+    const cards = [...who({ un1tBilling: { studios: [{ locationId: 'x' }] } }).matchAll(/data-card="([^"]+)"/g)].map((m) => m[1])
+    expect(cards).toEqual(['linked-accounts', 'memberships', 'un1t-payments', 'glofox'])
+  })
+
+  it('Glofox-only contact renders exactly as before', () => {
+    const cards = (html) => [...html.matchAll(/data-card="([^"]+)"/g)].map((m) => m[1])
+    const BEFORE = ['linked-accounts', 'memberships', 'glofox']
+    expect(cards(who({}))).toEqual(BEFORE)
+    expect(cards(who({ un1tBilling: { studios: [] } }))).toEqual(BEFORE)
+    expect(cards(who({ un1tBilling: null }))).toEqual(BEFORE)
+    expect(cards(who({ canReadStudioCards: true }))).toEqual([...BEFORE, 'marketing-preferences'])
   })
 })

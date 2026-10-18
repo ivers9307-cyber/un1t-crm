@@ -7,6 +7,7 @@
 // the payload leaves the server (PERF.2 discipline).
 
 import { nextBookedClass } from '@/lib/pipeline-classifier'
+import { getBoardModule } from '../../shared/pipelines/index.js'
 
 // Per-column page size — the server ships this many cards per column initially
 // and each "Load more" fetches another page. Replaces the old approach of
@@ -87,21 +88,36 @@ export function dealAge(deal, nowMs) {
   }
 }
 
-// Map a raw deal row to a board deal: derive next_class_at for funnel columns
-// and the age footer, strip recent_bookings so the payload stays card-sized.
-// Deliberately 1-arg (nowMs pinned inside): callers do `.map(toBoardDeal)`,
-// and a second parameter would silently receive the array index. Tests
-// inject time via dealAge directly.
-export function toBoardDeal(deal) {
-  const { recent_bookings, ...contact } = deal.contacts || {}
-  return {
-    ...deal,
-    age: dealAge(deal, Date.now()),
-    contacts: {
-      ...contact,
-      next_class_at: BADGE_SLUGS.has(contact.pipeline_stage_slug)
-        ? nextBookedClass(recent_bookings)
-        : null,
-    },
+// The next-class badge reads a Glofox-fed `contacts.recent_bookings`. A board
+// whose inputs come from un1t.online has no such bookings (they are not
+// projected), so the badge there would be empty at best and wrong at worst.
+// Decided by the board module's declared inputSource, never a location id.
+// An unknown or absent module keeps the badge (today's behaviour).
+export function badgeEnabledForModule(moduleName) {
+  return getBoardModule(moduleName)?.inputSource !== 'un1t_online'
+}
+
+// Build the row mapper for a board: derive next_class_at for funnel columns
+// (unless `badge` is false, then always null) and the age footer, and strip
+// recent_bookings so the payload stays card-sized.
+// The returned mapper is deliberately 1-arg (nowMs pinned inside): callers do
+// `.map(mapper)`, and a second parameter would silently receive the array
+// index. Tests inject time via dealAge directly.
+export function boardDealMapper({ badge = true } = {}) {
+  return (deal) => {
+    const { recent_bookings, ...contact } = deal.contacts || {}
+    return {
+      ...deal,
+      age: dealAge(deal, Date.now()),
+      contacts: {
+        ...contact,
+        next_class_at: badge && BADGE_SLUGS.has(contact.pipeline_stage_slug)
+          ? nextBookedClass(recent_bookings)
+          : null,
+      },
+    }
   }
 }
+
+// The default mapper (badge on) — unchanged for existing callers.
+export const toBoardDeal = boardDealMapper()

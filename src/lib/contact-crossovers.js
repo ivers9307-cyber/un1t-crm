@@ -132,7 +132,7 @@ export async function canViewContact(db, user, contact) {
 }
 
 /** The caller's studios where they hold Contacts, web OR phone (mig 690's rule). */
-function contactStudioIds(user, locIds) {
+export function contactStudioIds(user, locIds) {
   return locIds.filter(
     (id) =>
       hasPermissionForLocation(user, id, 'contacts') ||

@@ -40,4 +40,26 @@ describe('board registry', () => {
       expect(requiredFields, `missing ${f}`).toContain(f)
     }
   })
+
+  it('registers acquisition_un1t with inputSource un1t_online', () => {
+    const mod = getBoardModule('acquisition_un1t')
+    expect(mod).toBeTruthy()
+    expect(mod.inputSource).toBe('un1t_online')
+  })
+
+  it('acquisition_un1t shares acquisition stages and classify by reference', () => {
+    const acq = getBoardModule('acquisition')
+    const un1t = getBoardModule('acquisition_un1t')
+    expect(un1t.stages).toBe(acq.stages)
+    expect(un1t.classify).toBe(acq.classify)
+  })
+
+  it('acquisition_un1t requires only id, name, email, location_id', () => {
+    const { requiredFields } = getBoardModule('acquisition_un1t')
+    expect([...requiredFields].sort()).toEqual(['email', 'id', 'location_id', 'name'])
+  })
+
+  it('acquisition declares no inputSource', () => {
+    expect(getBoardModule('acquisition').inputSource).toBeUndefined()
+  })
 })

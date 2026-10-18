@@ -10,7 +10,8 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { pipelineDealSelect, toBoardDeal, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
+import { logWarn } from '@/lib/log'
+import { pipelineDealSelect, boardDealMapper, badgeEnabledForModule, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -39,11 +40,32 @@ export async function GET(request) {
   // can't be enumerated across tenants.
   const { data: stage } = await db
     .from('pipeline_stages')
-    .select('id')
+    .select('id, pipeline_id')
     .eq('id', stageId)
     .eq('location_id', locationId)
     .maybeSingle()
   if (!stage) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+
+  // The stage's board decides whether cards carry the next-class badge (a
+  // un1t.online board has no Glofox bookings to read it from). A stage with no
+  // readable board keeps the badge, i.e. today's behaviour.
+  let badge = true
+  if (stage.pipeline_id) {
+    const { data: pipeline, error: pipelineError } = await db
+      .from('pipelines')
+      .select('module')
+      .eq('id', stage.pipeline_id)
+      .eq('location_id', locationId)
+      .maybeSingle()
+    if (pipelineError) {
+      // The board only decides the badge. Fail open (badge kept, today's
+      // behaviour) rather than 500 the whole Load-more page; ids only, no
+      // error text.
+      logWarn('pipeline-deals', 'board read failed; badge kept', { stageId, locationId })
+    } else {
+      badge = badgeEnabledForModule(pipeline?.module)
+    }
+  }
 
   const { data, error } = await db
     .from('deals')
@@ -56,5 +78,5 @@ export async function GET(request) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  return NextResponse.json({ success: true, deals: (data || []).map(toBoardDeal) })
+  return NextResponse.json({ success: true, deals: (data || []).map(boardDealMapper({ badge })) })
 }

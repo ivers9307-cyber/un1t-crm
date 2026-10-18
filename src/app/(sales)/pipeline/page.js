@@ -33,7 +33,7 @@
 //   - archived=false filter so retiring old stages needs no UI change.
 
 import { createServerClient } from '@/lib/supabase'
-import { pipelineDealSelect, toBoardDeal, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
+import { pipelineDealSelect, boardDealMapper, badgeEnabledForModule, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { canWriteActivitiesAt } from '@/lib/activity-write-gate'
@@ -71,7 +71,7 @@ export default async function PipelinePage(props) {
   //    is the tab order.
   const { data: pipelineRows, error: pipelinesError } = await db
     .from('pipelines')
-    .select('id, key, name, mode')
+    .select('id, key, name, mode, module')
     .eq('location_id', locationId)
     .eq('enabled', true)
     .order('display_order', { ascending: true })
@@ -92,6 +92,7 @@ export default async function PipelinePage(props) {
   }
 
   const manual = activePipeline.mode === 'manual'
+  const toBoard = boardDealMapper({ badge: badgeEnabledForModule(activePipeline.module) })
   // A manual board draws no view toggle, so it can only ever be the one view —
   // otherwise a bookmarked ?view=dormant would strand the operator on a screen
   // with no way back.
@@ -133,7 +134,7 @@ export default async function PipelinePage(props) {
           db.from('deals').select('id', { count: 'exact', head: true })
             .eq('status', 'open').eq('location_id', locationId).eq('stage_id', stage.id),
         ])
-        return { stageId: stage.id, deals: (pageRes.data || []).map(toBoardDeal), count: countRes.count || 0 }
+        return { stageId: stage.id, deals: (pageRes.data || []).map(toBoard), count: countRes.count || 0 }
       }))
     : []
   const boardDeals = perStage.flatMap((sg) => sg.deals)

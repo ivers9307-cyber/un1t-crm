@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  toBoardDeal, pipelineContactFields, PIPELINE_PAGE_SIZE,
+  toBoardDeal, boardDealMapper, badgeEnabledForModule, pipelineContactFields, PIPELINE_PAGE_SIZE,
   ageDays, formatAge, dealAge, PIPELINE_BACKFILL_CUTOFF,
 } from './pipeline-board.js'
 
@@ -114,5 +114,57 @@ describe('pipelineContactFields', () => {
   })
   it('page size is a sane positive number', () => {
     expect(PIPELINE_PAGE_SIZE).toBeGreaterThan(0)
+  })
+})
+
+describe('boardDealMapper', () => {
+  // unix SECONDS (Glofox convention), a day ahead of the real clock.
+  const FUTURE_SECONDS = Math.floor(Date.now() / 1000) + 86400
+  const deal = {
+    id: 'd1', stage_id: 's1', title: 't', created_at: '2026-09-01T00:00:00Z',
+    contacts: {
+      id: 'c1', name: 'Ann', pipeline_stage_slug: 'new_lead',
+      recent_bookings: [{ status: 'BOOKED', time_start: FUTURE_SECONDS }],
+    },
+  }
+
+  it('positive control: the default mapper and toBoardDeal derive an ISO next_class_at for this deal', () => {
+    const expected = new Date(FUTURE_SECONDS * 1000).toISOString()
+    expect(boardDealMapper()(deal).contacts.next_class_at).toBe(expected)
+    expect(toBoardDeal(deal).contacts.next_class_at).toBe(expected)
+  })
+
+  it('boardDealMapper({ badge:false }) sets next_class_at null and still strips recent_bookings', () => {
+    const out = boardDealMapper({ badge: false })(deal)
+    expect(out.contacts.next_class_at).toBeNull()
+    expect(out.contacts.recent_bookings).toBeUndefined()
+    expect(out.contacts.id).toBe('c1')
+    expect(out.age).toBeTruthy()
+  })
+
+  it('toBoardDeal unchanged', () => {
+    const viaDefault = boardDealMapper()(deal)
+    const direct = toBoardDeal(deal)
+    expect(direct.contacts).toEqual(viaDefault.contacts)
+    expect(direct.contacts.recent_bookings).toBeUndefined()
+    expect(direct.contacts.next_class_at).not.toBeNull()
+    // 1-arg: safe in .map (the index must not be read as an option bag)
+    const mapped = [deal, deal].map(toBoardDeal)
+    expect(mapped).toHaveLength(2)
+  })
+
+  it('is safe in .map with a deal that has no contacts', () => {
+    const out = [{ id: 'd' }].map(boardDealMapper({ badge: false }))[0]
+    expect(out.contacts.next_class_at).toBeNull()
+  })
+})
+
+describe('badgeEnabledForModule', () => {
+  it('acquisition true, acquisition_un1t false, unknown true', () => {
+    expect(badgeEnabledForModule('acquisition')).toBe(true)
+    expect(badgeEnabledForModule('acquisition_un1t')).toBe(false)
+    expect(badgeEnabledForModule('nope')).toBe(true)
+    expect(badgeEnabledForModule(null)).toBe(true)
+    expect(badgeEnabledForModule(undefined)).toBe(true)
   })
 })
