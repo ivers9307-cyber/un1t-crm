@@ -24,6 +24,7 @@ import { contactChannelFlags, canLoadContactConsultations } from '@/lib/contact-
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
+import { loadUn1tBilling } from '@/lib/contact-un1t-billing'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -83,7 +84,10 @@ export async function GET(request, props) {
     }
   }
 
-  const [actRes, etRes, arrears, latestNote] = await Promise.all([
+  // HATCHPIPE.2 — un1t.online billing joins the same pass. loadUn1tBilling
+  // never rejects and already narrows to the studios where the viewer holds
+  // Contacts (the 404 gate above is unchanged).
+  const [actRes, etRes, arrears, latestNote, un1tBilling] = await Promise.all([
     db.from('activities')
       .select('*')
       .eq('contact_id', params.id)
@@ -96,6 +100,7 @@ export async function GET(request, props) {
       .order('name', { ascending: true }),
     loadContactArrears(db, params.id),
     fetchLatestNote(),
+    loadUn1tBilling(db, user, params.id),
   ])
   if (actRes.error) {
     return NextResponse.json({ success: false, error: actRes.error.message }, { status: 500 })
@@ -125,6 +130,18 @@ export async function GET(request, props) {
   } else if (scored) {
     churnLabel = 'At risk'
     churnTier = 'low'
+  }
+  // An un1t.online overdue reads the same as a Glofox one in the panel.
+  if (un1tBilling.overdue) churnLabel = 'Payment overdue'
+
+  // The panel's own shape: only the studios with a past-due, and the EUR sum
+  // alone (another currency is never added to it; 0 when no amount is known).
+  const un1tBillingOut = {
+    overdue: un1tBilling.overdue,
+    arrears_cents: Number(un1tBilling.arrearsCentsByCurrency?.EUR) || 0,
+    studios: (un1tBilling.studios || [])
+      .filter((s) => s.pastDue)
+      .map((s) => ({ location_id: s.locationId, since: s.pastDue.since })),
   }
 
   // DRAWER.2 — extra fields for the pipeline contact drawer only, so
@@ -214,6 +231,7 @@ export async function GET(request, props) {
       lastAttendedAt: contact.last_attended_at ?? null,
     },
     latestNote,
+    un1t_billing: un1tBillingOut,
     ...(drawerExtras || {}),
   })
 }

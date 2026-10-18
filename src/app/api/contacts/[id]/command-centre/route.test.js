@@ -13,6 +13,9 @@
 //   - ?scope=drawer adds notes / sequences / wa / composer_templates /
 //     permissions; wa.window_open derives from window_expires_at
 //   - whatsapp_templates only queried when the caller holds `whatsapp`
+//   - HATCHPIPE.2 — `un1t_billing` (loadUn1tBilling, Task 12) runs inside the
+//     same Promise.all, ships EUR-only `arrears_cents` and the overdue
+//     studios, and an un1t.online overdue sets churnLabel 'Payment overdue'
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -43,11 +46,15 @@ vi.mock('@/lib/permissions', () => {
 })
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/contact-un1t-billing', () => ({ loadUn1tBilling: vi.fn() }))
 
 import { GET } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { loadUn1tBilling } from '@/lib/contact-un1t-billing'
+
+const NO_BILLING = { studios: [], overdue: false, arrearsCentsByCurrency: {} }
 
 const USER = { id: 'u1', locations: [{ id: 'loc1' }] }
 const CONTACT = { id: 'c1', location_id: 'loc1', name: 'Emma Byrne' }
@@ -81,6 +88,7 @@ const props = { params: Promise.resolve({ id: 'c1' }) }
 beforeEach(() => {
   vi.clearAllMocks()
   hasPermission.mockReturnValue(false)
+  loadUn1tBilling.mockResolvedValue(NO_BILLING)
 })
 
 describe('GET /api/contacts/[id]/command-centre', () => {
@@ -208,6 +216,105 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     expect(j.signals.arrearsCents).toBe(0)
     expect(j.signals.arrearsCount).toBe(0)
     expect(j.signals.lastAttendedAt).toBe(goneQuietAt)
+  })
+
+  it('loadUn1tBilling joins the Promise.all and the response carries un1t_billing', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    // Hold the activities read open: billing must already have been asked for
+    // while a sibling read is still pending, i.e. it is a member of the same
+    // Promise.all and not awaited before or after it.
+    let releaseActivities
+    const activities = new Promise((resolve) => {
+      releaseActivities = () => resolve({ data: [], error: null })
+    })
+    const db = mockDb({
+      contacts: { data: CONTACT, error: null },
+      activities,
+      event_types: { data: [], error: null },
+    })
+    createServerClient.mockReturnValue(db)
+    loadUn1tBilling.mockResolvedValue({
+      studios: [
+        { locationId: 'loc1', locationName: 'Hatch', pastDue: { since: '2026-10-01', amountCents: 4500, currency: 'EUR' } },
+        { locationId: 'loc2', locationName: 'Other', pastDue: null },
+        { locationId: 'loc3', locationName: 'Third', pastDue: { since: '2026-09-20', amountCents: 1000, currency: 'GBP' } },
+      ],
+      overdue: true,
+      arrearsCentsByCurrency: { EUR: 4500, GBP: 1000 },
+    })
+
+    const pending = GET(req(), props)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(loadUn1tBilling).toHaveBeenCalledTimes(1)
+    expect(loadUn1tBilling).toHaveBeenCalledWith(db, USER, 'c1')
+    releaseActivities()
+    const res = await pending
+    const j = await res.json()
+
+    expect(res.status).toBe(200)
+    // Only studios with a pastDue, and EUR alone in arrears_cents.
+    expect(j.un1t_billing).toEqual({
+      overdue: true,
+      arrears_cents: 4500,
+      studios: [
+        { location_id: 'loc1', since: '2026-10-01' },
+        { location_id: 'loc3', since: '2026-09-20' },
+      ],
+    })
+    expect(j.signals.churnLabel).toBe('Payment overdue')
+  })
+
+  it('overdue with null amount → churnLabel Payment overdue, arrears_cents 0', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    createServerClient.mockReturnValue(mockDb({
+      contacts: { data: CONTACT, error: null },
+      activities: { data: [], error: null },
+      event_types: { data: [], error: null },
+    }))
+    loadUn1tBilling.mockResolvedValue({
+      studios: [{ locationId: 'loc1', locationName: 'Hatch', pastDue: { since: '2026-10-01', amountCents: null, currency: null } }],
+      overdue: true,
+      arrearsCentsByCurrency: {},
+    })
+    const res = await GET(req(), props)
+    const j = await res.json()
+    expect(res.status).toBe(200)
+    expect(j.un1t_billing).toEqual({
+      overdue: true,
+      arrears_cents: 0,
+      studios: [{ location_id: 'loc1', since: '2026-10-01' }],
+    })
+    expect(j.signals.churnLabel).toBe('Payment overdue')
+  })
+
+  it('no un1t billing → un1t_billing { overdue:false, arrears_cents:0, studios:[] } and churnLabel as before', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const goneQuietAt = new Date(Date.now() - 20 * 86_400_000).toISOString()
+    createServerClient.mockReturnValue(mockDb({
+      contacts: {
+        data: {
+          id: 'c1',
+          location_id: 'loc1',
+          name: 'Sam Byrne',
+          glofox_membership_status: 'member',
+          glofox_membership_type: 'time',
+          last_attended_at: goneQuietAt,
+          total_attended_30d: 0,
+          total_attended_7d: 0,
+          total_noshow_30d: 0,
+        },
+        error: null,
+      },
+      activities: { data: [], error: null },
+      event_types: { data: [], error: null },
+    }))
+    const res = await GET(req(), props)
+    const j = await res.json()
+    expect(res.status).toBe(200)
+    expect(j.un1t_billing).toEqual({ overdue: false, arrears_cents: 0, studios: [] })
+    // The Glofox-side label and tier are untouched.
+    expect(j.signals.churnLabel).toBe('At risk')
+    expect(j.signals.churnTier).toBe('low')
   })
 
   it('?scope=drawer adds notes, sequences, wa window and permissions', async () => {
