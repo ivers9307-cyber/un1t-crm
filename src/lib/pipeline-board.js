@@ -162,6 +162,11 @@ export function boardDealMapper({ badge = true, glofoxCredits = true } = {}) {
     return {
       ...deal,
       age: dealAge(deal, Date.now()),
+      // HATCHPIPE.5 — the card must know the badge is OFF, not merely that no
+      // class is booked: a null next_class_at alone renders "No class booked"
+      // on every early-stage un1t.online card. Only added when off, so a badge
+      // board's row (Stillorgan) is exactly what it was.
+      ...(badge ? {} : { next_class_badge: false }),
       contacts: {
         ...contact,
         next_class_at: badge && BADGE_SLUGS.has(contact.pipeline_stage_slug)
