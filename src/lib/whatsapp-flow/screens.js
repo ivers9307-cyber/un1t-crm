@@ -12,8 +12,24 @@ export function dayScreen(days, path) {
 export function slotScreen({ day, slots, path }) {
   return { screen: SCREEN.SLOT, data: { day, slots, path } }
 }
-export function detailsScreen(prefill = {}, carry = {}) {
-  return { screen: SCREEN.DETAILS, data: { name: prefill.name || '', email: prefill.email || '', marketing_opt_in: true, path: carry.path, slot: carry.slot } }
+// UN1TWRITE.19 — `terms` drives the un1t.online terms and waiver OptIn: hidden
+// and not required unless the studio's funnel needs it (the handler decides).
+export function detailsScreen(prefill = {}, carry = {}, terms = {}) {
+  return {
+    screen: SCREEN.DETAILS,
+    data: {
+      name: prefill.name || '',
+      email: prefill.email || '',
+      marketing_opt_in: prefill.marketing_opt_in === false ? false : true,
+      path: carry.path,
+      slot: carry.slot,
+      terms_required: terms.required === true,
+      terms_label: terms.label || '',
+      terms_url: terms.url || '',
+      terms_accepted: terms.accepted === true,
+      terms_error: terms.error || '',
+    },
+  }
 }
 export function confirmScreen(summary, selection) {
   return { screen: SCREEN.CONFIRM, data: { summary, selection } }
@@ -53,22 +69,31 @@ export const FLOW_JSON = {
     },
     {
       id: SCREEN.DETAILS, title: 'Your details',
-      data: { name: { type: 'string', __example__: '' }, email: { type: 'string', __example__: '' }, marketing_opt_in: { type: 'boolean', __example__: true }, path: { type: 'string', __example__: 'class' }, slot: { type: 'string', __example__: '' } },
+      data: {
+        name: { type: 'string', __example__: '' }, email: { type: 'string', __example__: '' }, marketing_opt_in: { type: 'boolean', __example__: true }, path: { type: 'string', __example__: 'class' }, slot: { type: 'string', __example__: '' },
+        // UN1TWRITE.19 — the un1t.online terms and waiver OptIn.
+        terms_required: { type: 'boolean', __example__: false }, terms_label: { type: 'string', __example__: '' }, terms_url: { type: 'string', __example__: '' }, terms_accepted: { type: 'boolean', __example__: false }, terms_error: { type: 'string', __example__: '' },
+      },
       layout: { type: 'SingleColumnLayout', children: [{
-        type: 'Form', name: 'form', 'init-values': { name: '${data.name}', email: '${data.email}', marketing_opt_in: '${data.marketing_opt_in}' }, children: [
+        type: 'Form', name: 'form', 'init-values': { name: '${data.name}', email: '${data.email}', marketing_opt_in: '${data.marketing_opt_in}', terms_accepted: '${data.terms_accepted}' }, children: [
           { type: 'TextInput', name: 'name', label: 'Name', required: true },
           { type: 'TextInput', name: 'email', label: 'Email', 'input-type': 'email', required: true },
           { type: 'OptIn', name: 'marketing_opt_in', label: 'Keep me posted with offers and updates' },
-          { type: 'Footer', label: 'Review', 'on-click-action': { name: 'data_exchange', payload: { path: '${data.path}', slot: '${data.slot}', name: '${form.name}', email: '${form.email}', marketing_opt_in: '${form.marketing_opt_in}' } } },
+          // Flow labels carry no links: tapping the label opens the terms page,
+          // which links the waiver. Builder may refuse the bound `required`; if
+          // so drop that one property (the handler's DETAILS check still holds).
+          { type: 'OptIn', name: 'terms_accepted', label: '${data.terms_label}', visible: '${data.terms_required}', required: '${data.terms_required}', 'on-click-action': { name: 'open_url', url: '${data.terms_url}' } },
+          { type: 'TextCaption', text: '${data.terms_error}' },
+          { type: 'Footer', label: 'Review', 'on-click-action': { name: 'data_exchange', payload: { path: '${data.path}', slot: '${data.slot}', name: '${form.name}', email: '${form.email}', marketing_opt_in: '${form.marketing_opt_in}', terms_accepted: '${form.terms_accepted}' } } },
         ] }] },
     },
     {
       id: SCREEN.CONFIRM, title: 'Confirm', terminal: true,
-      data: { summary: { type: 'string', __example__: '' }, selection: { type: 'object', properties: { path: { type: 'string' }, slot: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, marketing_opt_in: { type: 'boolean' } }, __example__: { path: 'class', slot: '', name: '', email: '', marketing_opt_in: true } } },
+      data: { summary: { type: 'string', __example__: '' }, selection: { type: 'object', properties: { path: { type: 'string' }, slot: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, marketing_opt_in: { type: 'boolean' }, terms_accepted: { type: 'boolean' } }, __example__: { path: 'class', slot: '', name: '', email: '', marketing_opt_in: true, terms_accepted: false } } },
       layout: { type: 'SingleColumnLayout', children: [{
         type: 'Form', name: 'form', children: [
           { type: 'TextBody', text: '${data.summary}' },
-          { type: 'Footer', label: 'Confirm booking', 'on-click-action': { name: 'complete', payload: { path: '${data.selection.path}', slot: '${data.selection.slot}', name: '${data.selection.name}', email: '${data.selection.email}', marketing_opt_in: '${data.selection.marketing_opt_in}' } } },
+          { type: 'Footer', label: 'Confirm booking', 'on-click-action': { name: 'complete', payload: { path: '${data.selection.path}', slot: '${data.selection.slot}', name: '${data.selection.name}', email: '${data.selection.email}', marketing_opt_in: '${data.selection.marketing_opt_in}', terms_accepted: '${data.selection.terms_accepted}' } } },
         ] }] },
     },
   ],
