@@ -232,6 +232,23 @@ describe('processClassBookingRequest', () => {
     expect(maybeSendBookingWhatsappConfirm).not.toHaveBeenCalled()
   })
 
+  // HATCHSTART.1 — a class off a un1t.online studio's synced timetable.
+  it('a un1t.online class (un1t:<id>) at a studio with no Glofox → staff card manual_booking; nothing booked', async () => {
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: null })
+    missingGlofoxCredentialsForLocation.mockReturnValueOnce(['Branch ID', 'API Key', 'API Token'])
+    const db = makeDb(null)
+    const inserts = []
+    const statusWrites = []
+    db.insert = (row) => { inserts.push(row); return { select: () => ({ maybeSingle: async () => ({ data: { id: 'amr2' } }) }) } }
+    db.update = (patch) => { statusWrites.push(patch); return { eq: async () => ({}), is: async () => ({}) } }
+    const r = await processClassBookingRequest(db, { ...req, glofox_event_id: 'un1t:7c9e6679-7425-40de-944b-e07fc1f90ae7', class_name: 'RALLY', starts_at: '2026-10-20T06:00:00.000Z', customer_name: 'Sam Byrne' })
+    expect(r).toEqual({ outcome: 'needs_review', detail: 'manual_booking' })
+    expect(inserts[0].details).toMatchObject({ event_id: 'un1t:7c9e6679-7425-40de-944b-e07fc1f90ae7', reason: 'manual_booking' })
+    expect(statusWrites).toEqual([{ status: 'needs_review', last_error: 'manual_booking', approval_request_id: 'amr2' }])
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(findOrCreateGlofoxMember).not.toHaveBeenCalled()
+  })
+
   it('a manual-looking id at a studio WITH Glofox is not special: it takes the normal path', async () => {
     createBooking.mockResolvedValueOnce({ ok: false, status: 404, body: { message_code: 'EVENT_NOT_FOUND' } })
     const db = makeDb({ id: 'c1', first_name: 'Sam', last_name: 'Byrne', phone: '0871234567', glofox_member_id: null, last_attended_at: null })

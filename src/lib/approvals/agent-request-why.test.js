@@ -383,4 +383,10 @@ describe('whyFlagged: a manual-timetable booking', () => {
   it('never offers to buy a trial', () => {
     expect(approvalGrantsTrialCredit(row('manual_booking').details)).toBe(false)
   })
+
+  // HATCHSTART.1 — a class off a un1t.online studio's synced timetable.
+  it('a un1t.online class (un1t:<id>) gets the same book-by-hand copy', () => {
+    const un1tRow = { kind: 'class_booking', details: { event_id: 'un1t:7c9e6679', reason: 'processing_error', source: 'start_funnel' } }
+    expect(whyFlagged(un1tRow)).toBe(whyFlagged(row('manual_booking')))
+  })
 })
