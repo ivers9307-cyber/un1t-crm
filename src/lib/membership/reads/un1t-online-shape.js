@@ -435,6 +435,10 @@ function isPaidPack(t, productsById) {
     && !isTrialProduct(productOf(productsById, t.product_id))
 }
 
+// A fresh subscription that holds a membership: the snapshot's `member` rule.
+const isMemberSub = (s) => MEMBER_STATUSES.includes(lower(s?.status))
+  || (s?.paused_at != null && !UN1T_ENDED_SUB_STATUSES.includes(lower(s?.status)))
+
 /** A recurring purchase: a sub_initial / sub_renewal, or a subscription product. */
 const isRecurringTx = (t) => RECURRING_TX_TYPES.includes(lower(t?.type)) || lower(t?.product_type) === 'subscription'
 
@@ -515,21 +519,34 @@ function aggregatorOf(bookings) {
   let gympass = false
   let ref = null
   let refMs = -Infinity
+  // HATCHPIPE.5 — the first booking that put them in each pile (start, else
+  // booking creation), for the board's stage date. Unread by the snapshot.
+  let classpassSince = null
+  let gympassSince = null
+  const firstOf = (best, v) => (v != null && (best == null || v < best) ? v : best)
   for (const b of bookings) {
     if (!b) continue
     const source = lower(b.source)
     const extRef = b.external_member_ref != null && String(b.external_member_ref).trim() !== ''
       ? String(b.external_member_ref) : null
     if (!((source !== '' && source !== 'direct') || extRef != null)) continue
+    const whenMs = msOf(b.starts_at) ?? msOf(b.remote_created_at)
     if (UN1T_AGGREGATOR_GYMPASS_SOURCES.includes(source)) {
       gympass = true
-      const at = msOf(b.starts_at) ?? msOf(b.remote_created_at) ?? -Infinity
+      gympassSince = firstOf(gympassSince, whenMs)
+      const at = whenMs ?? -Infinity
       if (extRef != null && (ref == null || at > refMs)) { ref = extRef; refMs = at }
     } else {
       classpass = true
+      classpassSince = firstOf(classpassSince, whenMs)
     }
   }
-  return { classpass, gympassMemberId: gympass ? (ref ?? UN1T_AGGREGATOR_MARKER) : null }
+  return {
+    classpass,
+    gympassMemberId: gympass ? (ref ?? UN1T_AGGREGATOR_MARKER) : null,
+    classpassSinceMs: classpassSince,
+    gympassSinceMs: gympassSince,
+  }
 }
 
 /**
@@ -575,9 +592,7 @@ export function shapePipelineSnapshot({
 
   const status = (() => {
     const subs = freshSubs.filter(Boolean)
-    const member = subs.some((s) => MEMBER_STATUSES.includes(lower(s.status))
-      || (s.paused_at != null && !UN1T_ENDED_SUB_STATUSES.includes(lower(s.status))))
-    if (member) return 'member'
+    if (subs.some(isMemberSub)) return 'member'
     if (credits.paidCredits > 0) return 'credit_member'
     if (aggregator.classpass) return 'classpass_payg'
     if (subs.some((s) => lower(s.status) === 'trialing') || credits.trialCreditsLeft > 0) return 'trial'
@@ -632,6 +647,53 @@ export function shapePipelineSnapshot({
     pipeline_dismissed_at: owned ? (contact.pipeline_dismissed_at ?? null) : null,
     last_lead_source_at: owned ? (contact.last_lead_source_at ?? null) : null,
     gympass_member_id: aggregator.gympassMemberId,
+  }
+}
+
+const isoOrNull = (ms) => (ms == null ? null : new Date(ms).toISOString())
+
+/**
+ * HATCHPIPE.5 — the evidence the board's date rules read
+ * (un1t-pipeline-dates.js), from the SAME rows shapePipelineSnapshot was given
+ * plus that snapshot. Kept apart from the snapshot so the snapshot stays
+ * exactly classifyContact's input keys. Pure.
+ *
+ *   client_created_at   the (merged) un1t_clients.remote_created_at
+ *   attended_starts     EVERY attended booking's start, oldest first (the
+ *                       snapshot keeps only the newest 10 bookings); the same
+ *                       "attended" test as recent_bookings (status
+ *                       'attended', readable starts_at)
+ *   member_since        earliest remote_created_at of a fresh subscription
+ *                       that holds a membership (the snapshot's member rule)
+ *   classpass_since / gympass_since  first aggregator booking of each pile
+ *   membership_ended_at latest end among this source's ended memberships
+ *   dismissed_at        the snapshot's pipeline_dismissed_at (owned only)
+ *   membership_status, joined_at, last_attended_at, converted_at,
+ *   pack_customer_at    copied from the snapshot
+ */
+export function shapePipelineDateEvidence({
+  client, freshSubs = [], bookings = [], memberships = [], snapshot = {},
+} = {}) {
+  const attendedStarts = bookings
+    .filter((b) => lower(b?.status) === 'attended' && msOf(b?.starts_at) != null)
+    .map((b) => b.starts_at)
+    .sort((a, b) => msOf(a) - msOf(b))
+  const aggregator = aggregatorOf(bookings)
+  const ended = memberships
+    .filter((m) => m && (m.source == null || m.source === 'un1t_online_api') && lower(m.status) === 'ended')
+  return {
+    client_created_at: client?.remote_created_at ?? null,
+    attended_starts: attendedStarts,
+    last_attended_at: snapshot.last_attended_at ?? null,
+    joined_at: snapshot.joined_at ?? null,
+    membership_status: snapshot.glofox_membership_status ?? null,
+    converted_at: snapshot.converted_at ?? null,
+    member_since: earliestOf(freshSubs.filter(isMemberSub).map((s) => s.remote_created_at)),
+    pack_customer_at: snapshot.pack_customer_at ?? null,
+    classpass_since: isoOrNull(aggregator.classpassSinceMs),
+    gympass_since: isoOrNull(aggregator.gympassSinceMs),
+    dismissed_at: snapshot.pipeline_dismissed_at ?? null,
+    membership_ended_at: latestOf(ended.map((m) => m.ended_at)),
   }
 }
 

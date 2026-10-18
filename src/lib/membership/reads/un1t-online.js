@@ -13,7 +13,7 @@
 //
 //   pastDue           { success, data: PastDueRow[] } | { success:false, error }
 //   paymentsFor       { success, data: { subscriptions, transactions, invoices, pastDue } } | { success:false, error }
-//   pipelineInputs    { success, data: { contacts, snapshots, unlinked } } | { success:false, error }
+//   pipelineInputs    { success, data: { contacts, snapshots, evidence, unlinked } } | { success:false, error }
 //   trialEligibility  { success, data: { eligible, reasons } } | { success:false, error }
 //
 // There is no `arrears`: the Glofox arrears summary is a different number from
@@ -39,7 +39,7 @@ import {
   shapeCounts, shapeMrr, shapeFlows, shapeRevenue,
   firstSales, engagementRows, cancelsComparable, MEMBER_STATUSES,
   shapePastDue, normaliseUn1tInvoiceStatus, glofoxInterval,
-  shapePipelineSnapshot, shapeTrialEligibility,
+  shapePipelineSnapshot, shapePipelineDateEvidence, shapeTrialEligibility,
 } from './un1t-online-shape'
 
 const PAGE = 1000
@@ -468,7 +468,7 @@ async function listNewestTransactions(db, loc, contactIds, limit) {
 // listLedgerTrials(db, locationId) reader here, in the PR that creates it).
 // ---------------------------------------------------------------------------
 const CLIENT_COLS = 'un1t_user_id, contact_id, credit_balance, credit_unlimited, last_attended_at, remote_created_at'
-const PIPE_SUB_COLS = 'un1t_user_id, contact_id, status, paused_at'
+const PIPE_SUB_COLS = 'un1t_user_id, contact_id, status, paused_at, remote_created_at'
 const ELIGIBILITY_SUB_COLS = 'un1t_id, un1t_user_id, contact_id, status'
 const PIPE_TX_COLS = 'un1t_id, un1t_user_id, contact_id, product_id, product_type, type, amount_cents, refunded, remote_created_at'
 const PRODUCT_COLS = 'un1t_id, type, price_cents, credits_per_period, title'
@@ -534,7 +534,7 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
     const linked = clients.filter((c) => c.contact_id != null)
     const unlinked = clients.length - linked.length
     if (linked.length === 0) {
-      return { success: true, data: { contacts: [], snapshots: new Map(), unlinked, skipped_no_contact: 0 } }
+      return { success: true, data: { contacts: [], snapshots: new Map(), evidence: new Map(), unlinked, skipped_no_contact: 0 } }
     }
 
     const [subs, txs, products, bookings, events, memberships, contactRows] = await Promise.all([
@@ -575,12 +575,13 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
 
     const contacts = []
     const snapshots = new Map()
+    const evidence = new Map()
     let skipped = 0
     for (const [contactId, theirClients] of clientsByContact) {
       const contact = contactById.get(contactId)
       if (!contact) { skipped += theirClients.length; continue }
       contacts.push({ id: contact.id, name: contact.name ?? null, email: contact.email ?? null, location_id: contact.location_id ?? null })
-      snapshots.set(contact.id, shapePipelineSnapshot({
+      const rows = {
         client: mergeClients(theirClients),
         contact,
         locationId,
@@ -591,10 +592,14 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
         memberships: membershipsBy.get(contactId) ?? [],
         ledgerTrials: [],
         now,
-      }))
+      }
+      const snapshot = shapePipelineSnapshot(rows)
+      snapshots.set(contact.id, snapshot)
+      // HATCHPIPE.5 — what the board's real dates are read from (un1t-pipeline-dates.js).
+      evidence.set(contact.id, shapePipelineDateEvidence({ ...rows, snapshot }))
     }
     if (skipped > 0) logWarn('un1t-pipeline', 'client contact missing', { locationId, count: skipped })
-    return { success: true, data: { contacts, snapshots, unlinked, skipped_no_contact: skipped } }
+    return { success: true, data: { contacts, snapshots, evidence, unlinked, skipped_no_contact: skipped } }
   } catch (e) {
     return { success: false, error: errMessage(e) }
   }
