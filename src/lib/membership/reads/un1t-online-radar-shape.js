@@ -13,7 +13,8 @@
 // Booking statuses in the mirror are LOWERCASE (booked, cancelled, attended,
 // no_show: the OpenAPI UserBookingResponseDto). They are compared exactly as
 // spelled; the uppercase Glofox constants are never reused.
-import { MEMBER_STATUSES, glofoxInterval, packHolderIds } from './un1t-online-shape'
+import { MEMBER_STATUSES, glofoxInterval, packHolderIds, isActiveSub } from './un1t-online-shape'
+import { NON_MEMBER_STATUSES } from '@/lib/lead-radar'
 
 const DAY_MS = 86_400_000
 const WINDOW_7D_MS = 7 * DAY_MS
@@ -41,8 +42,9 @@ const latestOf = (values) => values.reduce((best, v) => (
 const earliestOf = (values) => values.reduce((best, v) => (
   msOf(v) != null && (best == null || msOf(v) < msOf(best)) ? v : best), null)
 
-/** A subscription that holds a membership: MEMBER_STATUSES (active, past_due), as shapeCounts. */
-const isLiveSub = (s) => MEMBER_STATUSES.includes(s?.status)
+// A subscription that holds a membership: MEMBER_STATUSES (active, past_due),
+// exactly as shapeCounts counts one.
+const isLiveSub = isActiveSub
 
 /** Months in a subscription's billing period (1 when unreadable). */
 function periodMonths(sub) {
@@ -87,7 +89,15 @@ export function expiryFor(sub, rule = RENEWAL_EXPIRY_RULE) {
 export function pickLiveMembership(subsForUser = [], nowMs) {
   const live = subsForUser.filter(isLiveSub)
   if (live.length === 0) return null
-  const sub = live.reduce((best, s) => (monthlyPrice(s) > monthlyPrice(best) ? s : best))
+  // Dearest monthly price; a tie goes to the newest subscription, then the
+  // highest un1t_id, so the plan never depends on query order.
+  const rank = (s) => [monthlyPrice(s), msOf(s.remote_created_at) ?? -Infinity, String(s.un1t_id ?? '')]
+  const better = (a, b) => {
+    const [pa, ta, ia] = rank(a)
+    const [pb, tb, ib] = rank(b)
+    return pa !== pb ? pa > pb : ta !== tb ? ta > tb : ia > ib
+  }
+  const sub = live.reduce((best, s) => (better(s, best) ? s : best))
   const pausedNow = (s) => s.paused_at != null && (s.paused_until == null || (msOf(s.paused_until) ?? -Infinity) > nowMs)
   return {
     sub,
@@ -197,7 +207,7 @@ export function shapeRadarMembers({
 
   const clientsByUser = groupBy(clients, (c) => c.un1t_user_id)
   const subsByUser = groupBy(liveSubs, (s) => s.un1t_user_id)
-  const productTitle = new Map(products.map((p) => [p.un1t_id, p.title ?? null]))
+  const productById = new Map(products.map((p) => [p.un1t_id, p]))
   const latestPack = new Map()
   for (const t of packTxs) {
     if (t.product_type !== 'pack' || t.un1t_user_id == null) continue
@@ -250,10 +260,11 @@ export function shapeRadarMembers({
       ...base,
       glofox_membership_status: 'credit_member',
       glofox_membership_type: 'num_classes',
-      glofox_membership_plan: packTx?.product_title ?? productTitle.get(packTx?.product_id) ?? null,
+      glofox_membership_plan: packTx?.product_title ?? productById.get(packTx?.product_id)?.title ?? null,
       glofox_membership_state: 'active',
       glofox_membership_expiry: null,
-      glofox_membership_price_cents: packTx?.amount_cents ?? null,
+      // the product's price when we can read it (as packHolderIds judges it), else what they paid
+      glofox_membership_price_cents: productById.get(packTx?.product_id)?.price_cents ?? packTx?.amount_cents ?? null,
       glofox_billing_interval: null,
       cancel_at_period_end: false,
     })
@@ -351,4 +362,73 @@ export function shapeWinbackRows({ allSubs = [], freshCutoffIso = null, endedMem
     })
   }
   return out
+}
+
+/**
+ * Lead-radar rows (spec B §2c), keyed exactly as lead-radar-data.js's
+ * CONTACT_COLUMNS. The status is spec A's pipeline snapshot, UNCHANGED, so a
+ * person is the same thing on Hatch's board and its lead radar:
+ *   - a snapshot whose status is not in NON_MEMBER_STATUSES (member,
+ *     credit_member, ex_member) is not a lead row;
+ *   - a snapshot carrying gympass_member_id is rendered 'classpass_payg' on
+ *     the LEAD ROW only, so the unchanged scorer sends it to the read-only
+ *     aggregator view with the ClassPass rows, as the board's Gympass pile.
+ * joined_at and last_attended_at come from the snapshot; last_booked_at from
+ * the person's newest booking here; name, email, phone and lead_source from
+ * their contact. Membership is judged at this studio only (G1): the contact's
+ * own glofox_membership_status is never read.
+ *
+ * `ownedWithoutClient` are contacts this studio OWNS with no un1t_clients row
+ * here (lead forms, campaigns): each is a 'lead', joined_at from
+ * contacts.joined_at, else created_at (Hatch was never bulk-imported, so
+ * created_at is real there; Claude's call 5).
+ *
+ * @param {object} a
+ * @param {{ contacts: object[], snapshots: Map<string, object> }} a.pipeline  pipelineInputs' data
+ * @param {Map<string, object>} a.contactsById  { name, email, phone, lead_source }
+ * @param {object[]} a.ownedWithoutClient       contacts { id, name, email, phone, lead_source, joined_at, created_at }
+ * @param {Map<string, string>} a.newestBookingAtByContact
+ * @returns {object[]}
+ */
+export function shapeLeadRows({
+  pipeline = { contacts: [], snapshots: new Map() }, contactsById = new Map(),
+  ownedWithoutClient = [], newestBookingAtByContact = new Map(),
+} = {}) {
+  const rows = []
+  const seen = new Set()
+  for (const person of pipeline.contacts ?? []) {
+    const snapshot = pipeline.snapshots?.get?.(person.id)
+    if (!snapshot || seen.has(person.id)) continue
+    const status = snapshot.gympass_member_id ? 'classpass_payg' : snapshot.glofox_membership_status
+    if (!NON_MEMBER_STATUSES.includes(status)) continue
+    seen.add(person.id)
+    const c = contactsById.get(person.id) ?? {}
+    rows.push({
+      id: person.id,
+      name: c.name ?? person.name ?? null,
+      email: c.email ?? person.email ?? null,
+      phone: c.phone ?? null,
+      glofox_membership_status: status,
+      last_attended_at: snapshot.last_attended_at ?? null,
+      last_booked_at: newestBookingAtByContact.get(person.id) ?? null,
+      joined_at: snapshot.joined_at ?? null,
+      lead_source: c.lead_source ?? null,
+    })
+  }
+  for (const c of ownedWithoutClient) {
+    if (c?.id == null || seen.has(c.id)) continue
+    seen.add(c.id)
+    rows.push({
+      id: c.id,
+      name: c.name ?? null,
+      email: c.email ?? null,
+      phone: c.phone ?? null,
+      glofox_membership_status: 'lead',
+      last_attended_at: null,
+      last_booked_at: newestBookingAtByContact.get(c.id) ?? null,
+      joined_at: c.joined_at ?? c.created_at ?? null,
+      lead_source: c.lead_source ?? null,
+    })
+  }
+  return rows
 }

@@ -3,8 +3,10 @@
 import { describe, it, expect } from 'vitest'
 import { shapeCounts, packHolderIds } from './un1t-online-shape'
 import {
-  RENEWAL_EXPIRY_RULE, expiryFor, pickLiveMembership, shapeRadarMembers, shapeWinbackRows,
+  RENEWAL_EXPIRY_RULE, expiryFor, pickLiveMembership, shapeRadarMembers, shapeWinbackRows, shapeLeadRows,
 } from './un1t-online-radar-shape'
+import { shapePipelineSnapshot } from './un1t-online-shape'
+import { buildFunnel, buildClassPass, NON_MEMBER_STATUSES } from '@/lib/lead-radar'
 import { buildRadar, buildWinback, classifyContact } from '@/lib/churn-radar'
 
 const NOW = Date.parse('2026-10-18T12:00:00Z')
@@ -98,6 +100,12 @@ describe('pickLiveMembership', () => {
     expect(pickLiveMembership([sub({ ...p, paused_until: iso(NOW - DAY) })], NOW).paused).toBe(false)
     expect(pickLiveMembership([sub(p), sub({ un1t_id: 's2' })], NOW).paused).toBe(false)
   })
+  it('a price tie goes to the newest subscription, whatever the order', () => {
+    const a = sub({ un1t_id: 'a', product_title: 'Older', remote_created_at: '2026-08-01T00:00:00Z' })
+    const b = sub({ un1t_id: 'b', product_title: 'Newer', remote_created_at: '2026-09-01T00:00:00Z' })
+    expect(pickLiveMembership([a, b], NOW).sub.product_title).toBe('Newer')
+    expect(pickLiveMembership([b, a], NOW).sub.product_title).toBe('Newer')
+  })
   it('past_due is live', () => {
     expect(pickLiveMembership([sub({ status: 'past_due' })], NOW)).not.toBeNull()
   })
@@ -148,7 +156,7 @@ describe('shapeRadarMembers', () => {
     expect(rows[0]).toMatchObject({
       id: 'c2', glofox_membership_status: 'credit_member', glofox_membership_type: 'num_classes',
       glofox_membership_plan: '5 Class Pack', trial_credits_remaining: 4, glofox_membership_expiry: null,
-      glofox_billing_interval: null, cancel_at_period_end: false,
+      glofox_billing_interval: null, cancel_at_period_end: false, glofox_membership_price_cents: 5400,
     })
     // the unchanged scorer treats it as a live pack
     expect(classifyContact(rows[0])).toBe('active')
@@ -177,6 +185,19 @@ describe('shapeRadarMembers', () => {
     expect(new Set(rows.map((r) => r.id))).toEqual(new Set([...holders].map((u) => contactOfUser.get(u))))
     expect(rows.length).toBe(shapeCounts(input).class_packs)
     expect(holders).toEqual(new Set(['u2']))
+  })
+
+  it('a pack row prices from the product, else what was paid', () => {
+    const disc = shapeRadarMembers(fx({
+      subs: [], clients: [client({ un1t_user_id: 'u2', contact_id: 'c2', credit_balance: 4 })],
+      packTxs: [ptx({ amount_cents: 4000 })],
+    }))
+    expect(disc.rows[0].glofox_membership_price_cents).toBe(5400)
+    const gone = shapeRadarMembers(fx({
+      subs: [], clients: [client({ un1t_user_id: 'u2', contact_id: 'c2', credit_balance: 4 })],
+      packTxs: [ptx({ product_id: 'deleted', amount_cents: 4000 })],
+    }))
+    expect(gone.rows[0].glofox_membership_price_cents).toBe(4000)
   })
 
   it('€0 pack never becomes a holder; "The UN1T Trial" plan is kept so NON_MEMBER_PLAN_RE drops it', () => {
@@ -398,5 +419,105 @@ describe('shapeWinbackRows', () => {
       allSubs: [sub({ synced_at: fresh }), sub({ un1t_id: 'old', un1t_user_id: 'u2', contact_id: null, status: 'cancelled', synced_at: fresh })],
     }))
     expect(rows.map((r) => r.id)).toEqual(['c1'])
+  })
+})
+
+describe('shapeLeadRows', () => {
+  const L = 'loc-hatch'
+  const products = new Map([
+    ['trial', { un1t_id: 'trial', type: 'one_time', price_cents: 0, credits_per_period: 3, title: 'The UN1T Trial' }],
+    ['pk1', { un1t_id: 'pk1', type: 'one_time', price_cents: 5400, credits_per_period: 5, title: '5 Class Pack' }],
+  ])
+  const pclient = (over = {}) => ({ un1t_user_id: 'u', credit_balance: 0, credit_unlimited: false, last_attended_at: null, remote_created_at: '2026-10-01T00:00:00Z', ...over })
+  // Each fixture is one person's shapePipelineSnapshot input (spec A's board classifier).
+  const fixtures = [
+    { contactId: 'm', input: { client: pclient(), freshSubs: [{ status: 'active' }] } },
+    { contactId: 'cm', input: { client: pclient({ credit_balance: 4 }), transactions: [{ product_id: 'pk1', product_type: 'pack', amount_cents: 5400, remote_created_at: '2026-10-02T00:00:00Z' }] } },
+    { contactId: 'tr', input: { client: pclient({ credit_balance: 3 }), transactions: [{ product_id: 'trial', product_type: 'one_time', amount_cents: 0, remote_created_at: '2026-10-10T00:00:00Z' }] } },
+    { contactId: 'trl', input: { client: pclient({ credit_balance: 3 }), ledgerTrials: [{ at: '2026-10-12T00:00:00Z', product_id: 'trial' }] } },
+    { contactId: 'cp', input: { client: pclient(), bookings: [{ source: 'classpass', status: 'attended', starts_at: '2026-10-05T09:00:00Z' }] } },
+    { contactId: 'gp', input: { client: pclient(), bookings: [{ source: 'wellhub', external_member_ref: 'W1', status: 'booked', starts_at: '2026-10-05T09:00:00Z' }] } },
+    { contactId: 'ref', input: { client: pclient(), bookings: [{ source: 'direct', external_member_ref: 'X9', status: 'booked', starts_at: '2026-10-05T09:00:00Z' }] } },
+    { contactId: 'ld', input: { client: pclient({ last_attended_at: '2026-10-14T09:00:00Z' }) } },
+    { contactId: 'ex', input: { client: pclient(), memberships: [{ source: 'un1t_online_api', status: 'ended', ended_at: '2026-09-01T00:00:00Z' }] } },
+  ]
+  const snapshots = new Map(fixtures.map((f) => [f.contactId, shapePipelineSnapshot({ productsById: products, locationId: L, contact: null, ...f.input })]))
+  const contacts = fixtures.map((f) => ({ id: f.contactId, name: f.contactId, email: null, location_id: 'loc-stillorgan' }))
+  const contactsById = new Map(fixtures.map((f) => [f.contactId, {
+    id: f.contactId, name: `N ${f.contactId}`, email: `${f.contactId}@example.com`, phone: '+353000', lead_source: 'web',
+    // a Stillorgan member: their Glofox status must never be read here (G1)
+    glofox_membership_status: 'member',
+  }]))
+  const run = (over = {}) => shapeLeadRows({ pipeline: { contacts, snapshots }, contactsById, ownedWithoutClient: [], newestBookingAtByContact: new Map(), ...over })
+  const byId = (rows, id) => rows.find((r) => r.id === id)
+
+  it('rows carry exactly CONTACT_COLUMNS', () => {
+    expect(Object.keys(run()[0]).sort()).toEqual(['email', 'glofox_membership_status', 'id', 'joined_at', 'last_attended_at', 'last_booked_at', 'lead_source', 'name', 'phone'].sort())
+  })
+
+  it("same status as A's snapshot for every shared un1t client fixture", () => {
+    const rows = run()
+    for (const r of rows) {
+      const snap = snapshots.get(r.id)
+      if (snap.gympass_member_id) expect(r.glofox_membership_status).toBe('classpass_payg')
+      else expect(r.glofox_membership_status).toBe(snap.glofox_membership_status)
+    }
+    expect(rows.length).toBeGreaterThan(0)
+  })
+
+  it('member, credit_member and ex_member snapshots are not lead rows', () => {
+    const ids = run().map((r) => r.id)
+    expect(ids).not.toContain('m')
+    expect(ids).not.toContain('cm')
+    expect(ids).not.toContain('ex')
+    for (const r of run()) expect(NON_MEMBER_STATUSES).toContain(r.glofox_membership_status)
+  })
+
+  it('a Stillorgan member with no Hatch membership is a Hatch lead or trial', () => {
+    expect(byId(run(), 'ld').glofox_membership_status).toBe('lead')
+    expect(byId(run(), 'tr').glofox_membership_status).toBe('trial')
+  })
+
+  it("trial comes from the trial purchase or D's op=trial ledger row, not the credit balance", () => {
+    const rows = run()
+    expect(byId(rows, 'tr').glofox_membership_status).toBe('trial')
+    expect(byId(rows, 'trl').glofox_membership_status).toBe('trial')
+    // a balance with no trial and no paid pack behind it is not a trial
+    const snap = shapePipelineSnapshot({ productsById: products, locationId: L, client: pclient({ credit_balance: 6 }) })
+    const out = shapeLeadRows({ pipeline: { contacts: [{ id: 'bal' }], snapshots: new Map([['bal', snap]]) }, contactsById: new Map(), ownedWithoutClient: [], newestBookingAtByContact: new Map() })
+    expect(out[0].glofox_membership_status).toBe('lead')
+  })
+
+  it('aggregator booking (source not direct, or external_member_ref) → classpass view', () => {
+    const rows = run()
+    expect(byId(rows, 'cp').glofox_membership_status).toBe('classpass_payg')
+    expect(byId(rows, 'gp').glofox_membership_status).toBe('classpass_payg')
+    expect(byId(rows, 'ref').glofox_membership_status).toBe('classpass_payg')
+    const cpIds = buildClassPass(rows, NOW).map((r) => r.contactId)
+    expect(cpIds).toEqual(expect.arrayContaining(['cp', 'gp', 'ref']))
+  })
+
+  it('joined_at and last_attended_at from the snapshot; last_booked_at from the booking map; lead fields from contacts', () => {
+    const rows = run({ newestBookingAtByContact: new Map([['ld', '2026-10-13T08:00:00Z']]) })
+    expect(byId(rows, 'ld')).toMatchObject({
+      name: 'N ld', email: 'ld@example.com', phone: '+353000', lead_source: 'web',
+      joined_at: snapshots.get('ld').joined_at, last_attended_at: '2026-10-14T09:00:00Z', last_booked_at: '2026-10-13T08:00:00Z',
+    })
+    expect(byId(rows, 'tr').last_booked_at).toBeNull()
+  })
+
+  it('owned contact with no un1t client → lead, joined_at falls back to created_at', () => {
+    const rows = run({ ownedWithoutClient: [
+      { id: 'o1', name: 'Owned', email: 'o1@example.com', phone: null, lead_source: 'form', joined_at: null, created_at: '2026-10-11T00:00:00Z' },
+      { id: 'o2', name: 'Owned2', email: null, phone: null, lead_source: null, joined_at: '2026-09-01T00:00:00Z', created_at: '2026-10-11T00:00:00Z' },
+    ] })
+    expect(byId(rows, 'o1')).toMatchObject({ glofox_membership_status: 'lead', joined_at: '2026-10-11T00:00:00Z', last_attended_at: null, last_booked_at: null, lead_source: 'form' })
+    expect(byId(rows, 'o2').joined_at).toBe('2026-09-01T00:00:00Z')
+    expect(buildFunnel(rows, NOW).map((r) => r.contactId)).toContain('o1')
+  })
+
+  it('an owned contact who IS a un1t client is not listed twice', () => {
+    const rows = run({ ownedWithoutClient: [{ id: 'ld', name: 'x', created_at: '2026-10-11T00:00:00Z' }] })
+    expect(rows.filter((r) => r.id === 'ld')).toHaveLength(1)
   })
 })
