@@ -4282,6 +4282,25 @@ registry.registerPath({
   },
 })
 
+// WAORGNUMBER.4 (R7) — blast sign-off at a studio new to a shared number
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/broadcasts/{id}/sign-off',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Sign off a draft or scheduled WhatsApp broadcast (organisation admins)',
+  description: "Stamps whatsapp_broadcasts.signed_off_by / signed_off_at (mig 748); sends nothing. While the studio's locations.settings.whatsapp_blast_signoff_until is in the future, a broadcast there goes out only once signed off: a non-admin's send, schedule or resume of an unsigned one answers 403 \"Blasts at {studio} need sign-off from an organisation admin until {date}.\", an org admin's signs it off, and anyone else's change to its template, variables, header or audience clears the sign-off. Master or an org admin of the studio's organisation only.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Signed off', content: { 'application/json': { schema: z.object({ success: z.literal(true), broadcast: z.object({ id: uuidLike, signed_off_by: uuidLike, signed_off_at: z.string() }) }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an organisation admin of the studio, or WhatsApp is off', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Broadcast not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not a draft or scheduled broadcast, or it changed meanwhile', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: "The broadcast's studio could not be read", content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // WAHOMESTUDIO.1 — move a WhatsApp thread to another studio of the same organisation
 registry.registerPath({
   method: 'get',

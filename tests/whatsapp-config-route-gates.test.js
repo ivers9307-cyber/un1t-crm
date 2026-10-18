@@ -235,7 +235,8 @@ export const EXPECTED = {
   'PUT whatsapp/broadcasts/[id]/route.js': ['whatsapp-permission', 'Edits a draft/scheduled broadcast; GATES-2: /send\'s rule, at the broadcast\'s studio.'],
   'DELETE whatsapp/broadcasts/[id]/route.js': ['whatsapp-permission', 'Deletes a broadcast row; GATES-2: /send\'s rule, at the broadcast\'s studio.'],
   'POST whatsapp/broadcasts/[id]/pause/route.js': ['whatsapp-permission', 'Pauses/resumes a drip; resuming restarts sends, so GATES-2 gives it /send\'s rule.'],
-  'POST whatsapp/broadcasts/[id]/send/route.js': ['whatsapp-permission', 'Sends to the audience.'],
+  'POST whatsapp/broadcasts/[id]/send/route.js': ['whatsapp-permission', 'Sends to the audience. WAORGNUMBER.4: inside the studio\'s blast sign-off window an unsigned broadcast also needs an org admin (403 otherwise; theirs stamps it).'],
+  'POST whatsapp/broadcasts/[id]/sign-off/route.js': ['org-admin', 'WAORGNUMBER.4 (R7): stamps signed_off_by on a draft/scheduled broadcast so it may go out inside the studio\'s sign-off window; sends nothing. whatsapp at the studio, then assertOrganizationAdmin for the studio\'s organisation.'],
 
   // ── The inbox: the whatsapp channel permission (INBOX-PERM.1), judged AT the
   // thread's studio since INBOXLOC.1 (web or mobile whatsapp there, after

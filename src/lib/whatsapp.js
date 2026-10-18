@@ -9,6 +9,7 @@ import {
   rollingHeadroom, selectDripRecipients, dripOutcome,
 } from './whatsapp-drip.js'
 import { getSendBudget, blastBudgetBlockError, effectiveTickHeadroom } from './whatsapp-budget.js'
+import { readSignoffLocation, broadcastSignoffBlock, BlastSignoffRequiredError } from './whatsapp-blast-signoff.js'
 import { checkSpend } from './wallet-enforcement.js'
 import { sliceBlastChunk } from './whatsapp-schedule.js'
 import { getLocationFrequencyCap, isFrequencyCapped, stampMarketingTouch } from './frequency-cap.js'
@@ -1226,6 +1227,17 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
     return { status: 'sending', mode: 'drip', sent: 0, failed: 0, total: 0, skipped: 'already-sending' }
   }
 
+  // WAORGNUMBER.4 (R7) — blast sign-off. While the studio's sign-off window
+  // is open, an unsigned broadcast is refused here, before any status flip:
+  // the send route answers 409, and the cron's refused-start path keeps a
+  // scheduled row a draft and pushes the managers. The studio read fails
+  // closed (throws); a signed row skips it.
+  if (!broadcast.signed_off_by) {
+    const signoffLocation = await readSignoffLocation(db, broadcast.location_id)
+    const signoffBlock = broadcastSignoffBlock(signoffLocation, broadcast)
+    if (signoffBlock) throw new BlastSignoffRequiredError(signoffBlock)
+  }
+
   // WA-MULTI.1 — resolve the location's WA config ONCE upfront and
   // reuse for every recipient. Cheaper than re-resolving per-send;
   // also ensures the whole broadcast goes from one consistent
@@ -1634,6 +1646,22 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
       .update({ paused_at: new Date().toISOString() })
       .eq('id', broadcastId)
     return { status: 'sending', skipped: 'url_button_value_missing', paused: true, sent: 0, failed: 0 }
+  }
+
+  // WAORGNUMBER.4 (R7) — an unsigned drip at a studio inside its sign-off
+  // window pauses (a throw would error-loop every tick); an org admin's
+  // Resume (POST …/pause { paused: false }) signs it off and resumes it. The
+  // studio read throws on failure, so
+  // the tick sends nothing.
+  if (!broadcast.signed_off_by) {
+    const signoffLocation = await readSignoffLocation(db, broadcast.location_id)
+    if (broadcastSignoffBlock(signoffLocation, broadcast)) {
+      const { error: pauseErr } = await db.from('whatsapp_broadcasts')
+        .update({ paused_at: new Date().toISOString() })
+        .eq('id', broadcastId)
+      if (pauseErr) throw new Error(`Could not pause the unsigned drip: ${pauseErr.message}`)
+      return { status: 'sending', skipped: 'needs_signoff', paused: true, sent: 0, failed: 0 }
+    }
   }
 
   // Resolve the location's WA config once for the whole tick (as the blast

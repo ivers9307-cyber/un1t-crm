@@ -39,6 +39,7 @@ import {
   countWhatsappSentToday,
   whatsappBroadcastDisplayStats,
 } from '@/lib/whatsapp-broadcast-stats'
+import { readSignoffLocation, signoffWindow, signoffMessage, isOrganizationAdminFor } from '@/lib/whatsapp-blast-signoff'
 import WABroadcastEditor from '@/components/WABroadcastEditor'
 import CampaignDetail from '@/components/CampaignDetail'
 import CampaignEditor from '@/components/CampaignEditor'
@@ -142,9 +143,27 @@ async function renderWhatsapp(db, user, id) {
     }
   }
 
+  // WAORGNUMBER.4 (R7) — the blast sign-off state, for the Send button. Only
+  // these four fields cross into the client component (never the studio's
+  // `settings`, which hold credentials). Display only: the routes and the send
+  // engine enforce the gate, so an unreadable studio just hides the notice.
+  let signoff = null
+  try {
+    const signoffLocation = await readSignoffLocation(db, broadcast.location_id)
+    const win = signoffWindow(signoffLocation)
+    if (win) {
+      signoff = {
+        message: signoffMessage(signoffLocation.name, win.until, zoneOfLocation(signoffLocation)),
+        canSignOff: isOrganizationAdminFor(user, signoffLocation.organization_id),
+        signedOff: Boolean(broadcast.signed_off_by),
+      }
+    }
+  } catch { /* display only */ }
+
   return (
     <WABroadcastEditor
       broadcast={broadcast}
+      signoff={signoff}
       templates={templates || []}
       locationId={broadcast.location_id}
       locationTimeZone={zoneOfUserLocation(user, broadcast.location_id)}

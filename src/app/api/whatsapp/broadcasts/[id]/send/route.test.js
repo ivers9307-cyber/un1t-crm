@@ -39,21 +39,31 @@ import { createServerClient } from '@/lib/supabase'
 import { hasPermission } from '@/lib/permissions'
 import { sendBroadcast } from '@/lib/whatsapp'
 
-function mockDb({ broadcast } = {}) {
+// A table-aware fake: the broadcast read (.maybeSingle), the studio read the
+// sign-off gate makes (WAORGNUMBER.4) and the stamp write. `location` omitted
+// = a studio with no sign-off window. Writes land on `writes`.
+function mockDb({ broadcast, location, locationError = null, stampError = null, writes = [] } = {}) {
   return {
-    from: vi.fn(() => ({
-      select: vi.fn(() => ({
-        eq: vi.fn(() => ({
-          single: vi.fn(() =>
-            Promise.resolve(
-              broadcast
-                ? { data: broadcast, error: null }
-                : { data: null, error: { message: 'no rows' } }
-            )
-          ),
+    from: vi.fn((table) => {
+      if (table === 'locations') {
+        const b = { select: () => b, eq: () => b,
+          maybeSingle: () => Promise.resolve(locationError ? { data: null, error: locationError }
+            : { data: location || { id: broadcast?.location_id, name: 'Studio', organization_id: 'org-1', timezone: 'Europe/Dublin', settings: {} }, error: null }) }
+        return b
+      }
+      return {
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            maybeSingle: vi.fn(() => Promise.resolve({ data: broadcast || null, error: null })),
+          })),
         })),
-      })),
-    })),
+        update: vi.fn((patch) => ({
+          eq: vi.fn(() => ({
+            select: vi.fn(() => { writes.push(patch); return Promise.resolve(stampError ? { data: null, error: stampError } : { data: [{ id: 'b1' }], error: null }) }),
+          })),
+        })),
+      }
+    }),
   }
 }
 
@@ -164,5 +174,71 @@ describe('POST /api/whatsapp/broadcasts/[id]/send — no WhatsApp number', () =>
     sendBroadcast.mockRejectedValueOnce(new Error('Template not approved by Meta'))
     const res = await POST(req(), props)
     expect(res.status).toBe(400)
+  })
+})
+
+// WAORGNUMBER.4 (R7) — blast sign-off at a studio new to a shared number.
+describe('POST /api/whatsapp/broadcasts/[id]/send — blast sign-off', () => {
+  // Fictional ids only: the repo is public.
+  const hatch = (until) => ({ id: 'loc-1', name: 'UN1T Hatch Street', organization_id: 'org-1', timezone: 'Europe/Dublin',
+    settings: { whatsapp_blast_signoff_until: until } })
+  const OPEN = '2999-11-16'
+  const manager = { id: 'u-m', role: 'manager', locations: [{ id: 'loc-1' }] }
+  const orgAdmin = { id: 'u-a', role: 'manager', locations: [{ id: 'loc-1' }], orgAdminOrgIds: ['org-1'] }
+
+  it('manager gets 403 with the copy while the window is open; nothing is sent', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1', signed_off_by: null }, location: hatch(OPEN) }))
+    const res = await POST(req(), props)
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('Blasts at UN1T Hatch Street need sign-off from an organisation admin until 16 Nov 2999.')
+    expect(sendBroadcast).not.toHaveBeenCalled()
+  })
+
+  it('org admin send stamps signed_off_by, then sends', async () => {
+    const writes = []
+    getCurrentUser.mockResolvedValue(orgAdmin)
+    createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1', signed_off_by: null }, location: hatch(OPEN), writes }))
+    const res = await POST(req(), props)
+    expect(res.status).toBe(200)
+    expect(writes).toEqual([{ signed_off_by: 'u-a', signed_off_at: expect.any(String) }])
+    expect(sendBroadcast).toHaveBeenCalledWith('b1', { force: false })
+  })
+
+  it('a manager may send a broadcast an org admin signed off', async () => {
+    const writes = []
+    getCurrentUser.mockResolvedValue(manager)
+    createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1', signed_off_by: 'u-a' }, location: hatch(OPEN), writes }))
+    expect((await POST(req(), props)).status).toBe(200)
+    expect(writes).toEqual([])
+  })
+
+  it('window past → no gate', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1', signed_off_by: null }, location: hatch('2020-01-01') }))
+    expect((await POST(req(), props)).status).toBe(200)
+    expect(sendBroadcast).toHaveBeenCalled()
+  })
+
+  it('a failed studio read refuses (503) and sends nothing', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1', signed_off_by: null }, locationError: { message: 'boom' } }))
+    expect((await POST(req(), props)).status).toBe(503)
+    expect(sendBroadcast).not.toHaveBeenCalled()
+  })
+
+  it('a failed stamp write refuses (500) and sends nothing', async () => {
+    getCurrentUser.mockResolvedValue(orgAdmin)
+    createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1', signed_off_by: null }, location: hatch(OPEN), stampError: { message: 'boom' } }))
+    expect((await POST(req(), props)).status).toBe(500)
+    expect(sendBroadcast).not.toHaveBeenCalled()
+  })
+
+  it("the engine's sign-off refusal is a 409", async () => {
+    const { BlastSignoffRequiredError } = await import('@/lib/whatsapp-blast-signoff')
+    getCurrentUser.mockResolvedValue(manager)
+    createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1', signed_off_by: null } }))
+    sendBroadcast.mockRejectedValueOnce(new BlastSignoffRequiredError('Blasts at X need sign-off'))
+    expect((await POST(req(), props)).status).toBe(409)
   })
 })

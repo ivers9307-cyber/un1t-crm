@@ -6,6 +6,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema, url } from '@/lib/schemas'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { logError } from '@/lib/log'
+import { readSignoffLocation, signoffWindow, routeSignoffGate } from '@/lib/whatsapp-blast-signoff'
 
 // GATES-2 — GET/PUT/DELETE took membership only, so a member with WhatsApp
 // switched off could read the recipient list, rewrite or delete a broadcast
@@ -38,11 +39,28 @@ const BroadcastUpdateSchema = z.object({
 // GATES-3 (f) — the read's error is read: a failed read is a 500, never
 // "not found" (PGRST116 = no row).
 async function loadBroadcastForUpdate(db, id) {
-  const { data, error } = await db.from('whatsapp_broadcasts').select('location_id, status, scheduled_at').eq('id', id).single()
+  const { data, error } = await db.from('whatsapp_broadcasts')
+    .select('location_id, status, scheduled_at, signed_off_by, template_id, variable_mapping, header_media_url, audience_filter')
+    .eq('id', id).single()
   if (error && error.code !== 'PGRST116') return { row: null, failed: true }
   return { row: data || null, failed: false }
 }
 const readFailed = () => NextResponse.json({ success: false, error: 'Could not read the broadcast' }, { status: 500 })
+
+// WAORGNUMBER.4 (R7) — the fields an org admin's sign-off vouches for. A
+// change to one of them by anyone else, while the studio's sign-off window is
+// open, clears the sign-off (the editor re-PUTs every field on Save and Send,
+// so only a CHANGED value counts; jsonb does not keep key order).
+const SIGNED_CONTENT = ['template_id', 'variable_mapping', 'header_media_url', 'audience_filter']
+function canonicalJson(v) {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`
+  if (v && typeof v === 'object') {
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`
+  }
+  return JSON.stringify(v ?? null)
+}
+const changesSignedContent = (updates, row) =>
+  SIGNED_CONTENT.some((f) => updates[f] !== undefined && canonicalJson(updates[f]) !== canonicalJson(row[f]))
 
 // C120 GATES-3 (f) — which status a PUT may move a broadcast to, from where.
 // 'draft' only un-schedules: never an un-cancel, and never a reset of a row
@@ -128,6 +146,31 @@ export async function PUT(request, props) {
     }
     if (new Date(nextScheduledAt).getTime() <= Date.now()) {
       return NextResponse.json({ success: false, error: 'scheduled_at must be in the future' }, { status: 400 })
+    }
+  }
+
+  // WAORGNUMBER.4 (R7) — blast sign-off. Inside the studio's window: an org
+  // admin's schedule signs the broadcast off; anyone else's content change
+  // clears an existing sign-off, and their schedule of an unsigned broadcast
+  // is a 403 with the spec copy.
+  const contentChanged = row.signed_off_by && changesSignedContent(updates, row)
+  if (updates.status === 'scheduled' || contentChanged) {
+    let location
+    try {
+      location = await readSignoffLocation(db, row.location_id)
+    } catch {
+      return NextResponse.json({ success: false, error: 'Could not check whether this broadcast needs sign-off. Try again.' }, { status: 503 })
+    }
+    if (signoffWindow(location)) {
+      const gate = routeSignoffGate({ user, location, row: contentChanged ? { signed_off_by: null } : row })
+      if (gate.stamp) {
+        if (updates.status === 'scheduled') Object.assign(updates, gate.stamp)
+      } else {
+        if (contentChanged) Object.assign(updates, { signed_off_by: null, signed_off_at: null })
+        if (updates.status === 'scheduled' && gate.blocked) {
+          return NextResponse.json({ success: false, error: gate.blocked }, { status: 403 })
+        }
+      }
     }
   }
 

@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Save, Send, Users, CheckCircle2, XCircle, Ban, Clock } from 'lucide-react'
+import { Save, Send, Users, CheckCircle2, XCircle, Ban, Clock, ShieldCheck } from 'lucide-react'
 import SendDetailHeader from './communications/SendDetailHeader'
 import SendStatusPill from './communications/SendStatusPill'
 import EditableSendTitle from './communications/EditableSendTitle'
@@ -21,7 +21,7 @@ import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
 
 const nf = (n) => Number(n || 0).toLocaleString()
 
-export default function WABroadcastEditor({ broadcast, templates, locationId, locationTimeZone = null, userId, failedRecipients = [], stats = null, dripProgress = null }) {
+export default function WABroadcastEditor({ broadcast, signoff = null, templates, locationId, locationTimeZone = null, userId, failedRecipients = [], stats = null, dripProgress = null }) {
   const router = useRouter()
   const isSent = broadcast?.status === 'sent'
   const isCancelled = broadcast?.status === 'cancelled'
@@ -43,6 +43,11 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, lo
   const [sending, setSending] = useState(false)
   const [pausing, setPausing] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  // WAORGNUMBER.4 (R7) — blast sign-off. `signoff` is set only while the
+  // studio's window is open: { message, canSignOff, signedOff }.
+  const [signedOff, setSignedOff] = useState(Boolean(signoff?.signedOff))
+  const [signingOff, setSigningOff] = useState(false)
+  const needsSignoff = Boolean(signoff) && !signedOff && !signoff.canSignOff
   const [error, setError] = useState(null)
   const [tab, setTab] = useState(isTerminal ? 'results' : 'setup')
   // Adjust drip pacing on a running drip (mig 328 / WA-DRIP-SIZE).
@@ -112,6 +117,22 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, lo
       setError(err.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleSignOff() {
+    if (!broadcastId) return
+    setSigningOff(true)
+    setError(null)
+    try {
+      const result = await fetch(`/api/whatsapp/broadcasts/${broadcastId}/sign-off`, { method: 'POST' }).then(r => r.json())
+      if (!result.success) throw new Error(result.error)
+      setSignedOff(true)
+      router.refresh()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSigningOff(false)
     }
   }
 
@@ -294,7 +315,26 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, lo
                 <Ban size={14} />
                 {cancelling ? 'Cancelling…' : 'Cancel schedule'}
               </button>
+            ) : needsSignoff ? (
+              // WAORGNUMBER.4 — in place of the button: the routes would 403.
+              <div className="max-w-sm text-right">
+                <p className="text-sm font-medium text-amber-700">{signoff.message}</p>
+                <p className="text-xs text-un1t-muted">Request sign-off: ask an organisation admin to open this broadcast and press Sign off.</p>
+              </div>
             ) : (
+              <>
+              {signoff && signoff.canSignOff && !signedOff && broadcastId && (
+                <button
+                  type="button"
+                  onClick={handleSignOff}
+                  disabled={signingOff}
+                  title={signoff.message}
+                  className="flex items-center gap-1.5 text-sm border border-un1t-border text-un1t-text font-medium px-3 py-1.5 rounded-md hover:border-un1t-text/30 transition-colors disabled:opacity-50"
+                >
+                  <ShieldCheck size={14} />
+                  {signingOff ? 'Signing off…' : 'Sign off'}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleSend}
@@ -304,6 +344,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, lo
                 <Send size={14} />
                 {sending ? 'Sending...' : 'Send Broadcast'}
               </button>
+              </>
             )}
           </>
         ) : null}

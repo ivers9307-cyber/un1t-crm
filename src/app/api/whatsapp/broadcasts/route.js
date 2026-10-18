@@ -7,6 +7,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema, url, timeOfDay } from '@/lib/schemas'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { canonicalZone, isValidZone, getLocationZone, LocationZoneReadError } from '@/lib/location-time'
+import { routeSignoffFor } from '@/lib/whatsapp-blast-signoff'
 
 const BroadcastCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -147,6 +148,20 @@ export async function POST(request) {
   // /send's checks; the composer now calls /send, whose sendBroadcast runs
   // them and starts the drip (draft→sending) without sending anything itself.
   const isScheduled = body.status === 'scheduled' && !!body.scheduled_at
+  // WAORGNUMBER.4 (R7) — scheduling is a send: while the studio's sign-off
+  // window is open only an organisation admin may schedule, and their
+  // schedule signs the broadcast off. A draft is never gated.
+  let signoffStamp = {}
+  if (isScheduled) {
+    let signoff
+    try {
+      signoff = await routeSignoffFor(db, { user, locationId, row: null })
+    } catch {
+      return NextResponse.json({ success: false, error: 'Could not check whether this broadcast needs sign-off. Try again.' }, { status: 503 })
+    }
+    if (signoff.blocked) return NextResponse.json({ success: false, error: signoff.blocked }, { status: 403 })
+    signoffStamp = signoff.stamp || {}
+  }
   const { data, error } = await db.from('whatsapp_broadcasts').insert({
     name: body.name || 'Untitled Broadcast',
     template_id: body.template_id,
@@ -168,6 +183,7 @@ export async function POST(request) {
     } : {}),
     location_id: locationId,
     created_by: user.id,
+    ...signoffStamp,
   }).select().single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
