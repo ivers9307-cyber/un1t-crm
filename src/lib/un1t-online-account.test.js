@@ -142,8 +142,38 @@ describe('ensureUn1tAccount', () => {
   })
 })
 
-describe('runSetPasswordStep', () => {
+describe('runSetPasswordStep — never promises a code twice', () => {
   const createdRow = { id: 'w-1', location_id: LOC, contact_id: 'c-funnel', op: 'create_client', stage: 'done', un1t_ref: 'usr-new', created_at: '2026-10-18T09:00:00Z' }
+  const resetRow = (stage) => ({ id: `w-r-${stage}`, location_id: LOC, op: 'forgot_password', stage, idempotency_key: `pw:${LOC}:usr-new`, created_at: '2026-10-18T09:01:00Z' })
+  const step = (over = {}) => runSetPasswordStep(makeDb(), { locationId: LOC, contact: contact({ email: 'jane@x.ie' }), un1tUserId: 'usr-new', request: { id: 'q-1' }, settings: { sendsWelcome: false, welcomeSetsLogin: false }, origin: 'funnel', ...over }, deps)
+
+  it('an in-doubt reset sends neither our email nor another request', async () => {
+    for (const stage of ['sent', 'unknown']) {
+      tables.un1t_write_events = [createdRow, resetRow(stage)]
+      expect(await step()).toMatchObject({ explanation: 'skipped_reset_in_doubt', forgotPassword: 'in_doubt' })
+    }
+    expect(deps.sendUn1tAccountEmail).not.toHaveBeenCalled()
+    expect(deps.forgotPassword).not.toHaveBeenCalled()
+  })
+
+  it('a refused earlier reset is tried again, without our email again', async () => {
+    tables.un1t_write_events = [createdRow, resetRow('refused')]
+    expect(await step()).toEqual({ explanation: 'skipped_already_sent', forgotPassword: 'done' })
+    expect(deps.sendUn1tAccountEmail).not.toHaveBeenCalled()
+  })
+
+  it('a budget or permission refusal before anything is sent defers both', async () => {
+    tables.un1t_write_events = [createdRow]
+    const { Un1tWriteRefused } = await import('./un1t-online-write.js')
+    const writer = { ensureOp: vi.fn(async () => { throw new Un1tWriteRefused('UN1T_RATE_BUDGET', 'busy', { retryable: true }) }) }
+    expect(await step({ writer })).toMatchObject({ explanation: 'deferred', forgotPassword: 'retry', code: 'UN1T_RATE_BUDGET' })
+    expect(deps.sendUn1tAccountEmail).not.toHaveBeenCalled()
+  })
+})
+
+describe('runSetPasswordStep', () => {
+  const createdRow = { id: 'w-1', location_id: LOC, contact_id: 'c-other', op: 'create_client', stage: 'done', un1t_ref: 'usr-new', created_at: '2026-10-18T09:00:00Z' }
+  const resetRow = (stage) => ({ id: `w-r-${stage}`, location_id: LOC, op: 'forgot_password', stage, idempotency_key: `pw:${LOC}:usr-new`, created_at: '2026-10-18T09:01:00Z' })
   const settings = (over = {}) => ({ sendsWelcome: false, welcomeSetsLogin: false, ...over })
   const step = (over = {}) => runSetPasswordStep(makeDb(), { locationId: LOC, contact: contact({ email: 'jane@x.ie' }), un1tUserId: 'usr-new', request: { id: 'q-1', class_name: 'RALLY', starts_at: '2026-10-20T18:00:00Z' }, settings: settings(), origin: 'funnel', emailArgs: { blocks: [], studioName: 'Hatch', address: null, zone: 'Europe/Dublin' }, ...over }, deps)
 
@@ -154,6 +184,7 @@ describe('runSetPasswordStep', () => {
     deps.forgotPassword.mockImplementation(async () => { order.push('forgot'); return done() })
     expect(await step()).toEqual({ explanation: 'sent', forgotPassword: 'done' })
     expect(order).toEqual(['email', 'forgot'])
+    // The created-by-us check matches the user, whichever contact the create was for.
     expect(deps.forgotPassword.mock.calls[0][1]).toMatchObject({ un1tUserId: 'usr-new', email: 'jane@x.ie', contactId: 'c-funnel', origin: 'funnel' })
   })
 
@@ -181,7 +212,9 @@ describe('runSetPasswordStep', () => {
     deps.sendUn1tAccountEmail.mockResolvedValueOnce({ sent: false, channel: 'email', reason: 'email_blocked' })
     expect(await step()).toEqual({ explanation: 'email_blocked', forgotPassword: 'done' })
     deps.forgotPassword.mockResolvedValueOnce(done({ verdict: 'unknown' }))
-    expect((await step()).forgotPassword).toBe('unknown')
+    expect(await step()).toMatchObject({ forgotPassword: 'unknown', help: expect.stringMatching(/Forgot password/) })
+    deps.forgotPassword.mockResolvedValueOnce(done({ verdict: 'refused', code: 'UN1T_RATE_BUDGET', retryable: true }))
+    expect(await step()).toMatchObject({ forgotPassword: 'retry', code: 'UN1T_RATE_BUDGET' })
     deps.sendUn1tAccountEmail.mockRejectedValueOnce(new Error('boom'))
     expect((await step()).explanation).toBe('send_error')
   })

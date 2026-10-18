@@ -28,14 +28,14 @@
 
 import { escapeLikePattern } from './like-escape.js'
 import { classifyRefusal } from './un1t-online-write-judge.js'
-import { createUn1tWriter } from './un1t-online-write.js'
+import { createUn1tWriter, Un1tWriteRefused } from './un1t-online-write.js'
 import {
   createClient as createClientOp,
   forgotPassword as forgotPasswordOp,
   findClientByEmail as findClientByEmailOp,
 } from './un1t-online-write-ops.js'
 import { applyUn1tWriteToMirror } from './un1t-online-mirror-write.js'
-import { findDone, ledgerKey, listAttempts } from './un1t-online-write-ledger.js'
+import { ledgerKey } from './un1t-online-write-ledger.js'
 import { logWarn } from './log'
 
 const LOG = 'un1t-online-write'
@@ -132,6 +132,10 @@ export async function findUn1tAccount(db, { locationId, organizationId, contact,
 
 const card = (reason) => ({ kind: 'card', reason })
 
+// A refusal raised inside a read (the budget, the permission check) is a
+// retry, never a crash out of the funnel.
+const retryOf = (err) => (err instanceof Un1tWriteRefused && err.result?.retryable ? { kind: 'retry', code: err.code } : null)
+
 /**
  * @returns {Promise<{ kind: 'existing'|'created', un1tUserId: string, executingContactId: string }
  *   | { kind: 'card', reason: 'account_ambiguous'|'terms_not_accepted'|'un1t_email_in_use_elsewhere'|string }
@@ -140,7 +144,14 @@ const card = (reason) => ({ kind: 'card', reason })
 export async function ensureUn1tAccount(db, { locationId, organizationId, contact, request, origin, originRef = null, actor = null }, deps = {}) {
   const d = depsOf(deps)
   const writer = await d.writerFactory(db, locationId)
-  const found = await findUn1tAccount(db, { locationId, organizationId, contact, writer }, deps)
+  let found
+  try {
+    found = await findUn1tAccount(db, { locationId, organizationId, contact, writer }, deps)
+  } catch (err) {
+    const retry = retryOf(err)
+    if (retry) return retry
+    throw err
+  }
   if (found.kind === 'linked') return { kind: 'existing', un1tUserId: found.un1tUserId, executingContactId: found.executingContactId }
   if (found.kind === 'ambiguous') return card('account_ambiguous')
   if (found.kind === 'conflict') return card('un1t_link_conflict')
@@ -162,12 +173,20 @@ export async function ensureUn1tAccount(db, { locationId, organizationId, contac
   if (r.retryable) return { kind: 'retry', code: r.code }
   if (r.code === 'terms_not_accepted') return card('terms_not_accepted')
   if (classifyRefusal({ code: r.code, message: r.message }) === 'email_in_use') {
-    const again = await walk(d, writer, normEmail(contact.email))
-    if (again === 'truncated' || again.matches.length > 1) return card('account_ambiguous')
-    if (again.matches.length === 0) return card('un1t_email_in_use_elsewhere')
-    const link = await d.linkAccount(db, { locationId, contactId: contact.id, un1tUserId: again.matches[0], writer })
-    if (link?.conflict) return card('un1t_link_conflict')
-    return { kind: 'existing', un1tUserId: again.matches[0], executingContactId: contact.id }
+    // Find again, mirror first: a sibling contact racing this one may have
+    // just created and linked the account.
+    let again
+    try {
+      again = await findUn1tAccount(db, { locationId, organizationId, contact, writer }, deps)
+    } catch (err) {
+      const retry = retryOf(err)
+      if (retry) return retry
+      throw err
+    }
+    if (again.kind === 'linked') return { kind: 'existing', un1tUserId: again.un1tUserId, executingContactId: again.executingContactId }
+    if (again.kind === 'conflict') return card('un1t_link_conflict')
+    if (again.kind === 'ambiguous') return card('account_ambiguous')
+    return card('un1t_email_in_use_elsewhere')
   }
   return card(`un1t_create_failed:${r.code ?? 'unknown'}`)
 }
@@ -177,19 +196,45 @@ export async function ensureUn1tAccount(db, { locationId, organizationId, contac
  * only on a ledger read failure (the queue retries; nothing was sent).
  * @returns {Promise<{ explanation: string, forgotPassword: string }>}
  */
-export async function runSetPasswordStep(db, { locationId, contact, un1tUserId, request, settings, origin, emailArgs = {} }, deps = {}) {
+export async function runSetPasswordStep(db, { locationId, contact, un1tUserId, request, settings, origin, emailArgs = {}, writer = null }, deps = {}) {
   const d = depsOf(deps)
-  const creates = await listAttempts(db, { locationId, contactId: contact.id, op: 'create_client' })
-  if (!creates.some((r) => r.stage === 'done' && idText(r.un1t_ref) === un1tUserId)) {
-    return { explanation: 'skipped_not_created', forgotPassword: 'skipped_not_created' }
+  // Did the CRM create this un1t.online user (whichever contact it was for)?
+  const { data: creates, error: createErr } = await db.from('un1t_write_events')
+    .select('id').eq('location_id', locationId).eq('op', 'create_client').eq('stage', 'done').eq('un1t_ref', un1tUserId).limit(1)
+  if (createErr) throw Object.assign(new Error(`un1t_write_events create read failed (${createErr.code ?? 'no code'})`), { code: createErr.code ?? null })
+  if (!creates || creates.length === 0) return { explanation: 'skipped_not_created', forgotPassword: 'skipped_not_created' }
+
+  // Any earlier reset for this user, whatever its stage: done is final, and an
+  // in-doubt one holds the key (no second request will go), so our "a code is
+  // on its way" email is never sent twice, nor sent for a code that cannot come.
+  const pwKey = ledgerKey.pw(locationId, un1tUserId)
+  const { data: resets, error: resetErr } = await db.from('un1t_write_events')
+    .select('id, stage').eq('location_id', locationId).eq('op', 'forgot_password').eq('idempotency_key', pwKey).limit(10)
+  if (resetErr) throw Object.assign(new Error(`un1t_write_events reset read failed (${resetErr.code ?? 'no code'})`), { code: resetErr.code ?? null })
+  const stages = new Set((resets || []).map((r) => r.stage))
+  if (stages.has('done')) return { explanation: 'skipped_already_done', forgotPassword: 'skipped_already_done' }
+  if (stages.has('sent') || stages.has('unknown')) return { explanation: 'skipped_reset_in_doubt', forgotPassword: 'in_doubt', help: UN1T_SET_PASSWORD_HELP }
+
+  // The reset must be sendable before we promise it: the switch, the token
+  // and the budget, checked first (a refusal here sends neither).
+  if (writer?.ensureOp) {
+    try {
+      await writer.ensureOp('forgot_password')
+    } catch (err) {
+      if (err instanceof Un1tWriteRefused) {
+        return { explanation: 'deferred', forgotPassword: err.result?.retryable ? 'retry' : 'refused', code: err.code, help: UN1T_SET_PASSWORD_HELP }
+      }
+      throw err
+    }
   }
-  if (await findDone(db, { key: ledgerKey.pw(locationId, un1tUserId) })) {
-    return { explanation: 'skipped_already_done', forgotPassword: 'skipped_already_done' }
-  }
+  const resent = stages.has('refused')
 
   let explanation
   if (settings?.sendsWelcome) {
     explanation = 'skipped_flag'
+  } else if (resent) {
+    // A refused reset earlier: our email went out before it; not again.
+    explanation = 'skipped_already_sent'
   } else {
     try {
       const sent = await d.sendUn1tAccountEmail(db, {
@@ -204,5 +249,8 @@ export async function runSetPasswordStep(db, { locationId, contact, un1tUserId, 
 
   if (settings?.sendsWelcome && settings?.welcomeSetsLogin) return { explanation, forgotPassword: 'skipped_flag' }
   const r = await d.forgotPassword(db, { locationId, contactId: contact.id, un1tUserId, email: contact.email, origin, originRef: request?.id ?? null })
-  return { explanation, forgotPassword: r.verdict }
+  const out = { explanation, forgotPassword: r.verdict === 'refused' && r.retryable ? 'retry' : r.verdict }
+  if (r.code) out.code = r.code
+  if (r.verdict !== 'done') out.help = UN1T_SET_PASSWORD_HELP
+  return out
 }

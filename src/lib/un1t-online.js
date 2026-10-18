@@ -183,7 +183,7 @@ export function createUn1tClient({
     let truncated = false
 
     for (let p = 1; p <= pages; p++) {
-      if (p > pageCap) {
+      if (p > Math.min(pageCap, maxPages)) {
         truncated = true
         break
       }
