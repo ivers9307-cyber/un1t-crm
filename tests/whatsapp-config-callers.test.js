@@ -244,6 +244,11 @@ const CALLERS = {
     decision: 'refuse-quiet',
     why: 'membership outcome template fallback: caught → { sent:false, reason:"send_error" }; needs an existing thread + a location-owned template.',
   },
+  'src/lib/radar-availability.js': {
+    calls: { getLocationWhatsAppNumberConfig: 1 },
+    decision: 'refuse-quiet',
+    why: 'UN1TRADAR.3: read only, never sends. The radar GETs say whether a number is switched on at the studio (outreachAvailable), so the outreach button shows "No WhatsApp number at this studio yet" instead of a template picker; null or a failed read is false (caught, never thrown). radar-availability.test.js.',
+  },
   'src/lib/radar-outreach.js': {
     calls: { sendTemplateMessage: 1 },
     decision: 'refuse-409',

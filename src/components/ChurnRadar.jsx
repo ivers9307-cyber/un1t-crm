@@ -22,7 +22,7 @@ import {
   ClipboardList, BellOff, Check, CalendarClock, RotateCcw,
   CreditCard, Ticket, TrendingUp, Mail, UserMinus, Coins, Hourglass,
 } from 'lucide-react'
-import RadarOutreachButton from '@/components/RadarOutreachButton'
+import RadarOutreachButton, { RadarOutreachAvailable } from '@/components/RadarOutreachButton'
 
 const TIER_STYLE = {
   high:   { label: 'High',   cls: 'bg-red-100 text-red-700' },
@@ -60,7 +60,7 @@ export default function ChurnRadar() {
   const [tab, setTab] = useState('radar')
   const [radar, setRadar] = useState(null)
   // UN1TRADAR.2 — the response's source and data freshness (beside `data`)
-  const [radarMeta, setRadarMeta] = useState({ source: null, dataAsOf: null, zone: null })
+  const [radarMeta, setRadarMeta] = useState({ source: null, dataAsOf: null, zone: null, outreachAvailable: true })
   const [quarantine, setQuarantine] = useState(null)
   const [winback, setWinback] = useState(null)
   const [overdue, setOverdue] = useState(null)
@@ -79,7 +79,7 @@ export default function ChurnRadar() {
       const j = await r.json()
       if (!r.ok || !j.success) throw new Error(j.error || 'Failed to load radar')
       setRadar(j.data)
-      setRadarMeta({ source: j.source ?? null, dataAsOf: j.dataAsOf ?? null, zone: j.dataAsOfZone ?? null })
+      setRadarMeta({ source: j.source ?? null, dataAsOf: j.dataAsOf ?? null, zone: j.dataAsOfZone ?? null, outreachAvailable: j.outreachAvailable !== false })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -255,11 +255,16 @@ export default function ChurnRadar() {
   // RADAR-TREND.1 — week-over-week deltas, null until the first
   // weekly snapshot exists.
   const td = summary.trend?.deltas || null
+  // UN1TRADAR.3 — the payment reminder and the Glofox re-pull read Glofox data:
+  // shown only at a Glofox studio (the routes refuse them elsewhere too)
+  const glofoxOnly = radarMeta.source === 'glofox'
+  const refreshFn = glofoxOnly ? runRefresh : null
   const freshness = radarMeta.source === 'un1t_online' && radarMeta.zone
     ? syncedAtLine(radarMeta.dataAsOf, radarMeta.zone)
     : null
 
   return (
+    <RadarOutreachAvailable.Provider value={radarMeta.outreachAvailable}>
     <div>
       {flash && (
         <p className={`mb-4 rounded-lg border p-3 text-sm ${
@@ -335,7 +340,7 @@ export default function ChurnRadar() {
 
       {tab === 'radar' && (
         <RadarList radar={radar?.radar || []} busy={busy} onAction={runAction}
-          onRefresh={runRefresh} snoozed={summary.snoozed} />
+          onRefresh={refreshFn} canRemind={glofoxOnly} snoozed={summary.snoozed} />
       )}
 
       {tab === 'winback' && (
@@ -343,15 +348,15 @@ export default function ChurnRadar() {
       )}
 
       {tab === 'overdue' && (
-        <OverdueList data={overdue} busy={busy} onAction={runAction} onRefresh={runRefresh} />
+        <OverdueList data={overdue} busy={busy} onAction={runAction} onRefresh={refreshFn} canRemind={glofoxOnly} />
       )}
 
       {tab === 'charges' && (
-        <UnpaidChargesList data={charges} busy={busy} onAction={runAction} onRefresh={runRefresh} />
+        <UnpaidChargesList data={charges} busy={busy} onAction={runAction} onRefresh={refreshFn} />
       )}
 
       {tab === 'awaiting' && (
-        <AwaitingAuthList data={awaiting} busy={busy} onAction={runAction} onRefresh={runRefresh} />
+        <AwaitingAuthList data={awaiting} busy={busy} onAction={runAction} onRefresh={refreshFn} />
       )}
 
       {tab === 'quarantine' && (
@@ -363,6 +368,7 @@ export default function ChurnRadar() {
       <DigestSettings />
       <DunningSettings />
     </div>
+    </RadarOutreachAvailable.Provider>
   )
 }
 
@@ -640,7 +646,7 @@ function Tab({ active, onClick, icon: Icon, label }) {
   )
 }
 
-function RadarList({ radar, busy, onAction, onRefresh, snoozed }) {
+function RadarList({ radar, busy, onAction, onRefresh, canRemind = true, snoozed }) {
   if (radar.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
@@ -657,12 +663,12 @@ function RadarList({ radar, busy, onAction, onRefresh, snoozed }) {
       {snoozed > 0 && (
         <p className="text-xs text-un1t-muted">{snoozed} member{snoozed === 1 ? '' : 's'} snoozed and hidden.</p>
       )}
-      {radar.map((m) => <RadarRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
+      {radar.map((m) => <RadarRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} canRemind={canRemind} />)}
     </div>
   )
 }
 
-function RadarRow({ m, busy, onAction, onRefresh }) {
+function RadarRow({ m, busy, onAction, onRefresh, canRemind = true }) {
   const tier = TIER_STYLE[m.tier] || TIER_STYLE.low
   const isBusy = busy === m.contactId
   return (
@@ -712,7 +718,7 @@ function RadarRow({ m, busy, onAction, onRefresh }) {
           onClick={() => onAction(m.contactId, 'task_assigned')} />
         <RadarOutreachButton contactName={m.name} disabled={isBusy} busy={isBusy}
           onSelect={(tpl) => onAction(m.contactId, 'outreach_sent', { template_name: tpl })} />
-        {m.signals.some((s) => s.key === 'payment_slipping') && (
+        {canRemind && m.signals.some((s) => s.key === 'payment_slipping') && (
           <ActionBtn icon={CreditCard} label="Send payment reminder" disabled={isBusy} primary
             onClick={() => onAction(m.contactId, 'payment_reminder')} />
         )}
@@ -876,7 +882,7 @@ function WinbackRow({ m, busy, onAction }) {
 
 // ── overdue ──────────────────────────────────────────────────────
 
-function OverdueList({ data, busy, onAction, onRefresh }) {
+function OverdueList({ data, busy, onAction, onRefresh, canRemind = true }) {
   if (data === null) return <p className="text-sm text-un1t-subtle">Loading overdue…</p>
   const rows = data.overdue || []
   if (rows.length === 0) {
@@ -901,7 +907,7 @@ function OverdueList({ data, busy, onAction, onRefresh }) {
         profile for their contact details. Fees, class packs, bookings and
         products are under <strong>Unpaid charges</strong>.
       </p>
-      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
+      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} canRemind={canRemind} />)}
     </div>
   )
 }

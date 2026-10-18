@@ -73,17 +73,17 @@ describe('radar read APIs and the memberships capability', () => {
     })
 
     it(`${name}: Glofox → data unchanged, source "glofox" and dataAsOf null beside it`, async () => {
-      radarAvailability.mockResolvedValue({ available: true, source: 'glofox', dataAsOf: null })
+      radarAvailability.mockResolvedValue({ available: true, source: 'glofox', dataAsOf: null, dataAsOfZone: null, outreachAvailable: true })
       const res = await GET(req(path))
       const body = await res.json()
       expect(res.status).toBe(200)
       expect(body.success).toBe(true)
       expect(body.source).toBe('glofox')
       expect(body.dataAsOf).toBeNull()
-      // the radar page's own route also carries the studio zone for its freshness line
-      expect(Object.keys(body).sort()).toEqual(name === 'churn-radar'
-        ? ['data', 'dataAsOf', 'dataAsOfZone', 'source', 'success']
-        : ['data', 'dataAsOf', 'source', 'success'])
+      // the radar page's own route also carries the studio zone for its freshness
+      // line; the routes behind an outreach button say whether a number is on
+      const extra = { 'churn-radar': ['dataAsOfZone', 'outreachAvailable'], winback: ['outreachAvailable'], 'lead-radar': ['outreachAvailable'] }[name] || []
+      expect(Object.keys(body).sort()).toEqual(['data', 'dataAsOf', 'source', 'success', ...extra].sort())
       expect(mod[loader]).toHaveBeenCalledTimes(1)
     })
 

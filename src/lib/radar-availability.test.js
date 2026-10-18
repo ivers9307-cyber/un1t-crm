@@ -5,10 +5,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/membership/reads/index', () => ({ radarReadsFor: vi.fn() }))
 vi.mock('@/lib/location-time', () => ({ getLocationZone: vi.fn(async () => 'Europe/Dublin') }))
+vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn() }))
 
 import { logInfo } from '@/lib/log'
 import { radarReadsFor } from '@/lib/membership/reads/index'
 import { radarAvailability, RADAR_UNAVAILABLE, syncDataAsOf } from './radar-availability'
+import { getLocationWhatsAppNumberConfig } from '@/lib/whatsapp-config'
 
 const L = 'loc-1'
 
@@ -77,5 +79,26 @@ describe('syncDataAsOf', () => {
   it('no run, or a failed read, is null (the line is just not drawn)', async () => {
     expect(await syncDataAsOf(runsDb([]).db, L)).toBeNull()
     expect(await syncDataAsOf(runsDb([], { error: { message: 'boom' } }).db, L)).toBeNull()
+  })
+})
+
+describe('radarAvailability withOutreach (UN1TRADAR.3)', () => {
+  it('outreachAvailable: a number switched on at the studio → true; none → false; a failed read → false', async () => {
+    radarReadsFor.mockResolvedValue({ source: 'glofox', reads: {}, providesMemberships: true, pinArrears: false })
+    const { db } = runsDb([])
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce({ phoneNumberId: 'p1' })
+    expect((await radarAvailability(db, L, { module: 'churn-radar', withOutreach: true })).outreachAvailable).toBe(true)
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledWith(L)
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(null)
+    expect((await radarAvailability(db, L, { module: 'churn-radar', withOutreach: true })).outreachAvailable).toBe(false)
+    getLocationWhatsAppNumberConfig.mockRejectedValueOnce(new Error('down'))
+    expect((await radarAvailability(db, L, { module: 'churn-radar', withOutreach: true })).outreachAvailable).toBe(false)
+  })
+  it('not asked → no key and no read', async () => {
+    radarReadsFor.mockResolvedValue({ source: 'glofox', reads: {}, providesMemberships: true, pinArrears: false })
+    getLocationWhatsAppNumberConfig.mockClear()
+    const a = await radarAvailability(runsDb([]).db, L, { module: 'churn-radar' })
+    expect(Object.hasOwn(a, 'outreachAvailable')).toBe(false)
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
   })
 })
