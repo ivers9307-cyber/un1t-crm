@@ -19,10 +19,12 @@ import { createUn1tClient, Un1tAuthError, Un1tApiError } from '@/lib/un1t-online
 import { UN1T_WRITE_BUDGET } from '@/lib/un1t-online-write'
 import { readConnection } from '@/lib/connection-registry'
 import { checkRateLimit } from '@/lib/rate-limit'
-import { logWarn, logError } from '@/lib/log'
+import { logWarn } from '@/lib/log'
 
 const LOG_MODULE = 'mia-un1t'
 const PLATFORM = 'un1t_online'
+/** Pages (100 rows each) one live list read will pull; past it the list is `truncated`. */
+export const UN1T_READ_MAX_PAGES = 5
 
 /** The shared budget was spent: nothing was sent, try again after the window. */
 export class Un1tBudgetSpent extends Error {
@@ -39,7 +41,8 @@ export class Un1tBudgetSpent extends Error {
  * @param {object} db  service-role Supabase client
  * @param {string} locationId
  * @param {{ clientFactory?: Function, fetchImpl?: Function, sleep?: Function }} [opts]
- * @returns {Promise<{ ok: true, studioId: string, getOne: (path: string) => Promise<any> }
+ * @returns {Promise<{ ok: true, studioId: string, getOne: (path: string) => Promise<any>,
+ *   listAll: (path: string) => Promise<{ rows: object[], total: number, truncated: boolean }> }
  *   | { ok: false, reason: 'not_connected' | 'read_failed' }>}
  */
 export async function openUn1tMemberReader(db, locationId, { clientFactory = createUn1tClient, fetchImpl, sleep } = {}) {
@@ -64,6 +67,7 @@ export async function openUn1tMemberReader(db, locationId, { clientFactory = cre
   const budgetKey = `un1t-write:${locationId}`
   const client = clientFactory({
     token: conn.accessToken,
+    maxPages: UN1T_READ_MAX_PAGES,
     ...(fetchImpl ? { fetchImpl } : {}),
     ...(sleep ? { sleep } : {}),
     beforeRequest: async () => {
@@ -76,6 +80,8 @@ export async function openUn1tMemberReader(db, locationId, { clientFactory = cre
     ok: true,
     studioId: String(conn.externalAccountId),
     getOne: (path) => client.getOne(path),
+    // Every page is one request, so every page takes one slot.
+    listAll: (path) => client.listAll(path),
   }
 }
 
@@ -83,30 +89,31 @@ export async function openUn1tMemberReader(db, locationId, { clientFactory = cre
 function logReadFailure(locationId, op, err) {
   const status = err instanceof Un1tApiError || err instanceof Un1tAuthError ? err.status ?? null : null
   const meta = { locationId, op, status, errClass: err?.name }
-  // A refused token needs a person (the connection is dead); the rest is a blip.
-  if (err instanceof Un1tAuthError) logError(LOG_MODULE, 'un1t.online refused the token', meta)
-  else logWarn(LOG_MODULE, 'un1t.online read failed', meta)
+  logWarn(LOG_MODULE, err instanceof Un1tAuthError ? 'un1t.online refused the token' : 'un1t.online read failed', meta)
 }
 
 /**
- * Live GET /users/{id}/bookings for one member.
+ * Live GET /users/{id}/bookings for one member, every page up to
+ * UN1T_READ_MAX_PAGES (a member's future bookings may sit past page 1). A list
+ * the cap cut comes back `truncated: true`: it may be incomplete, so a caller
+ * must not read "not in the list" as "no such booking".
  *
  * @param {object} db
  * @param {{ locationId: string, un1tUserId: string }} args
  * @param {{ clientFactory?: Function, fetchImpl?: Function, sleep?: Function }} [deps]
- * @returns {Promise<{ ok: true, rows: object[] } | { ok: false, reason: 'not_connected' | 'read_failed' | 'budget_spent' }>}
+ * @returns {Promise<{ ok: true, rows: object[], truncated?: true } | { ok: false, reason: 'not_connected' | 'read_failed' | 'budget_spent' }>}
  */
 export async function fetchLiveUn1tBookings(db, { locationId, un1tUserId } = {}, deps = {}) {
   if (!locationId || !un1tUserId) return { ok: false, reason: 'read_failed' }
   const reader = await openUn1tMemberReader(db, locationId, deps)
   if (!reader.ok) return { ok: false, reason: reader.reason }
   try {
-    const data = await reader.getOne(`/users/${encodeURIComponent(String(un1tUserId))}/bookings`)
-    if (!Array.isArray(data)) {
-      logWarn(LOG_MODULE, 'un1t.online sent bookings that are not a list', { locationId, op: 'bookings', status: null })
-      return { ok: false, reason: 'read_failed' }
+    const { rows, total, truncated } = await reader.listAll(`/users/${encodeURIComponent(String(un1tUserId))}/bookings`)
+    if (truncated) {
+      logWarn(LOG_MODULE, 'live bookings read hit the page cap', { locationId, op: 'bookings', maxPages: UN1T_READ_MAX_PAGES, read: rows.length, total })
+      return { ok: true, rows, truncated: true }
     }
-    return { ok: true, rows: data }
+    return { ok: true, rows }
   } catch (err) {
     if (err instanceof Un1tBudgetSpent) {
       logWarn(LOG_MODULE, 'read budget spent', { locationId, op: 'bookings', status: null, retryAfterSec: err.retryAfterSec })

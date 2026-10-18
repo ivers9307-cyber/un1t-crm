@@ -4,7 +4,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.f
 vi.mock('@/lib/connection-registry', () => ({ readConnection: vi.fn() }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }))
 
-import { Un1tBudgetSpent, openUn1tMemberReader, fetchLiveUn1tBookings } from './un1t-member-read'
+import { Un1tBudgetSpent, openUn1tMemberReader, fetchLiveUn1tBookings, UN1T_READ_MAX_PAGES } from './un1t-member-read'
 import { fakeUn1tReader, fakeUn1tWrite } from './un1t-fakes.test-helpers'
 import { readConnection } from '@/lib/connection-registry'
 import { checkRateLimit } from '@/lib/rate-limit'
@@ -122,13 +122,52 @@ describe('fetchLiveUn1tBookings', () => {
     const fetchImpl = fetchSeq([ok([{ id: 'b1' }, { id: 'b2' }])])
     const out = await fetchLiveUn1tBookings(db, { locationId: LOC, un1tUserId: 'u1' }, { fetchImpl, sleep })
     expect(out).toEqual({ ok: true, rows: [{ id: 'b1' }, { id: 'b2' }] })
-    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.un1t.online/users/u1/bookings')
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.un1t.online/users/u1/bookings?page=1&pageSize=100')
   })
 
   it('encodes the member id into the path', async () => {
     const fetchImpl = fetchSeq([ok([])])
     await fetchLiveUn1tBookings(db, { locationId: LOC, un1tUserId: 'u 1/../x' }, { fetchImpl, sleep })
-    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.un1t.online/users/u%201%2F..%2Fx/bookings')
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.un1t.online/users/u%201%2F..%2Fx/bookings?page=1&pageSize=100')
+  })
+
+  const pageOf = (n, pages, rows) => res(200, { success: true, data: rows, pagination: { total: pages * 100, page: n, pages, pageSize: 100 } })
+  const rowsFor = (page, n = 100) => Array.from({ length: n }, (_, i) => ({ id: `b${page}-${i}` }))
+
+  it('pages through every page, one budget slot per page', async () => {
+    const fetchImpl = fetchSeq([pageOf(1, 3, rowsFor(1)), pageOf(2, 3, rowsFor(2)), pageOf(3, 3, rowsFor(3, 7))])
+    const out = await fetchLiveUn1tBookings(db, { locationId: LOC, un1tUserId: 'u1' }, { fetchImpl, sleep })
+    expect(out.ok).toBe(true)
+    expect(out.rows).toHaveLength(207)
+    expect(out.rows[100]).toEqual({ id: 'b2-0' })
+    expect(out.truncated).toBeUndefined()
+    expect(fetchImpl.mock.calls.map(([u]) => u)).toEqual([1, 2, 3].map((p) => `https://api.un1t.online/users/u1/bookings?page=${p}&pageSize=100`))
+    expect(checkRateLimit).toHaveBeenCalledTimes(3)
+    expect(checkRateLimit).toHaveBeenCalledWith(db, `un1t-write:${LOC}`, { max: 30, windowMs: 60_000 })
+  })
+
+  it('stops at the page cap and says the list is truncated', async () => {
+    const pages = UN1T_READ_MAX_PAGES + 4
+    const fetchImpl = vi.fn(async (url) => {
+      const n = Number(/page=(\d+)/.exec(url)[1])
+      return pageOf(n, pages, rowsFor(n))
+    })
+    const out = await fetchLiveUn1tBookings(db, { locationId: LOC, un1tUserId: 'u1' }, { fetchImpl, sleep })
+    expect(out).toMatchObject({ ok: true, truncated: true })
+    expect(out.rows).toHaveLength(UN1T_READ_MAX_PAGES * 100)
+    expect(fetchImpl).toHaveBeenCalledTimes(UN1T_READ_MAX_PAGES)
+    expect(checkRateLimit).toHaveBeenCalledTimes(UN1T_READ_MAX_PAGES)
+    const warn = logWarn.mock.calls.find(([m, msg]) => m === 'mia-un1t' && /page cap/.test(msg))
+    expect(warn).toBeTruthy()
+    expect(warn[2]).not.toHaveProperty('status')
+  })
+
+  it('a budget spent on page 2 is budget_spent and returns no rows', async () => {
+    checkRateLimit.mockResolvedValueOnce(allow).mockResolvedValue(spent)
+    const fetchImpl = fetchSeq([pageOf(1, 3, rowsFor(1)), pageOf(2, 3, rowsFor(2))])
+    const out = await fetchLiveUn1tBookings(db, { locationId: LOC, un1tUserId: 'u1' }, { fetchImpl, sleep })
+    expect(out).toEqual({ ok: false, reason: 'budget_spent' })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
   it('a 5xx after retries -> { ok: false, reason: read_failed }', async () => {
@@ -144,7 +183,8 @@ describe('fetchLiveUn1tBookings', () => {
     const out = await fetchLiveUn1tBookings(db, { locationId: LOC, un1tUserId: 'u1' }, { fetchImpl, sleep })
     expect(out).toEqual({ ok: false, reason: 'read_failed' })
     expect(fetchImpl).toHaveBeenCalledTimes(1)
-    expect(logWarn.mock.calls.concat(logError.mock.calls).some(([, , meta]) => meta?.status === 401)).toBe(true)
+    expect(logError).not.toHaveBeenCalled()
+    expect(logWarn.mock.calls.some(([m, , meta]) => m === 'mia-un1t' && meta?.status === 401)).toBe(true)
   })
 
   it('a spent budget is budget_spent and sends nothing', async () => {
