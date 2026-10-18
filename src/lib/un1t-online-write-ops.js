@@ -772,14 +772,14 @@ export async function grantTrial(db, args = {}, deps = {}) {
   const settleDone = (ledgerId) => (ledgerId
     ? finishAttempt(db, ledgerId, { stage: 'done', recovered: 'credits_show' })
     : null)
-  const byCredits = async (method, ledgerId, { noCredits = 'unverified' } = {}) => {
+  const byCredits = async (method, ledgerId, { noCredits = 'unverified', settle = true } = {}) => {
     const credits = await readTrialCredits(writer, un1tUserId)
     if (!credits) return { outcome: 'retry', code: 'credits_unreadable' }
     if (!credits.shows) {
       if (noCredits === 'used') return { outcome: 'ineligible', reason: 'trial_used' }
       return { outcome: 'needs_staff', reason: 'un1t_trial_unverified', ledgerId: ledgerId ?? null }
     }
-    await settleDone(ledgerId)
+    if (settle) await settleDone(ledgerId)
     await mirror({ credits: credits.ledger }, ledgerId)
     logInfo(LOG_MODULE, 'trial granted on the credits read', fields({ ...meta, ledgerId: ledgerId ?? undefined, recovered: 'credits_show' }))
     return { outcome: 'granted', method, ledgerId: ledgerId ?? null }
@@ -800,8 +800,14 @@ export async function grantTrial(db, args = {}, deps = {}) {
   // 1. What we already did. A trial we granted before stands only while its
   //    credits do: with none left the person has had it (trial_used), so the
   //    funnel sends them the trial-used email instead of a doomed booking.
+  // A grant inside the doubt window stands as is (its credits may not show
+  // yet, and the booking judges them); an older one stands while they do.
   const done = await findDoneTrial(db, { locationId, un1tUserId, productId })
-  if (done) return byCredits(methodOf(done), done.id, { noCredits: 'used' })
+  if (done) {
+    const doneAge = ageMs(done)
+    if (Number.isFinite(doneAge) && doneAge < UN1T_TRIAL_DOUBT_WINDOW_MS) return { outcome: 'granted', method: methodOf(done), ledgerId: done.id }
+    return byCredits(methodOf(done), done.id, { noCredits: 'used', settle: false })
+  }
   const open = await findOpenTrial(db, { locationId, un1tUserId, productId })
   if (open) {
     const age = ageMs(open)
