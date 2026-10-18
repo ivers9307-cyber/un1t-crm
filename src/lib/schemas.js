@@ -7,6 +7,7 @@
 import { z } from 'zod'
 import { sanitizePermissionsBlob } from '@shared/permissions'
 import { UUID_SHAPE } from './uuid-shape'
+import { isFreshSecret } from './integration-secret-merge'
 
 // UUID-shaped string matching what Postgres's uuid type accepts. See
 // src/lib/validate.js for the rationale (Zod 4's .uuid() is RFC-strict
@@ -425,4 +426,56 @@ export const giversEnquirySchema = z.object({
 // un1t.online with it. Never echoed in a response or a validation issue.
 export const Un1tOnlineConnectSchema = z.object({
   token: z.string().trim().max(512).regex(/^un1t_[A-Za-z0-9_-]{20,}$/, 'That does not look like an un1t.online API token'),
+})
+
+// WAORGNUMBER.1 — the organisation's WhatsApp number admin
+// (/api/organizations/[id]/whatsapp/*). A number belongs to the ORGANISATION;
+// home_location_id is its home studio (where new-enquiry threads and
+// coexistence history land), and must be a studio of that organisation (the
+// route checks, the database does not).
+export const orgWhatsAppNumberCreateSchema = z.object({
+  label: z.string().trim().min(1).max(120),
+  phone_number_id: z.string().trim().min(1).max(64),
+  access_token: z.string().min(20).max(2000),
+  business_account_id: z.string().max(64).nullable().optional(),
+  app_id: z.string().max(64).nullable().optional(),
+  display_phone: z.string().max(32).nullable().optional(),
+  source: z.enum(['cloud_api', 'coexistence']).optional().default('cloud_api'),
+  home_location_id: uuidLike,
+})
+
+// N8NECHO.1: the screens are handed SECRET_MASK for a stored token. A mask (or
+// a blank) sent back is "no change", so it is dropped BEFORE validation and the
+// rest of the save applies; only a fresh token is ever written. min(20) below
+// is not the guard: it would refuse the whole save instead.
+const dropStaleAccessToken = (raw) => {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw) && 'access_token' in raw && !isFreshSecret(raw.access_token)) {
+    const { access_token: _dropped, ...rest } = raw
+    return rest
+  }
+  return raw
+}
+
+export const orgWhatsAppNumberPatchSchema = z.preprocess(dropStaleAccessToken, z.object({
+  label: z.string().trim().min(1).max(120).optional(),
+  phone_number_id: z.string().trim().min(1).max(64).optional(),
+  access_token: z.string().min(20).max(2000).optional(),
+  business_account_id: z.string().max(64).nullable().optional(),
+  app_id: z.string().max(64).nullable().optional(),
+  display_phone: z.string().max(32).nullable().optional(),
+  source: z.enum(['cloud_api', 'coexistence']).optional(),
+  is_active: z.boolean().optional(),
+  home_location_id: uuidLike.optional(),
+}))
+
+// The Embedded Signup dialog's result. Cloud API supplies phone_number_id from
+// the session; coexistence resolves it server-side from the WABA. A NEW number
+// needs a home studio; reconnecting a number the organisation already holds
+// keeps the one it has.
+export const orgWhatsAppEmbeddedSignupSchema = z.object({
+  mode: z.enum(['cloud_api', 'coexistence']).default('cloud_api'),
+  code: z.string().min(1),
+  waba_id: z.string().regex(/^\d+$/, 'waba_id must be a numeric Meta id'),
+  phone_number_id: z.string().regex(/^\d+$/, 'phone_number_id must be a numeric Meta id').optional(),
+  home_location_id: uuidLike.optional(),
 })

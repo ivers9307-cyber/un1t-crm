@@ -4,6 +4,10 @@
 // configured … Add a number below", the Add button and the Embedded Signup
 // Connect card over a live number. The server refuses a duplicate
 // phone_number_id (409), so this was low severity, but the screen lied.
+//
+// WAORGNUMBER.1 — numbers are added, edited and removed on the organisation's
+// page now (src/components/settings/whatsapp/OrgWhatsAppNumbers.test.jsx holds
+// the forms' tests). This tab lists them read-only and links there.
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
@@ -58,12 +62,21 @@ describe('WhatsAppIntegrationTab — Try again (CHANNELREAD.1)', () => {
   })
 })
 
-describe('WhatsAppIntegrationTab — real answers are unchanged (pin)', () => {
-  it('no numbers yet shows the empty state and Add', async () => {
+describe('WhatsAppIntegrationTab — numbers are read-only here (WAORGNUMBER.1)', () => {
+  const NUMBER = {
+    id: 'n1', location_id: LOC.id, label: 'Front desk', phone_number_id: '100', business_account_id: '200',
+    app_id: '300', display_phone: '+353 00 000 0000', source: 'cloud_api', token_type: 'system_user',
+    connected_via: 'manual', is_default: true, is_active: true, access_token_redacted: '••••••',
+    history_sync_status: null, coex_link_status: null, created_at: null, updated_at: null,
+  }
+
+  it('no numbers yet shows the empty state, with no Add button and no Connect card', async () => {
     mockFetch(reply(200, { success: true, numbers: [] }))
     render(<WhatsAppIntegrationTab location={LOC} canEdit />)
     expect(await screen.findByText(/No numbers configured/)).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Add WhatsApp number/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Add WhatsApp number/ })).toBeNull()
+    expect(screen.queryByText('Connect with WhatsApp')).toBeNull()
+    expect(urls().some((u) => u.endsWith('/whatsapp/embedded-signup'))).toBe(false)
   })
 
   // WAROLE.1 — the chat openers now need the location's own number (the
@@ -74,35 +87,30 @@ describe('WhatsAppIntegrationTab — real answers are unchanged (pin)', () => {
     render(<WhatsAppIntegrationTab location={LOC} canEdit />)
     expect(await screen.findByText(/Chat openers can only be saved once this location has its own number/)).toBeTruthy()
   })
-})
 
-describe('WhatsAppIntegrationTab — the stored token is never shown (N8NECHO.1)', () => {
-  const NUMBER = {
-    id: 'n1', location_id: LOC.id, label: 'Front desk', phone_number_id: '100', business_account_id: '200',
-    app_id: '300', display_phone: '+353 00 000 0000', source: 'cloud_api', token_type: 'system_user',
-    connected_via: 'manual', is_default: true, is_active: true, access_token_redacted: '••••••',
-    history_sync_status: null, coex_link_status: null, created_at: null, updated_at: null,
-  }
-
-  it('a stored token reads "Saved (hidden)" and the hint never promises characters', async () => {
-    mockFetch(reply(200, { success: true, numbers: [NUMBER] }))
-    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
-    fireEvent.click(await screen.findByText('Front desk'))
-    expect(await screen.findByText('Saved (hidden)')).toBeTruthy()
-    expect(screen.queryByText(/last 6/i)).toBeNull()
-    expect(screen.queryByText('••••••')).toBeNull()
-    expect(screen.getByText(/never shown/i)).toBeTruthy()
+  it('an organisation admin is pointed at the organisation page; anyone else is told who to ask', async () => {
+    mockFetch(reply(200, { success: true, numbers: [] }))
+    const { rerender } = render(<WhatsAppIntegrationTab location={LOC} canEdit canManageNumbers />)
+    const link = await screen.findByRole('link', { name: 'WhatsApp numbers' })
+    expect(link.getAttribute('href')).toBe('/settings/whatsapp-numbers')
+    rerender(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    expect(screen.queryByRole('link', { name: 'WhatsApp numbers' })).toBeNull()
+    expect(screen.getByText(/An organisation admin adds, edits and removes numbers/)).toBeTruthy()
   })
 
-  it('no stored token reads "Not set"', async () => {
-    mockFetch(reply(200, { success: true, numbers: [{ ...NUMBER, access_token_redacted: null }] }))
-    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
-    fireEvent.click(await screen.findByText('Front desk'))
-    expect(await screen.findByText('Not set')).toBeTruthy()
+  it('a number is listed with its default and inactive marks, and offers no edit, remove or set-default', async () => {
+    mockFetch(reply(200, { success: true, numbers: [NUMBER, { ...NUMBER, id: 'n2', label: 'Old', is_default: false, is_active: false }] }))
+    render(<WhatsAppIntegrationTab location={LOC} canEdit canManageNumbers />)
+    expect(await screen.findByText('Front desk')).toBeTruthy()
+    expect(screen.getByText('Default')).toBeTruthy()
+    expect(screen.getByText('Inactive')).toBeTruthy()
+    expect(screen.queryByTitle('Remove this number')).toBeNull()
+    expect(screen.queryByText(/Set default/)).toBeNull()
     expect(screen.queryByText('Saved (hidden)')).toBeNull()
-    // The hint must not claim a token is stored when none is.
-    expect(screen.queryByText(/token is stored/i)).toBeNull()
-    expect(screen.getByText(/No token is saved/i)).toBeTruthy()
+    fireEvent.click(screen.getByText('Front desk'))
+    expect(screen.queryByText('Saved (hidden)')).toBeNull()
+    const writes = global.fetch.mock.calls.filter(([, init]) => init && init.method && init.method !== 'GET')
+    expect(writes).toEqual([])
   })
 })
 
@@ -152,77 +160,15 @@ describe('WhatsAppIntegrationTab — chat openers and card sets follow canEdit (
 
 // WACONFIGFALLBACK.1 — there is no env fallback any more: a studio with no
 // active number sends and receives no WhatsApp. The copy used to promise
-// "falls back to the global WHATSAPP_* env vars", and the Remove confirm "the
-// env-var default". Removing or deactivating the LAST active number now says
-// WhatsApp stops at this studio, and how to fix a token instead.
+// "falls back to the global WHATSAPP_* env vars". (The Remove and Deactivate
+// confirms moved to the organisation's page with the controls.)
 describe('WhatsAppIntegrationTab — no env fallback in the copy (WACONFIGFALLBACK.1)', () => {
-  const NUM = (over) => ({
-    id: 'n1', location_id: LOC.id, label: 'Front desk', phone_number_id: '100', business_account_id: '200',
-    app_id: '300', display_phone: null, source: 'cloud_api', token_type: 'system_user', connected_via: 'manual',
-    is_default: true, is_active: true, access_token_redacted: null, history_sync_status: null,
-    coex_link_status: null, created_at: null, updated_at: null, ...over,
-  })
-  const STOPS = /WhatsApp stops at this studio: Mia stops replying, and booking confirmations and reminders are no longer sent/
-  afterEach(() => { vi.restoreAllMocks() })
-
   it('the empty state says WhatsApp is off here, never the env vars', async () => {
     mockFetch(reply(200, { success: true, numbers: [] }))
     render(<WhatsAppIntegrationTab location={LOC} canEdit />)
     expect(await screen.findByText(/will not send or receive WhatsApp while it has no active number/)).toBeTruthy()
     expect(screen.queryByText(/WHATSAPP_\*/)).toBeNull()
     expect(screen.queryByText(/falls back/)).toBeNull()
-  })
-
-  it('removing the LAST active number warns that WhatsApp stops here; cancel sends nothing', async () => {
-    mockFetch(reply(200, { success: true, numbers: [NUM()] }))
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
-    fireEvent.click(await screen.findByTitle('Remove this number'))
-    expect(confirmSpy).toHaveBeenCalledTimes(1)
-    expect(confirmSpy.mock.calls[0][0]).toMatch(STOPS)
-    expect(confirmSpy.mock.calls[0][0]).not.toMatch(/env/i)
-    expect(global.fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
-  })
-
-  it('removing one of two active numbers says the other keeps working (no stop warning)', async () => {
-    mockFetch(reply(200, { success: true, numbers: [NUM(), NUM({ id: 'n2', label: 'Back office', is_default: false })] }))
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
-    fireEvent.click((await screen.findAllByTitle('Remove this number'))[0])
-    expect(confirmSpy.mock.calls[0][0]).toMatch(/keeps using its other active number/)
-    expect(confirmSpy.mock.calls[0][0]).not.toMatch(STOPS)
-  })
-
-  it('the Active checkbox no longer calls deactivating "temporary maintenance"', async () => {
-    mockFetch(reply(200, { success: true, numbers: [NUM()] }))
-    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
-    fireEvent.click(await screen.findByText('Front desk'))
-    expect(await screen.findByText(/inactive number sends and receives no WhatsApp/)).toBeTruthy()
-    expect(screen.queryByText(/temporary maintenance/)).toBeNull()
-  })
-
-  it('deactivating the LAST active number asks first; cancel saves nothing', async () => {
-    mockFetch(reply(200, { success: true, numbers: [NUM()] }))
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
-    fireEvent.click(await screen.findByText('Front desk'))
-    fireEvent.click(await screen.findByRole('checkbox', { name: /inactive number sends and receives no WhatsApp/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    expect(confirmSpy).toHaveBeenCalledTimes(1)
-    expect(confirmSpy.mock.calls[0][0]).toMatch(/^Deactivate "Front desk"\?/)
-    expect(confirmSpy.mock.calls[0][0]).toMatch(STOPS)
-    expect(global.fetch.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(false)
-  })
-
-  it('deactivating one of two active numbers saves without a confirm', async () => {
-    mockFetch(reply(200, { success: true, numbers: [NUM(), NUM({ id: 'n2', label: 'Back office', is_default: false })] }))
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
-    fireEvent.click(await screen.findByText('Front desk'))
-    fireEvent.click(await screen.findByRole('checkbox', { name: /inactive number sends and receives no WhatsApp/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    expect(confirmSpy).not.toHaveBeenCalled()
-    expect(global.fetch.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true)
   })
 })
 
