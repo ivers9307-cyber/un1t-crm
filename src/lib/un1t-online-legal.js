@@ -68,7 +68,14 @@ const copyOf = (doc) => (doc ? { ...doc } : null)
 const noWait = async () => {
   throw Object.assign(new Error('un1t.online legal read does not wait'), { code: 'no_wait' })
 }
-const timedFetch = (url, init = {}) => fetch(url, { ...init, signal: AbortSignal.timeout(UN1T_LEGAL_TIMEOUT_MS) })
+// A 429 or 5xx becomes a thrown fault, so the read client's retry goes
+// through a backoff wait (which noWait refuses) even when the server says
+// Retry-After: 0, a wait the client would otherwise skip and retry on.
+const timedFetch = async (url, init = {}) => {
+  const res = await fetch(url, { ...init, signal: AbortSignal.timeout(UN1T_LEGAL_TIMEOUT_MS) })
+  if (res.status === 429 || res.status >= 500) throw Object.assign(new Error(`un1t.online answered HTTP ${res.status}`), { status: res.status })
+  return res
+}
 
 async function readOnce(db, locationId, { createWriter, now }) {
   let writer
