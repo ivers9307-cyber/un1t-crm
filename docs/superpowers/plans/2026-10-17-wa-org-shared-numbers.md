@@ -361,7 +361,7 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
 
 - [ ] **Step 1:** Write the migration test `moves exactly the three ids to the Hatch location and nothing else`. Use the fictional ids in the test. The migration names the real ids from the spec §8, guarded by `WHERE id IN (…) AND name LIKE 'hatch\_%'`.
 - [ ] **Step 2:** Callers table, CI mirror, `npm run build`.
-- [ ] **Step 3:** Apply 745 via MCP before merge, verify `business_account_id` is non-null on all 21 rows, then merge. Apply 746 after deploy. Verify: Hatch has 3 template rows and Stillorgan has 18.
+- [ ] **Step 3:** Apply 745 via MCP before merge, verify `business_account_id` is non-null on all 21 rows, then merge. Do NOT apply 746 here (R10): it is applied at go-live, in the same step as switching the organisation number on at UN1T Hatch Street (Task 21 Step 2). It is idempotent and safe to apply any time. After it is applied, verify: Hatch has 3 template rows and Stillorgan has 18.
 - [ ] **Step 4:** PR + changelog entry.
 
 ---
@@ -556,7 +556,7 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
   - Hatch purpose-template settings;
   - Hatch `customer_agent.enabled` (must be false);
   - the meta-ad welcome flag for Hatch lead sources.
-- [ ] **Step 2:** Richard switches +353 1 578 9401 on at Hatch (studio WhatsApp tab). With his OK, set `locations.settings.whatsapp_blast_signoff_until` for Hatch to go-live + 30 days.
+- [ ] **Step 2:** Richard switches +353 1 578 9401 on at Hatch (studio WhatsApp tab). In the same step, apply mig 746 via MCP (moves the three `hatch_*` templates to Hatch; R10), then verify Hatch has 3 template rows and Stillorgan has 18. With his OK, set `locations.settings.whatsapp_blast_signoff_until` for Hatch to go-live + 30 days.
 - [ ] **Step 3:** Smoke (spec §8 step 6) with Richard's test contact homed at Hatch:
   1. inbound lands at Hatch;
   2. a staff reply and a radar win-back (free text) file in the same thread;
