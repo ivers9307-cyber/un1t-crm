@@ -118,6 +118,24 @@ async function applyConsentWrites(db, { contactId, locationId = null, optingOut,
     )
   if (prefError) failures.push(`contact_preferences.whatsapp_marketing: ${prefError.message}`)
 
+  // 1b. WAORGNUMBER.3 (R17) — a contact-wide opt-OUT also closes every studio
+  //     row of the contact. Mig 747 fans contact_preferences out to the studio
+  //     rows only on a CHANGE, so a studio row re-opened by a studio START would
+  //     otherwise survive a later contact-wide STOP (contact_preferences already
+  //     false = no change = no fan-out). Only rows that are currently true are
+  //     written. Checked and counted in `failures`; it is NOT part of the
+  //     verdict (the two gates below still decide it), and a contact with no
+  //     studio rows is the ordinary zero-row answer. An opt-IN contact-wide
+  //     never re-opens a studio row: opting back in is per studio.
+  if (optingOut) {
+    const { error: studioRowsError } = await db
+      .from('contact_location_preferences')
+      .update({ whatsapp_marketing: false, updated_at: new Date().toISOString() })
+      .eq('contact_id', contactId)
+      .eq('whatsapp_marketing', true)
+    if (studioRowsError) failures.push(`contact_location_preferences.whatsapp_marketing (all studios): ${studioRowsError.message}`)
+  }
+
   // 2. The hard wa_status signal on the contact row. ATTEMPTED WHATEVER
   //    STEP 1 DID — see the header. This is the write whose loss the early
   //    return used to cause.
@@ -215,8 +233,10 @@ async function applyStudioConsentWrites(db, { contactId, locationId, optingOut, 
       { onConflict: 'contact_id,location_id', ignoreDuplicates: true },
     )
     .select('contact_id')
-  if (createError) failures.push(`contact_location_preferences (create): ${createError.message}`)
-  else created = (createdRows || []).length > 0
+  // A create error is held, not yet counted: the row may exist already, and if
+  // the update below lands the end state is correct, so the error is not a
+  // failure of this keyword (it is logged as a warning in that case).
+  if (!createError) created = (createdRows || []).length > 0
 
   let updated = false
   if (!created) {
@@ -229,6 +249,13 @@ async function applyStudioConsentWrites(db, { contactId, locationId, optingOut, 
     if (updateError) failures.push(`contact_location_preferences.whatsapp_marketing: ${updateError.message}`)
     else if ((updatedRows || []).length === 0) failures.push('contact_location_preferences.whatsapp_marketing: no row at this studio was changed')
     else updated = true
+  }
+  if (createError) {
+    if (updated) {
+      logWarn('wa-consent', 'studio row create errored but the update landed; end state is correct', { contactId, locationId, err: createError.message })
+    } else {
+      failures.push(`contact_location_preferences (create): ${createError.message}`)
+    }
   }
 
   // Audit trail, naming the studio. Best-effort and never part of the verdict
@@ -437,49 +464,79 @@ export async function applyMetaUserPreference(db, pref = {}, receivingLocationId
   const waId = String(pref.wa_id || '').replace(/\D/g, '')
   if (!waId) return { applied: false, reason: 'no_wa_id' }
 
+  const optingOut = pref.value === 'stop'
+
   // WAORGNUMBER.3 (R6) — the lookup is scoped to the RECEIVING number's
   // organisation. It used to be unscoped (`.limit(1)` across every contact), so
   // a person who is a contact at two tenants could have the OTHER tenant's row
-  // opted out by a preference they set on this tenant's number. No receiving
-  // studio = no scope = nothing is touched (never an unscoped fallback).
-  if (!receivingLocationId) return { applied: false, reason: 'no_receiving_studio' }
-  const orgLocationIds = await orgLocationIdsFor(db, receivingLocationId)
-  const { data: contacts, error: contactError } = await db.from('contacts')
-    .select('id')
-    .or(`wa_phone.eq.${waId},wa_phone.eq.+${waId},phone.eq.${waId},phone.eq.+${waId}`)
-    .in('location_id', scopeFor(orgLocationIds))
-    .limit(1)
-  if (contactError) return { applied: false, reason: 'contact_read_failed', failures: [`contacts: ${contactError.message}`] }
-  const contact = contacts?.[0]
-  if (!contact) return { applied: false, reason: 'no_contact' }
-
-  const optingOut = pref.value === 'stop'
-  // Exactly the same writes and the same BAREWRITE.4 shape as the keyword path
-  // above, through one helper.
+  // opted out by a preference they set on this tenant's number.
   //
-  // AN EARLIER VERSION OF THIS COMMENT SAID THE TWO PATHS HAD ALREADY DRIFTED —
-  // "the keyword path grew an upsert while this one kept an update". That is
-  // false, and the history says so: 85afb1c0 (COMMS-AUDIT 2026-07-10) changed
-  // BOTH from `.update` to `.upsert` in the same commit, and no revision of this
-  // file has ever had one shape in one path and the other shape in the other.
-  // The real reason for the helper is smaller and true: the two paths must make
-  // the same partial-failure judgement (attempt every write, then decide), and
-  // that judgement is subtle enough — STOP needs EITHER gate, START needs BOTH —
-  // that maintaining it twice is how it would come apart. One copy, one test.
+  // Suppression is the safe direction, so the two directions differ when the
+  // receiving studio cannot be resolved:
+  //   • opt-OUT: applies to EVERY contact with that number (unscoped), logged
+  //     structurally. Dropping a person's "stop marketing" is worse than
+  //     over-reaching into another tenant's marketing list.
+  //   • opt-IN: not applied (logged by the route). Never widen on a guess.
+  let orgLocationIds = null
+  if (receivingLocationId) {
+    orgLocationIds = await orgLocationIdsFor(db, receivingLocationId)
+  } else if (!optingOut) {
+    return { applied: false, reason: 'no_receiving_studio' }
+  } else {
+    logError('wa-consent', 'Meta opt-out arrived with an unresolved receiving studio; applying it to every contact with the number', { waId })
+  }
+
+  // EVERY matching contact in scope, not the first: the same person is often a
+  // contact at more than one studio of the organisation, and Meta's control is
+  // the person's, not a studio's. Paginated (1,000-row cap) with an explicit order.
+  const PAGE = 1000
+  const contacts = []
+  const failures = []
+  for (let from = 0; ; from += PAGE) {
+    let q = db.from('contacts')
+      .select('id')
+      .or(`wa_phone.eq.${waId},wa_phone.eq.+${waId},phone.eq.${waId},phone.eq.+${waId}`)
+    if (orgLocationIds) q = q.in('location_id', scopeFor(orgLocationIds))
+    const { data: page, error: contactError } = await q.order('id').range(from, from + PAGE - 1)
+    if (contactError) {
+      // Suppress what was read; report the rest. Never drop an opt-out over a failed page.
+      failures.push(`contacts: ${contactError.message}`)
+      break
+    }
+    contacts.push(...(page || []))
+    if ((page || []).length < PAGE) break
+  }
+  if (contacts.length === 0) {
+    return failures.length > 0
+      ? { applied: false, reason: 'contact_read_failed', failures }
+      : { applied: false, reason: 'no_contact' }
+  }
+
+  // Exactly the same writes and the same BAREWRITE.4 shape as the keyword path
+  // above, through one helper, per contact. (See the history note there: the two
+  // paths must make the same partial-failure judgement, STOP needs EITHER gate,
+  // START needs BOTH, and one copy of that is how it stays right.)
   // No locationId: Meta's control is number-level, so it stays contact-wide (R6).
-  const outcome = await applyConsentWrites(db, { contactId: contact.id, optingOut, source: 'meta_user_preferences' })
-  if (!consentTookEffect(optingOut, outcome)) {
+  const tookEffect = []
+  for (const contact of contacts) {
+    const outcome = await applyConsentWrites(db, { contactId: contact.id, optingOut, source: 'meta_user_preferences' })
+    failures.push(...outcome.failures)
+    if (consentTookEffect(optingOut, outcome)) tookEffect.push(contact.id)
+  }
+  if (tookEffect.length === 0) {
     return {
       applied: false,
       reason: optingOut ? 'no_suppression_signal_landed' : 'opt_in_incomplete',
-      failures: outcome.failures,
-      contactId: contact.id,
+      failures,
+      contactId: contacts[0].id,
     }
   }
+  const partial = failures.length > 0 || tookEffect.length < contacts.length
   return {
     applied: true,
     action: consentActionFor(!optingOut),
-    contactId: contact.id,
-    ...(outcome.failures.length > 0 ? { partial: true, failures: outcome.failures } : {}),
+    contactId: tookEffect[0],
+    contactIds: tookEffect,
+    ...(partial ? { partial: true, failures } : {}),
   }
 }

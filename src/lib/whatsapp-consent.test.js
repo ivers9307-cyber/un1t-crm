@@ -10,6 +10,8 @@
 // when present. These tests pin the upsert + the unchanged behaviour of
 // the denormalised contacts.wa_status write and the consent_log audit.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+vi.mock('./log', async (importOriginal) => ({ ...(await importOriginal()), logError: vi.fn() }))
+import { logError } from './log'
 import { applyWhatsappConsentKeyword, applyMetaUserPreference, consentAckText } from './whatsapp-consent.js'
 
 vi.mock('./whatsapp', () => ({
@@ -29,7 +31,7 @@ import { sendTextMessage } from './whatsapp'
 // contact_location_preferences is modelled as a set of `contact|location` keys:
 // an ignoreDuplicates upsert returns the row only when it CREATED it, and an
 // update returns the rows it matched (a zero-row UPDATE is not an error).
-function stubDb({ writes, failOn = {}, studioRows = [], location = null, locationError = null, inScopes = [] }) {
+function stubDb({ writes, failOn = {}, studioRows = [], location = null, locationError = null, inScopes = [], contacts = [{ id: 'c1' }] }) {
   const rowsAt = new Set(studioRows)
   const errorFor = (table, op) => {
     const msg = failOn[`${table}.${op}`] ?? failOn[table]
@@ -41,6 +43,7 @@ function stubDb({ writes, failOn = {}, studioRows = [], location = null, locatio
       const run = () => {
         if (q.op === 'select') {
           if (table === 'locations') return { data: locationError ? null : location, error: locationError }
+          if (table === 'contacts') return failOn['contacts.select'] ? { data: null, error: { message: failOn['contacts.select'] } } : { data: q.range ? contacts.slice(q.range[0], q.range[1] + 1) : contacts, error: null }
           return { data: [{ id: 'c1' }], error: null }
         }
         const entry = { table, op: q.op, filters: q.filters }
@@ -73,6 +76,8 @@ function stubDb({ writes, failOn = {}, studioRows = [], location = null, locatio
         or() { return q },
         in(col, ids) { inScopes.push([table, col, ids]); return q },
         neq() { return q },
+        order() { return q },
+        range(from, to) { q.range = [from, to]; return q },
         limit() { return q },
         maybeSingle() { return Promise.resolve(run()) },
         then(resolve, reject) { return Promise.resolve(run()).then(resolve, reject) },
@@ -322,10 +327,54 @@ describe('applyMetaUserPreference — same upsert semantics', () => {
     expect(inScopes).toEqual([['contacts', 'location_id', ['loc1']]])
   })
 
-  it('with no receiving studio it touches nothing', async () => {
+  it('an opt-OUT reaches EVERY matching contact in the organisation, not the first', async () => {
+    const writes = []
+    const db = stubDb({ writes, contacts: [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }] })
+    const r = await applyMetaUserPreference(db, { wa_id: '353871234567', value: 'stop' }, 'loc1')
+    expect(r).toMatchObject({ applied: true, action: 'opt_out', contactIds: ['c1', 'c2', 'c3'] })
+    expect(writes.filter((w) => w.table === 'contact_preferences').map((w) => w.row.contact_id)).toEqual(['c1', 'c2', 'c3'])
+    expect(writes.filter((w) => w.table === 'contact_location_preferences').map((w) => w.filters.contact_id)).toEqual(['c1', 'c2', 'c3'])
+  })
+
+  it('paginates past the 1,000-row cap', async () => {
+    const writes = []
+    const many = Array.from({ length: 1001 }, (_, i) => ({ id: `c${i}` }))
+    const r = await applyMetaUserPreference(stubDb({ writes, contacts: many }), { wa_id: '353871234567', value: 'stop' }, 'loc1')
+    expect(r.contactIds).toHaveLength(1001)
+    expect(writes.filter((w) => w.table === 'contact_preferences')).toHaveLength(1001)
+  })
+
+  it('one contact failing entirely does not drop the others: applied, partial, failures named', async () => {
+    const writes = []
+    // 'contacts' + 'contact_preferences' down for every contact => nothing lands anywhere
+    const none = await applyMetaUserPreference(stubDb({ writes: [], failOn: { contacts: 'down', contact_preferences: 'down' }, contacts: [{ id: 'c1' }, { id: 'c2' }] }), { wa_id: '353871234567', value: 'stop' }, 'loc1')
+    expect(none).toMatchObject({ applied: false, reason: 'no_suppression_signal_landed' })
+    const some = await applyMetaUserPreference(stubDb({ writes, failOn: { contacts: 'blip' }, contacts: [{ id: 'c1' }, { id: 'c2' }] }), { wa_id: '353871234567', value: 'stop' }, 'loc1')
+    expect(some).toMatchObject({ applied: true, partial: true, contactIds: ['c1', 'c2'] })
+  })
+
+  it('a failed contact read applies nothing and says so (never "no contact")', async () => {
+    const writes = []
+    const r = await applyMetaUserPreference(stubDb({ writes, failOn: { 'contacts.select': 'timeout' } }), { wa_id: '353871234567', value: 'stop' }, 'loc1')
+    expect(r).toMatchObject({ applied: false, reason: 'contact_read_failed' })
+    expect(writes).toEqual([])
+  })
+
+  it('an opt-OUT with an UNRESOLVED studio is applied to every contact with the number (unscoped) and logged', async () => {
     const writes = []
     const inScopes = []
-    const r = await applyMetaUserPreference(stubDb({ writes, inScopes }), { wa_id: '353871234567', value: 'stop' })
+    const db = stubDb({ writes, inScopes, contacts: [{ id: 'c1' }, { id: 'other-org' }] })
+    const r = await applyMetaUserPreference(db, { wa_id: '353871234567', value: 'stop' })
+    expect(r).toMatchObject({ applied: true, action: 'opt_out', contactIds: ['c1', 'other-org'] })
+    expect(inScopes).toEqual([]) // no location filter at all
+    expect(writes.filter((w) => w.table === 'contact_preferences')).toHaveLength(2)
+    expect(logError).toHaveBeenCalledWith('wa-consent', expect.stringContaining('unresolved receiving studio'), expect.objectContaining({ waId: '353871234567' }))
+  })
+
+  it('an opt-IN with an unresolved studio is NOT applied: nothing read, nothing written', async () => {
+    const writes = []
+    const inScopes = []
+    const r = await applyMetaUserPreference(stubDb({ writes, inScopes }), { wa_id: '353871234567', value: 'resume' })
     expect(r).toMatchObject({ applied: false, reason: 'no_receiving_studio' })
     expect(writes).toEqual([])
     expect(inScopes).toEqual([])
@@ -470,13 +519,17 @@ describe('WAORGNUMBER.3 — the keyword writes the thread studio\'s row', () => 
     expect(r).toEqual({ applied: true, action: 'opt_out' })
     // The three consent writes, then the ack's two thread writes.
     expect(writes.map((w) => `${w.table}.${w.op}`)).toEqual([
-      'contact_preferences.upsert', 'contacts.update', 'consent_log.insert',
+      'contact_preferences.upsert', 'contact_location_preferences.update', 'contacts.update', 'consent_log.insert',
       'whatsapp_messages.insert', 'whatsapp_conversations.update',
     ])
     expect(writes[0].row).toMatchObject({ contact_id: 'c1', whatsapp_marketing: false })
     expect(writes[0].opts).toEqual({ onConflict: 'contact_id' })
-    expect(writes[1].patch).toEqual({ wa_status: 'opted_out' })
-    expect(writes[2].row).not.toHaveProperty('location_id')
+    // R17 — every studio row of the contact is closed too (rows still true only).
+    expect(writes[1].patch).toMatchObject({ whatsapp_marketing: false })
+    expect(writes[1].filters).toMatchObject({ contact_id: 'c1', whatsapp_marketing: true })
+    expect(writes[1].filters).not.toHaveProperty('location_id')
+    expect(writes[2].patch).toEqual({ wa_status: 'opted_out' })
+    expect(writes[3].row).not.toHaveProperty('location_id')
     expect(sendTextMessage).toHaveBeenCalledWith('353871234567', expect.stringContaining('unsubscribed'), expect.anything())
   })
 
@@ -490,14 +543,38 @@ describe('WAORGNUMBER.3 — the keyword writes the thread studio\'s row', () => 
     expect(writes.some((w) => w.table === 'contact_preferences' || w.table === 'contacts')).toBe(false)
   })
 
-  it('a failed create still attempts the update (one failed write never costs another)', async () => {
+  it('a failed create still attempts the update; when the update lands the create error is not a failure', async () => {
     const writes = []
     const r = await keywordAt(stubDb({
       writes, studioRows: ['c1|loc-hatch'], failOn: { 'contact_location_preferences.upsert': 'deadlock detected' }, location: hatch,
     }), 'stop')
     expect(writes.find((w) => w.table === 'contact_location_preferences' && w.op === 'update')).toBeDefined()
-    expect(r).toMatchObject({ applied: true, action: 'opt_out', partial: true })
+    // End state is correct (the row is closed): clean apply, no partial, no failure to report.
+    expect(r).toEqual({ applied: true, action: 'opt_out' })
     expect(sendTextMessage).toHaveBeenCalled()
+  })
+
+  it('a failed create AND a failed update: both are reported and the STOP is refused', async () => {
+    const writes = []
+    const r = await keywordAt(stubDb({
+      writes, failOn: { contact_location_preferences: 'down' }, location: hatch,
+    }), 'stop')
+    expect(r).toMatchObject({ applied: false, reason: 'no_suppression_signal_landed' })
+    expect(r.failures.join(' ')).toContain('(create)')
+    expect(r.failures.join(' ')).toContain('contact_location_preferences.whatsapp_marketing')
+  })
+
+  it('contact-wide STOP: a failed studio-rows write is counted in failures (partial) but does not refuse the STOP', async () => {
+    const writes = []
+    const r = await keywordAt(stubDb({ writes, failOn: { 'contact_location_preferences.update': 'timeout' } }), 'stop', null)
+    expect(r).toMatchObject({ applied: true, action: 'opt_out', partial: true })
+    expect(r.failures.join(' ')).toContain('all studios')
+  })
+
+  it('contact-wide START never re-opens a studio row', async () => {
+    const writes = []
+    await keywordAt(stubDb({ writes }), 'start', null)
+    expect(writes.some((w) => w.table === 'contact_location_preferences')).toBe(false)
   })
 
   it('START whose update touches no row is not acknowledged', async () => {

@@ -130,7 +130,8 @@ export async function POST(request) {
           // separate from STOP keywords. Best-effort per entry; never throws out.
           // WAORGNUMBER.3 (R6) — the preference arrives on ONE number; the contact
           // lookup is scoped to that number's organisation. An unroutable number
-          // resolves to no studio and applies nothing (logged below).
+          // resolves to no studio: an opt-out then applies to every contact with
+          // the number, an opt-in applies nothing (logged below).
           let prefStudio = null
           try {
             const owner = classifyInboundOwner(await resolveWhatsAppNumberByPhoneNumberId(change.value?.metadata?.phone_number_id))
@@ -140,6 +141,8 @@ export async function POST(request) {
             try {
               const r = await applyMetaUserPreference(db, pref, prefStudio)
               if (r?.reason === 'no_receiving_studio') {
+                // Only an opt-IN reaches here: an opt-OUT with no studio is applied
+                // to every contact with the number (and logged by the helper).
                 console.error(`[wa-webhook] user_preferences ${pref?.value} NOT applied — phone_number_id ${change.value?.metadata?.phone_number_id || '(missing)'} resolves to no studio`)
               }
               // BAREWRITE.4 — `applied: false` is the ordinary answer for an
@@ -611,13 +614,17 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // Consent keywords — the broadcast footer promises "Reply STOP to
   // Unsubscribe", so honour an exact UNSUBSCRIBE/STOP or START text reply
   // (the list lives in parseConsentKeyword; CANCEL/END/QUIT are NOT opt-outs
-  // since STOPWORDS.1 and fall through to the agent below): flip
-  // whatsapp_marketing + wa_status, write the consent_log audit row,
-  // and acknowledge in-thread. The helper never throws, and the webhook still
-  // 200s either way (Meta disables a subscription on non-2xx) — but a REFUSED
-  // opt-out is not a non-event: it means the customer asked to stop and is
-  // still in every marketing audience, with no acknowledgement sent. Say so at
-  // error level rather than discarding the result, which is what let the
+  // since STOPWORDS.1 and fall through to the agent below). WAORGNUMBER.3: the
+  // keyword acts at the thread's STUDIO only — that studio's
+  // contact_location_preferences.whatsapp_marketing plus a consent_log row
+  // naming it (a START also lifts a historic wa_status 'opted_out'). Only with
+  // no studio does it flip contact_preferences.whatsapp_marketing +
+  // contacts.wa_status contact-wide (and a contact-wide STOP also closes every
+  // studio row). Either way it acknowledges in-thread. The helper never throws,
+  // and the webhook still 200s either way (Meta disables a subscription on
+  // non-2xx) — but a REFUSED keyword is not a non-event: the customer asked to
+  // stop (or resume) and nothing changed, with no acknowledgement sent. Say so
+  // at error level rather than discarding the result, which is what let the
   // never-firing catch inside the helper hide for so long.
   // Unknown senders (no contact row) are skipped.
   if (messageType === 'text' && contact?.id) {
@@ -635,7 +642,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
         keyword,
       })
       if (!consent?.applied) {
-        console.error(`[wa-webhook] ${keyword.toUpperCase()} from contact ${contact.id} was NOT applied (${consent?.reason || 'unknown'}) — the contact is still in marketing audiences and got no acknowledgement: ${(consent?.failures || []).join('; ') || 'no detail'}`)
+        console.error(`[wa-webhook] ${keyword.toUpperCase()} from contact ${contact.id} was NOT applied (${consent?.reason || 'unknown'}) — their WhatsApp marketing consent is unchanged (a STOP has not taken effect) and they got no acknowledgement: ${(consent?.failures || []).join('; ') || 'no detail'}`)
       } else if (consent.partial) {
         // BAREWRITE.4 — a PARTIAL opt-out is applied (at least one suppression
         // gate landed, which is why the customer was acknowledged) but it is

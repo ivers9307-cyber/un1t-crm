@@ -308,18 +308,19 @@ function consentDb({ contact, writes, contacts, inScopes = [] }) {
               : { neq: (_c, self) => Promise.resolve({ data: Object.keys(LOCS).filter((l) => LOCS[l] === val && l !== self).map((id) => ({ id })), error: null }) },
           }
         }
+        const page = (ids) => {
+          const rows = contacts ? (ids ? contacts.filter((r) => ids.includes(r.location_id)) : contacts) : (contact ? [contact] : [])
+          return { order: () => ({ range: () => Promise.resolve({ data: rows, error: null }) }) }
+        }
         return {
           or: () => ({
-            in: (_c, ids) => {
-              inScopes.push(ids)
-              const rows = contacts ? contacts.filter((r) => ids.includes(r.location_id)) : (contact ? [contact] : [])
-              return { limit: () => Promise.resolve({ data: rows, error: null }) }
-            },
+            in: (_c, ids) => { inScopes.push(ids); return page(ids) },
+            ...page(null), // unscoped: no .in()
           }),
         }
       },
       upsert: (row) => { writes.push([table, row]); return Promise.resolve({ error: null }) },
-      update: (patch) => { writes.push([table, patch]); return { eq: () => Promise.resolve({ error: null }) } },
+      update: (patch) => { writes.push([table, patch]); const r = { eq: () => r, then: (ok, bad) => Promise.resolve({ error: null }).then(ok, bad) }; return r },
       insert: (row) => { writes.push([table, row]); return Promise.resolve({ error: null }) },
     }),
   }
@@ -334,6 +335,8 @@ describe('applyMetaUserPreference', () => {
     expect(writes).toEqual([
       // Upserted by contact_id so a contact with no preferences row still opts out.
       ['contact_preferences', expect.objectContaining({ contact_id: 'c1', whatsapp_marketing: false })],
+      // R17 — a contact-wide opt-out closes every studio row too.
+      ['contact_location_preferences', expect.objectContaining({ whatsapp_marketing: false })],
       ['contacts', { wa_status: 'opted_out' }],
       ['consent_log', expect.objectContaining({ action: 'opt_out', source: 'meta_user_preferences' })],
     ])
@@ -362,19 +365,26 @@ describe('applyMetaUserPreference', () => {
     expect(r).toMatchObject({ applied: true, action: 'opt_out', contactId: 'sibling-contact' })
     expect(writes).toEqual([
       ['contact_preferences', expect.objectContaining({ contact_id: 'sibling-contact', whatsapp_marketing: false })],
+      ['contact_location_preferences', expect.objectContaining({ whatsapp_marketing: false })],
       ['contacts', { wa_status: 'opted_out' }],
       ['consent_log', expect.objectContaining({ source: 'meta_user_preferences' })],
     ])
-    expect(writes.some(([t]) => t === 'contact_location_preferences')).toBe(false)
+    // contact-wide: never a studio-scoped upsert (the all-studios CLOSE is the update above)
+    expect(writes.some(([t, row]) => t === 'contact_location_preferences' && row?.location_id)).toBe(false)
   })
-  it('no receiving studio → nothing is touched (never an unscoped lookup)', async () => {
+  it('no receiving studio: an opt-OUT still applies (unscoped, suppression is the safe direction)', async () => {
     const writes = []
     const inScopes = []
     const db = consentDb({ writes, inScopes, contact: { id: 'c1' } })
     const r = await applyMetaUserPreference(db, { wa_id: '353871234567', value: 'stop' })
+    expect(r).toMatchObject({ applied: true, action: 'opt_out', contactId: 'c1' })
+    expect(inScopes).toEqual([])
+  })
+  it('no receiving studio: an opt-IN is NOT applied', async () => {
+    const writes = []
+    const r = await applyMetaUserPreference(consentDb({ writes, contact: { id: 'c1' } }), { wa_id: '353871234567', value: 'resume' })
     expect(r).toMatchObject({ applied: false, reason: 'no_receiving_studio' })
     expect(writes).toEqual([])
-    expect(inScopes).toEqual([])
   })
   it('unknown contact / bad value → not applied, no writes', async () => {
     const writes = []
