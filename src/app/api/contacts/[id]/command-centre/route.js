@@ -115,7 +115,10 @@ export async function GET(request, props) {
   // → churnClass → churnScored), minus the person-group activity merge —
   // out of scope here; no migration/new data source either way.
   const churnCtx = arrears.count > 0 ? { pastDueIds: new Set([params.id]) } : {}
-  const churnClass = classifyContact(contact, churnCtx)
+  // An un1t.online overdue is the same 'overdue' class a Glofox past-due
+  // gets, so the label, the null tier and CommandCentre's red chip all follow
+  // from the one existing branch below.
+  const churnClass = un1tBilling.overdue ? 'overdue' : classifyContact(contact, churnCtx)
   const scored = churnClass === 'active' ? scoreMember(contact, Date.now()) : null
   let churnLabel = null
   let churnTier = null
@@ -131,8 +134,6 @@ export async function GET(request, props) {
     churnLabel = 'At risk'
     churnTier = 'low'
   }
-  // An un1t.online overdue reads the same as a Glofox one in the panel.
-  if (un1tBilling.overdue) churnLabel = 'Payment overdue'
 
   // The panel's own shape: only the studios with a past-due, and the EUR sum
   // alone (another currency is never added to it; 0 when no amount is known).

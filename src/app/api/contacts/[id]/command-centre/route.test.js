@@ -317,6 +317,41 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     expect(j.signals.churnTier).toBe('low')
   })
 
+  it('un1t overdue on a Glofox medium-tier contact takes the Glofox overdue class, label and tier; not overdue leaves all three as before', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    // 35 days quiet = an escalated "gone quiet" signal = medium tier.
+    const MEDIUM = {
+      id: 'c1',
+      location_id: 'loc1',
+      name: 'Pat Byrne',
+      glofox_membership_status: 'member',
+      glofox_membership_type: 'time',
+      last_attended_at: new Date(Date.now() - 35 * 86_400_000).toISOString(),
+      total_attended_30d: 0,
+      total_attended_7d: 0,
+      total_noshow_30d: 0,
+    }
+    const seed = () => createServerClient.mockReturnValue(mockDb({
+      contacts: { data: MEDIUM, error: null },
+      activities: { data: [], error: null },
+      event_types: { data: [], error: null },
+    }))
+
+    seed()
+    const before = await (await GET(req(), props)).json()
+    expect(before.signals).toMatchObject({ churnClass: 'active', churnLabel: 'At risk · Medium', churnTier: 'medium' })
+
+    seed()
+    loadUn1tBilling.mockResolvedValue({
+      studios: [{ locationId: 'loc1', locationName: 'Hatch', pastDue: { since: '2026-10-01', amountCents: 4500, currency: 'EUR' } }],
+      overdue: true,
+      arrearsCentsByCurrency: { EUR: 4500 },
+    })
+    const overdue = await (await GET(req(), props)).json()
+    // Exactly what a Glofox "Payment overdue" contact gets (see the PAST_DUE test).
+    expect(overdue.signals).toMatchObject({ churnClass: 'overdue', churnLabel: 'Payment overdue', churnTier: null })
+  })
+
   it('?scope=drawer adds notes, sequences, wa window and permissions', async () => {
     getCurrentUser.mockResolvedValue(USER)
     const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
