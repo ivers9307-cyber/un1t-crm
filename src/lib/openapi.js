@@ -10849,6 +10849,57 @@ registry.registerPath({
   },
 })
 
+// UN1TWRITE.14 — the staff un1t.online class list, book and cancel.
+const Un1tStaffGate = {
+  400: { description: 'Writes off at the studio, or the contact has no un1t.online account there', content: { 'application/json': { schema: ErrorResponse } } },
+  401: { description: 'Unauthorised', content: { 'application/json': { schema: ErrorResponse } } },
+  403: { description: 'No access to the booking studio', content: { 'application/json': { schema: ErrorResponse } } },
+  404: { description: 'Contact not in the studio\'s organisation (or, on cancel, not their booking)', content: { 'application/json': { schema: ErrorResponse } } },
+  503: { description: 'Settings or mirror unreadable; nothing sent', content: { 'application/json': { schema: ErrorResponse } } },
+}
+registry.registerPath({
+  method: 'get',
+  path: '/api/un1t-online/classes',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Staff: un1t.online classes, credits and upcoming bookings for a contact',
+  description: 'Scheduled classes at the booking studio in the next 14 days (spots left for staff, community classes labelled), the contact\'s credits from the mirror and their upcoming bookings there. Access is judged on the booking studio.',
+  request: { query: z.object({ location_id: uuidLike, contact_id: uuidLike }) },
+  responses: { 200: { description: '{ classes, credits, upcoming, spots_note }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } }, ...Un1tStaffGate },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/un1t-online/classes/book',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Staff: book a contact into a un1t.online class',
+  description: 'The book primitive with origin staff. done 200 (already booked is success); refused 409 with un1t.online\'s words; budget spent 429; unclear 502. maxDuration 120.',
+  request: { body: { content: { 'application/json': { schema: z.object({ contact_id: uuidLike, location_id: uuidLike, event_id: z.string() }) } } } },
+  responses: {
+    200: { description: '{ un1t_booking_id, already_booked, message, ledger_id }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    409: { description: 'un1t.online refused (its words), a permission missing, or an attempt in flight', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'un1t.online is busy', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'un1t.online did not answer clearly', content: { 'application/json': { schema: ErrorResponse } } },
+    ...Un1tStaffGate,
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/un1t-online/classes/cancel',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Staff: cancel a contact\'s un1t.online booking',
+  description: 'The booking must be this contact\'s at this studio in the mirror (404 otherwise). The cancel primitive with origin staff, an empty body. Same answers as book. maxDuration 120.',
+  request: { body: { content: { 'application/json': { schema: z.object({ contact_id: uuidLike, location_id: uuidLike, booking_id: z.string() }) } } } },
+  responses: {
+    200: { description: '{ un1t_booking_id, ledger_id }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    409: { description: 'un1t.online refused (its words), already happened, or an attempt in flight', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'un1t.online is busy', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'un1t.online did not answer clearly', content: { 'application/json': { schema: ErrorResponse } } },
+    ...Un1tStaffGate,
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
