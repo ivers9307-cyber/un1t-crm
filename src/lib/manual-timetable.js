@@ -35,11 +35,13 @@ export function isUn1tEventId(id) {
   return typeof id === 'string' && id.startsWith(UN1T_EVENT_PREFIX)
 }
 // UN1TWRITE.16 — the bare un1t.online event id behind a 'un1t:' id (what the
-// write primitives send), or null for any other id.
+// write primitives send), or null for any other id. A malformed bare id
+// (spaces, punctuation) is refused, never tidied: the queue row and the
+// booked class must name the same event.
 export function un1tEventIdOf(id) {
   if (!isUn1tEventId(id)) return null
-  const bare = id.slice(UN1T_EVENT_PREFIX.length).trim()
-  return bare || null
+  const bare = id.slice(UN1T_EVENT_PREFIX.length)
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(bare) ? bare : null
 }
 
 // The one question the processor, the approve route and the card copy ask:

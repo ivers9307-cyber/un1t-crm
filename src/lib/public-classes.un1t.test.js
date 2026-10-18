@@ -63,6 +63,9 @@ describe('un1tEventIdOf', () => {
   it('strips the un1t: prefix and refuses anything else', () => {
     expect(un1tEventIdOf('un1t:7f3a-1')).toBe('7f3a-1')
     expect(un1tEventIdOf('un1t:')).toBeNull()
+    expect(un1tEventIdOf('un1t:   ')).toBeNull()
+    expect(un1tEventIdOf('un1t: abc')).toBeNull()
+    expect(un1tEventIdOf('UN1T:abc')).toBeNull()
     expect(un1tEventIdOf('manual-20261020-0615-strength')).toBeNull()
     expect(un1tEventIdOf('7f3a-1')).toBeNull()
     expect(un1tEventIdOf(null)).toBeNull()
