@@ -304,6 +304,36 @@ describe('createUn1tClient', () => {
     expect(fetchImpl.calls.length).toBe(0)
   })
 
+  describe('listAll requireList', () => {
+    it.each([['null', null], ['missing', undefined], ['a string', 'abc'], ['an object', { id: 'x' }]])(
+      'strict mode throws Un1tApiError when data is %s',
+      async (_name, data) => {
+        const { client } = setup([res(200, { success: true, data, pagination: { total: 1, page: 1, pages: 1, pageSize: 100 } })])
+        const err = await client.listAll('/users/u1/bookings', { requireList: true }).catch((e) => e)
+        expect(err).toBeInstanceOf(Un1tApiError)
+        expect(err).toMatchObject({ status: 200, code: 'not_a_list' })
+        expect(err.message).not.toContain('abc')
+      },
+    )
+
+    it('strict mode also refuses a later page that is not a list', async () => {
+      const { client } = setup([page(rowsOf(1, 100), 1, 2, 150), res(200, { success: true, data: null, pagination: { total: 150, page: 2, pages: 2, pageSize: 100 } })])
+      await expect(client.listAll('/bookings', { requireList: true })).rejects.toMatchObject({ code: 'not_a_list' })
+    })
+
+    it('strict mode passes a real list, and an empty one, through', async () => {
+      const { client } = setup([page(rowsOf(1, 3), 1, 1, 3), page([], 1, 1, 0)])
+      expect((await client.listAll('/bookings', { requireList: true })).rows).toHaveLength(3)
+      expect((await client.listAll('/bookings', { requireList: true })).rows).toEqual([])
+    })
+
+    it('default mode is unchanged: null or missing data is no rows', async () => {
+      const { client } = setup([res(200, { success: true, data: null }), res(200, { success: true })])
+      expect((await client.listAll('/bookings')).rows).toEqual([])
+      expect((await client.listAll('/bookings')).rows).toEqual([])
+    })
+  })
+
   it('exports the rate-limit header helpers', () => {
     const h = new Headers({ 'x-ratelimit-reset': '4', 'x-ratelimit-remaining': '0' })
     expect(headerNumber(h, 'x-ratelimit-remaining')).toBe(0)

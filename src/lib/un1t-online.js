@@ -172,7 +172,10 @@ export function createUn1tClient({
     return body.data
   }
 
-  async function listAll(path) {
+  // `requireList: true` (opt-in; the sync leaves it off) makes a page whose
+  // `data` is not an array an Un1tApiError instead of "no rows". Only reachable
+  // after get() accepted a 2xx, so the status is 200; the message names no body.
+  async function listAll(path, { requireList = false } = {}) {
     const sep = path.includes('?') ? '&' : '?'
     const rows = []
     const seen = new Set()
@@ -186,6 +189,9 @@ export function createUn1tClient({
         break
       }
       const body = await get(`${path}${sep}page=${p}&pageSize=${PAGE_SIZE}`)
+      if (requireList && !Array.isArray(body.data)) {
+        throw new Un1tApiError('un1t.online sent a page whose data is not a list (HTTP 200)', { status: 200, code: 'not_a_list' })
+      }
       const pagination = body.pagination || {}
       pages = Number(pagination.pages) || 1
       total = Number(pagination.total) || 0

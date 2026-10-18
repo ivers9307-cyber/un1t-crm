@@ -81,7 +81,7 @@ export async function openUn1tMemberReader(db, locationId, { clientFactory = cre
     studioId: String(conn.externalAccountId),
     getOne: (path) => client.getOne(path),
     // Every page is one request, so every page takes one slot.
-    listAll: (path) => client.listAll(path),
+    listAll: (path) => client.listAll(path, { requireList: true }),
   }
 }
 
@@ -109,6 +109,11 @@ export async function fetchLiveUn1tBookings(db, { locationId, un1tUserId } = {},
   if (!reader.ok) return { ok: false, reason: reader.reason }
   try {
     const { rows, total, truncated } = await reader.listAll(`/users/${encodeURIComponent(String(un1tUserId))}/bookings`)
+    // Belt and braces behind requireList: a row that is not an object is not a booking.
+    if (!Array.isArray(rows) || !rows.every((r) => r && typeof r === 'object' && !Array.isArray(r))) {
+      logWarn(LOG_MODULE, 'un1t.online sent bookings that are not a list of objects', { locationId, op: 'bookings', status: null })
+      return { ok: false, reason: 'read_failed' }
+    }
     if (truncated) {
       logWarn(LOG_MODULE, 'live bookings read hit the page cap', { locationId, op: 'bookings', maxPages: UN1T_READ_MAX_PAGES, read: rows.length, total })
       return { ok: true, rows, truncated: true }

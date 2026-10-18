@@ -6,16 +6,16 @@ import { Un1tBudgetSpent } from './un1t-member-read'
 
 /**
  * Stand-in for the object openUn1tMemberReader resolves. getOne routes by
- * path: .../bookings, .../ledger, .../history answer the matching list.
+ * path: .../bookings, .../ledger, .../history answer the matching list;
+ * listAll answers the same list as { rows, total, truncated } (`truncated` option).
  *
  * `fail` makes every read fail: a number is an HTTP status (Un1tApiError),
  * 'budget' is a spent budget (Un1tBudgetSpent), anything else a network fault.
  * `calls` records each path asked for.
  */
-export function fakeUn1tReader({ bookings = [], ledger = [], history = [], fail = null, studioId = 'studio-test-1' } = {}) {
+export function fakeUn1tReader({ bookings = [], ledger = [], history = [], fail = null, truncated = false, studioId = 'studio-test-1' } = {}) {
   const calls = []
-  const getOne = vi.fn(async (path) => {
-    calls.push(path)
+  const answer = (path) => {
     if (fail === 'budget') throw new Un1tBudgetSpent('un1t read budget spent')
     if (typeof fail === 'number') throw new Un1tApiError(`un1t.online answered HTTP ${fail}`, { status: fail })
     if (fail) throw new Un1tApiError('un1t.online request failed', { status: 0 })
@@ -23,8 +23,18 @@ export function fakeUn1tReader({ bookings = [], ledger = [], history = [], fail 
     if (/\/ledger(\?|$)/.test(path)) return ledger
     if (/\/history(\?|$)/.test(path)) return history
     throw new Un1tApiError('unmocked fake path', { status: 404 })
+  }
+  const getOne = vi.fn(async (path) => {
+    calls.push(path)
+    return answer(path)
   })
-  return { ok: true, studioId, getOne, calls }
+  // The paged read, as the real reader shapes it: { rows, total, truncated }.
+  const listAll = vi.fn(async (path) => {
+    calls.push(path)
+    const rows = answer(path)
+    return { rows, total: rows.length, truncated }
+  })
+  return { ok: true, studioId, getOne, listAll, calls }
 }
 
 // Same shapes as the real classes in @/lib/un1t-online-write (importing the

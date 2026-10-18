@@ -195,8 +195,17 @@ describe('fetchLiveUn1tBookings', () => {
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
-  it('a body that is not a list is read_failed', async () => {
-    const fetchImpl = fetchSeq([ok({ nope: true })])
+  it.each([['an object', { nope: true }], ['null', null], ['missing', undefined], ['a string', 'abc']])(
+    'data that is %s is read_failed, never an empty list',
+    async (_name, data) => {
+      const fetchImpl = fetchSeq([res(200, { success: true, data })])
+      const out = await fetchLiveUn1tBookings(db, { locationId: LOC, un1tUserId: 'u1' }, { fetchImpl, sleep })
+      expect(out).toEqual({ ok: false, reason: 'read_failed' })
+    },
+  )
+
+  it('a list holding something that is not a booking object is read_failed', async () => {
+    const fetchImpl = fetchSeq([ok([{ id: 'b1' }, 'x'])])
     const out = await fetchLiveUn1tBookings(db, { locationId: LOC, un1tUserId: 'u1' }, { fetchImpl, sleep })
     expect(out).toEqual({ ok: false, reason: 'read_failed' })
   })
@@ -247,11 +256,14 @@ describe('test helpers', () => {
   it('fakeUn1tReader routes by path, records calls and can fail', async () => {
     const r = fakeUn1tReader({ bookings: [{ id: 'b1' }], ledger: [{ id: 'l1' }], history: [{ id: 'h1' }] })
     expect(await r.getOne('/users/u1/bookings')).toEqual([{ id: 'b1' }])
+    expect(await r.listAll('/users/u1/bookings')).toEqual({ rows: [{ id: 'b1' }], total: 1, truncated: false })
     expect(await r.getOne('/users/u1/ledger')).toEqual([{ id: 'l1' }])
     expect(await r.getOne('/users/u1/history')).toEqual([{ id: 'h1' }])
-    expect(r.calls).toEqual(['/users/u1/bookings', '/users/u1/ledger', '/users/u1/history'])
+    expect(r.calls).toEqual(['/users/u1/bookings', '/users/u1/bookings', '/users/u1/ledger', '/users/u1/history'])
     await expect(fakeUn1tReader({ fail: 503 }).getOne('/users/u1/bookings')).rejects.toMatchObject({ status: 503 })
     await expect(fakeUn1tReader({ fail: 'budget' }).getOne('/users/u1/bookings')).rejects.toBeInstanceOf(Un1tBudgetSpent)
+    await expect(fakeUn1tReader({ fail: 503 }).listAll('/users/u1/bookings')).rejects.toMatchObject({ status: 503 })
+    expect(await fakeUn1tReader({ bookings: [{ id: 'b1' }], truncated: true }).listAll('/users/u1/bookings')).toMatchObject({ truncated: true })
   })
 
   it('fakeUn1tWrite keys factories by real module path and records calls', async () => {
