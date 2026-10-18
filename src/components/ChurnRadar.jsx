@@ -329,6 +329,10 @@ export default function ChurnRadar() {
           label={`Quarantine (${quarantine ? quarantine.length : summary.quarantine})`} />
       </div>
 
+      {tab === 'radar' && radar?.pinned?.length > 0 && (
+        <PaymentFailedBlock rows={radar.pinned} onOpen={() => setTab('overdue')} />
+      )}
+
       {tab === 'radar' && (
         <RadarList radar={radar?.radar || []} busy={busy} onAction={runAction}
           onRefresh={runRefresh} snoozed={summary.snoozed} />
@@ -898,6 +902,31 @@ function OverdueList({ data, busy, onAction, onRefresh }) {
         products are under <strong>Unpaid charges</strong>.
       </p>
       {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
+    </div>
+  )
+}
+
+// UN1TRADAR.3 — at a un1t.online studio, members whose payment failed sit
+// above the At-risk list (the Overdue tab keeps their full rows and actions).
+function PaymentFailedBlock({ rows, onOpen }) {
+  return (
+    <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3">
+      <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-red-800">
+        <CreditCard size={14} /> Payment failed
+      </p>
+      <ul className="space-y-1">
+        {rows.map((m) => (
+          <li key={m.contactId}>
+            <button type="button" onClick={onOpen}
+              className="flex w-full flex-wrap items-center justify-between gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-red-100">
+              <span className="font-medium text-un1t-text">{m.name}</span>
+              <span className="text-xs text-red-700">
+                {rowAmountLabel(m)}{m.daysOverdue != null ? ` · ${m.daysOverdue}d overdue` : ''}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }

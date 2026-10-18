@@ -136,8 +136,9 @@ export async function radarMembers(db, locationId, { nowMs = Date.now() } = {}) 
   const subs = await listFreshLiveSubs(db, locationId)
   const input = await loadRadarInputs(db, locationId, nowMs, subs)
   const out = shapeRadarMembers(input)
+  // the pinned count is logged by loadRadar ('un1t radar pinned'), which builds the block
   logInfo('churn-radar', 'un1t radar built', {
-    locationId, members: out.members, packHolders: out.packHolders, unlinkedClients: out.unlinkedClients, pinned: 0,
+    locationId, members: out.members, packHolders: out.packHolders, unlinkedClients: out.unlinkedClients,
   })
   return out.rows
 }

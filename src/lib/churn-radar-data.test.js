@@ -847,6 +847,65 @@ describe('UN1TRADAR.2 arrears at a un1t studio', () => {
     expect(await loadUnpaidCharges(un1tDb(), FIX_LOC, FIX_NOW)).toEqual({ charges: [], summary: { total: null, totalValueCents: null, unavailable: true } })
     expect(await loadAwaitingAuth(un1tDb(), FIX_LOC, FIX_NOW)).toEqual({ charges: [], summary: { total: null, totalValueCents: null, unavailable: true } })
   })
+
+  // UN1TRADAR.3 — the pinned "Payment failed" block
+  const withExtra = (fold, ids) => {
+    for (const id of ids) {
+      const agg = { amountCents: 9000, count: 1, oldestDueAt: new Date(FIX_NOW - 2 * DAYMS).toISOString() }
+      fold.ids.add(id); fold.byId.set(id, { ...agg }); fold.membershipById.set(id, { ...agg })
+      fold.profileById.set(id, { glofox_membership_status: 'member', glofox_membership_type: 'time', glofox_membership_plan: 'Hatch plan', last_attended_at: null })
+    }
+    return fold
+  }
+
+  it('pinned only with pinArrears; Glofox result has no pinned key', async () => {
+    const glofox = await loadRadar(glofoxFixtureDb(), FIX_LOC, FIX_NOW)
+    expect(Object.hasOwn(glofox, 'pinned')).toBe(false)
+    asUn1t()
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    const out = await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)
+    expect(out.pinned.map((r) => r.contactId).sort()).toEqual(['c-dual', 'c-hatch'])
+    expect(out.pinned.find((r) => r.contactId === 'c-dual')).toMatchObject({ membershipPlan: 'Hatch plan', amountEstimated: true })
+  })
+
+  it('pinned holds a cancelling past-due member once', async () => {
+    asUn1t()
+    fakeReads.radarMembers.mockResolvedValueOnce([
+      { id: 'c-hatch', name: 'Hatchling', glofox_membership_status: 'member', glofox_membership_type: 'time', glofox_membership_plan: 'Hatch plan', glofox_membership_state: 'active', cancel_at_period_end: true, last_attended_at: new Date(FIX_NOW - DAYMS).toISOString() },
+    ])
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    const out = await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)
+    expect(out.pinned.filter((r) => r.contactId === 'c-hatch')).toHaveLength(1)
+    // past due wins classification: overdue, never on the At-risk list as cancelling
+    expect(out.radar.find((r) => r.contactId === 'c-hatch')).toBeUndefined()
+    expect(out.summary.overdue).toBe(2)
+  })
+
+  it('pinned excludes a dismissed contact and a snoozed one', async () => {
+    asUn1t()
+    // c11 is dismissed and c10 snoozed in the fixture's action log
+    fakeReads.radarPastDue.mockResolvedValueOnce(withExtra(un1tFold(), ['c10', 'c11']))
+    const out = await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)
+    const ids = out.pinned.map((r) => r.contactId)
+    expect(ids).not.toContain('c11')
+    expect(ids).not.toContain('c10')
+  })
+
+  it('summary counts are identical with and without pinned', async () => {
+    asUn1t()
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    const withPin = await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)
+    // same studio, an adapter that does not pin
+    const { pinArrears: _p, ...noPin } = fakeReads
+    expect(_p).toBe(true)
+    fakeReads.pinArrears = false
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    const without = await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)
+    fakeReads.pinArrears = true
+    expect(Object.hasOwn(without, 'pinned')).toBe(false)
+    expect(withPin.summary).toEqual(without.summary)
+    void noPin
+  })
 })
 
 describe('buildOverdue amountEstimated', () => {

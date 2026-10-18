@@ -20,6 +20,7 @@ import { nettedOutByRetry, isMembershipInvoice } from '@/lib/glofox-arrears'
 import { combineGroupActivity, rollupByPerson } from '@/lib/person-rollup'
 import { selectAll } from '@/lib/select-all'
 import { radarReadsFor } from '@/lib/membership/reads/index'
+import { logInfo } from '@/lib/log'
 
 // Columns the scorer + UI need from contacts. glofox_membership_type
 // and trial_credits_remaining drive the live-membership gate (a class
@@ -46,13 +47,22 @@ const CONTACTING_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'outre
  * An unreadable source key throws MEMBERSHIP_SOURCE_UNREADABLE.
  */
 export async function radarReads(db, locationId, keys) {
-  const { reads } = await radarReadsFor(db, locationId)
+  const { reads, pinArrears } = await radarReadsFor(db, locationId)
   const out = {}
   for (const key of keys) {
     if (typeof reads[key] !== 'function') throw new Error(`radar read missing: ${key}`)
     out[key] = reads[key]
   }
+  // UN1TRADAR.3 — the adapter's flag rides along (a boolean, never a read)
+  out.pinArrears = pinArrears === true
   return out
+}
+
+// UN1TRADAR.2/3 — a fold's `profileById` (a un1t studio's own plan and last
+// attended) laid over contact rows; the name stays the contact's.
+function withProfiles(contacts, pastDue) {
+  const profileById = pastDue?.profileById instanceof Map ? pastDue.profileById : null
+  return profileById ? contacts.map((c) => (profileById.has(c.id) ? { ...c, ...profileById.get(c.id) } : c)) : contacts
 }
 
 // Actions that triage a quarantine record — once a member carries one
@@ -426,6 +436,23 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   // unpaid charges, awaiting authorization) reports null for it, never 0; an
   // estimated overdue total says so. Both keys are absent for Glofox.
   const unavailable = new Set(pastDue.unavailable || [])
+  // UN1TRADAR.3 — at a studio whose adapter pins arrears (un1t.online), the
+  // past-due members' Overdue rows also go above the At-risk list ("Payment
+  // failed"). Dismissed and snoozed contacts are left out; the summary counts
+  // do not change (they are the Overdue tab's).
+  let pinned
+  if (r.pinArrears) {
+    const nowSnoozed = (id) => {
+      const snz = snoozedUntil.get(id)
+      return Boolean(snz && new Date(snz).getTime() > nowMs)
+    }
+    const ids = [...overdueById.keys()].filter((id) => !dismissed.has(id) && !nowSnoozed(id))
+    const contacts = withProfiles(await fetchContactsByIds(db, ids), pastDue)
+    pinned = buildOverdue(contacts, nowMs, { pastDueById: overdueById })
+      .map((row) => ({ ...row, lastContacted: lastContacted.get(row.contactId) || null }))
+    logInfo('churn-radar', 'un1t radar pinned', { locationId, pinned: pinned.length })
+  }
+
   const finalSummary = {
     ...summary, quarantine: quarantineOpen, snoozed, recovery,
     overdue: overdueCount, overdueValueCents,
@@ -448,7 +475,7 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
     .maybeSingle()
   finalSummary.trend = computeTrend(finalSummary, snapshot || null)
 
-  return { radar, summary: finalSummary }
+  return pinned ? { radar, summary: finalSummary, pinned } : { radar, summary: finalSummary }
 }
 
 /**
@@ -519,9 +546,7 @@ async function loadArrearsRows(db, locationId, nowMs) {
   // UN1TRADAR.2 — at a un1t studio the plan and last attended come from the
   // studio's own rows (profileById): a dual-studio member's contact row is
   // Stillorgan's. The name stays the contact's.
-  const profileById = pastDue.profileById instanceof Map ? pastDue.profileById : null
-  const contacts = (await fetchContactsByIds(db, ids))
-    .map((c) => (profileById?.has(c.id) ? { ...c, ...profileById.get(c.id) } : c))
+  const contacts = withProfiles(await fetchContactsByIds(db, ids), pastDue)
 
   // Actions are newest-first — first hit per contact is the latest.
   const lastContacted = new Map()

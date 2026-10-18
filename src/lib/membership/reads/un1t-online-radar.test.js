@@ -224,7 +224,7 @@ describe('radarMembers', () => {
   it('build log carries counts and locationId only', async () => {
     const { db } = makeDb(seed())
     await radarMembers(db, HATCH, { nowMs: NOW })
-    expect(logInfo).toHaveBeenCalledWith('churn-radar', 'un1t radar built', { locationId: HATCH, members: 1, packHolders: 0, unlinkedClients: 0, pinned: 0 })
+    expect(logInfo).toHaveBeenCalledWith('churn-radar', 'un1t radar built', { locationId: HATCH, members: 1, packHolders: 0, unlinkedClients: 0 })
   })
 
   it('is registered on un1tOnlineReads', () => {
