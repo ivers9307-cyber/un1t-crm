@@ -1021,14 +1021,20 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                           {conversation.is_blocked ? 'Blocked — unblock' : 'Block'}
                         </button>
                         {(moveTargets || []).map((t) => (
+                          // WAMOVENUMBER.1 — a studio with no WhatsApp number
+                          // switched on could not answer the thread: shown,
+                          // disabled, saying why (the route would 409).
                           <button
                             key={t.id}
                             type="button"
                             role="menuitem"
+                            disabled={t.whatsapp === false}
+                            title={t.whatsapp === false ? `${t.name} has no WhatsApp number switched on, so it could not answer this conversation.` : undefined}
                             onClick={() => { setShowMoreMenu(false); moveTo(conversation, t) }}
-                            className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40 transition-colors"
+                            className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40 transition-colors disabled:text-un1t-muted disabled:hover:bg-transparent disabled:cursor-not-allowed"
                           >
                             Move to {t.name}
+                            {t.whatsapp === false && <span className="block text-[11px] text-un1t-muted">No WhatsApp number switched on</span>}
                           </button>
                         ))}
                         {isUnknown ? (canUseWebControls && (
