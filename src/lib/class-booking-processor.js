@@ -14,7 +14,7 @@ import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { hasBookableMembership, personRowsForContact, corroborated, reusableSibling, electWriteAccount, chunkIds } from '@/lib/person-accounts'
 import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
 import { sendCtwaConversion, sendWebsiteConversion } from '@/lib/meta-capi'
-import { isManualEventId } from '@/lib/manual-timetable'
+import { isHandBookedEventId } from '@/lib/manual-timetable'
 import { logWarn } from '@/lib/log'
 import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 
@@ -213,8 +213,9 @@ export async function processClassBookingRequest(db, request) {
     // MANUALFUNNEL.1 — a class off a hand-written timetable (a studio with no
     // Glofox: Hatch Street books on its own platform) is never booked from
     // here. It goes straight to staff, who create the account and the booking
-    // by hand and then approve the card to record it.
-    if (isManualEventId(request.glofox_event_id)) return routeToReview(db, request, 'manual_booking')
+    // by hand and then approve the card to record it. HATCHSTART.1: so is a
+    // class off a un1t.online studio's synced timetable ('un1t:' ids).
+    if (isHandBookedEventId(request.glofox_event_id)) return routeToReview(db, request, 'manual_booking')
     await setStatus(db, request.id, { status: 'failed', last_error: 'glofox_not_configured' })
     return { outcome: 'failed', detail: 'glofox_not_configured' }
   }

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
+  isHandBookedEventId,
+  isUn1tEventId,
+  classFunnelMinNoticeHours,
+  UN1T_EVENT_PREFIX,
   parseManualTimetable,
   manualClassOccurrences,
   manualTimetableConfigFromBlocks,
@@ -179,5 +183,27 @@ describe('isManualEventId', () => {
     expect(isManualEventId('manual-20261003-0900-conditioning')).toBe(true)
     expect(isManualEventId('66f1a2b3c4d5e6f7a8b9c0d1')).toBe(false)
     expect(isManualEventId(null)).toBe(false)
+  })
+})
+
+// HATCHSTART.1 — which classes staff book by hand.
+describe('isHandBookedEventId', () => {
+  it('is true for a manual or a un1t.online class, false for a Glofox id or junk', () => {
+    expect(UN1T_EVENT_PREFIX).toBe('un1t:')
+    expect(isHandBookedEventId('manual-2026-10-19-0600-0')).toBe(true)
+    expect(isHandBookedEventId('un1t:7c9e6679-7425-40de-944b-e07fc1f90ae7')).toBe(true)
+    expect(isUn1tEventId('un1t:x')).toBe(true)
+    expect(isHandBookedEventId('5f0c2a1b2c3d4e5f6a7b8c9d')).toBe(false)
+    expect(isHandBookedEventId(null)).toBe(false)
+    expect(isHandBookedEventId(42)).toBe(false)
+  })
+})
+describe('classFunnelMinNoticeHours', () => {
+  it('reads the block with or without a timetable; default 12, capped at 168', () => {
+    expect(classFunnelMinNoticeHours([{ type: 'class_funnel', min_notice_hours: 3 }])).toBe(3)
+    expect(classFunnelMinNoticeHours([{ type: 'class_funnel', min_notice_hours: '0' }])).toBe(0)
+    expect(classFunnelMinNoticeHours([{ type: 'class_funnel', min_notice_hours: '' }])).toBe(12)
+    expect(classFunnelMinNoticeHours([{ type: 'class_funnel', min_notice_hours: 999 }])).toBe(168)
+    expect(classFunnelMinNoticeHours(null)).toBe(12)
   })
 })

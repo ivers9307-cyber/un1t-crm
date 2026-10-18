@@ -270,11 +270,15 @@ describe('TZ.7 America/New_York follows New York across DST', () => {
   describe('readPublicClasses uses the location\'s zone', () => {
     // A tolerant db: locations answers the studio's zone (or fails),
     // landing_page_settings answers the timetable block.
+    // HATCHSTART.1: the membership-source read (not a un1t.online studio
+    // here) is a different select on locations and never fails.
     function studioDb({ zone = NY, zoneError = null, blocks = null } = {}) {
       const b = {
         _t: null,
-        from(t) { b._t = t; return b }, select() { return b }, eq() { return b },
+        _cols: null,
+        from(t) { b._t = t; return b }, select(c) { b._cols = c; return b }, eq() { return b },
         maybeSingle: async () => {
+          if (b._t === 'locations' && b._cols === 'membership_source, settings') return { data: { membership_source: 'none', settings: {} }, error: null }
           if (b._t === 'locations') return zoneError ? { data: null, error: zoneError } : { data: { id: 'NYC', timezone: zone }, error: null }
           if (b._t === 'landing_page_settings') return { data: { blocks }, error: null }
           return { data: null, error: null }

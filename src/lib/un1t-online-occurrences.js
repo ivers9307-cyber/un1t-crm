@@ -18,11 +18,14 @@
 //     result as informational: a projection failure must not fail the run,
 //     whose membership and contact data are the primary payload.
 
+import { UN1T_EVENT_PREFIX } from './manual-timetable'
+
 const CHUNK = 200
 // The existing-cancelled read puts every id in the URL's IN-list, so it takes
 // smaller chunks than the upsert (whose ids travel in the body).
 const READ_CHUNK = 100
-const PREFIX = 'un1t:'
+// The same prefix the public class list mints for these classes (HATCHSTART.1).
+const PREFIX = UN1T_EVENT_PREFIX
 const SOURCE_PLATFORM = 'un1t_online'
 const MAX_ERROR_LEN = 500
 
