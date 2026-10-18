@@ -90,6 +90,13 @@ export function outcomeLine(status, item, executed, notified = null, plannedEndD
   if (status === 'actioned' && item.kind === 'event_move') {
     return { tone: 'ok', text: eventMoveDoneLine({ hasThread, notified: executed?.notified === true }) }
   }
+  // UN1TWRITE.8 — a refund is recorded, never moved by the CRM; nothing went to Glofox.
+  if (status === 'actioned' && item.kind === 'refund_request') {
+    return { tone: 'ok', text: 'Recorded. The refund itself is done by hand in the un1t.online owner console.' }
+  }
+  if (status === 'declined' && item.kind === 'refund_request') {
+    return { tone: 'neutral', text: 'Declined. The customer was not messaged: Mia already answered them about the refund.' }
+  }
   if (status === 'actioned') {
     return { tone: 'ok', text: hasThread ? 'Done — executed in Glofox and the customer was told in-thread.' : 'Done — executed in Glofox and the customer was notified.' }
   }

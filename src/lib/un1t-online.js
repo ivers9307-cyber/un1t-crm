@@ -17,7 +17,7 @@
 
 import { logWarn } from './log'
 
-const DEFAULT_BASE_URL = 'https://api.un1t.online'
+export const DEFAULT_BASE_URL = 'https://api.un1t.online'
 const PAGE_SIZE = 100
 const MAX_RETRIES = 3
 // The longest single rate-limit / Retry-After wait the client will sit through.
@@ -41,7 +41,7 @@ export class Un1tApiError extends Error {
   }
 }
 
-function headerNumber(headers, name) {
+export function headerNumber(headers, name) {
   const raw = headers?.get?.(name)
   if (raw == null || raw === '') return null
   const n = Number(raw)
@@ -49,7 +49,7 @@ function headerNumber(headers, name) {
 }
 
 /** ms to wait for a rate-limit window to reset, or null if the response did not say. */
-function resetWaitMs(headers) {
+export function resetWaitMs(headers) {
   const reset = headerNumber(headers, 'x-ratelimit-reset')
   return reset == null ? null : (Math.max(0, reset) + 1) * 1000
 }
@@ -60,6 +60,9 @@ export function createUn1tClient({
   fetchImpl = fetch,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   maxPages = 50,
+  // Runs immediately before every HTTP request (retries included). A throw
+  // stops that request and surfaces to the caller; no fetch is made.
+  beforeRequest = async () => {},
 } = {}) {
   const root = String(baseUrl).replace(/\/+$/, '')
   const counters = { requests: 0, waitedMs: 0, retries: 0 }
@@ -90,6 +93,7 @@ export function createUn1tClient({
         await wait(ms, 429)
       }
 
+      await beforeRequest()
       counters.requests += 1
       let response
       try {
@@ -162,6 +166,12 @@ export function createUn1tClient({
     return body.data
   }
 
+  // One GET of a single resource; returns body.data. Never pages.
+  async function getOne(path) {
+    const body = await get(path)
+    return body.data
+  }
+
   async function listAll(path) {
     const sep = path.includes('?') ? '&' : '?'
     const rows = []
@@ -195,5 +205,5 @@ export function createUn1tClient({
     return { ...counters }
   }
 
-  return { getSelf, listAll, stats }
+  return { getSelf, listAll, getOne, stats }
 }

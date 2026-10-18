@@ -38,6 +38,12 @@ export async function POST(request, { params }) {
     return NextResponse.json({ success: false, error: 'Not decided yet' }, { status: 400 })
   }
 
+  // UN1TWRITE.8 — nothing to suggest for a record-only refund_request (Mia's
+  // refund_request_text already answered); skip the settings read and the model.
+  if (row.kind === 'refund_request') {
+    return NextResponse.json({ success: true, suggestion: null })
+  }
+
   // MIAORG.1 — the studio's resolved Mia settings (DEFAULTS <- org <-
   // studio; `enabled` is the studio's own). Unreadable = no suggestion.
   const resolved = await resolveAgentSettings(db, row.location_id)

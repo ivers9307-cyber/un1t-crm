@@ -2,7 +2,7 @@
 // nothing here reaches the real api.un1t.online.
 
 import { describe, it, expect, vi } from 'vitest'
-import { createUn1tClient, Un1tAuthError, Un1tApiError } from './un1t-online'
+import { createUn1tClient, Un1tAuthError, Un1tApiError, headerNumber, resetWaitMs } from './un1t-online'
 import { logWarn } from './log'
 
 vi.mock('./log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
@@ -50,7 +50,7 @@ describe('createUn1tClient', () => {
     await client.listAll('/bookings')
     expect(fetchImpl.calls.length).toBe(2)
     for (const c of fetchImpl.calls) expect(c.method).toBe('GET')
-    expect(Object.keys(createUn1tClient({ token: 't' }))).toEqual(['getSelf', 'listAll', 'stats'])
+    expect(Object.keys(createUn1tClient({ token: 't' }))).toEqual(['getSelf', 'listAll', 'getOne', 'stats'])
   })
 
   it('getSelf returns the data of GET /api-token', async () => {
@@ -272,6 +272,44 @@ describe('createUn1tClient', () => {
     const { client } = setup([res(401, {})])
     const err = await client.getSelf().catch((e) => e)
     expect(err.message).not.toContain('Bearer')
+  })
+
+  it('getOne returns body.data of one GET and never pages', async () => {
+    const booking = { id: 'bk1', event_id: 'ev1' }
+    const { client, fetchImpl } = setup([res(200, { success: true, data: booking })])
+    await expect(client.getOne('/bookings/bk1')).resolves.toEqual(booking)
+    expect(fetchImpl.calls.length).toBe(1)
+    expect(fetchImpl.calls[0].method).toBe('GET')
+    expect(fetchImpl.calls[0].url).toBe('https://api.un1t.online/bookings/bk1')
+    expect(fetchImpl.calls[0].url).not.toContain('page=')
+  })
+
+  it('beforeRequest runs once before every HTTP request, retries included', async () => {
+    const beforeRequest = vi.fn(async () => {})
+    const { client, fetchImpl } = setup([
+      res(503, {}),
+      res(200, { success: true, data: { id: 's' } }),
+    ], { beforeRequest })
+    await client.getSelf()
+    expect(fetchImpl.calls.length).toBe(2)
+    expect(beforeRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it('a beforeRequest that throws stops the request and surfaces the error', async () => {
+    const boom = new Error('budget spent')
+    const beforeRequest = vi.fn(async () => { throw boom })
+    const { client, fetchImpl } = setup([res(200, { success: true, data: {} })], { beforeRequest })
+    await expect(client.getSelf()).rejects.toBe(boom)
+    await expect(client.getOne('/bookings/bk1')).rejects.toBe(boom)
+    expect(fetchImpl.calls.length).toBe(0)
+  })
+
+  it('exports the rate-limit header helpers', () => {
+    const h = new Headers({ 'x-ratelimit-reset': '4', 'x-ratelimit-remaining': '0' })
+    expect(headerNumber(h, 'x-ratelimit-remaining')).toBe(0)
+    expect(headerNumber(h, 'x-missing')).toBeNull()
+    expect(resetWaitMs(h)).toBe(5000)
+    expect(resetWaitMs(new Headers())).toBeNull()
   })
 
   it('has no write helper anywhere in the module', async () => {

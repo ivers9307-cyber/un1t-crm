@@ -99,3 +99,45 @@ describe('CANCEL-FORM.6 — membership drafts', () => {
     expect(getNextSteps('cancellation', 'saved', ctx)[0].draft).not.toMatch(/—/)
   })
 })
+
+// UN1TWRITE.8 — a refund_request is record-only: the refund is done by hand in
+// the un1t.online owner console, and Mia already answered the customer.
+describe('getNextSteps — refund_request', () => {
+  it('getNextSteps(\'refund_request\', \'approved\') says the refund is done by hand in un1t.online', () => {
+    const steps = getNextSteps('refund_request', 'approved', ctx)
+    expect(steps).toHaveLength(1)
+    expect(steps[0].type).toBe('note')
+    expect(steps[0].label).toBe('Recorded. The refund itself is done by hand in the un1t.online owner console.')
+    expect(steps[0].draft).toBeUndefined()
+  })
+
+  it("the stored outcome is 'actioned', and it gets the same step", () => {
+    expect(getNextSteps('refund_request', 'actioned', ctx)).toEqual(getNextSteps('refund_request', 'approved', ctx))
+  })
+
+  it('declined has no customer draft and no step at all', () => {
+    expect(getNextSteps('refund_request', 'declined', ctx)).toEqual([])
+    expect(getNextSteps('refund_request', 'declined', { ...ctx, reason: 'other' })).toEqual([])
+  })
+
+  it('no refund step carries an em dash', () => {
+    for (const outcome of ['approved', 'actioned', 'declined']) {
+      for (const s of getNextSteps('refund_request', outcome, ctx)) {
+        expect(`${s.label} ${s.draft || ''}`).not.toMatch(/—/)
+      }
+    }
+  })
+})
+
+// UN1TWRITE.8 fix 1 — declining a refund card prefills NOTHING in either composer.
+describe('buildDeclineDraft — refund_request', () => {
+  it("is the empty string for any reason: no customer draft, no em dash", () => {
+    for (const reason of ['other', 'not_eligible', 'class_full', undefined]) {
+      expect(buildDeclineDraft('refund_request', reason, ctx)).toBe('')
+    }
+  })
+  it('every other kind still gets a draft (the carve-out is refund_request only)', () => {
+    expect(buildDeclineDraft('mystery_kind', 'other', ctx)).not.toBe('')
+    expect(buildDeclineDraft('pause', 'other', ctx)).not.toBe('')
+  })
+})

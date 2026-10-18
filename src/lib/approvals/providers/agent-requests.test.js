@@ -180,3 +180,25 @@ describe('agentRequestSubtitle — event_move', () => {
     expect(s).toBe('Move Ann Example from Hyrox Sim, Sun 18 Oct to Hyrox Sim, Sun 25 Oct 09:30 · €10 difference to collect')
   })
 })
+
+// UN1TWRITE.8 — a record-only refund card on the /approvals list.
+describe('agentRequestsProvider — refund_request', () => {
+  const refundRow = {
+    id: 'rf1', kind: 'refund_request', created_at: '2026-10-17T10:00:00Z', location_id: 'loc1',
+    details: { provider: 'un1t_online', reason: 'double_payment', amount_cents: 1500, currency: 'EUR', record_only: true },
+    contact: { id: 'ct9', name: 'Aoife Test' },
+  }
+
+  it("the approvals list labels refund_request 'Refund request'", async () => {
+    const { items } = await agentRequestsProvider.fetchPending(stubDb([refundRow]), { activeLocation: { id: 'loc1' } })
+    expect(items).toHaveLength(1)
+    expect(items[0].title).toBe('Refund request — Aoife Test')
+    expect(items[0].kind).toBe('refund_request')
+  })
+
+  it('the subtitle names the reason and the amount, and falls back when neither is known', () => {
+    expect(agentRequestSubtitle(refundRow)).toBe('Double payment · €15')
+    expect(agentRequestSubtitle({ kind: 'refund_request', details: { reason: 'member_request' } })).toBe('Member request')
+    expect(agentRequestSubtitle({ kind: 'refund_request', details: {} })).toBe('Refund request')
+  })
+})

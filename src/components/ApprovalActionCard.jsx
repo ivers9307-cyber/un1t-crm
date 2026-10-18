@@ -94,7 +94,10 @@ export default function ApprovalActionCard({
       if (data.customer_notified) setNotified(data.customer_notified)
       fetchSuggestion() // fire-and-forget — never blocks the decision UX
       if (status === 'declined') {
-        onPrefillComposer?.(buildDeclineDraft(request.kind, reason, ctx))
+        // An empty draft (a refund_request: Mia already answered) must not
+        // overwrite what staff are typing.
+        const draft = buildDeclineDraft(request.kind, reason, ctx)
+        if (draft) onPrefillComposer?.(draft)
       }
     } catch {
       setError('Network error — try again')
@@ -201,7 +204,10 @@ export default function ApprovalActionCard({
         {(steps.length > 0 || suggestion || suggestLoading) && (
           <div className="flex flex-wrap items-center gap-1.5 mt-2 pt-2 border-t border-un1t-border/50">
             <span className="text-[10px] uppercase tracking-wide text-un1t-subtle w-full">Next steps</span>
-            {steps.map(step => (
+            {steps.map(step => step.type === 'note' ? (
+              // UN1TWRITE.8 — plain guidance for staff (a refund done by hand), not an action.
+              <span key={step.id} className="text-xs text-un1t-muted">{step.label}</span>
+            ) : (
               <button key={step.id} type="button" onClick={() => runStep(step)}
                 className={`px-2.5 py-1 rounded-full text-xs font-medium bg-un1t-bg border border-un1t-border text-un1t-text hover:bg-un1t-border/30 ${step.type === 'book' ? 'hidden xl:inline-flex' : ''}`}>
                 {step.label}

@@ -12,6 +12,7 @@ import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetc
 import { parseManualTimetable, manualClassOccurrences, manualTimetableConfigFromBlocks } from '@/lib/manual-timetable'
 import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
+import { parseHiddenKeywords } from '@/lib/class-keywords'
 
 // The exact Intl options the Dublin formatters used, so a Dublin studio's
 // day/time/label text is byte-identical (TZ.7).
@@ -50,10 +51,10 @@ export function shapePublicClass(e, zone = DEFAULT_TZ) {
 // — keeps free-trial leads out of e.g. ELITES / members-only sessions. Applied
 // inside readPublicClasses so it governs BOTH the public picker AND the booking
 // enqueue (both go through here): a hidden class can be neither seen nor booked.
-export function parseHiddenKeywords(raw) {
-  const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\n,]/) : []
-  return arr.map((s) => String(s || '').trim().toLowerCase()).filter(Boolean)
-}
+// parseHiddenKeywords lives in ./class-keywords (a light module, so the
+// un1t.online settings reader does not import Glofox); re-exported here so
+// every existing import keeps working.
+export { parseHiddenKeywords }
 export function isClassHidden(name, keywords) {
   if (!keywords || !keywords.length) return false
   const n = String(name || '').toLowerCase()

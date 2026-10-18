@@ -191,6 +191,10 @@ const MESSAGES_TABLE_BY_CHANNEL = {
  * @returns {Promise<{ text: string }|{ error: string }>}
  */
 export async function composeApprovalSuggestion(db, row, { signal } = {}) {
+  // UN1TWRITE.8 — a refund_request is record-only and Mia's refund_request_text
+  // already answered the customer; a "Mia suggests" draft would be a second,
+  // unrequested word about money. Nothing is read and no model is called.
+  if (row?.kind === 'refund_request') return { error: 'no_suggestion_for_kind' }
   const messagesTable = MESSAGES_TABLE_BY_CHANNEL[row?.channel]
   if (!messagesTable) return { error: 'unknown_channel' }
   if (!row?.location_id) return { error: 'no_location' }

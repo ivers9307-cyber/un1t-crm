@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 import { logWarn } from '@/lib/log'
-import { un1tOnlineReads, freshCutoff } from './un1t-online'
+import { un1tOnlineReads, freshCutoff, listLedgerTrials } from './un1t-online'
 
 const HATCH = 'loc-hatch'
 const STILLORGAN = 'loc-stillorgan'
@@ -19,9 +19,9 @@ const SYNCED = '2026-10-17T11:50:00.000Z' // the last sync run stamps every row 
 function makeDb(seed = {}, { fail = [] } = {}) {
   const log = []
   function builder(table) {
-    const s = { filters: [], order: null, desc: false, range: null, cols: null, opts: null }
+    const s = { filters: [], order: null, orders: [], desc: false, range: null, cols: null, opts: null }
     const run = () => {
-      log.push({ table, cols: s.cols, filters: s.filters, order: s.order, range: s.range, opts: s.opts })
+      log.push({ table, cols: s.cols, filters: s.filters, order: s.order, orders: s.orders, range: s.range, opts: s.opts })
       if (fail.includes(table)) return { data: null, count: null, error: { message: `${table} boom` } }
       let rows = (seed[table] || []).filter((r) => s.filters.every(([k, c, v]) => {
         if (k === 'eq') return r[c] === v
@@ -32,7 +32,15 @@ function makeDb(seed = {}, { fail = [] } = {}) {
         return true
       }))
       if (s.opts?.head) return { data: null, count: rows.length, error: null }
-      if (s.order) rows = [...rows].sort((a, b) => (s.desc ? -1 : 1) * String(a[s.order]).localeCompare(String(b[s.order])))
+      if (s.order) {
+        rows = [...rows].sort((a, b) => {
+          for (const c of s.orders) {
+            const d = String(a[c]).localeCompare(String(b[c]))
+            if (d !== 0) return (s.desc ? -1 : 1) * d
+          }
+          return 0
+        })
+      }
       if (s.range) rows = rows.slice(s.range[0], s.range[1] + 1)
       return { data: rows.map((r) => ({ ...r })), count: null, error: null }
     }
@@ -43,7 +51,7 @@ function makeDb(seed = {}, { fail = [] } = {}) {
       gt(c, v) { s.filters.push(['gt', c, v]); return api },
       gte(c, v) { s.filters.push(['gte', c, v]); return api },
       lt(c, v) { s.filters.push(['lt', c, v]); return api },
-      order(c, o) { s.order = c; s.desc = o?.ascending === false; return api },
+      order(c, o) { if (s.order == null) { s.order = c; s.desc = o?.ascending === false } s.orders.push(c); return api },
       range(a, b) { s.range = [a, b]; return api },
       then(res, rej) { return Promise.resolve().then(run).then(res, rej) },
     }
@@ -754,7 +762,7 @@ describe('pipelineInputs and trialEligibility', () => {
       const { db, log } = makeDb(world())
       await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
       const tables = new Set(log.map((q) => q.table))
-      expect([...tables].sort()).toEqual(['contact_memberships', 'contacts', 'un1t_bookings', 'un1t_clients', 'un1t_events', 'un1t_products', 'un1t_subscriptions', 'un1t_transactions'])
+      expect([...tables].sort()).toEqual(['contact_memberships', 'contacts', 'un1t_bookings', 'un1t_clients', 'un1t_events', 'un1t_products', 'un1t_subscriptions', 'un1t_transactions', 'un1t_write_events'])
       for (const q of log.filter((x) => x.table !== 'contacts')) {
         expect(q.filters, q.table).toContainEqual(['eq', 'location_id', HATCH])
       }
@@ -886,9 +894,71 @@ describe('pipelineInputs and trialEligibility', () => {
       expect(subCols.some((c) => c.split(', ').includes('remote_created_at'))).toBe(true)
     })
 
-    it('does not query un1t_write_events', async () => {
-      const { db, log } = makeDb(world())
-      await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+    it('counts only done ledger rows as a trial (a sent, unknown or refused row is not on the board)', async () => {
+      // 3 credits on the account: with the trial known, they are trial credits (status 'trial')
+      const base = {
+        un1t_transactions: [], contact_memberships: [], un1t_bookings: [],
+        un1t_clients: [client({ credit_balance: 3 }), client({ un1t_user_id: 'u2', contact_id: 'c2' })],
+      }
+      const trialOf = (stage) => ledger({ un1t_user_id: 'u1', stage, method: 'free_checkout' })
+      for (const stage of ['sent', 'unknown', 'refused']) {
+        const { db } = makeDb(world({ ...base, un1t_write_events: [trialOf(stage)] }))
+        const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+        expect(out.data.snapshots.get('c1').glofox_membership_status, stage).toBe('lead')
+      }
+      const { db, log } = makeDb(world({ ...base, un1t_write_events: [trialOf('done')] }))
+      const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      const one = out.data.snapshots.get('c1')
+      expect(one.glofox_membership_status).toBe('trial')
+      expect(one.joined_at).toBe('2026-10-16T09:00:00Z')
+      // only the person who took it, and the read asks for done rows only
+      expect(out.data.snapshots.get('c2').glofox_membership_status).toBe('member')
+      const q = log.find((x) => x.table === 'un1t_write_events')
+      expect(q.filters).toContainEqual(['in', 'stage', ['done']])
+      expect(q.filters).toContainEqual(['eq', 'location_id', HATCH])
+    })
+
+    it('a done ledger trial reaches the person through ANY of their linked accounts', async () => {
+      const w = world({
+        un1t_clients: [client({ un1t_user_id: 'a1', contact_id: 'c1', credit_balance: 1 }), client({ un1t_user_id: 'a2', contact_id: 'c1', credit_balance: 2 })],
+        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_memberships: [],
+        un1t_write_events: [ledger({ un1t_user_id: 'a2', stage: 'done', method: 'charge' })],
+      })
+      const out = await un1tOnlineReads.pipelineInputs(makeDb(w).db, HATCH, { now: NOW.getTime() })
+      expect(out.data.snapshots.get('c1').glofox_membership_status).toBe('trial')
+    })
+
+    it("a done ledger trial keyed by contact_id (the account not yet mirrored into un1t_clients) is the contact's trial; a sent one is not", async () => {
+      const w = (stage) => world({
+        un1t_clients: [client({ credit_balance: 3 })],
+        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_memberships: [],
+        un1t_write_events: [ledger({ un1t_user_id: 'brand-new-account', contact_id: 'c1', stage })],
+      })
+      const done = await un1tOnlineReads.pipelineInputs(makeDb(w('done')).db, HATCH, { now: NOW.getTime() })
+      expect(done.data.snapshots.get('c1').glofox_membership_status).toBe('trial')
+      const sent = await un1tOnlineReads.pipelineInputs(makeDb(w('sent')).db, HATCH, { now: NOW.getTime() })
+      expect(sent.data.snapshots.get('c1').glofox_membership_status).toBe('lead')
+    })
+
+    it('a done ledger row reaching a person by both user id and contact id is counted once', async () => {
+      const w = world({
+        un1t_clients: [client({ credit_balance: 3 })],
+        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_memberships: [],
+        un1t_write_events: [ledger({ un1t_user_id: 'u1', contact_id: 'c1', stage: 'done' })],
+      })
+      const out = await un1tOnlineReads.pipelineInputs(makeDb(w).db, HATCH, { now: NOW.getTime() })
+      expect(out.data.snapshots.get('c1').glofox_membership_status).toBe('trial')
+    })
+
+    it('a failed ledger read fails the run: { success:false }, never a board built without the ledger', async () => {
+      const { db } = makeDb(world(), { fail: ['un1t_write_events'] })
+      expect(await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() }))
+        .toEqual({ success: false, error: 'un1t_write_events boom' })
+    })
+
+    it('a studio with no linked client reads no ledger rows', async () => {
+      const { db, log } = makeDb({})
+      await un1tOnlineReads.pipelineInputs(db, HATCH)
       expect(log.some((q) => q.table === 'un1t_write_events')).toBe(false)
     })
   })
@@ -947,7 +1017,7 @@ describe('pipelineInputs and trialEligibility', () => {
       const { db, log } = makeDb(world({ contact_memberships: [], un1t_subscriptions: [] }))
       expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
       const clientsQ = log.find((q) => q.table === 'un1t_clients')
-      expect(clientsQ.filters).toEqual([['eq', 'location_id', HATCH], ['eq', 'contact_id', 'c1']])
+      expect(clientsQ.filters).toEqual([['eq', 'location_id', HATCH], ['in', 'contact_id', ['c1']]])
     })
 
     it('a trial row with a null un1t_user_id but a matching contact_id denies', async () => {
@@ -1003,11 +1073,268 @@ describe('pipelineInputs and trialEligibility', () => {
       expect(log).toHaveLength(0)
     })
 
-    it('neither read queries un1t_write_events', async () => {
-      const { db, log } = makeDb(world())
-      await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1', contactId: 'c1' })
-      await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
-      expect(log.some((q) => q.table === 'un1t_write_events')).toBe(false)
+    it('counts a sent or unknown ledger row as trial_used (a trial in flight or in doubt is used)', async () => {
+      for (const stage of ['sent', 'unknown', 'done']) {
+        for (const method of ['charge', 'free_checkout']) {
+          const w = world({ un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [], un1t_write_events: [ledger({ un1t_user_id: 'u1', stage, method })] })
+          const out = await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'u1' })
+          expect(out, `${stage} ${method}`).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+        }
+      }
     })
+
+    it('a refused ledger row, another op, another person and another studio do not deny', async () => {
+      const w = world({
+        un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_write_events: [
+          ledger({ un1t_user_id: 'u1', stage: 'refused' }),
+          ledger({ un1t_user_id: 'u1', op: 'book', method: null, target: 'event-1', stage: 'done' }),
+          ledger({ un1t_user_id: 'someone-else', stage: 'done' }),
+          ledger({ un1t_user_id: 'u1', stage: 'done', location_id: STILLORGAN }),
+        ],
+      })
+      expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'u1' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
+    })
+
+    it('finds the ledger trial through the contact\'s other un1t account', async () => {
+      const w = world({
+        un1t_clients: [client({ un1t_user_id: 'a1', contact_id: 'c1' }), client({ un1t_user_id: 'a2', contact_id: 'c1' })],
+        un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_write_events: [ledger({ un1t_user_id: 'a2', stage: 'unknown' })],
+      })
+      const { db, log } = makeDb(w)
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'a1', contactId: 'c1' }))
+        .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+      expect(log.find((q) => q.table === 'un1t_write_events').filters).toContainEqual(['in', 'un1t_user_id', ['a1', 'a2']])
+    })
+
+    it('a CRM-created account not yet mirrored into un1t_clients: a ledger trial keyed by contact_id denies a contactId-only call', async () => {
+      for (const stage of ['done', 'sent', 'unknown']) {
+        const w = world({
+          un1t_clients: [], un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+          un1t_write_events: [ledger({ un1t_user_id: 'brand-new-account', contact_id: 'c1', stage })],
+        })
+        const { db, log } = makeDb(w)
+        expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' }), stage)
+          .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+        const q = log.filter((x) => x.table === 'un1t_write_events').map((x) => x.filters.find((f) => f[1] === 'contact_id'))
+        expect(q).toContainEqual(['in', 'contact_id', ['c1']])
+      }
+      // another contact's unmirrored account does not deny
+      const other = world({
+        un1t_clients: [], un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_write_events: [ledger({ un1t_user_id: 'brand-new-account', contact_id: 'c2', stage: 'done' })],
+      })
+      expect(await un1tOnlineReads.trialEligibility(makeDb(other).db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
+    })
+
+    it("a un1tUserId-only call also finds a ledger trial keyed by that account's contact (a second, unmirrored account)", async () => {
+      const w = world({
+        un1t_clients: [client({ un1t_user_id: 'a1', contact_id: 'c1' })],
+        un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_write_events: [ledger({ un1t_user_id: 'brand-new-account', contact_id: 'c1', stage: 'done' })],
+      })
+      expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'a1' }))
+        .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+    })
+
+    it("a un1tUserId-only call widens to the person's sibling accounts: a trial row on a2 with a NULL contact_id still denies a1", async () => {
+      const siblings = [client({ un1t_user_id: 'a1', contact_id: 'c1' }), client({ un1t_user_id: 'a2', contact_id: 'c1' })]
+      for (const stage of ['done', 'sent', 'unknown']) {
+        const w = world({
+          un1t_clients: siblings, un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+          un1t_write_events: [ledger({ un1t_user_id: 'a2', contact_id: null, stage })],
+        })
+        expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'a1' }), stage)
+          .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+      }
+    })
+
+    it("a un1tUserId-only call reads the sibling account's transactions and subscriptions too", async () => {
+      const siblings = [client({ un1t_user_id: 'a1', contact_id: 'c1' }), client({ un1t_user_id: 'a2', contact_id: 'c1' })]
+      const w = world({
+        un1t_clients: siblings, contact_memberships: [], un1t_write_events: [],
+        un1t_transactions: [ctx({ un1t_user_id: 'a2', contact_id: null })],
+        un1t_subscriptions: [csub({ un1t_user_id: 'a2', contact_id: null, status: 'canceled' })],
+      })
+      const { db, log } = makeDb(w)
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'a1' }))
+        .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used', 'membership_history'] } })
+      expect(log.find((q) => q.table === 'un1t_write_events').filters).toContainEqual(['in', 'un1t_user_id', ['a1', 'a2']])
+    })
+
+    it("a un1tUserId-only call does not widen to another person's accounts", async () => {
+      const w = world({
+        un1t_clients: [client({ un1t_user_id: 'a1', contact_id: 'c1' }), client({ un1t_user_id: 'z', contact_id: 'c2' })],
+        un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_write_events: [ledger({ un1t_user_id: 'z', stage: 'done' })],
+      })
+      expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'a1' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
+    })
+
+    it("a failed read of the account's own un1t_clients row (for its contact) → { success:false }, never eligible", async () => {
+      const { db } = makeDb(world(), { fail: ['un1t_clients'] })
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })).toEqual({ success: false, error: 'un1t_clients boom' })
+    })
+
+    it('a row found by both user id and contact id is one trial (de-duplicated by ledger row)', async () => {
+      const w = world({
+        un1t_clients: [client({ un1t_user_id: 'a1', contact_id: 'c1' })],
+        un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_write_events: [ledger({ un1t_user_id: 'a1', contact_id: 'c1', stage: 'done' })],
+      })
+      const { db } = makeDb(w)
+      const out = await listLedgerTrials(db, HATCH, { un1tUserIds: ['a1'], contactIds: ['c1'] })
+      expect(out.byUser.get('a1')).toHaveLength(1)
+      expect(out.byContact.get('c1')).toHaveLength(1)
+      expect(out.byContact.get('c1')[0]).toBe(out.byUser.get('a1')[0])
+    })
+
+    it('a failed ledger read → { success:false }, never eligible (it does not read as "no trial")', async () => {
+      for (const ids of [{ un1tUserId: 'u1' }, { contactId: 'c1' }, { un1tUserId: 'u1', contactId: 'c1' }]) {
+        const { db } = makeDb(world(), { fail: ['un1t_write_events'] })
+        const out = await un1tOnlineReads.trialEligibility(db, HATCH, ids)
+        expect(out).toEqual({ success: false, error: 'un1t_write_events boom' })
+        expect(out.data).toBeUndefined()
+      }
+    })
+
+    it('reads the ledger with the same studio and person scope as the other tables', async () => {
+      const { db, log } = makeDb(world())
+      await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })
+      const q = log.find((x) => x.table === 'un1t_write_events')
+      expect(q.filters).toContainEqual(['eq', 'location_id', HATCH])
+      expect(q.filters).toContainEqual(['eq', 'op', 'trial'])
+      expect(q.filters).toContainEqual(['in', 'stage', ['done', 'sent', 'unknown']])
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// UN1TWRITE.9 — listLedgerTrials: the ledger's trial rows into A's ledgerTrials seam.
+// ---------------------------------------------------------------------------
+function ledger(over = {}) {
+  return {
+    id: `w-${Math.random().toString(36).slice(2)}`, location_id: HATCH, op: 'trial', un1t_user_id: 'u1', contact_id: null, target: 'trial',
+    stage: 'done', method: 'charge', created_at: '2026-10-16T09:00:00Z', ...over,
+  }
+}
+
+describe('listLedgerTrials', () => {
+  it('reads only op trial rows in done, sent or unknown, paged past 1,000', async () => {
+    const rows = [
+      ...Array.from({ length: 1100 }, (_, i) => ledger({
+        id: `w-${String(i).padStart(5, '0')}`, un1t_user_id: `user-${i}`, stage: ['done', 'sent', 'unknown'][i % 3],
+        method: i % 2 ? 'charge' : 'free_checkout', created_at: `2026-10-01T00:${String(i % 60).padStart(2, '0')}:00Z`,
+      })),
+      ledger({ id: 'w-refused', un1t_user_id: 'refused-user', stage: 'refused' }),
+      ledger({ id: 'w-book', un1t_user_id: 'book-user', op: 'book', method: null, target: 'event-1' }),
+      ledger({ id: 'w-other', un1t_user_id: 'other-studio-user', location_id: STILLORGAN }),
+    ]
+    const { db, log } = makeDb({ un1t_write_events: rows })
+    const out = await listLedgerTrials(db, HATCH)
+    expect(out.ok).toBe(true)
+    expect(out.byUser.size).toBe(1100)
+    expect(out.byUser.has('refused-user')).toBe(false)
+    expect(out.byUser.has('book-user')).toBe(false)
+    expect(out.byUser.has('other-studio-user')).toBe(false)
+
+    const pages = log.filter((q) => q.table === 'un1t_write_events')
+    expect(pages.map((q) => q.range)).toEqual([[0, 999], [1000, 1999]])
+    for (const q of pages) {
+      expect(q.cols).toBe('id, un1t_user_id, contact_id, target, stage, created_at')
+      expect(q.orders[0]).toBe('created_at')
+      expect(q.filters).toContainEqual(['eq', 'location_id', HATCH])
+      expect(q.filters).toContainEqual(['eq', 'op', 'trial'])
+      expect(q.filters).toContainEqual(['in', 'stage', ['done', 'sent', 'unknown']])
+    }
+  })
+
+  it('pages with a unique tie-break after created_at, so equal timestamps never double-count or skip', async () => {
+    const { db, log } = makeDb({ un1t_write_events: [ledger()] })
+    await listLedgerTrials(db, HATCH)
+    expect(log[0].orders).toEqual(['created_at', 'id'])
+  })
+
+  it('shapes each row as { at, product_id, stage } keyed by un1t user; both methods; a person with two rows keeps both', async () => {
+    const { db } = makeDb({
+      un1t_write_events: [
+        ledger({ un1t_user_id: 'u1', target: 'trial', stage: 'unknown', method: 'charge', created_at: '2026-10-10T08:00:00Z' }),
+        ledger({ un1t_user_id: 'u1', target: 'trial', stage: 'done', method: 'free_checkout', created_at: '2026-10-11T08:00:00Z' }),
+        ledger({ un1t_user_id: 'u2', target: 'trial-b', stage: 'sent', method: 'charge', created_at: '2026-10-12T08:00:00Z' }),
+      ],
+    })
+    const out = await listLedgerTrials(db, HATCH)
+    expect(out.byUser.get('u1')).toEqual([
+      { at: '2026-10-10T08:00:00Z', product_id: 'trial', stage: 'unknown' },
+      { at: '2026-10-11T08:00:00Z', product_id: 'trial', stage: 'done' },
+    ])
+    expect(out.byUser.get('u2')).toEqual([{ at: '2026-10-12T08:00:00Z', product_id: 'trial-b', stage: 'sent' }])
+  })
+
+  it('stages narrows the read (the board asks for done only)', async () => {
+    const { db, log } = makeDb({
+      un1t_write_events: [ledger({ un1t_user_id: 'u1', stage: 'done' }), ledger({ un1t_user_id: 'u2', stage: 'sent' })],
+    })
+    const out = await listLedgerTrials(db, HATCH, { stages: ['done'] })
+    expect([...out.byUser.keys()]).toEqual(['u1'])
+    expect(log[0].filters).toContainEqual(['in', 'stage', ['done']])
+  })
+
+  it('un1tUserIds narrows to those people, de-duplicated, in .in() chunks of at most 150', async () => {
+    const ids = Array.from({ length: 320 }, (_, i) => `user-${i}`)
+    const { db, log } = makeDb({ un1t_write_events: [ledger({ un1t_user_id: 'user-300' }), ledger({ un1t_user_id: 'not-asked' })] })
+    const out = await listLedgerTrials(db, HATCH, { un1tUserIds: [...ids, ...ids.slice(0, 10), null, ''] })
+    expect(out.ok).toBe(true)
+    expect([...out.byUser.keys()]).toEqual(['user-300'])
+    const chunks = log.filter((q) => q.table === 'un1t_write_events').map((q) => q.filters.find((f) => f[0] === 'in' && f[1] === 'un1t_user_id')[2])
+    expect(chunks.map((c) => c.length)).toEqual([150, 150, 20])
+    expect(chunks.flat()).toEqual(ids)
+  })
+
+  it('contactIds are read too: chunked at 150, de-duplicated, byContact keyed by contact; a row with both keys is one object in both maps', async () => {
+    const ids = Array.from({ length: 160 }, (_, i) => `contact-${i}`)
+    const { db, log } = makeDb({ un1t_write_events: [
+      ledger({ un1t_user_id: 'new-1', contact_id: 'contact-155' }),
+      ledger({ un1t_user_id: 'u1', contact_id: 'contact-1' }),
+      ledger({ un1t_user_id: 'u9', contact_id: 'not-asked' }),
+    ] })
+    const out = await listLedgerTrials(db, HATCH, { un1tUserIds: ['u1'], contactIds: [...ids, ids[0], null] })
+    expect(out.ok).toBe(true)
+    expect([...out.byContact.keys()].sort()).toEqual(['contact-1', 'contact-155'])
+    expect([...out.byUser.keys()].sort()).toEqual(['new-1', 'u1'])
+    expect(out.byUser.get('u1')[0]).toBe(out.byContact.get('contact-1')[0])
+    const chunks = log.map((q) => q.filters.find((f) => f[0] === 'in' && f[1] === 'contact_id')?.[2]).filter(Boolean)
+    expect(chunks.map((c) => c.length)).toEqual([150, 10])
+  })
+
+  it('contactIds alone narrows to those contacts; an empty contactIds with no user ids is an empty answer; a non-array is refused', async () => {
+    const { db, log } = makeDb({ un1t_write_events: [ledger({ contact_id: 'c1' })] })
+    expect((await listLedgerTrials(db, HATCH, { contactIds: [] })).byUser.size).toBe(0)
+    expect(log).toHaveLength(0)
+    expect(await listLedgerTrials(db, HATCH, { contactIds: 'c1' })).toMatchObject({ ok: false })
+    expect([...(await listLedgerTrials(db, HATCH, { contactIds: ['c1'] })).byContact.keys()]).toEqual(['c1'])
+  })
+
+  it('an empty un1tUserIds list is an empty answer with no query; a non-array is refused, never widened to the studio', async () => {
+    const { db, log } = makeDb({ un1t_write_events: [ledger()] })
+    const empty = await listLedgerTrials(db, HATCH, { un1tUserIds: [] })
+    expect(empty.ok).toBe(true)
+    expect(empty.byUser.size).toBe(0)
+    expect(await listLedgerTrials(db, HATCH, { un1tUserIds: 'u1' })).toMatchObject({ ok: false })
+    expect(log).toHaveLength(0)
+  })
+
+  it('refuses a missing location without querying', async () => {
+    const { db, log } = makeDb({ un1t_write_events: [ledger()] })
+    expect(await listLedgerTrials(db, null)).toMatchObject({ ok: false })
+    expect(log).toHaveLength(0)
+  })
+
+  it('a failed page is { ok:false, error }, never an empty map and never a throw', async () => {
+    const { db } = makeDb({ un1t_write_events: [ledger()] }, { fail: ['un1t_write_events'] })
+    const out = await listLedgerTrials(db, HATCH)
+    expect(out).toEqual({ ok: false, error: 'un1t_write_events boom' })
+    expect(out.byUser).toBeUndefined()
   })
 })
