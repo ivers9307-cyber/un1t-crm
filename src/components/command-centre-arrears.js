@@ -9,6 +9,8 @@
 //   total > 0, a row unreported  -> "€X + amount not reported" / "+ amount not in EUR"
 // With no un1t facts (Stillorgan) the result is exactly the Glofox-only tile.
 
+import { formatMoney } from '@/components/contact/format'
+
 /**
  * How one overdue row's amount counts toward a EUR figure.
  * 'eur' = a positive EUR amount; 'not_eur' = a positive amount in another
@@ -39,7 +41,7 @@ export function arrearsTile(signals, un1tBilling) {
   const flagged = Number(signals?.arrearsCount) > 0 || un1tOverdue
   const note = amountNote(un1tBilling?.amount_not_eur === true)
   const unreported = un1tOverdue && un1tBilling?.amount_unreported === true
-  if (total > 0) return { text: `€${Math.round(total / 100)}${unreported ? ` + ${note}` : ''}`, flagged }
+  if (total > 0) return { text: `${formatMoney(total, 'EUR')}${unreported ? ` + ${note}` : ''}`, flagged }
   if (un1tOverdue) return { text: note, flagged }
   return { text: '€0', flagged }
 }
