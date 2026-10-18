@@ -256,7 +256,9 @@ async function glofoxStudioCtx(toolCtx, studios) {
  *     studio (glofoxStudioCtx);
  *   - a un1t block: book_class / cancel_class_booking with a Glofox id run at
  *     the Glofox studio, and request_pause / request_cancellation are filed at
- *     the answerable un1t.online studio (the member's), not the thread's.
+ *     the answerable un1t.online studio (the member's), not the thread's; in
+ *     the dual block their details also carry `member_studios_dual: true` and
+ *     `also_member_at_location_id` (ctx.membershipRequestDetails).
  */
 export async function executorCtxFor(toolName, input, toolCtx, studios) {
   const turn = toolCtx?.turn
@@ -264,7 +266,19 @@ export async function executorCtxFor(toolName, input, toolCtx, studios) {
   if (turn.block.startsWith('un1t_')) {
     if (MEMBERSHIP_REQUEST_TOOLS.has(toolName)) {
       const un1t = (turn.answerable || []).find((s) => s?.providerKey === 'un1t_online')
-      return un1t && un1t.locationId !== toolCtx.locationId ? { ...toolCtx, locationId: un1t.locationId } : toolCtx
+      if (!un1t) return toolCtx
+      // Ruling 13: in the dual block the request is still filed at the
+      // un1t.online studio (it can never auto-execute there), and the row says
+      // the person is a member at the other studio too, so staff confirm which
+      // membership is meant.
+      const other = turn.block === 'un1t_read_dual'
+        ? (turn.answerable || []).find((s) => s && s.locationId !== un1t.locationId)
+        : null
+      const extra = other
+        ? { membershipRequestDetails: { member_studios_dual: true, also_member_at_location_id: other.locationId } }
+        : {}
+      if (un1t.locationId === toolCtx.locationId && !other) return toolCtx
+      return { ...toolCtx, locationId: un1t.locationId, ...extra }
     }
     const field = BOOKING_ID_FIELD[toolName]
     if (field && parseAgentId(input?.[field])?.provider === 'glofox') return glofoxStudioCtx(toolCtx, studios)

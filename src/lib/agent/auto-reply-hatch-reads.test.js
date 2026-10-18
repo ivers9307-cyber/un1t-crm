@@ -502,6 +502,32 @@ describe('Stillorgan thread', () => {
     expect(toolResultOf(bodies[2])).toEqual({ requested: true, kind: 'pause' })
     const rows = inserts.filter((i) => i.table === 'agent_membership_requests').map((i) => i.row)
     expect(rows.map((r) => [r.kind, r.location_id])).toEqual([['cancellation', HATCH], ['pause', HATCH]])
+    // Hatch-only (un1t_read): no dual stamp.
+    for (const r of rows) {
+      expect(r.details).not.toHaveProperty('member_studios_dual')
+      expect(r.details).not.toHaveProperty('also_member_at_location_id')
+    }
+    expect(glofoxCalls()).toBe(0)
+  })
+
+  it('dual member: request_cancellation is filed at Hatch and says they are also a member at Stillorgan', async () => {
+    resolveMemberStudios.mockResolvedValue(resolution(stillorganStudio(), hatchStudio()))
+    const { fetchFn, bodies } = modelTurns([
+      toolTurn('request_cancellation', { reason: 'moving away' }),
+      toolTurn('request_pause', { reason: 'injury' }),
+      textTurn('Requested.'),
+    ])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, inserts } = turnDb({ threadLocationId: STILLORGAN, conv: verifiedThread(STILLORGAN_CONTACT) })
+
+    await runChannelAgent(db, whatsappAdapter(), turnCtx(STILLORGAN))
+
+    same(bodies[0].tools, CACHED_UN1T_READ_DUAL_TOOLS)
+    const rows = inserts.filter((i) => i.table === 'agent_membership_requests').map((i) => i.row)
+    expect(rows.map((r) => [r.kind, r.location_id])).toEqual([['cancellation', HATCH], ['pause', HATCH]])
+    for (const r of rows) {
+      expect(r.details).toMatchObject({ member_studios_dual: true, also_member_at_location_id: STILLORGAN, reason: expect.any(String) })
+    }
     expect(glofoxCalls()).toBe(0)
   })
 })

@@ -874,6 +874,12 @@ export async function executeAccountTool(toolName, input, ctx) {
     // verifiedId — today's behaviour, unchanged: never a confident guess
     // when there is nothing to elect from.
 
+    // MIAHATCH.2 — a dual-studio member's request names the other studio
+    // (set by the turn, turn-studios.js executorCtxFor). Ids and a flag only.
+    if (ctx.membershipRequestDetails && typeof ctx.membershipRequestDetails === 'object') {
+      Object.assign(details, ctx.membershipRequestDetails)
+    }
+
     const { data: inserted, error } = await db.from('agent_membership_requests').insert({
       location_id: locationId,
       contact_id: targetContactId,

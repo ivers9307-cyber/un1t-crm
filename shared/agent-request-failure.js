@@ -11,10 +11,6 @@ const FAILURE_EXPLANATIONS = {
     'Glofox refused the booking: no class credits on their account. Grant a credit in Glofox, then retry.',
   NOT_EXECUTABLE:
     'The request could not be executed: the contact has no linked Glofox account (or Glofox is not configured here). Link the account, then retry.',
-  // MIAHATCH.2 — a membership cancellation at a un1t.online studio (Hatch
-  // Street) is never run in Glofox; it is done by hand in un1t.online.
-  NOT_EXECUTABLE_UN1T:
-    'This studio runs on un1t.online, so the cancellation was not sent to Glofox. Cancel the membership in un1t.online by hand.',
   // PERSON-ACCT.7 — the row named the Glofox account the agent chose for this
   // booking, and the contact is now linked to a different one, so nothing was
   // booked (rather than booking on an account nobody picked).
