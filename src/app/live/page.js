@@ -18,7 +18,10 @@ export default async function LiveRedirectPage() {
   // this on `studio_management` ("Same permission gate as Studio
   // Management"), but nothing enforced it server-side. Same gate as
   // src/app/(operations)/studio-management/page.js.
-  if (!hasPermission(user, 'studio_management')) redirect('/')
+  //
+  // UN1TBOOK.11 — `class_roster` (the who's-coming list, no door unlock) is
+  // the second key that may open the live page.
+  if (!hasPermission(user, 'studio_management') && !hasPermission(user, 'class_roster')) redirect('/')
   const activeLocationId = user.activeLocation?.id
   if (!activeLocationId) {
     // Master with no active location selected; bounce to home where

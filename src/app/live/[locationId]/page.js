@@ -11,6 +11,7 @@ import { createServerClient } from '@/lib/supabase'
 import { canMutateLiveAt } from '@/lib/live-access'
 import { zoneOfLocation } from '@/lib/location-time'
 import LiveClassClient from './LiveClassClient'
+import LiveRosterClient from './LiveRosterClient'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,7 +37,10 @@ export default async function LiveClassPage(props) {
   if (!user.isMaster && !getUserLocationIds(user).includes(locationId)) {
     notFound()
   }
-  if (!hasPermissionForLocation(user, locationId, 'studio_management')) redirect('/')
+  // UN1TBOOK.13 — `class_roster` admits the roster-only view; the HR board
+  // stays behind `studio_management`. Both resolve AT the target location.
+  const canSeeBoard = hasPermissionForLocation(user, locationId, 'studio_management')
+  if (!canSeeBoard && !hasPermissionForLocation(user, locationId, 'class_roster')) redirect('/')
 
   // Pull the location name. Member search is now server-side via
   // /api/live/[locationId]/contacts so we no longer preload contacts here.
@@ -50,6 +54,17 @@ export default async function LiveClassPage(props) {
     .single()
 
   if (!location) notFound()
+
+  // A roster-only caller stops here: no tv_displays token, no mutation flags.
+  if (!canSeeBoard) {
+    return (
+      <LiveRosterClient
+        locationId={locationId}
+        locationName={location.name}
+        timeZone={zoneOfLocation(location)}
+      />
+    )
+  }
 
   // LIVE-TVBTN.1 — the "TV display" link. W0.9c removed the location-keyed
   // /tv/<locationId> board, so the studio board is now /tv/live/<token> and

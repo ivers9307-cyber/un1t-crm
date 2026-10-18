@@ -539,3 +539,37 @@ describe('notify_email defaults mirror the email_inbox surface', () => {
       .toBe(DEFAULT_WEB_PERMISSIONS_BY_ROLE[role].email_inbox)
   })
 })
+
+// UN1TBOOK.11 — `class_roster`: the "who's coming" list on /live without
+// door unlock. Web-only; a coach can hold it without `studio_management`.
+describe('class_roster', () => {
+  it('is a web permission with the approved label and hint', () => {
+    const entry = WEB_PERMISSIONS.find(p => p.key === 'class_roster')
+    expect(entry).toBeDefined()
+    expect(entry.label).toBe('Class roster')
+    expect(entry.hint).toBe('See who is booked into the class running now on the live class page, without heart-rate data, pairing or door unlock.')
+  })
+
+  it('has no mobile counterpart', () => {
+    expect(MOBILE_PERMISSION_KEYS).not.toContain('class_roster')
+  })
+
+  it('class_roster defaults on for staff, head_coach, manager, owner and master, off for reception', () => {
+    for (const role of ['staff', 'head_coach', 'manager', 'owner', 'master']) {
+      expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE[role].class_roster, role).toBe(true)
+    }
+    expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE.reception.class_roster).toBe(false)
+  })
+
+  it('class_roster never implies studio_management', () => {
+    const args = {
+      role: 'staff',
+      location: { features: {} },
+      permissions: null,
+      roleTemplate: { class_roster: true, studio_management: false },
+      defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+    }
+    expect(resolvePermission({ ...args, key: 'class_roster' })).toBe(true)
+    expect(resolvePermission({ ...args, key: 'studio_management' })).toBe(false)
+  })
+})

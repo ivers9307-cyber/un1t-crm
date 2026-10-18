@@ -384,11 +384,13 @@ describe('pairOverride', () => {
           })) })) })) })) }
         }
         if (table === 'class_bookings') {
-          // resolveBookedOccurrenceForMember: .eq(location_id).eq(glofox_member_id).gte().lte()
+          // resolveBookedOccurrenceForMember: .eq(location_id).eq(glofox_member_id).gte().lte(),
+          // then scopeToCrmActionable's .eq(source_platform, 'glofox') on the finished chain.
+          const bookingRows = Promise.resolve({ data: [
+            { glofox_event_id: 'ev1', status: 'CONFIRMED', starts_at: '2026-06-18T05:00:00Z' },
+          ] })
           return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({
-            gte: vi.fn(() => ({ lte: vi.fn(() => Promise.resolve({ data: [
-              { glofox_event_id: 'ev1', status: 'CONFIRMED', starts_at: '2026-06-18T05:00:00Z' },
-            ] })) })),
+            gte: vi.fn(() => ({ lte: vi.fn(() => Object.assign(bookingRows, { eq: vi.fn(() => bookingRows) })) })),
           })) })) })) }
         }
         if (table === 'class_occurrences') {

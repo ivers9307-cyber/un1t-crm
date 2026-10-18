@@ -216,7 +216,7 @@ export const ALL_NAV = [
   //  - Hyrox Training Club (HYROX-TC.2) — coach planner: generate/review/
   //    approve a 12-week Hyrox block before it publishes to the studio TV.
   { href: '/members', label: 'Members', icon: HeartPulse,
-    anyPermission: ['bookings', 'events', 'races', 'challenges', 'pulse_admin', 'studio_management', 'class_timer', 'approvals_hyrox_sessions'],
+    anyPermission: ['bookings', 'events', 'races', 'challenges', 'pulse_admin', 'studio_management', 'class_timer', 'class_roster', 'approvals_hyrox_sessions'],
     extraActivePaths: ['/bookings', '/events', '/challenges', '/pulse', '/live', '/studio-management/timer', '/hyrox'],
     section: 'members' },
 

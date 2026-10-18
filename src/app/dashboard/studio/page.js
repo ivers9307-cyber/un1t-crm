@@ -82,28 +82,52 @@ function soft(promise) {
 // reads class tables and stays source-agnostic, EXCEPT that its booking-derived
 // figures only exist for Glofox (UN1TCLASS.3): see withoutBookingKpis().
 
-// UN1TCLASS.3 — Hatch Street's class_occurrences are projected from its
-// un1t.online timetable (raw.booked = bookings_count), so Classes and Fill
-// compute honestly. Nothing writes class_bookings there, which makes the
-// no-show rate, new-joiner activation and attended visits "no data", not 0:
-// an empty table would compute 0% / 0, a plausible-looking wrong number.
-// Null them so the cells draw '— unavailable'. Per-group fill is kept; the
-// per-group no-show is nulled (FloorTable draws '—'). Everything else (classes,
-// fill, 7-day fill, noData, groupedBy) passes through as fetchFloor computed it.
-function withoutBookingKpis(floor) {
+// UN1TCLASS.3 / UN1TBOOK.4 — Hatch Street's class_occurrences are projected from
+// its un1t.online timetable (raw.booked = bookings_count), so Classes and Fill
+// compute honestly. Since UN1TBOOK.3 its bookings are projected into
+// class_bookings too (source_platform 'un1t_online'), and the no-show rate and
+// attended visits (and the per-group no-show) are real there: keepAttendance.
+// A un1t row carries an explicit verdict: ATTENDED and NO_SHOW count, and a
+// past un1t BOOKED is UNDECIDED, outside the numerator and the denominator
+// (bookingOutcome, shared/studio-kpi-math.js). So an unmarked past un1t class
+// is not a no-show, unlike an unmarked Glofox booking.
+//
+// Until the projection has decided anything (the window between this deploy
+// and the projection landing, or a studio whose past rows are all undecided)
+// computeFloor returns noShowPct null but attendedVisits 0 (pastBooked minus
+// noShows). That 0 is not a count of visits, so when keepAttendance and
+// noShowPct is null the attended figure is null too: both cells draw
+// '— unavailable', never a plausible-looking 0.
+//
+// New-joiner activation stays unavailable for un1t_online: its cohort is
+// contacts.converted_at, which spec A never writes (A, Anti-goals), and which
+// would miss the dual-studio members. A source with no projection at all
+// keeps all three booking cells "no data", not 0: an empty class_bookings table
+// would compute 0% / 0, a plausible-looking wrong number. Null them so the cells
+// draw '— unavailable'. Per-group fill is kept; the per-group no-show follows
+// the no-show rate (FloorTable draws '—'). Everything else (classes, fill,
+// 7-day fill, noData, groupedBy) passes through as fetchFloor computed it.
+function withoutBookingKpis(floor, { keepAttendance = false } = {}) {
   if (!floor) return floor
   return {
     ...floor,
-    noShowPct: null,
     activation: null,
-    attendedVisits: null,
-    groupTable: (floor.groupTable || []).map((g) => ({ ...g, noShowPct: null })),
+    ...(keepAttendance
+      ? (floor.noShowPct == null ? { attendedVisits: null } : {})
+      : {
+        noShowPct: null,
+        attendedVisits: null,
+        groupTable: (floor.groupTable || []).map((g) => ({ ...g, noShowPct: null })),
+      }),
   }
 }
 
 async function loadLocationScorecard(locationId, r) {
   const db = createServerClient()
   const glofox = r.source === 'glofox'
+  // Booking-derived no-show and attended visits exist where class_bookings is
+  // written: Glofox's sync and the un1t.online projection (UN1TBOOK.3).
+  const attendanceKpis = glofox || r.source === 'un1t_online'
   const radarOk = providesCapability(r, 'memberships')
   // MRR first — its average yield prices unstamped (pre-mig-480)
   // cancels in the revenue-churn figure. Everything else is parallel.
@@ -116,7 +140,7 @@ async function loadLocationScorecard(locationId, r) {
       glofox ? soft(fetchRevenueChurn(db, locationId, estYield)) : null,
       glofox ? soft(fetchAcquisition(db, locationId)) : null,
       supportsRead(r, 'engagement') ? soft(r.reads.engagement(db, locationId)) : null,
-      soft(fetchFloor(db, locationId)).then((f) => (glofox ? f : withoutBookingKpis(f))),
+      soft(fetchFloor(db, locationId)).then((f) => (glofox ? f : withoutBookingKpis(f, { keepAttendance: attendanceKpis }))),
       soft(fetchAdSpend(db, locationId)),
       radarOk ? loadRadar(db, locationId).catch(() => null) : null,
     ])
@@ -124,8 +148,10 @@ async function loadLocationScorecard(locationId, r) {
   if (!mrr && !growth && !acq && !engagement && !floor) return null
   return {
     mrr, growth, churn, acq, engagement, floor, spend,
-    // Booking-derived floor cells exist only where class_bookings is written.
+    // Activation and the Glofox trainer footer exist only for Glofox; the
+    // no-show and attended-visits cells follow attendanceKpis.
     bookingKpis: glofox,
+    attendanceKpis,
     radarSummary: radar?.summary || null,
   }
 }
@@ -166,8 +192,12 @@ async function LocationColumn({ user, location }) {
   }
   if (!vm) return <BlockError label={`${location.name} scorecard`} />
 
-  const { mrr, growth, churn, acq, engagement, floor, spend, radarSummary, bookingKpis } = vm
+  const { mrr, growth, churn, acq, engagement, floor, spend, radarSummary, bookingKpis, attendanceKpis } = vm
   const W = WINDOW_DAYS
+  // A projected (non-Glofox) column with nothing decided yet has no no-show
+  // rate and no attended count: both cells say unavailable, sublabels too.
+  // Glofox keeps its long-standing cells (its floor is never null-attended).
+  const attendanceShown = Boolean(floor && attendanceKpis && (bookingKpis || floor.noShowPct != null))
 
   // A CONFIGURED source with no recurring base AND no class sync has not
   // synced anything yet (a studio in its first hours) — say so instead
@@ -344,7 +374,7 @@ async function LocationColumn({ user, location }) {
           <ScoreCell
             label="No-show rate 28d"
             value={floor?.noShowPct != null ? `${floor.noShowPct}%` : null}
-            sublabel={floor && bookingKpis ? `target under ${TARGETS.noShowPct}%` : UNAVAILABLE}
+            sublabel={attendanceShown ? `target under ${TARGETS.noShowPct}%` : UNAVAILABLE}
             accent={toneBelow(floor?.noShowPct, TARGETS.noShowPct)}
           />
           <ScoreCell
@@ -359,7 +389,7 @@ async function LocationColumn({ user, location }) {
           <ScoreCell
             label="Attended visits 28d"
             value={floor ? floor.attendedVisits : null}
-            sublabel={floor && bookingKpis ? `across ${floor.classes} classes` : UNAVAILABLE}
+            sublabel={attendanceShown ? `across ${floor.classes} classes` : UNAVAILABLE}
           />
         </ScoreGrid>
         <div className="mt-2">

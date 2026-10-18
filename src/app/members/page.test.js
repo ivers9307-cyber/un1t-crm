@@ -37,8 +37,8 @@ import { getCurrentUser } from '@/lib/auth'
 
 // Stable user fixture — explicit per-user permission overrides
 // (tier 2 of the resolver) so each test controls exactly which of the
-// seven gate keys the fixture holds, regardless of role defaults.
-// ALL seven keys are always passed explicitly.
+// eight gate keys the fixture holds, regardless of role defaults.
+// ALL eight keys are always passed explicitly.
 function user({ role = 'staff', perms = {} } = {}) {
   const allDenied = {
     bookings: false,
@@ -47,6 +47,7 @@ function user({ role = 'staff', perms = {} } = {}) {
     pulse_admin: false,
     studio_management: false,
     class_timer: false,
+    class_roster: false,
     approvals_hyrox_sessions: false,
   }
   return {
@@ -132,6 +133,11 @@ describe('/members index page', () => {
 
   it('redirects to /live when only studio_management is held', async () => {
     getCurrentUser.mockResolvedValue(user({ perms: { studio_management: true } }))
+    await expect(MembersIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/live$/)
+  })
+
+  it('redirects to /live when only class_roster is held', async () => {
+    getCurrentUser.mockResolvedValue(user({ perms: { class_roster: true } }))
     await expect(MembersIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/live$/)
   })
 

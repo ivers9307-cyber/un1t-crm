@@ -29,7 +29,7 @@ function user({ activeLocationId = 'loc1', perms = {} } = {}) {
     id: 'u1',
     role: 'staff',
     activeLocation: activeLocationId ? { id: activeLocationId } : null,
-    activeAssignment: { permissions: { studio_management: false, ...perms } },
+    activeAssignment: { permissions: { studio_management: false, class_roster: false, ...perms } },
   }
 }
 
@@ -49,6 +49,23 @@ describe('/live redirect page', () => {
   it('redirects to /live/<activeLocation> when the user holds studio_management', async () => {
     getCurrentUser.mockResolvedValue(user({ activeLocationId: 'loc9', perms: { studio_management: true } }))
     await expect(LiveRedirectPage()).rejects.toThrow(/^NEXT_REDIRECT:\/live\/loc9$/)
+  })
+
+  // UN1TBOOK.11 — class_roster is the door-unlock-free key for the who's
+  // coming list; either key gets a coach onto /live/<active>.
+  it('redirects a class_roster-only user to /live/<active>', async () => {
+    getCurrentUser.mockResolvedValue(user({
+      activeLocationId: 'loc4',
+      perms: { studio_management: false, class_roster: true },
+    }))
+    await expect(LiveRedirectPage()).rejects.toThrow(/^NEXT_REDIRECT:\/live\/loc4$/)
+  })
+
+  it('redirects a user with neither key to /', async () => {
+    getCurrentUser.mockResolvedValue(user({
+      perms: { studio_management: false, class_roster: false },
+    }))
+    await expect(LiveRedirectPage()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 
   it('redirects to / when studio_management is held but there is no active location', async () => {

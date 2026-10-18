@@ -660,7 +660,9 @@ describe('resolveStrapsForBatch: registered booking-first + test mode', () => {
           return { select: vi.fn(() => ({ in: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [{ identifier: 'ant:12511', contact_id: 'c1', contacts: { id: 'c1', location_id: 'loc1' } }], error: null })) })) })) })) }
         }
         if (table === 'class_bookings') {
-          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => Promise.resolve({ data: bookings })) })) })) })) })) }
+          // resolveBookedOccurrenceForMember's read, then scopeToCrmActionable's .eq(source_platform) on the finished chain.
+          const bookingRows = Promise.resolve({ data: bookings })
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => Object.assign(bookingRows, { eq: vi.fn(() => bookingRows) })) })) })) })) })) }
         }
         if (table === 'bookings') {
           // Native CRM booking fallback (path d) — no native bookings in these cases.
@@ -800,7 +802,9 @@ describe('resolveStrapsForBatch: back-to-back class supersede (item 1)', () => {
           return { select: vi.fn(() => ({ eq: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { glofox_member_id: 'g1', max_hr_override: null, dob: null } })) })) })) }
         }
         if (table === 'class_bookings') {
-          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => Promise.resolve({ data: [{ glofox_event_id: 'e-new', status: 'BOOKED', starts_at: occNew.starts_at }] })) })) })) })) })) }
+          // then scopeToCrmActionable's .eq(source_platform) on the finished chain.
+          const bookingRows = Promise.resolve({ data: [{ glofox_event_id: 'e-new', status: 'BOOKED', starts_at: occNew.starts_at }] })
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => Object.assign(bookingRows, { eq: vi.fn(() => bookingRows) })) })) })) })) })) }
         }
         if (table === 'class_occurrences') {
           return {

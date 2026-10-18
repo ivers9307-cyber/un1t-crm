@@ -31,6 +31,31 @@ function userAt(locationId, role, { studio = true, isMaster = false, extra = [] 
   }
 }
 
+describe('guardLiveLocation — permission option (UN1TBOOK.12)', () => {
+  const rosterOnly = (role = 'staff') => ({
+    ...userAt(LOC, role, { studio: false }),
+    assignmentsByLocation: { [LOC]: { role, permissions: { studio_management: false, class_roster: true } } },
+  })
+
+  it('lets class_roster through when the guard is asked for it', async () => {
+    expect(guardLiveLocation(rosterOnly(), LOC, { permission: 'class_roster' })).toBeNull()
+  })
+
+  it('still refuses that user on the default studio_management guard', async () => {
+    const res = guardLiveLocation(rosterOnly(), LOC)
+    expect(res?.status).toBe(403)
+    expect((await res.json()).error).toBe('Studio management permission required')
+  })
+
+  it('refuses a studio_management-only user on the class_roster guard, naming it', async () => {
+    const user = userAt(LOC, 'staff', { studio: true })
+    user.assignmentsByLocation[LOC].permissions.class_roster = false
+    const res = guardLiveLocation(user, LOC, { permission: 'class_roster' })
+    expect(res?.status).toBe(403)
+    expect((await res.json()).error).toBe('Class roster permission required')
+  })
+})
+
 describe('guardLiveLocation — read gate', () => {
   it('401s an anonymous caller', () => {
     const res = guardLiveLocation(null, LOC)

@@ -111,6 +111,12 @@ export const WEB_PERMISSIONS = Object.freeze([
   // the mobile timer screen and every /api/timer/* route). ON for
   // every role by default — revoke per user/role via the Roles tab.
   { key: 'class_timer',       label: 'Class timer',             hint: 'Start, pause and stop the class interval timer on the studio TV, including quick-add presets and timer templates.' },
+  // UN1TBOOK.11 — the "who's coming" list on /live, split off
+  // `studio_management` so a coach can see who is booked into the class
+  // running now without heart-rate data, strap pairing or door unlock.
+  // Web-only (no phone screen yet): see WEB_ONLY_OK in
+  // scripts/check-mobile-parity.mjs. ON for every role but reception.
+  { key: 'class_roster',      label: 'Class roster',            hint: 'See who is booked into the class running now on the live class page, without heart-rate data, pairing or door unlock.' },
   // SONOS.16 — device_control now gates Sonos studio-music scheduling;
   // its old surface (Tapo plug/switch control, TAPO-T1.4) was deleted at
   // SONOS.14. Per-schedule playback windows (days/on/off/volume/
@@ -335,7 +341,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // nothing until a studio has a mailbox and the person has a grant
     // on it, the same two-level shape as approvals_inbox.
     email: true, email_inbox: true, whatsapp: true,
-    schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
+    schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true, class_roster: true,
     device_control: true,
     // Studio Management children (STUDIO-GROUP.1) — master has all.
     contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
@@ -368,7 +374,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pulse_admin: false,                            // Pulse operator hub — retention oversight, not a staff surface
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
     email: false, email_inbox: false, whatsapp: false,
-    schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true,
+    schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true, class_roster: true,
     device_control: false,                         // on-site device control — not a staff surface
     // Studio Management children — all off for staff.
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
@@ -406,7 +412,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pulse_admin: false,
     events: true, bookings: true, races: true,       // front desk runs the booking desk
     email: false, email_inbox: false, whatsapp: true,        // WhatsApp inbox is the front-desk channel
-    schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true,
+    schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true, class_roster: false,
     device_control: false,
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: false,
@@ -441,6 +447,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, attendance_reports: false,    // head coaches don't see attendance — owner/manager only
     assistant: true, studio_management: false,    // explicit opt-in
     class_timer: true,                             // running the class timer is a coaching duty
+    class_roster: true,
     device_control: false,                         // owner + manager by default; grant per-user
     // Studio Management children — all off for head_coach (explicit opt-in by admin).
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
@@ -473,7 +480,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pulse_admin: true,                             // managers run the Pulse operator hub
     events: true, bookings: true, races: true,
     email: true, email_inbox: true, whatsapp: true,
-    schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
+    schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true, class_roster: true,
     device_control: true,                          // managers run on-site device control
     // Studio Management children — manager gets TV displays (marketing
     // surface they handle day-to-day). Contracts + imports stay
@@ -508,7 +515,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pulse_admin: true,
     events: true, bookings: true, races: true,
     email: true, email_inbox: true, whatsapp: true,
-    schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
+    schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true, class_roster: true,
     device_control: true,
     // Studio Management children — owner gets contracts + TV displays
     // by default (mirroring the old role-only gates). Imports stay
