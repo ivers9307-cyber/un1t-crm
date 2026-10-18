@@ -17,7 +17,7 @@ vi.mock('@/lib/un1t-online-write', async () => ({
   createUn1tWriter: vi.fn(async () => ({ permissionReport })),
 }))
 
-import { GET, PATCH } from './route.js'
+import { GET, PATCH, _resetPermissionFailuresForTests } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { createUn1tWriter } from '@/lib/un1t-online-write'
@@ -73,11 +73,12 @@ const get = () => GET(new Request(`http://x/api/locations/${LOC}/un1t-online`), 
 
 beforeEach(() => {
   vi.clearAllMocks()
+  _resetPermissionFailuresForTests()
   settings = { glofox: { branch_id: 'keep' }, un1t_online: { hidden_class_keywords: 'elite' } }
   settingsReadError = null
   writes = []
   createServerClient.mockReturnValue(makeDb())
-  permissionReport.mockResolvedValue({ missing: [] })
+  permissionReport.mockResolvedValue({ missing: [], studioMatches: true })
 })
 
 describe('PATCH /api/locations/[id]/un1t-online (write settings)', () => {
@@ -128,7 +129,7 @@ describe('GET adds the write block for masters', () => {
   it('reports the switch, the €0 one-time products by title and the missing write permissions', async () => {
     getCurrentUser.mockResolvedValue(master)
     settings = { un1t_online: { writes_enabled: true, trial_product_id: TRIAL } }
-    permissionReport.mockResolvedValue({ missing: ['purchases:create', 'credits:read'] })
+    permissionReport.mockResolvedValue({ missing: ['purchases:create', 'credits:read'], studioMatches: true })
     const j = await (await get()).json()
     expect(j.data.write).toEqual({
       writes_enabled: true,
@@ -138,13 +139,28 @@ describe('GET adds the write block for masters', () => {
     })
   })
 
-  it('an unreadable permission check says so; an owner gets no write block at all', async () => {
+  it('an unreadable permission check says so, is not retried for a minute, and never waits', async () => {
     getCurrentUser.mockResolvedValue(master)
     permissionReport.mockRejectedValue(new Error('down'))
     expect((await (await get()).json()).data.write.permissions).toEqual({ unreadable: true })
+    expect((await (await get()).json()).data.write.permissions).toEqual({ unreadable: true })
+    expect(permissionReport).toHaveBeenCalledTimes(1)
+    const opts = createUn1tWriter.mock.calls[0][2]
+    await expect(opts.sleep(1000)).rejects.toThrow(/does not wait/)
+  })
+
+  it('a token for another studio is never "all present"', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    permissionReport.mockResolvedValue({ missing: [], studioMatches: false })
+    expect((await (await get()).json()).data.write.permissions).toEqual({ all_present: false, missing: [], wrong_studio: true })
+  })
+
+  it('an owner gets no write block, only whether writes are on', async () => {
     getCurrentUser.mockResolvedValue(owner)
+    settings = { un1t_online: { writes_enabled: true, trial_product_id: TRIAL } }
     const j = await (await get()).json()
     expect(j.data).not.toHaveProperty('write')
-    expect(createUn1tWriter).toHaveBeenCalledTimes(1)
+    expect(j.data.writes_enabled).toBe(true)
+    expect(createUn1tWriter).not.toHaveBeenCalled()
   })
 })

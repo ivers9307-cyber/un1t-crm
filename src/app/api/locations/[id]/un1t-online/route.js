@@ -138,6 +138,14 @@ export async function GET(request, props) {
   const lastRun = Array.isArray(runs) ? runs[0] ?? null : null
 
   const data = presentUn1tConnection(conn, lastRun)
+  // Every caller learns only whether writes are on (a boolean, never the
+  // settings), so the tab never calls a write token unsafe while writes run.
+  try {
+    const { data: loc } = await db.from('locations').select('id, settings').eq('id', g.locationId).maybeSingle()
+    data.writes_enabled = un1tWriteSettingsFrom(loc?.settings).writesEnabled
+  } catch {
+    data.writes_enabled = false
+  }
   if (isMaster(g.user)) {
     // Advisory, like the run summary: the connection itself answered.
     try {
@@ -151,6 +159,37 @@ export async function GET(request, props) {
 }
 
 const isMaster = (user) => user?.profileRole === 'master'
+
+// The permissions line is read on page load, so it may never spend the
+// studio's write budget in a loop: one attempt, no waits, a 4 s timeout, and
+// a failed check is remembered for a minute per instance.
+const PERMISSION_FAILURE_TTL_MS = 60_000
+const permissionFailures = new Map() // locationId → atMs
+const noWait = async () => { throw Object.assign(new Error('the permission check does not wait'), { code: 'no_wait' }) }
+const oneShotFetch = async (url, init = {}) => {
+  const res = await fetch(url, { ...init, signal: AbortSignal.timeout(4_000) })
+  if (res.status === 429 || res.status >= 500) throw Object.assign(new Error(`un1t.online answered HTTP ${res.status}`), { status: res.status })
+  return res
+}
+/** Test seam only. */
+export function _resetPermissionFailuresForTests() { permissionFailures.clear() }
+
+async function permissionLine(db, locationId) {
+  const failedAt = permissionFailures.get(locationId)
+  if (failedAt != null && Date.now() - failedAt < PERMISSION_FAILURE_TTL_MS) return { unreadable: true }
+  try {
+    const writer = await createUn1tWriter(db, locationId, { fetchImpl: oneShotFetch, sleep: noWait })
+    const { missing, studioMatches } = await writer.permissionReport()
+    permissionFailures.delete(locationId)
+    if (!studioMatches) return { all_present: false, missing: [], wrong_studio: true }
+    return { all_present: missing.length === 0, missing }
+  } catch (err) {
+    if (err?.code === 'UN1T_NOT_CONNECTED') return { not_connected: true }
+    permissionFailures.set(locationId, Date.now())
+    logError(LOG, 'write permission check failed', { locationId, code: err?.code ?? err?.name ?? 'error' })
+    return { unreadable: true }
+  }
+}
 
 // The trial picker's choices: active €0 one-time products at this studio
 // (A's isTrialProduct), by title. A failed read is an empty list, logged.
@@ -181,15 +220,7 @@ async function writeSection(db, locationId) {
   }
   const s = un1tWriteSettingsFrom(loc.settings)
   const { rows } = await trialProducts(db, locationId)
-  let permissions
-  try {
-    const writer = await createUn1tWriter(db, locationId)
-    const { missing } = await writer.permissionReport()
-    permissions = { all_present: missing.length === 0, missing }
-  } catch (err) {
-    logError(LOG, 'write permission check failed', { locationId, code: err?.code ?? err?.name ?? 'error' })
-    permissions = { unreadable: true }
-  }
+  const permissions = await permissionLine(db, locationId)
   return { writes_enabled: s.writesEnabled, trial_product_id: s.trialProductId, trial_products: rows, permissions }
 }
 
@@ -226,6 +257,7 @@ export async function PATCH(request, props) {
   }), { scope: LOG })
   if (!merged.ok) {
     if (merged.reason === 'not_found') return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+    if (merged.reason === 'write_failed') return NextResponse.json({ success: false, error: 'Could not save just now. Try again.' }, { status: 500 })
     return NextResponse.json({ success: false, error: 'Could not read this studio\'s settings. Nothing was saved.' }, { status: 503 })
   }
   const s = un1tWriteSettingsFrom(merged.settings)
