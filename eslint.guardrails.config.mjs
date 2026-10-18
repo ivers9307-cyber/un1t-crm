@@ -476,6 +476,7 @@ const config = [
       // refresh and the contact link the rows they touched), logged, never
       // thrown past the write's verdict.
       'src/lib/un1t-online-write.js',
+      'src/lib/un1t-online-write-ops.js',
       'src/lib/un1t-online-mirror-write.js',
     ],
     ignores: NO_TESTS,
