@@ -59,6 +59,17 @@ describe('deriveNeedsAttention', () => {
     const items = deriveNeedsAttention({ contact: { ...base, next_class_at: 'x' }, arrearsCents: 4900, openTasks: [] })
     expect(items).toEqual([expect.objectContaining({ key: 'arrears', tone: 'danger' })])
   })
+  it('overdue true with arrearsCents 0 still raises the Payment overdue item', () => {
+    const items = deriveNeedsAttention({ contact: { ...base, next_class_at: 'x' }, arrearsCents: 0, openTasks: [], overdue: true })
+    expect(items).toEqual([expect.objectContaining({ key: 'arrears', label: 'Payment overdue', tone: 'danger' })])
+  })
+  it('overdue true and arrears > 0 raises the item once', () => {
+    const items = deriveNeedsAttention({ contact: { ...base, next_class_at: 'x' }, arrearsCents: 4900, openTasks: [], overdue: true })
+    expect(items.filter((i) => i.key === 'arrears')).toHaveLength(1)
+  })
+  it('overdue defaults to false', () => {
+    expect(deriveNeedsAttention({ contact: { ...base, next_class_at: 'x' }, arrearsCents: 0, openTasks: [] })).toEqual([])
+  })
   it('flags overdue tasks (due_date <= todayStr)', () => {
     const items = deriveNeedsAttention({
       contact: { ...base, next_class_at: 'x' }, arrearsCents: 0,

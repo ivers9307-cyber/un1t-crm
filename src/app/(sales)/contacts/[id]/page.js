@@ -28,6 +28,8 @@ import ContactHeaderBand from '@/components/contact/ContactHeaderBand'
 import { latestLinkForContact } from '@/lib/cancellation-form/links'
 import ContactWhoRail from '@/components/contact/ContactWhoRail'
 import { loadContactMemberships } from '@/lib/contact-memberships'
+// HATCHPIPE.2 — un1t.online payments + overdue, scoped to the viewer's studios.
+import { loadUn1tBilling, un1tHeaderRisk, mergeArrearsCents } from '@/lib/contact-un1t-billing'
 import ContactNextRail from '@/components/contact/ContactNextRail'
 import ContactTimeline from '@/components/contact/ContactTimeline'
 import { PastEventsCard } from '@/components/contact/EventRegistrationsCards'
@@ -86,7 +88,7 @@ export default async function ContactDetailPage(props) {
     if (pg?.group?.id) person = await aggregatePerson(db, pg.group.id)
   } catch { person = null }
 
-  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink, primaryPipeline, studioMemberships] = await Promise.all([
+  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink, primaryPipeline, studioMemberships, un1tBilling] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
@@ -117,6 +119,9 @@ export default async function ContactDetailPage(props) {
     // HATCH-MEMBERS.1 (mig 722) — memberships held outside Glofox. Never
     // throws; a failed read just hides the card.
     loadContactMemberships(db, id),
+    // HATCHPIPE.2 — un1t.online payments for the studios the VIEWER can see.
+    // Never throws; an unreadable studio is dropped, never shown as zero.
+    loadUn1tBilling(db, user, id),
   ])
 
   // GLOFOX-CATALOG — resolve the member's plan description (pricing +
@@ -163,8 +168,11 @@ export default async function ContactDetailPage(props) {
   const churnClass = classifyContact(activityContact, arrearsCtx)
   const churnScored = churnClass === 'active' ? scoreMember(activityContact, Date.now()) : null
   let risk = null
+  const un1tRisk = un1tHeaderRisk(un1tBilling)
   if (churnClass === 'overdue') {
     risk = { label: 'Payment overdue', cls: 'bg-red-50 text-red-700 border-red-200', title: 'Membership locked in Glofox — on the Overdue chase-list.' }
+  } else if (un1tRisk) {
+    risk = un1tRisk
   } else if (churnScored) {
     const sigs = churnScored.signals.map((s) => `${s.label}: ${s.detail}`).join(' · ')
     risk = churnScored.tier === 'high'
@@ -339,7 +347,7 @@ export default async function ContactDetailPage(props) {
   //    cross-member LTV roll-up), so we keep the primary contact's figure
   //    in both the grouped and single case.
   const ltvCents = contact.lifetime_value_cents
-  const metricArrearsCents = person ? person.arrearsCents : contactArrears.arrearsCents
+  const metricArrearsCents = mergeArrearsCents(person ? person.arrearsCents : contactArrears.arrearsCents, un1tBilling)
   const metricAttended = person ? person.attended : (Number(contact.total_attended_30d) || 0)
   const metricDeals = person ? person.dealsCount : deals.length
 
@@ -366,6 +374,7 @@ export default async function ContactDetailPage(props) {
     arrearsCents: metricArrearsCents || 0,
     openTasks,
     todayStr: today,
+    overdue: un1tBilling.overdue,
   })
 
   // ── CC.2 — command-centre layout (tabs removed) ─────────────────────────
@@ -418,6 +427,7 @@ export default async function ContactDetailPage(props) {
             canLinkAccounts={work.canLinkAccounts}
             studioMemberships={studioMemberships.rows}
             canReadStudioCards={work.canReadStudioCards}
+            un1tBilling={un1tBilling}
           />
         </div>
 
