@@ -433,10 +433,13 @@ export async function createUn1tWriter(
     }
   }
 
+  // Reads get the same per-request timeout as writes (a hung read would hold a
+  // queue job past its function's duration).
+  const timedReadFetch = (url, init = {}) => fetchImpl(url, { ...init, signal: init.signal ?? AbortSignal.timeout(UN1T_WRITE_TIMEOUT_MS) })
   const readClient = conn
     ? clientFactory({
       token,
-      fetchImpl,
+      fetchImpl: timedReadFetch,
       sleep,
       beforeRequest: async () => {
         if (!(await takeSlot({ wait: checkDepth > 0, proceed: true }))) throw refuse(C.RATE_BUDGET)

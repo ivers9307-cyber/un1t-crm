@@ -123,7 +123,7 @@ describe('processUn1tClassBookingRequest', () => {
     expect(order).toEqual(['account', 'trial', 'handoff', 'trial_used_email', 'card:un1t_trial_used'])
     const [, , , opts] = deps.routeToReview.mock.calls[0]
     expect(opts).toMatchObject({ provider: 'un1t_online', rowStatus: 'failed', rowLastError: 'trial_used_options_sent', executingContactId: 'c-1' })
-    expect(out.outcome).toBe('needs_review')
+    expect(out).toEqual({ outcome: 'failed', detail: 'trial_used_options_sent' })
   })
 
   it('ineligible with the hand-off handled: no email, row failed trial_used_handed_to_mia', async () => {
@@ -190,6 +190,16 @@ describe('processUn1tClassBookingRequest', () => {
     await run(request(), ctx({ sendsBookingConfirmation: true }))
     expect(deps.sendManualBookingConfirmEmail).not.toHaveBeenCalled()
     expect(lastRow().un1t_steps.confirmation).toBe('skipped_flag')
+  })
+
+  it('any other error is rethrown as the retry signal, carrying the provider (D-8)', async () => {
+    deps.ensureUn1tAccount.mockRejectedValueOnce(Object.assign(new Error('contacts read failed'), { code: 'XX000' }))
+    const err = await run().catch((e) => e)
+    expect(err).toBeInstanceOf(Un1tFunnelRetry)
+    expect(err.reviewOptions).toEqual({ provider: 'un1t_online', executingContactId: null })
+    expect(err.cause.message).toBe('contacts read failed')
+    // The row was marked as the un1t.online processor's before anything else.
+    expect(rowUpdates[0]).toHaveProperty('un1t_steps')
   })
 
   it('a malformed event id is class_unavailable and nothing is read from un1t.online', async () => {

@@ -98,8 +98,9 @@ export async function findUn1tAccount(db, { locationId, organizationId, contact,
   const email = normEmail(contact?.email)
   if (!email) return { kind: 'none' }
 
-  // (b) a sibling in the organisation with the same email, linked here.
-  const { data: siblings, error } = await db
+  // (b) a sibling in the organisation with the same email, linked here
+  // (skipped for a studio with no organisation: nothing to compare against).
+  const { data: siblings, error } = organizationId == null ? { data: [], error: null } : await db
     .from('contacts')
     .select('id, email, un1t_user_id')
     .eq('organization_id', organizationId)

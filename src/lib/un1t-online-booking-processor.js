@@ -34,7 +34,7 @@ import { ensureUn1tAccount as ensureAccountOp, runSetPasswordStep as setPassword
 import { sendUn1tTrialUsedEmail as trialUsedEmailOp, sendUn1tAccountEmail } from './un1t-online-funnel-emails.js'
 import { trialUsedHandoff as handoffOp } from './un1t-online-trial-used.js'
 import { MEMBERSHIP_ACTIVE_STATUSES } from './un1t-online-map.js'
-import { logWarn } from './log'
+import { logError, logWarn } from './log'
 
 export const UN1T_PROVIDER = 'un1t_online'
 const LOG = 'un1t-funnel'
@@ -85,13 +85,15 @@ function depsOf(deps = {}) {
   }
 }
 
-// The queue row: a judged write, never a silent one; a lost stamp is logged.
+// The queue row: a judged write, never a silent one; a lost stamp is logged
+// (at error level for 'booked', which nothing else would record).
 async function stampRow(db, id, fields) {
+  const log = fields?.status === 'booked' ? logError : logWarn
   try {
     const { error } = await db.from('class_booking_requests').update(fields).eq('id', id)
-    if (error) logWarn(LOG, 'queue row update failed', { requestId: id, err: error })
+    if (error) log(LOG, 'queue row update failed', { requestId: id, err: error })
   } catch (err) {
-    logWarn(LOG, 'queue row update threw', { requestId: id, err })
+    log(LOG, 'queue row update threw', { requestId: id, err })
   }
 }
 
@@ -225,6 +227,25 @@ export async function un1tBookOnce(db, { request, contact, organizationId, event
  * @returns {Promise<{ outcome: 'booked'|'needs_review'|'failed', detail?: string }>}
  */
 export async function processUn1tClassBookingRequest(db, request, ctx, deps = {}) {
+  // Mark the row as the un1t.online processor's before anything else, so a
+  // job that dies mid-run is carded for the un1t.online executor by the
+  // reaper (process-class-bookings) too.
+  await stampRow(db, request.id, { un1t_steps: { at: new Date((deps.now ?? Date.now)()).toISOString() } })
+  const holder = { executingContactId: null }
+  try {
+    return await runFunnel(db, request, ctx, deps, holder)
+  } catch (err) {
+    // Every throw is the queue's retry signal and must carry the provider,
+    // or the card filed at the cap would run the Glofox executor (D-8).
+    if (err instanceof Un1tFunnelRetry) throw err
+    logWarn(LOG, 'funnel step failed; the queue retries', { requestId: request.id, err })
+    const wrapped = new Un1tFunnelRetry(err?.code ?? err?.name ?? 'error', { executingContactId: holder.executingContactId })
+    wrapped.cause = err
+    throw wrapped
+  }
+}
+
+async function runFunnel(db, request, ctx, deps, holder) {
   const d = depsOf(deps)
   const { settings, organizationId } = ctx
   const steps = { at: new Date(d.now()).toISOString() }
@@ -267,6 +288,7 @@ export async function processUn1tClassBookingRequest(db, request, ctx, deps = {}
   }, deps)
   Object.assign(steps, once.steps)
   executingContactId = once.executingContactId ?? null
+  holder.executingContactId = executingContactId
   if (once.kind === 'retry') throw retry(once.code)
   if (once.kind === 'card') return card(once.reason)
   if (once.kind === 'trial_used') {
@@ -286,11 +308,13 @@ export async function processUn1tClassBookingRequest(db, request, ctx, deps = {}
       mail = { sent: false, reason: 'send_error' }
     }
     steps.trial_used_email = mail?.sent ? 'sent' : (mail?.reason || 'not_sent')
-    return card('un1t_trial_used', { rowStatus: 'failed', rowLastError: 'trial_used_options_sent' })
+    await card('un1t_trial_used', { rowStatus: 'failed', rowLastError: 'trial_used_options_sent' })
+    return { outcome: 'failed', detail: 'trial_used_options_sent' }
   }
   const { account, booking: b } = once
 
   const bookingRef = b.id ? `un1t:${b.id}` : null
+  if (!bookingRef) logWarn(LOG, 'booked with no booking id; the next sync names it', { requestId: request.id, code: 'no_booking_id' })
   await stampRow(db, request.id, { status: 'booked', last_error: null, glofox_booking_id: bookingRef, un1t_steps: steps })
 
   // 7. Emails.

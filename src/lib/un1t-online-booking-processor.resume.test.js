@@ -95,6 +95,24 @@ describe('the funnel over the real primitives', () => {
     expect(writes(s.fetchImpl)).toEqual([1, 1, 1, 1])
   })
 
+  it('RF2: two requests for one person at once create exactly one account; the second retries', async () => {
+    const s = setup()
+    s.store.class_booking_requests.push({ id: 'q-2', location_id: LOC, contact_id: CONTACT, status: 'processing' })
+    const results = await Promise.allSettled([
+      processUn1tClassBookingRequest(s.db, request(), ctx, s.deps),
+      processUn1tClassBookingRequest(s.db, { ...request(), id: 'q-2' }, ctx, s.deps),
+    ])
+    expect(s.fetchImpl.count('POST /users/clients')).toBe(1)
+    const rejected = results.filter((r) => r.status === 'rejected')
+    expect(rejected).toHaveLength(1)
+    expect(rejected[0].reason.name).toBe('Un1tFunnelRetry')
+    // The retry finds the account linked and books with no second create.
+    _resetUn1tWriteStateForTests()
+    const retried = await processUn1tClassBookingRequest(s.db, { ...request(), id: 'q-2' }, ctx, s.deps)
+    expect(retried.outcome).toBe('booked')
+    expect(s.fetchImpl.count('POST /users/clients')).toBe(1)
+  })
+
   it('a plain re-run after success sends nothing new', async () => {
     const s = setup()
     await processUn1tClassBookingRequest(s.db, request(), ctx, s.deps)
