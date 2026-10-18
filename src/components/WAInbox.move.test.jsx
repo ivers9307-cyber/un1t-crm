@@ -44,6 +44,7 @@ const CONV = {
 }
 
 let moveResponse
+let moveTargets
 let listCalls
 let listBody
 
@@ -53,7 +54,7 @@ function routeFetch(url, init) {
   const u = String(url)
   if (/\/conversations\/conv1\/move$/.test(u)) {
     if (init?.method === 'POST') return json(moveResponse)
-    return json({ success: true, data: { targets: [{ id: 'loc2', name: 'Hatch Street' }] } })
+    return json({ success: true, data: { targets: moveTargets } })
   }
   if (/\/api\/whatsapp\/conversations\/conv1$/.test(u)) {
     return json({ success: true, conversation: CONV, messages: [] })
@@ -68,6 +69,7 @@ function routeFetch(url, init) {
 
 beforeEach(() => {
   moveResponse = { success: true, data: { conversation_id: 'conv1', merged: false } }
+  moveTargets = [{ id: 'loc2', name: 'Hatch Street', whatsapp: true }]
   listCalls = 0
   listBody = [CONV]
   vi.stubGlobal('fetch', vi.fn(async (url, init) => routeFetch(url, init)))
@@ -101,6 +103,22 @@ describe('WAInbox — Move to studio', () => {
     render(<WAInbox locationId="loc1" initialConversationId="conv1" embedded onMoved={onMoved} />)
     await moveFromMenu()
     await waitFor(() => expect(window.alert).toHaveBeenCalledWith('nope'))
+    expect(onMoved).not.toHaveBeenCalled()
+  })
+
+  // WAMOVENUMBER.1 — a studio with no WhatsApp number switched on is shown,
+  // disabled and saying why, instead of a move the server would refuse.
+  it('a target with no WhatsApp number switched on is disabled and says why; clicking it does nothing', async () => {
+    moveTargets = [{ id: 'loc2', name: 'Hatch Street', whatsapp: false }]
+    const onMoved = vi.fn()
+    render(<WAInbox locationId="loc1" initialConversationId="conv1" embedded onMoved={onMoved} />)
+    fireEvent.click(await screen.findByTitle('More actions'))
+    const item = await screen.findByRole('menuitem', { name: /move to hatch street/i })
+    expect(item.disabled).toBe(true)
+    expect(item.textContent).toMatch(/no WhatsApp number/i)
+    fireEvent.click(item)
+    expect(window.confirm).not.toHaveBeenCalled()
+    expect(fetch.mock.calls.some(([url, init]) => init?.method === 'POST' && /\/move$/.test(String(url)))).toBe(false)
     expect(onMoved).not.toHaveBeenCalled()
   })
 
