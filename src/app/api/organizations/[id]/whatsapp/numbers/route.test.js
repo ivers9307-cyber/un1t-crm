@@ -4,7 +4,7 @@
 // anyone else is refused. Adding a number files it at a HOME studio of the
 // organisation (a studio of another organisation is a 400: the database does
 // not refuse it). The route does NOT write the home studio's switch-on row: mig
-// 736's AFTER INSERT trigger does (default only when that studio has none yet),
+// 743's AFTER INSERT trigger does (default only when that studio has none yet),
 // so the route test pins that it never inserts one. Fictional values only (the
 // repo is public): every secret starts SYNTH-.
 

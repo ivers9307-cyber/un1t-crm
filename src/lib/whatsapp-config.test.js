@@ -269,7 +269,7 @@ describe('classifyInboundOwner — SAAS-2 strict tenant routing', () => {
 })
 
 // WAORGNUMBER.1 (R2) — numbers belong to the organisation and are switched on
-// per studio (location_whatsapp_numbers, mig 736). A config is resolved FOR a
+// per studio (location_whatsapp_numbers, mig 743). A config is resolved FOR a
 // studio: locationId is that studio, homeLocationId the number's own studio.
 describe('WAORGNUMBER.1 — the resolver reads location_whatsapp_numbers', () => {
   const STILL = 'a0000000-0000-4000-8000-000000000001'

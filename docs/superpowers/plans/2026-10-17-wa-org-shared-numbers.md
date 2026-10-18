@@ -22,7 +22,7 @@
 - A studio with no number switched on keeps today's refusal for each caller: 409, quiet `sent:false`, or a recorded skip.
 - **Migrations:**
   - Forward-only, applied by me via Supabase MCP `apply_migration` on project `iyvtbjjxdggiadzwwvdj` BEFORE the code that reads them deploys. Run `get_advisors` (security) after DDL.
-  - Next free numbers at plan time: 736–739. Re-check `ls supabase/migrations | tail` before writing; another branch may have taken them.
+  - Next free numbers at plan time: 743–746. Re-check `ls supabase/migrations | tail` before writing; another branch may have taken them.
   - Each migration has a PGlite behavioural test in the style of `tests/migration-723-724-wa-home-studio.test.js`, with fictional ids only (the repo is public).
 - **New tables and functions:** a table states `REVOKE ALL ON public.<t> FROM anon, authenticated`. A function states `REVOKE EXECUTE … FROM PUBLIC, anon, authenticated`. `CREATE OR REPLACE` (never DROP+CREATE) for `move_whatsapp_conversation`.
 - **Deprecated columns stay on disk** with `COMMENT … 'DEPRECATED (mig N)'`.
@@ -54,11 +54,11 @@
 
 Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAHOMESTUDIO sibling clause stays.
 
-### Task 1: Migration 736 — organisation-owned numbers and the switch-on link table
+### Task 1: Migration 743 — organisation-owned numbers and the switch-on link table
 
 **Files:**
-- Create: `supabase/migrations/736_wa_org_numbers.sql`
-- Test: `tests/migration-736-wa-org-numbers.test.js`
+- Create: `supabase/migrations/743_wa_org_numbers.sql`
+- Test: `tests/migration-743-wa-org-numbers.test.js`
 
 **Interfaces:**
 - Produces:
@@ -67,7 +67,7 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
   - Trigger function `private.location_whatsapp_numbers_same_org()`, BEFORE INSERT OR UPDATE. It raises `'whatsapp number % belongs to another organisation'` when the number's org differs from the location's.
   - `move_whatsapp_conversation` re-created with `CREATE OR REPLACE`. Its unstamped-thread stamp reads `location_whatsapp_numbers` (the source studio's link default, then newest) joined to active `whatsapp_numbers`.
 
-- [ ] **Step 1: Write the failing test.** Load 723 + 736 into PGlite over a schema with `organizations`, `locations`, `whatsapp_numbers` (the live columns incl. `is_default`, `location_id`) and `whatsapp_conversations`. Seed STILL + HATCH in ORG, OTHER in ORG2, and NUM at STILL (default). Tests:
+- [ ] **Step 1: Write the failing test.** Load 723 + 743 into PGlite over a schema with `organizations`, `locations`, `whatsapp_numbers` (the live columns incl. `is_default`, `location_id`) and `whatsapp_conversations`. Seed STILL + HATCH in ORG, OTHER in ORG2, and NUM at STILL (default). Tests:
   - `backfills one link row per number`: `select location_id, whatsapp_number_id, is_default from location_whatsapp_numbers` equals `[[STILL, NUM, true]]`.
   - `backfills organization_id`: `select organization_id from whatsapp_numbers` → ORG.
   - `refuses a link across organisations`: insert `(OTHER, NUM)` rejects, matching `/another organisation/`.
@@ -75,11 +75,11 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
   - `closed to clients`: `has_table_privilege('authenticated','public.location_whatsapp_numbers','SELECT')` is false.
   - `move stamps from the link default`: an unstamped thread at STILL moved to HATCH gets `whatsapp_number_id = NUM`.
   - `move keeps its grants`: `has_function_privilege('authenticated', 'public.move_whatsapp_conversation(uuid,uuid)', 'EXECUTE')` is false.
-  - `deprecation comment`: `col_description` on `whatsapp_numbers.is_default` matches `/DEPRECATED \(mig 736\)/`.
+  - `deprecation comment`: `col_description` on `whatsapp_numbers.is_default` matches `/DEPRECATED \(mig 743\)/`.
 
-- [ ] **Step 2: Run, expect FAIL.** `npx vitest run tests/migration-736-wa-org-numbers.test.js` fails with ENOENT on the migration file.
+- [ ] **Step 2: Run, expect FAIL.** `npx vitest run tests/migration-743-wa-org-numbers.test.js` fails with ENOENT on the migration file.
 
-- [ ] **Step 3: Write `736_wa_org_numbers.sql`.** In this order:
+- [ ] **Step 3: Write `743_wa_org_numbers.sql`.** In this order:
   1. Add the column nullable.
   2. `UPDATE … FROM locations` backfill.
   3. `SET NOT NULL` + FK + index on `organization_id`.
@@ -92,7 +92,7 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
 
 - [ ] **Step 4: Run, expect PASS.** Same command, all 8 pass. Also `npx vitest run tests/migration-723-724-wa-home-studio.test.js tests/function-execute-guard.test.js tests/table-default-acl-guard.test.js` passes.
 
-- [ ] **Step 5: Commit** `git commit -m "WAORGNUMBER.1 — mig 736: organisation-owned WhatsApp numbers, switched on per studio"`
+- [ ] **Step 5: Commit** `git commit -m "WAORGNUMBER.1 — mig 743: organisation-owned WhatsApp numbers, switched on per studio"`
 
 ### Task 2: Resolver reads the link table
 
@@ -258,17 +258,17 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
 
 - [ ] **Step 1:** Run `npx vitest run tests/whatsapp-config-callers.test.js`. Update every row whose counts or `why` changed. New callers: the org routes (`own-number`) and anything Task 3 made call a resolver.
 - [ ] **Step 2:** Run the full CI mirror + `npm run build`. Expect all green.
-- [ ] **Step 3:** Apply mig 736 via MCP. `get_advisors` security shows no new findings. Verify: `select count(*) from location_whatsapp_numbers` = 1, and Stillorgan is the default.
+- [ ] **Step 3:** Apply mig 743 via MCP. `get_advisors` security shows no new findings. Verify: `select count(*) from location_whatsapp_numbers` = 1, and Stillorgan is the default.
 - [ ] **Step 4:** Push and `gh pr create`. Add the changelog entry, commit, push. Bind the PR (`ccd_pr`).
 
 ---
 
 ## PR 2 — Templates per studio on a shared WABA (WAORGNUMBER.2)
 
-### Task 8: Migration 737 and the pure sync planner
+### Task 8: Migration 744 and the pure sync planner
 
 **Files:**
-- Create: `supabase/migrations/737_wa_templates_waba.sql`, `tests/migration-737-wa-templates-waba.test.js`, `src/lib/whatsapp-template-sync.js`, `src/lib/whatsapp-template-sync.test.js`
+- Create: `supabase/migrations/744_wa_templates_waba.sql`, `tests/migration-744-wa-templates-waba.test.js`, `src/lib/whatsapp-template-sync.js`, `src/lib/whatsapp-template-sync.test.js`
 
 **Interfaces:**
 - Produces:
@@ -288,7 +288,7 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
 - [ ] **Step 2: Run, expect FAIL.**
 - [ ] **Step 3: Implement** the migration and `planTemplateSync` (pure: no db).
 - [ ] **Step 4: Run, expect PASS.**
-- [ ] **Step 5: Commit** `WAORGNUMBER.2 — mig 737 + template sync planner: templates belong to a studio and a WABA`
+- [ ] **Step 5: Commit** `WAORGNUMBER.2 — mig 744 + template sync planner: templates belong to a studio and a WABA`
 
 ### Task 9: Template routes and template sends pick the number by WABA
 
@@ -357,11 +357,11 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
 
 ### Task 11: Ship PR 2 and move the three Hatch templates
 
-**Files:** `supabase/migrations/738_move_hatch_templates.sql` (+ test), `tests/whatsapp-config-callers.test.js`, changelog entry.
+**Files:** `supabase/migrations/745_move_hatch_templates.sql` (+ test), `tests/whatsapp-config-callers.test.js`, changelog entry.
 
 - [ ] **Step 1:** Write the migration test `moves exactly the three ids to the Hatch location and nothing else`. Use the fictional ids in the test. The migration names the real ids from the spec §8, guarded by `WHERE id IN (…) AND name LIKE 'hatch\_%'`.
 - [ ] **Step 2:** Callers table, CI mirror, `npm run build`.
-- [ ] **Step 3:** Apply 737 via MCP before merge, verify `business_account_id` is non-null on all 21 rows, then merge. Apply 738 after deploy. Verify: Hatch has 3 template rows and Stillorgan has 18.
+- [ ] **Step 3:** Apply 744 via MCP before merge, verify `business_account_id` is non-null on all 21 rows, then merge. Apply 745 after deploy. Verify: Hatch has 3 template rows and Stillorgan has 18.
 - [ ] **Step 4:** PR + changelog entry.
 
 ---
@@ -438,14 +438,14 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
 - [ ] **Step 2: Run, expect FAIL.** **Step 3: Implement.** **Step 4: Run, expect PASS.**
 - [ ] **Step 5: Commit** `WAORGNUMBER.4 — one daily limit per number, shared by its studios`
 
-### Task 16: Migration 739 and blast sign-off
+### Task 16: Migration 746 and blast sign-off
 
 **Files:**
-- Create: `supabase/migrations/739_wa_broadcast_signoff.sql` (+ test), `src/lib/whatsapp-blast-signoff.js` (+ test), `src/app/api/whatsapp/broadcasts/[id]/sign-off/route.js` (+ test)
+- Create: `supabase/migrations/746_wa_broadcast_signoff.sql` (+ test), `src/lib/whatsapp-blast-signoff.js` (+ test), `src/app/api/whatsapp/broadcasts/[id]/sign-off/route.js` (+ test)
 - Modify: `src/app/api/whatsapp/broadcasts/[id]/send/route.js`, the schedule and start-drip routes under `src/app/api/whatsapp/broadcasts/` (grep `status: 'scheduled'` and the drip start), `src/lib/whatsapp.js` (`sendBroadcast`, `sendDripChunk`), the broadcast UI's send button (grep `broadcasts/${` in `src/components`)
 
 **Interfaces:**
-- Mig 739: `whatsapp_broadcasts.signed_off_by uuid NULL REFERENCES profiles(id)`, `signed_off_at timestamptz NULL`.
+- Mig 746: `whatsapp_broadcasts.signed_off_by uuid NULL REFERENCES profiles(id)`, `signed_off_at timestamptz NULL`.
 - `signoffWindow(location, now): { until: string } | null`. It reads `location.settings.whatsapp_blast_signoff_until`. Null when absent or past.
 - `signoffMessage(locationName, until)` gives the exact spec copy, with the date formatted `d MMM yyyy` in the studio zone.
 - In the routes: when `signoffWindow` is open, a non-org-admin gets 403 with that copy. An org admin's send, schedule or start also writes `signed_off_by` and `signed_off_at`.
@@ -483,7 +483,7 @@ Behaviour-neutral: the backfill reproduces today's Stillorgan setup, and the WAH
 
 ### Task 17b: Ship PR 4
 
-- [ ] Apply mig 739 before merge. Update the callers table. Run the CI mirror + build. PR + changelog entry.
+- [ ] Apply mig 746 before merge. Update the callers table. Run the CI mirror + build. PR + changelog entry.
 
 ---
 

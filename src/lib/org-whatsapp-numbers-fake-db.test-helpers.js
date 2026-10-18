@@ -7,7 +7,7 @@
 //   from(t).update(patch).eq(c, v)…[.select().single()] → updates every match
 //   from(t).delete().eq(c, v)…                       → deletes every match
 //
-// It also stands in for mig 736's AFTER INSERT trigger: a number inserted into
+// It also stands in for mig 743's AFTER INSERT trigger: a number inserted into
 // whatsapp_numbers gets a link row at its home studio (default only when that
 // studio has no default link yet), so a route that relies on the trigger can be
 // tested without writing the link itself. Every write is recorded on state.ops

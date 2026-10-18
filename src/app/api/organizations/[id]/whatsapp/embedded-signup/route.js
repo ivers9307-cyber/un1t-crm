@@ -22,7 +22,7 @@
 //        A number this organisation already holds is refreshed in place and
 //        keeps its home studio. A NEW number needs home_location_id (a studio
 //        of this organisation; 400 otherwise, checked before any Meta-side
-//        mutation) and is switched on there by mig 736's AFTER INSERT trigger
+//        mutation) and is switched on there by mig 743's AFTER INSERT trigger
 //        (R1: this route never inserts the link row).
 //
 // Org-admin gated (assertOrganizationAdmin; a master passes).

@@ -4498,7 +4498,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'Add a WhatsApp number to the organisation',
-  description: "home_location_id must be a studio of this organisation (400 otherwise; the database does not refuse another organisation's studio). The number is switched on at its home studio by the database (mig 736's AFTER INSERT trigger: default only when that studio has none); the route never inserts the link row.",
+  description: "home_location_id must be a studio of this organisation (400 otherwise; the database does not refuse another organisation's studio). The number is switched on at its home studio by the database (mig 743's AFTER INSERT trigger: default only when that studio has none); the route never inserts the link row.",
   request: { params: orgNumbersParams, body: { content: { 'application/json': { schema: orgWhatsAppNumberCreateSchema } } } },
   responses: {
     200: { description: 'Number added', content: { 'application/json': { schema: z.object({ success: z.literal(true), number: WaOrgNumberPublic }) } } },

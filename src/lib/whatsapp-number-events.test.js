@@ -82,7 +82,7 @@ describe('broadcastPauseReason', () => {
 // Table-routing fake: whatsapp_numbers supports the select/update(+eq) shapes
 // applyNumberEvent uses; whatsapp_broadcasts supports the auto-pause chain
 // update(..).eq(..).eq(..).eq(..).is(..).select(..) and records its filters.
-// location_whatsapp_numbers (mig 736) answers studiosUsingNumbers: `links` is
+// location_whatsapp_numbers (mig 743) answers studiosUsingNumbers: `links` is
 // [{ location_id, whatsapp_number_id }]; `linkError` makes that read fail.
 function fakeDb({ numbers = [], pausedRows = [], links = [], linkError = null } = {}) {
   const calls = { updates: [], pauseFilters: [] }

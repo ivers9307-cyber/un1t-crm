@@ -1,4 +1,4 @@
--- 736_wa_org_numbers.sql
+-- 743_wa_org_numbers.sql
 -- WAORGNUMBER.1 — WhatsApp numbers are owned by the ORGANISATION and switched on
 -- per studio (docs/superpowers/specs/2026-10-17-wa-org-shared-numbers-design.md, R1).
 --
@@ -182,7 +182,7 @@ CREATE TRIGGER trg_whatsapp_numbers_org_change_guard
 COMMENT ON COLUMN public.whatsapp_numbers.location_id IS
   'Home studio: new-enquiry threads and coexistence history land here (WAORGNUMBER R1)';
 COMMENT ON COLUMN public.whatsapp_numbers.is_default IS
-  'DEPRECATED (mig 736): the per-studio default is location_whatsapp_numbers.is_default. Still written for one release; a later migration drops it.';
+  'DEPRECATED (mig 743): the per-studio default is location_whatsapp_numbers.is_default. Still written for one release; a later migration drops it.';
 
 -- 9. mig 723's function, verbatim, except the stamp subquery: the source
 -- studio's link default (then the newest link) among its ACTIVE numbers.

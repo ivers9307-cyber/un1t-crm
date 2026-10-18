@@ -3,7 +3,7 @@
 // were retired in their favour.
 //
 // A number belongs to an ORGANISATION; whatsapp_numbers.location_id is its HOME
-// studio (where new-enquiry threads and coexistence history land). Mig 736 fills
+// studio (where new-enquiry threads and coexistence history land). Mig 743 fills
 // organization_id from the home studio when an insert omits it and switches the
 // number on at its home studio (AFTER INSERT trigger), but it does NOT refuse a
 // home studio of another organisation while organization_id is unchanged, so

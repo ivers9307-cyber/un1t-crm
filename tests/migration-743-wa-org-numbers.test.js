@@ -1,6 +1,6 @@
-// WAORGNUMBER.1 — behavioural test for migration 736: WhatsApp numbers are
+// WAORGNUMBER.1 — behavioural test for migration 743: WhatsApp numbers are
 // organisation-owned and switched on per studio (design R1). Loads the REAL
-// 723 + 736 files into PGlite over the live columns of the tables they touch.
+// 723 + 743 files into PGlite over the live columns of the tables they touch.
 // The default privileges below mimic a database BEFORE mig 667/677/678, so a
 // closed grant in the result is the migration's own REVOKE, not the sandbox.
 // Fictional ids only: the repo is public.
@@ -11,7 +11,7 @@ import { PGlite } from '@electric-sql/pglite'
 
 const read = (f) => readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations', f), 'utf8')
 const MIG_723 = read('723_move_whatsapp_conversation.sql')
-const MIG_736 = read('736_wa_org_numbers.sql')
+const MIG_743 = read('743_wa_org_numbers.sql')
 
 const ORG = 'd0000000-0000-0000-0000-000000000001'
 const ORG2 = 'd0000000-0000-0000-0000-000000000002'
@@ -67,13 +67,13 @@ async function boot(extraBefore = '') {
   await db.exec(SCHEMA)
   if (extraBefore) await db.exec(extraBefore)
   await db.exec(MIG_723)
-  await db.exec(MIG_736)
+  await db.exec(MIG_743)
   return db
 }
 const one = async (db, sql) => (await db.query(sql)).rows[0]
 const rows = async (db, sql) => (await db.query(sql)).rows
 
-describe('736 organisation-owned WhatsApp numbers', () => {
+describe('743 organisation-owned WhatsApp numbers', () => {
   it('backfills one link row per number', async () => {
     const db = await boot()
     expect(await rows(db, `SELECT location_id, whatsapp_number_id, is_default FROM location_whatsapp_numbers`))
@@ -149,7 +149,7 @@ describe('736 organisation-owned WhatsApp numbers', () => {
   it('deprecation comment', async () => {
     const db = await boot()
     const c = (col) => one(db, `SELECT col_description('public.whatsapp_numbers'::regclass, (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.whatsapp_numbers'::regclass AND attname = '${col}')) AS d`)
-    expect((await c('is_default')).d).toMatch(/DEPRECATED \(mig 736\)/)
+    expect((await c('is_default')).d).toMatch(/DEPRECATED \(mig 743\)/)
     expect((await c('location_id')).d).toMatch(/Home studio/)
   })
 

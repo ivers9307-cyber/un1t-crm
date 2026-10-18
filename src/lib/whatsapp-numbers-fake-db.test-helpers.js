@@ -24,7 +24,7 @@ function valueAt(row, col) {
 function rowsFor(state, table) {
   if (table === 'location_whatsapp_numbers') {
     // No `links` given: every number is switched on at its home studio, as the
-    // mig 736 backfill (and its AFTER INSERT trigger) leaves it.
+    // mig 743 backfill (and its AFTER INSERT trigger) leaves it.
     const links = state.links ?? (state.numbers || []).map((n) => link(n.location_id, n.id, { is_default: Boolean(n.is_default) }))
     return links
       .map((l) => ({ ...l, whatsapp_numbers: (state.numbers || []).find((n) => n.id === l.whatsapp_number_id) || null }))

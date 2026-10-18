@@ -3,7 +3,7 @@
 //
 // A number belongs to the ORGANISATION (added and edited at /settings/whatsapp-
 // numbers); a studio only SWITCHES it on or off, and picks its default. The
-// switch is a location_whatsapp_numbers row (mig 736).
+// switch is a location_whatsapp_numbers row (mig 743).
 //
 // GET  /api/locations/[id]/whatsapp/numbers
 //   Every number of the studio's organisation: { id, label, display_phone,
@@ -168,7 +168,7 @@ export async function PUT(request, props) {
         .insert({ location_id: locationId, whatsapp_number_id: numberId, is_default: makeDefault, created_by: user.id })
       if (error) {
         await restoreOtherDefault()
-        // Mig 736's same-organisation trigger: not this studio's organisation's number.
+        // Mig 743's same-organisation trigger: not this studio's organisation's number.
         if (/belongs to another organisation/i.test(error.message || '')) return fail('WhatsApp number not found', 404)
         return fail(error.message)
       }

@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
 
 // WAORGNUMBER.1 — the fake models location_whatsapp_numbers too: a number in
-// `state.numbers` is switched on at its home studio (the mig 736 backfill).
+// `state.numbers` is switched on at its home studio (the mig 743 backfill).
 const state = { numbers: [] }
 vi.mock('./supabase', async () => {
   const { fakeWhatsAppDb } = await import('./whatsapp-numbers-fake-db.test-helpers.js')

@@ -12,7 +12,7 @@
 //           app_id?, display_phone?, source?, home_location_id }
 //   home_location_id must be a studio of this organisation (400 otherwise: the
 //   database does not refuse another organisation's studio as a home). The
-//   number is switched on at its home studio by mig 736's AFTER INSERT trigger
+//   number is switched on at its home studio by mig 743's AFTER INSERT trigger
 //   (default only when that studio has none yet); this route does NOT insert
 //   the link row (R1), it only stamps created_by on it afterwards.
 //

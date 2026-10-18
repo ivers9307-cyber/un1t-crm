@@ -3,7 +3,7 @@
 // Single entry point for "give me the WhatsApp credentials I should
 // use for this location".
 //
-// WAORGNUMBER.1 (mig 736): a number belongs to the ORGANISATION and is
+// WAORGNUMBER.1 (mig 743): a number belongs to the ORGANISATION and is
 // switched on per studio by a location_whatsapp_numbers row. A studio's
 // numbers are the active whatsapp_numbers rows switched on there, in order:
 //
@@ -91,7 +91,7 @@ function switchedOnNumbers(db, locationId, extra = (q) => q, numberColumns = '*'
     .eq('whatsapp_numbers.is_active', true))
     .order('is_default', { ascending: false })   // the studio's default first
     .order('created_at', { ascending: false })   // then the newest switch-on
-    // Deterministic tie-break for links stamped in the same instant. Mig 736's
+    // Deterministic tie-break for links stamped in the same instant. Mig 743's
     // move function picks by link is_default, link created_at, n.updated_at, so
     // this order and that one agree on everything but an exact created_at tie.
     .order('whatsapp_number_id', { ascending: true })
