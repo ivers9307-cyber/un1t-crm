@@ -933,7 +933,9 @@ function LeadFormEdit({ block, onUpdate }) {
 // MANUALFUNNEL.1 — for a studio with no Glofox (Hatch Street books on its own
 // platform). The operator types the weekly timetable; the funnel lists it,
 // and every request lands in Approvals for staff to book by hand. A studio
-// WITH Glofox ignores all of this and keeps listing its live classes.
+// WITH Glofox ignores all of this and keeps listing its live classes; a
+// un1t.online studio lists its synced classes instead of the typed text
+// (HATCHSTART.1) but keeps the notice and the confirmation email.
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 function ManualTimetableFields({ block, onUpdate, publicPath }) {
@@ -947,6 +949,9 @@ function ManualTimetableFields({ block, onUpdate, publicPath }) {
         <p className="text-sm font-medium text-un1t-text">Typed-in timetable (studio without Glofox)</p>
         <p className="text-[11px] text-un1t-muted mt-1">
           Only used when this studio has no Glofox connection. Visitors pick one of these times and leave their details. Nothing is booked automatically: each request appears in Approvals for staff to create the account and booking by hand.
+        </p>
+        <p className="text-[11px] text-un1t-muted mt-1">
+          A studio that runs on un1t.online ignores the typed-in timetable and the first bookable date: visitors see its real classes from un1t.online. The minimum notice and the confirmation email below still apply.
         </p>
       </div>
       <Field

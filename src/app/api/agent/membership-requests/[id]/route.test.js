@@ -898,6 +898,16 @@ describe('PATCH class_booking approval — manual timetable booking', () => {
     expect(createBooking).not.toHaveBeenCalled()
   })
 
+  // HATCHSTART.1 — a class off a un1t.online studio's synced timetable.
+  it('a un1t.online class (un1t:<id>) records the same way; nothing is sent to Glofox', async () => {
+    db = makeDbFor(manualRow({ event_id: 'un1t:7c9e6679-7425-40de-944b-e07fc1f90ae7', class_name: 'RALLY' }), updates)
+    const json = await (await approve()).json()
+    expect(json.executed).toEqual({ ok: true, manual: true })
+    expect(updates.at(-1).patch.status).toBe('actioned')
+    expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+
   it('recording it after the class has run is still actioned, never expired', async () => {
     db = makeDbFor(manualRow({ starts_at: new Date(Date.now() - 3_600_000).toISOString() }), updates)
     await approve()

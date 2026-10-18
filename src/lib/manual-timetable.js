@@ -25,6 +25,23 @@ export function isManualEventId(id) {
   return typeof id === 'string' && id.startsWith(MANUAL_EVENT_PREFIX)
 }
 
+// HATCHSTART.1 — a class off a un1t.online studio's synced timetable
+// (un1t_events) carries 'un1t:' + its un1t.online id, the same key
+// class_occurrences uses for it. The CRM cannot book un1t.online yet (the
+// write-back funnel is dark), so such a class is booked by staff exactly like
+// a manual one.
+export const UN1T_EVENT_PREFIX = 'un1t:'
+export function isUn1tEventId(id) {
+  return typeof id === 'string' && id.startsWith(UN1T_EVENT_PREFIX)
+}
+
+// The one question the processor, the approve route and the card copy ask:
+// is this a class staff book by hand on the studio's own platform? Judged on
+// the event id, never on a card's `reason`.
+export function isHandBookedEventId(id) {
+  return isManualEventId(id) || isUn1tEventId(id)
+}
+
 export const DEFAULT_MIN_NOTICE_HOURS = 12
 const MAX_MIN_NOTICE_HOURS = 168
 const MAX_SLOTS = 200
@@ -238,13 +255,27 @@ export function manualTimetableConfigFromBlocks(blocks) {
   const text = typeof cf?.timetable === 'string' ? cf.timetable : ''
   if (!text.trim()) return null
   const start = typeof cf.timetable_start_date === 'string' ? cf.timetable_start_date.trim() : ''
-  const rawNotice = cf.min_notice_hours
-  const notice = rawNotice === '' || rawNotice == null ? NaN : Number(rawNotice)
   return {
     text,
     startDate: /^\d{4}-\d{2}-\d{2}$/.test(start) ? start : null,
-    minNoticeHours: Number.isFinite(notice) && notice >= 0
-      ? Math.min(MAX_MIN_NOTICE_HOURS, notice)
-      : DEFAULT_MIN_NOTICE_HOURS,
+    minNoticeHours: minNoticeHoursOf(cf),
   }
+}
+
+function minNoticeHoursOf(cf) {
+  const rawNotice = cf?.min_notice_hours
+  const notice = rawNotice === '' || rawNotice == null ? NaN : Number(rawNotice)
+  return Number.isFinite(notice) && notice >= 0
+    ? Math.min(MAX_MIN_NOTICE_HOURS, notice)
+    : DEFAULT_MIN_NOTICE_HOURS
+}
+
+/**
+ * HATCHSTART.1 — the class_funnel block's minimum notice, with or without a
+ * hand-written timetable on it (a un1t.online studio lists its synced
+ * timetable but staff still book it by hand, so the same notice applies).
+ */
+export function classFunnelMinNoticeHours(blocks) {
+  const list = Array.isArray(blocks) ? blocks : []
+  return minNoticeHoursOf(list.find((b) => b && typeof b === 'object' && b.type === 'class_funnel'))
 }

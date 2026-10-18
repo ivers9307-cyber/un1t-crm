@@ -486,6 +486,8 @@ Branch `un1t-funnel-front`. **Waits for:** PR 1 merged (columns + settings reade
 
 ### Task 16: `readPublicClasses` un1t.online branch
 
+> **Already partly shipped (HATCHSTART.1, 2026-10-18), ahead of this plan:** at any `membership_source = 'un1t_online'` studio `readPublicClasses` now lists `un1t_events` (scheduled, `access_mode 'open'`, after the class_funnel block's minimum notice, not full, `settings.un1t_online.hidden_class_keywords` applied) **whatever `funnel_enabled` says**, with `event_id = 'un1t:' + un1t_id`, not the bare uuid. `isHandBookedEventId` (manual-timetable.js) sends those ids to the `manual_booking` staff card, exactly like `manual-…` ids. When this task and Task 22 land: strip the `un1t:` prefix before the write primitives, and dispatch a `un1t:` id with the funnel off to today's `manual_booking` card (not `un1t_funnel_off`), so a request filed before the switch still books by hand.
+
 **Files:**
 - Modify: `src/lib/public-classes.js`, `src/app/api/public/classes/route.js` (response adds `terms`, Task 18)
 - Test: `src/lib/public-classes.un1t.test.js`
