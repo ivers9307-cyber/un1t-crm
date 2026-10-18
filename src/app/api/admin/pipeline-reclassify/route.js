@@ -25,7 +25,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { reclassifyAllContacts } from '@/lib/pipeline-reclassify'
+import { reclassifyAllContacts, restampUn1tDealDates } from '@/lib/pipeline-reclassify'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -38,6 +38,15 @@ const PipelineReclassifySchema = z.object({
   // acquisition row before it is re-enabled), dry-run as acquisition_un1t.
   // Honoured ONLY with dry_run: a real run never classifies a disabled board.
   include_disabled: z.array(z.literal('acquisition')).optional(),
+  // HATCHPIPE.5 — instead of classifying, re-date the open deals on the
+  // location's un1t.online boards from the un1t evidence (created_at,
+  // stage_entered_at; no stage change). Dry-run it first. Needs an explicit
+  // location_id, and is not combined with include_disabled.
+  restamp_dates: z.boolean().optional(),
+}).refine((b) => !(b.restamp_dates && b.include_disabled?.length), {
+  message: 'restamp_dates cannot be combined with include_disabled', path: ['include_disabled'],
+}).refine((b) => !b.restamp_dates || Boolean(b.location_id), {
+  message: 'restamp_dates needs an explicit location_id', path: ['location_id'],
 })
 
 export const runtime = 'nodejs'
@@ -66,6 +75,14 @@ export async function POST(request) {
   const dryRun = body?.dry_run === true
 
   const db = createServerClient()
+
+  // HATCHPIPE.5 — the one-off date backfill. Scoped to body.location_id (the
+  // schema requires it), un1t.online boards only; see restampUn1tDealDates.
+  if (body?.restamp_dates === true) {
+    const restamped = await restampUn1tDealDates(db, { locationId, dryRun })
+    return NextResponse.json(restamped, { status: restamped.ok ? 200 : 500 })
+  }
+
   const result = await reclassifyAllContacts(db, {
     locationId,
     dryRun,
