@@ -56,7 +56,11 @@ import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account
 import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
-import { deriveNoBookingTools, providerTakesBookings, refuseAtNoBookingStudio } from './tool-capability'
+import {
+  BOOKING_SYSTEM_TOOL_NAMES, deriveNoBookingTools, membershipAtOtherStudio, providerTakesBookings,
+  refuseAtNoBookingStudio,
+} from './tool-capability'
+import { resolveMemberStudios, otherStudioOnly } from './member-studios'
 import { DEFAULT_BOOKING_CTA_LABEL } from './default-copy'
 import { anthropicMessages } from '@/lib/anthropic'
 // MIA-HYGIENE.4 — the agent's own caught failures never reached error_events
@@ -884,6 +888,32 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // MIA-REVIEW.3 — surface the acting account to the decision log.
     trace.actingContactId = toolCtx.verifiedContactId || null
 
+    // MIAHATCH.1 — which studios is this person a member of, and may this
+    // studio's Mia answer for them? WhatsApp only (Instagram has no phone to
+    // gate on and leaves memberStudios undefined). The anchor is the acting
+    // account, else the thread's contact; no anchor or no organisation means
+    // no resolution, which is today's thread-studio behaviour. The resolver
+    // never throws; a failed read is { studios: [], readFailed: true } and the
+    // dispatch below treats it exactly like no resolution.
+    const resolveTurnMemberStudios = async (anchorContactId) => {
+      if (!isWhatsApp || !anchorContactId || !loc?.organization_id) return undefined
+      try {
+        return await resolveMemberStudios(db, {
+          anchorContactId,
+          threadLocationId: locationId,
+          organizationId: loc.organization_id,
+          senderPhone: recipient,
+        })
+      } catch { return undefined }
+    }
+    const applyMemberStudios = (resolution) => {
+      if (!resolution) return
+      toolCtx.memberStudios = resolution
+      // The decision row records the LATEST resolution (a failed read records none).
+      trace.memberStudios = resolution.readFailed ? null : resolution.studios
+    }
+    applyMemberStudios(await resolveTurnMemberStudios(resolvedVerifiedContactId || conv?.contact_id))
+
     let verifyFails = conv?.agent_verify_attempts ?? 0
     // MIA-CREDITS.1 — set when book_class pre-flights to no_credits; the
     // turn ends in a deterministic handoff (script + park + manager push).
@@ -984,7 +1014,20 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
               // MIAORG.1 Task 5 — a booking-system tool named at a studio
               // without one (never offered there, so the model invented it)
               // is refused before any executor runs: no Glofox call, no read.
-              result = refuseAtNoBookingStudio(block.name, toolCtx) || (ACCOUNT_TOOL_NAMES.has(block.name)
+              //
+              // MIAHATCH.1 — a person whose only live membership is at another
+              // studio Mia cannot answer for: the booking-system and account
+              // tools would read THIS studio's Glofox columns and report "no
+              // membership", true of the studio and false of the person.
+              // Answer with the studio's name instead, before any executor
+              // (and before the no-booking refusal) runs. A failed or absent
+              // resolution never reaches here: today's behaviour exactly.
+              const otherStudio = BOOKING_SYSTEM_TOOL_NAMES.has(block.name)
+                && toolCtx.memberStudios && !toolCtx.memberStudios.readFailed
+                ? otherStudioOnly(toolCtx.memberStudios.studios, locationId)
+                : null
+              result = (otherStudio ? membershipAtOtherStudio(otherStudio.name) : null)
+                || refuseAtNoBookingStudio(block.name, toolCtx) || (ACCOUNT_TOOL_NAMES.has(block.name)
                 ? await executeAccountTool(block.name, block.input || {}, toolCtx)
                 : EVENT_TOOL_NAMES.has(block.name)
                   ? await executeEventTool(block.name, block.input || {}, toolCtx)
@@ -1031,6 +1074,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
                 // reads (person-accounts.js) make the anchor sufficient.
                 toolCtx.verifiedContactId = fresh?.agent_verified_contact_id || toolCtx.verifiedContactId
                 trace.actingContactId = toolCtx.verifiedContactId
+                // MIAHATCH.1 — a different acting account can be a member of
+                // different studios: resolve again from the verified contact.
+                applyMemberStudios(await resolveTurnMemberStudios(toolCtx.verifiedContactId))
               }
             }
             toolResults.push({

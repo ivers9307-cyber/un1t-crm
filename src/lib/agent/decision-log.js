@@ -14,6 +14,8 @@ const META_MAX_INPUT_CHARS = 200
 // MIA-HYGIENE.4 — upstream error text (an Anthropic body, a stack line) can be
 // long; the trace wants the shape of the failure, not the essay.
 const META_MAX_ERROR_CHARS = 160
+// MIAHATCH.1 — a person is at a handful of studios, never dozens.
+const META_MAX_STUDIOS = 8
 
 /**
  * Compact a turn trace into the agent_decisions.meta payload (mig 444).
@@ -54,6 +56,19 @@ export function compactDecisionMeta(trace = {}) {
       e.message = m.length > META_MAX_ERROR_CHARS ? m.slice(0, META_MAX_ERROR_CHARS) + '…' : m
     }
     if (Object.keys(e).length) meta.error = e
+  }
+  // MIAHATCH.1 — which studios the turn resolved this person at, so a reply
+  // that named another studio (or said nothing about one) can be explained
+  // after the fact. Ids and flags ONLY: no studio names, no contact ids, no
+  // member ids. Absent when the turn did not resolve (Instagram, a failed
+  // read, no organisation).
+  if (Array.isArray(trace.memberStudios) && trace.memberStudios.length) {
+    meta.member_studios = trace.memberStudios.slice(0, META_MAX_STUDIOS).map((s) => ({
+      location_id: s?.locationId ?? null,
+      provider: s?.providerKey ?? null,
+      active: s?.active === true,
+      answerable: s?.answerable === true,
+    }))
   }
   return Object.keys(meta).length ? meta : null
 }
