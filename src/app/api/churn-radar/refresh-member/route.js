@@ -32,6 +32,9 @@ import { logWarn, logInfo } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { isCrossoverAt } from '@/lib/contact-crossovers'
+import { radarReadsFor } from '@/lib/membership/reads/index'
+import { syncDataAsOf } from '@/lib/radar-availability'
+import { getLocationZone, timeLabelIn } from '@/lib/location-time'
 
 const RefreshMemberSchema = z.object({
   contact_id: uuidLike,
@@ -46,6 +49,19 @@ const STATE_COLUMNS =
   'glofox_membership_status, glofox_membership_type, glofox_membership_state, ' +
   'glofox_billing_interval, last_payment_at, last_attended_at, last_booked_at, ' +
   'trial_credits_remaining, glofox_membership_expiry'
+
+const UN1T_REFRESH = 'un1t.online data refreshes every 15 minutes'
+
+async function un1tRefreshCopy(db, locationId) {
+  const at = await syncDataAsOf(db, locationId)
+  if (!at) return UN1T_REFRESH
+  try {
+    const hm = timeLabelIn(at, await getLocationZone(db, locationId))
+    return hm ? `${UN1T_REFRESH}, last at ${hm}` : UN1T_REFRESH
+  } catch {
+    return UN1T_REFRESH
+  }
+}
 
 export async function POST(request) {
   const user = await getCurrentUser()
@@ -76,6 +92,12 @@ export async function POST(request) {
   // or a un1t client there); never the caller's other studios. Fails closed.
   if (!contact || (contact.location_id !== locationId && !(await isCrossoverAt(db, contact.id, locationId)))) {
     return NextResponse.json({ success: false, error: 'Contact not in your active location' }, { status: 404 })
+  }
+  // UN1TRADAR.3 — a un1t.online studio has nothing to re-pull from Glofox;
+  // its data refreshes on the sync. Say when it last did (studio clock).
+  const { source } = await radarReadsFor(db, locationId)
+  if (source === 'un1t_online') {
+    return NextResponse.json({ success: false, error: await un1tRefreshCopy(db, locationId) }, { status: 409 })
   }
   if (!contact.glofox_member_id) {
     return NextResponse.json({

@@ -58,6 +58,7 @@ import { getLocationBranding } from '@/lib/location-branding'
 import { defaultWinbackMessage } from '@/lib/churn-winback'
 import { validateBody } from '@/lib/validate'
 import { isCrossoverAt } from '@/lib/contact-crossovers'
+import { radarReadsFor } from '@/lib/membership/reads/index'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -91,7 +92,11 @@ function isoDatePlus(days) {
 // WAORGNUMBER.4 (R8) — the 409 for a radar studio with no WhatsApp number
 // switched on, naming it: "No WhatsApp number is switched on at {studio}." A
 // failed name read still refuses, without the name.
+const PAYMENT_REMINDER_UN1T = 'Payment reminders are not available for un1t.online studios yet.'
+
 async function noNumberRefusal(db, locationId) {
+  // UN1TRADAR.3 — one structured line per refusal (no Meta call was made, no row written)
+  logInfo('churn-radar', 'outreach refused: studio has no WhatsApp number', { locationId })
   const { data: loc, error } = await db.from('locations').select('name').eq('id', locationId).maybeSingle()
   if (error) logWarn('churn-radar', 'studio name read failed for the no-number refusal', { locationId, code: error.code || null })
   return NextResponse.json({ success: false, error: noNumberSwitchedOnMessage(error ? null : loc?.name) }, { status: 409 })
@@ -211,6 +216,12 @@ export async function POST(request) {
   // them. enrolContacts is idempotent — a re-click on a member already
   // mid-sequence is a no-op, not a double-send.
   if (action === 'payment_reminder') {
+    // UN1TRADAR.3 — the reminder reads glofox_invoices and mints a Glofox pay
+    // link: refused at a un1t.online studio (the button is hidden there too).
+    const { source } = await radarReadsFor(db, locationId)
+    if (source === 'un1t_online') {
+      return NextResponse.json({ success: false, error: PAYMENT_REMINDER_UN1T }, { status: 409 })
+    }
     const { data: loc } = await db
       .from('locations')
       .select('dunning_sequence_id')

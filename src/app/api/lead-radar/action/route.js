@@ -23,7 +23,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendRadarOutreach } from '@/lib/radar-outreach'
-import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
+import { whatsappErrorStatus, isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
@@ -96,6 +96,8 @@ export async function POST(request) {
       await sendRadarOutreach({ db, contact, templateName, locationId, sentBy: user.id })
     } catch (e) {
       logWarn('lead-radar', 'outreach send failed', { err: e, contactId })
+      // UN1TRADAR.3 — one structured line for the no-number refusal
+      if (isWhatsAppNumberMissing(e)) logInfo('lead-radar', 'outreach refused: studio has no WhatsApp number', { locationId })
       // WACONFIGFALLBACK.1 — no WhatsApp number at this location → 409.
       return NextResponse.json({
         success: false,
