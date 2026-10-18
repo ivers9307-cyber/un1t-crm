@@ -257,3 +257,63 @@ describe('Un1tOnlineIntegrationTab', () => {
     expect(screen.queryByLabelText(/API token/i)).toBeNull()
   })
 })
+
+// UN1TWRITE.12 — the Writes section: masters only (the GET carries `write`
+// only for them), the switch, the trial product picker and the permissions line.
+describe('Un1tOnlineIntegrationTab — Writes (UN1TWRITE.12)', () => {
+  const write = (over = {}) => ({
+    writes_enabled: false, trial_product_id: null,
+    trial_products: [{ un1t_id: 'p-trial', title: 'Trial' }],
+    permissions: { all_present: true, missing: [] },
+    ...over,
+  })
+
+  it('the Writes section shows only when the GET carries the write block (masters)', async () => {
+    current = connected()
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    await screen.findByText('UN1T Hatch Street')
+    expect(screen.queryByText('Allow the CRM to write to un1t.online')).toBeNull()
+    cleanup()
+    current = connected({ write: write() })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    expect(await screen.findByText('Allow the CRM to write to un1t.online')).toBeTruthy()
+    expect(screen.getByText('Write permissions: all present')).toBeTruthy()
+  })
+
+  it('the permissions line lists missing permissions, or says it could not check', async () => {
+    current = connected({ write: write({ permissions: { all_present: false, missing: ['purchases:create', 'credits:read'] } }) })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    expect(await screen.findByText('Write permissions missing: purchases:create, credits:read')).toBeTruthy()
+    cleanup()
+    current = connected({ write: write({ permissions: { unreadable: true } }) })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    expect(await screen.findByText(/Write permissions could not be checked/)).toBeTruthy()
+  })
+
+  it('toggling the switch PATCHes writes_enabled; picking a product PATCHes trial_product_id', async () => {
+    current = connected({ write: write() })
+    fetchMock.mockImplementation(async (url, init) => {
+      const method = init?.method || 'GET'
+      if (method === 'PATCH') {
+        const body = JSON.parse(init.body)
+        current = connected({ write: write({ writes_enabled: body.writes_enabled ?? current.write.writes_enabled, trial_product_id: body.trial_product_id ?? current.write.trial_product_id }) })
+        return reply({ write: current.write })
+      }
+      return reply(current)
+    })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Allow the CRM to write to un1t.online' }))
+    await waitFor(() => expect(callsOf('PATCH')).toHaveLength(1))
+    expect(JSON.parse(callsOf('PATCH')[0][1].body)).toEqual({ writes_enabled: true })
+    fireEvent.change(screen.getByLabelText('Trial product'), { target: { value: 'p-trial' } })
+    await waitFor(() => expect(callsOf('PATCH')).toHaveLength(2))
+    expect(JSON.parse(callsOf('PATCH')[1][1].body)).toEqual({ trial_product_id: 'p-trial' })
+  })
+
+  it('with writes on, the read-only token note is not shown (writes need a write token)', async () => {
+    current = connected({ has_write_permissions: true, write: write({ writes_enabled: true }) })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    await screen.findByText('Allow the CRM to write to un1t.online')
+    expect(screen.queryByText(/a read-only token is safer/)).toBeNull()
+  })
+})

@@ -52,6 +52,7 @@ import { recordErrorEvent } from './error-events.js'
 import { logInfo, logWarn } from './log'
 import {
   judgeUn1tWrite,
+  UN1T_WRITE_OPS,
   missingPermissions,
   permissionMissingMessage,
   classifyRefusal,
@@ -488,6 +489,20 @@ export async function createUn1tWriter(
     }
   }
 
+  /**
+   * UN1TWRITE.12 — the settings tab's permissions line: every write
+   * permission the token lacks, across all ops (the cached GET /api-token,
+   * one budget slot at most every 5 minutes). Throws Un1tWriteRefused
+   * (not connected, the token refused, the check unreadable).
+   * @returns {Promise<{ missing: string[], studioMatches: boolean }>}
+   */
+  async function permissionReport() {
+    requireConnected()
+    const self = await tokenSelf()
+    const missing = [...new Set(UN1T_WRITE_OPS.flatMap((op) => missingPermissions(op, self.permissions)))]
+    return { missing, studioMatches: !!studioId && self.studioId === studioId }
+  }
+
   // A check read: one call, with the budget waited for, never throwing.
   async function runCheck(fn, meta) {
     checkDepth++
@@ -762,6 +777,7 @@ export async function createUn1tWriter(
     studioId,
     studioName,
     ensureOp,
+    permissionReport,
     assertAllowed: (op, method, path, body) => {
       assertEndpoint(op, method, path, body)
     },
