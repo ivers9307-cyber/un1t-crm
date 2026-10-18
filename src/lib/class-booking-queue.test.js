@@ -301,3 +301,13 @@ describe('claimAndProcessBookingJob', () => {
     expect(result).toEqual({ status: 'failed', error: 'glofox 502', requeued: true })
   })
 })
+
+describe('UN1TWRITE.22 — a un1t.online row at the cap', () => {
+  it("a un1t.online row's processing_error card carries details.provider un1t_online (from the throw's reviewOptions)", async () => {
+    const err = Object.assign(new Error('un1t_funnel_retry:credits_unreadable'), { reviewReason: 'processing_error', reviewOptions: { provider: 'un1t_online', executingContactId: 'c-1' } })
+    processClassBookingRequest.mockRejectedValueOnce(err)
+    const db = makeDb()
+    await claimAndProcessBookingJob(db, { id: 'cbr-1', attempts: MAX_ATTEMPTS - 1, glofox_event_id: 'un1t:ev-1' })
+    expect(routeToReview).toHaveBeenCalledWith(db, expect.objectContaining({ id: 'cbr-1' }), 'processing_error', { provider: 'un1t_online', executingContactId: 'c-1' })
+  })
+})

@@ -158,11 +158,12 @@ export async function ensureUn1tAccount(db, { locationId, organizationId, contac
 
   // No account: create one, only with a recorded acceptance.
   if (!request?.terms_accepted_at) return card('terms_not_accepted')
+  // The same writer as the find (one per job), never a fresh one.
   const r = await d.createClient(db, {
     locationId, contact,
     terms: { acceptedAt: request.terms_accepted_at, source: request.terms_source ?? null, version: request.terms_version ?? null },
     origin, originRef, actor,
-  })
+  }, { writerFactory: async () => writer })
   if (r.verdict === 'done') {
     if (r.conflict) return card('un1t_link_conflict')
     const id = idText(r.id)
@@ -248,7 +249,8 @@ export async function runSetPasswordStep(db, { locationId, contact, un1tUserId, 
   }
 
   if (settings?.sendsWelcome && settings?.welcomeSetsLogin) return { explanation, forgotPassword: 'skipped_flag' }
-  const r = await d.forgotPassword(db, { locationId, contactId: contact.id, un1tUserId, email: contact.email, origin, originRef: request?.id ?? null })
+  const r = await d.forgotPassword(db, { locationId, contactId: contact.id, un1tUserId, email: contact.email, origin, originRef: request?.id ?? null },
+    writer ? { writerFactory: async () => writer } : undefined)
   const out = { explanation, forgotPassword: r.verdict === 'refused' && r.retryable ? 'retry' : r.verdict }
   if (r.code) out.code = r.code
   if (r.verdict !== 'done') out.help = UN1T_SET_PASSWORD_HELP

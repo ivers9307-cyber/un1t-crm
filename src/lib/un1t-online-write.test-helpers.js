@@ -96,6 +96,13 @@ export function makeDb({
       if (kind === 'eq') return r[c] === v
       if (kind === 'in') return v.includes(r[c])
       if (kind === 'is') return v === null ? r[c] === null || r[c] === undefined : r[c] === v
+      if (kind === 'neq') return r[c] !== v
+      if (kind === 'notnull') return r[c] !== null && r[c] !== undefined
+      // A LIKE pattern as Postgres reads it (escaped _ % \\ are literal), case-insensitive.
+      if (kind === 'ilike') {
+        const re = new RegExp(`^${String(v).replace(/\\([_%\\])|([_%])|([.*+?^${'$'}{}()|[\]])/g, (m, esc, wild, meta) => (esc ? `\\${esc}` : wild === '_' ? '.' : wild === '%' ? '.*' : `\\${meta}`))}$`, 'i')
+        return typeof r[c] === 'string' && re.test(r[c])
+      }
       return false
     })
     const open = (r) => r.stage === 'sent' || r.stage === 'unknown'
@@ -165,6 +172,9 @@ export function makeDb({
       eq(c, v) { s.filters.push(['eq', c, v]); return api },
       in(c, v) { s.filters.push(['in', c, v]); return api },
       is(c, v) { s.filters.push(['is', c, v]); return api },
+      neq(c, v) { s.filters.push(['neq', c, v]); return api },
+      not(c, op, v) { if (op === 'is' && v === null) s.filters.push(['notnull', c]); return api },
+      ilike(c, v) { s.filters.push(['ilike', c, v]); return api },
       order(c, o) { s.order = [c, o]; return api },
       limit(n) { s.limit = n; return api },
       single() { return Promise.resolve(first(run())) },

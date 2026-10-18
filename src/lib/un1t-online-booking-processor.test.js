@@ -1,0 +1,200 @@
+// UN1TWRITE.22 — the un1t.online funnel processor. Every collaborator is
+// injected (the account step, the trial, the booking, the emails, the card);
+// the fake database models the reads it makes and the queue row it stamps.
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+
+import { processUn1tClassBookingRequest, Un1tFunnelRetry } from './un1t-online-booking-processor'
+
+const LOC = 'loc-hatch'
+const EVENT = 'ev-1'
+const HOUR = 3_600_000
+let tables
+let rowUpdates
+let order
+function makeDb() {
+  return {
+    from(table) {
+      const q = { f: [], op: 'select', payload: null }
+      const rows = () => (tables[table] || []).filter((r) => q.f.every(([k, c, v]) => (k === 'eq' ? r[c] === v : k === 'in' ? v.includes(r[c]) : true)))
+      const b = {
+        select: () => b, order: () => b, limit: () => b,
+        eq: (c, v) => { q.f.push(['eq', c, v]); return b },
+        in: (c, v) => { q.f.push(['in', c, v]); return b },
+        update: (p) => { q.op = 'update'; q.payload = p; return b },
+        maybeSingle: async () => ({ data: rows()[0] ?? null, error: null }),
+        then: (ok, no) => {
+          if (q.op === 'update' && table === 'class_booking_requests') rowUpdates.push(q.payload)
+          return Promise.resolve({ data: q.op === 'update' ? [{ id: 'q-1' }] : rows(), error: null }).then(ok, no)
+        },
+      }
+      return b
+    },
+  }
+}
+
+const request = (over = {}) => ({
+  id: 'q-1', location_id: LOC, contact_id: 'c-1', glofox_event_id: `un1t:${EVENT}`, class_name: 'RALLY',
+  starts_at: new Date(Date.now() + 24 * HOUR).toISOString(), attempts: 1,
+  terms_accepted_at: '2026-10-18T09:00:00.000Z', terms_source: 'website', terms_version: 'v', ...over,
+})
+const settings = (over = {}) => ({ writesEnabled: true, funnelEnabled: true, sendsWelcome: false, welcomeSetsLogin: false, sendsBookingConfirmation: false, ...over })
+const ctx = (over = {}) => ({ settings: settings(over), studioName: 'Hatch Street', organizationId: 'org-1' })
+const done = (over) => ({ verdict: 'done', sent: true, id: 'bk-9', code: null, message: null, alreadyBooked: false, retryable: false, ledgerId: 'l-b', ...over })
+
+let deps
+let writer
+beforeEach(() => {
+  vi.clearAllMocks()
+  // Never the live API: any request a collaborator forgot to route through the fake fails loudly.
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('test: real network call') }))
+  order = []
+  rowUpdates = []
+  tables = {
+    un1t_events: [{ location_id: LOC, un1t_id: EVENT, title: 'RALLY', status: 'scheduled', starts_at: new Date(Date.now() + 24 * HOUR).toISOString() }],
+    contacts: [{ id: 'c-1', organization_id: 'org-1', first_name: 'Jane', last_name: 'Doe', name: 'Jane Doe', email: 'jane@example.test', phone: null, un1t_user_id: null, ctwa_clid: null }],
+    un1t_subscriptions: [],
+    landing_page_settings: [{ location_id: LOC, public_path: 'hatch-street', blocks: [] }],
+    locations: [{ id: LOC, name: 'Hatch Street', address: '1 Hatch St', timezone: 'Europe/Dublin' }],
+  }
+  writer = { locationId: LOC, studioId: 'studio-1', read: vi.fn(async () => ({ balance: 0, is_unlimited: false })) }
+  const track = (name, value) => vi.fn(async (...args) => { order.push(name); return typeof value === 'function' ? value(...args) : value })
+  deps = {
+    writerFactory: vi.fn(async () => writer),
+    ensureUn1tAccount: track('account', { kind: 'created', un1tUserId: 'usr-1', executingContactId: 'c-1' }),
+    grantTrial: track('trial', { outcome: 'granted', method: 'charge', ledgerId: 'l-t' }),
+    book: track('book', done()),
+    runSetPasswordStep: track('set_password', { explanation: 'sent', forgotPassword: 'done' }),
+    sendManualBookingConfirmEmail: track('confirmation', { sent: true, channel: 'email' }),
+    sendUn1tTrialUsedEmail: track('trial_used_email', { sent: true, channel: 'email' }),
+    trialUsedHandoff: track('handoff', { handled: false }),
+    trialUsedOptionsText: vi.fn(async () => null),
+    routeToReview: vi.fn(async (db, req, reason) => { order.push(`card:${reason}`); return { outcome: 'needs_review', detail: reason } }),
+    sendCtwaConversion: vi.fn(async () => {}),
+    sendWebsiteConversion: vi.fn(async () => {}),
+  }
+})
+const run = (req = request(), c = ctx()) => processUn1tClassBookingRequest(makeDb(), req, c, deps)
+const lastRow = () => Object.assign({}, ...rowUpdates)
+
+describe('processUn1tClassBookingRequest', () => {
+  it('happy path new person: create, trial, book, explanation email then forgot-password, in that order', async () => {
+    const out = await run()
+    expect(out).toEqual({ outcome: 'booked', detail: 'un1t:bk-9' })
+    expect(order).toEqual(['account', 'trial', 'book', 'set_password'])
+    expect(deps.book.mock.calls[0][1]).toMatchObject({ locationId: LOC, contactId: 'c-1', un1tUserId: 'usr-1', eventId: EVENT, origin: 'funnel', originRef: 'q-1' })
+    expect(deps.grantTrial.mock.calls[0][1]).toMatchObject({ locationId: LOC, un1tUserId: 'usr-1', contactId: 'c-1', origin: 'funnel', originRef: 'q-1' })
+    expect(lastRow()).toMatchObject({ status: 'booked', glofox_booking_id: 'un1t:bk-9' })
+    expect(lastRow().un1t_steps).toMatchObject({ account: 'created', trial: 'granted:charge', book: 'done', explanation: 'sent', forgot_password: 'done' })
+    expect(deps.sendWebsiteConversion).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'Schedule', eventId: 'classbooking-q-1' }))
+  })
+
+  it('existing account by own link, sibling email or API walk books with no create and no set-password step', async () => {
+    deps.ensureUn1tAccount.mockImplementation(async () => { order.push('account'); return { kind: 'existing', un1tUserId: 'usr-sib', executingContactId: 'c-sib' } })
+    await run()
+    expect(order).toEqual(['account', 'trial', 'book', 'confirmation'])
+    expect(deps.runSetPasswordStep).not.toHaveBeenCalled()
+    expect(deps.book.mock.calls[0][1]).toMatchObject({ contactId: 'c-sib', un1tUserId: 'usr-sib' })
+    expect(lastRow().un1t_steps).toMatchObject({ account: 'existing', confirmation: 'sent' })
+  })
+
+  it('credits or an active subscription skip the trial', async () => {
+    writer.read.mockResolvedValueOnce({ balance: 2, is_unlimited: false })
+    await run()
+    expect(deps.grantTrial).not.toHaveBeenCalled()
+    expect(lastRow().un1t_steps.trial).toBe('skipped_credits')
+    order.length = 0
+    writer.read.mockResolvedValueOnce({ balance: 0, is_unlimited: false })
+    tables.un1t_subscriptions = [{ location_id: LOC, un1t_user_id: 'usr-1', status: 'active' }]
+    await run()
+    expect(deps.grantTrial).toHaveBeenCalledTimes(0)
+  })
+
+  it('a failed credits read throws (the queue retries); the account is kept', async () => {
+    writer.read.mockRejectedValueOnce(new Error('down'))
+    await expect(run()).rejects.toBeInstanceOf(Un1tFunnelRetry)
+  })
+
+  it('ineligible on the website: trial-used email, row failed trial_used_options_sent, one record-only card, no booking', async () => {
+    deps.grantTrial.mockImplementation(async () => { order.push('trial'); return { outcome: 'ineligible', reason: 'trial_used' } })
+    const out = await run()
+    expect(deps.book).not.toHaveBeenCalled()
+    expect(order).toEqual(['account', 'trial', 'handoff', 'trial_used_email', 'card:un1t_trial_used'])
+    const [, , , opts] = deps.routeToReview.mock.calls[0]
+    expect(opts).toMatchObject({ provider: 'un1t_online', rowStatus: 'failed', rowLastError: 'trial_used_options_sent', executingContactId: 'c-1' })
+    expect(out.outcome).toBe('needs_review')
+  })
+
+  it('ineligible with the hand-off handled: no email, row failed trial_used_handed_to_mia', async () => {
+    deps.grantTrial.mockResolvedValue({ outcome: 'ineligible', reason: 'trial_used' })
+    deps.trialUsedHandoff.mockResolvedValue({ handled: true })
+    const out = await run()
+    expect(deps.sendUn1tTrialUsedEmail).not.toHaveBeenCalled()
+    expect(lastRow()).toMatchObject({ status: 'failed', last_error: 'trial_used_handed_to_mia' })
+    expect(out).toEqual({ outcome: 'failed', detail: 'trial_used_handed_to_mia' })
+  })
+
+  it('trial needs_staff files its reason; trial retry throws', async () => {
+    deps.grantTrial.mockResolvedValueOnce({ outcome: 'needs_staff', reason: 'un1t_trial_unverified' })
+    await run()
+    expect(deps.routeToReview.mock.calls[0][2]).toBe('un1t_trial_unverified')
+    expect(deps.routeToReview.mock.calls[0][3]).toMatchObject({ provider: 'un1t_online' })
+    deps.grantTrial.mockResolvedValueOnce({ outcome: 'retry', code: 'credits_unreadable' })
+    const err = await run().catch((e) => e)
+    expect(err).toBeInstanceOf(Un1tFunnelRetry)
+    expect(err.reviewOptions).toMatchObject({ provider: 'un1t_online', executingContactId: 'c-1' })
+  })
+
+  it('booking fails after create: card un1t_booking_failed, account kept, no set-password step', async () => {
+    deps.book.mockResolvedValue(done({ verdict: 'refused', code: 'CLASS_FULL', id: null }))
+    await run()
+    expect(deps.routeToReview.mock.calls[0][2]).toBe('un1t_booking_failed:CLASS_FULL')
+    expect(deps.runSetPasswordStep).not.toHaveBeenCalled()
+  })
+
+  it('an unclear booking is un1t_outcome_unknown; a busy or in-flight one throws', async () => {
+    deps.book.mockResolvedValueOnce(done({ verdict: 'unknown', id: null }))
+    await run()
+    expect(deps.routeToReview.mock.calls[0][2]).toBe('un1t_outcome_unknown')
+    deps.book.mockResolvedValueOnce(done({ verdict: 'refused', code: 'UN1T_ATTEMPT_IN_FLIGHT', retryable: true }))
+    await expect(run()).rejects.toBeInstanceOf(Un1tFunnelRetry)
+  })
+
+  it('two concurrent requests for one person create one account (RF2): the second throws and retries', async () => {
+    deps.ensureUn1tAccount.mockResolvedValueOnce({ kind: 'retry', code: 'UN1T_ATTEMPT_IN_FLIGHT' })
+    await expect(run()).rejects.toBeInstanceOf(Un1tFunnelRetry)
+    expect(deps.book).not.toHaveBeenCalled()
+  })
+
+  it('a class whose start has passed but whose status is still scheduled is class_unavailable (RF4)', async () => {
+    tables.un1t_events[0].starts_at = new Date(Date.now() - 60_000).toISOString()
+    await run()
+    expect(deps.routeToReview.mock.calls[0][2]).toBe('class_unavailable')
+    expect(deps.ensureUn1tAccount).not.toHaveBeenCalled()
+  })
+
+  it('no email → no_email card; no acceptance + new person → terms_not_accepted card', async () => {
+    tables.contacts[0].email = null
+    await run()
+    expect(deps.routeToReview.mock.calls[0][2]).toBe('no_email')
+    tables.contacts[0].email = 'jane@example.test'
+    deps.ensureUn1tAccount.mockResolvedValueOnce({ kind: 'card', reason: 'terms_not_accepted' })
+    await run(request({ terms_accepted_at: null, terms_source: null }))
+    expect(deps.routeToReview.mock.calls[1][2]).toBe('terms_not_accepted')
+    expect(deps.book).not.toHaveBeenCalled()
+  })
+
+  it('sendsBookingConfirmation skips our confirmation and records the skip in un1t_steps', async () => {
+    deps.ensureUn1tAccount.mockResolvedValue({ kind: 'existing', un1tUserId: 'usr-1', executingContactId: 'c-1' })
+    await run(request(), ctx({ sendsBookingConfirmation: true }))
+    expect(deps.sendManualBookingConfirmEmail).not.toHaveBeenCalled()
+    expect(lastRow().un1t_steps.confirmation).toBe('skipped_flag')
+  })
+
+  it('a malformed event id is class_unavailable and nothing is read from un1t.online', async () => {
+    await run(request({ glofox_event_id: 'un1t: bad id' }))
+    expect(deps.routeToReview.mock.calls[0][2]).toBe('class_unavailable')
+    expect(deps.writerFactory).not.toHaveBeenCalled()
+  })
+})

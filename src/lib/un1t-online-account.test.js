@@ -46,6 +46,7 @@ const done = (over) => ({ verdict: 'done', sent: true, id: null, code: null, mes
 let deps
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('test: real network call') }))
   writes = []
   tables = { contacts: [], un1t_clients: [], un1t_write_events: [] }
   deps = {
