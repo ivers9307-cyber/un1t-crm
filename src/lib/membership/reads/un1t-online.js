@@ -28,7 +28,11 @@
 // counts at Stillorgan if they are a Glofox member there). The one exception is
 // `pipelineInputs`, which reads `contacts` BY ID (never by location) for exactly
 // the people this studio's clients link to, and only six named columns.
-// Service-role client;
+// `pipelineInputs` and `trialEligibility` also read the CRM's own write ledger,
+// `un1t_write_events` (op 'trial' rows, via listLedgerTrials), still filtered by
+// location_id and, in `trialEligibility`, narrowed by the person's user ids and
+// contact ids; `trialEligibility` additionally reads `un1t_clients` to find the
+// person's accounts. Service-role client;
 // reads only, no writes. Every list read is range()+order() paginated.
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { logWarn } from '@/lib/log'
@@ -714,33 +718,25 @@ function unionByUn1tId(...lists) {
 /**
  * May this person get the free trial at `locationId` (see shapeTrialEligibility)?
  * Needs `un1tUserId` and/or `contactId`. "This person" is every un1t account
- * the contact owns at the studio (their un1t_clients rows) plus any user id
- * given, AND any row that carries only the contact id, so a trial booked under
- * a second account, or a sync row not yet stamped with a user, still denies.
+ * owned by the contact asked about AND by the contact of the account asked
+ * about (their un1t_clients rows: one read for the account's own contact, one
+ * for the accounts of those contacts) plus any user id given, AND any row that
+ * carries only a contact id, so a trial booked under a second account, or a
+ * sync row not yet stamped with a user, still denies.
  * Reads their transactions and subscriptions (history: no freshness window),
- * the studio's full products map, and, for a contact, its contact_memberships
- * here from the api and export sources, any status. Any failed read is
- * { success:false }: an unreadable history is never eligible.
+ * the studio's full products map, the CRM's own trial rows in `un1t_write_events`
+ * (done, sent and unknown, by user id and by contact id; an account the CRM just
+ * created is not in un1t_clients until the next sync), and, for a contact, its
+ * contact_memberships here from the api and export sources, any status. Any
+ * failed read is { success:false }: an unreadable history is never eligible.
  */
 async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) {
   if (!locationId) return { success: false, error: 'No location' }
   if (un1tUserId == null && contactId == null) return { success: false, error: 'un1tUserId or contactId is required' }
   try {
-    const userIds = new Set(un1tUserId == null ? [] : [un1tUserId])
-    if (contactId != null) {
-      const accounts = await selectAll((from, to) => db
-        .from('un1t_clients')
-        .select('un1t_user_id')
-        .eq('location_id', locationId)
-        .eq('contact_id', contactId)
-        .order('id', { ascending: true })
-        .range(from, to), { pageSize: PAGE })
-      for (const a of accounts) if (a.un1t_user_id != null) userIds.add(a.un1t_user_id)
-    }
-    const users = [...userIds]
     // The contacts this person is: the one asked about, and the contact of the
-    // account asked about (its un1t_clients row), so a CRM-created account the
-    // sync has not mirrored yet is still reached through its ledger contact_id.
+    // account asked about (its un1t_clients row). A failed read throws: an
+    // unreadable identity is never "no other accounts".
     const contactSet = new Set(contactId == null ? [] : [contactId])
     if (un1tUserId != null) {
       const own = await selectAll((from, to) => db
@@ -753,6 +749,24 @@ async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) 
       for (const c of own) if (c.contact_id != null) contactSet.add(c.contact_id)
     }
     const contactIds = [...contactSet]
+    // Every account those contacts own, so a un1tUserId-only call still sees a
+    // sibling account's history (and a ledger trial row with a NULL contact_id).
+    const userIds = new Set(un1tUserId == null ? [] : [un1tUserId])
+    if (contactIds.length > 0) {
+      const accounts = await selectAllByKeys(
+        contactIds,
+        (keys, from, to) => db
+          .from('un1t_clients')
+          .select('un1t_user_id')
+          .eq('location_id', locationId)
+          .in('contact_id', keys)
+          .order('id', { ascending: true })
+          .range(from, to),
+        { chunkSize: KEY_CHUNK, pageSize: PAGE },
+      )
+      for (const a of accounts) if (a.un1t_user_id != null) userIds.add(a.un1t_user_id)
+    }
+    const users = [...userIds]
     const rowsFor = (table, cols) => Promise.all([
       selectAllByKeys(
         users,

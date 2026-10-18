@@ -995,7 +995,7 @@ describe('pipelineInputs and trialEligibility', () => {
       const { db, log } = makeDb(world({ contact_memberships: [], un1t_subscriptions: [] }))
       expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
       const clientsQ = log.find((q) => q.table === 'un1t_clients')
-      expect(clientsQ.filters).toEqual([['eq', 'location_id', HATCH], ['eq', 'contact_id', 'c1']])
+      expect(clientsQ.filters).toEqual([['eq', 'location_id', HATCH], ['in', 'contact_id', ['c1']]])
     })
 
     it('a trial row with a null un1t_user_id but a matching contact_id denies', async () => {
@@ -1114,6 +1114,40 @@ describe('pipelineInputs and trialEligibility', () => {
       })
       expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'a1' }))
         .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+    })
+
+    it("a un1tUserId-only call widens to the person's sibling accounts: a trial row on a2 with a NULL contact_id still denies a1", async () => {
+      const siblings = [client({ un1t_user_id: 'a1', contact_id: 'c1' }), client({ un1t_user_id: 'a2', contact_id: 'c1' })]
+      for (const stage of ['done', 'sent', 'unknown']) {
+        const w = world({
+          un1t_clients: siblings, un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+          un1t_write_events: [ledger({ un1t_user_id: 'a2', contact_id: null, stage })],
+        })
+        expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'a1' }), stage)
+          .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+      }
+    })
+
+    it("a un1tUserId-only call reads the sibling account's transactions and subscriptions too", async () => {
+      const siblings = [client({ un1t_user_id: 'a1', contact_id: 'c1' }), client({ un1t_user_id: 'a2', contact_id: 'c1' })]
+      const w = world({
+        un1t_clients: siblings, contact_memberships: [], un1t_write_events: [],
+        un1t_transactions: [ctx({ un1t_user_id: 'a2', contact_id: null })],
+        un1t_subscriptions: [csub({ un1t_user_id: 'a2', contact_id: null, status: 'canceled' })],
+      })
+      const { db, log } = makeDb(w)
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'a1' }))
+        .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used', 'membership_history'] } })
+      expect(log.find((q) => q.table === 'un1t_write_events').filters).toContainEqual(['in', 'un1t_user_id', ['a1', 'a2']])
+    })
+
+    it("a un1tUserId-only call does not widen to another person's accounts", async () => {
+      const w = world({
+        un1t_clients: [client({ un1t_user_id: 'a1', contact_id: 'c1' }), client({ un1t_user_id: 'z', contact_id: 'c2' })],
+        un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_write_events: [ledger({ un1t_user_id: 'z', stage: 'done' })],
+      })
+      expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'a1' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
     })
 
     it("a failed read of the account's own un1t_clients row (for its contact) → { success:false }, never eligible", async () => {
