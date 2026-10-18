@@ -24,8 +24,7 @@
 // A config says which studio it is FOR: `locationId` is the studio it was
 // resolved for, `homeLocationId` the number's home studio, `organizationId`
 // the number's organisation. They differ when a studio sends from a number
-// switched on there but homed elsewhere (or, transitionally, through a
-// sibling's stamped number, `viaSibling`).
+// switched on there but homed elsewhere.
 //
 // The webhook router (`resolveWhatsAppNumberByPhoneNumberId`)
 // goes the other direction — given the phone_number_id Meta sent
@@ -44,8 +43,6 @@ export const META_API_URL = `https://graph.facebook.com/${META_API_VERSION}`
  * WAORGNUMBER.1 — `locationId` is the studio the config was resolved FOR
  * (`forLocationId`); `homeLocationId` is the number's own studio
  * (whatsapp_numbers.location_id) and `organizationId` its organisation.
- * `viaSibling` is true only for the transitional WAHOMESTUDIO.1 clause
- * (getConversationNumberConfig).
  *
  * @param {object} row  a whatsapp_numbers row
  * @param {string|null} forLocationId
@@ -57,7 +54,6 @@ function rowToConfig(row, forLocationId) {
     locationId: forLocationId ?? null,
     homeLocationId: row.location_id ?? null,
     organizationId: row.organization_id ?? null,
-    viaSibling: false,
     label: row.label,
     token: row.access_token,
     phoneNumberId: row.phone_number_id,
@@ -223,17 +219,15 @@ export async function getWhatsAppConfig(locationId) {
  * WAREPLYNUMBER.1 (C86) — the number a REPLY into a conversation goes from:
  * the number the customer wrote to. The inbound webhook stamps it on
  * whatsapp_conversations.whatsapp_number_id (mig 696). Used when it is still
- * active and switched on AT this location (WAORGNUMBER.1; or, WAHOMESTUDIO.1,
- * a same-organisation sibling's when this studio has none); otherwise the location default
- * (getWhatsAppConfig, which refuses a number-less studio as ever). A single-
- * number studio resolves the same number either way.
+ * active and switched on AT this location (WAORGNUMBER.1); otherwise the
+ * location default (getWhatsAppConfig, which refuses a number-less studio).
+ * A single-number studio resolves the same number either way. A studio with
+ * nothing switched on never replies through another studio's stamp
+ * (WAORGNUMBER.6 removed WAHOMESTUDIO.1's sibling clause).
  *
  * A TEMPLATE goes from the thread number only when it shares the default's
  * WABA: templates are synced per location from the default number's account,
- * and Meta only sends a number's own-WABA templates. The one exception
- * (WAHOMESTUDIO.1): a number-less studio's thread replies through a
- * same-organisation sibling's stamped number, and its templates come from that
- * number's owner (templateLocationIdFor), not from a default it does not have.
+ * and Meta only sends a number's own-WABA templates.
  *
  * Any failed read here (including the column not existing yet, before 696 is
  * applied) falls back to the default, logged: losing a reply is worse than
@@ -260,11 +254,6 @@ export async function getConversationReplyConfig(locationId, conversationId, { t
   }
   if (!thread) return getWhatsAppConfig(locationId)
   if (!template) return thread
-  // WAHOMESTUDIO.1 — a sibling's number only reaches here for a studio with no
-  // number of its own, so there is no default to compare WABAs with: the
-  // template comes from the number owner's WABA (templateLocationIdFor).
-  // WAORGNUMBER.1: `viaSibling` says so; `locationId` is now always this studio.
-  if (thread.viaSibling) return thread
   return pickReplyConfig(thread, await getWhatsAppConfig(locationId), { template: true })
 }
 
@@ -272,11 +261,9 @@ export async function getConversationReplyConfig(locationId, conversationId, { t
  * WAREPLYNUMBER.1 — the number recorded on the thread
  * (whatsapp_conversations.whatsapp_number_id) while it is ACTIVE and switched
  * on at this location (WAORGNUMBER.1: a location_whatsapp_numbers row), as a
- * config FOR this location. Transitionally (WAHOMESTUDIO.1, deleted by
- * WAORGNUMBER.6) also a same-organisation number when this location has no
- * active number switched on at all: `{ viaSibling: true }`, `homeLocationId`
- * the number's home. Null otherwise (none recorded, inactive, gone, switched
- * off here while this studio has another, or another organisation's). Never
+ * config FOR this location. Null otherwise (none recorded, inactive, gone,
+ * switched off here, or another organisation's; WAORGNUMBER.6: a studio with
+ * nothing switched on never replies through a sibling's stamp). Never
  * throws: a failed read (the column missing before mig 696 included) is null,
  * logged, so the caller replies from the default as it did before.
  *
@@ -300,35 +287,7 @@ export async function getConversationNumberConfig(locationId, conversationId) {
     const { data: here, error: hereErr } = await switchedOnNumbers(db, locationId, (q) => q.eq('whatsapp_number_id', conv.whatsapp_number_id))
       .maybeSingle()
     if (hereErr) throw hereErr
-    if (here?.whatsapp_numbers) return rowToConfig(here.whatsapp_numbers, locationId)
-    // WAHOMESTUDIO.1 (R4), transitional — a SIBLING's number: only for a thread
-    // at a studio with no active number switched on, and only inside one
-    // organisation (the number's organization_id). The thread is filed at the
-    // customer's own studio, so a reply from the organisation number cannot
-    // land in another studio's inbox (the harm WACONFIGFALLBACK.1 closed). A
-    // studio that has a number switched on (Review Focus 1) never falls through
-    // to a stamp that was switched off there.
-    const { data: own, error: ownErr } = await switchedOnNumbers(db, locationId, (q) => q, 'id').limit(1)
-    if (ownErr) throw ownErr
-    if (own && own.length > 0) return null
-    const { data: num, error: numErr } = await db.from('whatsapp_numbers')
-      .select('*')
-      .eq('id', conv.whatsapp_number_id)
-      .eq('is_active', true)
-      .maybeSingle()
-    if (numErr) throw numErr
-    if (!num?.organization_id) return null
-    // A number whose HOME is this studio is never a sibling's: if it is not
-    // switched on here (checked above), the studio switched it off, and a studio
-    // that switched its only number off must stop replying through it.
-    if (num.location_id === locationId) return null
-    const { data: loc, error: locErr } = await db.from('locations')
-      .select('id, organization_id')
-      .eq('id', locationId)
-      .maybeSingle()
-    if (locErr) throw locErr
-    if (!loc?.organization_id || loc.organization_id !== num.organization_id) return null
-    return { ...rowToConfig(num, locationId), viaSibling: true }
+    return here?.whatsapp_numbers ? rowToConfig(here.whatsapp_numbers, locationId) : null
   } catch (e) {
     logWarn('wa-config', 'reply number unreadable; replying from the default number', { conversationId, err: e?.message || String(e) })
     return null
@@ -336,17 +295,14 @@ export async function getConversationNumberConfig(locationId, conversationId) {
 }
 
 /**
- * WAHOMESTUDIO.1 (R5) — the studio whose whatsapp_templates a send in this
- * thread uses: templates are synced per studio from that studio's default
- * number's WABA, so a thread replying through a sibling's number sends that
- * sibling's (the number's home studio's) templates. Every other thread uses
- * its own studio's (WAORGNUMBER.1: a number switched on here is this studio's
- * to send from, whatever its home). Never throws (getConversationNumberConfig
- * never does).
+ * The studio whose whatsapp_templates a send in this thread uses: the thread's
+ * own studio (WAORGNUMBER.1: a number switched on here is this studio's to
+ * send from, whatever its home; WAORGNUMBER.6 removed the sibling case).
+ * Kept as the one seam template senders ask, so the callers table can count
+ * them. Never throws.
  */
-export async function templateLocationIdFor(locationId, conversationId) {
-  const thread = await getConversationNumberConfig(locationId, conversationId)
-  return thread?.viaSibling ? (thread.homeLocationId || locationId) : locationId
+export async function templateLocationIdFor(locationId, _conversationId) {
+  return locationId
 }
 
 /**

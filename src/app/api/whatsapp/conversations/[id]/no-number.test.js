@@ -81,7 +81,7 @@ describe.each(ROUTES)('%s', (_name, call, sender) => {
 })
 
 describe('block', () => {
-  it('WAHOMESTUDIO.1 — block resolves the number through the thread', async () => {
+  it('block resolves the number through the thread (WAREPLYNUMBER.1)', async () => {
     createServerClient.mockReturnValue(makeDb())
     setWhatsAppUserBlockState.mockResolvedValue({})
     await block(json({ action: 'block' }), props)

@@ -54,7 +54,7 @@ export async function syncContactMatchOnly(db, { phone, locationId }) {
  * the IMPORT time, so a staff tag would read as "staff just spoke" in every
  * created_at-ordered reader.
  */
-export async function ingestCoexistenceMessage(db, { locationId, numberId = null, organizationId = null, descriptor }) {
+export async function ingestCoexistenceMessage(db, { locationId, numberId = null, descriptor }) {
   const { waMessageId, peerPhone, direction, messageType, body, tsSeconds } = descriptor
   if (!waMessageId) return { inserted: false, reason: 'no_id' }
   if (direction !== 'inbound' && direction !== 'outbound') return { inserted: false, reason: 'bad_direction' }
@@ -81,13 +81,11 @@ export async function ingestCoexistenceMessage(db, { locationId, numberId = null
   // WAORGNUMBER.5 (R4) — the same rule as the inbound webhook decides the
   // thread's studio: the member's thread with the latest outbound in 7 days at
   // a studio the number is switched on at, else their home studio, else the
-  // number's home (`locationId`); transitionally (WAHOMESTUDIO.1, until
-  // WAORGNUMBER.6) a number-less home studio of the organisation. Never throws.
+  // number's home (`locationId`). Never throws.
   const waPhone = n?.without || peerPhone || 'unknown'
   const route = await routeInboundThread(db, {
     numberId,
     numberHomeLocationId: locationId,
-    organizationId,
     waPhone,
     bsuid: null,
     contact: contactId ? { id: contactId, location_id: contactHome } : null,
@@ -99,9 +97,8 @@ export async function ingestCoexistenceMessage(db, { locationId, numberId = null
   })
   const threadLocationId = route.locationId
   // The receiving number goes on the thread when it is switched on at its
-  // studio, or the thread is at a number-less home studio that replies through
-  // it (R4 step 6).
-  const stamp = Boolean(numberId) && (route.switchedOn || route.by === 'numberless_home')
+  // studio.
+  const stamp = Boolean(numberId) && route.switchedOn
 
   const existingConv = route.conversation
   let conversationId = existingConv?.id

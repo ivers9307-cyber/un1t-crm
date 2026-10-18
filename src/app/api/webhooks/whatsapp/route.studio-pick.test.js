@@ -245,9 +245,9 @@ describe('POST /api/webhooks/whatsapp — a new sender\u2019s studio is decided 
     }))
   })
 
-  it('a thread staff moved to a number-less studio carries its studio_resolution to the resolver too (numberless_home)', async () => {
+  it('a thread at another studio the number is switched on at carries its studio_resolution to the resolver too', async () => {
     const resolution = { status: 'decided', by: 'staff' }
-    routeInboundThread.mockResolvedValueOnce({ locationId: 'loc-hatch', by: 'numberless_home', switchedOn: false, conversation: { id: 'conv-hatch', location_id: 'loc-hatch', contact_id: null, ctwa_clid: null, studio_resolution: resolution } })
+    routeInboundThread.mockResolvedValueOnce({ locationId: 'loc-hatch', by: 'recent', switchedOn: true, conversation: { id: 'conv-hatch', location_id: 'loc-hatch', contact_id: null, ctwa_clid: null, studio_resolution: resolution } })
     resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
     await POST(reqFor(inboundText(REGISTERED_PNI)))
     expect(resolveNewSenderStudio).toHaveBeenCalledWith(db, expect.objectContaining({

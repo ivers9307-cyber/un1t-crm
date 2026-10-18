@@ -60,7 +60,6 @@ function makeDb({ links = GO_LIVE, conversations = [], messages = [], adEntities
 const base = {
   numberId: NUM,
   numberHomeLocationId: STILL,
-  organizationId: ORG,
   waPhone: PHONE,
   bsuid: null,
   contact: null,
@@ -168,14 +167,14 @@ describe('routeInboundThread — the steps, in order (R4)', () => {
     expect(r.conversation).toMatchObject({ id: 'conv-hatch' })
   })
 
-  it('numberless_home (transitional): a Hatch member with no recent outbound lands at Hatch while Hatch has nothing switched on', async () => {
+  it('WAORGNUMBER.6: a member whose home studio has nothing switched on lands at the number’s home, never at the number-less studio', async () => {
     const db = makeDb({ links: PRE_GO_LIVE })
     const r = await routeInboundThread(db, { ...base, contact: { id: 'c1', location_id: HATCH } })
-    expect(r).toMatchObject({ locationId: HATCH, by: 'numberless_home', conversation: null, switchedOn: false })
+    expect(r).toMatchObject({ locationId: STILL, by: 'number_home', conversation: null, switchedOn: true })
   })
 
-  it('home not switched on and not numberless → number home', async () => {
-    // loc-other has its own number switched on, so it is neither a candidate nor number-less.
+  it('home not switched on → number home', async () => {
+    // loc-other has its own number switched on, but not this one, so it is not a candidate.
     const db = makeDb({ conversations: [thread('conv-still', STILL)] })
     const r = await routeInboundThread(db, { ...base, contact: { id: 'c1', location_id: OTHER } })
     expect(r).toMatchObject({ locationId: STILL, by: 'number_home', switchedOn: true })
@@ -232,34 +231,11 @@ describe('routeInboundThread — the steps, in order (R4)', () => {
   })
 })
 
-describe('routeInboundThread — a thread staff moved to a number-less studio (transitional WAHOMESTUDIO.1 F1)', () => {
-  it('an unknown sender whose thread was moved to Hatch (stamped with this number) stays in it while Hatch has nothing switched on', async () => {
+describe('routeInboundThread — a thread staff moved to a number-less studio (WAORGNUMBER.6)', () => {
+  it('is no longer followed: the message lands at the number’s home', async () => {
     const db = makeDb({ links: PRE_GO_LIVE, conversations: [thread('conv-hatch', HATCH, { whatsapp_number_id: NUM })] })
     const r = await routeInboundThread(db, base)
-    expect(r).toMatchObject({ locationId: HATCH, by: 'numberless_home', switchedOn: false })
-    expect(r.conversation).toMatchObject({ id: 'conv-hatch' })
-  })
-
-  it('not when a thread already exists at the winner', async () => {
-    const db = makeDb({ links: PRE_GO_LIVE, conversations: [thread('conv-still', STILL), thread('conv-hatch', HATCH, { whatsapp_number_id: NUM })] })
-    const r = await routeInboundThread(db, base)
-    expect(r).toMatchObject({ locationId: STILL, by: 'number_home', conversation: expect.objectContaining({ id: 'conv-still' }) })
-  })
-
-  it('not at a studio with a number of its own, and not when two are possible', async () => {
-    const own = makeDb({ links: PRE_GO_LIVE, conversations: [thread('conv-other', OTHER, { whatsapp_number_id: NUM })] })
-    expect(await routeInboundThread(own, base)).toMatchObject({ locationId: STILL, by: 'number_home', conversation: null })
-    const LOCS = [...LOCATIONS, { id: 'loc-third', organization_id: ORG }]
-    const two = fakeWhatsAppDb({
-      locations: LOCS, numbers: NUMBERS, links: PRE_GO_LIVE,
-      conversations: [thread('conv-hatch', HATCH, { whatsapp_number_id: NUM }), thread('conv-third', 'loc-third', { whatsapp_number_id: NUM })],
-    })
-    expect(await routeInboundThread(two, base)).toMatchObject({ locationId: STILL, by: 'number_home', conversation: null })
-  })
-
-  it('a thread at another organisation’s studio is never followed', async () => {
-    const db = makeDb({ links: PRE_GO_LIVE, conversations: [thread('conv-foreign', 'loc-foreign', { whatsapp_number_id: NUM })] })
-    expect(await routeInboundThread(db, base)).toMatchObject({ locationId: STILL, by: 'number_home', conversation: null })
+    expect(r).toMatchObject({ locationId: STILL, by: 'number_home', conversation: null, switchedOn: true })
   })
 })
 
@@ -283,7 +259,6 @@ describe('routeInboundThread — never throws', () => {
   it('a failed link read leaves the number’s home as the only candidate (and treats it as switched on)', async () => {
     const db = makeDb({ faults: { location_whatsapp_numbers: { message: 'links down' } } })
     const r = await routeInboundThread(db, { ...base, contact: { id: 'c1', location_id: HATCH } })
-    // numberlessHomeStudio cannot read the links either, so it says null (logged).
     expect(r).toMatchObject({ locationId: STILL, by: 'number_home', switchedOn: true })
     expect(logWarn).toHaveBeenCalled()
   })
