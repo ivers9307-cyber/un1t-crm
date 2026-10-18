@@ -679,6 +679,13 @@ describe('foldPastDue', () => {
     expect(gbp.membershipById.get('c1')).toMatchObject({ amountCents: 0, amountUnknown: true })
   })
 
+  it('a €0 price or a €0 reported sum is amountUnknown, never a silent €0', () => {
+    const zeroPrice = foldPastDue([pd({ amountCents: null, openInvoiceIds: [], subscriptionId: 'free' })], { ...deps, priceBySubscriptionId: new Map([['free', 0]]) })
+    expect(zeroPrice.membershipById.get('c1')).toMatchObject({ amountCents: 0, amountUnknown: true })
+    const zeroSum = foldPastDue([pd({ amountCents: 0 })], deps)
+    expect(zeroSum.membershipById.get('c1')).toMatchObject({ amountCents: 0, amountUnknown: true })
+  })
+
   it('the plan shown is the one owed longest', () => {
     const f = foldPastDue([
       pd({ productTitle: 'Newer', since: '2026-10-05T00:00:00Z' }),

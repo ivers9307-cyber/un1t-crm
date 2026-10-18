@@ -486,13 +486,13 @@ export const UN1T_ARREARS_UNAVAILABLE = Object.freeze(['unpaidCharges', 'awaitin
  * `{ ids, byId, membershipById, chargesById, pendingById, unavailable, profileById }`.
  * Each aggregate is `{ amountCents, count, oldestDueAt, amountEstimated?, amountUnknown? }`
  * (the flags appear only when true). A row's euro amount is, in order:
- *   - its reported amount, when un1t.online reported one in EUR;
+ *   - its reported amount, when un1t.online reported one above 0 in EUR;
  *   - else, when no invoice is open (the subscription's own past-due flag),
  *     the subscription's price, marked `amountEstimated` (bucketArrears drops a
  *     zero amount, so the member would vanish from the Overdue tab; Claude's
  *     call 11);
- *   - else nothing: the debt is real but has no euro figure (no price, a
- *     non-EUR amount, or invoices in mixed currencies), so the row adds 0 and
+ *   - else nothing: the debt is real but has no euro figure (no or a €0
+ *     price, a €0 or non-EUR amount, or invoices in mixed currencies), so the row adds 0 and
  *     is marked `amountUnknown`, which bucketArrears keeps on the Overdue tab.
  * Several rows for one contact sum, keeping the earliest `since`; the plan
  * shown is the one owed longest. A row with no contact cannot be surfaced on a
@@ -519,10 +519,12 @@ export function foldPastDue(rows = [], { priceBySubscriptionId = new Map(), last
   }
   const euroOf = (r) => {
     const currency = r.currency == null ? null : String(r.currency).toUpperCase()
-    if (r.amountCents != null && currency === 'EUR') return { amount: Number(r.amountCents) || 0, flag: null }
+    // A debt is never shown as €0: a zero (or unreadable) reported sum, or a
+    // €0 price, is a debt with no euro figure (bucketArrears drops a plain 0).
+    if (r.amountCents != null && currency === 'EUR' && Number(r.amountCents) > 0) return { amount: Number(r.amountCents), flag: null }
     const flagOnly = r.amountCents == null && !(Array.isArray(r.openInvoiceIds) && r.openInvoiceIds.length > 0)
-    const price = priceBySubscriptionId.get(r.subscriptionId)
-    if (flagOnly && price != null && Number.isFinite(Number(price))) return { amount: Number(price), flag: 'amountEstimated' }
+    const price = Number(priceBySubscriptionId.get(r.subscriptionId))
+    if (flagOnly && Number.isFinite(price) && price > 0) return { amount: price, flag: 'amountEstimated' }
     return { amount: 0, flag: 'amountUnknown' }
   }
   for (const r of rows) {
