@@ -593,6 +593,9 @@ export function buildOverdue(contacts, nowMs = Date.now(), ctx = {}) {
       daysOverdue: dDue == null ? null : Math.floor(dDue),
       lastAttendedAt: c.last_attended_at || null,
       daysSinceAttended: dAtt == null ? null : Math.floor(dAtt),
+      // UN1TRADAR.2 — only when the amount is an estimate (a un1t.online
+      // past-due row with no reported amount), so a Glofox row is unchanged.
+      ...(pd.amountEstimated === true ? { amountEstimated: true } : {}),
     })
   }
   rows.sort((a, b) => {

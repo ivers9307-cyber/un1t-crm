@@ -405,12 +405,13 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   // who owe. Pending never counts as Overdue or Unpaid charges. (A contact can
   // land in more than one bucket — a failed renewal AND a failed fee, say.)
   const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(pastDue)
-  let overdueCount = 0, overdueValueCents = 0
+  let overdueCount = 0, overdueValueCents = 0, overdueValueEstimated = false
   let unpaidChargesCount = 0, unpaidChargesValueCents = 0
   let awaitingAuthCount = 0, awaitingAuthValueCents = 0
   for (const [id, agg] of overdueById) {
     if (dismissed.has(id)) continue
     overdueCount++; overdueValueCents += agg.amountCents || 0
+    if (agg.amountEstimated === true) overdueValueEstimated = true
   }
   for (const [id, agg] of unpaidById) {
     if (dismissed.has(id)) continue
@@ -421,11 +422,18 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
     awaitingAuthCount++; awaitingAuthValueCents += agg.amountCents || 0
   }
 
+  // UN1TRADAR.2 — a source that cannot read a tab's charges (un1t.online:
+  // unpaid charges, awaiting authorization) reports null for it, never 0; an
+  // estimated overdue total says so. Both keys are absent for Glofox.
+  const unavailable = new Set(pastDue.unavailable || [])
   const finalSummary = {
     ...summary, quarantine: quarantineOpen, snoozed, recovery,
     overdue: overdueCount, overdueValueCents,
-    unpaidCharges: unpaidChargesCount, unpaidChargesValueCents,
-    awaitingAuth: awaitingAuthCount, awaitingAuthValueCents,
+    unpaidCharges: unavailable.has('unpaidCharges') ? null : unpaidChargesCount,
+    unpaidChargesValueCents: unavailable.has('unpaidCharges') ? null : unpaidChargesValueCents,
+    awaitingAuth: unavailable.has('awaitingAuth') ? null : awaitingAuthCount,
+    awaitingAuthValueCents: unavailable.has('awaitingAuth') ? null : awaitingAuthValueCents,
+    ...(overdueValueEstimated ? { overdueValueEstimated: true } : {}),
   }
 
   // RADAR-TREND.1 — week-over-week deltas vs the most recent weekly
@@ -508,7 +516,12 @@ async function loadArrearsRows(db, locationId, nowMs) {
   // authorization. A contact may appear in more than one tab.
   const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(pastDue)
   const ids = [...new Set([...overdueById.keys(), ...unpaidById.keys(), ...awaitingAuthById.keys()])].filter((id) => !dismissed.has(id))
-  const contacts = await fetchContactsByIds(db, ids)
+  // UN1TRADAR.2 — at a un1t studio the plan and last attended come from the
+  // studio's own rows (profileById): a dual-studio member's contact row is
+  // Stillorgan's. The name stays the contact's.
+  const profileById = pastDue.profileById instanceof Map ? pastDue.profileById : null
+  const contacts = (await fetchContactsByIds(db, ids))
+    .map((c) => (profileById?.has(c.id) ? { ...c, ...profileById.get(c.id) } : c))
 
   // Actions are newest-first — first hit per contact is the latest.
   const lastContacted = new Map()
@@ -522,13 +535,17 @@ async function loadArrearsRows(db, locationId, nowMs) {
   const overdue = buildOverdue(contacts, nowMs, { pastDueById: overdueById }).map(withAction)
   const unpaidCharges = buildOverdue(contacts, nowMs, { pastDueById: unpaidById }).map(withAction)
   const awaitingAuth = buildOverdue(contacts, nowMs, { pastDueById: awaitingAuthById }).map(withAction)
-  return { overdue, unpaidCharges, awaitingAuth }
+  return { overdue, unpaidCharges, awaitingAuth, unavailable: new Set(pastDue.unavailable || []) }
 }
+
+// UN1TRADAR.2 — a tab whose charges the source cannot read.
+const UNAVAILABLE_TAB = () => ({ charges: [], summary: { total: null, totalValueCents: null, unavailable: true } })
 
 export async function loadOverdue(db, locationId, nowMs = Date.now()) {
   const { overdue } = await loadArrearsRows(db, locationId, nowMs)
   const totalValueCents = overdue.reduce((sum, r) => sum + (r.amountOwedCents || 0), 0)
-  return { overdue, summary: { total: overdue.length, totalValueCents } }
+  const estimated = overdue.some((r) => r.amountEstimated === true)
+  return { overdue, summary: { total: overdue.length, totalValueCents, ...(estimated ? { totalValueEstimated: true } : {}) } }
 }
 
 /**
@@ -542,7 +559,8 @@ export async function loadOverdue(db, locationId, nowMs = Date.now()) {
  * @returns {Promise<{ charges: object[], summary: object }>}
  */
 export async function loadUnpaidCharges(db, locationId, nowMs = Date.now()) {
-  const { unpaidCharges } = await loadArrearsRows(db, locationId, nowMs)
+  const { unpaidCharges, unavailable } = await loadArrearsRows(db, locationId, nowMs)
+  if (unavailable.has('unpaidCharges')) return UNAVAILABLE_TAB()
   const totalValueCents = unpaidCharges.reduce((sum, r) => sum + (r.amountOwedCents || 0), 0)
   return { charges: unpaidCharges, summary: { total: unpaidCharges.length, totalValueCents } }
 }
@@ -558,7 +576,8 @@ export async function loadUnpaidCharges(db, locationId, nowMs = Date.now()) {
  * @returns {Promise<{ charges: object[], summary: object }>}
  */
 export async function loadAwaitingAuth(db, locationId, nowMs = Date.now()) {
-  const { awaitingAuth } = await loadArrearsRows(db, locationId, nowMs)
+  const { awaitingAuth, unavailable } = await loadArrearsRows(db, locationId, nowMs)
+  if (unavailable.has('awaitingAuth')) return UNAVAILABLE_TAB()
   const totalValueCents = awaitingAuth.reduce((sum, r) => sum + (r.amountOwedCents || 0), 0)
   return { charges: awaitingAuth, summary: { total: awaitingAuth.length, totalValueCents } }
 }

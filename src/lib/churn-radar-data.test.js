@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // UN1TRADAR.1 — the loaders resolve their row reads through the seam
 // (radarReadsFor, by source key). Every test here is a Glofox studio unless it
-// says otherwise; the un1t adapter is spies, and (as in PR 1) has no radarPastDue.
+// says otherwise; the un1t adapter is spies.
 const fakeReads = vi.hoisted(() => ({
   radarMembers: vi.fn(async () => []),
   winbackContacts: vi.fn(async () => []),
   leadContacts: vi.fn(async () => []),
+  radarPastDue: vi.fn(async () => ({ ids: new Set(), byId: new Map(), membershipById: new Map(), chargesById: new Map(), pendingById: new Map(), unavailable: ['unpaidCharges', 'awaitingAuth'], profileById: new Map() })),
+  pinArrears: true,
 }))
 // No importOriginal: loading the real module inside the factory closes the
 // churn-radar-data → reads/index → state-for-page → registry → glofox →
@@ -23,6 +25,7 @@ import { membershipStateForPage } from '@/lib/membership/state-for-page'
 import { loadOverdue, loadUnpaidCharges, loadAwaitingAuth, loadRadar, loadContactArrears, loadQuarantine, loadWinback } from './churn-radar-data'
 import { loadEngagementChurn } from './engagement-analytics-data'
 import { glofoxFixtureDb, NOW as FIX_NOW, LOC as FIX_LOC } from './radar-glofox-fixture.test-helpers'
+import { buildOverdue } from './churn-radar'
 import EXPECTED from './radar-glofox-fixture.expected.json'
 
 // ARREARS-NETTING.1 (Fix B) — the live Overdue feature must net cross-
@@ -755,14 +758,109 @@ describe('UN1TRADAR.1 seam dispatch', () => {
     }
   })
 
-  it('un1t adapter without radarPastDue makes loadRadar throw "radar read missing: radarPastDue"', async () => {
-    membershipStateForPage.mockResolvedValueOnce({ source: 'un1t_online', state: 'configured', label: 'un1t.online' })
-    const db = { from: () => { throw new Error('no read may run before the key check') } }
-    await expect(loadRadar(db, FIX_LOC, FIX_NOW)).rejects.toThrow('radar read missing: radarPastDue')
-  })
-
   it('a source with no adapter (none) throws "radar read missing"', async () => {
     membershipStateForPage.mockResolvedValueOnce({ source: 'none', state: 'none', label: 'x' })
     await expect(loadQuarantine(glofoxFixtureDb(), FIX_LOC)).rejects.toThrow('radar read missing: radarMembers')
+  })
+})
+
+// ── UN1TRADAR.2 — unreadable arrears are null; estimates flagged ─────────────
+describe('UN1TRADAR.2 arrears at a un1t studio', () => {
+  beforeEach(() => vi.useFakeTimers({ now: FIX_NOW, toFake: ['Date'] }))
+  afterEach(() => vi.useRealTimers())
+
+  const DAYMS = 86_400_000
+  const un1tFold = () => ({
+    ids: new Set(['c-dual', 'c-hatch']),
+    byId: new Map([
+      ['c-dual', { amountCents: 12000, count: 1, oldestDueAt: new Date(FIX_NOW - 9 * DAYMS).toISOString(), amountEstimated: true }],
+      ['c-hatch', { amountCents: 4500, count: 1, oldestDueAt: new Date(FIX_NOW - 3 * DAYMS).toISOString() }],
+    ]),
+    membershipById: new Map([
+      ['c-dual', { amountCents: 12000, count: 1, oldestDueAt: new Date(FIX_NOW - 9 * DAYMS).toISOString(), amountEstimated: true }],
+      ['c-hatch', { amountCents: 4500, count: 1, oldestDueAt: new Date(FIX_NOW - 3 * DAYMS).toISOString() }],
+    ]),
+    chargesById: new Map(),
+    pendingById: new Map(),
+    unavailable: ['unpaidCharges', 'awaitingAuth'],
+    profileById: new Map([
+      ['c-dual', { glofox_membership_status: 'member', glofox_membership_type: 'time', glofox_membership_plan: 'Hatch plan', last_attended_at: '2026-10-12T09:00:00.000Z' }],
+      ['c-hatch', { glofox_membership_status: 'member', glofox_membership_type: 'time', glofox_membership_plan: 'Hatch plan', last_attended_at: null }],
+    ]),
+  })
+  // contacts: the dual-studio member's row is Stillorgan's (Glofox plan, Stillorgan attendance)
+  const un1tDb = () => {
+    const base = glofoxFixtureDb()
+    const extra = [
+      { id: 'c-dual', name: 'Dual', glofox_membership_status: 'credit_member', glofox_membership_type: 'num_classes', glofox_membership_plan: 'Stillorgan Gold', last_attended_at: '2026-10-17T09:00:00.000Z', last_payment_at: null },
+      { id: 'c-hatch', name: 'Hatchling', glofox_membership_status: null, glofox_membership_type: null, glofox_membership_plan: null, last_attended_at: null, last_payment_at: null },
+    ]
+    return { from: (t) => (t === 'contacts' ? fixedRows(extra) : base.from(t)) }
+  }
+  function fixedRows(rows) {
+    const api = { select: () => api, in: () => api, eq: () => api, order: () => api, range: () => api, then: (res, rej) => Promise.resolve({ data: rows, error: null }).then(res, rej) }
+    return api
+  }
+  const asUn1t = () => membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online' })
+  afterEach(() => membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: { memberships: true } }))
+
+  it("Glofox: loadOverdue/loadUnpaidCharges/loadAwaitingAuth deep-equal today's output", async () => {
+    const db = glofoxFixtureDb()
+    expect(asJson(await loadOverdue(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.overdue)
+    expect(asJson(await loadUnpaidCharges(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.unpaid)
+    expect(asJson(await loadAwaitingAuth(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.awaiting)
+    const radar = asJson(await loadRadar(db, FIX_LOC, FIX_NOW))
+    expect(radar).toEqual(EXPECTED.radar)
+    expect(radar.summary).not.toHaveProperty('overdueValueEstimated')
+  })
+
+  it('un1t: summary unpaidCharges and awaitingAuth are null, never 0', async () => {
+    asUn1t()
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    const { summary } = await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)
+    expect(summary.unpaidCharges).toBeNull()
+    expect(summary.unpaidChargesValueCents).toBeNull()
+    expect(summary.awaitingAuth).toBeNull()
+    expect(summary.awaitingAuthValueCents).toBeNull()
+    expect(summary.overdue).toBe(2)
+    expect(summary.overdueValueCents).toBe(16500)
+  })
+
+  it('un1t: estimated overdue row carries amountEstimated and the summary overdueValueEstimated', async () => {
+    asUn1t()
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    expect((await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)).summary.overdueValueEstimated).toBe(true)
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    const { overdue, summary } = await loadOverdue(un1tDb(), FIX_LOC, FIX_NOW)
+    expect(overdue.find((r) => r.contactId === 'c-dual').amountEstimated).toBe(true)
+    expect(Object.hasOwn(overdue.find((r) => r.contactId === 'c-hatch'), 'amountEstimated')).toBe(false)
+    expect(summary.totalValueEstimated).toBe(true)
+  })
+
+  it('overdue row at a un1t studio takes plan and last attended from un1t, not contacts', async () => {
+    asUn1t()
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    const { overdue } = await loadOverdue(un1tDb(), FIX_LOC, FIX_NOW)
+    const dual = overdue.find((r) => r.contactId === 'c-dual')
+    expect(dual).toMatchObject({ name: 'Dual', membershipPlan: 'Hatch plan', membershipStatus: 'member', segment: 'member', lastAttendedAt: '2026-10-12T09:00:00.000Z' })
+  })
+
+  it('un1t: unpaid charges and awaiting authorization are unavailable, not empty', async () => {
+    asUn1t()
+    fakeReads.radarPastDue.mockResolvedValue(un1tFold())
+    expect(await loadUnpaidCharges(un1tDb(), FIX_LOC, FIX_NOW)).toEqual({ charges: [], summary: { total: null, totalValueCents: null, unavailable: true } })
+    expect(await loadAwaitingAuth(un1tDb(), FIX_LOC, FIX_NOW)).toEqual({ charges: [], summary: { total: null, totalValueCents: null, unavailable: true } })
+  })
+})
+
+describe('buildOverdue amountEstimated', () => {
+  const c = { id: 'c1', name: 'A', glofox_membership_status: 'member', glofox_membership_type: 'time' }
+  it('buildOverdue omits amountEstimated when the agg lacks it', () => {
+    const m = new Map([['c1', { amountCents: 100, count: 1, oldestDueAt: null }]])
+    expect(Object.hasOwn(buildOverdue([c], FIX_NOW, { pastDueById: m })[0], 'amountEstimated')).toBe(false)
+  })
+  it('buildOverdue carries amountEstimated: true when the agg has it', () => {
+    const m = new Map([['c1', { amountCents: 100, count: 1, oldestDueAt: null, amountEstimated: true }]])
+    expect(buildOverdue([c], FIX_NOW, { pastDueById: m })[0].amountEstimated).toBe(true)
   })
 })
