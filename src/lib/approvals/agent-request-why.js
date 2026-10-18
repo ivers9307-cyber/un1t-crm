@@ -1,6 +1,6 @@
 import { hasBookableMembership } from '@/lib/person-accounts'
 import { CLASS_BOOKING_MAX_ATTEMPTS } from '@/lib/class-booking-attempts'
-import { isManualEventId } from '@/lib/manual-timetable'
+import { isHandBookedEventId } from '@/lib/manual-timetable'
 
 // AGENT-REQ-UX.1 — operator-readable explanations for agent requests.
 //
@@ -118,7 +118,7 @@ export function whyFlagged(row) {
   if (!row || row.kind !== 'class_booking') return null
   const d = row.details || {}
   const reason = typeof d.reason === 'string' ? d.reason : null
-  if (isManualEventId(d.event_id)) return MANUAL_BOOKING
+  if (isHandBookedEventId(d.event_id)) return MANUAL_BOOKING
   if (reason) {
     if (reason === 'credit_check_failed') {
       const line = creditUnreadLine(d.credit_unread_accounts)

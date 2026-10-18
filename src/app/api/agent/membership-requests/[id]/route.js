@@ -15,7 +15,7 @@ import {
 } from '@/lib/agent/request-recovery'
 import { approvalGrantsTrialCredit } from '@/lib/approvals/agent-request-why'
 import { logWarn } from '@/lib/log'
-import { isManualEventId } from '@/lib/manual-timetable'
+import { isHandBookedEventId } from '@/lib/manual-timetable'
 import { zoneOfLocation } from '@/lib/location-time'
 import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -446,7 +446,9 @@ export async function PATCH(request, { params }) {
   // there: staff book it on the studio's own platform) is exempt. Approving
   // it executes nothing and messages nobody, it only records that staff did
   // the booking, so recording it after the class has run is still true.
-  const manualBooking = row.kind === 'class_booking' && isManualEventId(details?.event_id)
+  // HATCHSTART.1: a class off a un1t.online studio's synced timetable is
+  // booked the same way (staff book it in un1t.online).
+  const manualBooking = row.kind === 'class_booking' && isHandBookedEventId(details?.event_id)
   let expiredBeforeExecution = false
   if (executing && row.kind === 'class_booking' && !manualBooking) {
     const startsAtMs = Date.parse(row.details?.starts_at || '')
