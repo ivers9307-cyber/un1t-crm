@@ -309,3 +309,53 @@ export async function fetchListMembershipFlags(db, contacts, activeLocationId) {
     return {}
   }
 }
+
+// UN1TRADAR.3 — the radar write routes (action, refresh-member, quarantine,
+// lead action, cleanup) accept a contact the ACTIVE studio does not own when
+// it is a crossover THERE: an active membership or a un1t_clients row at that
+// one studio (a Stillorgan contact with a Hatch Street membership, acted on
+// from Hatch's radar). Never the caller's other studios. Both fail closed.
+
+/** Is `contactId` a membership / un1t-client crossover at `locationId`? Any error → false. */
+export async function isCrossoverAt(db, contactId, locationId) {
+  if (!contactId || !locationId) return false
+  try {
+    return await probeMembershipOrClient(db, contactId, [locationId])
+  } catch (e) {
+    logError('contact-crossovers', 'crossover probe threw; refusing', { locationId, message: e?.message || String(e) })
+    return false
+  }
+}
+
+const CROSSOVER_PROBE_CHUNK = 200
+
+/**
+ * The subset of `contactIds` that are crossovers at `locationId` (an active
+ * membership or a un1t_clients row there). Any read error → an empty Set:
+ * the caller then acts on the contacts it owns only.
+ */
+export async function crossoverIdsAt(db, contactIds, locationId) {
+  const ids = [...new Set((contactIds || []).filter(Boolean))]
+  if (!locationId || ids.length === 0) return new Set()
+  try {
+    const out = new Set()
+    for (let i = 0; i < ids.length; i += CROSSOVER_PROBE_CHUNK) {
+      const chunk = ids.slice(i, i + CROSSOVER_PROBE_CHUNK)
+      const [memberships, clients] = await Promise.all([
+        db.from('contact_memberships').select('contact_id').eq('location_id', locationId).eq('status', 'active').in('contact_id', chunk),
+        db.from('un1t_clients').select('contact_id').eq('location_id', locationId).in('contact_id', chunk),
+      ])
+      if (memberships.error || clients.error) {
+        logError('contact-crossovers', 'bulk crossover probe failed; owned contacts only', {
+          locationId, code: (memberships.error || clients.error).code,
+        })
+        return new Set()
+      }
+      for (const r of [...(memberships.data || []), ...(clients.data || [])]) if (r.contact_id) out.add(r.contact_id)
+    }
+    return out
+  } catch (e) {
+    logError('contact-crossovers', 'bulk crossover probe threw; owned contacts only', { locationId, message: e?.message || String(e) })
+    return new Set()
+  }
+}

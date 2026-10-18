@@ -482,3 +482,67 @@ describe('canViewContact', () => {
     })
   })
 })
+
+// UN1TRADAR.3 — the radar write routes accept a crossover at the ACTIVE studio
+// only (a membership or un1t client there), and fail closed.
+describe('isCrossoverAt / crossoverIdsAt', () => {
+  function probeDb(tables, { fail = [] } = {}) {
+    const log = []
+    return {
+      log,
+      from(table) {
+        const s = { table, filters: [] }
+        const b = {
+          select: () => b,
+          eq(c, v) { s.filters.push(['eq', c, v]); return b },
+          in(c, v) { s.filters.push(['in', c, v]); return b },
+          order: () => b,
+          range: () => b,
+          limit: () => b,
+          then(res, rej) {
+            log.push(s)
+            if (fail.includes(table)) return Promise.resolve({ data: null, error: { code: 'X', message: 'boom' } }).then(res, rej)
+            const rows = (tables[table] || []).filter((r) => s.filters.every(([k, c, v]) => (k === 'eq' ? r[c] === v : v.includes(r[c]))))
+            return Promise.resolve({ data: rows, error: null }).then(res, rej)
+          },
+        }
+        return b
+      },
+    }
+  }
+  const HATCH = 'loc-hatch'
+  const STILL = 'loc-still'
+  const tables = {
+    contact_memberships: [{ id: 'm1', contact_id: 'c-mem', location_id: HATCH, status: 'active' }, { id: 'm2', contact_id: 'c-ended', location_id: HATCH, status: 'ended' }],
+    un1t_clients: [{ id: 'u1', contact_id: 'c-client', location_id: HATCH }],
+  }
+
+  it('crossover accepted at its membership studio', async () => {
+    const { isCrossoverAt } = await import('./contact-crossovers')
+    expect(await isCrossoverAt(probeDb(tables), 'c-mem', HATCH)).toBe(true)
+    expect(await isCrossoverAt(probeDb(tables), 'c-ended', HATCH)).toBe(false)
+  })
+  it('crossover via a un1t_clients row accepted', async () => {
+    const { isCrossoverAt } = await import('./contact-crossovers')
+    expect(await isCrossoverAt(probeDb(tables), 'c-client', HATCH)).toBe(true)
+  })
+  it('refused at any other studio', async () => {
+    const { isCrossoverAt } = await import('./contact-crossovers')
+    expect(await isCrossoverAt(probeDb(tables), 'c-mem', STILL)).toBe(false)
+  })
+  it('probe error fails closed', async () => {
+    const { isCrossoverAt } = await import('./contact-crossovers')
+    expect(await isCrossoverAt(probeDb(tables, { fail: ['contact_memberships', 'un1t_clients'] }), 'c-mem', HATCH)).toBe(false)
+    expect(await isCrossoverAt({ from() { throw new Error('down') } }, 'c-mem', HATCH)).toBe(false)
+    expect(await isCrossoverAt(probeDb(tables), null, HATCH)).toBe(false)
+  })
+  it('crossoverIdsAt: both probes at the active studio only; any error → empty set', async () => {
+    const { crossoverIdsAt } = await import('./contact-crossovers')
+    const db = probeDb(tables)
+    expect(await crossoverIdsAt(db, ['c-mem', 'c-client', 'c-ended', 'c-none'], HATCH)).toEqual(new Set(['c-mem', 'c-client']))
+    for (const q of db.log) expect(q.filters).toContainEqual(['eq', 'location_id', HATCH])
+    expect(await crossoverIdsAt(probeDb(tables), ['c-mem'], STILL)).toEqual(new Set())
+    expect(await crossoverIdsAt(probeDb(tables, { fail: ['un1t_clients'] }), ['c-mem', 'c-client'], HATCH)).toEqual(new Set())
+    expect(await crossoverIdsAt(probeDb(tables), [], HATCH)).toEqual(new Set())
+  })
+})

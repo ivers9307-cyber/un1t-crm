@@ -25,6 +25,7 @@ import { radarCache, invalidateRadar } from '@/lib/radar-cache'
 import { radarAvailability, RADAR_UNAVAILABLE } from '@/lib/radar-availability'
 import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
+import { crossoverIdsAt } from '@/lib/contact-crossovers'
 
 const CleanupBody = z.object({
   decision: z.enum(['archive', 'keep']),
@@ -106,7 +107,12 @@ export async function POST(request) {
   if (scopeErr) {
     return NextResponse.json({ success: false, error: scopeErr.message }, { status: 500 })
   }
-  const ids = (scoped || []).map((c) => c.id)
+  const ownedIds = (scoped || []).map((c) => c.id)
+  // UN1TRADAR.3 — plus crossovers AT the active studio (a membership or a
+  // un1t client there). A failed probe adds none (owned contacts only).
+  const owned = new Set(ownedIds)
+  const crossover = await crossoverIdsAt(db, contactIds.filter((id) => !owned.has(id)), locationId)
+  const ids = [...ownedIds, ...crossover]
   if (ids.length === 0) {
     return NextResponse.json({ success: false, error: 'No contacts in scope' }, { status: 400 })
   }
@@ -118,7 +124,7 @@ export async function POST(request) {
     const { error: updErr } = await db
       .from('contacts')
       .update({ pipeline_stage_slug: 'dormant' })
-      .in('id', ids)
+      .in('id', ownedIds) // owned only: a crossover's row is another studio's
     if (updErr) {
       logWarn('lead-radar', 'cleanup reclassify failed', { err: updErr })
       return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })

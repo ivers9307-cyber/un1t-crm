@@ -31,6 +31,7 @@ import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { isCrossoverAt } from '@/lib/contact-crossovers'
 
 const RefreshMemberSchema = z.object({
   contact_id: uuidLike,
@@ -71,7 +72,9 @@ export async function POST(request) {
     .select('id, location_id, glofox_member_id')
     .eq('id', contactId)
     .maybeSingle()
-  if (!contact || contact.location_id !== locationId) {
+  // UN1TRADAR.3 — or a crossover AT the active studio (an active membership
+  // or a un1t client there); never the caller's other studios. Fails closed.
+  if (!contact || (contact.location_id !== locationId && !(await isCrossoverAt(db, contact.id, locationId)))) {
     return NextResponse.json({ success: false, error: 'Contact not in your active location' }, { status: 404 })
   }
   if (!contact.glofox_member_id) {

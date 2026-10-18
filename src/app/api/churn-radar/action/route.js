@@ -57,6 +57,7 @@ import { logWarn, logInfo } from '@/lib/log'
 import { getLocationBranding } from '@/lib/location-branding'
 import { defaultWinbackMessage } from '@/lib/churn-winback'
 import { validateBody } from '@/lib/validate'
+import { isCrossoverAt } from '@/lib/contact-crossovers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -130,7 +131,9 @@ export async function POST(request) {
     .select('id, name, first_name, location_id, wa_phone, phone')
     .eq('id', contactId)
     .maybeSingle()
-  if (!contact || contact.location_id !== locationId) {
+  // UN1TRADAR.3 — or a crossover AT the active studio (an active membership
+  // or a un1t client there); never the caller's other studios. Fails closed.
+  if (!contact || (contact.location_id !== locationId && !(await isCrossoverAt(db, contact.id, locationId)))) {
     return NextResponse.json({ success: false, error: 'Contact not in your active location' }, { status: 404 })
   }
 
