@@ -12,8 +12,19 @@
 // db.from('table').select().eq()...  is a chainable proxy that
 // records the read + records writes for assertion.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { reclassifyAllContacts } from './pipeline-reclassify.js'
+import { membershipReadsFor } from './membership/reads/index.js'
+import { logWarn } from './log.js'
+
+// HATCHPIPE.2 — the membership read seam is mocked: the un1t.online boards ask
+// it for their inputs, and the contacts-input (Stillorgan) path must never ask
+// it at all. supportsRead is the real one-liner.
+vi.mock('./membership/reads/index.js', () => ({
+  membershipReadsFor: vi.fn(),
+  supportsRead: (r, key) => typeof r?.reads?.[key] === 'function',
+}))
+vi.mock('./log.js', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 const isoDaysAgo = (d) => new Date(Date.now() - d * 86_400_000).toISOString()
 
@@ -353,5 +364,405 @@ describe('PIPELINES.3 — per-pipeline orchestration', () => {
 
     expect(res.contacts_seen).toBe(0)
     expect(res.deals_created).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// HATCHPIPE.2 — un1t.online-input boards (Hatch) and the dry run of a
+// disabled board.
+// ---------------------------------------------------------------------------
+
+/**
+ * A fake that records EVERY call: one entry per db.from(table), holding the
+ * table and each chained method with its arguments. Run timestamps in the
+ * audit close are replaced so the log is deterministic. SELECT filters apply
+ * as in fakeDb (a filter on a column a fixture row lacks is ignored).
+ */
+function recordingDb(fixtures = {}) {
+  const calls = []
+  const norm = (v) => {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const o = { ...v }
+      if ('finished_at' in o) o.finished_at = '<iso>'
+      if ('duration_ms' in o) o.duration_ms = '<ms>'
+      return o
+    }
+    return v
+  }
+  function chain(table) {
+    const entry = [table]
+    calls.push(entry)
+    let op = 'select'
+    const filters = []
+    const c = {}
+    for (const m of ['select', 'eq', 'in', 'order', 'range', 'single', 'maybeSingle', 'limit', 'gte', 'update', 'insert']) {
+      c[m] = (...args) => {
+        entry.push([m, ...args.map(norm)])
+        if (m === 'update' || m === 'insert') op = m
+        if (m === 'eq') filters.push({ op: 'eq', col: args[0], val: args[1] })
+        if (m === 'in') filters.push({ op: 'in', col: args[0], vals: args[1] })
+        return c
+      }
+    }
+    const applyFilters = (rows) => rows.filter((row) => filters.every((f) => {
+      if (!Object.prototype.hasOwnProperty.call(row, f.col)) return true
+      return f.op === 'in' ? f.vals.includes(row[f.col]) : row[f.col] === f.val
+    }))
+    c.then = (resolve) => {
+      if (op === 'insert') {
+        return resolve({ data: table === 'pipeline_classification_runs' ? { id: 'run-1' } : null, error: null })
+      }
+      if (op === 'update') return resolve({ data: null, error: null })
+      return resolve({ data: applyFilters(fixtures[table] || []), error: null })
+    }
+    return c
+  }
+  const db = { from: (t) => chain(t) }
+  const tables = () => calls.map((e) => e[0])
+  const writesTo = (table) => calls.filter((e) => e[0] === table && e.some((x) => Array.isArray(x) && (x[0] === 'update' || x[0] === 'insert')))
+  const argOf = (entry, method) => entry.find((x) => Array.isArray(x) && x[0] === method)
+  return { db, calls, tables, writesTo, argOf }
+}
+
+const ISO_BASE = Date.parse('2026-10-01T00:00:00Z')
+const isoBefore = (d) => new Date(ISO_BASE - d * 86_400_000).toISOString()
+
+describe('HATCHPIPE.2 — contacts-input path is unchanged', () => {
+  beforeEach(() => { vi.mocked(membershipReadsFor).mockReset(); vi.mocked(logWarn).mockClear() })
+
+  it('Stillorgan (contacts-input board): exact from() call sequence and writes unchanged; membershipReadsFor never called; result has input_source "contacts"', async () => {
+    // Recorded against the orchestrator BEFORE HATCHPIPE.2 (b31dd1fd): the
+    // same fixture, the same calls in the same order, the same payloads.
+    const { db, calls } = recordingDb({
+      pipelines: [
+        { id: 'p-acq', location_id: 'loc-st', key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true },
+        { id: 'p-ret', location_id: 'loc-st', key: 'returning', module: 'returning', mode: 'derived', enabled: true, is_primary: false },
+      ],
+      pipeline_stages: [
+        { id: 's-new', slug: 'new_lead', pipeline_id: 'p-acq' },
+        { id: 's-dormant', slug: 'dormant', pipeline_id: 'p-acq' },
+        { id: 's-member', slug: 'member', pipeline_id: 'p-acq' },
+      ],
+      contacts: [
+        { id: 'c-1', name: 'A', email: null, glofox_membership_status: 'ex_member', last_attended_at: isoBefore(400), joined_at: isoBefore(800), created_at: isoBefore(800), recent_bookings: [] },
+        { id: 'c-2', name: null, email: null, glofox_membership_status: null, joined_at: new Date().toISOString(), created_at: new Date().toISOString(), recent_bookings: [] },
+      ],
+      deals: [{ id: 'd-1', contact_id: 'c-1', stage_id: 's-member', pipeline_id: 'p-acq', status: 'open' }],
+    })
+
+    const out = await reclassifyAllContacts(db, { locationId: 'loc-st', source: 'cron', userId: 'u-1' })
+
+    expect(calls).toEqual([
+      ['pipeline_classification_runs',
+        ['insert', { location_id: 'loc-st', source: 'cron', dry_run: false, status: 'running', created_by: 'u-1' }],
+        ['select', 'id'], ['single']],
+      ['pipelines',
+        ['select', 'id, key, module, mode, enabled, is_primary'],
+        ['eq', 'location_id', 'loc-st'], ['eq', 'enabled', true]],
+      ['pipeline_stages',
+        ['select', 'id, slug, pipeline_id'],
+        ['eq', 'location_id', 'loc-st'], ['in', 'pipeline_id', ['p-acq']]],
+      ['contacts',
+        ['select', 'id, name, email, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, last_attended_at, total_attended_7d, total_attended_30d, last_payment_at, joined_at, created_at, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at, gympass_member_id, last_lead_source_at'],
+        ['eq', 'location_id', 'loc-st'], ['order', 'id', { ascending: true }], ['range', 0, 999]],
+      ['deals',
+        ['select', 'id, contact_id, stage_id'],
+        ['eq', 'location_id', 'loc-st'], ['eq', 'status', 'open'], ['in', 'pipeline_id', ['p-acq']],
+        ['order', 'id', { ascending: true }], ['range', 0, 999]],
+      ['deals', ['update', { stage_id: 's-dormant' }], ['in', 'id', ['d-1']]],
+      ['deals', ['insert', { title: 'Glofox member', contact_id: 'c-2', stage_id: 's-new', pipeline_id: 'p-acq', location_id: 'loc-st', status: 'open' }]],
+      ['pipeline_classification_runs',
+        ['update', {
+          status: 'success', contacts_seen: 2, deals_moved: 1, deals_unchanged: 0, deals_created: 1, errors: 0,
+          movement_matrix: { member: { dormant: 1 }, '': { new_lead: 1 } },
+          samples: [{ contact_id: 'c-1', contact_name: 'A', from_slug: 'member', to_slug: 'dormant' }],
+          finished_at: '<iso>', duration_ms: '<ms>',
+        }],
+        ['eq', 'id', 'run-1']],
+    ])
+    expect(membershipReadsFor).not.toHaveBeenCalled()
+    expect(out).toMatchObject({ ok: true, input_source: 'contacts', deals_moved: 1, deals_created: 1, pipelines_skipped: ['returning'] })
+    expect(out).not.toHaveProperty('unlinked')
+    expect(out).not.toHaveProperty('stage_histogram') // dry runs only
+  })
+})
+
+// Hatch: an enabled acquisition board on the un1t.online module, and the
+// manual waitlist board beside it.
+const HATCH = 'loc-hatch'
+const HATCH_PIPELINES = [
+  { id: 'p-h-acq', location_id: HATCH, key: 'acquisition', module: 'acquisition_un1t', mode: 'derived', enabled: true, is_primary: false },
+  { id: 'p-h-wait', location_id: HATCH, key: 'waitlist', module: null, mode: 'manual', enabled: true, is_primary: true },
+]
+const HATCH_STAGES = [
+  { id: 'h-new', slug: 'new_lead', pipeline_id: 'p-h-acq', location_id: HATCH },
+  { id: 'h-first', slug: 'first_class', pipeline_id: 'p-h-acq', location_id: HATCH },
+  { id: 'h-member', slug: 'member', pipeline_id: 'p-h-acq', location_id: HATCH },
+  { id: 'h-dormant', slug: 'dormant', pipeline_id: 'p-h-acq', location_id: HATCH },
+  { id: 'h-wait-new', slug: 'waitlist_new_enquiry', pipeline_id: 'p-h-wait', location_id: HATCH },
+]
+// Classifier inputs as pipelineInputs shapes them (field names are the
+// classifier's vocabulary, not contacts columns).
+const leadSnap = () => ({ glofox_membership_status: 'lead', recent_bookings: [], joined_at: new Date(Date.now() - 2 * 86_400_000).toISOString() })
+const memberSnap = () => ({ glofox_membership_status: 'member', converted_at: isoBefore(200), recent_bookings: [attendedBooking(3)], last_attended_at: isoBefore(3), joined_at: isoBefore(300) })
+
+function hatchInputs({ contacts, snapshots, unlinked = 2, skipped = 1 }) {
+  return { success: true, data: { contacts, snapshots: new Map(snapshots), unlinked, skipped_no_contact: skipped } }
+}
+
+function seamWith(pipelineInputs, over = {}) {
+  vi.mocked(membershipReadsFor).mockResolvedValue({
+    source: 'un1t_online', label: 'un1t.online', state: 'configured', reads: { pipelineInputs }, error: null, capabilities: {}, ...over,
+  })
+}
+
+describe('HATCHPIPE.2 — un1t.online-input boards', () => {
+  beforeEach(() => { vi.mocked(membershipReadsFor).mockReset(); vi.mocked(logWarn).mockClear() })
+
+  it('un1t location: uses pipelineInputs, never selects from contacts, issues no contacts write, creates deals titled from name or "Member"', async () => {
+    const pipelineInputs = vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [
+        { id: 'c-bea', name: 'Bea', email: 'bea@example.test', location_id: HATCH },
+        { id: 'c-anon', name: null, email: null, location_id: HATCH },
+        { id: 'c-mail', name: null, email: 'mail@example.test', location_id: HATCH },
+      ],
+      snapshots: [['c-bea', memberSnap()], ['c-anon', leadSnap()], ['c-mail', leadSnap()]],
+    }))
+    seamWith(pipelineInputs)
+    const { db, tables, writesTo, argOf } = recordingDb({
+      pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals: [],
+    })
+
+    const out = await reclassifyAllContacts(db, { locationId: HATCH })
+
+    expect(membershipReadsFor).toHaveBeenCalledWith(db, HATCH)
+    expect(pipelineInputs).toHaveBeenCalledTimes(1)
+    expect(pipelineInputs.mock.calls[0][0]).toBe(db)
+    expect(pipelineInputs.mock.calls[0][1]).toBe(HATCH)
+    expect(typeof pipelineInputs.mock.calls[0][2].now).toBe('number')
+    expect(tables()).not.toContain('contacts')
+    expect(writesTo('contacts')).toHaveLength(0)
+
+    const inserts = writesTo('deals').map((e) => argOf(e, 'insert')[1])
+    expect(inserts.map((r) => [r.contact_id, r.title, r.stage_id])).toEqual([
+      ['c-bea', 'Bea', 'h-member'],
+      ['c-anon', 'Member', 'h-new'],
+      ['c-mail', 'mail@example.test', 'h-new'],
+    ])
+    expect(out).toMatchObject({
+      ok: true, input_source: 'un1t_online', contacts_seen: 3, deals_created: 3, errors: 0,
+      unlinked: 2, skipped_no_contact: 1,
+    })
+  })
+
+  it('un1t location: dual-studio contact gets a deal with location_id = Hatch and pipeline_id = Hatch acquisition', async () => {
+    // The contact lives at Stillorgan and already holds a Stillorgan
+    // acquisition deal; Hatch gets its own deal, and Stillorgan's is untouched.
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-dual', name: 'Dual', email: null, location_id: 'loc-st' }],
+      snapshots: [['c-dual', leadSnap()]],
+    })))
+    const { db, writesTo, argOf } = recordingDb({
+      pipelines: HATCH_PIPELINES,
+      pipeline_stages: HATCH_STAGES,
+      deals: [{ id: 'd-st', contact_id: 'c-dual', stage_id: 's-st-member', pipeline_id: 'p-st-acq', location_id: 'loc-st', status: 'open' }],
+    })
+
+    const out = await reclassifyAllContacts(db, { locationId: HATCH })
+
+    const dealWrites = writesTo('deals')
+    expect(dealWrites).toHaveLength(1)
+    expect(argOf(dealWrites[0], 'insert')[1]).toEqual({
+      title: 'Dual', contact_id: 'c-dual', stage_id: 'h-new', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open',
+    })
+    expect(out.deals_created).toBe(1)
+  })
+
+  it('a contact with no snapshot is counted as an error, not classified', async () => {
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-x', name: 'X', email: null, location_id: HATCH }],
+      snapshots: [],
+    })))
+    const { db, writesTo } = recordingDb({ pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals: [] })
+
+    const out = await reclassifyAllContacts(db, { locationId: HATCH })
+
+    expect(out).toMatchObject({ ok: true, errors: 1, deals_created: 0 })
+    expect(writesTo('deals')).toHaveLength(0)
+  })
+
+  const expectSkipped = (out, { db: rec, reason, state, source = 'un1t_online', err }) => {
+    expect(out.ok).toBe(false)
+    expect(out.error).toBe(`un1t inputs unavailable: ${reason}`)
+    expect(out.input_source).toBe('un1t_online')
+    expect(rec.writesTo('deals')).toHaveLength(0)
+    expect(rec.tables()).not.toContain('contacts')
+    const close = rec.calls.filter((e) => e[0] === 'pipeline_classification_runs').at(-1)
+    expect(rec.argOf(close, 'update')[1]).toMatchObject({ status: 'failed', error_message: `un1t inputs unavailable: ${reason}` })
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'inputs unavailable', { locationId: HATCH, source, state, reason, ...(err ? { err } : {}) })
+  }
+
+  it('state unknown → audit row failed "un1t inputs unavailable: unknown", no deal write', async () => {
+    seamWith(undefined, { state: 'unknown', reads: null })
+    const rec = recordingDb({ pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals: [] })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expectSkipped(out, { db: rec, reason: 'unknown', state: 'unknown' })
+  })
+
+  it('unconfigured un1t → skipped the same way', async () => {
+    seamWith(undefined, { state: 'unconfigured', reads: null })
+    const rec = recordingDb({ pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals: [] })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expectSkipped(out, { db: rec, reason: 'unconfigured', state: 'unconfigured' })
+  })
+
+  it('pipelineInputs { success:false } → skipped the same way', async () => {
+    seamWith(vi.fn().mockResolvedValue({ success: false, error: 'boom' }))
+    const rec = recordingDb({ pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals: [] })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expectSkipped(out, { db: rec, reason: 'read_failed', state: 'configured', err: 'boom' })
+  })
+
+  it('a pipelineInputs that throws is skipped the same way', async () => {
+    seamWith(vi.fn().mockRejectedValue(new Error('socket hang up')))
+    const rec = recordingDb({ pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals: [] })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expectSkipped(out, { db: rec, reason: 'read_failed', state: 'configured', err: 'socket hang up' })
+  })
+
+  it('a configured seam on another source is skipped too, never read from contacts', async () => {
+    seamWith(vi.fn(), { source: 'glofox' })
+    const rec = recordingDb({ pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals: [] })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expectSkipped(out, { db: rec, reason: 'source_mismatch', state: 'configured', source: 'glofox' })
+  })
+
+  it('a location with a contacts board and a un1t board refuses the un1t board (mixed_input_sources) and runs the contacts board', async () => {
+    const { db, tables, argOf, calls } = recordingDb({
+      pipelines: [
+        { id: 'p-acq', location_id: 'loc-1', key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true },
+        { id: 'p-un1t', location_id: 'loc-1', key: 'acquisition_hatch', module: 'acquisition_un1t', mode: 'derived', enabled: true, is_primary: false },
+      ],
+      pipeline_stages: STAGES,
+      contacts: [{ id: 'c1', name: 'L', email: null, glofox_membership_status: null, joined_at: isoDaysAgo(2), created_at: isoDaysAgo(2), recent_bookings: [] }],
+      deals: [],
+    })
+
+    const out = await reclassifyAllContacts(db, { locationId: 'loc-1', dryRun: true })
+
+    expect(membershipReadsFor).not.toHaveBeenCalled()
+    expect(tables()).toContain('contacts')
+    expect(out).toMatchObject({ ok: true, input_source: 'contacts', deals_created: 1 })
+    expect(out.pipelines_skipped).toContain('acquisition_hatch')
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({
+      key: 'acquisition_hatch', locationId: 'loc-1', reason: 'mixed_input_sources',
+    }))
+    // The un1t board's stages and deals are not read either.
+    const stagesCall = calls.find((e) => e[0] === 'pipeline_stages')
+    expect(argOf(stagesCall, 'in')).toEqual(['in', 'pipeline_id', ['p-acq']])
+  })
+
+  it('a pipelines row naming an unregistered module is skipped and reported', async () => {
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-bea', name: 'Bea', email: null, location_id: HATCH }],
+      snapshots: [['c-bea', leadSnap()]],
+    })))
+    const { db } = recordingDb({
+      pipelines: [...HATCH_PIPELINES, { id: 'p-h-x', location_id: HATCH, key: 'mystery', module: 'acquisition_v9', mode: 'derived', enabled: true, is_primary: false }],
+      pipeline_stages: HATCH_STAGES,
+      deals: [],
+    })
+
+    const out = await reclassifyAllContacts(db, { locationId: HATCH, dryRun: true })
+
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', deals_created: 1 })
+    expect(out.pipelines_skipped).toEqual(expect.arrayContaining(['waitlist', 'mystery']))
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'no board module registered', { key: 'mystery', module: 'acquisition_v9', locationId: HATCH })
+  })
+
+  it('the manual waitlist board is never read or written on the un1t path', async () => {
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-bea', name: 'Bea', email: null, location_id: HATCH }],
+      snapshots: [['c-bea', memberSnap()]],
+    })))
+    const { db, calls, writesTo, argOf } = recordingDb({
+      pipelines: HATCH_PIPELINES,
+      pipeline_stages: HATCH_STAGES,
+      deals: [
+        { id: 'd-wait', contact_id: 'c-bea', stage_id: 'h-wait-new', pipeline_id: 'p-h-wait', location_id: HATCH, status: 'open' },
+        { id: 'd-acq', contact_id: 'c-bea', stage_id: 'h-new', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' },
+      ],
+    })
+
+    const out = await reclassifyAllContacts(db, { locationId: HATCH })
+
+    const stagesCall = calls.find((e) => e[0] === 'pipeline_stages')
+    expect(argOf(stagesCall, 'in')).toEqual(['in', 'pipeline_id', ['p-h-acq']])
+    const dealsRead = calls.find((e) => e[0] === 'deals' && argOf(e, 'select'))
+    expect(argOf(dealsRead, 'in')).toEqual(['in', 'pipeline_id', ['p-h-acq']])
+    const dealWrites = writesTo('deals')
+    expect(dealWrites).toHaveLength(1)
+    expect(argOf(dealWrites[0], 'update')[1]).toEqual({ stage_id: 'h-member' })
+    expect(argOf(dealWrites[0], 'in')).toEqual(['in', 'id', ['d-acq']])
+    expect(out).toMatchObject({ ok: true, deals_moved: 1, deals_created: 0 })
+    expect(out.pipelines_skipped).toContain('waitlist')
+  })
+})
+
+describe('HATCHPIPE.2 — dry run of a disabled board (includeDisabled)', () => {
+  beforeEach(() => { vi.mocked(membershipReadsFor).mockReset(); vi.mocked(logWarn).mockClear() })
+
+  // Hatch before A2: the acquisition row is disabled and still names the
+  // Glofox module. The dry run treats it as acquisition_un1t.
+  const DISABLED_HATCH = [
+    { id: 'p-h-acq', location_id: HATCH, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: false, is_primary: false },
+    { id: 'p-h-wait', location_id: HATCH, key: 'waitlist', module: null, mode: 'manual', enabled: true, is_primary: true },
+  ]
+  const inputs = () => hatchInputs({
+    contacts: [
+      { id: 'c-bea', name: 'Bea', email: null, location_id: HATCH },
+      { id: 'c-cal', name: 'Cal', email: null, location_id: HATCH },
+      { id: 'c-dee', name: 'Dee', email: null, location_id: 'loc-st' },
+    ],
+    snapshots: [['c-bea', memberSnap()], ['c-cal', leadSnap()], ['c-dee', leadSnap()]],
+  })
+
+  it('includeDisabled is ignored without dryRun; with dryRun it classifies the disabled acquisition row as acquisition_un1t and returns stage_histogram', async () => {
+    // Without dryRun: one pipelines query, the disabled board stays off.
+    seamWith(vi.fn().mockResolvedValue(inputs()))
+    const live = recordingDb({ pipelines: DISABLED_HATCH, pipeline_stages: HATCH_STAGES, deals: [] })
+    const liveOut = await reclassifyAllContacts(live.db, { locationId: HATCH, includeDisabled: ['acquisition'] })
+    expect(live.tables().filter((t) => t === 'pipelines')).toHaveLength(1)
+    expect(membershipReadsFor).not.toHaveBeenCalled()
+    expect(live.writesTo('deals')).toHaveLength(0)
+    expect(liveOut).toMatchObject({ ok: true, contacts_seen: 0, deals_created: 0 })
+    expect(liveOut).not.toHaveProperty('stage_histogram')
+
+    // With dryRun: one extra query for the disabled rows with those keys.
+    const pipelineInputs = vi.fn().mockResolvedValue(inputs())
+    seamWith(pipelineInputs)
+    const dry = recordingDb({
+      pipelines: DISABLED_HATCH,
+      pipeline_stages: HATCH_STAGES,
+      deals: [{ id: 'd-bea', contact_id: 'c-bea', stage_id: 'h-new', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' }],
+    })
+    const out = await reclassifyAllContacts(dry.db, { locationId: HATCH, dryRun: true, includeDisabled: ['acquisition'] })
+
+    const pipelineCalls = dry.calls.filter((e) => e[0] === 'pipelines')
+    expect(pipelineCalls).toHaveLength(2)
+    expect(pipelineCalls[1].slice(1)).toEqual([
+      ['select', 'id, key, module, mode, enabled, is_primary'],
+      ['eq', 'location_id', HATCH], ['eq', 'enabled', false], ['in', 'key', ['acquisition']],
+    ])
+    expect(pipelineInputs).toHaveBeenCalledTimes(1)
+    expect(dry.tables()).not.toContain('contacts')
+    // Dry run: nothing written anywhere, the audit row included.
+    expect(dry.calls.filter((e) => e.some((x) => Array.isArray(x) && (x[0] === 'update' || x[0] === 'insert')))).toHaveLength(0)
+    expect(out).toMatchObject({
+      ok: true, input_source: 'un1t_online', contacts_seen: 3, deals_moved: 1, deals_created: 2,
+      stage_histogram: { member: 1, new_lead: 2 },
+      movement_matrix: { new_lead: { member: 1 } },
+    })
+    expect(out.pipelines_skipped).toEqual(['waitlist'])
   })
 })

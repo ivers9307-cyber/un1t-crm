@@ -23,6 +23,15 @@
 import { classifyContact } from './pipeline-classifier.js'
 import { logWarn } from './log.js'
 import { getBoardModule, PIPELINE_MODES } from '../../shared/pipelines/index.js'
+import { membershipReadsFor, supportsRead } from './membership/reads/index.js'
+
+// HATCHPIPE.2 — a board whose module declares this inputSource is classified
+// from the location's membership read adapter (un1tOnlineReads.pipelineInputs:
+// un1t_* rows at THIS studio), never from contacts columns. Every other board
+// reads contacts exactly as before.
+const UN1T_INPUT = 'un1t_online'
+// The module a disabled row is dry-run as (includeDisabled, below).
+const DRY_RUN_DISABLED_MODULE = 'acquisition_un1t'
 
 // PIPELINES.3 — the columns a run selects are the UNION of what its enabled
 // derived boards DECLARE, not a hand-maintained list. The list this replaced
@@ -46,6 +55,9 @@ function selectColsFor(modules) {
  * @param {string}  [args.source='cron']  audit field
  * @param {string}  [args.runId]          optional pre-allocated audit row id
  * @param {string}  [args.userId]         created_by for audit
+ * @param {string[]} [args.includeDisabled=[]]  pipeline keys whose DISABLED
+ *   rows at the location are dry-run as acquisition_un1t. Honoured only with
+ *   dryRun; ignored (no query) otherwise.
  *
  * @returns {Promise<{
  *   ok: boolean,
@@ -57,12 +69,16 @@ function selectColsFor(modules) {
  *   movement_matrix: object,
  *   samples: object[],
  *   run_id: string|null,
+ *   input_source?: 'contacts'|'un1t_online',
+ *   unlinked?: number,             un1t path: clients with no contact
+ *   skipped_no_contact?: number,   un1t path: clients whose contact is gone
+ *   stage_histogram?: object,      dry runs only: { [target slug]: n }
  *   error?: string,
  * }>}
  */
 export async function reclassifyAllContacts(db, args) {
   const {
-    locationId, dryRun = false, source = 'cron', userId = null,
+    locationId, dryRun = false, source = 'cron', userId = null, includeDisabled = [],
   } = args || {}
   const startedAt = new Date()
 
@@ -115,9 +131,29 @@ export async function reclassifyAllContacts(db, args) {
     return { ok: false, error: `pipeline load: ${pipelinesErr.message}`, run_id: runId }
   }
 
+  // HATCHPIPE.2 — a dry run may preview a board that is still switched off
+  // (Hatch's acquisition row before it is re-enabled). Its disabled rows with
+  // the named keys are classified as acquisition_un1t. Never on a real run:
+  // without dryRun this issues no query at all.
+  const boardRows = [...(pipelineRows || [])]
+  if (dryRun && Array.isArray(includeDisabled) && includeDisabled.length > 0) {
+    const { data: disabledRows, error: disabledErr } = await db
+      .from('pipelines')
+      .select('id, key, module, mode, enabled, is_primary')
+      .eq('location_id', locationId)
+      .eq('enabled', false)
+      .in('key', includeDisabled)
+    if (disabledErr) {
+      return { ok: false, error: `pipeline load: ${disabledErr.message}`, run_id: runId }
+    }
+    for (const p of disabledRows || []) {
+      boardRows.push({ ...p, mode: PIPELINE_MODES.DERIVED, module: DRY_RUN_DISABLED_MODULE })
+    }
+  }
+
   const pipelinesSkipped = []
-  const activePipelines = []
-  for (const p of pipelineRows || []) {
+  let activePipelines = []
+  for (const p of boardRows) {
     if (p.mode === PIPELINE_MODES.MANUAL) { pipelinesSkipped.push(p.key); continue }
     const mod = getBoardModule(p.module)
     if (!mod) {
@@ -126,6 +162,24 @@ export async function reclassifyAllContacts(db, args) {
       continue
     }
     activePipelines.push({ ...p, mod })
+  }
+
+  // HATCHPIPE.2 — where this run's inputs come from. One location reads one
+  // source: a location also running a contacts-input board refuses its un1t
+  // boards (no such location exists or is planned), so the contacts path is
+  // exactly the one that ran before.
+  let inputSource = 'contacts'
+  if (activePipelines.some((p) => p.mod.inputSource === UN1T_INPUT)) {
+    if (activePipelines.some((p) => p.mod.inputSource !== UN1T_INPUT)) {
+      for (const p of activePipelines) {
+        if (p.mod.inputSource !== UN1T_INPUT) continue
+        pipelinesSkipped.push(p.key)
+        logWarn('pipeline-reclassify', 'board refused', { key: p.key, module: p.module, locationId, reason: 'mixed_input_sources' })
+      }
+      activePipelines = activePipelines.filter((p) => p.mod.inputSource !== UN1T_INPUT)
+    } else {
+      inputSource = UN1T_INPUT
+    }
   }
 
   if (activePipelines.length === 0) {
@@ -137,8 +191,38 @@ export async function reclassifyAllContacts(db, args) {
     return {
       ok: true, run_id: runId, contacts_seen: 0, deals_moved: 0, deals_unchanged: 0,
       deals_created: 0, errors: 0, movement_matrix: {}, samples: [],
-      pipelines_skipped: pipelinesSkipped,
+      pipelines_skipped: pipelinesSkipped, input_source: inputSource,
     }
+  }
+
+  // HATCHPIPE.2 — a un1t.online board's inputs, from the location's read
+  // adapter. Anything short of a configured un1t.online adapter whose
+  // pipelineInputs answered skips the run (retried next tick): never a
+  // fallback to contacts columns, which at a dual-studio contact hold
+  // Stillorgan's Glofox state.
+  const nowMs = startedAt.getTime()
+  let un1tInputs = null
+  let un1tClassify = null
+  if (inputSource === UN1T_INPUT) {
+    const loaded = await loadUn1tInputs(db, locationId, nowMs)
+    if (!loaded.ok) {
+      const errorMessage = `un1t inputs unavailable: ${loaded.reason}`
+      logWarn('pipeline-reclassify', 'inputs unavailable', {
+        locationId, source: loaded.source, state: loaded.state, reason: loaded.reason,
+        // The adapter's own error text (a failed read), so the miss is not silent.
+        ...(loaded.err ? { err: loaded.err } : {}),
+      })
+      await markRun(db, runId, { status: 'failed', error_message: errorMessage }, startedAt)
+      return {
+        ok: false, error: errorMessage, run_id: runId,
+        input_source: inputSource, pipelines_skipped: pipelinesSkipped,
+      }
+    }
+    un1tInputs = loaded.data
+    // Every un1t board shares the acquisition stages and rules today; the
+    // first one's classify places the contact, as the contacts path's single
+    // classifyContact() call does across its boards.
+    un1tClassify = activePipelines[0].mod.classify
   }
 
   const activePipelineIds = activePipelines.map((p) => p.id)
@@ -177,26 +261,32 @@ export async function reclassifyAllContacts(db, args) {
   //    20k hard ceiling is plenty for UN1T (~8k today). Crossing it
   //    means we should switch to per-stage streaming, not just
   //    bumping the number again.
+  //
+  //    HATCHPIPE.2 — on the un1t path the people are pipelineInputs' list
+  //    (every contact a un1t client row at this studio links to, whoever owns
+  //    the contact) and contacts is not read here at all.
   const PAGE_SIZE = 1000
   const HARD_LIMIT = 20_000
-  const contacts = []
-  let pageStart = 0
+  const contacts = un1tInputs ? un1tInputs.contacts.slice() : []
   let pageErr = null
-   
-  while (true) {
-    const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
-    const { data: page, error } = await db
-      .from('contacts')
-      .select(selectCols)
-      .eq('location_id', locationId)
-      .order('id', { ascending: true })
-      .range(pageStart, pageEnd)
-    if (error) { pageErr = error; break }
-    if (!Array.isArray(page) || page.length === 0) break
-    contacts.push(...page)
-    if (page.length < PAGE_SIZE) break          // ran out of rows
-    if (contacts.length >= HARD_LIMIT) break     // hit the safety cap
-    pageStart += PAGE_SIZE
+
+  if (!un1tInputs) {
+    let pageStart = 0
+    while (true) {
+      const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
+      const { data: page, error } = await db
+        .from('contacts')
+        .select(selectCols)
+        .eq('location_id', locationId)
+        .order('id', { ascending: true })
+        .range(pageStart, pageEnd)
+      if (error) { pageErr = error; break }
+      if (!Array.isArray(page) || page.length === 0) break
+      contacts.push(...page)
+      if (page.length < PAGE_SIZE) break          // ran out of rows
+      if (contacts.length >= HARD_LIMIT) break     // hit the safety cap
+      pageStart += PAGE_SIZE
+    }
   }
   const contactsErr = pageErr
   if (contactsErr) {
@@ -209,7 +299,7 @@ export async function reclassifyAllContacts(db, args) {
       contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0,
       movement_matrix: {}, samples: [],
     }, startedAt)
-    return { ok: true, run_id: runId, contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0, movement_matrix: {}, samples: [], pipelines_skipped: pipelinesSkipped }
+    return { ok: true, run_id: runId, contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0, movement_matrix: {}, samples: [], pipelines_skipped: pipelinesSkipped, ...un1tCounts(inputSource, un1tInputs) }
   }
 
   // 4. Pull every open deal at the location in one query.
@@ -276,9 +366,17 @@ export async function reclassifyAllContacts(db, args) {
   const samples = []
   const movesToApply = [] // [{ deal_id, contact_id, from_slug, to_slug, target_stage_id, contact_name }]
   const createsToApply = [] // [{ contact_id, target_stage_id, target_slug, contact_name }]
+  const stageHistogram = {} // dry runs only: { target_slug: count }
+
+  // HATCHPIPE.2 — the un1t path classifies the contact's snapshot (built from
+  // this studio's un1t rows). No snapshot → null → counted as an error below.
+  const classifyFromSnapshot = (contactId) => {
+    const snapshot = un1tInputs.snapshots.get(contactId)
+    return snapshot ? un1tClassify(snapshot, nowMs) : null
+  }
 
   for (const c of contacts) {
-    const targetSlug = classifyContact({
+    const targetSlug = un1tInputs ? classifyFromSnapshot(c.id) : classifyContact({
       glofox_membership_status: c.glofox_membership_status,
       glofox_membership_state: c.glofox_membership_state,
       glofox_membership_expiry: c.glofox_membership_expiry,
@@ -306,6 +404,7 @@ export async function reclassifyAllContacts(db, args) {
       errors++
       continue
     }
+    if (dryRun) stageHistogram[targetSlug] = (stageHistogram[targetSlug] || 0) + 1
 
     const existing = dealByContact.get(c.id)
     if (!existing) {
@@ -315,7 +414,7 @@ export async function reclassifyAllContacts(db, args) {
         target_stage_id: targetStageId,
         target_pipeline_id: stagePipelineById.get(targetStageId) || null,
         target_slug: targetSlug,
-        contact_name: c.name || c.email || 'Glofox member',
+        contact_name: c.name || c.email || (un1tInputs ? 'Member' : 'Glofox member'),
       })
       continue
     }
@@ -457,7 +556,57 @@ export async function reclassifyAllContacts(db, args) {
     movement_matrix: movementMatrix,
     samples,
     pipelines_skipped: pipelinesSkipped,
+    ...un1tCounts(inputSource, un1tInputs),
+    ...(dryRun ? { stage_histogram: stageHistogram } : {}),
   }
+}
+
+// HATCHPIPE.2 — the input fields a run result carries: always input_source,
+// and on the un1t path the clients pipelineInputs could not place.
+function un1tCounts(inputSource, un1tInputs) {
+  if (!un1tInputs) return { input_source: inputSource }
+  return {
+    input_source: inputSource,
+    unlinked: un1tInputs.unlinked ?? 0,
+    skipped_no_contact: un1tInputs.skipped_no_contact ?? 0,
+  }
+}
+
+/**
+ * HATCHPIPE.2 — resolve the un1t.online classifier inputs for a location.
+ *
+ * Requires the seam to be a CONFIGURED un1t_online adapter that implements
+ * pipelineInputs, and that read to succeed. `reason` is the seam state when it
+ * is not configured ('unknown', 'unconfigured', 'none', 'no_location'), else
+ * 'source_mismatch' (configured, but another source), 'read_unsupported', or
+ * 'read_failed' (the read answered success:false or threw).
+ *
+ * @returns {Promise<{ ok: true, data: { contacts, snapshots, unlinked, skipped_no_contact } }
+ *   | { ok: false, source: string|null, state: string, reason: string, err?: string }>}
+ */
+async function loadUn1tInputs(db, locationId, now) {
+  let r
+  try {
+    r = await membershipReadsFor(db, locationId)
+  } catch {
+    return { ok: false, source: null, state: 'unknown', reason: 'unknown' }
+  }
+  const source = r?.source ?? null
+  const state = r?.state ?? 'unknown'
+  if (state !== 'configured') return { ok: false, source, state, reason: state }
+  if (source !== UN1T_INPUT) return { ok: false, source, state, reason: 'source_mismatch' }
+  if (!supportsRead(r, 'pipelineInputs')) return { ok: false, source, state, reason: 'read_unsupported' }
+  let res
+  try {
+    res = await r.reads.pipelineInputs(db, locationId, { now })
+  } catch (e) {
+    res = { success: false, error: e?.message || String(e) }
+  }
+  const data = res?.success ? res.data : null
+  if (!data || !Array.isArray(data.contacts) || !(data.snapshots instanceof Map)) {
+    return { ok: false, source, state, reason: 'read_failed', err: res?.error ? String(res.error) : 'malformed answer' }
+  }
+  return { ok: true, data }
 }
 
 async function markRun(db, runId, fields, startedAt) {

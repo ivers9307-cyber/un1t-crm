@@ -34,6 +34,10 @@ const PipelineReclassifySchema = z.object({
   location_id: uuidLike.optional(),
   source:      z.enum(['manual', 'backfill']).optional(),
   dry_run:     z.boolean().optional(),
+  // HATCHPIPE.2 — preview a board that is still switched off (Hatch's
+  // acquisition row before it is re-enabled), dry-run as acquisition_un1t.
+  // Honoured ONLY with dry_run: a real run never classifies a disabled board.
+  include_disabled: z.array(z.literal('acquisition')).optional(),
 })
 
 export const runtime = 'nodejs'
@@ -67,6 +71,7 @@ export async function POST(request) {
     dryRun,
     source,
     userId: user.id || null,
+    ...(dryRun && body?.include_disabled?.length ? { includeDisabled: body.include_disabled } : {}),
   })
 
   // The orchestrator returns ok:true even on partial — the audit row
