@@ -57,7 +57,7 @@ import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
 //                       (getLocationNumberForWaba), or, with
 //                       replyInConversation, the thread number when it is on
 //                       it. None switched on there → WhatsAppNumberMissingError.
-//                       Null/absent → the rules above (a row before mig 744).
+//                       Null/absent → the rules above (a row before mig 745).
 async function resolveConfig(opts = {}, { template = false } = {}) {
   if (opts.config) return opts.config
   if (opts.replyInConversation) {

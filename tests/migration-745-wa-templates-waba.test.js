@@ -1,14 +1,14 @@
-// WAORGNUMBER.2 — behavioural test for migration 744: whatsapp_templates gains
+// WAORGNUMBER.2 — behavioural test for migration 745: whatsapp_templates gains
 // business_account_id (backfilled from the studio's link-default number), a unique
 // (WABA, name, language) index and a unique meta_template_id index (design R5).
-// Loads the REAL 744 file into PGlite over the columns of the tables it touches.
+// Loads the REAL 745 file into PGlite over the columns of the tables it touches.
 // The link table mirrors mig 743's shape. Fictional ids only: the repo is public.
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
 
-const MIG_744 = readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations/744_wa_templates_waba.sql'), 'utf8')
+const MIG_745 = readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations/745_wa_templates_waba.sql'), 'utf8')
 
 const STILL = 'a0000000-0000-0000-0000-000000000001'
 const HATCH = 'a0000000-0000-0000-0000-000000000002'
@@ -37,14 +37,14 @@ async function boot(extra = '', { run = true } = {}) {
   const db = new PGlite()
   await db.exec(SCHEMA)
   if (extra) await db.exec(extra)
-  if (run) await db.exec(MIG_744)
+  if (run) await db.exec(MIG_745)
   return db
 }
 const rows = async (db, sql) => (await db.query(sql)).rows
 const tpl = (loc, name, meta = 'NULL', lang = 'en') =>
   `INSERT INTO public.whatsapp_templates (location_id, name, meta_template_id, language) VALUES ('${loc}', '${name}', ${meta === 'NULL' ? 'NULL' : `'${meta}'`}, '${lang}');`
 
-describe('744 whatsapp_templates WABA', () => {
+describe('745 whatsapp_templates WABA', () => {
   it('backfills the WABA from the link-default number', async () => {
     const db = await boot(`
       INSERT INTO public.whatsapp_numbers (id, location_id, business_account_id) VALUES ('${N1}', '${STILL}', '${WABA_A}'), ('${N2}', '${STILL}', '${WABA_B}');
@@ -100,7 +100,7 @@ describe('744 whatsapp_templates WABA', () => {
       INSERT INTO public.whatsapp_numbers (id, location_id, business_account_id) VALUES ('${N1}', '${STILL}', '${WABA_A}'), ('${N3}', '${HATCH}', '${WABA_A}');
       INSERT INTO public.location_whatsapp_numbers VALUES ('${STILL}', '${N1}', true, now()), ('${HATCH}', '${N3}', true, now());
       ${tpl(STILL, 'welcome', 'm1')} ${tpl(HATCH, 'welcome', 'm2')}`, { run: false })
-    await expect(db.exec(MIG_744)).rejects.toThrow(/mig 744: duplicate \(business_account_id, name, language\).*welcome/)
+    await expect(db.exec(MIG_745)).rejects.toThrow(/mig 745: duplicate \(business_account_id, name, language\).*welcome/)
     // the file rolls back whole (its own BEGIN is left open by the error): no column
     await db.exec('ROLLBACK')
     expect(await rows(db, `SELECT 1 FROM information_schema.columns WHERE table_name = 'whatsapp_templates' AND column_name = 'business_account_id'`)).toEqual([])
@@ -108,12 +108,12 @@ describe('744 whatsapp_templates WABA', () => {
 
   it('raises when a meta_template_id is duplicated', async () => {
     const db = await boot(`${tpl(STILL, 'a', 'm1')} ${tpl(HATCH, 'b', 'm1')}`, { run: false })
-    await expect(db.exec(MIG_744)).rejects.toThrow(/mig 744: duplicate meta_template_id.*m1/)
+    await expect(db.exec(MIG_745)).rejects.toThrow(/mig 745: duplicate meta_template_id.*m1/)
   })
 
   it('is re-runnable and leaves authenticated with read-only access', async () => {
     const db = await boot(`${tpl(STILL, 'a', 'm1')}`)
-    await db.exec(MIG_744)
+    await db.exec(MIG_745)
     for (const [priv, ok] of [['SELECT', true], ['INSERT', false], ['UPDATE', false], ['DELETE', false]]) {
       expect((await rows(db, `SELECT has_table_privilege('authenticated', 'public.whatsapp_templates', '${priv}') AS ok`))[0].ok, priv).toBe(ok)
     }

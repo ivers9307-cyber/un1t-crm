@@ -10,7 +10,7 @@
 //   - ... that matches no row, S is not the home studio  -> skipped 'unowned_not_home'
 //     (syncing at Hatch never copies Stillorgan's templates into Hatch)
 //
-// Match key: meta_template_id first (Meta's ids are globally unique, mig 744), else
+// Match key: meta_template_id first (Meta's ids are globally unique, mig 745), else
 // (name, language). The id wins even if another row shares the name.
 
 const nameKey = (name, language) => `${name}\u0000${language ?? ''}`

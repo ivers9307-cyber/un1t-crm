@@ -39,7 +39,7 @@ export async function ownNumberOrRefusal(locationId, scope) {
  * WAORGNUMBER.2 (R5) — the number a template's Meta edit / delete runs on: the
  * template studio's number on the template's OWN WABA
  * (getLocationNumberForWaba(template.location_id, template.business_account_id)).
- * A template with no WABA recorded (a row before mig 744's backfill, or at a
+ * A template with no WABA recorded (a row before mig 745's backfill, or at a
  * studio that had no number) falls back to the studio's default, with
  * ownNumberOrRefusal's refusals.
  *

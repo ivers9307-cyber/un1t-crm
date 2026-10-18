@@ -1,4 +1,4 @@
--- 744_wa_templates_waba.sql
+-- 745_wa_templates_waba.sql
 -- WAORGNUMBER.2 — templates belong to a studio AND a WhatsApp Business Account
 -- (docs/superpowers/specs/2026-10-17-wa-org-shared-numbers-design.md, R5).
 --
@@ -61,7 +61,7 @@ BEGIN
        GROUP BY business_account_id, name, language
       HAVING count(*) > 1) d;
   IF v_dupes IS NOT NULL THEN
-    RAISE EXCEPTION 'mig 744: duplicate (business_account_id, name, language) in whatsapp_templates: %', v_dupes;
+    RAISE EXCEPTION 'mig 745: duplicate (business_account_id, name, language) in whatsapp_templates: %', v_dupes;
   END IF;
 
   SELECT string_agg(meta_template_id || ' x' || n, ', ')
@@ -73,7 +73,7 @@ BEGIN
        GROUP BY meta_template_id
       HAVING count(*) > 1) d;
   IF v_dupes IS NOT NULL THEN
-    RAISE EXCEPTION 'mig 744: duplicate meta_template_id in whatsapp_templates: %', v_dupes;
+    RAISE EXCEPTION 'mig 745: duplicate meta_template_id in whatsapp_templates: %', v_dupes;
   END IF;
 END $$;
 

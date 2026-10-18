@@ -170,8 +170,12 @@ export async function POST(request, props) {
       sentTemplateName = template.name
     }
   } catch (e) {
-    // WACONFIGFALLBACK.1 — whatsappErrorStatus keeps a typed refusal a 409
-    // (the send carries the checked config, so none is expected here).
+    // WACONFIGFALLBACK.1 — whatsappErrorStatus keeps a typed refusal a 409.
+    // Text and most templates carry a checked config, so none is expected
+    // there; WAORGNUMBER.2: a template whose WABA neither the thread number
+    // nor the checked default is on resolves by location + WABA inside
+    // sendTemplateMessage, and refuses (409) when the studio has no number
+    // switched on on that WABA.
     return NextResponse.json({ success: false, error: e?.message || 'Failed to send WhatsApp message' }, { status: whatsappErrorStatus(e, 502) })
   }
 

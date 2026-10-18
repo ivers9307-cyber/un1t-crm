@@ -157,12 +157,12 @@ const CALLERS = {
   'src/app/api/contacts/[id]/whatsapp/route.js': {
     calls: { sendTextMessage: 1, sendTemplateMessage: 1, ownNumberOrRefusal: 1, getConversationNumberConfig: 1 },
     decision: 'refuse-409',
-    why: 'contact composer: own number checked BEFORE a thread is opened (no empty thread); the send carries that checked { config } (one lookup, no check-then-send gap), or the thread\'s own number while it is active here (WAREPLYNUMBER.1: getConversationNumberConfig never throws, null → the checked default; a template only within the default\'s WABA). route.test.js.',
+    why: 'contact composer: own number checked BEFORE a thread is opened (no empty thread); the send carries that checked { config } (one lookup, no check-then-send gap), or the thread\'s own number while it is active here (WAREPLYNUMBER.1: getConversationNumberConfig never throws, null → the checked default; a template only within the default\'s WABA). WAORGNUMBER.2 (R5): a template goes from the thread number or the checked default only when it is on the template\'s WABA (pickTemplateConfig); when neither is, the send resolves by location + WABA (sendTemplateMessage { locationId, businessAccountId }) and can refuse: WhatsAppNumberMissingError → 409 (whatsappErrorStatus), nothing logged. route.test.js.',
   },
   'src/app/api/contacts/[id]/cancellation-form/route.js': {
     calls: { sendCtaUrlMessage: 1, sendTemplateMessage: 1, ownNumberOrRefusal: 1 },
     decision: 'refuse-409',
-    why: 'WhatsApp channel only: own number checked before a thread or a link, and the send carries that checked { config }; email unaffected. route.test.js.',
+    why: 'WhatsApp channel only: own number checked before a thread or a link, and the send carries that checked { config }; email unaffected. WAORGNUMBER.2 (R5): a template goes from the checked default only when it is on the template\'s WABA (pickTemplateConfig); otherwise the send resolves by location + WABA (sendTemplateMessage { locationId, businessAccountId }) and can refuse: WhatsAppNumberMissingError → the minted link is revoked and the route answers 409 (whatsappErrorStatus). route.test.js.',
   },
   'src/app/api/churn-radar/action/route.js': {
     calls: { sendTextMessage: 1 },

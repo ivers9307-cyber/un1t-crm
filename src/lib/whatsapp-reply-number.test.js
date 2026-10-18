@@ -346,6 +346,28 @@ describe('WAORGNUMBER.2 — template sends pick the number by the template’s W
     expect(sentFrom).toEqual([])
   })
 
+  // Transitional WAHOMESTUDIO.1 clause: LOC2 has nothing switched on; its thread
+  // is stamped with LOC's (same organisation) default number, on WABA-1.
+  it('a sibling-stamped thread with the stamped number’s WABA sends from the sibling number (viaSibling kept)', async () => {
+    state.conversations = [conv('n-default', { location_id: LOC2 })]
+    const cfg = await getConversationReplyConfig(LOC2, CONV, { template: true, businessAccountId: 'WABA-1' })
+    expect(cfg.phoneNumberId).toBe('PNI-n-default')
+    expect(cfg.viaSibling).toBe(true)
+    expect(cfg.locationId).toBe(LOC2)
+    await wa.sendTemplateMessage('+353000000000', 'tpl', 'en', [], { locationId: LOC2, replyInConversation: CONV, businessAccountId: 'WABA-1' })
+    expect(sentFrom).toEqual(['PNI-n-default'])
+  })
+
+  it('a sibling-stamped thread with ANOTHER WABA refuses (the studio has no number on it), Meta never called', async () => {
+    state.numbers = [DEFAULT, ON_WABA_2]
+    state.conversations = [conv('n-default', { location_id: LOC2 })]
+    await expect(getConversationReplyConfig(LOC2, CONV, { template: true, businessAccountId: 'WABA-2' })).rejects.toSatisfy(isWhatsAppNumberMissing)
+    const err = await wa.sendTemplateMessage('+353000000000', 'tpl', 'en', [], { locationId: LOC2, replyInConversation: CONV, businessAccountId: 'WABA-2' }).catch((e) => e)
+    expect(isWhatsAppNumberMissing(err)).toBe(true)
+    expect(err.locationId).toBe(LOC2)
+    expect(sentFrom).toEqual([])
+  })
+
   it('pickTemplateConfig: thread on the WABA, else default on it, else null (resolve by WABA); no WABA → pickReplyConfig', async () => {
     const { pickTemplateConfig } = await import('./whatsapp-config.js')
     const thread = { id: 't', businessAccountId: 'WABA-2' }
