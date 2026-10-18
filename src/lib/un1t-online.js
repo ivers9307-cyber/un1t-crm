@@ -172,9 +172,7 @@ export function createUn1tClient({
     return body.data
   }
 
-  // `maxPages` per call (UN1TWRITE.20) bounds a walk below the client's own
-  // cap: each page is one request, and on the write side one budget slot.
-  async function listAll(path, { maxPages: pageCap = maxPages } = {}) {
+  async function listAll(path) {
     const sep = path.includes('?') ? '&' : '?'
     const rows = []
     const seen = new Set()
@@ -183,7 +181,7 @@ export function createUn1tClient({
     let truncated = false
 
     for (let p = 1; p <= pages; p++) {
-      if (p > Math.min(pageCap, maxPages)) {
+      if (p > maxPages) {
         truncated = true
         break
       }

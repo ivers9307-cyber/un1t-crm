@@ -699,12 +699,28 @@ export async function createUn1tWriter(
     }
   }
 
+  // A list walk with its own page cap (UN1TWRITE.20: the client email walk)
+  // gets a read client built with that cap, so un1t-online.js stays as it is.
+  const cappedClients = new Map()
+  function clientFor(maxPages) {
+    if (!(Number.isInteger(maxPages) && maxPages > 0)) return readClient
+    if (!cappedClients.has(maxPages)) {
+      cappedClients.set(maxPages, clientFactory({
+        token, fetchImpl: timedReadFetch, sleep, maxPages,
+        beforeRequest: async () => {
+          if (!(await takeSlot({ wait: checkDepth > 0, proceed: true }))) throw refuse(C.RATE_BUDGET)
+        },
+      }))
+    }
+    return cappedClients.get(maxPages)
+  }
+
   /** Every page of a list (at most `maxPages`); a walk cut short throws. */
-  async function readAll(path, opts) {
+  async function readAll(path, { maxPages } = {}) {
     requireConnected()
     let out
     try {
-      out = await readClient.listAll(path, opts)
+      out = await clientFor(maxPages).listAll(path)
     } catch (err) {
       if (err instanceof Un1tAuthError) dropPermissions()
       throw err
