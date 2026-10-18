@@ -91,6 +91,7 @@ export async function POST(request) {
     switch (b.op) {
       case 'create': {
         if (b.terms_confirmed !== true) return bad("Confirm that MIA TEST accepts un1t.online's terms and liability waiver (terms_confirmed: true).")
+        if (typeof contact.email !== 'string' || !contact.email.trim()) return bad('MIA TEST needs an email address before an account can be created.')
         // The legal documents' version is recorded by the funnel (plan D
         // PR 4); this route records the acceptance with no version.
         const r = await createClient(db, {
