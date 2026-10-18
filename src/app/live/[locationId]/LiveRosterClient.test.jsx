@@ -45,10 +45,10 @@ describe('LiveRosterClient', () => {
     await mount()
     expect(screen.getByText(/^2 booked$/)).toBeTruthy()
     expect(screen.getByText('Aoife B')).toBeTruthy()
-    expect(screen.queryByText(/booked here/)).toBeNull()
+    expect(screen.queryByText(/no strap/)).toBeNull()
   })
 
-  it('shows "{p}/{n} booked here" with a bridge', async () => {
+  it('never shows booked-here or strap state, even when has_bridge is true', async () => {
     respond({
       ok: true,
       occurrence: OCC,
@@ -56,7 +56,11 @@ describe('LiveRosterClient', () => {
       has_bridge: true,
     })
     await mount()
-    expect(screen.getByText(/^1\/2 booked here$/)).toBeTruthy()
+    expect(screen.getByText(/^2 booked$/)).toBeTruthy()
+    expect(screen.queryByText(/booked here/)).toBeNull()
+    expect(screen.queryByText(/no strap/)).toBeNull()
+    expect(screen.queryByText(/bpm/)).toBeNull()
+    expect(screen.queryByText('120')).toBeNull()
   })
 
   it('shows the empty state with no live class', async () => {

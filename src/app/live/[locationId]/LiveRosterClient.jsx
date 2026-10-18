@@ -17,7 +17,7 @@ const POLL_MS = 15_000
 // `timeZone` is accepted for parity with LiveClassClient; the list has no
 // clock of its own, so nothing here reads it yet.
 export default function LiveRosterClient({ locationId, locationName }) {
-  const [data, setData] = useState(null) // { occurrence, roster, has_bridge }
+  const [data, setData] = useState(null) // { occurrence, roster }
   const [error, setError] = useState(null)
 
   useEffect(() => {
@@ -32,7 +32,6 @@ export default function LiveRosterClient({ locationId, locationName }) {
         setData({
           occurrence: json.occurrence || null,
           roster: json.roster || [],
-          has_bridge: json.has_bridge,
         })
         setError(null)
       } catch (e) {
@@ -80,7 +79,7 @@ export default function LiveRosterClient({ locationId, locationName }) {
           </p>
         </div>
       ) : (
-        <ClassRosterPanel roster={roster} occurrence={occurrence} hasBridge={data.has_bridge} />
+        <ClassRosterPanel roster={roster} occurrence={occurrence} showHr={false} />
       )}
     </main>
   )

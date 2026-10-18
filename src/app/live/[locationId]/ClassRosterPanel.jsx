@@ -2,10 +2,13 @@
 // board (LiveClassClient) and the roster-only view (LiveRosterClient,
 // UN1TBOOK.13). `hasBridge` is false when the location has no BLE bridge, so no
 // strap can ever be present and "p/n booked here" would only ever read 0/n.
+// `showHr` is false for the roster-only view: a class_roster holder sees who is
+// booked and nothing about straps or arrival, so the header is always
+// "{n} booked" and the per-row bpm / "no strap" cell is not rendered.
 
 import { Users } from 'lucide-react'
 
-export default function ClassRosterPanel({ roster, occurrence, hasBridge = true }) {
+export default function ClassRosterPanel({ roster, occurrence, hasBridge = true, showHr = true }) {
   // Only shown while a class is live (occurrence resolved) and there's a roster
   // or walk-ins to show. HR-CLASS-ALLOC.2.
   if (!occurrence || roster.length === 0) return null
@@ -24,7 +27,7 @@ export default function ClassRosterPanel({ roster, occurrence, hasBridge = true 
           </span>
         )}
         <span className="ml-auto text-xs text-un1t-subtle">
-          {hasBridge ? `${presentBooked}/${booked.length} booked here` : `${booked.length} booked`}
+          {showHr && hasBridge ? `${presentBooked}/${booked.length} booked here` : `${booked.length} booked`}
           {walkins.length > 0 && ` · ${walkins.length} walk-in${walkins.length > 1 ? 's' : ''}`}
         </span>
       </div>
@@ -37,13 +40,13 @@ export default function ClassRosterPanel({ roster, occurrence, hasBridge = true 
               {r.anon && <span className="ml-1.5 text-[10px] font-semibold uppercase text-indigo-700">walk-in</span>}
               {!r.booked && !r.anon && <span className="ml-1.5 text-[10px] text-amber-700">not booked</span>}
             </span>
-            {r.hasHr ? (
+            {showHr && (r.hasHr ? (
               <span className="shrink-0 text-sm font-semibold tabular-nums">
                 {r.currentBpm ?? '—'}<span className="ml-0.5 text-[10px] font-normal text-un1t-subtle">bpm</span>
               </span>
             ) : (
               <span className="shrink-0 text-[11px] text-un1t-subtle">no strap</span>
-            )}
+            ))}
             {r.booked && (
               <span className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
                 booked
