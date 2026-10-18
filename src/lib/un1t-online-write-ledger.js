@@ -1,5 +1,5 @@
 // UN1TWRITE.4 — the un1t.online write ledger helpers (table: un1t_write_events,
-// mig 742, service role only).
+// mig 744, service role only).
 //
 // One row per write attempt. beginAttempt is the WRITE-AHEAD marker: the row
 // exists, stage 'sent', BEFORE the request goes out, so a crash, a retry or an
@@ -84,7 +84,7 @@ export async function beginAttempt(
   if (!locationId || !op || !origin || !key) {
     throw new TypeError('beginAttempt: locationId, op, origin and key are required')
   }
-  // A trial row names its person and product (mig 742 trial_target_check
+  // A trial row names its person and product (mig 744 trial_target_check
   // and the one-trial index key on them). Refuse here, before the insert, a
   // row the database would take as a hole in the one-trial rule or reject.
   if (op === 'trial') {

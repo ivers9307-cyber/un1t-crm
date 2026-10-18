@@ -187,7 +187,7 @@ export async function findDoneBooking(db, { locationId, un1tUserId, eventId }) {
 /**
  * The done trial for this person and product, by EITHER method (the €0 charge
  * or the free checkout): their keys differ, so findDone on one key misses the
- * other (mig 742 one_trial is per person and product). null when none.
+ * other (mig 744 one_trial is per person and product). null when none.
  * Throws on a database error: an unreadable history is never "no trial".
  */
 export async function findDoneTrial(db, { locationId, un1tUserId, productId }) {

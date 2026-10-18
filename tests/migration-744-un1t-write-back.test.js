@@ -1,15 +1,15 @@
-// UN1TWRITE.1 — behavioural test for migration 742 (un1t.online write-back:
+// UN1TWRITE.1 — behavioural test for migration 744 (un1t.online write-back:
 // the write ledger, the mirror's keep-the-CRM-write trigger, the terms columns
 // on the /start queue and the refund_request approval kind).
 //
 // PGlite (PostgreSQL 17) with only what the file touches, in the shape prod
 // holds on 18 Oct 2026: locations and contacts reduced to ids; un1t_bookings,
 // un1t_clients and un1t_transactions as mig 726 made them; class_booking_requests
-// as mig 335 plus 437/438/442's columns, with prod's ACL (authenticated arwd,
-// RLS on, no policy); agent_membership_requests with mig 711's kind CHECK.
+// as mig 335 plus 437/438/442's columns, with prod's ACL after mig 742
+// (CBRCLIENTCLOSED.1: no client privilege, RLS on, no policy); agent_membership_requests with mig 711's kind CHECK.
 // The schema's default privileges are reset to the pre-677 shape (anon and
 // authenticated get everything) so the file's own REVOKEs are what close the
-// new table and function, not PGlite's defaults. Then the real 742 file runs.
+// new table and function, not PGlite's defaults. Then the real 744 file runs.
 // Fictional ids and values only: the repo is public.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -17,8 +17,8 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
 
-const MIG_742 = readFileSync(
-  path.resolve(import.meta.dirname, '../supabase/migrations/742_un1t_write_back.sql'), 'utf8')
+const MIG_744 = readFileSync(
+  path.resolve(import.meta.dirname, '../supabase/migrations/744_un1t_write_back.sql'), 'utf8')
 
 const LOC = 'a0000000-0000-0000-0000-00000000000a'
 const CONTACT = 'c0000000-0000-0000-0000-00000000000c'
@@ -152,19 +152,18 @@ const SETUP_SQL = `
       connected_account_id text
     );
     ALTER TABLE public.class_booking_requests ENABLE ROW LEVEL SECURITY;
-    REVOKE ALL ON public.class_booking_requests FROM anon, authenticated;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON public.class_booking_requests TO authenticated;
+    REVOKE ALL ON public.class_booking_requests FROM anon, authenticated, PUBLIC;
     INSERT INTO public.class_booking_requests (location_id, glofox_event_id) VALUES ('${LOC}', 'un1t:ev-old');
 `
 
 beforeAll(async () => {
   db = new PGlite()
   await runSql(SETUP_SQL)
-  await runSql(MIG_742)
+  await runSql(MIG_744)
 }, 60_000)
 afterAll(() => db?.close())
 
-describe('mig 742 — un1t.online write-back core', () => {
+describe('mig 744 — un1t.online write-back core', () => {
   it('builds and passes its own self-check', async () => {
     const { rows } = await db.query(`
       SELECT c.relrowsecurity,
@@ -182,7 +181,7 @@ describe('mig 742 — un1t.online write-back core', () => {
   })
 
   it('is idempotent: a second run passes and changes nothing', async () => {
-    await expect(runSql(MIG_742)).resolves.toBeDefined()
+    await expect(runSql(MIG_744)).resolves.toBeDefined()
     const { rows } = await db.query(`SELECT count(*)::int AS n FROM pg_trigger WHERE tgname = 'un1t_mirror_keep_crm_write'`)
     expect(rows[0].n).toBe(3)
   })
@@ -399,6 +398,23 @@ describe('mig 742 — un1t.online write-back core', () => {
       }
     })
 
+    it('the four new columns open nothing to a client role (main\'s mig 742 closed the table)', async () => {
+      const { rows } = await db.query(`
+        SELECT (SELECT count(*)::int FROM information_schema.table_privileges
+                 WHERE table_schema = 'public' AND table_name = 'class_booking_requests'
+                   AND grantee IN ('anon', 'authenticated', 'PUBLIC')) AS table_grants,
+               (SELECT count(*)::int FROM information_schema.column_privileges
+                 WHERE table_schema = 'public' AND table_name = 'class_booking_requests'
+                   AND grantee IN ('anon', 'authenticated', 'PUBLIC')) AS column_grants,
+               (SELECT count(*)::int FROM pg_attribute
+                 WHERE attrelid = 'public.class_booking_requests'::regclass
+                   AND attname IN ('terms_accepted_at', 'terms_source', 'terms_version', 'un1t_steps')
+                   AND attacl IS NOT NULL) AS acl_on_new_columns,
+               has_any_column_privilege('authenticated', 'public.class_booking_requests', 'SELECT') AS auth_select,
+               has_any_column_privilege('anon', 'public.class_booking_requests', 'SELECT') AS anon_select`)
+      expect(rows[0]).toEqual({ table_grants: 0, column_grants: 0, acl_on_new_columns: 0, auth_select: false, anon_select: false })
+    })
+
     it('a row with no terms (every existing row) is fine, and un1t_steps holds the funnel record', async () => {
       await expect(insertCbr([], [])).resolves.toBeDefined()
       const steps = { explanation_email: 'sent', forgot_password: 'done', booking_confirmation: 'sent', skips: ['trial'] }
@@ -444,7 +460,7 @@ describe('mig 742 — un1t.online write-back core', () => {
             created_at timestamptz NOT NULL DEFAULT now(), finished_at timestamptz,
             ${badChecks}
           );`)
-        return await p['exec'](MIG_742).then(() => null, (e) => e.message)
+        return await p['exec'](MIG_744).then(() => null, (e) => e.message)
       } finally {
         await p.close()
       }
@@ -454,12 +470,12 @@ describe('mig 742 — un1t.online write-back core', () => {
 
     it('aborts on a message-length CHECK with another limit', async () => {
       const err = await probe(`${GOOD_TRIAL}, CONSTRAINT un1t_write_events_message_length_check CHECK (char_length(message) <= 5000)`)
-      expect(err).toMatch(/mig 742: un1t_write_events_message_length_check wrong/)
+      expect(err).toMatch(/mig 744: un1t_write_events_message_length_check wrong/)
     })
 
     it('aborts on a trial-method CHECK that no longer ties method to the trial op', async () => {
       const err = await probe(`CONSTRAINT un1t_write_events_trial_method_check CHECK (method IS NULL OR op = 'trial'), ${GOOD_MESSAGE}`)
-      expect(err).toMatch(/mig 742: un1t_write_events_trial_method_check wrong/)
+      expect(err).toMatch(/mig 744: un1t_write_events_trial_method_check wrong/)
     })
 
     it('passes on a left-behind table whose CHECKs are right (and adds the trial-target CHECK)', async () => {

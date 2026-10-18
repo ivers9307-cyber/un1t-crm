@@ -6,7 +6,7 @@
 // instead of after the next 15-minute sync.
 //
 // Rules:
-// - Every row this module writes stamps crm_written_at = now. Mig 742's
+// - Every row this module writes stamps crm_written_at = now. Mig 744's
 //   trigger then keeps it against a sync upsert whose pull began before it.
 //   That includes the credits refresh on un1t_clients.
 // - A failed mirror write NEVER changes the write's verdict: it is logError

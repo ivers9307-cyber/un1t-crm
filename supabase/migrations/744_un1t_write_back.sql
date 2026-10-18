@@ -1,4 +1,4 @@
--- 742 — UN1TWRITE.1: un1t.online write-back core, shipped dark (plan D,
+-- 744 — UN1TWRITE.1: un1t.online write-back core, shipped dark (plan D,
 -- .superpowers/sdd/2026-10-17-un1t-online-write-back, PR 1 "Write core,
 -- ledger, guards"; spec docs/superpowers/specs/2026-10-17-un1t-online-write-
 -- back-design.md §6.2, §6.3, §6.5).
@@ -64,10 +64,14 @@
 --     /api routes.
 --   column-grant: n/a for crm_written_at, the three un1t_* tables are
 --     service_role-only (mig 726).
---   column-grant: n/a for the four class_booking_requests columns. That
---     table has no column-level grant: authenticated holds table-level
---     SELECT/INSERT/UPDATE/DELETE (live 18 Oct 2026), fenced by RLS on with
---     no policy, and this file leaves that ACL as it is.
+--   column-grant: n/a for the four class_booking_requests columns. Since
+--     mig 742 (CBRCLIENTCLOSED.1) that table is service_role only: anon,
+--     authenticated and PUBLIC hold no table-level and no column-level
+--     privilege, and RLS is on with no policy. A new column inherits that,
+--     so no client can read or write these four; they are read and written
+--     only by service-role routes. This file changes no privilege on the
+--     table and must not (tests/class-booking-requests-client-closed-guard
+--     .test.js fails a later migration that re-grants a client role).
 --   The trigger function needs no EXECUTE grant (CLAUDE.md); it states
 --   REVOKE EXECUTE FROM PUBLIC, anon, authenticated anyway.
 --
@@ -146,7 +150,7 @@ CREATE INDEX IF NOT EXISTS un1t_write_events_contact_op
   ON public.un1t_write_events (location_id, contact_id, op, created_at DESC);
 
 COMMENT ON TABLE public.un1t_write_events IS
-  'UN1TWRITE.1 (mig 742): one row per un1t.online write attempt (book, cancel, create_client, forgot_password, trial, checkout). The write-ahead marker, the resume point for retries and approvals, the dedupe of the CRM''s own attempts and the audit trail. Keys: create:<loc>:<contact>, trial:<loc>:<un1tUser>:<product>:<method>, book:<loc>:<un1tUser>:<event>, cancel:<loc>:<booking>, pw:<loc>:<un1tUser>, checkout = the caller''s key (also the idempotency-key header on purchase calls). message is <= 500 chars and never carries a password, token, email or phone. Service role only.';
+  'UN1TWRITE.1 (mig 744): one row per un1t.online write attempt (book, cancel, create_client, forgot_password, trial, checkout). The write-ahead marker, the resume point for retries and approvals, the dedupe of the CRM''s own attempts and the audit trail. Keys: create:<loc>:<contact>, trial:<loc>:<un1tUser>:<product>:<method>, book:<loc>:<un1tUser>:<event>, cancel:<loc>:<booking>, pw:<loc>:<un1tUser>, checkout = the caller''s key (also the idempotency-key header on purchase calls). message is <= 500 chars and never carries a password, token, email or phone. Service role only.';
 
 ALTER TABLE public.un1t_write_events ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.un1t_write_events FROM anon, authenticated;
@@ -161,11 +165,11 @@ ALTER TABLE public.un1t_clients      ADD COLUMN IF NOT EXISTS crm_written_at tim
 ALTER TABLE public.un1t_transactions ADD COLUMN IF NOT EXISTS crm_written_at timestamptz;
 
 COMMENT ON COLUMN public.un1t_bookings.crm_written_at IS
-  'UN1TWRITE.1 (mig 742): when the CRM last wrote this row after a un1t.online write. The sync never sets it; un1t_mirror_keep_crm_write keeps the CRM''s columns against a sync upsert pulled before this time (rank first: a terminal status from the sync always wins over booked).';
+  'UN1TWRITE.1 (mig 744): when the CRM last wrote this row after a un1t.online write. The sync never sets it; un1t_mirror_keep_crm_write keeps the CRM''s columns against a sync upsert pulled before this time (rank first: a terminal status from the sync always wins over booked).';
 COMMENT ON COLUMN public.un1t_clients.crm_written_at IS
-  'UN1TWRITE.1 (mig 742): when the CRM last wrote this row after a un1t.online write. The sync never sets it; un1t_mirror_keep_crm_write keeps the CRM''s columns against a sync upsert pulled before this time.';
+  'UN1TWRITE.1 (mig 744): when the CRM last wrote this row after a un1t.online write. The sync never sets it; un1t_mirror_keep_crm_write keeps the CRM''s columns against a sync upsert pulled before this time.';
 COMMENT ON COLUMN public.un1t_transactions.crm_written_at IS
-  'UN1TWRITE.1 (mig 742): when the CRM last wrote this row after a un1t.online write. The sync never sets it; un1t_mirror_keep_crm_write keeps the CRM''s columns against a sync upsert pulled before this time.';
+  'UN1TWRITE.1 (mig 744): when the CRM last wrote this row after a un1t.online write. The sync never sets it; un1t_mirror_keep_crm_write keeps the CRM''s columns against a sync upsert pulled before this time.';
 
 CREATE OR REPLACE FUNCTION public.un1t_mirror_keep_crm_write()
 RETURNS trigger
@@ -208,7 +212,7 @@ $fn$;
 REVOKE EXECUTE ON FUNCTION public.un1t_mirror_keep_crm_write() FROM PUBLIC, anon, authenticated;
 
 COMMENT ON FUNCTION public.un1t_mirror_keep_crm_write() IS
-  'UN1TWRITE.1 (mig 742): BEFORE UPDATE on un1t_bookings, un1t_clients, un1t_transactions. A sync upsert (crm_written_at unchanged, synced_at changed) whose synced_at is before OLD.crm_written_at keeps every OLD column except synced_at. On un1t_bookings a terminal status (attended, no_show, cancelled) over a non-terminal one always wins first. An UPDATE that leaves synced_at unchanged is not a sync (contact re-point, FK set-null) and always passes. A CRM mirror write stamps crm_written_at = now().';
+  'UN1TWRITE.1 (mig 744): BEFORE UPDATE on un1t_bookings, un1t_clients, un1t_transactions. A sync upsert (crm_written_at unchanged, synced_at changed) whose synced_at is before OLD.crm_written_at keeps every OLD column except synced_at. On un1t_bookings a terminal status (attended, no_show, cancelled) over a non-terminal one always wins first. An UPDATE that leaves synced_at unchanged is not a sync (contact re-point, FK set-null) and always passes. A CRM mirror write stamps crm_written_at = now().';
 
 CREATE OR REPLACE TRIGGER un1t_mirror_keep_crm_write
   BEFORE UPDATE ON public.un1t_bookings
@@ -223,7 +227,7 @@ CREATE OR REPLACE TRIGGER un1t_mirror_keep_crm_write
 -- ---------------------------------------------------------------------------
 -- (3) The /start queue: terms record + the funnel's per-step record
 -- ---------------------------------------------------------------------------
--- column-grant: n/a, class_booking_requests has no column-level grant (table-level only, RLS on, no policy)
+-- column-grant: n/a, class_booking_requests is service_role only since mig 742 (no client privilege at table or column level, RLS on, no policy); the new columns inherit that
 ALTER TABLE public.class_booking_requests
   ADD COLUMN IF NOT EXISTS terms_accepted_at timestamptz,
   ADD COLUMN IF NOT EXISTS terms_source      text,
@@ -243,13 +247,13 @@ ALTER TABLE public.class_booking_requests
   CHECK ((terms_accepted_at IS NULL) = (terms_source IS NULL));
 
 COMMENT ON COLUMN public.class_booking_requests.terms_accepted_at IS
-  'UN1TWRITE.1 (mig 742): when the person accepted un1t.online''s terms and liability waiver for this request; copied onto the create_client ledger row. Set together with terms_source.';
+  'UN1TWRITE.1 (mig 744): when the person accepted un1t.online''s terms and liability waiver for this request; copied onto the create_client ledger row. Set together with terms_source.';
 COMMENT ON COLUMN public.class_booking_requests.terms_source IS
-  'UN1TWRITE.1 (mig 742): where the terms were accepted: website, whatsapp_flow or test_account.';
+  'UN1TWRITE.1 (mig 744): where the terms were accepted: website, whatsapp_flow or test_account.';
 COMMENT ON COLUMN public.class_booking_requests.terms_version IS
-  'UN1TWRITE.1 (mig 742): the version of the terms text shown when they were accepted.';
+  'UN1TWRITE.1 (mig 744): the version of the terms text shown when they were accepted.';
 COMMENT ON COLUMN public.class_booking_requests.un1t_steps IS
-  'UN1TWRITE.1 (mig 742): the un1t.online funnel''s per-step record for this request: { explanation_email, forgot_password, booking_confirmation, skips: string[] }.';
+  'UN1TWRITE.1 (mig 744): the un1t.online funnel''s per-step record for this request: { explanation_email, forgot_password, booking_confirmation, skips: string[] }.';
 
 -- ---------------------------------------------------------------------------
 -- (4) Approval kind 'refund_request' (every live kind kept)
@@ -285,63 +289,63 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
                   WHERE n.nspname = 'public' AND c.relname = 'un1t_write_events'
                     AND c.relkind = 'r' AND c.relrowsecurity) THEN
-    RAISE EXCEPTION 'mig 742: un1t_write_events missing or RLS off';
+    RAISE EXCEPTION 'mig 744: un1t_write_events missing or RLS off';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = 'public.un1t_write_events'::regclass) THEN
-    RAISE EXCEPTION 'mig 742: un1t_write_events carries a policy; it must have none';
+    RAISE EXCEPTION 'mig 744: un1t_write_events carries a policy; it must have none';
   END IF;
   IF has_table_privilege('authenticated', 'public.un1t_write_events', 'SELECT')
      OR has_table_privilege('anon', 'public.un1t_write_events', 'SELECT')
      OR EXISTS (SELECT 1 FROM information_schema.table_privileges
                  WHERE table_schema = 'public' AND table_name = 'un1t_write_events'
                    AND grantee IN ('anon', 'authenticated', 'PUBLIC')) THEN
-    RAISE EXCEPTION 'mig 742: a client role holds a privilege on public.un1t_write_events';
+    RAISE EXCEPTION 'mig 744: a client role holds a privilege on public.un1t_write_events';
   END IF;
 
   -- The ledger's CHECKs, by definition.
   d := pg_get_constraintdef((SELECT oid FROM pg_constraint
         WHERE conrelid = 'public.un1t_write_events'::regclass AND conname = 'un1t_write_events_trial_method_check'));
   IF d IS NULL OR replace(replace(d, '(', ''), ')', '') <> 'CHECK op = ''trial''::text = method IS NOT NULL' THEN
-    RAISE EXCEPTION 'mig 742: un1t_write_events_trial_method_check wrong or missing: %', d;
+    RAISE EXCEPTION 'mig 744: un1t_write_events_trial_method_check wrong or missing: %', d;
   END IF;
   d := pg_get_constraintdef((SELECT oid FROM pg_constraint
         WHERE conrelid = 'public.un1t_write_events'::regclass AND conname = 'un1t_write_events_message_length_check'));
   IF d IS NULL OR replace(replace(d, '(', ''), ')', '') <> 'CHECK char_lengthmessage <= 500' THEN
-    RAISE EXCEPTION 'mig 742: un1t_write_events_message_length_check wrong or missing: %', d;
+    RAISE EXCEPTION 'mig 744: un1t_write_events_message_length_check wrong or missing: %', d;
   END IF;
   d := pg_get_constraintdef((SELECT oid FROM pg_constraint
         WHERE conrelid = 'public.un1t_write_events'::regclass AND conname = 'un1t_write_events_trial_target_check'));
   IF d IS NULL OR replace(replace(d, '(', ''), ')', '')
        <> 'CHECK op <> ''trial''::text OR un1t_user_id IS NOT NULL AND target IS NOT NULL' THEN
-    RAISE EXCEPTION 'mig 742: un1t_write_events_trial_target_check wrong or missing: %', d;
+    RAISE EXCEPTION 'mig 744: un1t_write_events_trial_target_check wrong or missing: %', d;
   END IF;
 
   -- The four indexes, with their keys and predicates.
   d := (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'un1t_write_events_one_open');
   IF d IS NULL OR d NOT ILIKE 'CREATE UNIQUE INDEX%' OR d NOT LIKE '%(idempotency_key) WHERE%'
      OR d NOT LIKE '%''sent''%' OR d NOT LIKE '%''unknown''%' OR d LIKE '%''done''%' THEN
-    RAISE EXCEPTION 'mig 742: un1t_write_events_one_open wrong or missing: %', d;
+    RAISE EXCEPTION 'mig 744: un1t_write_events_one_open wrong or missing: %', d;
   END IF;
   d := (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'un1t_write_events_one_done');
   IF d IS NULL OR d NOT ILIKE 'CREATE UNIQUE INDEX%' OR d NOT LIKE '%(idempotency_key) WHERE%'
      OR d NOT LIKE '%''done''%' OR d NOT LIKE '%''create_client''%' OR d NOT LIKE '%''trial''%'
      OR d NOT LIKE '%''forgot_password''%' OR d LIKE '%''book''%' THEN
-    RAISE EXCEPTION 'mig 742: un1t_write_events_one_done wrong or missing: %', d;
+    RAISE EXCEPTION 'mig 744: un1t_write_events_one_done wrong or missing: %', d;
   END IF;
   d := (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'un1t_write_events_one_trial');
   IF d IS NULL OR d NOT ILIKE 'CREATE UNIQUE INDEX%' OR d NOT LIKE '%(location_id, un1t_user_id, target) WHERE%'
      OR d NOT LIKE '%''trial''%' OR d NOT LIKE '%''done''%' THEN
-    RAISE EXCEPTION 'mig 742: un1t_write_events_one_trial wrong or missing: %', d;
+    RAISE EXCEPTION 'mig 744: un1t_write_events_one_trial wrong or missing: %', d;
   END IF;
   d := (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'un1t_write_events_contact_op');
   IF d IS NULL OR d NOT LIKE '%(location_id, contact_id, op, created_at DESC)%' THEN
-    RAISE EXCEPTION 'mig 742: un1t_write_events_contact_op wrong or missing: %', d;
+    RAISE EXCEPTION 'mig 744: un1t_write_events_contact_op wrong or missing: %', d;
   END IF;
 
   -- The trigger function: closed to client roles.
   IF has_function_privilege('anon', v_fn, 'EXECUTE')
      OR has_function_privilege('authenticated', v_fn, 'EXECUTE') THEN
-    RAISE EXCEPTION 'mig 742: a client role can execute public.un1t_mirror_keep_crm_write()';
+    RAISE EXCEPTION 'mig 744: a client role can execute public.un1t_mirror_keep_crm_write()';
   END IF;
 
   -- crm_written_at + an enabled BEFORE UPDATE FOR EACH ROW trigger on each mirror table.
@@ -349,7 +353,7 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                     WHERE table_schema = 'public' AND table_name = t
                       AND column_name = 'crm_written_at' AND data_type = 'timestamp with time zone') THEN
-      RAISE EXCEPTION 'mig 742: %.crm_written_at missing or not timestamptz', t;
+      RAISE EXCEPTION 'mig 744: %.crm_written_at missing or not timestamptz', t;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_trigger
                     WHERE tgrelid = ('public.' || t)::regclass
@@ -360,7 +364,7 @@ BEGIN
                       AND (tgtype & 2) = 2      -- BEFORE
                       AND (tgtype & 16) = 16    -- UPDATE
                       AND (tgtype & 12) = 0) THEN -- not INSERT/DELETE
-      RAISE EXCEPTION 'mig 742: % lacks the enabled BEFORE UPDATE row trigger un1t_mirror_keep_crm_write', t;
+      RAISE EXCEPTION 'mig 744: % lacks the enabled BEFORE UPDATE row trigger un1t_mirror_keep_crm_write', t;
     END IF;
   END LOOP;
 
@@ -368,30 +372,30 @@ BEGIN
   IF (SELECT count(*) FROM information_schema.columns
        WHERE table_schema = 'public' AND table_name = 'class_booking_requests'
          AND column_name IN ('terms_accepted_at', 'terms_source', 'terms_version', 'un1t_steps')) <> 4 THEN
-    RAISE EXCEPTION 'mig 742: class_booking_requests is missing a terms or un1t_steps column';
+    RAISE EXCEPTION 'mig 744: class_booking_requests is missing a terms or un1t_steps column';
   END IF;
   d := pg_get_constraintdef((SELECT oid FROM pg_constraint
         WHERE conrelid = 'public.class_booking_requests'::regclass AND conname = 'class_booking_requests_terms_source_check'));
   IF d IS NULL OR d NOT LIKE '%''website''%' OR d NOT LIKE '%''whatsapp_flow''%' OR d NOT LIKE '%''test_account''%' THEN
-    RAISE EXCEPTION 'mig 742: class_booking_requests_terms_source_check wrong: %', d;
+    RAISE EXCEPTION 'mig 744: class_booking_requests_terms_source_check wrong: %', d;
   END IF;
   d := pg_get_constraintdef((SELECT oid FROM pg_constraint
         WHERE conrelid = 'public.class_booking_requests'::regclass AND conname = 'class_booking_requests_terms_pair_check'));
   IF d IS NULL OR replace(replace(d, '(', ''), ')', '') <> 'CHECK terms_accepted_at IS NULL = terms_source IS NULL' THEN
-    RAISE EXCEPTION 'mig 742: class_booking_requests_terms_pair_check wrong or missing: %', d;
+    RAISE EXCEPTION 'mig 744: class_booking_requests_terms_pair_check wrong or missing: %', d;
   END IF;
 
   -- The kind CHECK admits refund_request and every kind mig 711 allowed.
   d := pg_get_constraintdef((SELECT oid FROM pg_constraint
         WHERE conrelid = 'public.agent_membership_requests'::regclass AND conname = 'agent_membership_requests_kind_check'));
   IF d IS NULL THEN
-    RAISE EXCEPTION 'mig 742: agent_membership_requests_kind_check missing';
+    RAISE EXCEPTION 'mig 744: agent_membership_requests_kind_check missing';
   END IF;
   FOREACH k IN ARRAY ARRAY['pause', 'cancellation', 'class_booking', 'consultation', 'class_cancellation',
                            'event_booking', 'event_cancellation', 'membership_purchase', 'event_move',
                            'refund_request'] LOOP
     IF d NOT LIKE '%''' || k || '''%' THEN
-      RAISE EXCEPTION 'mig 742: agent_membership_requests_kind_check does not admit %: %', k, d;
+      RAISE EXCEPTION 'mig 744: agent_membership_requests_kind_check does not admit %: %', k, d;
     END IF;
   END LOOP;
 END $$;
