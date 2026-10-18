@@ -18,19 +18,19 @@ import { logError } from './log.js'
 export const RECLASSIFY_MIN_GAP_MS = 55 * 60 * 1000
 
 const UN1T_INPUT = 'un1t_online'
-const ERR_LOG_MAX = 200
 
 /**
  * @param {object} db service-role client
  * @param {string} locationId
  * @param {{ now?: number }} [opts]
- * @returns {Promise<{ ran: false, reason: 'no_un1t_board'|'recent_run'|'error' } | { ran: true, result: object }>}
+ * @returns {Promise<{ ran: false, reason: 'no_un1t_board'|'recent_run'|'error'|'timeout' } | { ran: true, result: object }>}
+ *   ('timeout' is only ever produced by the sync cron's deadline race around this call.)
  */
 export async function maybeReclassifyAfterSync(db, locationId, { now = Date.now() } = {}) {
   try {
     const { data: boards, error: boardsErr } = await db
       .from('pipelines')
-      .select('id, module')
+      .select('module')
       .eq('location_id', locationId)
       .eq('enabled', true)
     if (boardsErr) throw boardsErr
@@ -58,10 +58,11 @@ export async function maybeReclassifyAfterSync(db, locationId, { now = Date.now(
     const result = await reclassifyAllContacts(db, { locationId, source: 'cron' })
     return { ran: true, result }
   } catch (err) {
+    // Name only, never the message (a token could ride in one).
     logError('un1t-pipeline-cadence', 'reclassify after sync failed', {
       locationId,
+      reason: 'error',
       errName: err?.name ?? null,
-      err: String(err?.message ?? err).slice(0, ERR_LOG_MAX),
     })
     return { ran: false, reason: 'error' }
   }

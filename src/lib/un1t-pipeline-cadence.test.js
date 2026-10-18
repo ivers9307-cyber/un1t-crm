@@ -102,13 +102,14 @@ describe('maybeReclassifyAfterSync', () => {
     })
   })
 
-  it('reclassify throwing → { ran:false, reason:"error" }, logged with a bounded message', async () => {
-    reclassifyAllContacts.mockRejectedValue(new Error('z'.repeat(5000)))
+  it('reclassify throwing → { ran:false, reason:"error" }, logged by name only', async () => {
+    reclassifyAllContacts.mockRejectedValue(new Error('secret-token-abc'))
     const { db } = fakeDb({ pipelines: UN1T_BOARD })
     expect(await maybeReclassifyAfterSync(db, LOC, { now: NOW })).toEqual({ ran: false, reason: 'error' })
     expect(logError).toHaveBeenCalledWith('un1t-pipeline-cadence', 'reclassify after sync failed', {
-      locationId: LOC, errName: 'Error', err: 'z'.repeat(200),
+      locationId: LOC, reason: 'error', errName: 'Error',
     })
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('secret-token')
   })
 
   it('an unreadable pipelines or audit table → error, never throws, never runs', async () => {

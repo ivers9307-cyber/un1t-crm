@@ -31,7 +31,7 @@ import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
 import { locationsWithSource } from '@/lib/membership/locations-for-source'
 import { runUn1tSync } from '@/lib/un1t-online-sync'
 import { maybeReclassifyAfterSync } from '@/lib/un1t-pipeline-cadence'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 
 const req = (token = 'test-secret') => ({
   headers: { get: (k) => (k.toLowerCase() === 'authorization' && token ? `Bearer ${token}` : null) },
@@ -42,6 +42,7 @@ const found = (eligible, skipped = []) => ({ locations: [...eligible, ...skipped
 beforeEach(() => {
   process.env.CRON_SECRET = 'test-secret'
   vi.clearAllMocks()
+  stampHeartbeat.mockReset().mockResolvedValue(undefined)
   stampTenantHeartbeat.mockReset().mockResolvedValue(undefined)
   maybeReclassifyAfterSync.mockReset().mockResolvedValue({ ran: false, reason: 'recent_run' })
   h.discovery = found([])
@@ -192,14 +193,15 @@ describe('GET /api/cron/un1t-online-sync', () => {
     }
   })
 
-  it('ok location calls maybeReclassifyAfterSync after its tenant heartbeat', async () => {
+  it('ok location calls maybeReclassifyAfterSync after its tenant heartbeat (and after the sync loop)', async () => {
     h.discovery = found([loc('hatch'), loc('other')])
     runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
     const order = []
     stampTenantHeartbeat.mockImplementation(async (_n, id) => { order.push(`hb:${id}`) })
     maybeReclassifyAfterSync.mockImplementation(async (_db, id) => { order.push(`re:${id}`); return { ran: false, reason: 'recent_run' } })
     await GET(req())
-    expect(order).toEqual(['hb:hatch', 're:hatch', 'hb:other', 're:other'])
+    // Every heartbeat first, the reclassify passes after the loop.
+    expect(order).toEqual(['hb:hatch', 'hb:other', 're:hatch', 're:other'])
     expect(maybeReclassifyAfterSync.mock.calls.map((c) => c[1])).toEqual(['hatch', 'other'])
     expect(maybeReclassifyAfterSync.mock.calls[0][0]).toEqual({ marker: 'db' })
   })
@@ -231,5 +233,35 @@ describe('GET /api/cron/un1t-online-sync', () => {
     // Logged by name only, never the message.
     expect(logError).toHaveBeenCalledWith('un1t-online-sync', 'reclassify after sync threw', { locationId: 'hatch', errName: 'Error' })
     expect(JSON.stringify(logError.mock.calls)).not.toContain('secret-token')
+  })
+
+  it('runs the reclassify passes only after the final stampHeartbeat', async () => {
+    h.discovery = found([loc('hatch')])
+    runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
+    const order = []
+    stampHeartbeat.mockImplementation(async () => { order.push('stamp') })
+    maybeReclassifyAfterSync.mockImplementation(async () => { order.push('re'); return { ran: false, reason: 'recent_run' } })
+    await GET(req())
+    expect(order).toEqual(['stamp', 're'])
+  })
+
+  it('a never-resolving maybeReclassifyAfterSync is cut at 60 s: heartbeat stamped, outcome unchanged, response returns', async () => {
+    h.discovery = found([loc('hatch')])
+    runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
+    maybeReclassifyAfterSync.mockImplementation(() => new Promise(() => {}))
+    vi.useFakeTimers()
+    try {
+      const pending = GET(req())
+      await vi.advanceTimersByTimeAsync(60_000)
+      const res = await pending
+      const expected = { locations_processed: 1, failed_locations: 0, failed_by_reason: {}, skipped: 0, skipped_in_progress: 0, deferred_budget: 0 }
+      expect(stampHeartbeat).toHaveBeenCalledTimes(1)
+      expect(stampHeartbeat).toHaveBeenCalledWith('un1t-online-sync', expected)
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ success: true, ...expected })
+      expect(logWarn).toHaveBeenCalledWith('un1t-online-sync', 'reclassify after sync timed out', { locationId: 'hatch' })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

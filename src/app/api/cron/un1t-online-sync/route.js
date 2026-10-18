@@ -14,9 +14,9 @@
 //      `deferred_budget` and run on the next tick (every 15 min). A location
 //      whose sync is already running (Sync now, mig 735) is `skipped_in_progress`,
 //      not a failure.
-//   3. ok → stamp the tenant heartbeat, then (HATCHPIPE.2) run the hourly
-//      reclassify of the studio's board if one is due; its result never
-//      reaches the outcome or the heartbeats. Not ok (auth, studio_mismatch, api,
+//   3. ok → stamp the tenant heartbeat. (HATCHPIPE.2: the hourly reclassify of the
+//      studio's board runs after step 4, deadline-raced; its result never
+//      reaches the outcome or the heartbeats.) Not ok (auth, studio_mismatch, api,
 //      truncated, db, not_connected) is COUNTED by reason, not fatal: the cron
 //      is healthy, the location is not, and the connection row already carries
 //      the readable last_error. A thrown exception from one location is counted
@@ -44,6 +44,10 @@ const CRON_NAME = 'un1t-online-sync'
 // Stop STARTING locations after this long, leaving room under maxDuration for
 // the one in flight (a run takes seconds today; the slowest seen was 14.5 s).
 export const BUDGET_MS = 240_000
+// The reclassify pass after a good sync: at most 60 s each, and never past 285 s
+// into the invocation (maxDuration is 300).
+const RECLASSIFY_CAP_MS = 60_000
+const TOTAL_DEADLINE_MS = 285_000
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -65,6 +69,7 @@ export async function GET(request) {
   let skippedInProgress = 0
   let deferredBudget = 0
   const failedByReason = {}
+  const okLocationIds = []
   const countFailure = (reason) => {
     failed++
     failedByReason[reason] = (failedByReason[reason] || 0) + 1
@@ -91,14 +96,7 @@ export async function GET(request) {
       processed++
       // SAAS4-O1 — only a location whose sync completed stamps its tenant row.
       await stampTenantHeartbeat(CRON_NAME, loc.id)
-      // HATCHPIPE.2 — a good sync is followed by an hourly board pass. Its own
-      // try/catch: whatever it does (it never throws today) cannot change this
-      // location's outcome, the heartbeats, or the next location.
-      try {
-        await maybeReclassifyAfterSync(db, loc.id)
-      } catch (err) {
-        logError(CRON_NAME, 'reclassify after sync threw', { locationId: loc.id, errName: err?.name ?? null })
-      }
+      okLocationIds.push(loc.id)
     } else if (result?.reason === 'in_progress') {
       // A Sync now (or another invocation) is running this studio right now.
       skippedInProgress++
@@ -118,6 +116,29 @@ export async function GET(request) {
     deferred_budget: deferredBudget,
   }
   await stampHeartbeat(CRON_NAME, outcome)
+  const payload = { success: true, ...outcome }
 
-  return NextResponse.json({ success: true, ...outcome })
+  // HATCHPIPE.2 — a good sync is followed by an hourly board pass. It runs only
+  // AFTER the heartbeat and the payload are settled, each call in its own
+  // try/catch and raced against a deadline, so a slow or hung pass can neither
+  // change this run's outcome nor keep the heartbeat from stamping.
+  for (const locationId of okLocationIds) {
+    const left = Math.max(0, Math.min(RECLASSIFY_CAP_MS, TOTAL_DEADLINE_MS - (Date.now() - started)))
+    let timer
+    try {
+      const timedOut = new Promise((resolve) => {
+        timer = setTimeout(() => resolve({ ran: false, reason: 'timeout' }), left)
+      })
+      const res = await Promise.race([maybeReclassifyAfterSync(db, locationId), timedOut])
+      if (res?.reason === 'timeout') {
+        logWarn(CRON_NAME, 'reclassify after sync timed out', { locationId })
+      }
+    } catch (err) {
+      logError(CRON_NAME, 'reclassify after sync threw', { locationId, errName: err?.name ?? null })
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  return NextResponse.json(payload)
 }
