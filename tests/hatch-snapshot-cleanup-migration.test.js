@@ -84,6 +84,11 @@ describe('running the migration', () => {
     expect(await count('membership_snapshots', HATCH)).toBe(4)
   })
 
+  it('aborts when the 2026-10-18 row is still Glofox-shaped (no members)', async () => {
+    await db.exec(`UPDATE public.membership_snapshots SET total_members = 0 WHERE location_id = '${HATCH}' AND snapshot_date = '2026-10-18'`)
+    await expect(db.exec(SQL)).rejects.toThrow(/members > 0/)
+  })
+
   it('is safe to re-run (the second run deletes nothing)', async () => {
     await db.exec(SQL)
     await db.exec(SQL)

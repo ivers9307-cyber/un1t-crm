@@ -30,6 +30,8 @@
 DO $$
 DECLARE
   v_boundary   constant date := DATE '2026-10-18';
+  -- the same boundary as an instant, explicit UTC (never the session's zone)
+  v_cutoff     constant timestamptz := TIMESTAMPTZ '2026-10-18 00:00:00+00';
   v_locs       uuid[];
   v_loc        uuid;
   v_mem        integer;
@@ -43,25 +45,25 @@ BEGIN
   v_loc := v_locs[1];
 
   IF NOT EXISTS (
-    SELECT 1 FROM public.membership_snapshots WHERE location_id = v_loc AND snapshot_date = v_boundary
+    SELECT 1 FROM public.membership_snapshots WHERE location_id = v_loc AND snapshot_date = v_boundary AND total_members > 0
   ) THEN
-    RAISE EXCEPTION 'mig 749: no un1t-shaped membership_snapshots row dated 2026-10-18 at the un1t_online location';
+    RAISE EXCEPTION 'mig 749: no un1t-shaped membership_snapshots row (members > 0) dated 2026-10-18 at the un1t_online location';
   END IF;
 
-  IF EXISTS (SELECT 1 FROM public.churn_radar_snapshots WHERE location_id = v_loc AND captured_at >= v_boundary)
-     OR EXISTS (SELECT 1 FROM public.lead_radar_snapshots WHERE location_id = v_loc AND captured_at >= v_boundary) THEN
+  IF EXISTS (SELECT 1 FROM public.churn_radar_snapshots WHERE location_id = v_loc AND captured_at >= v_cutoff)
+     OR EXISTS (SELECT 1 FROM public.lead_radar_snapshots WHERE location_id = v_loc AND captured_at >= v_cutoff) THEN
     RAISE EXCEPTION 'mig 749: a radar snapshot at the un1t_online location is on or after 2026-10-18; refusing to delete it';
   END IF;
 
-  DELETE FROM public.churn_radar_snapshots WHERE location_id = v_loc AND captured_at < v_boundary;
+  DELETE FROM public.churn_radar_snapshots WHERE location_id = v_loc AND captured_at < v_cutoff;
   GET DIAGNOSTICS v_churn = ROW_COUNT;
-  DELETE FROM public.lead_radar_snapshots WHERE location_id = v_loc AND captured_at < v_boundary;
+  DELETE FROM public.lead_radar_snapshots WHERE location_id = v_loc AND captured_at < v_cutoff;
   GET DIAGNOSTICS v_lead = ROW_COUNT;
   DELETE FROM public.membership_snapshots WHERE location_id = v_loc AND snapshot_date < v_boundary;
   GET DIAGNOSTICS v_mem = ROW_COUNT;
 
-  IF EXISTS (SELECT 1 FROM public.churn_radar_snapshots WHERE location_id = v_loc AND captured_at < v_boundary)
-     OR EXISTS (SELECT 1 FROM public.lead_radar_snapshots WHERE location_id = v_loc AND captured_at < v_boundary)
+  IF EXISTS (SELECT 1 FROM public.churn_radar_snapshots WHERE location_id = v_loc AND captured_at < v_cutoff)
+     OR EXISTS (SELECT 1 FROM public.lead_radar_snapshots WHERE location_id = v_loc AND captured_at < v_cutoff)
      OR EXISTS (SELECT 1 FROM public.membership_snapshots WHERE location_id = v_loc AND snapshot_date < v_boundary) THEN
     RAISE EXCEPTION 'mig 749: rows before 2026-10-18 remain at the un1t_online location after the delete';
   END IF;
