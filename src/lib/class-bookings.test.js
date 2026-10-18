@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mapBookingToRosterRow, upsertClassBookings, resolveClassLinkSource, lookupBookedMember, mergeRosterWithSessions, pickNearestBookedOccurrence } from './class-bookings'
+import { mapBookingToRosterRow, upsertClassBookings, resolveClassLinkSource, lookupBookedMember, resolveBookedOccurrenceForMember, mergeRosterWithSessions, pickNearestBookedOccurrence } from './class-bookings'
 
 describe('class-bookings: mapBookingToRosterRow', () => {
   // Real /2.0/bookings item is polymorphic: model:'events' + model_id (the
@@ -85,33 +85,61 @@ describe('class-bookings: resolveClassLinkSource', () => {
 })
 
 describe('class-bookings: lookupBookedMember', () => {
-  // Mock the .select().eq().eq().eq().not().limit() chain → { data }.
-  const db = (rows) => ({
-    from: vi.fn(() => ({
-      select: vi.fn(() => ({
-        eq: vi.fn(() => ({
-          eq: vi.fn(() => ({
-            eq: vi.fn(() => ({
-              not: vi.fn(() => ({
-                limit: vi.fn(() => Promise.resolve({ data: rows })),
-              })),
-            })),
-          })),
-        })),
-      })),
-    })),
-  })
+  // A chain that accepts any filter in any order and records every .eq(col, v)
+  // → { data } when awaited. The scope may land anywhere in the chain.
+  const db = (rows, eqs = []) => {
+    const chain = {}
+    for (const m of ['select', 'not', 'limit', 'gte', 'lte', 'in', 'is']) chain[m] = vi.fn(() => chain)
+    chain.eq = vi.fn((col, val) => { eqs.push([col, val]); return chain })
+    chain.then = (resolve, reject) => Promise.resolve({ data: rows }).then(resolve, reject)
+    return { from: vi.fn(() => chain), eqs }
+  }
   it('true when a non-cancelled booking row exists', async () => {
     expect(await lookupBookedMember(db([{ id: 'x' }]), { locationId: 'l', glofoxEventId: 'e', glofoxMemberId: 'm' })).toBe(true)
   })
   it('false when none match', async () => {
     expect(await lookupBookedMember(db([]), { locationId: 'l', glofoxEventId: 'e', glofoxMemberId: 'm' })).toBe(false)
   })
+  it('filters source_platform glofox (UN1TBOOK.9: a un1t row never links a strap)', async () => {
+    const spy = db([{ id: 'x' }])
+    await lookupBookedMember(spy, { locationId: 'l', glofoxEventId: 'e', glofoxMemberId: 'm' })
+    expect(spy.eqs).toContainEqual(['source_platform', 'glofox'])
+    // the location guard is the caller's location, unchanged
+    expect(spy.eqs).toContainEqual(['location_id', 'l'])
+  })
   it('false (no query) when member / event / location id missing', async () => {
     const spy = db([{ id: 'x' }])
     expect(await lookupBookedMember(spy, { locationId: 'l', glofoxEventId: 'e', glofoxMemberId: null })).toBe(false)
     expect(await lookupBookedMember(spy, { locationId: 'l', glofoxMemberId: 'm' })).toBe(false)
     expect(spy.from).not.toHaveBeenCalled()
+  })
+})
+
+describe('class-bookings: resolveBookedOccurrenceForMember', () => {
+  const NOW = Date.parse('2026-06-18T05:00:00Z')
+  // class_bookings and class_occurrences both answer from the same recording chain.
+  const db = () => {
+    const eqs = []
+    const tables = {
+      class_bookings: [{ glofox_event_id: 'ev1', status: 'CONFIRMED', starts_at: '2026-06-18T05:00:00Z' }],
+      class_occurrences: [{ glofox_event_id: 'ev1', name: 'DR1VE', starts_at: '2026-06-18T05:00:00Z', ends_at: '2026-06-18T06:00:00Z' }],
+    }
+    const make = (table) => {
+      const chain = {}
+      for (const m of ['select', 'gte', 'lte', 'in', 'is']) chain[m] = vi.fn(() => chain)
+      chain.eq = vi.fn((col, val) => { eqs.push([table, col, val]); return chain })
+      chain.then = (resolve, reject) => Promise.resolve({ data: tables[table] }).then(resolve, reject)
+      return chain
+    }
+    return { from: vi.fn(make), eqs }
+  }
+  it('filters source_platform glofox on the class_bookings read only (UN1TBOOK.9)', async () => {
+    const spy = db()
+    const hit = await resolveBookedOccurrenceForMember(spy, { locationId: 'l', glofoxMemberId: 'm', nowMs: NOW, preMs: 60 * 60_000, postMs: 60 * 60_000 })
+    expect(hit).toMatchObject({ glofox_event_id: 'ev1', class_name: 'DR1VE' })
+    expect(spy.eqs).toContainEqual(['class_bookings', 'source_platform', 'glofox'])
+    expect(spy.eqs).toContainEqual(['class_bookings', 'location_id', 'l'])
+    expect(spy.eqs.filter(([t, c]) => t === 'class_occurrences' && c === 'source_platform')).toEqual([])
   })
 })
 

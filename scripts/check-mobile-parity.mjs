@@ -74,6 +74,7 @@ for (const m of MOBILE_PERMISSIONS) {
 // you ship a web feature that genuinely doesn't make sense on
 // mobile.
 const WEB_ONLY_OK = {
+  class_roster:   'web /live roster only; phone screen out of scope',
   // W1 (parity inversion): contacts now has a mobile read surface — a
   // searchable directory + contact detail via the `contacts`
   // MOBILE_PERMISSIONS entry (webEquivalent: 'contacts'), so it's matched,

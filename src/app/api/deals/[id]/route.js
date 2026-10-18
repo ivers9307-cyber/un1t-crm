@@ -33,7 +33,7 @@ export async function PUT(request, props) {
   // path, so read it once and share it.
   const { data: existing } = await db
     .from('deals')
-    .select('location_id, contact_id, stage_id')
+    .select('location_id, contact_id, stage_id, pipeline_id')
     .eq('id', id)
     .maybeSingle()
 
@@ -117,7 +117,7 @@ export async function PUT(request, props) {
         action: 'move',
         from_slug: slugById.get(existing.stage_id) ?? null,
         to_slug: slugById.get(updates.stage_id) ?? null,
-      })
+      }, { dealLocationId: existing.location_id, pipelineId: existing.pipeline_id })
     } catch (e) {
       logWarn('deals.PUT', `pipeline_stage_change trigger failed for deal ${id}`, { err: e })
     }

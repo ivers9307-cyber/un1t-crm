@@ -31,7 +31,7 @@ export async function GET(_request, props) {
     getLiveSessions(db, locationId),
     getAvailableStraps(db, locationId),
     getClassRoster(db, { locationId }),
-    db.from('ble_bridges').select('test_mode_until').eq('location_id', locationId),
+    db.from('ble_bridges').select('id, test_mode_until').eq('location_id', locationId),
   ])
 
   // HR-CLASS-ALLOC.2 — the live-class roster panel: everyone booked into the
@@ -51,6 +51,9 @@ export async function GET(_request, props) {
     available_straps: availableStraps,
     roster,
     occurrence: rosterData.occurrence,
+    // UN1TBOOK.12 — at least one bridge row at the location; the page uses it
+    // to tell "no straps yet" from "no bridge installed".
+    has_bridge: (bridges || []).length > 0,
     test_mode_until: testModeUntilMs ? new Date(testModeUntilMs).toISOString() : null,
   })
 }

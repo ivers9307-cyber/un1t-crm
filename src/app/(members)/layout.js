@@ -1,5 +1,5 @@
 // (members) — Members hub chrome. Same pattern as (sales)/layout.js: the
-// group shares one tab strip WITHOUT changing member URLs. Live HR and the
+// group shares one tab strip WITHOUT changing member URLs. Live class and the
 // class timer are tabs but their routes stay OUTSIDE the group — they are
 // full-screen surfaces and must not inherit the strip. The event check-in
 // subtree (/events/[id]/checkin + /checkin/scan) and the race-day control
@@ -7,7 +7,8 @@
 // reason — a phone scan surface and a tablet race console, chrome-free by
 // design. Tab visibility mirrors each PAGE's own gate (not the old nav
 // entries' looser gates); /live has no page gate today (tracked
-// separately) — its tab uses the nav-documented studio_management key.
+// separately) — its tab uses the nav-documented studio_management key,
+// or class_roster (UN1TBOOK.11: the who's-coming list without door unlock).
 //
 // FU-COSMETICS — /achievements (the master-only achievements-catalogue
 // editor) is ANOTHER chrome-free exception, moved out to
@@ -34,7 +35,7 @@ const TABS = [
   // tab that bounced them. A tab with no `roles` has no floor.
   { id: 'challenges', label: 'Challenges',  href: '/challenges',              perms: ['challenges'], roles: CHALLENGE_ADMIN_ROLES },
   { id: 'pulse',      label: 'Pulse',       href: '/pulse',                   perms: ['pulse_admin'] },
-  { id: 'live',       label: 'Live HR',     href: '/live',                    perms: ['studio_management'] },
+  { id: 'live',       label: 'Live class',  href: '/live',                    perms: ['studio_management', 'class_roster'] },
   { id: 'timer',      label: 'Class timer', href: '/studio-management/timer', perms: ['class_timer'] },
   { id: 'hyrox',      label: 'Hyrox',       href: '/hyrox',                   perms: ['approvals_hyrox_sessions'] },
 ]

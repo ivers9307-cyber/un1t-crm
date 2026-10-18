@@ -8254,12 +8254,40 @@ registry.registerPath({
             available_straps: z.array(z.record(z.string(), z.unknown())),
             roster: z.array(z.record(z.string(), z.unknown())),
             occurrence: z.record(z.string(), z.unknown()).nullable(),
+            has_bridge: z.boolean(),
             test_mode_until: z.string().nullable(),
           }).openapi('LiveState'),
         },
       },
     },
     403: { description: 'Location not in scope, or studio_management not held there', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/live/{locationId}/roster',
+  tags: ['Live HR'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Who is booked into the class running now, labels only (class_roster)',
+  // UN1TBOOK.12 (kept out of the string: the literal sweep forbids the brand in served text)
+  description: 'The roster half of /api/live/{locationId} under its own `class_roster` permission, resolved at the target location: no heart-rate sessions, no straps, no door control. Cancelled bookings are skipped; ATTENDED and NO_SHOW members are listed. Each roster entry is `{ label, booked }` only: no heart-rate, strap or session fields are ever returned, and there is no `has_bridge` (the full /api/live/{locationId} route keeps it).',
+  request: { params: z.object({ locationId: uuidLike }) },
+  responses: {
+    200: {
+      description: 'The live occurrence (or null) and its roster labels',
+      content: {
+        'application/json': {
+          schema: z.object({
+            ok: z.literal(true),
+            occurrence: z.record(z.string(), z.unknown()).nullable(),
+            roster: z.array(z.object({ label: z.string(), booked: z.boolean() })),
+          }).openapi('LiveRoster'),
+        },
+      },
+    },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Location not in scope, or class_roster not held there', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

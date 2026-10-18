@@ -35,6 +35,7 @@ vi.mock('@/lib/permissions', () => {
 })
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/glofox-sync', () => ({ ensureDealForContact: vi.fn(() => Promise.resolve({ action: 'move', to_slug: 'cold_lead' })) }))
+vi.mock('@/lib/sequences/triggers', () => ({ triggerSequencesForDealPlacement: vi.fn(async () => {}) }))
 vi.mock('@/lib/activity-events', () => ({ logPipelineDismissal: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(() => Promise.resolve({ logged: true })) }))
 
@@ -43,6 +44,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { ensureDealForContact } from '@/lib/glofox-sync'
+import { triggerSequencesForDealPlacement } from '@/lib/sequences/triggers'
 import { logPipelineDismissal } from '@/lib/activity-events'
 import { logAuditEvent } from '@/lib/audit'
 
@@ -174,5 +176,19 @@ describe('POST /api/contacts/[id]/pipeline-status', () => {
     expect(res.status).toBe(200)
     expect(json.success).toBe(true)
     expect(json.data.deal.action).toBe('error')
+  })
+
+  // HATCHPIPE.1 — the sequence fence needs the board the placement used.
+  it('Cold route passes the board ensureDealForContact used', async () => {
+    createServerClient.mockReturnValue(makeDb(vi.fn()))
+    const placed = {
+      action: 'move', deal_id: 'd1', from_slug: 'x', to_slug: 'cold_lead',
+      pipeline_id: 'pl-1', location_id: LOC_ID,
+    }
+    ensureDealForContact.mockResolvedValueOnce(placed)
+    await POST(req({ cold: true }), props)
+    expect(triggerSequencesForDealPlacement).toHaveBeenCalledWith(
+      CONTACT_ID, placed, { dealLocationId: LOC_ID, pipelineId: 'pl-1' },
+    )
   })
 })

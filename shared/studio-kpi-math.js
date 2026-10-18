@@ -172,15 +172,46 @@ export function computeEngagement(rows = []) {
 }
 
 /**
+ * How one class_bookings row counts toward the no-show rate, attended visits
+ * and activation: 'attended' | 'no_show' | 'undecided' | 'excluded'.
+ *
+ * Glofox: only status BOOKED counts, split by the `attended` boolean (an
+ * unmarked past booking is a no-show: the long-standing Stillorgan rule).
+ * Anything else is excluded (WAITING, CANCELLED ...).
+ * un1t_online: the row carries an explicit verdict. ATTENDED and NO_SHOW
+ * count; a past BOOKED is UNDECIDED (nobody has marked it yet) and sits
+ * outside the numerator and the denominator; anything else is excluded.
+ *
+ * A row with no source_platform is read as 'glofox'. That is display-only
+ * (this module rates what it is handed); the opposite default in the
+ * CRM-action predicate (class-booking-platform.js) is deliberate.
+ */
+export function bookingOutcome(row) {
+  const platform = row?.source_platform || 'glofox'
+  const status = row?.status ?? null
+  if (platform === 'un1t_online') {
+    if (status === 'ATTENDED') return 'attended'
+    if (status === 'NO_SHOW') return 'no_show'
+    if (status === 'BOOKED') return 'undecided'
+    return 'excluded'
+  }
+  if (status !== 'BOOKED') return 'excluded'
+  return row.attended ? 'attended' : 'no_show'
+}
+
+/**
  * Floor metrics from PAST class occurrences + their bookings.
  * occurrences: [{ glofox_event_id, name, instructor, capacity, starts_at,
  *   booked }] where `booked` is Glofox's own frozen booked count
  * (raw.booked — survives roster-assembly gaps); bookings:
- * [{ glofox_event_id, status, attended }] for the same window.
+ * [{ glofox_event_id, source_platform, status, attended }] for the same
+ * window.
  *
  * Fill rate = Σbooked / Σcapacity over occurrences with a capacity.
- * No-show rate = past BOOKED rows with attended=false ÷ past BOOKED
- * rows (the computeBookingAggregates rule).
+ * No-show rate = no-shows ÷ (attended + no-shows), each row judged by
+ * bookingOutcome(): for Glofox that is past BOOKED rows with attended=false
+ * ÷ past BOOKED rows (the computeBookingAggregates rule); a past un1t BOOKED
+ * is undecided and counts on neither side.
  *
  * The breakdown table groups by instructor when Glofox sends any
  * (groupedBy 'coach'), else by class name (groupedBy 'class') — live
@@ -224,7 +255,8 @@ export function computeFloor(occurrences = [], bookings = [], { sevenDayCutIso }
   let pastBooked = 0
   let noShows = 0
   for (const b of bookings) {
-    if (b.status !== 'BOOKED') continue
+    const outcome = bookingOutcome(b)
+    if (outcome === 'excluded' || outcome === 'undecided') continue
     // Only bookings whose class survived (non-cancelled occurrence in
     // the window) count — class_bookings is upsert-only, so a cancelled
     // class leaves phantom BOOKED/attended=false rows that would
@@ -233,7 +265,7 @@ export function computeFloor(occurrences = [], bookings = [], { sevenDayCutIso }
     const occ = byEvent.get(b.glofox_event_id)
     if (!occ) continue
     pastBooked++
-    const isNoShow = !b.attended
+    const isNoShow = outcome === 'no_show'
     if (isNoShow) noShows++
     const g = groups.get(keyOf(occ))
     if (g) {
@@ -268,13 +300,13 @@ export function computeFloor(occurrences = [], bookings = [], { sevenDayCutIso }
  * ACTIVATION_WINDOW_DAYS ago, so their window is complete) who attended
  * ≥ ACTIVATION_VISITS classes within ACTIVATION_WINDOW_DAYS of joining.
  * joiners: [{ id, joined_at }]; bookings: [{ contact_id, starts_at,
- * status, attended }] covering the cohort window.
+ * source_platform, status, attended }] covering the cohort window.
  */
 export function computeActivation(joiners = [], bookings = [], nowMs = Date.now()) {
   const windowMs = ACTIVATION_WINDOW_DAYS * MS_PER_DAY
   const attendedByContact = new Map()
   for (const b of bookings) {
-    if (b.status !== 'BOOKED' || !b.attended || !b.contact_id) continue
+    if (bookingOutcome(b) !== 'attended' || !b.contact_id) continue
     if (!attendedByContact.has(b.contact_id)) attendedByContact.set(b.contact_id, [])
     attendedByContact.get(b.contact_id).push(Date.parse(b.starts_at))
   }

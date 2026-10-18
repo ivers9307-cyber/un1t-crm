@@ -75,6 +75,11 @@ export const CLOSED_FUNCTIONS = [
   // (UN1TDUAL.4) rewrites it again the same way.
   { fn: 'public.crossover_contact_ids', args: '(uuid)', closedBy: 731,
     why: 'contact ids at a studio by deal, active membership or un1t.online client; only the contacts list and search call it, on the service role' },
+  // Closed since mig 513; 737 (UN1TBOOK.1) rewrites it with CREATE OR REPLACE
+  // (the CANCELLED filter) and restates the REVOKE, so it is registered from
+  // that file.
+  { fn: 'public.campaign_outcome_stats', args: '(uuid, int)', closedBy: 737,
+    why: 'INVOKER campaign outcome report over a bare campaign id; only the service-role outcomes route calls it, after its own access check' },
 ]
 
 /** The client roles a closed function is closed to. */

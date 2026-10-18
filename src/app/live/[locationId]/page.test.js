@@ -44,6 +44,12 @@ vi.mock('./LiveClassClient', () => ({
   ),
 }))
 
+vi.mock('./LiveRosterClient', () => ({
+  default: ({ locationId, locationName, timeZone }) => (
+    <div data-testid="live-roster-client" data-time-zone={timeZone}>{locationName} / {locationId}</div>
+  ),
+}))
+
 import LiveClassPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
@@ -90,7 +96,7 @@ function mockDb({ location = null, displays = [], displaysError = null } = {}) {
  * disagree is genuinely exercising which one the page consults.
  */
 function user({ isMaster = false, locations = [{ id: 'loc1' }], perms = {}, permsByLocation = {} } = {}) {
-  const permsAt = (id) => ({ studio_management: false, ...perms, ...(permsByLocation[id] || {}) })
+  const permsAt = (id) => ({ studio_management: false, class_roster: false, ...perms, ...(permsByLocation[id] || {}) })
   return {
     id: 'u1',
     role: isMaster ? 'master' : 'staff',
@@ -120,8 +126,8 @@ describe('/live/[locationId] page', () => {
     await expect(LiveClassPage(props())).rejects.toThrow(/^NEXT_REDIRECT:\/login$/)
   })
 
-  it('redirects to / when the user lacks studio_management, even at their own location', async () => {
-    getCurrentUser.mockResolvedValue(user({ perms: { studio_management: false } }))
+  it('redirects a user with neither key, even at their own location', async () => {
+    getCurrentUser.mockResolvedValue(user({ perms: { studio_management: false, class_roster: false } }))
     createServerClient.mockReturnValue(mockDb({ location: { id: 'loc1', name: 'Stillorgan' } }))
     await expect(LiveClassPage(props('loc1'))).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
@@ -134,6 +140,14 @@ describe('/live/[locationId] page', () => {
     // LIVE-TVBTN.1 — the token query sits BEHIND the gate: a caller outside
     // the location never even reaches the tv_displays read.
     expect(db.from).not.toHaveBeenCalledWith('tv_displays')
+  })
+
+  it('renders LiveClassClient when studio_management is held', async () => {
+    getCurrentUser.mockResolvedValue(user({ locations: [{ id: 'loc1' }], perms: { studio_management: true, class_roster: true } }))
+    createServerClient.mockReturnValue(mockDb({ location: { id: 'loc1', name: 'Stillorgan' } }))
+    const html = renderToStaticMarkup(await LiveClassPage(props('loc1')))
+    expect(html).toContain('data-testid="live-class-client"')
+    expect(html).not.toContain('data-testid="live-roster-client"')
   })
 
   it('renders the live client for an assigned location when studio_management is held', async () => {
@@ -165,10 +179,23 @@ describe('/live/[locationId] page', () => {
   // locations carry `features.studio_management: false` (CCF Autos, SourceIt).
   it('honours the tier-1 location feature gate, even for a master', async () => {
     getCurrentUser.mockResolvedValue(
-      user({ isMaster: true, locations: [{ id: 'loc7', features: { studio_management: false } }] }),
+      user({ isMaster: true, locations: [{ id: 'loc7', features: { studio_management: false, class_roster: false } }] }),
     )
     createServerClient.mockReturnValue(mockDb({ location: { id: 'loc7', name: 'CCF Autos' } }))
     await expect(LiveClassPage(props('loc7'))).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
+  })
+
+  // UN1TBOOK.13 — each key has its own tier-1 switch: a studio that turns the
+  // HR board off but leaves class_roster on gets the roster-only view, never
+  // the board, even for a master.
+  it('a master at a studio_management-off, class_roster-on location gets the roster view', async () => {
+    getCurrentUser.mockResolvedValue(
+      user({ isMaster: true, locations: [{ id: 'loc7', features: { studio_management: false } }] }),
+    )
+    createServerClient.mockReturnValue(mockDb({ location: { id: 'loc7', name: 'CCF Autos' } }))
+    const html = renderToStaticMarkup(await LiveClassPage(props('loc7')))
+    expect(html).toContain('data-testid="live-roster-client"')
+    expect(html).not.toContain('data-testid="live-class-client"')
   })
 
   // The SEC-LIVE-API.2 defect, in the shape prod actually had it: permitted at
@@ -204,6 +231,47 @@ describe('/live/[locationId] page', () => {
     createServerClient.mockReturnValue(mockDb({ location: { id: 'loc2', name: 'Stillorgan' } }))
     const html = renderToStaticMarkup(await LiveClassPage(props('loc2')))
     expect(html).toContain('Stillorgan')
+  })
+})
+
+// UN1TBOOK.13 — class_roster holders get the roster-only view.
+describe('/live/[locationId] — class_roster only', () => {
+  const rosterOnly = (extra = {}) => user({ locations: [{ id: 'loc1' }], perms: { class_roster: true }, ...extra })
+
+  it('renders LiveRosterClient for a class_roster-only user at their location', async () => {
+    getCurrentUser.mockResolvedValue(rosterOnly())
+    createServerClient.mockReturnValue(mockDb({ location: { id: 'loc1', name: 'Hatch', timezone: 'Europe/Dublin' } }))
+    const html = renderToStaticMarkup(await LiveClassPage(props('loc1')))
+    expect(html).toContain('data-testid="live-roster-client"')
+    expect(html).not.toContain('data-testid="live-class-client"')
+    expect(html).toContain('Hatch / loc1')
+    expect(html).toContain('data-time-zone="Europe/Dublin"')
+  })
+
+  it('a roster-only render reads no tv_displays token', async () => {
+    getCurrentUser.mockResolvedValue(rosterOnly())
+    const db = mockDb({ location: { id: 'loc1', name: 'Hatch' }, displays: [{ token: 'tok-secret' }] })
+    createServerClient.mockReturnValue(db)
+    const html = renderToStaticMarkup(await LiveClassPage(props('loc1')))
+    expect(db.from).not.toHaveBeenCalledWith('tv_displays')
+    expect(html).not.toContain('tok-secret')
+  })
+
+  it('still 404s a class_roster holder at a location they do not belong to', async () => {
+    getCurrentUser.mockResolvedValue(rosterOnly())
+    createServerClient.mockReturnValue(mockDb({ location: { id: 'loc9', name: 'Foreign' } }))
+    await expect(LiveClassPage(props('loc9'))).rejects.toThrow('NEXT_NOT_FOUND')
+  })
+
+  it('resolves class_roster AT the target location, not the active one', async () => {
+    getCurrentUser.mockResolvedValue(
+      user({
+        locations: [{ id: 'loc1' }, { id: 'loc2' }],
+        permsByLocation: { loc1: { class_roster: true }, loc2: { class_roster: false } },
+      }),
+    )
+    createServerClient.mockReturnValue(mockDb({ location: { id: 'loc2', name: 'Stillorgan' } }))
+    await expect(LiveClassPage(props('loc2'))).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 })
 

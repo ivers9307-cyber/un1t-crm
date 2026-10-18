@@ -125,7 +125,7 @@ describe('Members hub', () => {
 
   it('the Members hub entry ORs its member permissions and lights on member paths', () => {
     const members = ALL_NAV.find(i => i.href === '/members')
-    expect(members.anyPermission).toEqual(['bookings', 'events', 'races', 'challenges', 'pulse_admin', 'studio_management', 'class_timer', 'approvals_hyrox_sessions'])
+    expect(members.anyPermission).toEqual(['bookings', 'events', 'races', 'challenges', 'pulse_admin', 'studio_management', 'class_timer', 'class_roster', 'approvals_hyrox_sessions'])
     expect(members.extraActivePaths).toEqual(['/bookings', '/events', '/challenges', '/pulse', '/live', '/studio-management/timer', '/hyrox'])
   })
 })

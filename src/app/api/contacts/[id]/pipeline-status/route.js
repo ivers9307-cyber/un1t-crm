@@ -111,7 +111,10 @@ export async function POST(request, props) {
   // Best-effort — the dismissal itself is already saved.
   try {
     const { triggerSequencesForDealPlacement } = await import('@/lib/sequences/triggers')
-    await triggerSequencesForDealPlacement(id, deal)
+    await triggerSequencesForDealPlacement(id, deal, {
+      dealLocationId: deal?.location_id,
+      pipelineId: deal?.pipeline_id,
+    })
   } catch {
     // The helper swallows its own errors; this only guards the import.
   }

@@ -292,16 +292,47 @@ export async function triggerSequencesForPipelineStageChange(contactId, oldStage
  * Best-effort and never throws: every caller has already committed its
  * primary write.
  *
+ * HATCHPIPE.1 — the FENCE. A deal move enrols only when ALL hold:
+ *   • the caller says which board the deal sits on (`dealLocationId` and
+ *     `pipelineId` both present) — else `missing_board`;
+ *   • that board's studio is the contact's OWN studio (a contact's deal on
+ *     another studio's board must not start the contact's sequences there
+ *     or here) — else `cross_location`;
+ *   • the move is the SOURCE of the contact's `pipeline_stage_slug`, i.e.
+ *     the slug the database now holds equals `to_slug` (mig 736 derives it
+ *     from the contact's own studio's boards only) — else `not_slug_source`.
+ * An unreadable contact skips too (`contact_unreadable`). Each skip is a
+ * `logWarn('sequences', 'stage_trigger_skipped', { reason, dealLocationId })`.
+ *
+ * Best-effort and never throws: every caller has already committed its
+ * primary write.
+ *
  * @param {string} contactId
  * @param {{action: string, from_slug?: string|null, to_slug?: string|null}|null} dealResult
  *   the return value of ensureDealForContact.
+ * @param {{dealLocationId?: string|null, pipelineId?: string|null}} [board]
+ *   location_id and pipeline_id of the deal that moved.
  */
-export async function triggerSequencesForDealPlacement(contactId, dealResult) {
+export async function triggerSequencesForDealPlacement(contactId, dealResult, { dealLocationId, pipelineId } = {}) {
   if (!contactId || dealResult?.action !== 'move') return
   const from = dealResult.from_slug ?? null
   const to = dealResult.to_slug ?? null
   if (from === to) return
+  const skip = (reason) =>
+    logWarn('sequences', 'stage_trigger_skipped', { reason, dealLocationId })
   try {
+    if (!dealLocationId || !pipelineId) return skip('missing_board')
+
+    const db = createServerClient()
+    const { data: contact, error } = await db
+      .from('contacts')
+      .select('id, location_id, pipeline_stage_slug')
+      .eq('id', contactId)
+      .maybeSingle()
+    if (error || !contact) return skip('contact_unreadable')
+    if (contact.location_id !== dealLocationId) return skip('cross_location')
+    if (contact.pipeline_stage_slug !== to) return skip('not_slug_source')
+
     await triggerSequencesForPipelineStageChange(contactId, from, to)
   } catch (e) {
     // triggerSequencesForPipelineStageChange swallows its own errors;

@@ -238,7 +238,16 @@ describe('POST /api/deals/[id]/stage — moving a card on a manual board', () =>
       action: 'move',
       from_slug: 'waitlist_new_enquiry',
       to_slug: 'waitlist_no_answer',
-    })
+    }, expect.any(Object))
+  })
+
+  it('passes { dealLocationId: deal.location_id, pipelineId: deal.pipeline_id } to the trigger', async () => {
+    createServerClient.mockReturnValue(manualDb())
+    await POST(req({ stage_id: STAGE_NEW }), props)
+    const opts = triggerSequencesForDealPlacement.mock.calls[0][2]
+    expect(opts).toEqual({ dealLocationId: LOC_ID, pipelineId: WAITLIST })
+    expect(opts.dealLocationId).toBeTruthy()
+    expect(opts.pipelineId).toBeTruthy()
   })
 
   it('records WHO moved the card', async () => {
