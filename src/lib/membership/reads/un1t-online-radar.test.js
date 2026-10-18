@@ -155,6 +155,31 @@ describe('radarMembers', () => {
     for (const q of chunks) expect(q.filters).toContainEqual(['eq', 'location_id', HATCH])
   })
 
+  it('contact ids are read in chunks of at most 300', async () => {
+    const many = Array.from({ length: 650 }, (_, i) => `u${i}`)
+    const { db, log } = makeDb(seed({
+      un1t_subscriptions: many.map((u) => sub({ un1t_user_id: u, contact_id: `c-${u}` })),
+      un1t_clients: many.map((u) => client({ un1t_user_id: u, contact_id: `c-${u}` })),
+      contacts: many.map((u) => contact({ id: `c-${u}`, name: u })),
+    }))
+    await radarMembers(db, HATCH, { nowMs: NOW })
+    const sizes = log.filter((q) => q.table === 'contacts').map((q) => q.filters.find(([k]) => k === 'in')[2].length)
+    expect(sizes).toEqual([300, 300, 50])
+  })
+
+  it('a refunded payment is not the last payment', async () => {
+    const { db } = makeDb(seed())
+    const [row] = await radarMembers(db, HATCH, { nowMs: NOW })
+    // the 10 Oct renewal was refunded; the 1 Oct one stands
+    expect(row.last_payment_at).toBe('2026-10-01T00:00:00Z')
+  })
+
+  it('reaching the hard cap fails instead of returning a truncated radar', async () => {
+    const big = Array.from({ length: 50_000 }, (_, i) => ({ id: `b${String(i).padStart(6, '0')}`, location_id: HATCH, un1t_user_id: 'u1', contact_id: 'c1', event_id: 'e0', status: 'booked', remote_created_at: '2026-10-01T00:00:00Z' }))
+    const { db } = makeDb(seed({ un1t_bookings: big }))
+    await expect(radarMembers(db, HATCH, { nowMs: NOW })).rejects.toThrow(/refusing a truncated radar/)
+  })
+
   it('events are read for the 30-day window only', async () => {
     const { db, log } = makeDb(seed())
     await radarMembers(db, HATCH, { nowMs: NOW })
@@ -258,6 +283,16 @@ describe('leadContacts', () => {
     // un1t_products is read only by pipelineInputs here, which answers success:false on it
     const { db } = makeDb(seed(), { fail: ['un1t_products'] })
     await expect(leadContacts(db, HATCH, { nowMs: NOW })).rejects.toThrow()
+  })
+
+  it('an owned contact whose only client row is stale is not listed as a lead', async () => {
+    const { db } = makeDb(seed({
+      un1t_subscriptions: [],
+      un1t_clients: [client(), client({ un1t_user_id: 'old', contact_id: 'own', synced_at: STALE })],
+      contacts: [contact(), contact({ id: 'own', location_id: HATCH })],
+    }))
+    const rows = await leadContacts(db, HATCH, { nowMs: NOW })
+    expect(rows.map((r) => r.id)).not.toContain('own')
   })
 
   it('owned contacts are read by location; everything else by id', async () => {

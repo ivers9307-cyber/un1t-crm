@@ -40,13 +40,24 @@ const BOOKED_AT_COLS = 'un1t_user_id, contact_id, remote_created_at'
 const ENDED_COLS = 'contact_id, plan_name, ended_at'
 const LEAD_CONTACT_COLS = 'id, name, email, phone, lead_source, joined_at, created_at'
 
-/** Every row of `table` at L, `build(q)` adding filters; paginated, ordered by id. */
-const listAt = (db, loc, table, cols, build = (q) => q) => selectAll((from, to) => build(db
-  .from(table)
-  .select(cols)
-  .eq('location_id', loc))
-  .order('id', { ascending: true })
-  .range(from, to), { pageSize: PAGE })
+// selectAll stops SILENTLY at its hard cap; a radar that read a truncated
+// table would be wrong without saying so, so reaching the cap is a failure.
+const HARD_CAP = 50_000
+
+/**
+ * Every row of `table` at L, `build(q)` adding filters; paginated, ordered by
+ * id. Throws on a failed page and when the hard cap is reached.
+ */
+async function listAt(db, loc, table, cols, build = (q) => q) {
+  const rows = await selectAll((from, to) => build(db
+    .from(table)
+    .select(cols)
+    .eq('location_id', loc))
+    .order('id', { ascending: true })
+    .range(from, to), { pageSize: PAGE, hardCap: HARD_CAP })
+  if (rows.length >= HARD_CAP) throw new Error(`${table}: ${HARD_CAP} rows at one studio; refusing a truncated radar`)
+  return rows
+}
 
 /** The un1t_subscriptions freshness cutoff (see freshCutoff in ./un1t-online.js). */
 const subsCutoff = (db, loc) => freshCutoff(db, 'un1t_subscriptions', loc)
@@ -167,6 +178,7 @@ export async function leadContacts(db, locationId, { nowMs = Date.now() } = {}) 
     listAt(db, locationId, 'un1t_bookings', BOOKED_AT_COLS),
   ])
   const contactOfUser = new Map(clients.filter((c) => c.contact_id != null).map((c) => [c.un1t_user_id, c.contact_id]))
+  const clientContacts = new Set(contactOfUser.values())
   const newestBookingAtByContact = latestBy(
     bookedAt,
     (b) => (b.un1t_user_id != null ? contactOfUser.get(b.un1t_user_id) : null) ?? b.contact_id ?? null,
@@ -175,7 +187,9 @@ export async function leadContacts(db, locationId, { nowMs = Date.now() } = {}) 
   return shapeLeadRows({
     pipeline,
     contactsById,
-    ownedWithoutClient: owned.filter((c) => !inPipeline.has(c.id)),
+    // spec §2c: owned contacts with NO un1t_clients row here (fresh or stale);
+    // a stale client is an account un1t.online dropped, not a new lead
+    ownedWithoutClient: owned.filter((c) => !inPipeline.has(c.id) && !clientContacts.has(c.id)),
     newestBookingAtByContact,
   })
 }
