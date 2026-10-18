@@ -16,6 +16,15 @@ import { transactionalEmailSuppression, loadTransactionalConsent } from '@/lib/t
 import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 import { un1tFunnelEmailCopyFromBlocks, DEFAULT_FUNNEL_EMAIL_COPY, DEFAULT_TRIAL_USED_OPTIONS } from './un1t-online-funnel-copy.js'
+import { trialUsedOptionsText } from './un1t-online-trial-used.js'
+import { getLocationBranding } from '@/lib/location-branding'
+
+// An address sits mid-sentence in the default body: it ends with a full stop.
+const sentence = (v) => {
+  const t = typeof v === 'string' ? v.trim() : ''
+  if (!t) return ''
+  return /[.!?]$/.test(t) ? t : `${t}.`
+}
 
 async function send(db, { kind, locationId, contact, className, startsAt, blocks, studioName, address = null, zone = null, options = null }) {
   const email = typeof contact?.email === 'string' ? contact.email.trim() : ''
@@ -26,19 +35,31 @@ async function send(db, { kind, locationId, contact, className, startsAt, blocks
 
   const copy = un1tFunnelEmailCopyFromBlocks(blocks)
   const tz = zone || await getLocationZone(db, locationId).catch(() => DEFAULT_TZ)
-  const optionsText = typeof options === 'string' && options.trim() ? options.trim() : DEFAULT_TRIAL_USED_OPTIONS
+  // {options}: the caller's list, else the studio's (spec E's seam), else the default words.
+  let optionsList = typeof options === 'string' && options.trim() ? options.trim() : null
+  if (!optionsList && kind === 'trial_used') {
+    try { optionsList = await trialUsedOptionsText(db, locationId) } catch (e) { logWarn('un1t-funnel-email', 'offer list unreadable; the default words are used', { locationId, err: e }) }
+  }
+  const optionsText = typeof optionsList === 'string' && optionsList.trim() ? optionsList.trim() : DEFAULT_TRIAL_USED_OPTIONS
+  // The studio's own name; only when the caller has none, its name or brand
+  // (never a fixed gym's name). The resolver never throws.
+  let studio = typeof studioName === 'string' ? studioName.trim() : ''
+  if (!studio) {
+    const branding = await getLocationBranding(db, locationId)
+    studio = branding?.locationName || branding?.companyName || ''
+  }
   const vars = {
     first_name: contact.first_name || (contact.name ? String(contact.name).split(' ')[0] : ''),
     class_name: className || 'your class',
     class_time: formatClassTime(startsAt, tz),
-    studio_name: typeof studioName === 'string' ? studioName.trim() : '',
-    address: address || '',
+    studio_name: studio,
+    address: sentence(address),
     options: optionsText,
   }
   const subjectKey = `${kind}_email_subject`
   const bodyKey = `${kind}_email_body`
   const subject = renderCopy(copy[subjectKey], vars) || renderCopy(DEFAULT_FUNNEL_EMAIL_COPY[subjectKey], vars)
-  const body = renderCopy(copy[bodyKey], vars)
+  const body = renderCopy(copy[bodyKey], vars).replace(/[ \t]{2,}/g, ' ')
   try {
     const replyTo = await getLocationInboxReplyTo(locationId)
     await sendTransactionalEmail({

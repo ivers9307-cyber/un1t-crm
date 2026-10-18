@@ -9,10 +9,13 @@ vi.mock('@/lib/transactional-consent', () => ({
   transactionalEmailSuppression: vi.fn(() => null),
 }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ locationName: 'Brand Studio', companyName: null })) }))
+vi.mock('./un1t-online-trial-used', async (o) => ({ ...(await o()), trialUsedOptionsText: vi.fn(async () => null) }))
 
 import { sendUn1tAccountEmail, sendUn1tTrialUsedEmail } from './un1t-online-funnel-emails'
 import { DEFAULT_FUNNEL_EMAIL_COPY } from './un1t-online-funnel-copy'
-import { trialUsedHandoff, trialUsedOptionsText } from './un1t-online-trial-used'
+import { trialUsedHandoff } from './un1t-online-trial-used'
+import { trialUsedOptionsText } from './un1t-online-trial-used'
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { loadTransactionalConsent, transactionalEmailSuppression } from '@/lib/transactional-consent'
 
@@ -84,8 +87,24 @@ describe('sendUn1tTrialUsedEmail', () => {
 })
 
 describe('the E seam', () => {
-  it('the defaults hand off nothing and list no options', async () => {
+  it('the hand-off default hands off nothing', async () => {
     expect(await trialUsedHandoff({}, { request: {}, contact, locationId: 'loc-1' })).toEqual({ handled: false })
-    expect(await trialUsedOptionsText({}, 'loc-1')).toBeNull()
+  })
+
+  it("the trial-used email asks the seam for the studio's offer list", async () => {
+    trialUsedOptionsText.mockResolvedValueOnce('Ten pack, EUR 90')
+    await sendUn1tTrialUsedEmail({}, { ...base, blocks: [] })
+    expect(trialUsedOptionsText).toHaveBeenCalledWith({}, 'loc-1')
+    expect(sent().htmlBody).toContain('Ten pack, EUR 90')
+  })
+})
+
+describe('fallbacks', () => {
+  it('a blank studio name reads the studio\'s own name; an address without a stop gets one; no double spaces', async () => {
+    await sendUn1tAccountEmail({}, { ...base, studioName: '', blocks: [], address: '1 Hatch St, Dublin 2' })
+    expect(sent().subject).toBe('You are booked in at Brand Studio')
+    expect(sent().htmlBody).toContain('1 Hatch St, Dublin 2. We have set up')
+    await sendUn1tAccountEmail({}, { ...base, blocks: [], address: null })
+    expect(sent().htmlBody).not.toMatch(/ {2}/)
   })
 })
