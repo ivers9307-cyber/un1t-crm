@@ -230,6 +230,13 @@ function pickBooking(d) {
     created_at: scalarOr(d.created_at),
     updated_at: scalarOr(d.updated_at),
   }
+  // The guest FLAG (never the guest's details): the DTO's own flag, flat or
+  // camelCase, else whether any guest field is filled (as mapBooking derives
+  // it). Dropping it would let a CRM mirror write reset has_guest to false.
+  const flag = d.has_guest ?? d.hasGuest
+  out.has_guest = typeof flag === 'boolean'
+    ? flag
+    : ['guest_name', 'guest_email', 'guest_phone'].some((k) => typeof d[k] === 'string' && d[k].trim() !== '')
   // Non-personal scalars mapBooking also stores; only when present.
   for (const k of ['source', 'credit_charged', 'external_member_ref', 'external_booking_ref']) {
     if (d[k] !== undefined && isScalar(d[k])) out[k] = d[k]

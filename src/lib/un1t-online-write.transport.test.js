@@ -365,7 +365,7 @@ describe('send: policies', () => {
     const r = await writer.send('POST', '/bookings', bookOpts())
     expect(Object.keys(r).sort()).toEqual(CONTRACT_KEYS)
     expect(r).toMatchObject({ verdict: 'done', sent: true, id: BOOKING, recovered: null, retryable: false, alreadyBooked: false })
-    expect(r.data).toEqual({ ...bookingDto(), created_at: null, updated_at: null })
+    expect(r.data).toEqual({ ...bookingDto(), created_at: null, updated_at: null, has_guest: false })
     expect(recordErrorEvent).not.toHaveBeenCalled()
   })
 
@@ -949,9 +949,26 @@ describe('fix round 1', () => {
     expect(r.verdict).toBe('done')
     expect(r.data).toEqual({
       id: BOOKING, event_id: EVENT, user_id: USER, studio_id: STUDIO, status: 'booked',
-      created_at: '2026-10-18T09:00:00Z', updated_at: '2026-10-18T09:00:01Z', source: 'api', credit_charged: true,
+      created_at: '2026-10-18T09:00:00Z', updated_at: '2026-10-18T09:00:01Z', source: 'api', credit_charged: true, has_guest: true,
     })
     expect(JSON.stringify(r)).not.toMatch(/example\.test|353800000000|Test Person|free text/)
+  })
+
+  it('the picked booking keeps the guest flag (flat, camelCase or derived from guest fields), never the guest details', async () => {
+    const cases = [
+      [{ has_guest: true }, true],
+      [{ hasGuest: true }, true],
+      [{ has_guest: false }, false],
+      [{ guest_email: 'guest@example.test' }, true],
+      [{}, false],
+    ]
+    for (const [extra, want] of cases) {
+      const { writer } = await setup({ routes: { 'POST /bookings': [res(201, { success: true, data: { ...bookingDto(), ...extra } })] } })
+      const r = await writer.send('POST', '/bookings', bookOpts())
+      expect(r.data.has_guest, JSON.stringify(extra)).toBe(want)
+      expect(JSON.stringify(r.data)).not.toContain('example.test')
+      expect(r.data).not.toHaveProperty('hasGuest')
+    }
   })
 
   it('writer.assertAllowed validates the endpoint, op and body without sending', async () => {
