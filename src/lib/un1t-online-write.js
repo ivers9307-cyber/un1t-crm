@@ -685,12 +685,12 @@ export async function createUn1tWriter(
     }
   }
 
-  /** Every page of a list; a walk cut short by the page cap throws. */
-  async function readAll(path) {
+  /** Every page of a list (at most `maxPages`); a walk cut short throws. */
+  async function readAll(path, opts) {
     requireConnected()
     let out
     try {
-      out = await readClient.listAll(path)
+      out = await readClient.listAll(path, opts)
     } catch (err) {
       if (err instanceof Un1tAuthError) dropPermissions()
       throw err
