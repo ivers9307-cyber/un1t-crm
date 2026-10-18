@@ -217,7 +217,7 @@ const CALLERS = {
   'src/lib/whatsapp-consent.js': {
     calls: { sendTextMessage: 1 },
     decision: 'inbound-owner',
-    why: 'STOP/START ack only; the consent change is written first and stands (louder-failure rule). WAORGNUMBER.3 per-studio consent: STOP/START write the thread studio\'s contact_location_preferences row only; a contact-wide opt-out (Meta preference, or a keyword with no studio) also sets every studio row false; the ack goes through the thread (replyInConversation, WAHOMESTUDIO.1). whatsapp-consent.test.js.',
+    why: 'STOP/START ack only; the consent change is written first and stands (louder-failure rule). WAORGNUMBER.3 per-studio consent: STOP/START write the thread studio\'s contact_location_preferences row only; a contact-wide opt-out (Meta preference, or a keyword with no studio) also sets every studio row false; the ack goes through the thread (replyInConversation, WAHOMESTUDIO.1). WAORGNUMBER.3b: the keyword is the thread contact\'s, and a studio STOP also closes that studio\'s existing row for every same-phone contact in the organisation (no Meta call; the ack still waits on the thread contact\'s row). whatsapp-consent.test.js.',
   },
   'src/lib/agent/notify.js': {
     calls: { sendTextMessage: 1 },

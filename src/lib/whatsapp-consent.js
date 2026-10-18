@@ -41,6 +41,12 @@
 // run exactly as before (scope 'contact'). Meta's own user_preferences control
 // stays contact-wide (applyMetaUserPreference).
 //
+// WAORGNUMBER.3b — the keyword is the THREAD's contact's (the webhook passes
+// the routed thread's contact, not whichever same-phone contact the phone match
+// preferred), and a studio STOP also closes that studio's existing row for every
+// other contact in the organisation with the sender's number. START re-opens
+// only the thread contact's row.
+//
 // The STOP/START description above is that contact-wide path.
 //
 // GAPS-P6 — the consent_log rows written here used to say 'opted_out' /
@@ -64,6 +70,29 @@ const ACK_STOP =
   "You've been unsubscribed from WhatsApp marketing messages. Reply START at any time to opt back in."
 const ACK_START =
   "You're opted back in to WhatsApp messages. Reply STOP at any time to unsubscribe."
+
+const CONTACT_PAGE = 1000
+
+/**
+ * Every contact whose wa_phone or phone is this number (with or without '+'),
+ * within `orgLocationIds` (null = unscoped). Paginated past the 1,000-row cap
+ * with an explicit order. A failed page stops the read and is returned as
+ * `error` with whatever was read before it, so a caller can still act on those.
+ * @returns {Promise<{ contacts: {id: string}[], error: string|null }>}
+ */
+async function contactsWithNumber(db, waId, orgLocationIds) {
+  const contacts = []
+  for (let from = 0; ; from += CONTACT_PAGE) {
+    let q = db.from('contacts')
+      .select('id')
+      .or(`wa_phone.eq.${waId},wa_phone.eq.+${waId},phone.eq.${waId},phone.eq.+${waId}`)
+    if (orgLocationIds) q = q.in('location_id', scopeFor(orgLocationIds))
+    const { data: page, error } = await q.order('id').range(from, from + CONTACT_PAGE - 1)
+    if (error) return { contacts, error: error.message }
+    contacts.push(...(page || []))
+    if ((page || []).length < CONTACT_PAGE) return { contacts, error: null }
+  }
+}
 
 /**
  * Apply BOTH authoritative consent writes, independently, and report what
@@ -97,11 +126,11 @@ const ACK_START =
  * below run exactly as before (Review Focus 3).
  *
  * @param {object} db
- * @param {{ contactId: string, locationId?: string|null, optingOut: boolean, source: string }} args
+ * @param {{ contactId: string, locationId?: string|null, optingOut: boolean, source: string, waPhone?: string|null }} args
  * @returns {Promise<{prefOk: boolean, statusOk: boolean, failures: string[], scope: 'studio'|'contact'}>}
  */
-async function applyConsentWrites(db, { contactId, locationId = null, optingOut, source }) {
-  if (locationId) return applyStudioConsentWrites(db, { contactId, locationId, optingOut, source })
+async function applyConsentWrites(db, { contactId, locationId = null, optingOut, source, waPhone = null }) {
+  if (locationId) return applyStudioConsentWrites(db, { contactId, locationId, optingOut, source, waPhone })
 
   const failures = []
 
@@ -208,8 +237,14 @@ async function applyConsentWrites(db, { contactId, locationId = null, optingOut,
  * There is ONE suppression gate here, not two: a STOP is judged on `prefOk`
  * alone. `statusOk` is about the START-only lift of a historic wa_status
  * 'opted_out' (below); it is true whenever there was nothing to lift.
+ *
+ * WAORGNUMBER.3b — a STOP also closes this studio's row for every OTHER contact
+ * in the organisation with the same number (closeSameNumberStudioRows). Those
+ * writes are secondary: attempted whatever the thread contact's write did,
+ * counted in `failures`, never part of the verdict. A START re-opens only the
+ * thread contact's row.
  */
-async function applyStudioConsentWrites(db, { contactId, locationId, optingOut, source }) {
+async function applyStudioConsentWrites(db, { contactId, locationId, optingOut, source, waPhone = null }) {
   const failures = []
   const nowIso = new Date().toISOString()
   const wa = !optingOut
@@ -269,6 +304,8 @@ async function applyStudioConsentWrites(db, { contactId, locationId, optingOut, 
   })
   if (logRowError) failures.push(`consent_log (audit only): ${logRowError.message}`)
 
+  if (optingOut) failures.push(...await closeSameNumberStudioRows(db, { contactId, locationId, waPhone, nowIso }))
+
   const prefOk = created || updated
 
   // START lifts a HISTORIC contact-wide STOP (WAORGNUMBER.3 ruling). A contact
@@ -310,6 +347,65 @@ async function applyStudioConsentWrites(db, { contactId, locationId, optingOut, 
   }
 
   return { prefOk, statusOk, failures, scope: 'studio' }
+}
+
+/**
+ * WAORGNUMBER.3b — a STOP at studio S closes S's row for every OTHER contact in
+ * S's organisation whose wa_phone or phone is the sender's number. Live on 18
+ * Oct 2026: seven contacts shared one phone, the STOP landed on one of them and
+ * the contact whose Hatch thread it was stayed opted in at Hatch. The person
+ * behind the number asked S to stop, so every row S holds for that number
+ * closes; suppression is the safe direction.
+ *
+ * Only EXISTING rows that are open are written (no row is created for another
+ * contact: a missing row is never an opt-in to WhatsApp, and creating one would
+ * write consent for a person who did not write in under that record), each
+ * change gets a consent_log row naming the studio, and the result is the list
+ * of failures. Never throws; never part of the STOP's verdict.
+ */
+const SIBLING_CHUNK = 100
+
+async function closeSameNumberStudioRows(db, { contactId, locationId, waPhone, nowIso }) {
+  const failures = []
+  const waId = String(waPhone || '').replace(/\D/g, '')
+  if (!waId) {
+    logWarn('wa-consent', 'studio STOP without the sender\'s number; other contacts with it are not closed', { contactId, locationId })
+    return failures
+  }
+
+  // The organisation of the thread's studio. A failed sibling read narrows to
+  // the studio itself (orgLocationIdsFor), so the contacts homed there still close.
+  const orgLocationIds = await orgLocationIdsFor(db, locationId)
+  const { contacts, error: readError } = await contactsWithNumber(db, waId, orgLocationIds)
+  if (readError) failures.push(`contacts (same number): ${readError}`)
+  const others = [...new Set(contacts.map((c) => c.id).filter((id) => id && id !== contactId))]
+
+  for (let i = 0; i < others.length; i += SIBLING_CHUNK) {
+    const chunk = others.slice(i, i + SIBLING_CHUNK)
+    const { data: closed, error: closeError } = await db
+      .from('contact_location_preferences')
+      .update({ whatsapp_marketing: false, updated_at: nowIso })
+      .in('contact_id', chunk)
+      .eq('location_id', locationId)
+      .eq('whatsapp_marketing', true)
+      .select('contact_id')
+    if (closeError) {
+      failures.push(`contact_location_preferences.whatsapp_marketing (same number, ${chunk.length} contacts): ${closeError.message}`)
+      continue
+    }
+    const closedIds = (closed || []).map((r) => r.contact_id).filter(Boolean)
+    if (closedIds.length === 0) continue
+    // Audit only, as for the thread contact.
+    const { error: auditError } = await db.from('consent_log').insert(closedIds.map((id) => ({
+      contact_id: id,
+      channel: 'whatsapp_marketing',
+      action: consentActionFor(false),
+      source: 'whatsapp_keyword',
+      location_id: locationId,
+    })))
+    if (auditError) failures.push(`consent_log (same number, audit only): ${auditError.message}`)
+  }
+  return failures
 }
 
 /**
@@ -361,6 +457,8 @@ async function loadAckLocation(db, locationId) {
  *   explicitly from the webhook (its contact lookup is a minimal
  *   `select('id, location_id')`, so contact.wa_phone is usually absent;
  *   relying on it silently skipped the ack on the first live STOP).
+ *   A studio STOP also closes the studio's row for every other contact in
+ *   the organisation with this number (WAORGNUMBER.3b).
  * @param {string|null} args.locationId  the thread's studio. The keyword acts
  *   there only (WAORGNUMBER.3, R6) and the ack names it; null = contact-wide.
  * @param {string|null} args.conversationId  thread to attribute the ack to
@@ -392,7 +490,9 @@ export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locati
   //
   // WAORGNUMBER.3 (R6) — with the thread's locationId this acts at that studio
   // only; with none, contact-wide exactly as before.
-  const outcome = await applyConsentWrites(db, { contactId: contact.id, locationId, optingOut, source: 'whatsapp_keyword' })
+  const outcome = await applyConsentWrites(db, {
+    contactId: contact.id, locationId, optingOut, source: 'whatsapp_keyword', waPhone: waPhone || contact.wa_phone || null,
+  })
   if (!consentTookEffect(optingOut, outcome)) {
     return {
       applied: false,
@@ -489,23 +589,10 @@ export async function applyMetaUserPreference(db, pref = {}, receivingLocationId
   // EVERY matching contact in scope, not the first: the same person is often a
   // contact at more than one studio of the organisation, and Meta's control is
   // the person's, not a studio's. Paginated (1,000-row cap) with an explicit order.
-  const PAGE = 1000
-  const contacts = []
   const failures = []
-  for (let from = 0; ; from += PAGE) {
-    let q = db.from('contacts')
-      .select('id')
-      .or(`wa_phone.eq.${waId},wa_phone.eq.+${waId},phone.eq.${waId},phone.eq.+${waId}`)
-    if (orgLocationIds) q = q.in('location_id', scopeFor(orgLocationIds))
-    const { data: page, error: contactError } = await q.order('id').range(from, from + PAGE - 1)
-    if (contactError) {
-      // Suppress what was read; report the rest. Never drop an opt-out over a failed page.
-      failures.push(`contacts: ${contactError.message}`)
-      break
-    }
-    contacts.push(...(page || []))
-    if ((page || []).length < PAGE) break
-  }
+  const { contacts, error: contactError } = await contactsWithNumber(db, waId, orgLocationIds)
+  // Suppress what was read; report the rest. Never drop an opt-out over a failed page.
+  if (contactError) failures.push(`contacts: ${contactError}`)
   if (contacts.length === 0) {
     return failures.length > 0
       ? { applied: false, reason: 'contact_read_failed', failures }
