@@ -14,10 +14,14 @@
 -- A location that already states `class_roster` (either way) is untouched, and
 -- so is one where `studio_management` is not explicitly false.
 --
--- SELF-CHECK: the ruling was made against live data where exactly 2 locations
--- match. The DO block raises unless the UPDATE touched exactly 2 rows, so the
--- whole transaction rolls back if live data has moved since. That also makes a
--- second run raise (0 rows), which is the safe direction for a one-shot.
+-- AFFECTED ROWS: exactly 2 on 17-18 Oct 2026 (CCF Autos, SourceIt).
+--
+-- IDEMPOTENT: the UPDATE only touches rows that still lack a `class_roster`
+-- key, so a second run changes nothing (some repo guard tests replay later
+-- migrations). The self-check is a POST-STATE check, not a count: after the
+-- UPDATE the DO block raises if any location still has
+-- `features.studio_management = false` and no `class_roster` key, which rolls
+-- the transaction back.
 --
 -- grant: none (data only)
 
@@ -25,16 +29,19 @@ BEGIN;
 
 DO $$
 DECLARE
-  v_rows integer;
+  v_left integer;
 BEGIN
   UPDATE public.locations
      SET features = jsonb_set(coalesce(features, '{}'::jsonb), '{class_roster}', 'false'::jsonb)
    WHERE (features->>'studio_management') = 'false'
      AND (features ? 'class_roster') IS NOT TRUE;
 
-  GET DIAGNOSTICS v_rows = ROW_COUNT;
-  IF v_rows <> 2 THEN
-    RAISE EXCEPTION 'mig 739: expected to switch class_roster off at exactly 2 locations (CCF Autos, SourceIt), touched %', v_rows;
+  SELECT count(*) INTO v_left
+    FROM public.locations
+   WHERE (features->>'studio_management') = 'false'
+     AND (features ? 'class_roster') IS NOT TRUE;
+  IF v_left > 0 THEN
+    RAISE EXCEPTION 'mig 739: % location(s) still have studio_management off and no class_roster key', v_left;
   END IF;
 END
 $$;

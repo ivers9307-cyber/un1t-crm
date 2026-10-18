@@ -74,19 +74,39 @@ describe('mig 739 — class_roster off where studio_management is off', () => {
     expect(await featuresOf(5)).toBeNull()
   })
 
-  it('raises, and changes nothing, when the count is not exactly 2', async () => {
+  it('is idempotent: a second run passes and changes nothing', async () => {
     await fresh([
       [1, { studio_management: false }],
-      [2, { studio_management: false }],
-      [3, { studio_management: false }],
+      [2, { studio_management: false, class_roster: true }],
+      [3, { studio_management: true }],
     ])
-    await expect(runSql(MIG_739)).rejects.toThrow(/expected to switch class_roster off at exactly 2/)
-    await db.query('ROLLBACK').catch(() => {})
-    expect(await featuresOf(1)).toEqual({ studio_management: false })
+    await runSql(MIG_739)
+    const after = [await featuresOf(1), await featuresOf(2), await featuresOf(3)]
+    await expect(runSql(MIG_739)).resolves.toBeDefined()
+    expect([await featuresOf(1), await featuresOf(2), await featuresOf(3)]).toEqual(after)
   })
 
-  it('raises when fewer than 2 match', async () => {
+  it('passes on any number of matches, including none', async () => {
+    await fresh([[1, { studio_management: false }], [2, { studio_management: false }], [3, { studio_management: false }]])
+    await expect(runSql(MIG_739)).resolves.toBeDefined()
+    expect(await featuresOf(3)).toEqual({ studio_management: false, class_roster: false })
+    await db.close()
+    await fresh([[1, { studio_management: true }]])
+    await expect(runSql(MIG_739)).resolves.toBeDefined()
+  })
+
+  it('raises, and rolls back, when a matching row is still there after the update', async () => {
     await fresh([[1, { studio_management: false }]])
-    await expect(runSql(MIG_739)).rejects.toThrow(/touched 1/)
+    // A trigger that strips the key the UPDATE just wrote stands in for
+    // "the update did not take": the post-state check must catch it.
+    await runSql(`
+      CREATE FUNCTION public.strip_class_roster() RETURNS trigger LANGUAGE plpgsql AS $f$
+      BEGIN NEW.features := NEW.features - 'class_roster'; RETURN NEW; END $f$;
+      CREATE TRIGGER strip_class_roster BEFORE UPDATE ON public.locations
+        FOR EACH ROW EXECUTE FUNCTION public.strip_class_roster();
+    `)
+    await expect(runSql(MIG_739)).rejects.toThrow(/still have studio_management off and no class_roster key/)
+    await db.query('ROLLBACK').catch(() => {})
+    expect(await featuresOf(1)).toEqual({ studio_management: false })
   })
 })
