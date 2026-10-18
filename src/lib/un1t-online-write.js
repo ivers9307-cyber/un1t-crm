@@ -71,6 +71,13 @@ export const UN1T_WRITE_BUDGET = Object.freeze({ max: 30, windowMs: 60_000 })
 export const UN1T_PERMISSION_TTL_MS = 5 * 60_000
 export const UN1T_WRITE_FAILURE_ROWS_PER_MIN = 5
 const MAX_429_RETRIES = 3
+/**
+ * UN1TWRITE.22 — one write request waits at most this long. A timed-out write
+ * may still have landed, so it is `unknown` (the check read decides) and is
+ * NEVER re-sent, even when the check read says absent: un1t.online may still
+ * be processing it.
+ */
+export const UN1T_WRITE_TIMEOUT_MS = 20_000
 // A check read waits out at most this many spent windows, then reads anyway
 // (never skipped). A re-send that still finds the budget spent is refused.
 const MAX_BUDGET_WAITS = 2
@@ -545,6 +552,8 @@ export async function createUn1tWriter(
     let sent = false
     let attempt = 0
     let throttles = 0
+    // A request that timed out: in doubt, and never sent again in this call.
+    let timedOut = false
 
     const fail = (reason, status) => recordFailure(locationId, { method: m, path, status: status ?? null, reason, attempts: attempt })
 
@@ -558,10 +567,12 @@ export async function createUn1tWriter(
         attempt++
         let res
         try {
-          res = await fetchImpl(url, { method: m, headers, body: payload })
-        } catch {
+          res = await fetchImpl(url, { method: m, headers, body: payload, signal: AbortSignal.timeout(UN1T_WRITE_TIMEOUT_MS) })
+        } catch (err) {
           sent = true
-          logWarn(LOG_MODULE, 'no reply from un1t.online', fields({ ...meta, attempt, code: 'no_reply' }))
+          const timeout = err?.name === 'TimeoutError' || err?.name === 'AbortError'
+          if (timeout) timedOut = true
+          logWarn(LOG_MODULE, 'no reply from un1t.online', fields({ ...meta, attempt, code: timeout ? 'timeout' : 'no_reply' }))
           return { noReply: true }
         }
         const status = res.status
@@ -648,7 +659,7 @@ export async function createUn1tWriter(
     }
 
     let j = j1
-    if (policy === 'idempotent') {
+    if (policy === 'idempotent' && !timedOut) {
       // The same idempotency-key makes the second request the same session.
       const second = await request()
       if (second.final) return finish(second.final)
@@ -665,7 +676,7 @@ export async function createUn1tWriter(
     if (chk.state === 'already_happened') {
       return finish(result('refused', { sent, code: C.ALREADY_HAPPENED, message: text[C.ALREADY_HAPPENED] }))
     }
-    if (chk.state !== 'absent' || policy === 'never') return unknown(j)
+    if (chk.state !== 'absent' || policy === 'never' || timedOut) return unknown(j)
 
     // Absent: send once more, judged once more, never checked again.
     const second = await request()

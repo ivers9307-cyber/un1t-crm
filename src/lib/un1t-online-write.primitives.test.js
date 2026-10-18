@@ -903,3 +903,21 @@ describe('the dedupe reads', () => {
     await expect(findClientByEmail(failed.writer, EMAIL)).rejects.toThrow()
   })
 })
+
+describe('UN1TWRITE.22 — a write that timed out', () => {
+  it('is unknown and never sent again, even when the check read finds nothing', async () => {
+    const timeout = () => { throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }) }
+    const s = await setup({ routes: { 'POST /bookings': [timeout], [USER_BOOKINGS]: [page([])] } })
+    const r = await book(s.db, bookArgs(), s.deps)
+    expect(r.verdict).toBe('unknown')
+    expect(s.fetchImpl.count('POST /bookings')).toBe(1)
+    expect(s.fetchImpl.calls.find((c) => c.key === 'POST /bookings')).toBeTruthy()
+  })
+
+  it('every write carries an abort signal', async () => {
+    const s = await setup({ routes: { 'POST /bookings': [created(bookingDto())], [CREDITS_PATH]: [credits()] } })
+    await book(s.db, bookArgs(), s.deps)
+    const call = s.fetchImpl.mock.calls.find(([url, init]) => init?.method === 'POST')
+    expect(call[1].signal).toBeInstanceOf(AbortSignal)
+  })
+})
