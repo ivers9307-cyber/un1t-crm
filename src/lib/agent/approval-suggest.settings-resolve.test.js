@@ -56,3 +56,13 @@ describe('composeApprovalSuggestion — resolved settings', () => {
     err.mockRestore()
   })
 })
+
+// UN1TWRITE.8 fix 1 — a refund_request is answered by Mia's refund_request_text;
+// no "Mia suggests" customer draft is ever composed for it.
+describe('composeApprovalSuggestion — refund_request', () => {
+  it('returns no suggestion and reads nothing (no settings, no history, no model call)', async () => {
+    const throwing = { from() { throw new Error('test: no database read expected') } }
+    expect(await composeApprovalSuggestion(throwing, { ...ROW, kind: 'refund_request', status: 'actioned' }))
+      .toEqual({ error: 'no_suggestion_for_kind' })
+  })
+})

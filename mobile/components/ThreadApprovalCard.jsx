@@ -73,7 +73,10 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
       // CANCEL-FORM.6 — whether the member heard about a pause/cancellation decision.
       if (res.customer_notified) setNotified(res.customer_notified)
       if (status === 'declined') {
-        onPrefillComposer?.(buildDeclineDraft(request.kind, reason, ctx))
+        // An empty draft (a refund_request: Mia already answered) must not
+        // overwrite what staff are typing.
+        const draft = buildDeclineDraft(request.kind, reason, ctx)
+        if (draft) onPrefillComposer?.(draft)
       }
     } catch {
       setError('Network error — try again')

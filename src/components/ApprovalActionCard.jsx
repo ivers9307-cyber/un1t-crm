@@ -94,7 +94,10 @@ export default function ApprovalActionCard({
       if (data.customer_notified) setNotified(data.customer_notified)
       fetchSuggestion() // fire-and-forget — never blocks the decision UX
       if (status === 'declined') {
-        onPrefillComposer?.(buildDeclineDraft(request.kind, reason, ctx))
+        // An empty draft (a refund_request: Mia already answered) must not
+        // overwrite what staff are typing.
+        const draft = buildDeclineDraft(request.kind, reason, ctx)
+        if (draft) onPrefillComposer?.(draft)
       }
     } catch {
       setError('Network error — try again')

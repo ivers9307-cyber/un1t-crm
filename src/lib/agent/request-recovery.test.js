@@ -199,3 +199,15 @@ describe('event_move', () => {
     expect(RETRYABLE_KINDS.has('event_move')).toBe(true)
   })
 })
+
+// UN1TWRITE.8 — a refund_request is record-only. It must stay out of the
+// executing and retry machinery: no crash recovery marker lane, no fix-and-retry
+// queue, no failed-retry rows in /approvals. The route closes it itself.
+describe('UN1TWRITE.8 — refund_request is not an executing or retryable kind', () => {
+  it('is in none of EXECUTING_KINDS, CONDITIONAL_EXECUTING_KINDS or RETRYABLE_KINDS', async () => {
+    const m = await import('./request-recovery.js')
+    expect(m.EXECUTING_KINDS.has('refund_request')).toBe(false)
+    expect(m.CONDITIONAL_EXECUTING_KINDS.has('refund_request')).toBe(false)
+    expect(m.RETRYABLE_KINDS.has('refund_request')).toBe(false)
+  })
+})

@@ -147,6 +147,7 @@ describe('fileRefundCard', () => {
     expect(notifyAgentApprovalRequest).toHaveBeenCalledOnce()
     expect(notifyAgentApprovalRequest.mock.calls[0][1]).toMatchObject({
       requestId: 'req-1', locationId: LOC, kind: 'refund_request', customerName: 'Aoife Test',
+      summary: 'Double payment · €15',
     })
   })
 

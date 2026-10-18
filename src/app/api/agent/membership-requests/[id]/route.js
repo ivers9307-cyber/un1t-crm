@@ -804,6 +804,11 @@ export async function PATCH(request, { params }) {
   // nothing executed — harmless rewrite of the claimed value). The execution
   // marker is closed out here: a row still reading 'executing' after this
   // point is one whose request died mid-flight (MIA-REVIEW.3).
+  // A refund_request has a tiny limbo window: if THIS write fails (or the
+  // process dies between the claim and here) the row stays 'approved' with an
+  // 'executing' marker. That is harmless (nothing was executed, so nothing is
+  // half-done) and it is not retryable by design (not in RETRYABLE_KINDS). Staff
+  // see an 'approved' refund card; the refund itself is always done by hand.
   const finishedIso = new Date().toISOString()
   const { data, error } = await db.from('agent_membership_requests').update({
     status: finalStatus,

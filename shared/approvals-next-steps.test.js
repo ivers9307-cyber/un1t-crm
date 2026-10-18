@@ -128,3 +128,16 @@ describe('getNextSteps — refund_request', () => {
     }
   })
 })
+
+// UN1TWRITE.8 fix 1 — declining a refund card prefills NOTHING in either composer.
+describe('buildDeclineDraft — refund_request', () => {
+  it("is the empty string for any reason: no customer draft, no em dash", () => {
+    for (const reason of ['other', 'not_eligible', 'class_full', undefined]) {
+      expect(buildDeclineDraft('refund_request', reason, ctx)).toBe('')
+    }
+  })
+  it('every other kind still gets a draft (the carve-out is refund_request only)', () => {
+    expect(buildDeclineDraft('mystery_kind', 'other', ctx)).not.toBe('')
+    expect(buildDeclineDraft('pause', 'other', ctx)).not.toBe('')
+  })
+})

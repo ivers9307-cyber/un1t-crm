@@ -35,6 +35,10 @@ function whatLabel(ctx) {
 }
 
 export function buildDeclineDraft(kind, reasonKey, ctx = {}) {
+  // UN1TWRITE.8 — a refund_request gets NO customer draft: Mia's
+  // refund_request_text already answered in the thread. '' means "prefill
+  // nothing"; both composers guard on it.
+  if (kind === 'refund_request') return ''
   const name = firstName(ctx)
   const what = whatLabel(ctx)
   if (BOOKING_KINDS.has(kind)) {

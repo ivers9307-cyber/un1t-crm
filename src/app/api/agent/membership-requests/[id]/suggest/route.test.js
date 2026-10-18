@@ -18,11 +18,11 @@ import { STILLORGAN_BLOB, withOrgLayer } from '@/lib/agent/settings-fixtures.tes
 const LOC = 'a0000000-0000-0000-0000-0000000000a1'
 const ROW = { id: 'r1', location_id: LOC, kind: 'pause', status: 'approved', decision_note: null, contact_id: null, channel: 'whatsapp', conversation_id: null }
 
-function makeDb({ customerAgent, org = null }) {
+function makeDb({ customerAgent, org = null, row = ROW }) {
   const inner = {
     from(table) {
       const result = table === 'agent_membership_requests'
-        ? { data: ROW, error: null }
+        ? { data: row, error: null }
         : { data: { id: LOC, name: 'Studio', timezone: 'Europe/Dublin', organization_id: 'org1', settings: customerAgent === undefined ? {} : { customer_agent: customerAgent } }, error: null }
       const b = { select: () => b, eq: () => b, maybeSingle: () => Promise.resolve(result) }
       return b
@@ -50,5 +50,13 @@ describe('POST /api/agent/membership-requests/[id]/suggest — resolved settings
   it("no behaviour change: Stillorgan's blob (no inline_suggestion key), org null, suggests", async () => {
     db = makeDb({ customerAgent: STILLORGAN_BLOB })
     expect(await call()).toEqual({ success: true, suggestion: 'Suggested reply.' })
+  })
+})
+
+describe('POST /api/agent/membership-requests/[id]/suggest — refund_request (UN1TWRITE.8)', () => {
+  it('answers no suggestion without calling the composer, even with Mia on', async () => {
+    db = makeDb({ customerAgent: STILLORGAN_BLOB, row: { ...ROW, kind: 'refund_request', status: 'actioned' } })
+    expect(await call()).toEqual({ success: true, suggestion: null })
+    expect(composeApprovalSuggestion).not.toHaveBeenCalled()
   })
 })

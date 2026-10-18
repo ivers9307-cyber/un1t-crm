@@ -19,17 +19,11 @@
 // of which may crash on a failed filing. A failed insert resolves
 // { approvalId: null } after a structured log naming the ids.
 import { logError, logWarn } from '@/lib/log'
-import { formatMoneyMinor } from '@/lib/money-format'
+import { approvalCardSummary } from '@shared/approval-cards'
 
 const MODULE = 'un1t-online-approval'
 const KIND = 'refund_request'
 const TABLE = 'agent_membership_requests'
-
-// A reason as words for the approvers' push ('double_payment' -> 'Double payment').
-const reasonWords = (reason) => {
-  const s = String(reason || '').replace(/_/g, ' ').trim()
-  return s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Refund'
-}
 
 /**
  * Find a PENDING refund card for the same person, reason and origin_ref, or
@@ -75,7 +69,8 @@ async function notifyApprovers(db, { approvalId, locationId, contactId, reason, 
       locationId,
       kind: KIND,
       customerName,
-      summary: [reasonWords(reason), formatMoneyMinor(amountCents, currency || 'EUR')].filter(Boolean).join(' · '),
+      // One wording everywhere: the shared card summary ('Double payment · €15').
+      summary: approvalCardSummary({ kind: KIND, details: { reason, amount_cents: amountCents, currency } }),
     })
   } catch (e) {
     logWarn(MODULE, 'refund card notify failed', { approvalId, locationId, err: e })
