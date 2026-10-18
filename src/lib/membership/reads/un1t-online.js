@@ -12,7 +12,7 @@
 //   revenueMtd        ← fetchRevenueMTD           { success, data } | { success:false, error }
 //
 //   pastDue           { success, data: PastDueRow[] } | { success:false, error }
-//   paymentsFor       { success, data: { subscriptions, transactions, invoices, pastDue } } | { success:false, error }
+//   paymentsFor       { success, data: { subscriptions, transactions, invoices, pastDues } } | { success:false, error }
 //   pipelineInputs    { success, data: { contacts, snapshots, evidence, unlinked } } | { success:false, error }
 //   trialEligibility  { success, data: { eligible, reasons } } | { success:false, error }
 //
@@ -382,9 +382,11 @@ async function pastDue(db, locationId, { contactIds } = {}) {
 /**
  * The payments picture for a contact (or a merged set of contacts) at one
  * studio: fresh subscriptions, the newest `limit` transactions and fresh
- * invoices, and the earliest-`since` past-due row (or null). `contactIds` must
- * be an array (a non-array is refused, as pastDue does); `limit` is clamped to
- * 1000, the page cap a single capped read can honour.
+ * invoices, and EVERY past-due row (`pastDues`, one per member and subscription,
+ * earliest `since` first; `[]` when nothing is owed). There is no single-row
+ * `pastDue`: a member with two overdue subscriptions must not lose the second.
+ * `contactIds` must be an array (a non-array is refused, as pastDue does);
+ * `limit` is clamped to 1000, the page cap a single capped read can honour.
  */
 // ISO 4217 codes arrive lowercase ('eur') from un1t.online; formatMoney wants
 // the upper-case code, as pastDue already returns via shapePastDue.
@@ -395,7 +397,7 @@ async function paymentsFor(db, locationId, contactIds, { limit = DEFAULT_PAYMENT
   if (!Array.isArray(contactIds)) return { success: false, error: 'contactIds must be an array' }
   const ids = cleanIds(contactIds)
   if (ids.length === 0) {
-    return { success: true, data: { subscriptions: [], transactions: [], invoices: [], pastDue: null } }
+    return { success: true, data: { subscriptions: [], transactions: [], invoices: [], pastDues: [] } }
   }
   const n = Number.isFinite(Number(limit)) && Number(limit) >= 1
     ? Math.min(Math.floor(Number(limit)), MAX_PAYMENTS_LIMIT)
@@ -437,7 +439,7 @@ async function paymentsFor(db, locationId, contactIds, { limit = DEFAULT_PAYMENT
             amountCents: i.amount_cents ?? null,
             currency: upperCurrency(i.currency),
           })),
-        pastDue: billing.pastDue[0] ?? null,
+        pastDues: billing.pastDue,
       },
     }
   } catch (e) {

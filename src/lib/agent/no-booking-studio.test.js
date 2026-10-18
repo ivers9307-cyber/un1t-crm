@@ -170,7 +170,7 @@ describe('tool blocks (T5-D)', () => {
   })
 
   it('capability follows the provider: un1t.online and none take no bookings, Glofox does (T5-A)', () => {
-    expect(MEMBERSHIP_SOURCES.un1t_online.capabilities).toEqual({ memberships: false, bookings: false, credits: false, invoices: false, schedule: false })
+    expect(MEMBERSHIP_SOURCES.un1t_online.capabilities).toEqual({ memberships: false, bookings: false, credits: false, invoices: true, schedule: false })
     expect(providerTakesBookings(MEMBERSHIP_SOURCES.un1t_online)).toBe(false)
     expect(providerTakesBookings(MEMBERSHIP_SOURCES.none)).toBe(false)
     expect(providerTakesBookings(MEMBERSHIP_SOURCES.glofox)).toBe(true)

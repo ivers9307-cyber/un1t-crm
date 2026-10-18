@@ -135,14 +135,22 @@ export async function GET(request, props) {
     churnTier = 'low'
   }
 
-  // The panel's own shape: only the studios with a past-due, and the EUR sum
-  // alone (another currency is never added to it; 0 when no amount is known).
+  // The panel's own shape: only the studios with an overdue row (each named
+  // once, at its earliest `since`), and the EUR sum alone (another currency is
+  // never added to it; 0 when no amount is known).
+  const earliestSince = (rows) => rows.reduce((min, r) => {
+    const ms = Date.parse(r?.since)
+    if (!Number.isFinite(ms)) return min
+    return min === null || ms < Date.parse(min) ? r.since : min
+  }, null)
   const un1tBillingOut = {
     overdue: un1tBilling.overdue,
     arrears_cents: Number(un1tBilling.arrearsCentsByCurrency?.EUR) || 0,
+    amount_unreported: un1tBilling.amountUnreported === true,
+    amount_not_eur: un1tBilling.amountNotEur === true,
     studios: (un1tBilling.studios || [])
-      .filter((s) => s.pastDue)
-      .map((s) => ({ location_id: s.locationId, since: s.pastDue.since })),
+      .filter((s) => s.pastDues?.length > 0)
+      .map((s) => ({ location_id: s.locationId, since: earliestSince(s.pastDues) })),
   }
 
   // DRAWER.2 — extra fields for the pipeline contact drawer only, so
