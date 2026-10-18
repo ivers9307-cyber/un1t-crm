@@ -93,6 +93,7 @@ function isoDatePlus(days) {
 // switched on, naming it: "No WhatsApp number is switched on at {studio}." A
 // failed name read still refuses, without the name.
 const PAYMENT_REMINDER_UN1T = 'Payment reminders are not available for un1t.online studios yet.'
+const PAYMENT_REMINDER_NOT_HOME = "Payment reminders go from the member's home studio."
 
 async function noNumberRefusal(db, locationId) {
   // UN1TRADAR.3 — one structured line per refusal (no Meta call was made, no row written)
@@ -221,6 +222,11 @@ export async function POST(request) {
     const { source } = await radarReadsFor(db, locationId)
     if (source === 'un1t_online') {
       return NextResponse.json({ success: false, error: PAYMENT_REMINDER_UN1T }, { status: 409 })
+    }
+    // A crossover's billing columns and invoices are its home studio's: never
+    // drive this studio's dunning from them.
+    if (contact.location_id !== locationId) {
+      return NextResponse.json({ success: false, error: PAYMENT_REMINDER_NOT_HOME }, { status: 409 })
     }
     const { data: loc } = await db
       .from('locations')

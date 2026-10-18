@@ -125,7 +125,7 @@ export async function POST(request) {
   // decision is logged only: contacts.pipeline_stage_slug follows the primary
   // board there, which spec A's classifier owns (Claude's call 6).
   const { source } = await radarReadsFor(db, locationId)
-  if (decision === 'archive' && source === 'glofox') {
+  if (decision === 'archive' && source === 'glofox' && ownedIds.length > 0) {
     const { error: updErr } = await db
       .from('contacts')
       .update({ pipeline_stage_slug: 'dormant' })

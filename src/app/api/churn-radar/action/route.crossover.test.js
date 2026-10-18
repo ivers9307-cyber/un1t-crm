@@ -6,11 +6,13 @@ vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(async () => USER) }))
 vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 vi.mock('@/lib/radar-cache', () => ({ invalidateRadar: vi.fn(), radarCache: vi.fn() }))
+vi.mock('@/lib/membership/reads/index', () => ({ radarReadsFor: vi.fn(async () => ({ source: 'glofox', reads: {}, providesMemberships: true, pinArrears: false })) }))
 vi.mock('@/lib/contact-crossovers', () => ({ isCrossoverAt: vi.fn(async () => false), crossoverIdsAt: vi.fn(async () => new Set()) }))
 
 import { isCrossoverAt } from '@/lib/contact-crossovers'
 import { POST as churnAction } from './route.js'
 import { POST as leadAction } from '../../lead-radar/action/route.js'
+import { POST as refreshMember } from '../refresh-member/route.js'
 
 const HATCH = 'loc-hatch'
 let USER = { id: 'user-1', activeLocation: { id: HATCH } }
@@ -60,5 +62,20 @@ describe('single-contact radar actions and crossovers', () => {
       expect(res.status).toBe(200)
       expect(isCrossoverAt).not.toHaveBeenCalled()
     } finally { CONTACT.location_id = 'loc-still' }
+  })
+})
+
+describe('crossovers that must stay home-studio only', () => {
+  it("payment_reminder refuses a crossover (its billing is another studio's)", async () => {
+    isCrossoverAt.mockResolvedValueOnce(true)
+    const res = await churnAction(req('/api/churn-radar/action', { contact_id: 'c-dual', action: 'payment_reminder' }))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe("Payment reminders go from the member's home studio.")
+    expect(inserts).toEqual([])
+  })
+  it('refresh-member never accepts a crossover (404, no probe)', async () => {
+    const res = await refreshMember(req('/api/churn-radar/refresh-member', { contact_id: '00000000-0000-4000-8000-000000000001' }))
+    expect(res.status).toBe(404)
+    expect(isCrossoverAt).not.toHaveBeenCalled()
   })
 })

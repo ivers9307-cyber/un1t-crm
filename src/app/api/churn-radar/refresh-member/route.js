@@ -31,7 +31,6 @@ import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
-import { isCrossoverAt } from '@/lib/contact-crossovers'
 import { radarReadsFor } from '@/lib/membership/reads/index'
 import { syncDataAsOf } from '@/lib/radar-availability'
 import { getLocationZone, timeLabelIn } from '@/lib/location-time'
@@ -88,9 +87,10 @@ export async function POST(request) {
     .select('id, location_id, glofox_member_id')
     .eq('id', contactId)
     .maybeSingle()
-  // UN1TRADAR.3 — or a crossover AT the active studio (an active membership
-  // or a un1t client there); never the caller's other studios. Fails closed.
-  if (!contact || (contact.location_id !== locationId && !(await isCrossoverAt(db, contact.id, locationId)))) {
+  // UN1TRADAR.3 — owned contacts only, unlike the other radar write routes: a
+  // re-pull applies the member to the ACTIVE studio's contacts with its Glofox
+  // credentials, so a crossover (another studio's row) would be duplicated.
+  if (!contact || contact.location_id !== locationId) {
     return NextResponse.json({ success: false, error: 'Contact not in your active location' }, { status: 404 })
   }
   // UN1TRADAR.3 — a un1t.online studio has nothing to re-pull from Glofox;
