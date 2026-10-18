@@ -25,8 +25,16 @@ const ev = (over = {}) => ({
 })
 
 describe('un1tStageEnteredAt — funnel stages', () => {
-  it('new_lead: the un1t.online client creation', () => {
+  it('new_lead: joined_at (client creation, or a later trial), the field classify keys the window on', () => {
     expect(un1tStageEnteredAt('new_lead', ev(), NOW)).toBe(ago(40))
+  })
+
+  it('new_lead: a trial taken last week on an old account dates from the trial, not the account', () => {
+    expect(un1tStageEnteredAt('new_lead', ev({ client_created_at: ago(180), joined_at: ago(7) }), NOW)).toBe(ago(7))
+  })
+
+  it('new_lead: falls back to client creation when joined_at is missing', () => {
+    expect(un1tStageEnteredAt('new_lead', ev({ client_created_at: ago(9), joined_at: null }), NOW)).toBe(ago(9))
   })
 
   it('new_lead: null when they have attended (a re-entry via a booking, which the creation date does not date)', () => {
@@ -89,12 +97,24 @@ describe('un1tStageEnteredAt — converted, member and pack', () => {
     expect(un1tStageEnteredAt('converted', ev({ membership_status: 'member', member_since: ago(12) }), NOW)).toBeNull()
   })
 
-  it('member: the earliest of the qualifying subscription start and the first sale', () => {
-    expect(un1tStageEnteredAt('member', ev({ membership_status: 'member', converted_at: ago(90), member_since: ago(95) }), NOW)).toBe(ago(95))
+  it('member: converted_at + CONVERTED_WINDOW_DAYS, when classify moves converted → member', () => {
+    expect(PIPELINE_THRESHOLDS.CONVERTED_WINDOW_DAYS).toBe(60)
+    const e = ev({ membership_status: 'member', converted_at: ago(90), member_since: ago(95) })
+    expect(un1tStageEnteredAt('member', e, NOW)).toBe(ago(90 - PIPELINE_THRESHOLDS.CONVERTED_WINDOW_DAYS))
+    // the same for a credit_member with a first sale
+    const credit = ev({ membership_status: 'credit_member', converted_at: ago(75), pack_customer_at: ago(8) })
+    expect(un1tStageEnteredAt('member', credit, NOW)).toBe(ago(75 - PIPELINE_THRESHOLDS.CONVERTED_WINDOW_DAYS))
+  })
+
+  it('member: converted_at + window still in the future is null (never a future date)', () => {
+    expect(un1tStageEnteredAt('member', ev({ membership_status: 'member', converted_at: ago(20), member_since: ago(20) }), NOW)).toBeNull()
+  })
+
+  it('member: with no converted_at, the qualifying subscription start', () => {
     expect(un1tStageEnteredAt('member', ev({ membership_status: 'member', member_since: ago(70) }), NOW)).toBe(ago(70))
   })
 
-  it('member via paid credits (credit_member): the paid pack purchase', () => {
+  it('member via paid credits (credit_member) with no converted_at: the paid pack purchase', () => {
     expect(un1tStageEnteredAt('member', ev({ membership_status: 'credit_member', pack_customer_at: ago(8) }), NOW)).toBe(ago(8))
   })
 
@@ -147,7 +167,7 @@ describe('never a future date', () => {
   it('a stage date after now is null, so the caller keeps now', () => {
     expect(un1tStageEnteredAt('first_class', ev({ attended_starts: [ahead(1)], last_attended_at: ahead(1) }), NOW)).toBeNull()
     expect(un1tStageEnteredAt('converted', ev({ converted_at: ahead(0.01) }), NOW)).toBeNull()
-    expect(un1tStageEnteredAt('new_lead', ev({ client_created_at: ahead(2) }), NOW)).toBeNull()
+    expect(un1tStageEnteredAt('new_lead', ev({ client_created_at: ahead(2), joined_at: ahead(2) }), NOW)).toBeNull()
   })
 
   it('exactly now is allowed', () => {

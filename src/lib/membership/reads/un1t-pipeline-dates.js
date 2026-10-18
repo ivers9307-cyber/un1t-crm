@@ -40,7 +40,9 @@ const hasAttended = (e) => attendedMs(e).length > 0 || msOf(e?.last_attended_at)
 /**
  * When the deal entered `stageSlug`, from the person's un1t.online evidence.
  *
- *   new_lead      the un1t.online client's creation. Null when they have
+ *   new_lead      joined_at (the later of the client's creation and the newest
+ *                 trial: the field classify keys the window on), else the
+ *                 client's creation. Null when they have
  *                 attended (a lapsed re-booker re-enters new_lead through a
  *                 booked class, which creation does not date) or joined
  *                 outside NEW_LEAD_WINDOW_DAYS (same reason).
@@ -53,9 +55,10 @@ const hasAttended = (e) => attendedMs(e).length > 0 || msOf(e?.last_attended_at)
  *                 done when that class happened, not at the latest one.
  *   converted     converted_at: the first sub_initial sale, which is the
  *                 field classify reads for the converted window.
- *   member        the earliest of the qualifying subscription's start
- *                 (member_since) and converted_at; for a credit_member (paid
- *                 credits), the paid pack purchase (pack_customer_at).
+ *   member        converted_at + CONVERTED_WINDOW_DAYS: when classify moves a
+ *                 member from 'converted' to 'member'. With no converted_at,
+ *                 the qualifying subscription's start (member_since), or for a
+ *                 credit_member (paid credits) the paid pack (pack_customer_at).
  *   pack_member   pack_customer_at: the first paid pack transaction.
  *   classpass     the first non-Gympass aggregator booking (classpass_since).
  *   gympass       the first Wellhub / Gympass booking (gympass_since).
@@ -89,7 +92,7 @@ export function un1tStageEnteredAt(stageSlug, evidence, now = Date.now()) {
       if (hasAttended(e)) return null
       const joined = msOf(e.joined_at) ?? msOf(e.client_created_at)
       if (joined != null && now - joined > PIPELINE_THRESHOLDS.NEW_LEAD_WINDOW_DAYS * DAY_MS) return null
-      return past(msOf(e.client_created_at), now)
+      return past(msOf(e.joined_at) ?? msOf(e.client_created_at), now)
     }
     case 'first_class':
       return past(attended.length ? attended[0] : msOf(e.last_attended_at), now)
@@ -99,10 +102,14 @@ export function un1tStageEnteredAt(stageSlug, evidence, now = Date.now()) {
       return past(nth(PIPELINE_THRESHOLDS.TRIAL_DONE_MIN_ATTENDED), now)
     case 'converted':
       return past(msOf(e.converted_at), now)
-    case 'member':
-      return past(e.membership_status === 'credit_member'
-        ? earliestMs([e.pack_customer_at, e.converted_at])
-        : earliestMs([e.member_since, e.converted_at]), now)
+    case 'member': {
+      // classify keeps a member in 'converted' for CONVERTED_WINDOW_DAYS after
+      // converted_at, then moves them to 'member': that crossing is the date.
+      const converted = msOf(e.converted_at)
+      if (converted != null) return past(converted + PIPELINE_THRESHOLDS.CONVERTED_WINDOW_DAYS * DAY_MS, now)
+      // No first sale on file: classify placed them in 'member' outright.
+      return past(msOf(e.membership_status === 'credit_member' ? e.pack_customer_at : e.member_since), now)
+    }
     case 'pack_member':
       return past(msOf(e.pack_customer_at), now)
     case 'classpass':

@@ -230,6 +230,45 @@ describe('restamp_dates — real run', () => {
     expect(deals.find((d) => d.id === 'd-first').stage_id).toBe('s-first')
   })
 
+  // Fix round 1 (b): live deal c9dcd911 moved converted → member at 18 Oct
+  // 12:45, which the mig 458 trigger stamped. Its stage date is already true.
+  it('a deal that moved stage since it was created keeps its stage_entered_at (kept_moved); created_at is still restamped', async () => {
+    const { deals, ev } = world()
+    const MOVED_AT = '2026-10-18T12:45:00.000000+00:00' // an hour after the run created it
+    deals.push(deal('d-moved', 'c-moved', 's-second', { stage_entered_at: MOVED_AT }))
+    ev.set('c-moved', evidence({ attended_starts: [ago(20), ago(9)], last_attended_at: ago(9) }))
+    seam(ev)
+    const { db, writes } = fakeDb({ pipelines: PIPELINES, pipeline_stages: STAGES, deals })
+    createServerClient.mockReturnValue(db)
+
+    const dry = await (await POST(req({ location_id: HATCH, restamp_dates: true, dry_run: true }))).json()
+    expect(dry).toMatchObject({ ok: true, kept_moved: 1 })
+    const s = dry.sample.find((x) => x.deal_id === 'd-moved')
+    expect(s).not.toHaveProperty('stage_entered_at')
+    expect(s.created_at.from).toBe(RUN)
+
+    const body = await (await POST(req({ location_id: HATCH, restamp_dates: true }))).json()
+    expect(body).toMatchObject({ ok: true, updated: 2, kept_moved: 1, errors: 0 })
+    const w = writes.find((x) => x.ids.includes('d-moved'))
+    expect(Object.keys(w.payload)).toEqual(['created_at'])
+    expect(Math.abs(Date.parse(w.payload.created_at) - (Date.now() - 30 * DAY))).toBeLessThan(5_000)
+    expect(deals.find((d) => d.id === 'd-moved').stage_entered_at).toBe(MOVED_AT)
+  })
+
+  it('a stage date within 1 s of created_at is the creation stamp, not a move: it is restamped', async () => {
+    const { deals, ev } = world()
+    deals.push(deal('d-fresh', 'c-fresh', 's-first', { created_at: '2026-10-18T11:45:26.000000+00:00', stage_entered_at: '2026-10-18T11:45:26.900000+00:00' }))
+    ev.set('c-fresh', evidence({ attended_starts: [ago(6)] }))
+    seam(ev)
+    const { db, writes } = fakeDb({ pipelines: PIPELINES, pipeline_stages: STAGES, deals })
+    createServerClient.mockReturnValue(db)
+
+    const body = await (await POST(req({ location_id: HATCH, restamp_dates: true }))).json()
+    expect(body).toMatchObject({ ok: true, kept_moved: 0 })
+    const w = writes.find((x) => x.ids.includes('d-fresh'))
+    expect(Object.keys(w.payload).sort()).toEqual(['created_at', 'stage_entered_at'])
+  })
+
   it('a second run changes nothing (idempotent)', async () => {
     const { deals, ev } = world()
     seam(ev)

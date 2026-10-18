@@ -575,6 +575,10 @@ export async function reclassifyAllContacts(db, args) {
 // HATCHPIPE.5 — one-off backfill of the real dates onto existing un1t deals.
 // ---------------------------------------------------------------------------
 const RESTAMP_SAMPLE = 10
+// A deal is inserted with created_at = stage_entered_at = now(), so a stage
+// date more than this after created_at was stamped by the mig 458 trigger on a
+// later stage MOVE, and already holds the true time.
+const RESTAMP_MOVED_GAP_MS = 1000
 const msOrNull = (v) => {
   if (v == null) return null
   const n = Date.parse(v)
@@ -595,7 +599,10 @@ const msOrNull = (v) => {
  * Each deal is updated on its own row, guarded on id, location, board, the
  * stage read and status 'open': a deal that moved or closed since the read is
  * skipped (skipped_changed), never stamped with the wrong stage's date. A
- * field with no evidence is left as it is; a deal with no evidence for either
+ * deal whose stage_entered_at is more than 1 s after its created_at has MOVED
+ * stage since it was created (both are now() on insert), so the trigger's
+ * stamp is kept and only created_at may change (kept_moved). A field with no
+ * evidence is left as it is; a deal with no evidence for either
  * is counted no_evidence. created_at is never set later than the deal's
  * (new or kept) stage_entered_at. No audit row: it changes no stage.
  *
@@ -603,12 +610,12 @@ const msOrNull = (v) => {
  * @param {{ locationId: string, dryRun?: boolean, now?: number }} args
  * @returns {Promise<{ ok: boolean, dry_run: boolean, un1t_boards: string[],
  *   deals_seen: number, updated: number, unchanged: number, no_evidence: number,
- *   skipped_changed: number, errors: number,
+ *   skipped_changed: number, kept_moved: number, errors: number,
  *   sample: Array<{ deal_id, stage_slug, created_at?: {from,to}, stage_entered_at?: {from,to} }>,
  *   error?: string }>}
  */
 export async function restampUn1tDealDates(db, { locationId, dryRun = false, now = Date.now() } = {}) {
-  const counts = { deals_seen: 0, updated: 0, unchanged: 0, no_evidence: 0, skipped_changed: 0, errors: 0 }
+  const counts = { deals_seen: 0, updated: 0, unchanged: 0, no_evidence: 0, skipped_changed: 0, kept_moved: 0, errors: 0 }
   const base = { dry_run: dryRun, un1t_boards: [] }
   if (!locationId) return { ok: false, error: 'locationId required', ...base, ...counts, sample: [] }
 
@@ -676,6 +683,16 @@ export async function restampUn1tDealDates(db, { locationId, dryRun = false, now
     const slug = slugById.get(d.stage_id) ?? null
     const dates = un1tDealDates(slug, evidence.get(d.contact_id) ?? null, now)
     if (!dates.created_at && !dates.stage_entered_at) { counts.no_evidence++; continue }
+    // The deal has moved stage since it was created: the trigger's stamp is the
+    // true entry to its current stage, so the stage date is kept as it is.
+    const readCreatedMs = msOrNull(d.created_at)
+    const readStageMs = msOrNull(d.stage_entered_at)
+    const movedSinceCreate = readCreatedMs != null && readStageMs != null
+      && readStageMs - readCreatedMs > RESTAMP_MOVED_GAP_MS
+    if (movedSinceCreate) {
+      counts.kept_moved++
+      dates.stage_entered_at = null
+    }
 
     const patch = {}
     const change = {}
