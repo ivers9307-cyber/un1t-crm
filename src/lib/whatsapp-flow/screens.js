@@ -72,7 +72,7 @@ export const FLOW_JSON = {
       layout: { type: 'SingleColumnLayout', children: [{
         type: 'Form', name: 'form', children: [
           { type: 'RadioButtonsGroup', name: 'slot', label: 'Available times', required: true, 'data-source': '${data.slots}' },
-          { type: 'Footer', label: 'Continue', 'on-click-action': { name: 'data_exchange', payload: { path: '${data.path}', slot: '${form.slot}', terms_flow: true } } },
+          { type: 'Footer', label: 'Continue', 'on-click-action': { name: 'data_exchange', payload: { path: '${data.path}', slot: '${form.slot}', terms_flow: '1' } } },
         ] }] },
     },
     {

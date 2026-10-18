@@ -47,7 +47,7 @@ import { centsToEuros, eurosToCents } from '@/lib/price-format'
 import { DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE, DEFAULT_CLASS_FUNNEL_CTA_LABEL } from '@/lib/public-landing'
 import { parseManualTimetable, DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
 import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
-import { DEFAULT_UN1T_FUNNEL_COPY } from '@/lib/un1t-online-funnel-copy'
+import { DEFAULT_FUNNEL_TERMS_COPY } from '@/lib/un1t-online-funnel-copy'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -1038,7 +1038,7 @@ function ManualTimetableFields({ block, onUpdate, publicPath }) {
 // UN1TWRITE.18 — the terms and waiver tick a un1t.online studio's funnel
 // shows while its funnel switch is on. Blank keeps each default.
 function Un1tFunnelCopyFields({ block, onUpdate }) {
-  const D = DEFAULT_UN1T_FUNNEL_COPY
+  const D = DEFAULT_FUNNEL_TERMS_COPY
   return (
     <>
       <Field label="Terms tick (un1t.online studios)" hint="Shown when this studio books through un1t.online. {studio_name} is the studio; {terms} and {waiver} become the two document links. Leave blank for the default.">

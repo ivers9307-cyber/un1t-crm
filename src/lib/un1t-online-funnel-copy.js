@@ -10,7 +10,7 @@
 // Placeholders are single-brace: {studio_name} in the terms label, plus
 // {terms} and {waiver}, which render as the two document links.
 
-export const DEFAULT_UN1T_FUNNEL_COPY = Object.freeze({
+export const DEFAULT_FUNNEL_TERMS_COPY = Object.freeze({
   terms_label: "I accept {studio_name}'s {terms} and {waiver}",
   terms_link_label: 'terms and conditions',
   waiver_link_label: 'liability waiver',
@@ -18,7 +18,7 @@ export const DEFAULT_UN1T_FUNNEL_COPY = Object.freeze({
   legal_unavailable_message: 'This document could not be loaded right now. Please try again shortly.',
 })
 
-export const UN1T_FUNNEL_COPY_KEYS = Object.freeze(Object.keys(DEFAULT_UN1T_FUNNEL_COPY))
+export const UN1T_FUNNEL_COPY_KEYS = Object.freeze(Object.keys(DEFAULT_FUNNEL_TERMS_COPY))
 
 function classFunnelBlock(blocks) {
   const list = Array.isArray(blocks) ? blocks : []
@@ -31,7 +31,7 @@ export function un1tFunnelCopyFromBlocks(blocks) {
   const out = {}
   for (const key of UN1T_FUNNEL_COPY_KEYS) {
     const v = cf?.[key]
-    out[key] = typeof v === 'string' && v.trim() ? v.trim() : DEFAULT_UN1T_FUNNEL_COPY[key]
+    out[key] = typeof v === 'string' && v.trim() ? v.trim() : DEFAULT_FUNNEL_TERMS_COPY[key]
   }
   return out
 }
@@ -65,7 +65,7 @@ export function fillCopy(template, vars = {}) {
  * @returns {{ text: string, link?: 'terms'|'waiver' }[]}
  */
 export function termsLabelSegments(copy, { studioName = '' } = {}) {
-  const c = { ...DEFAULT_UN1T_FUNNEL_COPY, ...(copy || {}) }
+  const c = { ...DEFAULT_FUNNEL_TERMS_COPY, ...(copy || {}) }
   // A studio with no name still reads as a sentence.
   const name = String(studioName || '').trim() || 'the studio'
   let label = String(c.terms_label ?? '')
