@@ -14,6 +14,46 @@ import { getBoardModule } from '../../shared/pipelines/index.js'
 // shipping ALL open deals (≤10k) to the client.
 export const PIPELINE_PAGE_SIZE = 50
 
+// HATCHPIPE.4 — the page ships a column WHOLE when the column is small and the
+// operator should see everyone without clicking: funnel columns (view 'active')
+// and every column of a manual board (max 96 at Hatch's funnel, 159 on its
+// waitlist, at most 29 at Stillorgan). Only the off-funnel piles (dormant 5,457,
+// classpass 1,684, member 1,110 at Stillorgan) keep the 50-card first page and
+// "Load more" through /api/pipeline/deals. Returns the first-page size, or null
+// for "the whole column". A manual board has no off-funnel view (the page also
+// forces its view to 'active'), so `manual` wins.
+export function initialPageSizeFor(view, manual) {
+  if (manual) return null
+  return view === 'dormant' ? PIPELINE_PAGE_SIZE : null
+}
+
+// PostgREST returns at most 1,000 rows per select whatever .limit() says
+// (CLAUDE.md: the 1,000-row cap), so a whole column is read in .range() pages
+// of exactly that size, each with an explicit order.
+export const PIPELINE_READ_PAGE = 1000
+
+// Finish reading a column whose first .range(0, PIPELINE_READ_PAGE - 1) page is
+// already in hand. `readRange(from, to)` runs the same ordered query for an
+// inclusive range and resolves { data, error }; `count` is the column's exact
+// open-deal count. Loops until `count` rows are held or a page comes back
+// short (a deal moved out since the count). Rows are de-duplicated by id: the
+// column can shift between two pages, and a repeated card would render twice.
+// Resolves { rows } or { error } (the first failing page's error, whole).
+export async function readWholeColumn({ readRange, first, count }) {
+  if (first.error) return { error: first.error }
+  const byId = new Map()
+  const take = (data) => { for (const row of data || []) byId.set(row.id, row) }
+  take(first.data)
+  let lastPageLen = (first.data || []).length
+  for (let from = PIPELINE_READ_PAGE; lastPageLen === PIPELINE_READ_PAGE && byId.size < count; from += PIPELINE_READ_PAGE) {
+    const res = await readRange(from, from + PIPELINE_READ_PAGE - 1)
+    if (res.error) return { error: res.error }
+    take(res.data)
+    lastPageLen = (res.data || []).length
+  }
+  return { rows: [...byId.values()] }
+}
+
 // Only funnel columns 1–4 carry the next-class badge (DealCard has a matching
 // set). Others get null so the board's badge-first sort never re-orders a
 // column by a criterion the card doesn't render.
