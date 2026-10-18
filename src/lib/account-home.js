@@ -51,6 +51,7 @@ import { resolveAdminOrgId } from '@/lib/org-admin'
 import { todayStrIn, addDaysISO, zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
 import { membershipSourceState } from '@/lib/membership/source'
 import { READS_BY_SOURCE } from '@/lib/membership/reads/registry'
+import { logWarn } from '@/lib/log'
 
 // Glofox statuses that count as an active member (same cohort as
 // membership-snapshot.js).
@@ -186,7 +187,8 @@ async function countMembers(db, locationId, source) {
   if (typeof counts === 'function') {
     try {
       return Number((await counts(db, locationId))?.total_members) || 0
-    } catch {
+    } catch (err) {
+      logWarn('account-home', 'member count read failed', { locationId, source, code: err?.code ?? null })
       return 0
     }
   }

@@ -37,7 +37,7 @@ export async function GET() {
     const avail = await radarAvailability(db, locationId, { module: 'churn-radar', withOutreach: true })
     if (!avail.available) return NextResponse.json(RADAR_UNAVAILABLE)
     const data = await radarCache('churn', locationId, 'winback', () => loadWinback(db, locationId))
-    return NextResponse.json({ success: true, data, source: avail.source, dataAsOf: avail.dataAsOf, outreachAvailable: avail.outreachAvailable === true })
+    return NextResponse.json({ success: true, data, source: avail.source, dataAsOf: avail.dataAsOf, outreachAvailable: avail.outreachAvailable ?? null })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message || 'fetch_failed' }, { status: 500 })
   }

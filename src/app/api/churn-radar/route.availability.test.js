@@ -87,6 +87,15 @@ describe('radar read APIs and the memberships capability', () => {
       expect(mod[loader]).toHaveBeenCalledTimes(1)
     })
 
+    if (['churn-radar', 'winback', 'lead-radar'].includes(name)) {
+      it(`${name}: an unread WhatsApp number is null (unknown), never false`, async () => {
+        radarAvailability.mockResolvedValue({ available: true, source: 'glofox', dataAsOf: null, dataAsOfZone: null, outreachAvailable: null })
+        expect((await (await GET(req(path))).json()).outreachAvailable).toBeNull()
+        radarAvailability.mockResolvedValue({ available: true, source: 'glofox', dataAsOf: null, dataAsOfZone: null, outreachAvailable: false })
+        expect((await (await GET(req(path))).json()).outreachAvailable).toBe(false)
+      })
+    }
+
     it(`${name}: an unreadable source is a 500`, async () => {
       radarAvailability.mockRejectedValue(Object.assign(new Error('membership source unreadable'), { code: 'MEMBERSHIP_SOURCE_UNREADABLE' }))
       const res = await GET(req(path))

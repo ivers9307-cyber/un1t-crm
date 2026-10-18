@@ -23,6 +23,7 @@ import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { crossoverIdsAt } from '@/lib/contact-crossovers'
 import { radarReadsFor } from '@/lib/membership/reads/index'
+import { SOURCE_UNREADABLE } from '@/lib/radar-copy'
 
 const QuarantineTriageSchema = z.object({
   decision:    z.enum(['stale', 'keep']),
@@ -106,15 +107,24 @@ export async function POST(request) {
   // UN1TRADAR.3 — at a studio whose membership source is not Glofox the
   // decision is logged only: contacts.pipeline_stage_slug follows the primary
   // board there, which spec A's classifier owns (Claude's call 6).
-  const { source } = await radarReadsFor(db, locationId)
-  if (decision === 'stale' && source === 'glofox' && ownedIds.length > 0) {
-    const { error: updErr } = await db
-      .from('contacts')
-      .update({ pipeline_stage_slug: 'dormant' })
-      .in('id', ownedIds) // owned only: a crossover's row is another studio's
-    if (updErr) {
-      logWarn('churn-radar', 'quarantine reclassify failed', { err: updErr })
-      return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+  // Read only for 'stale': a 'keep' never touches contacts.
+  if (decision === 'stale') {
+    let source
+    try {
+      ({ source } = await radarReadsFor(db, locationId))
+    } catch (err) {
+      logWarn('churn-radar', 'membership source unreadable', { locationId, code: err?.code ?? null })
+      return NextResponse.json({ success: false, error: SOURCE_UNREADABLE }, { status: 503 })
+    }
+    if (source === 'glofox' && ownedIds.length > 0) {
+      const { error: updErr } = await db
+        .from('contacts')
+        .update({ pipeline_stage_slug: 'dormant' })
+        .in('id', ownedIds) // owned only: a crossover's row is another studio's
+      if (updErr) {
+        logWarn('churn-radar', 'quarantine reclassify failed', { err: updErr })
+        return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+      }
     }
   }
 

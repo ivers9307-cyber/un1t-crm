@@ -8,6 +8,9 @@ import { timeLabelIn } from '@shared/zoned-time'
 
 export const UN1T_UNAVAILABLE = 'not available from un1t.online'
 export const ESTIMATE_NOTE = 'includes an estimate'
+// UN1TRADAR.3 — a radar write route that could not read the studio's
+// membership source (radarReadsFor threw): 503, nothing written.
+export const SOURCE_UNREADABLE = "Could not read this studio's membership source. Try again shortly."
 
 const euros = (cents) => `€${Math.round((Number(cents) || 0) / 100).toLocaleString('en-IE')}`
 

@@ -59,6 +59,7 @@ import { defaultWinbackMessage } from '@/lib/churn-winback'
 import { validateBody } from '@/lib/validate'
 import { isCrossoverAt } from '@/lib/contact-crossovers'
 import { radarReadsFor } from '@/lib/membership/reads/index'
+import { SOURCE_UNREADABLE } from '@/lib/radar-copy'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -89,11 +90,13 @@ function isoDatePlus(days) {
   return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
 }
 
+// UN1TRADAR.3 — the payment_reminder refusals (a un1t.online studio; a crossover).
+const PAYMENT_REMINDER_UN1T = 'Payment reminders are not available for un1t.online studios yet.'
+const PAYMENT_REMINDER_NOT_HOME = "Payment reminders go from the member's home studio."
+
 // WAORGNUMBER.4 (R8) — the 409 for a radar studio with no WhatsApp number
 // switched on, naming it: "No WhatsApp number is switched on at {studio}." A
 // failed name read still refuses, without the name.
-const PAYMENT_REMINDER_UN1T = 'Payment reminders are not available for un1t.online studios yet.'
-const PAYMENT_REMINDER_NOT_HOME = "Payment reminders go from the member's home studio."
 
 async function noNumberRefusal(db, locationId) {
   // UN1TRADAR.3 — one structured line per refusal (no Meta call was made, no row written)
@@ -219,7 +222,13 @@ export async function POST(request) {
   if (action === 'payment_reminder') {
     // UN1TRADAR.3 — the reminder reads glofox_invoices and mints a Glofox pay
     // link: refused at a un1t.online studio (the button is hidden there too).
-    const { source } = await radarReadsFor(db, locationId)
+    let source
+    try {
+      ({ source } = await radarReadsFor(db, locationId))
+    } catch (err) {
+      logWarn('churn-radar', 'membership source unreadable', { locationId, code: err?.code ?? null })
+      return NextResponse.json({ success: false, error: SOURCE_UNREADABLE }, { status: 503 })
+    }
     if (source === 'un1t_online') {
       return NextResponse.json({ success: false, error: PAYMENT_REMINDER_UN1T }, { status: 409 })
     }

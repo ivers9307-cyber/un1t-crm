@@ -54,11 +54,12 @@ export async function GET(request) {
   // freshness, which means nothing at a source that gains the memberships
   // capability (un1t.online). Every other active location is a counted skip.
   const { ids: glofoxIds, error: srcErr } = await listLocationsByMembershipSource(db, 'glofox')
-  const noSource = { has: (id) => !(glofoxIds || []).includes(id) }
   if (srcErr) {
     console.warn(`[cron][glofox-data-quality] failed to read membership sources: ${srcErr.message}`)
     return NextResponse.json({ success: false, error: srcErr.message }, { status: 500 })
   }
+  const glofoxSet = new Set(glofoxIds || [])
+  const noSource = { has: (id) => !glofoxSet.has(id) }
   let skippedNoSource = 0
 
   const perLocation = []
