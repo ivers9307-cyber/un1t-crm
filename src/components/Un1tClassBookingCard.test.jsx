@@ -42,6 +42,23 @@ describe('Un1tClassBookingCard', () => {
     expect(calls.find((c) => c.url.startsWith('/api/un1t-online/classes/cancel')).body).toEqual({ contact_id: 'c1', location_id: LOC, booking_id: 'bk-7' })
   })
 
+  it('a booking keeps the panel (its result line and Undo stay) and refreshes the upcoming list', async () => {
+    payload.classes = [{ id: 'ev-1', name: 'BASE', starts_at: new Date(Date.now() + 7_200_000).toISOString(), spots_left: 5, community: false }]
+    global.fetch.mockImplementation(async (url, init) => {
+      const u = String(url)
+      calls.push({ url: u, body: init?.body ? JSON.parse(init.body) : null })
+      const json = (o) => new Response(JSON.stringify(o), { status: 200 })
+      if (u.startsWith('/api/un1t-online/classes/book')) return json({ success: true, data: { un1t_booking_id: 'bk-9', already_booked: false, chat_template: null } })
+      if (u.startsWith('/api/un1t-online/classes')) return json({ success: true, data: payload })
+      return json({ success: false })
+    })
+    mount()
+    fireEvent.click(await screen.findByRole('button', { name: 'Book' }))
+    expect(await screen.findByText(/Booked into BASE/)).toBeTruthy()
+    await waitFor(() => expect(calls.filter((c) => c.url.startsWith('/api/un1t-online/classes?')).length).toBe(2))
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy()
+  })
+
   it('unlimited, and no credits', async () => {
     payload.credits = { balance: null, unlimited: true, as_of: null }
     mount()

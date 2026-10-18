@@ -8,7 +8,7 @@
 // each with Cancel. Everything goes through /api/un1t-online/classes*, gated
 // on the BOOKING studio.
 
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { CalendarPlus } from 'lucide-react'
 import BookPanel from '@/components/BookPanel'
@@ -30,15 +30,20 @@ function fmtWhen(iso) {
 export default function Un1tClassBookingCard({ contactId, locationId, studioName, waConversationId, waWindowOpen }) {
   const router = useRouter()
   const [info, setInfo] = useState(null) // { credits, upcoming } from the class list
-  const [reloadKey, setReloadKey] = useState(0)
   const [busy, setBusy] = useState(null) // booking id being cancelled
   const [note, setNote] = useState(null)
   const canWhatsApp = !!waConversationId && !!waWindowOpen
 
-  const reload = () => {
-    setReloadKey((k) => k + 1)
+  // After a booking or a cancel: re-read the credits and the upcoming list
+  // only. The panel is never remounted, so its result line and Undo stay.
+  const reload = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/un1t-online/classes?location_id=${encodeURIComponent(locationId)}&contact_id=${encodeURIComponent(contactId)}`)
+      const data = await res.json().catch(() => ({}))
+      if (data.success) setInfo(data.data)
+    } catch { /* the list stays as it was */ }
     router.refresh()
-  }
+  }, [contactId, locationId, router])
 
   async function cancelBooking(bookingId) {
     if (busy) return
@@ -78,7 +83,6 @@ export default function Un1tClassBookingCard({ contactId, locationId, studioName
         </p>
       )}
       <BookPanel
-        key={reloadKey}
         contactId={contactId}
         locationId={locationId}
         eventTypes={[]}

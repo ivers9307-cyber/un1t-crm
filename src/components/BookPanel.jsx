@@ -261,7 +261,7 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
       const threadNote = view.sendChat
         ? await sendThreadText(bookChatConfirmationText({
           what: [cls.name, fmtClassTime(cls.time_start_ms)].filter(Boolean).join(', '),
-          template: data.chat_template,
+          template: isUn1t ? data.data?.chat_template : data.chat_template,
         }))
         : ''
       setClassResult({
