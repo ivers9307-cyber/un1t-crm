@@ -159,7 +159,7 @@ export async function POST(request) {
     } catch {
       return NextResponse.json({ success: false, error: 'Could not check whether this broadcast needs sign-off. Try again.' }, { status: 503 })
     }
-    if (signoff.blocked) return NextResponse.json({ success: false, error: signoff.blocked }, { status: 403 })
+    if (signoff.blocked) return NextResponse.json({ success: false, error: signoff.blocked, signoff_required: true }, { status: 403 })
     signoffStamp = signoff.stamp || {}
   }
   const { data, error } = await db.from('whatsapp_broadcasts').insert({

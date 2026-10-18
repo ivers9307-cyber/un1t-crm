@@ -57,7 +57,7 @@ describe('PUT …/[id] — scheduling inside the sign-off window', () => {
     getCurrentUser.mockResolvedValue(manager())
     const res = await put({ status: 'scheduled', scheduled_at: FUTURE })
     expect(res.status).toBe(403)
-    expect((await res.json()).error).toBe(COPY)
+    expect(await res.json()).toEqual({ success: false, error: COPY, signoff_required: true })
     expect(row().status).toBe('draft')
   })
   it("an org admin's schedule stamps the sign-off", async () => {
@@ -107,6 +107,25 @@ describe('PUT …/[id] — a content change clears the sign-off', () => {
     row().signed_off_by = ADMIN_ID
     getCurrentUser.mockResolvedValue(orgAdmin())
     await put({ variable_mapping: { 1: 'name' } })
+    expect(row().signed_off_by).toBe(ADMIN_ID)
+  })
+  it("a manager raising a signed drip's pace clears it", async () => {
+    Object.assign(row(), { delivery_mode: 'drip', daily_cap: 50, signed_off_by: ADMIN_ID })
+    getCurrentUser.mockResolvedValue(manager())
+    expect((await put({ daily_cap: 100000 })).status).toBe(200)
+    expect(row()).toMatchObject({ daily_cap: 100000, signed_off_by: null })
+  })
+  it('a manager cannot change a running send’s content inside the window (409, nothing written)', async () => {
+    Object.assign(row(), { status: 'sending', signed_off_by: ADMIN_ID })
+    getCurrentUser.mockResolvedValue(manager())
+    const res = await put({ variable_mapping: { 1: 'name' } })
+    expect(res.status).toBe(409)
+    expect(row()).toMatchObject({ variable_mapping: { 1: 'first_name' }, signed_off_by: ADMIN_ID })
+  })
+  it('a name-only change is not gated', async () => {
+    Object.assign(row(), { status: 'sending', signed_off_by: ADMIN_ID })
+    getCurrentUser.mockResolvedValue(manager())
+    expect((await put({ name: 'Renamed' })).status).toBe(200)
     expect(row().signed_off_by).toBe(ADMIN_ID)
   })
   it('outside the window nothing is cleared', async () => {

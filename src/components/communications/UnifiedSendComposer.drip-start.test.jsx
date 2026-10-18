@@ -96,3 +96,17 @@ describe('UnifiedSendComposer — TZ.4 the drip window is the studio clock', () 
     expect(create.body).not.toHaveProperty('send_window_tz')
   })
 })
+
+// WAORGNUMBER.4 (R7) — /send refused for sign-off: the composer says the
+// broadcast is saved and waiting for an organisation admin, with a link to it.
+describe('a studio whose blasts need sign-off', () => {
+  it('shows the copy and the Request sign-off note, not an error', async () => {
+    const COPY = 'Blasts at UN1T Hatch Street need sign-off from an organisation admin until 16 Nov 2026.'
+    sendAnswer = { ok: false, body: { success: false, error: COPY, signoff_required: true } }
+    await startDrip()
+    await waitFor(() => expect(screen.getByText('Saved, waiting for sign-off')).toBeTruthy())
+    expect(screen.getByText(COPY)).toBeTruthy()
+    expect(screen.getByText(/Request sign-off/)).toBeTruthy()
+    expect(screen.getByRole('link', { name: /View details/ }).getAttribute('href')).toBe('/communications/sent/whatsapp/wb-1')
+  })
+})

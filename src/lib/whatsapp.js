@@ -1656,9 +1656,13 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   if (!broadcast.signed_off_by) {
     const signoffLocation = await readSignoffLocation(db, broadcast.location_id)
     if (broadcastSignoffBlock(signoffLocation, broadcast)) {
+      // Conditional: an org admin's resume (which signs it off) landing
+      // between this tick's read and here is never undone.
       const { error: pauseErr } = await db.from('whatsapp_broadcasts')
         .update({ paused_at: new Date().toISOString() })
         .eq('id', broadcastId)
+        .is('signed_off_by', null)
+        .is('paused_at', null)
       if (pauseErr) throw new Error(`Could not pause the unsigned drip: ${pauseErr.message}`)
       return { status: 'sending', skipped: 'needs_signoff', paused: true, sent: 0, failed: 0 }
     }

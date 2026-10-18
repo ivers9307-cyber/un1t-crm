@@ -44,7 +44,7 @@ export default function WABroadcastEditor({ broadcast, signoff = null, templates
   const [pausing, setPausing] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   // WAORGNUMBER.4 (R7) — blast sign-off. `signoff` is set only while the
-  // studio's window is open: { message, canSignOff, signedOff }.
+  // studio's window is open: { message, canSignOff, signedOff, contentKey }.
   const [signedOff, setSignedOff] = useState(Boolean(signoff?.signedOff))
   const [signingOff, setSigningOff] = useState(false)
   const needsSignoff = Boolean(signoff) && !signedOff && !signoff.canSignOff
@@ -125,7 +125,11 @@ export default function WABroadcastEditor({ broadcast, signoff = null, templates
     setSigningOff(true)
     setError(null)
     try {
-      const result = await fetch(`/api/whatsapp/broadcasts/${broadcastId}/sign-off`, { method: 'POST' }).then(r => r.json())
+      const result = await fetch(`/api/whatsapp/broadcasts/${broadcastId}/sign-off`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content_key: signoff.contentKey }),
+      }).then(r => r.json())
       if (!result.success) throw new Error(result.error)
       setSignedOff(true)
       router.refresh()

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   SIGNOFF_SETTING_KEY, signoffWindow, signoffMessage, isOrganizationAdminFor,
   routeSignoffGate, broadcastSignoffBlock, BlastSignoffRequiredError, isBlastSignoffRequired,
-  readSignoffLocation,
+  readSignoffLocation, changesSignedContent, signedContentKey,
 } from './whatsapp-blast-signoff.js'
 
 // Fictional ids only: the repo is public.
@@ -27,12 +27,9 @@ describe('signoffWindow', () => {
     expect(signoffWindow(ny, at('2026-11-17T04:30:00Z'))).toEqual({ until: '2026-11-16' })
     expect(signoffWindow(ny, at('2026-11-17T05:30:00Z'))).toBeNull()
   })
-  it('accepts a full timestamp and closes at that instant', () => {
-    expect(signoffWindow(hatch('2026-11-16T09:00:00Z'), at('2026-11-16T08:59:00Z'))).toEqual({ until: '2026-11-16T09:00:00Z' })
-    expect(signoffWindow(hatch('2026-11-16T09:00:00Z'), at('2026-11-16T09:00:00Z'))).toBeNull()
-  })
-  it('absent, blank or unreadable → no gate', () => {
-    for (const loc of [null, hatch(undefined), hatch(''), hatch('soon'), hatch(null), { settings: null }]) {
+  it('absent, blank, a timestamp or not a real date → no gate (only a plain date is read)', () => {
+    for (const loc of [null, hatch(undefined), hatch(''), hatch('soon'), hatch(null), { settings: null },
+      hatch('2026-11-16T09:00:00Z'), hatch('2026-02-30')]) {
       expect(signoffWindow(loc, at('2026-10-18T12:00:00Z'))).toBeNull()
     }
   })
@@ -41,10 +38,6 @@ describe('signoffWindow', () => {
 describe('signoffMessage', () => {
   it('gives the spec copy with the date as "16 Nov 2026"', () => {
     expect(signoffMessage('UN1T Hatch Street', '2026-11-16'))
-      .toBe('Blasts at UN1T Hatch Street need sign-off from an organisation admin until 16 Nov 2026.')
-  })
-  it("formats a timestamp's day in the studio zone", () => {
-    expect(signoffMessage('UN1T Hatch Street', '2026-11-17T02:00:00Z', 'America/New_York'))
       .toBe('Blasts at UN1T Hatch Street need sign-off from an organisation admin until 16 Nov 2026.')
   })
   it('has no em-dash', () => {
@@ -124,5 +117,29 @@ describe('readSignoffLocation', () => {
   it('throws on a failed read (the gate fails closed)', async () => {
     const { db } = dbWith({ data: null, error: { message: 'boom' } })
     await expect(readSignoffLocation(db, 'loc-h')).rejects.toThrow(/sign-off/)
+  })
+})
+
+describe('changesSignedContent / signedContentKey', () => {
+  const row = { template_id: 't1', variable_mapping: null, header_media_url: null,
+    audience_filter: { filters: [{ field: 'tags', op: 'contains', value: 'vip' }], logic: 'and' }, daily_cap: 50, per_tick_max: null }
+  it("an unchanged re-save is no change, whatever the key order or null vs {}", () => {
+    expect(changesSignedContent({ template_id: 't1', variable_mapping: {}, header_media_url: '',
+      audience_filter: { logic: 'and', filters: [{ value: 'vip', op: 'contains', field: 'tags' }] } }, row)).toBe(false)
+  })
+  it('a changed audience, variable, template or drip pace is a change', () => {
+    expect(changesSignedContent({ audience_filter: { filters: [], logic: 'and' } }, row)).toBe(true)
+    expect(changesSignedContent({ variable_mapping: { 1: 'name' } }, row)).toBe(true)
+    expect(changesSignedContent({ template_id: 't2' }, row)).toBe(true)
+    expect(changesSignedContent({ daily_cap: 100000 }, row)).toBe(true)
+    expect(changesSignedContent({ per_tick_max: 500 }, row)).toBe(true)
+  })
+  it('a name change is not signed content', () => {
+    expect(changesSignedContent({ name: 'Renamed' }, row)).toBe(false)
+  })
+  it('the key is stable across equivalent shapes and moves with the content', () => {
+    expect(signedContentKey(row)).toBe(signedContentKey({ ...row, variable_mapping: {} }))
+    expect(signedContentKey(row)).not.toBe(signedContentKey({ ...row, daily_cap: 51 }))
+    expect(signedContentKey(row)).toMatch(/^[0-9a-f]{32}$/)
   })
 })

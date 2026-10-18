@@ -3,22 +3,24 @@
 // so for a while after a studio switches it on, its broadcasts and drips go
 // out only once an organisation admin (or a master) has signed them off.
 //
-//   * The window: locations.settings.whatsapp_blast_signoff_until, an ISO
-//     date ('2026-11-16': the gate holds through that day on the studio's
-//     clock) or a full timestamp (it holds until that instant). Absent, blank,
-//     unreadable or past = no gate. Set for Hatch at go-live to go-live + 30
-//     days (by hand; there is no UI for it).
+//   * The window: locations.settings.whatsapp_blast_signoff_until, a plain
+//     ISO date ('2026-11-16': the gate holds through that day on the studio's
+//     clock, the day the copy names). Absent, blank, not a real date, or past
+//     = no gate. Set for Hatch at go-live to go-live + 30 days (by hand; there
+//     is no UI for it).
 //   * The stamp: whatsapp_broadcasts.signed_off_by / signed_off_at (mig 748).
 //     An org admin's send, schedule or start stamps it, as does
-//     POST /api/whatsapp/broadcasts/[id]/sign-off on a draft. Anyone else's
-//     send, schedule or start answers 403 with signoffMessage() while the row
-//     is unsigned.
+//     POST /api/whatsapp/broadcasts/[id]/sign-off on a draft (which must name
+//     the content the admin saw: signedContentKey). Anyone else's send,
+//     schedule or start answers 403 with signoffMessage() while the row is
+//     unsigned, and anyone else's change to the signed content clears it.
 //   * The engine gate: the cron has no actor, so sendBroadcast refuses an
 //     unsigned broadcast with BlastSignoffRequiredError BEFORE any status flip
 //     (the route answers 409; the cron's refused-start path keeps it a draft
 //     and pushes the managers), and sendDripChunk pauses an unsigned drip.
 //
 // Zone maths only through @/lib/location-time (CLAUDE.md, TZ).
+import { createHash } from 'node:crypto'
 import {
   zoneOfLocation, todayStrIn, formatInZone, strictDayStartMsIn,
 } from './location-time'
@@ -35,31 +37,63 @@ const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
  */
 export function signoffWindow(location, now = new Date()) {
   const raw = location?.settings?.[SIGNOFF_SETTING_KEY]
-  if (typeof raw !== 'string' || !raw.trim()) return null
+  if (typeof raw !== 'string') return null
   const until = raw.trim()
-  if (DATE_ONLY.test(until)) {
-    if (strictDayStartMsIn(until, zoneOfLocation(location)) == null) return null
-    return todayStrIn(zoneOfLocation(location), now.getTime()) <= until ? { until } : null
-  }
-  const ms = Date.parse(until)
-  if (!Number.isFinite(ms)) return null
-  return now.getTime() < ms ? { until } : null
+  if (!DATE_ONLY.test(until)) return null
+  const zone = zoneOfLocation(location)
+  if (strictDayStartMsIn(until, zone) == null) return null
+  return todayStrIn(zone, now.getTime()) <= until ? { until } : null
 }
 
 /**
- * The spec copy (R7), date as "16 Nov 2026" on the studio's clock.
+ * The spec copy (R7), date as "16 Nov 2026". `until` is the window's plain
+ * date, already on the studio's calendar, so it is formatted as a calendar
+ * day (noon UTC keeps it on its own day).
  * @param {string} locationName
- * @param {string} until  the window's `until`
- * @param {string} [zone] the studio's zone (only a timestamp needs it)
+ * @param {string} until  the window's `until` ('YYYY-MM-DD')
  */
-export function signoffMessage(locationName, until, zone) {
-  const fmt = { day: 'numeric', month: 'short', year: 'numeric' }
-  const tz = zone || zoneOfLocation(null)
-  const day = DATE_ONLY.test(until)
-    // A calendar date: noon UTC keeps it on its own day in every zone.
-    ? formatInZone(new Date(`${until}T12:00:00Z`), 'UTC', fmt, 'en-GB')
-    : formatInZone(new Date(until), tz, fmt, 'en-GB')
+export function signoffMessage(locationName, until) {
+  const day = formatInZone(new Date(`${until}T12:00:00Z`), 'UTC', { day: 'numeric', month: 'short', year: 'numeric' }, 'en-GB')
   return `Blasts at ${locationName || 'this studio'} need sign-off from an organisation admin until ${day}.`
+}
+
+/**
+ * The broadcast fields an org admin's sign-off vouches for: what goes out
+ * (template, variables, header, audience) and, for a drip, how fast.
+ */
+export const SIGNED_CONTENT_FIELDS = Object.freeze([
+  'template_id', 'variable_mapping', 'header_media_url', 'audience_filter', 'daily_cap', 'per_tick_max',
+])
+
+// jsonb does not keep key order, and an empty mapping / filter is stored
+// either as null or as {}: both compare equal here.
+function canonicalJson(v) {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`
+  if (v && typeof v === 'object') {
+    return `{${Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`
+  }
+  return JSON.stringify(v ?? null)
+}
+function normalisedField(field, value) {
+  if (field === 'variable_mapping') return value ?? {}
+  if (field === 'audience_filter') {
+    const f = value ?? {}
+    return { logic: f.logic ?? 'and', filters: f.filters ?? [] }
+  }
+  if (field === 'header_media_url') return value || null
+  return value ?? null
+}
+
+/** True when `updates` changes a signed field of `row` (only fields present in `updates`). */
+export function changesSignedContent(updates, row) {
+  return SIGNED_CONTENT_FIELDS.some((f) => updates[f] !== undefined
+    && canonicalJson(normalisedField(f, updates[f])) !== canonicalJson(normalisedField(f, row?.[f])))
+}
+
+/** A short key of the row's signed content: the sign-off route refuses a stale one. */
+export function signedContentKey(row) {
+  const body = SIGNED_CONTENT_FIELDS.map((f) => canonicalJson(normalisedField(f, row?.[f]))).join('|')
+  return createHash('sha256').update(body).digest('hex').slice(0, 32)
 }
 
 /** Master, or an org admin of `orgId` (assertOrganizationAdmin's rule, as a boolean). */
@@ -95,7 +129,7 @@ export function routeSignoffGate({ user, location, row, now = new Date() }) {
     return { stamp: { signed_off_by: user.id, signed_off_at: now.toISOString() } }
   }
   if (row?.signed_off_by) return {}
-  return { blocked: signoffMessage(location?.name, win.until, zoneOfLocation(location)) }
+  return { blocked: signoffMessage(location?.name, win.until) }
 }
 
 /** The engine's refusal message for an unsigned broadcast in an open window, or null. */
@@ -103,7 +137,7 @@ export function broadcastSignoffBlock(location, broadcast, now = new Date()) {
   if (broadcast?.signed_off_by) return null
   const win = signoffWindow(location, now)
   if (!win) return null
-  return signoffMessage(location?.name, win.until, zoneOfLocation(location))
+  return signoffMessage(location?.name, win.until)
 }
 
 export class BlastSignoffRequiredError extends Error {

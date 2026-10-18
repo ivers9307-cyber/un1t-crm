@@ -3,12 +3,19 @@
 // broadcast someone else made, so it may go out while its studio's blast
 // sign-off window (locations.settings.whatsapp_blast_signoff_until) is open.
 // Stamps whatsapp_broadcasts.signed_off_by / signed_off_at (mig 748); sends
-// nothing. A later content change by anyone else clears the stamp (PUT).
+// nothing. The body names the content the admin saw ({ content_key }, the
+// page's signedContentKey): a broadcast changed since is a 409, so a sign-off
+// never covers content its admin did not see. A later content change by
+// anyone else clears the stamp (PUT).
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, assertOrganizationAdmin } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
-import { readSignoffLocation } from '@/lib/whatsapp-blast-signoff'
+import { z } from 'zod'
+import { validateBody } from '@/lib/validate'
+import { readSignoffLocation, signedContentKey, SIGNED_CONTENT_FIELDS } from '@/lib/whatsapp-blast-signoff'
+
+const SignOffSchema = z.object({ content_key: z.string().min(1).max(64) })
 
 const SIGNABLE = ['draft', 'scheduled']
 const waForbidden = () => NextResponse.json(
@@ -20,9 +27,12 @@ export async function POST(request, props) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermissionAtAnyLocation(user, 'whatsapp')) return waForbidden()
 
+  const validation = await validateBody(request, SignOffSchema)
+  if (!validation.ok) return validation.response
+
   const db = createServerClient()
   const { data: row, error: rowErr } = await db.from('whatsapp_broadcasts')
-    .select('id, location_id, status')
+    .select(`id, location_id, status, updated_at, ${SIGNED_CONTENT_FIELDS.join(', ')}`)
     .eq('id', params.id)
     .maybeSingle()
   if (rowErr) return NextResponse.json({ success: false, error: 'Could not read the broadcast' }, { status: 500 })
@@ -49,12 +59,21 @@ export async function POST(request, props) {
     }, { status: 409 })
   }
 
-  // Compare-and-swap on the status it was judged in (the cron may promote a
-  // scheduled row in between).
+  if (signedContentKey(row) !== validation.data.content_key) {
+    return NextResponse.json({
+      success: false,
+      error: 'This broadcast has changed since you opened it. Reload the page, check it, and sign it off again.',
+    }, { status: 409 })
+  }
+
+  // Compare-and-swap on the state it was judged in: the status (the cron may
+  // promote a scheduled row) and updated_at (bumped by trigger on every write,
+  // so an edit landing after the read above is never signed off unseen).
   const { data, error } = await db.from('whatsapp_broadcasts')
     .update({ signed_off_by: user.id, signed_off_at: new Date().toISOString() })
     .eq('id', row.id)
     .eq('status', row.status)
+    .eq('updated_at', row.updated_at)
     .select('id, signed_off_by, signed_off_at')
   if (error) return NextResponse.json({ success: false, error: 'Could not record the sign-off' }, { status: 500 })
   if (!data?.length) {

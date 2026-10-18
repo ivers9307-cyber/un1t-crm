@@ -84,7 +84,9 @@ describe('run-whatsapp-broadcasts and blast sign-off (WAORGNUMBER.4)', () => {
     expect(msg.data).toEqual({ type: 'broadcast_schedule_failed', broadcast_id: 'b1' })
   })
 
-  it('a signed-off scheduled blast is sent as usual', async () => {
+  // The engine's own sign-off check is covered in whatsapp-blast-signoff-engine.test.js;
+  // this pins only that the cron does not push or refuse when the start succeeds.
+  it('a scheduled blast the engine accepts is sent as usual, no push', async () => {
     sendBroadcast.mockResolvedValue({ status: 'sent', sent: 4, failed: 0 })
     const body = await (await run()).json()
     expect(body.stats).toMatchObject({ promoted: 1, sent: 4, refused: 0 })

@@ -39,7 +39,7 @@ import {
   countWhatsappSentToday,
   whatsappBroadcastDisplayStats,
 } from '@/lib/whatsapp-broadcast-stats'
-import { readSignoffLocation, signoffWindow, signoffMessage, isOrganizationAdminFor } from '@/lib/whatsapp-blast-signoff'
+import { readSignoffLocation, signoffWindow, signoffMessage, isOrganizationAdminFor, signedContentKey } from '@/lib/whatsapp-blast-signoff'
 import WABroadcastEditor from '@/components/WABroadcastEditor'
 import CampaignDetail from '@/components/CampaignDetail'
 import CampaignEditor from '@/components/CampaignEditor'
@@ -144,7 +144,7 @@ async function renderWhatsapp(db, user, id) {
   }
 
   // WAORGNUMBER.4 (R7) — the blast sign-off state, for the Send button. Only
-  // these four fields cross into the client component (never the studio's
+  // these fields cross into the client component (never the studio's
   // `settings`, which hold credentials). Display only: the routes and the send
   // engine enforce the gate, so an unreadable studio just hides the notice.
   let signoff = null
@@ -153,9 +153,11 @@ async function renderWhatsapp(db, user, id) {
     const win = signoffWindow(signoffLocation)
     if (win) {
       signoff = {
-        message: signoffMessage(signoffLocation.name, win.until, zoneOfLocation(signoffLocation)),
+        message: signoffMessage(signoffLocation.name, win.until),
         canSignOff: isOrganizationAdminFor(user, signoffLocation.organization_id),
         signedOff: Boolean(broadcast.signed_off_by),
+        // The content this page shows: a sign-off of anything else is refused.
+        contentKey: signedContentKey(broadcast),
       }
     }
   } catch { /* display only */ }
