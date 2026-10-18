@@ -985,6 +985,12 @@ describe('shapeTrialEligibility', () => {
     expect(elig({ transactions: [tx({ amount_cents: null, product_id: 'prod-gone', product_type: null })] }).reasons).not.toContain('trial_used')
   })
 
+  it('a €0 transaction on a RESOLVED product whose price_cents is null also counts as trial_used (deny-only)', () => {
+    const products = new Map([['prod-unpriced', { un1t_id: 'prod-unpriced', type: 'one_time', price_cents: null }]])
+    expect(shapeTrialEligibility({ productsById: products, transactions: [tx({ product_id: 'prod-unpriced', amount_cents: 0, product_type: null })] }))
+      .toEqual({ eligible: false, reasons: ['trial_used'] })
+  })
+
   it('a product with a null price is not a trial product, so its transaction is not trial_used', () => {
     const products = new Map([['prod-unpriced', { un1t_id: 'prod-unpriced', type: 'one_time', price_cents: null }]])
     expect(shapeTrialEligibility({ productsById: products, transactions: [tx({ product_id: 'prod-unpriced', amount_cents: 500, product_type: null })] }))

@@ -441,17 +441,20 @@ const isRecurringTx = (t) => RECURRING_TX_TYPES.includes(lower(t?.type)) || lowe
 /**
  * Every trial this person took at the studio, as { at, product_id }: a
  * transaction for a trial product (keyed on product id, never the title), a
- * €0 transaction whose product we cannot resolve (deleted upstream, or not yet
- * synced: it may well have been the trial, so it counts; this only ever
- * DENIES a second free trial), and each of spec D's ledger trial rows.
+ * €0 transaction whose product we cannot resolve or whose price is null
+ * (deleted upstream, or not yet synced: it may well have been the trial, so it
+ * counts; this only ever DENIES a second free trial), and each of spec D's ledger trial rows.
  */
 function trialsTaken({ transactions = [], productsById, ledgerTrials = [] }) {
   const out = []
   for (const t of transactions) {
     if (!t) continue
     const product = productOf(productsById, t.product_id)
-    const unresolvedFree = product == null && t.amount_cents != null && Number(t.amount_cents) === 0
-    if (isTrialProduct(product) || unresolvedFree) out.push({ at: t.remote_created_at ?? null, product_id: t.product_id })
+    // A €0 payment on a product we cannot price (unresolved, or resolved with a
+    // null price) may well have been the trial: it counts. Deny-only.
+    const unpricedFree = (product == null || product.price_cents == null)
+      && t.amount_cents != null && Number(t.amount_cents) === 0
+    if (isTrialProduct(product) || unpricedFree) out.push({ at: t.remote_created_at ?? null, product_id: t.product_id })
   }
   for (const l of ledgerTrials) if (l) out.push({ at: l.at ?? null, product_id: l.product_id ?? null })
   return out

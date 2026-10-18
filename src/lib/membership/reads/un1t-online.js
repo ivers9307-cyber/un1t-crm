@@ -465,7 +465,8 @@ async function listNewestTransactions(db, loc, contactIds, limit) {
 // ---------------------------------------------------------------------------
 const CLIENT_COLS = 'un1t_user_id, contact_id, credit_balance, credit_unlimited, last_attended_at, remote_created_at'
 const PIPE_SUB_COLS = 'un1t_user_id, contact_id, status, paused_at'
-const PIPE_TX_COLS = 'un1t_user_id, contact_id, product_id, product_type, type, amount_cents, refunded, remote_created_at'
+const ELIGIBILITY_SUB_COLS = 'un1t_id, un1t_user_id, contact_id, status'
+const PIPE_TX_COLS = 'un1t_id, un1t_user_id, contact_id, product_id, product_type, type, amount_cents, refunded, remote_created_at'
 const PRODUCT_COLS = 'un1t_id, type, price_cents, credits_per_period, title'
 const BOOKING_COLS = 'un1t_user_id, contact_id, event_id, status, source, credit_charged, external_member_ref, remote_created_at'
 const EVENT_COLS = 'un1t_id, starts_at'
@@ -496,13 +497,31 @@ function groupBy(rows, keyOf) {
   return out
 }
 
+/** One person's classifier `client` from all of their un1t accounts at the studio. */
+function mergeClients(clients) {
+  if (clients.length === 1) return clients[0]
+  const balances = clients.map((c) => c.credit_balance).filter((v) => v != null)
+  const pick = (key, better) => clients.map((c) => c[key]).filter((v) => Number.isFinite(Date.parse(v)))
+    .reduce((best, v) => (best == null || better(Date.parse(v), Date.parse(best)) ? v : best), null)
+  return {
+    ...clients[0],
+    credit_balance: balances.length ? balances.reduce((sum, v) => sum + Number(v), 0) : null,
+    credit_unlimited: clients.some((c) => c.credit_unlimited === true),
+    last_attended_at: pick('last_attended_at', (a, b) => a > b),
+    // the first account is when the person joined; a later duplicate does not make them new
+    remote_created_at: pick('remote_created_at', (a, b) => a < b),
+  }
+}
+
 /**
  * Everything the pipeline board needs for one un1t.online studio: the people
  * (fresh un1t_clients linked to a contact) and one classifier snapshot each.
- * `unlinked` counts the fresh clients with no contact. A booking, transaction
- * or subscription belongs to a client by `un1t_user_id`, else by its
- * `contact_id` when that names one of the studio's clients. If two clients link
- * to the same contact, the first (by id) is the one snapshotted.
+ * `unlinked` counts the fresh clients with no contact; `skipped_no_contact`
+ * the linked ones whose contacts row could not be read (logged once, ids never
+ * named). A booking, transaction or subscription belongs to a person by its
+ * `un1t_user_id`, else by its `contact_id`. If several clients link to one
+ * contact they are ONE person: one snapshot over the union of their rows
+ * (credits summed, unlimited if any, latest attendance, earliest sign-up).
  */
 async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
   if (!locationId) return { success: false, error: 'No location' }
@@ -510,7 +529,9 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
     const clients = await listFresh(db, locationId, 'un1t_clients', CLIENT_COLS)
     const linked = clients.filter((c) => c.contact_id != null)
     const unlinked = clients.length - linked.length
-    if (linked.length === 0) return { success: true, data: { contacts: [], snapshots: new Map(), unlinked } }
+    if (linked.length === 0) {
+      return { success: true, data: { contacts: [], snapshots: new Map(), unlinked, skipped_no_contact: 0 } }
+    }
 
     const [subs, txs, products, bookings, events, memberships, contactRows] = await Promise.all([
       listFresh(db, locationId, 'un1t_subscriptions', PIPE_SUB_COLS),
@@ -532,9 +553,10 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
       ),
     ])
 
-    const userByContact = new Map()
-    for (const c of linked) if (!userByContact.has(c.contact_id)) userByContact.set(c.contact_id, c.un1t_user_id)
-    const owner = (r) => r.un1t_user_id ?? (r.contact_id != null ? userByContact.get(r.contact_id) ?? null : null)
+    const clientsByContact = groupBy(linked, (c) => c.contact_id)
+    const contactOfUser = new Map(linked.map((c) => [c.un1t_user_id, c.contact_id]))
+    // a row's person: its un1t user's contact, else its own contact_id
+    const owner = (r) => (r.un1t_user_id != null ? contactOfUser.get(r.un1t_user_id) : null) ?? r.contact_id ?? null
 
     const startsAt = new Map(events.map((e) => [e.un1t_id, e.starts_at ?? null]))
     const subsBy = groupBy(subs, owner)
@@ -549,57 +571,90 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
 
     const contacts = []
     const snapshots = new Map()
-    for (const client of linked) {
-      const contact = contactById.get(client.contact_id)
-      if (!contact || snapshots.has(contact.id)) continue
+    let skipped = 0
+    for (const [contactId, theirClients] of clientsByContact) {
+      const contact = contactById.get(contactId)
+      if (!contact) { skipped += theirClients.length; continue }
       contacts.push({ id: contact.id, name: contact.name ?? null, email: contact.email ?? null, location_id: contact.location_id ?? null })
       snapshots.set(contact.id, shapePipelineSnapshot({
-        client,
+        client: mergeClients(theirClients),
         contact,
         locationId,
-        freshSubs: subsBy.get(client.un1t_user_id) ?? [],
-        transactions: txsBy.get(client.un1t_user_id) ?? [],
+        freshSubs: subsBy.get(contactId) ?? [],
+        transactions: txsBy.get(contactId) ?? [],
         productsById,
-        bookings: bookingsBy.get(client.un1t_user_id) ?? [],
-        memberships: membershipsBy.get(client.contact_id) ?? [],
+        bookings: bookingsBy.get(contactId) ?? [],
+        memberships: membershipsBy.get(contactId) ?? [],
         ledgerTrials: [],
         now,
       }))
     }
-    return { success: true, data: { contacts, snapshots, unlinked } }
+    if (skipped > 0) logWarn('un1t-pipeline', 'client contact missing', { locationId, count: skipped })
+    return { success: true, data: { contacts, snapshots, unlinked, skipped_no_contact: skipped } }
   } catch (e) {
     return { success: false, error: errMessage(e) }
   }
 }
 
+/** Rows from two reads (by un1t user, by contact), de-duplicated on un1t_id. */
+function unionByUn1tId(...lists) {
+  const seen = new Set()
+  const out = []
+  for (const r of lists.flat()) {
+    const k = r.un1t_id ?? JSON.stringify(r)
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(r)
+  }
+  return out
+}
+
 /**
  * May this person get the free trial at `locationId` (see shapeTrialEligibility)?
- * Needs `un1tUserId` and/or `contactId`. With a un1t user: ALL their
- * transactions and subscriptions at the studio (history, so no freshness
- * window) and the studio's full products map. With a contact: their
- * contact_memberships here from the api and export sources, any status. Any
- * failed read is { success:false }: an unreadable history is never eligible.
+ * Needs `un1tUserId` and/or `contactId`. "This person" is every un1t account
+ * the contact owns at the studio (their un1t_clients rows) plus any user id
+ * given, AND any row that carries only the contact id, so a trial booked under
+ * a second account, or a sync row not yet stamped with a user, still denies.
+ * Reads their transactions and subscriptions (history: no freshness window),
+ * the studio's full products map, and, for a contact, its contact_memberships
+ * here from the api and export sources, any status. Any failed read is
+ * { success:false }: an unreadable history is never eligible.
  */
 async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) {
   if (!locationId) return { success: false, error: 'No location' }
   if (un1tUserId == null && contactId == null) return { success: false, error: 'un1tUserId or contactId is required' }
   try {
+    const userIds = new Set(un1tUserId == null ? [] : [un1tUserId])
+    if (contactId != null) {
+      const accounts = await selectAll((from, to) => db
+        .from('un1t_clients')
+        .select('un1t_user_id')
+        .eq('location_id', locationId)
+        .eq('contact_id', contactId)
+        .order('id', { ascending: true })
+        .range(from, to), { pageSize: PAGE })
+      for (const a of accounts) if (a.un1t_user_id != null) userIds.add(a.un1t_user_id)
+    }
+    const users = [...userIds]
+    const rowsFor = (table, cols) => Promise.all([
+      selectAllByKeys(
+        users,
+        (keys, from, to) => db.from(table).select(cols).eq('location_id', locationId).in('un1t_user_id', keys).order('id', { ascending: true }).range(from, to),
+        { chunkSize: KEY_CHUNK, pageSize: PAGE },
+      ),
+      contactId == null ? [] : selectAll((from, to) => db
+        .from(table)
+        .select(cols)
+        .eq('location_id', locationId)
+        .eq('contact_id', contactId)
+        .order('id', { ascending: true })
+        .range(from, to), { pageSize: PAGE }),
+    ]).then((lists) => unionByUn1tId(...lists))
+
     const [transactions, subscriptions, products, memberships] = await Promise.all([
-      un1tUserId == null ? [] : selectAll((from, to) => db
-        .from('un1t_transactions')
-        .select(PIPE_TX_COLS)
-        .eq('location_id', locationId)
-        .eq('un1t_user_id', un1tUserId)
-        .order('id', { ascending: true })
-        .range(from, to), { pageSize: PAGE }),
-      un1tUserId == null ? [] : selectAll((from, to) => db
-        .from('un1t_subscriptions')
-        .select('un1t_user_id, status')
-        .eq('location_id', locationId)
-        .eq('un1t_user_id', un1tUserId)
-        .order('id', { ascending: true })
-        .range(from, to), { pageSize: PAGE }),
-      un1tUserId == null ? [] : listAtStudio(db, locationId, 'un1t_products', PRODUCT_COLS),
+      rowsFor('un1t_transactions', PIPE_TX_COLS),
+      rowsFor('un1t_subscriptions', ELIGIBILITY_SUB_COLS),
+      listAtStudio(db, locationId, 'un1t_products', PRODUCT_COLS),
       contactId == null ? [] : selectAll((from, to) => db
         .from('contact_memberships')
         .select(MEMBERSHIP_COLS)
