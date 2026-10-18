@@ -43,8 +43,11 @@ export const isActiveSub = (s) => MEMBER_STATUSES.includes(s?.status)
 /** A subscription that is billing NOW: status 'active', neither paused nor past due. */
 export const isActiveRecurring = (s) => s?.status === 'active' && !s.paused_at && !s.past_due_at
 
-/** A €0 one-time product is the free trial, never a class pack. */
-export const isTrialProduct = (p) => p?.type === 'one_time' && Number(p.price_cents) === 0
+/**
+ * A €0 one-time product is the free trial, never a class pack. An UNPRICED
+ * product (price_cents null) is not €0: it is unknown, and never a trial.
+ */
+export const isTrialProduct = (p) => p?.type === 'one_time' && p.price_cents != null && Number(p.price_cents) === 0
 
 // Glofox counts CONTACTS, so a member with two active subscriptions is one
 // member. A row with no un1t_user_id cannot be matched and stands alone.
@@ -437,13 +440,18 @@ const isRecurringTx = (t) => RECURRING_TX_TYPES.includes(lower(t?.type)) || lowe
 
 /**
  * Every trial this person took at the studio, as { at, product_id }: a
- * transaction for a trial product (keyed on product id, never the title), and
- * each of spec D's ledger trial rows.
+ * transaction for a trial product (keyed on product id, never the title), a
+ * €0 transaction whose product we cannot resolve (deleted upstream, or not yet
+ * synced: it may well have been the trial, so it counts; this only ever
+ * DENIES a second free trial), and each of spec D's ledger trial rows.
  */
 function trialsTaken({ transactions = [], productsById, ledgerTrials = [] }) {
   const out = []
   for (const t of transactions) {
-    if (t && isTrialProduct(productOf(productsById, t.product_id))) out.push({ at: t.remote_created_at ?? null, product_id: t.product_id })
+    if (!t) continue
+    const product = productOf(productsById, t.product_id)
+    const unresolvedFree = product == null && t.amount_cents != null && Number(t.amount_cents) === 0
+    if (isTrialProduct(product) || unresolvedFree) out.push({ at: t.remote_created_at ?? null, product_id: t.product_id })
   }
   for (const l of ledgerTrials) if (l) out.push({ at: l.at ?? null, product_id: l.product_id ?? null })
   return out
@@ -455,7 +463,8 @@ function trialsTaken({ transactions = [], productsById, ledgerTrials = [] }) {
  * Trial credits left = the newest trial product's `credits_per_period` minus
  * the `credit_charged` bookings made (`remote_created_at`) at or after that
  * trial, floored at 0 and capped at `credit_balance`. A trial whose product we
- * cannot read grants 0; one with no readable date counts every charged booking.
+ * cannot read grants 0 (and is passed over for the newest trial whose product does
+ * resolve); one with no readable date counts every charged booking.
  * Paid credits = `credit_balance` minus trial credits left, and only when a
  * paid pack exists (A-2: the whole balance is never read as "trial", and a
  * balance with no paid pack behind it is never read as paid).
@@ -467,7 +476,12 @@ export function splitUn1tCredits({ client, transactions = [], productsById = new
   const balance = Math.max(0, Number(client?.credit_balance) || 0)
   const trials = trialsTaken({ transactions, productsById, ledgerTrials })
   const newestTrialAt = latestOf(trials.map((t) => t.at))
-  const newest = trials.find((t) => t.at === newestTrialAt && newestTrialAt != null) ?? trials[0] ?? null
+  // The newest trial whose product resolves sets the grant; an unreadable one
+  // (grants 0) is only the fallback when no trial resolves at all.
+  const resolved = trials.filter((t) => productOf(productsById, t.product_id) != null)
+  const newestResolvedAt = latestOf(resolved.map((t) => t.at))
+  const newest = resolved.find((t) => t.at === newestResolvedAt && newestResolvedAt != null) ?? resolved[0]
+    ?? trials.find((t) => t.at === newestTrialAt && newestTrialAt != null) ?? trials[0] ?? null
   const hasPaidPack = transactions.some((t) => isPaidPack(t, productsById))
 
   let trialCreditsLeft = 0

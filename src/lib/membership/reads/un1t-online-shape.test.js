@@ -55,6 +55,9 @@ describe('counts', () => {
   it('a €0 one_time product is a trial, never a class pack; a paid pack with balance > 0 and no sub is a class pack', () => {
     expect(isTrialProduct(PRODUCTS[1])).toBe(true)
     expect(isTrialProduct(PRODUCTS[0])).toBe(false)
+    // a null price is unknown, not €0
+    expect(isTrialProduct({ type: 'one_time', price_cents: null })).toBe(false)
+    expect(isTrialProduct({ type: 'one_time' })).toBe(false)
     const r = shapeCounts({
       subs: [sub({ un1t_user_id: 'm' })],
       clients: [
@@ -762,6 +765,18 @@ describe('shapePipelineSnapshot', () => {
     }).trialCreditsLeft).toBe(1)
   })
 
+  it('the newest trial whose product resolves sets the credit grant; an unreadable newer trial does not hide it', () => {
+    const input = {
+      client: pclient({ credit_balance: 3 }),
+      transactions: [trialTx({ remote_created_at: daysAgo(10) }), trialTx({ product_id: 'prod-gone', remote_created_at: daysAgo(2) })],
+      productsById: PRODUCTS_BY_ID,
+    }
+    expect(splitUn1tCredits(input)).toMatchObject({ trialCreditsLeft: 3, tookTrial: true })
+    // with no resolvable trial at all the grant is 0, but a trial was still taken
+    expect(splitUn1tCredits({ ...input, transactions: [trialTx({ product_id: 'prod-gone' })] }))
+      .toMatchObject({ trialCreditsLeft: 0, tookTrial: true })
+  })
+
   it('ledger trial with no transaction → trial (ledgerTrials [{ at, product_id: TRIAL }])', () => {
     const s = snap({ client: pclient({ credit_balance: 3 }), ledgerTrials: [{ at: daysAgo(1), product_id: TRIAL }] })
     expect(s.glofox_membership_status).toBe('trial')
@@ -956,8 +971,24 @@ describe('shapeTrialEligibility', () => {
   it('paid pack → paid_pack', () => {
     expect(elig({ transactions: [tx()] })).toEqual({ eligible: false, reasons: ['paid_pack'] })
     // €0 pack and a refunded pack are not paid packs (the same definition as the snapshot)
-    expect(elig({ transactions: [tx({ amount_cents: 0, product_id: 'prod-free' })] })).toEqual({ eligible: true, reasons: [] })
+    expect(elig({ transactions: [tx({ amount_cents: 0, product_id: PACK5 })] })).toEqual({ eligible: true, reasons: [] })
     expect(elig({ transactions: [tx({ refunded: true })] })).toEqual({ eligible: true, reasons: [] })
+  })
+
+  it('a €0 transaction whose product cannot be resolved counts as a trial taken (only ever denies)', () => {
+    expect(elig({ transactions: [tx({ amount_cents: 0, product_id: 'prod-gone' })] })).toEqual({ eligible: false, reasons: ['trial_used'] })
+    expect(elig({ transactions: [tx({ amount_cents: 0, product_id: null })] }).reasons).toEqual(['trial_used'])
+    // an empty products map (the products read gave nothing) is the same unresolved case
+    expect(shapeTrialEligibility({ transactions: [tx({ amount_cents: 0, product_id: TRIAL })] }).reasons).toEqual(['trial_used'])
+    // a PAID transaction on an unresolved product is not a trial; an unknown amount is not €0
+    expect(elig({ transactions: [tx({ amount_cents: 6000, product_id: 'prod-gone', product_type: null, type: 'one_time' })] }).reasons).not.toContain('trial_used')
+    expect(elig({ transactions: [tx({ amount_cents: null, product_id: 'prod-gone', product_type: null })] }).reasons).not.toContain('trial_used')
+  })
+
+  it('a product with a null price is not a trial product, so its transaction is not trial_used', () => {
+    const products = new Map([['prod-unpriced', { un1t_id: 'prod-unpriced', type: 'one_time', price_cents: null }]])
+    expect(shapeTrialEligibility({ productsById: products, transactions: [tx({ product_id: 'prod-unpriced', amount_cents: 500, product_type: null })] }))
+      .toEqual({ eligible: true, reasons: [] })
   })
 
   it('reasons come in order trial_used, membership_history, paid_pack, each once', () => {

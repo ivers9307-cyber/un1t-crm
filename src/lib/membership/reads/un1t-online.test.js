@@ -107,8 +107,8 @@ const call = (db, key) => ({
 beforeEach(() => vi.clearAllMocks())
 
 describe('un1tOnlineReads surface', () => {
-  it('implements six reads plus pastDue and paymentsFor, and deliberately no arrears', () => {
-    expect(Object.keys(un1tOnlineReads).sort()).toEqual([...READS, 'pastDue', 'paymentsFor'].sort())
+  it('implements six reads plus pastDue, paymentsFor, pipelineInputs and trialEligibility, and deliberately no arrears', () => {
+    expect(Object.keys(un1tOnlineReads).sort()).toEqual([...READS, 'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility'].sort())
     expect(Object.isFrozen(un1tOnlineReads)).toBe(true)
     expect(un1tOnlineReads.arrears).toBeUndefined()
   })
@@ -632,5 +632,246 @@ describe('pastDue and paymentsFor', () => {
     }
     const { db } = makeDb(base(), { fail: ['un1t_transactions'] })
     expect(await un1tOnlineReads.paymentsFor(db, HATCH, ['c1'])).toEqual({ success: false, error: 'un1t_transactions boom' })
+  })
+})
+
+describe('paymentsFor argument hygiene (Task 5 review)', () => {
+  it('refuses a non-array contactIds without querying, as pastDue does', async () => {
+    for (const bad of ['c1', { 0: 'c1' }, 42, null, undefined]) {
+      const { db, log } = makeDb({})
+      expect(await un1tOnlineReads.paymentsFor(db, HATCH, bad)).toEqual({ success: false, error: 'contactIds must be an array' })
+      expect(log).toHaveLength(0)
+    }
+  })
+
+  it('clamps limit to 1000 (a larger limit asks the transactions page for at most 1000 rows)', async () => {
+    const { db, log } = makeDb({ un1t_subscriptions: [{ location_id: HATCH, un1t_id: 's1', un1t_user_id: 'u1', contact_id: 'c1', status: 'active', synced_at: SYNCED }] })
+    await un1tOnlineReads.paymentsFor(db, HATCH, ['c1'], { limit: 5_000_000 })
+    const txQuery = log.find((q) => q.table === 'un1t_transactions')
+    expect(txQuery.range).toEqual([0, 999])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// HATCHPIPE.2 Task 7 — pipelineInputs and trialEligibility
+// ---------------------------------------------------------------------------
+describe('pipelineInputs and trialEligibility', () => {
+  const OLD = '2026-10-17T10:00:00.000Z' // 110 min before the newest pull: stale
+  const client = (over = {}) => ({
+    id: over.un1t_user_id ?? 'u1', location_id: HATCH, un1t_user_id: 'u1', contact_id: 'c1', credit_balance: 0,
+    credit_unlimited: false, last_attended_at: null, remote_created_at: '2026-01-05T10:00:00Z', synced_at: SYNCED, ...over,
+  })
+  const csub = (over = {}) => ({ id: over.un1t_id ?? 's1', location_id: HATCH, un1t_id: 's1', un1t_user_id: 'u1', contact_id: 'c1', status: 'active', paused_at: null, synced_at: SYNCED, ...over })
+  const ctx = (over = {}) => ({
+    id: over.un1t_id ?? 'x1', location_id: HATCH, un1t_id: 'x1', un1t_user_id: 'u1', contact_id: 'c1', product_id: 'trial', product_type: 'pack',
+    type: 'one_time', amount_cents: 0, refunded: false, remote_created_at: '2026-10-01T09:00:00Z', ...over,
+  })
+  const contact = (over = {}) => ({ id: 'c1', name: 'Test One', email: 'one@example.test', location_id: HATCH, pipeline_dismissed_at: null, last_lead_source_at: null, ...over })
+  const prod = (over = {}) => ({ id: over.un1t_id, location_id: HATCH, un1t_id: 'trial', type: 'one_time', price_cents: 0, credits_per_period: 3, title: 'Trial', ...over })
+
+  const world = (over = {}) => ({
+    un1t_clients: [client(), client({ un1t_user_id: 'u2', contact_id: 'c2' }), client({ un1t_user_id: 'u3', contact_id: null }),
+      client({ location_id: STILLORGAN, un1t_user_id: 'o1', contact_id: 'c9' })],
+    un1t_subscriptions: [csub({ un1t_user_id: 'u2', contact_id: 'c2', un1t_id: 's2' })],
+    un1t_transactions: [ctx()],
+    un1t_products: [prod(), prod({ un1t_id: 'pack5', type: 'one_time', price_cents: 6000, credits_per_period: 5 }), prod({ location_id: STILLORGAN, un1t_id: 'other' })],
+    un1t_events: [{ id: 'e1', location_id: HATCH, un1t_id: 'e1', starts_at: '2026-10-10T18:00:00Z' }],
+    un1t_bookings: [{ id: 'b1', location_id: HATCH, un1t_id: 'b1', un1t_user_id: 'u1', contact_id: 'c1', event_id: 'e1', status: 'attended', source: 'direct', credit_charged: true, external_member_ref: null, remote_created_at: '2026-10-09T10:00:00Z' }],
+    contact_memberships: [{ id: 'm1', location_id: HATCH, contact_id: 'c1', source: 'un1t_online_api', status: 'ended', ended_at: '2026-09-01T00:00:00Z' }],
+    contacts: [contact(), contact({ id: 'c2', name: 'Test Two', email: 'two@example.test' }), contact({ id: 'c9', location_id: STILLORGAN })],
+    ...over,
+  })
+
+  describe('pipelineInputs', () => {
+    it('population is fresh un1t_clients with a contact; unlinked counts null contact_id', async () => {
+      const { db } = makeDb(world({
+        un1t_clients: [...world().un1t_clients, client({ un1t_user_id: 'stale', contact_id: 'c2', synced_at: OLD })],
+      }))
+      const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      expect(out.success).toBe(true)
+      expect(out.data.contacts.map((c) => c.id).sort()).toEqual(['c1', 'c2'])
+      expect([...out.data.snapshots.keys()].sort()).toEqual(['c1', 'c2'])
+      expect(out.data.unlinked).toBe(1)
+      expect(out.data.contacts.find((c) => c.id === 'c1')).toEqual({ id: 'c1', name: 'Test One', email: 'one@example.test', location_id: HATCH })
+    })
+
+    it('shapes each client from its own rows (bookings get starts_at from the event, history from transactions)', async () => {
+      const { db } = makeDb(world())
+      const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      const one = out.data.snapshots.get('c1')
+      expect(one.glofox_membership_status).toBe('lead')
+      expect(one.recent_bookings).toEqual([{ attended: true, status: 'ATTENDED', time_start: Math.floor(Date.parse('2026-10-10T18:00:00Z') / 1000) }])
+      expect(one.last_attended_at).toBe('2026-10-10T18:00:00Z')
+      expect(out.data.snapshots.get('c2').glofox_membership_status).toBe('member')
+      expect(out.data.snapshots.get('c2').recent_bookings).toEqual([])
+    })
+
+    it('a booking with no un1t_user_id is filed under the client its contact_id names', async () => {
+      const w = world()
+      w.un1t_bookings = [{ ...w.un1t_bookings[0], un1t_user_id: null, contact_id: 'c1' }]
+      const { db } = makeDb(w)
+      const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      expect(out.data.snapshots.get('c1').recent_bookings).toHaveLength(1)
+      expect(out.data.snapshots.get('c2').recent_bookings).toHaveLength(0)
+    })
+
+    it('every un1t table filtered by location_id; contacts read by id only, with the six named columns, no Glofox column', async () => {
+      const { db, log } = makeDb(world())
+      await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      const tables = new Set(log.map((q) => q.table))
+      expect([...tables].sort()).toEqual(['contact_memberships', 'contacts', 'un1t_bookings', 'un1t_clients', 'un1t_events', 'un1t_products', 'un1t_subscriptions', 'un1t_transactions'])
+      for (const q of log.filter((x) => x.table !== 'contacts')) {
+        expect(q.filters, q.table).toContainEqual(['eq', 'location_id', HATCH])
+      }
+      const contactQueries = log.filter((q) => q.table === 'contacts')
+      expect(contactQueries.length).toBeGreaterThan(0)
+      for (const q of contactQueries) {
+        expect(q.cols).toBe('id, name, email, location_id, pipeline_dismissed_at, last_lead_source_at')
+        expect(q.filters.map((f) => [f[0], f[1]])).toEqual([['in', 'id']])
+        expect(q.cols).not.toMatch(/glofox/)
+      }
+      expect(log.some((q) => q.table === 'contact_memberships' && q.filters.some((f) => f[1] === 'source' && f[2] === 'un1t_online_api'))).toBe(true)
+    })
+
+    it('a dual-studio contact (contacts.location_id = Stillorgan) is in the population; their Stillorgan dismissal is not lent', async () => {
+      const w = world({
+        un1t_clients: [client({ contact_id: 'cd' })],
+        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_memberships: [],
+        contacts: [contact({ id: 'cd', location_id: STILLORGAN, pipeline_dismissed_at: '2026-10-01T00:00:00Z', last_lead_source_at: '2026-10-02T00:00:00Z' })],
+      })
+      const { db } = makeDb(w)
+      const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      expect(out.data.contacts).toEqual([{ id: 'cd', name: 'Test One', email: 'one@example.test', location_id: STILLORGAN }])
+      const s = out.data.snapshots.get('cd')
+      expect(s.pipeline_dismissed_at).toBeNull()
+      expect(s.last_lead_source_at).toBeNull()
+    })
+
+    it('a stale subscription row does not make a member', async () => {
+      const w = world()
+      w.un1t_subscriptions = [csub({ un1t_user_id: 'u2', contact_id: 'c2', un1t_id: 's2' }), csub({ un1t_id: 'old', synced_at: OLD })]
+      const { db } = makeDb(w)
+      const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      expect(out.data.snapshots.get('c1').glofox_membership_status).not.toBe('member')
+      expect(out.data.snapshots.get('c2').glofox_membership_status).toBe('member')
+    })
+
+    it('a studio with no client rows is an empty answer', async () => {
+      const { db } = makeDb({})
+      expect(await un1tOnlineReads.pipelineInputs(db, HATCH)).toEqual({ success: true, data: { contacts: [], snapshots: new Map(), unlinked: 0 } })
+    })
+
+    it('refuses a missing location without querying', async () => {
+      const { db, log } = makeDb(world())
+      expect(await un1tOnlineReads.pipelineInputs(db, null)).toEqual({ success: false, error: 'No location' })
+      expect(log).toHaveLength(0)
+    })
+
+    it('any failed read → { success:false }', async () => {
+      for (const table of ['un1t_clients', 'un1t_subscriptions', 'un1t_transactions', 'un1t_products', 'un1t_bookings', 'un1t_events', 'contact_memberships', 'contacts']) {
+        const { db } = makeDb(world(), { fail: [table] })
+        expect(await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() }), table).toEqual({ success: false, error: `${table} boom` })
+      }
+    })
+
+    it('paginates past 1,000 bookings with range + order', async () => {
+      const w = world()
+      w.un1t_bookings = Array.from({ length: 1200 }, (_, i) => ({
+        id: `b${String(i).padStart(5, '0')}`, location_id: HATCH, un1t_id: `b${i}`, un1t_user_id: 'u1', contact_id: 'c1',
+        event_id: 'e1', status: 'booked', source: 'direct', credit_charged: false, external_member_ref: null, remote_created_at: '2026-10-09T10:00:00Z',
+      }))
+      const { db, log } = makeDb(w)
+      const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      expect(out.success).toBe(true)
+      const pages = log.filter((q) => q.table === 'un1t_bookings')
+      expect(pages.map((q) => q.range)).toEqual([[0, 999], [1000, 1999]])
+      for (const q of pages) expect(q.order).toBe('id')
+      // the shaper saw all of them: only the ten newest are kept, so assert via the cap
+      expect(out.data.snapshots.get('c1').recent_bookings).toHaveLength(10)
+    })
+
+    it('does not query un1t_write_events', async () => {
+      const { db, log } = makeDb(world())
+      await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      expect(log.some((q) => q.table === 'un1t_write_events')).toBe(false)
+    })
+  })
+
+  describe('trialEligibility', () => {
+    it('a new person is eligible', async () => {
+      const { db } = makeDb(world())
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'nobody', contactId: 'nobody' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
+    })
+
+    it('reads the person\'s transactions, subscriptions and the studio\'s FULL products map; a trial product keyed by id → trial_used', async () => {
+      const { db, log } = makeDb(world())
+      const out = await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })
+      expect(out).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+      for (const q of log) expect(q.filters, q.table).toContainEqual(['eq', 'location_id', HATCH])
+      const tx = log.find((q) => q.table === 'un1t_transactions')
+      const subs = log.find((q) => q.table === 'un1t_subscriptions')
+      expect(tx.filters).toContainEqual(['eq', 'un1t_user_id', 'u1'])
+      expect(subs.filters).toContainEqual(['eq', 'un1t_user_id', 'u1'])
+      // the products read is the whole studio's, not narrowed to this person's transactions
+      expect(log.find((q) => q.table === 'un1t_products').filters).toEqual([['eq', 'location_id', HATCH]])
+      expect(log.some((q) => q.table === 'contact_memberships')).toBe(false)
+    })
+
+    it('a €0 transaction whose product is not in the studio\'s products counts as a trial taken', async () => {
+      const w = world({ un1t_transactions: [ctx({ product_id: 'deleted-upstream' })] })
+      const { db } = makeDb(w)
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+    })
+
+    it('history older than the freshness window still counts (stale subscription row → membership_history)', async () => {
+      const w = world({ un1t_transactions: [], un1t_subscriptions: [csub({ un1t_id: 'old', status: 'canceled', synced_at: OLD }), csub({ un1t_user_id: 'u2', contact_id: 'c2', un1t_id: 's2' })] })
+      const { db } = makeDb(w)
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })).toEqual({ success: true, data: { eligible: false, reasons: ['membership_history'] } })
+    })
+
+    it('with a contactId: memberships at the studio from api and export sources, any status', async () => {
+      const w = world({
+        contact_memberships: [
+          { id: 'm1', location_id: HATCH, contact_id: 'c1', source: 'un1t_online_export', status: 'active', ended_at: null },
+          { id: 'm2', location_id: STILLORGAN, contact_id: 'c2', source: 'un1t_online_api', status: 'ended', ended_at: '2026-09-01T00:00:00Z' },
+          { id: 'm3', location_id: HATCH, contact_id: 'c2', source: 'glofox', status: 'ended', ended_at: '2026-09-01T00:00:00Z' },
+        ],
+      })
+      const { db, log } = makeDb(w)
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['membership_history'] } })
+      // Stillorgan's row and a non-un1t source are not this studio's un1t.online history
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c2' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
+      const q = log.find((x) => x.table === 'contact_memberships')
+      expect(q.filters).toContainEqual(['in', 'source', ['un1t_online_api', 'un1t_online_export']])
+      expect(q.filters).toContainEqual(['eq', 'location_id', HATCH])
+      expect(log.some((x) => x.table === 'un1t_transactions')).toBe(false)
+    })
+
+    it('a failed read → { success:false }, never eligible', async () => {
+      for (const [table, ids] of [
+        ['un1t_transactions', { un1tUserId: 'u1' }], ['un1t_subscriptions', { un1tUserId: 'u1' }],
+        ['un1t_products', { un1tUserId: 'u1' }], ['contact_memberships', { contactId: 'c1' }],
+      ]) {
+        const { db } = makeDb(world(), { fail: [table] })
+        const out = await un1tOnlineReads.trialEligibility(db, HATCH, ids)
+        expect(out, table).toEqual({ success: false, error: `${table} boom` })
+        expect(out.data).toBeUndefined()
+      }
+    })
+
+    it('neither id → { success:false } with no query', async () => {
+      const { db, log } = makeDb(world())
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH)).toMatchObject({ success: false })
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, {})).toMatchObject({ success: false })
+      expect(await un1tOnlineReads.trialEligibility(db, null, { un1tUserId: 'u1' })).toMatchObject({ success: false })
+      expect(log).toHaveLength(0)
+    })
+
+    it('neither read queries un1t_write_events', async () => {
+      const { db, log } = makeDb(world())
+      await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1', contactId: 'c1' })
+      await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      expect(log.some((q) => q.table === 'un1t_write_events')).toBe(false)
+    })
   })
 })

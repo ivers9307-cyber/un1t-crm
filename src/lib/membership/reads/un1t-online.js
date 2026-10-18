@@ -13,17 +13,22 @@
 //
 //   pastDue           { success, data: PastDueRow[] } | { success:false, error }
 //   paymentsFor       { success, data: { subscriptions, transactions, invoices, pastDue } } | { success:false, error }
+//   pipelineInputs    { success, data: { contacts, snapshots, unlinked } } | { success:false, error }
+//   trialEligibility  { success, data: { eligible, reasons } } | { success:false, error }
 //
 // There is no `arrears`: the Glofox arrears summary is a different number from
 // the per-subscription `pastDue` below (surviving open invoices, netted), so the
 // surface shows "unavailable" rather than a Glofox-shaped zero (supportsRead
-// false). `pastDue` / `paymentsFor` are un1t-only reads (HATCHPIPE.2): the
-// Glofox adapter lacks them.
+// false). `pastDue` / `paymentsFor` / `pipelineInputs` / `trialEligibility` are
+// un1t-only reads (HATCHPIPE.2): the Glofox adapter lacks them.
 //
 // SCOPE. Every query filters `<table>.location_id = locationId`, the studio the
 // MEMBERSHIP is held at. Nothing here reads `contacts`, so a contact who lives
 // at Stillorgan with an active Hatch subscription counts at Hatch (and still
-// counts at Stillorgan if they are a Glofox member there). Service-role client;
+// counts at Stillorgan if they are a Glofox member there). The one exception is
+// `pipelineInputs`, which reads `contacts` BY ID (never by location) for exactly
+// the people this studio's clients link to, and only six named columns.
+// Service-role client;
 // reads only, no writes. Every list read is range()+order() paginated.
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { logWarn } from '@/lib/log'
@@ -34,10 +39,12 @@ import {
   shapeCounts, shapeMrr, shapeFlows, shapeRevenue,
   firstSales, engagementRows, cancelsComparable, MEMBER_STATUSES,
   shapePastDue, normaliseUn1tInvoiceStatus, glofoxInterval,
+  shapePipelineSnapshot, shapeTrialEligibility,
 } from './un1t-online-shape'
 
 const PAGE = 1000
 const API_SOURCE = 'un1t_online_api'
+const EXPORT_SOURCE = 'un1t_online_export'
 
 // ---------------------------------------------------------------------------
 // Paginated list readers. All throw on a failed page (selectAll); the
@@ -166,6 +173,7 @@ const INVOICE_COLS = 'un1t_id, un1t_user_id, contact_id, subscription_id, status
 const TX_COLS = 'remote_created_at, product_title, type, amount_cents, currency, refunded'
 const KEY_CHUNK = 300
 const DEFAULT_PAYMENTS_LIMIT = 25
+const MAX_PAYMENTS_LIMIT = 1000
 
 /** Fresh rows of one sync-stamped table at a studio; `contactIds` (array) narrows to those contacts. */
 async function listFresh(db, loc, table, cols, contactIds) {
@@ -370,15 +378,20 @@ async function pastDue(db, locationId, { contactIds } = {}) {
 /**
  * The payments picture for a contact (or a merged set of contacts) at one
  * studio: fresh subscriptions, the newest `limit` transactions and fresh
- * invoices, and the earliest-`since` past-due row (or null).
+ * invoices, and the earliest-`since` past-due row (or null). `contactIds` must
+ * be an array (a non-array is refused, as pastDue does); `limit` is clamped to
+ * 1000, the page cap a single capped read can honour.
  */
 async function paymentsFor(db, locationId, contactIds, { limit = DEFAULT_PAYMENTS_LIMIT } = {}) {
   if (!locationId) return { success: false, error: 'No location' }
-  const ids = Array.isArray(contactIds) ? cleanIds(contactIds) : []
+  if (!Array.isArray(contactIds)) return { success: false, error: 'contactIds must be an array' }
+  const ids = cleanIds(contactIds)
   if (ids.length === 0) {
     return { success: true, data: { subscriptions: [], transactions: [], invoices: [], pastDue: null } }
   }
-  const n = Number.isFinite(Number(limit)) && Number(limit) >= 1 ? Math.floor(Number(limit)) : DEFAULT_PAYMENTS_LIMIT
+  const n = Number.isFinite(Number(limit)) && Number(limit) >= 1
+    ? Math.min(Math.floor(Number(limit)), MAX_PAYMENTS_LIMIT)
+    : DEFAULT_PAYMENTS_LIMIT
   try {
     const [billing, txRows] = await Promise.all([
       loadBilling(db, locationId, ids),
@@ -443,6 +456,170 @@ async function listNewestTransactions(db, loc, contactIds, limit) {
   return out.sort((a, b) => newestFirst(a.remote_created_at, b.remote_created_at)).slice(0, limit)
 }
 
+// ---------------------------------------------------------------------------
+// HATCHPIPE.2 — the pipeline inputs and trial eligibility (spec A §6.2).
+// Both load one studio's un1t_* rows and hand them to the pure shapers in
+// un1t-online-shape.js. Neither queries `un1t_write_events`: that table is spec
+// D's, and until it ships both pass `ledgerTrials: []` (spec D adds a
+// listLedgerTrials(db, locationId) reader here, in the PR that creates it).
+// ---------------------------------------------------------------------------
+const CLIENT_COLS = 'un1t_user_id, contact_id, credit_balance, credit_unlimited, last_attended_at, remote_created_at'
+const PIPE_SUB_COLS = 'un1t_user_id, contact_id, status, paused_at'
+const PIPE_TX_COLS = 'un1t_user_id, contact_id, product_id, product_type, type, amount_cents, refunded, remote_created_at'
+const PRODUCT_COLS = 'un1t_id, type, price_cents, credits_per_period, title'
+const BOOKING_COLS = 'un1t_user_id, contact_id, event_id, status, source, credit_charged, external_member_ref, remote_created_at'
+const EVENT_COLS = 'un1t_id, starts_at'
+const MEMBERSHIP_COLS = 'contact_id, source, status, ended_at'
+// Exactly these six, by id: no Glofox column is read (membership and the
+// pipeline are separate per studio; only the contact is shared).
+const PIPE_CONTACT_COLS = 'id, name, email, location_id, pipeline_dismissed_at, last_lead_source_at'
+
+/** Every row of one un1t table at a studio, paginated (not freshness-gated). */
+const listAtStudio = (db, loc, table, cols) => selectAll((from, to) => db
+  .from(table)
+  .select(cols)
+  .eq('location_id', loc)
+  .order('id', { ascending: true })
+  .range(from, to), { pageSize: PAGE })
+
+const productsMap = (rows) => new Map(rows.map((p) => [p.un1t_id, p]))
+
+/** Group rows into Map<key, row[]>; rows with no key are dropped. */
+function groupBy(rows, keyOf) {
+  const out = new Map()
+  for (const r of rows) {
+    const k = keyOf(r)
+    if (k == null) continue
+    if (!out.has(k)) out.set(k, [])
+    out.get(k).push(r)
+  }
+  return out
+}
+
+/**
+ * Everything the pipeline board needs for one un1t.online studio: the people
+ * (fresh un1t_clients linked to a contact) and one classifier snapshot each.
+ * `unlinked` counts the fresh clients with no contact. A booking, transaction
+ * or subscription belongs to a client by `un1t_user_id`, else by its
+ * `contact_id` when that names one of the studio's clients. If two clients link
+ * to the same contact, the first (by id) is the one snapshotted.
+ */
+async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
+  if (!locationId) return { success: false, error: 'No location' }
+  try {
+    const clients = await listFresh(db, locationId, 'un1t_clients', CLIENT_COLS)
+    const linked = clients.filter((c) => c.contact_id != null)
+    const unlinked = clients.length - linked.length
+    if (linked.length === 0) return { success: true, data: { contacts: [], snapshots: new Map(), unlinked } }
+
+    const [subs, txs, products, bookings, events, memberships, contactRows] = await Promise.all([
+      listFresh(db, locationId, 'un1t_subscriptions', PIPE_SUB_COLS),
+      listAtStudio(db, locationId, 'un1t_transactions', PIPE_TX_COLS),
+      listAtStudio(db, locationId, 'un1t_products', PRODUCT_COLS),
+      listAtStudio(db, locationId, 'un1t_bookings', BOOKING_COLS),
+      listAtStudio(db, locationId, 'un1t_events', EVENT_COLS),
+      selectAll((from, to) => db
+        .from('contact_memberships')
+        .select(MEMBERSHIP_COLS)
+        .eq('location_id', locationId)
+        .eq('source', API_SOURCE)
+        .order('id', { ascending: true })
+        .range(from, to), { pageSize: PAGE }),
+      selectAllByKeys(
+        cleanIds(linked.map((c) => c.contact_id)),
+        (keys, from, to) => db.from('contacts').select(PIPE_CONTACT_COLS).in('id', keys).order('id', { ascending: true }).range(from, to),
+        { chunkSize: KEY_CHUNK, pageSize: PAGE },
+      ),
+    ])
+
+    const userByContact = new Map()
+    for (const c of linked) if (!userByContact.has(c.contact_id)) userByContact.set(c.contact_id, c.un1t_user_id)
+    const owner = (r) => r.un1t_user_id ?? (r.contact_id != null ? userByContact.get(r.contact_id) ?? null : null)
+
+    const startsAt = new Map(events.map((e) => [e.un1t_id, e.starts_at ?? null]))
+    const subsBy = groupBy(subs, owner)
+    const txsBy = groupBy(txs, owner)
+    const bookingsBy = groupBy(
+      bookings.map((b) => ({ ...b, starts_at: startsAt.get(b.event_id) ?? null })),
+      owner,
+    )
+    const membershipsBy = groupBy(memberships, (m) => m.contact_id)
+    const productsById = productsMap(products)
+    const contactById = new Map(contactRows.map((c) => [c.id, c]))
+
+    const contacts = []
+    const snapshots = new Map()
+    for (const client of linked) {
+      const contact = contactById.get(client.contact_id)
+      if (!contact || snapshots.has(contact.id)) continue
+      contacts.push({ id: contact.id, name: contact.name ?? null, email: contact.email ?? null, location_id: contact.location_id ?? null })
+      snapshots.set(contact.id, shapePipelineSnapshot({
+        client,
+        contact,
+        locationId,
+        freshSubs: subsBy.get(client.un1t_user_id) ?? [],
+        transactions: txsBy.get(client.un1t_user_id) ?? [],
+        productsById,
+        bookings: bookingsBy.get(client.un1t_user_id) ?? [],
+        memberships: membershipsBy.get(client.contact_id) ?? [],
+        ledgerTrials: [],
+        now,
+      }))
+    }
+    return { success: true, data: { contacts, snapshots, unlinked } }
+  } catch (e) {
+    return { success: false, error: errMessage(e) }
+  }
+}
+
+/**
+ * May this person get the free trial at `locationId` (see shapeTrialEligibility)?
+ * Needs `un1tUserId` and/or `contactId`. With a un1t user: ALL their
+ * transactions and subscriptions at the studio (history, so no freshness
+ * window) and the studio's full products map. With a contact: their
+ * contact_memberships here from the api and export sources, any status. Any
+ * failed read is { success:false }: an unreadable history is never eligible.
+ */
+async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) {
+  if (!locationId) return { success: false, error: 'No location' }
+  if (un1tUserId == null && contactId == null) return { success: false, error: 'un1tUserId or contactId is required' }
+  try {
+    const [transactions, subscriptions, products, memberships] = await Promise.all([
+      un1tUserId == null ? [] : selectAll((from, to) => db
+        .from('un1t_transactions')
+        .select(PIPE_TX_COLS)
+        .eq('location_id', locationId)
+        .eq('un1t_user_id', un1tUserId)
+        .order('id', { ascending: true })
+        .range(from, to), { pageSize: PAGE }),
+      un1tUserId == null ? [] : selectAll((from, to) => db
+        .from('un1t_subscriptions')
+        .select('un1t_user_id, status')
+        .eq('location_id', locationId)
+        .eq('un1t_user_id', un1tUserId)
+        .order('id', { ascending: true })
+        .range(from, to), { pageSize: PAGE }),
+      un1tUserId == null ? [] : listAtStudio(db, locationId, 'un1t_products', PRODUCT_COLS),
+      contactId == null ? [] : selectAll((from, to) => db
+        .from('contact_memberships')
+        .select(MEMBERSHIP_COLS)
+        .eq('location_id', locationId)
+        .eq('contact_id', contactId)
+        .in('source', [API_SOURCE, EXPORT_SOURCE])
+        .order('id', { ascending: true })
+        .range(from, to), { pageSize: PAGE }),
+    ])
+    return {
+      success: true,
+      data: shapeTrialEligibility({
+        transactions, subscriptions, memberships, productsById: productsMap(products), ledgerTrials: [],
+      }),
+    }
+  } catch (e) {
+    return { success: false, error: errMessage(e) }
+  }
+}
+
 export const un1tOnlineReads = Object.freeze({
   membershipCounts,
   mrr,
@@ -452,4 +629,6 @@ export const un1tOnlineReads = Object.freeze({
   revenueMtd,
   pastDue,
   paymentsFor,
+  pipelineInputs,
+  trialEligibility,
 })
