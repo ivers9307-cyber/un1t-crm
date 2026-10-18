@@ -8,6 +8,9 @@
 // These push in real time what the number-health poll cron only catches later —
 // the number has sat at RED before, so minutes matter.
 
+import { studiosUsingNumbers } from './whatsapp-config.js'
+import { logError } from './log.js'
+
 export const NUMBER_EVENT_FIELDS = new Set([
   'phone_number_quality_update',
   'phone_number_name_update',
@@ -63,6 +66,32 @@ export async function pauseLocationDrips(db, locationId) {
     .is('paused_at', null)
     .select('id, name')
   return data || []
+}
+
+/**
+ * WAORGNUMBER.1 — the studios a health / quality / account event about these
+ * `whatsapp_numbers` rows (each { id, location_id }) must reach: every studio
+ * the number is switched on at (location_whatsapp_numbers), not just the
+ * row's home `location_id`.
+ *
+ * Fails SAFE: a failed link read (logged) or a number with no link rows at
+ * all answers the numbers' home studios, so a quality collapse still pauses
+ * drips and pages somebody. Never skips the pause.
+ *
+ * @returns {Promise<string[]>} distinct location ids
+ */
+export async function studiosForNumbers(db, numbers) {
+  const rows = (numbers || []).filter(Boolean)
+  const home = [...new Set(rows.map((r) => r.location_id).filter(Boolean))]
+  try {
+    const studios = await studiosUsingNumbers(db, rows.map((r) => r.id))
+    return studios.length ? studios : home
+  } catch (e) {
+    logError('wa-number-events', 'could not read the studios using the number; falling back to its home studio', {
+      number_ids: rows.map((r) => r.id), err: e?.message || String(e),
+    })
+    return home
+  }
 }
 
 // Operator-facing sentence describing an auto-pause, for appending to a
@@ -177,7 +206,7 @@ export function numberNotification(field, value = {}, label) {
  * Best-effort caller; may throw — the route wrapper swallows.
  *
  * WA-QUALITY.1 — a quality collapse (FLAGGED / limit DOWNGRADE) also auto-pauses
- * the matched location's in-flight drip broadcasts (status='sending',
+ * the matched number's studios' in-flight drip broadcasts (status='sending',
  * delivery_mode='drip', not already paused): the FLAGGED push used to say
  * "Pause broadcasts" while nothing did it, and a drip left running drains the
  * list into a throttled number. Idempotent twice over: an already-applied
@@ -201,8 +230,9 @@ export async function applyNumberEvent(db, field, value = {}, opts = {}) {
 
   // Account-level scope: only for events that carry no phone number at all.
   const wabaId = String(opts?.wabaId || '')
+  // WAORGNUMBER.1 — every studio with any number on that WABA switched on.
   const wabaLocations = !digits && wabaId
-    ? [...new Set(numbers.filter((r) => String(r.business_account_id || '') === wabaId).map((r) => r.location_id).filter(Boolean))]
+    ? await studiosForNumbers(db, numbers.filter((r) => String(r.business_account_id || '') === wabaId))
     : []
 
   const update = numberColumnUpdate(field, value)
@@ -216,7 +246,19 @@ export async function applyNumberEvent(db, field, value = {}, opts = {}) {
   // `matched` (an unmatched event can't scope the pause to a location) and on
   // the patch actually changing something (redelivered events stay no-ops).
   const pauseReason = matched && !unchanged ? broadcastPauseReason(field, value) : null
-  const pausedBroadcasts = pauseReason ? await pauseLocationDrips(db, matched.location_id) : []
+  // WAORGNUMBER.1 — at EVERY studio using the number; one studio's failed
+  // pause never stops the rest.
+  const matchedStudios = matched ? await studiosForNumbers(db, [matched]) : []
+  const pausedBroadcasts = []
+  if (pauseReason) {
+    for (const locationId of matchedStudios) {
+      try {
+        pausedBroadcasts.push(...await pauseLocationDrips(db, locationId))
+      } catch (e) {
+        logError('wa-number-events', 'drip auto-pause failed at a studio', { location_id: locationId, err: e?.message || String(e) })
+      }
+    }
+  }
 
   // Idempotency: a Meta retry of a column-bearing event we already applied
   // stays silent. Notify-only events (account/capability) always notify.
@@ -227,7 +269,7 @@ export async function applyNumberEvent(db, field, value = {}, opts = {}) {
   }
 
   // W0.13 — never fan an unidentified event out to every tenant's managers.
-  const locations = matched ? [matched.location_id] : wabaLocations
+  const locations = matched ? matchedStudios : wabaLocations
   const unmatched = !locations.length
   if (unmatched && notify) {
     console.error(`[wa-number-events] unmatched ${field} event (number ${digits || '(none)'}, waba ${wabaId || '(none)'}): ${notify.title}`)

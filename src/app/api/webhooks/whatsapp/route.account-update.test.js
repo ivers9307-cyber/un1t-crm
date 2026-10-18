@@ -244,3 +244,38 @@ describe('POST /api/webhooks/whatsapp — account_update is dispatched to BOTH h
     expect(pushesOfType('coex_link')).toHaveLength(0)
   })
 })
+
+// WAORGNUMBER.1 — a coexistence number switched on at several studios: the
+// offboard / reconnect page reaches managers at each of them, resolved through
+// the link rows (location_whatsapp_numbers), not just the number's home.
+describe('WAORGNUMBER.1 — account_update resolves studios through link rows', () => {
+  const dbWithLinks = (linkResult) => makeDb({
+    whatsapp_numbers: (ops) => (ops.some(([m]) => m === 'update') ? { data: null, error: null } : { data: [COEX_ROW], error: null }),
+    location_whatsapp_numbers: linkResult,
+  })
+
+  it('pages managers at every studio using the number', async () => {
+    db = dbWithLinks({ data: [{ location_id: 'loc-still' }, { location_id: 'loc-hatch' }], error: null })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(reqFor(wabaEnvelope('account_update', { event: 'ACCOUNT_OFFBOARDED' })))
+    expect(res.status).toBe(200)
+
+    expect(coexLinkWrites()).toHaveLength(1)
+    const pushed = pushesOfType('coex_link')
+    expect(pushed.map(([loc]) => loc).sort()).toEqual(['loc-hatch', 'loc-still'])
+    for (const [, roles, payload] of pushed) {
+      expect(roles).toEqual(['owner', 'manager', 'head_coach'])
+      expect(payload.data).toMatchObject({ type: 'coex_link', number_id: 'wn-coex' })
+    }
+  })
+
+  it('a failed link read still pages the number\'s home studio', async () => {
+    db = dbWithLinks({ data: null, error: { message: 'links down' } })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(reqFor(wabaEnvelope('account_update', { event: 'ACCOUNT_OFFBOARDED' })))
+    expect(res.status).toBe(200)
+    expect(pushesOfType('coex_link').map(([loc]) => loc)).toEqual(['loc-still'])
+  })
+})
