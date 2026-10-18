@@ -15,6 +15,21 @@
 
 import { createHash } from 'crypto'
 import { websiteEventToken } from './meta-conversions-settings.js'
+import { getLocationWhatsAppNumberConfig } from './whatsapp-config'
+
+// WAORGNUMBER.1 — the token + WABA of the number switched on at this studio
+// (link default first, else the newest switch-on), whatever its home studio:
+// an organisation number sends a studio's events with the one token. A failed
+// lookup is "no number", logged, as the old unchecked whatsapp_numbers read
+// was: attribution must never break a webhook or a booking.
+async function studioNumber(locationId) {
+  try {
+    return await getLocationWhatsAppNumberConfig(locationId)
+  } catch (e) {
+    console.error('[meta-capi] WhatsApp number lookup failed:', e?.message)
+    return null
+  }
+}
 
 export function buildBusinessMessagingEvent({ eventName, ctwaClid, wabaId, eventTime, contentName }) {
   const event = {
@@ -57,25 +72,20 @@ export async function sendCtwaConversion(db, { locationId, contactId, eventName,
     const datasetId = loc?.settings?.meta_ads?.dataset_id
     if (!datasetId) return { sent: false, reason: 'no_dataset' }
 
-    const { data: num } = await db.from('whatsapp_numbers')
-      .select('access_token, business_account_id')
-      .eq('location_id', locationId)
-      .eq('is_active', true)
-      .limit(1)
-      .maybeSingle()
-    if (!num?.access_token) return { sent: false, reason: 'no_token' }
+    const num = await studioNumber(locationId)
+    if (!num?.token) return { sent: false, reason: 'no_token' }
 
     const event = buildBusinessMessagingEvent({
       eventName,
       ctwaClid,
-      wabaId: num.business_account_id,
+      wabaId: num.businessAccountId,
       eventTime: Math.floor(Date.now() / 1000),
       contentName,
     })
     const res = await fetch(`https://graph.facebook.com/v21.0/${datasetId}/events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: [event], access_token: num.access_token }),
+      body: JSON.stringify({ data: [event], access_token: num.token }),
     })
     const json = await res.json().catch(() => ({}))
     if (!res.ok || json.error) {
@@ -193,13 +203,8 @@ export async function sendWebsiteConversion(db, { locationId, eventName, email, 
     // the WhatsApp number token, as before.
     let accessToken = websiteEventToken(loc?.settings, null)
     if (!accessToken) {
-      const { data: num } = await db.from('whatsapp_numbers')
-        .select('access_token, business_account_id')
-        .eq('location_id', locationId)
-        .eq('is_active', true)
-        .limit(1)
-        .maybeSingle()
-      accessToken = websiteEventToken(null, num?.access_token)
+      const num = await studioNumber(locationId)
+      accessToken = websiteEventToken(null, num?.token)
     }
     if (!accessToken) return { sent: false, reason: 'no_token' }
 

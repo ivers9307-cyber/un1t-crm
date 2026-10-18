@@ -7,17 +7,13 @@
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
 
-const numberRows = { rows: [] }
-vi.mock('./supabase', () => ({
-  createServerClient: () => ({
-    from: () => {
-      const b = {}
-      for (const m of ['select', 'eq', 'order', 'limit']) b[m] = () => b
-      b.then = (res, rej) => Promise.resolve({ data: numberRows.rows, error: null }).then(res, rej)
-      return b
-    },
-  }),
-}))
+// WAORGNUMBER.1 — the fake models location_whatsapp_numbers too: a number in
+// `state.numbers` is switched on at its home studio (the mig 743 backfill).
+const state = { numbers: [] }
+vi.mock('./supabase', async () => {
+  const { fakeWhatsAppDb } = await import('./whatsapp-numbers-fake-db.test-helpers.js')
+  return { createServerClient: () => fakeWhatsAppDb(state) }
+})
 
 const wa = await import('./whatsapp.js')
 const { isWhatsAppNumberMissing } = await import('./whatsapp-number-missing.js')
@@ -25,7 +21,7 @@ const { isWhatsAppNumberMissing } = await import('./whatsapp-number-missing.js')
 const ORIGINAL_ENV = { ...process.env }
 const LOC = 'a0000000-0000-4000-8000-000000000001'
 const ROW = {
-  id: 'n1', location_id: LOC, label: 'Main', phone_number_id: 'PNI-SYNTH', business_account_id: 'WABA-SYNTH',
+  id: 'n1', location_id: LOC, organization_id: 'ORG-1', label: 'Main', phone_number_id: 'PNI-SYNTH', business_account_id: 'WABA-SYNTH',
   app_id: 'APP-SYNTH', access_token: 'tok-synth', source: 'cloud_api', is_default: true, is_active: true,
 }
 
@@ -52,7 +48,7 @@ const CALLS = {
 }
 
 beforeEach(() => {
-  numberRows.rows = []
+  state.numbers = []
   process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
   process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni'
   process.env.WHATSAPP_BUSINESS_ACCOUNT_ID = 'env-waba'
@@ -77,7 +73,7 @@ describe.each(Object.keys(CALLS))('%s', (name) => {
   })
 
   it("the location's own number → Meta is called with that number's token", async () => {
-    numberRows.rows = [ROW]
+    state.numbers = [ROW]
     await CALLS[name]({ locationId: LOC })
     expect(globalThis.fetch).toHaveBeenCalled()
     const [, init] = globalThis.fetch.mock.calls[0]

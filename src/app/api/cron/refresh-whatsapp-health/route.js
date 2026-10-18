@@ -38,13 +38,28 @@ import {
   fetchNumberHealth, healthDowngradeReason, pollQualityPauseReason,
   isMetaAuthError, tokenTransition, tokenInvalidNotification, tokenRecoveredNotification,
 } from '@/lib/whatsapp-number-health'
-import { pauseLocationDrips, dripPauseNote } from '@/lib/whatsapp-number-events'
+import { pauseLocationDrips, dripPauseNote, studiosForNumbers } from '@/lib/whatsapp-number-events'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
 
 export async function POST(request) { return GET(request) }
+
+// WAORGNUMBER.1 — a number can be switched on at several studios, so every
+// alert and the drip pause go to ALL of them, not just n.location_id.
+// studiosForNumbers already falls back to the home studio (logged) when the
+// link read fails; this guard covers it throwing for any other reason.
+async function studiosOf(db, n) {
+  try {
+    return await studiosForNumbers(db, [n])
+  } catch (e) {
+    logError('wa-health', 'could not resolve the studios using the number; falling back to its home studio', {
+      number_id: n.id, err: e?.message || String(e),
+    })
+    return n.location_id ? [n.location_id] : []
+  }
+}
 
 // Best-effort manager push — an alert failure never fails the poll.
 // C21 PUSHDONE.1 — returns the push outcome ('delivered' | 'settled' |
@@ -104,25 +119,33 @@ export async function GET(request) {
       checked++
 
       // WA-TOKEN.1 — recovery page, once per transition (gated on the old stamp).
-      if (tokenTransition(n.token_invalid_at, false) === 'recovered' && n.location_id) {
+      if (tokenTransition(n.token_invalid_at, false) === 'recovered') {
         const notify = tokenRecoveredNotification(n.label)
-        tally(await tryPush(n.location_id, {
-          title: notify.title, body: notify.body,
-          category: 'whatsapp', data: { type: 'wa_token', number_id: n.id },
-        }, n.id))
+        for (const locationId of await studiosOf(db, n)) {
+          tally(await tryPush(locationId, {
+            title: notify.title, body: notify.body,
+            category: 'whatsapp', data: { type: 'wa_token', number_id: n.id },
+          }, n.id))
+        }
       }
 
       // WA-QUALITY.5 — poll-observed collapse into RED/FLAGGED pauses the
       // location's in-flight drips, exactly like the webhook path. Best-effort:
       // a pause failure must not stop the poll (the push below still warns).
       const pauseReason = pollQualityPauseReason(n.quality_rating, health.quality_rating)
+      const studios = (pauseReason || reason) ? await studiosOf(db, n) : []
       let pausedBroadcasts = []
-      if (pauseReason && n.location_id) {
-        try {
-          pausedBroadcasts = await pauseLocationDrips(db, n.location_id)
-          pausedDrips += pausedBroadcasts.length
-        } catch (e) {
-          console.error(`[wa-health] drip auto-pause failed for ${n.id}:`, e?.message || e)
+      if (pauseReason) {
+        // WAORGNUMBER.1 — every studio using the number; one studio's failed
+        // pause never stops the rest.
+        for (const locationId of studios) {
+          try {
+            const paused = await pauseLocationDrips(db, locationId)
+            pausedBroadcasts = pausedBroadcasts.concat(paused)
+            pausedDrips += paused.length
+          } catch (e) {
+            console.error(`[wa-health] drip auto-pause failed for ${n.id} at ${locationId}:`, e?.message || e)
+          }
         }
       }
 
@@ -130,14 +153,16 @@ export async function GET(request) {
       // misses (first-seed RED: prev null isn't a "downgrade" but IS an
       // emergency). Never on a healthy first seed. Best-effort.
       const alertReason = reason || pauseReason
-      if (alertReason && n.location_id) {
+      if (alertReason) {
         const note = dripPauseNote(pausedBroadcasts, pauseReason || alertReason)
-        tally(await tryPush(n.location_id, {
-          title: `WhatsApp health: ${n.label || 'number'}`,
-          body: `${alertReason}. Ease off sends and check Meta Business Manager.${note ? ` ${note}` : ''}`,
-          category: 'whatsapp',
-          data: { type: 'wa_quality', number_id: n.id },
-        }, n.id))
+        for (const locationId of studios) {
+          tally(await tryPush(locationId, {
+            title: `WhatsApp health: ${n.label || 'number'}`,
+            body: `${alertReason}. Ease off sends and check Meta Business Manager.${note ? ` ${note}` : ''}`,
+            category: 'whatsapp',
+            data: { type: 'wa_quality', number_id: n.id },
+          }, n.id))
+        }
       }
     } catch (e) {
       // Bad/expired token, missing scope, Meta hiccup — keep going.
@@ -148,9 +173,9 @@ export async function GET(request) {
         // token already known-invalid just refreshes quality_checked_at.
         if (tokenTransition(n.token_invalid_at, true) === 'invalidated') {
           await writeNumberState(db, n.id, { token_invalid_at: nowIso, quality_checked_at: nowIso })
-          if (n.location_id) {
-            const notify = tokenInvalidNotification(n.label)
-            tally(await tryPush(n.location_id, {
+          const notify = tokenInvalidNotification(n.label)
+          for (const locationId of await studiosOf(db, n)) {
+            tally(await tryPush(locationId, {
               title: notify.title, body: notify.body,
               category: 'whatsapp', data: { type: 'wa_token', number_id: n.id },
             }, n.id))

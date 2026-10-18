@@ -315,6 +315,28 @@ function makeHealthDb(results = {}, calls = []) {
   }
 }
 
+// WAORGNUMBER.1 — the WhatsApp row grades the numbers SWITCHED ON at the studio
+// (location_whatsapp_numbers → active number), not those homed there.
+describe('getIntegrationHealth — WhatsApp numbers', () => {
+  const embed = (n) => ({ whatsapp_numbers: { label: 'Main', quality_rating: 'GREEN', messaging_limit_tier: 'TIER_1K', token_invalid_at: null, quality_checked_at: '2026-10-17T10:00:00Z', ...n } })
+
+  it('grades each active number switched on at the studio, whatever its home', async () => {
+    const calls = []
+    const db = makeHealthDb({ location_whatsapp_numbers: { data: [embed({}), embed({ label: 'Second', quality_rating: 'RED' })], error: null } }, calls)
+    const rows = await getIntegrationHealth(db, 'loc-1')
+    expect(rows.find((r) => r.key === 'wa:Main')).toMatchObject({ name: 'WhatsApp — Main', status: 'ok', lastSuccess: '2026-10-17T10:00:00Z' })
+    expect(rows.find((r) => r.key === 'wa:Second').status).not.toBe('ok')
+    expect(calls).toContainEqual(['location_whatsapp_numbers', 'eq', 'location_id', 'loc-1'])
+    expect(calls).toContainEqual(['location_whatsapp_numbers', 'eq', 'whatsapp_numbers.is_active', true])
+    expect(calls.some((c) => c[0] === 'whatsapp_numbers')).toBe(false)
+  })
+
+  it('no number switched on → one unknown row, "No active number"', async () => {
+    const rows = await getIntegrationHealth(makeHealthDb({ location_whatsapp_numbers: { data: [], error: null } }), 'loc-1')
+    expect(rows.find((r) => r.key === 'wa')).toMatchObject({ status: 'unknown', detail: 'No active number' })
+  })
+})
+
 describe('getIntegrationHealth — webhook dead-letter count', () => {
   it('counts NULL-location rows alongside the location’s own, unresolved only', async () => {
     const calls = []

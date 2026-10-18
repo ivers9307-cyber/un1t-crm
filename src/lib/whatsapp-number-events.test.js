@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { logError } from './log.js'
+
+vi.mock('./log.js', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 import {
   NUMBER_EVENT_FIELDS, numberColumnUpdate, numberNotification, broadcastPauseReason,
-  applyNumberEvent, pauseLocationDrips, dripPauseNote,
+  applyNumberEvent, pauseLocationDrips, dripPauseNote, studiosForNumbers,
 } from './whatsapp-number-events.js'
 
 describe('NUMBER_EVENT_FIELDS', () => {
@@ -79,10 +82,21 @@ describe('broadcastPauseReason', () => {
 // Table-routing fake: whatsapp_numbers supports the select/update(+eq) shapes
 // applyNumberEvent uses; whatsapp_broadcasts supports the auto-pause chain
 // update(..).eq(..).eq(..).eq(..).is(..).select(..) and records its filters.
-function fakeDb({ numbers = [], pausedRows = [] } = {}) {
+// location_whatsapp_numbers (mig 743) answers studiosUsingNumbers: `links` is
+// [{ location_id, whatsapp_number_id }]; `linkError` makes that read fail.
+function fakeDb({ numbers = [], pausedRows = [], links = [], linkError = null } = {}) {
   const calls = { updates: [], pauseFilters: [] }
   const db = {
     from: (table) => {
+      if (table === 'location_whatsapp_numbers') {
+        return {
+          select: () => ({
+            in: (_col, ids) => Promise.resolve(linkError
+              ? { data: null, error: linkError }
+              : { data: links.filter((l) => ids.includes(l.whatsapp_number_id)), error: null }),
+          }),
+        }
+      }
       if (table === 'whatsapp_broadcasts') {
         return {
           update: (patch) => {
@@ -277,5 +291,75 @@ describe('dripPauseNote', () => {
   it('no pauses → null (no misleading note)', () => {
     expect(dripPauseNote([], 'x')).toBeNull()
     expect(dripPauseNote(undefined, 'x')).toBeNull()
+  })
+})
+
+
+// ── WAORGNUMBER.1 — a number shared by several studios fans out to all of them ─
+
+const STILL_ID = 'loc1'
+const HATCH_ID = 'locHatch'
+const sharedLinks = [
+  { location_id: STILL_ID, whatsapp_number_id: 'n1' },
+  { location_id: HATCH_ID, whatsapp_number_id: 'n1' },
+]
+
+describe('studiosForNumbers', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('returns every studio the numbers are switched on at', async () => {
+    const { db } = fakeDb({ numbers: [STILLORGAN], links: sharedLinks })
+    expect((await studiosForNumbers(db, [STILLORGAN])).sort()).toEqual([HATCH_ID, STILL_ID].sort())
+  })
+
+  it('falls back to the number\'s home studio and logs when the link read fails (never skips the pause)', async () => {
+    const { db } = fakeDb({ numbers: [STILLORGAN], linkError: { message: 'boom' } })
+    expect(await studiosForNumbers(db, [STILLORGAN])).toEqual([STILL_ID])
+    expect(logError).toHaveBeenCalledWith('wa-number-events', expect.any(String), expect.objectContaining({ err: expect.stringContaining('boom') }))
+  })
+
+  it('a number with no link rows at all still reaches its home studio', async () => {
+    const { db } = fakeDb({ numbers: [STILLORGAN], links: [] })
+    expect(await studiosForNumbers(db, [STILLORGAN])).toEqual([STILL_ID])
+  })
+
+  it('no numbers, no studios', async () => {
+    const { db } = fakeDb()
+    expect(await studiosForNumbers(db, [])).toEqual([])
+  })
+})
+
+describe('applyNumberEvent — shared numbers (WAORGNUMBER.1)', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('quality collapse pauses drips at every studio with the number switched on', async () => {
+    const { db, calls } = fakeDb({ numbers: [STILLORGAN], links: sharedLinks, pausedRows: [{ id: 'b1', name: 'Promo' }] })
+    const res = await applyNumberEvent(db, 'phone_number_quality_update', { display_phone_number: '35315789401', event: 'FLAGGED' })
+    const pausedAt = calls.pauseFilters.map((f) => f.find(([, c]) => c === 'location_id')[2]).sort()
+    expect(pausedAt).toEqual([HATCH_ID, STILL_ID].sort())
+    expect(res.locations.sort()).toEqual([HATCH_ID, STILL_ID].sort())
+    expect(res.unmatched).toBe(false)
+    expect(res.pausedBroadcasts).toHaveLength(2)
+    expect(res.notify.body).toMatch(/auto-paused 2 in-flight drip broadcasts/i)
+  })
+
+  it('a failed link read still pauses the number\'s home studio and notifies it', async () => {
+    const { db, calls } = fakeDb({ numbers: [STILLORGAN], linkError: { message: 'boom' }, pausedRows: [{ id: 'b1', name: 'Promo' }] })
+    const res = await applyNumberEvent(db, 'phone_number_quality_update', { display_phone_number: '35315789401', event: 'FLAGGED' })
+    expect(calls.pauseFilters).toHaveLength(1)
+    expect(calls.pauseFilters[0].find(([, c]) => c === 'location_id')[2]).toBe(STILL_ID)
+    expect(res.locations).toEqual([STILL_ID])
+    expect(logError).toHaveBeenCalled()
+  })
+
+  it('an account-level event reaches every studio using any number on that WABA', async () => {
+    const other = { ...STILLORGAN, id: 'n2', location_id: 'loc2', display_phone: '+353 1 111 2222' }
+    const { db } = fakeDb({
+      numbers: [STILLORGAN, other, { ...STILLORGAN, id: 'n9', location_id: 'locX', display_phone: '+353 1 999 9999', business_account_id: 'WABA-OTHER' }],
+      links: [...sharedLinks, { location_id: 'loc2', whatsapp_number_id: 'n2' }, { location_id: 'locX', whatsapp_number_id: 'n9' }],
+    })
+    const res = await applyNumberEvent(db, 'account_update', { event: 'DISABLED_UPDATE' }, { wabaId: 'WABA-1' })
+    expect(res.locations.sort()).toEqual([HATCH_ID, STILL_ID, 'loc2'].sort())
+    expect(res.unmatched).toBe(false)
   })
 })

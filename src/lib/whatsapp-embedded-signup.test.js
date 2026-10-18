@@ -85,17 +85,20 @@ describe('registerNumber', () => {
   })
 })
 
-describe('planPersistence', () => {
+describe('planPersistence (WAORGNUMBER.1: a number belongs to an organisation)', () => {
   it('no existing row → insert', () => {
-    expect(planPersistence({ existingRow: null, locationId: 'L1' })).toEqual({ action: 'insert' })
+    expect(planPersistence({ existingRow: null, organizationId: 'O1' })).toEqual({ action: 'insert' })
   })
-  it('existing row in the same location → update (reconnect refresh)', () => {
-    expect(planPersistence({ existingRow: { id: 'row1', location_id: 'L1' }, locationId: 'L1' }))
+  it('existing row in the same organisation → update (reconnect refresh), whatever its home studio', () => {
+    expect(planPersistence({ existingRow: { id: 'row1', organization_id: 'O1', location_id: 'L9' }, organizationId: 'O1' }))
       .toEqual({ action: 'update', id: 'row1' })
   })
-  it('existing row owned by ANOTHER location → conflict, never reassign', () => {
-    expect(planPersistence({ existingRow: { id: 'row1', location_id: 'L2' }, locationId: 'L1' }))
-      .toEqual({ action: 'conflict', owningLocationId: 'L2' })
+  it('existing row owned by ANOTHER organisation → conflict, never reassign', () => {
+    expect(planPersistence({ existingRow: { id: 'row1', organization_id: 'O2', location_id: 'L2' }, organizationId: 'O1' }))
+      .toEqual({ action: 'conflict', owningOrganizationId: 'O2' })
+  })
+  it('a row with no organisation is never treated as ours', () => {
+    expect(planPersistence({ existingRow: { id: 'row1', organization_id: null }, organizationId: 'O1' }).action).toBe('conflict')
   })
 })
 

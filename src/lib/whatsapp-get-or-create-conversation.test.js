@@ -5,6 +5,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./whatsapp-thread-location', () => ({ numberlessHomeStudio: vi.fn(async () => null) }))
+// WAORGNUMBER.1 — the sending number is resolved through the link table
+// (getLocationWhatsAppNumberConfig builds its own client): the shared fake
+// models it from `state.numbers` / `state.links`.
+let state
+vi.mock('./supabase', async () => {
+  const { fakeWhatsAppDb } = await import('./whatsapp-numbers-fake-db.test-helpers.js')
+  return { createServerClient: () => fakeWhatsAppDb(state) }
+})
+const { link } = await import('./whatsapp-numbers-fake-db.test-helpers.js')
 const { getOrCreateConversation } = await import('./whatsapp.js')
 const { numberlessHomeStudio } = await import('./whatsapp-thread-location')
 
@@ -50,12 +59,11 @@ function makeDb(state) {
   return { from, writes }
 }
 
-let state
 beforeEach(() => {
   vi.clearAllMocks()
   state = {
     whatsapp_conversations: [],
-    whatsapp_numbers: [{ id: 'n-still', location_id: STILL, is_active: true, is_default: true }],
+    numbers: [{ id: 'n-still', location_id: STILL, is_active: true, is_default: true }],
   }
 })
 
@@ -66,6 +74,32 @@ describe('getOrCreateConversation — WAHOMESTUDIO.1', () => {
     const id = await getOrCreateConversation(db, { id: 'k1', wa_phone: '15555550100', location_id: HATCH }, STILL)
     expect(state.whatsapp_conversations[0]).toMatchObject({ id, location_id: HATCH, contact_id: 'k1', whatsapp_number_id: 'n-still' })
     expect(numberlessHomeStudio).toHaveBeenCalledWith(db, { id: 'k1', wa_phone: '15555550100', location_id: HATCH }, STILL)
+  })
+
+  it('stamps the number switched on at the sending studio, whatever its home (WAORGNUMBER.1)', async () => {
+    // The organisation number is homed at Hatch but switched on at Still only.
+    state.numbers = [{ id: 'n-org', location_id: HATCH, is_active: true }]
+    state.links = [link(STILL, 'n-org')]
+    numberlessHomeStudio.mockResolvedValueOnce(HATCH)
+    await getOrCreateConversation(makeDb(state), { id: 'k1', wa_phone: '15555550100', location_id: HATCH }, STILL)
+    expect(state.whatsapp_conversations[0]).toMatchObject({ location_id: HATCH, whatsapp_number_id: 'n-org' })
+  })
+
+  it('a number homed at the sending studio but switched off there is not stamped (WAORGNUMBER.1)', async () => {
+    state.links = []
+    numberlessHomeStudio.mockResolvedValueOnce(HATCH)
+    await getOrCreateConversation(makeDb(state), { id: 'k1', wa_phone: '15555550100', location_id: HATCH }, STILL)
+    expect(state.whatsapp_conversations[0].whatsapp_number_id ?? null).toBeNull()
+  })
+
+  it('an unreadable sending number files the thread unstamped, logged (never thrown)', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    state.faults = { location_whatsapp_numbers: { message: 'boom' } }
+    numberlessHomeStudio.mockResolvedValueOnce(HATCH)
+    await getOrCreateConversation(makeDb(state), { id: 'k1', wa_phone: '15555550100', location_id: HATCH }, STILL)
+    expect(state.whatsapp_conversations[0].whatsapp_number_id ?? null).toBeNull()
+    expect(errSpy).toHaveBeenCalledWith('[whatsapp] getOrCreateConversation: sending number lookup failed', STILL, expect.stringContaining('boom'))
+    errSpy.mockRestore()
   })
 
   it('reuses the home studio’s existing thread', async () => {

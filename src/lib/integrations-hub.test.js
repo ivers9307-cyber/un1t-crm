@@ -864,7 +864,7 @@ describe('assembleIntegrationsHub — a failed read is never "not connected" (HU
 
   for (const [table, key, label] of [
     ['xero_connections', 'xero', 'Xero'],
-    ['whatsapp_numbers', 'whatsapp', 'WhatsApp'],
+    ['location_whatsapp_numbers', 'whatsapp', 'WhatsApp'],
     ['ad_accounts', 'ads', 'Meta Ads'],
   ]) {
     it(`${table} read fails → ${key} rows unknown per location + one attention row`, async () => {
@@ -886,8 +886,30 @@ describe('assembleIntegrationsHub — a failed read is never "not connected" (HU
     })
   }
 
+  // WAORGNUMBER.1 — a studio's WhatsApp card lists the numbers SWITCHED ON there
+  // (location_whatsapp_numbers), with the link's own default flag, whatever
+  // the number's home studio. Fictional ids only.
+  it('lists the numbers switched on at each studio, link default first, homed anywhere', async () => {
+    const num = (id, extra = {}) => ({ id, label: id, display_phone: '+353000000000', source: 'cloud_api', token_type: 'permanent', connected_via: 'manual', is_active: true, quality_rating: 'GREEN', messaging_limit_tier: 'TIER_1K', token_invalid_at: null, ...extra })
+    const db = tableDb({
+      location_whatsapp_numbers: { data: [
+        { location_id: LOC_A.id, is_default: true, created_at: '2026-09-01T00:00:00Z', whatsapp_numbers: num('org-number') },
+        { location_id: LOC_B.id, is_default: true, created_at: '2026-09-02T00:00:00Z', whatsapp_numbers: num('org-number') },
+        { location_id: LOC_B.id, is_default: false, created_at: '2026-09-03T00:00:00Z', whatsapp_numbers: num('own-number', { quality_rating: 'RED' }) },
+      ], error: null },
+    })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    const a = data.whatsapp.find((r) => r.locationId === LOC_A.id)
+    const b = data.whatsapp.find((r) => r.locationId === LOC_B.id)
+    expect(a.numbers.map((n) => [n.id, n.isDefault])).toEqual([['org-number', true]])
+    expect(b.numbers.map((n) => [n.id, n.isDefault])).toEqual([['org-number', true], ['own-number', false]])
+    expect(b.status).toBe('action_needed')
+    expect(db.inCalls.location_whatsapp_numbers).toContainEqual(['location_id', [LOC_A.id, LOC_B.id]])
+    expect(db.inCalls.whatsapp_numbers).toBeUndefined()
+  })
+
   it('a WhatsApp unknown row carries no numbers and no budget', async () => {
-    const db = tableDb({ whatsapp_numbers: { error: { message: 'x' } } })
+    const db = tableDb({ location_whatsapp_numbers: { error: { message: 'x' } } })
     const data = await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
     expect(data.whatsapp[0]).toMatchObject({ status: 'unknown', numbers: [], budget: null })
   })

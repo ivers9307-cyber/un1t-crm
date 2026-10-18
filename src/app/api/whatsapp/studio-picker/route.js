@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { logError } from '@/lib/log'
+import { locationsWithWhatsApp } from '@/lib/whatsapp-config'
 import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-settings'
 import { LABEL_MAX, QUESTION_MAX, KEYWORDS_MAX, KEYWORD_LEN_MAX, DEFAULT_PICKER_QUESTION } from '@/lib/wa-studio-pick/config'
 
@@ -23,10 +24,10 @@ const PutSchema = z.object({
 
 const NO_NUMBER_ERROR = 'This studio has no WhatsApp number, so it cannot ask the question.'
 
+// WAORGNUMBER.1 — a studio can ask the question when an active number is
+// switched on there (throws on a failed read, as before).
 async function hasNumber(db, locationId) {
-  const { data, error } = await db.from('whatsapp_numbers').select('id').eq('location_id', locationId).eq('is_active', true).limit(1)
-  if (error) throw error
-  return (data || []).length > 0
+  return (await locationsWithWhatsApp(db, [locationId])).has(locationId)
 }
 
 const view = (p, has) => ({

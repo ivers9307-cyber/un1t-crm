@@ -13,7 +13,7 @@ export function fakeLocationsDb({ reads, write = { data: { id: 'loc' }, error: n
   const nextRead = () => (queue ? (queue.length > 1 ? queue.shift() : queue[0]) : reads)
   const chain = (result) => {
     const b = {
-      select: () => b, eq: () => b, is: () => b, not: () => b, gte: () => b, order: () => b, limit: () => b,
+      select: () => b, eq: () => b, in: () => b, is: () => b, not: () => b, gte: () => b, order: () => b, limit: () => b,
       single: () => Promise.resolve(result()), maybeSingle: () => Promise.resolve(result()),
       then: (ok, bad) => Promise.resolve(result()).then(ok, bad),
     }

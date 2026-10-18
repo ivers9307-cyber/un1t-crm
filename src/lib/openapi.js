@@ -24,6 +24,8 @@ import {
   passwordSchema, tenantDomainBrandConfigSchema,
   giversEnquirySchema,
   Un1tOnlineConnectSchema,
+  orgWhatsAppNumberCreateSchema, orgWhatsAppEmbeddedSignupSchema,
+  studioWhatsAppNumberSwitchSchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 import { PLATFORM_NAME } from './brand-name.js'
@@ -4410,29 +4412,181 @@ registry.registerPath({
   path: '/api/locations/{id}/whatsapp/embedded-signup',
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
-  summary: 'Exchange an Embedded Signup code and connect the WABA/number to this location',
-  description: "Orchestrates code→business-token exchange, an ownership check against whatsapp_numbers (a number already connected to a different location 409s BEFORE any Meta-side mutation), WABA webhook subscription, conditional number registration, then upsert into whatsapp_numbers. Nothing persists unless every Meta call succeeded — safe to re-run with a fresh code. mode='cloud_api' (default) supplies phone_number_id from the ES session and registers the number; mode='coexistence' omits phone_number_id (resolved server-side from the WABA) and skips registration — the number is already live on the WhatsApp Business app. Master-or-owner gated, matching the numbers CRUD route.",
+  summary: 'RETIRED: Embedded Signup now runs at the organisation',
+  description: "WAORGNUMBER.1: a number belongs to the organisation, so connecting one is POST /api/organizations/{id}/whatsapp/embedded-signup. This route answers 410 { success:false, error, moved_to:'/settings/whatsapp-numbers' } to a signed-in caller.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    410: { description: 'Moved to the organisation (moved_to: /settings/whatsapp-numbers)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAORGNUMBER.1 (R8, Task 6) — a studio switches the organisation's numbers on and off
+const WaStudioNumber = z.object({
+  id: uuidLike,
+  label: z.string(),
+  display_phone: z.string().nullable(),
+  is_active: z.boolean(),
+  on: z.boolean(),
+  is_default: z.boolean(),
+}).openapi('WaStudioNumber')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/whatsapp/numbers',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "List the organisation's WhatsApp numbers as this studio sees them",
+  description: 'Every number of the studio\'s organisation with on (switched on at this studio) and is_default (this studio\'s default). No token or other credential is returned.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Numbers', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ numbers: z.array(WaStudioNumber) }) }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — location not in your assignments', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/whatsapp/numbers',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Switch an organisation number on or off at this studio",
+  description: "Owner, manager or master at THIS studio (403 otherwise). The number must belong to the studio's organisation (404 otherwise). isDefault:true (with on:true) makes it the studio default, clearing the previous default first. Switching off the default promotes the newest remaining number; switching off the last one is allowed: the studio stops sending.",
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: studioWhatsAppNumberSwitchSchema } } } },
+  responses: {
+    200: { description: 'The studio\'s numbers after the change', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ numbers: z.array(WaStudioNumber) }) }) } } },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner, manager or master at this studio required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such number in this studio\'s organisation', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAORGNUMBER.1 (R8) — the organisation's WhatsApp numbers (org-admin or master; cookie auth)
+const WaOrgNumberPublic = WaNumberPublic.extend({
+  history_sync_status: z.string().nullable(),
+  history_sync_started_at: z.string().nullable(),
+  coex_link_status: z.string().nullable(),
+  coex_offboarded_at: z.string().nullable(),
+}).openapi('WaOrgNumberPublic')
+
+const orgNumbersParams = z.object({ id: uuidLike })
+const orgNumberParams = z.object({ id: uuidLike, numberId: uuidLike })
+const orgAdminResponses = {
+  401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  403: { description: 'Forbidden — master or organisation admin role required', content: { 'application/json': { schema: ErrorResponse } } },
+}
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/organizations/{id}/whatsapp/numbers',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "List the organisation's WhatsApp numbers",
+  description: "Every number of the organisation. The access token is returned only as the fixed mask (access_token_redacted); location_id is the number's home studio.",
+  request: { params: orgNumbersParams },
+  responses: {
+    200: { description: 'Numbers', content: { 'application/json': { schema: z.object({ success: z.literal(true), numbers: z.array(WaOrgNumberPublic) }) } } },
+    ...orgAdminResponses,
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/organizations/{id}/whatsapp/numbers',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Add a WhatsApp number to the organisation',
+  description: "home_location_id must be a studio of this organisation (400 otherwise; the database does not refuse another organisation's studio). The number is switched on at its home studio by the database (mig 743's AFTER INSERT trigger: default only when that studio has none); the route never inserts the link row.",
+  request: { params: orgNumbersParams, body: { content: { 'application/json': { schema: orgWhatsAppNumberCreateSchema } } } },
+  responses: {
+    200: { description: 'Number added', content: { 'application/json': { schema: z.object({ success: z.literal(true), number: WaOrgNumberPublic }) } } },
+    400: { description: 'Invalid body, or the home studio is not a studio of this organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'phone_number_id (globally unique) or label already in use', content: { 'application/json': { schema: ErrorResponse } } },
+    ...orgAdminResponses,
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/organizations/{id}/whatsapp/numbers/{numberId}',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Edit one of the organisation's WhatsApp numbers",
+  description: "Any subset of the fields. A token is written only when fresh (a mask or blank echoed back is dropped). home_location_id moves the home studio and must be a studio of this organisation (400 otherwise); it does not touch the per-studio switch-on rows. Another organisation's number is a 404.",
   request: {
-    params: z.object({ id: uuidLike }),
+    params: orgNumberParams,
     body: {
       content: {
         'application/json': {
           schema: z.object({
-            mode: z.enum(['cloud_api', 'coexistence']).default('cloud_api'),
-            code: z.string().min(1),
-            waba_id: z.string().regex(/^\d+$/, 'waba_id must be a numeric Meta id'),
-            phone_number_id: z.string().regex(/^\d+$/, 'phone_number_id must be a numeric Meta id').optional(),
-          }).openapi('WaEmbeddedSignupExchange'),
+            label: z.string().min(1).max(120).optional(),
+            phone_number_id: z.string().min(1).max(64).optional(),
+            access_token: z.string().min(20).max(2000).optional(),
+            business_account_id: z.string().max(64).nullable().optional(),
+            app_id: z.string().max(64).nullable().optional(),
+            display_phone: z.string().max(32).nullable().optional(),
+            source: z.enum(['cloud_api', 'coexistence']).optional(),
+            is_active: z.boolean().optional(),
+            home_location_id: uuidLike.optional(),
+          }).openapi('WaOrgNumberPatch'),
         },
       },
     },
   },
   responses: {
-    200: { description: 'WABA/number connected to this location', content: { 'application/json': { schema: SuccessResponse(WaNumberPublic) } } },
-    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden — location not in your assignments, or master/owner role required', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'Number already connected to a different location, or a concurrent connect/label collision', content: { 'application/json': { schema: ErrorResponse } } },
-    502: { description: 'A Meta call failed (code exchange, WABA subscription, or number registration)', content: { 'application/json': { schema: ErrorResponse } } },
+    200: { description: 'Number updated', content: { 'application/json': { schema: z.object({ success: z.literal(true), number: WaOrgNumberPublic }) } } },
+    400: { description: 'Invalid body, or the home studio is not a studio of this organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Number not found in this organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Phone number ID or label already in use', content: { 'application/json': { schema: ErrorResponse } } },
+    ...orgAdminResponses,
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/organizations/{id}/whatsapp/numbers/{numberId}',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Remove one of the organisation's WhatsApp numbers",
+  description: "Hard delete; the number's per-studio switch-on rows cascade. Another organisation's number is a 404.",
+  request: { params: orgNumberParams },
+  responses: {
+    200: { description: 'Removed', content: { 'application/json': { schema: z.object({ success: z.literal(true) }) } } },
+    404: { description: 'Number not found in this organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    ...orgAdminResponses,
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/organizations/{id}/whatsapp/embedded-signup',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Embedded Signup launch config (app_id, config_id, configured)',
+  description: 'Launch config for the "Connect with WhatsApp" button. Reports configured:false instead of throwing when WHATSAPP_APP_ID / WHATSAPP_ES_CONFIG_ID are unset.',
+  request: { params: orgNumbersParams },
+  responses: {
+    200: { description: 'Launch config', content: { 'application/json': { schema: SuccessResponse(WaEmbeddedSignupConfig) } } },
+    ...orgAdminResponses,
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/organizations/{id}/whatsapp/embedded-signup',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Exchange an Embedded Signup code and connect the WABA/number to the organisation',
+  description: "Code→business-token exchange, an ownership check against whatsapp_numbers (a number held by a different organisation 409s BEFORE any Meta-side mutation), WABA webhook subscription, conditional registration (cloud_api only), then upsert. Nothing persists unless every Meta call succeeded. A number the organisation already holds is refreshed in place and keeps its home studio; a NEW number needs home_location_id (a studio of this organisation, 400 otherwise, checked before any Meta call) and is switched on there by the database. mode='coexistence' omits phone_number_id (resolved from the WABA) and skips registration.",
+  request: { params: orgNumbersParams, body: { content: { 'application/json': { schema: orgWhatsAppEmbeddedSignupSchema } } } },
+  responses: {
+    200: { description: 'WABA/number connected', content: { 'application/json': { schema: SuccessResponse(WaOrgNumberPublic) } } },
+    400: { description: 'Missing or invalid home studio, or no phone_number_id', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Number held by a different organisation, or a concurrent connect/label collision', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'A Meta call failed (code exchange, WABA subscription, probe or registration)', content: { 'application/json': { schema: ErrorResponse } } },
+    ...orgAdminResponses,
   },
 })
 

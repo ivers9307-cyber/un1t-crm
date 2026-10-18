@@ -25,6 +25,8 @@ import { Instagram } from '@/components/icons/InstagramIcon'
 import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { hasRoleAtLocation } from '@/lib/role-at-location'
+import { ADMIN_ROLES } from '@/lib/schemas'
+import { isOrgAdmin } from '@/lib/org-admin'
 
 import XeroIntegrationTab from './integrations/XeroIntegrationTab'
 import GlofoxIntegrationTab from './integrations/GlofoxIntegrationTab'
@@ -288,7 +290,7 @@ export default function LocationIntegrations({ location, xeroConnection, xeroRea
             <BcaIntegrationTab location={location} canEdit={isMaster} sampleCar={sampleBcaCar} />
           )}
           {activeKey === 'whatsapp' && (
-            <WhatsAppIntegrationTab location={location} canEdit={ownsWhatsAppHere} />
+            <WhatsAppIntegrationTab location={location} canEdit={ownsWhatsAppHere} canManageNumbers={isOrgAdmin(user, location.organization_id)} canSwitch={hasRoleAtLocation(user, location.id, ADMIN_ROLES)} />
           )}
           {activeKey === 'instagram' && (
             <ConnectionsSection locationId={location.id} locationName={location.name} embedded />

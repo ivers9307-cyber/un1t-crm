@@ -30,7 +30,12 @@ vi.mock('@/lib/whatsapp', () => ({
 
 const getConversationNumberConfig = vi.fn()
 const templateLocationIdFor = vi.fn()
-vi.mock('@/lib/whatsapp-config', () => ({ getConversationNumberConfig, templateLocationIdFor }))
+// The real locationsWithWhatsApp runs over the stub db (WAORGNUMBER.1).
+vi.mock('@/lib/whatsapp-config', async (importOriginal) => ({
+  locationsWithWhatsApp: (await importOriginal()).locationsWithWhatsApp,
+  getConversationNumberConfig,
+  templateLocationIdFor,
+}))
 
 // The source must come off the location row: a separate read is a failure.
 const resolveMembershipSource = vi.fn(async () => { throw new Error('separate membership-source read') })
@@ -65,7 +70,8 @@ const APPROVED = (name) => [{ name, language: 'en', status: 'APPROVED', componen
 
 // A recording stub. `cfg`:
 //   location        the one active studio
-//   ownsNumber      what the whatsapp_numbers read answers (true / false / 'error')
+//   ownsNumber      what the location_whatsapp_numbers read answers (WAORGNUMBER.1: a
+//                   number switched on at the studio) — true / false / 'error'
 //   followConvs     follow-up candidate rows
 //   checkinConv     the contact's thread at the studio for a check-in (or null)
 //   messages        the thread (oldest first; the stub answers newest first)
@@ -78,9 +84,9 @@ function stubDb(cfg) {
     const has = (...f) => q.filters.some((x) => JSON.stringify(x) === JSON.stringify(f))
     switch (q.table) {
       case 'locations': return { data: [cfg.location], error: null }
-      case 'whatsapp_numbers':
+      case 'location_whatsapp_numbers':
         if (cfg.ownsNumber === 'error') return { data: null, error: { message: 'statement timeout', code: '57014' } }
-        return { data: cfg.ownsNumber ? [{ id: 'num-own' }] : [], error: null }
+        return { data: cfg.ownsNumber ? [{ location_id: cfg.location.id }] : [], error: null }
       case 'whatsapp_conversations':
         if (q.op === 'update') return { data: null, error: null }
         if (q.opts?.head) return { count: cfg.sentToday ?? 0, error: null }
@@ -218,8 +224,20 @@ describe('T6-A — a studio with its own number sends exactly as before', () => 
     const db = stubDb({ location: STILL_LOC, ownsNumber: true, followConvs: two, messages: NUDGE_THREAD })
     await runAgentFollowups(db, { nowMs: NOW })
     expect(sendTextMessage).toHaveBeenCalledTimes(2)
-    expect(reads(db, 'whatsapp_numbers')).toHaveLength(1)
-    expect(reads(db, 'whatsapp_numbers')[0].filters).toEqual([['eq', 'location_id', STILL], ['eq', 'is_active', true]])
+    expect(reads(db, 'location_whatsapp_numbers')).toHaveLength(1)
+    expect(reads(db, 'location_whatsapp_numbers')[0].filters).toEqual([['in', 'location_id', [STILL]], ['eq', 'whatsapp_numbers.is_active', true]])
+  })
+
+  // WAORGNUMBER.1 — "owns a number" is a number switched on at the studio, not
+  // one homed there: the read never touches whatsapp_numbers.
+  it('a studio with a switched-on org number sends with { locationId }', async () => {
+    const db = stubDb({ location: HATCH_LOC, ownsNumber: true, followConvs: [CONV(HATCH)], messages: NUDGE_THREAD })
+    const res = await runAgentFollowups(db, { nowMs: NOW })
+    expect(res.nudges).toBe(1)
+    expect(sendTextMessage.mock.calls[0][2]).toEqual({ locationId: HATCH })
+    expect(reads(db, 'location_whatsapp_numbers').map((q) => q.filters[0])).toEqual([['in', 'location_id', [HATCH]]])
+    expect(reads(db, 'whatsapp_numbers')).toHaveLength(0)
+    expect(getConversationNumberConfig).not.toHaveBeenCalled()
   })
 })
 
