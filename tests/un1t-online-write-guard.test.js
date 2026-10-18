@@ -667,6 +667,46 @@ describe('UN1TWRITE.7 — the sync cannot write', { timeout: WHOLE_REPO_TIMEOUT_
   })
 })
 
+// UN1TWRITE.8 — the refund card is RECORD-ONLY. A refund is never moved by the
+// CRM (no /refunds endpoint, no forceRefund): fileRefundCard only files a card
+// and the approval route only closes it. So neither may reach the write
+// transport, its ops, its ledger or the mirror, however many imports deep, and
+// neither may name a Glofox or un1t.online client. Task 23 adds the booking
+// executor to un1t-online-approval.js; when it does, the refund entry below
+// moves to its own file (or this walk becomes a per-function check) so the
+// executor can import the ops while the refund path still cannot.
+describe('UN1TWRITE.8 — the refund path is record-only', { timeout: WHOLE_REPO_TIMEOUT_MS }, () => {
+  const REFUND_ENTRIES = ['src/lib/un1t-online-approval.js']
+
+  it('the refund entry exists (a rename does not slip out of the fence)', () => {
+    for (const k of REFUND_ENTRIES) expect(realIo.exists(k), k).toBe(true)
+  })
+
+  it('un1t-online-approval.js reaches no write module (transport, ops, ledger, judge, mirror), transitively', () => {
+    expect(fenceBreaches(REFUND_ENTRIES, realIo)).toEqual([])
+  })
+
+  it('the walk resolves every import it meets, and is not vacuous', () => {
+    const { chains, unresolved } = walkImports(REFUND_ENTRIES, realIo)
+    expect(unresolved).toEqual([])
+    expect(chains.size).toBeGreaterThan(REFUND_ENTRIES.length)
+  })
+
+  it('it imports no Glofox or un1t.online client either', () => {
+    const { chains } = walkImports(REFUND_ENTRIES, realIo)
+    const clients = [...chains.keys()].filter((k) => /(^|\/)(glofox|un1t-online)(\.|-(?!approval))[^/]*$/.test(k) && isScanned(k))
+    expect(clients).toEqual([])
+  })
+
+  it('the fence is aimed at a real walker: an import of the ops from the approval file would be caught', () => {
+    const io = {
+      exists: realIo.exists,
+      read: (k) => (k === 'src/lib/un1t-online-approval.js' ? "import { x } from '@/lib/un1t-online-write-ops'" : realIo.read(k)),
+    }
+    expect(fenceBreaches(REFUND_ENTRIES, io)).toContain('src/lib/un1t-online-approval.js -> src/lib/un1t-online-write-ops.js')
+  })
+})
+
 describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REPO_TIMEOUT_MS }, () => {
   const writeSideFile = (entry) => isWriteModule(entry.key) || /un1t-online-write/.test(entry.text.split('\n').filter((l) => /^\s*(import|export)\b|\bfrom\s+['"]|\bimport\(|\brequire\(/.test(l)).join('\n'))
   const sendFiles = () => filesMentioning(/\bsend\b/)

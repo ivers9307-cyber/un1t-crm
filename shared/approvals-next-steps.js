@@ -9,6 +9,7 @@
 //                     edit and send it themselves (nothing auto-sends)
 //   type 'book'     — open the Command Centre Book tab (desktop rail)
 //   type 'sequence' — open the sequence picker for the contact
+//   type 'note'     — plain text for staff, no action (refund_request)
 //
 // Auto-executed approvals ('actioned') get no steps: the agent already
 // sent the confirmation into the thread.
@@ -64,6 +65,22 @@ export function buildDeclineDraft(kind, reasonKey, ctx = {}) {
 export function getNextSteps(kind, outcome, ctx = {}) {
   const name = firstName(ctx)
   const what = whatLabel(ctx)
+
+  // UN1TWRITE.8 — a refund_request is record-only. Approving it records the
+  // card as 'actioned' (so both outcomes get the one note): the refund itself
+  // is done by hand in the un1t.online owner console. A decline sends no draft:
+  // Mia's refund_request_text already answered the customer. type 'note' is
+  // plain text, not an action (the phone only renders 'composer' steps).
+  if (kind === 'refund_request') {
+    if (outcome === 'approved' || outcome === 'actioned') {
+      return [{
+        id: 'refund_by_hand',
+        label: 'Recorded. The refund itself is done by hand in the un1t.online owner console.',
+        type: 'note',
+      }]
+    }
+    if (outcome === 'declined') return []
+  }
 
   if (outcome === 'declined') {
     const steps = []

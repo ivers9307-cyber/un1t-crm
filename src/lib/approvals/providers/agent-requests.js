@@ -47,6 +47,8 @@ const KIND_LABELS = {
   class_booking: 'Book class',
   consultation: 'Book consultation',
   event_move: 'Move event entry',
+  // UN1TWRITE.8 — record-only: the refund is done by hand in un1t.online.
+  refund_request: 'Refund request',
 }
 
 // One-line summary of the request payload per kind. Exported for tests.
@@ -59,6 +61,12 @@ export function agentRequestSubtitle(row) {
   }
   // EVENT-MOVE.7 — the move summary (web-only module; see event-move-card.js).
   if (row?.kind === 'event_move') return approvalSummary(row)
+  // UN1TWRITE.8 — 'Double payment · €15'; the reason as words, the amount when known.
+  if (row?.kind === 'refund_request') {
+    const words = String(d.reason || '').replace(/_/g, ' ').trim()
+    const reason = words ? words.charAt(0).toUpperCase() + words.slice(1) : null
+    return [reason, formatMoneyMinor(d.amount_cents, d.currency || 'EUR') || null].filter(Boolean).join(' · ') || 'Refund request'
+  }
   if (row?.kind === 'consultation') {
     return [d.date, d.start_time].filter(Boolean).join(' · ') || 'Consultation request'
   }

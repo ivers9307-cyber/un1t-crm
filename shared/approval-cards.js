@@ -12,6 +12,7 @@ export const APPROVAL_KIND_LABELS = Object.freeze({
   event_booking: 'Event booking',
   event_cancellation: 'Event cancellation',
   membership_purchase: 'Membership purchase',
+  refund_request: 'Refund request',
 })
 
 // One-line summary of the request payload per kind. Mirrors (and

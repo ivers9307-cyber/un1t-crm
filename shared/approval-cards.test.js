@@ -27,6 +27,10 @@ describe('approvalCardSummary', () => {
   it('never throws on null input', () => {
     expect(() => approvalCardSummary(null)).not.toThrow()
   })
+  // UN1TWRITE.8 — the record-only refund card.
+  it("labels refund_request 'Refund request'", () => {
+    expect(APPROVAL_KIND_LABELS.refund_request).toBe('Refund request')
+  })
 })
 
 describe('mergeTimeline', () => {

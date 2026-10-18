@@ -175,7 +175,11 @@ export async function PATCH(request, { params }) {
   const nowIso = new Date().toISOString()
   // Executing kinds carry an intent marker for the duration of the side
   // effect, so a crash is visible (and retryable) rather than silent.
-  const executing = v.data.status === 'approved' && (EXECUTING_KINDS.has(row.kind) || autoCancel)
+  // UN1TWRITE.8 — a refund_request is RECORD-ONLY: approving it executes
+  // nothing (the refund is done by hand in the un1t.online owner console), but
+  // it takes the same marker so the row closes out like every executing kind.
+  const recordOnlyRefund = row.kind === 'refund_request' && v.data.status === 'approved'
+  const executing = v.data.status === 'approved' && (EXECUTING_KINDS.has(row.kind) || autoCancel || recordOnlyRefund)
   const claimPatch = {
     status: v.data.status,
     decision_note: v.data.decision_note?.trim() || null,
@@ -224,6 +228,17 @@ export async function PATCH(request, { params }) {
       confirmationCopy = await agentConfirmationTemplates(db, row.location_id)
     }
     return confirmationCopy[key]
+  }
+
+  // UN1TWRITE.8 — record-only: no un1t.online call, no Glofox call, no message.
+  // Mia's refund_request_text already answered the customer in the thread, so
+  // approving only records that staff made the refund by hand. Before every
+  // other branch, and it imports nothing from the write side (the guard walks
+  // this file's refund path in tests/un1t-online-write-guard.test.js).
+  if (executing && row.kind === 'refund_request') {
+    executed = { ok: true, record_only: true }
+    details = { ...details, result: executed }
+    finalStatus = 'actioned'
   }
 
   // AGENT-EVENTS.3 — approving a drafted PAID-entry cancellation
@@ -769,7 +784,9 @@ export async function PATCH(request, { params }) {
   // in-thread (operator-editable approval_decline_text). Best-effort; only
   // for requests that came from a live conversation (funnel rows without a
   // thread have no message window to use).
-  if (v.data.status === 'declined' && row.conversation_id) {
+  // UN1TWRITE.8 — not for a refund_request: Mia's refund_request_text already
+  // answered in the thread, so a decline notice would be a second, confusing word.
+  if (v.data.status === 'declined' && row.conversation_id && row.kind !== 'refund_request') {
     try {
       const { sendAgentThreadMessage, buildDeclineNoticeText } = await import('@/lib/agent/notify')
       await sendAgentThreadMessage(db, {

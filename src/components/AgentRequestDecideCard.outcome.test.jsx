@@ -24,3 +24,21 @@ describe('outcomeLine — event_move', () => {
     expect(line.text).not.toMatch(/Glofox/)
   })
 })
+
+// UN1TWRITE.8 — a refund card is record-only: the line must not claim Glofox
+// or a customer message.
+describe('outcomeLine — refund_request', () => {
+  const item = { kind: 'refund_request', conversationId: 'conv1' }
+
+  it('actioned says the refund is done by hand in un1t.online, not "executed in Glofox"', () => {
+    const line = outcomeLine('actioned', item, { ok: true, record_only: true })
+    expect(line).toEqual({ tone: 'ok', text: 'Recorded. The refund itself is done by hand in the un1t.online owner console.' })
+    expect(line.text).not.toMatch(/glofox/i)
+  })
+
+  it('declined says the customer was not messaged', () => {
+    const line = outcomeLine('declined', item, null)
+    expect(line.text).toMatch(/not messaged/)
+    expect(line.text).not.toMatch(/—/)
+  })
+})
