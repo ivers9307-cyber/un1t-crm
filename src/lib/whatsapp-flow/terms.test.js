@@ -57,7 +57,7 @@ describe('FLOW_JSON', () => {
 
   it('the SLOT footer marks the new Flow so the handler can send every declared key', () => {
     const slotFooter = byId.SLOT.layout.children[0].children.find((c) => c.type === 'Footer')
-    expect(slotFooter['on-click-action'].payload.terms_flow).toBe(true)
+    expect(slotFooter['on-click-action'].payload.terms_flow).toBe('1')
   })
 
   it('every DETAILS to CONFIRM to complete payload forwards terms_accepted', () => {
@@ -114,7 +114,7 @@ describe('handler', () => {
 
   it('the new Flow (terms_flow posted) gets every declared key at a studio that does not ask', async () => {
     settings = glofox
-    const d = await exchange(SCREEN.SLOT, { path: 'class', slot: 's', terms_flow: true })
+    const d = await exchange(SCREEN.SLOT, { path: 'class', slot: 's', terms_flow: '1' })
     expect(d.data).toMatchObject({ terms_required: false, terms_label: '', terms_url: '', terms_accepted: false, terms_error: '' })
   })
 
