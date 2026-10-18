@@ -20,9 +20,13 @@ const {
   getWhatsAppConfig,
   getWhatsAppConfigById,
   getLocationWhatsAppNumberConfig,
+  getLocationNumberForWaba,
   resolveWhatsAppNumberByPhoneNumberId,
   classifyInboundOwner,
+  studiosUsingNumbers,
+  locationsWithWhatsApp,
 } = await import('./whatsapp-config.js')
+const { fakeWhatsAppDb, link } = await import('./whatsapp-numbers-fake-db.test-helpers.js')
 
 // Build a mock Supabase client whose .from('whatsapp_numbers')
 // chain resolves to the given rows.
@@ -53,16 +57,17 @@ beforeEach(() => {
   delete process.env.WHATSAPP_APP_ID
 })
 
-describe('getWhatsAppConfig — tier 1 (db row)', () => {
+describe('getWhatsAppConfig — tier 1 (a number switched on at the studio)', () => {
   it('returns the default row when present', async () => {
-    createServerClient.mockReturnValue(mockDb({
-      rows: [{
-        id: 'n1', location_id: 'loc-1', label: 'Main',
+    createServerClient.mockReturnValue(fakeWhatsAppDb({
+      numbers: [{
+        id: 'n1', location_id: 'loc-1', organization_id: 'org-1', label: 'Main',
         phone_number_id: 'PNI-123', business_account_id: 'WABA-456',
         app_id: 'APP-789', access_token: 'tok-default',
         display_phone: '+353 1 234 5678', source: 'cloud_api',
         is_default: true, is_active: true,
       }],
+      links: [link('loc-1', 'n1', { is_default: true })],
     }))
     const cfg = await getWhatsAppConfig('loc-1')
     expect(cfg.source).toBe('db')
@@ -73,13 +78,14 @@ describe('getWhatsAppConfig — tier 1 (db row)', () => {
     expect(cfg.sourceKind).toBe('cloud_api')
   })
 
-  it('falls back to is_active=true row when no default exists', async () => {
-    createServerClient.mockReturnValue(mockDb({
-      rows: [{
-        id: 'n2', location_id: 'loc-1', label: 'Backup',
+  it('falls back to a switched-on active number when no link is the default', async () => {
+    createServerClient.mockReturnValue(fakeWhatsAppDb({
+      numbers: [{
+        id: 'n2', location_id: 'loc-1', organization_id: 'org-1', label: 'Backup',
         phone_number_id: 'PNI-999', access_token: 'tok-active',
         source: 'cloud_api', is_default: false, is_active: true,
       }],
+      links: [link('loc-1', 'n2')],
     }))
     const cfg = await getWhatsAppConfig('loc-1')
     expect(cfg.source).toBe('db')
@@ -126,11 +132,13 @@ describe('getWhatsAppConfig — no own number → typed refusal, never the env n
 // changes what Meta shows on "this studio's number" (chat openers) must not
 // land on the legacy global number when the studio has none of its own.
 describe('getLocationWhatsAppNumberConfig — the location tier only (WAROLE.1)', () => {
-  it("returns the location's active row, default first", async () => {
-    const db = mockDb({ rows: [{ id: 'n1', location_id: 'loc-1', label: 'Main', phone_number_id: 'PNI-123', access_token: 'tok-default', source: 'cloud_api', is_default: true, is_active: true }] })
-    createServerClient.mockReturnValue(db)
+  it("returns the location's switched-on active number, default first", async () => {
+    createServerClient.mockReturnValue(fakeWhatsAppDb({
+      numbers: [{ id: 'n1', location_id: 'loc-1', organization_id: 'org-1', label: 'Main', phone_number_id: 'PNI-123', access_token: 'tok-default', source: 'cloud_api', is_default: true, is_active: true }],
+      links: [link('loc-1', 'n1', { is_default: true })],
+    }))
     const cfg = await getLocationWhatsAppNumberConfig('loc-1')
-    expect(cfg).toMatchObject({ source: 'db', id: 'n1', locationId: 'loc-1', phoneNumberId: 'PNI-123', token: 'tok-default' })
+    expect(cfg).toMatchObject({ source: 'db', id: 'n1', locationId: 'loc-1', homeLocationId: 'loc-1', organizationId: 'org-1', viaSibling: false, phoneNumberId: 'PNI-123', token: 'tok-default' })
   })
 
   it('no row at the location → null, even with the global env number set (never the env tier)', async () => {
@@ -190,6 +198,7 @@ describe('resolveWhatsAppNumberByPhoneNumberId — inbound webhook routing', () 
     }))
     const cfg = await resolveWhatsAppNumberByPhoneNumberId('PNI-MATCH')
     expect(cfg?.locationId).toBe('loc-1')
+    expect(cfg?.homeLocationId).toBe('loc-1')
   })
 
   it('WACONFIGFALLBACK.1 — an id equal to the (ignored) env number with no row → null (unknown), never an env config', async () => {
@@ -249,13 +258,122 @@ describe('classifyInboundOwner — SAAS-2 strict tenant routing', () => {
     expect(classifyInboundOwner({ source: 'env', phoneNumberId: 'PNI-SYNTH' }))
       .toEqual({ action: 'drop' })
   })
-  it('db row with a location → route to that location', () => {
-    expect(classifyInboundOwner({ source: 'db', locationId: 'L9' }))
+  it('db row with a home studio → route to the number’s home studio (WAORGNUMBER.1: homeLocationId, not the studio a config was resolved for)', () => {
+    expect(classifyInboundOwner({ source: 'db', locationId: 'L-for', homeLocationId: 'L9' }))
       .toEqual({ action: 'location', locationId: 'L9', numberId: null })
   })
-  it('db row somehow missing locationId → drop, never a guessed tenant', () => {
-    expect(classifyInboundOwner({ source: 'db', locationId: null }))
+  it('db row somehow missing its home studio → drop, never a guessed tenant', () => {
+    expect(classifyInboundOwner({ source: 'db', locationId: 'L-for', homeLocationId: null }))
       .toEqual({ action: 'drop' })
+  })
+})
+
+// WAORGNUMBER.1 (R2) — numbers belong to the organisation and are switched on
+// per studio (location_whatsapp_numbers, mig 743). A config is resolved FOR a
+// studio: locationId is that studio, homeLocationId the number's own studio.
+describe('WAORGNUMBER.1 — the resolver reads location_whatsapp_numbers', () => {
+  const STILL = 'a0000000-0000-4000-8000-000000000001'
+  const HATCH = 'a0000000-0000-4000-8000-000000000002'
+  const OTHER = 'a0000000-0000-4000-8000-000000000003'
+  const n = (id, extra = {}) => ({
+    id, location_id: STILL, organization_id: 'org-1', label: id, phone_number_id: `PNI-${id}`,
+    business_account_id: 'WABA-1', access_token: `tok-${id}`, source: 'cloud_api', is_default: false, is_active: true, ...extra,
+  })
+
+  it('resolves the link default before a newer non-default', async () => {
+    createServerClient.mockReturnValue(fakeWhatsAppDb({
+      numbers: [n('n-default'), n('n-newer')],
+      links: [
+        link(STILL, 'n-default', { is_default: true, created_at: '2026-01-01T00:00:00Z' }),
+        link(STILL, 'n-newer', { created_at: '2026-10-01T00:00:00Z' }),
+      ],
+    }))
+    expect((await getLocationWhatsAppNumberConfig(STILL)).id).toBe('n-default')
+  })
+
+  it('with no link default, the most recently switched-on number', async () => {
+    createServerClient.mockReturnValue(fakeWhatsAppDb({
+      numbers: [n('n-old'), n('n-newer')],
+      links: [link(STILL, 'n-old', { created_at: '2026-01-01T00:00:00Z' }), link(STILL, 'n-newer', { created_at: '2026-10-01T00:00:00Z' })],
+    }))
+    expect((await getLocationWhatsAppNumberConfig(STILL)).id).toBe('n-newer')
+  })
+
+  it('a number that is not switched on at the studio is not resolved there, even at its home', async () => {
+    createServerClient.mockReturnValue(fakeWhatsAppDb({ numbers: [n('n-1')], links: [link(HATCH, 'n-1', { is_default: true })] }))
+    expect(await getLocationWhatsAppNumberConfig(STILL)).toBeNull()
+    await expect(getWhatsAppConfig(STILL)).rejects.toSatisfy(isWhatsAppNumberMissing)
+  })
+
+  it('inactive number is not resolved even when switched on', async () => {
+    createServerClient.mockReturnValue(fakeWhatsAppDb({
+      numbers: [n('n-off', { is_active: false })],
+      links: [link(STILL, 'n-off', { is_default: true })],
+    }))
+    expect(await getLocationWhatsAppNumberConfig(STILL)).toBeNull()
+  })
+
+  it('config carries locationId = the studio asked for and homeLocationId = the number’s home', async () => {
+    createServerClient.mockReturnValue(fakeWhatsAppDb({
+      numbers: [n('n-still', { organization_id: 'org-1' })],
+      links: [link(STILL, 'n-still', { is_default: true }), link(HATCH, 'n-still', { is_default: true })],
+    }))
+    const cfg = await getLocationWhatsAppNumberConfig(HATCH)
+    expect(cfg).toMatchObject({ id: 'n-still', locationId: HATCH, homeLocationId: STILL, organizationId: 'org-1', viaSibling: false })
+    expect((await getWhatsAppConfig(STILL))).toMatchObject({ locationId: STILL, homeLocationId: STILL })
+  })
+
+  it('getLocationNumberForWaba picks the number on that WABA', async () => {
+    createServerClient.mockReturnValue(fakeWhatsAppDb({
+      numbers: [n('n-a', { business_account_id: 'WABA-1' }), n('n-b', { business_account_id: 'WABA-2' })],
+      links: [link(STILL, 'n-a', { is_default: true }), link(STILL, 'n-b')],
+    }))
+    expect((await getLocationNumberForWaba(STILL, 'WABA-2')).id).toBe('n-b')
+    expect((await getLocationNumberForWaba(STILL, 'WABA-1')).id).toBe('n-a')
+    expect(await getLocationNumberForWaba(STILL, 'WABA-9')).toBeNull()
+    expect((await getLocationNumberForWaba(STILL, null)).id).toBe('n-a')
+    expect(await getLocationNumberForWaba(HATCH, 'WABA-2')).toBeNull()
+  })
+
+  it('getLocationNumberForWaba throws on a failed read', async () => {
+    createServerClient.mockReturnValue(fakeWhatsAppDb({ faults: { location_whatsapp_numbers: { message: 'boom' } } }))
+    await expect(getLocationNumberForWaba(STILL, 'WABA-1')).rejects.toThrow(/boom/)
+  })
+
+  it('locationsWithWhatsApp returns only studios with an active switched-on number', async () => {
+    const db = fakeWhatsAppDb({
+      numbers: [n('n-on'), n('n-off', { is_active: false })],
+      links: [link(STILL, 'n-on', { is_default: true }), link(HATCH, 'n-off', { is_default: true })],
+    })
+    const got = await locationsWithWhatsApp(db, [STILL, HATCH, OTHER])
+    expect(got).toBeInstanceOf(Set)
+    expect([...got]).toEqual([STILL])
+    expect([...(await locationsWithWhatsApp(db, []))]).toEqual([])
+  })
+
+  it('locationsWithWhatsApp throws on a failed read', async () => {
+    const db = fakeWhatsAppDb({ faults: { location_whatsapp_numbers: { message: 'boom' } } })
+    await expect(locationsWithWhatsApp(db, [STILL])).rejects.toThrow(/boom/)
+  })
+
+  it('studiosUsingNumbers returns every studio linked to the number', async () => {
+    const db = fakeWhatsAppDb({
+      numbers: [n('n-1'), n('n-2')],
+      links: [link(STILL, 'n-1', { is_default: true }), link(HATCH, 'n-1'), link(OTHER, 'n-2', { is_default: true })],
+    })
+    expect((await studiosUsingNumbers(db, ['n-1'])).sort()).toEqual([STILL, HATCH].sort())
+    expect((await studiosUsingNumbers(db, ['n-1', 'n-2'])).sort()).toEqual([STILL, HATCH, OTHER].sort())
+    expect(await studiosUsingNumbers(db, [])).toEqual([])
+  })
+
+  it('studiosUsingNumbers throws on a failed read', async () => {
+    const db = fakeWhatsAppDb({ faults: { location_whatsapp_numbers: { message: 'boom' } } })
+    await expect(studiosUsingNumbers(db, ['n-1'])).rejects.toThrow(/boom/)
+  })
+
+  it('getWhatsAppConfigById names the number’s home studio', async () => {
+    createServerClient.mockReturnValue(fakeWhatsAppDb({ numbers: [n('n-1', { location_id: HATCH })] }))
+    expect(await getWhatsAppConfigById('n-1')).toMatchObject({ id: 'n-1', locationId: HATCH, homeLocationId: HATCH, viaSibling: false })
   })
 })
 

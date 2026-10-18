@@ -4,7 +4,8 @@
 // integration rows with a red/amber/green status. Does NOT rebuild the
 // underlying checks — it reads:
 //   - cron_health view (mig 053): per-cron heartbeat staleness (global).
-//   - whatsapp_numbers: Meta quality/tier + token validity (per location).
+//   - whatsapp_numbers: Meta quality/tier + token validity (per location:
+//     the numbers switched on there, location_whatsapp_numbers, WAORGNUMBER.1).
 //   - webhook_dead_letter (mig 315): unresolved captured events (this
 //     location's rows + the NULL-location orphans — see block 3).
 //   - channel_connections (readConnection): Glofox connection state (per loc).
@@ -335,12 +336,16 @@ export async function getIntegrationHealth(db, locationId) {
   } catch { rows.push({ key: 'crons', name: 'Scheduled jobs (crons)', status: 'unknown', detail: 'Unavailable' }) }
 
   // 2. WhatsApp number(s) — per location (quality/tier + token validity).
+  // WAORGNUMBER.1: the active numbers SWITCHED ON at this studio
+  // (location_whatsapp_numbers), whatever their home studio — an organisation
+  // number reads the same health at every studio it is on.
   try {
-    const { data: nums } = await db
-      .from('whatsapp_numbers')
-      .select('label, quality_rating, messaging_limit_tier, token_invalid_at, quality_checked_at')
+    const { data: links } = await db
+      .from('location_whatsapp_numbers')
+      .select('whatsapp_numbers!inner(label, quality_rating, messaging_limit_tier, token_invalid_at, quality_checked_at)')
       .eq('location_id', locationId)
-      .eq('is_active', true)
+      .eq('whatsapp_numbers.is_active', true)
+    const nums = (links || []).map((l) => l.whatsapp_numbers).filter(Boolean)
     if ((nums || []).length === 0) {
       rows.push({ key: 'wa', name: 'WhatsApp', status: 'unknown', detail: 'No active number' })
     } else {

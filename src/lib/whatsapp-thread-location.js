@@ -9,6 +9,7 @@
 // contact, a failed read — returns null and the caller files where it always
 // has. Spec: docs/superpowers/specs/2026-10-15-wa-home-studio-threads-design.md
 import { logWarn } from './log'
+import { locationsWithWhatsApp } from './whatsapp-config'
 
 export async function numberlessHomeStudio(db, contact, numberLocationId) {
   if (!contact || !numberLocationId) return null
@@ -21,10 +22,10 @@ export async function numberlessHomeStudio(db, contact, numberLocationId) {
     }
     if (!home || home === numberLocationId) return null
 
-    const { data: own, error: ownErr } = await db.from('whatsapp_numbers')
-      .select('id').eq('location_id', home).eq('is_active', true).limit(1)
-    if (ownErr) throw ownErr
-    if (own && own.length > 0) return null
+    // WAORGNUMBER.1 — "has a number" is an active number SWITCHED ON at the home
+    // studio (location_whatsapp_numbers), not one homed there. Throws on a
+    // failed read, caught below as ever.
+    if ((await locationsWithWhatsApp(db, [home])).has(home)) return null
 
     const { data: locs, error: locErr } = await db.from('locations')
       .select('id, organization_id').in('id', [home, numberLocationId])
@@ -41,7 +42,7 @@ export async function numberlessHomeStudio(db, contact, numberLocationId) {
 }
 
 // WAHOMESTUDIO.1 (Task 4b) — the studios in `locationId`'s organisation (never
-// `locationId` itself) that have NO active whatsapp_numbers row. A template
+// `locationId` itself) with NO active number switched on (WAORGNUMBER.1). A template
 // sent from `locationId` into a thread filed at one of them carries that
 // sibling's location_id (the message follows its thread, mig 723), so the send
 // budget counts their outbound template rows against `locationId`.
@@ -63,9 +64,14 @@ export async function numberlessSiblingLocationIds(db, locationId) {
   const ids = (siblings || []).map((l) => l.id)
   if (ids.length === 0) return []
 
-  const { data: numbered, error: numErr } = await db.from('whatsapp_numbers')
-    .select('location_id').in('location_id', ids).eq('is_active', true)
-  if (numErr) throw new Error(`WhatsApp sibling studio lookup failed: ${numErr.message}`)
-  const withNumber = new Set((numbered || []).map((n) => n.location_id))
+  // WAORGNUMBER.1 — a sibling "has a number" when an active one is switched on
+  // there. locationsWithWhatsApp throws on a failed read, so this still fails
+  // closed (its message names the read; the budget only cares that it threw).
+  let withNumber
+  try {
+    withNumber = await locationsWithWhatsApp(db, ids)
+  } catch (e) {
+    throw new Error(`WhatsApp sibling studio lookup failed: ${e?.message || String(e)}`)
+  }
   return ids.filter((id) => !withNumber.has(id))
 }

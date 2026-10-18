@@ -8,8 +8,9 @@
 // Both now decide with guardMasterOrOwner at the location written, the rule
 // of the settings page they live on.
 //
-// What it covers: every route file under src/app/api/whatsapp/** and
-// src/app/api/locations/[id]/whatsapp/**, plus
+// What it covers: every route file under src/app/api/whatsapp/**,
+// src/app/api/locations/[id]/whatsapp/** and (WAORGNUMBER.1) the
+// organisation's number admin src/app/api/organizations/[id]/whatsapp/**, plus
 // src/app/api/contacts/[id]/whatsapp (the one session route outside those
 // trees that writes to WhatsApp). The WhatsApp crons and Meta's webhook are
 // not session routes; check:route-guards covers them.
@@ -46,7 +47,7 @@ import ts from 'typescript'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const API = path.join(ROOT, 'src/app/api')
-const DIRS = [path.join(API, 'whatsapp'), path.join(API, 'locations/[id]/whatsapp')]
+const DIRS = [path.join(API, 'whatsapp'), path.join(API, 'locations/[id]/whatsapp'), path.join(API, 'organizations/[id]/whatsapp')]
 const EXTRA = [path.join(API, 'contacts/[id]/whatsapp/route.js')]
 
 function routeFiles(dir) {
@@ -109,10 +110,16 @@ export function blankNonCode(text, sf = parse(text)) {
 
 // Strongest first. Each test is a CALL shape, not a bare name.
 export function classify(handlerSrc) {
+  // WAORGNUMBER.1 (R8) — the organisation's number admin: an organisation admin
+  // (master passes). Stricter than 'owner', which judges ONE studio.
+  if (/assertOrganizationAdmin\(\s*user\b/.test(handlerSrc)) return 'org-admin'
   if (/guardMasterOrOwner\(\s*user\b/.test(handlerSrc)) return 'owner'
   // GATES-3 (b) — MANAGER_ROLES AND `whatsapp` at the template's studio.
   if (/canManageWaTemplatesAt\(\s*user\b/.test(handlerSrc)) return 'manager-whatsapp'
   if (/hasRoleAtLocation\(\s*user\b[^)]*MANAGER_ROLES/.test(handlerSrc)) return 'manager'
+  // WAORGNUMBER.1 (Task 6, R8) — master, owner or manager AT the studio
+  // (ADMIN_ROLES, not MANAGER_ROLES: a head coach cannot switch a number on).
+  if (/hasRoleAtLocation\(\s*user\b[^)]*ADMIN_ROLES/.test(handlerSrc)) return 'studio-admin'
   if (/hasPermissionForLocation\(\s*user\b[^)]*'whatsapp'/.test(handlerSrc)) return 'whatsapp-permission'
   // INBOXLOC.1 — the thread routes' decision: whatsapp (web or mobile) AT the
   // conversation's (or contact's) studio. Above 'inbox', which judges the
@@ -198,11 +205,18 @@ function actual() {
 // [gate, reason]. 'membership' rows are the ones a follow-up may tighten;
 // each says why it is membership-only today.
 export const EXPECTED = {
-  // ── The number itself and what Meta shows on it: master or owner ──
-  'POST locations/[id]/whatsapp/embedded-signup/route.js': ['owner', 'Connects a number through Meta Embedded Signup.'],
-  'POST locations/[id]/whatsapp/numbers/route.js': ['owner', 'Registers a Cloud API number (token).'],
-  'PATCH locations/[id]/whatsapp/numbers/[numberId]/route.js': ['owner', 'Edits a number, its token, its default flag.'],
-  'DELETE locations/[id]/whatsapp/numbers/[numberId]/route.js': ['owner', 'Removes a number.'],
+  // ── The number itself: the ORGANISATION's admin (WAORGNUMBER.1, R8) ──
+  'POST organizations/[id]/whatsapp/embedded-signup/route.js': ['org-admin', 'Connects a number through Meta Embedded Signup, for the organisation.'],
+  'POST organizations/[id]/whatsapp/numbers/route.js': ['org-admin', 'Registers a Cloud API number (token) with its home studio.'],
+  'PATCH organizations/[id]/whatsapp/numbers/[numberId]/route.js': ['org-admin', 'Edits a number, its token, its home studio.'],
+  'DELETE organizations/[id]/whatsapp/numbers/[numberId]/route.js': ['org-admin', 'Removes a number (its switch-on rows cascade).'],
+  // Retired: they answer 410 with a pointer to the organisation page and write nothing.
+  'POST locations/[id]/whatsapp/embedded-signup/route.js': ['session-only', 'WAORGNUMBER.1: retired, answers 410 (moved to the organisation).'],
+  'POST locations/[id]/whatsapp/numbers/route.js': ['session-only', 'WAORGNUMBER.1: retired, answers 410 (moved to the organisation).'],
+  'PUT locations/[id]/whatsapp/numbers/route.js': ['studio-admin', 'WAORGNUMBER.1 (R8): switches an organisation number on or off at THIS studio and picks its default; owner, manager or master there (ADMIN_ROLES, so a head coach cannot), the number checked against the studio\'s organisation.'],
+  'PATCH locations/[id]/whatsapp/numbers/[numberId]/route.js': ['membership', 'WAORGNUMBER.1: retired, answers 410 (moved to the organisation) after the path-studio access check; writes nothing, so membership is enough.'],
+  'DELETE locations/[id]/whatsapp/numbers/[numberId]/route.js': ['membership', 'WAORGNUMBER.1: retired, answers 410 (moved to the organisation) after the path-studio access check; writes nothing, so membership is enough.'],
+  // ── What Meta shows on the number: master or owner ──
   'POST whatsapp/conversational-automation/route.js': ['owner', 'WAROLE.1: sets the welcome event + ice breakers AT META on the number.'],
   'PUT whatsapp/card-sets/route.js': ['owner', 'WAROLE.1: replaces the carousel card sets staff and Mia send.'],
   'PUT whatsapp/studio-picker/route.js': ['owner', 'WASTUDIOPICK.1: sets how the studio appears in the picker unknown senders are asked and, with a number, whether it asks.'],
@@ -247,6 +261,7 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
   it('the classifier reads call shapes, strongest first', () => {
     expect(classify('const g = guardMasterOrOwner(user, id)\nassertLocationAccess(user, id)')).toBe('owner')
     expect(classify('if (!hasRoleAtLocation(user, t.location_id, MANAGER_ROLES)) {}')).toBe('manager')
+    expect(classify('if (!hasRoleAtLocation(user, params.id, ADMIN_ROLES)) {}')).toBe('studio-admin')
     expect(classify('if (!canManageWaTemplatesAt(user, t.location_id)) {}')).toBe('manager-whatsapp')
     expect(classify("if (!hasPermissionForLocation(user, row.location_id, 'whatsapp')) {}")).toBe('whatsapp-permission')
     expect(classify("const p = requireInboxPermission(user, 'wa')")).toBe('inbox')
@@ -362,14 +377,24 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
     expect(odd).toEqual([])
   })
 
-  it('what Meta shows on the number is master/owner, like the number itself', () => {
+  it('what Meta shows on the number is master/owner', () => {
     const got = actual()
     for (const k of [
       'POST whatsapp/conversational-automation/route.js',
       'PUT whatsapp/card-sets/route.js',
-      'POST locations/[id]/whatsapp/numbers/route.js',
-      'POST locations/[id]/whatsapp/embedded-signup/route.js',
     ]) expect([k, got[k]]).toEqual([k, 'owner'])
+  })
+
+  // WAORGNUMBER.1 (R8) — the number itself is the organisation's: every write
+  // is org-admin, and the studio-level writes that used to do it are retired.
+  it('adding, editing, removing and connecting a number is an organisation admin\'s', () => {
+    const got = actual()
+    for (const k of [
+      'POST organizations/[id]/whatsapp/numbers/route.js',
+      'PATCH organizations/[id]/whatsapp/numbers/[numberId]/route.js',
+      'DELETE organizations/[id]/whatsapp/numbers/[numberId]/route.js',
+      'POST organizations/[id]/whatsapp/embedded-signup/route.js',
+    ]) expect([k, got[k]]).toEqual([k, 'org-admin'])
   })
 
   // WATPLROLE.1 — every template handler that changes what Meta holds or what

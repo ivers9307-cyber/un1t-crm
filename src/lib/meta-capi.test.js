@@ -1,6 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { buildBusinessMessagingEvent, captureCtwaReferral, sendCtwaConversion, recordCtwaTouch } from './meta-capi.js'
 
+// WAORGNUMBER.1 — the studio's token + WABA come from the number switched on at
+// it (getLocationWhatsAppNumberConfig), not from a whatsapp_numbers row read by
+// the studio's id. `fakeDb({ whatsapp_numbers: row })` feeds the mock.
+const numberHolder = vi.hoisted(() => ({ row: null, error: null }))
+vi.mock('./whatsapp-config', () => ({
+  getLocationWhatsAppNumberConfig: vi.fn(async () => {
+    if (numberHolder.error) throw numberHolder.error
+    return numberHolder.row ? { token: numberHolder.row.access_token, businessAccountId: numberHolder.row.business_account_id || null } : null
+  }),
+}))
+import { getLocationWhatsAppNumberConfig } from './whatsapp-config'
+
 describe('buildBusinessMessagingEvent', () => {
   it('builds the business_messaging event shape', () => {
     const ev = buildBusinessMessagingEvent({ eventName: 'Lead', ctwaClid: 'clid1', wabaId: 'waba1', eventTime: 1234, contentName: 'HIIT' })
@@ -23,6 +35,8 @@ describe('buildBusinessMessagingEvent', () => {
 // Chainable fake supabase client: from(table) → builder recording updates,
 // resolving selects from `state`.
 function fakeDb(state) {
+  numberHolder.row = state.whatsapp_numbers ?? null
+  numberHolder.error = null
   const updates = []
   function builder(table) {
     const b = {
@@ -94,6 +108,19 @@ describe('sendCtwaConversion', () => {
       user_data: { ctwa_clid: 'clid9', whatsapp_business_account_id: 'waba9' },
       custom_data: { content_name: 'ENT1TY' },
     })
+  })
+  it('asks for the number switched on at the studio (WAORGNUMBER.1)', async () => {
+    const { db } = fakeDb({ contacts: CONTACT, locations: LOC, whatsapp_numbers: NUM })
+    await sendCtwaConversion(db, { locationId: 'l1', contactId: 'c1', eventName: 'Schedule' })
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledWith('l1')
+  })
+  it('no number switched on, or a failed lookup → no_token, no fetch', async () => {
+    const { db } = fakeDb({ contacts: CONTACT, locations: LOC, whatsapp_numbers: null })
+    expect(await sendCtwaConversion(db, { locationId: 'l1', contactId: 'c1', eventName: 'Schedule' })).toEqual({ sent: false, reason: 'no_token' })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    numberHolder.error = new Error('boom')
+    expect(await sendCtwaConversion(db, { locationId: 'l1', contactId: 'c1', eventName: 'Schedule' })).toEqual({ sent: false, reason: 'no_token' })
+    expect(fetch).not.toHaveBeenCalled()
   })
   it('API error → sent:false, never throws', async () => {
     global.fetch = vi.fn(async () => ({ ok: false, status: 400, json: async () => ({ error: { message: 'bad' } }) }))

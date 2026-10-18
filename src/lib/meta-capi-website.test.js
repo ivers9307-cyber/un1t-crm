@@ -1,4 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+// WAORGNUMBER.1 — the WhatsApp token comes from the number switched on at the
+// studio (getLocationWhatsAppNumberConfig); the fakes feed it from their
+// `whatsapp_numbers` state entry.
+const numberHolder = vi.hoisted(() => ({ row: null, error: null }))
+vi.mock('./whatsapp-config', () => ({
+  getLocationWhatsAppNumberConfig: vi.fn(async () => {
+    if (numberHolder.error) throw numberHolder.error
+    return numberHolder.row ? { token: numberHolder.row.access_token, businessAccountId: numberHolder.row.business_account_id || null } : null
+  }),
+}))
+import { getLocationWhatsAppNumberConfig } from './whatsapp-config'
 import { normalizeEmailForMeta, normalizePhoneForMeta, sha256Hex, buildWebsiteEvent, sendWebsiteConversion, fbcFromFbclid, normalizeNameForMeta, fbpIfValid } from './meta-capi.js'
 
 describe('normalizeEmailForMeta', () => {
@@ -75,6 +86,8 @@ describe('buildWebsiteEvent', () => {
 
 // Minimal chainable fake supabase client resolving selects from `state`.
 function fakeDb(state) {
+  numberHolder.row = state.whatsapp_numbers ?? null
+  numberHolder.error = null
   function builder(table) {
     const b = {
       select() { return b },
@@ -200,6 +213,8 @@ describe('sendWebsiteConversion — the dataset\'s own token', () => {
   const args = { locationId: 'loc1', eventName: 'Lead', email: 'a@b.ie', phone: '0871234567', eventId: 'classlead-1' }
 
   function tracedDb(state) {
+    numberHolder.row = state.whatsapp_numbers ?? null
+    numberHolder.error = null
     const tables = []
     function builder(table) {
       tables.push(table)
@@ -221,6 +236,15 @@ describe('sendWebsiteConversion — the dataset\'s own token', () => {
     expect(body.data[0].user_data).toMatchObject({ fbc: 'fb.1.1.abc', client_ip_address: '203.0.113.9', client_user_agent: 'UA' })
     // The WhatsApp number is not even read when the dataset has its own token.
     expect(db.tables).toEqual(['locations'])
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
+  })
+
+  it('a failed number lookup with no token of its own is no_token, logged (never thrown)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = tracedDb({ locations: { settings: { meta_ads: { dataset_id: 'ds1' } } }, whatsapp_numbers: { access_token: 'WA-TOKEN' } })
+    numberHolder.error = new Error('boom')
+    expect(await sendWebsiteConversion(db, args)).toEqual({ sent: false, reason: 'no_token' })
+    expect(global.fetch).not.toHaveBeenCalled()
   })
 
   it('its own token wins over the WhatsApp number token', async () => {
@@ -238,7 +262,9 @@ describe('sendWebsiteConversion — the dataset\'s own token', () => {
     const db = tracedDb({ locations: { settings: { meta_ads: { dataset_id: 'ds1' } } }, whatsapp_numbers: { access_token: 'WA-TOKEN' } })
     await sendWebsiteConversion(db, args)
     expect(JSON.parse(global.fetch.mock.calls[0][1].body).access_token).toBe('WA-TOKEN')
-    expect(db.tables).toEqual(['locations', 'whatsapp_numbers'])
+    // WAORGNUMBER.1 — the number switched on at the studio, not a row read by the studio's id.
+    expect(db.tables).toEqual(['locations'])
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledWith('loc1')
   })
 })
 

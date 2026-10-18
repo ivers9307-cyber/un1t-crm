@@ -3,6 +3,7 @@
 // `listed` (with a `label` and classifier `keywords`); the studio that owns the
 // number carries `enabled` and the `question`. Defaults keep it all OFF.
 import { logWarn } from '../log'
+import { locationsWithWhatsApp } from '../whatsapp-config'
 
 export const DEFAULT_PICKER_QUESTION = 'Thanks for getting in touch. Which studio is this about?'
 export const PICKER_ID_PREFIX = 'studio:'
@@ -32,13 +33,9 @@ export async function readPickerConfig(db, receivingLocationId) {
     // A sibling with its own WhatsApp number is only offered on that number: a
     // thread moved to it here would be answered from this number, not its own.
     const siblingIds = listed.map((l) => l.id).filter((id) => id !== receivingLocationId)
-    let numbered = new Set()
-    if (siblingIds.length) {
-      const { data: nums, error: numErr } = await db.from('whatsapp_numbers')
-        .select('location_id').in('location_id', siblingIds).eq('is_active', true)
-      if (numErr) throw numErr
-      numbered = new Set((nums || []).map((n) => n.location_id))
-    }
+    // WAORGNUMBER.1 — "its own number" is an active number switched on there
+    // (locationsWithWhatsApp throws on a failed read: caught below, picker skipped).
+    const numbered = await locationsWithWhatsApp(db, siblingIds)
     const studios = listed
       .filter((l) => !numbered.has(l.id))
       .map((l) => ({

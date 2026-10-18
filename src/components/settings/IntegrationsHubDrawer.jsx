@@ -12,15 +12,15 @@
 //               (GET /api/xero/connect?location_id=…&return_to=/settings/
 //               integrations-hub — the return_to guard shipped in Phase-3
 //               part 1); Disconnect → POST /api/xero/disconnect.
-//   whatsapp  → the SHARED ConnectWhatsAppCard (Meta Embedded Signup popup,
-//               GET/POST …/whatsapp/embedded-signup) + per-number Disconnect
-//               that calls the SAME DELETE …/whatsapp/numbers/[numberId] the
-//               tab calls, with the tab's exact confirm() copy + semantics
-//               (never touches a different number, no reactivation). The
-//               heavy config for both stays on the "Advanced settings"
-//               deep-link ("Xero data & accounts" / "Manage numbers").
+//   whatsapp  → WAORGNUMBER.1: the organisation's numbers with a per-studio
+//               on/off switch and default radio (StudioWhatsAppNumbers), with a
+//               link to the organisation's page (/settings/whatsapp-numbers),
+//               where numbers are connected, edited and removed. (It used to
+//               host the Embedded Signup card and a per-number Disconnect;
+//               both routes moved to the organisation.) The studio's own
+//               controls stay on the "Manage numbers" deep-link.
 //               WhatsApp is the LIVE customer channel — no send/routing code
-//               is touched here; connect + per-number disconnect only.
+//               is touched here.
 //
 // PHASE 2 adds first-class inline Manage forms for the credential-bearing
 // providers stored on the `locations` row, saving through ONE new
@@ -49,9 +49,10 @@ import Link from 'next/link'
 import { X, Save, Loader2, Check, AlertCircle, Unplug, Plug, RefreshCw } from 'lucide-react'
 import { buttonClasses } from '@/components/ui'
 import AdsIntegrationTab from './integrations/AdsIntegrationTab'
-import { ConnectWhatsAppCard } from './integrations/ConnectWhatsAppCard'
 import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
-import { NO_ACTIVE_NUMBER_NOTE, BROKEN_TOKEN_HINT, removeNumberConfirm } from '@/lib/whatsapp-number-copy'
+import { NO_ACTIVE_NUMBER_NOTE, BROKEN_TOKEN_HINT } from '@/lib/whatsapp-number-copy'
+import { ORG_NUMBERS_PAGE } from '@/lib/org-whatsapp-numbers-page'
+import StudioWhatsAppNumbers from '@/components/settings/whatsapp/StudioWhatsAppNumbers'
 
 // cardKey → { title, routeProvider, tabKey, masterOnly, intro, fields }.
 // `fields`: name (payload key) + label + kind. Secret fields carry has()
@@ -235,12 +236,7 @@ export default function IntegrationsHubDrawer({ cardKey, locationId, locationNam
             />
           )}
           {cardKey === 'whatsapp' && (
-            <WhatsAppPanel
-              locationId={locationId}
-              locationName={locationName}
-              initial={initial}
-              onChanged={onChanged}
-            />
+            <WhatsAppPanel locationId={locationId} onChanged={onChanged} />
           )}
           {spec && (
             <IntegrationCredForm
@@ -556,98 +552,22 @@ function XeroPanel({ locationId, locationName, initial, onChanged, onDisconnecte
   )
 }
 
-// ── WhatsApp connect/disconnect panel (Phase 3) ──
+// ── WhatsApp panel (Phase 3; WAORGNUMBER.1) ──
 //
-// The SHARED ConnectWhatsAppCard (Meta Embedded Signup) drives connect,
-// verbatim — same GET/POST …/whatsapp/embedded-signup flow the tab uses.
-// Below it, each already-connected number gets a Disconnect button that calls
-// the SAME DELETE …/whatsapp/numbers/[numberId] the tab's remove() calls, with
-// the tab's exact confirm() copy + semantics: it targets ONLY that number's
-// id, never reactivates anything, and never touches a different number. The
-// numbers list is kept in local state (seeded from the assembled hub row) so a
-// per-number disconnect updates the panel without re-plumbing the drawer's
-// `initial`; onChanged still re-grades the hub card behind the drawer. The
-// full numbers UI (add/edit/default/token) stays on the "Manage numbers"
-// deep-link — WhatsApp is the LIVE customer channel, so this panel does the
-// two safe operations only.
-function WhatsAppPanel({ locationId, locationName, initial, onChanged }) {
-  const [numbers, setNumbers] = useState(() => (Array.isArray(initial?.numbers) ? initial.numbers : []))
-  const [busyId, setBusyId] = useState(null)
-  const [error, setError] = useState(null)
-
-  async function disconnectNumber(number) {
-    // The tab's EXACT confirm copy (shared helper). WACONFIGFALLBACK.1: no env
-    // fallback, so the last active number's confirm says WhatsApp stops here.
-    if (!confirm(removeNumberConfirm(number, numbers))) return
-    setBusyId(number.id); setError(null)
-    try {
-      const res = await fetch(`/api/locations/${locationId}/whatsapp/numbers/${number.id}`, {
-        method: 'DELETE',
-        credentials: 'same-origin',
-      })
-      const j = await res.json().catch(() => ({}))
-      if (!res.ok || j.success === false) {
-        setError(j.error || `Disconnect failed (${res.status})`)
-        setBusyId(null)
-        return
-      }
-      // Drop just this number from the local list; re-grade the hub behind us.
-      setNumbers((prev) => prev.filter((n) => n.id !== number.id))
-      setBusyId(null)
-      onChanged?.()
-    } catch (e) {
-      setError(e.message || 'Network error')
-      setBusyId(null)
-    }
-  }
-
+// A number belongs to the organisation, so connecting, editing and removing one
+// happens on the organisation's page; this panel lists the organisation's
+// numbers with the studio's switch and default (the same list as the studio's
+// WhatsApp tab) and points there. Switching re-grades the hub card.
+function WhatsAppPanel({ locationId, onChanged }) {
   return (
     <div className="space-y-4">
       <p className="text-xs text-un1t-subtle">
-        WhatsApp Cloud API. Connect onboards a number through Meta&apos;s guided signup; each
-        connected number can be disconnected below. {NO_ACTIVE_NUMBER_NOTE} {BROKEN_TOKEN_HINT}{' '}
-        Editing tokens, labels and the default number stays on Manage numbers.
+        WhatsApp Cloud API. Numbers belong to the organisation: an organisation admin connects,
+        edits and removes them on{' '}
+        <Link href={ORG_NUMBERS_PAGE} className="text-blue-700 hover:underline">WhatsApp numbers</Link>.{' '}
+        {NO_ACTIVE_NUMBER_NOTE} {BROKEN_TOKEN_HINT}
       </p>
-
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
-          <AlertCircle size={12} className="mt-0.5" /> {error}
-        </div>
-      )}
-
-      {numbers.length > 0 && (
-        <div className="rounded-md border border-un1t-border divide-y divide-un1t-border">
-          {numbers.map((n) => (
-            <div key={n.id} className="flex items-center gap-3 px-3 py-2">
-              <div className="min-w-0 flex-1">
-                <div className="text-sm text-un1t-text truncate">{n.label}</div>
-                <div className="text-[11px] text-un1t-subtle truncate">
-                  {n.displayPhone || n.id}
-                  {n.isDefault ? ' · default' : ''}
-                  {n.source === 'coexistence' ? ' · coexistence' : ''}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => disconnectNumber(n)}
-                disabled={busyId === n.id}
-                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-un1t-border text-xs text-red-700 hover:bg-red-500/10 disabled:opacity-50"
-              >
-                {busyId === n.id ? <Loader2 size={12} className="animate-spin" /> : <Unplug size={12} />} Disconnect
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* The shared Embedded Signup card — identical to the WhatsApp tab. The
-          hub page is owner+/master gated and the route re-checks master-or-
-          owner, so connecting is permitted for every hub viewer. */}
-      <ConnectWhatsAppCard
-        location={{ id: locationId, name: locationName }}
-        canEdit
-        onConnected={onChanged}
-      />
+      <StudioWhatsAppNumbers locationId={locationId} canSwitch onChanged={onChanged} />
     </div>
   )
 }

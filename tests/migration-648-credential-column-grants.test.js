@@ -115,6 +115,8 @@ const BASE_SCHEMA = `
     quality_rating text, messaging_limit_tier text, name_status text, quality_checked_at timestamptz,
     token_invalid_at timestamptz, token_type text, connected_via text, signup_meta jsonb
   );
+  -- mig 743 re-creates move_whatsapp_conversation, whose DECLARE reads this table's row type at CREATE time.
+  CREATE TABLE public.whatsapp_conversations (id uuid PRIMARY KEY);
   CREATE TABLE public.xero_connections (
     id uuid PRIMARY KEY, location_id uuid, tenant_id text, tenant_name text, tenant_type text,
     access_token text, refresh_token text, expires_at timestamptz, scopes text, connected_at timestamptz,

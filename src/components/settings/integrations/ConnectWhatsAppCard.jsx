@@ -1,15 +1,14 @@
 'use client'
 
 // INTEG hub inline #4 (Phase 3) — the "Connect with WhatsApp" Embedded
-// Signup card, EXTRACTED VERBATIM from WhatsAppIntegrationTab so BOTH the
-// per-location WhatsApp tab AND the Integrations-hub Manage drawer import the
-// IDENTICAL component. No behaviour change: same embedded-signup GET/POST
-// flow, same FB JS SDK loader, same session-info postMessage capture.
-//
-// Reuses the EXISTING routes verbatim:
-//   GET  /api/locations/[id]/whatsapp/embedded-signup → launch config
-//   POST /api/locations/[id]/whatsapp/embedded-signup → code→token exchange,
+// Signup card, extracted from WhatsAppIntegrationTab. WAORGNUMBER.1: numbers
+// belong to the ORGANISATION, so the card now lives on the organisation's
+// number page (OrgWhatsAppNumbers) and talks to the organisation's route:
+//   GET  /api/organizations/[id]/whatsapp/embedded-signup → launch config
+//   POST /api/organizations/[id]/whatsapp/embedded-signup → code→token exchange,
 //        WABA webhook subscription, conditional number registration, upsert.
+// A NEW number needs a home studio (where new-enquiry threads land), so the
+// card asks for one; a number the organisation already holds keeps its own.
 
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
@@ -44,21 +43,23 @@ function loadFacebookSdk(appId) {
   })
 }
 
-export function ConnectWhatsAppCard({ location, canEdit, onConnected }) {
+export function ConnectWhatsAppCard({ organizationId, locations = [], canEdit, onConnected }) {
   const [launch, setLaunch] = useState(null)      // { configured, app_id, config_id }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [connectedLabel, setConnectedLabel] = useState(null)
+  // The home studio of a NEW number: the only studio when there is one.
+  const [homeLocationId, setHomeLocationId] = useState(locations.length === 1 ? locations[0].id : '')
   const sessionInfo = useRef({})                  // { waba_id, phone_number_id }
 
   useEffect(() => {
     let cancelled = false
-    fetch(`/api/locations/${location.id}/whatsapp/embedded-signup`)
+    fetch(`/api/organizations/${organizationId}/whatsapp/embedded-signup`)
       .then((r) => r.json())
       .then((j) => { if (!cancelled) setLaunch(j.success ? j.data : { configured: false }) })
       .catch(() => { if (!cancelled) setLaunch({ configured: false }) }) // fetch failed → amber not-configured chip
     return () => { cancelled = true }
-  }, [location.id])
+  }, [organizationId])
 
   // Preload the FB SDK once we know we're launchable, so connect()'s await
   // resolves instantly (loadFacebookSdk is idempotent via the window.FB
@@ -117,10 +118,10 @@ export function ConnectWhatsAppCard({ location, canEdit, onConnected }) {
         throw new Error('Signup finished but no number details arrived — close the dialog and retry.')
       }
 
-      const res = await fetch(`/api/locations/${location.id}/whatsapp/embedded-signup`, {
+      const res = await fetch(`/api/organizations/${organizationId}/whatsapp/embedded-signup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, code: authCode, waba_id, phone_number_id }),
+        body: JSON.stringify({ mode, code: authCode, waba_id, phone_number_id, home_location_id: homeLocationId || undefined }),
       })
       const json = await res.json()
       if (!json.success) throw new Error(json.error || 'Connection failed')
@@ -161,11 +162,26 @@ export function ConnectWhatsAppCard({ location, canEdit, onConnected }) {
         </div>
       )}
 
+      <label className="block">
+        <div className="text-[10px] uppercase tracking-wider text-un1t-subtle mb-0.5">Home studio</div>
+        <select
+          value={homeLocationId}
+          onChange={(e) => setHomeLocationId(e.target.value)}
+          className="bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text"
+        >
+          <option value="">Choose a studio…</option>
+          {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+        </select>
+        <div className="text-[10px] text-un1t-muted mt-0.5">
+          Where a new number is switched on first and new-enquiry threads land. A number the organisation already holds keeps its own.
+        </div>
+      </label>
+
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
           onClick={() => connect('cloud_api')}
-          disabled={!canEdit || busy || !launch?.configured}
+          disabled={!canEdit || busy || !launch?.configured || !homeLocationId}
           className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-semibold hover:bg-un1t-accent disabled:opacity-50"
         >
           {busy ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
@@ -174,7 +190,7 @@ export function ConnectWhatsAppCard({ location, canEdit, onConnected }) {
         <button
           type="button"
           onClick={() => connect('coexistence')}
-          disabled={!canEdit || busy || !launch?.configured}
+          disabled={!canEdit || busy || !launch?.configured || !homeLocationId}
           className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-bg border border-un1t-border text-un1t-text hover:bg-un1t-surface disabled:opacity-50"
         >
           {busy ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}

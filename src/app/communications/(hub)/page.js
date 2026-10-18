@@ -23,6 +23,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { tierLabel, qualityAccent } from '@/lib/whatsapp-number-health'
 import { loadEmailHubStats } from './email-hub-stats.js'
+import { loadWhatsAppHubHealth } from './wa-hub-health.js'
 import { Mail, MessageCircle, Megaphone, Repeat, FileText, Inbox, Send, ShieldCheck, Gauge } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -85,13 +86,9 @@ export default async function CommunicationsHub() {
   let unreadConvos = 0, draftBroadcasts = 0, waHealth = null
   if (canWhatsapp && locationId) {
     // Number health (Meta quality rating + messaging tier) — stored by the
-    // refresh-whatsapp-health cron (mig 329). Default number for the location.
-    const { data: num } = await db.from('whatsapp_numbers')
-      .select('quality_rating, messaging_limit_tier, name_status, quality_checked_at')
-      .eq('location_id', locationId).eq('is_active', true)
-      .order('is_default', { ascending: false })
-      .limit(1).maybeSingle()
-    if (num) waHealth = num
+    // refresh-whatsapp-health cron (mig 329). The studio's default switched-on
+    // number (WAORGNUMBER.1; wa-hub-health.js).
+    waHealth = await loadWhatsAppHubHealth(locationId)
 
     // Unread = conversations with unread inbound messages.
     const { count: unread } = await db

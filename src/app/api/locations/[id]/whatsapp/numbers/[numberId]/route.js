@@ -1,104 +1,25 @@
-// WA-MULTI.1 — single-number operations: update + delete.
+// WA-MULTI.1 — single-number operations.
 //
-// PATCH /api/locations/[id]/whatsapp/numbers/[numberId]
-//   Body: any subset of CreateBody — partial update. Tokens are
-//   only written when explicitly included (avoids accidentally
-//   clobbering with the redacted display value).
-//
-// DELETE /api/locations/[id]/whatsapp/numbers/[numberId]
-//   Hard delete. The row is locked to this location's tenant via
-//   the SELECT-then-DELETE pattern. Doesn't soft-delete because
-//   whatsapp_numbers is config, not log data.
+// RETIRED (WAORGNUMBER.1): a number belongs to the organisation, so it is
+// edited and removed there — PATCH / DELETE
+// /api/organizations/[id]/whatsapp/numbers/[numberId]. Both answer 410 with a
+// pointer to /settings/whatsapp-numbers (after the signed-out check and the
+// path-studio access check every route in this folder makes).
 
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
-import { publicShape } from '@/lib/whatsapp-numbers-shape'
-import { isFreshSecret } from '@/lib/integration-secret-merge'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { numbersMovedToOrganisation } from '@/lib/org-whatsapp-numbers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const PatchBody = z.object({
-  label: z.string().min(1).max(120).optional(),
-  phone_number_id: z.string().min(1).max(64).optional(),
-  access_token: z.string().min(20).max(2000).optional(),
-  business_account_id: z.string().max(64).nullable().optional(),
-  app_id: z.string().max(64).nullable().optional(),
-  display_phone: z.string().max(32).nullable().optional(),
-  source: z.enum(['cloud_api', 'coexistence']).optional(),
-  is_default: z.boolean().optional(),
-  is_active: z.boolean().optional(),
-})
-
-export async function PATCH(request, props) {
+export async function PATCH(_request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   const guard = assertLocationAccess(user, params.id)
   if (guard) return guard
-  const roleGuard = guardMasterOrOwner(user, params.id)
-  if (roleGuard) return roleGuard
-
-  const raw = await request.json().catch(() => ({}))
-  // N8NECHO.1: the screens are handed SECRET_MASK for a stored token. A mask
-  // (or a blank) sent back is "no change", so it is dropped before validation
-  // and the rest of the save applies; only a fresh token is ever written.
-  // min(20) below is not the guard: it would refuse the whole save instead.
-  if (raw && typeof raw === 'object' && raw.access_token !== undefined && !isFreshSecret(raw.access_token)) {
-    delete raw.access_token
-  }
-  const parsed = PatchBody.safeParse(raw)
-  if (!parsed.success) {
-    return NextResponse.json({
-      success: false,
-      error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
-    }, { status: 400 })
-  }
-
-  const db = createServerClient()
-
-  // Verify the number belongs to this location (defence-in-depth
-  // alongside RLS).
-  const { data: existing } = await db
-    .from('whatsapp_numbers')
-    .select('id, location_id')
-    .eq('id', params.numberId)
-    .single()
-  if (!existing || existing.location_id !== params.id) {
-    return NextResponse.json({ success: false, error: 'Number not found' }, { status: 404 })
-  }
-
-  // If flipping this row to default, clear any other defaults at
-  // this location first (partial unique index enforces "one
-  // default per location").
-  if (parsed.data.is_default === true) {
-    await db
-      .from('whatsapp_numbers')
-      .update({ is_default: false })
-      .eq('location_id', params.id)
-      .eq('is_default', true)
-      .neq('id', params.numberId)
-  }
-
-  const updates = { ...parsed.data, updated_at: new Date().toISOString() }
-
-  const { data, error } = await db
-    .from('whatsapp_numbers')
-    .update(updates)
-    .eq('id', params.numberId)
-    .select()
-    .single()
-
-  if (error) {
-    if (/duplicate key|unique constraint/i.test(error.message)) {
-      return NextResponse.json({ success: false, error: 'Phone number ID or label already in use.' }, { status: 409 })
-    }
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  }
-
-  return NextResponse.json({ success: true, number: publicShape(data) })
+  return numbersMovedToOrganisation()
 }
 
 export async function DELETE(_request, props) {
@@ -107,24 +28,5 @@ export async function DELETE(_request, props) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   const guard = assertLocationAccess(user, params.id)
   if (guard) return guard
-  const roleGuard = guardMasterOrOwner(user, params.id)
-  if (roleGuard) return roleGuard
-
-  const db = createServerClient()
-  const { data: existing } = await db
-    .from('whatsapp_numbers')
-    .select('id, location_id')
-    .eq('id', params.numberId)
-    .single()
-  if (!existing || existing.location_id !== params.id) {
-    return NextResponse.json({ success: false, error: 'Number not found' }, { status: 404 })
-  }
-
-  const { error } = await db
-    .from('whatsapp_numbers')
-    .delete()
-    .eq('id', params.numberId)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-
-  return NextResponse.json({ success: true })
+  return numbersMovedToOrganisation()
 }

@@ -11,7 +11,7 @@ import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
 import { resolveNewSenderStudio } from '@/lib/wa-studio-pick/resolve'
 import { applyTemplateEvent } from '@/lib/whatsapp-template-events'
-import { NUMBER_EVENT_FIELDS, applyNumberEvent } from '@/lib/whatsapp-number-events'
+import { NUMBER_EVENT_FIELDS, applyNumberEvent, studiosForNumbers } from '@/lib/whatsapp-number-events'
 import { FLOW_EVENT_FIELDS, applyFlowEvent } from '@/lib/whatsapp-flow-events'
 import { recordCtwaTouch } from '@/lib/meta-capi'
 import { pricingColumnsFromStatus } from '@/lib/whatsapp-pricing'
@@ -1015,14 +1015,24 @@ async function handleAccountUpdateEvent(db, wabaId, value) {
           title: 'WhatsApp reconnected',
           body: `${name} is back online. Messaging has resumed.`,
         }
+    // WAORGNUMBER.1 — every studio the number is switched on at (the link
+    // rows), not only its home studio; falls back to home if that read fails.
+    let studios = [row.location_id].filter(Boolean)
     try {
-      await sendPushToRolesAtLocation(row.location_id, MANAGER_ROLES, {
-        ...notify,
-        category: 'whatsapp',
-        data: { type: 'coex_link', event, number_id: String(row.id) },
-      })
+      studios = await studiosForNumbers(db, [row])
     } catch (e) {
-      console.error('[wa-webhook] account_update push failed:', e?.message)
+      console.error('[wa-webhook] account_update studio lookup failed:', e?.message)
+    }
+    for (const locationId of studios) {
+      try {
+        await sendPushToRolesAtLocation(locationId, MANAGER_ROLES, {
+          ...notify,
+          category: 'whatsapp',
+          data: { type: 'coex_link', event, number_id: String(row.id) },
+        })
+      } catch (e) {
+        console.error('[wa-webhook] account_update push failed:', e?.message)
+      }
     }
   }
 }

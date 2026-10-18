@@ -3,7 +3,7 @@
 // WA-TECHPROV.2 — Embedded Signup v4 server-side helpers.
 //
 // Pure Graph-API wrappers + pure decision functions for the
-// exchange route (src/app/api/locations/[id]/whatsapp/embedded-signup).
+// exchange route (src/app/api/organizations/[id]/whatsapp/embedded-signup).
 // Design: docs/WHATSAPP_TECH_PROVIDER_DESIGN_2026-07.md §4.2.
 // Meta error style mirrors whatsapp-number-health.js (metaCode/metaType).
 
@@ -79,13 +79,16 @@ export async function registerNumber({ phoneNumberId, token, pin }) {
 
 /**
  * Insert vs token-refresh vs conflict, keyed on the globally-unique
- * phone_number_id. A number owned by a DIFFERENT location is a
- * conflict surfaced to the operator — never silently reassigned.
+ * phone_number_id. WAORGNUMBER.1: a number belongs to an ORGANISATION (its
+ * home studio is only where new enquiries land), so reconnecting it from the
+ * same organisation refreshes the row. A number owned by a DIFFERENT
+ * organisation is a conflict surfaced to the operator, never silently
+ * reassigned.
  */
-export function planPersistence({ existingRow, locationId }) {
+export function planPersistence({ existingRow, organizationId }) {
   if (!existingRow) return { action: 'insert' }
-  if (existingRow.location_id === locationId) return { action: 'update', id: existingRow.id }
-  return { action: 'conflict', owningLocationId: existingRow.location_id }
+  if (organizationId && existingRow.organization_id === organizationId) return { action: 'update', id: existingRow.id }
+  return { action: 'conflict', owningOrganizationId: existingRow.organization_id ?? null }
 }
 
 /**

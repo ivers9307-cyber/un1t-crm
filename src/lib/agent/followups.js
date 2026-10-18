@@ -26,6 +26,7 @@ import { providerFor } from '@/lib/membership/source'
 import { noneSource } from '@/lib/membership/sources/none'
 import { providerTakesBookings } from './tool-capability'
 import { isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
+import { locationsWithWhatsApp } from '@/lib/whatsapp-config'
 import { formatHistoryForClaude, parseAgentResponse, phoneMatchesAllowlist, isSkipResponse, isWithinQuietHours } from './core'
 import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
@@ -375,8 +376,10 @@ export function promptCapabilityFor(location, settings) {
   }
 }
 
-// MIAORG.1 Task 6 (T6-A) — does this studio own an active WhatsApp number?
-// Read once per studio per tick. A studio that does sends exactly as it always
+// MIAORG.1 Task 6 (T6-A) — does this studio have an active WhatsApp number
+// switched on (WAORGNUMBER.1: a location_whatsapp_numbers row, whatever the
+// number's home studio)? Read once per studio per tick. A studio that does
+// sends exactly as it always
 // has ({ locationId }, its own templates). One that does not (Hatch Street:
 // its threads carry a sibling studio's stamped number, WAHOMESTUDIO.1) sends
 // only through a thread that number can reply in. A failed read is "owns a
@@ -384,18 +387,14 @@ export function promptCapabilityFor(location, settings) {
 // refused before any Meta call and counted as a skip, so the doubt can never
 // be louder than today.
 async function studioOwnsWhatsAppNumber(db, locationId) {
-  const { data, error } = await db.from('whatsapp_numbers')
-    .select('id')
-    .eq('location_id', locationId)
-    .eq('is_active', true)
-    .limit(1)
-  if (error || !Array.isArray(data)) {
+  try {
+    return (await locationsWithWhatsApp(db, [locationId])).has(locationId)
+  } catch (err) {
     logError('agent-followups', 'studio WhatsApp number unreadable; sending as a studio with its own number this tick', {
-      locationId, err: error || { message: 'no rows returned' },
+      locationId, err,
     })
     return true
   }
-  return data.length > 0
 }
 
 // MIAORG.1 Task 6 (T6-B) — can a send in this thread go out? At a studio with

@@ -3,6 +3,7 @@ import {
   TIER_DAILY_LIMITS, tierDailyLimit, budgetSnapshot, blastBudgetBlockError,
   effectiveTickHeadroom, countBusinessInitiatedContactsLast24h, getSendBudget,
 } from './whatsapp-budget.js'
+import { fakeWhatsAppDb, link } from './whatsapp-numbers-fake-db.test-helpers.js'
 
 describe('tierDailyLimit', () => {
   it('maps every gated Meta tier to its daily unique-contact limit', () => {
@@ -75,15 +76,23 @@ describe('effectiveTickHeadroom', () => {
 
 // Fake db mimicking the paginated usage query chain:
 // .from('whatsapp_messages').select(...).in(location_id).eq×2.gt(...).order(...).range(s,e)
-// plus the sibling lookup (locations / whatsapp_numbers) that feeds the .in().
+// plus the sibling lookup (locations / location_whatsapp_numbers, WAORGNUMBER.1)
+// that feeds the .in().
 // The studio under test is 'loc1' in organisation 'org1'; `world` adds more.
 function usageDb(rows, calls = {}, world = {}) {
   calls.filters = []
   const tables = {
     locations: [{ id: 'loc1', organization_id: 'org1' }, ...(world.locations || [])],
-    whatsapp_numbers: world.numbers || [],
   }
   const lookup = (table) => {
+    // WAORGNUMBER.1 — "has a number" is the link table; `world.numbers` are
+    // whatsapp_numbers rows (each switched on at its home unless `world.links`).
+    if (table === 'location_whatsapp_numbers') {
+      return fakeWhatsAppDb({
+        numbers: world.numbers || [], links: world.links,
+        faults: world.fault === table ? { [table]: { message: 'boom' } } : {},
+      }).from(table)
+    }
     const filters = []
     if (world.fault === table) {
       const failed = { select: () => failed, eq: () => failed, neq: () => failed, in: () => failed,
@@ -189,8 +198,19 @@ describe('countBusinessInitiatedContactsLast24h', () => {
     expect(await countBusinessInitiatedContactsLast24h(db, 'loc1')).toBe(1)
     expect(calls.filters).toContainEqual(['in', 'location_id', ['loc1']])
   })
+  it('does not count a sibling the organisation number is switched on at (WAORGNUMBER.1)', async () => {
+    const calls = {}
+    const world = {
+      locations: [{ id: 'hatch', organization_id: 'org1' }],
+      numbers: [{ id: 'n', location_id: 'loc1', is_active: true }],
+      links: [link('loc1', 'n'), link('hatch', 'n')],
+    }
+    const db = usageDb([{ id: 1, contact_id: 'a', location_id: 'loc1' }, { id: 2, contact_id: 'b', location_id: 'hatch' }], calls, world)
+    expect(await countBusinessInitiatedContactsLast24h(db, 'loc1')).toBe(1)
+    expect(calls.filters).toContainEqual(['in', 'location_id', ['loc1']])
+  })
   it('fails closed when the sibling lookup fails (never counts a smaller set)', async () => {
-    for (const table of ['locations', 'whatsapp_numbers']) {
+    for (const table of ['locations', 'location_whatsapp_numbers']) {
       const db = usageDb([], {}, { fault: table, locations: [{ id: 'hatch', organization_id: 'org1' }] })
       await expect(countBusinessInitiatedContactsLast24h(db, 'loc1')).rejects.toThrow(/boom/)
     }

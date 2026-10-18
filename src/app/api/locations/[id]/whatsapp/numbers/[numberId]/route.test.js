@@ -1,122 +1,45 @@
-// N8NECHO.1 — the WhatsApp number PATCH and the masked token round-trip.
-//
-// The numbers screens show a stored Meta token as the shared mask
-// (publicShape().access_token_redacted === SECRET_MASK, presence only). If a
-// client ever sends that mask back as access_token, the stored token must
-// stay exactly as it is: the PATCH drops a token that is not fresh (the
-// shared '••' rule, isFreshSecret) before validating, and applies the rest
-// of the body. The old 4-bullet-plus-last-6 shape is pinned too. Fictional values only (public
-// repo): every secret starts SYNTH-.
+// WAORGNUMBER.1 (Task 5) — editing and removing a number happen at the
+// organisation now, so the studio-level PATCH and DELETE answer 410 with a
+// pointer. The masked-token round trip this file used to pin (N8NECHO.1) is
+// pinned on the organisation route:
+// src/app/api/organizations/[id]/whatsapp/numbers/[numberId]/route.test.js.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-  assertLocationAccess: vi.fn(() => null),
-  guardMasterOrOwner: vi.fn(() => null),
-}))
-vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null) }))
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => { throw new Error('a retired route must not touch the database') }) }))
 
-import { PATCH } from './route.js'
+import { PATCH, DELETE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
-import { publicShape } from '@/lib/whatsapp-numbers-shape'
-import { SECRET_MASK } from '@/lib/secret-keys'
 
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
 const NUM = 'c0000000-0000-4000-8000-00000000000a'
-const STORED_TOKEN = 'SYNTH-WA-SYSTEM-USER-TOKEN-0000'
-
-const STORED = {
-  id: NUM, location_id: LOC, label: 'Front desk', phone_number_id: '100',
-  business_account_id: '200', app_id: '300', display_phone: '+353 00 000 0000',
-  source: 'cloud_api', token_type: 'system_user', connected_via: 'manual',
-  is_default: true, is_active: true, access_token: STORED_TOKEN, signup_meta: null,
-  created_at: null, updated_at: null,
+const ctx = { params: Promise.resolve({ id: LOC, numberId: NUM }) }
+const url = `http://x/api/locations/${LOC}/whatsapp/numbers/${NUM}`
+const MOVED = {
+  success: false,
+  error: 'WhatsApp numbers are managed at the organisation now.',
+  moved_to: '/settings/whatsapp-numbers',
 }
 
-// The row lives in `stored`; an update merges its argument into it, the way
-// the database would, so "the stored value is unchanged" is read off the row.
-function mockDb() {
-  const state = { stored: { ...STORED }, updates: [] }
-  const db = {
-    from: vi.fn(() => ({
-      select: () => ({ eq: () => ({ single: async () => ({ data: { id: state.stored.id, location_id: state.stored.location_id }, error: null }) }) }),
-      update: (arg) => {
-        state.updates.push(arg)
-        state.stored = { ...state.stored, ...arg }
-        const chain = {
-          eq: () => chain,
-          neq: () => chain,
-          select: () => ({ single: async () => ({ data: state.stored, error: null }) }),
-          then: (resolve) => resolve({ data: null, error: null }),
-        }
-        return chain
-      },
-    })),
-  }
-  createServerClient.mockReturnValue(db)
-  return state
-}
+beforeEach(() => { vi.clearAllMocks(); getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner' }) })
 
-const patch = (body) => PATCH(
-  new Request(`http://x/api/locations/${LOC}/whatsapp/numbers/${NUM}`, {
-    method: 'PATCH',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  }),
-  { params: Promise.resolve({ id: LOC, numberId: NUM }) },
-)
-
-beforeEach(() => {
-  vi.clearAllMocks()
-  getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner' })
-})
-
-describe('PATCH whatsapp number: a masked token echo never overwrites the stored token (N8NECHO.1)', () => {
-  it('round-trip: the mask the screen is given, sent back with a label change, saves the label and leaves the stored token unchanged', async () => {
-    const state = mockDb()
-    const echoed = publicShape(state.stored).access_token_redacted
-    expect(echoed).toBe(SECRET_MASK)
-
-    const res = await patch({ label: 'Front desk renamed', access_token: echoed })
-    expect(res.status).toBe(200)
-    expect(state.updates.some((u) => 'access_token' in u)).toBe(false)
-    expect(state.stored.access_token).toBe(STORED_TOKEN)
-    expect(state.stored.label).toBe('Front desk renamed')
+describe('PATCH and DELETE /api/locations/[id]/whatsapp/numbers/[numberId] (retired)', () => {
+  it('PATCH answers 410 with moved_to', async () => {
+    const res = await PATCH(new Request(url, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: '{"label":"x"}' }), ctx)
+    expect(res.status).toBe(410)
+    expect(await res.json()).toEqual(MOVED)
   })
 
-  it('the old tail-keeping mask shape is dropped the same way', async () => {
-    const state = mockDb()
-    const res = await patch({ access_token: '••••' + STORED_TOKEN.slice(-6) })
-    expect(res.status).toBe(200)
-    expect(state.updates.some((u) => 'access_token' in u)).toBe(false)
-    expect(state.stored.access_token).toBe(STORED_TOKEN)
+  it('DELETE answers 410 with moved_to', async () => {
+    const res = await DELETE(new Request(url, { method: 'DELETE' }), ctx)
+    expect(res.status).toBe(410)
+    expect(await res.json()).toEqual(MOVED)
   })
 
-  it('a blank token is dropped too, not refused', async () => {
-    const state = mockDb()
-    const res = await patch({ label: 'Front desk 3', access_token: '' })
-    expect(res.status).toBe(200)
-    expect(state.stored.access_token).toBe(STORED_TOKEN)
-    expect(state.stored.label).toBe('Front desk 3')
-  })
-
-  it('a save without a token keeps the stored token and answers with the mask, not a tail', async () => {
-    const state = mockDb()
-    const res = await patch({ label: 'Front desk 2' })
-    expect(res.status).toBe(200)
-    const body = await res.json()
-    expect(state.stored.access_token).toBe(STORED_TOKEN)
-    expect(state.updates.some((u) => 'access_token' in u)).toBe(false)
-    expect(body.number.access_token_redacted).toBe(SECRET_MASK)
-    expect(JSON.stringify(body)).not.toMatch(/SYNTH-|N-0000/)
-  })
-
-  it('a real new token is written (the refusal is for masks, not for tokens)', async () => {
-    const state = mockDb()
-    const res = await patch({ access_token: 'SYNTH-WA-NEW-SYSTEM-USER-TOKEN-1111' })
-    expect(res.status).toBe(200)
-    expect(state.stored.access_token).toBe('SYNTH-WA-NEW-SYSTEM-USER-TOKEN-1111')
+  it('a signed-out caller still gets 401 on both', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await PATCH(new Request(url, { method: 'PATCH', body: '{}' }), ctx)).status).toBe(401)
+    expect((await DELETE(new Request(url, { method: 'DELETE' }), ctx)).status).toBe(401)
   })
 })
