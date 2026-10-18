@@ -11,7 +11,11 @@ vi.mock('@/lib/auth', async () => {
   return { ...actual, getCurrentUser: vi.fn() }
 })
 vi.mock('@/lib/whatsapp', () => ({ setConversationalAutomation: vi.fn() }))
-vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn() }))
+vi.mock('@/lib/whatsapp-config', async () => ({
+  getLocationWhatsAppNumberConfig: vi.fn(),
+  // WAORGNUMBER.4 — the real link-table read, over the fake db.
+  studiosUsingNumbers: (await vi.importActual('@/lib/whatsapp-config')).studiosUsingNumbers,
+}))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { POST } from './route.js'
@@ -221,5 +225,31 @@ describe('chat openers on a shared number (WAORGNUMBER.4)', () => {
   it('an owner at the home studio may change them (as before)', async () => {
     createServerClient.mockReturnValue(fakeLocationsDb({ reads: { data: { settings: {} }, error: null } }))
     expect((await POST(post())).status).toBe(200)
+  })
+})
+
+describe('the openers mirror to every studio using the number (WAORGNUMBER.4)', () => {
+  const HOME = 'a0000000-0000-4000-8000-0000000000aa'
+  it('an org admin saving at one studio mirrors them at every studio with the number switched on', async () => {
+    getCurrentUser.mockResolvedValue({ ...USER, orgAdminOrgIds: [ORG] })
+    getLocationWhatsAppNumberConfig.mockResolvedValue({ ...NUMBER, homeLocationId: HOME })
+    const db = fakeLocationsDb({
+      reads: { data: { settings: {} }, error: null },
+      tables: { location_whatsapp_numbers: { data: [{ location_id: HOME }, { location_id: LOC }], error: null } },
+    })
+    createServerClient.mockReturnValue(db)
+    expect((await POST(post())).status).toBe(200)
+    expect(db.writes).toHaveLength(2)
+  })
+  it('a failed read of the studios using it is the applied_at_meta 500 (the saving studio still mirrored)', async () => {
+    const db = fakeLocationsDb({
+      reads: { data: { settings: {} }, error: null },
+      tables: { location_whatsapp_numbers: { data: null, error: BOOM } },
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(post())
+    expect(res.status).toBe(500)
+    expect((await res.json()).applied_at_meta).toBe(true)
+    expect(db.writes).toHaveLength(1)
   })
 })

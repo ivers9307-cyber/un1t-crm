@@ -13,9 +13,10 @@ import { contactWaPhone, loadSendConversation } from './whatsapp-conversations.j
 import { getOrCreateConversation } from './whatsapp.js'
 
 describe('contactWaPhone', () => {
-  it('prefers wa_phone, strips a leading +, null without a phone', () => {
+  it('prefers wa_phone, digits only (as the webhook keys threads), null without a phone', () => {
     expect(contactWaPhone({ wa_phone: '353870000001', phone: '+353870000002' })).toBe('353870000001')
     expect(contactWaPhone({ phone: '+353870000002' })).toBe('353870000002')
+    expect(contactWaPhone({ wa_phone: '+353 87 000 0003' })).toBe('353870000003')
     expect(contactWaPhone({})).toBeNull()
     expect(contactWaPhone(null)).toBeNull()
   })

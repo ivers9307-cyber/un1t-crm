@@ -45,7 +45,7 @@ import { createServerClient } from '@/lib/supabase'
 
 // db mock dispatching by table. Captures the unread-reset update so
 // tests can assert the side-effect is gated too.
-function mockDb({ conversation, messages = [], locationSettings = {} } = {}) {
+function mockDb({ conversation, messages = [], locationSettings = {}, links = { data: [], error: null } } = {}) {
   const updateEq = vi.fn(() => Promise.resolve({ data: null, error: null }))
   return {
     updateEq,
@@ -76,6 +76,10 @@ function mockDb({ conversation, messages = [], locationSettings = {} } = {}) {
             })),
           })),
         }
+      }
+      if (table === 'location_whatsapp_numbers') {
+        // WAORGNUMBER.4 — which numbers are switched on at the thread's studio
+        return { select: () => ({ eq: () => Promise.resolve(links) }) }
       }
       if (table === 'locations') {
         // FLOW-SEND — the flow_available lookup
@@ -170,5 +174,28 @@ describe('GET /api/whatsapp/conversations/[id] — authz gate', () => {
     )
     const res = await GET(req(), props)
     expect(res.status).toBe(200)
+  })
+})
+
+// WAORGNUMBER.4 (R8) — the block confirm names the number a block acts on.
+describe('GET /api/whatsapp/conversations/[id] — the number the block confirm names', () => {
+  const STAFF = { role: 'staff', locations: [{ id: 'loc-1' }] }
+  const stamped = () => ({ id: 'c1', location_id: 'loc-1', whatsapp_number_id: 'n-1', whatsapp_numbers: { display_phone: '+353 1 000 0000' } })
+  const named = async (links) => {
+    getCurrentUser.mockResolvedValue(STAFF)
+    createServerClient.mockReturnValue(mockDb({ conversation: stamped(), links }))
+    return (await (await GET(req(), props)).json()).conversation.whatsapp_numbers
+  }
+  it('the stamp switched on here is named', async () => {
+    expect(await named({ data: [{ whatsapp_number_id: 'n-1' }], error: null })).toEqual({ display_phone: '+353 1 000 0000' })
+  })
+  it('nothing switched on here (the send-through-thread case): the stamp is named', async () => {
+    expect(await named({ data: [], error: null })).toEqual({ display_phone: '+353 1 000 0000' })
+  })
+  it("another number switched on here (the block uses the studio's default): not named", async () => {
+    expect(await named({ data: [{ whatsapp_number_id: 'n-2' }], error: null })).toBeNull()
+  })
+  it('an unreadable link read: not named', async () => {
+    expect(await named({ data: null, error: { message: 'boom' } })).toBeNull()
   })
 })

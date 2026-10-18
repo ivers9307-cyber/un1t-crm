@@ -2230,6 +2230,9 @@ export async function getOrCreateConversation(db, contact, locationId) {
     // Lost a race with the inbound webhook (or another send) on the same
     // wa_phone — the unique constraint rejected us; re-read the winner.
     const raced = await findAt(fileAt)
+    // WAORGNUMBER.4 — say why when there is no thread at all (the staff routes
+    // answer a bare "Could not open a conversation").
+    if (!raced) console.error('[whatsapp] getOrCreateConversation: insert failed and no thread to adopt', fileAt, error?.message || 'no row')
     return raced?.id
   }
 

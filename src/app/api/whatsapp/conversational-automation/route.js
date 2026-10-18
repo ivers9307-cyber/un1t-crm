@@ -8,6 +8,7 @@ import { setConversationalAutomation } from '@/lib/whatsapp'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 import { mergeLocationSettings } from '@/lib/location-settings'
 import { isOrganizationAdminFor } from '@/lib/whatsapp-blast-signoff'
+import { studiosUsingNumbers } from '@/lib/whatsapp-config'
 
 const ConversationalAutomationSchema = z.object({
   location_id: uuidLike,
@@ -77,14 +78,27 @@ export async function POST(request) {
   // bare-write the whole column, so a blip wiped every other settings key and
   // still said success. Meta already has the openers (the source of truth,
   // and idempotent), so a failed mirror says exactly that.
+  // WAORGNUMBER.4 (R8) — the openers are the NUMBER's, so every studio with it
+  // switched on shows them, not just the one that saved (else another
+  // studio's card shows stale openers and a save there puts them back).
   const db = createServerClient()
-  const saved = await mergeLocationSettings(
-    db,
-    locationId,
-    (s) => ({ ...s, conversational_automation: { enable_welcome: enableWelcome, prompts } }),
-    { scope: 'wa-conversational-automation' },
-  )
-  if (!saved.ok) {
+  let studios = [locationId]
+  try {
+    studios = [...new Set([locationId, ...(await studiosUsingNumbers(db, [own.config.id]))])]
+  } catch {
+    studios = null
+  }
+  let mirrored = Array.isArray(studios)
+  for (const studioId of studios || [locationId]) {
+    const saved = await mergeLocationSettings(
+      db,
+      studioId,
+      (s) => ({ ...s, conversational_automation: { enable_welcome: enableWelcome, prompts } }),
+      { scope: 'wa-conversational-automation' },
+    )
+    if (!saved.ok) mirrored = false
+  }
+  if (!mirrored) {
     return NextResponse.json({
       success: false,
       applied_at_meta: true,

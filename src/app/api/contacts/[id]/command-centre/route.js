@@ -169,9 +169,12 @@ export async function GET(request, props) {
         .eq('contact_id', params.id)
         .eq('status', 'active')
         .order('next_step_at', { ascending: true }),
+      // WAORGNUMBER.4 (R3) — the composer sends on the HOME studio's thread,
+      // so its window is the one the drawer shows.
       db.from('whatsapp_conversations')
         .select('id, window_expires_at, last_message_at')
         .eq('contact_id', params.id)
+        .eq('location_id', contact.location_id)
         .order('last_message_at', { ascending: false })
         .limit(1),
     ])

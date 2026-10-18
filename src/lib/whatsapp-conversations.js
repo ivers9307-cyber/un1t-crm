@@ -10,13 +10,18 @@
 // helpers are what is left of it: the phone a send goes to, and the thread
 // fields the routes read.
 
+import { normalizeWaPhone } from './whatsapp-coexistence'
+
 const SEND_CONVERSATION_COLUMNS = 'id, window_expires_at, location_id, agent_handed_off_at'
 
-/** The contact's WhatsApp number as Meta wants it (no leading '+'), or null. */
+/**
+ * The contact's WhatsApp number as Meta wants it and the webhook keys threads
+ * on (digits only, no '+'), or null. getOrCreateConversation matches threads
+ * on it exactly, so a stored '+353 87 …' must not open a second thread beside
+ * the webhook's '35387…' one.
+ */
 export function contactWaPhone(contact) {
-  const phone = contact?.wa_phone || contact?.phone
-  if (!phone) return null
-  return phone.startsWith('+') ? phone.slice(1) : phone
+  return normalizeWaPhone(contact?.wa_phone || contact?.phone)?.without || null
 }
 
 /**

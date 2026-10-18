@@ -132,10 +132,12 @@ export async function GET(request, props) {
     latestLinkForContact(db, contact.id),
     loadTemplate(db, contact.location_id, copy.whatsapp_template_name),
   ])
-  // Window state without creating a conversation: read the newest thread.
+  // Window state without creating a conversation: read the newest thread at
+  // the contact's HOME studio, the one the POST sends on (WAORGNUMBER.4, R3).
   const { data: convs } = await db.from('whatsapp_conversations')
     .select('id, window_expires_at')
     .eq('contact_id', contact.id)
+    .eq('location_id', contact.location_id)
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .limit(1)
   const conversation = convs?.[0] || null
