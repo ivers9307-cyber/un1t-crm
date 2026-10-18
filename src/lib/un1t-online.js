@@ -63,6 +63,14 @@ export function createUn1tClient({
   // Runs immediately before every HTTP request (retries included). A throw
   // stops that request and surfaces to the caller; no fetch is made.
   beforeRequest = async () => {},
+  // Per-client overrides. The defaults are the sync's behaviour (D's writer
+  // shares them); the live member reader passes fail-fast values so a
+  // WhatsApp turn never sits through retries or a long rate-limit wait.
+  maxRetries = MAX_RETRIES,
+  maxWaitMs = MAX_WAIT_MS,
+  // null = no timeout (today's behaviour). A number aborts one request (its
+  // body read included) after that many ms; it surfaces like a network fault.
+  requestTimeoutMs = null,
 } = {}) {
   const root = String(baseUrl).replace(/\/+$/, '')
   const counters = { requests: 0, waitedMs: 0, retries: 0 }
@@ -72,9 +80,9 @@ export function createUn1tClient({
 
   async function wait(ms, status = 429) {
     if (!(ms > 0)) return
-    if (ms > MAX_WAIT_MS) {
+    if (ms > maxWaitMs) {
       throw new Un1tApiError(
-        `un1t.online asked the client to wait ${Math.ceil(ms / 1000)}s, longer than the ${MAX_WAIT_MS / 1000}s limit`,
+        `un1t.online asked the client to wait ${Math.ceil(ms / 1000)}s, longer than the ${maxWaitMs / 1000}s limit`,
         { status, code: 'wait_too_long' },
       )
     }
@@ -96,15 +104,20 @@ export function createUn1tClient({
       await beforeRequest()
       counters.requests += 1
       let response
+      const controller = requestTimeoutMs > 0 ? new AbortController() : null
+      const timer = controller ? setTimeout(() => controller.abort(), requestTimeoutMs) : null
+      const clear = () => { if (timer) clearTimeout(timer) }
       try {
         response = await fetchImpl(url, {
           method: 'GET',
           headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+          ...(controller ? { signal: controller.signal } : {}),
         })
       } catch (err) {
+        clear()
         // A network fault is retried like a 5xx. Only the error's name and
         // message are surfaced, never the request, so the token cannot leak.
-        if (attempt < MAX_RETRIES) {
+        if (attempt < maxRetries) {
           counters.retries += 1
           logWarn('un1t-online', 'request failed; retrying', { path, attempt: attempt + 1, errName: err?.name })
           await wait(1000 * 2 ** attempt)
@@ -115,11 +128,13 @@ export function createUn1tClient({
 
       const status = response.status
       if (status === 401 || status === 403) {
+        clear()
         throw new Un1tAuthError(`un1t.online refused the token (HTTP ${status})`, status)
       }
 
       if (status === 429 || status >= 500) {
-        if (attempt < MAX_RETRIES) {
+        clear()
+        if (attempt < maxRetries) {
           counters.retries += 1
           const retryAfter = headerNumber(response.headers, 'retry-after')
           const ms = retryAfter != null
@@ -129,7 +144,7 @@ export function createUn1tClient({
           await wait(ms, status)
           continue
         }
-        throw new Un1tApiError(`un1t.online answered HTTP ${status} after ${MAX_RETRIES} retries`, { status })
+        throw new Un1tApiError(`un1t.online answered HTTP ${status} after ${maxRetries} retries`, { status })
       }
 
       let body
@@ -137,6 +152,8 @@ export function createUn1tClient({
         body = await response.json()
       } catch {
         throw new Un1tApiError(`un1t.online sent an unreadable body (HTTP ${status})`, { status })
+      } finally {
+        clear()
       }
 
       if (status < 200 || status >= 300) {

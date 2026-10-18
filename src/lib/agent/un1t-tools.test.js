@@ -22,6 +22,7 @@ vi.mock('./booking-tools', async (importOriginal) => {
 
 import {
   UN1T_BOOKED_STATUS,
+  UN1T_EVENT_SCHEDULED_STATUS,
   UN1T_PRODUCT_ACTIVE_STATUS,
   UN1T_PRODUCT_PRIVATE_VISIBILITY,
   UN1T_NO_7_DAY_NOTE,
@@ -150,6 +151,13 @@ describe('shapeUn1tMembership', () => {
     expect(paused).toMatchObject({ status: 'paused', paused_until: 'Sun 1 Nov 2026', renews_on: null })
     expect(shapeUn1tMembership({ ...base, subscriptions: [sub({ paused_until: '2026-10-01T00:00:00Z' })] }).status).toBe('active')
   })
+  it('an open-ended pause (paused_at past, no paused_until) is paused, with no renewal date', () => {
+    const out = shapeUn1tMembership({ ...base, subscriptions: [sub({ paused_at: '2026-10-10T00:00:00Z', paused_until: null })] })
+    expect(out).toMatchObject({ status: 'paused', paused_until: null, renews_on: null })
+    // a pause that ended (both in the past) is active again; a pause not yet begun is not a pause
+    expect(shapeUn1tMembership({ ...base, subscriptions: [sub({ paused_at: '2026-10-01T00:00:00Z', paused_until: '2026-10-05T00:00:00Z' })] }).status).toBe('active')
+    expect(shapeUn1tMembership({ ...base, subscriptions: [sub({ paused_at: '2030-01-01T00:00:00Z', paused_until: null })] }).status).toBe('active')
+  })
   it('ending on the period end when cancel_at_period_end, with no renewal date', () => {
     expect(shapeUn1tMembership({ ...base, subscriptions: [sub({ cancel_at_period_end: true })] }))
       .toMatchObject({ status: 'ending', ends_on: 'Fri 20 Nov 2026', renews_on: null })
@@ -243,7 +251,10 @@ describe('shapeUn1tAttendance', () => {
   })
   it('no client row is found:false, still never a 7-day number', () => {
     expect(shapeUn1tAttendance(null)).toEqual({ found: false, total_attended_7d: null, note: UN1T_NO_7_DAY_NOTE })
-    expect(shapeUn1tAttendance({ bookings_30d_attended: null, last_attended_at: null })).toMatchObject({ found: true, total_attended_30d: 0, last_attended_on: null })
+    // A missing counter is unknown (null), never zero; a real zero stays zero.
+    expect(shapeUn1tAttendance({ bookings_30d_attended: null, last_attended_at: null })).toMatchObject({ found: true, total_attended_30d: null, last_attended_on: null, note: UN1T_NO_7_DAY_NOTE })
+    expect(shapeUn1tAttendance({ last_attended_at: null }).total_attended_30d).toBeNull()
+    expect(shapeUn1tAttendance({ bookings_30d_attended: 0, last_attended_at: null }).total_attended_30d).toBe(0)
   })
 })
 
@@ -353,6 +364,17 @@ describe('executeUn1tRead: get_my_membership', () => {
     t.un1t_subscriptions = []
     expect((await executeUn1tRead('get_my_membership', {}, ctxFor(fakeDb(t, { errors: { un1t_clients: true } })), [hatchStudio])).error).toBe('read_failed')
   })
+  it('"none" from the mirror carries a staleness note (a purchase minutes old may not show)', async () => {
+    const t = tables()
+    t.un1t_subscriptions = []
+    const out = await executeUn1tRead('get_my_membership', {}, ctxFor(fakeDb(t)), [hatchStudio])
+    expect(out).toMatchObject({ status: 'none', plan: null })
+    expect(out.message).toMatch(/few minutes behind/)
+    expect(out.message).toMatch(/very recent purchase/)
+    expect(out.message).not.toMatch(/[\u2013\u2014]/)
+    // a live membership gets no such note
+    expect((await executeUn1tRead('get_my_membership', {}, ctxFor(fakeDb(tables())), [hatchStudio])).message).toBeUndefined()
+  })
   it('an unreadable product read still answers from the subscription', async () => {
     const out = await executeUn1tRead('get_my_membership', {}, ctxFor(fakeDb(tables(), { errors: { un1t_products: true } })), [hatchStudio])
     expect(out).toMatchObject({ status: 'active', plan: 'Monthly Foundation' })
@@ -388,6 +410,21 @@ describe('executeUn1tRead: bookings and next class', () => {
     expect(out.may_be_stale).toBe(true)
     expect(out.bookings.map((b) => b.booking_id)).toEqual(['un1t:b1', 'un1t:b2'])
     expect(out.message).toMatch(/few minutes behind/)
+  })
+  it('a booking at a cancelled class is not upcoming, on the live path and the mirror path', async () => {
+    const t = tables()
+    t.un1t_events.find((e) => e.un1t_id === 'e2').status = 'cancelled'
+    fetchLiveUn1tBookings.mockResolvedValue({ ok: true, rows: liveRows })
+    const live = await executeUn1tRead('list_my_upcoming_bookings', {}, ctxFor(fakeDb(t)), [hatchStudio])
+    expect(live.bookings.map((b) => b.booking_id)).toEqual(['un1t:b1'])
+    expect((await executeUn1tRead('get_my_next_class', {}, ctxFor(fakeDb(t)), [hatchStudio])).booking_id).toBe('un1t:b1')
+    fetchLiveUn1tBookings.mockResolvedValue({ ok: false, reason: 'read_failed' })
+    const mirror = await executeUn1tRead('list_my_upcoming_bookings', {}, ctxFor(fakeDb(t)), [hatchStudio])
+    expect(mirror.bookings.map((b) => b.booking_id)).toEqual(['un1t:b1'])
+  })
+  it('the cancelled-class filter uses the same scheduled literal as the timetable', async () => {
+    const { UN1T_SCHEDULED_STATUS } = await import('./booking-tools')
+    expect(UN1T_EVENT_SCHEDULED_STATUS).toBe(UN1T_SCHEDULED_STATUS)
   })
   it('a thrown live read also falls back to the mirror, stale', async () => {
     fetchLiveUn1tBookings.mockRejectedValue(new Error('network'))

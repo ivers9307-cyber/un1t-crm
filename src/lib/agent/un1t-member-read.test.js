@@ -4,6 +4,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.f
 vi.mock('@/lib/connection-registry', () => ({ readConnection: vi.fn() }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }))
 
+import { Un1tApiError } from '@/lib/un1t-online'
 import { Un1tBudgetSpent, openUn1tMemberReader, fetchLiveUn1tBookings, UN1T_READ_MAX_PAGES } from './un1t-member-read'
 import { fakeUn1tReader, fakeUn1tWrite } from './un1t-fakes.test-helpers'
 import { readConnection } from '@/lib/connection-registry'
@@ -62,12 +63,23 @@ describe('openUn1tMemberReader', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
-  it('a retried request spends a slot for every HTTP attempt', async () => {
+  it('the reader never retries: a 5xx is one request and one slot', async () => {
     const fetchImpl = fetchSeq([res(503, {}), ok([])])
     const reader = await openUn1tMemberReader(db, LOC, { fetchImpl, sleep })
-    await reader.getOne('/users/u1/bookings')
-    expect(fetchImpl).toHaveBeenCalledTimes(2)
-    expect(checkRateLimit).toHaveBeenCalledTimes(2)
+    const err = await reader.getOne('/users/u1/bookings').catch((e) => e)
+    expect(err).toBeInstanceOf(Un1tApiError)
+    expect(err.status).toBe(503)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(checkRateLimit).toHaveBeenCalledTimes(1)
+    expect(sleep).not.toHaveBeenCalled()
+  })
+
+  it('hands the client the fail-fast options', async () => {
+    const clientFactory = vi.fn(() => ({ getOne: vi.fn(), listAll: vi.fn() }))
+    await openUn1tMemberReader(db, LOC, { clientFactory })
+    expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({
+      maxRetries: 0, maxWaitMs: 2000, requestTimeoutMs: 5000, maxPages: UN1T_READ_MAX_PAGES,
+    }))
   })
 
   it('a spent slot throws Un1tBudgetSpent and sends nothing', async () => {
@@ -170,12 +182,40 @@ describe('fetchLiveUn1tBookings', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
-  it('a 5xx after retries -> { ok: false, reason: read_failed }', async () => {
+  it('a 5xx -> read_failed on the first request, no retry, no sleep', async () => {
     const fetchImpl = fetchSeq([res(503, {})])
     const out = await fetchLiveUn1tBookings(db, { locationId: LOC, un1tUserId: 'u1' }, { fetchImpl, sleep })
     expect(out).toEqual({ ok: false, reason: 'read_failed' })
-    expect(fetchImpl).toHaveBeenCalledTimes(4)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(checkRateLimit).toHaveBeenCalledTimes(1)
+    expect(sleep).not.toHaveBeenCalled()
     expect(logWarn.mock.calls.concat(logError.mock.calls).some(([m, , meta]) => m === 'mia-un1t' && meta?.status === 503)).toBe(true)
+  })
+
+  it('a 429 with a long retry-after fails fast: read_failed, no sleep, one slot', async () => {
+    const fetchImpl = fetchSeq([res(429, {}, { 'retry-after': '60' }), ok([])])
+    const out = await fetchLiveUn1tBookings(db, { locationId: LOC, un1tUserId: 'u1' }, { fetchImpl, sleep })
+    expect(out).toEqual({ ok: false, reason: 'read_failed' })
+    expect(sleep).not.toHaveBeenCalled()
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(checkRateLimit).toHaveBeenCalledTimes(1)
+  })
+
+  it('a spent un1t.online window longer than 2 s fails the next page without waiting or a slot', async () => {
+    const spentWindow = res(200, { success: true, data: rowsFor(1), pagination: { total: 300, page: 1, pages: 3, pageSize: 100 } }, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '30' })
+    const fetchImpl = fetchSeq([spentWindow, pageOf(2, 3, rowsFor(2))])
+    const out = await fetchLiveUn1tBookings(db, { locationId: LOC, un1tUserId: 'u1' }, { fetchImpl, sleep })
+    expect(out).toEqual({ ok: false, reason: 'read_failed' })
+    expect(sleep).not.toHaveBeenCalled()
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(checkRateLimit).toHaveBeenCalledTimes(1)
+  })
+
+  it('slots spent per read never exceed the pages fetched, even when every page is slow-failing', async () => {
+    const fetchImpl = fetchSeq([pageOf(1, 3, rowsFor(1)), res(503, {})])
+    await fetchLiveUn1tBookings(db, { locationId: LOC, un1tUserId: 'u1' }, { fetchImpl, sleep })
+    expect(checkRateLimit.mock.calls.length).toBe(fetchImpl.mock.calls.length)
+    expect(checkRateLimit.mock.calls.length).toBeLessThanOrEqual(UN1T_READ_MAX_PAGES)
   })
 
   it('a 401 is read_failed and logged with its status', async () => {

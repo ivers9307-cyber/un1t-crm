@@ -176,6 +176,82 @@ describe('createUn1tClient', () => {
     expect(client.stats().retries).toBe(3)
   })
 
+  describe('fail-fast options (the live member reader)', () => {
+    it('maxRetries 0: a 5xx and a 429 are one request, no retry, no sleep', async () => {
+      for (const status of [503, 429]) {
+        const { client, fetchImpl, sleeps } = setup([res(status, {}, { 'retry-after': '60' }), page([], 1, 1, 0)], { maxRetries: 0, maxWaitMs: 2000 })
+        const err = await client.getOne('/users/u1/bookings').catch((e) => e)
+        expect(err).toBeInstanceOf(Un1tApiError)
+        expect(err.status).toBe(status)
+        expect(err.message).toContain('after 0 retries')
+        expect(fetchImpl.calls.length).toBe(1)
+        expect(sleeps).toEqual([])
+        expect(client.stats().retries).toBe(0)
+      }
+    })
+
+    it('maxRetries 0: a network fault is one request and fails', async () => {
+      const boom = () => { throw new Error('socket hang up') }
+      const { client, fetchImpl, sleeps } = setup([boom, page([], 1, 1, 0)], { maxRetries: 0 })
+      const err = await client.getOne('/x').catch((e) => e)
+      expect(err).toBeInstanceOf(Un1tApiError)
+      expect(err.status).toBe(0)
+      expect(fetchImpl.calls.length).toBe(1)
+      expect(sleeps).toEqual([])
+    })
+
+    it('maxWaitMs: a spent window longer than the cap fails without sleeping or sending the next request', async () => {
+      const spentWindow = page(rowsOf(1, 2), 1, 2, 4, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '30' })
+      const { client, fetchImpl, sleeps } = setup([spentWindow, page(rowsOf(3, 4), 2, 2, 4)], { maxRetries: 0, maxWaitMs: 2000 })
+      const err = await client.listAll('/bookings').catch((e) => e)
+      expect(err).toBeInstanceOf(Un1tApiError)
+      expect(err.code).toBe('wait_too_long')
+      expect(err.message).toContain('2s limit')
+      expect(fetchImpl.calls.length).toBe(1)
+      expect(sleeps).toEqual([])
+    })
+
+    it('maxWaitMs: a short spent window (within the cap) is still waited out', async () => {
+      const shortWindow = page(rowsOf(1, 2), 1, 2, 4, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1' })
+      const { client, sleeps } = setup([shortWindow, page(rowsOf(3, 4), 2, 2, 4)], { maxRetries: 0, maxWaitMs: 2000 })
+      const out = await client.listAll('/bookings')
+      expect(out.rows).toHaveLength(4)
+      expect(sleeps).toEqual([2000])
+    })
+
+    it('requestTimeoutMs: aborts a hung request and surfaces it as a network fault', async () => {
+      const hung = (_url, init) => new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))
+      })
+      const { client, fetchImpl, sleeps } = setup([hung], { maxRetries: 0, requestTimeoutMs: 20 })
+      const err = await client.getOne('/x').catch((e) => e)
+      expect(err).toBeInstanceOf(Un1tApiError)
+      expect(err.status).toBe(0)
+      expect(fetchImpl.calls[0].signal).toBeDefined()
+      expect(sleeps).toEqual([])
+    })
+
+    it('requestTimeoutMs: a prompt response is untouched and the default client sends no signal', async () => {
+      const a = setup([page([], 1, 1, 0)], { requestTimeoutMs: 5000 })
+      await a.client.getOne('/x')
+      expect(a.fetchImpl.calls[0].signal).toBeDefined()
+      const b = setup([page([], 1, 1, 0)])
+      await b.client.getOne('/x')
+      expect(b.fetchImpl.calls[0].signal).toBeUndefined()
+    })
+
+    it('defaults are unchanged: 3 retries and a 90s wait cap', async () => {
+      const { client, fetchImpl, sleeps } = setup([res(503, {}), res(503, {}), page([], 1, 1, 0)])
+      await client.getOne('/x')
+      expect(fetchImpl.calls.length).toBe(3)
+      expect(sleeps).toEqual([1000, 2000])
+      const refused = setup([res(429, {}, { 'retry-after': '91' })])
+      const err = await refused.client.getOne('/x').catch((e) => e)
+      expect(err.code).toBe('wait_too_long')
+      expect(err.message).toContain('90s limit')
+    })
+  })
+
   it('401 is Un1tAuthError with no retry', async () => {
     const { client, fetchImpl } = setup([res(401, { success: false })])
     const err = await client.getSelf().catch((e) => e)

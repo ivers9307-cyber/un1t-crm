@@ -48,7 +48,7 @@ const PATTERNS = Object.freeze([
 ])
 
 /** True when `code` (comments already blanked) reads the credits capability. */
-export function readsInvoicesCapability(code) {
+export function readsCreditsCapability(code) {
   return PATTERNS.some((re) => re.test(code))
 }
 
@@ -78,7 +78,7 @@ function foundReaders() {
   for (const f of SCAN_DIRS.flatMap((d) => walk(path.join(ROOT, d)))) {
     const raw = readFileSync(f, 'utf8')
     if (!raw.includes('credits')) continue
-    if (readsInvoicesCapability(codeOf(raw, f))) found.add(rel(f))
+    if (readsCreditsCapability(codeOf(raw, f))) found.add(rel(f))
   }
   return found
 }
@@ -105,8 +105,8 @@ describe('credits capability readers (MIAHATCH.2)', () => {
     expect(verdict.unreasoned).toEqual(['c.js'])
   })
 
-  it('the patterns read each spelling the brief lists, and nothing else', () => {
-    const reads = (s) => readsInvoicesCapability(codeOf(s, 'x.jsx'))
+  it('the patterns read each spelling of a credits capability read (property, index, generic reader calls, gate prop), and nothing else', () => {
+    const reads = (s) => readsCreditsCapability(codeOf(s, 'x.jsx'))
     expect(reads('if (r.capabilities.credits) {}')).toBe(true)
     expect(reads('if (r.capabilities?.credits !== true) {}')).toBe(true)
     expect(reads("const x = p.capabilities['credits']")).toBe(true)

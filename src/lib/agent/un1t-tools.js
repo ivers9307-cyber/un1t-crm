@@ -37,6 +37,9 @@ const LOG_MODULE = 'mia-un1t'
 // un1t_bookings.status is one of booked / attended / cancelled / no_show;
 // un1t_products.status is 'active' on every row, visibility public / private.
 export const UN1T_BOOKED_STATUS = 'booked'
+// un1t_events.status of a class that is on. Same literal as UN1T_SCHEDULED_STATUS
+// in booking-tools.js (not imported: that module is heavy and imports this one lazily).
+export const UN1T_EVENT_SCHEDULED_STATUS = 'scheduled'
 export const UN1T_PRODUCT_ACTIVE_STATUS = 'active'
 export const UN1T_PRODUCT_PRIVATE_VISIBILITY = 'private'
 
@@ -68,6 +71,8 @@ const LIST_FAILED_TIMETABLE = Object.freeze({
 })
 const NO_ACCOUNT_NOTE =
   'No account was found for this person at this studio. Say you cannot see an account for them here and offer to hand off to the team.'
+const NO_MEMBERSHIP_STALE_NOTE =
+  'No membership is showing in synced data that can be a few minutes behind. Say you cannot see a membership for them right now, and that a very recent purchase may not show yet. Offer to hand off to the team if they expect one.'
 const STALE_NOTE =
   'This comes from synced data that can be a few minutes behind. Relay it, and say a very recent booking or cancellation may not show yet.'
 
@@ -144,9 +149,14 @@ export function shapeUn1tMembership({ subscriptions, productsById, client, credi
   const periodEnd = dateLabel(sub.current_period_end, zone)
   const base = { plan, price_label, renews_on: null, credits }
 
+  const pausedAtMs = toMs(sub.paused_at)
   const pausedUntilMs = toMs(sub.paused_until)
   if (pausedUntilMs !== null && pausedUntilMs > nowMs) {
     return { status: 'paused', ...base, paused_until: dateLabel(sub.paused_until, zone) }
+  }
+  // An open-ended pause: started, no end date. It is still a pause, with no renewal date.
+  if (pausedAtMs !== null && pausedAtMs <= nowMs && pausedUntilMs === null) {
+    return { status: 'paused', ...base, paused_until: null }
   }
   if (sub.past_due_at || sub.status === 'past_due') return { status: 'payment_issue', ...base }
   if (sub.cancel_at_period_end === true) return { status: 'ending', ...base, ends_on: periodEnd }
@@ -178,6 +188,10 @@ export function shapeUn1tBookingsForAgent(rows, eventsByUn1tId, nowMs, zone = DE
     const eventId = rowEventId(r)
     if (!id || !eventId || seen.has(id)) continue
     const event = eventOf(eventId)
+    // A booking row can outlive its class: a cancelled class is not upcoming.
+    // An event with no status (a live row's embedded event) is kept.
+    const eventStatus = event?.status
+    if (eventStatus != null && String(eventStatus).toLowerCase() !== UN1T_EVENT_SCHEDULED_STATUS) continue
     const startMs = eventStartMs(event)
     if (startMs === null || startMs <= nowMs) continue
     seen.add(id)
@@ -225,10 +239,11 @@ export function shapeUn1tTimetableForAgent(rows, zone = DEFAULT_TZ) {
 export function shapeUn1tAttendance(client, zone = DEFAULT_TZ) {
   const base = { total_attended_7d: null, note: UN1T_NO_7_DAY_NOTE }
   if (!client) return { found: false, ...base }
-  const count = Number(client.bookings_30d_attended)
+  // A missing counter is unknown, never zero: the model then says it cannot see the figure.
+  const count = client.bookings_30d_attended == null ? NaN : Number(client.bookings_30d_attended)
   return {
     found: true,
-    total_attended_30d: Number.isFinite(count) ? count : 0,
+    total_attended_30d: Number.isFinite(count) ? count : null,
     last_attended_on: dateLabel(client.last_attended_at, zone),
     ...base,
   }
@@ -394,6 +409,8 @@ async function readMembership(db, studio, zone) {
   const shaped = shapeUn1tMembership({ subscriptions: subs || [], productsById, client: clientError ? null : client, creditsCapable, zone })
   // With the client unreadable, "no membership" could hide a credit pack.
   if (clientError && shaped.status === 'none') return { ...READ_FAILED }
+  // The mirror runs minutes behind: "no membership" must not be stated flatly.
+  if (shaped.status === 'none') return { ...shaped, message: NO_MEMBERSHIP_STALE_NOTE }
   return shaped
 }
 

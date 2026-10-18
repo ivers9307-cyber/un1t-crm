@@ -74,6 +74,7 @@ import { anthropicMessages } from '@/lib/anthropic'
 import { recordErrorEvent } from '@/lib/error-events'
 import { getAiCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
+import { logWarn } from '@/lib/log'
 
 // MIA-SONNET5 — Claude Sonnet 5. Reaches previous Opus-tier quality on
 // agentic work, and Mia was unusually cheap to migrate: she never sent
@@ -983,7 +984,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
         try {
           extra = await promptOptionsForPlan(db, next, actionStudios)
         } catch (err) {
-          console.warn('[radar-agent] turn prompt options failed; today\'s block instead', JSON.stringify({ block: next.block, message: err?.message || String(err) }))
+          logWarn('mia-un1t', 'turn prompt options failed; using the today block', { block: next.block, errClass: err?.name })
           next = todayPlan(planArgs())
         }
       }

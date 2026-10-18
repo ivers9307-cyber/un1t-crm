@@ -9,7 +9,9 @@
 //   request, so nothing is sent. checkRateLimit FAILS OPEN when its own RPC
 //   errors (it logs and answers allowed), so a limiter outage lets reads
 //   through unbudgeted rather than blanking Mia; un1t.online's own 60/min
-//   limit still binds, and the client waits that window out.
+//   limit still binds (a wait past ~2 s is a failed read, see below).
+// - Fail fast: no retries, a 2 s wait cap, a 5 s per-request timeout, so a
+//   read spends at most one slot per page (five pages max).
 // - The connection must be an ACTIVE registry row with a token and a studio
 //   id. A failed connection read is `read_failed`, never `not_connected`.
 // - Logs: module 'mia-un1t', the HTTP status and the location only. Never the
@@ -25,6 +27,13 @@ const LOG_MODULE = 'mia-un1t'
 const PLATFORM = 'un1t_online'
 /** Pages (100 rows each) one live list read will pull; past it the list is `truncated`. */
 export const UN1T_READ_MAX_PAGES = 5
+// Fail-fast posture: the read runs inside a WhatsApp webhook turn, so it never
+// retries (one request = one slot, at most one per page), never waits out a
+// rate-limit window past ~2 s, and gives up on a request after 5 s. Any of
+// those is a read failure; callers fall back to the mirror with may_be_stale.
+export const UN1T_READ_MAX_RETRIES = 0
+export const UN1T_READ_MAX_WAIT_MS = 2000
+export const UN1T_READ_TIMEOUT_MS = 5000
 
 /** The shared budget was spent: nothing was sent, try again after the window. */
 export class Un1tBudgetSpent extends Error {
@@ -68,6 +77,9 @@ export async function openUn1tMemberReader(db, locationId, { clientFactory = cre
   const client = clientFactory({
     token: conn.accessToken,
     maxPages: UN1T_READ_MAX_PAGES,
+    maxRetries: UN1T_READ_MAX_RETRIES,
+    maxWaitMs: UN1T_READ_MAX_WAIT_MS,
+    requestTimeoutMs: UN1T_READ_TIMEOUT_MS,
     ...(fetchImpl ? { fetchImpl } : {}),
     ...(sleep ? { sleep } : {}),
     beforeRequest: async () => {
