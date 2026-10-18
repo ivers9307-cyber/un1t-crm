@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  toBoardDeal, boardDealMapper, badgeEnabledForModule, pipelineContactFields, PIPELINE_PAGE_SIZE,
+  toBoardDeal, boardDealMapper, badgeEnabledForModule, boardCardOptionsForModule, pipelineContactFields, PIPELINE_PAGE_SIZE,
   ageDays, formatAge, dealAge, PIPELINE_BACKFILL_CUTOFF,
 } from './pipeline-board.js'
 
@@ -166,5 +166,43 @@ describe('badgeEnabledForModule', () => {
     expect(badgeEnabledForModule('nope')).toBe(true)
     expect(badgeEnabledForModule(null)).toBe(true)
     expect(badgeEnabledForModule(undefined)).toBe(true)
+  })
+})
+
+// HATCHPIPE.3 — a un1t.online board's card must not show the Glofox credit
+// count: on a dual-studio contact `contacts.trial_credits_remaining` is
+// Stillorgan's. Decided by the board module's inputSource, never a location id.
+describe('Glofox credit count on board cards', () => {
+  const deal = {
+    id: 'd1', stage_id: 's1', title: 't', created_at: '2026-09-01T00:00:00Z',
+    contacts: { id: 'c1', name: 'Ann', pipeline_stage_slug: 'new_lead', trial_credits_remaining: 2, recent_bookings: [] },
+  }
+
+  it('boardCardOptionsForModule: a un1t.online board gets no badge and no Glofox credits', () => {
+    expect(boardCardOptionsForModule('acquisition_un1t')).toEqual({ badge: false, glofoxCredits: false })
+  })
+
+  it('boardCardOptionsForModule: Glofox, unknown and absent modules keep both (today\'s behaviour)', () => {
+    for (const m of ['acquisition', 'returning', 'nope', null, undefined]) {
+      expect(boardCardOptionsForModule(m)).toEqual({ badge: true, glofoxCredits: true })
+    }
+  })
+
+  it('boardDealMapper({ glofoxCredits:false }) strips trial_credits_remaining', () => {
+    const out = boardDealMapper({ badge: false, glofoxCredits: false })(deal)
+    expect(out.contacts).not.toHaveProperty('trial_credits_remaining')
+    expect(out.contacts.id).toBe('c1')
+  })
+
+  it('a Glofox board (Stillorgan) keeps the credit count, byte-identical to the default mapper', () => {
+    const viaOptions = boardDealMapper(boardCardOptionsForModule('acquisition'))(deal)
+    const viaDefault = toBoardDeal(deal)
+    expect(viaOptions.contacts.trial_credits_remaining).toBe(2)
+    expect(JSON.stringify(viaOptions.contacts)).toBe(JSON.stringify(viaDefault.contacts))
+  })
+
+  it('the board mapper never mutates the row it was given', () => {
+    boardDealMapper({ glofoxCredits: false })(deal)
+    expect(deal.contacts.trial_credits_remaining).toBe(2)
   })
 })

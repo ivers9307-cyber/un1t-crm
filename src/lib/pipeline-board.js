@@ -97,15 +97,28 @@ export function badgeEnabledForModule(moduleName) {
   return getBoardModule(moduleName)?.inputSource !== 'un1t_online'
 }
 
+// The card options for a board, by its module. A un1t.online board shows
+// neither the next-class badge nor the Glofox credit count: on a dual-studio
+// contact `contacts.trial_credits_remaining` is Stillorgan's Glofox balance,
+// not this studio's. Same seam as the badge (the module's inputSource, never a
+// location id); a Glofox, unknown or absent module keeps both.
+export function boardCardOptionsForModule(moduleName) {
+  const glofoxBoard = badgeEnabledForModule(moduleName)
+  return { badge: glofoxBoard, glofoxCredits: glofoxBoard }
+}
+
 // Build the row mapper for a board: derive next_class_at for funnel columns
 // (unless `badge` is false, then always null) and the age footer, and strip
-// recent_bookings so the payload stays card-sized.
+// recent_bookings so the payload stays card-sized. `glofoxCredits: false`
+// also strips trial_credits_remaining (a un1t.online board, see
+// boardCardOptionsForModule); the default leaves the row exactly as before.
 // The returned mapper is deliberately 1-arg (nowMs pinned inside): callers do
 // `.map(mapper)`, and a second parameter would silently receive the array
 // index. Tests inject time via dealAge directly.
-export function boardDealMapper({ badge = true } = {}) {
+export function boardDealMapper({ badge = true, glofoxCredits = true } = {}) {
   return (deal) => {
     const { recent_bookings, ...contact } = deal.contacts || {}
+    if (!glofoxCredits) delete contact.trial_credits_remaining
     return {
       ...deal,
       age: dealAge(deal, Date.now()),
