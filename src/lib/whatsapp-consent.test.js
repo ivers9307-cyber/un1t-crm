@@ -31,8 +31,12 @@ import { sendTextMessage } from './whatsapp'
 // contact_location_preferences is modelled as a set of `contact|location` keys:
 // an ignoreDuplicates upsert returns the row only when it CREATED it, and an
 // update returns the rows it matched (a zero-row UPDATE is not an error).
-function stubDb({ writes, failOn = {}, studioRows = [], location = null, locationError = null, inScopes = [], contacts = [{ id: 'c1' }] }) {
+// An update filtered `.in('contact_id', ids)` (WAORGNUMBER.3b's same-number
+// close) returns the listed rows that exist and are not in `closedRows`.
+// `orgLocations` answers the organisation read (`.eq('organization_id', …)`).
+function stubDb({ writes, failOn = {}, studioRows = [], closedRows = [], location = null, locationError = null, orgLocations = [], inScopes = [], contacts = [{ id: 'c1' }] }) {
   const rowsAt = new Set(studioRows)
+  const closed = new Set(closedRows)
   const errorFor = (table, op) => {
     const msg = failOn[`${table}.${op}`] ?? failOn[table]
     return msg ? { message: msg } : null
@@ -42,6 +46,7 @@ function stubDb({ writes, failOn = {}, studioRows = [], location = null, locatio
       const q = { op: 'select', filters: {} }
       const run = () => {
         if (q.op === 'select') {
+          if (table === 'locations' && q.filters.organization_id) return { data: orgLocations.filter((id) => id !== q.filters.id).map((id) => ({ id })), error: null }
           if (table === 'locations') return { data: locationError ? null : location, error: locationError }
           if (table === 'contacts') return failOn['contacts.select'] ? { data: null, error: { message: failOn['contacts.select'] } } : { data: q.range ? contacts.slice(q.range[0], q.range[1] + 1) : contacts, error: null }
           return { data: [{ id: 'c1' }], error: null }
@@ -60,6 +65,11 @@ function stubDb({ writes, failOn = {}, studioRows = [], location = null, locatio
             rowsAt.add(key)
             return { data: [{ contact_id: q.row.contact_id }], error: null }
           }
+          if (q.op === 'update' && Array.isArray(q.filters.contact_id)) {
+            const hit = q.filters.contact_id.filter((id) => rowsAt.has(`${id}|${q.filters.location_id}`) && !closed.has(`${id}|${q.filters.location_id}`))
+            for (const id of hit) closed.add(`${id}|${q.filters.location_id}`)
+            return { data: hit.map((id) => ({ contact_id: id })), error: null }
+          }
           if (q.op === 'update') {
             const key = `${q.filters.contact_id}|${q.filters.location_id}`
             return { data: rowsAt.has(key) ? [{ contact_id: q.filters.contact_id }] : [], error: null }
@@ -74,8 +84,8 @@ function stubDb({ writes, failOn = {}, studioRows = [], location = null, locatio
         select() { return q },
         eq(col, val) { q.filters = { ...q.filters, [col]: val }; return q },
         or() { return q },
-        in(col, ids) { inScopes.push([table, col, ids]); return q },
-        neq() { return q },
+        in(col, ids) { inScopes.push([table, col, ids]); q.filters = { ...q.filters, [col]: ids }; return q },
+        neq(col, val) { if (col === 'id') q.filters = { ...q.filters, id: val }; return q },
         order() { return q },
         range(from, to) { q.range = [from, to]; return q },
         limit() { return q },
@@ -625,6 +635,143 @@ describe('WAORGNUMBER.3 — the keyword writes the thread studio\'s row', () => 
       "You won't get WhatsApp marketing from us any more. Reply START to opt back in.",
       expect.anything(),
     )
+  })
+})
+
+// WAORGNUMBER.3b — live 18 Oct 2026: seven contacts shared one phone. The STOP
+// in a Hatch thread was written to a Stillorgan contact sharing the phone while
+// the thread's own contact stayed opted in at Hatch. The webhook now passes the
+// thread's contact; here, a studio STOP also closes that studio's EXISTING open
+// row for every other same-phone contact in the organisation.
+describe('WAORGNUMBER.3b — a studio STOP reaches every contact sharing the number', () => {
+  const HATCH = 'loc-hatch'
+  const STILL = 'loc-still'
+  const hatch = { name: 'UN1T Hatch Street', settings: {}, organization_id: 'org-1' }
+  const dupes = [{ id: 'c-doe' }, { id: 'c-ivers-1' }, { id: 'c-ivers-2' }, { id: 'c-ivers-3' }]
+  const keywordAt = (db, keyword, extra = {}) => applyWhatsappConsentKeyword({
+    db, contact: { id: 'c-doe' }, waPhone: '353870000001', locationId: HATCH, conversationId: 'conv-hatch', keyword, ...extra,
+  })
+  const sameNumberCloses = (writes) => writes.filter((w) => w.table === 'contact_location_preferences' && w.op === 'update' && Array.isArray(w.filters.contact_id))
+
+  it('closes Hatch\'s open row for every other same-phone contact; creates a row only for the thread contact', async () => {
+    const writes = []
+    const inScopes = []
+    const db = stubDb({
+      writes, inScopes, location: hatch, orgLocations: [HATCH, STILL], contacts: dupes,
+      // Doe has no Hatch row yet; Ivers-1 has an open one, Ivers-2 an already
+      // closed one, Ivers-3 none at Hatch (only Stillorgan's).
+      studioRows: ['c-ivers-1|loc-hatch', 'c-ivers-2|loc-hatch', 'c-ivers-3|loc-still'],
+      closedRows: ['c-ivers-2|loc-hatch'],
+    })
+    const r = await keywordAt(db, 'stop')
+    expect(r).toEqual({ applied: true, action: 'opt_out' })
+
+    // The thread contact's row is created (WhatsApp, email, SMS off); nobody else's.
+    const creates = writes.filter((w) => w.table === 'contact_location_preferences' && w.op === 'upsert')
+    expect(creates).toHaveLength(1)
+    expect(creates[0].row).toMatchObject({ contact_id: 'c-doe', location_id: HATCH, whatsapp_marketing: false })
+
+    // The same-number contacts are read within the organisation, not estate-wide.
+    expect(inScopes).toContainEqual(['contacts', 'location_id', [HATCH, STILL]])
+
+    // One update at Hatch for the OTHER contacts, only open rows, WhatsApp only.
+    const closes = sameNumberCloses(writes)
+    expect(closes).toHaveLength(1)
+    expect(closes[0].filters).toMatchObject({ location_id: HATCH, whatsapp_marketing: true })
+    expect(closes[0].filters.contact_id.sort()).toEqual(['c-ivers-1', 'c-ivers-2', 'c-ivers-3'])
+    expect(Object.keys(closes[0].patch).sort()).toEqual(['updated_at', 'whatsapp_marketing'])
+    expect(closes[0].patch.whatsapp_marketing).toBe(false)
+
+    // Audit rows: the thread contact's, plus one per row that actually closed.
+    const logs = writes.filter((w) => w.table === 'consent_log').flatMap((w) => [].concat(w.row))
+    expect(logs).toEqual([
+      { contact_id: 'c-doe', channel: 'whatsapp_marketing', action: 'opt_out', source: 'whatsapp_keyword', location_id: HATCH },
+      { contact_id: 'c-ivers-1', channel: 'whatsapp_marketing', action: 'opt_out', source: 'whatsapp_keyword', location_id: HATCH },
+    ])
+
+    // Nothing contact-wide, and the ack goes out.
+    expect(writes.some((w) => w.table === 'contact_preferences' || w.table === 'contacts')).toBe(false)
+    expect(sendTextMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed same-number close never fails the STOP: applied, acknowledged, partial and logged', async () => {
+    const writes = []
+    const db = stubDb({
+      writes, location: hatch, orgLocations: [HATCH, STILL], contacts: dupes,
+      // Doe's row is CREATED (an upsert), so only the same-number UPDATE fails.
+      failOn: { 'contact_location_preferences.update': 'statement timeout' },
+    })
+    const r = await keywordAt(db, 'stop')
+    expect(r).toMatchObject({ applied: true, action: 'opt_out', partial: true })
+    expect(r.failures.join(' ')).toMatch(/same number.*statement timeout/)
+    expect(sendTextMessage).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith('wa-consent', 'consent write(s) failed', expect.objectContaining({ prefOk: true, suppressed: true }))
+  })
+
+  it('a failed same-number read never fails the STOP either', async () => {
+    const writes = []
+    const db = stubDb({ writes, location: hatch, orgLocations: [HATCH, STILL], failOn: { 'contacts.select': 'connection reset' } })
+    const r = await keywordAt(db, 'stop')
+    expect(r).toMatchObject({ applied: true, partial: true })
+    expect(r.failures.join(' ')).toMatch(/contacts \(same number\): connection reset/)
+    expect(sameNumberCloses(writes)).toHaveLength(0)
+    expect(sendTextMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('the ack is sent only when the THREAD contact\'s row landed, even if the others closed', async () => {
+    const writes = []
+    const db = stubDb({
+      writes, location: hatch, orgLocations: [HATCH, STILL], contacts: dupes,
+      // Doe's create fails and Doe has no row to update; Ivers-1's row is open.
+      failOn: { 'contact_location_preferences.upsert': 'deadlock detected' },
+      studioRows: ['c-ivers-1|loc-hatch'],
+    })
+    const r = await keywordAt(db, 'stop')
+    expect(r).toMatchObject({ applied: false, reason: 'no_suppression_signal_landed' })
+    expect(sendTextMessage).not.toHaveBeenCalled()
+    // ...but every suppression write was still attempted: Ivers-1 is closed.
+    const closes = sameNumberCloses(writes)
+    expect(closes).toHaveLength(1)
+    const logs = writes.filter((w) => w.table === 'consent_log').flatMap((w) => [].concat(w.row))
+    expect(logs.map((l) => l.contact_id)).toContain('c-ivers-1')
+  })
+
+  it('START re-opens ONLY the thread contact\'s row: no same-number read, no other row touched', async () => {
+    const writes = []
+    const inScopes = []
+    const db = stubDb({ writes, inScopes, location: hatch, orgLocations: [HATCH, STILL], contacts: dupes, studioRows: ['c-doe|loc-hatch', 'c-ivers-1|loc-hatch'] })
+    const r = await keywordAt(db, 'start')
+    expect(r).toEqual({ applied: true, action: 'opt_in' })
+    expect(sameNumberCloses(writes)).toHaveLength(0)
+    expect(inScopes.some(([t]) => t === 'contacts')).toBe(false)
+    const studio = writes.filter((w) => w.table === 'contact_location_preferences')
+    expect(studio.every((w) => (w.row?.contact_id ?? w.filters.contact_id) === 'c-doe')).toBe(true)
+  })
+
+  it('the thread contact itself is never in the same-number close (its row is written as asked)', async () => {
+    const writes = []
+    const db = stubDb({ writes, location: hatch, orgLocations: [HATCH], contacts: [{ id: 'c-doe' }], studioRows: ['c-doe|loc-hatch'] })
+    const r = await keywordAt(db, 'stop')
+    expect(r).toEqual({ applied: true, action: 'opt_out' })
+    expect(sameNumberCloses(writes)).toHaveLength(0)
+  })
+
+  it('closes in chunks of 100 contacts, every chunk checked', async () => {
+    const writes = []
+    const many = [{ id: 'c-doe' }, ...Array.from({ length: 150 }, (_, i) => ({ id: `c-${i}` }))]
+    const db = stubDb({ writes, location: hatch, orgLocations: [HATCH], contacts: many })
+    await keywordAt(db, 'stop')
+    expect(sameNumberCloses(writes).map((w) => w.filters.contact_id.length)).toEqual([100, 50])
+  })
+
+  it('without the sender\'s number nothing else is read; the thread contact\'s STOP stands', async () => {
+    const writes = []
+    const inScopes = []
+    const db = stubDb({ writes, inScopes, location: hatch, orgLocations: [HATCH], contacts: dupes })
+    const r = await keywordAt(db, 'stop', { waPhone: null })
+    expect(r).toEqual({ applied: true, action: 'opt_out' })
+    expect(inScopes.some(([t]) => t === 'contacts')).toBe(false)
+    expect(sameNumberCloses(writes)).toHaveLength(0)
   })
 })
 

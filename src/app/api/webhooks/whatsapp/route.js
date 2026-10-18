@@ -22,6 +22,7 @@ import { parseEchoMessages, parseSyncContacts, parseHistoryMessages, nextHistory
 import { syncContactMatchOnly, ingestCoexistenceMessage } from '@/lib/whatsapp-coexistence-ingest'
 import { orgLocationIdsFor, scopeFor } from '@/lib/inbound-contact-match'
 import { buttonTapBody, interactiveReplyBody } from '@/lib/whatsapp-inbound-tap'
+import { logError } from '@/lib/log'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
 export const runtime = 'nodejs'
@@ -244,6 +245,35 @@ export async function POST(request) {
 // already resolved (and unroutable traffic dropped) by the POST loop.
 // `receivingNumberId` is that whatsapp_numbers row (WAREPLYNUMBER.1) and
 // `organizationId` its organisation (WAORGNUMBER.5).
+// WAORGNUMBER.3b — the contact an inbound message acts for: the routed thread's
+// own contact when it has one, else the phone match. The thread's contact is
+// taken from the phone matches when it is among them, else read by id within
+// the receiving number's organisation (never another tenant's row). A failed or
+// empty read falls back to the phone match, logged: the message, Mia's turn and
+// a STOP still go ahead (and a STOP at a studio also closes that studio's row
+// for every same-phone contact in the organisation, whatsapp-consent.js).
+async function threadContactFor(db, { existingConv, phoneContact, matches, orgLocIds }) {
+  const threadContactId = existingConv?.contact_id
+  if (!threadContactId || threadContactId === phoneContact?.id) return phoneContact
+  const known = (matches || []).find((m) => m?.id === threadContactId)
+  if (known) return known
+  const { data, error } = await db.from('contacts')
+    .select('id, location_id')
+    .eq('id', threadContactId)
+    .in('location_id', scopeFor(orgLocIds))
+    .maybeSingle()
+  if (error || !data) {
+    logError('wa-webhook', 'thread contact unreadable; acting for the phone-matched contact', {
+      conversationId: existingConv.id,
+      threadContactId,
+      phoneContactId: phoneContact?.id || null,
+      err: error?.message || 'not found in the organisation',
+    })
+    return phoneContact
+  }
+  return data
+}
+
 async function handleIncomingMessage(db, message, contacts, defaultLocationId, receivingNumberId = null, organizationId = null) {
   const senderPhone = message.from  // E.164 format
   const messageId = message.id
@@ -348,6 +378,17 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // Glofox event id.
   const actingLocationId = route.by === 'numberless_home' ? defaultLocationId : locationId
 
+  // WAORGNUMBER.3b — the contact this message is FROM, as far as everything
+  // below is concerned. Several contacts can share one phone (7 shared Richard's
+  // on 18 Oct 2026), and the phone match above picks one by studio preference,
+  // not by thread: it picked a Stillorgan "Richard Ivers" while the message
+  // routed into "Richard Doe"'s Hatch thread, so the Hatch STOP was written to
+  // Ivers and Doe stayed opted in, under an ack saying Hatch had stopped. A
+  // thread that already names its contact speaks for that contact (consent
+  // keyword, Mia, greeting, CTWA, Flow, the message row); the phone match still
+  // decides routing above and is used for a thread with no contact.
+  const actingContact = await threadContactFor(db, { existingConv, phoneContact: contact, matches: existingContacts, orgLocIds })
+
   let conversationId
   if (existingConv) {
     conversationId = existingConv.id
@@ -366,7 +407,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   } else {
     const { data: newConv, error: convErr } = await db.from('whatsapp_conversations').insert({
       location_id: locationId,
-      contact_id: contact?.id || null,  // null if unknown sender
+      contact_id: actingContact?.id || null,  // null if unknown sender
       wa_phone: senderPhone,
       wa_profile_name: senderName,
       status: 'active',
@@ -417,14 +458,14 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
 
   // CTWA attribution — stamp the click id (conversation + contact) and fire
   // the Lead conversion once. Swallows its own errors; never blocks the webhook.
-  await recordCtwaTouch(db, { ctwaClid: message.referral?.ctwa_clid, conversationId, contact, locationId: actingLocationId })
+  await recordCtwaTouch(db, { ctwaClid: message.referral?.ctwa_clid, conversationId, contact: actingContact, locationId: actingLocationId })
 
   // WA-BSUID.1 — capture Meta's Business-Scoped User ID (arrives as
   // contacts[].user_id once usernames roll out) onto the matched
   // conversation + contact. Capture ONLY — identity resolution above stays
   // phone-keyed. Best-effort: never overwrites a differing stored value
   // (warns — that's a collision signal) and never throws out of the webhook.
-  await captureInboundBsuid(db, { contacts, senderPhone, conversationId, contactId: contact?.id || null })
+  await captureInboundBsuid(db, { contacts, senderPhone, conversationId, contactId: actingContact?.id || null })
 
   // Update profile name if we have one (it can change)
   if (senderName) {
@@ -478,7 +519,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     case 'interactive':
       if (message.interactive?.type === 'nfm_reply') {
         // A completed WhatsApp Flow ("Book your first visit"). Book it, then log a marker.
-        try { await handleFlowCompletion(db, { interactive: message.interactive, contact, locationId: actingLocationId }) }
+        try { await handleFlowCompletion(db, { interactive: message.interactive, contact: actingContact, locationId: actingLocationId }) }
         catch (e) { console.error('[wa-webhook] flow completion failed:', e.message) }
         body = '[Booking submitted via WhatsApp Flow]'
       } else {
@@ -524,7 +565,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // Save message (contact_id is null for unknown senders)
   const { data: insertedMessage, error: inboundInsertError } = await db.from('whatsapp_messages').insert({
     conversation_id: conversationId,
-    contact_id: contact?.id || null,
+    contact_id: actingContact?.id || null,
     location_id: locationId,
     wa_message_id: messageId,
     direction: 'inbound',
@@ -559,7 +600,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
         threadLocationId: locationId,
         receivingLocationId: defaultLocationId,
         receivingNumberId,
-        contactId: contact?.id || null,
+        contactId: actingContact?.id || null,
         resolution: existingConv?.studio_resolution ?? null,
         message,
         messageType,
@@ -630,13 +671,15 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // stop (or resume) and nothing changed, with no acknowledgement sent. Say so
   // at error level rather than discarding the result, which is what let the
   // never-firing catch inside the helper hide for so long.
-  // Unknown senders (no contact row) are skipped.
-  if (messageType === 'text' && contact?.id) {
+  // Unknown senders (no contact row) are skipped. WAORGNUMBER.3b: the keyword is
+  // the THREAD's contact's (actingContact), and the phone is passed so a STOP
+  // also closes the studio's row for every same-phone contact in the org.
+  if (messageType === 'text' && actingContact?.id) {
     const keyword = parseConsentKeyword(body)
     if (keyword) {
       const consent = await applyWhatsappConsentKeyword({
         db,
-        contact,
+        contact: actingContact,
         // The contact lookup above is a minimal select (no wa_phone) —
         // pass the sender's number from the webhook payload so the ack
         // can actually send.
@@ -646,13 +689,13 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
         keyword,
       })
       if (!consent?.applied) {
-        console.error(`[wa-webhook] ${keyword.toUpperCase()} from contact ${contact.id} was NOT applied (${consent?.reason || 'unknown'}) — their WhatsApp marketing consent is unchanged (a STOP has not taken effect) and they got no acknowledgement: ${(consent?.failures || []).join('; ') || 'no detail'}`)
+        console.error(`[wa-webhook] ${keyword.toUpperCase()} from contact ${actingContact.id} was NOT applied (${consent?.reason || 'unknown'}) — their WhatsApp marketing consent is unchanged (a STOP has not taken effect) and they got no acknowledgement: ${(consent?.failures || []).join('; ') || 'no detail'}`)
       } else if (consent.partial) {
         // BAREWRITE.4 — a PARTIAL opt-out is applied (at least one suppression
         // gate landed, which is why the customer was acknowledged) but it is
         // still a defect: say so at error level rather than letting a `true`
         // swallow it.
-        console.error(`[wa-webhook] ${keyword.toUpperCase()} from contact ${contact.id} applied only PARTIALLY — one or more consent writes were lost: ${(consent.failures || []).join('; ')}`)
+        console.error(`[wa-webhook] ${keyword.toUpperCase()} from contact ${actingContact.id} applied only PARTIALLY — one or more consent writes were lost: ${(consent.failures || []).join('; ')}`)
       }
     }
   }
@@ -672,7 +715,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
         conversationId,
         locationId,
         senderPhone,
-        contactId: contact?.id || null,
+        contactId: actingContact?.id || null,
         messageType,
         body,
         waMessageId: message.id || null,
@@ -736,7 +779,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   if (messageType === 'request_welcome' && !awaitingStudio) {
     try {
       const { maybeSendWelcomeGreeting } = await import('@/lib/agent/welcome-greeting')
-      await maybeSendWelcomeGreeting(db, { conversationId, locationId, senderPhone, contactId: contact?.id || null })
+      await maybeSendWelcomeGreeting(db, { conversationId, locationId, senderPhone, contactId: actingContact?.id || null })
     } catch (err) {
       console.error('[whatsapp webhook] welcome greeting failed', err?.message)
     }

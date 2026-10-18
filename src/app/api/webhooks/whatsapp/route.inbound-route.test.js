@@ -280,3 +280,78 @@ describe('POST /api/webhooks/whatsapp — while Hatch has nothing switched on (t
     expect(stampsOn(still.id)).toHaveLength(1)
   })
 })
+
+// WAORGNUMBER.3b — live 18 Oct 2026: seven contacts shared Richard's phone. The
+// phone match preferred a Stillorgan "Ivers" while the message routed into
+// "Doe"'s Hatch thread, and the Hatch STOP was written to Ivers. A thread that
+// names its contact now speaks for that contact; the phone match routes, and is
+// used for a thread with no contact.
+describe('POST /api/webhooks/whatsapp — several contacts share the phone (WAORGNUMBER.3b)', () => {
+  const IVERS = { id: 'c-ivers', location_id: STILL }
+  const DOE = { id: 'c-doe', location_id: HATCH }
+  const hatchThreadOf = (contactId) => thread('conv-hatch', HATCH, { contact_id: contactId })
+  const routedToDoe = (extra = {}) => makeState({
+    contacts: [IVERS, DOE],
+    conversations: [thread('conv-still', STILL, { contact_id: 'c-ivers' }), hatchThreadOf('c-doe')],
+    messages: [outbound('conv-hatch', HATCH, ago(HOUR))],
+    ...extra,
+  })
+
+  it('a STOP routed into Doe’s Hatch thread is applied to DOE at Hatch, with the sender’s number', async () => {
+    pickInboundContact.mockReturnValue(IVERS)
+    parseConsentKeyword.mockReturnValue('stop')
+    await run(routedToDoe(), { text: { body: 'STOP' } })
+    expect(inboundRow()).toMatchObject({ conversation_id: 'conv-hatch', location_id: HATCH, contact_id: 'c-doe' })
+    expect(applyWhatsappConsentKeyword).toHaveBeenCalledTimes(1)
+    expect(applyWhatsappConsentKeyword).toHaveBeenCalledWith(expect.objectContaining({
+      contact: expect.objectContaining({ id: 'c-doe' }), locationId: HATCH, conversationId: 'conv-hatch', waPhone: PHONE, keyword: 'stop',
+    }))
+  })
+
+  it('Mia, CTWA and the Flow act for the thread contact too', async () => {
+    pickInboundContact.mockReturnValue(IVERS)
+    await run(routedToDoe(), { referral: { source_type: 'ad', source_id: 'ad-none', ctwa_clid: 'clid-1' } })
+    expect(maybeAutoReply).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ conversationId: 'conv-hatch', contactId: 'c-doe' }))
+    expect(recordCtwaTouch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contact: expect.objectContaining({ id: 'c-doe' }) }))
+
+    vi.clearAllMocks()
+    pickInboundContact.mockReturnValue(IVERS)
+    await run(routedToDoe(), { type: 'interactive', interactive: { type: 'nfm_reply', nfm_reply: { name: 'flow', response_json: '{}' } } })
+    expect(handleFlowCompletion).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contact: expect.objectContaining({ id: 'c-doe' }) }))
+  })
+
+  it('the welcome greeting is for the thread contact', async () => {
+    pickInboundContact.mockReturnValue(IVERS)
+    const { maybeSendWelcomeGreeting } = await import('@/lib/agent/welcome-greeting')
+    await run(routedToDoe(), { type: 'request_welcome' })
+    expect(maybeSendWelcomeGreeting).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ conversationId: 'conv-hatch', contactId: 'c-doe' }))
+  })
+
+  it('a thread contact beyond the 20 phone matches is read by id within the organisation', async () => {
+    pickInboundContact.mockReturnValue(IVERS)
+    parseConsentKeyword.mockReturnValue('stop')
+    // Twenty older same-phone contacts fill the phone match's limit, so Doe is not among them.
+    const older = Array.from({ length: 20 }, (_, i) => ({ id: `c-old-${i}`, location_id: STILL, created_at: `2020-01-${String(i + 1).padStart(2, '0')}` }))
+    await run(routedToDoe({ contacts: [...older, IVERS, { ...DOE, created_at: '2026-10-01' }] }), { text: { body: 'STOP' } })
+    expect(applyWhatsappConsentKeyword).toHaveBeenCalledWith(expect.objectContaining({ contact: expect.objectContaining({ id: 'c-doe' }), locationId: HATCH }))
+  })
+
+  it('a thread contact outside the organisation is never acted for: the phone match is, logged', async () => {
+    pickInboundContact.mockReturnValue(IVERS)
+    parseConsentKeyword.mockReturnValue('stop')
+    await run(routedToDoe({
+      contacts: [IVERS, { id: 'c-stranger', location_id: 'loc-other-tenant' }],
+      conversations: [hatchThreadOf('c-stranger')],
+    }), { text: { body: 'STOP' } })
+    expect(applyWhatsappConsentKeyword).toHaveBeenCalledWith(expect.objectContaining({ contact: expect.objectContaining({ id: 'c-ivers' }) }))
+    expect(console.error).toHaveBeenCalledWith('[wa-webhook] thread contact unreadable; acting for the phone-matched contact', expect.objectContaining({ threadContactId: 'c-stranger' }))
+  })
+
+  it('a thread with no contact keeps the phone match (and is linked to it)', async () => {
+    pickInboundContact.mockReturnValue(IVERS)
+    parseConsentKeyword.mockReturnValue('stop')
+    await run(routedToDoe({ conversations: [hatchThreadOf(null)] }), { text: { body: 'STOP' } })
+    expect(state.conversations.find((c) => c.id === 'conv-hatch')).toMatchObject({ contact_id: 'c-ivers' })
+    expect(applyWhatsappConsentKeyword).toHaveBeenCalledWith(expect.objectContaining({ contact: expect.objectContaining({ id: 'c-ivers' }), locationId: HATCH }))
+  })
+})
