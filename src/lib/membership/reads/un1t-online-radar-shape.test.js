@@ -3,9 +3,9 @@
 import { describe, it, expect } from 'vitest'
 import { shapeCounts, packHolderIds } from './un1t-online-shape'
 import {
-  RENEWAL_EXPIRY_RULE, expiryFor, pickLiveMembership, shapeRadarMembers,
+  RENEWAL_EXPIRY_RULE, expiryFor, pickLiveMembership, shapeRadarMembers, shapeWinbackRows,
 } from './un1t-online-radar-shape'
-import { buildRadar, classifyContact } from '@/lib/churn-radar'
+import { buildRadar, buildWinback, classifyContact } from '@/lib/churn-radar'
 
 const NOW = Date.parse('2026-10-18T12:00:00Z')
 const DAY = 86_400_000
@@ -295,5 +295,108 @@ describe('shapeRadarMembers', () => {
     const radar = buildRadar(rows, NOW)
     expect(radar).toHaveLength(1)
     expect(radar[0].signals.map((s) => s.key)).toContain('gone_quiet')
+  })
+})
+
+describe('shapeWinbackRows', () => {
+  const CUTOFF = '2026-10-18T11:50:00Z'
+  const fresh = '2026-10-18T11:55:00Z'
+  const stale = '2026-09-01T00:00:00Z'
+  // c2 / u2: a former member who last trained 60 days ago
+  const exClient = client({ un1t_user_id: 'u2', contact_id: 'c2', last_attended_at: iso(NOW - 60 * DAY), credit_balance: 0 })
+  const wfx = (over = {}) => fx({
+    subs: [sub({ synced_at: fresh })],
+    clients: [client(), exClient],
+    allSubs: [sub({ synced_at: fresh })],
+    freshCutoffIso: CUTOFF,
+    endedMemberships: [],
+    ...over,
+  })
+  const byId = (rows, id) => rows.find((r) => r.id === id)
+
+  it('keeps every live row from shapeRadarMembers', () => {
+    const rows = shapeWinbackRows(wfx())
+    expect(byId(rows, 'c1').glofox_membership_status).toBe('member')
+    expect(byId(rows, 'c2')).toBeUndefined() // no evidence of a past membership
+  })
+
+  it('ex_member from a non-live subscription row', () => {
+    const rows = shapeWinbackRows(wfx({
+      allSubs: [sub({ synced_at: fresh }), sub({ un1t_id: 'old', un1t_user_id: 'u2', contact_id: 'c2', status: 'cancelled', product_title: 'Old plan', price_cents: 9900, synced_at: fresh })],
+    }))
+    expect(byId(rows, 'c2')).toMatchObject({
+      glofox_membership_status: 'ex_member', glofox_membership_type: 'time', glofox_membership_plan: 'Old plan',
+      glofox_membership_price_cents: 9900, glofox_billing_interval: '1 month', cancel_at_period_end: false,
+      last_attended_at: exClient.last_attended_at, person_group_id: null,
+    })
+    const wb = buildWinback(rows, NOW)
+    expect(wb.map((r) => r.contactId)).toEqual(['c2'])
+  })
+
+  it('ex_member from a stale-active row', () => {
+    const rows = shapeWinbackRows(wfx({
+      allSubs: [sub({ synced_at: fresh }), sub({ un1t_id: 'gone', un1t_user_id: 'u2', contact_id: 'c2', status: 'active', synced_at: stale })],
+    }))
+    expect(byId(rows, 'c2').glofox_membership_status).toBe('ex_member')
+  })
+
+  it('a fresh active row is never ex_member evidence (it is live)', () => {
+    const rows = shapeWinbackRows(wfx({
+      subs: [sub({ synced_at: fresh }), sub({ un1t_id: 's2', un1t_user_id: 'u2', contact_id: 'c2', synced_at: fresh })],
+      allSubs: [sub({ synced_at: fresh }), sub({ un1t_id: 's2', un1t_user_id: 'u2', contact_id: 'c2', synced_at: fresh })],
+    }))
+    expect(byId(rows, 'c2').glofox_membership_status).toBe('member')
+  })
+
+  it('ex_member from an ended export row, plan from plan_name', () => {
+    const rows = shapeWinbackRows(wfx({
+      endedMemberships: [{ contact_id: 'c2', plan_name: 'Export plan', ended_at: '2026-08-01T00:00:00Z', source: 'un1t_online_export' }],
+    }))
+    expect(byId(rows, 'c2')).toMatchObject({ glofox_membership_status: 'ex_member', glofox_membership_plan: 'Export plan' })
+  })
+
+  it('a current member with an ended export row is NOT an ex_member', () => {
+    // live sub + ended un1t_online_export row (the mig 728 case)
+    const rows = shapeWinbackRows(wfx({
+      endedMemberships: [{ contact_id: 'c1', plan_name: 'Export plan', ended_at: '2026-08-01T00:00:00Z', source: 'un1t_online_export' }],
+    }))
+    expect(rows.filter((r) => r.id === 'c1')).toHaveLength(1)
+    expect(byId(rows, 'c1').glofox_membership_status).toBe('member')
+  })
+
+  it('a pack holder with credits is not an ex_member', () => {
+    const rows = shapeWinbackRows(wfx({
+      clients: [client(), { ...exClient, credit_balance: 3 }],
+      packTxs: [ptx({ un1t_user_id: 'u2' })],
+      allSubs: [sub({ synced_at: fresh }), sub({ un1t_id: 'old', un1t_user_id: 'u2', contact_id: 'c2', status: 'cancelled', synced_at: fresh })],
+    }))
+    expect(byId(rows, 'c2').glofox_membership_status).toBe('credit_member')
+  })
+
+  it('trialing-only history is not ex_member evidence', () => {
+    const rows = shapeWinbackRows(wfx({
+      allSubs: [sub({ synced_at: fresh }), sub({ un1t_id: 't', un1t_user_id: 'u2', contact_id: 'c2', status: 'trialing', synced_at: stale })],
+    }))
+    expect(byId(rows, 'c2')).toBeUndefined()
+  })
+
+  it('plan comes from the newest non-trial subscription row', () => {
+    const rows = shapeWinbackRows(wfx({
+      allSubs: [
+        sub({ synced_at: fresh }),
+        sub({ un1t_id: 'a', un1t_user_id: 'u2', contact_id: 'c2', status: 'cancelled', product_title: 'First', remote_created_at: '2026-08-20T00:00:00Z', synced_at: fresh }),
+        sub({ un1t_id: 'b', un1t_user_id: 'u2', contact_id: 'c2', status: 'cancelled', product_title: 'Second', remote_created_at: '2026-09-10T00:00:00Z', synced_at: fresh }),
+        sub({ un1t_id: 'c', un1t_user_id: 'u2', contact_id: 'c2', status: 'trialing', product_title: 'Trial', remote_created_at: '2026-10-01T00:00:00Z', synced_at: fresh }),
+      ],
+    }))
+    expect(byId(rows, 'c2').glofox_membership_plan).toBe('Second')
+  })
+
+  it('an ex-member with no contact is left out', () => {
+    const rows = shapeWinbackRows(wfx({
+      clients: [client(), { ...exClient, contact_id: null }],
+      allSubs: [sub({ synced_at: fresh }), sub({ un1t_id: 'old', un1t_user_id: 'u2', contact_id: null, status: 'cancelled', synced_at: fresh })],
+    }))
+    expect(rows.map((r) => r.id)).toEqual(['c1'])
   })
 })

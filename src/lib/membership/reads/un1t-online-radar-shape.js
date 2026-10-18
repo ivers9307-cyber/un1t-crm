@@ -140,6 +140,26 @@ function bookingCounts({ events = [], bookings = [], nowMs }) {
   return { attended7d, bookings30d, skippedEvents }
 }
 
+/** The person-level columns every row carries, over all of one contact's un1t users. */
+function baseRow(contactId, users, { clientsByUser, contactsById, newestBookingAtByUser, lastPaymentAtByUser, attended7d, bookings30d }) {
+  const theirClients = users.flatMap((u) => clientsByUser.get(u) ?? [])
+  return {
+    id: contactId,
+    name: contactsById.get(contactId)?.name ?? null,
+    trial_credits_remaining: sumOrNull(theirClients.map((c) => c.credit_balance)),
+    last_attended_at: latestOf(theirClients.map((c) => c.last_attended_at)),
+    last_booked_at: latestOf(users.map((u) => newestBookingAtByUser.get(u))),
+    total_attended_30d: sumOrNull(theirClients.map((c) => c.bookings_30d_attended)),
+    total_noshow_30d: sumOrNull(theirClients.map((c) => c.bookings_30d_no_show)),
+    total_attended_7d: users.reduce((n, u) => n + (attended7d.get(u) ?? 0), 0),
+    total_bookings_30d: users.reduce((n, u) => n + (bookings30d.get(u) ?? 0), 0),
+    last_payment_at: latestOf(users.map((u) => lastPaymentAtByUser.get(u))),
+    joined_at: earliestOf(theirClients.map((c) => c.remote_created_at)),
+    lifetime_value_cents: sumOrNull(theirClients.map((c) => c.ltv_cents)),
+    person_group_id: null,
+  }
+}
+
 /**
  * The radar's active base at one un1t.online studio, in the scorer's row shape
  * (spec B §2 mapping table). One row per CONTACT: a person with two un1t
@@ -199,27 +219,13 @@ export function shapeRadarMembers({
     usersByContact.get(contactId).push(user)
   }
 
+  const ctx = { clientsByUser, contactsById, newestBookingAtByUser, lastPaymentAtByUser, attended7d, bookings30d }
   const rows = []
   let members = 0
   let packHolders = 0
   for (const [contactId, users] of usersByContact) {
-    const theirClients = users.flatMap((u) => clientsByUser.get(u) ?? [])
     const live = pickLiveMembership(users.flatMap((u) => subsByUser.get(u) ?? []), nowMs)
-    const base = {
-      id: contactId,
-      name: contactsById.get(contactId)?.name ?? null,
-      trial_credits_remaining: sumOrNull(theirClients.map((c) => c.credit_balance)),
-      last_attended_at: latestOf(theirClients.map((c) => c.last_attended_at)),
-      last_booked_at: latestOf(users.map((u) => newestBookingAtByUser.get(u))),
-      total_attended_30d: sumOrNull(theirClients.map((c) => c.bookings_30d_attended)),
-      total_noshow_30d: sumOrNull(theirClients.map((c) => c.bookings_30d_no_show)),
-      total_attended_7d: users.reduce((n, u) => n + (attended7d.get(u) ?? 0), 0),
-      total_bookings_30d: users.reduce((n, u) => n + (bookings30d.get(u) ?? 0), 0),
-      last_payment_at: latestOf(users.map((u) => lastPaymentAtByUser.get(u))),
-      joined_at: earliestOf(theirClients.map((c) => c.remote_created_at)),
-      lifetime_value_cents: sumOrNull(theirClients.map((c) => c.ltv_cents)),
-      person_group_id: null,
-    }
+    const base = baseRow(contactId, users, ctx)
     if (live) {
       members += 1
       rows.push({
@@ -252,5 +258,97 @@ export function shapeRadarMembers({
       cancel_at_period_end: false,
     })
   }
-  return { rows, members, packHolders, unlinkedClients, skippedEvents }
+  return { rows, members, packHolders, unlinkedClients, skippedEvents, ctx }
+}
+
+// Subscription statuses that are NOT win-back evidence on their own: the live
+// ones (a fresh row is a member, a stale one is checked separately) and
+// 'trialing' (a trial that lapsed is a lead, never a former member).
+const NOT_EVIDENCE_STATUSES = Object.freeze([...MEMBER_STATUSES, 'trialing'])
+
+/**
+ * Win-back rows (spec B §2b, Claude's call 4): every live row from
+ * shapeRadarMembers, plus an `ex_member` row for each contact who holds NO live
+ * subscription and is not a pack holder now (both tested FIRST, so a current
+ * member's ended export row is never evidence: mig 728 ended exactly those),
+ * and has evidence of a past membership at this studio:
+ *   (i)   a subscription row whose status is not active, past_due or trialing;
+ *   (ii)  an active / past_due row the API stopped returning (synced_at older
+ *         than freshCutoffIso: the mirror never deletes);
+ *   (iii) an ended contact_memberships row here (un1t_online_api or
+ *         un1t_online_export; the caller filters the source).
+ * A 'trialing'-only history is not evidence.
+ *
+ * Subscription statuses seen at Hatch (read-only check, 18 Oct 2026): all 26
+ * rows 'active'; no cancelled row has been observed, so /subscriptions appears
+ * to return active ones only, and (ii) and (iii) carry the evidence today. The
+ * last five syncs report history.absent_from_pull = 0.
+ *
+ * Plan and price come from the person's newest non-trialing subscription row
+ * (by remote_created_at), else the ended membership's plan_name. Activity
+ * columns come from their un1t_clients rows, as for members.
+ *
+ * @param {object} a  shapeRadarMembers' input, plus:
+ * @param {object[]} a.allSubs           every un1t_subscriptions row at the studio, any status and age (synced_at)
+ * @param {string|null} a.freshCutoffIso freshCutoff('un1t_subscriptions'); null = no rows
+ * @param {object[]} a.endedMemberships  ended contact_memberships { contact_id, plan_name, ended_at }
+ * @returns {object[]}
+ */
+export function shapeWinbackRows({ allSubs = [], freshCutoffIso = null, endedMemberships = [], ...input } = {}) {
+  const { rows, ctx } = shapeRadarMembers(input)
+  const liveContacts = new Set(rows.map((r) => r.id))
+  const { clients = [] } = input
+  const cutoffMs = msOf(freshCutoffIso)
+
+  const contactOfUser = new Map()
+  for (const c of clients) if (c.contact_id != null && !contactOfUser.has(c.un1t_user_id)) contactOfUser.set(c.un1t_user_id, c.contact_id)
+  for (const s of allSubs) if (s.contact_id != null && s.un1t_user_id != null && !contactOfUser.has(s.un1t_user_id)) contactOfUser.set(s.un1t_user_id, s.contact_id)
+  const contactOfSub = (s) => (s.un1t_user_id != null ? contactOfUser.get(s.un1t_user_id) : null) ?? s.contact_id ?? null
+
+  // Contact → evidence (subscriptions, ended memberships) and its un1t users.
+  const evidence = new Map()
+  const entry = (id) => {
+    if (!evidence.has(id)) evidence.set(id, { subs: [], ended: [], users: new Set() })
+    return evidence.get(id)
+  }
+  // An unlimited-credit client holds credits now, so is not "no pack credits".
+  const unlimitedContacts = new Set(clients.filter((c) => c.credit_unlimited === true && c.contact_id != null).map((c) => c.contact_id))
+
+  for (const s of allSubs) {
+    const contactId = contactOfSub(s)
+    if (contactId == null) continue
+    const status = lower(s.status)
+    const nonLive = !NOT_EVIDENCE_STATUSES.includes(status)
+    const staleLive = MEMBER_STATUSES.includes(status) && cutoffMs != null && (msOf(s.synced_at) ?? -Infinity) < cutoffMs
+    if (status !== 'trialing') entry(contactId).subs.push(s)
+    if (nonLive || staleLive) entry(contactId).evident = true
+  }
+  for (const m of endedMemberships) {
+    if (m?.contact_id == null) continue
+    const e = entry(m.contact_id)
+    e.ended.push(m)
+    e.evident = true
+  }
+  for (const [user, contactId] of contactOfUser) if (evidence.has(contactId)) evidence.get(contactId).users.add(user)
+
+  const out = [...rows]
+  for (const [contactId, e] of evidence) {
+    if (!e.evident || liveContacts.has(contactId) || unlimitedContacts.has(contactId)) continue
+    const newestSub = e.subs.reduce((best, s) => (
+      best == null || (msOf(s.remote_created_at) ?? -Infinity) > (msOf(best.remote_created_at) ?? -Infinity) ? s : best), null)
+    const newestEnded = e.ended.reduce((best, m) => (
+      best == null || (msOf(m.ended_at) ?? -Infinity) > (msOf(best.ended_at) ?? -Infinity) ? m : best), null)
+    out.push({
+      ...baseRow(contactId, [...e.users], ctx),
+      glofox_membership_status: 'ex_member',
+      glofox_membership_type: 'time',
+      glofox_membership_plan: newestSub?.product_title ?? newestEnded?.plan_name ?? null,
+      glofox_membership_state: null,
+      glofox_membership_expiry: null,
+      glofox_membership_price_cents: newestSub?.price_cents ?? null,
+      glofox_billing_interval: newestSub ? glofoxInterval(newestSub.billing_interval, newestSub.billing_interval_count) : null,
+      cancel_at_period_end: false,
+    })
+  }
+  return out
 }
