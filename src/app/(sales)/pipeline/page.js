@@ -33,7 +33,10 @@
 //   - archived=false filter so retiring old stages needs no UI change.
 
 import { createServerClient } from '@/lib/supabase'
-import { pipelineDealSelect, boardDealMapper, boardCardOptionsForModule, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
+import {
+  pipelineDealSelect, boardDealMapper, boardCardOptionsForModule,
+  initialPageSizeFor, readWholeColumn, PIPELINE_READ_PAGE,
+} from '@/lib/pipeline-board'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { canWriteActivitiesAt } from '@/lib/activity-write-gate'
@@ -118,23 +121,55 @@ export default async function PipelinePage(props) {
     ? [...activeStages, ...dormantStages]
     : (view === 'dormant' ? dormantStages : activeStages)
 
-  // 2. Deals — ship only the FIRST page per column + a per-stage total count,
-  //    instead of the whole open-deal set (was ≤10k shipped to the client and
-  //    held in the Kanban). The board lazily fetches more per column via
-  //    /api/pipeline/deals. Per stage: first page (created_at desc) + an exact
+  // 2. Deals. HATCHPIPE.4 — a funnel column and every column of a manual board
+  //    ships WHOLE: the operator sees everyone without clicking, and the board's
+  //    "Load more" never draws because loaded equals the total. Those columns are
+  //    small (max 96 at Hatch's funnel, 159 on its waitlist, at most 29 at
+  //    Stillorgan), read in 1,000-row .range() pages with an explicit order (the
+  //    1,000-row cap) until the exact count is reached. The Off funnel piles are
+  //    huge (dormant 5,457, classpass 1,684, member 1,110 at Stillorgan), so they
+  //    keep the first 50 + a per-stage total, and the board fetches the rest per
+  //    column through /api/pipeline/deals. Per stage: the deals read and an exact
   //    HEAD count, in parallel. Empty visibleStages → no queries.
+  //
+  //    Either read failing THROWS, like the pipelines read above: an error used
+  //    to be dropped here (`pageRes.data || []`), which rendered a column as
+  //    empty, or with a zero badge, to an operator who would take it as true.
+  //    The message carries ids only (no contact or deal data).
+  const pageSize = initialPageSizeFor(view, manual)
   const perStage = visibleStages.length > 0
     ? await Promise.all(visibleStages.map(async (stage) => {
+        // created_at is not unique (bulk imports share a stamp), so `id` breaks
+        // ties: without it two pages of one column can overlap or skip a card.
+        const readRange = (from, to) => db.from('deals')
+          .select(pipelineDealSelect(view))
+          .eq('status', 'open').eq('location_id', locationId).eq('stage_id', stage.id)
+          .order('created_at', { ascending: false })
+          .order('id')
+          .range(from, to)
         const [pageRes, countRes] = await Promise.all([
-          db.from('deals')
-            .select(pipelineDealSelect(view))
-            .eq('status', 'open').eq('location_id', locationId).eq('stage_id', stage.id)
-            .order('created_at', { ascending: false })
-            .range(0, PIPELINE_PAGE_SIZE - 1),
+          readRange(0, (pageSize ?? PIPELINE_READ_PAGE) - 1),
           db.from('deals').select('id', { count: 'exact', head: true })
             .eq('status', 'open').eq('location_id', locationId).eq('stage_id', stage.id),
         ])
-        return { stageId: stage.id, deals: (pageRes.data || []).map(toBoard), count: countRes.count || 0 }
+        if (countRes.error) {
+          throw new Error(`pipeline deals count (stage ${stage.id}, location ${locationId}): ${countRes.error.message}`)
+        }
+        const total = countRes.count || 0
+        if (pageSize != null) {
+          if (pageRes.error) {
+            throw new Error(`pipeline deals load (stage ${stage.id}, location ${locationId}): ${pageRes.error.message}`)
+          }
+          return { stageId: stage.id, deals: (pageRes.data || []).map(toBoard), count: total }
+        }
+        const whole = await readWholeColumn({ readRange, first: pageRes, count: total })
+        if (whole.error) {
+          throw new Error(`pipeline deals load (stage ${stage.id}, location ${locationId}): ${whole.error.message}`)
+        }
+        // What was read IS the column: report that, so a card that moved out (or
+        // in) between the count and the last page cannot leave a "Load more"
+        // that has nothing to load.
+        return { stageId: stage.id, deals: whole.rows.map(toBoard), count: whole.rows.length }
       }))
     : []
   const boardDeals = perStage.flatMap((sg) => sg.deals)

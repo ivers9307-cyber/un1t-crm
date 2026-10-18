@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   toBoardDeal, boardDealMapper, badgeEnabledForModule, boardCardOptionsForModule, pipelineContactFields, PIPELINE_PAGE_SIZE,
+  initialPageSizeFor, readWholeColumn, PIPELINE_READ_PAGE,
   ageDays, formatAge, dealAge, PIPELINE_BACKFILL_CUTOFF,
 } from './pipeline-board.js'
 
@@ -204,5 +205,86 @@ describe('Glofox credit count on board cards', () => {
   it('the board mapper never mutates the row it was given', () => {
     boardDealMapper({ glofoxCredits: false })(deal)
     expect(deal.contacts.trial_credits_remaining).toBe(2)
+  })
+})
+
+// HATCHPIPE.4 — funnel and manual columns ship every card on the first load;
+// only the huge off-funnel piles keep paging.
+describe('initialPageSizeFor', () => {
+  it('off-funnel on a derived board keeps the 50-card first page', () => {
+    expect(initialPageSizeFor('dormant', false)).toBe(PIPELINE_PAGE_SIZE)
+  })
+  it('funnel columns load whole (null = no page cap)', () => {
+    expect(initialPageSizeFor('active', false)).toBeNull()
+  })
+  it('a manual board loads whole in either view', () => {
+    expect(initialPageSizeFor('active', true)).toBeNull()
+    expect(initialPageSizeFor('dormant', true)).toBeNull()
+  })
+})
+
+describe('readWholeColumn', () => {
+  const rows = (from, to) => Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => ({ id: `d${from + i}` }))
+  // A fake table of `total` rows served by inclusive .range(from, to) like PostgREST.
+  const table = (total) => {
+    const calls = []
+    const readRange = async (from, to) => {
+      calls.push([from, to])
+      return { data: rows(from, Math.min(to, total - 1)), error: null }
+    }
+    return { readRange, calls }
+  }
+
+  it('uses 1,000-row pages (the PostgREST cap)', () => {
+    expect(PIPELINE_READ_PAGE).toBe(1000)
+  })
+
+  it('reads nothing more when the first page already holds the column', async () => {
+    const { readRange, calls } = table(96)
+    const first = await readRange(0, PIPELINE_READ_PAGE - 1)
+    calls.length = 0
+    const out = await readWholeColumn({ readRange, first, count: 96 })
+    expect(out.error).toBeUndefined()
+    expect(out.rows).toHaveLength(96)
+    expect(calls).toEqual([])
+  })
+
+  it('loops .range() pages of 1,000 until the count is reached', async () => {
+    const { readRange, calls } = table(2500)
+    const first = await readRange(0, PIPELINE_READ_PAGE - 1)
+    calls.length = 0
+    const out = await readWholeColumn({ readRange, first, count: 2500 })
+    expect(out.rows).toHaveLength(2500)
+    expect(calls).toEqual([[1000, 1999], [2000, 2999]])
+    expect(new Set(out.rows.map((r) => r.id)).size).toBe(2500)
+  })
+
+  it('stops on a short page even if the count was higher (rows left the column meanwhile)', async () => {
+    const { readRange, calls } = table(1500)
+    const first = await readRange(0, PIPELINE_READ_PAGE - 1)
+    calls.length = 0
+    const out = await readWholeColumn({ readRange, first, count: 1800 })
+    expect(out.rows).toHaveLength(1500)
+    expect(calls).toEqual([[1000, 1999]])
+  })
+
+  it('drops a row served twice by two overlapping pages', async () => {
+    const first = { data: rows(0, 999), error: null }
+    const readRange = async () => ({ data: [{ id: 'd999' }, ...rows(1000, 1098)], error: null })
+    const out = await readWholeColumn({ readRange, first, count: 1100 })
+    expect(out.rows).toHaveLength(1099)
+  })
+
+  it('returns the error of the first page', async () => {
+    const err = { message: 'boom', code: '57014' }
+    const out = await readWholeColumn({ readRange: async () => { throw new Error('unused') }, first: { data: null, error: err }, count: 10 })
+    expect(out.error).toBe(err)
+  })
+
+  it('returns the error of a later page', async () => {
+    const err = { message: 'boom', code: '57014' }
+    const first = { data: rows(0, 999), error: null }
+    const out = await readWholeColumn({ readRange: async () => ({ data: null, error: err }), first, count: 2000 })
+    expect(out.error).toBe(err)
   })
 })

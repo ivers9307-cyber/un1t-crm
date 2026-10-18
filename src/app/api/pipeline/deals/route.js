@@ -75,6 +75,9 @@ export async function GET(request) {
     .eq('location_id', locationId)
     .eq('stage_id', stageId)
     .order('created_at', { ascending: false })
+    // Same tiebreak as the page's first page (created_at is not unique), so the
+    // pages of an off-funnel column never overlap or skip a card.
+    .order('id')
     .range(offset, offset + PIPELINE_PAGE_SIZE - 1)
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })

@@ -95,3 +95,19 @@ describe('KanbanBoard — waitlist columns are not fallback grey', () => {
     expect(html).not.toContain('#6B7280')
   })
 })
+
+// HATCHPIPE.4 — the server now ships funnel and manual columns whole, so the
+// board's existing rule (a "Load more" control only while loaded < total) is
+// what makes the button disappear. Pin both sides of that rule.
+describe('KanbanBoard — Load more shows only while cards are unloaded', () => {
+  it('draws no Load more when every card of every column is loaded', () => {
+    const html = render({ manual: false })
+    expect(html).not.toContain('Load more')
+  })
+
+  it('draws Load more (n of total) for a column with unloaded cards', () => {
+    const html = render({ view: 'dormant', stageCounts: { 's-1': 5457, 's-2': 1 } })
+    expect(html).toContain('Load more (1 of 5457)')
+    expect(html).not.toContain('Load more (1 of 1)')
+  })
+})
