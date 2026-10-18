@@ -252,6 +252,29 @@ describe('Hatch-only member on a Stillorgan thread, Hatch off', () => {
     expect(executeBookingTool).not.toHaveBeenCalled()
   })
 
+  it('an UNVERIFIED turn gets not_verified from the executor: no membership_at_other_studio, no studio name', async () => {
+    resolveMemberStudios.mockResolvedValue(HATCH_ONLY)
+    executeAccountTool.mockImplementationOnce(async (_name, _input, ctx) => (ctx.verifiedContactId
+      ? { marker: 'REAL_ACCOUNT_TOOL_RAN' }
+      : { error: 'not_verified', message: 'Verify the customer first.' }))
+    const { fetchFn, bodies } = modelTurns([toolTurn('get_my_membership'), textTurn('Please verify first')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, inserts } = turnDb({ conv: UNVERIFIED_THREAD })
+
+    await runChannelAgent(db, makeAdapter(), turnCtx())
+
+    // The turn still resolved (it feeds the decision meta)...
+    expect(resolveMemberStudios).toHaveBeenCalledTimes(1)
+    expect(inserts.find((i) => i.table === 'agent_decisions').row.meta.member_studios).toHaveLength(2)
+    // ...but the tool ran its own executor, which answered not_verified.
+    expect(executeAccountTool).toHaveBeenCalledTimes(1)
+    expect(executeAccountTool.mock.calls[0][2].verifiedContactId).toBeNull()
+    const result = toolResultOf(bodies[1])
+    expect(result.error).toBe('not_verified')
+    expect(result.error).not.toBe('membership_at_other_studio')
+    expect(JSON.stringify(result)).not.toContain('Hatch')
+  })
+
   it('a tool outside the booking-system set still runs its executor', async () => {
     resolveMemberStudios.mockResolvedValue(HATCH_ONLY)
     const { fetchFn, bodies } = modelTurns([toolTurn('list_upcoming_classes'), textTurn('Here you go')])

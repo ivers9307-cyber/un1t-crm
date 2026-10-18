@@ -1022,8 +1022,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
               // Answer with the studio's name instead, before any executor
               // (and before the no-booking refusal) runs. A failed or absent
               // resolution never reaches here: today's behaviour exactly.
+              // Only once verified: unverified, the executor path below answers not_verified and reads nothing.
               const otherStudio = BOOKING_SYSTEM_TOOL_NAMES.has(block.name)
-                && toolCtx.memberStudios && !toolCtx.memberStudios.readFailed
+                && toolCtx.verifiedContactId && toolCtx.memberStudios && !toolCtx.memberStudios.readFailed
                 ? otherStudioOnly(toolCtx.memberStudios.studios, locationId)
                 : null
               result = (otherStudio ? membershipAtOtherStudio(otherStudio.name) : null)
