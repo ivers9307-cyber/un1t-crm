@@ -67,7 +67,7 @@ function makeDb({ clientLocs = [], honourIn = true } = {}) {
   }
 }
 
-const data = (over = {}) => ({ subscriptions: [], transactions: [], invoices: [], pastDue: null, ...over })
+const data = (over = {}) => ({ subscriptions: [], transactions: [], invoices: [], pastDues: [], ...over })
 const pastDue = (over = {}) => ({ since: '2026-10-03T09:00:00Z', amountCents: 8900, currency: 'EUR', productTitle: 'Monthly', ...over })
 
 // One adapter per location; `paymentsFor` is the spy the tests look at.
@@ -91,7 +91,7 @@ beforeEach(() => vi.clearAllMocks())
 
 describe('loadUn1tBilling', () => {
   it('Hatch member past due: overdue true, EUR amount summed, studio listed', async () => {
-    const spies = seam({ [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDue: pastDue(), transactions: [{ at: '2026-10-01T00:00:00Z', productTitle: 'Monthly', amountCents: 8900, currency: 'EUR', refunded: false }] }) })) } })
+    const spies = seam({ [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDues: [pastDue()], transactions: [{ at: '2026-10-01T00:00:00Z', productTitle: 'Monthly', amountCents: 8900, currency: 'EUR', refunded: false }] }) })) } })
     const out = await loadUn1tBilling(makeDb({ clientLocs: [HATCH] }), viewer(HATCH), CONTACT)
     expect(out.overdue).toBe(true)
     expect(out.arrearsCentsByCurrency).toEqual({ EUR: 8900 })
@@ -102,7 +102,7 @@ describe('loadUn1tBilling', () => {
   })
 
   it('null amount: overdue true, arrearsCentsByCurrency empty', async () => {
-    seam({ [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDue: pastDue({ amountCents: null, currency: null }) }) })) } })
+    seam({ [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDues: [pastDue({ amountCents: null, currency: null })] }) })) } })
     const out = await loadUn1tBilling(makeDb({ clientLocs: [HATCH] }), viewer(HATCH), CONTACT)
     expect(out.overdue).toBe(true)
     expect(out.arrearsCentsByCurrency).toEqual({})
@@ -110,19 +110,71 @@ describe('loadUn1tBilling', () => {
 
   it('two studios both overdue: amounts sum per currency', async () => {
     seam({
-      [STILL]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDue: pastDue({ amountCents: 1000 }) }) })) },
-      [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDue: pastDue({ amountCents: 2500 }) }) })) },
+      [STILL]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDues: [pastDue({ amountCents: 1000 })] }) })) },
+      [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDues: [pastDue({ amountCents: 2500 })] }) })) },
     })
     const out = await loadUn1tBilling(makeDb({ clientLocs: [STILL, HATCH] }), viewer(STILL, HATCH), CONTACT)
     expect(out.studios.map((s) => s.locationId).sort()).toEqual([STILL, HATCH].sort())
     expect(out.arrearsCentsByCurrency).toEqual({ EUR: 3500 })
   })
 
+  describe('several overdue subscriptions at one studio', () => {
+    const load = async (rows) => {
+      seam({ [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDues: rows }) })) } })
+      return loadUn1tBilling(makeDb({ clientLocs: [HATCH] }), viewer(HATCH), CONTACT)
+    }
+
+    it('two overdue subscriptions in EUR are summed, and the studio keeps both rows', async () => {
+      const out = await load([
+        pastDue({ since: '2026-09-20T09:00:00Z', amountCents: 4000 }),
+        pastDue({ since: '2026-10-03T09:00:00Z', amountCents: 8900 }),
+      ])
+      expect(out.overdue).toBe(true)
+      expect(out.arrearsCentsByCurrency).toEqual({ EUR: 12900 })
+      expect(out.studios[0].pastDues).toHaveLength(2)
+    })
+
+    it('EUR plus GBP: only EUR in arrearsCentsByCurrency.EUR, GBP kept separate', async () => {
+      const out = await load([
+        pastDue({ amountCents: 4000 }),
+        pastDue({ amountCents: 7000, currency: 'GBP' }),
+      ])
+      expect(out.arrearsCentsByCurrency).toEqual({ EUR: 4000, GBP: 7000 })
+      expect(mergeArrearsCents(0, out)).toBe(4000)
+    })
+
+    it('a null amount still makes the member overdue but adds nothing', async () => {
+      const out = await load([
+        pastDue({ amountCents: null, currency: null }),
+        pastDue({ amountCents: 4000 }),
+      ])
+      expect(out.overdue).toBe(true)
+      expect(out.arrearsCentsByCurrency).toEqual({ EUR: 4000 })
+      const only = await load([pastDue({ amountCents: null, currency: null })])
+      expect(only.overdue).toBe(true)
+      expect(only.arrearsCentsByCurrency).toEqual({})
+    })
+
+    it('the header chip names the studio\'s earliest since across its rows', async () => {
+      const out = await load([
+        pastDue({ since: '2026-10-09T09:00:00Z' }),
+        pastDue({ since: '2026-09-20T09:00:00Z' }),
+      ])
+      expect(un1tHeaderRisk(out).title).toBe('Payment overdue on un1t.online at UN1T Hatch Street since 20 Sept 2026')
+    })
+
+    it('an empty pastDues is not overdue', async () => {
+      const out = await load([])
+      expect(out.overdue).toBe(false)
+      expect(out.arrearsCentsByCurrency).toEqual({})
+    })
+  })
+
   describe('Review Focus 4: cross-studio scoping', () => {
     it('Stillorgan-only viewer of a dual-studio member: no Hatch studio returned', async () => {
       const spies = seam({
         [STILL]: { paymentsFor: vi.fn(async () => ({ success: true, data: data() })) },
-        [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDue: pastDue() }) })) },
+        [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDues: [pastDue()] }) })) },
       })
       const db = makeDb({ clientLocs: [STILL, HATCH] })
       const out = await loadUn1tBilling(db, viewer(STILL), CONTACT)
@@ -139,7 +191,7 @@ describe('loadUn1tBilling', () => {
     it('holds even when the client-row query ignores its own location filter', async () => {
       const spies = seam({
         [STILL]: {},
-        [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDue: pastDue() }) })) },
+        [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDues: [pastDue()] }) })) },
       })
       const out = await loadUn1tBilling(makeDb({ clientLocs: [STILL, HATCH], honourIn: false }), viewer(STILL), CONTACT)
       expect(out.studios.map((s) => s.locationId)).toEqual([STILL])
@@ -149,7 +201,7 @@ describe('loadUn1tBilling', () => {
     })
 
     it('a viewer of only the studio the client row is at gets that studio (the contact\'s owner is never consulted)', async () => {
-      seam({ [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDue: pastDue() }) })) } })
+      seam({ [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDues: [pastDue()] }) })) } })
       const db = makeDb({ clientLocs: [HATCH] })
       const out = await loadUn1tBilling(db, viewer(HATCH), CONTACT)
       expect(out.studios.map((s) => s.locationId)).toEqual([HATCH])
@@ -160,7 +212,7 @@ describe('loadUn1tBilling', () => {
     it('location access without Contacts at that studio: no card, nothing read for it', async () => {
       const spies = seam({
         [STILL]: { paymentsFor: vi.fn(async () => ({ success: true, data: data() })) },
-        [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDue: pastDue() }) })) },
+        [HATCH]: { paymentsFor: vi.fn(async () => ({ success: true, data: data({ pastDues: [pastDue()] }) })) },
       })
       const db = makeDb({ clientLocs: [STILL, HATCH] })
       const out = await loadUn1tBilling(db, viewerAt([STILL, HATCH], [HATCH]), CONTACT)
@@ -205,7 +257,7 @@ describe('loadUn1tBilling', () => {
   })
 
   it('a studio whose source is not un1t.online, or not configured, or whose adapter lacks paymentsFor, is skipped and never read', async () => {
-    const answer = { success: true, data: { pastDue: pastDue() } }
+    const answer = { success: true, data: { pastDues: [pastDue()] } }
     const glofoxSpy = vi.fn(async () => answer)
     membershipReadsFor.mockResolvedValue({ source: 'glofox', state: 'configured', capabilities: { invoices: true }, reads: { paymentsFor: glofoxSpy } })
     expect((await loadUn1tBilling(makeDb({ clientLocs: [HATCH] }), viewer(HATCH), CONTACT)).studios).toEqual([])
@@ -257,7 +309,7 @@ describe('un1tHeaderRisk', () => {
   it('title "Payment overdue on un1t.online at UN1T Hatch Street since 3 Oct 2026"', () => {
     const risk = un1tHeaderRisk({
       overdue: true,
-      studios: [{ locationId: HATCH, locationName: 'UN1T Hatch Street', pastDue: pastDue() }],
+      studios: [{ locationId: HATCH, locationName: 'UN1T Hatch Street', pastDues: [pastDue()] }],
       arrearsCentsByCurrency: { EUR: 8900 },
     })
     expect(risk).toEqual({
@@ -271,15 +323,26 @@ describe('un1tHeaderRisk', () => {
     const risk = un1tHeaderRisk({
       overdue: true,
       studios: [
-        { locationId: STILL, locationName: 'Studio One', pastDue: pastDue({ since: '2026-10-09T09:00:00Z' }) },
-        { locationId: HATCH, locationName: 'Studio Two', pastDue: pastDue({ since: '2026-10-02T09:00:00Z' }) },
+        { locationId: STILL, locationName: 'Studio One', pastDues: [pastDue({ since: '2026-10-09T09:00:00Z' })] },
+        { locationId: HATCH, locationName: 'Studio Two', pastDues: [pastDue({ since: '2026-10-02T09:00:00Z' })] },
       ],
     })
     expect(risk.title).toBe('Payment overdue on un1t.online at Studio Two since 2 Oct 2026')
   })
 
+  it('earliest since across a studio\'s several rows, and across studios', () => {
+    const risk = un1tHeaderRisk({
+      overdue: true,
+      studios: [
+        { locationId: STILL, locationName: 'Studio One', pastDues: [pastDue({ since: '2026-10-09T09:00:00Z' }), pastDue({ since: '2026-10-04T09:00:00Z' })] },
+        { locationId: HATCH, locationName: 'Studio Two', pastDues: [pastDue({ since: '2026-10-06T09:00:00Z' })] },
+      ],
+    })
+    expect(risk.title).toBe('Payment overdue on un1t.online at Studio One since 4 Oct 2026')
+  })
+
   it('no since: the title says only where', () => {
-    const risk = un1tHeaderRisk({ overdue: true, studios: [{ locationId: HATCH, locationName: 'Studio Two', pastDue: pastDue({ since: null }) }] })
+    const risk = un1tHeaderRisk({ overdue: true, studios: [{ locationId: HATCH, locationName: 'Studio Two', pastDues: [pastDue({ since: null })] }] })
     expect(risk.title).toBe('Payment overdue on un1t.online at Studio Two')
   })
 

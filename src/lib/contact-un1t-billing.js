@@ -29,11 +29,15 @@ const sinceMs = (iso) => {
   return Number.isFinite(n) ? n : Infinity
 }
 
+// A studio's overdue rows, earliest `since` first (an unreadable date last), so
+// the first row is always the one the header and the command centre name.
+const sortedBySince = (rows) => (Array.isArray(rows) ? [...rows].sort((a, b) => sinceMs(a?.since) - sinceMs(b?.since)) : [])
+
 /**
  * @param {object} db  service-role client
  * @param {{ locations?: Array<{id: string}> }|null} user
  * @param {string} contactId
- * @returns {Promise<{ studios: Array<{ locationId: string, locationName: string, subscriptions: object[], transactions: object[], invoices: object[], pastDue: object|null }>, overdue: boolean, arrearsCentsByCurrency: Record<string, number> }>}
+ * @returns {Promise<{ studios: Array<{ locationId: string, locationName: string, subscriptions: object[], transactions: object[], invoices: object[], pastDues: object[] }>, overdue: boolean, arrearsCentsByCurrency: Record<string, number> }>}
  */
 export async function loadUn1tBilling(db, user, contactId) {
   try {
@@ -74,7 +78,7 @@ export async function loadUn1tBilling(db, user, contactId) {
         subscriptions: d.subscriptions || [],
         transactions: d.transactions || [],
         invoices: d.invoices || [],
-        pastDue: d.pastDue ?? null,
+        pastDues: sortedBySince(d.pastDues),
       })
     }
     if (studios.length === 0) return emptyBilling()
@@ -92,17 +96,20 @@ export async function loadUn1tBilling(db, user, contactId) {
     }
     for (const s of studios) s.locationName = names.get(s.locationId) || 'Studio'
 
+    // Every overdue row counts: a member can owe on more than one subscription.
+    // Like currencies are summed; a row with no amount (or no currency) keeps
+    // the member overdue but adds nothing.
     const arrearsCentsByCurrency = {}
     for (const s of studios) {
-      const p = s.pastDue
-      if (!p) continue
-      const cents = p.amountCents
-      if (Number.isFinite(cents) && cents > 0 && p.currency) {
-        const cur = String(p.currency).toUpperCase()
-        arrearsCentsByCurrency[cur] = (arrearsCentsByCurrency[cur] || 0) + cents
+      for (const p of s.pastDues) {
+        const cents = p?.amountCents
+        if (Number.isFinite(cents) && cents > 0 && p.currency) {
+          const cur = String(p.currency).toUpperCase()
+          arrearsCentsByCurrency[cur] = (arrearsCentsByCurrency[cur] || 0) + cents
+        }
       }
     }
-    return { studios, overdue: studios.some((s) => s.pastDue != null), arrearsCentsByCurrency }
+    return { studios, overdue: studios.some((s) => s.pastDues.length > 0), arrearsCentsByCurrency }
   } catch {
     logWarn('un1t-billing', 'load failed', { contactId })
     return emptyBilling()
@@ -115,10 +122,15 @@ export async function loadUn1tBilling(db, user, contactId) {
  */
 export function un1tHeaderRisk(billing) {
   if (!billing?.overdue) return null
-  const overdueStudios = (billing.studios || []).filter((s) => s.pastDue != null)
-  if (overdueStudios.length === 0) return null
-  const pick = overdueStudios.reduce((best, s) => (sinceMs(s.pastDue.since) < sinceMs(best.pastDue.since) ? s : best))
-  const since = formatDate(pick.pastDue.since)
+  // Earliest `since` across every studio's every overdue row.
+  let pick = null
+  for (const s of billing.studios || []) {
+    for (const p of s.pastDues || []) {
+      if (!pick || sinceMs(p.since) < sinceMs(pick.since)) pick = { locationName: s.locationName, since: p.since }
+    }
+  }
+  if (!pick) return null
+  const since = formatDate(pick.since)
   return {
     label: 'Payment overdue',
     cls: 'bg-red-50 text-red-700 border-red-200',

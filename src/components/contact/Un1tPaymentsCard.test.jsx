@@ -12,7 +12,7 @@ const studio = (over = {}) => ({
   subscriptions: [],
   transactions: [],
   invoices: [],
-  pastDue: null,
+  pastDues: [],
   ...over,
 })
 const tx = (n, over = {}) => ({ at: `2026-10-${String(n).padStart(2, '0')}T10:00:00Z`, productTitle: `Plan ${String.fromCharCode(64 + n)}`, type: 'sub_renewal', amountCents: 8900, currency: 'EUR', refunded: false, ...over })
@@ -26,7 +26,7 @@ describe('Un1tPaymentsCard', () => {
   })
 
   it('shows amount and since in the overdue band', () => {
-    const t = text([studio({ pastDue: { since: '2026-10-03T09:00:00Z', amountCents: 8900, currency: 'EUR' }, transactions: [tx(1)] })])
+    const t = text([studio({ pastDues: [{ since: '2026-10-03T09:00:00Z', amountCents: 8900, currency: 'EUR' }], transactions: [tx(1)] })])
     expect(t).toContain('UN1T Hatch Street')
     expect(t).toContain('Payment overdue since 3 Oct 2026')
     expect(t).toContain('€89')
@@ -34,15 +34,29 @@ describe('Un1tPaymentsCard', () => {
   })
 
   it('shows "amount not reported by un1t.online" when amountCents is null', () => {
-    const t = text([studio({ pastDue: { since: '2026-10-03T09:00:00Z', amountCents: null, currency: null }, transactions: [tx(1)] })])
+    const t = text([studio({ pastDues: [{ since: '2026-10-03T09:00:00Z', amountCents: null, currency: null }], transactions: [tx(1)] })])
     expect(t).toContain('Payment overdue since 3 Oct 2026')
     expect(t).toContain('amount not reported by un1t.online')
   })
 
   it('a past-due amount with no currency is not shown as euros', () => {
-    const t = text([studio({ pastDue: { since: '2026-10-03T09:00:00Z', amountCents: 8900, currency: null } })])
+    const t = text([studio({ pastDues: [{ since: '2026-10-03T09:00:00Z', amountCents: 8900, currency: null }] })])
     expect(t).toContain('amount not reported by un1t.online')
     expect(t).not.toContain('€')
+  })
+
+  it('lists every overdue subscription with its own amount or "amount not reported"', () => {
+    const { container } = render(<Un1tPaymentsCard studios={[studio({ pastDues: [
+      { since: '2026-09-20T09:00:00Z', amountCents: 4000, currency: 'EUR', productTitle: 'Pack' },
+      { since: '2026-10-03T09:00:00Z', amountCents: null, currency: null, productTitle: 'Unlimited' },
+    ] })]} />)
+    const bands = [...container.querySelectorAll('div.border-red-200')]
+    expect(bands).toHaveLength(2)
+    expect(bands[0].textContent).toContain('Payment overdue since 20 Sept 2026')
+    expect(bands[0].textContent).toContain('€40')
+    expect(bands[0].textContent).not.toContain('amount not reported')
+    expect(bands[1].textContent).toContain('Payment overdue since 3 Oct 2026')
+    expect(bands[1].textContent).toContain('amount not reported by un1t.online')
   })
 
   it('no overdue band when nothing is overdue', () => {

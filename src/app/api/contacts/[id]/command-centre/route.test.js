@@ -218,41 +218,42 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     expect(j.signals.lastAttendedAt).toBe(goneQuietAt)
   })
 
-  it('loadUn1tBilling joins the Promise.all and the response carries un1t_billing', async () => {
+  it('loadUn1tBilling joins the Promise.all: with billing held pending, its sibling reads are already issued', async () => {
     getCurrentUser.mockResolvedValue(USER)
-    // Hold the activities read open: billing must already have been asked for
-    // while a sibling read is still pending, i.e. it is a member of the same
-    // Promise.all and not awaited before or after it.
-    let releaseActivities
-    const activities = new Promise((resolve) => {
-      releaseActivities = () => resolve({ data: [], error: null })
-    })
     const db = mockDb({
       contacts: { data: CONTACT, error: null },
-      activities,
+      activities: { data: [], error: null },
       event_types: { data: [], error: null },
     })
     createServerClient.mockReturnValue(db)
-    loadUn1tBilling.mockResolvedValue({
-      studios: [
-        { locationId: 'loc1', locationName: 'Hatch', pastDue: { since: '2026-10-01', amountCents: 4500, currency: 'EUR' } },
-        { locationId: 'loc2', locationName: 'Other', pastDue: null },
-        { locationId: 'loc3', locationName: 'Third', pastDue: { since: '2026-09-20', amountCents: 1000, currency: 'GBP' } },
-      ],
-      overdue: true,
-      arrearsCentsByCurrency: { EUR: 4500, GBP: 1000 },
-    })
+    // Billing never settles until released. If the route awaited it before (or
+    // instead of) the Promise.all, the activities / event_types reads would not
+    // have been issued by now.
+    let releaseBilling
+    loadUn1tBilling.mockReturnValue(new Promise((resolve) => {
+      releaseBilling = () => resolve({
+        studios: [
+          { locationId: 'loc1', locationName: 'Hatch', pastDues: [{ since: '2026-10-01', amountCents: 4500, currency: 'EUR' }] },
+          { locationId: 'loc2', locationName: 'Other', pastDues: [] },
+          { locationId: 'loc3', locationName: 'Third', pastDues: [{ since: '2026-09-20', amountCents: 1000, currency: 'GBP' }] },
+        ],
+        overdue: true,
+        arrearsCentsByCurrency: { EUR: 4500, GBP: 1000 },
+      })
+    }))
 
     const pending = GET(req(), props)
     await new Promise((r) => setTimeout(r, 0))
     expect(loadUn1tBilling).toHaveBeenCalledTimes(1)
     expect(loadUn1tBilling).toHaveBeenCalledWith(db, USER, 'c1')
-    releaseActivities()
+    expect(db.__queried).toContain('activities')
+    expect(db.__queried).toContain('event_types')
+    releaseBilling()
     const res = await pending
     const j = await res.json()
 
     expect(res.status).toBe(200)
-    // Only studios with a pastDue, and EUR alone in arrears_cents.
+    // Only studios with a past-due row, and EUR alone in arrears_cents.
     expect(j.un1t_billing).toEqual({
       overdue: true,
       arrears_cents: 4500,
@@ -264,6 +265,30 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     expect(j.signals.churnLabel).toBe('Payment overdue')
   })
 
+  it('a studio with several overdue rows reports its earliest since once', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    createServerClient.mockReturnValue(mockDb({
+      contacts: { data: CONTACT, error: null },
+      activities: { data: [], error: null },
+      event_types: { data: [], error: null },
+    }))
+    loadUn1tBilling.mockResolvedValue({
+      studios: [{ locationId: 'loc1', locationName: 'Hatch', pastDues: [
+        { since: '2026-10-05T09:00:00Z', amountCents: 4500, currency: 'EUR' },
+        { since: null, amountCents: null, currency: null },
+        { since: '2026-09-20T09:00:00Z', amountCents: 1000, currency: 'EUR' },
+      ] }],
+      overdue: true,
+      arrearsCentsByCurrency: { EUR: 5500 },
+    })
+    const j = await (await GET(req(), props)).json()
+    expect(j.un1t_billing).toEqual({
+      overdue: true,
+      arrears_cents: 5500,
+      studios: [{ location_id: 'loc1', since: '2026-09-20T09:00:00Z' }],
+    })
+  })
+
   it('overdue with null amount → churnLabel Payment overdue, arrears_cents 0', async () => {
     getCurrentUser.mockResolvedValue(USER)
     createServerClient.mockReturnValue(mockDb({
@@ -272,7 +297,7 @@ describe('GET /api/contacts/[id]/command-centre', () => {
       event_types: { data: [], error: null },
     }))
     loadUn1tBilling.mockResolvedValue({
-      studios: [{ locationId: 'loc1', locationName: 'Hatch', pastDue: { since: '2026-10-01', amountCents: null, currency: null } }],
+      studios: [{ locationId: 'loc1', locationName: 'Hatch', pastDues: [{ since: '2026-10-01', amountCents: null, currency: null }] }],
       overdue: true,
       arrearsCentsByCurrency: {},
     })
@@ -343,7 +368,7 @@ describe('GET /api/contacts/[id]/command-centre', () => {
 
     seed()
     loadUn1tBilling.mockResolvedValue({
-      studios: [{ locationId: 'loc1', locationName: 'Hatch', pastDue: { since: '2026-10-01', amountCents: 4500, currency: 'EUR' } }],
+      studios: [{ locationId: 'loc1', locationName: 'Hatch', pastDues: [{ since: '2026-10-01', amountCents: 4500, currency: 'EUR' }] }],
       overdue: true,
       arrearsCentsByCurrency: { EUR: 4500 },
     })
