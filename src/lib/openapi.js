@@ -10795,6 +10795,30 @@ registry.registerPath({
   },
 })
 
+// UN1TWRITE.12 — the un1t.online write settings (master only).
+registry.registerPath({
+  method: 'patch',
+  path: '/api/locations/{id}/un1t-online',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Set the un1t.online write settings (master only)',
+  description:
+    'Sets locations.settings.un1t_online.writes_enabled and/or trial_product_id through mergeLocationSettings, keeping ' +
+    'every other settings key. trial_product_id must be an active, free, one-time un1t.online product at this studio ' +
+    '(null clears it). An unreadable settings row is a 503 and nothing is written. A master GET of the same path also ' +
+    'carries `write`: the switch, the trial product choices and the token\'s missing write permissions.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ writes_enabled: z.boolean().optional(), trial_product_id: z.string().nullable().optional() }) } } },
+  },
+  responses: {
+    200: { description: '{ write: { writes_enabled, trial_product_id } }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'Nothing to change, or not a free one-time product at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a master', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Settings or products unreadable; nothing written', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================

@@ -1,4 +1,11 @@
-// GET / PUT / DELETE /api/locations/[id]/un1t-online
+// GET / PUT / PATCH / DELETE /api/locations/[id]/un1t-online
+//
+// UN1TWRITE.12 — for a MASTER, GET also carries `write`: the writes switch,
+// the trial product (an active €0 one-time un1t.online product at this
+// studio; the picker lists only those) and the token's write permissions
+// line. PATCH (master only) sets writes_enabled / trial_product_id under
+// locations.settings.un1t_online through mergeLocationSettings, keeping every
+// other key; an unreadable settings row is 503 and writes nothing.
 //
 // UN1TSYNC.7 — connect, inspect and disconnect Hatch Street's un1t.online
 // token. The token is a per-studio bearer the operator creates at un1t.online
@@ -46,6 +53,10 @@ import { presentUn1tConnection, hasWritePermissions } from '@/lib/un1t-online-st
 import { logMembershipSourceChange } from '@/lib/membership/audit'
 import { resetMembershipStateCache } from '@/lib/membership/state-for-page'
 import { logError } from '@/lib/log'
+import { z } from 'zod'
+import { mergeLocationSettings } from '@/lib/location-settings'
+import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
+import { createUn1tWriter } from '@/lib/un1t-online-write'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -126,7 +137,99 @@ export async function GET(request, props) {
   }
   const lastRun = Array.isArray(runs) ? runs[0] ?? null : null
 
-  return NextResponse.json({ success: true, data: presentUn1tConnection(conn, lastRun) })
+  const data = presentUn1tConnection(conn, lastRun)
+  if (isMaster(g.user)) {
+    // Advisory, like the run summary: the connection itself answered.
+    try {
+      data.write = await writeSection(db, g.locationId)
+    } catch (err) {
+      logError(LOG, 'write section failed', { locationId: g.locationId, code: err?.code ?? err?.name ?? 'error' })
+      data.write = { unreadable: true }
+    }
+  }
+  return NextResponse.json({ success: true, data })
+}
+
+const isMaster = (user) => user?.profileRole === 'master'
+
+// The trial picker's choices: active €0 one-time products at this studio
+// (A's isTrialProduct), by title. A failed read is an empty list, logged.
+async function trialProducts(db, locationId) {
+  const { data, error } = await db
+    .from('un1t_products')
+    .select('un1t_id, title, type, status, price_cents')
+    .eq('location_id', locationId)
+    .eq('status', 'active')
+    .eq('type', 'one_time')
+    .eq('price_cents', 0)
+  if (error) {
+    logError(LOG, 'trial products read failed', { locationId, err: safeErr(error) })
+    return { rows: [], error }
+  }
+  const rows = (data || [])
+    .filter((p) => p.status === 'active' && p.type === 'one_time' && p.price_cents === 0 && p.un1t_id)
+    .map((p) => ({ un1t_id: String(p.un1t_id), title: p.title || String(p.un1t_id) }))
+    .sort((a, b) => a.title.localeCompare(b.title))
+  return { rows, error: null }
+}
+
+async function writeSection(db, locationId) {
+  const { data: loc, error } = await db.from('locations').select('id, settings').eq('id', locationId).maybeSingle()
+  if (error || !loc) {
+    logError(LOG, 'write settings read failed', { locationId, err: safeErr(error) })
+    return { unreadable: true }
+  }
+  const s = un1tWriteSettingsFrom(loc.settings)
+  const { rows } = await trialProducts(db, locationId)
+  let permissions
+  try {
+    const writer = await createUn1tWriter(db, locationId)
+    const { missing } = await writer.permissionReport()
+    permissions = { all_present: missing.length === 0, missing }
+  } catch (err) {
+    logError(LOG, 'write permission check failed', { locationId, code: err?.code ?? err?.name ?? 'error' })
+    permissions = { unreadable: true }
+  }
+  return { writes_enabled: s.writesEnabled, trial_product_id: s.trialProductId, trial_products: rows, permissions }
+}
+
+const WriteSettingsSchema = z.object({
+  writes_enabled: z.boolean().optional(),
+  trial_product_id: z.string().trim().min(1).max(64).nullable().optional(),
+}).strict().refine((b) => Object.keys(b).length > 0, { message: 'Nothing to change.' })
+
+export async function PATCH(request, props) {
+  const g = await gate(props)
+  if (g.refusal) return g.refusal
+  if (!isMaster(g.user)) {
+    return NextResponse.json({ success: false, error: 'Only a master can change un1t.online write settings.' }, { status: 403 })
+  }
+  const validation = await validateBody(request, WriteSettingsSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
+  const db = createServerClient()
+
+  if (typeof body.trial_product_id === 'string') {
+    const { rows, error } = await trialProducts(db, g.locationId)
+    if (error) return NextResponse.json({ success: false, error: 'Could not read the trial products. Nothing was saved.' }, { status: 503 })
+    if (!rows.some((p) => p.un1t_id === body.trial_product_id)) {
+      return NextResponse.json({ success: false, error: 'The trial product must be an active, free, one-time product at this studio.' }, { status: 400 })
+    }
+  }
+
+  const patch = {}
+  if (body.writes_enabled !== undefined) patch.writes_enabled = body.writes_enabled
+  if (body.trial_product_id !== undefined) patch.trial_product_id = body.trial_product_id
+  const merged = await mergeLocationSettings(db, g.locationId, (current) => ({
+    ...current,
+    un1t_online: { ...(current.un1t_online && typeof current.un1t_online === 'object' ? current.un1t_online : {}), ...patch },
+  }), { scope: LOG })
+  if (!merged.ok) {
+    if (merged.reason === 'not_found') return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+    return NextResponse.json({ success: false, error: 'Could not read this studio\'s settings. Nothing was saved.' }, { status: 503 })
+  }
+  const s = un1tWriteSettingsFrom(merged.settings)
+  return NextResponse.json({ success: true, data: { write: { writes_enabled: s.writesEnabled, trial_product_id: s.trialProductId } } })
 }
 
 export async function PUT(request, props) {

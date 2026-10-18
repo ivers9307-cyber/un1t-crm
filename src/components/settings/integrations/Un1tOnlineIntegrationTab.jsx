@@ -8,8 +8,11 @@
 // into a write-only password field, posted, and cleared; no response carries
 // it back, so nothing here can render it.
 //
-// The CRM only READS from un1t.online. A token that can change data is allowed
-// (some presets are broader) but flagged, because a read-only one is safer.
+// The sync only READS from un1t.online. Writes (booking, cancelling, the
+// trial, accounts) are off until a master switches them on in the Writes
+// section (UN1TWRITE.12, masters only: the GET carries `write` only for them).
+// While writes are off, a token that can change data is flagged, because a
+// read-only one is safer; with writes on, the token needs those permissions.
 
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -137,6 +140,19 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
     router.refresh()
   }
 
+  async function saveWrite(patch) {
+    setBusy('write'); setError(null); setNotice(null)
+    const r = await call(() => fetch(`/api/locations/${location.id}/un1t-online`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }))
+    setBusy(null)
+    if (!r.ok) { setError(r.error); return }
+    setState((s) => ({ ...s, data: { ...s.data, write: { ...(s.data?.write || {}), ...(r.json.data?.write || {}) } } }))
+    setNotice('Saved.')
+  }
+
   async function disconnect() {
     if (!window.confirm('Disconnect un1t.online? The token is deleted and the sync stops. Existing data stays.')) return
     setBusy('disconnect'); setError(null); setNotice(null)
@@ -160,6 +176,7 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
   const runCounts = describeCounts(run?.counts)
   const contactCounts = describeContacts(run?.counts)
   const shownError = error || state.error
+  const write = data?.write && !data.write.unreadable ? data.write : null
 
   return (
     <div className="space-y-4">
@@ -199,11 +216,47 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
           {data.last_error && (
             <div className="text-xs text-red-700">Last error: {data.last_error}</div>
           )}
-          {data.has_write_permissions && (
+          {data.has_write_permissions && !write?.writes_enabled && (
             <div className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-xs rounded-md p-2">
               This token can change data on un1t.online. The CRM only reads, so a read-only token is safer: create one with the Read-only preset and paste it here.
             </div>
           )}
+        </div>
+      )}
+
+      {write && (
+        <div data-testid="un1t-writes" className="border border-un1t-border rounded-md p-3 space-y-2 text-xs">
+          <div className="text-sm font-semibold text-un1t-text">Writes</div>
+          <label className="flex items-center gap-2 text-un1t-text">
+            <input
+              type="checkbox"
+              checked={!!write.writes_enabled}
+              disabled={busy !== null}
+              onChange={(e) => saveWrite({ writes_enabled: e.target.checked })}
+            />
+            Allow the CRM to write to un1t.online
+          </label>
+          <div className="space-y-1">
+            <label htmlFor="un1t-trial-product" className="block text-un1t-subtle">Trial product</label>
+            <select
+              id="un1t-trial-product"
+              value={write.trial_product_id || ''}
+              disabled={busy !== null}
+              onChange={(e) => saveWrite({ trial_product_id: e.target.value || null })}
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text"
+            >
+              <option value="">Not set</option>
+              {(write.trial_products || []).map((p) => <option key={p.un1t_id} value={p.un1t_id}>{p.title}</option>)}
+            </select>
+            <div className="text-un1t-subtle">Only active, free, one-time products are listed.</div>
+          </div>
+          <div className={write.permissions?.all_present ? 'text-green-700' : 'text-amber-700'}>
+            {write.permissions?.unreadable
+              ? 'Write permissions could not be checked just now.'
+              : write.permissions?.all_present
+                ? 'Write permissions: all present'
+                : `Write permissions missing: ${(write.permissions?.missing || []).join(', ')}`}
+          </div>
         </div>
       )}
 
