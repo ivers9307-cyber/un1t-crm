@@ -88,6 +88,7 @@ export async function GET(request) {
     .eq('location_id', locationId)
     .eq('un1t_user_id', gate.un1tUserId)
     .eq('status', 'booked')
+    .order('remote_created_at', { ascending: false })
     .limit(LIMIT)
   if (bkErr) logWarn('un1t-staff-classes', 'upcoming bookings read failed', { locationId, err: bkErr })
   const eventIds = [...new Set((bookings || []).map((b) => b.event_id).filter(Boolean).map(String))]
@@ -98,6 +99,7 @@ export async function GET(request) {
       .select('un1t_id, title, starts_at')
       .eq('location_id', locationId)
       .in('un1t_id', eventIds)
+      .eq('status', 'scheduled')
       .gt('starts_at', new Date(now).toISOString())
     if (teErr) logWarn('un1t-staff-classes', 'upcoming events read failed', { locationId, err: teErr })
     const byId = new Map((theirEvents || []).map((e) => [String(e.un1t_id), e]))

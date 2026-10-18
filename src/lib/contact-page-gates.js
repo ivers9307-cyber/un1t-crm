@@ -261,3 +261,25 @@ export function contactWorkGates(user, contact) {
     canReadStudioCards: isMemberOfContactStudio(user, loc),
   }
 }
+
+/**
+ * UN1TWRITE.15 — the un1t.online studios the contact page offers a booking
+ * card for: membership source un1t.online with writes on, where the contact
+ * has a un1t.online account (a un1t_clients row) and the viewer is a member
+ * (or a master). Judged per booking studio, independent of work.canBook (the
+ * contact's home studio may be another one).
+ * @param {{ user: object, clientRows: { location_id: string }[], locations: { id: string, name: string, membership_source: string|null, writes_enabled: boolean }[] }} args
+ * @returns {{ locationId: string, studioName: string }[]}
+ */
+export function un1tBookingStudios({ user, clientRows = [], locations = [] }) {
+  const withAccount = new Set((clientRows || []).map((r) => r?.location_id).filter(Boolean))
+  const out = []
+  for (const loc of locations || []) {
+    if (!loc?.id || !withAccount.has(loc.id)) continue
+    if (loc.membership_source !== 'un1t_online' || loc.writes_enabled !== true) continue
+    if (!isMemberOfContactStudio(user, loc.id)) continue
+    if (out.some((s) => s.locationId === loc.id)) continue
+    out.push({ locationId: loc.id, studioName: loc.name || 'this studio' })
+  }
+  return out
+}

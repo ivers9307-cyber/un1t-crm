@@ -6,7 +6,7 @@ import { ArrowLeft, Mail, MessageSquare, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { todayStrIn, getLocationZone, getLocationZones, DEFAULT_TZ } from '@/lib/location-time'
 import { canViewContact } from '@/lib/contact-crossovers'
-import { canLoadContactConsultations, contactChannelFlags, contactActionGates, contactWorkGates } from '@/lib/contact-page-gates'
+import { canLoadContactConsultations, contactChannelFlags, contactActionGates, contactWorkGates, un1tBookingStudios } from '@/lib/contact-page-gates'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
 import { loadContactJourney } from '@/lib/onboarding-journey-data'
@@ -16,6 +16,7 @@ import { findPrimaryPipeline } from '@/lib/deal-lookup'
 import ContactActions from '@/components/ContactActions'
 import ContactComposer from '@/components/ContactComposer'
 import ContactBookingCard from '@/components/ContactBookingCard'
+import Un1tClassBookingCard from '@/components/Un1tClassBookingCard'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import StartWhatsAppButton from '@/components/StartWhatsAppButton'
 import ContactConsentHistoryCard from '@/components/ContactConsentHistoryCard'
@@ -144,6 +145,28 @@ export default async function ContactDetailPage(props) {
   const activities = activitiesRes.data || []
   const bookings = bookingsRes.data || []
   const waConversations = waConvRes.data || []
+
+  // UN1TWRITE.15 — the un1t.online studios this contact can be booked at
+  // from here: an account there (un1t_clients), writes on, and the viewer a
+  // member. Only the writes_enabled boolean leaves the settings (a JSON
+  // path), never the settings object. Best-effort: no card on a failed read.
+  let un1tStudios = []
+  try {
+    const { data: clientRows, error: clientErr } = await db.from('un1t_clients')
+      .select('location_id').eq('contact_id', contact.id).limit(50)
+    const ids = [...new Set((clientRows || []).map((r) => r.location_id).filter(Boolean))]
+    if (!clientErr && ids.length > 0) {
+      const { data: locs, error: locErr } = await db.from('locations')
+        .select('id, name, membership_source, writes_enabled:settings->un1t_online->writes_enabled').in('id', ids)
+      if (!locErr) {
+        un1tStudios = un1tBookingStudios({
+          user,
+          clientRows,
+          locations: (locs || []).map((l) => ({ id: l.id, name: l.name, membership_source: l.membership_source, writes_enabled: l.writes_enabled === true })),
+        })
+      }
+    }
+  } catch { un1tStudios = [] }
   const bookableEventTypes = eventTypesRes?.data || []
 
   // CHURN-CONTACT.1 — make the contact page prospective, not just a
@@ -574,6 +597,16 @@ export default async function ContactDetailPage(props) {
               waWindowOpen={whatsappWindowOpen}
             />
           )}
+          {un1tStudios.map((studio) => (
+            <Un1tClassBookingCard
+              key={studio.locationId}
+              contactId={contact.id}
+              locationId={studio.locationId}
+              studioName={studio.studioName}
+              waConversationId={latestWaConversation?.id || null}
+              waWindowOpen={whatsappWindowOpen}
+            />
+          ))}
         </div>
       </div>
 

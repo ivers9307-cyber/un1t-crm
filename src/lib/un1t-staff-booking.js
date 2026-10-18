@@ -12,20 +12,11 @@
 import { assertLocationAccess } from './auth.js'
 import { readUn1tWriteSettings, Un1tSettingsReadError } from './un1t-online-settings.js'
 import { UN1T_WRITE_CODES } from './un1t-online-write.js'
+import { UN1T_STAFF_COPY } from './un1t-staff-booking-copy.js'
 
 const C = UN1T_WRITE_CODES
 
-/** Staff copy (plan D global constraints, verbatim). */
-export const UN1T_STAFF_COPY = Object.freeze({
-  unknown: 'un1t.online did not answer clearly. Check the class in un1t.online before trying again.',
-  noAccount: (studio) => `This contact has no un1t.online account at ${studio}. They can book through the website.`,
-  alreadyBooked: 'Already booked in un1t.online',
-  off: (studio) => `un1t.online booking is off at ${studio}.`,
-  busy: 'un1t.online is busy. Try again in a minute.',
-  // An unconfirmed "already booked" (the words said so; the check read could not).
-  alreadyBookedUnverified: 'un1t.online said this person is already booked, but the CRM could not confirm it. Check the class in un1t.online before trying again.',
-  settingsUnreadable: "Could not read this studio's un1t.online settings just now. Nothing was sent; try again.",
-})
+export { UN1T_STAFF_COPY }
 
 /**
  * @returns {Promise<{ ok: true, contact: object, un1tUserId: string, studioName: string }
@@ -88,7 +79,9 @@ export function staffWriteAnswer(r, { op }) {
     return { status: 200, body: { success: true, data: { ...data, ledger_id: r.ledgerId ?? null } } }
   }
   if (r.verdict === 'unknown') {
-    const error = r.code === C.ALREADY_BOOKED_UNVERIFIED ? UN1T_STAFF_COPY.alreadyBookedUnverified : UN1T_STAFF_COPY.unknown
+    const error = r.code === C.ALREADY_BOOKED_UNVERIFIED
+      ? UN1T_STAFF_COPY.alreadyBookedUnverified
+      : r.code === C.BOOKING_NOT_THIS_CLIENT && r.message ? r.message : UN1T_STAFF_COPY.unknown
     return { status: 502, body: { success: false, code: r.code ?? 'outcome_unknown', error, ledger_id: r.ledgerId ?? null } }
   }
   if (r.code === C.RATE_BUDGET || r.code === C.RATE_LIMITED) {
