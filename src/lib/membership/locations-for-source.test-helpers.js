@@ -28,6 +28,7 @@ export const FULL_GLOFOX_SLICE = Object.freeze({ glofox: { branch_id: 'b', api_k
 // real Glofox branch id; Hatch Street and CCF Autos carry a settings.glofox
 // slice with branch_id NULL (what the old discovery tried every tick).
 export const STILLORGAN_ID = 'a0000000-0000-0000-0000-000000000001'
+export const HATCH_ID = '28c78d6b-0000-0000-0000-000000000002'
 export const ESTATE_2026_10 = Object.freeze([
   locationRow({ id: STILLORGAN_ID, name: 'UN1T Stillorgan', source: 'glofox', settings: FULL_GLOFOX_SLICE }),
   locationRow({ id: '28c78d6b-0000-0000-0000-000000000002', name: 'UN1T Hatch Street', source: 'none', settings: { glofox: { branch_id: null, api_key: 'k', api_token: 't' } } }),
