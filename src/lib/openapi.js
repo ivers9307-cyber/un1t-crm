@@ -4311,7 +4311,8 @@ registry.registerPath({
   summary: 'List the studios a WhatsApp conversation can move to',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
-    200: { description: 'The caller’s other studios in the conversation’s organisation' },
+    200: { description: 'The caller’s other studios in the conversation’s organisation, each { id, name, whatsapp }: whatsapp=false when the studio has no active number switched on (a move there is refused)' },
+    500: { description: 'A studio or number read failed', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -4329,7 +4330,7 @@ registry.registerPath({
     200: { description: 'Moved; merged=true when it joined an existing thread there' },
     400: { description: 'Same studio, or a studio in another organisation', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Conversation or target studio not found for the caller', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'The customer already has a thread at that studio that could not be merged automatically', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The target studio has no WhatsApp number switched on (WAMOVENUMBER.1), or the customer already has a thread there that could not be merged automatically', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'The move failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

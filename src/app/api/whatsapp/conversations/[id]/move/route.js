@@ -5,6 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404, requireWhatsAppInboxAnywhere
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { logError } from '@/lib/log'
+import { locationsWithWhatsApp } from '@/lib/whatsapp-config'
 
 // WAHOMESTUDIO.1 (R7) — move a WhatsApp thread to another studio of the SAME
 // organisation (an unknown sender who turns out to be a Hatch customer, a
@@ -12,12 +13,19 @@ import { logError } from '@/lib/log'
 // thread there) is ONE SQL function, move_whatsapp_conversation (mig 723).
 // The caller needs WhatsApp inbox access at BOTH studios. Registered in
 // src/lib/openapi.js.
+//
+// WAMOVENUMBER.1 — the target must have an active WhatsApp number switched on
+// (location_whatsapp_numbers). Since WAORGNUMBER.6 a studio with nothing
+// switched on cannot answer a thread (no sibling's number), so a move there is
+// a 409, and GET flags each target with `whatsapp` so the inbox can say why.
+// A failed read is a 500, never "no number" and never a silent allow.
 const MoveSchema = z.object({ location_id: uuidLike })
 
 const NOT_FOUND = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 const READ_FAILED = () => NextResponse.json({ success: false, error: 'Could not load the conversation.' }, { status: 500 })
 const SAME_STUDIO = 'The conversation is already at this studio.'
 const WRONG_ORG = 'A conversation can only move to a studio in the same organisation.'
+const NO_NUMBER = (name) => `${name || 'That studio'} has no WhatsApp number switched on, so a conversation there could not be answered. Switch a number on at that studio first (Settings, WhatsApp).`
 
 async function load(props) {
   const params = await props.params
@@ -55,9 +63,15 @@ export async function GET(request, props) {
     logError('wa-move', 'target studios read failed', { conversationId: conversation.id, err: error.message })
     return NextResponse.json({ success: false, error: 'Could not load the studios.' }, { status: 500 })
   }
-  const targets = (locs || [])
-    .filter((l) => !requireWhatsAppInboxAt(user, l.id))
-    .map((l) => ({ id: l.id, name: l.name }))
+  const allowed = (locs || []).filter((l) => !requireWhatsAppInboxAt(user, l.id))
+  let withNumber
+  try {
+    withNumber = await locationsWithWhatsApp(db, allowed.map((l) => l.id))
+  } catch (e) {
+    logError('wa-move', 'target studios’ WhatsApp numbers read failed', { conversationId: conversation.id, err: e?.message || String(e) })
+    return NextResponse.json({ success: false, error: 'Could not load the studios.' }, { status: 500 })
+  }
+  const targets = allowed.map((l) => ({ id: l.id, name: l.name, whatsapp: withNumber.has(l.id) }))
   return NextResponse.json({ success: true, data: { targets } })
 }
 
@@ -76,13 +90,24 @@ export async function POST(request, props) {
   // organisation. An inaccessible target is the unknown-id 404.
   const guard = assertLocationAccessOr404(user, target) || requireWhatsAppInboxAt(user, target)
   if (guard) return guard
-  const { data: dest, error: destErr } = await db.from('locations').select('id, organization_id').eq('id', target).maybeSingle()
+  const { data: dest, error: destErr } = await db.from('locations').select('id, name, organization_id').eq('id', target).maybeSingle()
   if (destErr) {
     logError('wa-move', 'target studio read failed', { conversationId: conversation.id, target, err: destErr.message })
     return NextResponse.json({ success: false, error: 'Could not move the conversation.' }, { status: 500 })
   }
   if (!dest || !orgId || dest.organization_id !== orgId) {
     return NextResponse.json({ success: false, error: WRONG_ORG }, { status: 400 })
+  }
+  // WAMOVENUMBER.1 — never file a thread where nobody can answer it.
+  let targetHasNumber
+  try {
+    targetHasNumber = (await locationsWithWhatsApp(db, [target])).has(target)
+  } catch (e) {
+    logError('wa-move', 'target studio WhatsApp number read failed', { conversationId: conversation.id, target, err: e?.message || String(e) })
+    return NextResponse.json({ success: false, error: 'Could not move the conversation.' }, { status: 500 })
+  }
+  if (!targetHasNumber) {
+    return NextResponse.json({ success: false, error: NO_NUMBER(dest.name) }, { status: 409 })
   }
 
   const { data, error } = await db.rpc('move_whatsapp_conversation', { p_conversation_id: conversation.id, p_target_location_id: target })

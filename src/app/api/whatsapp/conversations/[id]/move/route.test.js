@@ -25,6 +25,9 @@ const LOCS = [
   { id: HATCH, name: 'Hatch Street', organization_id: 'O1' },
   { id: OTHER, name: 'Elsewhere', organization_id: 'O2' },
 ]
+// WAMOVENUMBER.1 — the studios with a WhatsApp number switched on: a
+// location_whatsapp_numbers row embedding its number (the !inner read).
+let LINKS
 let rpc
 let updates
 let updateError
@@ -38,7 +41,8 @@ function makeDb() {
       const filters = []
       const run = () => {
         if (table === failTable) return { data: null, error: { message: 'read failed' } }
-        const src = table === 'whatsapp_conversations' ? [CONV] : table === 'locations' ? LOCS : []
+        const src = table === 'whatsapp_conversations' ? [CONV] : table === 'locations' ? LOCS
+          : table === 'location_whatsapp_numbers' ? LINKS : []
         return { data: src.filter((r) => filters.every((f) => f(r))), error: null }
       }
       const b = {
@@ -52,7 +56,7 @@ function makeDb() {
           }
           return u
         },
-        eq: (c, v) => { filters.push((r) => r[c] === v); return b },
+        eq: (c, v) => { filters.push((r) => (c.includes('.') ? r[c.split('.')[0]]?.[c.split('.')[1]] : r[c]) === v); return b },
         in: (c, vals) => { filters.push((r) => vals.includes(r[c])); return b },
         order: () => b,
         maybeSingle: async () => {
@@ -72,6 +76,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   failTable = null
   updateError = null
+  LINKS = [STILL, HATCH, OTHER].map((id) => ({ location_id: id, whatsapp_numbers: { id: 'n1', is_active: true } }))
   assertLocationAccessOr404.mockImplementation(() => null)
   getCurrentUser.mockResolvedValue({ id: 'u1', locations: [{ id: STILL }, { id: HATCH }, { id: OTHER }] })
   createServerClient.mockReturnValue(makeDb())
@@ -80,7 +85,18 @@ beforeEach(() => {
 describe('GET move targets', () => {
   it('lists the caller’s other studios in the thread’s organisation only', async () => {
     const body = await (await GET(new Request('http://x'), params)).json()
-    expect(body.data.targets).toEqual([{ id: HATCH, name: 'Hatch Street' }])
+    expect(body.data.targets).toEqual([{ id: HATCH, name: 'Hatch Street', whatsapp: true }])
+  })
+  it('WAMOVENUMBER.1: a studio with no active number switched on is listed with whatsapp: false', async () => {
+    LINKS = [{ location_id: STILL, whatsapp_numbers: { id: 'n1', is_active: true } }, { location_id: HATCH, whatsapp_numbers: { id: 'n2', is_active: false } }]
+    const body = await (await GET(new Request('http://x'), params)).json()
+    expect(body.data.targets).toEqual([{ id: HATCH, name: 'Hatch Street', whatsapp: false }])
+  })
+  it('WAMOVENUMBER.1: a failed number read is a 500, never "no number"', async () => {
+    failTable = 'location_whatsapp_numbers'
+    const res = await GET(new Request('http://x'), params)
+    expect(res.status).toBe(500)
+    expect(logError).toHaveBeenCalled()
   })
   it('leaves out a studio where the caller has no WhatsApp inbox access', async () => {
     requireWhatsAppInboxAt.mockImplementation((u, loc) => (loc === HATCH ? new Response(null, { status: 403 }) : null))
@@ -96,6 +112,28 @@ describe('GET move targets', () => {
 })
 
 describe('POST move', () => {
+  // WAMOVENUMBER.1 — since WAORGNUMBER.6 a studio with nothing switched on
+  // cannot answer a thread (no sibling's number), so a move there is refused.
+  it('a target with no WhatsApp number switched on → 409, the function never runs', async () => {
+    LINKS = [{ location_id: STILL, whatsapp_numbers: { id: 'n1', is_active: true } }]
+    const res = await POST(post({ location_id: HATCH }), params)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/no WhatsApp number switched on/)
+    expect(rpc).not.toHaveBeenCalled()
+    expect(updates).toEqual([])
+  })
+  it('a target whose only number is inactive is refused the same way', async () => {
+    LINKS = [{ location_id: HATCH, whatsapp_numbers: { id: 'n2', is_active: false } }]
+    expect((await POST(post({ location_id: HATCH }), params)).status).toBe(409)
+    expect(rpc).not.toHaveBeenCalled()
+  })
+  it('a failed number read is a 500, the function never runs', async () => {
+    failTable = 'location_whatsapp_numbers'
+    const res = await POST(post({ location_id: HATCH }), params)
+    expect(res.status).toBe(500)
+    expect(rpc).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalled()
+  })
   it('moves through the SQL function', async () => {
     const res = await POST(post({ location_id: HATCH }), params)
     expect(res.status).toBe(200)
