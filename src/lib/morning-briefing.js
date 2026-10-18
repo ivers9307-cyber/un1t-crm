@@ -8,6 +8,8 @@
 // location-level briefing has no viewer to scope by — see
 // fetchLocationTodayFeed in today-feed-data.js).
 
+import { ESTIMATE_NOTE, UN1T_UNAVAILABLE } from '@/lib/radar-copy'
+
 function esc(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
@@ -100,11 +102,16 @@ export function shapePulseMetrics(bundle) {
         key: 'overdue',
         label: 'Overdue payments',
         value: radar.overdue || 0,
-        sub: `${euro(radar.overdueValueCents)}/mo at risk`,
+        sub: `${euro(radar.overdueValueCents)}/mo at risk${radar.overdueValueEstimated ? `, ${ESTIMATE_NOTE}` : ''}`,
         delta: d(radar.overdue, prevChurn?.overdue),
         since: churnSince,
       },
     )
+  }
+
+  // UN1TRADAR.2 — charges the studio's source cannot read are said in words
+  if (radar?.arrearsUnavailable) {
+    metrics.push({ key: 'arrears_unavailable', label: 'Unpaid charges and awaiting authorization', value: UN1T_UNAVAILABLE, delta: null })
   }
 
   return metrics
@@ -181,7 +188,7 @@ export function buildMorningBriefingEmail(rows, opts = {}) {
           ${m.sub ? `<div style="color:#94a3b8;font-size:11px;">${esc(m.sub)}</div>` : ''}
         </td>
         <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;text-align:right;white-space:nowrap;">
-          <span style="color:#111827;font-size:15px;font-weight:700;">${Number(m.value) || 0}</span>
+          <span style="color:#111827;font-size:15px;font-weight:700;">${typeof m.value === 'string' ? esc(m.value) : (Number(m.value) || 0)}</span>
         </td>
         <td style="padding:7px 0;border-bottom:1px solid #f1f5f9;text-align:right;white-space:nowrap;">
           ${deltaChip(m)}

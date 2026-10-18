@@ -157,3 +157,32 @@ describe('buildMorningBriefingEmail with a pulse strip', () => {
     expect(subject).toContain('2 open issues')
   })
 })
+
+// UN1TRADAR.2 — a un1t.online studio's pulse: estimates labelled, unreadable
+// arrears said in words, never 0.
+describe('shapePulseMetrics at a un1t.online studio', () => {
+  const counts = { monthly_recurring: 26, class_packs: 4, payg: 0, total_members: 30, active_recurring: 25, dead_packs: 0 }
+  it('briefing overdue sub labels an estimate', () => {
+    const m = Object.fromEntries(shapePulseMetrics({ counts, radar: { paused: 0, overdue: 2, overdueValueCents: 16500, overdueValueEstimated: true } }).map((x) => [x.key, x]))
+    expect(m.overdue.sub).toBe('€165/mo at risk, includes an estimate')
+  })
+  it('briefing shows "not available from un1t.online" for unreadable arrears, never 0', () => {
+    const list = shapePulseMetrics({ counts, radar: { paused: 0, overdue: 0, overdueValueCents: 0, arrearsUnavailable: true } })
+    const m = list.find((x) => x.key === 'arrears_unavailable')
+    expect(m).toEqual({ key: 'arrears_unavailable', label: 'Unpaid charges and awaiting authorization', value: 'not available from un1t.online', delta: null })
+  })
+  it('a Glofox bundle gets no extra metric and no label', () => {
+    const list = shapePulseMetrics({ counts, radar: { paused: 1, overdue: 1, overdueValueCents: 100 } })
+    expect(list.find((x) => x.key === 'arrears_unavailable')).toBeUndefined()
+    expect(list.find((x) => x.key === 'overdue').sub).toBe('€1/mo at risk')
+  })
+})
+
+describe('buildMorningBriefingEmail renders an unavailable metric in words (UN1TRADAR.2)', () => {
+  it('the arrears_unavailable value is the words, never 0', () => {
+    const counts = { monthly_recurring: 26, class_packs: 4, payg: 0, total_members: 30, active_recurring: 25, dead_packs: 0 }
+    const pulse = shapePulseMetrics({ counts, radar: { paused: 0, overdue: 0, overdueValueCents: 0, arrearsUnavailable: true } })
+    const { html } = buildMorningBriefingEmail([], { locationName: 'Studio', pulse })
+    expect(html).toContain('>not available from un1t.online</span>')
+  })
+})

@@ -200,7 +200,7 @@ export default function RadarGlance() {
                   />
                 ))}
                 {overdueValueNote(churn) && (
-                  <Text className="text-xs text-un1t-subtle px-1 mt-1">Overdue value {overdueValueNote(churn)}</Text>
+                  <Text className="text-xs text-un1t-subtle px-4 py-2">Overdue value {overdueValueNote(churn)}</Text>
                 )}
                 {churn.recovery?.contacted > 0 && (
                   <EffectivenessLine
