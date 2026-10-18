@@ -58,7 +58,7 @@ import {
 } from './auto-reply'
 import {
   BOOKING_SYSTEM_TOOL_NAMES, TOOL_NOT_AT_THIS_STUDIO, NO_BOOKING_CLASS_LIST_DESCRIPTION,
-  deriveNoBookingTools, providerTakesBookings, refuseAtNoBookingStudio,
+  deriveNoBookingTools, providerTakesBookings, refuseToolForTurn,
 } from './tool-capability'
 import {
   buildCachedSystem, buildCustomerSystemPromptParts, CUSTOMER_AGENT_BASE_PROMPT,
@@ -264,12 +264,12 @@ function throwingDb() {
 describe('executor refusal at a no-booking studio (T5-B)', () => {
   it('refuses every booking-system tool only where canBook is explicitly false', () => {
     for (const name of BOOKING_SYSTEM_TOOL_NAMES) {
-      expect(refuseAtNoBookingStudio(name, { canBook: false })).toEqual(TOOL_NOT_AT_THIS_STUDIO)
-      expect(refuseAtNoBookingStudio(name, { canBook: true })).toBeNull()
-      expect(refuseAtNoBookingStudio(name, {})).toBeNull()
+      expect(refuseToolForTurn(name, { canBook: false })).toEqual(TOOL_NOT_AT_THIS_STUDIO)
+      expect(refuseToolForTurn(name, { canBook: true })).toBeNull()
+      expect(refuseToolForTurn(name, {})).toBeNull()
     }
-    expect(refuseAtNoBookingStudio('list_upcoming_classes', { canBook: false })).toBeNull()
-    expect(refuseAtNoBookingStudio('request_pause', { canBook: false })).toBeNull()
+    expect(refuseToolForTurn('list_upcoming_classes', { canBook: false })).toBeNull()
+    expect(refuseToolForTurn('request_pause', { canBook: false })).toBeNull()
   })
 
   it('a fabricated get_my_membership at Hatch is refused with no read and no Glofox call', async () => {

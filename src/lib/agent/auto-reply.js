@@ -58,8 +58,9 @@ import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
 import {
   BOOKING_SYSTEM_TOOL_NAMES, deriveNoBookingTools, membershipAtOtherStudio, providerTakesBookings,
-  refuseAtNoBookingStudio,
+  refuseToolForTurn,
 } from './tool-capability'
+import { deriveUn1tReadTools, selectToolBlock, withCacheBreakpoint } from './tool-blocks'
 import { resolveMemberStudios, otherStudioOnly } from './member-studios'
 import { DEFAULT_BOOKING_CTA_LABEL } from './default-copy'
 import { anthropicMessages } from '@/lib/anthropic'
@@ -123,25 +124,42 @@ export const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOO
 // Exported so the eval harness sends the EXACT block production sends. It used
 // to rebuild its own copy "in the same shape", which silently drifted the
 // moment the TTL changed here and cost a full eval run to a 400.
-export const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
-  i === ALL_AGENT_TOOLS.length - 1
-    ? { ...tool, cache_control: { type: 'ephemeral', ttl: '1h' } }
-    : tool,
-)
+export const CACHED_ACCOUNT_TOOLS = withCacheBreakpoint(ALL_AGENT_TOOLS)
 // MIAORG.1 Task 5 — the tool block for a studio whose membership source takes
 // no bookings (un1t.online, none): the Glofox tools gone, the timetable tool
 // re-described (tool-capability.js). Derived ONCE here, like the full block,
 // so each variant is a byte-stable cached prefix of its own. The full block
 // above is untouched: Glofox studios send exactly what they sent before.
 export const NO_BOOKING_AGENT_TOOLS = deriveNoBookingTools(ALL_AGENT_TOOLS)
-export const CACHED_NO_BOOKING_TOOLS = NO_BOOKING_AGENT_TOOLS.map((tool, i) =>
-  i === NO_BOOKING_AGENT_TOOLS.length - 1
-    ? { ...tool, cache_control: { type: 'ephemeral', ttl: '1h' } }
-    : tool,
-)
-/** The cached tool block for a turn: the full one where the studio takes bookings. */
-export function agentToolsFor(canBook) {
-  return canBook ? CACHED_ACCOUNT_TOOLS : CACHED_NO_BOOKING_TOOLS
+export const CACHED_NO_BOOKING_TOOLS = withCacheBreakpoint(NO_BOOKING_AGENT_TOOLS)
+// MIAHATCH.2 — the two un1t.online READ blocks (tool-blocks.js), built once at
+// load like the two above: `un1t_read` for a member at a un1t.online studio
+// only, `un1t_read_dual` when the person is also answerable at a Glofox
+// studio. Neither is reachable in production until a later task sets
+// toolCtx.turn and calls agentToolsFor with the object form.
+export const CACHED_UN1T_READ_TOOLS = withCacheBreakpoint(deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: false }))
+export const CACHED_UN1T_READ_DUAL_TOOLS = withCacheBreakpoint(deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }))
+const CACHED_BLOCKS = {
+  glofox: CACHED_ACCOUNT_TOOLS,
+  no_booking: CACHED_NO_BOOKING_TOOLS,
+  un1t_read: CACHED_UN1T_READ_TOOLS,
+  un1t_read_dual: CACHED_UN1T_READ_DUAL_TOOLS,
+  // The un1t.online write block does not exist yet (selectToolBlock only
+  // returns un1t_full when un1tWrites is true, which nothing sets): the read
+  // block that includes every Glofox tool stands in, offering strictly fewer
+  // tools than the executor would allow.
+  un1t_full: CACHED_UN1T_READ_DUAL_TOOLS,
+}
+/**
+ * The cached tool block for a turn. `agentToolsFor(canBook)` (a boolean, what
+ * production and the eval harness pass today) is the full block where the
+ * studio takes bookings, else the no-booking one. `agentToolsFor({ answerable,
+ * threadProvider, channel, un1tWrites })` picks through selectToolBlock. Both
+ * return the same array objects on every call, so the cached prefix is stable.
+ */
+export function agentToolsFor(arg) {
+  if (arg !== null && typeof arg === 'object') return CACHED_BLOCKS[selectToolBlock(arg)]
+  return arg ? CACHED_ACCOUNT_TOOLS : CACHED_NO_BOOKING_TOOLS
 }
 // Don't re-acknowledge a burst of non-text messages — one soft handoff
 // per minute is enough.
@@ -1036,7 +1054,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
                 ? otherStudioOnly(toolCtx.memberStudios.studios, locationId)
                 : null
               result = (otherStudio ? membershipAtOtherStudio(otherStudio.name) : null)
-                || refuseAtNoBookingStudio(block.name, toolCtx) || (ACCOUNT_TOOL_NAMES.has(block.name)
+                || refuseToolForTurn(block.name, toolCtx) || (ACCOUNT_TOOL_NAMES.has(block.name)
                 ? await executeAccountTool(block.name, block.input || {}, toolCtx)
                 : EVENT_TOOL_NAMES.has(block.name)
                   ? await executeEventTool(block.name, block.input || {}, toolCtx)

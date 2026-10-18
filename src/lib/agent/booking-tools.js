@@ -34,7 +34,7 @@ import { notifyAgentApprovalRequest } from './approval-notify'
 import { formatClassTime } from './dublin-format'
 import { DEFAULT_TZ } from '@/lib/location-time'
 import { logError } from '@/lib/log'
-import { refuseAtNoBookingStudio } from './tool-capability'
+import { refuseToolForTurn } from './tool-capability'
 
 // REGISTRYREAD.1b — what Mia is told when the auto lane has no usable Glofox
 // credentials. A failed settings READ (creds.readError) is a blip, not "this
@@ -662,7 +662,7 @@ export async function executeBookingTool(toolName, input, ctx) {
 
   // MIAORG.1 Task 5 — defence in depth: a booking-system tool at a studio
   // whose source takes no bookings is refused before any read or Glofox call.
-  const refused = refuseAtNoBookingStudio(toolName, ctx)
+  const refused = refuseToolForTurn(toolName, ctx)
   if (refused) return refused
 
   if (toolName === 'list_upcoming_classes' && ctx.canBook === false) {
