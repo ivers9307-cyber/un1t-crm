@@ -81,6 +81,7 @@ async function recentThread(db, threads, now) {
       .eq('direction', 'outbound')
       .neq('status', 'failed')
       .gte('sent_at', new Date(now - RECENT_OUTBOUND_MS).toISOString())
+      .lte('sent_at', new Date(now).toISOString())
       .order('sent_at', { ascending: false })
       .order('conversation_id', { ascending: false })
       .limit(1)

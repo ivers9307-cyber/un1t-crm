@@ -303,8 +303,8 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // WAORGNUMBER.6): a contact homed at a studio with nothing switched on, or a
   // thread staff moved to one, still lands there ('numberless_home'). Never
   // throws; a failed read falls through to the next rule. Consent keywords,
-  // Flows, the CTWA Lead, Mia, the greeting and the push all act at this
-  // studio (the old actingLocationId split is gone).
+  // Mia, the greeting and the push act at this studio; the CTWA Lead and Flow
+  // completions act at `actingLocationId` (below).
   const route = await routeInboundThread(db, {
     numberId: receivingNumberId,
     numberHomeLocationId: defaultLocationId,
@@ -323,12 +323,16 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // home studio, which replies through it (getConversationNumberConfig).
   const stampReceivingNumber = route.switchedOn || route.by === 'numberless_home'
 
-  // The CTWA Lead goes out with the token and dataset of a number switched on
-  // at its studio. A number-less home studio has none (transitional, until
-  // WAORGNUMBER.6), so its Lead stays with the receiving number's studio, as
-  // before; it would otherwise be dropped for good (no_token), since the click
-  // id is stamped on the contact on first sight and never retried.
-  const ctwaLocationId = route.by === 'numberless_home' ? defaultLocationId : locationId
+  // The studio whose number, Flows, ads and Glofox the customer is talking to.
+  // It is the routed studio, except for a thread at a number-less home studio
+  // (transitional, until WAORGNUMBER.6): that studio has no number, token or
+  // dataset, so what went out through the receiving number (the CTWA Lead, a
+  // Flow's slot list and its completion) belongs to the receiving number's
+  // studio, as before. Otherwise the Lead would be dropped for good (no_token;
+  // the click id is stamped on the contact on first sight, never retried) and a
+  // Flow minted by a Stillorgan send would book at Hatch with a Stillorgan
+  // Glofox event id.
+  const actingLocationId = route.by === 'numberless_home' ? defaultLocationId : locationId
 
   let conversationId
   if (existingConv) {
@@ -342,7 +346,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
       // CTWA backfill: the click id landed while the sender was unknown —
       // move it onto the newly linked contact (fires the Lead event once).
       if (existingConv.ctwa_clid) {
-        await recordCtwaTouch(db, { ctwaClid: existingConv.ctwa_clid, conversationId: null, contact, locationId: ctwaLocationId })
+        await recordCtwaTouch(db, { ctwaClid: existingConv.ctwa_clid, conversationId: null, contact, locationId: actingLocationId })
       }
     }
   } else {
@@ -399,7 +403,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
 
   // CTWA attribution — stamp the click id (conversation + contact) and fire
   // the Lead conversion once. Swallows its own errors; never blocks the webhook.
-  await recordCtwaTouch(db, { ctwaClid: message.referral?.ctwa_clid, conversationId, contact, locationId: ctwaLocationId })
+  await recordCtwaTouch(db, { ctwaClid: message.referral?.ctwa_clid, conversationId, contact, locationId: actingLocationId })
 
   // WA-BSUID.1 — capture Meta's Business-Scoped User ID (arrives as
   // contacts[].user_id once usernames roll out) onto the matched
@@ -460,7 +464,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     case 'interactive':
       if (message.interactive?.type === 'nfm_reply') {
         // A completed WhatsApp Flow ("Book your first visit"). Book it, then log a marker.
-        try { await handleFlowCompletion(db, { interactive: message.interactive, contact, locationId }) }
+        try { await handleFlowCompletion(db, { interactive: message.interactive, contact, locationId: actingLocationId }) }
         catch (e) { console.error('[wa-webhook] flow completion failed:', e.message) }
         body = '[Booking submitted via WhatsApp Flow]'
       } else {

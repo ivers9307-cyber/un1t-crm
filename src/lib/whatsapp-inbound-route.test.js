@@ -131,6 +131,19 @@ describe('routeInboundThread — the steps, in order (R4)', () => {
     expect(r).toMatchObject({ locationId: HATCH, by: 'home', conversation: null, switchedOn: true })
   })
 
+  it('a history row only considers outbound in the week before it', async () => {
+    // A coexistence history row from 18 days ago: Stillorgan spoke 19 days ago
+    // (in the week before it); Hatch spoke yesterday (after it, within a week
+    // of today). The row files with Stillorgan, not whoever spoke most recently.
+    const db = makeDb({
+      conversations: [thread('conv-still', STILL, { contact_id: 'c1' }), thread('conv-hatch', HATCH, { contact_id: 'c1' })],
+      messages: [outbound('conv-still', ago(19 * DAY)), outbound('conv-hatch', ago(DAY))],
+    })
+    const r = await routeInboundThread(db, { ...base, contact: { id: 'c1', location_id: HATCH }, now: NOW - 18 * DAY })
+    expect(r).toMatchObject({ locationId: STILL, by: 'recent' })
+    expect(r.conversation).toMatchObject({ id: 'conv-still' })
+  })
+
   it('a failed outbound does not count: the earlier delivered one wins', async () => {
     const db = makeDb({
       conversations: [thread('conv-still', STILL), thread('conv-hatch', HATCH)],
