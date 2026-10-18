@@ -30,12 +30,12 @@ describe('GET /api/cron/churn-radar-snapshot — skips locations with no members
     expect(stampHeartbeat).toHaveBeenCalledWith('churn-radar-snapshot')
   })
 
-  it('UN1TCAP.1 — Hatch on un1t.online (configured, no data) is still skipped: snapshots Stillorgan only, counts the five skips, writes one row, stamps', async () => {
+  it('UN1TRADAR.4 — snapshot crons include a un1t location once its provider has the capability', async () => {
     h.db = dbFor(ESTATE_2026_10_17)
     const out = await (await GET(req())).json()
-    expect(visited()).toEqual([STILLORGAN_ID])
-    expect(out).toMatchObject({ success: true, locations: 1, skipped_no_source: 5, snapshots_written: 1 })
-    expect(queriesOf(h.db, 'churn_radar_snapshots', 'insert')[0].payload.map((r) => r.location_id)).toEqual([STILLORGAN_ID])
+    expect(visited()).toEqual([STILLORGAN_ID, '28c78d6b-0000-0000-0000-000000000002'])
+    expect(out).toMatchObject({ success: true, locations: 2, skipped_no_source: 4, snapshots_written: 2 })
+    expect(queriesOf(h.db, 'churn_radar_snapshots', 'insert')[0].payload.map((r) => r.location_id)).toEqual([STILLORGAN_ID, '28c78d6b-0000-0000-0000-000000000002'])
     expect(stampHeartbeat).toHaveBeenCalledWith('churn-radar-snapshot')
   })
   it('a failed seam read answers 500 and does NOT stamp', async () => {
