@@ -5,7 +5,7 @@
 //   from('location_whatsapp_numbers').select('…, whatsapp_numbers!inner(*)')
 //     → each link row with its number embedded as `whatsapp_numbers`; a link
 //       whose number is missing is dropped (the !inner join)
-//   .eq(col, v) / .neq(col, v) / .in(col, vals) / .gte(col, v)  — a dotted column ('whatsapp_numbers.is_active')
+//   .eq(col, v) / .neq(col, v) / .in(col, vals) / .gte(col, v) / .lte(col, v)  — a dotted column ('whatsapp_numbers.is_active')
 //       filters on the embedded row, as PostgREST does for an !inner embed
 //   .order(col, { ascending }) / .limit(n) / .maybeSingle() / await
 //
@@ -63,6 +63,7 @@ export function fakeWhatsAppDb(state) {
         in: (c, vals) => { filters.push((r) => vals.includes(valueAt(r, c))); return b },
         // NULL is never >= anything, as in SQL.
         gte: (c, v) => { filters.push((r) => valueAt(r, c) != null && valueAt(r, c) >= v); return b },
+        lte: (c, v) => { filters.push((r) => valueAt(r, c) != null && valueAt(r, c) <= v); return b },
         order: (c, o) => { orders.push([c, o?.ascending !== false]); return b },
         limit: (n) => { cap = n; return b },
         maybeSingle: async () => {
