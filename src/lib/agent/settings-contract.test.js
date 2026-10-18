@@ -68,6 +68,34 @@ describe('settings write-through contract', () => {
     expect(DEFAULTS.account_conflict_handoff_text).toBe(null)
   })
 
+  // MIAHATCH.2 — what Mia says when a member at a un1t.online studio asks her
+  // to book or cancel a class there (no chat booking in slice 1).
+  it('chat_booking_unavailable_text round-trips; blank → null (mia-copy default)', () => {
+    expect(
+      buildCustomerAgentSettings(
+        SettingsSchema.parse({ enabled: true, chat_booking_unavailable_text: '  Book {studio} online: {link}  ' }),
+      ).chat_booking_unavailable_text,
+    ).toBe('Book {studio} online: {link}')
+    expect(
+      buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, chat_booking_unavailable_text: '   ' }))
+        .chat_booking_unavailable_text,
+    ).toBe(null)
+    expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true })).chat_booking_unavailable_text).toBe(null)
+    expect(DEFAULTS.chat_booking_unavailable_text).toBe(null)
+    expect(SettingsSchema.safeParse({ enabled: true, chat_booking_unavailable_text: 'x'.repeat(501) }).success).toBe(false)
+  })
+
+  it('chat_booking_unavailable_text inherits from the org; a studio value wins', () => {
+    expect(INHERITABLE_SCALAR_KEYS).toContain('chat_booking_unavailable_text')
+    const org = { chat_booking_unavailable_text: 'Org: book {studio} at {link}' }
+    const inherited = mergeAgentSettings({ org, studio: { enabled: true } })
+    expect(inherited.settings.chat_booking_unavailable_text).toBe('Org: book {studio} at {link}')
+    expect(inherited.sources.chat_booking_unavailable_text).toBe('org')
+    const own = mergeAgentSettings({ org, studio: { enabled: true, chat_booking_unavailable_text: 'Studio: {link}' } })
+    expect(own.settings.chat_booking_unavailable_text).toBe('Studio: {link}')
+    expect(own.sources.chat_booking_unavailable_text).toBe('studio')
+  })
+
   // CANCEL-FORM.2 — the cancellation-form copy block. Null = every code default
   // (lib/cancellation-form/copy.js); an object round-trips with strings trimmed
   // and blanks nulled so the resolver falls back per key.

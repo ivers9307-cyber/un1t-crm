@@ -16,10 +16,10 @@ const conn = (over = {}) => ({
 describe('un1tOnlineSource (UN1TSYNC.5)', () => {
   beforeEach(() => read.mockReset())
 
-  it('is the un1t_online provider; only invoices is on (HATCHINV.1: payments, subscriptions and past-due rows are read from un1t_invoices)', () => {
+  it('is the un1t_online provider; invoices and credits are on (HATCHINV.1: payments, subscriptions and past-due rows are read from un1t_invoices; MIAHATCH.2: Mia reports a members credits)', () => {
     expect(un1tOnlineSource.key).toBe('un1t_online')
     expect(un1tOnlineSource.label).toBe('un1t.online')
-    expect(un1tOnlineSource.capabilities).toEqual({ memberships: false, bookings: false, credits: false, invoices: true, schedule: false })
+    expect(un1tOnlineSource.capabilities).toEqual({ memberships: false, bookings: false, credits: true, invoices: true, schedule: false })
     expect(Object.isFrozen(un1tOnlineSource)).toBe(true)
     expect(Object.isFrozen(un1tOnlineSource.capabilities)).toBe(true)
   })
