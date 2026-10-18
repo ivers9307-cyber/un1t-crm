@@ -41,7 +41,8 @@ export async function syncDataAsOf(db, locationId) {
  * @param {{ module: string, withZone?: boolean }} opts  the log module ('churn-radar' | 'lead-radar' | …);
  *   withZone: also read the studio's zone for the "as of HH:MM" line (only
  *   the radar page's own route draws it); withOutreach: also say whether a
- *   WhatsApp number is switched on at the studio (`outreachAvailable`)
+ *   WhatsApp number is switched on at the studio (`outreachAvailable`:
+ *   true | false | null when the read failed)
  * @returns {Promise<{ available: boolean, source: string|null, dataAsOf: string|null, dataAsOfZone?: string|null }>}
  *   Throws when the source key is unreadable (MEMBERSHIP_SOURCE_UNREADABLE).
  */
@@ -59,9 +60,11 @@ export async function radarAvailability(db, locationId, { module, withZone = fal
     try { out.dataAsOfZone = withZone && out.dataAsOf ? await getLocationZone(db, locationId) : null } catch { out.dataAsOfZone = null }
   }
   // UN1TRADAR.3 — is a WhatsApp number switched on here (the outreach button's
-  // note instead of a picker when not)? Read only; a failed read is false.
+  // note instead of a picker when not)? Read only. Three states: true, false
+  // (no number), null (the read failed: unknown, so the picker stays and the
+  // send route answers for itself).
   if (withOutreach) {
-    try { out.outreachAvailable = Boolean(await getLocationWhatsAppNumberConfig(locationId)) } catch { out.outreachAvailable = false }
+    try { out.outreachAvailable = Boolean(await getLocationWhatsAppNumberConfig(locationId)) } catch { out.outreachAvailable = null }
   }
   return out
 }

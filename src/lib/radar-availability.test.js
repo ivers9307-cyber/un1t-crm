@@ -83,7 +83,7 @@ describe('syncDataAsOf', () => {
 })
 
 describe('radarAvailability withOutreach (UN1TRADAR.3)', () => {
-  it('outreachAvailable: a number switched on at the studio → true; none → false; a failed read → false', async () => {
+  it('outreachAvailable: a number switched on at the studio → true; none → false; a failed read → null (unknown: the picker stays)', async () => {
     radarReadsFor.mockResolvedValue({ source: 'glofox', reads: {}, providesMemberships: true, pinArrears: false })
     const { db } = runsDb([])
     getLocationWhatsAppNumberConfig.mockResolvedValueOnce({ phoneNumberId: 'p1' })
@@ -92,7 +92,7 @@ describe('radarAvailability withOutreach (UN1TRADAR.3)', () => {
     getLocationWhatsAppNumberConfig.mockResolvedValueOnce(null)
     expect((await radarAvailability(db, L, { module: 'churn-radar', withOutreach: true })).outreachAvailable).toBe(false)
     getLocationWhatsAppNumberConfig.mockRejectedValueOnce(new Error('down'))
-    expect((await radarAvailability(db, L, { module: 'churn-radar', withOutreach: true })).outreachAvailable).toBe(false)
+    expect((await radarAvailability(db, L, { module: 'churn-radar', withOutreach: true })).outreachAvailable).toBe(null)
   })
   it('not asked → no key and no read', async () => {
     radarReadsFor.mockResolvedValue({ source: 'glofox', reads: {}, providesMemberships: true, pinArrears: false })

@@ -32,6 +32,7 @@ import { logWarn, logInfo } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { radarReadsFor } from '@/lib/membership/reads/index'
+import { SOURCE_UNREADABLE } from '@/lib/radar-copy'
 import { syncDataAsOf } from '@/lib/radar-availability'
 import { getLocationZone, timeLabelIn } from '@/lib/location-time'
 
@@ -95,7 +96,13 @@ export async function POST(request) {
   }
   // UN1TRADAR.3 — a un1t.online studio has nothing to re-pull from Glofox;
   // its data refreshes on the sync. Say when it last did (studio clock).
-  const { source } = await radarReadsFor(db, locationId)
+  let source
+  try {
+    ({ source } = await radarReadsFor(db, locationId))
+  } catch (err) {
+    logWarn('churn-radar', 'membership source unreadable', { locationId, code: err?.code ?? null })
+    return NextResponse.json({ success: false, error: SOURCE_UNREADABLE }, { status: 503 })
+  }
   if (source === 'un1t_online') {
     return NextResponse.json({ success: false, error: await un1tRefreshCopy(db, locationId) }, { status: 409 })
   }

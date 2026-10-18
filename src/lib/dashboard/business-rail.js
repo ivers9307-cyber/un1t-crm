@@ -171,6 +171,7 @@ async function uncontactedAcquisitionLeads(db, locationId, pipelineId, cutoffIso
     .eq('status', 'open')
     .in('stage_id', stageIds)
     .lt('created_at', cutoffIso)
+    .order('created_at', { ascending: true })
     .limit(100)
   const ids = [...new Set((deals || []).map((d) => d.contact_id).filter(Boolean))]
   if (ids.length === 0) return 0

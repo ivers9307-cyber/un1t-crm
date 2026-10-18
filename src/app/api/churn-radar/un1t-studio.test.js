@@ -112,3 +112,37 @@ describe('acting routes at a un1t.online studio', () => {
     expect(logInfo).toHaveBeenCalledWith('lead-radar', 'outreach refused: studio has no WhatsApp number', { locationId: L })
   })
 })
+
+describe('an unreadable membership source (radarReadsFor throws)', () => {
+  const unreadable = () => radarReadsFor.mockRejectedValue(Object.assign(new Error('source unreadable'), { code: 'MEMBERSHIP_SOURCE_UNREADABLE' }))
+  const SOURCE_503 = { success: false, error: "Could not read this studio's membership source. Try again shortly." }
+
+  it('quarantine stale and cleanup archive answer 503 with a JSON body and write nothing', async () => {
+    unreadable()
+    for (const [post, path, decision] of [[quarantinePOST, '/api/churn-radar/quarantine', 'stale'], [cleanupPOST, '/api/lead-radar/cleanup', 'archive']]) {
+      const res = await post(req(path, { decision, contact_ids: ['c1'] }))
+      expect(res.status).toBe(503)
+      expect(await res.json()).toEqual(SOURCE_503)
+    }
+    expect(writes).toEqual([])
+  })
+
+  it('keep decisions never read the source, so they still log', async () => {
+    unreadable()
+    expect((await quarantinePOST(req('/api/churn-radar/quarantine', { decision: 'keep', contact_ids: ['c1'] }))).status).toBe(200)
+    expect((await cleanupPOST(req('/api/lead-radar/cleanup', { decision: 'keep', contact_ids: ['c1'] }))).status).toBe(200)
+    expect(radarReadsFor).not.toHaveBeenCalled()
+  })
+
+  it('payment_reminder and refresh-member answer 503 with a JSON body', async () => {
+    unreadable()
+    const pay = await actionPOST(req('/api/churn-radar/action', { contact_id: 'c1', action: 'payment_reminder' }))
+    expect(pay.status).toBe(503)
+    expect(await pay.json()).toEqual(SOURCE_503)
+    const ref = await refreshPOST(req('/api/churn-radar/refresh-member', { contact_id: '00000000-0000-4000-8000-000000000001' }))
+    expect(ref.status).toBe(503)
+    expect(await ref.json()).toEqual(SOURCE_503)
+    expect(writes).toEqual([])
+    expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
+  })
+})
