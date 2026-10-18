@@ -49,7 +49,8 @@ describe('radarAvailability', () => {
   it('a un1t studio with the capability carries dataAsOf', async () => {
     radarReadsFor.mockResolvedValue({ source: 'un1t_online', reads: {}, providesMemberships: true, pinArrears: true })
     const { db } = runsDb([{ finished_at: '2026-10-18T11:45:00Z' }])
-    expect(await radarAvailability(db, L, { module: 'lead-radar' })).toEqual({ available: true, source: 'un1t_online', dataAsOf: '2026-10-18T11:45:00Z', dataAsOfZone: 'Europe/Dublin' })
+    expect(await radarAvailability(db, L, { module: 'lead-radar' })).toEqual({ available: true, source: 'un1t_online', dataAsOf: '2026-10-18T11:45:00Z', dataAsOfZone: null })
+    expect(await radarAvailability(db, L, { module: 'churn-radar', withZone: true })).toEqual({ available: true, source: 'un1t_online', dataAsOf: '2026-10-18T11:45:00Z', dataAsOfZone: 'Europe/Dublin' })
   })
 
   it('an unreadable source throws (the route answers 500)', async () => {

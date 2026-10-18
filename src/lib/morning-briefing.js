@@ -8,7 +8,7 @@
 // location-level briefing has no viewer to scope by — see
 // fetchLocationTodayFeed in today-feed-data.js).
 
-import { ESTIMATE_NOTE, UN1T_UNAVAILABLE } from '@/lib/radar-copy'
+import { ESTIMATE_NOTE, UN1T_UNAVAILABLE, totalLabel } from '@/lib/radar-copy'
 
 function esc(s) {
   return String(s ?? '')
@@ -102,7 +102,11 @@ export function shapePulseMetrics(bundle) {
         key: 'overdue',
         label: 'Overdue payments',
         value: radar.overdue || 0,
-        sub: `${euro(radar.overdueValueCents)}/mo at risk${radar.overdueValueEstimated ? `, ${ESTIMATE_NOTE}` : ''}`,
+        sub: !radar.overdueValueEstimated
+          ? `${euro(radar.overdueValueCents)}/mo at risk`
+          : Number(radar.overdueValueCents) > 0
+            ? `${euro(radar.overdueValueCents)}/mo at risk, ${ESTIMATE_NOTE}`
+            : totalLabel(0, { estimated: true }),
         delta: d(radar.overdue, prevChurn?.overdue),
         since: churnSince,
       },

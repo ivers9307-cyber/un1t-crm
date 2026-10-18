@@ -165,6 +165,8 @@ describe('shapePulseMetrics at a un1t.online studio', () => {
   it('briefing overdue sub labels an estimate', () => {
     const m = Object.fromEntries(shapePulseMetrics({ counts, radar: { paused: 0, overdue: 2, overdueValueCents: 16500, overdueValueEstimated: true } }).map((x) => [x.key, x]))
     expect(m.overdue.sub).toBe('€165/mo at risk, includes an estimate')
+    const none = Object.fromEntries(shapePulseMetrics({ counts, radar: { paused: 0, overdue: 1, overdueValueCents: 0, overdueValueEstimated: true } }).map((x) => [x.key, x]))
+    expect(none.overdue.sub).toBe('amount not available from un1t.online')
   })
   it('briefing shows "not available from un1t.online" for unreadable arrears, never 0', () => {
     const list = shapePulseMetrics({ counts, radar: { paused: 0, overdue: 0, overdueValueCents: 0, arrearsUnavailable: true } })

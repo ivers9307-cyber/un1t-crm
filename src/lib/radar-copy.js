@@ -45,7 +45,8 @@ export function syncedAtLine(iso, zone) {
 /** The radar's Overdue stat card breakdown: '€X owed', plus the estimate note. */
 export function overdueCardBreakdown(summary) {
   const base = `${euros(summary?.overdueValueCents)} owed`
-  return summary?.overdueValueEstimated === true ? `${base}, ${ESTIMATE_NOTE}` : base
+  if (summary?.overdueValueEstimated !== true) return base
+  return Number(summary.overdueValueCents) > 0 ? `${base}, ${ESTIMATE_NOTE}` : totalLabel(0, { estimated: true })
 }
 
 /** One Overdue / Unpaid / Awaiting row's amount pill text. */

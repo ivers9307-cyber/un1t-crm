@@ -49,6 +49,7 @@ describe('radar page copy (ChurnRadar.jsx)', () => {
   it('Overdue stat card: Glofox text unchanged; an estimate says so', () => {
     expect(overdueCardBreakdown({ overdueValueCents: 16500 })).toBe('€165 owed')
     expect(overdueCardBreakdown({ overdueValueCents: 16500, overdueValueEstimated: true })).toBe('€165 owed, includes an estimate')
+    expect(overdueCardBreakdown({ overdueValueCents: 0, overdueValueEstimated: true })).toBe('amount not available from un1t.online')
   })
   it('Overdue row amount: exact, estimate, unknown and awaiting', () => {
     expect(rowAmountLabel({ amountOwedCents: 4500 })).toBe('€45 owed')
