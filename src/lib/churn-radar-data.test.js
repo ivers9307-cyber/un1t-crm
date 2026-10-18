@@ -10,15 +10,11 @@ const fakeReads = vi.hoisted(() => ({
   radarPastDue: vi.fn(async () => ({ ids: new Set(), byId: new Map(), membershipById: new Map(), chargesById: new Map(), pendingById: new Map(), unavailable: ['unpaidCharges', 'awaitingAuth'], profileById: new Map() })),
   pinArrears: true,
 }))
-// No importOriginal: loading the real module inside the factory closes the
-// churn-radar-data → reads/index → state-for-page → registry → glofox →
-// churn-radar-data cycle mid-mock, and reads/index then binds the real one.
+// Only the resolver is needed here, so the factory builds it outright.
 vi.mock('@/lib/membership/state-for-page', () => ({
   membershipStateForPage: vi.fn(async () => ({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: { memberships: true } })),
 }))
-// The un1t adapter is replaced by spies (no importOriginal: a factory that
-// loads the real registry would close the churn-radar-data → reads → registry
-// → glofox → churn-radar-data cycle inside a mock and bind the real state).
+// The un1t adapter is replaced by spies.
 vi.mock('@/lib/membership/reads/un1t-online', () => ({ un1tOnlineReads: fakeReads, freshCutoff: vi.fn() }))
 
 import { membershipStateForPage } from '@/lib/membership/state-for-page'

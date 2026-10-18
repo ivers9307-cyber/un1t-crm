@@ -49,7 +49,7 @@ export async function radarReads(db, locationId, keys) {
   const { reads } = await radarReadsFor(db, locationId)
   const out = {}
   for (const key of keys) {
-    if (typeof reads[key] !== "function") throw new Error(`radar read missing: ${key}`)
+    if (typeof reads[key] !== 'function') throw new Error(`radar read missing: ${key}`)
     out[key] = reads[key]
   }
   return out
