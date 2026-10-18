@@ -4,13 +4,16 @@
 //   2. a pass finished inside the 55-minute gap → recent_run (54 min), outside it → runs (56 min);
 //   3. the pass is source 'cron' for that location;
 //   4. a failed pass does not hold the next tick off;
+//   4b. a pass still RUNNING (no finished_at) that started under 10 minutes ago
+//       → recent_run, so passes never stack behind one in flight; one started 10+
+//       minutes ago is stuck and does not block;
 //   5. anything throwing (reads or the reclassify) → { ran:false, reason:'error' }, logged, never thrown.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./pipeline-reclassify.js', () => ({ reclassifyAllContacts: vi.fn() }))
 vi.mock('./log.js', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
-import { maybeReclassifyAfterSync, RECLASSIFY_MIN_GAP_MS } from './un1t-pipeline-cadence.js'
+import { maybeReclassifyAfterSync, RECLASSIFY_MIN_GAP_MS, RECLASSIFY_IN_FLIGHT_MS } from './un1t-pipeline-cadence.js'
 import { reclassifyAllContacts } from './pipeline-reclassify.js'
 import { logError } from './log.js'
 
@@ -91,6 +94,32 @@ describe('maybeReclassifyAfterSync', () => {
 
   it('a FAILED run 10 min ago does not hold the next tick off', async () => {
     const { db } = fakeDb({ pipelines: UN1T_BOARD, runs: [{ started_at: minAgo(11), finished_at: minAgo(10), status: 'failed' }] })
+    expect((await maybeReclassifyAfterSync(db, LOC, { now: NOW })).ran).toBe(true)
+  })
+
+  it('exposes a 10-minute in-flight window', () => {
+    expect(RECLASSIFY_IN_FLIGHT_MS).toBe(10 * 60 * 1000)
+  })
+
+  it('a pass still running, started 9 min ago → recent_run (never stack behind one in flight)', async () => {
+    const { db } = fakeDb({ pipelines: UN1T_BOARD, runs: [{ started_at: minAgo(9), finished_at: null, status: 'running' }] })
+    expect(await maybeReclassifyAfterSync(db, LOC, { now: NOW })).toEqual({ ran: false, reason: 'recent_run' })
+    expect(reclassifyAllContacts).not.toHaveBeenCalled()
+  })
+
+  it('a pass still running, started 11 min ago, is stuck → runs', async () => {
+    const { db } = fakeDb({ pipelines: UN1T_BOARD, runs: [{ started_at: minAgo(11), finished_at: null, status: 'running' }] })
+    expect((await maybeReclassifyAfterSync(db, LOC, { now: NOW })).ran).toBe(true)
+    expect(reclassifyAllContacts).toHaveBeenCalledTimes(1)
+  })
+
+  it('a running row with an unreadable started_at does not block', async () => {
+    const { db } = fakeDb({ pipelines: UN1T_BOARD, runs: [{ started_at: null, finished_at: null, status: 'running' }] })
+    expect((await maybeReclassifyAfterSync(db, LOC, { now: NOW })).ran).toBe(true)
+  })
+
+  it('a FAILED row with no finished_at, started 2 min ago, still never counts', async () => {
+    const { db } = fakeDb({ pipelines: UN1T_BOARD, runs: [{ started_at: minAgo(2), finished_at: null, status: 'failed' }] })
     expect((await maybeReclassifyAfterSync(db, LOC, { now: NOW })).ran).toBe(true)
   })
 

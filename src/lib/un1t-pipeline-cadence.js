@@ -17,6 +17,12 @@ import { logError } from './log.js'
 // runs: runs spaced 60 minutes apart by tick jitter never skip a slot.
 export const RECLASSIFY_MIN_GAP_MS = 55 * 60 * 1000
 
+// A pass still 'running' (finished_at null) that started inside this window is
+// in flight: the next tick waits for it rather than stacking a second pass
+// behind it. One older than this is stuck (a killed function never closes its
+// audit row) and does not hold the board off.
+export const RECLASSIFY_IN_FLIGHT_MS = 10 * 60 * 1000
+
 const UN1T_INPUT = 'un1t_online'
 
 /**
@@ -51,6 +57,12 @@ export async function maybeReclassifyAfterSync(db, locationId, { now = Date.now(
     if (last?.finished_at && last.status !== 'failed') {
       const finishedMs = Date.parse(last.finished_at)
       if (Number.isFinite(finishedMs) && now - finishedMs < RECLASSIFY_MIN_GAP_MS) {
+        return { ran: false, reason: 'recent_run' }
+      }
+    }
+    if (last && !last.finished_at && last.status === 'running') {
+      const startedMs = Date.parse(last.started_at)
+      if (Number.isFinite(startedMs) && now - startedMs < RECLASSIFY_IN_FLIGHT_MS) {
         return { ran: false, reason: 'recent_run' }
       }
     }
