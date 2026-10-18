@@ -227,12 +227,52 @@ describe('grantTrial — what the ledger already holds', () => {
     })
   }
 
-  it('a done trial by EITHER method is granted again with nothing sent', async () => {
+  it('a done trial by EITHER method: granted again while its credits show, trial_used once spent; nothing sent', async () => {
     for (const method of ['charge', 'free_checkout']) {
-      const s = await setup({ db: { tables: { un1t_write_events: [row({ id: `tw-${method}`, stage: 'done', method, idempotency_key: `trial:${LOC}:${USER}:${PRODUCT}:${method}`, un1t_ref: 'tx-old' })] } } })
-      expect(await grantTrial(s.db, args(), s.deps)).toMatchObject({ outcome: 'granted', method, ledgerId: `tw-${method}` })
-      expect(s.fetchImpl.writes()).toHaveLength(0)
-      expect(s.trialEligibility).not.toHaveBeenCalled()
+      const tables = () => ({ un1t_write_events: [row({ id: `tw-${method}`, stage: 'done', method, idempotency_key: `trial:${LOC}:${USER}:${PRODUCT}:${method}`, un1t_ref: 'tx-old' })] })
+      const a = await setup({ routes: { [CREDITS]: [creditsShow()] }, db: { tables: tables() } })
+      expect(await grantTrial(a.db, args(), a.deps)).toMatchObject({ outcome: 'granted', method, ledgerId: `tw-${method}` })
+      expect(a.fetchImpl.writes()).toHaveLength(0)
+      expect(a.trialEligibility).not.toHaveBeenCalled()
+      const b = await setup({ routes: { [CREDITS]: [creditsNone()] }, db: { tables: tables() } })
+      expect(await grantTrial(b.db, args(), b.deps)).toEqual({ outcome: 'ineligible', reason: 'trial_used' })
+      expect(b.fetchImpl.writes()).toHaveLength(0)
     }
+  })
+
+  it('a sent row another process is still sending (under 3 minutes) is retry in flight, never judged', async () => {
+    const s = await setup({ db: { tables: { un1t_write_events: [row({ stage: 'sent', method: 'charge', idempotency_key: `trial:${LOC}:${USER}:${PRODUCT}:charge`, created_at: new Date(Date.now() - 20_000).toISOString() })] } } })
+    expect(await grantTrial(s.db, args(), s.deps)).toEqual({ outcome: 'retry', code: 'UN1T_ATTEMPT_IN_FLIGHT' })
+    expect(s.fetchImpl.count(CREDITS)).toBe(0)
+  })
+
+  it('an open row whose credits show is settled done; an old one with no credits counts as used', async () => {
+    const key = `trial:${LOC}:${USER}:${PRODUCT}:charge`
+    const a = await setup({ routes: { [CREDITS]: [creditsShow()] }, db: { tables: { un1t_write_events: [row({ stage: 'unknown', method: 'charge', idempotency_key: key })] } } })
+    await grantTrial(a.db, args(), a.deps)
+    expect(a.store.un1t_write_events[0]).toMatchObject({ stage: 'done', recovered: 'credits_show' })
+    const b = await setup({ routes: { [CREDITS]: [creditsNone()] }, db: { tables: { un1t_write_events: [row({ stage: 'unknown', method: 'charge', idempotency_key: key, created_at: new Date(Date.now() - 3 * 86_400_000).toISOString() })] } } })
+    expect(await grantTrial(b.db, args(), b.deps)).toEqual({ outcome: 'ineligible', reason: 'trial_used' })
+  })
+})
+
+describe('grantTrial — the documented free checkout answer', () => {
+  it('{ checkoutUrl, free: true } is done: credits show → granted, no failure row, the URL nowhere', async () => {
+    const { recordErrorEvent } = await import('./error-events')
+    const s = await setup({ routes: { [CHARGE]: [refused('SOMETHING_ELSE')], [CHECKOUT]: [ok({ checkoutUrl: CHECKOUT_URL, free: true })], [CREDITS]: [creditsShow()] } })
+    const out = await grantTrial(s.db, args(), s.deps)
+    expect(out).toMatchObject({ outcome: 'granted', method: 'free_checkout' })
+    expect(trialRows(s.store).find((r) => r.method === 'free_checkout').stage).toBe('done')
+    // Only the charge's unmapped refusal leaves a row; the checkout's success never does.
+    expect(recordErrorEvent.mock.calls.every(([e]) => !/checkout/.test(JSON.stringify(e)))).toBe(true)
+    expect(everyText(s, out)).not.toContain('secret-session-id')
+  })
+
+  it('an unreadable customer site rejects before anything is sent', async () => {
+    const { resolveCustomerBaseUrl } = await import('./tenant-host.js')
+    resolveCustomerBaseUrl.mockRejectedValueOnce(new Error('down'))
+    const s = await setup({ routes: { [CHARGE]: [ok({ transactionId: TX })] } })
+    await expect(grantTrial(s.db, args(), s.deps)).rejects.toMatchObject({ code: 'customer_url_unreadable' })
+    expect(s.fetchImpl.writes()).toHaveLength(0)
   })
 })

@@ -241,10 +241,17 @@ export function judgeUn1tWrite(op, { status, body, expect } = {}, table = UN1T_R
       return id ? verdict('done', { id }) : verdict('unknown')
     }
     case 'trial': {
-      // The trial's free checkout (UN1TWRITE.10) answering free: false is a
-      // paid checkout session, not a trial: refused, and nothing of the
-      // answer (its URL) is carried on.
-      if (data?.free === false) return verdict('refused', { code: 'checkout_not_free' })
+      // The trial's free checkout (UN1TWRITE.10, expect.freeCheckout) answers
+      // { checkoutUrl, free }: free true is done (completed on the server; the
+      // caller still checks the credits), free false is a paid session and
+      // refused checkout_not_free. Neither carries the URL on: the id is the
+      // transaction id when one is given, else null. The charge is judged on
+      // its transactionId alone.
+      if (want.freeCheckout === true) {
+        if (data?.free === true) return verdict('done', { id: idOf(data.transactionId) })
+        if (data?.free === false) return verdict('refused', { code: 'checkout_not_free' })
+        return verdict('unknown')
+      }
       const id = idOf(data?.transactionId)
       return id ? verdict('done', { id }) : verdict('unknown')
     }
