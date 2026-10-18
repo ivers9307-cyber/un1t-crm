@@ -44,6 +44,7 @@ export const UN1T_APPROVAL_COPY = Object.freeze({
   [C.ALREADY_BOOKED_UNVERIFIED]: UN1T_STAFF_COPY.alreadyBookedUnverified,
   un1t_outcome_unknown: UN1T_STAFF_COPY.unknown,
   un1t_trial_unverified: 'The trial could not be confirmed: no credits show in un1t.online. Check the person in un1t.online; nothing was bought.',
+  un1t_trial_used: 'They have had the free trial before, so nothing was booked. Offer them a pack or a membership.',
 })
 
 const reasonOf = (details) => (typeof details?.reason === 'string' ? details.reason : '')
@@ -133,7 +134,7 @@ export async function executeUn1tApproval(db, { row, actor }, deps = {}) {
     const code = once.kind === 'card' ? once.reason : once.kind === 'retry' ? once.code : 'un1t_trial_used'
     const message = UN1T_APPROVAL_COPY[code] ?? UN1T_APPROVAL_COPY[once.booking?.code] ?? once.booking?.message ?? null
     if (fromFunnel) await syncQueueRow(db, row.id, { status: 'failed', last_error: code, un1t_steps: once.steps })
-    return done({ ok: false, verdict: once.booking?.verdict ?? null, code, message, retryable: once.kind === 'retry', ledger_id: once.booking?.ledgerId ?? null }, 'failed')
+    return done({ ok: false, verdict: once.booking?.verdict ?? null, code, message, retryable: once.kind === 'retry', ledger_id: once.booking?.ledgerId ?? null }, 'failed', { sent: false, channel: 'email', reason: 'not_executed' })
   }
 
   const b = once.booking

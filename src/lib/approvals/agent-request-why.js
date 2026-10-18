@@ -38,6 +38,23 @@ const MACHINE_REASONS = {
     'Mia escalated: they asked to book but have no class credits or active membership. Talk to them in the conversation, grant a credit or set them up in Glofox, then approve to book.',
   account_ambiguous:
     'More than one Glofox account matched this customer. Pick the right account in Glofox before approving.',
+  // UN1TWRITE.23 — un1t.online funnel cards (details.provider 'un1t_online').
+  // The record-only ones execute nothing: approving records that staff
+  // booked the class by hand in un1t.online (the funnel row reads booked).
+  un1t_email_in_use_elsewhere:
+    'Their email already has a un1t.online account at another studio, so none was made here. Sort the account and book them in un1t.online, then approve to record it (approving books nothing).',
+  un1t_link_conflict:
+    'The un1t.online account is linked to a different contact here. Sort it in un1t.online, book them there, then approve to record it (approving books nothing).',
+  un1t_trial_used:
+    'They have had the free trial before, so nothing was booked and they were emailed the options. Approve once they are booked in un1t.online (approving books nothing).',
+  terms_not_accepted:
+    'They have not accepted un1t.online\'s terms and waiver, so no account was made. Book them by hand in un1t.online, then approve to record it (approving books nothing).',
+  un1t_funnel_off:
+    'The un1t.online funnel is off at this studio. Book them by hand in un1t.online, then approve to record it (approving books nothing).',
+  un1t_outcome_unknown:
+    'un1t.online did not answer clearly. Approving checks un1t.online first and books only if it is not already done.',
+  un1t_trial_unverified:
+    'The free trial could not be confirmed in un1t.online. Approving books only if their credits show; it never buys a trial.',
   // PERSON-ACCT.7 — the agent elects ONE linked account per booking and
   // escalates instead of coin-flipping between two that are both live.
   account_conflict:

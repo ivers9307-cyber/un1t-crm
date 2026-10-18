@@ -14,7 +14,7 @@
 // While writes are off, a token that can change data is flagged, because a
 // read-only one is safer; with writes on, the token needs those permissions.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, AlertCircle, RefreshCw, Unplug, PlugZap } from 'lucide-react'
 
@@ -141,14 +141,21 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
     router.refresh()
   }
 
-  async function saveWrite(patch) {
-    setBusy('write'); setError(null); setNotice(null)
+  // Write-setting saves run one after another (each is a read-modify-write
+  // of the studio's settings) and never disable the controls, so a click made
+  // while an earlier save is in flight is queued, not lost.
+  const saveChain = useRef(Promise.resolve())
+  function saveWrite(patch) {
+    saveChain.current = saveChain.current.then(() => doSaveWrite(patch)).catch(() => {})
+    return saveChain.current
+  }
+  async function doSaveWrite(patch) {
+    setError(null); setNotice(null)
     const r = await call(() => fetch(`/api/locations/${location.id}/un1t-online`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     }))
-    setBusy(null)
     if (!r.ok) { setError(r.error); return }
     setState((s) => {
       const next = { ...(s.data?.write || {}), ...(r.json.data?.write || {}) }
@@ -235,7 +242,6 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
             <input
               type="checkbox"
               checked={!!write.writes_enabled}
-              disabled={busy !== null}
               onChange={(e) => saveWrite({ writes_enabled: e.target.checked })}
             />
             Allow the CRM to write to un1t.online
@@ -245,7 +251,6 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
             <select
               id="un1t-trial-product"
               value={write.trial_product_id || ''}
-              disabled={busy !== null}
               onChange={(e) => saveWrite({ trial_product_id: e.target.value || null })}
               className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text"
             >
@@ -258,7 +263,7 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
             <input
               type="checkbox"
               checked={!!write.funnel_enabled}
-              disabled={busy !== null || !write.writes_enabled}
+              disabled={!write.writes_enabled}
               onChange={(e) => saveWrite({ funnel_enabled: e.target.checked })}
             />
             Take new people through un1t.online
@@ -273,8 +278,8 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
             <textarea
               id="un1t-hidden-keywords"
               rows={2}
+              key={write.hidden_class_keywords || ''}
               defaultValue={write.hidden_class_keywords || ''}
-              disabled={busy !== null}
               onBlur={(e) => { if (e.target.value !== (write.hidden_class_keywords || '')) saveWrite({ hidden_class_keywords: e.target.value }) }}
               className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text"
             />
@@ -287,7 +292,7 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
           ].map(([key, label, hint]) => (
             <div key={key}>
               <label className="flex items-center gap-2 text-un1t-text">
-                <input type="checkbox" checked={!!write[key]} disabled={busy !== null} onChange={(e) => saveWrite({ [key]: e.target.checked })} />
+                <input type="checkbox" checked={!!write[key]} disabled={key === 'un1t_welcome_sets_login' && !write.un1t_sends_welcome} onChange={(e) => saveWrite({ [key]: e.target.checked })} />
                 {label}
               </label>
               <div className="text-un1t-subtle pl-6">{hint}</div>

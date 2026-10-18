@@ -90,13 +90,21 @@ describe('processUn1tClassBookingRequest', () => {
     expect(deps.sendWebsiteConversion).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'Schedule', eventId: 'classbooking-q-1' }))
   })
 
-  it('existing account by own link, sibling email or API walk books with no create and no set-password step', async () => {
+  it('existing account by own link, sibling email or API walk books with no create; the step finds no create and the confirmation goes', async () => {
     deps.ensureUn1tAccount.mockImplementation(async () => { order.push('account'); return { kind: 'existing', un1tUserId: 'usr-sib', executingContactId: 'c-sib' } })
+    deps.runSetPasswordStep.mockImplementation(async () => { order.push('set_password'); return { explanation: 'skipped_not_created', forgotPassword: 'skipped_not_created' } })
     await run()
-    expect(order).toEqual(['account', 'trial', 'book', 'confirmation'])
-    expect(deps.runSetPasswordStep).not.toHaveBeenCalled()
+    expect(order).toEqual(['account', 'trial', 'book', 'set_password', 'confirmation'])
     expect(deps.book.mock.calls[0][1]).toMatchObject({ contactId: 'c-sib', un1tUserId: 'usr-sib' })
     expect(lastRow().un1t_steps).toMatchObject({ account: 'existing', confirmation: 'sent' })
+  })
+
+  it('an account we created that a re-run now finds "existing" still gets its set-password step', async () => {
+    deps.ensureUn1tAccount.mockResolvedValue({ kind: 'existing', un1tUserId: 'usr-1', executingContactId: 'c-1' })
+    await run()
+    expect(deps.runSetPasswordStep).toHaveBeenCalledOnce()
+    expect(deps.sendManualBookingConfirmEmail).not.toHaveBeenCalled()
+    expect(lastRow().un1t_steps).toMatchObject({ explanation: 'sent', forgot_password: 'done' })
   })
 
   it('credits or an active subscription skip the trial', async () => {
@@ -187,6 +195,7 @@ describe('processUn1tClassBookingRequest', () => {
 
   it('sendsBookingConfirmation skips our confirmation and records the skip in un1t_steps', async () => {
     deps.ensureUn1tAccount.mockResolvedValue({ kind: 'existing', un1tUserId: 'usr-1', executingContactId: 'c-1' })
+    deps.runSetPasswordStep.mockResolvedValue({ explanation: 'skipped_not_created', forgotPassword: 'skipped_not_created' })
     await run(request(), ctx({ sendsBookingConfirmation: true }))
     expect(deps.sendManualBookingConfirmEmail).not.toHaveBeenCalled()
     expect(lastRow().un1t_steps.confirmation).toBe('skipped_flag')

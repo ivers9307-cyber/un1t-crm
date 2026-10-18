@@ -106,6 +106,7 @@ describe('the funnel over the real primitives', () => {
     const rejected = results.filter((r) => r.status === 'rejected')
     expect(rejected).toHaveLength(1)
     expect(rejected[0].reason.name).toBe('Un1tFunnelRetry')
+    expect(rejected[0].reason.code).toBe('UN1T_ATTEMPT_IN_FLIGHT')
     // The retry finds the account linked and books with no second create.
     _resetUn1tWriteStateForTests()
     const retried = await processUn1tClassBookingRequest(s.db, { ...request(), id: 'q-2' }, ctx, s.deps)

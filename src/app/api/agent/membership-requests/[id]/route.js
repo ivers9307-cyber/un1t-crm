@@ -574,10 +574,11 @@ export async function PATCH(request, { params }) {
       finalStatus = r.finalStatus
       un1tNotified = r.customerNotified
     } catch (e) {
-      // Nothing was written or sent (the executor rejects only before that):
-      // the card stays as claimed, on the retry lane.
-      logWarn('agent-requests', 'un1t.online approval failed before executing', { requestId: id, err: e })
-      return NextResponse.json({ success: false, error: 'Could not read what this booking needs just now. Try again in a minute.' }, { status: 500 })
+      // A database read failed mid-way. The card stays claimed ('executing')
+      // and can be retried once its marker is stale (request-recovery.js);
+      // a re-run is safe: every un1t.online step resumes from the ledger.
+      logWarn('agent-requests', 'un1t.online approval failed part way', { requestId: id, err: e })
+      return NextResponse.json({ success: false, error: 'Could not finish this booking just now. It can be retried from the card in a few minutes; nothing will be done twice.' }, { status: 500 })
     }
   }
 

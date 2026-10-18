@@ -281,6 +281,9 @@ export async function PATCH(request, props) {
   const merged = await mergeLocationSettings(db, g.locationId, (current) => {
     const block = current.un1t_online && typeof current.un1t_online === 'object' ? current.un1t_online : {}
     const next = { ...block, ...patch }
+    // Writes off switches the funnel off too, so writes coming back on never
+    // brings the public path back live without anyone asking for it.
+    if (patch.writes_enabled === false) next.funnel_enabled = false
     if (patch.funnel_enabled === true && next.writes_enabled !== true) {
       refusedFunnel = true
       return null

@@ -195,3 +195,14 @@ describe('UN1TWRITE.24 — funnel settings', () => {
     expect(j.data.write).toMatchObject({ un1t_sends_welcome: true, un1t_welcome_sets_login: true, un1t_sends_booking_confirmation: true, hidden_class_keywords: 'elite', funnel_enabled: false })
   })
 })
+
+describe('UN1TWRITE.24 — writes off switches the funnel off', () => {
+  it('a PATCH turning writes off clears funnel_enabled, so writes on again never re-arms it', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    settings = { un1t_online: { writes_enabled: true, funnel_enabled: true } }
+    expect((await patch({ writes_enabled: false })).status).toBe(200)
+    expect(settings.un1t_online).toMatchObject({ writes_enabled: false, funnel_enabled: false })
+    expect((await patch({ writes_enabled: true })).status).toBe(200)
+    expect(settings.un1t_online.funnel_enabled).toBe(false)
+  })
+})

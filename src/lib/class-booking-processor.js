@@ -229,7 +229,15 @@ export async function processClassBookingRequest(db, request) {
     // the switch flips is never lost), and any other id gets a card. A failed
     // settings read throws: the queue's retry signal.
     if (!isManualEventId(request.glofox_event_id)) {
-      const un1t = await readUn1tWriteSettings(db, request.location_id)
+      let un1t
+      try {
+        un1t = await readUn1tWriteSettings(db, request.location_id)
+      } catch (e) {
+        // A bare uuid is only ever a un1t.online class: its cap card must run
+        // the un1t.online executor. A 'un1t:' id falls back to the manual record.
+        if (UUID_RE.test(String(request.glofox_event_id || ''))) e.reviewOptions = { provider: 'un1t_online' }
+        throw e
+      }
       if (un1t.membershipSource === 'un1t_online') {
         const bareUuid = UUID_RE.test(String(request.glofox_event_id || ''))
         if (un1t.settings.funnelEnabled && (isUn1tEventId(request.glofox_event_id) || bareUuid)) {

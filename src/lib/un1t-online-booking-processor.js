@@ -128,16 +128,19 @@ async function readStudioContext(db, locationId) {
 export async function un1tAfterBooking(db, { request, contact, account, settings, studio, origin, writer }, deps = {}) {
   const d = depsOf(deps)
   const emailArgs = { blocks: studio.blocks, studioName: studio.studioName, address: studio.address, zone: studio.zone }
-  if (account.kind === 'created') {
-    try {
-      const r = await d.runSetPasswordStep(db, {
-        locationId: request.location_id, contact, un1tUserId: account.un1tUserId, request, settings, origin, emailArgs, writer,
-      }, { sendUn1tAccountEmail: d.sendUn1tAccountEmail })
+  // The set-password step decides from the ledger whether the CRM created this
+  // account, so a re-run (a queue retry, an approval) that now finds the
+  // account "existing" still sends the code it never got.
+  try {
+    const r = await d.runSetPasswordStep(db, {
+      locationId: request.location_id, contact, un1tUserId: account.un1tUserId, request, settings, origin, emailArgs, writer,
+    }, { sendUn1tAccountEmail: d.sendUn1tAccountEmail })
+    if (r.explanation !== 'skipped_not_created') {
       return { explanation: r.explanation, forgot_password: r.forgotPassword, ...(r.code ? { forgot_password_code: r.code } : {}), ...(r.help ? { help: r.help } : {}) }
-    } catch (err) {
-      logWarn(LOG, 'set-password step failed; the booking stands', { requestId: request.id, err })
-      return { explanation: 'error', forgot_password: 'error' }
     }
+  } catch (err) {
+    logWarn(LOG, 'set-password step failed; the booking stands', { requestId: request.id, err })
+    if (account.kind === 'created') return { explanation: 'error', forgot_password: 'error' }
   }
   if (settings.sendsBookingConfirmation) return { confirmation: 'skipped_flag' }
   try {
