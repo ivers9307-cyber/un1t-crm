@@ -293,22 +293,25 @@ describe('executeUn1tRead: gates', () => {
 })
 
 describe('executeUn1tRead: get_my_membership', () => {
-  it('answers from the studio and user, with credits null while the capability is off', async () => {
+  it('answers from the studio and user, with the credit balance now un1t.online declares credits (MIAHATCH.2)', async () => {
     const db = fakeDb(tables())
     const out = await executeUn1tRead('get_my_membership', {}, ctxFor(db), [hatchStudio])
-    expect(out).toEqual({ status: 'active', plan: 'Monthly Foundation', price_label: '€189 a month', renews_on: 'Fri 20 Nov 2026', credits: null })
+    expect(out).toEqual({ status: 'active', plan: 'Monthly Foundation', price_label: '€189 a month', renews_on: 'Fri 20 Nov 2026', credits: 5 })
     // Every read is pinned to the studio; the subscription and client reads also to the user.
     for (const c of db.calls) expect(c.eqs.location_id).toBe(HATCH)
     for (const c of db.calls.filter((c) => c.table === 'un1t_subscriptions' || c.table === 'un1t_clients')) expect(c.eqs.un1t_user_id).toBe(USER)
   })
-  it('reports the balance, or unlimited, once the studio source declares credits', async () => {
+  it('the real un1t.online provider declares credits, and reports the balance or unlimited', async () => {
+    expect(providerFor('un1t_online').capabilities.credits).toBe(true)
+    const t = tables()
+    t.un1t_clients[0] = { ...t.un1t_clients[0], credit_balance: 0, credit_unlimited: true }
+    expect((await executeUn1tRead('get_my_membership', {}, ctxFor(fakeDb(t)), [hatchStudio])).credits).toBe('unlimited')
+  })
+  it('reports credits null when the studio source does not declare them', async () => {
     const real = providerFor.getMockImplementation()
-    providerFor.mockImplementation((key) => ({ ...real(key), capabilities: { ...real(key).capabilities, credits: true } }))
+    providerFor.mockImplementation((key) => ({ ...real(key), capabilities: { ...real(key).capabilities, credits: false } }))
     try {
-      expect((await executeUn1tRead('get_my_membership', {}, ctxFor(fakeDb(tables())), [hatchStudio])).credits).toBe(5)
-      const t = tables()
-      t.un1t_clients[0] = { ...t.un1t_clients[0], credit_balance: 0, credit_unlimited: true }
-      expect((await executeUn1tRead('get_my_membership', {}, ctxFor(fakeDb(t)), [hatchStudio])).credits).toBe('unlimited')
+      expect((await executeUn1tRead('get_my_membership', {}, ctxFor(fakeDb(tables())), [hatchStudio])).credits).toBeNull()
     } finally {
       providerFor.mockImplementation(real)
     }
@@ -480,7 +483,7 @@ describe('executeUn1tRead: two answerable studios', () => {
     const out = await executeUn1tRead('get_my_membership', {}, ctx, [hatchStudio, stillStudio])
     expect(out).toEqual({
       studios: [
-        { studio: 'Test Studio Hatch', status: 'active', plan: 'Monthly Foundation', price_label: '€189 a month', renews_on: 'Fri 20 Nov 2026', credits: null },
+        { studio: 'Test Studio Hatch', status: 'active', plan: 'Monthly Foundation', price_label: '€189 a month', renews_on: 'Fri 20 Nov 2026', credits: 5 },
         { studio: 'Test Studio Still', found: true, status: 'active', plan: 'Glofox Plan' },
       ],
     })
