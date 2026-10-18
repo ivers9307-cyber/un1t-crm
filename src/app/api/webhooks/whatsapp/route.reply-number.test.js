@@ -277,7 +277,8 @@ describe('POST /api/webhooks/whatsapp — the receiving number is recorded on th
     await POST(reqFor(inboundFlowReply(REGISTERED_PNI)))
     expect(convInserts()).toEqual([])
     expect(msgInsert().ops.find(([m]) => m === 'insert')[1]).toMatchObject({ conversation_id: 'conv-hatch', location_id: 'loc-hatch' })
-    expect(handleFlowCompletion).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-hatch' }))
+    // The Flow was minted by a send through the receiving number, so it completes at that number's studio.
+    expect(handleFlowCompletion).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-still' }))
   })
 
   it('numberless_home: the CTWA Lead stays with the receiving number’s studio (a number-less studio has no token to send it)', async () => {

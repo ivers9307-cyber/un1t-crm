@@ -51,6 +51,7 @@ import { pickInboundContact, parseConsentKeyword } from '@/lib/whatsapp'
 import { applyWhatsappConsentKeyword } from '@/lib/whatsapp-consent'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
 import { recordCtwaTouch } from '@/lib/meta-capi'
+import { handleFlowCompletion } from '@/lib/whatsapp-flow/completion.js'
 import { fakeWhatsAppDb, link } from '@/lib/whatsapp-numbers-fake-db.test-helpers.js'
 
 const ORG = 'd0000000-0000-4000-8000-000000000001'
@@ -67,7 +68,7 @@ const OWNER = { source: 'db', id: NUM, locationId: STILL, homeLocationId: STILL,
 const PRE_GO_LIVE = [link(STILL, NUM, { is_default: true })]
 const GO_LIVE = [...PRE_GO_LIVE, link(HATCH, NUM, { is_default: true })]
 
-// Reads replay on the shared WhatsApp fake (it filters eq/neq/in/gte, orders,
+// Reads replay on the shared WhatsApp fake (it filters eq/neq/in/gte/lte, orders,
 // limits); writes land in `state` so later reads see them. `.or()` and `.is()`
 // only narrow writes and the contacts lookup here, so the reader skips them.
 function makeDb(state) {
@@ -96,7 +97,7 @@ function makeDb(state) {
       return q
     }
     const b = {}
-    for (const m of ['select', 'eq', 'neq', 'in', 'gte', 'or', 'is', 'order', 'limit']) {
+    for (const m of ['select', 'eq', 'neq', 'in', 'gte', 'lte', 'or', 'is', 'order', 'limit']) {
       b[m] = (...args) => { ops.push([m, ...args]); return b }
     }
     b.insert = (payload) => { write = { op: 'insert', payload }; return b }
@@ -212,6 +213,17 @@ describe('POST /api/webhooks/whatsapp — a reply lands with the studio that spo
     expect(applyWhatsappConsentKeyword).toHaveBeenCalledWith(expect.objectContaining({ locationId: STILL, conversationId: 'conv-still', keyword: 'stop' }))
   })
 
+  it('a Flow completed in a thread routed by recent outbound acts at the routed studio', async () => {
+    pickInboundContact.mockReturnValue({ id: 'c-1', location_id: HATCH })
+    await run(makeState({
+      conversations: [thread('conv-still', STILL), thread('conv-hatch', HATCH)],
+      messages: [outbound('conv-still', STILL, ago(HOUR))],
+    }), { type: 'interactive', interactive: { type: 'nfm_reply', nfm_reply: { name: 'flow', response_json: '{}' } } })
+    expect(inboundRow()).toMatchObject({ conversation_id: 'conv-still', location_id: STILL })
+    expect(handleFlowCompletion).toHaveBeenCalledTimes(1)
+    expect(handleFlowCompletion).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ locationId: STILL }))
+  })
+
   it('a reply quoting a Hatch message lands in the Hatch thread even when Stillorgan spoke later', async () => {
     pickInboundContact.mockReturnValue({ id: 'c-1', location_id: STILL })
     await run(makeState({
@@ -244,6 +256,14 @@ describe('POST /api/webhooks/whatsapp — while Hatch has nothing switched on (t
     await run(makeState({ links: PRE_GO_LIVE }), { referral: { source_type: 'ad', source_id: 'ad-x', ctwa_clid: 'clid-pre' } })
     expect(inboundRow()).toMatchObject({ location_id: HATCH })
     expect(recordCtwaTouch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ ctwaClid: 'clid-pre', locationId: STILL }))
+  })
+
+  it('a Flow completed in a Hatch thread books at Stillorgan, the studio whose number sent it', async () => {
+    pickInboundContact.mockReturnValue({ id: 'c-1', location_id: HATCH })
+    await run(makeState({ links: PRE_GO_LIVE }), { type: 'interactive', interactive: { type: 'nfm_reply', nfm_reply: { name: 'flow', response_json: '{}' } } })
+    expect(inboundRow()).toMatchObject({ location_id: HATCH })
+    expect(handleFlowCompletion).toHaveBeenCalledTimes(1)
+    expect(handleFlowCompletion).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ locationId: STILL }))
   })
 
   it('an unknown sender whose thread staff moved to Hatch stays in that thread (F1)', async () => {
