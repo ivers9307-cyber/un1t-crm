@@ -46,3 +46,15 @@ describe('/api/mobile/radar availability', () => {
     expect(body.data.leadError).toBe('membership source unreadable')
   })
 })
+
+describe('/api/mobile/radar estimate flag (UN1TRADAR.2)', () => {
+  it('mobile radar carries overdueValueEstimated only when the summary has it', async () => {
+    radarAvailability.mockResolvedValue({ available: true, source: 'un1t_online', dataAsOf: null })
+    loadRadar.mockResolvedValueOnce({ radar: [], summary: { activeBase: 3, overdueValueCents: 12000, overdueValueEstimated: true } })
+    const body = await (await GET()).json()
+    expect(body.data.churn.overdueValueEstimated).toBe(true)
+    loadRadar.mockResolvedValueOnce({ radar: [], summary: { activeBase: 3, overdueValueCents: 12000 } })
+    const body2 = await (await GET()).json()
+    expect(body2.data.churn).not.toHaveProperty('overdueValueEstimated')
+  })
+})

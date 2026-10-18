@@ -31,6 +31,7 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { fetchBusinessCommandCentre } from '../../lib/dashboard-api'
 import { businessMembershipView } from '../../lib/membership-source-copy'
+import { arrearsSublabel } from '../../lib/arrears-estimate-label'
 import { KpiCard, KpiRow, SectionHeader, formatCurrency } from './cards'
 
 // ---------------------------------------------------------------------------
@@ -338,9 +339,7 @@ export default function BusinessDashboard({ refreshKey }) {
             <KpiCard
               label="In arrears"
               value={kpis.arrearsData ? formatCurrency(kpis.arrearsData.totalCents / 100) : '—'}
-              sublabel={kpis.arrearsData
-                ? `${kpis.arrearsData.memberCount} member${kpis.arrearsData.memberCount === 1 ? '' : 's'}`
-                : 'arrears unavailable'}
+              sublabel={arrearsSublabel(kpis.arrearsData)}
               accent={kpis.arrearsData?.memberCount > 0 ? 'text-red-700' : undefined}
               onPress={() => router.push('/radar')}
             />
