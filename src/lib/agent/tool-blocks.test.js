@@ -10,7 +10,7 @@ import {
   CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS, agentToolsFor,
 } from './auto-reply'
 import {
-  UN1T_TOOL_DESCRIPTIONS, UN1T_WRITE_TOOL_NAMES, UN1T_PURCHASE_TOOL_NAMES,
+  UN1T_TOOL_DESCRIPTIONS, UN1T_DUAL_TOOL_DESCRIPTIONS, UN1T_WRITE_TOOL_NAMES, UN1T_PURCHASE_TOOL_NAMES,
   deriveUn1tReadTools, selectToolBlock, withCacheBreakpoint,
 } from './tool-blocks'
 import { UN1T_ID_PREFIX, tagUn1tId, parseAgentId } from './studio-ids'
@@ -99,11 +99,17 @@ describe('the un1t read blocks', () => {
       expect(names(block)).toContain(PAYMENT_REMINDER)
       expect(names(block)).toContain('request_cancellation')
       const tool = block.find((t) => t.name === PAYMENT_REMINDER)
-      expect(tool.description).toBe(UN1T_TOOL_DESCRIPTIONS[PAYMENT_REMINDER])
+      expect(tool.description).toBe(block === CACHED_UN1T_READ_DUAL_TOOLS ? UN1T_DUAL_TOOL_DESCRIPTIONS[PAYMENT_REMINDER] : UN1T_TOOL_DESCRIPTIONS[PAYMENT_REMINDER])
       expect(tool.description).toMatch(/overdue/i)
-      expect(tool.description).toMatch(/never gives a pay link/i)
-      expect(tool.description).not.toMatch(/glofox|[–—]/i)
+      expect(tool.description).not.toMatch(/glofox|limited|spaces|capacity|[–—]/i)
     }
+    // Single block: never a pay link. Dual block: one section per studio, only the un1t.online one is link free.
+    expect(UN1T_TOOL_DESCRIPTIONS[PAYMENT_REMINDER]).toMatch(/never gives a pay link/i)
+    const dual = UN1T_DUAL_TOOL_DESCRIPTIONS[PAYMENT_REMINDER]
+    expect(dual).toMatch(/one section per studio/i)
+    expect(dual).toMatch(/un1t\.online studio's section[^.]*never has a pay link/i)
+    expect(dual).toMatch(/may carry its own pay link/i)
+    expect(dual).not.toMatch(/the answer never gives a pay link/i)
     expect(names(CACHED_ACCOUNT_TOOLS)).toContain(PAYMENT_REMINDER)
     expect(names(CACHED_NO_BOOKING_TOOLS)).not.toContain(PAYMENT_REMINDER)
   })
@@ -115,13 +121,14 @@ describe('the un1t read blocks', () => {
       for (const t of derived) {
         if (REDESCRIBED.includes(t.name)) {
           expect(ALL_AGENT_TOOLS).not.toContain(t)
-          expect(t.description).toBe(UN1T_TOOL_DESCRIPTIONS[t.name])
+          expect(t.description).toBe((dual && UN1T_DUAL_TOOL_DESCRIPTIONS[t.name]) || UN1T_TOOL_DESCRIPTIONS[t.name])
         } else {
           expect(ALL_AGENT_TOOLS).toContain(t)
         }
       }
     }
     expect(Object.keys(UN1T_TOOL_DESCRIPTIONS).sort()).toEqual([...REDESCRIBED].sort())
+    expect(Object.keys(UN1T_DUAL_TOOL_DESCRIPTIONS)).toEqual([PAYMENT_REMINDER])
     // The full list's own objects are never touched.
     expect(JSON.stringify(CACHED_ACCOUNT_TOOLS)).toBe(JSON.stringify(GLOFOX_FIXTURE.cached_tools))
   })
@@ -133,9 +140,11 @@ describe('the un1t read blocks', () => {
 
   it('3a list_upcoming_classes description never says limited or spaces; descriptions free of em/en dashes', () => {
     const d = UN1T_TOOL_DESCRIPTIONS.list_upcoming_classes
+    expect(UN1T_TOOL_DESCRIPTIONS.get_my_membership).toMatch(/use get_my_payment_reminder/)
+    expect(UN1T_TOOL_DESCRIPTIONS.get_my_membership).not.toMatch(/live billing standing/)
     expect(d).toMatch(/event_id/)
     expect(d).toMatch(/\bfull\b/)
-    for (const [name, text] of Object.entries(UN1T_TOOL_DESCRIPTIONS)) {
+    for (const [name, text] of [...Object.entries(UN1T_TOOL_DESCRIPTIONS), ...Object.entries(UN1T_DUAL_TOOL_DESCRIPTIONS)]) {
       expect(text, name).not.toMatch(/[—–]/)
       expect(text, name).not.toMatch(/limited|spaces|capacity|headcount|glofox/i)
     }

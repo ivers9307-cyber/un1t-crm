@@ -451,7 +451,7 @@ function logReminderFailure(studio, status, err) {
 
 /**
  * The reminder shape from the seam's past-due rows. Rows of another un1t
- * account are dropped first. `since` is the earliest known `since`; the amount
+ * account make the answer unknown. `since` is the earliest known `since`; the amount
  * is shown only when every row's amount is known in one currency (a sum is
  * made, never an estimate). Pure.
  *
@@ -460,16 +460,21 @@ function logReminderFailure(studio, status, err) {
  * @param {string} zone
  */
 export function shapeUn1tPaymentReminder(rows, un1tUserId, zone = DEFAULT_TZ) {
-  const own = (Array.isArray(rows) ? rows : []).filter((r) => r && r.un1tUserId === un1tUserId)
+  const all = (Array.isArray(rows) ? rows : []).filter(Boolean)
+  const own = all.filter((r) => r.un1tUserId === un1tUserId)
+  // A row the account filter dropped (another account's, or one naming none)
+  // means the answer is not provably this member's: unknown, never a mix.
+  if (own.length !== all.length) return { ...REMINDER_UNKNOWN }
   if (!own.length) return { has_reminder: false, still_overdue: false }
   const out = { has_reminder: false, still_overdue: true }
   const sinceMs = own.map((r) => toMs(r.since)).filter((ms) => ms !== null)
   const since = sinceMs.length ? dateLabel(new Date(Math.min(...sinceMs)).toISOString(), zone) : null
   if (since) out.since = since
   const amounts = own.map((r) => r.amountCents)
-  const currencies = new Set(own.map((r) => String(r.currency || '').toUpperCase()))
-  if (amounts.every((a) => a !== null && a !== undefined && Number.isFinite(Number(a))) && currencies.size === 1) {
-    const label = formatMoneyMinor(amounts.reduce((sum, a) => sum + Number(a), 0), [...currencies][0] || 'EUR')
+  // A row with no currency gives no label: never assume euros.
+  const currencies = new Set(own.map((r) => String(r.currency || '').trim().toUpperCase()))
+  if (amounts.every((a) => a !== null && a !== undefined && Number.isFinite(Number(a))) && currencies.size === 1 && !currencies.has('')) {
+    const label = formatMoneyMinor(amounts.reduce((sum, a) => sum + Number(a), 0), [...currencies][0])
     if (label) out.amount_label = label
   }
   return out

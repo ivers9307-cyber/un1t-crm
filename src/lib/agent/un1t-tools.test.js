@@ -677,12 +677,32 @@ describe('executeUn1tRead: get_my_payment_reminder', () => {
     expect(JSON.stringify(logWarn.mock.calls)).not.toContain(USER)
   })
 
-  it('contactIds is the studio\'s person group; rows of another un1t account are dropped', async () => {
+  it('contactIds is the studio\'s person group', async () => {
     const studio = { ...hatchStudio, contactIds: ['c-h', 'c-h2'] }
-    pastDueFn.mockResolvedValue({ success: true, data: [row({ un1tUserId: 'someone-else', amountCents: 99900 })] })
     expect(await run([studio])).toEqual({ has_reminder: false, still_overdue: false })
     expect(pastDueFn).toHaveBeenCalledWith(expect.anything(), HATCH, { contactIds: ['c-h', 'c-h2'] })
     expect(membershipReadsFor).toHaveBeenCalledWith(expect.anything(), HATCH)
+  })
+
+  it('a row of another un1t account, or naming none, makes the answer unknown and mixes nothing in', async () => {
+    for (const other of [row({ un1tUserId: 'someone-else', amountCents: 99900, since: '2026-01-01T00:00:00Z' }), row({ un1tUserId: null, amountCents: 99900 })]) {
+      // Only the stranger's row: not "clear", unknown.
+      pastDueFn.mockResolvedValue({ success: true, data: [other] })
+      expect(await run()).toEqual({ has_reminder: false, still_overdue: 'unknown' })
+      // Alongside the member's own row: still unknown, no amount or date leaks.
+      pastDueFn.mockResolvedValue({ success: true, data: [other, row()] })
+      const out = await run()
+      expect(out).toEqual({ has_reminder: false, still_overdue: 'unknown' })
+      expect(JSON.stringify(out)).not.toMatch(/999|2026/)
+    }
+  })
+
+  it('a row with no currency gives no amount_label (euros are never assumed)', async () => {
+    pastDueFn.mockResolvedValue({ success: true, data: [row({ currency: null })] })
+    const out = await run()
+    expect(out).toEqual({ has_reminder: false, still_overdue: true, since: 'Sat 10 Oct 2026' })
+    pastDueFn.mockResolvedValue({ success: true, data: [row({ amountCents: 1000 }), row({ subscriptionId: 'sub-2', amountCents: 500, currency: null })] })
+    expect(await run()).not.toHaveProperty('amount_label')
   })
 
   it('no un1t account or no group contacts: unknown without asking the seam', async () => {

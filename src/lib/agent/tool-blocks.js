@@ -32,8 +32,8 @@ export const UN1T_TOOL_DESCRIPTIONS = Object.freeze({
     "Get the verified customer's current membership status (active, paused, cancelled) and their plan name. " +
     'When the plan is in the studio catalog, also a short description of what it includes, such as its pricing ' +
     'and commitment terms. Only works after verify_identity has succeeded this conversation. Use for ' +
-    '"is my membership active", "what plan am I on", "what does my plan include". For live billing standing ' +
-    'or payment issues, hand off.',
+    '"is my membership active", "what plan am I on", "what does my plan include". For an overdue payment ' +
+    'or a payment reminder, use get_my_payment_reminder; for anything else about billing, hand off.',
   get_my_next_class:
     "Get the verified customer's next upcoming booked class (name and date/time). Only works after " +
     'verify_identity has succeeded this conversation. Use for "when is my next class", "what have I got booked".',
@@ -55,6 +55,17 @@ export const UN1T_TOOL_DESCRIPTIONS = Object.freeze({
     '"what classes are on", "can I book a class", "what\'s available tomorrow". Each class carries an event_id ' +
     'and a full flag, true or false. Never give a count, never say how many places are left and never hint that ' +
     'a class is nearly full. Offer an alternative to a full class.',
+})
+
+// The dual block's own text for the payment reminder: its answer has one section per
+// studio, and only the un1t.online studio's is guaranteed to carry no pay link.
+export const UN1T_DUAL_TOOL_DESCRIPTIONS = Object.freeze({
+  get_my_payment_reminder:
+    'Check whether the verified customer has a payment that is overdue. The answer has one section per studio. ' +
+    "The un1t.online studio's section reports only whether a payment is overdue, and since when and for how much " +
+    "when known, and never has a pay link. Another studio's section may say whether a reminder was sent and may " +
+    'carry its own pay link. Call this before answering anything about a payment reminder, a failed payment or ' +
+    '"I\'ve paid". Only works after verify_identity has succeeded this conversation.',
 })
 
 // list_upcoming_classes keeps its one optional parameter (the budget is
@@ -84,7 +95,7 @@ export function deriveUn1tReadTools(tools, { dual = false } = {}) {
   return tools
     .filter((t) => dual || !UN1T_READ_DROPPED.has(t.name))
     .map((t) => {
-      const description = UN1T_TOOL_DESCRIPTIONS[t.name]
+      const description = (dual && UN1T_DUAL_TOOL_DESCRIPTIONS[t.name]) || UN1T_TOOL_DESCRIPTIONS[t.name]
       if (!description) return t
       return t.name === 'list_upcoming_classes'
         ? { ...t, description, input_schema: UN1T_CLASS_LIST_SCHEMA }

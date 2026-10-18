@@ -603,23 +603,43 @@ describe('un1t.online prompt variants', () => {
     expect(render('read', false, null)).not.toMatch(/Say which studio each answer is for/)
   })
 
-  it('MIAHATCH.3: the read variant has its own overdue payment rules, with no pay link', () => {
-    for (const multi of [false, true]) {
-      const out = render('read', multi, null)
-      expect(out).toMatch(/## Overdue payments/)
-      expect(out).toMatch(/call get_my_payment_reminder BEFORE answering/)
-      expect(out).toMatch(/There is no pay link for these payments, and you never send or invent one/)
-      expect(out).toMatch(/update the card on file, they can do it in the un1t\.online app, or the team can help/)
-      expect(out).toMatch(/never state an amount or a date the tool did not give/)
-      expect(out).toMatch(/still_overdue is 'unknown': never guess/)
-      // The Glofox-only wording does not leak into the un1t render.
-      expect(out).not.toMatch(/Pay now|send pay_link|first_sent_at|Glofox/)
-      // The old blanket "hand off any payment reminder question" lines are gone.
-      expect(out).not.toMatch(/You do NOT have their price, payment history or billing standing\./)
-      expect(out).not.toMatch(/asks about a payment reminder or a failed payment/)
-    }
-    expect(render('read', true, null)).toMatch(/If the answer lists more than one studio, say which studio each part is for/)
-    expect(render('read', false, null)).not.toMatch(/If the answer lists more than one studio/)
+  it('MIAHATCH.3: the single-studio read variant has its own overdue payment rules, with no pay link', () => {
+    const out = render('read', false, null)
+    expect(out).toMatch(/## Overdue payments/)
+    expect(out).toMatch(/call get_my_payment_reminder BEFORE answering/)
+    expect(out).toMatch(/"am I paid up"/)
+    expect(out).toMatch(/Overdue payments at the un1t\.online studio are chased by the studio itself\. There is no pay link for them, and you never send or invent one/)
+    expect(out).toMatch(/update the card on file at the un1t\.online studio, they can do it in the un1t\.online app, or the team can help/)
+    expect(out).toMatch(/never state an amount or a date the tool did not give/)
+    expect(out).toMatch(/still_overdue is 'unknown': never guess/)
+    // The Glofox-only wording does not leak into the single-studio un1t render.
+    expect(out).not.toMatch(/Pay now|send pay_link|first_sent_at|Glofox/)
+    // The old blanket "hand off any payment reminder question" lines are gone.
+    expect(out).not.toMatch(/You do NOT have their price, payment history or billing standing\./)
+    expect(out).not.toMatch(/asks about a payment reminder or a failed payment/)
+    expect(out).not.toMatch(/If the answer lists more than one studio/)
+  })
+
+  it('MIAHATCH.3 fix 1: the dual render scopes the no-pay-link rule to the named un1t studio and carries the Glofox rules for the other section', () => {
+    const named = renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: false, bookingUrl: null, un1tVariant: 'read', multiStudio: true, un1tStudioName: 'Hatch Street' })
+    expect(named).toMatch(/Overdue payments at Hatch Street are chased by the studio itself\. There is no pay link for them/)
+    expect(named).toMatch(/update the card on file at Hatch Street, they can do it in the un1t\.online app/)
+    expect(named).not.toMatch(/There is no pay link for these payments/)
+    expect(named).toMatch(/If the answer lists more than one studio, say which studio each part is for/)
+    expect(named).toMatch(/The rules that follow apply only to the section of the answer for the Glofox studio, which can carry its own reminder details and pay link\. They never apply to the section for Hatch Street\./)
+    // The shared lines are today's Glofox lines, byte for byte.
+    const glofoxBullets = CUSTOMER_AGENT_BASE_PROMPT.slice(
+      CUSTOMER_AGENT_BASE_PROMPT.indexOf('- When a message is about a payment reminder'),
+      CUSTOMER_AGENT_BASE_PROMPT.indexOf('- NEVER ask for or accept card numbers, expiry dates, CVV or bank details in chat. If a customer sends them, do not repeat them back; say the secure link'),
+    ).trimEnd()
+    expect(glofoxBullets.split('\n')).toHaveLength(7)
+    expect(named).toContain(glofoxBullets)
+    expect(named).toContain('send pay_link in plain text')
+    // Unnamed dual: the unnamed wording.
+    expect(render('read', true, null)).toMatch(/section for the un1t\.online studio\./)
+    // The added lines (everything not in today's prompt) are dash free; the reused ones have none either.
+    expect(named.split('\n').filter((l) => /Pay now|pay_link/.test(l)).join('\n')).not.toMatch(DASHES)
+    expect(named).not.toMatch(BANNED_WORDS)
   })
 
   it('every line a un1t variant adds is free of em and en dashes', () => {
