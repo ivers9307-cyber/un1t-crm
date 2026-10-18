@@ -81,6 +81,33 @@ export function termsLabelSegments(copy, { studioName = '' } = {}) {
   return out.filter((s) => s.text !== '')
 }
 
+const LEGAL_DOCS = Object.freeze(['terms', 'waiver'])
+
+/** The public page for a studio's document (/legal/un1t/<public_path>/<doc>). */
+export function legalDocPathFor(publicPath, doc) {
+  if (!LEGAL_DOCS.includes(doc)) throw new TypeError(`legalDocPathFor: unknown document '${doc}'`)
+  return `/legal/un1t/${publicPath}/${doc}`
+}
+
+/**
+ * What the website funnel needs to show the required tick: the label (studio
+ * name filled, {terms}/{waiver} kept for the links), the link labels, the
+ * message and the two page urls. One builder for the class list and the
+ * booking route's 400, so the two can never disagree on the wording.
+ */
+export function un1tTermsPayload({ blocks, studioName, publicPath }) {
+  const copy = un1tFunnelCopyFromBlocks(blocks)
+  return {
+    required: true,
+    label: stripDashes(copy.terms_label.replace(/\{studio_name\}/g, String(studioName || '').trim() || 'the studio')),
+    terms_link_label: stripDashes(copy.terms_link_label),
+    waiver_link_label: stripDashes(copy.waiver_link_label),
+    required_message: stripDashes(copy.terms_required_message),
+    terms_url: legalDocPathFor(publicPath, 'terms'),
+    waiver_url: legalDocPathFor(publicPath, 'waiver'),
+  }
+}
+
 /** The same label as one line of plain text (a WhatsApp Flow label carries no links). */
 export function termsLabelText(copy, { studioName = '' } = {}) {
   return termsLabelSegments(copy, { studioName }).map((s) => s.text).join('').replace(/[ \t]{2,}/g, ' ').trim()

@@ -10,8 +10,7 @@ import { listPublicClasses } from '@/lib/public-classes'
 import { resolveLandingPath } from '@/lib/public-landing'
 import { logWarn } from '@/lib/log'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
-import { un1tFunnelCopyFromBlocks } from '@/lib/un1t-online-funnel-copy'
-import { legalDocPathFor } from '@/lib/un1t-online-legal'
+import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 
 // UN1TWRITE.18 — does this studio's funnel need the terms and waiver tick
 // (un1t.online with the funnel on), and in the operator's words. An
@@ -26,16 +25,7 @@ async function termsFor(db, page) {
     return { required: false }
   }
   if (s.membershipSource !== 'un1t_online' || !s.settings.funnelEnabled) return { required: false }
-  const copy = un1tFunnelCopyFromBlocks(page.blocks)
-  return {
-    required: true,
-    label: copy.terms_label.replace(/\{studio_name\}/g, s.studioName || 'the studio'),
-    terms_link_label: copy.terms_link_label,
-    waiver_link_label: copy.waiver_link_label,
-    required_message: copy.terms_required_message,
-    terms_url: legalDocPathFor(page.public_path, 'terms'),
-    waiver_url: legalDocPathFor(page.public_path, 'waiver'),
-  }
+  return un1tTermsPayload({ blocks: page.blocks, studioName: s.studioName, publicPath: page.public_path })
 }
 
 export const runtime = 'nodejs'

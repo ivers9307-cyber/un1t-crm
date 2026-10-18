@@ -26,12 +26,14 @@ const REQUIRED = {
 
 let terms
 let posts
+let refuseOnce = null
 beforeEach(() => {
   posts = []
   global.fetch = vi.fn(async (url, init) => {
     if (String(url).startsWith('/api/public/classes')) return { json: async () => ({ success: true, data: { classes: [CLASS], terms } }) }
     if (url === '/api/public/class-booking') {
       posts.push(JSON.parse(init.body))
+      if (refuseOnce) { const r = refuseOnce; refuseOnce = null; return { ok: false, json: async () => r } }
       return { ok: true, json: async () => ({ success: true, data: { queued: true } }) }
     }
     return { ok: true, json: async () => ({}) }
@@ -68,6 +70,18 @@ describe('UN1TWRITE.18 — ClassFunnel terms tick', () => {
     fireEvent.click(screen.getByText(/Confirm my class/))
     await waitFor(() => expect(posts).toHaveLength(1))
     expect(posts[0].terms_accepted).toBe(true)
+  })
+
+  it('a terms_required refusal on a page that did not know shows the tick from the refusal', async () => {
+    terms = { required: false }
+    refuseOnce = { success: false, code: 'terms_required', error: 'Please tick to accept the terms and waiver.', terms: REQUIRED }
+    await toDetails()
+    fireEvent.click(screen.getByText(/Confirm my class/))
+    expect(await screen.findByText('Please tick to accept the terms and waiver.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept Hatch Street's/ }))
+    fireEvent.click(screen.getByText(/Confirm my class/))
+    await waitFor(() => expect(posts).toHaveLength(2))
+    expect(posts[1].terms_accepted).toBe(true)
   })
 
   it('shows no tick and sends no terms field otherwise', async () => {

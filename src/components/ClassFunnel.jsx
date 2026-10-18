@@ -18,7 +18,7 @@ import { newLeadEventId, pixelUserData, fireBrowserLead } from '@/lib/meta-pixel
 import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
 import ClassFunnelCheckout from '@/components/landing-page/ClassFunnelCheckout'
 import { classFunnelConsentDefault } from '@/lib/landing-page-blocks'
-import { termsLabelSegments } from '@/lib/un1t-online-funnel-copy'
+import { termsLabelSegments, stripDashes } from '@/lib/un1t-online-funnel-copy'
 
 // MATCHQUALITY.1 — Meta's `_fbp` cookie, or null. Never throws (no document
 // during SSR, cookies blocked, no Pixel yet).
@@ -290,7 +290,7 @@ export default function ClassFunnel(props) {
       setError('Please enter a valid mobile number (e.g. 087 123 4567).'); return
     }
     if (terms.required && !termsAccepted) {
-      setError(terms.required_message || 'Please tick to accept the terms and waiver.'); return
+      setError(stripDashes(terms.required_message || 'Please tick to accept the terms and waiver.')); return
     }
     fireStep('details')
     // STARTCONV.1 — the form submit IS the booking now. `details` still fires
@@ -350,6 +350,15 @@ export default function ClassFunnel(props) {
         // back to the picker rather than leaving them on a form whose submit
         // can never succeed. `form` is component state, so everything they
         // typed survives the step change — say so, or it reads as lost work.
+        // UN1TWRITE.18 — the studio needs the terms tick but this page did
+        // not know (it loaded before the switch, or its class list read
+        // missed it): show the tick from the refusal and let them tick it.
+        if (j.code === 'terms_required' && j.terms?.required === true) {
+          setTerms(j.terms)
+          setTermsAccepted(false)
+          setError(stripDashes(j.error || j.terms.required_message || ''))
+          return
+        }
         if (j.code === 'class_unavailable') {
           setChosenClass(null)
           setStep('classpick')

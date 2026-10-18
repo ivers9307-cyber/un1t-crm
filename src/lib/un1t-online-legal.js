@@ -30,6 +30,9 @@ import { logWarn } from './log'
 export const UN1T_LEGAL_TTL_MS = 60 * 60_000
 export const UN1T_LEGAL_FAILURE_TTL_MS = 60_000
 export const UN1T_LEGAL_TIMEOUT_MS = 4_000
+import { legalDocPathFor } from './un1t-online-funnel-copy.js'
+export { legalDocPathFor }
+
 const DOCS = Object.freeze({
   terms: 'terms-and-conditions',
   waiver: 'liability-waiver',
@@ -46,11 +49,6 @@ export function _resetUn1tLegalCacheForTests() {
 
 const empty = () => ({ terms: null, waiver: null, version: null })
 
-/** The public page for a studio's document. */
-export function legalDocPathFor(publicPath, doc) {
-  if (!Object.hasOwn(DOCS, doc)) throw new TypeError(`legalDocPathFor: unknown document '${doc}'`)
-  return `/legal/un1t/${publicPath}/${doc}`
-}
 
 // The DTO is not pinned by the snapshot beyond "a document": accept
 // { content | text | body, updated_at | updatedAt } or a bare string.

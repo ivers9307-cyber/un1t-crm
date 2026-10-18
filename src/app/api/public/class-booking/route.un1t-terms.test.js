@@ -7,15 +7,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let pageBlocks = []
 let locRow = null
+let existingRow = null
 const inserts = []
+const updates = []
 const db = {
   from(table) {
     const b = {
-      select: () => b, eq: () => b, is: () => b, in: () => b, limit: () => b, update: () => b,
+      select: () => b, eq: () => b, is: () => b, in: () => b, limit: () => b,
+      update: (row) => { updates.push({ table, row }); return b },
       insert: (row) => { inserts.push({ table, row }); return b },
       maybeSingle: async () => {
         if (table === 'landing_page_settings') return { data: { location_id: 'L1', blocks: pageBlocks }, error: null }
         if (table === 'locations') return { data: locRow, error: null }
+        if (table === 'class_booking_requests' && existingRow) return { data: existingRow, error: null }
         if (table === 'class_booking_requests' && inserts.some((i) => i.table === table)) return { data: { id: 'Q1', class_name: 'BASE' }, error: null }
         return { data: null, error: null }
       },
@@ -72,6 +76,8 @@ const queued = () => inserts.find((i) => i.table === 'class_booking_requests')?.
 beforeEach(() => {
   vi.clearAllMocks()
   inserts.length = 0
+  updates.length = 0
+  existingRow = null
   pageBlocks = [{ type: 'class_funnel' }]
   locRow = { id: 'L1', membership_source: 'glofox', settings: {} }
   settings = un1t(true)
@@ -85,6 +91,9 @@ describe('UN1TWRITE.18 — terms and waiver tick', () => {
     expect(j.success).toBe(false)
     expect(j.error).toBe('Please tick to accept the terms and waiver.')
     expect(j.issues.terms_accepted).toBe(j.error)
+    // The refusal carries the tick, so a page that did not know can show it.
+    expect(j.code).toBe('terms_required')
+    expect(j.terms).toMatchObject({ required: true, label: "I accept Hatch Street's {terms} and {waiver}", terms_url: '/legal/un1t/hatch-street/terms', waiver_url: '/legal/un1t/hatch-street/waiver' })
     expect(findOrCreateRaceContact).not.toHaveBeenCalled()
     expect(queued()).toBeUndefined()
   })
@@ -115,6 +124,15 @@ describe('UN1TWRITE.18 — terms and waiver tick', () => {
     expect(row).not.toHaveProperty('terms_source')
     expect(row).not.toHaveProperty('terms_accepted_at')
     expect(row).not.toHaveProperty('terms_version')
+  })
+
+  it('a retry with the tick records it on the row the first try queued without one', async () => {
+    existingRow = { id: 'Q0' }
+    const res = await book({ terms_accepted: true })
+    expect((await res.json()).data).toEqual({ queued: true, deduped: true })
+    const u = updates.find((x) => x.table === 'class_booking_requests')
+    expect(u.row).toMatchObject({ terms_source: 'website', terms_version: 'terms:a|waiver:b' })
+    expect(queued()).toBeUndefined()
   })
 
   it('an unreadable settings row never blocks a booking (the processor refuses an account without an acceptance)', async () => {

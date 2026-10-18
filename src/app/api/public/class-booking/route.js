@@ -22,7 +22,7 @@ import { resolveLandingPath, classFunnelConfigFromBlocks, classFunnelTimetableUn
 import { createClassBookingPayment } from '@/lib/class-booking-payments'
 import { locationCanTakePayments } from '@/lib/location-payments'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
-import { un1tFunnelCopyFromBlocks } from '@/lib/un1t-online-funnel-copy'
+import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
 
 export const runtime = 'nodejs'
@@ -103,15 +103,23 @@ export async function POST(request) {
   // is queued with no acceptance, and the processor (which reads the
   // settings again) never creates an account without one.
   let un1tFunnel = false
+  let un1tStudioName = null
   try {
     const un1t = await readUn1tWriteSettings(db, locationId)
     un1tFunnel = un1t.membershipSource === 'un1t_online' && un1t.settings.funnelEnabled
+    un1tStudioName = un1t.studioName
   } catch (e) {
     logWarn('classbook', 'un1t.online settings unreadable; terms not judged', { locationId, err: e })
   }
   if (un1tFunnel && b.terms_accepted !== true) {
-    const message = un1tFunnelCopyFromBlocks(page.blocks).terms_required_message
-    return NextResponse.json({ success: false, error: message, issues: { terms_accepted: message } }, { status: 400 })
+    // The tick's wording rides on the refusal, so a page that loaded before
+    // the funnel switched on (or whose class list read missed it) can show
+    // the tick and try again instead of being refused with nothing to tick.
+    const terms = un1tTermsPayload({ blocks: page.blocks, studioName: un1tStudioName, publicPath: landingPath })
+    return NextResponse.json({
+      success: false, code: 'terms_required', error: terms.required_message,
+      issues: { terms_accepted: terms.required_message }, terms,
+    }, { status: 400 })
   }
 
   // Paid intro? Load the location's payment settings so we can resolve the rail.
@@ -241,6 +249,15 @@ export async function POST(request) {
     })
   } catch (e) { logWarn('classbook', 'deal placement failed', { err: e }) }
 
+  // UN1TWRITE.18 — the acceptance, with the documents' version at the time of
+  // the tick (null when they could not be read; the tick still stands).
+  let termsRecord = {}
+  if (un1tFunnel && b.terms_accepted === true) {
+    let version = null
+    try { version = (await readUn1tLegalDocs(db, locationId)).version } catch (e) { logWarn('classbook', 'legal documents version unread', { err: e }) }
+    termsRecord = { terms_accepted_at: new Date().toISOString(), terms_source: 'website', terms_version: version }
+  }
+
   // Dedupe: if this contact already has an active/booked request for this class
   // (double-submit, refresh, retry), don't create a second. Treat as success.
   // `awaiting_payment` is included so a double-submit of a PAID booking doesn't
@@ -250,17 +267,19 @@ export async function POST(request) {
     const { data: existing } = await db.from('class_booking_requests')
       .select('id').eq('contact_id', contactId).eq('glofox_event_id', b.event_id)
       .in('status', ['queued', 'processing', 'booked', 'awaiting_payment']).limit(1).maybeSingle()
-    if (existing) return NextResponse.json({ success: true, data: { queued: true, deduped: true } })
+    if (existing) {
+      // A retry that now carries the tick records it on the row the first
+      // try queued without one (never over an acceptance already there).
+      if (termsRecord.terms_source) {
+        try {
+          const { error: termsErr } = await db.from('class_booking_requests').update(termsRecord)
+            .eq('id', existing.id).is('terms_accepted_at', null)
+          if (termsErr) logWarn('classbook', 'terms record on the deduped row failed', { err: termsErr })
+        } catch (e) { logWarn('classbook', 'terms record on the deduped row failed', { err: e }) }
+      }
+      return NextResponse.json({ success: true, data: { queued: true, deduped: true } })
+    }
   } catch (e) { logWarn('classbook', 'dedupe check failed', { err: e }) }
-
-  // UN1TWRITE.18 — the acceptance, with the documents' version at the time of
-  // the tick (null when they could not be read; the tick still stands).
-  let termsRecord = {}
-  if (un1tFunnel && b.terms_accepted === true) {
-    let version = null
-    try { version = (await readUn1tLegalDocs(db, locationId)).version } catch (e) { logWarn('classbook', 'legal documents version unread', { err: e }) }
-    termsRecord = { terms_accepted_at: new Date().toISOString(), terms_source: 'website', terms_version: version }
-  }
 
   // class_name + starts_at come from the SERVER-validated class, not the client.
   const { data: queuedRow, error: insErr } = await db.from('class_booking_requests').insert({

@@ -1044,16 +1044,16 @@ function Un1tFunnelCopyFields({ block, onUpdate }) {
       <Field label="Terms tick (un1t.online studios)" hint="Shown when this studio books through un1t.online. {studio_name} is the studio; {terms} and {waiver} become the two document links. Leave blank for the default.">
         <Input value={block.terms_label || ''} onChange={(v) => onUpdate({ terms_label: v })} maxLength={200} placeholder={D.terms_label} />
       </Field>
-      <Field label="Terms link text">
+      <Field label="Terms link text (un1t.online studios)">
         <Input value={block.terms_link_label || ''} onChange={(v) => onUpdate({ terms_link_label: v })} maxLength={60} placeholder={D.terms_link_label} />
       </Field>
-      <Field label="Waiver link text">
+      <Field label="Waiver link text (un1t.online studios)">
         <Input value={block.waiver_link_label || ''} onChange={(v) => onUpdate({ waiver_link_label: v })} maxLength={60} placeholder={D.waiver_link_label} />
       </Field>
-      <Field label="Terms not ticked: message">
+      <Field label="Terms not ticked: message (un1t.online studios)">
         <Input value={block.terms_required_message || ''} onChange={(v) => onUpdate({ terms_required_message: v })} maxLength={200} placeholder={D.terms_required_message} />
       </Field>
-      <Field label="Document could not load: message">
+      <Field label="Terms page could not load: message (un1t.online studios)">
         <Textarea value={block.legal_unavailable_message || ''} onChange={(v) => onUpdate({ legal_unavailable_message: v })} maxLength={300} rows={2} placeholder={D.legal_unavailable_message} />
       </Field>
     </>
