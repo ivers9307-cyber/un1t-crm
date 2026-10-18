@@ -407,10 +407,87 @@ describe('shapeWinbackRows', () => {
         sub({ synced_at: fresh }),
         sub({ un1t_id: 'a', un1t_user_id: 'u2', contact_id: 'c2', status: 'cancelled', product_title: 'First', remote_created_at: '2026-08-20T00:00:00Z', synced_at: fresh }),
         sub({ un1t_id: 'b', un1t_user_id: 'u2', contact_id: 'c2', status: 'cancelled', product_title: 'Second', remote_created_at: '2026-09-10T00:00:00Z', synced_at: fresh }),
-        sub({ un1t_id: 'c', un1t_user_id: 'u2', contact_id: 'c2', status: 'trialing', product_title: 'Trial', remote_created_at: '2026-10-01T00:00:00Z', synced_at: fresh }),
+        sub({ un1t_id: 'c', un1t_user_id: 'u2', contact_id: 'c2', status: 'trialing', product_title: 'Trial', remote_created_at: '2026-10-01T00:00:00Z', synced_at: stale }),
       ],
     }))
     expect(byId(rows, 'c2').glofox_membership_plan).toBe('Second')
+  })
+
+  it('paused, unpaid, incomplete or blank statuses are not evidence', () => {
+    for (const status of ['paused', 'unpaid', 'incomplete', null, '']) {
+      const rows = shapeWinbackRows(wfx({
+        allSubs: [sub({ synced_at: fresh }), sub({ un1t_id: 'x', un1t_user_id: 'u2', contact_id: 'c2', status, synced_at: stale })],
+      }))
+      expect(byId(rows, 'c2')).toBeUndefined()
+    }
+  })
+
+  it('a fresh paused subscription keeps them off win-back even with an ended row', () => {
+    const rows = shapeWinbackRows(wfx({
+      allSubs: [
+        sub({ synced_at: fresh }),
+        sub({ un1t_id: 'p', un1t_user_id: 'u2', contact_id: 'c2', status: 'paused', synced_at: fresh }),
+        sub({ un1t_id: 'old', un1t_user_id: 'u2', contact_id: 'c2', status: 'cancelled', synced_at: fresh }),
+      ],
+    }))
+    expect(byId(rows, 'c2')).toBeUndefined()
+  })
+
+  it('a stale past_due row is evidence too', () => {
+    const rows = shapeWinbackRows(wfx({
+      allSubs: [sub({ synced_at: fresh }), sub({ un1t_id: 'g', un1t_user_id: 'u2', contact_id: 'c2', status: 'past_due', synced_at: stale })],
+    }))
+    expect(byId(rows, 'c2').glofox_membership_status).toBe('ex_member')
+  })
+
+  it('a stalled sync (every row equally old) yields no stale-active ex_member', () => {
+    const old = '2026-09-01T00:00:00Z'
+    const rows = shapeWinbackRows(wfx({
+      freshCutoffIso: '2026-08-31T23:50:00Z',
+      allSubs: [sub({ synced_at: old }), sub({ un1t_id: 's2', un1t_user_id: 'u2', contact_id: 'c2', synced_at: old })],
+    }))
+    expect(byId(rows, 'c1').glofox_membership_status).toBe('member')
+    expect(byId(rows, 'c2').glofox_membership_status).toBe('member')
+  })
+
+  it('live rows come from allSubs by the same cutoff (subs input ignored)', () => {
+    const rows = shapeWinbackRows(wfx({
+      subs: [],
+      allSubs: [sub({ synced_at: fresh })],
+    }))
+    expect(byId(rows, 'c1').glofox_membership_status).toBe('member')
+  })
+
+  it('an unlimited-credit client is not an ex_member', () => {
+    const rows = shapeWinbackRows(wfx({
+      clients: [client(), { ...exClient, credit_unlimited: true, credit_balance: 0 }],
+      allSubs: [sub({ synced_at: fresh }), sub({ un1t_id: 'old', un1t_user_id: 'u2', contact_id: 'c2', status: 'cancelled', synced_at: fresh })],
+    }))
+    expect(byId(rows, 'c2')).toBeUndefined()
+  })
+
+  it('credits left from a €0 trial do not keep a former member off win-back', () => {
+    const rows = shapeWinbackRows(wfx({
+      clients: [client(), { ...exClient, credit_balance: 2 }],
+      packTxs: [ptx({ un1t_user_id: 'u2', product_id: 'trial', amount_cents: 0 })],
+      allSubs: [sub({ synced_at: fresh }), sub({ un1t_id: 'old', un1t_user_id: 'u2', contact_id: 'c2', status: 'cancelled', synced_at: fresh })],
+    }))
+    expect(byId(rows, 'c2').glofox_membership_status).toBe('ex_member')
+  })
+
+  it('plan prefers the newest REAL plan over a newer trial-titled row', () => {
+    const rows = shapeWinbackRows(wfx({
+      allSubs: [
+        sub({ synced_at: fresh }),
+        sub({ un1t_id: 'a', un1t_user_id: 'u2', contact_id: 'c2', status: 'cancelled', product_title: 'Unlimited', remote_created_at: '2026-08-20T00:00:00Z', synced_at: fresh }),
+        sub({ un1t_id: 'b', un1t_user_id: 'u2', contact_id: 'c2', status: 'cancelled', product_title: 'The UN1T Trial', remote_created_at: '2026-09-10T00:00:00Z', synced_at: fresh }),
+      ],
+    }))
+    expect(byId(rows, 'c2').glofox_membership_plan).toBe('Unlimited')
+  })
+
+  it('shapeRadarMembers does not expose its lookups', () => {
+    expect(Object.keys(shapeRadarMembers(fx())).sort()).toEqual(['members', 'packHolders', 'rows', 'skippedEvents', 'unlinkedClients'])
   })
 
   it('an ex-member with no contact is left out', () => {

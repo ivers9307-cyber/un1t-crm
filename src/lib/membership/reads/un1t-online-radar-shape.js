@@ -13,7 +13,10 @@
 // Booking statuses in the mirror are LOWERCASE (booked, cancelled, attended,
 // no_show: the OpenAPI UserBookingResponseDto). They are compared exactly as
 // spelled; the uppercase Glofox constants are never reused.
-import { MEMBER_STATUSES, glofoxInterval, packHolderIds, isActiveSub } from './un1t-online-shape'
+import {
+  MEMBER_STATUSES, UN1T_ENDED_SUB_STATUSES, UN1T_LIVE_SUB_STATUSES, glofoxInterval, packHolderIds, isActiveSub,
+} from './un1t-online-shape'
+import { isRealMembershipPlan } from '@/lib/churn-radar'
 import { NON_MEMBER_STATUSES } from '@/lib/lead-radar'
 
 const DAY_MS = 86_400_000
@@ -196,7 +199,14 @@ function baseRow(contactId, users, { clientsByUser, contactsById, newestBookingA
  * @param {number} a.nowMs
  * @returns {{ rows: object[], members: number, packHolders: number, unlinkedClients: number, skippedEvents: number }}
  */
-export function shapeRadarMembers({
+export function shapeRadarMembers(input = {}) {
+  const { ctx: _ctx, ...out } = radarCore(input)
+  return out
+}
+
+// shapeRadarMembers plus the per-person lookups (`ctx`) shapeWinbackRows reuses.
+// Kept private: ctx holds contact names and must never reach a response or log.
+function radarCore({
   subs = [], clients = [], packTxs = [], products = [], contactsById = new Map(),
   events = [], bookings = [], newestBookingAtByUser = new Map(), lastPaymentAtByUser = new Map(),
   nowMs,
@@ -272,10 +282,6 @@ export function shapeRadarMembers({
   return { rows, members, packHolders, unlinkedClients, skippedEvents, ctx }
 }
 
-// Subscription statuses that are NOT win-back evidence on their own: the live
-// ones (a fresh row is a member, a stale one is checked separately) and
-// 'trialing' (a trial that lapsed is a lead, never a former member).
-const NOT_EVIDENCE_STATUSES = Object.freeze([...MEMBER_STATUSES, 'trialing'])
 
 /**
  * Win-back rows (spec B §2b, Claude's call 4): every live row from
@@ -283,12 +289,19 @@ const NOT_EVIDENCE_STATUSES = Object.freeze([...MEMBER_STATUSES, 'trialing'])
  * subscription and is not a pack holder now (both tested FIRST, so a current
  * member's ended export row is never evidence: mig 728 ended exactly those),
  * and has evidence of a past membership at this studio:
- *   (i)   a subscription row whose status is not active, past_due or trialing;
+ *   (i)   a subscription row whose status is an ENDED spelling
+ *         (UN1T_ENDED_SUB_STATUSES); a paused, unpaid, incomplete or blank
+ *         status is not proof that a membership ended;
  *   (ii)  an active / past_due row the API stopped returning (synced_at older
  *         than freshCutoffIso: the mirror never deletes);
  *   (iii) an ended contact_memberships row here (un1t_online_api or
  *         un1t_online_export; the caller filters the source).
- * A 'trialing'-only history is not evidence.
+ * A 'trialing'-only history is not evidence. A contact holding any FRESH
+ * subscription on the live allowlist (UN1T_LIVE_SUB_STATUSES: active,
+ * past_due, trialing, paused, unpaid) is not an ex-member: spec A's board
+ * counts a fresh paused one as a member. "No pack credits" means not a pack
+ * holder (packHolderIds) and not unlimited: credits left from a €0 trial are
+ * not pack credits, so they do not keep a former member off the list.
  *
  * Subscription statuses seen at Hatch (read-only check, 18 Oct 2026): all 26
  * rows 'active'; no cancelled row has been observed, so /subscriptions appears
@@ -296,20 +309,26 @@ const NOT_EVIDENCE_STATUSES = Object.freeze([...MEMBER_STATUSES, 'trialing'])
  * last five syncs report history.absent_from_pull = 0.
  *
  * Plan and price come from the person's newest non-trialing subscription row
- * (by remote_created_at), else the ended membership's plan_name. Activity
+ * (by remote_created_at) whose plan is a real membership (isRealMembershipPlan),
+ * else their newest non-trialing row, else the ended membership's plan_name. Activity
  * columns come from their un1t_clients rows, as for members.
  *
- * @param {object} a  shapeRadarMembers' input, plus:
+ * @param {object} a  shapeRadarMembers' input (its `subs` is derived here from
+ *                   `allSubs`: the fresh rows, by the same cutoff), plus:
  * @param {object[]} a.allSubs           every un1t_subscriptions row at the studio, any status and age (synced_at)
  * @param {string|null} a.freshCutoffIso freshCutoff('un1t_subscriptions'); null = no rows
  * @param {object[]} a.endedMemberships  ended contact_memberships { contact_id, plan_name, ended_at }
  * @returns {object[]}
  */
 export function shapeWinbackRows({ allSubs = [], freshCutoffIso = null, endedMemberships = [], ...input } = {}) {
-  const { rows, ctx } = shapeRadarMembers(input)
+  const cutoffMs = msOf(freshCutoffIso)
+  // One source of truth for "fresh": a row at or after the cutoff (every row
+  // when there is no cutoff), so live and stale can never disagree.
+  const isFresh = (s) => cutoffMs == null || (msOf(s.synced_at) ?? -Infinity) >= cutoffMs
+  const freshSubs = allSubs.filter(isFresh)
+  const { rows, ctx } = radarCore({ ...input, subs: freshSubs })
   const liveContacts = new Set(rows.map((r) => r.id))
   const { clients = [] } = input
-  const cutoffMs = msOf(freshCutoffIso)
 
   const contactOfUser = new Map()
   for (const c of clients) if (c.contact_id != null && !contactOfUser.has(c.un1t_user_id)) contactOfUser.set(c.un1t_user_id, c.contact_id)
@@ -325,14 +344,16 @@ export function shapeWinbackRows({ allSubs = [], freshCutoffIso = null, endedMem
   // An unlimited-credit client holds credits now, so is not "no pack credits".
   const unlimitedContacts = new Set(clients.filter((c) => c.credit_unlimited === true && c.contact_id != null).map((c) => c.contact_id))
 
+  const holdsLiveSub = new Set()
   for (const s of allSubs) {
     const contactId = contactOfSub(s)
     if (contactId == null) continue
     const status = lower(s.status)
-    const nonLive = !NOT_EVIDENCE_STATUSES.includes(status)
-    const staleLive = MEMBER_STATUSES.includes(status) && cutoffMs != null && (msOf(s.synced_at) ?? -Infinity) < cutoffMs
+    if (isFresh(s) && UN1T_LIVE_SUB_STATUSES.includes(status)) holdsLiveSub.add(contactId)
+    const ended = UN1T_ENDED_SUB_STATUSES.includes(status)
+    const staleLive = MEMBER_STATUSES.includes(status) && !isFresh(s)
     if (status !== 'trialing') entry(contactId).subs.push(s)
-    if (nonLive || staleLive) entry(contactId).evident = true
+    if (ended || staleLive) entry(contactId).evident = true
   }
   for (const m of endedMemberships) {
     if (m?.contact_id == null) continue
@@ -344,9 +365,10 @@ export function shapeWinbackRows({ allSubs = [], freshCutoffIso = null, endedMem
 
   const out = [...rows]
   for (const [contactId, e] of evidence) {
-    if (!e.evident || liveContacts.has(contactId) || unlimitedContacts.has(contactId)) continue
-    const newestSub = e.subs.reduce((best, s) => (
+    if (!e.evident || liveContacts.has(contactId) || holdsLiveSub.has(contactId) || unlimitedContacts.has(contactId)) continue
+    const newestOf = (subs) => subs.reduce((best, s) => (
       best == null || (msOf(s.remote_created_at) ?? -Infinity) > (msOf(best.remote_created_at) ?? -Infinity) ? s : best), null)
+    const newestSub = newestOf(e.subs.filter((s) => isRealMembershipPlan(s.product_title))) ?? newestOf(e.subs)
     const newestEnded = e.ended.reduce((best, m) => (
       best == null || (msOf(m.ended_at) ?? -Infinity) > (msOf(best.ended_at) ?? -Infinity) ? m : best), null)
     out.push({
