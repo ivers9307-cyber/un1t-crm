@@ -384,6 +384,16 @@ describe('list_upcoming_classes at an un1t.online studio (T5-F)', () => {
     expect(logError).toHaveBeenCalledWith('agent-timetable', expect.any(String), expect.objectContaining({ locationId: HATCH }))
   })
 
+  it('no-booking block payload unchanged: { name, starts_at } and the two-column select, with or without a no_booking turn', async () => {
+    const rows = [{ un1t_id: 'e1', title: 'HYROX', starts_at: '2026-10-20T07:00:00Z', capacity: 12, bookings_count: 12 }]
+    for (const turn of [undefined, { block: 'no_booking', answerable: [], channel: 'whatsapp', un1tWrites: false }]) {
+      const { db, calls } = timetableDb({ rows })
+      const r = await executeBookingTool('list_upcoming_classes', {}, { ...HATCH_CTX, turn, db })
+      expect(r).toEqual({ classes: [{ name: 'HYROX', starts_at: 'Tue 20 Oct, 08:00' }] })
+      expect(calls[0].ops).toContainEqual(['select', 'title, starts_at'])
+    }
+  })
+
   it('a no-booking studio with no source has no timetable: no_booking_system, no read', async () => {
     const db = throwingDb()
     const r = await executeBookingTool('list_upcoming_classes', {}, { ...HATCH_CTX, membershipSourceKey: 'none', db })

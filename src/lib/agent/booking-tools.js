@@ -316,12 +316,19 @@ export function shapeUn1tClassesForAgent(rows, zone = DEFAULT_TZ) {
   return out
 }
 
-async function listUn1tOnlineClasses(db, locationId, zone, nowMs = Date.now()) {
+/**
+ * The timetable at one un1t.online studio. The no-booking block calls it with
+ * defaults and gets `{ name, starts_at }` per class (two columns selected).
+ * A `un1t_*` block passes `withEventIds` and gets `{ event_id, name, starts_at,
+ * full }`: capacity and bookings_count are selected for that one case, only to
+ * compute `full` inside the shaper, and are in no returned object, log or error.
+ */
+export async function listUn1tOnlineClasses(db, locationId, zone, nowMs = Date.now(), { withEventIds = false } = {}) {
   const fromIso = new Date(nowMs).toISOString()
   const toIso = new Date(nowMs + UN1T_TIMETABLE_DAYS * 86400_000).toISOString()
   try {
     const { data, error } = await db.from('un1t_events')
-      .select('title, starts_at')
+      .select(withEventIds ? 'un1t_id, title, starts_at, capacity, bookings_count' : 'title, starts_at')
       .eq('location_id', locationId)
       .eq('status', UN1T_SCHEDULED_STATUS)
       .gte('starts_at', fromIso)
@@ -333,7 +340,13 @@ async function listUn1tOnlineClasses(db, locationId, zone, nowMs = Date.now()) {
       return noBookingSystemAnswer(null, { state: 'none' })
     }
     const rows = Array.isArray(data) ? data : []
-    const classes = shapeUn1tClassesForAgent(rows, zone)
+    let classes
+    if (withEventIds) {
+      const { shapeUn1tTimetableForAgent } = await import('./un1t-tools')
+      classes = shapeUn1tTimetableForAgent(rows, zone)
+    } else {
+      classes = shapeUn1tClassesForAgent(rows, zone)
+    }
     // A full page means there may be more after the last class shown.
     return rows.length >= UN1T_TIMETABLE_LIMIT ? { classes, truncated: true } : { classes }
   } catch (err) {
@@ -664,6 +677,15 @@ export async function executeBookingTool(toolName, input, ctx) {
   // whose source takes no bookings is refused before any read or Glofox call.
   const refused = refuseToolForTurn(toolName, ctx)
   if (refused) return refused
+
+  // MIAHATCH.2 Task 6 — on a turn whose tool block reads un1t.online the
+  // timetable comes from the answerable studios (event ids and `full`), not the
+  // thread studio. A turn without one is untouched; the module loads lazily so
+  // a Glofox turn never imports it. No verification: the timetable is public.
+  if (toolName === 'list_upcoming_classes' && String(ctx.turn?.block || '').startsWith('un1t_')) {
+    const { executeUn1tTimetable } = await import('./un1t-tools')
+    return executeUn1tTimetable(input, ctx, ctx.turn.answerable)
+  }
 
   if (toolName === 'list_upcoming_classes' && ctx.canBook === false) {
     // MIAORG.1 Task 5 — no Glofox here. un1t.online studios answer from their

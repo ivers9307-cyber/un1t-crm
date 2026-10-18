@@ -28,11 +28,14 @@ import {
   shapeUn1tMembership,
   shapeUn1tBookingsForAgent,
   shapeUn1tAttendance,
+  shapeUn1tTimetableForAgent,
   un1tPriceLabel,
   executeUn1tRead,
+  executeUn1tTimetable,
 } from './un1t-tools'
 import { executeAccountTool } from './account-tools'
-import { executeBookingTool } from './booking-tools'
+import { executeBookingTool, UN1T_TIMETABLE_LIMIT, noBookingSystemAnswer } from './booking-tools'
+import { TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
 import { fetchLiveUn1tBookings } from './un1t-member-read'
 import { providerFor } from '@/lib/membership/source'
 import { formatClassTime } from './dublin-format'
@@ -66,8 +69,9 @@ function fakeDb(tables = {}, { errors = {} } = {}) {
       eq(col, val) { call.eqs[col] = val; filters.push((r) => r[col] === val); return b },
       in(col, vals) { filters.push((r) => vals.includes(r[col])); return b },
       gte(col, val) { filters.push((r) => Date.parse(r[col]) >= Date.parse(val)); return b },
+      lte(col, val) { filters.push((r) => Date.parse(r[col]) <= Date.parse(val)); return b },
       order() { return b },
-      limit() { return b },
+      limit(n) { call.limit = n; filters.push(((seen) => () => seen++ < n)(0)); return b },
       range(from_, to) { call.range = [from_, to]; const base = run(); return Promise.resolve(base.error ? base : { data: base.data.slice(from_, to + 1), error: null }) },
       async maybeSingle() { const r = run(); return r.error ? r : { data: r.data[0] ?? null, error: null } },
       then(resolve, reject) { return Promise.resolve(run()).then(resolve, reject) },
@@ -541,5 +545,119 @@ describe('what the model sees', () => {
   it('logs carry the studio and a code, never an id of the member', async () => {
     await executeUn1tRead('get_my_membership', {}, ctxFor(fakeDb(tables(), { errors: { un1t_subscriptions: true } })), [hatchStudio])
     expect(JSON.stringify(logWarn.mock.calls)).not.toContain(USER)
+  })
+})
+
+// ── Task 6: the timetable with event ids and `full` ──────────────────
+describe('shapeUn1tTimetableForAgent', () => {
+  const row = (over = {}) => ({ un1t_id: 'e1', title: 'HYROX', starts_at: '2026-10-20T07:00:00Z', capacity: 12, bookings_count: 3, ...over })
+
+  it('payload keys are exactly event_id, name, starts_at, full', () => {
+    const rows = [row(), row({ un1t_id: 'e2', capacity: 12, bookings_count: 12 }), row({ un1t_id: 'e3', capacity: null }), row({ un1t_id: 'e4', capacity: 0, bookings_count: 4 })]
+    const out = shapeUn1tTimetableForAgent(rows, 'Europe/Dublin')
+    expect(out).toHaveLength(4)
+    for (const item of out) expect(Object.keys(item)).toEqual(['event_id', 'name', 'starts_at', 'full'])
+    expect(out[0]).toEqual({ event_id: 'un1t:e1', name: 'HYROX', starts_at: 'Tue 20 Oct, 08:00', full: false })
+    expect(JSON.stringify(out)).not.toMatch(/capacity|bookings_count|limited|spaces/)
+  })
+  it('full true at capacity and over it, false below, false when capacity is 0 or null', () => {
+    const at = (capacity, bookings_count) => shapeUn1tTimetableForAgent([row({ capacity, bookings_count })], 'Europe/Dublin')[0].full
+    expect(at(12, 12)).toBe(true)
+    expect(at(12, 15)).toBe(true)
+    expect(at(12, 11)).toBe(false)
+    expect(at(12, 0)).toBe(false)
+    expect(at(12, null)).toBe(false)
+    expect(at(0, 3)).toBe(false)
+    expect(at(null, 3)).toBe(false)
+    expect(at(undefined, undefined)).toBe(false)
+  })
+  it('drops a row with no id or no parseable start; a blank title is "Class"; uses the zone', () => {
+    const out = shapeUn1tTimetableForAgent([row({ un1t_id: null }), row({ starts_at: 'nope' }), row({ title: '  ' })], 'America/New_York')
+    expect(out).toEqual([{ event_id: 'un1t:e1', name: 'Class', starts_at: 'Tue 20 Oct, 03:00', full: false }])
+  })
+  it('a non-array is an empty list', () => {
+    expect(shapeUn1tTimetableForAgent(null, 'Europe/Dublin')).toEqual([])
+  })
+})
+
+describe('executeUn1tTimetable: two answerable studios', () => {
+  const dualCtx = (db) => ctxFor(db, { turn: { block: 'un1t_read_dual', answerable: [hatchStudio, stillStudio], channel: 'whatsapp', un1tWrites: false } })
+
+  it('one named section each, the Glofox half is today\'s path at the Glofox studio with no turn', async () => {
+    executeBookingTool.mockResolvedValueOnce({ classes: [{ event_id: '64cc00000000000000000001', name: 'Glofox Class', time: 'Mon 19 Oct, 07:00', starts_at: '2026-10-19T07:00:00.000Z', full: false }] })
+    const db = fakeDb({ ...tables(), locations: [{ id: STILL, timezone: 'Europe/Dublin' }] })
+    const out = await executeUn1tTimetable({}, dualCtx(db), [hatchStudio, stillStudio])
+    expect(out.studios.map((s) => s.studio)).toEqual(['Test Studio Hatch', 'Test Studio Still'])
+    expect(out.studios[0].classes.map((c) => c.event_id)).toEqual(['un1t:e1', 'un1t:e2', 'un1t:e3'])
+    expect(out.studios[0].classes[0].full).toBe(true)
+    expect(out.studios[1].classes[0].name).toBe('Glofox Class')
+    const glofoxCall = executeBookingTool.mock.calls.find((c) => c[2].locationId === STILL)
+    expect(glofoxCall[0]).toBe('list_upcoming_classes')
+    expect(glofoxCall[2].turn).toBeUndefined()
+  })
+  it('two studios: a failed un1t read is that section\'s handoff; the Glofox half still answers', async () => {
+    executeBookingTool.mockResolvedValueOnce({ classes: [] })
+    const db = fakeDb({ ...tables(), locations: [] }, { errors: { un1t_events: true } })
+    const out = await executeUn1tTimetable({}, dualCtx(db), [hatchStudio, stillStudio])
+    expect(out.studios[0]).toMatchObject({ studio: 'Test Studio Hatch', error: 'no_booking_system' })
+    expect(out.studios[1]).toEqual({ studio: 'Test Studio Still', classes: [] })
+  })
+})
+
+describe('list_upcoming_classes in a un1t block', () => {
+  const run = (db, turn, over = {}) => executeBookingTool('list_upcoming_classes', {}, ctxFor(db, { turn, ...over }))
+  const readTurn = { block: 'un1t_read', answerable: [hatchStudio], channel: 'whatsapp', un1tWrites: false }
+  it('answers { classes: [{ event_id, name, starts_at, full }] } with full set from capacity, never the numbers', async () => {
+    const db = fakeDb(tables())
+    const out = await run(db, readTurn)
+    expect(Object.keys(out)).toEqual(['classes'])
+    expect(out.classes.map((c) => c.name)).toEqual(['HYROX', 'Strength', 'Mobility'])
+    expect(out.classes.map((c) => c.full)).toEqual([true, false, false])
+    expect(out.classes.map((c) => c.event_id)).toEqual(['un1t:e1', 'un1t:e2', 'un1t:e3'])
+    for (const item of out.classes) expect(Object.keys(item)).toEqual(['event_id', 'name', 'starts_at', 'full'])
+    expect(JSON.stringify(out)).not.toMatch(/capacity|bookings_count|limited/)
+    const read = db.calls.find((c) => c.table === 'un1t_events')
+    expect(read.cols).toBe('un1t_id, title, starts_at, capacity, bookings_count')
+    expect(read.eqs).toMatchObject({ location_id: HATCH, status: 'scheduled' })
+  })
+  it('needs no verification (the public timetable)', async () => {
+    const out = await run(fakeDb(tables()), readTurn, { verifiedContactId: null })
+    expect(out.classes).toHaveLength(3)
+  })
+  it('is dispatched to the answerable un1t studio, not the thread studio', async () => {
+    // A Hatch-only member on a Stillorgan thread: ctx.locationId is Stillorgan.
+    const stillThread = { zone: 'Europe/Dublin', locationId: STILL }
+    const db = fakeDb({ ...tables(), locations: [{ id: HATCH, timezone: 'Europe/Dublin' }] })
+    const out = await run(db, readTurn, stillThread)
+    const read = db.calls.find((c) => c.table === 'un1t_events')
+    expect(read.eqs.location_id).toBe(HATCH)
+    expect(out.classes).toHaveLength(3)
+  })
+  it('the studio\'s own zone is used when it is not the thread studio', async () => {
+    const db = fakeDb({ ...tables(), locations: [{ id: HATCH, timezone: 'America/New_York' }] })
+    const out = await run(db, readTurn, { locationId: STILL, zone: 'Europe/Dublin' })
+    expect(out.classes[0].starts_at).toBe(formatClassTime(Math.floor((NOW + DAY) / 1000), 'America/New_York'))
+  })
+  it('a full page says truncated: true', async () => {
+    const many = Array.from({ length: UN1T_TIMETABLE_LIMIT }, (_, i) => ({ location_id: HATCH, un1t_id: `m${i}`, title: `C${i}`, starts_at: iso(NOW + DAY + i * 60_000), status: 'scheduled', capacity: 12, bookings_count: 1 }))
+    const out = await run(fakeDb({ un1t_events: many }), readTurn)
+    expect(Object.keys(out)).toEqual(['classes', 'truncated'])
+    expect(out.truncated).toBe(true)
+    expect(out.classes).toHaveLength(UN1T_TIMETABLE_LIMIT)
+  })
+  it('a failed read hands off like the no-booking block, never an empty list', async () => {
+    const db = fakeDb(tables(), { errors: { un1t_events: true } })
+    const out = await run(db, readTurn)
+    expect(out).toEqual(noBookingSystemAnswer(null, { state: 'none' }))
+    expect(out.classes).toBeUndefined()
+  })
+  it('a turn with no un1t studio answerable is the not-at-this-studio refusal', async () => {
+    const out = await run(fakeDb(tables()), { ...readTurn, answerable: [stillStudio] })
+    expect(out).toEqual({ ...TOOL_NOT_AT_THIS_STUDIO })
+  })
+  it('no em or en dash in what the timetable itself adds', async () => {
+    // (The failed-read handoff is the existing no_booking_system message.)
+    const out = await run(fakeDb(tables()), readTurn)
+    expect(JSON.stringify(out)).not.toMatch(/[–—]/)
   })
 })

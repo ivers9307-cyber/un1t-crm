@@ -62,6 +62,10 @@ const LIST_FAILED = Object.freeze({
   error: 'list_failed',
   message: 'Could not load their bookings just now, offer to hand off.',
 })
+const LIST_FAILED_TIMETABLE = Object.freeze({
+  error: 'list_failed',
+  message: 'Could not load the timetable just now, offer to hand off.',
+})
 const NO_ACCOUNT_NOTE =
   'No account was found for this person at this studio. Say you cannot see an account for them here and offer to hand off to the team.'
 const STALE_NOTE =
@@ -186,6 +190,32 @@ export function shapeUn1tBookingsForAgent(rows, eventsByUn1tId, nowMs, zone = DE
   }
   out.sort((a, b) => a.startMs - b.startMs)
   return out.slice(0, MAX_MEMBER_BOOKINGS).map(({ startMs: _omitted, ...rest }) => rest)
+}
+
+/**
+ * The timetable for a un1t block: `{ event_id: 'un1t:<un1t_id>', name,
+ * starts_at, full }` per class, starts_at the studio's wall-clock label.
+ * `full` is `capacity > 0 && bookings_count >= capacity` (a null or 0 capacity
+ * is never full). CAPACITY-SECRECY.1: capacity and bookings_count are read
+ * here to compute `full` and go no further; they are in no returned object.
+ * Rows without an id or a parseable start are dropped. Pure.
+ */
+export function shapeUn1tTimetableForAgent(rows, zone = DEFAULT_TZ) {
+  const out = []
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const id = rowId(r)
+    const ms = toMs(r?.starts_at)
+    if (!id || ms === null) continue
+    const capacity = Number(r.capacity)
+    const booked = Number(r.bookings_count) || 0
+    out.push({
+      event_id: tagUn1tId(id),
+      name: String(r?.title || '').trim() || 'Class',
+      starts_at: formatClassTime(Math.floor(ms / 1000), zone),
+      full: Number.isFinite(capacity) && capacity > 0 && booked >= capacity,
+    })
+  }
+  return out
 }
 
 /**
@@ -433,7 +463,7 @@ async function glofoxSection(toolName, input, ctx, studio, zone) {
     canBook: true,
     membershipSourceKey: 'glofox',
   }
-  if (toolName === 'list_my_upcoming_bookings') {
+  if (toolName === 'list_my_upcoming_bookings' || toolName === 'list_upcoming_classes') {
     const { executeBookingTool } = await import('./booking-tools')
     return executeBookingTool(toolName, input, glofoxCtx)
   }
@@ -467,6 +497,39 @@ export async function executeUn1tRead(toolName, input, ctx, studios) {
     } catch (err) {
       logWarn(LOG_MODULE, 'member read threw', { locationId: studio.locationId, op: toolName, status: null, errClass: err?.name })
       return { ...READ_FAILED }
+    }
+  }))
+  if (list.length === 1) return sections[0]
+  return { studios: list.map((studio, i) => ({ studio: studio.name, ...sections[i] })) }
+}
+
+/**
+ * `list_upcoming_classes` on a un1t turn. The answerable un1t.online studio is
+ * read, whichever studio the thread is at (a Hatch-only member on a Stillorgan
+ * thread reads Hatch's timetable). One studio: its shape, `{ classes,
+ * truncated? }`. Two: `{ studios: [{ studio: name, ...shape }] }` with the
+ * Glofox section from TODAY's executor (Glofox studio as the location, no
+ * turn). No verification, as today. A failed read is the no-booking handoff
+ * for that section, never an empty list.
+ *
+ * @param {object} input
+ * @param {object} ctx tool context
+ * @param {import('./member-studios').MemberStudio[]} studios answerable studios
+ */
+export async function executeUn1tTimetable(input, ctx, studios) {
+  const list = (Array.isArray(studios) ? studios : [])
+    .filter((s) => s && (s.providerKey === 'un1t_online' || s.providerKey === 'glofox'))
+  if (!list.some((s) => s.providerKey === 'un1t_online')) return { ...TOOL_NOT_AT_THIS_STUDIO }
+
+  const { listUn1tOnlineClasses } = await import('./booking-tools')
+  const sections = await Promise.all(list.map(async (studio) => {
+    try {
+      const zone = await zoneFor(ctx, studio)
+      if (studio.providerKey === 'glofox') return await glofoxSection('list_upcoming_classes', input, ctx, studio, zone)
+      return await listUn1tOnlineClasses(ctx.db, studio.locationId, zone, Date.now(), { withEventIds: true })
+    } catch (err) {
+      logWarn(LOG_MODULE, 'timetable read threw', { locationId: studio.locationId, op: 'list_upcoming_classes', status: null, errClass: err?.name })
+      return { ...LIST_FAILED_TIMETABLE }
     }
   }))
   if (list.length === 1) return sections[0]
