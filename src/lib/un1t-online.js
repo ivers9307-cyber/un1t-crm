@@ -17,7 +17,7 @@
 
 import { logWarn } from './log'
 
-const DEFAULT_BASE_URL = 'https://api.un1t.online'
+export const DEFAULT_BASE_URL = 'https://api.un1t.online'
 const PAGE_SIZE = 100
 const MAX_RETRIES = 3
 // The longest single rate-limit / Retry-After wait the client will sit through.
