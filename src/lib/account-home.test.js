@@ -15,9 +15,17 @@ import { describe, it, expect, vi } from 'vitest'
 vi.mock('@/lib/membership/source', () => ({
   membershipSourceState: vi.fn(async (_db, locationId) => (
     locationId === 'loc-1' ? { source: 'glofox', state: 'configured' }
+      : locationId === 'loc-un1t' ? { source: 'un1t_online', state: 'configured' }
+      : locationId === 'loc-un1t-bad' ? { source: 'un1t_online', state: 'configured' }
       : locationId === 'loc-err' ? { source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE' }
         : { source: 'none', state: 'none' }
   )),
+}))
+
+// UN1TRADAR.3 — the source-key registry, so a un1t studio counts members through the seam.
+const un1tCounts = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/membership/reads/registry', () => ({
+  READS_BY_SOURCE: { glofox: { membershipCounts: vi.fn() }, none: {}, un1t_online: { membershipCounts: un1tCounts } },
 }))
 
 import {
@@ -285,5 +293,27 @@ describe('assembleAccountHome', () => {
       now: Date.now(),
     })
     expect(res.studios[0].membershipSource).toEqual({ source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE' })
+  })
+})
+
+// UN1TRADAR.3 — Glofox keeps its contacts head-count (Stillorgan unchanged);
+// another source with a membershipCounts read reports its total_members.
+describe('assembleAccountHome members by source', () => {
+  it('account-home members: glofox head-count unchanged; un1t from membershipCounts; a failed read is 0', async () => {
+    un1tCounts.mockImplementation(async (_db, id) => {
+      if (id === 'loc-un1t-bad') throw new Error('down')
+      return { total_members: 26 }
+    })
+    const { db, selectCalls } = mockDb({ 'loc-1': { members: 268 }, 'loc-un1t': { members: 999 }, 'loc-un1t-bad': { members: 999 } })
+    const res = await assembleAccountHome(db, {
+      organization: { id: 'o', name: 'O', slug: 'o' },
+      locations: [{ id: 'loc-1', name: 'S' }, { id: 'loc-un1t', name: 'H' }, { id: 'loc-un1t-bad', name: 'X' }],
+      now: Date.parse('2026-10-18T12:00:00Z'),
+    })
+    const by = Object.fromEntries(res.studios.map((st) => [st.id, st.members]))
+    expect(by).toEqual({ 'loc-1': 268, 'loc-un1t': 26, 'loc-un1t-bad': 0 })
+    expect(un1tCounts).toHaveBeenCalledWith(db, 'loc-un1t')
+    // the contacts head-count ran for the Glofox studio only
+    expect(selectCalls.filter((c) => c.table === 'contacts')).toHaveLength(1)
   })
 })

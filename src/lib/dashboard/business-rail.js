@@ -111,6 +111,18 @@ async function churnRow(db, locationId) {
 async function leadsRow(db, locationId, now) {
   try {
     const cutoffIso = new Date(now.getTime() - DAY_MS).toISOString()
+    // UN1TRADAR.3 — contacts.pipeline_stage_slug follows the PRIMARY board
+    // (mig 595). Where that is not the acquisition board (Hatch: the manual
+    // waitlist), count the acquisition board's own deals instead.
+    const { data: boards, error: boardErr } = await db.from('pipelines')
+      .select('id, key, is_primary, enabled')
+      .eq('location_id', locationId)
+    const primary = boardErr ? null : (boards || []).find((p) => p.is_primary)
+    if (primary && primary.key !== 'acquisition') {
+      const acq = (boards || []).find((p) => p.key === 'acquisition' && p.enabled)
+      if (!acq) return null
+      return leadsRowRender(await uncontactedAcquisitionLeads(db, locationId, acq.id, cutoffIso))
+    }
     const { data: leads } = await db.from('contacts')
       .select('id')
       .eq('location_id', locationId).eq('pipeline_stage_slug', 'new_lead')
@@ -128,15 +140,48 @@ async function leadsRow(db, locationId, now) {
       const touched = new Set((actions || []).map(a => a.contact_id))
       uncontacted = ids.filter(id => !touched.has(id)).length
     }
-    if (uncontacted > 0) {
-      return {
-        key: 'leads', chip: 'Leads', tone: 'teal',
-        text: `${uncontacted} lead${uncontacted === 1 ? '' : 's'} uncontacted > 24h`,
-        href: '/dashboard/lead-radar',
-      }
-    }
+    return leadsRowRender(uncontacted)
   } catch { /* omitted */ }
   return null
+}
+
+function leadsRowRender(uncontacted) {
+  if (!(uncontacted > 0)) return null
+  return {
+    key: 'leads', chip: 'Leads', tone: 'teal',
+    text: `${uncontacted} lead${uncontacted === 1 ? '' : 's'} uncontacted > 24h`,
+    href: '/dashboard/lead-radar',
+  }
+}
+
+// Open deals at the acquisition board's new_lead stage created over 24h ago
+// (capped at 100, as the contacts query is), minus contacted / outreach-sent.
+async function uncontactedAcquisitionLeads(db, locationId, pipelineId, cutoffIso) {
+  const { data: stages } = await db.from('pipeline_stages')
+    .select('id')
+    .eq('location_id', locationId)
+    .eq('pipeline_id', pipelineId)
+    .eq('slug', 'new_lead')
+  const stageIds = (stages || []).map((st) => st.id)
+  if (stageIds.length === 0) return 0
+  const { data: deals } = await db.from('deals')
+    .select('contact_id')
+    .eq('location_id', locationId)
+    .eq('pipeline_id', pipelineId)
+    .eq('status', 'open')
+    .in('stage_id', stageIds)
+    .lt('created_at', cutoffIso)
+    .limit(100)
+  const ids = [...new Set((deals || []).map((d) => d.contact_id).filter(Boolean))]
+  if (ids.length === 0) return 0
+  // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- ids is capped at 100 deals above; contacting actions per contact are a tiny set, so 1000 captures every row
+  const { data: actions } = await db.from('lead_radar_actions')
+    .select('contact_id')
+    .in('contact_id', ids)
+    .in('action', ['contacted', 'outreach_sent'])
+    .limit(1000)
+  const touched = new Set((actions || []).map((a) => a.contact_id))
+  return ids.filter((id) => !touched.has(id)).length
 }
 
 export async function buildNeedsYouRail(db, user, locationId, now = new Date()) {

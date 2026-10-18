@@ -50,6 +50,7 @@
 import { resolveAdminOrgId } from '@/lib/org-admin'
 import { todayStrIn, addDaysISO, zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
 import { membershipSourceState } from '@/lib/membership/source'
+import { READS_BY_SOURCE } from '@/lib/membership/reads/registry'
 
 // Glofox statuses that count as an active member (same cohort as
 // membership-snapshot.js).
@@ -175,7 +176,20 @@ export function resolveAccountScope(user, requestedOrgId) {
 // bad studio can't blank the whole portfolio.
 // ---------------------------------------------------------------------------
 
-async function countMembers(db, locationId) {
+// UN1TRADAR.3 — Glofox keeps the contacts head-count (Stillorgan's number
+// does not move); any other source whose read seam counts members reports its
+// total_members (a failed read is 0, as a failed count is). A narrowing of
+// spec B §5's "one line": the head-count would read Hatch's Stillorgan-shaped
+// glofox_* columns.
+async function countMembers(db, locationId, source) {
+  const counts = source && source !== 'glofox' ? READS_BY_SOURCE[source]?.membershipCounts : null
+  if (typeof counts === 'function') {
+    try {
+      return Number((await counts(db, locationId))?.total_members) || 0
+    } catch {
+      return 0
+    }
+  }
   const { count } = await db
     .from('contacts')
     .select('id', { count: 'exact', head: true })
@@ -240,7 +254,7 @@ async function assembleStudio(db, location, now) {
   const membershipSource = await membershipSourceState(db, location.id)
   try {
     const [members, bookings7d, atRiskHigh, openApprovals] = await Promise.all([
-      countMembers(db, location.id),
+      countMembers(db, location.id, membershipSource?.source),
       countBookings7d(db, location.id, window),
       latestAtRiskHigh(db, location.id),
       countOpenApprovals(db, location.id, window.end),
