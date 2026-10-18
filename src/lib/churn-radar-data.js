@@ -610,7 +610,7 @@ const WINBACK_CONTACT_STATUSES = ['member', 'credit_member', 'ex_member']
  * Fetch every contact that could be a former member. Paginated, like
  * fetchMembers, but widened to include ex_member.
  */
-async function fetchWinbackContacts(db, locationId) {
+export async function fetchWinbackContacts(db, locationId) {
   const rows = []
   const PAGE = 1000
   for (let from = 0; ; from += PAGE) {

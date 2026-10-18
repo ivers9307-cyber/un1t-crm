@@ -12,7 +12,7 @@ vi.mock('@shared/studio-kpis', () => ({ fetchMrr: vi.fn(), fetchGrowth: vi.fn(),
 vi.mock('@shared/dashboard-data', () => ({ fetchRevenueMTD: vi.fn(), fetchArrearsSummary: vi.fn() }))
 
 import { membershipStateForPage } from '@/lib/membership/state-for-page'
-import { READ_KEYS, READS_BY_SOURCE, membershipReadsFor, supportsRead } from './index'
+import { READ_KEYS, READS_BY_SOURCE, membershipReadsFor, supportsRead, radarReadsFor } from './index'
 import { glofoxReads } from './glofox'
 import { noneReads } from './none'
 import { un1tOnlineReads } from './un1t-online'
@@ -25,10 +25,11 @@ const LOC = 'a0000000-0000-4000-8000-00000000000a'
 beforeEach(() => vi.clearAllMocks())
 
 describe('membershipReadsFor', () => {
-  it('exposes the eleven read keys', () => {
+  it('exposes the fifteen read keys', () => {
     expect(READ_KEYS).toEqual([
       'membershipCounts', 'mrr', 'membershipFlows', 'growth', 'engagement', 'revenueMtd', 'arrears',
       'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility',
+      'radarMembers', 'winbackContacts', 'leadContacts', 'radarPastDue',
     ])
     expect(Object.isFrozen(READ_KEYS)).toBe(true)
   })
@@ -108,5 +109,54 @@ describe('supportsRead', () => {
     expect(supportsRead({ reads: { mrr: 'nope' } }, 'mrr')).toBe(false)
     expect(supportsRead(null, 'mrr')).toBe(false)
     expect(supportsRead({ reads: null }, 'mrr')).toBe(false)
+  })
+})
+
+// UN1TRADAR.1 — the radar reads resolve by SOURCE KEY in any state, so
+// Stillorgan's radar survives a Glofox credential glitch.
+describe('radarReadsFor', () => {
+  it('READ_KEYS lists the four radar keys', () => {
+    expect(READ_KEYS).toEqual(expect.arrayContaining(['radarMembers', 'winbackContacts', 'leadContacts', 'radarPastDue']))
+  })
+
+  for (const state of ['configured', 'unconfigured', 'unknown']) {
+    it(`resolves glofox by source key while ${state}`, async () => {
+      membershipStateForPage.mockResolvedValue({ source: 'glofox', state, label: 'Glofox', capabilities: { memberships: true } })
+      const r = await radarReadsFor(db, LOC)
+      expect(membershipStateForPage).toHaveBeenCalledWith(db, LOC)
+      expect(r.source).toBe('glofox')
+      expect(r.reads).toBe(READS_BY_SOURCE.glofox)
+      expect(r.providesMemberships).toBe(true)
+      expect(r.pinArrears).toBe(false)
+    })
+  }
+
+  it('resolves un1t_online with providesMemberships false today (the static table, not the state)', async () => {
+    // even a state claiming memberships cannot widen what the provider declares
+    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: true } })
+    const r = await radarReadsFor(db, LOC)
+    expect(r.source).toBe('un1t_online')
+    expect(r.reads).toBe(un1tOnlineReads)
+    expect(r.providesMemberships).toBe(false)
+  })
+
+  it('none and an unregistered source resolve to noneReads, providing nothing', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'none', state: 'none', label: 'x' })
+    expect(await radarReadsFor(db, LOC)).toMatchObject({ source: 'none', reads: noneReads, providesMemberships: false, pinArrears: false })
+    membershipStateForPage.mockResolvedValue({ source: 'un1t', state: 'unconfigured', label: 'un1t', missing: ['provider'] })
+    expect(await radarReadsFor(db, LOC)).toMatchObject({ source: 'un1t', reads: noneReads, providesMemberships: false })
+    membershipStateForPage.mockResolvedValue({ source: 'constructor', state: 'unconfigured', label: 'x' })
+    expect(await radarReadsFor(db, LOC)).toMatchObject({ reads: noneReads, providesMemberships: false })
+  })
+
+  it('throws MEMBERSHIP_SOURCE_UNREADABLE when the source key is unreadable', async () => {
+    membershipStateForPage.mockResolvedValue({ source: null, state: 'unknown', label: 'x', readError: 'MEMBERSHIP_SOURCE_UNREADABLE' })
+    await expect(radarReadsFor(db, LOC)).rejects.toMatchObject({ code: 'MEMBERSHIP_SOURCE_UNREADABLE' })
+  })
+
+  it('pinArrears mirrors the adapter flag', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online' })
+    const r = await radarReadsFor(db, LOC)
+    expect(r.pinArrears).toBe(un1tOnlineReads.pinArrears === true)
   })
 })

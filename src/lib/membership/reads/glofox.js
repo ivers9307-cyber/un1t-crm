@@ -9,6 +9,11 @@ import { computeMembershipCounts } from '@/lib/membership-snapshot'
 import { fetchMembershipFlows } from '@/lib/membership-flows'
 import { fetchMrr, fetchGrowth, fetchEngagement } from '@shared/studio-kpis'
 import { fetchRevenueMTD, fetchArrearsSummary } from '@shared/dashboard-data'
+// UN1TRADAR.1 — churn-radar-data imports reads/index, which reaches this file
+// through the registry: the arrows resolve their target at CALL time, so the
+// import cycle is safe.
+import { fetchMembers, fetchWinbackContacts, fetchPastDue } from '@/lib/churn-radar-data'
+import { fetchNonMembers } from '@/lib/lead-radar-data'
 
 export const glofoxReads = Object.freeze({
   membershipCounts: (...args) => computeMembershipCounts(...args),
@@ -18,4 +23,9 @@ export const glofoxReads = Object.freeze({
   engagement: (...args) => fetchEngagement(...args),
   revenueMtd: (...args) => fetchRevenueMTD(...args),
   arrears: (...args) => fetchArrearsSummary(...args),
+  // UN1TRADAR.1 — the radar row fetches: today's contacts / glofox_invoices readers
+  radarMembers: (...args) => fetchMembers(...args),
+  winbackContacts: (...args) => fetchWinbackContacts(...args),
+  leadContacts: (...args) => fetchNonMembers(...args),
+  radarPastDue: (...args) => fetchPastDue(...args),
 })

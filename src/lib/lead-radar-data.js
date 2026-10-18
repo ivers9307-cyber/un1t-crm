@@ -30,7 +30,7 @@ const CONTACTING_ACTIONS = ['contacted', 'outreach_sent']
  * non-member base (~7,000 rows) far exceeds Supabase's ~1000-row
  * response cap.
  */
-async function fetchNonMembers(db, locationId) {
+export async function fetchNonMembers(db, locationId) {
   const rows = []
   const PAGE = 1000
   for (let from = 0; ; from += PAGE) {
