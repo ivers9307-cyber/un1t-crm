@@ -13,7 +13,15 @@
 //   error.code and words (surfaced verbatim; scrubMessage runs before storage).
 // - A book answer that describes another event, user or studio is unknown
 //   (RF5: a proxy bug or a stale cache must not read as our booking).
-// - already booked is a done book with no new id.
+// - already booked is a done book with no new id, but only when the code
+//   table (UN1T_REFUSAL_CODES) says so. Matched from words alone it is
+//   unknown with alreadyBooked kept as a hint: the transport runs its dedupe
+//   read and does not re-send on that hint ("already booked into another
+//   class" and "already booked up" read the same to a regex).
+// - A non-null `code` does NOT mean refused: an unknown verdict can carry
+//   'response_mismatch' (the 2xx described something other than what we
+//   asked for) or un1t.online's code beside the already-booked hint. Always
+//   branch on `verdict`.
 
 export const UN1T_WRITE_OPS = Object.freeze(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout'])
 const OPS = new Set(UN1T_WRITE_OPS)
@@ -55,11 +63,21 @@ export function permissionMissingMessage(studioName, permission) {
  */
 export const UN1T_REFUSAL_CODES = Object.freeze({})
 
-/** Kinds E relays to the customer; every other kind, or null, is a staff card. */
-export const CUSTOMER_ANSWERABLE_REFUSALS = new Set(['class_full', 'already_booked', 'late_cancel'])
+export const UN1T_REFUSAL_KINDS = Object.freeze(['no_credits', 'class_full', 'already_booked', 'trial_used', 'email_in_use', 'late_cancel'])
 
-/** Answers, not faults: logged and on the ledger, no error_events row. */
-export const KNOWN_BUSINESS_REFUSALS = new Set(['no_credits', 'class_full', 'already_booked', 'trial_used', 'email_in_use', 'late_cancel'])
+// Private on purpose: an exported Set can be .add()ed to by any importer.
+const CUSTOMER_ANSWERABLE = Object.freeze(new Set(['class_full', 'already_booked', 'late_cancel']))
+const KNOWN_BUSINESS = Object.freeze(new Set(UN1T_REFUSAL_KINDS))
+
+/** A kind E relays to the customer; every other kind, or null, is a staff card. */
+export function isCustomerAnswerable(kind) {
+  return typeof kind === 'string' && CUSTOMER_ANSWERABLE.has(kind)
+}
+
+/** An answer, not a fault: logged and on the ledger, no error_events row. */
+export function isKnownBusinessRefusal(kind) {
+  return typeof kind === 'string' && KNOWN_BUSINESS.has(kind)
+}
 
 // Word fallbacks while the table is empty. `[\s_-]*` so a code spelled
 // ALREADY_BOOKED / EMAIL_IN_USE matches as well as the words.
@@ -67,6 +85,20 @@ export const KNOWN_BUSINESS_REFUSALS = new Set(['no_credits', 'class_full', 'alr
 // not tell a customer their trial was used.
 const ALREADY_BOOKED_WORDS = /already[\s_-]*booked/i
 const EMAIL_IN_USE_WORDS = /email.*(in[\s_-]*use|exists|taken|already)/i
+// "No account with this email exists" is a missing account, not one in use.
+const NEGATED = /\b(no|not|never|cannot|doesn't)\b/i
+const saysEmailInUse = (t) => EMAIL_IN_USE_WORDS.test(t) && !NEGATED.test(t)
+
+// The kind and where it came from ('table' | 'words'). The judge needs the
+// source: only a table match is trusted to make a book done.
+function refusalKindOf({ code, message } = {}, table = UN1T_REFUSAL_CODES) {
+  const c = code == null ? '' : String(code)
+  if (c && Object.hasOwn(table, c)) return { kind: table[c], source: 'table' }
+  const m = message == null ? '' : String(message)
+  if (ALREADY_BOOKED_WORDS.test(c) || ALREADY_BOOKED_WORDS.test(m)) return { kind: 'already_booked', source: 'words' }
+  if (saysEmailInUse(c) || saysEmailInUse(m)) return { kind: 'email_in_use', source: 'words' }
+  return { kind: null, source: null }
+}
 
 /**
  * The kind of a refusal, or null when it is not one we know.
@@ -74,13 +106,8 @@ const EMAIL_IN_USE_WORDS = /email.*(in[\s_-]*use|exists|taken|already)/i
  * @param {Readonly<Record<string, Un1tRefusalKind>>} [table] test seam; callers omit it
  * @returns {Un1tRefusalKind|null}
  */
-export function classifyRefusal({ code, message } = {}, table = UN1T_REFUSAL_CODES) {
-  const c = code == null ? '' : String(code)
-  if (c && Object.hasOwn(table, c)) return table[c]
-  const m = message == null ? '' : String(message)
-  if (ALREADY_BOOKED_WORDS.test(c) || ALREADY_BOOKED_WORDS.test(m)) return 'already_booked'
-  if (EMAIL_IN_USE_WORDS.test(c) || EMAIL_IN_USE_WORDS.test(m)) return 'email_in_use'
-  return null
+export function classifyRefusal(refusal = {}, table = UN1T_REFUSAL_CODES) {
+  return refusalKindOf(refusal, table).kind
 }
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -110,27 +137,64 @@ function isHttpsUrl(v) {
   }
 }
 
-// The book answer must describe the booking we asked for (RF5). A field the
-// request names but the answer leaves out cannot be checked, so it fails too.
+// The book answer must describe the booking we asked for (RF5): every one of
+// event, user and studio must be named by the caller AND match the answer,
+// and the booking must be `booked`. A missing expect is never done (and never
+// a throw: the write has already been sent).
 function bookMatches(data, expect) {
   const pairs = [
     [expect.eventId, data.event_id ?? (isObj(data.event) ? data.event.id : undefined)],
     [expect.userId, data.user_id ?? (isObj(data.user) ? data.user.id : undefined)],
     [expect.studioId, data.studio_id ?? (isObj(data.studio) ? data.studio.id : undefined)],
   ]
-  return pairs.every(([want, got]) => want == null || sameId(want, got))
+  if (!pairs.every(([want, got]) => idOf(want) != null && sameId(want, got))) return false
+  return typeof data.status === 'string' && data.status.trim().toLowerCase() === 'booked'
+}
+
+// A cancel 2xx: no body, or a JSON object whose data (when present) names the
+// requested booking and says cancelled. A string (an HTML error page from a
+// proxy) or another booking is not an answer we can trust.
+function cancelMatches(body, bookingId) {
+  if (body === null || body === undefined) return true
+  if (!isObj(body)) return false
+  const data = isObj(body.data) ? body.data : null
+  if (!data) return body.data === undefined || body.data === null
+  if (data.id !== undefined && data.id !== null && !sameId(data.id, bookingId)) return false
+  if (data.status !== undefined && data.status !== null && String(data.status).trim().toLowerCase() !== 'cancelled') return false
+  return true
+}
+
+// The id each op is judged on, read from the body without judging it.
+function opIdIn(op, data) {
+  if (!data) return null
+  if (op === 'trial') return idOf(data.transactionId)
+  if (op === 'checkout') return typeof data.checkoutUrl === 'string' && data.checkoutUrl ? data.checkoutUrl : null
+  if (op === 'book' || op === 'create_client' || op === 'cancel') return idOf(data.id)
+  return null
 }
 
 const verdict = (v, { id = null, code = null, message = null, alreadyBooked = false } = {}) => ({ verdict: v, id, code, message, alreadyBooked })
+const MISMATCH = 'response_mismatch'
 
 /**
  * What a write's answer means.
+ *
+ * verdict 'done' | 'refused' | 'unknown'; `id` only on done; `code` is
+ * un1t.online's error.code on a refusal (or 'http_<status>' for a 4xx with
+ * none), 'response_mismatch' on an unknown whose 2xx described something
+ * else, un1t.online's code beside an already-booked hint, else null. A
+ * non-null code never means refused by itself: branch on `verdict`.
+ * `alreadyBooked` is true on a done book the code table calls already booked,
+ * and as a hint on an unknown matched from words alone.
+ *
  * @param {string} op one of UN1T_WRITE_OPS
  * @param {{ status: number|null, body: any, expect?: { eventId?: string, userId?: string, studioId?: string, bookingId?: string } }} answer
+ * @param {Readonly<Record<string, Un1tRefusalKind>>} [table] test seam; callers omit it
  * @returns {{ verdict: 'done'|'refused'|'unknown', id: string|null, code: string|null, message: string|null, alreadyBooked: boolean }}
  */
-export function judgeUn1tWrite(op, { status, body, expect = {} } = {}) {
+export function judgeUn1tWrite(op, { status, body, expect } = {}, table = UN1T_REFUSAL_CODES) {
   if (!OPS.has(op)) return verdict('unknown')
+  const want = isObj(expect) ? expect : {}
   const s = Number.isInteger(status) ? status : null
   const is2xx = s != null && s >= 200 && s < 300
   const is4xx = s != null && s >= 400 && s < 500
@@ -138,27 +202,38 @@ export function judgeUn1tWrite(op, { status, body, expect = {} } = {}) {
   // No reply, a 5xx, a redirect: nothing to judge on.
   if (!is2xx && !is4xx) return verdict('unknown')
 
+  const data = isObj(body) && isObj(body.data) ? body.data : null
+
   if (is4xx || (isObj(body) && body.success === false)) {
-    const { code, message } = refusalOf(body)
-    if (op === 'book' && classifyRefusal({ code, message }) === 'already_booked') {
-      return verdict('done', { code, message, alreadyBooked: true })
+    // A refusal that still carries the op's id contradicts itself.
+    if (opIdIn(op, data)) return verdict('unknown', { code: MISMATCH })
+    const r = refusalOf(body)
+    const code = r.code ?? (is4xx ? `http_${s}` : null)
+    const { message } = r
+    if (op === 'book') {
+      const { kind, source } = refusalKindOf({ code: r.code, message }, table)
+      if (kind === 'already_booked') {
+        return source === 'table'
+          ? verdict('done', { code, message, alreadyBooked: true })
+          : verdict('unknown', { code, message, alreadyBooked: true })
+      }
     }
     return verdict('refused', { code, message })
   }
 
-  const data = isObj(body) && isObj(body.data) ? body.data : null
   switch (op) {
     case 'cancel': {
       // 200 with no body schema: the requested booking is the id.
-      const id = idOf(expect.bookingId)
-      return id ? verdict('done', { id }) : verdict('unknown')
+      const id = idOf(want.bookingId)
+      if (!id) return verdict('unknown')
+      return cancelMatches(body, id) ? verdict('done', { id }) : verdict('unknown', { code: isObj(body) ? MISMATCH : null })
     }
     case 'forgot_password':
       return isObj(body) && body.success === true ? verdict('done') : verdict('unknown')
     case 'book': {
       const id = idOf(data?.id)
       if (!id) return verdict('unknown')
-      return bookMatches(data, expect) ? verdict('done', { id }) : verdict('unknown', { code: 'response_mismatch' })
+      return bookMatches(data, want) ? verdict('done', { id }) : verdict('unknown', { code: MISMATCH })
     }
     case 'create_client': {
       // Only the id leaves: the body also carries reset_password_token, email and phone.

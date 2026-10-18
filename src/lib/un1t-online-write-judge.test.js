@@ -4,8 +4,9 @@
 import { describe, it, expect } from 'vitest'
 import {
   UN1T_WRITE_OPS, REQUIRED_PERMISSIONS, missingPermissions, permissionMissingMessage,
-  judgeUn1tWrite, UN1T_REFUSAL_CODES, CUSTOMER_ANSWERABLE_REFUSALS, classifyRefusal,
-  KNOWN_BUSINESS_REFUSALS, scrubMessage, un1tRoutePathLabel, un1tWriteFailureEvent,
+  judgeUn1tWrite, UN1T_REFUSAL_CODES, isCustomerAnswerable, classifyRefusal,
+  isKnownBusinessRefusal, scrubMessage, un1tRoutePathLabel, un1tWriteFailureEvent,
+  UN1T_REFUSAL_KINDS,
 } from './un1t-online-write-judge.js'
 
 const EVENT = '11111111-2222-4333-8444-555555555555'
@@ -50,6 +51,42 @@ describe('judgeUn1tWrite: book', () => {
     })
   })
 
+  describe('book 201 is done only when data.status is booked', () => {
+    it('booked in any case is done', () => {
+      expect(judgeUn1tWrite('book', { status: 201, body: { success: true, data: bookingDto({ status: 'BOOKED' }) }, expect: bookExpect }).verdict).toBe('done')
+    })
+    for (const [label, status] of [['cancelled', 'cancelled'], ['an unknown status', 'waitlisted'], ['a missing status', undefined]]) {
+      it(`${label} is unknown with response_mismatch`, () => {
+        const data = bookingDto({ status })
+        if (status === undefined) delete data.status
+        expect(judgeUn1tWrite('book', { status: 201, body: { success: true, data }, expect: bookExpect }))
+          .toEqual({ verdict: 'unknown', id: null, code: 'response_mismatch', message: null, alreadyBooked: false })
+      })
+    }
+  })
+
+  it('book with a missing expect is unknown (response_mismatch), never done and never a throw', () => {
+    const body = { success: true, data: bookingDto() }
+    for (const expectArg of [{}, { eventId: EVENT, userId: USER }, { userId: USER, studioId: STUDIO }, { eventId: EVENT, studioId: STUDIO }, undefined]) {
+      expect(judgeUn1tWrite('book', { status: 201, body, expect: expectArg }))
+        .toEqual({ verdict: 'unknown', id: null, code: 'response_mismatch', message: null, alreadyBooked: false })
+    }
+  })
+
+  it('a success:false that still carries the op id is unknown, not refused', () => {
+    const contradict = { success: false, data: bookingDto(), error: { code: 'NO_CREDITS', message: 'Not enough credits' } }
+    expect(judgeUn1tWrite('book', { status: 201, body: contradict, expect: bookExpect }).verdict).toBe('unknown')
+    expect(judgeUn1tWrite('trial', { status: 201, body: { success: false, data: { transactionId: 'txn_1' } }, expect: {} }).verdict).toBe('unknown')
+    expect(judgeUn1tWrite('create_client', { status: 201, body: { success: false, data: { id: USER } }, expect: {} }).verdict).toBe('unknown')
+    expect(judgeUn1tWrite('checkout', { status: 201, body: { success: false, data: { checkoutUrl: 'https://checkout.example.test/c' } }, expect: {} }).verdict).toBe('unknown')
+  })
+
+  it('a refused 4xx with no code is named http_<status>', () => {
+    expect(judgeUn1tWrite('book', { status: 404, body: null, expect: bookExpect }))
+      .toEqual({ verdict: 'refused', id: null, code: 'http_404', message: null, alreadyBooked: false })
+    expect(judgeUn1tWrite('book', { status: 201, body: { success: false }, expect: bookExpect }).code).toBeNull()
+  })
+
   it('2xx with success:false is refused with error.code and error.message', () => {
     const v = judgeUn1tWrite('book', {
       status: 201, body: { success: false, error: { code: 'NO_CREDITS', message: 'Not enough credits' } }, expect: bookExpect,
@@ -64,9 +101,7 @@ describe('judgeUn1tWrite: book', () => {
     expect(v).toEqual({ verdict: 'refused', id: null, code: 'CLASS_FULL', message: 'This class is full', alreadyBooked: false })
     // A framework-shaped 400 (message array, error a word) still gives its words.
     const nest = judgeUn1tWrite('book', { status: 400, body: { statusCode: 400, message: ['eventId must be a UUID', 'userId is required'], error: 'Bad Request' }, expect: bookExpect })
-    expect(nest).toMatchObject({ verdict: 'refused', code: null, message: 'eventId must be a UUID; userId is required' })
-    // A 4xx with no body at all is still refused, never done or unknown.
-    expect(judgeUn1tWrite('book', { status: 404, body: null, expect: bookExpect })).toEqual({ verdict: 'refused', id: null, code: null, message: null, alreadyBooked: false })
+    expect(nest).toMatchObject({ verdict: 'refused', code: 'http_400', message: 'eventId must be a UUID; userId is required' })
   })
 
   it('2xx with no id is unknown, never refused', () => {
@@ -84,27 +119,57 @@ describe('judgeUn1tWrite: book', () => {
     expect(judgeUn1tWrite('book', { status: null, body: null, expect: bookExpect }).verdict).toBe('unknown')
   })
 
-  it('already booked by code or by words is done with alreadyBooked true and id null', () => {
-    const byCode = judgeUn1tWrite('book', { status: 409, body: { success: false, error: { code: 'ALREADY_BOOKED', message: 'Conflict' } }, expect: bookExpect })
-    expect(byCode).toEqual({ verdict: 'done', id: null, code: 'ALREADY_BOOKED', message: 'Conflict', alreadyBooked: true })
-    const byWords = judgeUn1tWrite('book', { status: 201, body: { success: false, error: { code: 'E1001', message: 'You are already booked into this class' } }, expect: bookExpect })
-    expect(byWords).toMatchObject({ verdict: 'done', id: null, alreadyBooked: true })
-    // Already booked only means done for a book.
-    const cancelV = judgeUn1tWrite('cancel', { status: 409, body: { success: false, error: { code: 'ALREADY_BOOKED' } }, expect: { bookingId: BOOKING } })
-    expect(cancelV).toMatchObject({ verdict: 'refused', alreadyBooked: false })
+  it('already booked from the code table is done with alreadyBooked true and id null', () => {
+    const table = Object.freeze({ E_DUP: 'already_booked' })
+    const v = judgeUn1tWrite('book', { status: 409, body: { success: false, error: { code: 'E_DUP', message: 'Conflict' } }, expect: bookExpect }, table)
+    expect(v).toEqual({ verdict: 'done', id: null, code: 'E_DUP', message: 'Conflict', alreadyBooked: true })
+  })
+
+  it('already booked from words alone is unknown with alreadyBooked kept as a hint', () => {
+    const byCodeWords = judgeUn1tWrite('book', { status: 409, body: { success: false, error: { code: 'ALREADY_BOOKED', message: 'Conflict' } }, expect: bookExpect })
+    expect(byCodeWords).toEqual({ verdict: 'unknown', id: null, code: 'ALREADY_BOOKED', message: 'Conflict', alreadyBooked: true })
+    const byMessage = judgeUn1tWrite('book', { status: 201, body: { success: false, error: { code: 'E1001', message: 'You are already booked into this class' } }, expect: bookExpect })
+    expect(byMessage).toMatchObject({ verdict: 'unknown', id: null, alreadyBooked: true })
+  })
+
+  it('phrases that only look like already booked are never done', () => {
+    for (const message of ['This class is already booked up', 'You are already booked into another class at this time']) {
+      const v = judgeUn1tWrite('book', { status: 409, body: { success: false, error: { code: 'E409', message } }, expect: bookExpect })
+      expect(v.verdict).not.toBe('done')
+    }
+  })
+
+  it('already booked only means done for a book', () => {
+    const table = Object.freeze({ ALREADY_BOOKED: 'already_booked' })
+    const v = judgeUn1tWrite('cancel', { status: 409, body: { success: false, error: { code: 'ALREADY_BOOKED' } }, expect: { bookingId: BOOKING } }, table)
+    expect(v).toMatchObject({ verdict: 'refused', alreadyBooked: false })
   })
 })
 
 describe('judgeUn1tWrite: other ops', () => {
   it('cancel 200 with no body schema is done with id = the requested booking id; success:false is refused', () => {
-    for (const body of [null, undefined, '', {}, { success: true }]) {
-      expect(judgeUn1tWrite('cancel', { status: 200, body, expect: { bookingId: BOOKING } }))
-        .toEqual({ verdict: 'done', id: BOOKING, code: null, message: null, alreadyBooked: false })
+    const done = { verdict: 'done', id: BOOKING, code: null, message: null, alreadyBooked: false }
+    for (const body of [null, undefined, {}, { success: true }, { success: true, data: { id: BOOKING, status: 'Cancelled' } }, { data: { status: 'cancelled' } }, { data: { id: BOOKING.toUpperCase() } }]) {
+      expect(judgeUn1tWrite('cancel', { status: 200, body, expect: { bookingId: BOOKING } })).toEqual(done)
     }
     const refused = judgeUn1tWrite('cancel', { status: 200, body: { success: false, error: { code: 'LATE_CANCEL', message: 'Too late to cancel' } }, expect: { bookingId: BOOKING } })
     expect(refused).toEqual({ verdict: 'refused', id: null, code: 'LATE_CANCEL', message: 'Too late to cancel', alreadyBooked: false })
     // Without the requested id there is nothing to name as cancelled.
     expect(judgeUn1tWrite('cancel', { status: 200, body: null, expect: {} }).verdict).toBe('unknown')
+  })
+
+  it('cancel 2xx with a string body, another booking or a status other than cancelled is unknown', () => {
+    const bodies = [
+      '', 'OK', '<html><body>Gateway</body></html>', [],
+      { success: true, data: { id: OTHER, status: 'cancelled' } },
+      { success: true, data: { id: BOOKING, status: 'booked' } },
+      { success: true, data: { status: 'attended' } },
+    ]
+    for (const body of bodies) {
+      expect(judgeUn1tWrite('cancel', { status: 200, body, expect: { bookingId: BOOKING } }))
+        .toMatchObject({ verdict: 'unknown', id: null, alreadyBooked: false })
+    }
+    expect(judgeUn1tWrite('cancel', { status: 200, body: { data: { id: OTHER } }, expect: { bookingId: BOOKING } }).code).toBe('response_mismatch')
   })
 
   it('create 201 with data.id is done and the id is the only field returned', () => {
@@ -168,6 +233,12 @@ describe('classifyRefusal', () => {
     expect(classifyRefusal({ code: null, message: 'Email is taken' })).toBe('email_in_use')
   })
 
+  it('a missing account is not email in use', () => {
+    for (const message of ['No account with this email exists', 'There is no user with that email', 'Email not found', 'This email does not exist']) {
+      expect(classifyRefusal({ code: null, message })).toBeNull()
+    }
+  })
+
   it('classifyRefusal never guesses trial_used from words', () => {
     for (const message of ['Trial already used', 'trial_used', 'You have used your free trial', 'Purchase limit reached for this product']) {
       expect(classifyRefusal({ code: 'TRIAL_USED', message })).not.toBe('trial_used')
@@ -181,9 +252,15 @@ describe('classifyRefusal', () => {
     expect(classifyRefusal({})).toBeNull()
   })
 
-  it('the customer-answerable and known-business sets', () => {
-    expect([...CUSTOMER_ANSWERABLE_REFUSALS].sort()).toEqual(['already_booked', 'class_full', 'late_cancel'])
-    expect([...KNOWN_BUSINESS_REFUSALS].sort()).toEqual(['already_booked', 'class_full', 'email_in_use', 'late_cancel', 'no_credits', 'trial_used'])
+  it('isCustomerAnswerable and isKnownBusinessRefusal', () => {
+    expect(UN1T_REFUSAL_KINDS).toEqual(['no_credits', 'class_full', 'already_booked', 'trial_used', 'email_in_use', 'late_cancel'])
+    expect(Object.isFrozen(UN1T_REFUSAL_KINDS)).toBe(true)
+    expect(UN1T_REFUSAL_KINDS.filter(isCustomerAnswerable).sort()).toEqual(['already_booked', 'class_full', 'late_cancel'])
+    expect(UN1T_REFUSAL_KINDS.filter(isKnownBusinessRefusal)).toEqual(UN1T_REFUSAL_KINDS)
+    for (const k of [null, undefined, '', 'response_mismatch', 'NO_CREDITS', 'constructor']) {
+      expect(isCustomerAnswerable(k)).toBe(false)
+      expect(isKnownBusinessRefusal(k)).toBe(false)
+    }
   })
 })
 
