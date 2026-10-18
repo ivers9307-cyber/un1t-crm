@@ -90,7 +90,7 @@ function noBookingSections(bookingUrl) {
   }
 }
 
-// MIAHATCH.2 Task 7 — the rules for a person answerable at a un1t.online studio
+// MIAHATCH.2 Task 7: the rules for a person answerable at a un1t.online studio
 // (Hatch Street), matching the tool block that turn gets (tool-blocks.js):
 // `un1t_read` has no book_class, cancel_class_booking or get_my_payment_reminder;
 // `un1t_read_dual` (multiStudio: the person is also answerable at a Glofox
@@ -99,17 +99,24 @@ function noBookingSections(bookingUrl) {
 // say whether a class is full, so the no-count rule is worded around that.
 // Slice 2 (the write tools) adds the upsell rules to 'full'; until then 'full'
 // renders exactly as 'read'. No em or en dashes in this text.
+// The carve-out for a studio that is not this conversation's: its facts block
+// is the only place (besides the tools) its prices and links may come from.
+const OTHER_STUDIO_FACTS_RULE = "\n- When a facts block below names another studio, that studio's prices, offers, timetable and links come only from its facts block and your tools. The KNOWLEDGE section and the membership sign-up link describe the studio of this conversation only."
 const READ_COUNT_RULE = '- NEVER tell a customer how many places are left, and never give any count, headcount or attendance number for a class, wave or event. The tools only tell you whether something is full, never a count, so there is no number to give and you must never invent one. The most you may say is that a class or wave is full.'
 const READ_EVENTS_RELAY = "- Use list_upcoming_events when someone asks what's on. Relay the dates and the wave times naturally, never how many places are left; never offer a wave marked full."
 
-function un1tSections({ bookingUrl, multiStudio }) {
+function un1tSections({ bookingUrl, multiStudio, studioName }) {
   const url = String(bookingUrl || '').trim() || null
+  // Named when the caller knows which studio the booking rules are about (a
+  // Stillorgan thread answering a Hatch member must not read "this studio" as
+  // Stillorgan); otherwise the unnamed wording.
+  const name = String(studioName || '').replace(/\s+/g, ' ').trim() || null
   const toBook = url
-    ? "To book, send the studio's booking link."
+    ? `To book, send ${name ? `${name}'s` : "the studio's"} booking link.`
     : 'To book, hand the customer to the team.'
-  const hardRuleOwnActions = multiStudio
+  const hardRuleOwnActions = (multiStudio
     ? '- Never confirm, promise, or claim that a change to someone\'s account, membership or payment has been MADE. You can log a pause or cancellation REQUEST for the team (see below), but always frame it as "requested": the team actions and confirms it, not you. The exception is the handful of actions your OWN tools execute in this conversation: class bookings and class-booking cancellations at a studio where the booking section says you can make them, consultation bookings, free event entries and their cancellations, and wave moves. When one of those tool results says it succeeded, confirm it plainly; when a tool returns anything else (queued for the team, failed, full), relay exactly that and never claim it happened. Where you cannot book from chat, never say you have booked, cancelled or changed a class.'
-    : '- Never confirm, promise, or claim that a change to someone\'s account, membership or payment has been MADE. You can log a pause or cancellation REQUEST for the team (see below), but always frame it as "requested": the team actions and confirms it, not you. The exception is the handful of actions your OWN tools execute in this conversation: consultation bookings, free event entries and their cancellations, and wave moves. When one of those tool results says it succeeded, confirm it plainly; when a tool returns anything else (queued for the team, failed, full), relay exactly that and never claim it happened. You never book, cancel or change a class booking from chat at this studio, so never say you have.'
+    : '- Never confirm, promise, or claim that a change to someone\'s account, membership or payment has been MADE. You can log a pause or cancellation REQUEST for the team (see below), but always frame it as "requested": the team actions and confirms it, not you. The exception is the handful of actions your OWN tools execute in this conversation: consultation bookings, free event entries and their cancellations, and wave moves. When one of those tool results says it succeeded, confirm it plainly; when a tool returns anything else (queued for the team, failed, full), relay exactly that and never claim it happened. ' + (name ? `You never book, cancel or change a class booking at ${name} from chat, so never say you have.` : 'You never book, cancel or change a class booking from chat at this studio, so never say you have.')) + OTHER_STUDIO_FACTS_RULE
   const accountSections = [
     ...(multiStudio ? [
       '## More than one studio',
@@ -134,11 +141,11 @@ function un1tSections({ bookingUrl, multiStudio }) {
     '- If the request tool returns an error, apologise briefly and hand off.',
   ].join('\n')
   const linkLine = url
-    ? `- The studio's booking link is ${url}. When someone wants to book, cancel or change a class there, tell them they can do it there and end your message with the link, with nothing after it and no tap choices, so it shows as a button. Never invent or change a link, and never say you've booked, cancelled or moved anything.`
+    ? `- ${name ? `${name}'s` : "The studio's"} booking link is ${url}. When someone wants to book, cancel or change a class there, tell them they can do it there and end your message with the link, with nothing after it and no tap choices, so it shows as a button. Never invent or change a link, and never say you've booked, cancelled or moved anything.`
     : '- When someone wants to book, cancel or change a class there, hand off ("wants to book <class and time>"). Never say you\'ve booked, cancelled or moved anything.'
   const classSections = (multiStudio ? [
     '## Classes and booking',
-    `- Check which studio a class is at. A class whose event_id starts with "un1t:" cannot be booked or cancelled from chat at this studio yet. ${toBook}`,
+    `- Check which studio a class is at. A class whose event_id starts with "un1t:" cannot be booked or cancelled from chat ${name ? `at ${name} ` : 'at this studio '}yet. ${toBook}`,
     linkLine,
     '- Use list_upcoming_classes to see what\'s on (they must be verified first), and relay the options naturally. Give the class name and the time, and answer what they asked (e.g. tomorrow morning\'s classes) rather than the whole list. Each class carries a full flag: if a class is full, say so and offer the nearest alternative, and never offer a full class or put one on a button. Never give a number of places, a headcount or an attendance figure, and never hint that a class is nearly full.',
     '- A class whose event_id does not start with "un1t:" can be booked with book_class, for a verified member. BEFORE booking, the customer must have clearly confirmed the exact class and day/time. If YOUR previous message already stated the exact class and time and they explicitly pick it, that IS the clear yes. Only restate-and-ask when their request is ambiguous. Never book from an ambiguous message. Relay the result honestly: if it\'s booked, confirm warmly with the class and time; if the tool says the team will confirm, say exactly that and never claim it\'s booked; if it failed (class full, already booked), say why and offer an alternative.',
@@ -146,7 +153,7 @@ function un1tSections({ bookingUrl, multiStudio }) {
     `- ${NO_BOOKING_ACCOUNT_HANDOFF}`,
   ] : [
     '## Classes and the timetable',
-    `You can't book or cancel classes from chat at this studio. ${toBook}`,
+    `You can't book or cancel classes ${name ? `at ${name} from chat` : 'from chat at this studio'}. ${toBook}`,
     '- Use list_upcoming_classes to answer what\'s on (they must be verified first). Give the class name and the time only, and answer what they asked (e.g. tomorrow morning\'s classes) rather than the whole list. Each class carries a full flag: if a class is full, say so and offer the nearest alternative, and never offer a full class or put one on a button. Never give a number of places, a headcount or an attendance figure, and never hint that a class is nearly full.',
     '- Use list_my_upcoming_bookings when a verified member asks what they are booked into.',
     linkLine,
@@ -161,12 +168,12 @@ function un1tSections({ bookingUrl, multiStudio }) {
   return { hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff }
 }
 
-export function renderCustomerAgentBasePrompt(membershipSource = GLOFOX_PROMPT_SOURCE, { bookings = true, bookingUrl = null, un1tVariant = null, multiStudio = false } = {}) {
+export function renderCustomerAgentBasePrompt(membershipSource = GLOFOX_PROMPT_SOURCE, { bookings = true, bookingUrl = null, un1tVariant = null, multiStudio = false, un1tStudioName = null } = {}) {
   const hasApp = !!membershipSource?.key && membershipSource.key !== 'none' && !!membershipSource.label
   const label = hasApp ? membershipSource.label : null
   const app = hasApp ? `the ${label} app` : null
   let hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff
-  // MIAHATCH.2 Task 7 — a un1t.online variant ('read'; 'full' is slice 2 and
+  // MIAHATCH.2 Task 7: a un1t.online variant ('read'; 'full' is slice 2 and
   // renders as 'read' until its upsell rules land) swaps the two capacity lines
   // below; null keeps the pre-Task-7 bytes (pinned by the Glofox and no-booking
   // fixtures).
@@ -177,7 +184,7 @@ export function renderCustomerAgentBasePrompt(membershipSource = GLOFOX_PROMPT_S
   // system. Each Glofox text below is the pre-Task-5 prompt VERBATIM (pinned
   // byte-for-byte by __fixtures__/glofox-system-prompt.fixture.json).
   if (un1t) {
-    ;({ hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff } = un1tSections({ bookingUrl, multiStudio: multiStudio === true }))
+    ;({ hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff } = un1tSections({ bookingUrl, multiStudio: multiStudio === true, studioName: un1tStudioName }))
     capacityRule = READ_COUNT_RULE
     eventsRelay = READ_EVENTS_RELAY
   } else if (bookings) {
@@ -415,6 +422,7 @@ export function buildCardSetsBlock(cardSets) {
  * @param {boolean}[opts.bookings] false = the studio's source takes no bookings (MIAORG.1 Task 5): the no-booking rules; absent/true = the Glofox render
  * @param {string} [opts.bookingUrl] the studio's booking link (settings.customer_agent.booking_url); read only when bookings is false or a un1t variant is set
  * @param {'read'|'full'|null}[opts.un1tVariant] MIAHATCH.2: the person is answerable at a un1t.online studio; selects the un1t rules (null/absent = today's render)
+ * @param {string} [opts.un1tStudioName] MIAHATCH.2: the un1t.online studio the booking lines are about (named instead of "this studio"); stable per studio
  * @param {boolean}[opts.multiStudio] MIAHATCH.2: answerable at more than one studio; the prompt says which studio each answer is for (read only with un1tVariant)
  * @param {string[]}[opts.factsBlocks] MIAHATCH.2: buildStudioFactsBlock outputs for answerable studios that are not the thread's; uncached suffix only
  * @returns {{ stable: string, volatile: string }}
@@ -424,7 +432,7 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   // MIAORG.1 Task 5 — `bookings` false selects the no-booking rules; absent or
   // true is the Glofox render, byte-identical to before (bookingUrl ignored).
   const bookings = opts.bookings !== false
-  // MIAHATCH.2 — a un1t variant needs the studio's booking link even on a thread
+  // MIAHATCH.2: a un1t variant needs the studio's booking link even on a thread
   // that takes bookings (a Stillorgan thread answering a Hatch member).
   const un1tVariant = opts.un1tVariant === 'read' || opts.un1tVariant === 'full' ? opts.un1tVariant : null
   const bookingUrl = bookings && !un1tVariant ? null : (opts.bookingUrl || null)
@@ -441,7 +449,7 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   // STABLE — cache this prefix. Order: identity + base, then the operator-set
   // blocks, then KNOWLEDGE last (the base prompt refers to "the KNOWLEDGE
   // section below").
-  const stableParts = [identity + ' ' + renderCustomerAgentBasePrompt(membershipSource || GLOFOX_PROMPT_SOURCE, { bookings, bookingUrl, un1tVariant, multiStudio: opts.multiStudio === true })]
+  const stableParts = [identity + ' ' + renderCustomerAgentBasePrompt(membershipSource || GLOFOX_PROMPT_SOURCE, { bookings, bookingUrl, un1tVariant, multiStudio: opts.multiStudio === true, un1tStudioName: un1tVariant ? opts.un1tStudioName : null })]
   if (membershipUrl) {
     stableParts.push(
       '## Joining the studio (membership sign-up link)\n' +
@@ -501,7 +509,7 @@ export function buildCustomerSystemPromptParts(opts = {}) {
     )
   }
 
-  // MIAHATCH.2 E-4 — facts for an answerable studio that is not the thread's.
+  // MIAHATCH.2 E-4: facts for an answerable studio that is not the thread's.
   // Volatile (uncached) only: the stable block above never sees them, so its
   // bytes and cache_control placement do not move with who is answerable.
   for (const block of Array.isArray(opts.factsBlocks) ? opts.factsBlocks : []) {
@@ -514,7 +522,7 @@ export function buildCustomerSystemPromptParts(opts = {}) {
 const oneLine = (v) => String(v ?? '').replace(/\s+/g, ' ').trim()
 
 /**
- * MIAHATCH.2 E-4 — a short facts block for an answerable studio that is NOT the
+ * MIAHATCH.2 E-4: a short facts block for an answerable studio that is NOT the
  * thread's studio (a Hatch-only member on a Stillorgan thread must never get
  * Stillorgan's prices or timetable for Hatch). Rendered in the uncached suffix.
  * Missing address, links, offers or knowledge are omitted (no empty label

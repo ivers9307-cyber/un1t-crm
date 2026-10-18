@@ -626,6 +626,56 @@ describe('un1t.online prompt variants', () => {
   })
 })
 
+describe('un1t variant names the studio it answers for', () => {
+  const CARVE_OUT = "When a facts block below names another studio, that studio's prices, offers, timetable and links come only from its facts block and your tools."
+  const named = (variant, multiStudio, bookingUrl) =>
+    renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: true, bookingUrl, un1tVariant: variant, multiStudio, un1tStudioName: 'Hatch Street' })
+
+  it('un1tStudioName replaces "this studio" in the booking lines (single and multi studio)', () => {
+    for (const [multi, url] of [[false, 'https://hatch.example.test/book'], [false, null], [true, 'https://hatch.example.test/book'], [true, null]]) {
+      const out = named('read', multi, url)
+      expect(out).toContain('at Hatch Street')
+      expect(out).not.toMatch(/at this studio/)
+      expect(out).not.toMatch(BANNED_WORDS)
+      if (!multi) expect(out).toContain("You can't book or cancel classes at Hatch Street from chat.")
+      if (url) expect(out).toContain("Hatch Street's booking link is https://hatch.example.test/book.")
+      if (!multi && url) expect(out).toContain("To book, send Hatch Street's booking link.")
+    }
+    expect(named('read', false, null)).toContain('You never book, cancel or change a class booking at Hatch Street from chat')
+  })
+
+  it('without a name the wording is unchanged, and a name is ignored without a un1t variant', () => {
+    expect(render('read', false, 'https://hatch.example.test/book')).toContain("You can't book or cancel classes from chat at this studio.")
+    expect(renderCustomerAgentBasePrompt(undefined, { un1tStudioName: 'Hatch Street' })).toBe(CUSTOMER_AGENT_BASE_PROMPT)
+    const parts = buildCustomerSystemPromptParts({ un1tStudioName: 'Hatch Street' })
+    expect(parts.stable).toBe(buildCustomerSystemPromptParts({}).stable)
+  })
+
+  it('the stable prefix stays identical across two turns with the name set', () => {
+    const o = { businessName: 'B', locationName: 'Stillorgan', un1tVariant: 'read', un1tStudioName: 'Hatch Street', multiStudio: true, bookings: true, bookingUrl: 'https://hatch.example.test/book', knowledge: [{ category: 'faq', title: 'Q', content: 'A' }] }
+    const a = buildCachedSystem({ ...o, today: 'Saturday' })
+    const b = buildCachedSystem({ ...o, today: 'Sunday', identityPreverified: true, factsBlocks: ['## Facts for Hatch Street\nx'] })
+    expect(a[0]).toEqual(b[0])
+    expect(a[0].text).toContain('at Hatch Street')
+  })
+
+  it('the carve-out is in the read and full renders, in the stable text, and absent from Glofox and no-booking', () => {
+    for (const variant of ['read', 'full']) {
+      for (const multi of [false, true]) {
+        for (const url of [null, 'https://hatch.example.test/book']) {
+          const out = render(variant, multi, url)
+          expect(out).toContain(CARVE_OUT)
+          expect(out).toContain('The KNOWLEDGE section and the membership sign-up link describe the studio of this conversation only.')
+          expect(out).not.toMatch(BANNED_WORDS)
+        }
+      }
+    }
+    expect(buildCustomerSystemPromptParts({ un1tVariant: 'read', bookings: false, membershipSource: UN1T_SOURCE }).stable).toContain(CARVE_OUT)
+    expect(CUSTOMER_AGENT_BASE_PROMPT).not.toContain(CARVE_OUT)
+    expect(renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: false, bookingUrl: 'u' })).not.toContain(CARVE_OUT)
+  })
+})
+
 describe('buildStudioFactsBlock', () => {
   const full = {
     studioName: 'Hatch Street', address: '1 Fictional Row, Dublin 2',
