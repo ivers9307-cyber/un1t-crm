@@ -39,7 +39,7 @@ export async function POST(request, props) {
   if (permHere) return permHere
 
   try {
-    // WAHOMESTUDIO.1 — block on the number this thread talks through (Meta blocks per business number).
+    // Block on the number this thread talks through (Meta blocks per business number).
     await setWhatsAppUserBlockState(conversation.wa_phone, blocked, { locationId: conversation.location_id, replyInConversation: conversation.id })
   } catch (e) {
     // WACONFIGFALLBACK.1 — a location with no WhatsApp number of its own is a

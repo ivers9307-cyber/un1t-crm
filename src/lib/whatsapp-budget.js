@@ -17,11 +17,6 @@
 //     can be switched on at several studios of its organisation
 //     (location_whatsapp_numbers), so usage is counted over EVERY studio with
 //     the number switched on, plus the sending studio itself;
-//   • WAHOMESTUDIO.1 (transitional, deleted with the numberless paths in
-//     WAORGNUMBER.6) — until a sibling switches the number on, a template sent
-//     from S into a thread filed at a number-less same-org sibling H carries
-//     location_id = H (mig 723), so H's rows still count against S's number.
-//     Once every sibling has a number switched on this set is empty;
 //   • whatsapp_messages carries no sender-number id, so usage is counted per
 //     LOCATION — a studio with two numbers switched on debits each number's
 //     tier with the studio's whole spend (over-counts only; a per-message
@@ -46,7 +41,6 @@
 import { tierLabel } from './whatsapp-number-health'
 import { WA_PHONE_APP_SOURCES_IN_LIST } from './whatsapp-staff-sources'
 import { studiosUsingNumbers } from './whatsapp-config'
-import { numberlessSiblingLocationIds } from './whatsapp-thread-location'
 
 // Meta messaging-limit tier → business-initiated conversations per rolling 24h.
 // UNLIMITED (and unknown/null) carry no numeric limit → ungated.
@@ -94,17 +88,14 @@ export function effectiveTickHeadroom(capHeadroom, budget) {
  * (conservative: can only over-count usage, never free up phantom headroom).
  * WAORGNUMBER.4 — counts the rows of every studio with the number switched on
  * (studiosUsingNumbers) plus `locationId`; with no `numberId`, `locationId`
- * alone. Until WAORGNUMBER.6 deletes them it also counts `locationId`'s
- * number-less same-org siblings (WAHOMESTUDIO.1 threads filed there, see
- * above; over-counts only). A failed read throws, so the budget fails closed. Paginated
+ * alone. A failed read throws, so the budget fails closed. Paginated
  * (>1k-safe) with a deterministic order, per the PostgREST cap rule.
  */
 export async function countBusinessInitiatedContactsLast24h(db, { numberId = null, locationId = null } = {}) {
   const PAGE = 1000
   const HARD_LIMIT = 200_000
   const using = numberId ? await studiosUsingNumbers(db, [numberId]) : []
-  const siblings = locationId ? await numberlessSiblingLocationIds(db, locationId) : []
-  const locationIds = [...new Set([locationId, ...using, ...siblings].filter(Boolean))]
+  const locationIds = [...new Set([locationId, ...using].filter(Boolean))]
   if (locationIds.length === 0) return 0
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
   const seen = new Set()

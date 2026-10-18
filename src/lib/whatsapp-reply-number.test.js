@@ -3,10 +3,10 @@
 // The inbound webhook stamps whatsapp_conversations.whatsapp_number_id (mig
 // 696) with the number that received the message. A reply into that thread
 // (opts.replyInConversation on any whatsapp.js sender) resolves that number
-// when it is still an active row AT the conversation's studio (or, at a studio
-// with no number of its own, a same-organisation sibling's, WAHOMESTUDIO.1);
-// otherwise the location default, exactly as before. A single-number studio sends from the
-// same number either way. A template goes from the thread number only when it
+// when it is still an active number switched on AT the conversation's studio;
+// otherwise the location default, exactly as before (WAORGNUMBER.6: a studio
+// with nothing switched on refuses; it never borrows a sibling's stamp). A
+// single-number studio sends from the same number either way. A template goes from the thread number only when it
 // shares the default's WABA (templates are synced per studio from the
 // default's account). A failed read in this layer is never a lost reply: it
 // falls back to the default, logged. The real resolvers run against a fake DB.
@@ -121,20 +121,31 @@ describe('getConversationReplyConfig', () => {
   })
 })
 
-describe('WAHOMESTUDIO.1 — a number-less studio replies through a same-organisation sibling’s number', () => {
-  // LOC owns DEFAULT and SECOND; LOC2 owns nothing.
+// WAORGNUMBER.6 — WAHOMESTUDIO.1's sibling clause is gone: a studio with no
+// active number switched on never replies through another studio's stamp, in
+// its own organisation or any other. It refuses (WhatsAppNumberMissingError).
+describe('WAORGNUMBER.6 — no sibling replies', () => {
+  // LOC owns DEFAULT and SECOND; LOC2 (same organisation) has nothing switched on.
   const hatchConv = (stamp) => conv(stamp, { location_id: LOC2 })
 
-  it('a thread at a number-less studio stamped with a sibling’s number replies from it, templates too', async () => {
+  it('a studio with nothing switched on never replies through a sibling’s stamp', async () => {
+    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC, 'n-second')]
     state.conversations = [hatchConv('n-default')]
-    expect((await getConversationReplyConfig(LOC2, CONV)).phoneNumberId).toBe('PNI-n-default')
-    expect((await getConversationReplyConfig(LOC2, CONV, { template: true })).phoneNumberId).toBe('PNI-n-default')
+    expect(await getConversationNumberConfig(LOC2, CONV)).toBeNull()
+    await expect(getConversationReplyConfig(LOC2, CONV)).rejects.toSatisfy(isWhatsAppNumberMissing)
+    await expect(getConversationReplyConfig(LOC2, CONV, { template: true })).rejects.toSatisfy(isWhatsAppNumberMissing)
+    await expect(getConversationReplyConfig(LOC2, CONV, { template: true, businessAccountId: 'WABA-1' })).rejects.toSatisfy(isWhatsAppNumberMissing)
+    // Nor through whatsapp.js: no Meta call at all.
+    await expect(wa.sendTextMessage('353800000001', 'hi', { locationId: LOC2, replyInConversation: CONV })).rejects.toSatisfy(isWhatsAppNumberMissing)
+    expect(sentFrom).toEqual([])
   })
 
-  it('a sibling stamp is ignored once the thread’s studio has a number of its own (Review Focus 1)', async () => {
-    state.numbers = [DEFAULT, num('n-hatch', { location_id: LOC2, is_default: true })]
+  it('a studio whose only link is to an inactive number refuses too, whatever the thread’s stamp', async () => {
+    state.numbers = [DEFAULT, num('n-hatch-off', { location_id: LOC2, is_active: false })]
+    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC2, 'n-hatch-off', { is_default: true })]
     state.conversations = [hatchConv('n-default')]
-    expect((await getConversationReplyConfig(LOC2, CONV)).phoneNumberId).toBe('PNI-n-hatch')
+    expect(await getConversationNumberConfig(LOC2, CONV)).toBeNull()
+    await expect(getConversationReplyConfig(LOC2, CONV)).rejects.toSatisfy(isWhatsAppNumberMissing)
   })
 
   it('a number in ANOTHER organisation is never used; the number-less studio still refuses', async () => {
@@ -144,27 +155,24 @@ describe('WAHOMESTUDIO.1 — a number-less studio replies through a same-organis
     await expect(getConversationReplyConfig(LOC2, CONV)).rejects.toSatisfy(isWhatsAppNumberMissing)
   })
 
-  it('an unreadable locations row is null (no sibling number), logged', async () => {
+  it('a studio that switches a number on replies from its own number, not the old stamp', async () => {
+    state.numbers = [DEFAULT, num('n-hatch', { location_id: LOC2, is_default: true })]
     state.conversations = [hatchConv('n-default')]
-    state.faults.locations = { message: 'boom' }
-    expect(await getConversationNumberConfig(LOC2, CONV)).toBeNull()
-    expect(logWarn).toHaveBeenCalled()
+    expect((await getConversationReplyConfig(LOC2, CONV)).phoneNumberId).toBe('PNI-n-hatch')
   })
 
-  it('templateLocationIdFor names the number owner for a sibling stamp, else the thread’s studio', async () => {
-    const { templateLocationIdFor } = await import('./whatsapp-config.js')
+  it('templateLocationIdFor is always the thread’s studio', async () => {
+    state.links = [link(LOC, 'n-default', { is_default: true })]
     state.conversations = [hatchConv('n-default')]
-    expect(await templateLocationIdFor(LOC2, CONV)).toBe(LOC)
-    state.conversations = [conv('n-second')]
-    expect(await templateLocationIdFor(LOC, CONV)).toBe(LOC)
+    expect(await templateLocationIdFor(LOC2, CONV)).toBe(LOC2)
+    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC2, 'n-default', { is_default: true })]
+    expect(await templateLocationIdFor(LOC2, CONV)).toBe(LOC2)
     expect(await templateLocationIdFor(LOC2, null)).toBe(LOC2)
   })
 })
 
 // WAORGNUMBER.1 (R2) — the thread's stamped number is used only while it is
-// switched on at the thread's studio (location_whatsapp_numbers). The
-// WAHOMESTUDIO.1 sibling clause stays, transitionally, for a studio with no
-// number switched on at all.
+// switched on at the thread's studio (location_whatsapp_numbers).
 describe('WAORGNUMBER.1 — the thread number must be switched on at the thread’s studio', () => {
   it('switched-off stamp is not used (Review Focus 1)', async () => {
     // LOC has DEFAULT switched on; the thread's stamp SECOND is active but was
@@ -180,82 +188,23 @@ describe('WAORGNUMBER.1 — the thread number must be switched on at the thread�
     // Stillorgan's DEFAULT switched on at LOC2 too; a thread at LOC2 stamped with it.
     state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC2, 'n-default', { is_default: true })]
     state.conversations = [conv('n-default', { location_id: LOC2 })]
-    expect(await getConversationNumberConfig(LOC2, CONV)).toMatchObject({ id: 'n-default', locationId: LOC2, homeLocationId: LOC, viaSibling: false })
+    expect(await getConversationNumberConfig(LOC2, CONV)).toMatchObject({ id: 'n-default', locationId: LOC2, homeLocationId: LOC })
     expect((await getConversationReplyConfig(LOC2, CONV, { template: true })).phoneNumberId).toBe('PNI-n-default')
   })
 
-  it('sibling clause applies only while the studio has no link rows', async () => {
-    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC, 'n-second')]
-    state.conversations = [conv('n-default', { location_id: LOC2 })]
-    expect(await getConversationNumberConfig(LOC2, CONV)).toMatchObject({ id: 'n-default', locationId: LOC2, homeLocationId: LOC, viaSibling: true })
-    expect((await getConversationReplyConfig(LOC2, CONV, { template: true })).phoneNumberId).toBe('PNI-n-default')
-    // LOC2 gets a number of its own switched on: the sibling stamp is no longer used.
-    state.numbers = [DEFAULT, SECOND, num('n-hatch', { location_id: LOC2 })]
-    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC2, 'n-hatch', { is_default: true })]
-    expect(await getConversationNumberConfig(LOC2, CONV)).toBeNull()
-    expect((await getConversationReplyConfig(LOC2, CONV)).phoneNumberId).toBe('PNI-n-hatch')
-  })
-
-  it('a studio whose only link is to an inactive number is still number-less (the clause is unchanged)', async () => {
-    state.numbers = [DEFAULT, num('n-hatch-off', { location_id: LOC2, is_active: false })]
-    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC2, 'n-hatch-off', { is_default: true })]
-    state.conversations = [conv('n-default', { location_id: LOC2 })]
-    expect(await getConversationNumberConfig(LOC2, CONV)).toMatchObject({ id: 'n-default', viaSibling: true })
-  })
-
-  it('a number switched off at its own home studio is not used via the sibling clause', async () => {
+  it('a number switched off at its own home studio is not used', async () => {
     // LOC's only number was switched off at LOC (no link row at all), the thread
     // is still stamped with it: LOC no longer replies through it.
     state.links = []
     state.conversations = [conv('n-default')]
     expect(await getConversationNumberConfig(LOC, CONV)).toBeNull()
     await expect(getConversationReplyConfig(LOC, CONV)).rejects.toSatisfy(isWhatsAppNumberMissing)
-    // A real sibling (another studio of the org, number home elsewhere) still can.
-    state.conversations = [conv('n-default', { location_id: LOC2 })]
-    expect(await getConversationNumberConfig(LOC2, CONV)).toMatchObject({ id: 'n-default', viaSibling: true, homeLocationId: LOC })
   })
 
   it('links stamped in the same instant resolve in a fixed order (number id ascending)', async () => {
     state.numbers = [DEFAULT, num('n-b'), num('n-a')]
     state.links = [link(LOC, 'n-b'), link(LOC, 'n-a')]
     expect((await getConversationReplyConfig(LOC, CONV)).phoneNumberId).toBe('PNI-n-a')
-  })
-
-  it('the own-number existence check reads no number columns (no access_token)', async () => {
-    state.selects = []
-    state.numbers = [DEFAULT]
-    state.links = [link(LOC, 'n-default', { is_default: true })]
-    state.conversations = [conv('n-default', { location_id: LOC2 })]
-    expect(await getConversationNumberConfig(LOC2, CONV)).toMatchObject({ viaSibling: true })
-    const linkSelects = state.selects.filter(([t]) => t === 'location_whatsapp_numbers').map(([, c]) => c)
-    expect(linkSelects).toContain('is_default, created_at, whatsapp_numbers!inner(id)')
-    state.selects = undefined
-  })
-
-  it('other organisation never', async () => {
-    state.numbers = [num('n-foreign', { location_id: LOC3, organization_id: 'ORG-2' })]
-    state.links = [link(LOC3, 'n-foreign', { is_default: true })]
-    state.conversations = [conv('n-foreign', { location_id: LOC2 })]
-    expect(await getConversationNumberConfig(LOC2, CONV)).toBeNull()
-    await expect(getConversationReplyConfig(LOC2, CONV)).rejects.toSatisfy(isWhatsAppNumberMissing)
-    // The org is judged on the NUMBER's organization_id, not its home studio's row.
-    state.numbers = [num('n-moved', { location_id: LOC, organization_id: 'ORG-2' })]
-    state.links = [link(LOC, 'n-moved', { is_default: true })]
-    state.conversations = [conv('n-moved', { location_id: LOC2 })]
-    expect(await getConversationNumberConfig(LOC2, CONV)).toBeNull()
-  })
-
-  it('templateLocationIdFor returns the number home only via sibling', async () => {
-    // Via sibling: the number's home studio's templates.
-    state.links = [link(LOC, 'n-default', { is_default: true })]
-    state.conversations = [conv('n-default', { location_id: LOC2 })]
-    expect(await templateLocationIdFor(LOC2, CONV)).toBe(LOC)
-    // Switched on at LOC2: LOC2's own templates, though the number's home is LOC.
-    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC2, 'n-default', { is_default: true })]
-    expect(await templateLocationIdFor(LOC2, CONV)).toBe(LOC2)
-    // No usable stamp: the thread's studio.
-    state.conversations = [conv(null, { location_id: LOC2 })]
-    expect(await templateLocationIdFor(LOC2, CONV)).toBe(LOC2)
   })
 })
 
@@ -346,25 +295,17 @@ describe('WAORGNUMBER.2 — template sends pick the number by the template’s W
     expect(sentFrom).toEqual([])
   })
 
-  // Transitional WAHOMESTUDIO.1 clause: LOC2 has nothing switched on; its thread
-  // is stamped with LOC's (same organisation) default number, on WABA-1.
-  it('a sibling-stamped thread with the stamped number’s WABA sends from the sibling number (viaSibling kept)', async () => {
-    state.conversations = [conv('n-default', { location_id: LOC2 })]
-    const cfg = await getConversationReplyConfig(LOC2, CONV, { template: true, businessAccountId: 'WABA-1' })
-    expect(cfg.phoneNumberId).toBe('PNI-n-default')
-    expect(cfg.viaSibling).toBe(true)
-    expect(cfg.locationId).toBe(LOC2)
-    await wa.sendTemplateMessage('+353000000000', 'tpl', 'en', [], { locationId: LOC2, replyInConversation: CONV, businessAccountId: 'WABA-1' })
-    expect(sentFrom).toEqual(['PNI-n-default'])
-  })
-
-  it('a sibling-stamped thread with ANOTHER WABA refuses (the studio has no number on it), Meta never called', async () => {
+  // WAORGNUMBER.6: LOC2 has nothing switched on; its thread is stamped with
+  // LOC's (same organisation) default number. A template on that number's WABA
+  // is refused, not sent through the sibling.
+  it('a sibling-stamped thread refuses a template even on the stamped number’s WABA, Meta never called', async () => {
     state.numbers = [DEFAULT, ON_WABA_2]
     state.conversations = [conv('n-default', { location_id: LOC2 })]
-    await expect(getConversationReplyConfig(LOC2, CONV, { template: true, businessAccountId: 'WABA-2' })).rejects.toSatisfy(isWhatsAppNumberMissing)
-    const err = await wa.sendTemplateMessage('+353000000000', 'tpl', 'en', [], { locationId: LOC2, replyInConversation: CONV, businessAccountId: 'WABA-2' }).catch((e) => e)
-    expect(isWhatsAppNumberMissing(err)).toBe(true)
-    expect(err.locationId).toBe(LOC2)
+    for (const waba of ['WABA-1', 'WABA-2']) {
+      const err = await wa.sendTemplateMessage('+353000000000', 'tpl', 'en', [], { locationId: LOC2, replyInConversation: CONV, businessAccountId: waba }).catch((e) => e)
+      expect(isWhatsAppNumberMissing(err)).toBe(true)
+      expect(err.locationId).toBe(LOC2)
+    }
     expect(sentFrom).toEqual([])
   })
 

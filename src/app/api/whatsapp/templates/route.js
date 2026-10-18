@@ -43,10 +43,10 @@ export async function GET(request) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const { searchParams } = new URL(request.url)
-  // WAHOMESTUDIO.1 (R5) — the picker inside a thread asks by conversation: a
-  // thread replying through a same-organisation sibling's number lists that
-  // sibling's templates. Authorised on the CONVERSATION's studio (Hatch staff
-  // need no Stillorgan access); cached rows only, never a sync.
+  // The picker inside a thread asks by conversation: it lists the thread's
+  // studio's templates (templateLocationIdFor; WAORGNUMBER.6 removed the
+  // sibling case). Authorised on the CONVERSATION's studio, so staff of that
+  // studio need no access to the active one; cached rows only, never a sync.
   const conversationId = searchParams.get('conversation_id')
   if (conversationId) {
     const db = createServerClient()

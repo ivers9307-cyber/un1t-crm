@@ -76,8 +76,8 @@ describe('effectiveTickHeadroom', () => {
 
 // Fake db mimicking the paginated usage query chain:
 // .from('whatsapp_messages').select(...).in(location_id).eq×2.gt(...).order(...).range(s,e)
-// plus the sibling lookup (locations / location_whatsapp_numbers, WAORGNUMBER.1)
-// that feeds the .in().
+// plus the studios-using-the-number lookup (location_whatsapp_numbers,
+// WAORGNUMBER.4) that feeds the .in().
 // The studio under test is 'loc1' in organisation 'org1'; `world` adds more.
 function usageDb(rows, calls = {}, world = {}) {
   calls.filters = []
@@ -207,10 +207,9 @@ describe('countBusinessInitiatedContactsLast24h', () => {
     expect(await countBusinessInitiatedContactsLast24h(db, { numberId: 'n1', locationId: 'loc1' })).toBe(1)
     expect(calls.filters).toContainEqual(['in', 'location_id', ['loc1']])
   })
-  // WAHOMESTUDIO.1 (transitional until WAORGNUMBER.6) — a template sent from
-  // S into a thread filed at a number-less same-org sibling H carries
-  // location_id = H (mig 723): it still counts against S's number.
-  it('still counts a number-less same-organisation sibling (until go-live switches it on)', async () => {
+  // WAORGNUMBER.6 — the number-less sibling union is gone: a studio with
+  // nothing switched on sends nothing, so it has no spend to count.
+  it('does not count a number-less same-organisation sibling', async () => {
     const calls = {}
     const world = {
       locations: [{ id: 'hatch', organization_id: 'org1' }],
@@ -221,7 +220,8 @@ describe('countBusinessInitiatedContactsLast24h', () => {
       { id: 1, contact_id: 'a', location_id: 'loc1' },
       { id: 2, contact_id: 'b', location_id: 'hatch' },
     ], calls, world)
-    expect(await countBusinessInitiatedContactsLast24h(db, { numberId: 'n1', locationId: 'loc1' })).toBe(2)
+    expect(await countBusinessInitiatedContactsLast24h(db, { numberId: 'n1', locationId: 'loc1' })).toBe(1)
+    expect(calls.filters).toContainEqual(['in', 'location_id', ['loc1']])
   })
   it('always counts the sending studio, even when its link row is gone', async () => {
     const calls = {}
@@ -246,7 +246,7 @@ describe('countBusinessInitiatedContactsLast24h', () => {
     expect(calls.filters).toContainEqual(['in', 'location_id', ['loc1']])
   })
   it('failed link read throws (never counts a smaller set)', async () => {
-    for (const table of ['location_whatsapp_numbers', 'locations']) {
+    for (const table of ['location_whatsapp_numbers']) {
       const db = usageDb([], {}, { fault: table, locations: [{ id: 'hatch', organization_id: 'org1' }] })
       await expect(countBusinessInitiatedContactsLast24h(db, { numberId: 'n1', locationId: 'loc1' })).rejects.toThrow(/boom/)
     }

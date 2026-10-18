@@ -379,13 +379,11 @@ export function promptCapabilityFor(location, settings) {
 // MIAORG.1 Task 6 (T6-A) — does this studio have an active WhatsApp number
 // switched on (WAORGNUMBER.1: a location_whatsapp_numbers row, whatever the
 // number's home studio)? Read once per studio per tick. A studio that does
-// sends exactly as it always
-// has ({ locationId }, its own templates). One that does not (Hatch Street:
-// its threads carry a sibling studio's stamped number, WAHOMESTUDIO.1) sends
-// only through a thread that number can reply in. A failed read is "owns a
-// number", logged: that is today's path, where a number-less studio's send is
-// refused before any Meta call and counted as a skip, so the doubt can never
-// be louder than today.
+// sends as it always has ({ locationId }, its own templates). One that does
+// not is skipped for the tick, before any candidate read or model call
+// (WAORGNUMBER.6: it no longer sends through a sibling's stamped number). A
+// failed read is "owns a number", logged: the send is then refused before any
+// Meta call and counted as a skip, so the doubt can never be louder.
 async function studioOwnsWhatsAppNumber(db, locationId) {
   try {
     return (await locationsWithWhatsApp(db, [locationId])).has(locationId)
@@ -395,31 +393,6 @@ async function studioOwnsWhatsAppNumber(db, locationId) {
     })
     return true
   }
-}
-
-// MIAORG.1 Task 6 (T6-B) — can a send in this thread go out? At a studio with
-// no number of its own, only through the number stamped on the thread when it
-// belongs to a studio of the same organisation (getConversationNumberConfig,
-// which never throws: a failed read is null, logged inside).
-async function threadCanReply(locationId, conversationId) {
-  const { getConversationNumberConfig } = await import('@/lib/whatsapp-config')
-  return Boolean(await getConversationNumberConfig(locationId, conversationId))
-}
-
-// The studio whose whatsapp_templates a send uses. A studio with its own
-// number: itself, exactly as before (no extra read). A number-less studio: the
-// owner of the thread's stamped number, whose WABA the template must belong to
-// (templateLocationIdFor, WAHOMESTUDIO.1 R5; never throws).
-async function templateStudioFor(ownsNumber, locationId, conversationId) {
-  if (ownsNumber) return locationId
-  const { templateLocationIdFor } = await import('@/lib/whatsapp-config')
-  return templateLocationIdFor(locationId, conversationId)
-}
-
-// The send options. A studio with its own number: { locationId }, today's
-// exact call. A number-less studio: through the thread (replyInConversation).
-function sendOptsFor(ownsNumber, locationId, conversationId) {
-  return ownsNumber ? { locationId } : { locationId, replyInConversation: conversationId }
 }
 
 // One short proactive message in Mia's voice, given the thread + an
@@ -480,7 +453,7 @@ export async function composeAgentText({ location, settings, historyRows, instru
   }
 }
 
-async function sendNudge(db, conv, location, settings, facts, zone, ownsNumber) {
+async function sendNudge(db, conv, location, settings, facts, zone) {
   const branding = await getLocationBranding(db, location.id)
   const composed = await composeAgentText({
     location, settings, historyRows: facts.rows, instruction: NUDGE_INSTRUCTION, zone,
@@ -502,14 +475,14 @@ async function sendNudge(db, conv, location, settings, facts, zone, ownsNumber) 
   }
 
   const { sendTextMessage } = await import('@/lib/whatsapp')
-  const res = await sendTextMessage(conv.to, parsed.text, sendOptsFor(ownsNumber, conv.location_id, conv.id))
+  const res = await sendTextMessage(conv.to, parsed.text, { locationId: conv.location_id })
   if (!res?.messageId) return skipLog(conv.id, 'nudge_send_failed')
   await recordProactiveMessage(db, conv, { body: parsed.text, waMessageId: res.messageId, messageType: 'text' })
   await stampStage(db, conv.id, 1, true)
   return { sent: 'nudge' }
 }
 
-async function sendFollowupTemplate(db, conv, settings, facts, ownsNumber) {
+async function sendFollowupTemplate(db, conv, settings, facts) {
   const followups = { ...FOLLOWUP_DEFAULTS, ...(settings?.followups || {}) }
   if (!followups.template_name) return skipLog(conv.id, 'no_template_configured')
 
@@ -532,12 +505,9 @@ async function sendFollowupTemplate(db, conv, settings, facts, ownsNumber) {
     return skipLog(conv.id, 'no_studio_whatsapp_consent')
   }
 
-  // MIAORG.1 Task 6 — a number-less studio's template comes from the owner of
-  // the thread's number (the WABA it is sent from); its own studio otherwise.
-  const templateStudio = await templateStudioFor(ownsNumber, conv.location_id, conv.id)
   const { data: rows } = await db.from('whatsapp_templates')
     .select('name, language, status, components, header_media_url, business_account_id')
-    .eq('location_id', templateStudio)
+    .eq('location_id', conv.location_id)
     .eq('name', followups.template_name)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -555,7 +525,7 @@ async function sendFollowupTemplate(db, conv, settings, facts, ownsNumber) {
   if (headerComponent) components.unshift(headerComponent)
 
   const res = await sendTemplateMessage(conv.to, template.name, template.language || 'en', components,
-    { ...sendOptsFor(ownsNumber, conv.location_id, conv.id), ...(template.business_account_id && { businessAccountId: template.business_account_id }) })
+    { locationId: conv.location_id, ...(template.business_account_id && { businessAccountId: template.business_account_id }) })
   if (!res?.messageId) return skipLog(conv.id, 'template_send_failed')
   await recordProactiveMessage(db, conv, {
     body: renderFollowupBody(template, values) || `[Template: ${template.name}]`,
@@ -640,8 +610,12 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
       console.warn('[radar-agent] followup-skip', JSON.stringify({ locationId: location.id, reason: window.reason }))
       continue
     }
-    // MIAORG.1 Task 6 (T6-A) — decided once for this studio this tick.
-    const ownsNumber = await studioOwnsWhatsAppNumber(db, location.id)
+    // MIAORG.1 Task 6 (T6-A) — decided once for this studio this tick: a
+    // studio with nothing switched on cannot send (WAORGNUMBER.6).
+    if (!(await studioOwnsWhatsAppNumber(db, location.id))) {
+      console.warn('[radar-agent] followup-skip', JSON.stringify({ locationId: location.id, reason: 'no_number' }))
+      continue
+    }
 
     const sinceIso = new Date(nowMs - (TEMPLATE_MAX_H + 2) * H_MS).toISOString()
     // wa_status is the hard opt-out signal (whatsapp-consent.js) — there is
@@ -698,15 +672,6 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
           results.skipped++; skipLog(c.id, 'human_resolved'); continue
         }
 
-        // MIAORG.1 Task 6 (T6-B) — a number-less studio sends only through a
-        // thread its stamped number can reply in; checked before any compose,
-        // so an unanswerable thread never costs a model call. Not stamped: a
-        // stamp only arrives with an inbound, which resets the cycle anyway,
-        // and a failed read is null too.
-        if (!ownsNumber && !(await threadCanReply(c.location_id, c.id))) {
-          results.skipped++; skipLog(c.id, 'no_thread_number'); continue
-        }
-
         if ((await sentTodayCount(db, location.id, nowMs)) >= followups.daily_cap) {
           skipLog(c.id, 'daily_cap'); break // cap is per location — stop this location
         }
@@ -716,17 +681,17 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
           firstName: (contact.first_name || String(contact.name || '').split(/\s+/)[0] || 'there').trim(),
         }
         const out = decision.action === 'nudge'
-          ? await sendNudge(db, conv, location, settings, facts, zone, ownsNumber)
-          : await sendFollowupTemplate(db, conv, settings, facts, ownsNumber)
+          ? await sendNudge(db, conv, location, settings, facts, zone)
+          : await sendFollowupTemplate(db, conv, settings, facts)
         if (out?.sent === 'nudge') results.nudges++
         else if (out?.sent === 'template') results.templates++
         else results.skipped++
       } catch (e) {
         results.skipped++
-        // MIAORG.1 Task 6 (T6-B) — at a number-less studio a number refusal
-        // (the thread's number gone between the check and the send) is a
-        // recorded skip, never a throw through the runner.
-        if (!ownsNumber && isWhatsAppNumberMissing(e)) { skipLog(c.id, 'no_number'); continue }
+        // A number refusal (the studio's number switched off mid-tick, or an
+        // unreadable switch-on read above) is a recorded skip: it was refused
+        // before any Meta call.
+        if (isWhatsAppNumberMissing(e)) { skipLog(c.id, 'no_number'); continue }
         console.error('[radar-agent] followup error:', e?.message || e)
       }
     }
@@ -947,8 +912,9 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
     // the daytime band is THIS studio's.
     const window = proactiveWindowOpen(nowMs, settings, zone)
     if (!window.open) { bump(window.reason); continue }
-    // MIAORG.1 Task 6 (T6-A) — decided once for this studio this tick.
-    const ownsNumber = await studioOwnsWhatsAppNumber(db, location.id)
+    // MIAORG.1 Task 6 (T6-A) — decided once for this studio this tick: a
+    // studio with nothing switched on cannot send (WAORGNUMBER.6).
+    if (!(await studioOwnsWhatsAppNumber(db, location.id))) { bump('no_number'); continue }
 
     // CHECKINRISKS.1 — the claim's lease: re-open claims that never recorded
     // an outcome, before the candidate query, so they are picked up this tick.
@@ -1031,16 +997,6 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         if (existingConv?.agent_handed_off_at) { bump('handed_off'); results.skipped++; continue }
         if (existingConv?.agent_paused_at) { bump('agent_paused'); results.skipped++; continue }
         if (existingConv && existingConv.agent_active === false) { bump('agent_inactive'); results.skipped++; continue }
-        // MIAORG.1 Task 6 (T6-B) — a number-less studio sends only into the
-        // contact's existing thread there, and only when its stamped number can
-        // reply in it. Never getOrCreateConversation here: a new thread at such
-        // a studio carries no stamp and could never be answered. Not stamped
-        // once-ever: a later inbound can bring a thread, and a failed number
-        // read is null too (a blip must not cost the check-in for good).
-        if (!ownsNumber && !(existingConv && await threadCanReply(location.id, existingConv.id))) {
-          bump('no_conversation'); results.skipped++; continue
-        }
-
         let facts = { rows: [], lastInboundAtMs: null, humanSpokeAfterInbound: false, staffSpokeAfterInbound: false, readFailed: false }
         if (existingConv) facts = await lastInboundFacts(db, existingConv.id)
         // CHECKINSTALL.1 — a failed thread read is not "nobody spoke" (logged
@@ -1081,13 +1037,12 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           // refusal: release, so the next tick retries.
           let res
           try {
-            res = await sendTextMessage(to, parsed.text, sendOptsFor(ownsNumber, location.id, existingConv?.id))
+            res = await sendTextMessage(to, parsed.text, { locationId: location.id })
           } catch (e) {
-            // MIAORG.1 Task 6 (T6-B) — a number refusal at a number-less
-            // studio is refused before any Meta call: release and record a
-            // skip. Anything else (and any throw at a studio with its own
-            // number) is unchanged: the claim stays for the lease.
-            if (ownsNumber || !isWhatsAppNumberMissing(e)) throw e
+            // A number refusal is refused before any Meta call: release and
+            // record a skip. Anything else is unchanged: the claim stays for
+            // the lease.
+            if (!isWhatsAppNumberMissing(e)) throw e
             await releaseCheckinClaim(db, contact.id, claim.at)
             bump('no_number'); results.skipped++; continue
           }
@@ -1125,12 +1080,9 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           const stamp = await stampCheckinSkip(db, contact, location.id, className, 'skipped — no marketing consent')
           bump(stamp.ok ? 'no_studio_whatsapp_consent' : stamp.reason); results.skipped++; continue
         }
-        // MIAORG.1 Task 6 — a number-less studio's template comes from the
-        // owner of the thread's number; its own studio otherwise (unchanged).
-        const templateStudio = await templateStudioFor(ownsNumber, location.id, existingConv?.id)
         const { data: tRows, error: tError } = await db.from('whatsapp_templates')
           .select('name, language, status, components, header_media_url, business_account_id')
-          .eq('location_id', templateStudio)
+          .eq('location_id', location.id)
           .eq('name', checkin.template_name)
           .order('created_at', { ascending: false })
           .limit(1)
@@ -1157,9 +1109,9 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         let res
         try {
           res = await sendTemplateMessage(to, template.name, template.language || 'en', components,
-            { ...sendOptsFor(ownsNumber, location.id, existingConv?.id), ...(template.business_account_id && { businessAccountId: template.business_account_id }) })
+            { locationId: location.id, ...(template.business_account_id && { businessAccountId: template.business_account_id }) })
         } catch (e) {
-          if (ownsNumber || !isWhatsAppNumberMissing(e)) throw e // as Case A
+          if (!isWhatsAppNumberMissing(e)) throw e // as Case A
           await releaseCheckinClaim(db, contact.id, claim.at)
           bump('no_number'); results.skipped++; continue
         }
@@ -1167,7 +1119,6 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           await releaseCheckinClaim(db, contact.id, claim.at)
           bump('send_failed'); results.skipped++; continue
         }
-        // A number-less studio always has existingConv here (checked above).
         const conversationId = existingConv?.id
           || await getOrCreateConversation(db, { id: contact.id, wa_phone: contact.wa_phone, phone: contact.phone, name: contact.name }, location.id)
         if (conversationId) {
