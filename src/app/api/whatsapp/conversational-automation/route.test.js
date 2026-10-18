@@ -33,7 +33,10 @@ const post = () => new Request('http://localhost/api/whatsapp/conversational-aut
 
 // The location's own number (synthetic): the openers are applied to THIS
 // config, never re-resolved (which would fall back to the global env number).
-const NUMBER = { source: 'db', id: 'n0000000-0000-4000-8000-000000000001', phoneNumberId: 'PNI-SYNTH', token: 'tok-synth' }
+// WAORGNUMBER.4 — homed at LOC (the openers' studio).
+const ORG = 'f0000000-0000-4000-8000-0000000000f1'
+const NUMBER = { source: 'db', id: 'n0000000-0000-4000-8000-000000000001', phoneNumberId: 'PNI-SYNTH', token: 'tok-synth',
+  homeLocationId: LOC, organizationId: ORG, displayPhone: '+353 1 000 0000' }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -102,6 +105,9 @@ const postAt = (loc) => new Request('http://localhost/api/whatsapp/conversationa
 describe('POST — WAROLE.1: master or owner AT the location', () => {
   it.each(ownerAtTargetCases())('%s', async (_label, caller, outcome) => {
     getCurrentUser.mockResolvedValue(caller)
+    // The number is homed at the target studio (WAORGNUMBER.4's own gate is below).
+    const homedAtB = { ...NUMBER, homeLocationId: LOC_B }
+    getLocationWhatsAppNumberConfig.mockResolvedValue(homedAtB)
     const db = fakeLocationsDb({ reads: { data: { settings: {} }, error: null } })
     createServerClient.mockReturnValue(db)
     const res = await POST(postAt(LOC_B))
@@ -109,7 +115,7 @@ describe('POST — WAROLE.1: master or owner AT the location', () => {
     if (outcome === 'pass') {
       expect(res.status).toBe(200)
       expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledWith(LOC_B)
-      expect(setConversationalAutomation).toHaveBeenCalledWith({ enableWelcome: true, prompts: ['Book a class'] }, { config: NUMBER })
+      expect(setConversationalAutomation).toHaveBeenCalledWith({ enableWelcome: true, prompts: ['Book a class'] }, { config: homedAtB })
       expect(db.writes).toHaveLength(1)
       return
     }
@@ -172,5 +178,48 @@ describe("POST — WAROLE.1: only the location's OWN number, never the env fallb
     const res = await POST(post())
     expect(res.status).toBe(403)
     expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
+  })
+})
+
+// WAORGNUMBER.4 (R8) — the openers belong to a number every studio of its
+// organisation may have switched on: only an organisation admin, or an owner
+// at the number's HOME studio, may change them.
+describe('chat openers on a shared number (WAORGNUMBER.4)', () => {
+  const HOME = 'a0000000-0000-4000-8000-0000000000aa'
+  const shared = { ...NUMBER, homeLocationId: HOME }
+
+  it('chat openers: manager at a non-home studio gets 403', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC]: 'manager' }, LOC))
+    getLocationWhatsAppNumberConfig.mockResolvedValue(shared)
+    const res = await POST(post())
+    expect(res.status).toBe(403)
+    expect(setConversationalAutomation).not.toHaveBeenCalled()
+  })
+
+  it('an owner at a non-home studio gets 403 naming the number; Meta is not called', async () => {
+    getLocationWhatsAppNumberConfig.mockResolvedValue(shared)
+    const res = await POST(post())
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('Chat openers apply to +353 1 000 0000 at every studio that uses it. Change them at its home studio, or ask an organisation admin.')
+    expect(setConversationalAutomation).not.toHaveBeenCalled()
+  })
+
+  it('an organisation admin may change them from any studio using the number', async () => {
+    getCurrentUser.mockResolvedValue({ ...USER, orgAdminOrgIds: [ORG] })
+    getLocationWhatsAppNumberConfig.mockResolvedValue(shared)
+    createServerClient.mockReturnValue(fakeLocationsDb({ reads: { data: { settings: {} }, error: null } }))
+    expect((await POST(post())).status).toBe(200)
+    expect(setConversationalAutomation).toHaveBeenCalledTimes(1)
+  })
+
+  it("an org admin of ANOTHER organisation is still refused", async () => {
+    getCurrentUser.mockResolvedValue({ ...USER, orgAdminOrgIds: ['f0000000-0000-4000-8000-0000000000f9'] })
+    getLocationWhatsAppNumberConfig.mockResolvedValue(shared)
+    expect((await POST(post())).status).toBe(403)
+  })
+
+  it('an owner at the home studio may change them (as before)', async () => {
+    createServerClient.mockReturnValue(fakeLocationsDb({ reads: { data: { settings: {} }, error: null } }))
+    expect((await POST(post())).status).toBe(200)
   })
 })

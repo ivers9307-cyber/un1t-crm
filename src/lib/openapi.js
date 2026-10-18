@@ -4083,7 +4083,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'Configure WhatsApp chat openers (welcome event + ice breakers)',
-  description: "Sets Meta conversational components on the location's WhatsApp number: enable the welcome-message event (fires the request_welcome webhook so a fresh chat open gets an instant greeting) and up to 4 ice-breaker prompts (80 chars each). The applied config is mirrored into locations.settings.conversational_automation. Master, or owner at the location; applied only to the location's own active number, never the global env number.",
+  description: "Sets Meta conversational components on the location's WhatsApp number: enable the welcome-message event (fires the request_welcome webhook so a fresh chat open gets an instant greeting) and up to 4 ice-breaker prompts (80 chars each). The applied config is mirrored into locations.settings.conversational_automation. Master, or owner at the location; applied only to the location's own active number, never the global env number. WAORGNUMBER.4: the openers belong to the number, shared by every studio that switched it on, so at a studio that is not the number's home only an organisation admin may change them (403 otherwise, before Meta).",
   request: {
     body: {
       content: {
@@ -4101,7 +4101,7 @@ registry.registerPath({
     200: { description: 'Chat openers updated at Meta and mirrored locally' },
     400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Master or owner role required at this location (WAROLE.1); nothing is sent to Meta', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Master or owner role required at this location (WAROLE.1), and an organisation admin when the location is not the number\'s home studio (WAORGNUMBER.4); nothing is sent to Meta', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'No WhatsApp number is connected at this location (WAROLE.1): the openers are never applied to the global env number; nothing is sent to Meta', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta conversational_automation call failed', content: { 'application/json': { schema: ErrorResponse } } },

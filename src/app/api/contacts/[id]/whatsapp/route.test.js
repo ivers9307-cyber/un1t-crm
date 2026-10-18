@@ -56,6 +56,8 @@ vi.mock('@/lib/whatsapp', () => ({
   sendTemplateMessage: vi.fn(() => Promise.resolve({ messageId: 'wamid.TEST123' })),
   isWindowOpen: vi.fn(() => true),
   headerComponentFor: vi.fn(() => null),
+  // WAORGNUMBER.4 (R3) — the thread files at the contact's home studio.
+  getOrCreateConversation: vi.fn(async () => 'e0000000-0000-0000-0000-000000000005'),
 }))
 
 // manualTakeoverPatch only contributes fields to the conversation update.
@@ -127,6 +129,8 @@ function makeDb(messageInsertSpy, { contact = CONTACT, conversation = CONVERSATI
               order: () => ({
                 limit: () => Promise.resolve({ data: conversation ? [conversation] : [] }),
               }),
+              // WAORGNUMBER.4 — loadSendConversation reads the thread by id.
+              maybeSingle: () => Promise.resolve({ data: conversation, error: null }),
             }),
           }),
           // post-send update: .update().eq()
@@ -271,5 +275,35 @@ describe('POST /api/contacts/[id]/whatsapp — replies from the number the threa
     expect(pickReplyConfig(SECOND, DEFAULT_NUMBER, { template: true })).toBe(SECOND)
     expect(pickReplyConfig(OTHER_WABA, DEFAULT_NUMBER)).toBe(OTHER_WABA)
     expect(pickReplyConfig(null, DEFAULT_NUMBER, { template: true })).toBe(DEFAULT_NUMBER)
+  })
+})
+
+// WAORGNUMBER.4 (R3) — the composer sends for the contact's HOME studio: the
+// thread files there through getOrCreateConversation(db, contact, home), never
+// on the contact's most recent thread at any studio.
+describe('POST /api/contacts/[id]/whatsapp — files at the contact’s home studio', () => {
+  it('opens the thread through getOrCreateConversation at contact.location_id, with the + stripped', async () => {
+    const { getOrCreateConversation, sendTextMessage } = await import('@/lib/whatsapp')
+    const db = makeDb(echoInsert())
+    createServerClient.mockReturnValue(db)
+    const res = await POST(postReq({ text: 'Hi' }), props)
+    expect(res.status).toBe(200)
+    expect(getOrCreateConversation).toHaveBeenCalledWith(db, expect.objectContaining({ id: CONTACT_ID, wa_phone: '353111111111' }), LOC_ID)
+    expect(sendTextMessage.mock.calls[0][0]).toBe('353111111111')
+  })
+  it('no phone on file is a 400 and no thread is opened', async () => {
+    const { getOrCreateConversation } = await import('@/lib/whatsapp')
+    createServerClient.mockReturnValue(makeDb(echoInsert(), { contact: { ...CONTACT, wa_phone: null, phone: null } }))
+    const res = await POST(postReq({ text: 'Hi' }), props)
+    expect(res.status).toBe(400)
+    expect(getOrCreateConversation).not.toHaveBeenCalled()
+  })
+  it('a thread that could not be opened is a 500 and nothing is sent', async () => {
+    const { getOrCreateConversation, sendTextMessage } = await import('@/lib/whatsapp')
+    getOrCreateConversation.mockResolvedValueOnce(undefined)
+    createServerClient.mockReturnValue(makeDb(echoInsert()))
+    const res = await POST(postReq({ text: 'Hi' }), props)
+    expect(res.status).toBe(500)
+    expect(sendTextMessage).not.toHaveBeenCalled()
   })
 })

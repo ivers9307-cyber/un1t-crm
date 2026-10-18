@@ -27,6 +27,17 @@ export class WhatsAppNumberMissingError extends Error {
   }
 }
 
+/**
+ * WAORGNUMBER.4 (R8) — the refusal naming the studio, for a surface that acts
+ * for one studio (the churn radar): numbers are switched on per studio, so
+ * "connected" no longer says what is missing.
+ */
+export function noNumberSwitchedOnMessage(studioName) {
+  return studioName
+    ? `No WhatsApp number is switched on at ${studioName}.`
+    : 'No WhatsApp number is switched on at this studio.'
+}
+
 /** True for the typed refusal, judged by its code so it survives a mock. */
 export function isWhatsAppNumberMissing(err) {
   return err?.code === WA_NO_NUMBER

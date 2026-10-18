@@ -48,8 +48,13 @@ vi.mock('@/lib/whatsapp', () => ({
   isWindowOpen: vi.fn(() => true),
   buildTemplateComponents: vi.fn(() => [{ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: 'TOKEN' }] }]),
   renderTemplateBody: vi.fn(() => 'Hi Aoife, here is the link.'),
+  // WAORGNUMBER.4 (R3) — the thread files at the contact's home studio.
+  getOrCreateConversation: vi.fn(async () => 'conv-1'),
 }))
-vi.mock('@/lib/whatsapp-conversations', () => ({ getOrCreateContactConversation: vi.fn() }))
+vi.mock('@/lib/whatsapp-conversations', async (orig) => ({
+  contactWaPhone: (await orig()).contactWaPhone,
+  loadSendConversation: vi.fn(),
+}))
 vi.mock('@/lib/agent/core', () => ({
   manualTakeoverPatch: vi.fn(() => ({ agent_handed_off_at: 'x' })),
   stripEmDashes: (t) => String(t ?? '').replace(/\s*[—–]\s+/g, ', ').replace(/[—–]/g, '-'),
@@ -60,8 +65,8 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { issueLink, revokeLink, latestLinkForContact } from '@/lib/cancellation-form/links'
 import { sendTransactionalEmail } from '@/lib/postmark'
-import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents } from '@/lib/whatsapp'
-import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
+import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents, getOrCreateConversation } from '@/lib/whatsapp'
+import { loadSendConversation } from '@/lib/whatsapp-conversations'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 const LOC = 'c0000000-0000-0000-0000-000000000003'
@@ -109,7 +114,7 @@ beforeEach(() => {
   getCurrentUser.mockResolvedValue(USER)
   hasPermission.mockReturnValue(true)
   issueLink.mockResolvedValue({ ok: true, linkId: 'l-1', token: 'TOKEN', url: 'https://crm.example/cancel/TOKEN', expiresAt: '2026-10-05T00:00:00Z' })
-  getOrCreateContactConversation.mockResolvedValue({ ok: true, conversation: { id: 'conv-1', window_expires_at: '2999-01-01', agent_handed_off_at: null }, waPhone: '353871234567' })
+  loadSendConversation.mockResolvedValue({ ok: true, conversation: { id: 'conv-1', window_expires_at: '2999-01-01', agent_handed_off_at: null } })
   isWindowOpen.mockReturnValue(true)
 })
 
@@ -287,6 +292,17 @@ describe('POST whatsapp', () => {
 // WACONFIGFALLBACK.1 — no WhatsApp number at the contact's location: refused
 // before a thread is opened or a link minted (the send used to go out on the
 // global env number). Email is unaffected.
+// WAORGNUMBER.4 (R3) — the cancellation-form send opens the composer's
+// thread: at the contact's HOME studio, through getOrCreateConversation.
+describe('WhatsApp thread filing (WAORGNUMBER.4)', () => {
+  it('files at contact.location_id with the + stripped', async () => {
+    const res = await post({ channel: 'whatsapp' })
+    expect(res.status).toBe(200)
+    expect(getOrCreateConversation).toHaveBeenCalledWith(dbMock, expect.objectContaining({ id: 'c-1', wa_phone: '353871234567' }), LOC)
+    expect(loadSendConversation).toHaveBeenCalledWith(dbMock, 'conv-1')
+  })
+})
+
 describe('POST whatsapp — no WhatsApp number at the contact location', () => {
   it('409 with the shared message; no thread, no link, nothing sent', async () => {
     const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
@@ -294,7 +310,7 @@ describe('POST whatsapp — no WhatsApp number at the contact location', () => {
     const res = await post({ channel: 'whatsapp' })
     expect(res.status).toBe(409)
     expect(await res.json()).toEqual({ success: false, error: 'No WhatsApp number is connected at this location.' })
-    expect(getOrCreateContactConversation).not.toHaveBeenCalled()
+    expect(getOrCreateConversation).not.toHaveBeenCalled()
     expect(issueLink).not.toHaveBeenCalled()
     expect(sendCtaUrlMessage).not.toHaveBeenCalled()
   })
@@ -307,3 +323,4 @@ describe('POST whatsapp — no WhatsApp number at the contact location', () => {
     expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
   })
 })
+

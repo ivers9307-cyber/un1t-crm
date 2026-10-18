@@ -1,54 +1,35 @@
-// Get-or-create a contact's whatsapp_conversations row for a STAFF send.
+// A STAFF send's WhatsApp conversation (the contact composer and the
+// cancellation-form send).
 //
-// CANCEL-FORM.4 — extracted verbatim from /api/contacts/[id]/whatsapp so the
-// cancellation-form send route opens the same conversation the composer does
-// (one thread per contact, races onto the wa_phone + location unique).
-//
-// Returns { ok:true, conversation, waPhone } or { ok:false, error, status }.
+// WAORGNUMBER.4 (spec R3) — a staff send from the contact page goes for the
+// contact's HOME studio (contact.location_id), and its thread files there
+// through getOrCreateConversation(db, contact, contact.location_id) (the
+// routes call it). The old getOrCreateContactConversation picked the contact's
+// most recent thread at ANY studio, which could pair a thread at one studio
+// with another studio's number once numbers are shared; it is gone. These two
+// helpers are what is left of it: the phone a send goes to, and the thread
+// fields the routes read.
 
-export async function getOrCreateContactConversation(db, contact) {
+const SEND_CONVERSATION_COLUMNS = 'id, window_expires_at, location_id, agent_handed_off_at'
+
+/** The contact's WhatsApp number as Meta wants it (no leading '+'), or null. */
+export function contactWaPhone(contact) {
   const phone = contact?.wa_phone || contact?.phone
-  if (!phone) return { ok: false, status: 400, error: 'Contact has no phone number on file' }
-  // Meta wants the number without a leading '+'.
-  const waPhone = phone.startsWith('+') ? phone.slice(1) : phone
+  if (!phone) return null
+  return phone.startsWith('+') ? phone.slice(1) : phone
+}
 
-  const { data: existing } = await db
-    .from('whatsapp_conversations')
-    .select('id, window_expires_at, location_id, agent_handed_off_at')
-    .eq('contact_id', contact.id)
-    .order('last_message_at', { ascending: false, nullsFirst: false })
-    .limit(1)
-  let conversation = existing?.[0] || null
-
-  if (!conversation) {
-    const { data: created, error: convErr } = await db
-      .from('whatsapp_conversations')
-      .insert({
-        location_id: contact.location_id,
-        contact_id: contact.id,
-        wa_phone: waPhone,
-        status: 'active',
-      })
-      .select('id, window_expires_at, location_id, agent_handed_off_at')
-      .single()
-    if (created) {
-      conversation = created
-    } else {
-      // Unique-constraint race on wa_phone — adopt the existing row.
-      const { data: byPhone } = await db
-        .from('whatsapp_conversations')
-        .select('id, window_expires_at, location_id, agent_handed_off_at')
-        .eq('wa_phone', waPhone)
-        .eq('location_id', contact.location_id)
-        .limit(1)
-      conversation = byPhone?.[0] || null
-      if (conversation) {
-        await db.from('whatsapp_conversations').update({ contact_id: contact.id }).eq('id', conversation.id)
-      }
-    }
-    if (!conversation) {
-      return { ok: false, status: 500, error: convErr?.message || 'Could not open a conversation' }
-    }
-  }
-  return { ok: true, conversation, waPhone }
+/**
+ * The conversation getOrCreateConversation returned, with the fields a staff
+ * send reads. Returns { ok:true, conversation } or { ok:false, status, error }.
+ */
+export async function loadSendConversation(db, conversationId) {
+  if (!conversationId) return { ok: false, status: 500, error: 'Could not open a conversation' }
+  const { data, error } = await db.from('whatsapp_conversations')
+    .select(SEND_CONVERSATION_COLUMNS)
+    .eq('id', conversationId)
+    .maybeSingle()
+  if (error) return { ok: false, status: 500, error: 'Could not read the conversation' }
+  if (!data) return { ok: false, status: 500, error: 'Could not open a conversation' }
+  return { ok: true, conversation: data }
 }

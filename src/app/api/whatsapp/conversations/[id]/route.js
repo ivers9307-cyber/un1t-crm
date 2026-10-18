@@ -25,7 +25,9 @@ export async function GET(request, props) {
   const limit = parseInt(searchParams.get('limit') || '50')
 
   const { data: conversation, error } = await db.from('whatsapp_conversations')
-    .select('*, contacts!contact_id(id, name, first_name, email, phone, wa_phone, pipeline_stage_slug, wa_status)')
+    // WAORGNUMBER.4 — the thread's stamped number, for the block confirm
+    // (display_phone only: whatsapp_numbers holds the access token).
+    .select('*, contacts!contact_id(id, name, first_name, email, phone, wa_phone, pipeline_stage_slug, wa_status), whatsapp_numbers:whatsapp_number_id(display_phone)')
     .eq('id', params.id)
     .single()
 
