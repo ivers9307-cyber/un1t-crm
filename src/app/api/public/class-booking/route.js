@@ -16,11 +16,14 @@ import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
 import { resolveLandingPath, classFunnelConfigFromBlocks, classFunnelTimetableUnavailableMessage } from '@/lib/public-landing'
 import { createClassBookingPayment } from '@/lib/class-booking-payments'
 import { locationCanTakePayments } from '@/lib/location-payments'
+import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
+import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
+import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
 
 export const runtime = 'nodejs'
 
@@ -58,6 +61,10 @@ const Schema = z.object({
     referrer: z.string().max(2000).optional(),
     landing_path: z.string().max(500).optional(),
   }).optional(),
+  // UN1TWRITE.18 — the un1t.online terms and waiver tick. Required (true)
+  // only at a un1t.online studio with the funnel on; judged below, after
+  // the studio is known.
+  terms_accepted: z.boolean().optional(),
 })
 
 export async function POST(request) {
@@ -89,6 +96,32 @@ export async function POST(request) {
   // mistagged 'stillorgan-start' or misreported to Meta as /start.
   const { tag, leadSource, eventSourceUrl, trialMembershipId, trialPlanCode, priceCents, currency } = classFunnelConfigFromBlocks(page.blocks, landingPath)
 
+  // UN1TWRITE.18 — at a un1t.online studio with the funnel on, the person
+  // must accept the studio's terms and liability waiver; the acceptance is
+  // recorded on the queue row (the create-account step copies it onto the
+  // ledger). An unreadable settings row never blocks a booking: the request
+  // is queued with no acceptance, and the processor (which reads the
+  // settings again) never creates an account without one.
+  let un1tFunnel = false
+  let un1tStudioName = null
+  try {
+    const un1t = await readUn1tWriteSettings(db, locationId)
+    un1tFunnel = un1t.membershipSource === 'un1t_online' && un1t.settings.funnelEnabled
+    un1tStudioName = un1t.studioName
+  } catch (e) {
+    logWarn('classbook', 'un1t.online settings unreadable; terms not judged', { locationId, err: e })
+  }
+  if (un1tFunnel && b.terms_accepted !== true) {
+    // The tick's wording rides on the refusal, so a page that loaded before
+    // the funnel switched on (or whose class list read missed it) can show
+    // the tick and try again instead of being refused with nothing to tick.
+    const terms = un1tTermsPayload({ blocks: page.blocks, studioName: un1tStudioName, publicPath: landingPath })
+    return NextResponse.json({
+      success: false, code: 'terms_required', error: terms.required_message,
+      issues: { terms_accepted: terms.required_message }, terms,
+    }, { status: 400 })
+  }
+
   // Paid intro? Load the location's payment settings so we can resolve the rail.
   // `wantsPayment` gates the paid branch; `paid` is only true once we've also
   // confirmed the location can actually charge (Revolut always; Stripe needs a
@@ -96,10 +129,17 @@ export async function POST(request) {
   const wantsPayment = Number.isFinite(priceCents) && priceCents > 0
   let locationForPay = null
   if (wantsPayment) {
-    const { data: loc } = await db.from('locations').select('id, settings').eq('id', locationId).maybeSingle()
+    const { data: loc } = await db.from('locations').select('id, settings, membership_source').eq('id', locationId).maybeSingle()
     locationForPay = loc || null
   }
-  const paid = wantsPayment && locationCanTakePayments(locationForPay)
+  // UN1TWRITE.18 — no paid intro at a un1t.online studio: anything paid there
+  // goes through un1t.online checkout, and the editor refuses to save a price.
+  // A price stored before that guard is ignored (the free path), loudly.
+  const un1tStudio = locationForPay?.membership_source === 'un1t_online'
+  if (wantsPayment && un1tStudio) {
+    logError('classbook', 'class_funnel price ignored at a un1t.online studio', { locationId })
+  }
+  const paid = wantsPayment && !un1tStudio && locationCanTakePayments(locationForPay)
 
   // Validate the chosen class against the live bookable list — never trust the
   // client's event_id / class_name / starts_at. We use the SERVER's name + start
@@ -209,6 +249,15 @@ export async function POST(request) {
     })
   } catch (e) { logWarn('classbook', 'deal placement failed', { err: e }) }
 
+  // UN1TWRITE.18 — the acceptance, with the documents' version at the time of
+  // the tick (null when they could not be read; the tick still stands).
+  let termsRecord = {}
+  if (un1tFunnel && b.terms_accepted === true) {
+    let version = null
+    try { version = (await readUn1tLegalDocs(db, locationId)).version } catch (e) { logWarn('classbook', 'legal documents version unread', { err: e }) }
+    termsRecord = { terms_accepted_at: new Date().toISOString(), terms_source: 'website', terms_version: version }
+  }
+
   // Dedupe: if this contact already has an active/booked request for this class
   // (double-submit, refresh, retry), don't create a second. Treat as success.
   // `awaiting_payment` is included so a double-submit of a PAID booking doesn't
@@ -218,11 +267,23 @@ export async function POST(request) {
     const { data: existing } = await db.from('class_booking_requests')
       .select('id').eq('contact_id', contactId).eq('glofox_event_id', b.event_id)
       .in('status', ['queued', 'processing', 'booked', 'awaiting_payment']).limit(1).maybeSingle()
-    if (existing) return NextResponse.json({ success: true, data: { queued: true, deduped: true } })
+    if (existing) {
+      // A retry that now carries the tick records it on the row the first
+      // try queued without one (never over an acceptance already there).
+      if (termsRecord.terms_source) {
+        try {
+          const { error: termsErr } = await db.from('class_booking_requests').update(termsRecord)
+            .eq('id', existing.id).is('terms_accepted_at', null)
+          if (termsErr) logWarn('classbook', 'terms record on the deduped row failed', { err: termsErr })
+        } catch (e) { logWarn('classbook', 'terms record on the deduped row failed', { err: e }) }
+      }
+      return NextResponse.json({ success: true, data: { queued: true, deduped: true } })
+    }
   } catch (e) { logWarn('classbook', 'dedupe check failed', { err: e }) }
 
   // class_name + starts_at come from the SERVER-validated class, not the client.
   const { data: queuedRow, error: insErr } = await db.from('class_booking_requests').insert({
+    ...termsRecord,
     location_id: locationId, contact_id: contactId,
     glofox_event_id: b.event_id, class_name: chosen.name,
     starts_at: chosen.starts_at,
