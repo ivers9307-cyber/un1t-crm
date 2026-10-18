@@ -39,7 +39,13 @@ function makeDb(state) {
         for (const r of (state[table] || []).filter((row) => filters.every((f) => f(row)))) Object.assign(r, payload)
         return { data: null, error: null }
       }
-      const rows = (state[table] || []).filter((r) => filters.every((f) => f(r)))
+      // The link and number tables are the resolver fake's `links` / `numbers`
+      // (no `links` = each number switched on at its home, as there).
+      const source = table === 'location_whatsapp_numbers'
+        ? (state.links ?? (state.numbers || []).map((n) => link(n.location_id, n.id)))
+        : table === 'whatsapp_numbers' ? state.numbers : state[table]
+      if (state.faults?.[table] && (table === 'location_whatsapp_numbers' || table === 'whatsapp_numbers')) return { data: null, error: state.faults[table] }
+      const rows = (source || []).filter((r) => filters.every((f) => f(r)))
       return { data: rows, error: null }
     }
     const b = {
@@ -114,10 +120,15 @@ describe('getOrCreateConversation — WAHOMESTUDIO.1', () => {
     expect(numberlessHomeStudio).not.toHaveBeenCalled()
   })
 
-  it('any other contact: a new thread at the sending studio, no stamp written by this path', async () => {
+  it('any other contact: a new thread at the sending studio, stamped with its number (WAORGNUMBER.5 R3)', async () => {
     await getOrCreateConversation(makeDb(state), { id: 'k2', wa_phone: '15555550101', location_id: STILL }, STILL)
-    expect(state.whatsapp_conversations[0]).toMatchObject({ location_id: STILL })
-    expect(state.whatsapp_conversations[0]).not.toHaveProperty('whatsapp_number_id')
+    expect(state.whatsapp_conversations[0]).toMatchObject({ location_id: STILL, whatsapp_number_id: 'n-still' })
+  })
+
+  it('a new thread at a sending studio with nothing switched on is unstamped', async () => {
+    state.links = []
+    await getOrCreateConversation(makeDb(state), { id: 'k2', wa_phone: '15555550101', location_id: STILL }, STILL)
+    expect(state.whatsapp_conversations[0].whatsapp_number_id ?? null).toBeNull()
   })
 
   // F4 (R3 completeness) — a home thread opened before WAHOMESTUDIO.1 (or by a
@@ -148,6 +159,68 @@ describe('getOrCreateConversation — WAHOMESTUDIO.1', () => {
     numberlessHomeStudio.mockResolvedValueOnce(HATCH)
     expect(await getOrCreateConversation(makeDb(state), { id: 'k1', wa_phone: '15555550100' }, STILL)).toBe('conv-hatch')
     expect(errSpy).toHaveBeenCalledWith('[whatsapp] getOrCreateConversation: number stamp on the home thread failed', 'conv-hatch', 'boom')
+    errSpy.mockRestore()
+  })
+})
+
+// WAORGNUMBER.5 (R3) — an existing thread at the sending studio replies from
+// its stamp: an unstamped one, or one whose stamp is no longer switched on
+// (or active) there, gets the studio's number; a stamp still in use is kept.
+describe('getOrCreateConversation — the thread at the sending studio carries a number it can use (WAORGNUMBER.5)', () => {
+  const existingAtStill = (stamp) => state.whatsapp_conversations.push({ id: 'conv-still', location_id: STILL, wa_phone: '15555550100', contact_id: 'k1', whatsapp_number_id: stamp })
+  const contact = { id: 'k1', wa_phone: '15555550100', location_id: STILL }
+
+  it('an unstamped thread is stamped with the studio’s number', async () => {
+    existingAtStill(null)
+    const db = makeDb(state)
+    expect(await getOrCreateConversation(db, contact, STILL)).toBe('conv-still')
+    expect(state.whatsapp_conversations[0].whatsapp_number_id).toBe('n-still')
+  })
+
+  it('getOrCreateConversation replaces a stamp that is switched off at the studio', async () => {
+    state.numbers = [{ id: 'n-still', location_id: STILL, is_active: true }, { id: 'n-old', location_id: STILL, is_active: true }]
+    state.links = [link(STILL, 'n-still', { is_default: true })]
+    existingAtStill('n-old')
+    const db = makeDb(state)
+    expect(await getOrCreateConversation(db, contact, STILL)).toBe('conv-still')
+    expect(state.whatsapp_conversations[0].whatsapp_number_id).toBe('n-still')
+    expect(db.writes).toEqual([{ table: 'whatsapp_conversations', op: 'update', payload: { whatsapp_number_id: 'n-still' } }])
+  })
+
+  it('replaces a stamp whose number is inactive', async () => {
+    state.numbers = [{ id: 'n-still', location_id: STILL, is_active: true }, { id: 'n-old', location_id: STILL, is_active: false }]
+    state.links = [link(STILL, 'n-still', { is_default: true }), link(STILL, 'n-old')]
+    existingAtStill('n-old')
+    await getOrCreateConversation(makeDb(state), contact, STILL)
+    expect(state.whatsapp_conversations[0].whatsapp_number_id).toBe('n-still')
+  })
+
+  it('keeps a stamp that is still switched on there (the customer wrote to it)', async () => {
+    state.numbers = [{ id: 'n-still', location_id: STILL, is_active: true }, { id: 'n-second', location_id: STILL, is_active: true }]
+    state.links = [link(STILL, 'n-still', { is_default: true }), link(STILL, 'n-second')]
+    existingAtStill('n-second')
+    const db = makeDb(state)
+    await getOrCreateConversation(db, contact, STILL)
+    expect(state.whatsapp_conversations[0].whatsapp_number_id).toBe('n-second')
+    expect(db.writes).toEqual([])
+  })
+
+  it('a failed stamp check keeps the stamp, logged; a failed write is logged; the thread is returned either way', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    state.numbers = [{ id: 'n-still', location_id: STILL, is_active: true }]
+    existingAtStill('n-old')
+    const db = makeDb(state)
+    const realFrom = db.from
+    db.from = (t) => (t === 'location_whatsapp_numbers' && !db.resolverRead ? { select: () => ({ eq: () => ({ eq: () => ({ limit: async () => ({ data: null, error: { message: 'links down' } }) }) }) }) } : realFrom(t))
+    expect(await getOrCreateConversation(db, contact, STILL)).toBe('conv-still')
+    expect(state.whatsapp_conversations[0].whatsapp_number_id).toBe('n-old')
+    expect(errSpy).toHaveBeenCalledWith('[whatsapp] getOrCreateConversation: stamp check failed; keeping the stamp', 'conv-still', 'links down')
+
+    state.whatsapp_conversations = []
+    existingAtStill(null)
+    state.failUpdate = 'boom'
+    expect(await getOrCreateConversation(makeDb(state), contact, STILL)).toBe('conv-still')
+    expect(errSpy).toHaveBeenCalledWith('[whatsapp] getOrCreateConversation: number stamp on the thread failed', 'conv-still', 'boom')
     errSpy.mockRestore()
   })
 })

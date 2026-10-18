@@ -123,7 +123,7 @@ export async function resolveNewSenderStudio(db, ctx) {
     if (ctx.contactId || ctx.threadLocationId !== ctx.receivingLocationId) return skip
     const status = ctx.resolution?.status || null
     if (status && FINAL.has(status)) return skip
-    const cfg = await readPickerConfig(db, ctx.receivingLocationId)
+    const cfg = await readPickerConfig(db, ctx.receivingLocationId, ctx.receivingNumberId)
     if (!cfg?.enabled || cfg.studios.length < 2) return skip
     const ids = cfg.studios.map((s) => s.id)
     const hasText = TEXT_TYPES.has(ctx.messageType) && String(ctx.body || '').trim()

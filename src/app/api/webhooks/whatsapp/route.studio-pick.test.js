@@ -20,8 +20,10 @@ vi.mock('@/lib/whatsapp-flow/completion.js', () => ({ handleFlowCompletion: vi.f
 vi.mock('@/lib/whatsapp-config', async (importOriginal) => ({
   ...(await importOriginal()),
   resolveWhatsAppNumberByPhoneNumberId: vi.fn(),
-  // the contact's own studio's number; null = no number there (WAHOMESTUDIO.1: decides the stamp only)
-  getLocationWhatsAppNumberConfig: vi.fn(async () => null),
+}))
+// WAORGNUMBER.5 — the inbound router's answer; default: a new thread at the number's home.
+vi.mock('@/lib/whatsapp-inbound-route', () => ({
+  routeInboundThread: vi.fn(async (_db, { numberHomeLocationId }) => ({ locationId: numberHomeLocationId, conversation: null, by: 'number_home', switchedOn: true })),
 }))
 vi.mock('@/lib/webhook-auth', () => ({ verifyMetaSignature: vi.fn(() => ({ ok: true })), safeEqual: vi.fn(() => true) }))
 vi.mock('@/lib/push', () => ({ sendPush: vi.fn(), sendPushToRolesAtLocation: vi.fn() }))
@@ -44,7 +46,7 @@ vi.mock('@/lib/whatsapp-flow-events', () => ({ FLOW_EVENT_FIELDS: new Set(), app
 vi.mock('@/lib/meta-capi', () => ({ recordCtwaTouch: vi.fn() }))
 vi.mock('@/lib/whatsapp-pricing', () => ({ pricingColumnsFromStatus: vi.fn(() => null) }))
 vi.mock('@/lib/whatsapp-media-server', () => ({ ensureMediaRehosted: vi.fn() }))
-vi.mock('@/lib/whatsapp-bsuid', () => ({ captureInboundBsuid: vi.fn() }))
+vi.mock('@/lib/whatsapp-bsuid', () => ({ captureInboundBsuid: vi.fn(), extractInboundBsuid: vi.fn(() => null) }))
 vi.mock('@/lib/whatsapp-coexistence', () => ({
   parseEchoMessages: vi.fn(() => []),
   parseSyncContacts: vi.fn(() => []),
@@ -60,6 +62,7 @@ import { resolveWhatsAppNumberByPhoneNumberId } from '@/lib/whatsapp-config'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
 import { recordCtwaTouch } from '@/lib/meta-capi'
 import { resolveNewSenderStudio } from '@/lib/wa-studio-pick/resolve'
+import { routeInboundThread } from '@/lib/whatsapp-inbound-route'
 import { maybeSendWelcomeGreeting } from '@/lib/agent/welcome-greeting'
 
 // Recording fake supabase client: chainable builder, thenable (matches
@@ -161,7 +164,7 @@ describe('POST /api/webhooks/whatsapp — a new sender\u2019s studio is decided 
     resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
     await POST(reqFor(inboundText(REGISTERED_PNI)))
     expect(resolveNewSenderStudio).toHaveBeenCalledWith(db, expect.objectContaining({
-      conversationId: 'conv-1', threadLocationId: 'loc-still', receivingLocationId: 'loc-still', contactId: null,
+      conversationId: 'conv-1', threadLocationId: 'loc-still', receivingLocationId: 'loc-still', receivingNumberId: STILLORGAN.id, contactId: null,
       resolution: null, messageType: 'text', body: 'hi', senderPhone: '353871234567',
       message: expect.objectContaining({ id: 'wamid.test1' }),
     }))
@@ -217,7 +220,7 @@ describe('POST /api/webhooks/whatsapp — a new sender\u2019s studio is decided 
     expect(maybeAutoReply).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-hatch', conversationId: 'conv-9' }))
   })
 
-  it('decided \u2192 Flows and ads still act for the receiving studio (actingLocationId is not moved)', async () => {
+  it('decided \u2192 the CTWA touch already ran at the routed studio, before the picker moved the thread (WAORGNUMBER.5)', async () => {
     resolveNewSenderStudio.mockResolvedValueOnce({ action: 'decided', locationId: 'loc-hatch', conversationId: 'conv-9' })
     resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
     await POST(reqFor(inboundCtwa(REGISTERED_PNI)))
@@ -234,45 +237,17 @@ describe('POST /api/webhooks/whatsapp — a new sender\u2019s studio is decided 
 
   it('an existing thread\u2019s studio_resolution is passed through (a staff-moved thread carries decided/staff)', async () => {
     const resolution = { status: 'decided', by: 'staff' }
-    const seenSelects = []
-    db = makeDb({
-      contacts: { data: [], error: null },
-      whatsapp_conversations: (ops, terminal) => {
-        if (terminal === 'single' && !ops.some(([m]) => m === 'update')) {
-          seenSelects.push(ops.find(([m]) => m === 'select')[1])
-          return { data: { id: 'conv-old', contact_id: null, ctwa_clid: null, studio_resolution: resolution }, error: null }
-        }
-        return { data: null, error: null }
-      },
-      whatsapp_messages: (ops) => (ops.some(([m]) => m === 'insert') ? { data: { id: 'msg-row-1' }, error: null } : { data: null, error: null }),
-    })
-    createServerClient.mockReturnValue(db)
+    routeInboundThread.mockResolvedValueOnce({ locationId: 'loc-still', by: 'number_home', switchedOn: true, conversation: { id: 'conv-old', location_id: 'loc-still', contact_id: null, ctwa_clid: null, studio_resolution: resolution } })
     resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
     await POST(reqFor(inboundText(REGISTERED_PNI)))
-    expect(seenSelects[0]).toContain('studio_resolution')
     expect(resolveNewSenderStudio).toHaveBeenCalledWith(db, expect.objectContaining({
       conversationId: 'conv-old', threadLocationId: 'loc-still', resolution,
     }))
   })
 
-  it('a thread staff moved to a number-less studio carries its studio_resolution to the resolver too (the moved-thread select names it)', async () => {
+  it('a thread staff moved to a number-less studio carries its studio_resolution to the resolver too (numberless_home)', async () => {
     const resolution = { status: 'decided', by: 'staff' }
-    db = makeDb({
-      contacts: { data: [], error: null },
-      locations: (ops, terminal) => (terminal === 'maybeSingle'
-        ? { data: { id: 'loc-still', organization_id: 'org-1' }, error: null }
-        : { data: [{ id: 'loc-hatch' }], error: null }),
-      whatsapp_conversations: (ops) => {
-        if (ops.some(([m, col]) => m === 'eq' && col === 'whatsapp_number_id')) {
-          expect(ops.find(([m]) => m === 'select')[1]).toContain('studio_resolution')
-          return { data: [{ id: 'conv-hatch', contact_id: null, ctwa_clid: null, location_id: 'loc-hatch', studio_resolution: resolution }], error: null }
-        }
-        return { data: null, error: null }
-      },
-      whatsapp_numbers: { data: [], error: null },
-      whatsapp_messages: (ops) => (ops.some(([m]) => m === 'insert') ? { data: { id: 'msg-row-1' }, error: null } : { data: null, error: null }),
-    })
-    createServerClient.mockReturnValue(db)
+    routeInboundThread.mockResolvedValueOnce({ locationId: 'loc-hatch', by: 'numberless_home', switchedOn: false, conversation: { id: 'conv-hatch', location_id: 'loc-hatch', contact_id: null, ctwa_clid: null, studio_resolution: resolution } })
     resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
     await POST(reqFor(inboundText(REGISTERED_PNI)))
     expect(resolveNewSenderStudio).toHaveBeenCalledWith(db, expect.objectContaining({

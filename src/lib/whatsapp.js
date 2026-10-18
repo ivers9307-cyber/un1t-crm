@@ -2185,8 +2185,49 @@ export async function getOrCreateConversation(db, contact, locationId) {
       return row.id
     }
 
+    // WAORGNUMBER.5 (R3) — an existing thread at the sending studio replies from
+    // its stamp, so one with no stamp, or a stamp that is no longer switched on
+    // (or active) at this studio, gets the studio's number. A stamp still in use
+    // here is kept (the customer wrote to it). A failed read keeps what is
+    // there, logged; a lost stamp is logged, never thrown.
+    const usableHere = async (numberId) => {
+      const { data: links, error: linkErr } = await db.from('location_whatsapp_numbers')
+        .select('whatsapp_number_id')
+        .eq('location_id', locationId)
+        .eq('whatsapp_number_id', numberId)
+        .limit(1)
+      if (linkErr) throw linkErr
+      if (!links?.length) return false
+      const { data: active, error: activeErr } = await db.from('whatsapp_numbers')
+        .select('id')
+        .eq('id', numberId)
+        .eq('is_active', true)
+        .limit(1)
+      if (activeErr) throw activeErr
+      return Boolean(active?.length)
+    }
+    const restamp = async (row) => {
+      const numberId = await sendingNumberId()
+      if (!numberId || row.whatsapp_number_id === numberId) return
+      if (row.whatsapp_number_id) {
+        try {
+          if (await usableHere(row.whatsapp_number_id)) return
+        } catch (e) {
+          console.error('[whatsapp] getOrCreateConversation: stamp check failed; keeping the stamp', row.id, e?.message || String(e))
+          return
+        }
+      }
+      let q = db.from('whatsapp_conversations').update({ whatsapp_number_id: numberId }).eq('id', row.id)
+      q = row.whatsapp_number_id ? q.eq('whatsapp_number_id', row.whatsapp_number_id) : q.is('whatsapp_number_id', null)
+      const { error: stampErr } = await q
+      if (stampErr) console.error('[whatsapp] getOrCreateConversation: number stamp on the thread failed', row.id, stampErr.message)
+    }
+
     const existing = await findAt(locationId)
-    if (existing) return linkContact(existing)
+    if (existing) {
+      await restamp(existing)
+      return linkContact(existing)
+    }
 
     // WAHOMESTUDIO.1 (R1) — a contact whose home studio has no WhatsApp number
     // of its own (same organisation) gets the thread at their home studio, the
@@ -2195,7 +2236,6 @@ export async function getOrCreateConversation(db, contact, locationId) {
     // existing one at the sending studio is the backfill's (mig 724) to move.
     const home = await numberlessHomeStudio(db, contact, locationId)
     let fileAt = locationId
-    let stamp = null
     if (home) {
       const atHome = await findAt(home)
       if (atHome) {
@@ -2215,8 +2255,10 @@ export async function getOrCreateConversation(db, contact, locationId) {
         return linkContact(atHome)
       }
       fileAt = home
-      stamp = await sendingNumberId()
     }
+    // A new thread is stamped with the sending studio's number (R3; at a
+    // number-less home studio it replies through it, WAHOMESTUDIO.1).
+    const stamp = await sendingNumberId()
 
     const { data: created, error } = await db.from('whatsapp_conversations').insert({
       location_id: fileAt,

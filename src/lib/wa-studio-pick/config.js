@@ -3,7 +3,7 @@
 // `listed` (with a `label` and classifier `keywords`); the studio that owns the
 // number carries `enabled` and the `question`. Defaults keep it all OFF.
 import { logWarn } from '../log'
-import { locationsWithWhatsApp } from '../whatsapp-config'
+import { locationsWithWhatsApp, studiosUsingNumbers } from '../whatsapp-config'
 
 export const DEFAULT_PICKER_QUESTION = 'Thanks for getting in touch. Which studio is this about?'
 export const PICKER_ID_PREFIX = 'studio:'
@@ -19,7 +19,14 @@ export function pickerLabel(loc) {
   return (label || String(loc?.name || '').trim()).slice(0, LABEL_MAX)
 }
 
-export async function readPickerConfig(db, receivingLocationId) {
+// WAORGNUMBER.5 (R4 step 5) — the studios offered are those the receiving
+// number is switched on at (plus its home studio) that are `listed`: a thread
+// moved to one of them replies from this same number. Transitional
+// (WAHOMESTUDIO.1, until WAORGNUMBER.6): a listed studio of the organisation
+// with nothing switched on is offered too, as before, since its thread replies
+// through this number (getConversationNumberConfig's sibling clause). A studio
+// with only other numbers switched on is never offered here.
+export async function readPickerConfig(db, receivingLocationId, receivingNumberId = null) {
   try {
     const { data: home, error: homeErr } = await db.from('locations')
       .select('id, name, organization_id, settings').eq('id', receivingLocationId).maybeSingle()
@@ -30,14 +37,12 @@ export async function readPickerConfig(db, receivingLocationId) {
     if (error) throw error
     const own = pickerOf(home)
     const listed = (rows || []).filter((l) => pickerOf(l).listed === true)
-    // A sibling with its own WhatsApp number is only offered on that number: a
-    // thread moved to it here would be answered from this number, not its own.
-    const siblingIds = listed.map((l) => l.id).filter((id) => id !== receivingLocationId)
-    // WAORGNUMBER.1 — "its own number" is an active number switched on there
-    // (locationsWithWhatsApp throws on a failed read: caught below, picker skipped).
-    const numbered = await locationsWithWhatsApp(db, siblingIds)
+    // Both helpers throw on a failed read: caught below, picker skipped.
+    const usingThisNumber = new Set(receivingNumberId ? await studiosUsingNumbers(db, [receivingNumberId]) : [])
+    usingThisNumber.add(receivingLocationId)
+    const numbered = await locationsWithWhatsApp(db, listed.map((l) => l.id).filter((id) => !usingThisNumber.has(id)))
     const studios = listed
-      .filter((l) => !numbered.has(l.id))
+      .filter((l) => usingThisNumber.has(l.id) || !numbered.has(l.id))
       .map((l) => ({
         id: l.id,
         name: l.name,
