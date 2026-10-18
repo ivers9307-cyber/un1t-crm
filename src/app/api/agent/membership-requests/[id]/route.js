@@ -233,8 +233,9 @@ export async function PATCH(request, { params }) {
   // UN1TWRITE.8 — record-only: no un1t.online call, no Glofox call, no message.
   // Mia's refund_request_text already answered the customer in the thread, so
   // approving only records that staff made the refund by hand. Before every
-  // other branch, and it imports nothing from the write side (the guard walks
-  // this file's refund path in tests/un1t-online-write-guard.test.js).
+  // other branch, and calls nothing on the write side. (The import guard in
+  // tests/un1t-online-write-guard.test.js walks src/lib/un1t-online-approval.js,
+  // not this route, which imports Glofox for other kinds.)
   if (executing && row.kind === 'refund_request') {
     executed = { ok: true, record_only: true }
     details = { ...details, result: executed }

@@ -1,6 +1,6 @@
 // UN1TWRITE.6 — the un1t_* mirror after a done un1t.online write (spec 6.3).
 //
-// Called by the write primitives (un1t-online-write.js) after a `done`
+// Called by the write primitives (un1t-online-write-ops.js) after a `done`
 // verdict, recovered ones included. It keeps the mirror the sync owns in step
 // with what the CRM just did, so staff see the booking and the credits at once
 // instead of after the next 15-minute sync.

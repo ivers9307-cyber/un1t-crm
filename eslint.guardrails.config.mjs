@@ -478,6 +478,7 @@ const config = [
       'src/lib/un1t-online-write.js',
       'src/lib/un1t-online-write-ops.js',
       'src/lib/un1t-online-mirror-write.js',
+      'src/lib/un1t-online-write-ledger.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

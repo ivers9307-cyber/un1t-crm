@@ -669,9 +669,10 @@ describe('UN1TWRITE.7 — the sync cannot write', { timeout: WHOLE_REPO_TIMEOUT_
 
 // UN1TWRITE.8 — the refund card is RECORD-ONLY. A refund is never moved by the
 // CRM (no /refunds endpoint, no forceRefund): fileRefundCard only files a card
-// and the approval route only closes it. So neither may reach the write
-// transport, its ops, its ledger or the mirror, however many imports deep, and
-// neither may name a Glofox or un1t.online client. Task 23 adds the booking
+// and the approval route only closes it. So un1t-online-approval.js (the walked
+// entry; the route itself imports Glofox for other kinds and is not walked) may
+// not reach the write transport, its ops, its ledger or the mirror, however
+// many imports deep, and may not name a Glofox or un1t.online client. Task 23 adds the booking
 // executor to un1t-online-approval.js; when it does, the refund entry below
 // moves to its own file (or this walk becomes a per-function check) so the
 // executor can import the ops while the refund path still cannot.
