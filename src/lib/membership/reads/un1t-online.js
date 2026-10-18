@@ -489,33 +489,45 @@ const listAtStudio = (db, loc, table, cols) => selectAll((from, to) => db
   .order('id', { ascending: true })
   .range(from, to), { pageSize: PAGE })
 
-// listLedgerTrials: ids per .in() chunk. The ids are un1t user ids (short), so 150
-// keeps the request line short; the match set is paged within each chunk.
+// listLedgerTrials: ids per .in() chunk. The ids are un1t user ids / contact uuids
+// (short), so 150 keeps the request line short; the match set is paged per chunk.
 const LEDGER_ID_CHUNK = 150
 const LEDGER_TRIAL_STAGES = Object.freeze(['done', 'sent', 'unknown'])
-const LEDGER_TRIAL_COLS = 'un1t_user_id, target, stage, created_at'
+const LEDGER_TRIAL_COLS = 'id, un1t_user_id, contact_id, target, stage, created_at'
 
 /**
  * The trials the CRM itself granted (or is granting) at a studio, from the
- * write ledger (un1t_write_events, op 'trial'), keyed by un1t user:
- * `byUser: Map<un1tUserId, Array<{ at, product_id, stage }>>`, where `at` is the
- * row's created_at and `product_id` its target. Both methods count (the €0
+ * write ledger (un1t_write_events, op 'trial'):
+ * `byUser: Map<un1tUserId, Array<{ at, product_id, stage }>>` and
+ * `byContact: Map<contactId, Array<{ at, product_id, stage }>>`, where `at` is
+ * the row's created_at and `product_id` its target. Both methods count (the €0
  * charge and the free checkout). A shaper reads `{ at, product_id }`.
  *
- * `stages` (default done, sent, unknown) picks which rows; `un1tUserIds`, when
- * given, narrows to those people (an empty list is an empty answer with no
- * query; a non-array is refused rather than widened to the whole studio).
+ * A row is found by its un1t user AND/OR its contact: an account the CRM just
+ * created is not in `un1t_clients` until the next sync, so its trial row is
+ * reachable only through the contact the ledger stamped on it. A row with both
+ * keys is ONE entry object in both maps (callers de-duplicate by identity).
+ *
+ * `stages` (default done, sent, unknown) picks which rows. `un1tUserIds` and
+ * `contactIds`, when either is given, narrow to rows matching either list (an
+ * empty list matches nothing; with both empty there is no query; a non-array is
+ * refused rather than widened to the whole studio). With neither, every trial
+ * row at the studio.
  *
  * Never throws and never answers an empty map for a failed read:
  * `{ ok:false, error }`, and the caller must fail with it.
  */
-export async function listLedgerTrials(db, locationId, { stages = LEDGER_TRIAL_STAGES, un1tUserIds } = {}) {
+export async function listLedgerTrials(db, locationId, { stages = LEDGER_TRIAL_STAGES, un1tUserIds, contactIds } = {}) {
   if (!locationId) return { ok: false, error: 'No location' }
   if (!Array.isArray(stages)) return { ok: false, error: 'stages must be an array' }
   if (un1tUserIds != null && !Array.isArray(un1tUserIds)) return { ok: false, error: 'un1tUserIds must be an array' }
+  if (contactIds != null && !Array.isArray(contactIds)) return { ok: false, error: 'contactIds must be an array' }
   const byUser = new Map()
-  const ids = un1tUserIds == null ? null : cleanIds(un1tUserIds)
-  if (ids && ids.length === 0) return { ok: true, byUser }
+  const byContact = new Map()
+  const scoped = un1tUserIds != null || contactIds != null
+  const userKeys = cleanIds(un1tUserIds ?? [])
+  const contactKeys = cleanIds(contactIds ?? [])
+  if (scoped && userKeys.length === 0 && contactKeys.length === 0) return { ok: true, byUser, byContact }
   try {
     // created_at alone is not unique (two trials can share a stamp), and a page
     // boundary inside a tie would double-count or skip a row: id breaks the tie.
@@ -526,19 +538,27 @@ export async function listLedgerTrials(db, locationId, { stages = LEDGER_TRIAL_S
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
       .range(from, to)
-    const rows = ids
-      ? await selectAllByKeys(
-        ids,
-        (keys, from, to) => page(db.from('un1t_write_events').select(LEDGER_TRIAL_COLS).in('un1t_user_id', keys), from, to),
-        { chunkSize: LEDGER_ID_CHUNK, pageSize: PAGE },
-      )
-      : await selectAll((from, to) => page(db.from('un1t_write_events').select(LEDGER_TRIAL_COLS), from, to), { pageSize: PAGE })
-    for (const r of rows) {
-      if (r.un1t_user_id == null) continue // a trial row always names its person (mig 742); never file one under null
-      if (!byUser.has(r.un1t_user_id)) byUser.set(r.un1t_user_id, [])
-      byUser.get(r.un1t_user_id).push({ at: r.created_at ?? null, product_id: r.target ?? null, stage: r.stage })
+    const byKeys = (column, keys) => selectAllByKeys(
+      keys,
+      (chunk, from, to) => page(db.from('un1t_write_events').select(LEDGER_TRIAL_COLS).in(column, chunk), from, to),
+      { chunkSize: LEDGER_ID_CHUNK, pageSize: PAGE },
+    )
+    const lists = scoped
+      ? await Promise.all([byKeys('un1t_user_id', userKeys), byKeys('contact_id', contactKeys)])
+      : [await selectAll((from, to) => page(db.from('un1t_write_events').select(LEDGER_TRIAL_COLS), from, to), { pageSize: PAGE })]
+    const seen = new Map() // ledger id → the one entry object
+    const file = (map, key, entry) => {
+      if (key == null) return
+      if (!map.has(key)) map.set(key, [])
+      if (!map.get(key).includes(entry)) map.get(key).push(entry)
     }
-    return { ok: true, byUser }
+    for (const r of lists.flat()) {
+      if (!seen.has(r.id)) seen.set(r.id, { at: r.created_at ?? null, product_id: r.target ?? null, stage: r.stage })
+      const entry = seen.get(r.id)
+      file(byUser, r.un1t_user_id, entry)
+      file(byContact, r.contact_id, entry)
+    }
+    return { ok: true, byUser, byContact }
   } catch (e) {
     return { ok: false, error: errMessage(e) }
   }
@@ -548,8 +568,14 @@ export async function listLedgerTrials(db, locationId, { stages = LEDGER_TRIAL_S
 async function ledgerTrialsOrThrow(db, locationId, opts) {
   const out = await listLedgerTrials(db, locationId, opts)
   if (!out.ok) throw new Error(out.error)
-  return out.byUser
+  return out
 }
+
+/** The ledger entries for these users and contacts, each ledger row once. */
+const ledgerEntriesFor = (ledger, userIds, contactIds) => [...new Set([
+  ...userIds.flatMap((id) => ledger.byUser.get(id) ?? []),
+  ...contactIds.flatMap((id) => ledger.byContact.get(id) ?? []),
+])]
 
 const productsMap = (rows) => new Map(rows.map((p) => [p.un1t_id, p]))
 
@@ -601,7 +627,7 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
       return { success: true, data: { contacts: [], snapshots: new Map(), evidence: new Map(), unlinked, skipped_no_contact: 0 } }
     }
 
-    const [subs, txs, products, bookings, events, memberships, contactRows, ledgerByUser] = await Promise.all([
+    const [subs, txs, products, bookings, events, memberships, contactRows, ledger] = await Promise.all([
       listFresh(db, locationId, 'un1t_subscriptions', PIPE_SUB_COLS),
       listAtStudio(db, locationId, 'un1t_transactions', PIPE_TX_COLS),
       listAtStudio(db, locationId, 'un1t_products', PRODUCT_COLS),
@@ -657,7 +683,7 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
         productsById,
         bookings: bookingsBy.get(contactId) ?? [],
         memberships: membershipsBy.get(contactId) ?? [],
-        ledgerTrials: theirClients.flatMap((c) => ledgerByUser.get(c.un1t_user_id) ?? []),
+        ledgerTrials: ledgerEntriesFor(ledger, theirClients.map((c) => c.un1t_user_id), [contactId]),
         now,
       }
       const snapshot = shapePipelineSnapshot(rows)
@@ -712,6 +738,21 @@ async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) 
       for (const a of accounts) if (a.un1t_user_id != null) userIds.add(a.un1t_user_id)
     }
     const users = [...userIds]
+    // The contacts this person is: the one asked about, and the contact of the
+    // account asked about (its un1t_clients row), so a CRM-created account the
+    // sync has not mirrored yet is still reached through its ledger contact_id.
+    const contactSet = new Set(contactId == null ? [] : [contactId])
+    if (un1tUserId != null) {
+      const own = await selectAll((from, to) => db
+        .from('un1t_clients')
+        .select('contact_id')
+        .eq('location_id', locationId)
+        .eq('un1t_user_id', un1tUserId)
+        .order('id', { ascending: true })
+        .range(from, to), { pageSize: PAGE })
+      for (const c of own) if (c.contact_id != null) contactSet.add(c.contact_id)
+    }
+    const contactIds = [...contactSet]
     const rowsFor = (table, cols) => Promise.all([
       selectAllByKeys(
         users,
@@ -727,7 +768,7 @@ async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) 
         .range(from, to), { pageSize: PAGE }),
     ]).then((lists) => unionByUn1tId(...lists))
 
-    const [transactions, subscriptions, products, memberships, ledgerByUser] = await Promise.all([
+    const [transactions, subscriptions, products, memberships, ledger] = await Promise.all([
       rowsFor('un1t_transactions', PIPE_TX_COLS),
       rowsFor('un1t_subscriptions', ELIGIBILITY_SUB_COLS),
       listAtStudio(db, locationId, 'un1t_products', PRODUCT_COLS),
@@ -740,13 +781,13 @@ async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) 
         .order('id', { ascending: true })
         .range(from, to), { pageSize: PAGE }),
       // Every ledger trial for these people counts, done, sent or unknown alike.
-      ledgerTrialsOrThrow(db, locationId, { un1tUserIds: users }),
+      ledgerTrialsOrThrow(db, locationId, { un1tUserIds: users, contactIds }),
     ])
     return {
       success: true,
       data: shapeTrialEligibility({
         transactions, subscriptions, memberships, productsById: productsMap(products),
-        ledgerTrials: users.flatMap((id) => ledgerByUser.get(id) ?? []),
+        ledgerTrials: ledgerEntriesFor(ledger, users, contactIds),
       }),
     }
   } catch (e) {
