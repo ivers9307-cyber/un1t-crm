@@ -43,7 +43,7 @@ describe('readPickerConfig — studios with their own number (F2)', () => {
     const cfg = await readPickerConfig(makeDb([STILL, HATCH, TEST], null, { numbers: [{ id: 'n1', location_id: 'a1', is_active: true }, HATCH_NO] }), 'a1')
     expect(cfg.studios.map((s) => s.id)).toEqual(['a1'])
   })
-  it('a sibling the organisation number is switched on at is not offered (WAORGNUMBER.1)', async () => {
+  it('without the receiving number, a sibling with any number switched on is not offered (WAORGNUMBER.1)', async () => {
     const org = { id: 'n1', location_id: 'a1', is_active: true }
     const cfg = await readPickerConfig(makeDb([STILL, HATCH, TEST], null, { numbers: [org], links: [link('a1', 'n1'), link('a2', 'n1')] }), 'a1')
     expect(cfg.studios.map((s) => s.id)).toEqual(['a1'])
@@ -67,5 +67,32 @@ describe('pickerLabel', () => {
   it('label, else name, cut to 20', () => {
     expect(pickerLabel({ name: 'UN1T Hatch Street Dublin 2', settings: {} })).toBe('UN1T Hatch Street Du')
     expect(pickerLabel({ name: 'x', settings: { wa_studio_picker: { label: '  Hatch Street ' } } })).toBe('Hatch Street')
+  })
+})
+
+// WAORGNUMBER.5 (R4 step 5) — the studios the RECEIVING number is switched on
+// at (and that are listed) are offered: a thread moved there replies from it.
+describe('readPickerConfig — studios using the receiving number (WAORGNUMBER.5)', () => {
+  const ORG_NO = { id: 'n1', location_id: 'a1', is_active: true }
+  it('a listed studio the receiving number is switched on at is offered', async () => {
+    const cfg = await readPickerConfig(makeDb([STILL, HATCH, TEST], null, { numbers: [ORG_NO], links: [link('a1', 'n1'), link('a2', 'n1')] }), 'a1', 'n1')
+    expect(cfg.studios.map((s) => s.id).sort()).toEqual(['a1', 'a2'])
+  })
+  it('one it is switched on at but that is not listed is not offered', async () => {
+    const cfg = await readPickerConfig(makeDb([STILL, HATCH, TEST], null, { numbers: [ORG_NO], links: [link('a1', 'n1'), link('a3', 'n1')] }), 'a1', 'n1')
+    expect(cfg.studios.map((s) => s.id).sort()).toEqual(['a1', 'a2'])
+  })
+  it('a studio with only ANOTHER number switched on is not offered', async () => {
+    const cfg = await readPickerConfig(makeDb([STILL, HATCH], null, { numbers: [ORG_NO, { id: 'n2', location_id: 'a2', is_active: true }], links: [link('a1', 'n1'), link('a2', 'n2')] }), 'a1', 'n1')
+    expect(cfg.studios.map((s) => s.id)).toEqual(['a1'])
+  })
+  it('transitional (WAHOMESTUDIO.1): a listed studio with nothing switched on is still offered', async () => {
+    const cfg = await readPickerConfig(makeDb([STILL, HATCH], null, { numbers: [ORG_NO], links: [link('a1', 'n1')] }), 'a1', 'n1')
+    expect(cfg.studios.map((s) => s.id).sort()).toEqual(['a1', 'a2'])
+  })
+  it('the links read failing → null, logged (picker skipped)', async () => {
+    logWarn.mockClear()
+    expect(await readPickerConfig(makeDb([STILL, HATCH], null, { numbers: [ORG_NO], numbersFault: { message: 'links down' } }), 'a1', 'n1')).toBeNull()
+    expect(logWarn).toHaveBeenCalled()
   })
 })

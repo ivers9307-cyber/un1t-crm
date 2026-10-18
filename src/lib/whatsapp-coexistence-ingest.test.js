@@ -2,9 +2,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
-vi.mock('./whatsapp-thread-location', () => ({ numberlessHomeStudio: vi.fn(async () => null) }))
+// WAORGNUMBER.5 — the thread's studio is routeInboundThread's (its rules are
+// whatsapp-inbound-route.test.js). Default: the number's home studio and the
+// peer's thread there, read through the test's db, switched on.
+vi.mock('./whatsapp-inbound-route', () => ({
+  routeInboundThread: vi.fn(async (db, { numberHomeLocationId, waPhone }) => {
+    const { data } = await db.from('whatsapp_conversations').select('id, whatsapp_number_id')
+      .eq('location_id', numberHomeLocationId).eq('wa_phone', waPhone).limit(1).maybeSingle()
+    return { locationId: numberHomeLocationId, conversation: data || null, by: 'number_home', switchedOn: true }
+  }),
+}))
 const { logError } = await import('@/lib/log')
-const { numberlessHomeStudio } = await import('./whatsapp-thread-location')
+const { routeInboundThread } = await import('./whatsapp-inbound-route')
 const { syncContactMatchOnly, ingestCoexistenceMessage } = await import('./whatsapp-coexistence-ingest.js')
 
 // Minimal chainable mock db. Each .from() returns a builder whose terminal
@@ -319,84 +328,92 @@ describe('ingestCoexistenceMessage — phone-app echoes are staff (C106 d)', () 
   })
 })
 
-// WAHOMESTUDIO.1 (R1) — a phone-app echo / history row for a peer whose home
-// studio has no number files at THAT studio (where the webhook files their
-// messages), the thread stamped with the receiving number.
-describe('ingestCoexistenceMessage — thread filed at a number-less home studio (WAHOMESTUDIO.1)', () => {
+// WAORGNUMBER.5 (R4) — a phone-app echo / history row files where the inbound
+// router says, and the receiving number is stamped when it is switched on
+// there, or (transitionally, WAHOMESTUDIO.1) the thread is at a number-less
+// home studio.
+describe('ingestCoexistenceMessage — the inbound router decides the thread (WAORGNUMBER.5)', () => {
   beforeEach(() => { vi.clearAllMocks() })
 
-  it('a peer whose home studio has no number threads at that studio, stamped with the receiving number', async () => {
-    numberlessHomeStudio.mockResolvedValueOnce('loc-hatch')
-    const writes = []
-    const convFilters = []
-    const db = makeDb((ctx) => {
-      if (ctx.op) writes.push({ table: ctx.table, op: ctx.op, values: ctx.values })
-      if (ctx.table === 'whatsapp_messages') return { data: ctx.op === 'insert' ? { id: 'm1' } : null, error: null }
-      if (ctx.table === 'contacts') return { data: { id: 'k1', location_id: 'loc-hatch' }, error: null }
-      if (ctx.table === 'whatsapp_conversations') {
-        if (ctx.op === 'insert') return { data: { id: 'conv1' }, error: null }
-        if (!ctx.op) convFilters.push(ctx.filters)
-        return { data: null, error: null }
-      }
-      return { data: null, error: null }
-    })
-    const r = await ingestCoexistenceMessage(db, {
-      locationId: 'loc-still', numberId: 'wn-1',
-      descriptor: { waMessageId: 'wamid.HOME1', peerPhone: '353222', direction: 'outbound', messageType: 'text', body: 'x', tsSeconds: 1700000000, origin: 'echo' },
-    })
-    expect(r).toMatchObject({ inserted: true, conversationId: 'conv1', contactId: 'k1' })
-    expect(numberlessHomeStudio).toHaveBeenCalledWith(db, { id: 'k1', location_id: 'loc-hatch' }, 'loc-still')
-    expect(convFilters[0]).toContainEqual(['eq', 'location_id', 'loc-hatch'])
-    const convInsert = writes.find((w) => w.table === 'whatsapp_conversations' && w.op === 'insert')
-    expect(convInsert.values).toMatchObject({ location_id: 'loc-hatch', contact_id: 'k1', whatsapp_number_id: 'wn-1' })
-    const msgInsert = writes.find((w) => w.table === 'whatsapp_messages' && w.op === 'insert')
-    expect(msgInsert.values).toMatchObject({ location_id: 'loc-hatch', conversation_id: 'conv1', contact_id: 'k1' })
-  })
-
-  it('a peer with no home-studio override threads at the receiving studio, unstamped', async () => {
-    const writes = []
-    const db = makeDb((ctx) => {
-      if (ctx.op) writes.push({ table: ctx.table, op: ctx.op, values: ctx.values })
-      if (ctx.table === 'whatsapp_messages') return { data: ctx.op === 'insert' ? { id: 'm1' } : null, error: null }
-      if (ctx.table === 'contacts') return { data: { id: 'k1', location_id: 'loc-still' }, error: null }
-      if (ctx.table === 'whatsapp_conversations') return { data: ctx.op === 'insert' ? { id: 'conv1' } : null, error: null }
-      return { data: null, error: null }
-    })
-    await ingestCoexistenceMessage(db, {
-      locationId: 'loc-still', numberId: 'wn-1',
-      descriptor: { waMessageId: 'wamid.HOME2', peerPhone: '353222', direction: 'inbound', messageType: 'text', body: 'x', tsSeconds: 1700000000 },
-    })
-    const convInsert = writes.find((w) => w.table === 'whatsapp_conversations' && w.op === 'insert')
-    expect(convInsert.values).toEqual({ location_id: 'loc-still', contact_id: 'k1', wa_phone: '353222', status: 'active' })
-  })
-})
-
-// F4 (R3 completeness) — an EXISTING home thread with no stamp (opened before
-// WAHOMESTUDIO.1) gets the receiving number, or a reply into it has no number
-// to resolve. Logged, never thrown; the message is stored either way.
-describe('ingestCoexistenceMessage — an existing unstamped home thread is stamped (F4)', () => {
-  beforeEach(() => { vi.clearAllMocks() })
-
-  function homeDb({ existing, updateError = null }) {
+  function routedDb(existing = null) {
     const writes = []
     const db = makeDb((ctx) => {
       if (ctx.op) writes.push({ table: ctx.table, op: ctx.op, values: ctx.values, filters: ctx.filters })
       if (ctx.table === 'whatsapp_messages') return { data: ctx.op === 'insert' ? { id: 'm1' } : null, error: null }
       if (ctx.table === 'contacts') return { data: { id: 'k1', location_id: 'loc-hatch' }, error: null }
-      if (ctx.table === 'whatsapp_conversations') {
-        if (ctx.op === 'update') return { data: null, error: updateError }
-        if (!ctx.op) return { data: existing, error: null }
-      }
+      if (ctx.table === 'whatsapp_conversations') return { data: ctx.op === 'insert' ? { id: 'conv1' } : (ctx.op ? null : existing), error: null }
       return { data: null, error: null }
     })
     return { db, writes }
   }
+  const echoAt = { waMessageId: 'wamid.HOME1', peerPhone: '353222', direction: 'outbound', messageType: 'text', body: 'x', tsSeconds: 1700000000, origin: 'echo' }
+  const convInsert = (writes) => writes.find((w) => w.table === 'whatsapp_conversations' && w.op === 'insert')
+
+  it('asks the router with the receiving number, its home, its organisation and the matched contact', async () => {
+    const { db } = routedDb()
+    await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', organizationId: 'org-1', descriptor: echoAt })
+    expect(routeInboundThread).toHaveBeenCalledWith(db, {
+      numberId: 'wn-1', numberHomeLocationId: 'loc-still', organizationId: 'org-1', waPhone: '353222', bsuid: null,
+      contact: { id: 'k1', location_id: 'loc-hatch' }, contextMessageId: null, referral: null,
+      now: 1700000000 * 1000, // the message's own time, not the import's
+    })
+  })
+
+  it('numberless_home: the thread is at the number-less home studio, stamped with the receiving number', async () => {
+    routeInboundThread.mockResolvedValueOnce({ locationId: 'loc-hatch', conversation: null, by: 'numberless_home', switchedOn: false })
+    const { db, writes } = routedDb()
+    const r = await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: echoAt })
+    expect(r).toMatchObject({ inserted: true, conversationId: 'conv1', contactId: 'k1' })
+    expect(convInsert(writes).values).toMatchObject({ location_id: 'loc-hatch', contact_id: 'k1', whatsapp_number_id: 'wn-1' })
+    const msgInsert = writes.find((w) => w.table === 'whatsapp_messages' && w.op === 'insert')
+    expect(msgInsert.values).toMatchObject({ location_id: 'loc-hatch', conversation_id: 'conv1', contact_id: 'k1' })
+  })
+
+  it('a studio the number is switched on at gets a stamped thread (R4 step 6)', async () => {
+    routeInboundThread.mockResolvedValueOnce({ locationId: 'loc-hatch', conversation: null, by: 'recent', switchedOn: true })
+    const { db, writes } = routedDb()
+    await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: echoAt })
+    expect(convInsert(writes).values).toEqual({ location_id: 'loc-hatch', contact_id: 'k1', wa_phone: '353222', status: 'active', whatsapp_number_id: 'wn-1' })
+  })
+
+  it('a studio the number is NOT switched on at (and not number-less) gets an unstamped thread', async () => {
+    routeInboundThread.mockResolvedValueOnce({ locationId: 'loc-still', conversation: null, by: 'number_home', switchedOn: false })
+    const { db, writes } = routedDb()
+    await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: echoAt })
+    expect(convInsert(writes).values).toEqual({ location_id: 'loc-still', contact_id: 'k1', wa_phone: '353222', status: 'active' })
+  })
+
+  it('no receiving number: never stamps', async () => {
+    const { db, writes } = routedDb()
+    await ingestCoexistenceMessage(db, { locationId: 'loc-still', descriptor: echoAt })
+    expect(convInsert(writes).values).not.toHaveProperty('whatsapp_number_id')
+  })
+})
+
+// F4 (R3 completeness) — an EXISTING thread with no stamp gets the receiving
+// number, or a reply into it has no number to resolve. Logged, never thrown;
+// the message is stored either way.
+describe('ingestCoexistenceMessage — an existing unstamped thread is stamped (F4)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  function homeDb({ updateError = null } = {}) {
+    const writes = []
+    const db = makeDb((ctx) => {
+      if (ctx.op) writes.push({ table: ctx.table, op: ctx.op, values: ctx.values, filters: ctx.filters })
+      if (ctx.table === 'whatsapp_messages') return { data: ctx.op === 'insert' ? { id: 'm1' } : null, error: null }
+      if (ctx.table === 'contacts') return { data: { id: 'k1', location_id: 'loc-hatch' }, error: null }
+      if (ctx.table === 'whatsapp_conversations' && ctx.op === 'update') return { data: null, error: updateError }
+      return { data: null, error: null }
+    })
+    return { db, writes }
+  }
+  const routedTo = (existing) => routeInboundThread.mockResolvedValueOnce({ locationId: 'loc-hatch', conversation: existing, by: 'numberless_home', switchedOn: false })
   const inbound = { waMessageId: 'wamid.HOME9', peerPhone: '353222', direction: 'inbound', messageType: 'text', body: 'x', tsSeconds: 1700000000 }
   const stampWrites = (writes) => writes.filter((w) => w.table === 'whatsapp_conversations' && w.op === 'update' && 'whatsapp_number_id' in (w.values || {}))
 
-  it('stamps the existing home thread with the receiving number, only while it is unstamped', async () => {
-    numberlessHomeStudio.mockResolvedValueOnce('loc-hatch')
-    const { db, writes } = homeDb({ existing: { id: 'conv-h', whatsapp_number_id: null } })
+  it('stamps the existing thread with the receiving number, only while it is unstamped', async () => {
+    routedTo({ id: 'conv-h', whatsapp_number_id: null })
+    const { db, writes } = homeDb()
     const r = await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: inbound })
     expect(r).toMatchObject({ inserted: true, conversationId: 'conv-h' })
     expect(stampWrites(writes)).toEqual([{
@@ -405,21 +422,21 @@ describe('ingestCoexistenceMessage — an existing unstamped home thread is stam
     }])
   })
 
-  it('leaves an already-stamped home thread alone', async () => {
-    numberlessHomeStudio.mockResolvedValueOnce('loc-hatch')
-    const { db, writes } = homeDb({ existing: { id: 'conv-h', whatsapp_number_id: 'wn-9' } })
+  it('leaves an already-stamped thread alone', async () => {
+    routedTo({ id: 'conv-h', whatsapp_number_id: 'wn-9' })
+    const { db, writes } = homeDb()
     await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: inbound })
     expect(stampWrites(writes)).toEqual([])
   })
 
   it('a failed stamp is logged and the message is still stored', async () => {
-    numberlessHomeStudio.mockResolvedValueOnce('loc-hatch')
-    const { db, writes } = homeDb({ existing: { id: 'conv-h', whatsapp_number_id: null }, updateError: { message: 'boom' } })
+    routedTo({ id: 'conv-h', whatsapp_number_id: null })
+    const { db, writes } = homeDb({ updateError: { message: 'boom' } })
     const r = await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: inbound })
     expect(r).toMatchObject({ inserted: true, conversationId: 'conv-h' })
     expect(writes.some((w) => w.table === 'whatsapp_messages' && w.op === 'insert')).toBe(true)
-    expect(logError).toHaveBeenCalledWith('wa-coexistence', 'number stamp on the existing home thread failed (replies into it have no number)', {
-      conversationId: 'conv-h', locationId: 'loc-still', numberId: 'wn-1', err: 'boom',
+    expect(logError).toHaveBeenCalledWith('wa-coexistence', 'number stamp on the existing thread failed (replies into it have no number)', {
+      conversationId: 'conv-h', locationId: 'loc-hatch', numberId: 'wn-1', err: 'boom',
     })
   })
 })

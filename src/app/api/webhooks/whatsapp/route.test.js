@@ -45,7 +45,7 @@ vi.mock('@/lib/whatsapp-flow-events', () => ({ FLOW_EVENT_FIELDS: new Set(), app
 vi.mock('@/lib/meta-capi', () => ({ recordCtwaTouch: vi.fn() }))
 vi.mock('@/lib/whatsapp-pricing', () => ({ pricingColumnsFromStatus: vi.fn(() => null) }))
 vi.mock('@/lib/whatsapp-media-server', () => ({ ensureMediaRehosted: vi.fn() }))
-vi.mock('@/lib/whatsapp-bsuid', () => ({ captureInboundBsuid: vi.fn() }))
+vi.mock('@/lib/whatsapp-bsuid', () => ({ captureInboundBsuid: vi.fn(), extractInboundBsuid: vi.fn(() => null) }))
 vi.mock('@/lib/whatsapp-coexistence', () => ({
   parseEchoMessages: vi.fn(() => []),
   parseSyncContacts: vi.fn(() => []),

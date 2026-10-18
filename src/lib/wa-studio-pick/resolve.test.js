@@ -76,6 +76,11 @@ beforeEach(() => {
 })
 
 describe('resolveNewSenderStudio', () => {
+  it('reads the picker for the receiving studio and number (WAORGNUMBER.5)', async () => {
+    await resolveNewSenderStudio(db, { ...base, receivingNumberId: 'n1' })
+    expect(readPickerConfig).toHaveBeenCalledWith(db, base.receivingLocationId, 'n1')
+  })
+
   it('skips a known contact, a thread at another studio, a final resolution, picker off, one listed studio', async () => {
     for (const ctx of [{ contactId: 'k1' }, { threadLocationId: 'a2' }, { resolution: { status: 'decided' } }, { resolution: { status: 'unresolved' } }]) {
       expect((await resolveNewSenderStudio(db, { ...base, ...ctx })).action).toBe('skip')
