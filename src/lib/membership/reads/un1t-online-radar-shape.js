@@ -282,7 +282,6 @@ function radarCore({
   return { rows, members, packHolders, unlinkedClients, skippedEvents, ctx }
 }
 
-
 /**
  * Win-back rows (spec B §2b, Claude's call 4): every live row from
  * shapeRadarMembers, plus an `ex_member` row for each contact who holds NO live
@@ -298,7 +297,10 @@ function radarCore({
  *         un1t_online_export; the caller filters the source).
  * A 'trialing'-only history is not evidence. A contact holding any FRESH
  * subscription on the live allowlist (UN1T_LIVE_SUB_STATUSES: active,
- * past_due, trialing, paused, unpaid) is not an ex-member: spec A's board
+ * past_due, trialing, paused, unpaid; or paused_at set on a status that is not
+ * ended) is not an ex-member, and gets no radar row either while that status is
+ * not active or past_due (paused people are spec A's members but the radar's
+ * active base is MEMBER_STATUSES, as shapeCounts): spec A's board
  * counts a fresh paused one as a member. "No pack credits" means not a pack
  * holder (packHolderIds) and not unlimited: credits left from a €0 trial are
  * not pack credits, so they do not keep a former member off the list.
@@ -349,7 +351,9 @@ export function shapeWinbackRows({ allSubs = [], freshCutoffIso = null, endedMem
     const contactId = contactOfSub(s)
     if (contactId == null) continue
     const status = lower(s.status)
-    if (isFresh(s) && UN1T_LIVE_SUB_STATUSES.includes(status)) holdsLiveSub.add(contactId)
+    // spec A's member rule too: a fresh paused row that is not ended
+    const pausedNotEnded = s.paused_at != null && !UN1T_ENDED_SUB_STATUSES.includes(status)
+    if (isFresh(s) && (UN1T_LIVE_SUB_STATUSES.includes(status) || pausedNotEnded)) holdsLiveSub.add(contactId)
     const ended = UN1T_ENDED_SUB_STATUSES.includes(status)
     const staleLive = MEMBER_STATUSES.includes(status) && !isFresh(s)
     if (status !== 'trialing') entry(contactId).subs.push(s)
@@ -393,8 +397,8 @@ export function shapeWinbackRows({ allSubs = [], freshCutoffIso = null, endedMem
  * radar (the board's own stage rules, dismissals and pack-customer piles stay
  * the board's, as the Glofox lead radar ignores them too):
  *   - a member or credit_member snapshot is never a lead row, whatever its
- *     bookings; any other status not in NON_MEMBER_STATUSES (ex_member) is not
- *     one either;
+ *     bookings; an ex_member is not one either, unless it has a Gympass
+ *     booking (below);
  *   - otherwise a snapshot carrying gympass_member_id is rendered
  *     'classpass_payg' on the LEAD ROW only, so the unchanged scorer sends it
  *     to the read-only aggregator view with the ClassPass rows, as the board's

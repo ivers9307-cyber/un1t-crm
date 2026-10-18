@@ -433,6 +433,28 @@ describe('shapeWinbackRows', () => {
     expect(byId(rows, 'c2')).toBeUndefined()
   })
 
+  it('a fresh trialing subscription alone keeps a person with ended history off win-back', () => {
+    const rows = shapeWinbackRows(wfx({
+      allSubs: [
+        sub({ synced_at: fresh }),
+        sub({ un1t_id: 't', un1t_user_id: 'u2', contact_id: 'c2', status: 'trialing', synced_at: fresh }),
+        sub({ un1t_id: 'old', un1t_user_id: 'u2', contact_id: 'c2', status: 'cancelled', synced_at: fresh }),
+      ],
+    }))
+    expect(byId(rows, 'c2')).toBeUndefined()
+  })
+
+  it('a fresh paused_at on a non-ended status keeps them off too (spec A member rule)', () => {
+    const rows = shapeWinbackRows(wfx({
+      allSubs: [
+        sub({ synced_at: fresh }),
+        sub({ un1t_id: 'i', un1t_user_id: 'u2', contact_id: 'c2', status: 'incomplete', paused_at: '2026-10-01T00:00:00Z', synced_at: fresh }),
+        sub({ un1t_id: 'old', un1t_user_id: 'u2', contact_id: 'c2', status: 'cancelled', synced_at: fresh }),
+      ],
+    }))
+    expect(byId(rows, 'c2')).toBeUndefined()
+  })
+
   it('a stale past_due row is evidence too', () => {
     const rows = shapeWinbackRows(wfx({
       allSubs: [sub({ synced_at: fresh }), sub({ un1t_id: 'g', un1t_user_id: 'u2', contact_id: 'c2', status: 'past_due', synced_at: stale })],
@@ -551,6 +573,8 @@ describe('shapeLeadRows', () => {
   it('a member or credit member with a Gympass booking is not a lead row', () => {
     const ids = run().map((r) => r.id)
     expect(snapshots.get('mgp').gympass_member_id).not.toBeNull()
+    expect(snapshots.get('cmgp').glofox_membership_status).toBe('credit_member')
+    expect(snapshots.get('cmgp').gympass_member_id).not.toBeNull()
     expect(ids).not.toContain('mgp')
     expect(ids).not.toContain('cmgp')
   })
