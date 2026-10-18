@@ -19,6 +19,7 @@ vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn() }))
 vi.mock('@/lib/approvals/registry', () => ({ getPendingApprovalsCount: vi.fn() }))
 vi.mock('@/lib/issues', () => ({ countInboxIssues: vi.fn() }))
 vi.mock('@/lib/churn-radar-data', () => ({ loadRadar: vi.fn() }))
+vi.mock('@/lib/radar-availability', () => ({ radarAvailability: vi.fn(async () => ({ available: true, source: 'glofox', dataAsOf: null })) }))
 vi.mock('@/lib/glofox', () => ({
   glofoxCredentialsForLocation: vi.fn(),
   missingGlofoxCredentialsForLocation: vi.fn(() => []),
@@ -30,6 +31,7 @@ import { hasPermission } from '@/lib/permissions'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { countInboxIssues } from '@/lib/issues'
 import { loadRadar } from '@/lib/churn-radar-data'
+import { radarAvailability } from '@/lib/radar-availability'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
 
 const LOC = 'loc-1'
@@ -208,5 +210,17 @@ describe('TZ.17 the feed day is the studio day', () => {
     const broken = { from: (t) => (t === 'locations' ? { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'down' } }) }) }) } : b.db.from(t)) }
     await fetchLocationTodayFeed(broken, 'loc-unreadable', Date.parse('2026-07-01T23:30:00Z'))
     expect(b.seen).toEqual([]) // no bookings read on a guessed day
+  })
+})
+
+// UN1TRADAR.1 — a source without the memberships capability gets no churn row.
+describe('fetchChurn and the memberships capability', () => {
+  it('today-feed churn is null at a source without memberships (no radar read)', async () => {
+    radarAvailability.mockResolvedValueOnce({ available: false, source: 'un1t_online', dataAsOf: null })
+    loadRadar.mockClear()
+    const db = makeDb({})
+    const rows = await fetchLocationTodayFeed(db, LOC)
+    expect(loadRadar).not.toHaveBeenCalled()
+    expect(rows.find((r) => r.id === 'churn')).toBeUndefined()
   })
 })
