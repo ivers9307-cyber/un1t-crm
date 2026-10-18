@@ -18,6 +18,7 @@ import { newLeadEventId, pixelUserData, fireBrowserLead } from '@/lib/meta-pixel
 import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
 import ClassFunnelCheckout from '@/components/landing-page/ClassFunnelCheckout'
 import { classFunnelConsentDefault } from '@/lib/landing-page-blocks'
+import { termsLabelSegments } from '@/lib/un1t-online-funnel-copy'
 
 // MATCHQUALITY.1 — Meta's `_fbp` cookie, or null. Never throws (no document
 // during SSR, cookies blocked, no Pixel yet).
@@ -95,6 +96,11 @@ export default function ClassFunnel(props) {
   const [slotsLoading, setSlotsLoading] = useState(false)
   const [classes, setClasses] = useState([])
   const [classesLoading, setClassesLoading] = useState(false)
+  // UN1TWRITE.18 — a un1t.online studio with the funnel on needs the
+  // studio's terms and waiver accepted. /api/public/classes says whether, and
+  // carries the operator's wording; { required: false } everywhere else.
+  const [terms, setTerms] = useState({ required: false })
+  const [termsAccepted, setTermsAccepted] = useState(false)
   const [selectedClassDay, setSelectedClassDay] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
@@ -229,6 +235,7 @@ export default function ClassFunnel(props) {
       .then((j) => {
         const list = (j.success && j.data?.classes) ? j.data.classes : []
         setClasses(list)
+        setTerms(j.success && j.data?.terms?.required === true ? j.data.terms : { required: false })
         if (list.length) setSelectedClassDay(list[0].day)
         // count=0 flags an empty picker (a dead end that would explain a drop)
         fireStep('slots_view', { kind: 'class', count: list.length })
@@ -282,6 +289,9 @@ export default function ClassFunnel(props) {
     if (!isValidMobileNumber(form.phone)) {
       setError('Please enter a valid mobile number (e.g. 087 123 4567).'); return
     }
+    if (terms.required && !termsAccepted) {
+      setError(terms.required_message || 'Please tick to accept the terms and waiver.'); return
+    }
     fireStep('details')
     // STARTCONV.1 — the form submit IS the booking now. `details` still fires
     // first and separately, so the drop between seeing times and completing
@@ -331,6 +341,7 @@ export default function ClassFunnel(props) {
           // VISIT-ORIGIN.1 — first page of the visit + referrer, if remembered.
           visit: readVisitOrigin() || undefined,
           lead_event_id: leadEventId,
+          ...(terms.required ? { terms_accepted: termsAccepted } : {}),
         }),
       })
       const j = await r.json().catch(() => ({}))
@@ -443,6 +454,17 @@ export default function ClassFunnel(props) {
             <input type="checkbox" checked={form.consent} onChange={set('consent')} className="mt-0.5 w-4 h-4 accent-white" />
             <span>{consentLabel} <a href="/privacy" target="_blank" rel="noreferrer" className="underline">Privacy</a></span>
           </label>
+          {terms.required && (
+            <label className="flex items-start gap-2.5 text-xs text-white/65">
+              <input type="checkbox" checked={termsAccepted} onChange={(e) => setTermsAccepted(e.target.checked)} className="mt-0.5 w-4 h-4 accent-white" />
+              <span>
+                {termsLabelSegments({ terms_label: terms.label, terms_link_label: terms.terms_link_label, waiver_link_label: terms.waiver_link_label })
+                  .map((seg, i) => (seg.link
+                    ? <a key={i} href={seg.link === 'terms' ? terms.terms_url : terms.waiver_url} target="_blank" rel="noreferrer" className="underline">{seg.text}</a>
+                    : <span key={i}>{seg.text}</span>))}
+              </span>
+            </label>
+          )}
           {error && <p className="text-sm text-red-300">{error}</p>}
           <button type="submit" disabled={submitting} className="lp-btn w-full disabled:opacity-50">
             {submitting ? 'Booking…' : 'Confirm my class →'}

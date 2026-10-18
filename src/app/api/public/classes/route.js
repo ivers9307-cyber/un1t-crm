@@ -9,6 +9,34 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { listPublicClasses } from '@/lib/public-classes'
 import { resolveLandingPath } from '@/lib/public-landing'
 import { logWarn } from '@/lib/log'
+import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
+import { un1tFunnelCopyFromBlocks } from '@/lib/un1t-online-funnel-copy'
+import { legalDocPathFor } from '@/lib/un1t-online-legal'
+
+// UN1TWRITE.18 — does this studio's funnel need the terms and waiver tick
+// (un1t.online with the funnel on), and in the operator's words. An
+// unreadable settings row is "not required": the processor still refuses to
+// create an account for a request with no recorded acceptance.
+async function termsFor(db, page) {
+  let s
+  try {
+    s = await readUn1tWriteSettings(db, page.location_id)
+  } catch (err) {
+    logWarn('public-classes', 'un1t.online settings unreadable; terms tick not shown', { err })
+    return { required: false }
+  }
+  if (s.membershipSource !== 'un1t_online' || !s.settings.funnelEnabled) return { required: false }
+  const copy = un1tFunnelCopyFromBlocks(page.blocks)
+  return {
+    required: true,
+    label: copy.terms_label.replace(/\{studio_name\}/g, s.studioName || 'the studio'),
+    terms_link_label: copy.terms_link_label,
+    waiver_link_label: copy.waiver_link_label,
+    required_message: copy.terms_required_message,
+    terms_url: legalDocPathFor(page.public_path, 'terms'),
+    waiver_url: legalDocPathFor(page.public_path, 'waiver'),
+  }
+}
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -25,10 +53,10 @@ export async function GET(request) {
 
   try {
     const { data: page } = await db.from('landing_page_settings')
-      .select('location_id').eq('public_path', path).maybeSingle()
+      .select('location_id, public_path, blocks').eq('public_path', path).maybeSingle()
     if (!page?.location_id) return NextResponse.json({ success: true, data: { classes: [] } })
-    const classes = await listPublicClasses(db, page.location_id, 7)
-    return NextResponse.json({ success: true, data: { classes } })
+    const [classes, terms] = await Promise.all([listPublicClasses(db, page.location_id, 7), termsFor(db, page)])
+    return NextResponse.json({ success: true, data: { classes, terms } })
   } catch (e) {
     logWarn('public-classes', 'list failed', { err: e })
     return NextResponse.json({ success: true, data: { classes: [] } })
