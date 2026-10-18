@@ -136,7 +136,7 @@ export async function PATCH(request, { params }) {
   let locationRow = null
   if (isMembershipKind) {
     const { data } = await db.from('locations')
-      .select('id, name, organization_id, glofox_auto_cancel_memberships, settings')
+      .select('id, name, organization_id, membership_source, glofox_auto_cancel_memberships, settings')
       .eq('id', row.location_id)
       .maybeSingle()
     locationRow = data || null
@@ -751,7 +751,15 @@ export async function PATCH(request, { params }) {
   // card (agent-request-why.js); a failure lands on 'failed' and rides the
   // same fix-&-retry lane as bookings (RETRYABLE_KINDS).
   let membershipContact = null
-  if (executing && row.kind === 'cancellation') {
+  // MIAHATCH.2 — a cancellation filed at a un1t.online studio (Mia files a
+  // Hatch Street member's request there) is never run as a Glofox cancel,
+  // whatever the auto-cancel column says: the row lands failed and staff
+  // cancel in un1t.online. Nothing is read from or sent to Glofox.
+  if (executing && row.kind === 'cancellation' && locationRow?.membership_source === 'un1t_online') {
+    executed = { ok: false, message_code: 'NOT_EXECUTABLE_UN1T' }
+    details = { ...details, result: executed }
+    finalStatus = 'failed'
+  } else if (executing && row.kind === 'cancellation') {
     const { executeMembershipCancellation } = await import('@/lib/agent/execute-membership-cancellation')
     const { glofoxCredentialsForLocation } = await import('@/lib/glofox')
     const { data: contact } = await db.from('contacts')
