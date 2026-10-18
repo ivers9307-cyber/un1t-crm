@@ -8270,7 +8270,8 @@ registry.registerPath({
   tags: ['Live HR'],
   security: [{ CookieAuth: [] }],
   summary: 'Who is booked into the class running now, labels only (class_roster)',
-  description: 'UN1TBOOK.12. The roster half of /api/live/{locationId} under its own `class_roster` permission, resolved at the target location: no heart-rate sessions, no straps, no door control. Cancelled bookings are skipped; ATTENDED and NO_SHOW members are listed. Each roster entry is `{ label, booked }` only: no heart-rate, strap or session fields are ever returned, and there is no `has_bridge` (the full /api/live/{locationId} route keeps it).',
+  // UN1TBOOK.12 (kept out of the string: the literal sweep forbids the brand in served text)
+  description: 'The roster half of /api/live/{locationId} under its own `class_roster` permission, resolved at the target location: no heart-rate sessions, no straps, no door control. Cancelled bookings are skipped; ATTENDED and NO_SHOW members are listed. Each roster entry is `{ label, booked }` only: no heart-rate, strap or session fields are ever returned, and there is no `has_bridge` (the full /api/live/{locationId} route keeps it).',
   request: { params: z.object({ locationId: uuidLike }) },
   responses: {
     200: {
