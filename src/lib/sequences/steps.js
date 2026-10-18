@@ -581,7 +581,8 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
       template.name,
       template.language,
       components,
-      { locationId: sequence.location_id },
+      // WAORGNUMBER.2 (R5) — the studio's number on the template's own WABA.
+      { locationId: sequence.location_id, ...(template.business_account_id && { businessAccountId: template.business_account_id }) },
     )
   } catch (e) {
     if (!isWhatsAppNumberMissing(e)) throw e

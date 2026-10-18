@@ -10,7 +10,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import { validateBody } from '@/lib/validate'
 import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
-import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
+import { templateNumberOrRefusal } from '@/lib/whatsapp-own-number'
 import { templateHeaderMediaError } from '@/lib/template-media'
 
 const ResubmitSchema = z.object({
@@ -37,7 +37,7 @@ export async function POST(request, props) {
 
   const db = createServerClient()
   const { data: tmpl, error: readError } = await db.from('whatsapp_templates')
-    .select('id, location_id, status, meta_template_id, header_media_url, header_media_path')
+    .select('id, location_id, business_account_id, status, meta_template_id, header_media_url, header_media_path')
     .eq('id', params.id)
     .single()
   // A failed read is never an empty answer. PGRST116 = no row (a real 404).
@@ -94,7 +94,9 @@ export async function POST(request, props) {
 
   // WACONFIGFALLBACK.1 — edit with THIS template's location's own number. The
   // call named no location, so it always used the global env token.
-  const own = await ownNumberOrRefusal(tmpl.location_id, 'wa-templates-resubmit')
+  // WAORGNUMBER.2 (R5) — on the template's OWN WABA: its studio's number on
+  // business_account_id; none switched on there → 409 before Meta.
+  const own = await templateNumberOrRefusal(tmpl, 'wa-templates-resubmit')
   if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
 
   try {

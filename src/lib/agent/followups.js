@@ -527,7 +527,7 @@ async function sendFollowupTemplate(db, conv, settings, facts, ownsNumber) {
   // the thread's number (the WABA it is sent from); its own studio otherwise.
   const templateStudio = await templateStudioFor(ownsNumber, conv.location_id, conv.id)
   const { data: rows } = await db.from('whatsapp_templates')
-    .select('name, language, status, components, header_media_url')
+    .select('name, language, status, components, header_media_url, business_account_id')
     .eq('location_id', templateStudio)
     .eq('name', followups.template_name)
     .order('created_at', { ascending: false })
@@ -546,7 +546,7 @@ async function sendFollowupTemplate(db, conv, settings, facts, ownsNumber) {
   if (headerComponent) components.unshift(headerComponent)
 
   const res = await sendTemplateMessage(conv.to, template.name, template.language || 'en', components,
-    sendOptsFor(ownsNumber, conv.location_id, conv.id))
+    { ...sendOptsFor(ownsNumber, conv.location_id, conv.id), ...(template.business_account_id && { businessAccountId: template.business_account_id }) })
   if (!res?.messageId) return skipLog(conv.id, 'template_send_failed')
   await recordProactiveMessage(db, conv, {
     body: renderFollowupBody(template, values) || `[Template: ${template.name}]`,
@@ -1118,7 +1118,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         // owner of the thread's number; its own studio otherwise (unchanged).
         const templateStudio = await templateStudioFor(ownsNumber, location.id, existingConv?.id)
         const { data: tRows, error: tError } = await db.from('whatsapp_templates')
-          .select('name, language, status, components, header_media_url')
+          .select('name, language, status, components, header_media_url, business_account_id')
           .eq('location_id', templateStudio)
           .eq('name', checkin.template_name)
           .order('created_at', { ascending: false })
@@ -1146,7 +1146,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         let res
         try {
           res = await sendTemplateMessage(to, template.name, template.language || 'en', components,
-            sendOptsFor(ownsNumber, location.id, existingConv?.id))
+            { ...sendOptsFor(ownsNumber, location.id, existingConv?.id), ...(template.business_account_id && { businessAccountId: template.business_account_id }) })
         } catch (e) {
           if (ownsNumber || !isWhatsAppNumberMissing(e)) throw e // as Case A
           await releaseCheckinClaim(db, contact.id, claim.at)

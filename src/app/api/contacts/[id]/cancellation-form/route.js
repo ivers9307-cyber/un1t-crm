@@ -40,6 +40,7 @@ import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComp
 import { URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
 import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
+import { pickTemplateConfig } from '@/lib/whatsapp-config'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { manualTakeoverPatch } from '@/lib/agent/core'
 import { issueLink, revokeLink, latestLinkForContact } from '@/lib/cancellation-form/links'
@@ -93,7 +94,7 @@ async function resolveFormBaseUrl(db, ctx) {
 async function loadTemplate(db, locationId, name) {
   if (!name) return null
   const { data: rows } = await db.from('whatsapp_templates')
-    .select('name, language, category, status, components, header_media_url')
+    .select('name, language, category, status, components, header_media_url, business_account_id')
     .eq('location_id', locationId)
     .eq('name', name)
     .order('created_at', { ascending: false })
@@ -266,7 +267,12 @@ export async function POST(request, props) {
         // The token rides the dynamic URL button; resolveContactField falls
         // through to the literal because 'TOKEN' is not a contact field.
         const components = buildTemplateComponents(template, contact, { [URL_BUTTON_MAPPING_KEY]: issued.token }, null, { locationId: contact.location_id })
-        result = await sendTemplateMessage(waPhone, template.name, template.language || 'en', components, { config: numberConfig })
+        // WAORGNUMBER.2 (R5) — from a number on the template's own WABA: the
+        // checked default when it is on it, else the studio's number on that
+        // WABA (none → WhatsAppNumberMissingError → the link is revoked, 409).
+        const held = pickTemplateConfig(null, numberConfig, template.business_account_id || null)
+        result = await sendTemplateMessage(waPhone, template.name, template.language || 'en', components,
+          held ? { config: held } : { locationId: contact.location_id, businessAccountId: template.business_account_id })
         messageType = 'template'
         templateName = template.name
         body = renderTemplateBody(template, contact, {}, { locationId: contact.location_id }) || `[Template: ${template.name}]`

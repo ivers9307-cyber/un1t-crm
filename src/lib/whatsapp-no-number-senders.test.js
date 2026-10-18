@@ -80,3 +80,62 @@ describe.each(Object.keys(CALLS))('%s', (name) => {
     expect(init.headers.Authorization).toMatch(/tok-synth$/)
   })
 })
+
+// WAORGNUMBER.2 (R5) — a template send naming its WABA refuses, before Meta,
+// when the studio has no number on that WABA (even with a number on another).
+describe('sendTemplateMessage with the template’s WABA', () => {
+  it('a number on another WABA only → typed refusal, Meta never called', async () => {
+    state.numbers = [ROW]
+    const err = await wa.sendTemplateMessage('+353000000000', 'tpl', 'en', [], { locationId: LOC, businessAccountId: 'WABA-OTHER' }).catch((e) => e)
+    expect(isWhatsAppNumberMissing(err)).toBe(true)
+    expect(err.locationId).toBe(LOC)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('the number on that WABA → sent with its token', async () => {
+    state.numbers = [ROW]
+    await wa.sendTemplateMessage('+353000000000', 'tpl', 'en', [], { locationId: LOC, businessAccountId: 'WABA-SYNTH' })
+    expect(globalThis.fetch.mock.calls[0][1].headers.Authorization).toMatch(/tok-synth$/)
+  })
+})
+
+// WAORGNUMBER.2 (R5) — the template sync reads every page (it read 100).
+describe('getTemplates paging', () => {
+  const page = (ids, next) => ({ ok: true, json: async () => ({ data: ids.map((id) => ({ id })), ...(next ? { paging: { next } } : {}) }) })
+
+  it('all: true follows paging.next to the end, with the number’s token each time', async () => {
+    state.numbers = [ROW]
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(page(['a', 'b'], 'https://graph.test/next-1'))
+      .mockResolvedValueOnce(page(['c'], 'https://graph.test/next-2'))
+      .mockResolvedValueOnce(page(['d']))
+    const out = await wa.getTemplates(2, { locationId: LOC, all: true })
+    expect(out.map((t) => t.id)).toEqual(['a', 'b', 'c', 'd'])
+    expect(globalThis.fetch.mock.calls.map((c) => c[0])).toEqual([
+      expect.stringMatching(/\/WABA-SYNTH\/message_templates\?limit=2$/), 'https://graph.test/next-1', 'https://graph.test/next-2',
+    ])
+    for (const [, init] of globalThis.fetch.mock.calls) expect(init.headers.Authorization).toMatch(/tok-synth$/)
+  })
+
+  it('without all: one page, as before', async () => {
+    state.numbers = [ROW]
+    globalThis.fetch = vi.fn().mockResolvedValue(page(['a'], 'https://graph.test/next-1'))
+    expect((await wa.getTemplates(100, { locationId: LOC })).map((t) => t.id)).toEqual(['a'])
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('a page error throws (a partial list is never the whole account)', async () => {
+    state.numbers = [ROW]
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(page(['a'], 'https://graph.test/next-1'))
+      .mockResolvedValueOnce({ ok: false, json: async () => ({ error: { message: 'rate limited' } }) })
+    await expect(wa.getTemplates(100, { locationId: LOC, all: true })).rejects.toThrow('rate limited')
+  })
+
+  it('a repeating cursor stops at TEMPLATE_PAGES_MAX', async () => {
+    state.numbers = [ROW]
+    globalThis.fetch = vi.fn().mockImplementation(async () => page(['x'], 'https://graph.test/same'))
+    const out = await wa.getTemplates(100, { locationId: LOC, all: true })
+    expect(out).toHaveLength(wa.TEMPLATE_PAGES_MAX)
+  })
+})

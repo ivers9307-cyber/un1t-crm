@@ -28,7 +28,11 @@ vi.mock('@/lib/permissions', () => {
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => dbMock) }))
 // WACONFIGFALLBACK.1 — the route checks the location's OWN number before
 // opening a thread; the default is "has one" (the no-number case is below).
-vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn(async () => ({ source: 'db', id: 'n1' })) }))
+// WAORGNUMBER.2 — pickTemplateConfig is the real (pure) rule.
+vi.mock('@/lib/whatsapp-config', async () => ({
+  getLocationWhatsAppNumberConfig: vi.fn(async () => ({ source: 'db', id: 'n1' })),
+  pickTemplateConfig: (await vi.importActual('@/lib/whatsapp-config')).pickTemplateConfig,
+}))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.example' }))
 // W1.L3b — the form link is minted on the contact location's tenant host unless
 // the per-location public_base_url override is set. Defaults to the CRM host so
@@ -236,6 +240,22 @@ describe('POST whatsapp', () => {
     expect(sendTemplateMessage).toHaveBeenCalledWith('353871234567', 'cancellation_form_link', 'en', expect.any(Array), { config: { source: 'db', id: 'n1' } })
     const msg = writes.find((w) => w.table === 'whatsapp_messages').payload
     expect(msg).toMatchObject({ message_type: 'template', template_name: 'cancellation_form_link', body: 'Hi Aoife, here is the link.' })
+  })
+
+  it('WAORGNUMBER.2: a template on another WABA than the default goes out by that WABA (the studio’s number on it)', async () => {
+    isWindowOpen.mockReturnValue(false)
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce({ source: 'db', id: 'n1', businessAccountId: 'WABA-1' })
+    templateRow = {
+      name: 'cancellation_form_link', language: 'en', status: 'APPROVED', category: 'UTILITY', header_media_url: null, business_account_id: 'WABA-2',
+      components: [
+        { type: 'BODY', text: 'Hi {{1}}' },
+        { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Open form', url: 'https://crm.example/cancel/{{1}}' }] },
+      ],
+    }
+    const res = await post({ channel: 'whatsapp' })
+    expect(res.status).toBe(200)
+    expect(sendTemplateMessage).toHaveBeenCalledWith('353871234567', 'cancellation_form_link', 'en', expect.any(Array), { locationId: LOC, businessAccountId: 'WABA-2' })
   })
 
   it('refuses a template whose URL button is rooted on another host', async () => {

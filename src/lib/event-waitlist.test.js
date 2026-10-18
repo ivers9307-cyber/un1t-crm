@@ -33,7 +33,7 @@ const { WhatsAppNumberMissingError } = await import('./whatsapp-number-missing')
 const { resolveCustomerBaseUrl } = await import('./tenant-host')
 const {
   eventHasRoom, isOfferDue, registrationWindowOpen, joinWaitlist, runWaitlistOffers,
-  claimWaitlistOnRegistration, claimWaitlistByEmail, sendWaitlistOffer, buildWaitlistJoinedEmail, WAITLIST_OFFER_TEMPLATE,
+  claimWaitlistOnRegistration, claimWaitlistByEmail, sendWaitlistOffer, buildWaitlistJoinedEmail,
 } = await import('./event-waitlist.js')
 const { signWaitlistClaimToken, verifyWaitlistClaimToken } = await import('./event-waitlist-tokens.js')
 
@@ -227,7 +227,8 @@ describe('sendWaitlistOffer', () => {
     const token = decodeURIComponent(new URL(link.replaceAll('&amp;', '&')).searchParams.get('wl'))
     expect(verifyWaitlistClaimToken(token, 'test-secret', { now: NOW })).toEqual({ waitlistId: 'wl1' })
     const wa = maybeSendBookingWhatsappConfirm.mock.calls[0][0]
-    expect(wa).toMatchObject({ locationId: 'L1', templateName: WAITLIST_OFFER_TEMPLATE })
+    // WAORGNUMBER.2 (R5): names the purpose, so the studio's own template is used.
+    expect(wa).toMatchObject({ locationId: 'L1', purpose: 'event_waitlist_offer' })
     expect(wa.contact.phone).toBe('+353870000000')
     expect(wa.bodyParams[0]).toBe('Ann')
     expect(wa.bodyParams[1]).toBe('Hatch Relay')

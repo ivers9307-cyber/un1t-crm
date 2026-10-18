@@ -20,6 +20,7 @@ import { normalizeUrlish } from '@/lib/urlish'
 import { ORG_NUMBERS_PAGE } from '@/lib/org-whatsapp-numbers-page'
 import { Row } from './WhatsAppFieldRow'
 import StudioWhatsAppNumbers from '@/components/settings/whatsapp/StudioWhatsAppNumbers'
+import PurposeTemplatesCard from '@/components/settings/whatsapp/PurposeTemplatesCard'
 
 export default function WhatsAppIntegrationTab({ location, canEdit, canManageNumbers = false, canSwitch = false, onChanged }) {
   return (
@@ -45,6 +46,8 @@ export default function WhatsAppIntegrationTab({ location, canEdit, canManageNum
       </div>
 
       <StudioWhatsAppNumbers locationId={location.id} canSwitch={canSwitch} canManageNumbers={canManageNumbers} onChanged={onChanged} />
+
+      <PurposeTemplatesCard locationId={location.id} canEdit={canEdit} />
 
       <ChatOpenersCard location={location} canEdit={canEdit} />
 

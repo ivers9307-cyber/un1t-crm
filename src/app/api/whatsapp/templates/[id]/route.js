@@ -5,7 +5,7 @@ import { deleteTemplate as deleteMetaTemplate } from '@/lib/whatsapp'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import { validateBody } from '@/lib/validate'
-import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
+import { templateNumberOrRefusal } from '@/lib/whatsapp-own-number'
 import { META_OWNED_FIELDS, lockedFieldsIn } from '@/lib/whatsapp-template-fields'
 
 // WATPLPUT.1 — Meta's fields are never written here, in any state: the
@@ -129,7 +129,7 @@ export async function DELETE(request, props) {
 
   // Get template name + location to delete from Meta and verify access
   const { data: template } = await db.from('whatsapp_templates')
-    .select('name, location_id')
+    .select('name, location_id, business_account_id')
     .eq('id', params.id)
     .single()
   if (!template) return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
@@ -152,10 +152,20 @@ export async function DELETE(request, props) {
   // an old env-fallback sync made), so the Meta call is skipped and the local
   // row still goes. A failed lookup keeps the row (500), so a retry can still
   // reach Meta; otherwise the next sync would bring the template back.
+  //
+  // WAORGNUMBER.2 (R5) — on the template's OWN WABA (business_account_id),
+  // through the studio's number on it: a studio can use numbers on two
+  // accounts, and deleting by name on the wrong one deletes another template.
+  // A template whose WABA has no number switched on at its studio is a 409
+  // and the row is KEPT (it still exists at Meta; switch the number back on,
+  // or delete it there). A row with no WABA recorded keeps the rule above.
   if (template.name) {
-    const own = await ownNumberOrRefusal(template.location_id, 'wa-templates-delete')
+    const own = await templateNumberOrRefusal(template, 'wa-templates-delete')
     if (!own.ok && own.status === 500) {
       return NextResponse.json({ success: false, error: own.error }, { status: 500 })
+    }
+    if (!own.ok && template.business_account_id) {
+      return NextResponse.json({ success: false, error: own.error }, { status: own.status })
     }
     if (own.ok) {
       try {

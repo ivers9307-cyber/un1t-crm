@@ -1,7 +1,7 @@
 import { createServerClient } from './supabase'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
-import { getWhatsAppConfig, getLocationWhatsAppNumberConfig, getConversationReplyConfig, META_API_URL } from './whatsapp-config'
-import { isWhatsAppNumberMissing } from './whatsapp-number-missing'
+import { getWhatsAppConfig, getLocationWhatsAppNumberConfig, getLocationNumberForWaba, getConversationReplyConfig, META_API_URL } from './whatsapp-config'
+import { isWhatsAppNumberMissing, WhatsAppNumberMissingError } from './whatsapp-number-missing'
 import { numberlessHomeStudio } from './whatsapp-thread-location'
 import { agentOptionId } from './whatsapp-inbound-tap'
 import {
@@ -50,10 +50,23 @@ import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
 //                       thread, which uses a same-org sibling's stamped number
 //                       and whose templates come from that number's owner
 //                       (templateLocationIdFor).
+//   opts.businessAccountId — WAORGNUMBER.2 (R5): the WABA a template lives on
+//                       (whatsapp_templates.business_account_id). Meta sends a
+//                       template only from a number on its own WABA, so the
+//                       send goes from the studio's number on THAT WABA
+//                       (getLocationNumberForWaba), or, with
+//                       replyInConversation, the thread number when it is on
+//                       it. None switched on there → WhatsAppNumberMissingError.
+//                       Null/absent → the rules above (a row before mig 745).
 async function resolveConfig(opts = {}, { template = false } = {}) {
   if (opts.config) return opts.config
   if (opts.replyInConversation) {
-    return await getConversationReplyConfig(opts.locationId || null, opts.replyInConversation, { template })
+    return await getConversationReplyConfig(opts.locationId || null, opts.replyInConversation, { template, businessAccountId: opts.businessAccountId || null })
+  }
+  if (opts.businessAccountId) {
+    const config = await getLocationNumberForWaba(opts.locationId || null, opts.businessAccountId)
+    if (!config) throw new WhatsAppNumberMissingError(opts.locationId || null)
+    return config
   }
   return await getWhatsAppConfig(opts.locationId || null)
 }
@@ -602,8 +615,15 @@ export async function createTemplate({ name, category, language, components, par
   }
 }
 
+// WAORGNUMBER.2 — a runaway `paging.next` (Meta repeating a cursor) cannot loop
+// forever: at 100 a page this is 5,000 templates, past Meta's per-WABA ceiling.
+export const TEMPLATE_PAGES_MAX = 50
+
 /**
- * Get all templates from Meta
+ * Get templates from Meta: one page of `limit`, or (WAORGNUMBER.2, R5)
+ * `opts.all === true` every page, following `paging.next` (the sync read only
+ * the first 100 before). A page error throws, so a partial list is never
+ * mistaken for the whole account.
  */
 export async function getTemplates(limit = 100, opts = {}) {
   const config = await resolveConfig(opts)
@@ -611,15 +631,17 @@ export async function getTemplates(limit = 100, opts = {}) {
     throw new Error('WhatsApp Business Account ID is not configured for this number.')
   }
 
-  const response = await fetch(
-    `${META_API_URL}/${config.businessAccountId}/message_templates?limit=${limit}`,
-    { headers: headersFor(config) }
-  )
-
-  const result = await response.json()
-  if (result.error) throw new Error(result.error.message)
-
-  return result.data || []
+  let url = `${META_API_URL}/${config.businessAccountId}/message_templates?limit=${limit}`
+  const out = []
+  for (let page = 0; url && page < TEMPLATE_PAGES_MAX; page++) {
+    const response = await fetch(url, { headers: headersFor(config) })
+    const result = await response.json()
+    if (result.error) throw new Error(result.error.message)
+    out.push(...(result.data || []))
+    if (opts.all !== true) break
+    url = result.paging?.next || null
+  }
+  return out
 }
 
 /**
@@ -1211,7 +1233,13 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
   // Resolved BEFORE the status flip so a refusal (quality gate below, or an
   // unconfigured location) leaves the broadcast in its entry state instead of
   // stranding it at 'sending'.
-  const broadcastConfig = await getWhatsAppConfig(broadcast.location_id)
+  // WAORGNUMBER.2 (R5) — from the studio's number on the TEMPLATE's WABA (Meta
+  // sends a template only from a number on its own account); none switched on
+  // there refuses exactly like a studio with no number.
+  const broadcastConfig = await resolveConfig({
+    locationId: broadcast.location_id,
+    businessAccountId: broadcast.whatsapp_templates.business_account_id || null,
+  }, { template: true })
 
   // WA-QUALITY.2 — preflight quality gate: refuse to start (or resume) a blast
   // from a RED/FLAGGED number. Every blast entry funnels through this function,
@@ -1617,7 +1645,12 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   // broadcast they can resume once a number is connected.
   let config
   try {
-    config = await getWhatsAppConfig(broadcast.location_id)
+    // WAORGNUMBER.2 (R5) — the studio's number on the template's WABA; none
+    // there pauses the drip like no number at all.
+    config = await resolveConfig({
+      locationId: broadcast.location_id,
+      businessAccountId: template.business_account_id || null,
+    }, { template: true })
   } catch (e) {
     if (!isWhatsAppNumberMissing(e)) throw e
     await db.from('whatsapp_broadcasts')

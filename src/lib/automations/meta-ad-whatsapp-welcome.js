@@ -27,6 +27,7 @@ import { logWarn } from '@/lib/log'
 import { flowTokenFor } from '@/lib/whatsapp-flow/config'
 import { flowButtonComponentFor } from '@/lib/whatsapp-template-buttons'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+import { resolvePurposeTemplate } from '@/lib/whatsapp-purpose-templates'
 
 // The template's only body variable {{1}} is the lead's first name.
 const VARIABLE_MAPPING = { '1': 'first_name' }
@@ -36,9 +37,13 @@ const VARIABLE_MAPPING = { '1': 'first_name' }
  * lead and logs it to the inbox. Never throws — callers run it as a
  * fire-and-forget side effect that must not fail the lead capture.
  *
+ * `purpose` ('meta_ad_welcome'): the template is the studio's own pick for that
+ * purpose (WAORGNUMBER.2 R5), else `templateName` (the campaign's) at the
+ * studio. A location's Flow-button template still takes precedence.
+ *
  * @returns {Promise<{sent: boolean, reason?: string, messageId?: string}>}
  */
-export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact, templateName }) {
+export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact, templateName, purpose }) {
   try {
     // If this location has the booking Flow enabled, prefer its FLOW-button
     // template over the classic quick-reply welcome, and mint a per-lead
@@ -46,6 +51,7 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
     // `features` rides the same row (TENANT.8 item 3b) — one query serves
     // both the flow-config read AND the bundle/feature gate below.
     let flowToken = null
+    let flowTemplate = false
     let location = null
     try {
       const { data: loc } = await db.from('locations').select('settings, features').eq('id', locationId).maybeSingle()
@@ -57,6 +63,7 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
       const token = flowCfg?.enabled && flowCfg.template_name ? flowTokenFor(contact?.id, locationId) : null
       if (token) {
         templateName = flowCfg.template_name
+        flowTemplate = true
         flowToken = token
       }
     } catch (e) { logWarn('meta-ad-wa-welcome', 'flow config read failed', { err: e }) }
@@ -68,7 +75,7 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
       return { sent: false, reason: 'bundle_disabled' }
     }
 
-    if (!templateName) return { sent: false, reason: 'no_template_configured' }
+    if (!templateName && !purpose) return { sent: false, reason: 'no_template_configured' }
     if (!contact?.phone) return { sent: false, reason: 'no_phone' }
 
     const waPhone = toE164Ireland(contact.phone)
@@ -78,14 +85,23 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
     if (!waPhone || !/^\+\d{10,15}$/.test(waPhone)) return { sent: false, reason: 'unnormalisable_phone' }
 
     // Resolve the template; must be this location's and APPROVED to send.
-    const { data: template } = await db
-      .from('whatsapp_templates')
-      .select('*')
-      .eq('name', templateName)
-      .eq('location_id', locationId)
-      .maybeSingle()
-    if (!template) return { sent: false, reason: 'template_not_found' }
-    if (template.status !== 'APPROVED') return { sent: false, reason: `template_${template.status}` }
+    let template
+    if (purpose && !flowTemplate) {
+      // The studio's own pick (or the campaign's default name at the studio):
+      // already APPROVED, or null.
+      template = await resolvePurposeTemplate(db, locationId, purpose, templateName ? { fallbackName: templateName } : {})
+      if (!template) return { sent: false, reason: 'template_not_found' }
+    } else {
+      const { data } = await db
+        .from('whatsapp_templates')
+        .select('*')
+        .eq('name', templateName)
+        .eq('location_id', locationId)
+        .maybeSingle()
+      template = data
+      if (!template) return { sent: false, reason: 'template_not_found' }
+      if (template.status !== 'APPROVED') return { sent: false, reason: `template_${template.status}` }
+    }
 
     // Build header (media auto-attached from the template row) + body var.
     const components = buildTemplateComponents(
@@ -105,7 +121,8 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
       template.name,
       template.language || 'en',
       components,
-      { locationId },
+      // WAORGNUMBER.2 (R5) — the studio's number on the template's own WABA.
+      { locationId, ...(template.business_account_id && { businessAccountId: template.business_account_id }) },
     )
 
     // Meta accepted it. NOW persist wa_phone (only if unset) so the inbox

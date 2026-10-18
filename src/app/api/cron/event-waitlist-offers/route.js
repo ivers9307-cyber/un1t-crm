@@ -3,7 +3,8 @@
 // For every event with people waiting: rows of a past event expire; an event
 // that is published, open for registration and has room in any time offers
 // everyone not offered in the last 24 h at once (email always, WhatsApp when
-// the location has an APPROVED `event_waitlist_offer` template). The first to
+// the location has an APPROVED offer template: the one it picked for the
+// 'event_waitlist_offer' purpose, else one named `event_waitlist_offer`). The first to
 // complete a booking gets the place: the register route is the arbiter.
 // src/lib/event-waitlist.js runWaitlistOffers.
 //

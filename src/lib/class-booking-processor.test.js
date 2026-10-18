@@ -25,7 +25,7 @@ import { processClassBookingRequest, CreditReadError } from './class-booking-pro
 import { createBooking, fetchUserBookingsResult, fetchUserCreditsResult, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } from '@/lib/glofox'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
-import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
+import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
 
 function makeDb(contact) {
   // Every select is traced (table + the exact column string requested), not
@@ -101,9 +101,9 @@ describe('processClassBookingRequest', () => {
     const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', last_name: 'Lee', phone: '0871234567', glofox_member_id: null, last_attended_at: null }), req)
     expect(r.outcome).toBe('booked')
     expect(createBooking).toHaveBeenCalled()
-    // Must use the shared template constant (matching the live APPROVED name),
-    // not a hardcoded literal — guards the trailing-underscore typo from regressing.
-    expect(maybeSendBookingWhatsappConfirm).toHaveBeenCalledWith(expect.objectContaining({ templateName: CLASS_CONFIRM_TEMPLATE }))
+    // WAORGNUMBER.2 (R5): the send names a PURPOSE, so the studio's own template
+    // (or today's default name) is what goes out.
+    expect(maybeSendBookingWhatsappConfirm).toHaveBeenCalledWith(expect.objectContaining({ purpose: 'class_confirmed' }))
   })
   it('booking failure → review', async () => {
     createBooking.mockResolvedValueOnce({ ok: false, status: 400, body: { message_code: 'EVENT_FULL' } })

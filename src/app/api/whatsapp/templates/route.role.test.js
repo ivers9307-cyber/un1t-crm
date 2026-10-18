@@ -39,6 +39,9 @@ function makeDb() {
       const b = {
         insert: (row) => { inserts.push({ table, row }); return b },
         select: () => b,
+        // WAORGNUMBER.2 — the name-clash read: nothing else on the WABA.
+        eq: () => b,
+        then: (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej),
         single: async () => ({ data: { id: 'row-new', ...inserts.at(-1)?.row }, error: null }),
       }
       return b

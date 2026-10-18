@@ -14,17 +14,17 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/wa-template-access', () => ({ canManageWaTemplatesAt: vi.fn(() => true) }))
 vi.mock('@/lib/whatsapp', () => ({ editTemplate: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn() }))
+vi.mock('@/lib/whatsapp-config', () => ({ getLocationWhatsAppNumberConfig: vi.fn(), getLocationNumberForWaba: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { POST } from './route.js'
 import { editTemplate } from '@/lib/whatsapp'
-import { getLocationWhatsAppNumberConfig } from '@/lib/whatsapp-config'
+import { getLocationWhatsAppNumberConfig, getLocationNumberForWaba } from '@/lib/whatsapp-config'
 import { createServerClient } from '@/lib/supabase'
 
 const LOC = 'a0000000-0000-4000-8000-000000000001'
 const NUMBER = { source: 'db', id: 'n1', phoneNumberId: 'PNI-SYNTH', token: 'tok-synth', businessAccountId: 'WABA-SYNTH' }
-const TMPL = { id: 't1', location_id: LOC, status: 'REJECTED', meta_template_id: 'meta-1' }
+let TMPL
 
 function makeDb() {
   const updates = []
@@ -50,6 +50,7 @@ const call = () => POST(new Request('https://crm.test/api/whatsapp/templates/t1/
 let db
 beforeEach(() => {
   vi.clearAllMocks()
+  TMPL = { id: 't1', location_id: LOC, status: 'REJECTED', meta_template_id: 'meta-1' }
   db = makeDb()
   createServerClient.mockReturnValue(db)
   getLocationWhatsAppNumberConfig.mockResolvedValue(NUMBER)
@@ -70,6 +71,30 @@ describe('POST resubmit — the template’s own location’s number', () => {
     const res = await call()
     expect(res.status).toBe(409)
     expect(await res.json()).toEqual({ success: false, error: 'No WhatsApp number is connected at this location.' })
+    expect(editTemplate).not.toHaveBeenCalled()
+    expect(db.updates).toEqual([])
+  })
+})
+
+// WAORGNUMBER.2 (R5) — the edit runs on the template's OWN WABA.
+describe('WAORGNUMBER.2 — resubmit on the template’s own WABA', () => {
+  const ON_WABA_2 = { ...NUMBER, id: 'n2', phoneNumberId: 'PNI-2', businessAccountId: 'WABA-2' }
+
+  it('edits with the studio’s number on the template’s WABA', async () => {
+    TMPL = { ...TMPL, business_account_id: 'WABA-2' }
+    getLocationNumberForWaba.mockResolvedValue(ON_WABA_2)
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect(getLocationNumberForWaba).toHaveBeenCalledWith(LOC, 'WABA-2')
+    expect(editTemplate.mock.calls[0][2]).toEqual({ config: ON_WABA_2 })
+  })
+
+  it('no number on that WABA at the studio: 409 with the copy, Meta never called, row untouched', async () => {
+    TMPL = { ...TMPL, business_account_id: 'WABA-2' }
+    getLocationNumberForWaba.mockResolvedValue(null)
+    const res = await call()
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'The number this template lives on is switched off at this studio.' })
     expect(editTemplate).not.toHaveBeenCalled()
     expect(db.updates).toEqual([])
   })

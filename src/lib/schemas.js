@@ -8,6 +8,7 @@ import { z } from 'zod'
 import { sanitizePermissionsBlob } from '@shared/permissions'
 import { UUID_SHAPE } from './uuid-shape'
 import { isFreshSecret } from './integration-secret-merge'
+import { PURPOSE_KEYS } from './whatsapp-purpose-templates'
 
 // UUID-shaped string matching what Postgres's uuid type accepts. See
 // src/lib/validate.js for the rationale (Zod 4's .uuid() is RFC-strict
@@ -451,6 +452,14 @@ export const studioWhatsAppNumberSwitchSchema = z.object({
   numberId: uuidLike,
   on: z.boolean(),
   isDefault: z.boolean().optional(),
+})
+
+// WAORGNUMBER.2 (R5): which of the studio's own templates an automatic message
+// uses (PUT /api/locations/[id]/whatsapp/purpose-templates). null clears the
+// pick, so the sender goes back to its default template name.
+export const studioPurposeTemplateSchema = z.object({
+  purpose: z.enum(PURPOSE_KEYS),
+  templateId: uuidLike.nullable(),
 })
 
 // N8NECHO.1: the screens are handed SECRET_MASK for a stored token. A mask (or

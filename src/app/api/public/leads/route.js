@@ -167,7 +167,7 @@ export async function POST(request) {
         .maybeSingle()
       if (c) {
         const { maybeSendCampaignWhatsappWelcome } = await import('@/lib/automations/meta-ad-whatsapp-welcome')
-        await maybeSendCampaignWhatsappWelcome({ db, locationId, contact: c, templateName: camp.whatsappTemplate })
+        await maybeSendCampaignWhatsappWelcome({ db, locationId, contact: c, templateName: camp.whatsappTemplate, purpose: 'meta_ad_welcome' })
       }
     }
   } catch (e) { logWarn('leads', 'campaign WA welcome failed', { err: e }) }

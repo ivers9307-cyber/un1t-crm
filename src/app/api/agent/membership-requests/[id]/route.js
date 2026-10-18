@@ -707,9 +707,9 @@ export async function PATCH(request, { params }) {
         try {
           const { data: c } = await db.from('contacts').select('id, first_name, name, phone, wa_phone').eq('id', row.contact_id).maybeSingle()
           if (c) {
-            const { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } = await import('@/lib/automations/booking-whatsapp-confirm')
+            const { maybeSendBookingWhatsappConfirm } = await import('@/lib/automations/booking-whatsapp-confirm')
             const firstName = c.first_name || (c.name ? c.name.split(' ')[0] : '') || 'there'
-            await maybeSendBookingWhatsappConfirm({ db, locationId: row.location_id, contact: c, templateName: CLASS_CONFIRM_TEMPLATE, bodyParams: [firstName, details.class_name || 'your class', details.class_time || ''] })
+            await maybeSendBookingWhatsappConfirm({ db, locationId: row.location_id, contact: c, purpose: 'class_confirmed', bodyParams: [firstName, details.class_name || 'your class', details.class_time || ''] })
           }
         } catch (e) { console.warn(`[agent-requests] cbr confirm error: ${e?.message || e}`) }
       }

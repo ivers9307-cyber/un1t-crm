@@ -214,6 +214,7 @@ export const EXPECTED = {
   'POST locations/[id]/whatsapp/embedded-signup/route.js': ['session-only', 'WAORGNUMBER.1: retired, answers 410 (moved to the organisation).'],
   'POST locations/[id]/whatsapp/numbers/route.js': ['session-only', 'WAORGNUMBER.1: retired, answers 410 (moved to the organisation).'],
   'PUT locations/[id]/whatsapp/numbers/route.js': ['studio-admin', 'WAORGNUMBER.1 (R8): switches an organisation number on or off at THIS studio and picks its default; owner, manager or master there (ADMIN_ROLES, so a head coach cannot), the number checked against the studio\'s organisation.'],
+  'PUT locations/[id]/whatsapp/purpose-templates/route.js': ['studio-admin', 'WAORGNUMBER.2 (R5): picks which of THIS studio\'s own templates its automatic messages use; owner, manager or master there (ADMIN_ROLES), the template checked to be this studio\'s, APPROVED and of an allowed category.'],
   'PATCH locations/[id]/whatsapp/numbers/[numberId]/route.js': ['membership', 'WAORGNUMBER.1: retired, answers 410 (moved to the organisation) after the path-studio access check; writes nothing, so membership is enough.'],
   'DELETE locations/[id]/whatsapp/numbers/[numberId]/route.js': ['membership', 'WAORGNUMBER.1: retired, answers 410 (moved to the organisation) after the path-studio access check; writes nothing, so membership is enough.'],
   // ── What Meta shows on the number: master or owner ──
