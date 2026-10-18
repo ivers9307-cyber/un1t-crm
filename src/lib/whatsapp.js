@@ -2188,35 +2188,33 @@ export async function getOrCreateConversation(db, contact, locationId) {
     // WAORGNUMBER.5 (R3) — an existing thread at the sending studio replies from
     // its stamp, so one with no stamp, or a stamp that is no longer switched on
     // (or active) at this studio, gets the studio's number. A stamp still in use
-    // here is kept (the customer wrote to it). A failed read keeps what is
-    // there, logged; a lost stamp is logged, never thrown.
+    // here is kept (the customer wrote to it). One read for a stamped thread
+    // (this runs per broadcast / drip recipient), the resolver only when the
+    // stamp must change. A failed read keeps what is there, logged; a lost
+    // stamp is logged, never thrown.
     const usableHere = async (numberId) => {
       const { data: links, error: linkErr } = await db.from('location_whatsapp_numbers')
-        .select('whatsapp_number_id')
+        .select('whatsapp_number_id, whatsapp_numbers!inner(id)')
         .eq('location_id', locationId)
         .eq('whatsapp_number_id', numberId)
+        .eq('whatsapp_numbers.is_active', true)
         .limit(1)
       if (linkErr) throw linkErr
-      if (!links?.length) return false
-      const { data: active, error: activeErr } = await db.from('whatsapp_numbers')
-        .select('id')
-        .eq('id', numberId)
-        .eq('is_active', true)
-        .limit(1)
-      if (activeErr) throw activeErr
-      return Boolean(active?.length)
+      return Boolean(links?.length)
     }
     const restamp = async (row) => {
-      const numberId = await sendingNumberId()
-      if (!numberId || row.whatsapp_number_id === numberId) return
       if (row.whatsapp_number_id) {
+        let usable
         try {
-          if (await usableHere(row.whatsapp_number_id)) return
+          usable = await usableHere(row.whatsapp_number_id)
         } catch (e) {
           console.error('[whatsapp] getOrCreateConversation: stamp check failed; keeping the stamp', row.id, e?.message || String(e))
           return
         }
+        if (usable) return
       }
+      const numberId = await sendingNumberId()
+      if (!numberId || row.whatsapp_number_id === numberId) return
       let q = db.from('whatsapp_conversations').update({ whatsapp_number_id: numberId }).eq('id', row.id)
       q = row.whatsapp_number_id ? q.eq('whatsapp_number_id', row.whatsapp_number_id) : q.is('whatsapp_number_id', null)
       const { error: stampErr } = await q

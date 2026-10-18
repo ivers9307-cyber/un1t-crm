@@ -93,6 +93,9 @@ export async function ingestCoexistenceMessage(db, { locationId, numberId = null
     contact: contactId ? { id: contactId, location_id: contactHome } : null,
     contextMessageId: null,
     referral: null,
+    // "Recent" is judged at the message's own time: a history row weeks old
+    // files with whoever spoke in the week before it, not this week.
+    ...(tsSeconds ? { now: tsSeconds * 1000 } : {}),
   })
   const threadLocationId = route.locationId
   // The receiving number goes on the thread when it is switched on at its
@@ -103,9 +106,11 @@ export async function ingestCoexistenceMessage(db, { locationId, numberId = null
   const existingConv = route.conversation
   let conversationId = existingConv?.id
   // An existing thread with no stamp gets the receiving number, or a reply
-  // into it has no number to resolve. Only while unstamped (history is weeks
-  // old, so it never re-points a stamp the webhook wrote); a lost stamp is
-  // logged, never thrown.
+  // into it has no number to resolve. Only while unstamped: a history row can
+  // be weeks old, so it must not re-point a stamp the webhook wrote since (an
+  // echo is live, but a stamped thread already replies from a number switched
+  // on there or the inbound webhook re-stamps it). A lost stamp is logged,
+  // never thrown.
   if (conversationId && stamp && !existingConv.whatsapp_number_id) {
     const { error: numberStampErr } = await db.from('whatsapp_conversations')
       .update({ whatsapp_number_id: numberId })

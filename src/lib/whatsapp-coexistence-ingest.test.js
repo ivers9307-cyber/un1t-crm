@@ -355,6 +355,7 @@ describe('ingestCoexistenceMessage — the inbound router decides the thread (WA
     expect(routeInboundThread).toHaveBeenCalledWith(db, {
       numberId: 'wn-1', numberHomeLocationId: 'loc-still', organizationId: 'org-1', waPhone: '353222', bsuid: null,
       contact: { id: 'k1', location_id: 'loc-hatch' }, contextMessageId: null, referral: null,
+      now: 1700000000 * 1000, // the message's own time, not the import's
     })
   })
 

@@ -323,6 +323,13 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // home studio, which replies through it (getConversationNumberConfig).
   const stampReceivingNumber = route.switchedOn || route.by === 'numberless_home'
 
+  // The CTWA Lead goes out with the token and dataset of a number switched on
+  // at its studio. A number-less home studio has none (transitional, until
+  // WAORGNUMBER.6), so its Lead stays with the receiving number's studio, as
+  // before; it would otherwise be dropped for good (no_token), since the click
+  // id is stamped on the contact on first sight and never retried.
+  const ctwaLocationId = route.by === 'numberless_home' ? defaultLocationId : locationId
+
   let conversationId
   if (existingConv) {
     conversationId = existingConv.id
@@ -335,7 +342,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
       // CTWA backfill: the click id landed while the sender was unknown —
       // move it onto the newly linked contact (fires the Lead event once).
       if (existingConv.ctwa_clid) {
-        await recordCtwaTouch(db, { ctwaClid: existingConv.ctwa_clid, conversationId: null, contact, locationId })
+        await recordCtwaTouch(db, { ctwaClid: existingConv.ctwa_clid, conversationId: null, contact, locationId: ctwaLocationId })
       }
     }
   } else {
@@ -353,8 +360,20 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     // on. The error lives in the result object, not in a throw.
     if (convErr) {
       console.error('[whatsapp webhook] conversation insert failed:', convErr.message)
+      // WAORGNUMBER.5 — the router answers "no thread" when its read failed
+      // too, so a thread may already hold (location_id, wa_phone): re-read it
+      // rather than lose the message.
+      const { data: raced, error: racedErr } = await db.from('whatsapp_conversations')
+        .select('id')
+        .eq('location_id', locationId)
+        .eq('wa_phone', senderPhone)
+        .limit(1)
+        .maybeSingle()
+      if (racedErr) console.error('[whatsapp webhook] conversation re-read after a failed insert failed:', racedErr.message)
+      conversationId = raced?.id
+    } else {
+      conversationId = newConv?.id
     }
-    conversationId = newConv?.id
   }
 
   if (!conversationId) {
@@ -380,7 +399,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
 
   // CTWA attribution — stamp the click id (conversation + contact) and fire
   // the Lead conversion once. Swallows its own errors; never blocks the webhook.
-  await recordCtwaTouch(db, { ctwaClid: message.referral?.ctwa_clid, conversationId, contact, locationId })
+  await recordCtwaTouch(db, { ctwaClid: message.referral?.ctwa_clid, conversationId, contact, locationId: ctwaLocationId })
 
   // WA-BSUID.1 — capture Meta's Business-Scoped User ID (arrives as
   // contacts[].user_id once usernames roll out) onto the matched

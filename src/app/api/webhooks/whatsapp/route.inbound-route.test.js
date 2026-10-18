@@ -239,6 +239,13 @@ describe('POST /api/webhooks/whatsapp — while Hatch has nothing switched on (t
     expect(maybeAutoReply).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ locationId: HATCH }))
   })
 
+  it('a Hatch member’s click-to-WhatsApp Lead is still sent for Stillorgan (Hatch has no number to send it with)', async () => {
+    pickInboundContact.mockReturnValue({ id: 'c-1', location_id: HATCH })
+    await run(makeState({ links: PRE_GO_LIVE }), { referral: { source_type: 'ad', source_id: 'ad-x', ctwa_clid: 'clid-pre' } })
+    expect(inboundRow()).toMatchObject({ location_id: HATCH })
+    expect(recordCtwaTouch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ ctwaClid: 'clid-pre', locationId: STILL }))
+  })
+
   it('an unknown sender whose thread staff moved to Hatch stays in that thread (F1)', async () => {
     await run(makeState({ links: PRE_GO_LIVE, conversations: [thread('conv-hatch', HATCH, { contact_id: null, whatsapp_number_id: NUM })] }))
     expect(state.conversations).toHaveLength(1)

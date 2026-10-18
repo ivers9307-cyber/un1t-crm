@@ -41,8 +41,11 @@ function makeDb(state) {
       }
       // The link and number tables are the resolver fake's `links` / `numbers`
       // (no `links` = each number switched on at its home, as there).
+      // A link row carries its number embedded, as the !inner select does.
       const source = table === 'location_whatsapp_numbers'
         ? (state.links ?? (state.numbers || []).map((n) => link(n.location_id, n.id)))
+          .map((l) => ({ ...l, whatsapp_numbers: (state.numbers || []).find((n) => n.id === l.whatsapp_number_id) || null }))
+          .filter((l) => l.whatsapp_numbers)
         : table === 'whatsapp_numbers' ? state.numbers : state[table]
       if (state.faults?.[table] && (table === 'location_whatsapp_numbers' || table === 'whatsapp_numbers')) return { data: null, error: state.faults[table] }
       const rows = (source || []).filter((r) => filters.every((f) => f(r)))
@@ -52,7 +55,7 @@ function makeDb(state) {
       select: () => b,
       insert: (p) => { op = 'insert'; payload = p; return b },
       update: (p) => { op = 'update'; payload = p; return b },
-      eq: (c, v) => { filters.push((r) => r[c] === v); return b },
+      eq: (c, v) => { filters.push((r) => (c.includes('.') ? r[c.split('.')[0]]?.[c.split('.')[1]] : r[c]) === v); return b },
       is: (c, v) => { filters.push((r) => (r[c] ?? null) === v); return b },
       order: () => b,
       limit: () => b,
@@ -205,13 +208,26 @@ describe('getOrCreateConversation — the thread at the sending studio carries a
     expect(db.writes).toEqual([])
   })
 
+  it('a thread stamped with a number still in use costs one read and no resolver call', async () => {
+    existingAtStill('n-still')
+    const db = makeDb(state)
+    const reads = []
+    const realFrom = db.from
+    db.from = (t) => { reads.push(t); return realFrom(t) }
+    state.reads = []
+    await getOrCreateConversation(db, contact, STILL)
+    expect(reads).toEqual(['whatsapp_conversations', 'location_whatsapp_numbers'])
+    expect(state.reads).toEqual([]) // the resolver's own client was never asked
+    expect(db.writes).toEqual([])
+  })
+
   it('a failed stamp check keeps the stamp, logged; a failed write is logged; the thread is returned either way', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     state.numbers = [{ id: 'n-still', location_id: STILL, is_active: true }]
     existingAtStill('n-old')
     const db = makeDb(state)
     const realFrom = db.from
-    db.from = (t) => (t === 'location_whatsapp_numbers' && !db.resolverRead ? { select: () => ({ eq: () => ({ eq: () => ({ limit: async () => ({ data: null, error: { message: 'links down' } }) }) }) }) } : realFrom(t))
+    db.from = (t) => (t === 'location_whatsapp_numbers' ? { select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ limit: async () => ({ data: null, error: { message: 'links down' } }) }) }) }) }) } : realFrom(t))
     expect(await getOrCreateConversation(db, contact, STILL)).toBe('conv-still')
     expect(state.whatsapp_conversations[0].whatsapp_number_id).toBe('n-old')
     expect(errSpy).toHaveBeenCalledWith('[whatsapp] getOrCreateConversation: stamp check failed; keeping the stamp', 'conv-still', 'links down')

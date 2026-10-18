@@ -280,6 +280,41 @@ describe('POST /api/webhooks/whatsapp — the receiving number is recorded on th
     expect(handleFlowCompletion).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-hatch' }))
   })
 
+  it('numberless_home: the CTWA Lead stays with the receiving number’s studio (a number-less studio has no token to send it)', async () => {
+    pickInboundContact.mockReturnValueOnce({ id: 'contact-9', location_id: 'loc-hatch' })
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    routed({ locationId: 'loc-hatch', by: 'numberless_home', switchedOn: false })
+    await POST(reqFor(inboundCtwa(REGISTERED_PNI)))
+    expect(convInserts()[0].ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-hatch', ctwa_clid: 'clid-1' })
+    expect(recordCtwaTouch).toHaveBeenCalledWith(db, expect.objectContaining({ ctwaClid: 'clid-1', locationId: 'loc-still' }))
+
+    vi.clearAllMocks()
+    pickInboundContact.mockReturnValueOnce({ id: 'contact-9', location_id: 'loc-hatch' })
+    routed({ locationId: 'loc-hatch', by: 'numberless_home', switchedOn: false, conversation: { id: 'conv-hatch', location_id: 'loc-hatch', contact_id: null, ctwa_clid: 'clid-old', studio_resolution: null } })
+    await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(recordCtwaTouch).toHaveBeenCalledWith(db, expect.objectContaining({ ctwaClid: 'clid-old', conversationId: null, locationId: 'loc-still' }))
+  })
+
+  it('a thread insert that loses the unique race re-reads the thread, so the message is not lost', async () => {
+    db = makeDb({
+      contacts: { data: [], error: null },
+      whatsapp_conversations: (ops, terminal) => {
+        if (ops.some(([m]) => m === 'insert')) return { data: null, error: { message: 'duplicate key value violates unique constraint' } }
+        if (terminal === 'maybeSingle') return { data: { id: 'conv-existing' }, error: null }
+        return { data: null, error: null }
+      },
+      whatsapp_messages: (ops) => (ops.some(([m]) => m === 'insert') ? { data: { id: 'msg-row-1' }, error: null } : { data: null, error: null }),
+    })
+    createServerClient.mockReturnValue(db)
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    const res = await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(res.status).toBe(200)
+    const reread = db.calls.find((c) => c.table === 'whatsapp_conversations' && c.terminal === 'maybeSingle')
+    expect(reread.ops).toEqual(expect.arrayContaining([['eq', 'location_id', 'loc-still'], ['eq', 'wa_phone', '353871234567']]))
+    expect(msgInsert().ops.find(([m]) => m === 'insert')[1]).toMatchObject({ conversation_id: 'conv-existing', location_id: 'loc-still' })
+    expect(maybeAutoReply).toHaveBeenCalledWith(db, expect.objectContaining({ conversationId: 'conv-existing' }))
+  })
+
   it('a failed stamp (e.g. 696 not applied yet) is logged and costs nothing else: message stored, Mia runs', async () => {
     db = makeDb({
       contacts: { data: [], error: null },
