@@ -28,7 +28,11 @@ export const UN1T_IN_FLIGHT_MS = 180_000
 const LEDGER_COLUMNS =
   'id, location_id, contact_id, un1t_user_id, op, origin, origin_ref, actor_user_id, idempotency_key, target, stage, method, un1t_ref, terms_accepted_at, terms_source, checkout_url, http_status, code, message, recovered, created_at, finished_at'
 
-const FINISH_STAGES = new Set(['sent', 'done', 'refused', 'unknown'])
+// 'sent' is the write-ahead marker beginAttempt inserts; it is never a finish value.
+const FINISH_STAGES = new Set(['done', 'refused', 'unknown'])
+// listAttempts is a resume read for ONE contact and op; two hundred attempts is
+// far past anything real, and the explicit limit stops PostgREST's silent 1000-row cut.
+const LIST_LIMIT = 200
 // un1t_write_events_message_length_check: char_length(message) <= 500.
 const MESSAGE_MAX = 500
 
@@ -49,6 +53,13 @@ export const ledgerKey = Object.freeze({
   cancel: (loc, bookingId) => `cancel:${part('loc', loc)}:${part('bookingId', bookingId)}`,
   pw: (loc, un1tUserId) => `pw:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}`,
 })
+
+// Cut on code points (the CHECK counts characters, and a UTF-16 slice can split
+// an emoji), then drop any lone surrogate so the text is valid to store.
+function capMessage(message) {
+  const cut = Array.from(String(message)).slice(0, MESSAGE_MAX).join('')
+  return cut.toWellFormed()
+}
 
 function dbError(what, error) {
   const code = error?.code ?? null
@@ -72,6 +83,17 @@ export async function beginAttempt(
 ) {
   if (!locationId || !op || !origin || !key) {
     throw new TypeError('beginAttempt: locationId, op, origin and key are required')
+  }
+  // A trial row names its person and product (mig 742 trial_target_check
+  // and the one-trial index key on them). Refuse here, before the insert, a
+  // row the database would take as a hole in the one-trial rule or reject.
+  if (op === 'trial') {
+    if (!un1tUserId || !target) throw new TypeError('beginAttempt: a trial needs un1tUserId and target')
+    // key = trial:<loc>:<un1tUser>:<product>:<method>
+    const parts = key.split(':')
+    if (parts.length !== 5 || parts[0] !== 'trial' || parts[3] !== target) {
+      throw new TypeError("beginAttempt: a trial's target must be the product id in its trial key")
+    }
   }
   const { data, error } = await db
     .from('un1t_write_events')
@@ -112,8 +134,10 @@ export async function beginAttempt(
   // caller's retry sees the finished row (findDone) or inserts afresh.
   if (!open) throw dbError('open-row read (no open row left)', { code: 'open_row_gone' })
 
-  const age = Date.now() - new Date(open.created_at).getTime()
-  const inFlight = open.stage === 'sent' && Number.isFinite(age) && age < UN1T_IN_FLIGHT_MS
+  // An unparsable created_at counts as in flight: the safe direction is to
+  // not send a second request over a row we cannot age.
+  const age = open.created_at ? Date.now() - new Date(open.created_at).getTime() : NaN
+  const inFlight = open.stage === 'sent' && (!Number.isFinite(age) || age < UN1T_IN_FLIGHT_MS)
   return { open, inFlight }
 }
 
@@ -125,27 +149,34 @@ export async function beginAttempt(
 export async function finishAttempt(db, id, { stage, un1tRef, httpStatus, code, message, recovered, checkoutUrl } = {}) {
   try {
     if (!FINISH_STAGES.has(stage)) {
-      logError(LOG_MODULE, 'ledger finish refused: unknown stage', { ledgerId: id, stage: String(stage) })
+      // The caller's value is not echoed: only contract fields are logged.
+      logError(LOG_MODULE, 'ledger finish refused: not a finish stage', { ledgerId: id })
       return
     }
     const patch = { stage, finished_at: new Date().toISOString() }
     if (un1tRef !== undefined) patch.un1t_ref = un1tRef
     if (httpStatus !== undefined) patch.http_status = httpStatus
     if (code !== undefined) patch.code = code
-    if (message !== undefined) patch.message = message == null ? null : String(message).slice(0, MESSAGE_MAX)
+    if (message !== undefined) patch.message = message == null ? null : capMessage(message)
     if (recovered !== undefined) patch.recovered = recovered
     if (checkoutUrl !== undefined) patch.checkout_url = checkoutUrl
 
-    const { data, error } = await db.from('un1t_write_events').update(patch).eq('id', id).select('id')
+    // done (and refused) is final: only a row still sent or unknown is finished.
+    const { data, error } = await db
+      .from('un1t_write_events')
+      .update(patch)
+      .eq('id', id)
+      .in('stage', ['sent', 'unknown'])
+      .select('id')
     if (error) {
-      logError(LOG_MODULE, 'ledger finish write failed', { ledgerId: id, stage, dbCode: error.code ?? null })
+      logError(LOG_MODULE, 'ledger finish write failed', { ledgerId: id, status: stage, code: error.code ?? null })
       return
     }
     if (!data || data.length === 0) {
-      logError(LOG_MODULE, 'ledger finish touched no row', { ledgerId: id, stage })
+      logError(LOG_MODULE, 'ledger finish touched no row', { ledgerId: id, status: stage })
     }
-  } catch (err) {
-    logError(LOG_MODULE, 'ledger finish threw', { ledgerId: id, errName: err?.name ?? null })
+  } catch {
+    logError(LOG_MODULE, 'ledger finish threw', { ledgerId: id })
   }
 }
 
@@ -174,6 +205,7 @@ export async function listAttempts(db, { locationId, contactId, op }) {
     .eq('contact_id', contactId)
     .eq('op', op)
     .order('created_at', { ascending: false })
+    .limit(LIST_LIMIT)
   if (error) throw dbError('list', error)
   return data ?? []
 }

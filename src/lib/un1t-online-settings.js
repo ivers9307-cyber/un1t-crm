@@ -9,7 +9,7 @@
 // A missing key, a string "true", 1, {} ... are all OFF: only the literal
 // boolean true turns anything on. A flag that fails closed is the point.
 
-import { parseHiddenKeywords } from './public-classes'
+import { parseHiddenKeywords } from './class-keywords'
 
 export class Un1tSettingsReadError extends Error {
   /** @param {string} message @param {{ code?: string|null }} [opts] */
@@ -27,7 +27,7 @@ const isTrue = (v) => v === true
  * mergeLocationSettings hands its mutator); anything unreadable is all-off.
  *
  * @returns {{ writesEnabled: boolean, funnelEnabled: boolean, trialProductId: string|null,
- *   hiddenClassKeywords: string[], sendsWelcome: boolean, welcomeSetsPassword: boolean,
+ *   hiddenClassKeywords: string[], sendsWelcome: boolean, welcomeSetsLogin: boolean,
  *   sendsBookingConfirmation: boolean }}
  */
 export function un1tWriteSettingsFrom(settings) {
@@ -43,7 +43,7 @@ export function un1tWriteSettingsFrom(settings) {
     trialProductId: trial || null,
     hiddenClassKeywords: parseHiddenKeywords(block.hidden_class_keywords),
     sendsWelcome: isTrue(block.un1t_sends_welcome),
-    welcomeSetsPassword: isTrue(block.un1t_welcome_sets_password),
+    welcomeSetsLogin: isTrue(block.un1t_welcome_sets_login),
     sendsBookingConfirmation: isTrue(block.un1t_sends_booking_confirmation),
   }
 }

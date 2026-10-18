@@ -7,7 +7,7 @@ const OFF = {
   trialProductId: null,
   hiddenClassKeywords: [],
   sendsWelcome: false,
-  welcomeSetsPassword: false,
+  welcomeSetsLogin: false,
   sendsBookingConfirmation: false,
 }
 
@@ -34,7 +34,7 @@ describe('un1tWriteSettingsFrom', () => {
           writes_enabled: v,
           funnel_enabled: v,
           un1t_sends_welcome: v,
-          un1t_welcome_sets_password: v,
+          un1t_welcome_sets_login: v,
           un1t_sends_booking_confirmation: v,
         },
       })
@@ -45,12 +45,12 @@ describe('un1tWriteSettingsFrom', () => {
       un1t_online: {
         writes_enabled: true,
         un1t_sends_welcome: true,
-        un1t_welcome_sets_password: 'true',
+        un1t_welcome_sets_login: 'true',
         un1t_sends_booking_confirmation: true,
       },
     })
     expect(on.sendsWelcome).toBe(true)
-    expect(on.welcomeSetsPassword).toBe(false)
+    expect(on.welcomeSetsLogin).toBe(false)
     expect(on.sendsBookingConfirmation).toBe(true)
   })
 

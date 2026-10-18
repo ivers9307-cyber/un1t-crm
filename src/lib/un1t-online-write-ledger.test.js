@@ -209,7 +209,44 @@ describe('beginAttempt', () => {
       b.select = (c) => { selects++; if (selects > 1) db.table.length = 0; return sel(c) }
       return b
     }
-    await expect(beginAttempt(db, ARGS)).rejects.toThrow(/open row/i)
+    const err = await beginAttempt(db, ARGS).catch((e) => e)
+    expect(err.message).toMatch(/open row/i)
+    expect(err.code).toBe('open_row_gone')
+  })
+
+  it('an unparsable created_at on a sent row counts as in flight (the safe direction)', async () => {
+    const db = makeDb({ rows: [{ id: 'a', idempotency_key: ARGS.key, stage: 'sent', created_at: 'not a date' }] })
+    expect((await beginAttempt(db, ARGS)).inFlight).toBe(true)
+    const db2 = makeDb({ rows: [{ id: 'a', idempotency_key: ARGS.key, stage: 'sent', created_at: null }] })
+    expect((await beginAttempt(db2, ARGS)).inFlight).toBe(true)
+    // still never for an unknown row
+    const db3 = makeDb({ rows: [{ id: 'a', idempotency_key: ARGS.key, stage: 'unknown', created_at: 'not a date' }] })
+    expect((await beginAttempt(db3, ARGS)).inFlight).toBe(false)
+  })
+
+  describe('trial guard', () => {
+    const TRIAL = { ...ARGS, op: 'trial', method: 'charge', key: 'trial:loc-1:u1t-user-1:prod-1:charge', target: 'prod-1' }
+    it('throws before the insert when the person or product is missing', async () => {
+      for (const bad of [{ un1tUserId: undefined }, { un1tUserId: '' }, { target: undefined }, { target: '' }]) {
+        const db = makeDb()
+        const err = await beginAttempt(db, { ...TRIAL, ...bad }).catch((e) => e)
+        expect(err).toBeInstanceOf(TypeError)
+        expect(db.log).toHaveLength(0)
+      }
+    })
+    it('throws before the insert when target is not the key\'s product id', async () => {
+      const db = makeDb()
+      await expect(beginAttempt(db, { ...TRIAL, target: 'prod-2' })).rejects.toThrow(TypeError)
+      await expect(beginAttempt(db, { ...TRIAL, key: 'book:loc-1:u1t-user-1:prod-1' })).rejects.toThrow(TypeError)
+      expect(db.log).toHaveLength(0)
+    })
+    it('accepts a matching trial, and non-trial ops need neither', async () => {
+      const db = makeDb()
+      expect((await beginAttempt(db, TRIAL)).row.target).toBe('prod-1')
+      const db2 = makeDb()
+      await beginAttempt(db2, { locationId: 'loc-1', op: 'forgot_password', origin: 'staff', key: 'pw:loc-1:u1' })
+      expect(db2.log).toHaveLength(1)
+    })
   })
 
   it('refuses a missing location, op, origin or key before touching the db', async () => {
@@ -243,13 +280,25 @@ describe('finishAttempt', () => {
     expect(db.table[0].message).toHaveLength(500)
   })
 
+  it('cuts the message on code points, never leaving half an emoji', async () => {
+    const db = makeDb({ rows: [{ id: 'led-1', stage: 'sent' }] })
+    await finishAttempt(db, 'led-1', { stage: 'refused', message: 'x'.repeat(499) + '\u{1F600}\u{1F600}' })
+    const m = db.table[0].message
+    expect(Array.from(m)).toHaveLength(500)
+    expect(m.endsWith('\u{1F600}')).toBe(true)
+    expect(m).toBe(m.toWellFormed())
+    // a lone surrogate already in the text is dropped too
+    await finishAttempt(db, 'led-1', { stage: 'unknown', message: 'ab\uD83D' })
+    expect(db.table[0].message).toBe(db.table[0].message.toWellFormed())
+  })
+
   it('finishAttempt logs a zero-row update, with ids only', async () => {
     const db = makeDb({ rows: [{ id: 'led-1', stage: 'sent' }], updateMatches: false })
     await expect(finishAttempt(db, 'led-1', { stage: 'done', un1tRef: 'bk-9' })).resolves.toBeUndefined()
     expect(logError).toHaveBeenCalledTimes(1)
     const [mod, , meta] = logError.mock.calls[0]
     expect(mod).toBe('un1t-online-write')
-    expect(meta).toMatchObject({ ledgerId: 'led-1', stage: 'done' })
+    expect(meta).toEqual({ ledgerId: 'led-1', status: 'done' })
     expect(JSON.stringify(meta)).not.toContain('bk-9')
   })
 
@@ -258,7 +307,7 @@ describe('finishAttempt', () => {
     await expect(finishAttempt(db, 'led-1', { stage: 'done' })).resolves.toBeUndefined()
     expect(logError).toHaveBeenCalledTimes(1)
     const meta = logError.mock.calls[0][2]
-    expect(meta).toMatchObject({ ledgerId: 'led-1', dbCode: '23505' })
+    expect(meta).toEqual({ ledgerId: 'led-1', status: 'done', code: '23505' })
     expect(JSON.stringify(meta)).not.toContain('secret')
   })
 
@@ -266,13 +315,43 @@ describe('finishAttempt', () => {
     const db = { from() { throw new Error('socket hang up') } }
     await expect(finishAttempt(db, 'led-1', { stage: 'done' })).resolves.toBeUndefined()
     expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError.mock.calls[0][2]).toEqual({ ledgerId: 'led-1' })
   })
 
-  it('refuses nothing silently: a bad stage is logged and not written', async () => {
+  it('refuses nothing silently: a bad stage is logged (without echoing it) and not written', async () => {
     const db = makeDb({ rows: [{ id: 'led-1', stage: 'sent' }] })
-    await finishAttempt(db, 'led-1', { stage: 'bogus' })
+    await finishAttempt(db, 'led-1', { stage: 'bogus-caller-value' })
     expect(db.table[0].stage).toBe('sent')
     expect(logError).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(logError.mock.calls[0])).not.toContain('bogus-caller-value')
+  })
+
+  it('refuses stage sent as a finish value, writing nothing', async () => {
+    const db = makeDb({ rows: [{ id: 'led-1', stage: 'unknown' }] })
+    await finishAttempt(db, 'led-1', { stage: 'sent' })
+    expect(db.table[0].stage).toBe('unknown')
+    expect(db.log.filter((l) => l.op === 'update')).toHaveLength(0)
+    expect(logError).toHaveBeenCalledTimes(1)
+  })
+
+  it('done is final: only sent and unknown rows are updated', async () => {
+    const db = makeDb({ rows: [
+      { id: 'led-1', stage: 'done', un1t_ref: 'bk-1' },
+      { id: 'led-2', stage: 'refused' },
+      { id: 'led-3', stage: 'unknown' },
+      { id: 'led-4', stage: 'sent' },
+    ] })
+    await finishAttempt(db, 'led-1', { stage: 'refused', un1tRef: 'other' })
+    expect(db.table[0]).toMatchObject({ stage: 'done', un1t_ref: 'bk-1' })
+    expect(logError).toHaveBeenCalledTimes(1) // zero rows touched is logged
+    await finishAttempt(db, 'led-2', { stage: 'done' })
+    expect(db.table[1].stage).toBe('refused')
+    await finishAttempt(db, 'led-3', { stage: 'done' })
+    await finishAttempt(db, 'led-4', { stage: 'unknown' })
+    expect(db.table[2].stage).toBe('done')
+    expect(db.table[3].stage).toBe('unknown')
+    const upd = db.log.filter((l) => l.op === 'update')
+    expect(upd.every((u) => u.filters.some(([k, c, v]) => k === 'in' && c === 'stage' && v.join() === 'sent,unknown'))).toBe(true)
   })
 })
 
@@ -303,6 +382,7 @@ describe('findDone and listAttempts', () => {
     expect(out.map((r) => r.id)).toEqual(['c', 'b', 'a'])
     const q = db.log.at(-1)
     expect(q.filters).toEqual(expect.arrayContaining([['eq', 'location_id', 'loc-1'], ['eq', 'contact_id', 'con-1'], ['eq', 'op', 'book']]))
+    expect(q.limit).toBe(200)
   })
 
   it('listAttempts throws on a DB error', async () => {
