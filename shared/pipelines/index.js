@@ -7,8 +7,12 @@
 // Import as 'shared/pipelines' from mobile, never a relative '../shared'.
 
 import * as acquisition from './acquisition.js'
+import * as acquisitionUn1t from './acquisition-un1t.js'
 
-export const BOARD_MODULES = Object.freeze({ acquisition })
+export const BOARD_MODULES = Object.freeze({
+  acquisition,
+  acquisition_un1t: acquisitionUn1t,
+})
 
 export const PIPELINE_MODES = Object.freeze({ DERIVED: 'derived', MANUAL: 'manual' })
 
