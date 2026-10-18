@@ -16,6 +16,8 @@ import { uuidLike } from '@/lib/schemas'
 import { gateUn1tStaffBooking, staffWriteAnswer, UN1T_STAFF_COPY } from '@/lib/un1t-staff-booking'
 import { Un1tSettingsReadError } from '@/lib/un1t-online-settings'
 import { book } from '@/lib/un1t-online-write-ops'
+import { readBookChatTemplate } from '@/lib/book-chat-copy'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 // A write plus its check read can wait out one budget window.
@@ -49,5 +51,12 @@ export async function POST(request) {
     throw err
   }
   const { status, body } = staffWriteAnswer(r, { op: 'book' })
+  // BOOKCHATCOPY.1 — the studio's editable chat confirmation, as the Glofox
+  // route sends it. The person IS booked, so a failed read never fails this.
+  if (status === 200) {
+    const chat = await readBookChatTemplate(db, b.location_id)
+    if (chat.error) logWarn('un1t-classes-book', 'chat confirmation template read failed; the default is used', { locationId: b.location_id, err: chat.error })
+    body.data.chat_template = chat.template ?? null
+  }
   return NextResponse.json(body, { status })
 }
