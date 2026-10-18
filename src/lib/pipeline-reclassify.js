@@ -24,6 +24,7 @@ import { classifyContact } from './pipeline-classifier.js'
 import { logWarn } from './log.js'
 import { getBoardModule, PIPELINE_MODES } from '../../shared/pipelines/index.js'
 import { membershipReadsFor, supportsRead } from './membership/reads/index.js'
+import { un1tDealDates } from './membership/reads/un1t-pipeline-dates.js'
 
 // HATCHPIPE.2 — a board whose module declares this inputSource is classified
 // from the location's membership read adapter (un1tOnlineReads.pipelineInputs:
@@ -415,6 +416,11 @@ export async function reclassifyAllContacts(db, args) {
         target_pipeline_id: stagePipelineById.get(targetStageId) || null,
         target_slug: targetSlug,
         contact_name: c.name || c.email || (un1tInputs ? 'Member' : 'Glofox member'),
+        // HATCHPIPE.5 — on the un1t path a NEW deal carries the real dates
+        // (client creation; the evidence for its stage). Null = the column
+        // default, now. A MOVE never sets them: the mig 458 trigger stamps
+        // stage_entered_at when stage_id changes, i.e. when the CRM saw it.
+        dates: un1tInputs ? un1tDealDates(targetSlug, un1tInputs.evidence?.get(c.id) ?? null, nowMs) : null,
       })
       continue
     }
@@ -503,6 +509,10 @@ export async function reclassifyAllContacts(db, args) {
           pipeline_id: c.target_pipeline_id,
           location_id: locationId,
           status: 'open',
+          // Mig 458's trigger is BEFORE UPDATE OF stage_id only: an insert
+          // keeps both values as given. Absent → default now(), as before.
+          ...(c.dates?.created_at ? { created_at: c.dates.created_at } : {}),
+          ...(c.dates?.stage_entered_at ? { stage_entered_at: c.dates.stage_entered_at } : {}),
         })
       if (createErr) {
         errors++
@@ -559,6 +569,176 @@ export async function reclassifyAllContacts(db, args) {
     ...un1tCounts(inputSource, un1tInputs),
     ...(dryRun ? { stage_histogram: stageHistogram } : {}),
   }
+}
+
+// ---------------------------------------------------------------------------
+// HATCHPIPE.5 — one-off backfill of the real dates onto existing un1t deals.
+// ---------------------------------------------------------------------------
+const RESTAMP_SAMPLE = 10
+// A deal is inserted with created_at = stage_entered_at = now(), so a stage
+// date more than this after created_at was stamped by the mig 458 trigger on a
+// later stage MOVE, and already holds the true time.
+const RESTAMP_MOVED_GAP_MS = 1000
+const msOrNull = (v) => {
+  if (v == null) return null
+  const n = Date.parse(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * Re-date every OPEN deal on the location's enabled un1t.online boards from
+ * the un1t evidence (un1tDealDates): created_at = funnel entry, and
+ * stage_entered_at = entry to the stage the deal sits in NOW. Neither stage_id
+ * nor any other column is written, so the stage never changes and the mig 458
+ * trigger (BEFORE UPDATE OF stage_id) and the stage-change activity trigger do
+ * not fire. The contacts.pipeline_stage_slug trigger (mig 736) runs on every
+ * deals UPDATE but recomputes the same slug: the stage is unchanged, and
+ * created_at only breaks ties between several open deals on the same tier,
+ * which the reclassifier never makes (one open deal per contact per board).
+ *
+ * Each deal is updated on its own row, guarded on id, location, board, the
+ * stage read and status 'open': a deal that moved or closed since the read is
+ * skipped (skipped_changed), never stamped with the wrong stage's date. A
+ * deal whose stage_entered_at is more than 1 s after its created_at has MOVED
+ * stage since it was created (both are now() on insert), so the trigger's
+ * stamp is kept and only created_at may change (kept_moved). A field with no
+ * evidence is left as it is; a deal with no evidence for either
+ * is counted no_evidence. created_at is never set later than the deal's
+ * (new or kept) stage_entered_at. No audit row: it changes no stage.
+ *
+ * @param {SupabaseClient} db
+ * @param {{ locationId: string, dryRun?: boolean, now?: number }} args
+ * @returns {Promise<{ ok: boolean, dry_run: boolean, un1t_boards: string[],
+ *   deals_seen: number, updated: number, unchanged: number, no_evidence: number,
+ *   skipped_changed: number, kept_moved: number, errors: number,
+ *   sample: Array<{ deal_id, stage_slug, created_at?: {from,to}, stage_entered_at?: {from,to} }>,
+ *   error?: string }>}
+ */
+export async function restampUn1tDealDates(db, { locationId, dryRun = false, now = Date.now() } = {}) {
+  const counts = { deals_seen: 0, updated: 0, unchanged: 0, no_evidence: 0, skipped_changed: 0, kept_moved: 0, errors: 0 }
+  const base = { dry_run: dryRun, un1t_boards: [] }
+  if (!locationId) return { ok: false, error: 'locationId required', ...base, ...counts, sample: [] }
+
+  const { data: pipelineRows, error: pipelinesErr } = await db
+    .from('pipelines')
+    .select('id, key, module, mode, enabled, is_primary')
+    .eq('location_id', locationId)
+    .eq('enabled', true)
+  if (pipelinesErr) {
+    logWarn('pipeline-reclassify', 'restamp pipeline load failed', { locationId, err: pipelinesErr.message })
+    return { ok: false, error: `pipeline load: ${pipelinesErr.message}`, ...base, ...counts, sample: [] }
+  }
+  const boards = (pipelineRows || []).filter((p) => p.mode !== PIPELINE_MODES.MANUAL
+    && getBoardModule(p.module)?.inputSource === UN1T_INPUT)
+  base.un1t_boards = boards.map((p) => p.key)
+  if (boards.length === 0) return { ok: true, ...base, ...counts, sample: [] }
+
+  const loaded = await loadUn1tInputs(db, locationId, now)
+  if (!loaded.ok) {
+    logWarn('pipeline-reclassify', 'restamp inputs unavailable', {
+      locationId, source: loaded.source, state: loaded.state, reason: loaded.reason,
+      ...(loaded.err ? { err: loaded.err } : {}),
+    })
+    return { ok: false, error: `un1t inputs unavailable: ${loaded.reason}`, ...base, ...counts, sample: [] }
+  }
+  const evidence = loaded.data.evidence instanceof Map ? loaded.data.evidence : new Map()
+
+  const boardIds = boards.map((p) => p.id)
+  const { data: stages, error: stagesErr } = await db
+    .from('pipeline_stages')
+    .select('id, slug, pipeline_id')
+    .eq('location_id', locationId)
+    .in('pipeline_id', boardIds)
+  if (stagesErr) {
+    logWarn('pipeline-reclassify', 'restamp stage load failed', { locationId, err: stagesErr.message })
+    return { ok: false, error: `stage load: ${stagesErr.message}`, ...base, ...counts, sample: [] }
+  }
+  const slugById = new Map((stages || []).map((s) => [s.id, s.slug]))
+
+  // Same .range() paging as the reclassifier (the 1,000-row cap).
+  const PAGE_SIZE = 1000
+  const HARD_LIMIT = 20_000
+  const deals = []
+  for (let from = 0; from < HARD_LIMIT; from += PAGE_SIZE) {
+    const { data: page, error } = await db
+      .from('deals')
+      .select('id, contact_id, stage_id, pipeline_id, created_at, stage_entered_at')
+      .eq('location_id', locationId)
+      .eq('status', 'open')
+      .in('pipeline_id', boardIds)
+      .order('id', { ascending: true })
+      .range(from, Math.min(from + PAGE_SIZE, HARD_LIMIT) - 1)
+    if (error) {
+      logWarn('pipeline-reclassify', 'restamp deal load failed', { locationId, err: error.message })
+      return { ok: false, error: `deal load: ${error.message}`, ...base, ...counts, sample: [] }
+    }
+    if (!Array.isArray(page) || page.length === 0) break
+    deals.push(...page)
+    if (page.length < PAGE_SIZE) break
+  }
+
+  const sample = []
+  for (const d of deals) {
+    counts.deals_seen++
+    const slug = slugById.get(d.stage_id) ?? null
+    const dates = un1tDealDates(slug, evidence.get(d.contact_id) ?? null, now)
+    if (!dates.created_at && !dates.stage_entered_at) { counts.no_evidence++; continue }
+    // The deal has moved stage since it was created: the trigger's stamp is the
+    // true entry to its current stage, so the stage date is kept as it is.
+    const readCreatedMs = msOrNull(d.created_at)
+    const readStageMs = msOrNull(d.stage_entered_at)
+    const movedSinceCreate = readCreatedMs != null && readStageMs != null
+      && readStageMs - readCreatedMs > RESTAMP_MOVED_GAP_MS
+    if (movedSinceCreate) {
+      counts.kept_moved++
+      dates.stage_entered_at = null
+    }
+
+    const patch = {}
+    const change = {}
+    const stageMs = msOrNull(dates.stage_entered_at) ?? msOrNull(d.stage_entered_at)
+    if (dates.stage_entered_at && msOrNull(dates.stage_entered_at) !== msOrNull(d.stage_entered_at)) {
+      patch.stage_entered_at = dates.stage_entered_at
+      change.stage_entered_at = { from: d.stage_entered_at ?? null, to: dates.stage_entered_at }
+    }
+    let createdMs = msOrNull(dates.created_at)
+    if (createdMs != null && stageMs != null && createdMs > stageMs) createdMs = stageMs
+    if (createdMs != null && createdMs !== msOrNull(d.created_at)) {
+      const createdAt = new Date(createdMs).toISOString()
+      patch.created_at = createdAt
+      change.created_at = { from: d.created_at ?? null, to: createdAt }
+    }
+    if (Object.keys(patch).length === 0) { counts.unchanged++; continue }
+
+    if (dryRun) {
+      counts.updated++
+      if (sample.length < RESTAMP_SAMPLE) sample.push({ deal_id: d.id, stage_slug: slug, ...change })
+      continue
+    }
+    let res
+    try {
+      res = await db
+        .from('deals')
+        .update(patch)
+        .eq('id', d.id)
+        .eq('location_id', locationId)
+        .eq('pipeline_id', d.pipeline_id)
+        .eq('stage_id', d.stage_id)
+        .eq('status', 'open')
+        .select('id')
+    } catch (e) {
+      res = { data: null, error: { message: e?.message || String(e) } }
+    }
+    if (res?.error) {
+      counts.errors++
+      logWarn('pipeline-reclassify', 'restamp update failed', { deal_id: d.id, locationId, err: boundedErr(res.error.message) })
+      continue
+    }
+    if (!Array.isArray(res?.data) || res.data.length === 0) { counts.skipped_changed++; continue }
+    counts.updated++
+    if (sample.length < RESTAMP_SAMPLE) sample.push({ deal_id: d.id, stage_slug: slug, ...change })
+  }
+  return { ok: true, ...base, ...counts, sample }
 }
 
 // HATCHPIPE.2 — the input fields a run result carries: always input_source,

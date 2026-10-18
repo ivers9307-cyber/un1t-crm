@@ -814,7 +814,7 @@ describe('pipelineInputs and trialEligibility', () => {
 
     it('a studio with no client rows is an empty answer', async () => {
       const { db } = makeDb({})
-      expect(await un1tOnlineReads.pipelineInputs(db, HATCH)).toEqual({ success: true, data: { contacts: [], snapshots: new Map(), unlinked: 0, skipped_no_contact: 0 } })
+      expect(await un1tOnlineReads.pipelineInputs(db, HATCH)).toEqual({ success: true, data: { contacts: [], snapshots: new Map(), evidence: new Map(), unlinked: 0, skipped_no_contact: 0 } })
     })
 
     it('refuses a missing location without querying', async () => {
@@ -844,6 +844,24 @@ describe('pipelineInputs and trialEligibility', () => {
       for (const q of pages) expect(q.order).toBe('id')
       // the shaper saw all of them: only the ten newest are kept, so assert via the cap
       expect(out.data.snapshots.get('c1').recent_bookings).toHaveLength(10)
+    })
+
+    // HATCHPIPE.5 — the board's real dates.
+    it('returns date evidence per contact: client creation, every attended start, the member subscription start', async () => {
+      const w = world()
+      w.un1t_subscriptions = [csub({ un1t_user_id: 'u2', contact_id: 'c2', un1t_id: 's2', remote_created_at: '2026-09-02T08:00:00Z' })]
+      w.un1t_events = [...w.un1t_events, { id: 'e0', location_id: HATCH, un1t_id: 'e0', starts_at: '2026-10-03T18:00:00Z' }]
+      w.un1t_bookings = [...w.un1t_bookings, { ...w.un1t_bookings[0], id: 'b0', un1t_id: 'b0', event_id: 'e0' }]
+      const { db, log } = makeDb(w)
+      const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      expect(out.data.evidence).toBeInstanceOf(Map)
+      expect([...out.data.evidence.keys()].sort()).toEqual(['c1', 'c2'])
+      const one = out.data.evidence.get('c1')
+      expect(one.client_created_at).toBe('2026-01-05T10:00:00Z')
+      expect(one.attended_starts).toEqual(['2026-10-03T18:00:00Z', '2026-10-10T18:00:00Z'])
+      expect(out.data.evidence.get('c2').member_since).toBe('2026-09-02T08:00:00Z')
+      const subCols = log.filter((q) => q.table === 'un1t_subscriptions').map((q) => q.cols)
+      expect(subCols.some((c) => c.split(', ').includes('remote_created_at'))).toBe(true)
     })
 
     it('does not query un1t_write_events', async () => {

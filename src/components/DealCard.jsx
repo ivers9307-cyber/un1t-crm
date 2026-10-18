@@ -80,6 +80,10 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
   // (toBoardDeal) so SSR and hydration render identical text.
   // Colour only alarms on the four active funnel stages — a long stay
   // in Member/Converted/dormant piles is fine (or good), not stale.
+  // HATCHPIPE.5 — a board with the next-class badge off (a un1t.online board,
+  // boardDealMapper) marks its deals next_class_badge:false: no "Next: …" and
+  // no "No class booked" there, since the badge never looked for a booking.
+  const showClassBadge = deal.next_class_badge !== false && BADGE_SLUGS.has(contact.pipeline_stage_slug)
   const age = deal.age || {}
   const ageTone = BADGE_SLUGS.has(contact.pipeline_stage_slug)
     ? (AGE_TONES[age.tone] || AGE_TONES.quiet)
@@ -133,7 +137,7 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
             {contact.trial_credits_remaining} credits
           </span>
         )}
-        {BADGE_SLUGS.has(contact.pipeline_stage_slug) && (
+        {showClassBadge && (
           contact.next_class_at ? (
             <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 bg-emerald-500/10 rounded text-emerald-700">
               Next: {nextClassLabel(contact.next_class_at, timezone, viewerZone)}

@@ -1,11 +1,12 @@
 // UN1TREAD.2 — pure shaping for the un1t.online reads.
 import { describe, it, expect } from 'vitest'
 import { classifyContact } from '@shared/pipeline-classifier'
+import { un1tDealDates } from './un1t-pipeline-dates'
 import {
   UN1T_CANCEL_TRACKING_START, glofoxInterval, shapeCounts, shapeMrr, shapeFlows,
   shapeRevenue, firstSales, engagementRows, isTrialProduct, cancelsComparable,
   UN1T_ENDED_SUB_STATUSES, UN1T_LIVE_SUB_STATUSES, UN1T_RETRY_NET_WINDOW_MS, normaliseUn1tInvoiceStatus, shapePastDue,
-  shapePipelineSnapshot, shapeTrialEligibility, splitUn1tCredits,
+  shapePipelineSnapshot, shapeTrialEligibility, splitUn1tCredits, shapePipelineDateEvidence,
   UN1T_AGGREGATOR_GYMPASS_SOURCES, UN1T_AGGREGATOR_MARKER,
 } from './un1t-online-shape'
 
@@ -1005,5 +1006,91 @@ describe('shapeTrialEligibility', () => {
       memberships: [ended()],
     })
     expect(r).toEqual({ eligible: false, reasons: ['trial_used', 'membership_history', 'paid_pack'] })
+  })
+})
+
+// HATCHPIPE.5 — the evidence the date rules read, from the same rows as the snapshot.
+describe('shapePipelineDateEvidence', () => {
+  const args = (over = {}) => ({
+    client: pclient(), contact: pcontact(), locationId: HATCH, productsById: PRODUCTS_BY_ID, now: NOW, ...over,
+  })
+  const evidence = (over = {}) => {
+    const a = args(over)
+    return shapePipelineDateEvidence({ ...a, snapshot: shapePipelineSnapshot(a) })
+  }
+  // classify the snapshot, then date the stage it lands in: the board's own path
+  const placed = (over = {}) => {
+    const a = args(over)
+    const s = shapePipelineSnapshot(a)
+    const slug = classifyContact(s, NOW)
+    return { slug, ...un1tDealDates(slug, shapePipelineDateEvidence({ ...a, snapshot: s }), NOW) }
+  }
+
+  it('carries the client creation and the snapshot fields classify read', () => {
+    const e = evidence()
+    expect(e.client_created_at).toBe(daysAgo(200))
+    expect(e.membership_status).toBe('lead')
+    expect(e.attended_starts).toEqual([])
+    expect(e.joined_at).toBe(daysAgo(200))
+  })
+
+  it('lists every attended booking start (not just the newest 10), oldest first, attended only', () => {
+    const bookings = [
+      attended(3), booking({ status: 'booked', starts_at: daysAhead(2) }), attended(30),
+      booking({ status: 'cancelled', starts_at: daysAgo(12) }), attended(12),
+      ...Array.from({ length: 12 }, (_, i) => booking({ status: 'booked', starts_at: daysAgo(i + 0.5) })),
+      attended(40, { starts_at: null }),
+    ]
+    expect(evidence({ bookings }).attended_starts).toEqual([daysAgo(30), daysAgo(12), daysAgo(3)])
+  })
+
+  it('member_since: the earliest qualifying subscription start; an ended one does not count', () => {
+    const e = evidence({ freshSubs: [
+      fsub({ remote_created_at: daysAgo(70) }),
+      fsub({ status: 'canceled', remote_created_at: daysAgo(300) }),
+      fsub({ status: 'paused', paused_at: daysAgo(5), remote_created_at: daysAgo(80) }),
+    ] })
+    expect(e.member_since).toBe(daysAgo(80))
+  })
+
+  it('aggregator bookings date the classpass and gympass piles (first such booking)', () => {
+    const e = evidence({ bookings: [
+      booking({ source: 'classpass', starts_at: daysAgo(9) }),
+      booking({ source: 'classpass', starts_at: daysAgo(19) }),
+      booking({ source: 'wellhub', starts_at: daysAgo(4) }),
+    ] })
+    expect(e.classpass_since).toBe(daysAgo(19))
+    expect(e.gympass_since).toBe(daysAgo(4))
+  })
+
+  it('the dismissal is lent only when this studio owns the contact', () => {
+    expect(evidence({ contact: pcontact({ pipeline_dismissed_at: daysAgo(2) }) }).dismissed_at).toBe(daysAgo(2))
+    expect(evidence({ contact: pcontact({ location_id: STILLORGAN, pipeline_dismissed_at: daysAgo(2) }) }).dismissed_at).toBeNull()
+  })
+
+  it('membership_ended_at: the latest end of this source\'s ended memberships', () => {
+    const e = evidence({ memberships: [ended({ ended_at: daysAgo(100) }), ended({ ended_at: daysAgo(90) }), ended({ source: 'glofox', ended_at: daysAgo(1) })] })
+    expect(e.membership_ended_at).toBe(daysAgo(90))
+  })
+
+  it('end to end: new_lead dates from the client row', () => {
+    expect(placed({ client: pclient({ remote_created_at: daysAgo(6) }) }))
+      .toEqual({ slug: 'new_lead', created_at: daysAgo(6), stage_entered_at: daysAgo(6) })
+  })
+
+  it('end to end: first, second and trial_done date from the 1st, 2nd and 3rd attended class', () => {
+    const c = pclient({ remote_created_at: daysAgo(30) })
+    expect(placed({ client: c, bookings: [attended(20)] })).toMatchObject({ slug: 'first_class', created_at: daysAgo(30), stage_entered_at: daysAgo(20) })
+    expect(placed({ client: c, bookings: [attended(5), attended(20)] })).toMatchObject({ slug: 'second_class', stage_entered_at: daysAgo(5) })
+    expect(placed({ client: c, bookings: [attended(1), attended(5), attended(20), attended(9)] }))
+      .toMatchObject({ slug: 'trial_done', created_at: daysAgo(30), stage_entered_at: daysAgo(5) })
+  })
+
+  it('end to end: converted dates from the first sub_initial', () => {
+    expect(placed({
+      client: pclient({ remote_created_at: daysAgo(40) }),
+      freshSubs: [fsub({ remote_created_at: daysAgo(15) })],
+      transactions: [tx({ type: 'sub_initial', product_type: 'subscription', product_id: 'prod-monthly', remote_created_at: daysAgo(15) })],
+    })).toEqual({ slug: 'converted', created_at: daysAgo(40), stage_entered_at: daysAgo(15) })
   })
 })

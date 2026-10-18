@@ -154,6 +154,17 @@ describe('boardDealMapper', () => {
     expect(mapped).toHaveLength(2)
   })
 
+  // HATCHPIPE.5 — the card must know the badge is OFF (not merely "no class"),
+  // or it shows a red "No class booked" on every early-stage un1t card.
+  it('badge off marks the deal next_class_badge:false; badge on adds no key at all (Stillorgan rows unchanged)', () => {
+    expect(boardDealMapper({ badge: false })(deal).next_class_badge).toBe(false)
+    expect(boardDealMapper(boardCardOptionsForModule('acquisition_un1t'))(deal).next_class_badge).toBe(false)
+    const on = boardDealMapper()(deal)
+    expect(on).not.toHaveProperty('next_class_badge')
+    expect(Object.keys(boardDealMapper(boardCardOptionsForModule('acquisition'))(deal)).sort()).toEqual(Object.keys(toBoardDeal(deal)).sort())
+    expect(Object.keys(on).sort()).toEqual(['age', 'contacts', 'created_at', 'id', 'stage_id', 'title'])
+  })
+
   it('is safe in .map with a deal that has no contacts', () => {
     const out = [{ id: 'd' }].map(boardDealMapper({ badge: false }))[0]
     expect(out.contacts.next_class_at).toBeNull()
