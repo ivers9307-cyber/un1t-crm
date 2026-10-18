@@ -4,6 +4,7 @@
 // failing block renders a compact error cell instead of blanking the
 // page (the old all-or-nothing fetch is gone). All-live by design
 // (Richard, 2026-07-04) — streaming is the perf counterweight.
+import { ESTIMATE_NOTE } from '@/lib/radar-copy'
 import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
@@ -94,7 +95,9 @@ async function KpiBriefingBlock({ user, locationId }) {
           sublabel={churnCount == null ? 'radar unavailable' : (churnDelta > 0 ? `+${churnDelta} this week` : 'high-risk members')}
           accent={churnCount ? 'text-amber-700' : undefined} href="/dashboard/churn-radar" />
         <KpiCard label="In arrears" value={arrearsData ? formatCurrency(arrearsData.totalCents / 100) : '—'}
-          sublabel={arrearsData ? `${arrearsData.memberCount} member${arrearsData.memberCount === 1 ? '' : 's'}` : 'arrears unavailable'}
+          sublabel={arrearsData
+            ? `${arrearsData.memberCount} member${arrearsData.memberCount === 1 ? '' : 's'}${arrearsData.estimated ? `, ${ESTIMATE_NOTE}` : ''}`
+            : 'arrears unavailable'}
           accent={arrearsData?.memberCount > 0 ? 'text-red-700' : undefined} href="/dashboard/churn-radar" />
       </KpiRow>
     </>

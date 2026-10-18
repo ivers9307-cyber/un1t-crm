@@ -11,6 +11,7 @@
 // a compact error cell on null — the web page's DASH-REBUILD error
 // posture, mirrored by the route as a null block key).
 
+import { arrearsBriefingLabel } from '@/lib/radar-copy'
 import { buildBusinessBriefing } from '@shared/business-briefing'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
@@ -103,7 +104,7 @@ export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()
     // different registers, not a bug.
     const labels = []
     if (approvalsCount > 0) labels.push(`${approvalsCount} pending approval${approvalsCount === 1 ? '' : 's'}`)
-    if (arrearsData?.memberCount > 0) labels.push(`${arrearsData.memberCount} in arrears (€${Math.round(arrearsData.totalCents / 100).toLocaleString('en-IE')})`)
+    if (arrearsData?.memberCount > 0) labels.push(arrearsBriefingLabel(arrearsData))
     if (churnCount > 0) labels.push(`${churnCount} at churn risk`)
 
     const briefing = buildBusinessBriefing({

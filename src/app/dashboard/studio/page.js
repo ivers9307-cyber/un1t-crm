@@ -21,6 +21,7 @@
 // through /api/schedule/time-off and /api/schedule/swaps; its contact
 // numbers through /api/dashboard/studio-contacts).
 
+import { ESTIMATE_NOTE } from '@/lib/radar-copy'
 import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
@@ -281,7 +282,7 @@ async function LocationColumn({ user, location }) {
           label="Arrears"
           value={radarSummary ? euros(radarSummary.overdueValueCents) : null}
           sublabel={radarSummary
-            ? `${radarSummary.overdue} member${radarSummary.overdue === 1 ? '' : 's'} overdue`
+            ? `${radarSummary.overdue} member${radarSummary.overdue === 1 ? '' : 's'} overdue${radarSummary.overdueValueEstimated ? `, ${ESTIMATE_NOTE}` : ''}`
             : UNAVAILABLE}
           accent={radarSummary?.overdue > 0 ? 'text-red-700' : undefined}
           href="/dashboard/churn-radar"

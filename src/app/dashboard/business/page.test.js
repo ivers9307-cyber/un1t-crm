@@ -282,3 +282,28 @@ describe('/dashboard/business — un1t.online reads through the seam (UN1TREAD.3
     expect(html).toContain('Headline numbers')
   })
 })
+
+// UN1TRADAR.2 — an estimated arrears total says so on the card.
+describe('/dashboard/business In arrears estimate (UN1TRADAR.2)', () => {
+  it('business In arrears sublabel carries "includes an estimate"', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: false, bookings: false, credits: false, invoices: true, schedule: false } })
+    buildBusinessKpis.mockResolvedValue({
+      revenue: { totalCents: 640_000, deltaPct: null, paidCount: 31 },
+      arrearsData: { totalCents: 16500, memberCount: 2, estimated: true }, memberCount: 33, churnCount: null, churnDelta: null, briefing: 'x',
+      gate: { state: 'configured', showNumbers: true },
+    })
+    const html = await renderBlock('KpiBriefingBlock')
+    expect(html).toContain('2 members, includes an estimate')
+  })
+  it('an exact total keeps today\'s sublabel', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS })
+    buildBusinessKpis.mockResolvedValue({
+      revenue: { totalCents: 640_000, deltaPct: null, paidCount: 31 },
+      arrearsData: { totalCents: 5000, memberCount: 1 }, memberCount: 33, churnCount: 0, churnDelta: 0, briefing: 'x',
+      gate: { state: 'configured', showNumbers: true },
+    })
+    const html = await renderBlock('KpiBriefingBlock')
+    expect(html).toContain('>1 member<')
+    expect(html).not.toContain('includes an estimate')
+  })
+})
