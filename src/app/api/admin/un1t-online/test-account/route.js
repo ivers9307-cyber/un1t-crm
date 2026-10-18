@@ -27,7 +27,7 @@ import { uuidLike } from '@/lib/schemas'
 import { Un1tSettingsReadError } from '@/lib/un1t-online-settings'
 import { Un1tWriteRefused, Un1tWriteUnknown } from '@/lib/un1t-online-write'
 import { createClient, forgotPassword, grantTrial, book, cancel, createCheckoutLink } from '@/lib/un1t-online-write-ops'
-import { logWarn } from '@/lib/log'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -123,8 +123,12 @@ export async function POST(request) {
         if (!b.product_id || !b.success_url || !b.cancel_url || !b.idempotency_key) {
           return bad('product_id, success_url, cancel_url and idempotency_key are required.')
         }
+        // The ledger and idempotency key is namespaced to this route, studio
+        // and contact, so a typed key can never adopt another client's open
+        // checkout (the one-open index is global on the key).
         const r = await createCheckoutLink(db, {
-          ...base, userId: un1tUserId, productId: b.product_id, successUrl: b.success_url, cancelUrl: b.cancel_url, idempotencyKey: b.idempotency_key,
+          ...base, userId: un1tUserId, productId: b.product_id, successUrl: b.success_url, cancelUrl: b.cancel_url,
+          idempotencyKey: `test_account:${b.location_id}:${contact.id}:${b.idempotency_key}`,
         })
         return ok({ verdict: 'done', checkout_url: r.checkoutUrl, free: r.free === true })
       }
@@ -133,10 +137,11 @@ export async function POST(request) {
     }
   } catch (err) {
     if (err instanceof Un1tWriteRefused) return NextResponse.json({ success: false, code: err.code, error: err.message }, { status: 409 })
-    if (err instanceof Un1tWriteUnknown) return NextResponse.json({ success: false, code: err.code, error: err.message }, { status: 502 })
+    if (err instanceof Un1tWriteUnknown) return NextResponse.json({ success: false, code: err.code, error: err.message, ledger_id: err.ledgerId ?? null }, { status: 502 })
     if (err instanceof Un1tSettingsReadError) return NextResponse.json({ success: false, code: err.code ?? 'settings_unreadable', error: 'Could not read the studio\'s un1t.online settings. Nothing was sent.' }, { status: 503 })
-    if (err instanceof TypeError) return bad(err.message)
-    logWarn(LOG, 'test-account write failed', { op: b.op, code: err?.code ?? err?.name ?? 'error' })
+    // A TypeError here is a programming error inside a primitive, not a bad
+    // request: logged (name and code only) and a 500.
+    logError(LOG, 'test-account write failed', { op: b.op, code: err?.code ?? err?.name ?? 'error' })
     return NextResponse.json({ success: false, error: 'The write could not be completed. Check the ledger.' }, { status: 500 })
   }
 }

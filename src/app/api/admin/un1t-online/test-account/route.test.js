@@ -133,7 +133,16 @@ describe('POST /api/admin/un1t-online/test-account', () => {
     expect((await res.json()).data).toMatchObject({ checkout_url: url, free: false })
     const logs = JSON.stringify([...logInfo.mock.calls, ...logWarn.mock.calls, ...logError.mock.calls])
     expect(logs).not.toContain('secret-abc')
-    expect(createCheckoutLink.mock.calls[0][1]).toMatchObject({ userId: 'usr-1', productId: 'p-1', idempotencyKey: 'k-1', origin: 'test_account' })
+    // The typed key is namespaced to this route, studio and contact.
+    expect(createCheckoutLink.mock.calls[0][1]).toMatchObject({ userId: 'usr-1', productId: 'p-1', idempotencyKey: `test_account:${LOC}:${CONTACT}:k-1`, origin: 'test_account' })
+  })
+
+  it('a programming error inside a primitive is a logged 500, never a 400 with its message', async () => {
+    book.mockRejectedValue(new TypeError("Cannot read properties of null (reading 'x')"))
+    const res = await post({ op: 'book', event_id: 'ev-1' })
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(await res.json())).not.toContain('Cannot read')
+    expect(logError).toHaveBeenCalled()
   })
 
   it('a checkout refusal is a 409 with un1t.online\'s words', async () => {
