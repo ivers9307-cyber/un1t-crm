@@ -12,7 +12,8 @@
 //               (GET /api/xero/connect?location_id=…&return_to=/settings/
 //               integrations-hub — the return_to guard shipped in Phase-3
 //               part 1); Disconnect → POST /api/xero/disconnect.
-//   whatsapp  → WAORGNUMBER.1: a read-only list of the numbers here, with a
+//   whatsapp  → WAORGNUMBER.1: the organisation's numbers with a per-studio
+//               on/off switch and default radio (StudioWhatsAppNumbers), with a
 //               link to the organisation's page (/settings/whatsapp-numbers),
 //               where numbers are connected, edited and removed. (It used to
 //               host the Embedded Signup card and a per-number Disconnect;
@@ -51,6 +52,7 @@ import AdsIntegrationTab from './integrations/AdsIntegrationTab'
 import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
 import { NO_ACTIVE_NUMBER_NOTE, BROKEN_TOKEN_HINT } from '@/lib/whatsapp-number-copy'
 import { ORG_NUMBERS_PAGE } from '@/lib/org-whatsapp-numbers-page'
+import StudioWhatsAppNumbers from '@/components/settings/whatsapp/StudioWhatsAppNumbers'
 
 // cardKey → { title, routeProvider, tabKey, masterOnly, intro, fields }.
 // `fields`: name (payload key) + label + kind. Secret fields carry has()
@@ -234,7 +236,7 @@ export default function IntegrationsHubDrawer({ cardKey, locationId, locationNam
             />
           )}
           {cardKey === 'whatsapp' && (
-            <WhatsAppPanel initial={initial} />
+            <WhatsAppPanel locationId={locationId} onChanged={onChanged} />
           )}
           {spec && (
             <IntegrationCredForm
@@ -553,11 +555,10 @@ function XeroPanel({ locationId, locationName, initial, onChanged, onDisconnecte
 // ── WhatsApp panel (Phase 3; WAORGNUMBER.1) ──
 //
 // A number belongs to the organisation, so connecting, editing and removing one
-// happens on the organisation's page; this panel only shows what the studio has
-// (read-only) and points there. The list is seeded from the assembled hub row.
-function WhatsAppPanel({ initial }) {
-  const numbers = Array.isArray(initial?.numbers) ? initial.numbers : []
-
+// happens on the organisation's page; this panel lists the organisation's
+// numbers with the studio's switch and default (the same list as the studio's
+// WhatsApp tab) and points there. Switching re-grades the hub card.
+function WhatsAppPanel({ locationId, onChanged }) {
   return (
     <div className="space-y-4">
       <p className="text-xs text-un1t-subtle">
@@ -566,24 +567,7 @@ function WhatsAppPanel({ initial }) {
         <Link href={ORG_NUMBERS_PAGE} className="text-blue-700 hover:underline">WhatsApp numbers</Link>.{' '}
         {NO_ACTIVE_NUMBER_NOTE} {BROKEN_TOKEN_HINT}
       </p>
-
-      {numbers.length > 0 && (
-        <div className="rounded-md border border-un1t-border divide-y divide-un1t-border">
-          {numbers.map((n) => (
-            <div key={n.id} className="flex items-center gap-3 px-3 py-2">
-              <div className="min-w-0 flex-1">
-                <div className="text-sm text-un1t-text truncate">{n.label}</div>
-                <div className="text-[11px] text-un1t-subtle truncate">
-                  {n.displayPhone || n.id}
-                  {n.isDefault ? ' · default' : ''}
-                  {n.source === 'coexistence' ? ' · coexistence' : ''}
-                  {n.isActive === false ? ' · inactive' : ''}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <StudioWhatsAppNumbers locationId={locationId} canSwitch onChanged={onChanged} />
     </div>
   )
 }

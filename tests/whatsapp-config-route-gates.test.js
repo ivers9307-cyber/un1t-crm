@@ -117,6 +117,9 @@ export function classify(handlerSrc) {
   // GATES-3 (b) — MANAGER_ROLES AND `whatsapp` at the template's studio.
   if (/canManageWaTemplatesAt\(\s*user\b/.test(handlerSrc)) return 'manager-whatsapp'
   if (/hasRoleAtLocation\(\s*user\b[^)]*MANAGER_ROLES/.test(handlerSrc)) return 'manager'
+  // WAORGNUMBER.1 (Task 6, R8) — master, owner or manager AT the studio
+  // (ADMIN_ROLES, not MANAGER_ROLES: a head coach cannot switch a number on).
+  if (/hasRoleAtLocation\(\s*user\b[^)]*ADMIN_ROLES/.test(handlerSrc)) return 'studio-admin'
   if (/hasPermissionForLocation\(\s*user\b[^)]*'whatsapp'/.test(handlerSrc)) return 'whatsapp-permission'
   // INBOXLOC.1 — the thread routes' decision: whatsapp (web or mobile) AT the
   // conversation's (or contact's) studio. Above 'inbox', which judges the
@@ -210,6 +213,7 @@ export const EXPECTED = {
   // Retired: they answer 410 with a pointer to the organisation page and write nothing.
   'POST locations/[id]/whatsapp/embedded-signup/route.js': ['session-only', 'WAORGNUMBER.1: retired, answers 410 (moved to the organisation).'],
   'POST locations/[id]/whatsapp/numbers/route.js': ['session-only', 'WAORGNUMBER.1: retired, answers 410 (moved to the organisation).'],
+  'PUT locations/[id]/whatsapp/numbers/route.js': ['studio-admin', 'WAORGNUMBER.1 (R8): switches an organisation number on or off at THIS studio and picks its default; owner, manager or master there (ADMIN_ROLES, so a head coach cannot), the number checked against the studio\'s organisation.'],
   'PATCH locations/[id]/whatsapp/numbers/[numberId]/route.js': ['membership', 'WAORGNUMBER.1: retired, answers 410 (moved to the organisation) after the path-studio access check; writes nothing, so membership is enough.'],
   'DELETE locations/[id]/whatsapp/numbers/[numberId]/route.js': ['membership', 'WAORGNUMBER.1: retired, answers 410 (moved to the organisation) after the path-studio access check; writes nothing, so membership is enough.'],
   // ── What Meta shows on the number: master or owner ──
@@ -257,6 +261,7 @@ describe('WhatsApp mutation handlers — each one\'s gate (WAROLE.1)', () => {
   it('the classifier reads call shapes, strongest first', () => {
     expect(classify('const g = guardMasterOrOwner(user, id)\nassertLocationAccess(user, id)')).toBe('owner')
     expect(classify('if (!hasRoleAtLocation(user, t.location_id, MANAGER_ROLES)) {}')).toBe('manager')
+    expect(classify('if (!hasRoleAtLocation(user, params.id, ADMIN_ROLES)) {}')).toBe('studio-admin')
     expect(classify('if (!canManageWaTemplatesAt(user, t.location_id)) {}')).toBe('manager-whatsapp')
     expect(classify("if (!hasPermissionForLocation(user, row.location_id, 'whatsapp')) {}")).toBe('whatsapp-permission')
     expect(classify("const p = requireInboxPermission(user, 'wa')")).toBe('inbox')

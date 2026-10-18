@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const state = { conversations: [], numbers: [], links: undefined, locations: [], faults: {}, reads: [] }
+const state = { conversations: [], numbers: [], links: undefined, locations: [], faults: {}, reads: [], selects: undefined }
 const reads = state.reads
 vi.mock('./supabase', async () => {
   const { fakeWhatsAppDb } = await import('./whatsapp-numbers-fake-db.test-helpers.js')
@@ -201,6 +201,35 @@ describe('WAORGNUMBER.1 â€” the thread number must be switched on at the threadâ
     state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC2, 'n-hatch-off', { is_default: true })]
     state.conversations = [conv('n-default', { location_id: LOC2 })]
     expect(await getConversationNumberConfig(LOC2, CONV)).toMatchObject({ id: 'n-default', viaSibling: true })
+  })
+
+  it('a number switched off at its own home studio is not used via the sibling clause', async () => {
+    // LOC's only number was switched off at LOC (no link row at all), the thread
+    // is still stamped with it: LOC no longer replies through it.
+    state.links = []
+    state.conversations = [conv('n-default')]
+    expect(await getConversationNumberConfig(LOC, CONV)).toBeNull()
+    await expect(getConversationReplyConfig(LOC, CONV)).rejects.toSatisfy(isWhatsAppNumberMissing)
+    // A real sibling (another studio of the org, number home elsewhere) still can.
+    state.conversations = [conv('n-default', { location_id: LOC2 })]
+    expect(await getConversationNumberConfig(LOC2, CONV)).toMatchObject({ id: 'n-default', viaSibling: true, homeLocationId: LOC })
+  })
+
+  it('links stamped in the same instant resolve in a fixed order (number id ascending)', async () => {
+    state.numbers = [DEFAULT, num('n-b'), num('n-a')]
+    state.links = [link(LOC, 'n-b'), link(LOC, 'n-a')]
+    expect((await getConversationReplyConfig(LOC, CONV)).phoneNumberId).toBe('PNI-n-a')
+  })
+
+  it('the own-number existence check reads no number columns (no access_token)', async () => {
+    state.selects = []
+    state.numbers = [DEFAULT]
+    state.links = [link(LOC, 'n-default', { is_default: true })]
+    state.conversations = [conv('n-default', { location_id: LOC2 })]
+    expect(await getConversationNumberConfig(LOC2, CONV)).toMatchObject({ viaSibling: true })
+    const linkSelects = state.selects.filter(([t]) => t === 'location_whatsapp_numbers').map(([, c]) => c)
+    expect(linkSelects).toContain('is_default, created_at, whatsapp_numbers!inner(id)')
+    state.selects = undefined
   })
 
   it('other organisation never', async () => {

@@ -4,55 +4,32 @@
 //
 // WAORGNUMBER.1: a number belongs to the ORGANISATION and is added, edited and
 // removed on the organisation's page (/settings/whatsapp-numbers, organisation
-// admins). This tab lists the numbers here READ-ONLY and links to that page;
+// admins). This tab lists the organisation's numbers with a per-studio on/off
+// switch and a default radio (StudioWhatsAppNumbers) and links to that page;
 // the studio-level controls (chat openers, studio picker, card sets) stay.
-// Task 6 replaces the list with per-studio on/off switches and a default.
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
-  Plus, Trash2, Star, Loader2, CheckCircle2, AlertCircle,
+  Plus, Trash2, Loader2, CheckCircle2, AlertCircle,
   Pencil, Upload,
 } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { validateTemplateMedia } from '@/lib/template-media'
 import { normalizeUrlish } from '@/lib/urlish'
-import { NO_ACTIVE_NUMBER_NOTE } from '@/lib/whatsapp-number-copy'
 import { ORG_NUMBERS_PAGE } from '@/lib/org-whatsapp-numbers-page'
 import { Row } from './WhatsAppFieldRow'
-import ReadFailedNote from '@/components/settings/ReadFailedNote'
+import StudioWhatsAppNumbers from '@/components/settings/whatsapp/StudioWhatsAppNumbers'
 
-export default function WhatsAppIntegrationTab({ location, canEdit, canManageNumbers = false }) {
-  // CHANNELREAD.1 — `numbers` is null until a read SUCCEEDS, and a failed
-  // read puts it back to null: no "No numbers configured" over a list we
-  // could not read.
-  const [numbers, setNumbers] = useState(null)
-  const [loading, setLoading] = useState(true)
-
-  async function load({ silent = false } = {}) {
-    if (!silent) setLoading(true)
-    try {
-      const res = await fetch(`/api/locations/${location.id}/whatsapp/numbers`)
-      const j = await res.json()
-      if (!res.ok || !j.success || !Array.isArray(j.numbers)) throw new Error(j.error || 'Failed to load numbers')
-      setNumbers(j.numbers)
-    } catch {
-      setNumbers(null)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
+export default function WhatsAppIntegrationTab({ location, canEdit, canManageNumbers = false, canSwitch = false, onChanged }) {
   return (
     <div className="space-y-4">
       <div>
         <h4 className="text-sm font-semibold text-un1t-text mb-1">WhatsApp numbers</h4>
         <p className="text-xs text-un1t-subtle">
-          WhatsApp numbers belong to the organisation. The number marked
-          <span className="font-medium"> default</span> is the one outbound sends from broadcasts,
-          sequences, and the inbox route through at this location. Inbound webhooks land at whichever
+          WhatsApp numbers belong to the organisation. Switch on the ones this location uses; the
+          number marked <span className="font-medium">default</span> is the one outbound sends from
+          broadcasts, sequences, and the inbox route through here. Inbound webhooks land at whichever
           number Meta posted to.
         </p>
         <p className="text-xs text-un1t-subtle mt-1">
@@ -67,36 +44,13 @@ export default function WhatsAppIntegrationTab({ location, canEdit, canManageNum
         </p>
       </div>
 
-      {loading ? (
-        <div className="text-xs text-un1t-subtle inline-flex items-center gap-2">
-          <Loader2 size={12} className="animate-spin" /> Loading…
-        </div>
-      ) : (
-        <>
-          {numbers === null ? (
-            <ReadFailedNote what="this location's WhatsApp numbers" onRetry={() => load({ silent: true })} />
-          ) : (
-            <div className="space-y-2">
-              {numbers.length === 0 && (
-                <div className="text-xs text-un1t-subtle bg-un1t-bg border border-un1t-border rounded p-3">
-                  No numbers configured. {NO_ACTIVE_NUMBER_NOTE}{' '}
-                  {canManageNumbers
-                    ? 'Add a number on the WhatsApp numbers page to connect one. '
-                    : 'Ask an organisation admin to add one. '}
-                  Chat openers can only be saved once this location has its own number.
-                </div>
-              )}
-              {numbers.map((n) => <NumberSummaryRow key={n.id} number={n} />)}
-            </div>
-          )}
+      <StudioWhatsAppNumbers locationId={location.id} canSwitch={canSwitch} canManageNumbers={canManageNumbers} onChanged={onChanged} />
 
-          <ChatOpenersCard location={location} canEdit={canEdit} />
+      <ChatOpenersCard location={location} canEdit={canEdit} />
 
-          <StudioPickerCard location={location} canEdit={canEdit} />
+      <StudioPickerCard location={location} canEdit={canEdit} />
 
-          <CardSetsCard location={location} canEdit={canEdit} />
-        </>
-      )}
+      <CardSetsCard location={location} canEdit={canEdit} />
     </div>
   )
 }
@@ -747,32 +701,5 @@ function CardImageField({ locationId, value, onChange, onError }) {
         </button>
       </div>
     </Row>
-  )
-}
-
-// Read-only: a number is edited on the organisation's page.
-function NumberSummaryRow({ number }) {
-  return (
-    <div className="bg-un1t-bg border border-un1t-border rounded-md p-3">
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-medium text-un1t-text truncate">{number.label}</span>
-        {number.is_default && (
-          <span className="inline-flex items-center gap-0.5 text-[10px] uppercase text-amber-700">
-            <Star size={10} className="fill-amber-700" /> Default
-          </span>
-        )}
-        {!number.is_active && (
-          <span className="text-[10px] uppercase text-un1t-muted">Inactive</span>
-        )}
-        <span className="text-[10px] uppercase text-un1t-muted">
-          {number.source === 'coexistence' ? 'Coexistence' : 'Cloud API'}
-        </span>
-      </div>
-      <div className="text-[11px] text-un1t-subtle truncate">
-        {number.display_phone || number.phone_number_id}
-        <span className="mx-1.5 text-un1t-muted">·</span>
-        <span className="text-un1t-muted">PhoneNumberID:</span> {number.phone_number_id}
-      </div>
-    </div>
   )
 }

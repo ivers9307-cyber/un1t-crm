@@ -25,6 +25,7 @@ import {
   giversEnquirySchema,
   Un1tOnlineConnectSchema,
   orgWhatsAppNumberCreateSchema, orgWhatsAppEmbeddedSignupSchema,
+  studioWhatsAppNumberSwitchSchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 import { PLATFORM_NAME } from './brand-name.js'
@@ -4417,6 +4418,48 @@ registry.registerPath({
   responses: {
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     410: { description: 'Moved to the organisation (moved_to: /settings/whatsapp-numbers)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAORGNUMBER.1 (R8, Task 6) — a studio switches the organisation's numbers on and off
+const WaStudioNumber = z.object({
+  id: uuidLike,
+  label: z.string(),
+  display_phone: z.string().nullable(),
+  is_active: z.boolean(),
+  on: z.boolean(),
+  is_default: z.boolean(),
+}).openapi('WaStudioNumber')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/whatsapp/numbers',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "List the organisation's WhatsApp numbers as this studio sees them",
+  description: 'Every number of the studio\'s organisation with on (switched on at this studio) and is_default (this studio\'s default). No token or other credential is returned.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Numbers', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ numbers: z.array(WaStudioNumber) }) }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — location not in your assignments', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/whatsapp/numbers',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Switch an organisation number on or off at this studio",
+  description: "Owner, manager or master at THIS studio (403 otherwise). The number must belong to the studio's organisation (404 otherwise). isDefault:true (with on:true) makes it the studio default, clearing the previous default first. Switching off the default promotes the newest remaining number; switching off the last one is allowed: the studio stops sending.",
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: studioWhatsAppNumberSwitchSchema } } } },
+  responses: {
+    200: { description: 'The studio\'s numbers after the change', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ numbers: z.array(WaStudioNumber) }) }) } } },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner, manager or master at this studio required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such number in this studio\'s organisation', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

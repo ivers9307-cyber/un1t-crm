@@ -11,7 +11,8 @@
 //
 // state = { numbers, links, conversations, locations, faults: { [table]: error } }
 // `links` omitted (undefined/null) = each number switched on at its home studio.
-// Every read is pushed onto state.reads (the table name) when that array exists.
+// Every read is pushed onto state.reads (the table name) when that array exists,
+// and its select string onto state.selects ([table, columns]) when that exists.
 // Fictional ids only: the repo is public.
 
 function valueAt(row, col) {
@@ -56,7 +57,7 @@ export function fakeWhatsAppDb(state) {
         return { data: rows.slice(0, cap), error: null }
       }
       const b = {
-        select: () => b,
+        select: (cols) => { if (Array.isArray(state.selects)) state.selects.push([table, cols]); return b },
         eq: (c, v) => { filters.push((r) => valueAt(r, c) === v); return b },
         neq: (c, v) => { filters.push((r) => valueAt(r, c) !== v); return b },
         in: (c, vals) => { filters.push((r) => vals.includes(valueAt(r, c))); return b },

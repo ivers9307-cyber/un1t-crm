@@ -7,7 +7,9 @@
 //
 // WAORGNUMBER.1 — numbers are added, edited and removed on the organisation's
 // page now (src/components/settings/whatsapp/OrgWhatsAppNumbers.test.jsx holds
-// the forms' tests). This tab lists them read-only and links there.
+// the forms' tests). This tab lists them with the studio's on/off switch and
+// default radio (Task 6; StudioWhatsAppNumbers.test.jsx holds the switch tests)
+// and links there.
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
@@ -62,16 +64,13 @@ describe('WhatsAppIntegrationTab — Try again (CHANNELREAD.1)', () => {
   })
 })
 
-describe('WhatsAppIntegrationTab — numbers are read-only here (WAORGNUMBER.1)', () => {
+describe("WhatsAppIntegrationTab — the organisation's numbers at this studio (WAORGNUMBER.1)", () => {
   const NUMBER = {
-    id: 'n1', location_id: LOC.id, label: 'Front desk', phone_number_id: '100', business_account_id: '200',
-    app_id: '300', display_phone: '+353 00 000 0000', source: 'cloud_api', token_type: 'system_user',
-    connected_via: 'manual', is_default: true, is_active: true, access_token_redacted: '••••••',
-    history_sync_status: null, coex_link_status: null, created_at: null, updated_at: null,
+    id: 'n1', label: 'Front desk', display_phone: '+353 00 000 0000', is_active: true, on: true, is_default: true,
   }
 
   it('no numbers yet shows the empty state, with no Add button and no Connect card', async () => {
-    mockFetch(reply(200, { success: true, numbers: [] }))
+    mockFetch(reply(200, { success: true, data: { numbers: [] } }))
     render(<WhatsAppIntegrationTab location={LOC} canEdit />)
     expect(await screen.findByText(/No numbers configured/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Add WhatsApp number/ })).toBeNull()
@@ -83,13 +82,13 @@ describe('WhatsAppIntegrationTab — numbers are read-only here (WAORGNUMBER.1)'
   // route answers 409 without one instead of using the global env number),
   // so the empty state says so rather than promising the env fallback.
   it('the empty state says chat openers need a number here', async () => {
-    mockFetch(reply(200, { success: true, numbers: [] }))
+    mockFetch(reply(200, { success: true, data: { numbers: [] } }))
     render(<WhatsAppIntegrationTab location={LOC} canEdit />)
     expect(await screen.findByText(/Chat openers can only be saved once this location has its own number/)).toBeTruthy()
   })
 
   it('an organisation admin is pointed at the organisation page; anyone else is told who to ask', async () => {
-    mockFetch(reply(200, { success: true, numbers: [] }))
+    mockFetch(reply(200, { success: true, data: { numbers: [] } }))
     const { rerender } = render(<WhatsAppIntegrationTab location={LOC} canEdit canManageNumbers />)
     const link = await screen.findByRole('link', { name: 'WhatsApp numbers' })
     expect(link.getAttribute('href')).toBe('/settings/whatsapp-numbers')
@@ -98,19 +97,26 @@ describe('WhatsAppIntegrationTab — numbers are read-only here (WAORGNUMBER.1)'
     expect(screen.getByText(/An organisation admin adds, edits and removes numbers/)).toBeTruthy()
   })
 
-  it('a number is listed with its default and inactive marks, and offers no edit, remove or set-default', async () => {
-    mockFetch(reply(200, { success: true, numbers: [NUMBER, { ...NUMBER, id: 'n2', label: 'Old', is_default: false, is_active: false }] }))
-    render(<WhatsAppIntegrationTab location={LOC} canEdit canManageNumbers />)
+  it('a number is listed with its switch and default radio; an inactive one is marked, and nothing is written on load', async () => {
+    mockFetch(reply(200, { success: true, data: { numbers: [NUMBER, { ...NUMBER, id: 'n2', label: 'Old', on: false, is_default: false, is_active: false }] } }))
+    render(<WhatsAppIntegrationTab location={LOC} canEdit canManageNumbers canSwitch />)
     expect(await screen.findByText('Front desk')).toBeTruthy()
-    expect(screen.getByText('Default')).toBeTruthy()
     expect(screen.getByText('Inactive')).toBeTruthy()
+    expect(screen.getByLabelText('Switch on Front desk at this studio').checked).toBe(true)
+    expect(screen.getByLabelText('Make Front desk the default at this studio').checked).toBe(true)
+    expect(screen.getByLabelText('Switch on Old at this studio').checked).toBe(false)
+    // A number that is not on cannot be the default.
+    expect(screen.getByLabelText('Make Old the default at this studio').disabled).toBe(true)
     expect(screen.queryByTitle('Remove this number')).toBeNull()
-    expect(screen.queryByText(/Set default/)).toBeNull()
-    expect(screen.queryByText('Saved (hidden)')).toBeNull()
-    fireEvent.click(screen.getByText('Front desk'))
-    expect(screen.queryByText('Saved (hidden)')).toBeNull()
     const writes = global.fetch.mock.calls.filter(([, init]) => init && init.method && init.method !== 'GET')
     expect(writes).toEqual([])
+  })
+
+  it('without canSwitch the switches and radios are disabled', async () => {
+    mockFetch(reply(200, { success: true, data: { numbers: [NUMBER] } }))
+    render(<WhatsAppIntegrationTab location={LOC} canEdit />)
+    expect((await screen.findByLabelText('Switch on Front desk at this studio')).disabled).toBe(true)
+    expect(screen.getByLabelText('Make Front desk the default at this studio').disabled).toBe(true)
   })
 })
 
@@ -128,7 +134,7 @@ describe('WhatsAppIntegrationTab — chat openers and card sets follow canEdit (
   const mockAll = () => {
     global.fetch = vi.fn(async (url) => {
       const u = String(url)
-      if (u.endsWith('/whatsapp/numbers')) return reply(200, { success: true, numbers: [] })
+      if (u.endsWith('/whatsapp/numbers')) return reply(200, { success: true, data: { numbers: [] } })
       if (u.endsWith('/whatsapp/embedded-signup')) return reply(200, { success: true, data: { configured: false } })
       return reply(200, { success: true })
     })
@@ -164,7 +170,7 @@ describe('WhatsAppIntegrationTab — chat openers and card sets follow canEdit (
 // confirms moved to the organisation's page with the controls.)
 describe('WhatsAppIntegrationTab — no env fallback in the copy (WACONFIGFALLBACK.1)', () => {
   it('the empty state says WhatsApp is off here, never the env vars', async () => {
-    mockFetch(reply(200, { success: true, numbers: [] }))
+    mockFetch(reply(200, { success: true, data: { numbers: [] } }))
     render(<WhatsAppIntegrationTab location={LOC} canEdit />)
     expect(await screen.findByText(/will not send or receive WhatsApp while it has no active number/)).toBeTruthy()
     expect(screen.queryByText(/WHATSAPP_\*/)).toBeNull()
@@ -189,7 +195,7 @@ describe('WhatsAppIntegrationTab — Studio picker card (WASTUDIOPICK.1)', () =>
         if (init?.method === 'PUT') return reply(putAnswer.success ? 200 : 400, putAnswer)
         return picker instanceof Error ? Promise.reject(picker) : reply(200, { success: true, data: picker })
       }
-      if (u.endsWith('/whatsapp/numbers')) return reply(200, { success: true, numbers: [] })
+      if (u.endsWith('/whatsapp/numbers')) return reply(200, { success: true, data: { numbers: [] } })
       if (u.endsWith('/whatsapp/embedded-signup')) return reply(200, { success: true, data: { configured: false } })
       return reply(200, { success: true })
     })

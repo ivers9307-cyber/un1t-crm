@@ -81,14 +81,20 @@ function rowToConfig(row, forLocationId) {
 
 // WAORGNUMBER.1 — the numbers switched on at a studio: link rows joined to
 // their ACTIVE number, the link default first, then the most recently switched
-// on. `extra` narrows the read (a WABA, one number). Returns the query builder.
-function switchedOnNumbers(db, locationId, extra = (q) => q) {
+// on. `extra` narrows the read (a WABA, one number). `numberColumns` is what to
+// embed of the number: '*' to use it, 'id' to only test that one exists (the
+// row carries access_token). Returns the query builder.
+function switchedOnNumbers(db, locationId, extra = (q) => q, numberColumns = '*') {
   return extra(db.from('location_whatsapp_numbers')
-    .select('is_default, created_at, whatsapp_numbers!inner(*)')
+    .select(`is_default, created_at, whatsapp_numbers!inner(${numberColumns})`)
     .eq('location_id', locationId)
     .eq('whatsapp_numbers.is_active', true))
     .order('is_default', { ascending: false })   // the studio's default first
     .order('created_at', { ascending: false })   // then the newest switch-on
+    // Deterministic tie-break for links stamped in the same instant. Mig 736's
+    // move function picks by link is_default, link created_at, n.updated_at, so
+    // this order and that one agree on everything but an exact created_at tie.
+    .order('whatsapp_number_id', { ascending: true })
 }
 
 /**
@@ -270,7 +276,7 @@ export async function getConversationNumberConfig(locationId, conversationId) {
     // land in another studio's inbox (the harm WACONFIGFALLBACK.1 closed). A
     // studio that has a number switched on (Review Focus 1) never falls through
     // to a stamp that was switched off there.
-    const { data: own, error: ownErr } = await switchedOnNumbers(db, locationId).limit(1)
+    const { data: own, error: ownErr } = await switchedOnNumbers(db, locationId, (q) => q, 'id').limit(1)
     if (ownErr) throw ownErr
     if (own && own.length > 0) return null
     const { data: num, error: numErr } = await db.from('whatsapp_numbers')
@@ -280,6 +286,10 @@ export async function getConversationNumberConfig(locationId, conversationId) {
       .maybeSingle()
     if (numErr) throw numErr
     if (!num?.organization_id) return null
+    // A number whose HOME is this studio is never a sibling's: if it is not
+    // switched on here (checked above), the studio switched it off, and a studio
+    // that switched its only number off must stop replying through it.
+    if (num.location_id === locationId) return null
     const { data: loc, error: locErr } = await db.from('locations')
       .select('id, organization_id')
       .eq('id', locationId)

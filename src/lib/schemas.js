@@ -444,6 +444,15 @@ export const orgWhatsAppNumberCreateSchema = z.object({
   home_location_id: uuidLike,
 })
 
+// WAORGNUMBER.1 (R8, Task 6) — a studio admin switches an organisation number
+// on or off at THIS studio (PUT /api/locations/[id]/whatsapp/numbers) and may
+// make it the studio default. isDefault is read only with on:true.
+export const studioWhatsAppNumberSwitchSchema = z.object({
+  numberId: uuidLike,
+  on: z.boolean(),
+  isDefault: z.boolean().optional(),
+})
+
 // N8NECHO.1: the screens are handed SECRET_MASK for a stored token. A mask (or
 // a blank) sent back is "no change", so it is dropped BEFORE validation and the
 // rest of the save applies; only a fresh token is ever written. min(20) below
