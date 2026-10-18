@@ -135,7 +135,12 @@ export async function un1tAfterBooking(db, { request, contact, account, settings
     const r = await d.runSetPasswordStep(db, {
       locationId: request.location_id, contact, un1tUserId: account.un1tUserId, request, settings, origin, emailArgs, writer,
     }, { sendUn1tAccountEmail: d.sendUn1tAccountEmail })
-    if (r.explanation !== 'skipped_not_created') {
+    // The step stands in for the confirmation only for the booking that made
+    // the account, or when it sent something now. A later booking for an
+    // account the CRM made weeks ago (its reset long done) still gets the
+    // ordinary confirmation.
+    const ranNow = r.explanation === 'sent' || ['done', 'unknown', 'refused', 'retry'].includes(r.forgotPassword)
+    if (account.kind === 'created' || ranNow) {
       return { explanation: r.explanation, forgot_password: r.forgotPassword, ...(r.code ? { forgot_password_code: r.code } : {}), ...(r.help ? { help: r.help } : {}) }
     }
   } catch (err) {

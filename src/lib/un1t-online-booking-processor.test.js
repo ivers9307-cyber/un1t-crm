@@ -99,6 +99,14 @@ describe('processUn1tClassBookingRequest', () => {
     expect(lastRow().un1t_steps).toMatchObject({ account: 'existing', confirmation: 'sent' })
   })
 
+  it('a later booking for an account the CRM made long ago (reset done) still gets the booking confirmation', async () => {
+    deps.ensureUn1tAccount.mockResolvedValue({ kind: 'existing', un1tUserId: 'usr-1', executingContactId: 'c-1' })
+    deps.runSetPasswordStep.mockResolvedValue({ explanation: 'skipped_already_done', forgotPassword: 'skipped_already_done' })
+    await run()
+    expect(deps.sendManualBookingConfirmEmail).toHaveBeenCalledOnce()
+    expect(lastRow().un1t_steps).toMatchObject({ confirmation: 'sent' })
+  })
+
   it('an account we created that a re-run now finds "existing" still gets its set-password step', async () => {
     deps.ensureUn1tAccount.mockResolvedValue({ kind: 'existing', un1tUserId: 'usr-1', executingContactId: 'c-1' })
     await run()
