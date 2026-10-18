@@ -7,7 +7,7 @@
 --     manages it". Backfilled from the row studio's LINK-default number
 --     (location_whatsapp_numbers.is_default, mig 743) -> whatsapp_numbers.business_account_id;
 --     a studio with no default link falls back to its newest switched-on number
---     that has a WABA. A studio with no number stays NULL (the unique index below
+--     that has a WABA. Only ACTIVE numbers count in both branches (as mig 743's move stamp). A studio with no number stays NULL (the unique index below
 --     is partial, so those rows are simply not constrained).
 --   * Partial unique index (business_account_id, name, language): two studios on
 --     one WABA cannot both own "welcome_offer"/en, which Meta would refuse anyway.
@@ -40,6 +40,7 @@ UPDATE public.whatsapp_templates t
        FROM public.location_whatsapp_numbers l
        JOIN public.whatsapp_numbers n ON n.id = l.whatsapp_number_id
       WHERE l.location_id = t.location_id
+        AND n.is_active
         AND n.business_account_id IS NOT NULL
         AND n.business_account_id <> ''
       ORDER BY l.is_default DESC, l.created_at DESC, n.updated_at DESC

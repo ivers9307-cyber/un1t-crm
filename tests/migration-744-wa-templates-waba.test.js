@@ -23,7 +23,7 @@ const SCHEMA = `
   CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS;
   CREATE TABLE public.locations (id uuid PRIMARY KEY);
   CREATE TABLE public.whatsapp_numbers (id uuid PRIMARY KEY, location_id uuid NOT NULL REFERENCES public.locations(id),
-    business_account_id text, updated_at timestamptz DEFAULT now());
+    business_account_id text, is_active boolean NOT NULL DEFAULT true, updated_at timestamptz DEFAULT now());
   CREATE TABLE public.location_whatsapp_numbers (
     location_id uuid NOT NULL REFERENCES public.locations(id), whatsapp_number_id uuid NOT NULL REFERENCES public.whatsapp_numbers(id),
     is_default boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now(),
@@ -60,6 +60,19 @@ describe('744 whatsapp_templates WABA', () => {
       INSERT INTO public.location_whatsapp_numbers VALUES ('${HATCH}', '${N1}', false, now()), ('${HATCH}', '${N2}', false, now() - interval '1 day');
       ${tpl(HATCH, 'hatch_offer', 'm3')}`)
     expect(await rows(db, `SELECT business_account_id FROM whatsapp_templates`)).toEqual([{ business_account_id: WABA_B }])
+  })
+
+  it("a deactivated number's WABA is not used by the fallback", async () => {
+    const db = await boot(`
+      INSERT INTO public.whatsapp_numbers (id, location_id, business_account_id, is_active) VALUES
+        ('${N1}', '${HATCH}', '${WABA_A}', false), ('${N2}', '${HATCH}', '${WABA_B}', true),
+        ('${N3}', '${STILL}', '${WABA_A}', false);
+      INSERT INTO public.location_whatsapp_numbers VALUES
+        ('${HATCH}', '${N1}', true, now()), ('${HATCH}', '${N2}', false, now() - interval '1 day'), ('${STILL}', '${N3}', true, now());
+      ${tpl(HATCH, 'hatch_offer', 'm3')} ${tpl(STILL, 'welcome', 'm4')}`)
+    // Hatch's default link is inactive: the active non-default number's WABA is used; Stillorgan has only an inactive one: NULL.
+    expect(await rows(db, `SELECT name, business_account_id FROM whatsapp_templates ORDER BY name`))
+      .toEqual([{ name: 'hatch_offer', business_account_id: WABA_B }, { name: 'welcome', business_account_id: null }])
   })
 
   it('refuses a duplicate name on one WABA across studios', async () => {
