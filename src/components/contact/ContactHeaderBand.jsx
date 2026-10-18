@@ -13,6 +13,7 @@ import PersonActionBar from '@/components/PersonActionBar'
 import AutomationsExemptToggle from '@/components/AutomationsExemptToggle'
 import { formatLastSeen } from '@/lib/person-view'
 import { formatMoney, formatDate, nextClassLabel } from './format'
+import { arrearsTile } from '@/components/command-centre-arrears'
 
 // PULSE-90.4 — first-90-days journey status chips. Light-theme contrast
 // recipe (bg-<c>-500/10 text-<c>-700 — never the -300/-400 ramp).
@@ -100,6 +101,26 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
   const cancelChip = cancellationLinkChip(cancellationLink)
   const funnel = BADGE_SLUGS.has(contact.pipeline_stage_slug)
   const lastAttended = person?.lastAttendedAt || contact.last_attended_at
+  // HATCHINV.1 — `metrics.arrearsCents` is already Glofox + un1t.online EUR. When
+  // un1t.online has the member overdue the tile follows the command centre's one
+  // rule (never "€0" for an overdue with no amount); otherwise it is the old tile.
+  const un1t = metrics.un1t?.overdue ? metrics.un1t : null
+  const arrearsStat = un1t ? (
+    <StatTile
+      label="Arrears"
+      value={arrearsTile(
+        { arrearsCents: metrics.arrearsCents },
+        { overdue: true, arrears_cents: 0, amount_unreported: un1t.amountUnreported, amount_not_eur: un1t.amountNotEur },
+      ).text}
+      tone="danger"
+    />
+  ) : (
+    <StatTile
+      label="Arrears"
+      value={metrics.arrearsCents != null ? (formatMoney(metrics.arrearsCents, metrics.currency) || '—') : '—'}
+      tone={metrics.arrearsCents > 0 ? 'danger' : 'default'}
+    />
+  )
   // GLOFOX-REACTIVE (mig 428) — membership pause, surfaced prominently
   // beside the name but framed NEUTRAL (amber, not the red "needs
   // attention" band): a paused member is on a planned freeze, not a
@@ -225,11 +246,7 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
           Overview metric grid). */}
       <div className="flex flex-wrap gap-2 mt-4">
         <StatTile label="Lifetime value" value={formatMoney(metrics.ltvCents, metrics.currency) || '—'} />
-        <StatTile
-          label="Arrears"
-          value={metrics.arrearsCents != null ? (formatMoney(metrics.arrearsCents, metrics.currency) || '—') : '—'}
-          tone={metrics.arrearsCents > 0 ? 'danger' : 'default'}
-        />
+        {arrearsStat}
         <StatTile label="Attended (30d)" value={metrics.attended} />
         <StatTile label="Deals" value={metrics.deals} />
         {journey?.inWindow && (

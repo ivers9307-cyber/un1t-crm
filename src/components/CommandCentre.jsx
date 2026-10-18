@@ -18,6 +18,7 @@ import {
 import ContactMarketingPreferencesCard from '@/components/ContactMarketingPreferencesCard'
 import SequencePicker from '@/components/SequencePicker'
 import BookPanel from '@/components/BookPanel'
+import { arrearsTile } from '@/components/command-centre-arrears'
 
 function prettyStage(slug) {
   if (!slug) return null
@@ -56,6 +57,7 @@ export default function CommandCentre({ contactId, locationId, canEditConsent, c
   const [consentLog, setConsentLog] = useState([])
   const [eventTypes, setEventTypes] = useState([])
   const [signals, setSignals] = useState(null)
+  const [un1tBilling, setUn1tBilling] = useState(null)
   const [latestNote, setLatestNote] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showSequencePicker, setShowSequencePicker] = useState(false)
@@ -72,6 +74,7 @@ export default function CommandCentre({ contactId, locationId, canEditConsent, c
       setActivities(bundle.activities || [])
       setEventTypes(bundle.event_types || [])
       setSignals(bundle.signals || null)
+      setUn1tBilling(bundle.un1t_billing || null)
       setLatestNote(bundle.latestNote || null)
     }
     if (log?.success) setConsentLog(log.rows || [])
@@ -84,6 +87,7 @@ export default function CommandCentre({ contactId, locationId, canEditConsent, c
     setConsentLog([])
     setEventTypes([])
     setSignals(null)
+    setUn1tBilling(null)
     setLatestNote(null)
     setShowSequencePicker(false)
     load()
@@ -94,6 +98,7 @@ export default function CommandCentre({ contactId, locationId, canEditConsent, c
   const stage = prettyStage(contact?.pipeline_stage_slug)
   const tags = Array.isArray(contact?.tags) ? contact.tags : []
   const optedOut = contact?.wa_status === 'opted_out'
+  const arrears = arrearsTile(signals, un1tBilling)
   // 'overdue' churnClass and tier 'high' are the sharpest signal (red);
   // 'medium' is amber; anything else (low tier, or a healthy/active
   // contact with a null churnLabel) reads as low risk (emerald).
@@ -176,8 +181,8 @@ export default function CommandCentre({ contactId, locationId, canEditConsent, c
               </div>
               <div className="bg-un1t-surface border border-un1t-border rounded-lg p-2">
                 <p className="text-[10px] uppercase tracking-wide text-un1t-subtle">Arrears</p>
-                <p className={`text-xs font-semibold mt-0.5 ${signals.arrearsCount > 0 ? 'text-amber-700' : 'text-un1t-text'}`}>
-                  {signals.arrearsCents > 0 ? `€${Math.round(signals.arrearsCents / 100)}` : '€0'}
+                <p className={`text-xs font-semibold mt-0.5 ${arrears.flagged ? 'text-amber-700' : 'text-un1t-text'}`}>
+                  {arrears.text}
                 </p>
               </div>
               <div className="bg-un1t-surface border border-un1t-border rounded-lg p-2">

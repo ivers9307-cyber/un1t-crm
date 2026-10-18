@@ -4,6 +4,7 @@
 // see each studio. Renders nothing when there is no studio to show.
 
 import { formatDate, formatMoney } from './format'
+import { amountNote, overdueAmountKind } from '@/components/command-centre-arrears'
 
 const MAX_TRANSACTIONS = 10
 
@@ -22,23 +23,32 @@ function invoiceChip(inv) {
   return { cls: 'bg-zinc-500/10 text-zinc-700', text: inv.rawStatus || 'Unknown' }
 }
 
-function StudioBlock({ studio }) {
-  const { locationName, subscriptions = [], transactions = [], invoices = [], pastDue } = studio
+// One band per overdue subscription, each with its own amount.
+function OverdueBand({ pastDue }) {
   // formatMoney defaults a missing currency to €, so an amount with no currency
-  // is as unreported as one with no amount.
-  const overdueAmount = pastDue && pastDue.currency ? formatMoney(pastDue.amountCents, pastDue.currency) : null
-  const overdueSince = pastDue ? formatDate(pastDue.since) : null
+  // is as unreported as one with no amount. A known foreign-currency amount is
+  // shown as it is, flagged as outside the EUR figures.
+  const kind = overdueAmountKind(pastDue)
+  const amount = kind === 'unreported'
+    ? null
+    : `${formatMoney(pastDue.amountCents, pastDue.currency)}${kind === 'not_eur' ? ` (${amountNote(true)})` : ''}`
+  const since = formatDate(pastDue.since)
+  return (
+    <div className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-700">
+      <div className="font-medium">{since ? `Payment overdue since ${since}` : 'Payment overdue'}</div>
+      <div>{amount || 'amount not reported by un1t.online'}</div>
+    </div>
+  )
+}
+
+function StudioBlock({ studio }) {
+  const { locationName, subscriptions = [], transactions = [], invoices = [], pastDues = [] } = studio
   const shownTransactions = transactions.slice(0, MAX_TRANSACTIONS)
   return (
     <div className="space-y-2">
       <div className="text-sm font-medium text-un1t-text">{locationName}</div>
 
-      {pastDue && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-700">
-          <div className="font-medium">{overdueSince ? `Payment overdue since ${overdueSince}` : 'Payment overdue'}</div>
-          <div>{overdueAmount || 'amount not reported by un1t.online'}</div>
-        </div>
-      )}
+      {pastDues.map((p, i) => <OverdueBand key={`due-${i}`} pastDue={p} />)}
 
       {subscriptions.length > 0 && (
         <ul className="space-y-1">
