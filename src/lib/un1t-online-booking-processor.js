@@ -96,6 +96,9 @@ async function stampRow(db, id, fields) {
 }
 
 /** The landing row (copy, conversion URL) and the studio (name, address, zone), best-effort. */
+export async function readStudioContextForApproval(db, locationId) {
+  return readStudioContext(db, locationId)
+}
 async function readStudioContext(db, locationId) {
   const out = { blocks: null, publicPath: null, studioName: null, address: null, zone: null }
   try {
@@ -148,6 +151,74 @@ export async function un1tAfterBooking(db, { request, contact, account, settings
 }
 
 /**
+ * Steps 2-6 (the account, credits or a membership, the trial, the booking),
+ * shared by the funnel processor and the approval executor (UN1TWRITE.23).
+ * Each step resumes from the ledger. Never files a card or stamps the row:
+ * the caller maps the answer.
+ * trialMode 'normal' grants the trial when nothing else books; 'credits_only'
+ * (approving un1t_trial_unverified) never buys: no credits is a card.
+ * @returns {Promise<{ kind: 'booked', account: object, booking: object, executingContactId: string, steps: object }
+ *   | { kind: 'card', reason: string, executingContactId?: string, steps: object }
+ *   | { kind: 'retry', code: string, executingContactId?: string, steps: object }
+ *   | { kind: 'trial_used', account: object, executingContactId: string, steps: object }>}
+ */
+export async function un1tBookOnce(db, { request, contact, organizationId, eventId, origin, originRef, actor, writer, trialMode = 'normal' }, deps = {}) {
+  const d = depsOf(deps)
+  const steps = {}
+  const opDeps = { writerFactory: async () => writer }
+
+  const account = await d.ensureUn1tAccount(db, {
+    locationId: request.location_id, organizationId, contact, request, origin, originRef, actor,
+  }, opDeps)
+  steps.account = account.kind
+  if (account.kind === 'retry') return { kind: 'retry', code: account.code, steps }
+  if (account.kind === 'card') return { kind: 'card', reason: account.reason, steps }
+  const executingContactId = account.executingContactId
+  const un1tUserId = account.un1tUserId
+
+  let ledger
+  try {
+    ledger = await writer.read(`/credits/ledgers/${encodeURIComponent(un1tUserId)}/${encodeURIComponent(writer.studioId)}`)
+  } catch {
+    return { kind: 'retry', code: 'credits_unreadable', executingContactId, steps }
+  }
+  const balance = typeof ledger?.balance === 'number' ? ledger.balance : null
+  const hasCredits = ledger?.is_unlimited === true || (balance != null && balance >= 1)
+  let hasMembership = false
+  if (!hasCredits) {
+    const { data: subs, error: sErr } = await db.from('un1t_subscriptions')
+      .select('un1t_id').eq('location_id', request.location_id).eq('un1t_user_id', un1tUserId)
+      .in('status', [...MEMBERSHIP_ACTIVE_STATUSES]).limit(1)
+    if (sErr) return { kind: 'retry', code: 'subscriptions_unreadable', executingContactId, steps }
+    hasMembership = Array.isArray(subs) && subs.length > 0
+  }
+
+  if (hasCredits || hasMembership) {
+    steps.trial = hasCredits ? 'skipped_credits' : 'skipped_membership'
+  } else if (trialMode === 'credits_only') {
+    steps.trial = 'unverified_no_credits'
+    return { kind: 'card', reason: 'un1t_trial_unverified', executingContactId, steps }
+  } else {
+    const t = await d.grantTrial(db, {
+      locationId: request.location_id, un1tUserId, contactId: executingContactId, origin, originRef, actor,
+    }, opDeps)
+    steps.trial = t.outcome === 'granted' ? `granted:${t.method}` : t.outcome === 'ineligible' ? `ineligible:${t.reason}` : t.outcome === 'retry' ? `retry:${t.code}` : t.reason
+    if (t.outcome === 'retry') return { kind: 'retry', code: t.code, executingContactId, steps }
+    if (t.outcome === 'needs_staff') return { kind: 'card', reason: t.reason, executingContactId, steps }
+    if (t.outcome === 'ineligible') return { kind: 'trial_used', account, executingContactId, steps }
+  }
+
+  const b = await d.book(db, {
+    locationId: request.location_id, contactId: executingContactId, un1tUserId, eventId, origin, originRef, actor,
+  }, opDeps)
+  steps.book = b.verdict === 'done' ? (b.alreadyBooked ? 'already_booked' : 'done') : `${b.verdict}${b.code ? `:${b.code}` : ''}`
+  if (b.verdict === 'refused' && b.retryable) return { kind: 'retry', code: b.code, executingContactId, steps }
+  if (b.verdict === 'refused') return { kind: 'card', reason: `un1t_booking_failed:${b.code ?? 'unknown'}`, executingContactId, steps, booking: b }
+  if (b.verdict !== 'done') return { kind: 'card', reason: 'un1t_outcome_unknown', executingContactId, steps, booking: b }
+  return { kind: 'booked', account, booking: b, executingContactId, steps }
+}
+
+/**
  * @param {object} db
  * @param {object} request a class_booking_requests row
  * @param {{ settings: object, studioName?: string|null, organizationId: string|null }} ctx readUn1tWriteSettings' answer
@@ -191,75 +262,33 @@ export async function processUn1tClassBookingRequest(db, request, ctx, deps = {}
 
   // One writer for the whole job.
   const writer = await d.writerFactory(db, request.location_id)
-  const opDeps = { writerFactory: async () => writer }
-
-  // 2-3. The account.
-  const account = await d.ensureUn1tAccount(db, {
-    locationId: request.location_id, organizationId, contact, request, origin: 'funnel', originRef: request.id, actor: null,
-  }, opDeps)
-  steps.account = account.kind
-  if (account.kind === 'retry') throw retry(account.code)
-  if (account.kind === 'card') return card(account.reason)
-  executingContactId = account.executingContactId
-  const un1tUserId = account.un1tUserId
-
-  // 4. Credits or a membership already: no trial.
-  let ledger
-  try {
-    ledger = await writer.read(`/credits/ledgers/${encodeURIComponent(un1tUserId)}/${encodeURIComponent(writer.studioId)}`)
-  } catch {
-    throw retry('credits_unreadable')
-  }
-  const balance = typeof ledger?.balance === 'number' ? ledger.balance : null
-  const hasCredits = ledger?.is_unlimited === true || (balance != null && balance >= 1)
-  let hasMembership = false
-  if (!hasCredits) {
-    const { data: subs, error: sErr } = await db.from('un1t_subscriptions')
-      .select('un1t_id').eq('location_id', request.location_id).eq('un1t_user_id', un1tUserId)
-      .in('status', [...MEMBERSHIP_ACTIVE_STATUSES]).limit(1)
-    if (sErr) throw retry('subscriptions_unreadable')
-    hasMembership = Array.isArray(subs) && subs.length > 0
-  }
-
-  // 5. The trial, only when there is nothing to book with.
-  if (hasCredits || hasMembership) {
-    steps.trial = hasCredits ? 'skipped_credits' : 'skipped_membership'
-  } else {
-    const t = await d.grantTrial(db, {
-      locationId: request.location_id, un1tUserId, contactId: executingContactId, origin: 'funnel', originRef: request.id, actor: null,
-    }, opDeps)
-    steps.trial = t.outcome === 'granted' ? `granted:${t.method}` : t.outcome === 'ineligible' ? `ineligible:${t.reason}` : t.outcome === 'retry' ? `retry:${t.code}` : t.reason
-    if (t.outcome === 'retry') throw retry(t.code)
-    if (t.outcome === 'needs_staff') return card(t.reason)
-    if (t.outcome === 'ineligible') {
-      const hand = await d.trialUsedHandoff(db, { request, contact, locationId: request.location_id }).catch(() => ({ handled: false }))
-      if (hand?.handled) {
-        await stampRow(db, request.id, { status: 'failed', last_error: 'trial_used_handed_to_mia', un1t_steps: { ...steps, trial_used: 'handed_to_mia' } })
-        return { outcome: 'failed', detail: 'trial_used_handed_to_mia' }
-      }
-      const studio = await readStudioContext(db, request.location_id)
-      let mail
-      try {
-        mail = await d.sendUn1tTrialUsedEmail(db, {
-          locationId: request.location_id, contact, className: request.class_name, startsAt: request.starts_at,
-          blocks: studio.blocks, studioName: studio.studioName || ctx.studioName, zone: studio.zone,
-        })
-      } catch {
-        mail = { sent: false, reason: 'send_error' }
-      }
-      steps.trial_used_email = mail?.sent ? 'sent' : (mail?.reason || 'not_sent')
-      return card('un1t_trial_used', { rowStatus: 'failed', rowLastError: 'trial_used_options_sent' })
+  const once = await un1tBookOnce(db, {
+    request, contact, organizationId, eventId, origin: 'funnel', originRef: request.id, actor: null, writer,
+  }, deps)
+  Object.assign(steps, once.steps)
+  executingContactId = once.executingContactId ?? null
+  if (once.kind === 'retry') throw retry(once.code)
+  if (once.kind === 'card') return card(once.reason)
+  if (once.kind === 'trial_used') {
+    const hand = await d.trialUsedHandoff(db, { request, contact, locationId: request.location_id }).catch(() => ({ handled: false }))
+    if (hand?.handled) {
+      await stampRow(db, request.id, { status: 'failed', last_error: 'trial_used_handed_to_mia', un1t_steps: { ...steps, trial_used: 'handed_to_mia' } })
+      return { outcome: 'failed', detail: 'trial_used_handed_to_mia' }
     }
+    const studio = await readStudioContext(db, request.location_id)
+    let mail
+    try {
+      mail = await d.sendUn1tTrialUsedEmail(db, {
+        locationId: request.location_id, contact, className: request.class_name, startsAt: request.starts_at,
+        blocks: studio.blocks, studioName: studio.studioName || ctx.studioName, zone: studio.zone,
+      })
+    } catch {
+      mail = { sent: false, reason: 'send_error' }
+    }
+    steps.trial_used_email = mail?.sent ? 'sent' : (mail?.reason || 'not_sent')
+    return card('un1t_trial_used', { rowStatus: 'failed', rowLastError: 'trial_used_options_sent' })
   }
-
-  // 6. Book.
-  const b = await d.book(db, {
-    locationId: request.location_id, contactId: executingContactId, un1tUserId, eventId, origin: 'funnel', originRef: request.id, actor: null,
-  }, opDeps)
-  steps.book = b.verdict === 'done' ? (b.alreadyBooked ? 'already_booked' : 'done') : `${b.verdict}${b.code ? `:${b.code}` : ''}`
-  if (b.verdict === 'refused' && b.retryable) throw retry(b.code)
-  if (b.verdict === 'refused') return card(`un1t_booking_failed:${b.code ?? 'unknown'}`)
-  if (b.verdict !== 'done') return card('un1t_outcome_unknown')
+  const { account, booking: b } = once
 
   const bookingRef = b.id ? `un1t:${b.id}` : null
   await stampRow(db, request.id, { status: 'booked', last_error: null, glofox_booking_id: bookingRef, un1t_steps: steps })
