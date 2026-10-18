@@ -388,13 +388,18 @@ export function shapeWinbackRows({ allSubs = [], freshCutoffIso = null, endedMem
 
 /**
  * Lead-radar rows (spec B §2c), keyed exactly as lead-radar-data.js's
- * CONTACT_COLUMNS. The status is spec A's pipeline snapshot, UNCHANGED, so a
- * person is the same thing on Hatch's board and its lead radar:
- *   - a snapshot whose status is not in NON_MEMBER_STATUSES (member,
- *     credit_member, ex_member) is not a lead row;
- *   - a snapshot carrying gympass_member_id is rendered 'classpass_payg' on
- *     the LEAD ROW only, so the unchanged scorer sends it to the read-only
- *     aggregator view with the ClassPass rows, as the board's Gympass pile.
+ * CONTACT_COLUMNS. The status is spec A's pipeline snapshot status, UNCHANGED,
+ * so a person carries the same membership status on Hatch's board and its lead
+ * radar (the board's own stage rules, dismissals and pack-customer piles stay
+ * the board's, as the Glofox lead radar ignores them too):
+ *   - a member or credit_member snapshot is never a lead row, whatever its
+ *     bookings; any other status not in NON_MEMBER_STATUSES (ex_member) is not
+ *     one either;
+ *   - otherwise a snapshot carrying gympass_member_id is rendered
+ *     'classpass_payg' on the LEAD ROW only, so the unchanged scorer sends it
+ *     to the read-only aggregator view with the ClassPass rows, as the board's
+ *     Gympass pile (an ex-member with a Gympass booking included: the board
+ *     checks Gympass before ex-member).
  * joined_at and last_attended_at come from the snapshot; last_booked_at from
  * the person's newest booking here; name, email, phone and lead_source from
  * their contact. Membership is judged at this studio only (G1): the contact's
@@ -421,7 +426,13 @@ export function shapeLeadRows({
   for (const person of pipeline.contacts ?? []) {
     const snapshot = pipeline.snapshots?.get?.(person.id)
     if (!snapshot || seen.has(person.id)) continue
-    const status = snapshot.gympass_member_id ? 'classpass_payg' : snapshot.glofox_membership_status
+    const snapStatus = snapshot.glofox_membership_status
+    // A member or credit member is never a lead, Gympass bookings or not: the
+    // board graduates them out of the Gympass pile (shared/pipeline-classifier.js).
+    if (snapStatus === 'member' || snapStatus === 'credit_member') continue
+    // The board checks Gympass BEFORE ex-member, so an ex-member with a Gympass
+    // booking is in the Gympass pile there and the aggregator view here.
+    const status = snapshot.gympass_member_id ? 'classpass_payg' : snapStatus
     if (!NON_MEMBER_STATUSES.includes(status)) continue
     seen.add(person.id)
     const c = contactsById.get(person.id) ?? {}

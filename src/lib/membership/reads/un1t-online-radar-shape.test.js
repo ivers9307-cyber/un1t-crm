@@ -517,6 +517,11 @@ describe('shapeLeadRows', () => {
     { contactId: 'ref', input: { client: pclient(), bookings: [{ source: 'direct', external_member_ref: 'X9', status: 'booked', starts_at: '2026-10-05T09:00:00Z' }] } },
     { contactId: 'ld', input: { client: pclient({ last_attended_at: '2026-10-14T09:00:00Z' }) } },
     { contactId: 'ex', input: { client: pclient(), memberships: [{ source: 'un1t_online_api', status: 'ended', ended_at: '2026-09-01T00:00:00Z' }] } },
+    // members with a Wellhub booking: still members, never leads
+    { contactId: 'mgp', input: { client: pclient(), freshSubs: [{ status: 'active' }], bookings: [{ source: 'wellhub', external_member_ref: 'W2', status: 'attended', starts_at: '2026-10-05T09:00:00Z' }] } },
+    { contactId: 'cmgp', input: { client: pclient({ credit_balance: 4 }), transactions: [{ product_id: 'pk1', product_type: 'pack', amount_cents: 5400, remote_created_at: '2026-10-02T00:00:00Z' }], bookings: [{ source: 'gympass', status: 'booked', starts_at: '2026-10-05T09:00:00Z' }] } },
+    // an ex-member with a Gympass booking: the board's Gympass pile, so the aggregator view
+    { contactId: 'exgp', input: { client: pclient(), memberships: [{ source: 'un1t_online_api', status: 'ended', ended_at: '2026-09-01T00:00:00Z' }], bookings: [{ source: 'wellhub', status: 'booked', starts_at: '2026-08-05T09:00:00Z' }] } },
   ]
   const snapshots = new Map(fixtures.map((f) => [f.contactId, shapePipelineSnapshot({ productsById: products, locationId: L, contact: null, ...f.input })]))
   const contacts = fixtures.map((f) => ({ id: f.contactId, name: f.contactId, email: null, location_id: 'loc-stillorgan' }))
@@ -536,10 +541,22 @@ describe('shapeLeadRows', () => {
     const rows = run()
     for (const r of rows) {
       const snap = snapshots.get(r.id)
+      expect(['member', 'credit_member']).not.toContain(snap.glofox_membership_status)
       if (snap.gympass_member_id) expect(r.glofox_membership_status).toBe('classpass_payg')
       else expect(r.glofox_membership_status).toBe(snap.glofox_membership_status)
     }
     expect(rows.length).toBeGreaterThan(0)
+  })
+
+  it('a member or credit member with a Gympass booking is not a lead row', () => {
+    const ids = run().map((r) => r.id)
+    expect(snapshots.get('mgp').gympass_member_id).not.toBeNull()
+    expect(ids).not.toContain('mgp')
+    expect(ids).not.toContain('cmgp')
+  })
+
+  it('an ex-member with a Gympass booking goes to the aggregator view (board order)', () => {
+    expect(byId(run(), 'exgp').glofox_membership_status).toBe('classpass_payg')
   })
 
   it('member, credit_member and ex_member snapshots are not lead rows', () => {
