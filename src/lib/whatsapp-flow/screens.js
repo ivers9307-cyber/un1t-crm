@@ -12,24 +12,28 @@ export function dayScreen(days, path) {
 export function slotScreen({ day, slots, path }) {
   return { screen: SCREEN.SLOT, data: { day, slots, path } }
 }
-// UN1TWRITE.19 — `terms` drives the un1t.online terms and waiver OptIn: hidden
-// and not required unless the studio's funnel needs it (the handler decides).
+// UN1TWRITE.19 — `terms` drives the un1t.online terms and waiver OptIn. The
+// terms_* keys are sent ONLY when the studio needs the tick: the Flow
+// published in Meta before this change declares none of them, and a studio
+// that never asks (Stillorgan) must answer it exactly as before.
 export function detailsScreen(prefill = {}, carry = {}, terms = {}) {
-  return {
-    screen: SCREEN.DETAILS,
-    data: {
-      name: prefill.name || '',
-      email: prefill.email || '',
-      marketing_opt_in: prefill.marketing_opt_in === false ? false : true,
-      path: carry.path,
-      slot: carry.slot,
-      terms_required: terms.required === true,
+  const data = {
+    name: prefill.name || '',
+    email: prefill.email || '',
+    marketing_opt_in: prefill.marketing_opt_in === false ? false : true,
+    path: carry.path,
+    slot: carry.slot,
+  }
+  if (terms.required === true) {
+    Object.assign(data, {
+      terms_required: true,
       terms_label: terms.label || '',
       terms_url: terms.url || '',
       terms_accepted: terms.accepted === true,
       terms_error: terms.error || '',
-    },
+    })
   }
+  return { screen: SCREEN.DETAILS, data }
 }
 export function confirmScreen(summary, selection) {
   return { screen: SCREEN.CONFIRM, data: { summary, selection } }
@@ -72,7 +76,7 @@ export const FLOW_JSON = {
       data: {
         name: { type: 'string', __example__: '' }, email: { type: 'string', __example__: '' }, marketing_opt_in: { type: 'boolean', __example__: true }, path: { type: 'string', __example__: 'class' }, slot: { type: 'string', __example__: '' },
         // UN1TWRITE.19 — the un1t.online terms and waiver OptIn.
-        terms_required: { type: 'boolean', __example__: false }, terms_label: { type: 'string', __example__: '' }, terms_url: { type: 'string', __example__: '' }, terms_accepted: { type: 'boolean', __example__: false }, terms_error: { type: 'string', __example__: '' },
+        terms_required: { type: 'boolean', __example__: true }, terms_label: { type: 'string', __example__: "I accept the studio's terms and conditions and liability waiver" }, terms_url: { type: 'string', __example__: 'https://example.com/legal/un1t/studio/terms' }, terms_accepted: { type: 'boolean', __example__: false }, terms_error: { type: 'string', __example__: 'Please tick to accept the terms and waiver.' },
       },
       layout: { type: 'SingleColumnLayout', children: [{
         type: 'Form', name: 'form', 'init-values': { name: '${data.name}', email: '${data.email}', marketing_opt_in: '${data.marketing_opt_in}', terms_accepted: '${data.terms_accepted}' }, children: [
@@ -83,7 +87,7 @@ export const FLOW_JSON = {
           // which links the waiver. Builder may refuse the bound `required`; if
           // so drop that one property (the handler's DETAILS check still holds).
           { type: 'OptIn', name: 'terms_accepted', label: '${data.terms_label}', visible: '${data.terms_required}', required: '${data.terms_required}', 'on-click-action': { name: 'open_url', url: '${data.terms_url}' } },
-          { type: 'TextCaption', text: '${data.terms_error}' },
+          { type: 'TextCaption', text: '${data.terms_error}', visible: '${data.terms_required}' },
           { type: 'Footer', label: 'Review', 'on-click-action': { name: 'data_exchange', payload: { path: '${data.path}', slot: '${data.slot}', name: '${form.name}', email: '${form.email}', marketing_opt_in: '${form.marketing_opt_in}', terms_accepted: '${form.terms_accepted}' } } },
         ] }] },
     },

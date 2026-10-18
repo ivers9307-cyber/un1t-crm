@@ -65,9 +65,9 @@ describe('FLOW_JSON', () => {
 })
 
 describe('detailsScreen', () => {
-  it('defaults leave the OptIn hidden and unticked', () => {
+  it('defaults send no terms keys at all (the Flow published before this declares none)', () => {
     const d = detailsScreen({ name: 'Ann' }, { path: 'class', slot: 's' }).data
-    expect(d).toMatchObject({ terms_required: false, terms_label: '', terms_url: '', terms_accepted: false, terms_error: '' })
+    expect(Object.keys(d).sort()).toEqual(['email', 'marketing_opt_in', 'name', 'path', 'slot'])
   })
 })
 
@@ -98,12 +98,30 @@ describe('handler', () => {
     for (const s of [glofox, un1t(false)]) {
       settings = s
       const d = await exchange(SCREEN.SLOT, { path: 'class', slot: 's' })
-      expect(d.data.terms_required).toBe(false)
+      expect(d.data).not.toHaveProperty('terms_required')
       const c = await exchange(SCREEN.DETAILS, { path: 'class', slot: 's', name: 'A', email: 'a@x.ie', marketing_opt_in: true })
       expect(c.screen).toBe(SCREEN.CONFIRM)
+      expect(c.data.selection).not.toHaveProperty('terms_accepted')
     }
     readUn1tWriteSettings.mockRejectedValueOnce(new Error('down'))
-    expect((await exchange(SCREEN.SLOT, { path: 'class', slot: 's' })).data.terms_required).toBe(false)
+    expect((await exchange(SCREEN.SLOT, { path: 'class', slot: 's' })).data).not.toHaveProperty('terms_required')
+  })
+
+  it('the Flow published before this change (no terms_accepted posted) is never trapped on DETAILS', async () => {
+    const c = await exchange(SCREEN.DETAILS, { path: 'class', slot: 's', name: 'A', email: 'a@x.ie', marketing_opt_in: true })
+    expect(c.screen).toBe(SCREEN.CONFIRM)
+    expect(c.data.selection).not.toHaveProperty('terms_accepted')
+  })
+
+  it('never asks when the terms link cannot be built, and cuts a long label', async () => {
+    blocks = [{ type: 'class_funnel', terms_label: 'x'.repeat(300) }]
+    const long = await exchange(SCREEN.SLOT, { path: 'class', slot: 's' })
+    expect(long.data.terms_label.length).toBe(120)
+    const saved = db.from
+    db.from = () => { const b = { select: () => b, eq: () => b, maybeSingle: async () => ({ data: null, error: null }) }; return b }
+    try {
+      expect((await exchange(SCREEN.SLOT, { path: 'class', slot: 's' })).data).not.toHaveProperty('terms_required')
+    } finally { db.from = saved }
   })
 })
 

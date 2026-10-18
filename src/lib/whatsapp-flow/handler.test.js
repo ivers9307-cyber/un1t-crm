@@ -57,7 +57,7 @@ describe('handleDataExchange', () => {
   it('DETAILS returns CONFIRM with a flat selection object', async () => {
     const res = await handleDataExchange(db, { decryptedBody: { action: 'data_exchange', screen: SCREEN.DETAILS, data: { path: 'class', slot: 'c1|x|HIIT', name: 'Ann', email: 'ann@x.ie', marketing_opt_in: true } }, contact, locationId: 'loc1', config })
     expect(res.screen).toBe(SCREEN.CONFIRM)
-    expect(res.data.selection).toEqual({ path: 'class', slot: 'c1|x|HIIT', name: 'Ann', email: 'ann@x.ie', marketing_opt_in: true, terms_accepted: false })
+    expect(res.data.selection).toEqual({ path: 'class', slot: 'c1|x|HIIT', name: 'Ann', email: 'ann@x.ie', marketing_opt_in: true })
   })
 })
 
