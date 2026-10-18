@@ -54,6 +54,7 @@ import * as glofox from '@/lib/glofox'
 import { logError } from '@/lib/log'
 import {
   ALL_AGENT_TOOLS, CACHED_ACCOUNT_TOOLS, CACHED_NO_BOOKING_TOOLS, NO_BOOKING_AGENT_TOOLS,
+  CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS,
   agentToolsFor, linkButtonText, runChannelAgent,
 } from './auto-reply'
 import {
@@ -76,6 +77,9 @@ import { STILLORGAN_BLOB } from './settings-fixtures.test-helpers'
 const FIX_DIR = path.join(__dirname, '__fixtures__')
 const PROMPT_FIXTURE = JSON.parse(fs.readFileSync(path.join(FIX_DIR, 'glofox-system-prompt.fixture.json'), 'utf8'))
 const TOOLS_FIXTURE = JSON.parse(fs.readFileSync(path.join(FIX_DIR, 'glofox-agent-tools.fixture.json'), 'utf8'))
+// MIAHATCH.2 Task 7: the no-booking (Hatch Street) prompt bytes, captured at the
+// Task 7 base commit before any Task 7 edit.
+const NO_BOOKING_FIXTURE = JSON.parse(fs.readFileSync(path.join(FIX_DIR, 'no-booking-system-prompt.fixture.json'), 'utf8'))
 
 // Fictional ids.
 const STILLORGAN = 'a1000000-0000-0000-0000-000000000001'
@@ -187,6 +191,37 @@ describe('prompt variants', () => {
       .toEqual(PROMPT_FIXTURE.stillorgan_preverified_no_link)
     expect(buildCachedSystem(stillorganOpts({ cardSets: [], multipleAccounts: true })))
       .toEqual(PROMPT_FIXTURE.stillorgan_instagram_multi)
+  })
+
+  it('Glofox and no-booking renders equal the fixtures byte for byte (MIAHATCH.2 Task 7)', () => {
+    const src = { key: 'un1t_online', label: 'un1t.online' }
+    expect(renderCustomerAgentBasePrompt(src, { bookings: false, bookingUrl: BOOKING_URL })).toBe(NO_BOOKING_FIXTURE.no_booking_base_with_url)
+    expect(renderCustomerAgentBasePrompt(src, { bookings: false, bookingUrl: null })).toBe(NO_BOOKING_FIXTURE.no_booking_base_no_url)
+    expect(renderCustomerAgentBasePrompt({ key: 'none', label: '' }, { bookings: false })).toBe(NO_BOOKING_FIXTURE.no_booking_base_none_source)
+    expect(buildCachedSystem(hatchOpts())).toEqual(NO_BOOKING_FIXTURE.hatch_whatsapp)
+    expect(buildCachedSystem(hatchOpts({ bookingUrl: null, identityPreverified: true, knownContact: null }))).toEqual(NO_BOOKING_FIXTURE.hatch_preverified_no_link)
+    expect(buildCachedSystem(hatchOpts({ cardSets: [], multipleAccounts: true }))).toEqual(NO_BOOKING_FIXTURE.hatch_instagram_multi)
+    // The new options at their defaults change nothing.
+    expect(buildCachedSystem(hatchOpts({ un1tVariant: null, multiStudio: false, factsBlocks: [] }))).toEqual(NO_BOOKING_FIXTURE.hatch_whatsapp)
+    expect(buildCachedSystem(stillorganOpts({ un1tVariant: null, multiStudio: false, factsBlocks: [] }))).toEqual(PROMPT_FIXTURE.stillorgan_whatsapp)
+  })
+
+  it('read variant names no tool absent from un1t_read (dual: from un1t_read_dual)', () => {
+    const names = (block) => new Set(block.map((t) => t.name))
+    for (const [multiStudio, block] of [[false, CACHED_UN1T_READ_TOOLS], [true, CACHED_UN1T_READ_DUAL_TOOLS]]) {
+      const allowed = names(block)
+      for (const bookingUrl of [BOOKING_URL, null]) {
+        const { stable, volatile } = buildCustomerSystemPromptParts(hatchOpts({ un1tVariant: 'read', multiStudio, bookingUrl, membershipUrl: 'https://example.test/join' }))
+        for (const text of [stable, volatile]) {
+          for (const tool of ALL_AGENT_TOOLS.map((t) => t.name)) {
+            if (new RegExp(`\\b${tool}\\b`).test(text)) expect(allowed, `${tool} (multiStudio ${multiStudio})`).toContain(tool)
+          }
+        }
+      }
+    }
+    // The single-studio read prompt names neither booking write nor the payment reminder.
+    const { stable } = buildCustomerSystemPromptParts(hatchOpts({ un1tVariant: 'read' }))
+    for (const tool of ['book_class', 'cancel_class_booking', 'get_my_payment_reminder']) expect(stable).not.toContain(tool)
   })
 
   it('bookings: true (what auto-reply passes at Glofox) is the same bytes, and ignores a booking link', () => {
