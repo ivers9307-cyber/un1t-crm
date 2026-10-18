@@ -9,7 +9,8 @@
 //                        connection-registry pure mappers (dual-read, same
 //                        rules as readConnection()).
 //   xero_connections     per-location Xero OAuth binding (tenant + scopes).
-//   whatsapp_numbers     per-location WA Cloud API numbers (read-only here).
+//   location_whatsapp_numbers  the WA Cloud API numbers switched on per studio
+//                        (WAORGNUMBER.1; read-only here).
 //   ad_accounts          Meta/TikTok ad account presence (read-only here).
 //   shelly_connections / per-location smart-plug account + adopted device
 //   shelly_devices       counts (migs 562/563) — non-secret columns only,
@@ -832,8 +833,11 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
     db.from('xero_connections')
       .select('location_id, tenant_id, tenant_name, tenant_type, connected_at, last_refreshed_at, scopes, accounts_last_synced_at, contacts_last_synced_at, tax_rates_last_synced_at, accounts_sync_error, contacts_sync_error, tax_rates_sync_error')
       .in('location_id', ids),
-    db.from('whatsapp_numbers')
-      .select('id, location_id, label, display_phone, source, token_type, connected_via, is_default, is_active, quality_rating, messaging_limit_tier, token_invalid_at')
+    // WAORGNUMBER.1 — the numbers SWITCHED ON at each studio (the link table),
+    // with the link's own default flag, whatever the number's home studio.
+    // Deactivated ones stay in: the card grades them "Number deactivated".
+    db.from('location_whatsapp_numbers')
+      .select('location_id, is_default, created_at, whatsapp_numbers!inner(id, label, display_phone, source, token_type, connected_via, is_active, quality_rating, messaging_limit_tier, token_invalid_at)')
       .in('location_id', ids)
       .order('is_default', { ascending: false })
       .order('created_at', { ascending: true }),
@@ -875,7 +879,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
   for (const [table, err] of [
     ['channel_connections', regErr],
     ['xero_connections', xeroErr],
-    ['whatsapp_numbers', waErr],
+    ['location_whatsapp_numbers', waErr],
     ['ad_accounts', adsErr],
   ]) {
     if (err) {
@@ -888,7 +892,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
 
   const regRows = regRes.data || []
   const xeroRows = xeroRes.data || []
-  const waRows = waRes.data || []
+  // One row per (studio, number): the number's columns with the LINK's studio
+  // and default flag (WAORGNUMBER.1).
+  const waRows = (waRes.data || []).map(({ location_id, is_default, whatsapp_numbers: n }) => ({ ...n, location_id, is_default }))
   // Map token presence to a boolean immediately — the raw value goes no
   // further than this line (maskAccountRow posture, without the echo).
   const adRows = (adsRes.data || []).map(({ access_token, ...rest }) => ({

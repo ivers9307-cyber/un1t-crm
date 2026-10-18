@@ -19,7 +19,8 @@ import { LOC_B, person } from '../../../../../tests/helpers/owner-at-location-ca
 
 const LOC = 'a0000000-0000-4000-8000-000000000001'
 const OWNER = person({ [LOC]: 'owner' }, LOC)
-const ACTIVE_NUMBER = { data: [{ id: 'n0000000-0000-4000-8000-000000000001' }], error: null }
+// WAORGNUMBER.1 — "has a number" is the link table: a row says a number is switched on here.
+const ACTIVE_NUMBER = { data: [{ location_id: LOC }], error: null }
 const NO_NUMBER = { data: [], error: null }
 
 const get = (loc = LOC) => new Request(`http://localhost/api/whatsapp/studio-picker${loc ? `?location_id=${loc}` : ''}`)
@@ -29,7 +30,7 @@ const put = (body, loc = LOC) => new Request('http://localhost/api/whatsapp/stud
 const dbWith = ({ settings = {}, number = ACTIVE_NUMBER, write, readsError } = {}) => {
   const db = fakeLocationsDb({
     reads: readsError ? { data: null, error: readsError } : { data: { settings }, error: null },
-    tables: { whatsapp_numbers: number },
+    tables: { location_whatsapp_numbers: number },
     ...(write ? { write } : {}),
   })
   createServerClient.mockReturnValue(db)

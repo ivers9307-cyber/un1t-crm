@@ -39,6 +39,7 @@ import { resolveMasterLocationId } from './host-events'
 import { loadForMode } from './event-signups'
 import { LIVE_REGISTRATION_STATUSES } from './audience-filter'
 import { isWhatsAppNumberMissing } from './whatsapp-number-missing'
+import { locationsWithWhatsApp } from './whatsapp-config'
 import { eventToday, earliestLocalToday, eventDateLong } from './event-day'
 import { signWaitlistClaimToken, verifyWaitlistClaimToken, waitlistTokenSecret } from './event-waitlist-tokens'
 import { logError, logWarn } from './log'
@@ -455,8 +456,9 @@ export async function sendWaitlistOffer(db, { race, row, now = Date.now(), comms
 /**
  * The WhatsApp leg. Must never throw out of the round. A studio with no active
  * WhatsApp number of its own (WhatsAppNumberMissingError territory, CLAUDE.md)
- * is a quiet skip, `no_number`: checked up front from whatsapp_numbers (a
- * plain read, not a config resolver), and recognised again if the error ever
+ * is a quiet skip, `no_number`: checked up front from the link table
+ * (WAORGNUMBER.1: a number switched on at the event's studio; a plain read, not
+ * a config resolver), and recognised again if the error ever
  * escapes the send helper. The helper swallows its own send errors; this
  * wrapper catches everything else.
  */
@@ -476,17 +478,16 @@ async function sendWaitlistOfferWhatsapp(db, { race, row, ctx }) {
     if (!contact) return 'skipped:no_contact'
     const suppression = transactionalWhatsappSuppression(contact)
     if (suppression) return `skipped:${suppression}`
-    const { data: numbers, error: numErr } = await db
-      .from('whatsapp_numbers')
-      .select('id')
-      .eq('location_id', race.location_id)
-      .eq('is_active', true)
-      .limit(1)
-    if (numErr) {
+    // WAORGNUMBER.1 — "has a number" is an active number switched on at the
+    // event's studio (location_whatsapp_numbers), not one homed there.
+    let withNumber
+    try {
+      withNumber = await locationsWithWhatsApp(db, [race.location_id])
+    } catch (numErr) {
       logWarn('event-waitlist', 'WhatsApp number read failed; WhatsApp offer not sent (the email carries it)', { err: numErr, waitlistId: row.id })
       return 'failed'
     }
-    if (!numbers?.length) return 'skipped:no_number'
+    if (!withNumber.has(race.location_id)) return 'skipped:no_number'
     const res = await maybeSendBookingWhatsappConfirm({
       db,
       locationId: race.location_id,

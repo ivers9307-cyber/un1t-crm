@@ -251,7 +251,7 @@ function runnerDb({ locations, zoneError = null, zones = ZONES } = {}) {
     from(table) {
       const q = { table, cols: '', op: 'select', filters: [], opts: null }
       const answer = () => {
-        if (table === 'whatsapp_numbers') return { data: [{ id: 'num-own' }], error: null } // MIAORG.1 Task 6: the studio owns its number
+        if (table === 'location_whatsapp_numbers') return { data: locations.map((l) => ({ location_id: l.id })), error: null } // MIAORG.1 Task 6 / WAORGNUMBER.1: a number is switched on at the studio
         if (table === 'locations') {
           if (q.cols.includes('timezone')) {
             if (zoneError) return { data: null, error: zoneError }
@@ -381,7 +381,7 @@ function reviewDb({ locations, messages, reviews = [], zoneError = null }) {
       const q = { table, cols: '', filters: [] }
       const val = (name, col) => q.filters.find((f) => f[0] === name && f[1] === col)?.[2]
       const answer = () => {
-        if (table === 'whatsapp_numbers') return { data: [{ id: 'num-own' }], error: null } // MIAORG.1 Task 6: the studio owns its number
+        if (table === 'location_whatsapp_numbers') return { data: locations.map((l) => ({ location_id: l.id })), error: null } // MIAORG.1 Task 6 / WAORGNUMBER.1: a number is switched on at the studio
         if (table === 'locations') return zoneError ? { data: null, error: zoneError } : { data: locations, error: null }
         if (table === 'whatsapp_messages' && val('eq', 'source') === 'agent') {
           const from = val('gte', 'created_at'); const to = val('lt', 'created_at')

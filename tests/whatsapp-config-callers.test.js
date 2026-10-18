@@ -83,9 +83,24 @@ const RESOLVING = {
 //   resolver       the resolution layer itself
 const CALLERS = {
   'src/lib/whatsapp.js': {
-    calls: { getWhatsAppConfig: 3, getConversationReplyConfig: 1 },
+    calls: { getWhatsAppConfig: 3, getConversationReplyConfig: 1, getLocationWhatsAppNumberConfig: 1 },
     decision: 'resolver',
-    why: 'resolveConfig (every Meta helper; opts.replyInConversation → getConversationReplyConfig, which falls back to getWhatsAppConfig and so refuses a number-less studio the same way, unless the thread carries a same-organisation sibling’s stamp (WAHOMESTUDIO.1 R4): WAREPLYNUMBER.1, whatsapp-reply-number.test.js), sendBroadcast (blast: throws BEFORE the status flip → route 409 / cron pushes managers), sendDripChunk (pauses the drip). src/lib/whatsapp-no-number-senders.test.js, whatsapp-no-number-broadcasts.test.js.',
+    why: 'getOrCreateConversation’s sendingNumberId (WAORGNUMBER.1: the number switched on at the sending studio, link default first; a throwing lookup is logged and files the thread unstamped, never thrown: whatsapp-get-or-create-conversation.test.js). resolveConfig (every Meta helper; opts.replyInConversation → getConversationReplyConfig, which falls back to getWhatsAppConfig and so refuses a number-less studio the same way, unless the thread carries a same-organisation sibling’s stamp (WAHOMESTUDIO.1 R4): WAREPLYNUMBER.1, whatsapp-reply-number.test.js), sendBroadcast (blast: throws BEFORE the status flip → route 409 / cron pushes managers), sendDripChunk (pauses the drip). src/lib/whatsapp-no-number-senders.test.js, whatsapp-no-number-broadcasts.test.js.',
+  },
+  'src/app/api/whatsapp/spend/route.js': {
+    calls: { getLocationWhatsAppNumberConfig: 1 },
+    decision: 'refuse-quiet',
+    why: 'WAORGNUMBER.1: Meta pricing_analytics for the WABA + token of the number switched on at the studio (it read whatsapp_numbers by the studio’s home id). Optional enrichment inside its try/catch: no number or a failed lookup → meta null, the local rollup still served, logged. route.test.js.',
+  },
+  'src/app/communications/(hub)/wa-hub-health.js': {
+    calls: { getLocationWhatsAppNumberConfig: 1 },
+    decision: 'refuse-quiet',
+    why: 'WAORGNUMBER.1: the hub’s health card reads the studio’s default switched-on number (it read whatsapp_numbers by home studio). Decorative: no number or a failed lookup → null, the card hidden, logged, never thrown into the page. wa-hub-health.test.js.',
+  },
+  'src/lib/meta-capi.js': {
+    calls: { getLocationWhatsAppNumberConfig: 1 },
+    decision: 'refuse-quiet',
+    why: 'WAORGNUMBER.1: (one helper, two sites) the CAPI token + WABA of the number switched on at the studio (CTWA conversion; website conversion when the dataset has no token of its own). Best-effort, never throws: no number or a failed lookup → { sent:false, reason:\'no_token\' }, logged. meta-capi.test.js, meta-capi-website.test.js.',
   },
   'src/lib/whatsapp-own-number.js': {
     calls: { getLocationWhatsAppNumberConfig: 1 },

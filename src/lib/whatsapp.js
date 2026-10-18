@@ -1,6 +1,6 @@
 import { createServerClient } from './supabase'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
-import { getWhatsAppConfig, getConversationReplyConfig, META_API_URL } from './whatsapp-config'
+import { getWhatsAppConfig, getLocationWhatsAppNumberConfig, getConversationReplyConfig, META_API_URL } from './whatsapp-config'
 import { isWhatsAppNumberMissing } from './whatsapp-number-missing'
 import { numberlessHomeStudio } from './whatsapp-thread-location'
 import { agentOptionId } from './whatsapp-inbound-tap'
@@ -2099,19 +2099,17 @@ export async function getOrCreateConversation(db, contact, locationId) {
         .maybeSingle()
       return data
     }
-    // The sending studio's default active number: the stamp a thread at a
-    // number-less home studio replies through (R3/R4).
+    // The number switched on at the sending studio (WAORGNUMBER.1: the link
+    // default first, else the newest switch-on, whatever its home): the stamp a
+    // thread at a number-less home studio replies through (R3/R4). The
+    // resolver throws on a failed read; a lost stamp is logged, never thrown.
     const sendingNumberId = async () => {
-      const { data: num, error: numErr } = await db.from('whatsapp_numbers')
-        .select('id')
-        .eq('location_id', locationId)
-        .eq('is_active', true)
-        .order('is_default', { ascending: false })
-        .order('updated_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      if (numErr) console.error('[whatsapp] getOrCreateConversation: sending number lookup failed', locationId, numErr.message)
-      return num?.id || null
+      try {
+        return (await getLocationWhatsAppNumberConfig(locationId))?.id || null
+      } catch (e) {
+        console.error('[whatsapp] getOrCreateConversation: sending number lookup failed', locationId, e?.message || String(e))
+        return null
+      }
     }
     const linkContact = async (row) => {
       // Backfill contact_id if the row was created for an unknown sender.

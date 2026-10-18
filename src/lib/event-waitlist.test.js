@@ -208,10 +208,10 @@ describe('sendWaitlistOffer', () => {
     expect(mail.htmlBody).not.toContain('crm.test')
     expect(maybeSendBookingWhatsappConfirm.mock.calls[0][0].bodyParams[2]).toMatch(/^https:\/\/gym-a\.repset\.ie\/event\/hatch-oct18-1100\?wl=/)
   })
-  const offerDb = (contact = { id: 'c1', first_name: 'Ann', name: 'Ann Example', wa_phone: null, wa_status: null, contact_preferences: null }, numbers = [{ id: 'n1' }]) =>
+  const offerDb = (contact = { id: 'c1', first_name: 'Ann', name: 'Ann Example', wa_phone: null, wa_status: null, contact_preferences: null }, numbers = [{ location_id: 'L1' }]) =>
     fakeDb((q) => {
       if (q.table === 'contacts') return { data: contact, error: null }
-      if (q.table === 'whatsapp_numbers') return { data: numbers, error: null }
+      if (q.table === 'location_whatsapp_numbers') return numbers instanceof Error ? { data: null, error: { message: numbers.message } } : { data: numbers, error: null }
       return { data: null, error: null }
     })
 
@@ -262,6 +262,25 @@ describe('sendWaitlistOffer', () => {
     expect(maybeSendBookingWhatsappConfirm).not.toHaveBeenCalled()
   })
 
+  // WAORGNUMBER.1 — "has WhatsApp" is a number switched on at the event's
+  // studio (location_whatsapp_numbers), whatever that number's home studio.
+  it('asks the link table about the event studio, never whatsapp_numbers', async () => {
+    const db = offerDb()
+    await sendWaitlistOffer(db, { race: RACE, row: ROW, now: NOW })
+    const reads = db.queries.filter((q) => q.table === 'location_whatsapp_numbers')
+    expect(reads).toHaveLength(1)
+    expect(reads[0].ops).toContainEqual(['in', 'location_id', ['L1']])
+    expect(reads[0].ops).toContainEqual(['eq', 'whatsapp_numbers.is_active', true])
+    expect(db.queries.some((q) => q.table === 'whatsapp_numbers')).toBe(false)
+  })
+
+  it('a failed number read is failed (logged), never a send and never no_number', async () => {
+    const res = await sendWaitlistOffer(offerDb(undefined, new Error('boom')), { race: RACE, row: ROW, now: NOW })
+    expect(res).toEqual({ email: 'sent', whatsapp: 'failed' })
+    expect(logWarn).toHaveBeenCalledWith('event-waitlist', expect.stringContaining('WhatsApp number read failed'), expect.objectContaining({ waitlistId: 'wl1' }))
+    expect(maybeSendBookingWhatsappConfirm).not.toHaveBeenCalled()
+  })
+
   it('a WhatsAppNumberMissingError that escapes is no_number too; any other throw is failed, never escapes', async () => {
     maybeSendBookingWhatsappConfirm.mockRejectedValueOnce(new WhatsAppNumberMissingError('L1'))
     expect((await sendWaitlistOffer(offerDb(), { race: RACE, row: ROW, now: NOW })).whatsapp).toBe('skipped:no_number')
@@ -303,7 +322,7 @@ describe('runWaitlistOffers', () => {
       if (q.table === 'race_events') return { data: race ? [race] : [], error: null }
       if (q.table === 'race_registrations') return { data: regs, error: null }
       if (q.table === 'contacts') return { data: { id: 'c1', wa_status: null }, error: null }
-      if (q.table === 'whatsapp_numbers') return { data: [{ id: 'n1' }], error: null }
+      if (q.table === 'location_whatsapp_numbers') return { data: [{ location_id: 'L1' }], error: null }
       return { data: null, error: null }
     })
   }

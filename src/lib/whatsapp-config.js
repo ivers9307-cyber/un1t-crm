@@ -73,6 +73,9 @@ function rowToConfig(row, forLocationId) {
     // (TIER_250 … UNLIMITED, null = never fetched). The blast/drip tier-budget
     // gates read this.
     messagingLimitTier: row.messaging_limit_tier ?? null,
+    // WA-QUALITY — when quality/tier were last fetched (null = never); the
+    // hub's health card tells "Checking…" from "Unavailable" by it.
+    qualityCheckedAt: row.quality_checked_at ?? null,
   }
 }
 
