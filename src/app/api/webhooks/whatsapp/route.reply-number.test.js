@@ -8,8 +8,8 @@
 // Mia's turn are untouched. WAORGNUMBER.5: the studio is decided by
 // routeInboundThread (mocked here; its rules are whatsapp-inbound-route.test.js,
 // end to end route.inbound-route.test.js), and the stamp is written when the
-// receiving number is switched on at the winning studio, or the thread is at a
-// number-less home studio (transitional WAHOMESTUDIO.1, 'numberless_home').
+// receiving number is switched on at the winning studio (WAORGNUMBER.6: only
+// then).
 // Harness copied from route.test.js (SAAS-2 routing contract).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -168,7 +168,7 @@ const msgInsert = () => db.calls.find((c) => c.table === 'whatsapp_messages' && 
 const routed = (r) => routeInboundThread.mockResolvedValueOnce({ conversation: null, switchedOn: true, ...r })
 
 describe('POST /api/webhooks/whatsapp — the inbound router decides the studio (WAORGNUMBER.5)', () => {
-  it('asks the router with the receiving number, its home, its organisation, the sender, the contact, the quoted id and the referral', async () => {
+  it('asks the router with the receiving number, its home, the sender, the contact, the quoted id and the referral', async () => {
     pickInboundContact.mockReturnValueOnce({ id: 'contact-9', location_id: 'loc-hatch' })
     resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
     const env = inboundCtwa(REGISTERED_PNI)
@@ -177,7 +177,6 @@ describe('POST /api/webhooks/whatsapp — the inbound router decides the studio 
     expect(routeInboundThread).toHaveBeenCalledWith(db, {
       numberId: 'wn-1',
       numberHomeLocationId: 'loc-still',
-      organizationId: 'org-1',
       waPhone: '353871234567',
       bsuid: null,
       contact: { id: 'contact-9', location_id: 'loc-hatch' },
@@ -255,45 +254,6 @@ describe('POST /api/webhooks/whatsapp — the receiving number is recorded on th
     await POST(reqFor(inboundText(REGISTERED_PNI)))
     expect(convInserts()[0].ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-other' })
     expect(stamps()).toEqual([])
-  })
-
-  // WAHOMESTUDIO.1 (R2/R3), transitional until WAORGNUMBER.6 — while Hatch has
-  // nothing switched on, its threads land at Hatch and reply through the
-  // receiving number stamped on them.
-  it('numberless_home: the thread is AT the number-less home studio and stamped with the receiving number', async () => {
-    pickInboundContact.mockReturnValueOnce({ id: 'contact-9', location_id: 'loc-hatch' })
-    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
-    routed({ locationId: 'loc-hatch', by: 'numberless_home', switchedOn: false })
-    await POST(reqFor(inboundText(REGISTERED_PNI)))
-    expect(convInserts()[0].ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-hatch', contact_id: 'contact-9' })
-    expect(msgInsert().ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-hatch' })
-    expect(maybeAutoReply).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-hatch' }))
-    expect(stamps().map((c) => c.ops)).toEqual([[['update', { whatsapp_number_id: 'wn-1' }], ['eq', 'id', 'conv-1']]])
-  })
-
-  it('numberless_home (a thread staff moved there): the message joins it and nothing new opens', async () => {
-    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
-    routed({ locationId: 'loc-hatch', by: 'numberless_home', switchedOn: false, conversation: { id: 'conv-hatch', location_id: 'loc-hatch', contact_id: null, ctwa_clid: null, studio_resolution: null } })
-    await POST(reqFor(inboundFlowReply(REGISTERED_PNI)))
-    expect(convInserts()).toEqual([])
-    expect(msgInsert().ops.find(([m]) => m === 'insert')[1]).toMatchObject({ conversation_id: 'conv-hatch', location_id: 'loc-hatch' })
-    // The Flow was minted by a send through the receiving number, so it completes at that number's studio.
-    expect(handleFlowCompletion).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-still' }))
-  })
-
-  it('numberless_home: the CTWA Lead stays with the receiving number’s studio (a number-less studio has no token to send it)', async () => {
-    pickInboundContact.mockReturnValueOnce({ id: 'contact-9', location_id: 'loc-hatch' })
-    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
-    routed({ locationId: 'loc-hatch', by: 'numberless_home', switchedOn: false })
-    await POST(reqFor(inboundCtwa(REGISTERED_PNI)))
-    expect(convInserts()[0].ops.find(([m]) => m === 'insert')[1]).toMatchObject({ location_id: 'loc-hatch', ctwa_clid: 'clid-1' })
-    expect(recordCtwaTouch).toHaveBeenCalledWith(db, expect.objectContaining({ ctwaClid: 'clid-1', locationId: 'loc-still' }))
-
-    vi.clearAllMocks()
-    pickInboundContact.mockReturnValueOnce({ id: 'contact-9', location_id: 'loc-hatch' })
-    routed({ locationId: 'loc-hatch', by: 'numberless_home', switchedOn: false, conversation: { id: 'conv-hatch', location_id: 'loc-hatch', contact_id: null, ctwa_clid: 'clid-old', studio_resolution: null } })
-    await POST(reqFor(inboundText(REGISTERED_PNI)))
-    expect(recordCtwaTouch).toHaveBeenCalledWith(db, expect.objectContaining({ ctwaClid: 'clid-old', conversationId: null, locationId: 'loc-still' }))
   })
 
   it('a thread insert that loses the unique race re-reads the thread, so the message is not lost', async () => {

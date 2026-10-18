@@ -138,7 +138,7 @@ describe('getLocationWhatsAppNumberConfig — the location tier only (WAROLE.1)'
       links: [link('loc-1', 'n1', { is_default: true })],
     }))
     const cfg = await getLocationWhatsAppNumberConfig('loc-1')
-    expect(cfg).toMatchObject({ source: 'db', id: 'n1', locationId: 'loc-1', homeLocationId: 'loc-1', organizationId: 'org-1', viaSibling: false, phoneNumberId: 'PNI-123', token: 'tok-default' })
+    expect(cfg).toMatchObject({ source: 'db', id: 'n1', locationId: 'loc-1', homeLocationId: 'loc-1', organizationId: 'org-1', phoneNumberId: 'PNI-123', token: 'tok-default' })
   })
 
   it('no row at the location → null, even with the global env number set (never the env tier)', async () => {
@@ -319,7 +319,7 @@ describe('WAORGNUMBER.1 — the resolver reads location_whatsapp_numbers', () =>
       links: [link(STILL, 'n-still', { is_default: true }), link(HATCH, 'n-still', { is_default: true })],
     }))
     const cfg = await getLocationWhatsAppNumberConfig(HATCH)
-    expect(cfg).toMatchObject({ id: 'n-still', locationId: HATCH, homeLocationId: STILL, organizationId: 'org-1', viaSibling: false })
+    expect(cfg).toMatchObject({ id: 'n-still', locationId: HATCH, homeLocationId: STILL, organizationId: 'org-1' })
     expect((await getWhatsAppConfig(STILL))).toMatchObject({ locationId: STILL, homeLocationId: STILL })
   })
 
@@ -373,7 +373,7 @@ describe('WAORGNUMBER.1 — the resolver reads location_whatsapp_numbers', () =>
 
   it('getWhatsAppConfigById names the number’s home studio', async () => {
     createServerClient.mockReturnValue(fakeWhatsAppDb({ numbers: [n('n-1', { location_id: HATCH })] }))
-    expect(await getWhatsAppConfigById('n-1')).toMatchObject({ id: 'n-1', locationId: HATCH, homeLocationId: HATCH, viaSibling: false })
+    expect(await getWhatsAppConfigById('n-1')).toMatchObject({ id: 'n-1', locationId: HATCH, homeLocationId: HATCH })
   })
 })
 

@@ -518,7 +518,7 @@ export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locati
       console.warn(`[wa-consent] no phone for contact ${contact.id} — consent applied but ack skipped`)
     }
     if (to) {
-      // WAHOMESTUDIO.1 — through the thread's number (a number-less studio's thread replies through its sibling's).
+      // Through the thread's number while it is switched on at this studio (WAREPLYNUMBER.1).
       const result = await sendTextMessage(to, ack, { locationId, ...(conversationId ? { replyInConversation: conversationId } : {}) })
       if (conversationId) {
         const { error: msgError } = await db.from('whatsapp_messages').insert({

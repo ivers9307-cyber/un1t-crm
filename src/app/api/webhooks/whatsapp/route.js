@@ -180,13 +180,10 @@ export async function POST(request) {
         // arbitrary tenant. Still 200s below: Meta auto-disables webhooks
         // on non-2xx.
         let routing = { action: 'drop' }
-        // WAORGNUMBER.5 — the number's organisation, for the inbound router.
-        let organizationId = null
         if (phoneNumberId) {
           try {
             const owner = await resolveWhatsAppNumberByPhoneNumberId(phoneNumberId)
             routing = classifyInboundOwner(owner)
-            organizationId = owner?.organizationId || null
           } catch (e) {
             console.error(`[wa-webhook] DROP messages change: phone_number_id ${phoneNumberId} lookup failed: ${e.message}`)
             continue
@@ -211,7 +208,7 @@ export async function POST(request) {
               })
               if (dedup.seen) continue
             }
-            await handleIncomingMessage(db, message, value.contacts, routing.locationId, routing.numberId, organizationId)
+            await handleIncomingMessage(db, message, value.contacts, routing.locationId, routing.numberId)
           }
         }
 
@@ -243,8 +240,7 @@ export async function POST(request) {
 
 // `defaultLocationId` is the HOME studio of the recipient phone_number_id —
 // already resolved (and unroutable traffic dropped) by the POST loop.
-// `receivingNumberId` is that whatsapp_numbers row (WAREPLYNUMBER.1) and
-// `organizationId` its organisation (WAORGNUMBER.5).
+// `receivingNumberId` is that whatsapp_numbers row (WAREPLYNUMBER.1).
 // WAORGNUMBER.3b — the contact an inbound message acts for: the routed thread's
 // own contact when it has one, else the phone match. The thread's contact is
 // taken from the phone matches when it is among them, else read by id within
@@ -274,7 +270,7 @@ async function threadContactFor(db, { existingConv, phoneContact, matches, orgLo
   return data
 }
 
-async function handleIncomingMessage(db, message, contacts, defaultLocationId, receivingNumberId = null, organizationId = null) {
+async function handleIncomingMessage(db, message, contacts, defaultLocationId, receivingNumberId = null) {
   const senderPhone = message.from  // E.164 format
   const messageId = message.id
   const timestamp = message.timestamp ? new Date(parseInt(message.timestamp) * 1000) : new Date()
@@ -343,16 +339,14 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // reply goes with whoever spoke last: the quoted message's thread, a
   // click-to-WhatsApp ad's studio, the thread with the latest outbound in 7
   // days, the contact's home studio, else the number's home studio (spec R4;
-  // src/lib/whatsapp-inbound-route.js). Transitional (WAHOMESTUDIO.1, until
-  // WAORGNUMBER.6): a contact homed at a studio with nothing switched on, or a
-  // thread staff moved to one, still lands there ('numberless_home'). Never
-  // throws; a failed read falls through to the next rule. Consent keywords,
-  // Mia, the greeting and the push act at this studio; the CTWA Lead and Flow
-  // completions act at `actingLocationId` (below).
+  // src/lib/whatsapp-inbound-route.js). It only ever picks a studio the
+  // number is switched on at, or the number's home (WAORGNUMBER.6 removed the
+  // number-less home studio). Never throws; a failed read falls through to the
+  // next rule. Everything below (consent keywords, Mia, the greeting, the push,
+  // the CTWA Lead, Flow completions) acts at this studio.
   const route = await routeInboundThread(db, {
     numberId: receivingNumberId,
     numberHomeLocationId: defaultLocationId,
-    organizationId,
     waPhone: senderPhone,
     bsuid: extractInboundBsuid(contacts, senderPhone),
     contact,
@@ -362,21 +356,9 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   let locationId = route.locationId
   const existingConv = route.conversation
 
-  // R4 step 6 — stamp the receiving number when it is switched on at the
-  // winning studio, or (transitionally) when the thread is at a number-less
-  // home studio, which replies through it (getConversationNumberConfig).
-  const stampReceivingNumber = route.switchedOn || route.by === 'numberless_home'
-
-  // The studio whose number, Flows, ads and Glofox the customer is talking to.
-  // It is the routed studio, except for a thread at a number-less home studio
-  // (transitional, until WAORGNUMBER.6): that studio has no number, token or
-  // dataset, so what went out through the receiving number (the CTWA Lead, a
-  // Flow's slot list and its completion) belongs to the receiving number's
-  // studio, as before. Otherwise the Lead would be dropped for good (no_token;
-  // the click id is stamped on the contact on first sight, never retried) and a
-  // Flow minted by a Stillorgan send would book at Hatch with a Stillorgan
-  // Glofox event id.
-  const actingLocationId = route.by === 'numberless_home' ? defaultLocationId : locationId
+  // Stamp the receiving number when it is switched on at the winning studio
+  // (getConversationNumberConfig replies through it).
+  const stampReceivingNumber = route.switchedOn
 
   // WAORGNUMBER.3b — the contact this message is FROM, as far as everything
   // below is concerned. Several contacts can share one phone (7 shared Richard's
@@ -401,7 +383,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
       // CTWA backfill: the click id landed while the sender was unknown —
       // move it onto the newly linked contact (fires the Lead event once).
       if (existingConv.ctwa_clid) {
-        await recordCtwaTouch(db, { ctwaClid: existingConv.ctwa_clid, conversationId: null, contact, locationId: actingLocationId })
+        await recordCtwaTouch(db, { ctwaClid: existingConv.ctwa_clid, conversationId: null, contact, locationId })
       }
     }
   } else {
@@ -444,9 +426,8 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // reply into this thread (staff send, Flow, carousel, reaction, Mia, her
   // confirmations) goes from it rather than the studio's default
   // (getConversationReplyConfig). When that number is switched on at the
-  // thread's studio (WAORGNUMBER.5), or the thread is at a number-less home
-  // studio (WAHOMESTUDIO.1, transitional); a thread at a studio that has only
-  // other numbers switched on replies from its own. Its OWN update, logged: a
+  // thread's studio (WAORGNUMBER.5); a thread at a studio that has only other
+  // numbers switched on replies from its own. Its OWN update, logged: a
   // lost stamp (the column missing before mig 696 is applied included) costs
   // only the stamp, never the message, the thread or Mia's turn.
   if (receivingNumberId && stampReceivingNumber) {
@@ -458,7 +439,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
 
   // CTWA attribution — stamp the click id (conversation + contact) and fire
   // the Lead conversion once. Swallows its own errors; never blocks the webhook.
-  await recordCtwaTouch(db, { ctwaClid: message.referral?.ctwa_clid, conversationId, contact: actingContact, locationId: actingLocationId })
+  await recordCtwaTouch(db, { ctwaClid: message.referral?.ctwa_clid, conversationId, contact: actingContact, locationId })
 
   // WA-BSUID.1 — capture Meta's Business-Scoped User ID (arrives as
   // contacts[].user_id once usernames roll out) onto the matched
@@ -519,7 +500,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     case 'interactive':
       if (message.interactive?.type === 'nfm_reply') {
         // A completed WhatsApp Flow ("Book your first visit"). Book it, then log a marker.
-        try { await handleFlowCompletion(db, { interactive: message.interactive, contact: actingContact, locationId: actingLocationId }) }
+        try { await handleFlowCompletion(db, { interactive: message.interactive, contact: actingContact, locationId }) }
         catch (e) { console.error('[wa-webhook] flow completion failed:', e.message) }
         body = '[Booking submitted via WhatsApp Flow]'
       } else {
@@ -947,7 +928,7 @@ async function handleCoexistenceEvent(db, field, value) {
     if (!d.waMessageId) continue
     const dedup = await recordWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.WHATSAPP, eventId: `coex:${d.waMessageId}` })
     if (dedup.seen) continue
-    try { await ingestCoexistenceMessage(db, { locationId, numberId: routing.numberId, organizationId: owner?.organizationId || null, descriptor: d }) }
+    try { await ingestCoexistenceMessage(db, { locationId, numberId: routing.numberId, descriptor: d }) }
     catch (e) { console.error('[wa-webhook] coexistence ingest failed:', e?.message) }
   }
 
