@@ -219,9 +219,10 @@ describe('prompt variants', () => {
         }
       }
     }
-    // The single-studio read prompt names neither booking write nor the payment reminder.
+    // The single-studio read prompt names neither booking write; it names the payment reminder (MIAHATCH.3).
     const { stable } = buildCustomerSystemPromptParts(hatchOpts({ un1tVariant: 'read' }))
-    for (const tool of ['book_class', 'cancel_class_booking', 'get_my_payment_reminder']) expect(stable).not.toContain(tool)
+    for (const tool of ['book_class', 'cancel_class_booking']) expect(stable).not.toContain(tool)
+    expect(stable).toContain('get_my_payment_reminder')
   })
 
   it('bookings: true (what auto-reply passes at Glofox) is the same bytes, and ignores a booking link', () => {

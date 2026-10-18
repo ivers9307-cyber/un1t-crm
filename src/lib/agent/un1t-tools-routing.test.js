@@ -40,9 +40,9 @@ beforeEach(() => {
 describe('un1t block -> executeUn1tRead', () => {
   it.each([
     ['un1t_read'], ['un1t_read_dual'], ['un1t_full'],
-  ])('routes the three account reads in %s with the turn\'s answerable studios', async (block) => {
+  ])('routes the four account reads in %s with the turn\'s answerable studios', async (block) => {
     const db = recordingDb()
-    for (const tool of ['get_my_membership', 'get_my_next_class', 'get_my_recent_attendance']) {
+    for (const tool of ['get_my_membership', 'get_my_next_class', 'get_my_recent_attendance', 'get_my_payment_reminder']) {
       const ctx = ctxOf(db, { turn: turn(block) })
       expect(await executeAccountTool(tool, { x: 1 }, ctx)).toEqual({ routed: 'un1t' })
       expect(probe.executeUn1tRead).toHaveBeenLastCalledWith(tool, { x: 1 }, ctx, ctx.turn.answerable)
@@ -63,9 +63,9 @@ describe('un1t block -> executeUn1tRead', () => {
     expect(await executeBookingTool('list_my_upcoming_bookings', {}, ctx)).toEqual(expected)
     expect(probe.executeUn1tRead).not.toHaveBeenCalled()
   })
-  it('tools outside the four reads keep their own executor in a un1t block', async () => {
+  it('tools outside the account reads keep their own executor in a un1t block', async () => {
     const db = recordingDb()
-    expect(await executeAccountTool('get_my_payment_reminder', {}, ctxOf(db, { turn: turn('un1t_read') })))
+    expect(await executeAccountTool('request_refund', {}, ctxOf(db, { turn: turn('un1t_read') })))
       .toMatchObject({ error: 'not_available_at_this_studio' })
     expect(probe.executeUn1tRead).not.toHaveBeenCalled()
   })
