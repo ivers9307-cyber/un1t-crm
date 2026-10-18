@@ -83,6 +83,34 @@ describe('compactDecisionMeta', () => {
     expect(meta.tools[0].input).toBe('{}')
   })
 
+  // MIAHATCH.1 — which studios the turn resolved the person at.
+  it('records member_studios as ids and flags only (no names, no contact or member ids)', () => {
+    const meta = compactDecisionMeta({
+      iterations: 1,
+      memberStudios: [
+        { locationId: 'loc-a', name: 'UN1T Stillorgan', providerKey: 'glofox', active: false, answerable: true, contactIds: ['c-1'], glofoxMemberId: 'gm-1' },
+        { locationId: 'loc-b', name: 'UN1T Hatch Street', providerKey: 'un1t_online', active: true, answerable: false, contactIds: ['c-2'], un1tUserId: 'u-1' },
+      ],
+    })
+    expect(meta.member_studios).toEqual([
+      { location_id: 'loc-a', provider: 'glofox', active: false, answerable: true },
+      { location_id: 'loc-b', provider: 'un1t_online', active: true, answerable: false },
+    ])
+    const raw = JSON.stringify(meta)
+    for (const leak of ['Stillorgan', 'Hatch', 'c-1', 'c-2', 'gm-1', 'u-1']) expect(raw).not.toContain(leak)
+  })
+
+  it('omits member_studios when the turn did not resolve (absent or empty)', () => {
+    expect(compactDecisionMeta({ iterations: 1 })).toEqual({ iterations: 1 })
+    expect(compactDecisionMeta({ iterations: 1, memberStudios: [] })).toEqual({ iterations: 1 })
+    expect(compactDecisionMeta({ memberStudios: null })).toBeNull()
+  })
+
+  it('caps member_studios', () => {
+    const memberStudios = Array.from({ length: 20 }, (_, i) => ({ locationId: `l${i}`, providerKey: 'glofox', active: true, answerable: true }))
+    expect(compactDecisionMeta({ memberStudios }).member_studios).toHaveLength(8)
+  })
+
   // MIA-HYGIENE.4 — a model_error row used to carry meta: null, so the trace
   // said a turn failed but not how. Live example: the 2026-08-12 model_error
   // on WhatsApp, undiagnosable after the fact because the status code and

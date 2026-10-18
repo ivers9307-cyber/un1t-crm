@@ -91,3 +91,26 @@ export function refuseAtNoBookingStudio(toolName, ctx) {
   if (!BOOKING_SYSTEM_TOOL_NAMES.has(toolName)) return null
   return { ...TOOL_NOT_AT_THIS_STUDIO }
 }
+
+// MIAHATCH.1 — a person whose only live membership is at ANOTHER studio of the
+// organisation (Hatch Street, on un1t.online) while this studio's Mia is the
+// one talking to them. The Stillorgan contact's Glofox columns say "no
+// membership" for them, which is true of Stillorgan and false of the person, so
+// the booking-system and account tools answer this instead of reading them.
+export const MEMBERSHIP_AT_OTHER_STUDIO_ERROR = 'membership_at_other_studio'
+
+/**
+ * What Mia is told when the person's membership is at a studio she cannot
+ * answer for yet. Plain words, no em or en dashes (it is paraphrased to the
+ * customer). Pure.
+ */
+export function membershipAtOtherStudio(studioName) {
+  const studio = String(studioName || '').trim() || 'another studio'
+  return {
+    error: MEMBERSHIP_AT_OTHER_STUDIO_ERROR,
+    studio,
+    message:
+      `This person's membership is at ${studio}, which you cannot answer for yet. Nothing was looked up. ` +
+      `Say you can see they train at ${studio} and hand off to the team.`,
+  }
+}
