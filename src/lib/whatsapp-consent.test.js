@@ -10,7 +10,7 @@
 // when present. These tests pin the upsert + the unchanged behaviour of
 // the denormalised contacts.wa_status write and the consent_log audit.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { applyWhatsappConsentKeyword, applyMetaUserPreference } from './whatsapp-consent.js'
+import { applyWhatsappConsentKeyword, applyMetaUserPreference, consentAckText } from './whatsapp-consent.js'
 
 vi.mock('./whatsapp', () => ({
   sendTextMessage: vi.fn().mockResolvedValue({ messageId: 'wamid.ack' }),
@@ -18,43 +18,64 @@ vi.mock('./whatsapp', () => ({
 
 import { sendTextMessage } from './whatsapp'
 
-// Chainable stub that records every write. `upsert` resolves directly
-// (the code awaits the builder); `update` supports the .eq(...) /
-// .eq().eq() chains used across the module.
+// Chainable stub that records every write. Every builder resolves when
+// awaited (the code awaits the builder), after any .select/.eq/.or/.limit.
 //
-// `failOn` is a { table: message } map — a resolved `{ error }`, which is what
-// supabase-js actually does. It never throws, on purpose: the writes here used
-// to sit in a try/catch that could not fire, which is exactly how a failed
-// opt-out kept returning `applied: true`.
-function stubDb({ writes, failOn = {} }) {
-  const resultFor = (table) =>
-    failOn[table] ? { error: { message: failOn[table] } } : { error: null }
+// `failOn` is a { table | 'table.op': message } map — a resolved `{ error }`,
+// which is what supabase-js actually does. It never throws, on purpose: the
+// writes here used to sit in a try/catch that could not fire, which is exactly
+// how a failed opt-out kept returning `applied: true`.
+//
+// contact_location_preferences is modelled as a set of `contact|location` keys:
+// an ignoreDuplicates upsert returns the row only when it CREATED it, and an
+// update returns the rows it matched (a zero-row UPDATE is not an error).
+function stubDb({ writes, failOn = {}, studioRows = [], location = null, locationError = null }) {
+  const rowsAt = new Set(studioRows)
+  const errorFor = (table, op) => {
+    const msg = failOn[`${table}.${op}`] ?? failOn[table]
+    return msg ? { message: msg } : null
+  }
   return {
     from(table) {
-      return {
-        upsert: (row, opts) => {
-          writes.push({ table, op: 'upsert', row, opts })
-          return Promise.resolve(resultFor(table))
-        },
-        update: (patch) => {
-          const record = (filters) => {
-            writes.push({ table, op: 'update', patch, filters })
-            return Promise.resolve(resultFor(table))
+      const q = { op: 'select', filters: {} }
+      const run = () => {
+        if (q.op === 'select') {
+          if (table === 'locations') return { data: locationError ? null : location, error: locationError }
+          return { data: [{ id: 'c1' }], error: null }
+        }
+        const entry = { table, op: q.op, filters: q.filters }
+        if (q.row) entry.row = q.row
+        if (q.opts) entry.opts = q.opts
+        if (q.patch) entry.patch = q.patch
+        writes.push(entry)
+        const error = errorFor(table, q.op)
+        if (error) return { data: null, error }
+        if (table === 'contact_location_preferences') {
+          if (q.op === 'upsert') {
+            const key = `${q.row.contact_id}|${q.row.location_id}`
+            if (rowsAt.has(key)) return { data: [], error: null }
+            rowsAt.add(key)
+            return { data: [{ contact_id: q.row.contact_id }], error: null }
           }
-          const chain = (filters) => ({
-            eq: (col, val) => chain({ ...filters, [col]: val }),
-            then: (resolve, reject) => record(filters).then(resolve, reject),
-          })
-          return chain({})
-        },
-        insert: (row) => {
-          writes.push({ table, op: 'insert', row })
-          return Promise.resolve(resultFor(table))
-        },
-        select: () => ({
-          or: () => ({ limit: () => Promise.resolve({ data: [{ id: 'c1' }] }) }),
-        }),
+          if (q.op === 'update') {
+            const key = `${q.filters.contact_id}|${q.filters.location_id}`
+            return { data: rowsAt.has(key) ? [{ contact_id: q.filters.contact_id }] : [], error: null }
+          }
+        }
+        return { data: null, error: null }
       }
+      Object.assign(q, {
+        upsert(row, opts) { q.op = 'upsert'; q.row = row; q.opts = opts; return q },
+        insert(row) { q.op = 'insert'; q.row = row; return q },
+        update(patch) { q.op = 'update'; q.patch = patch; return q },
+        select() { return q },
+        eq(col, val) { q.filters = { ...q.filters, [col]: val }; return q },
+        or() { return q },
+        limit() { return q },
+        maybeSingle() { return Promise.resolve(run()) },
+        then(resolve, reject) { return Promise.resolve(run()).then(resolve, reject) },
+      })
+      return q
     },
   }
 }
@@ -63,7 +84,10 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('applyWhatsappConsentKeyword — STOP', () => {
+// These pin the CONTACT-WIDE path, which since WAORGNUMBER.3 runs only when
+// the keyword arrives with no studio (locationId null; Review Focus 3: exactly
+// today's three writes). The studio path is pinned further down.
+describe('applyWhatsappConsentKeyword — STOP, no studio (contact-wide)', () => {
   it('UPSERTS contact_preferences by contact_id so a contact with no row still opts out', async () => {
     const writes = []
     const db = stubDb({ writes })
@@ -71,7 +95,7 @@ describe('applyWhatsappConsentKeyword — STOP', () => {
       db,
       contact: { id: 'c1' },
       waPhone: '353871234567',
-      locationId: 'loc1',
+      locationId: null,
       conversationId: 'conv1',
       keyword: 'stop',
     })
@@ -89,7 +113,7 @@ describe('applyWhatsappConsentKeyword — STOP', () => {
     const db = stubDb({ writes })
     await applyWhatsappConsentKeyword({
       db, contact: { id: 'c1' }, waPhone: '353871234567',
-      locationId: 'loc1', conversationId: 'conv1', keyword: 'stop',
+      locationId: null, conversationId: 'conv1', keyword: 'stop',
     })
 
     const contactWrite = writes.find(w => w.table === 'contacts')
@@ -111,7 +135,7 @@ describe('applyWhatsappConsentKeyword — STOP', () => {
     expect(sendTextMessage).toHaveBeenCalledWith(
       '353871234567',
       expect.stringContaining('unsubscribed'),
-      expect.objectContaining({ locationId: 'loc1', replyInConversation: 'conv1' }),
+      expect.objectContaining({ locationId: null, replyInConversation: 'conv1' }),
     )
   })
 
@@ -120,7 +144,7 @@ describe('applyWhatsappConsentKeyword — STOP', () => {
     const db = stubDb({ writes })
     const r = await applyWhatsappConsentKeyword({
       db, contact: { id: 'c1' }, waPhone: '353871234567',
-      locationId: 'loc1', conversationId: 'conv1', keyword: 'start',
+      locationId: null, conversationId: 'conv1', keyword: 'start',
     })
     expect(r).toMatchObject({ applied: true, action: 'opt_in' })
 
@@ -172,7 +196,7 @@ describe('BAREWRITE.4 — one failed consent write never suppresses the others',
       const db = stubDb({ writes, failOn: { [failing]: 'connection reset' } })
       const r = await applyWhatsappConsentKeyword({
         db, contact: { id: 'c1' }, waPhone: '353871234567',
-        locationId: 'loc1', conversationId: 'conv1', keyword: 'stop',
+        locationId: null, conversationId: 'conv1', keyword: 'stop',
       })
 
       // THE REGRESSION. Under BAREWRITE.1 this write never happened when the
@@ -200,7 +224,7 @@ describe('BAREWRITE.4 — one failed consent write never suppresses the others',
     const db = stubDb({ writes, failOn: { contact_preferences: 'down', contacts: 'down' } })
     const r = await applyWhatsappConsentKeyword({
       db, contact: { id: 'c1' }, waPhone: '353871234567',
-      locationId: 'loc1', conversationId: 'conv1', keyword: 'stop',
+      locationId: null, conversationId: 'conv1', keyword: 'stop',
     })
 
     // Both were still ATTEMPTED — that is the whole point.
@@ -217,7 +241,7 @@ describe('BAREWRITE.4 — one failed consent write never suppresses the others',
     const db = stubDb({ writes, failOn: { contacts: 'deadlock detected' } })
     const r = await applyWhatsappConsentKeyword({
       db, contact: { id: 'c1' }, waPhone: '353871234567',
-      locationId: 'loc1', conversationId: 'conv1', keyword: 'start',
+      locationId: null, conversationId: 'conv1', keyword: 'start',
     })
 
     // Still attempted both — the flag flipped even though wa_status did not.
@@ -235,7 +259,7 @@ describe('BAREWRITE.4 — one failed consent write never suppresses the others',
     const db = stubDb({ writes, failOn: { consent_log: 'table locked' } })
     const r = await applyWhatsappConsentKeyword({
       db, contact: { id: 'c1' }, waPhone: '353871234567',
-      locationId: 'loc1', conversationId: 'conv1', keyword: 'stop',
+      locationId: null, conversationId: 'conv1', keyword: 'stop',
     })
 
     // Both suppression gates landed — refusing here would leave the customer
@@ -304,7 +328,188 @@ describe('WACONFIGFALLBACK.1 — STOP ack refused for a missing number', () => {
       locationId: 'loc1', conversationId: 'conv1', keyword: 'stop',
     })
     expect(r).toMatchObject({ applied: true, action: 'opt_out' })
-    expect(writes.some((w) => w.table === 'contact_preferences')).toBe(true)
+    expect(writes.some((w) => w.table === 'contact_location_preferences')).toBe(true)
     expect(writes.some((w) => w.table === 'whatsapp_messages')).toBe(false)
+  })
+})
+
+// ── WAORGNUMBER.3 (R6) — STOP and START act at the studio whose thread they ──
+// arrive in. One number can be switched on at two studios: STOP in a Hatch
+// Street thread stops Hatch Street, not Stillorgan. Nothing contact-wide is
+// written, because the mig 489/543 trigger fans a contact-wide false out to
+// every studio's row.
+describe('WAORGNUMBER.3 — the keyword writes the thread studio\'s row', () => {
+  const HATCH = 'loc-hatch'
+  const hatch = { name: 'UN1T Hatch Street', settings: {} }
+  const keywordAt = (db, keyword, locationId = HATCH) => applyWhatsappConsentKeyword({
+    db, contact: { id: 'c1' }, waPhone: '353871234567', locationId, conversationId: 'conv1', keyword,
+  })
+
+  it('STOP at Hatch writes only Hatch\'s row and a located log row', async () => {
+    const writes = []
+    const r = await keywordAt(stubDb({ writes, studioRows: ['c1|loc-hatch'], location: hatch }), 'stop')
+    expect(r).toEqual({ applied: true, action: 'opt_out' })
+
+    // Nothing contact-wide: no contact_preferences write (it would fan out to
+    // every studio) and no contacts.wa_status.
+    expect(writes.some((w) => w.table === 'contact_preferences')).toBe(false)
+    expect(writes.some((w) => w.table === 'contacts')).toBe(false)
+
+    const studio = writes.filter((w) => w.table === 'contact_location_preferences')
+    // The row exists, so the create-if-missing is a no-op and the update flips
+    // ONLY WhatsApp, at Hatch only.
+    expect(studio[0]).toMatchObject({ op: 'upsert', opts: { onConflict: 'contact_id,location_id', ignoreDuplicates: true } })
+    expect(studio[1]).toMatchObject({ op: 'update', filters: { contact_id: 'c1', location_id: HATCH } })
+    expect(Object.keys(studio[1].patch).sort()).toEqual(['updated_at', 'whatsapp_marketing'])
+    expect(studio[1].patch.whatsapp_marketing).toBe(false)
+
+    const log = writes.find((w) => w.table === 'consent_log')
+    expect(log.row).toEqual({
+      contact_id: 'c1', channel: 'whatsapp_marketing', action: 'opt_out', source: 'whatsapp_keyword', location_id: HATCH,
+    })
+  })
+
+  it('STOP at a studio with no row creates it with WhatsApp, email and SMS all OFF', async () => {
+    const writes = []
+    const r = await keywordAt(stubDb({ writes, location: hatch }), 'stop')
+    expect(r).toEqual({ applied: true, action: 'opt_out' })
+    const created = writes.find((w) => w.table === 'contact_location_preferences' && w.op === 'upsert')
+    // The table's channels default TRUE (creating the row is the opt-in act),
+    // so a row naming only WhatsApp would OPEN email and SMS here.
+    expect(created.row).toMatchObject({
+      contact_id: 'c1', location_id: HATCH,
+      whatsapp_marketing: false, email_marketing: false, sms_marketing: false,
+      source: 'whatsapp_keyword',
+    })
+    expect(created.row.unsubscribed_at).toBeTruthy()
+    // Created, so no second write.
+    expect(writes.filter((w) => w.table === 'contact_location_preferences')).toHaveLength(1)
+  })
+
+  it('START at Hatch upserts the row to true', async () => {
+    const writes = []
+    const r = await keywordAt(stubDb({ writes, location: hatch }), 'start')
+    expect(r).toEqual({ applied: true, action: 'opt_in' })
+    const created = writes.find((w) => w.table === 'contact_location_preferences' && w.op === 'upsert')
+    expect(created.row).toMatchObject({
+      contact_id: 'c1', location_id: HATCH, whatsapp_marketing: true, source: 'whatsapp_keyword',
+      // A WhatsApp START is not consent to email or SMS at the studio.
+      email_marketing: false, sms_marketing: false, unsubscribed_at: null,
+    })
+    expect(created.row.subscribed_at).toBeTruthy()
+    expect(writes.some((w) => w.table === 'contact_preferences' || w.table === 'contacts')).toBe(false)
+    expect(writes.find((w) => w.table === 'consent_log').row).toMatchObject({ action: 'opt_in', location_id: HATCH })
+  })
+
+  it('START on an existing row flips only WhatsApp back on', async () => {
+    const writes = []
+    await keywordAt(stubDb({ writes, studioRows: ['c1|loc-hatch'], location: hatch }), 'start')
+    const update = writes.find((w) => w.table === 'contact_location_preferences' && w.op === 'update')
+    expect(update.patch).toMatchObject({ whatsapp_marketing: true })
+    expect(Object.keys(update.patch).sort()).toEqual(['updated_at', 'whatsapp_marketing'])
+  })
+
+  it('STOP with no location keeps the contact-wide writes', async () => {
+    const writes = []
+    const r = await keywordAt(stubDb({ writes }), 'stop', null)
+    expect(r).toEqual({ applied: true, action: 'opt_out' })
+    // The three consent writes, then the ack's two thread writes.
+    expect(writes.map((w) => `${w.table}.${w.op}`)).toEqual([
+      'contact_preferences.upsert', 'contacts.update', 'consent_log.insert',
+      'whatsapp_messages.insert', 'whatsapp_conversations.update',
+    ])
+    expect(writes[0].row).toMatchObject({ contact_id: 'c1', whatsapp_marketing: false })
+    expect(writes[0].opts).toEqual({ onConflict: 'contact_id' })
+    expect(writes[1].patch).toEqual({ wa_status: 'opted_out' })
+    expect(writes[2].row).not.toHaveProperty('location_id')
+    expect(sendTextMessage).toHaveBeenCalledWith('353871234567', expect.stringContaining('unsubscribed'), expect.anything())
+  })
+
+  it('failed studio upsert → applied:false, no ack', async () => {
+    const writes = []
+    const r = await keywordAt(stubDb({ writes, failOn: { contact_location_preferences: 'connection reset' }, location: hatch }), 'stop')
+    expect(r).toMatchObject({ applied: false, reason: 'no_suppression_signal_landed' })
+    expect(r.failures.join(' ')).toContain('contact_location_preferences')
+    expect(sendTextMessage).not.toHaveBeenCalled()
+    // Still nothing contact-wide: a failure here must not widen the STOP.
+    expect(writes.some((w) => w.table === 'contact_preferences' || w.table === 'contacts')).toBe(false)
+  })
+
+  it('a failed create still attempts the update (one failed write never costs another)', async () => {
+    const writes = []
+    const r = await keywordAt(stubDb({
+      writes, studioRows: ['c1|loc-hatch'], failOn: { 'contact_location_preferences.upsert': 'deadlock detected' }, location: hatch,
+    }), 'stop')
+    expect(writes.find((w) => w.table === 'contact_location_preferences' && w.op === 'update')).toBeDefined()
+    expect(r).toMatchObject({ applied: true, action: 'opt_out', partial: true })
+    expect(sendTextMessage).toHaveBeenCalled()
+  })
+
+  it('START whose update touches no row is not acknowledged', async () => {
+    // The create reported no row created (a concurrent insert, say) and the
+    // update then matched nothing: the opt-in did not land.
+    const writes = []
+    const db = stubDb({ writes, failOn: { 'contact_location_preferences.upsert': 'timeout' }, location: hatch })
+    const r = await keywordAt(db, 'start')
+    expect(r).toMatchObject({ applied: false, reason: 'opt_in_incomplete' })
+    expect(r.failures.join(' ')).toContain('no row at this studio was changed')
+    expect(sendTextMessage).not.toHaveBeenCalled()
+  })
+
+  it('a lost audit row still applies and acknowledges', async () => {
+    const writes = []
+    const r = await keywordAt(stubDb({ writes, failOn: { consent_log: 'table locked' }, location: hatch }), 'stop')
+    expect(r).toMatchObject({ applied: true, action: 'opt_out', partial: true })
+    expect(sendTextMessage).toHaveBeenCalled()
+  })
+
+  it('ack names the studio and honours the operator copy', async () => {
+    await keywordAt(stubDb({ writes: [], location: hatch }), 'stop')
+    expect(sendTextMessage).toHaveBeenLastCalledWith(
+      '353871234567',
+      "You won't get WhatsApp marketing from UN1T Hatch Street any more. Reply START to opt back in.",
+      expect.objectContaining({ locationId: HATCH, replyInConversation: 'conv1' }),
+    )
+
+    await keywordAt(stubDb({ writes: [], location: hatch }), 'start')
+    expect(sendTextMessage).toHaveBeenLastCalledWith(
+      '353871234567',
+      "You're back on WhatsApp messages from UN1T Hatch Street. Reply STOP to opt out.",
+      expect.anything(),
+    )
+
+    const custom = { name: 'UN1T Hatch Street', settings: { whatsapp_consent_copy: { stop_ack: 'Done. {studio} will not message you. Text START to undo.' } } }
+    const writes = []
+    await keywordAt(stubDb({ writes, location: custom }), 'stop')
+    expect(sendTextMessage).toHaveBeenLastCalledWith('353871234567', 'Done. UN1T Hatch Street will not message you. Text START to undo.', expect.anything())
+    // The thread records the text that was actually sent.
+    expect(writes.find((w) => w.table === 'whatsapp_messages').row.body).toBe('Done. UN1T Hatch Street will not message you. Text START to undo.')
+  })
+
+  it('an unreadable studio still gets the default ack (the change already landed)', async () => {
+    await keywordAt(stubDb({ writes: [], locationError: { message: 'boom' } }), 'stop')
+    expect(sendTextMessage).toHaveBeenLastCalledWith(
+      '353871234567',
+      "You won't get WhatsApp marketing from us any more. Reply START to opt back in.",
+      expect.anything(),
+    )
+  })
+})
+
+describe('consentAckText', () => {
+  it('uses the defaults, replacing every {studio}', () => {
+    expect(consentAckText({ name: 'UN1T Stillorgan', settings: null }, true))
+      .toBe("You won't get WhatsApp marketing from UN1T Stillorgan any more. Reply START to opt back in.")
+    expect(consentAckText({ name: 'A', settings: { whatsapp_consent_copy: { start_ack: '{studio} {studio}' } } }, false)).toBe('A A')
+  })
+
+  it('a blank saved copy falls back to the default', () => {
+    expect(consentAckText({ name: 'A', settings: { whatsapp_consent_copy: { stop_ack: '   ' } } }, true))
+      .toBe("You won't get WhatsApp marketing from A any more. Reply START to opt back in.")
+  })
+
+  it('the defaults carry no em-dash (customer copy rule)', () => {
+    expect(consentAckText({ name: 'A' }, true)).not.toMatch(/\u2014/)
+    expect(consentAckText({ name: 'A' }, false)).not.toMatch(/\u2014/)
   })
 })

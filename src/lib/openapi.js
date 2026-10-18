@@ -27,6 +27,7 @@ import {
   orgWhatsAppNumberCreateSchema, orgWhatsAppEmbeddedSignupSchema,
   studioWhatsAppNumberSwitchSchema,
   studioPurposeTemplateSchema,
+  studioConsentCopySchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 import { PLATFORM_NAME } from './brand-name.js'
@@ -4521,6 +4522,48 @@ registry.registerPath({
   responses: {
     200: { description: 'The picks after the change', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaPurposeTemplates }) } } },
     400: { description: 'Invalid body, or the template is not this studio\'s, not approved, or the wrong category', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner, manager or master at this studio required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAORGNUMBER.3 (R6) — the studio's STOP / START acknowledgement copy
+const WaConsentCopyPair = z.object({ stop_ack: z.string().nullable(), start_ack: z.string().nullable() })
+const WaConsentCopy = z.object({
+  copy: WaConsentCopyPair,
+  defaults: z.object({ stop_ack: z.string(), start_ack: z.string() }),
+  studio_name: z.string().nullable(),
+  can_edit: z.boolean(),
+}).openapi('WaConsentCopy')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/whatsapp/consent-copy',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The reply a customer gets for STOP / START in a WhatsApp thread at this studio',
+  description: 'copy: the studio\'s saved text for each reply, or null (the default is used). defaults: the default text. {studio} in either is replaced with studio_name when sent. can_edit is true for an owner, manager or master at this studio.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The copy', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaConsentCopy }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — location not in your assignments', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/whatsapp/consent-copy',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Change the STOP / START replies at this studio',
+  description: 'Owner, manager or master AT THIS STUDIO (403 otherwise). Each field is the reply text (at most 500 characters), or blank/null for the default. Merged into locations.settings.whatsapp_consent_copy without touching other settings.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: studioConsentCopySchema } } } },
+  responses: {
+    200: { description: 'The copy after the change', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaConsentCopy }) } } },
+    400: { description: 'Invalid body (a reply over 500 characters)', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — owner, manager or master at this studio required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'No such studio', content: { 'application/json': { schema: ErrorResponse } } },
