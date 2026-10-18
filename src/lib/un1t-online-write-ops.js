@@ -15,7 +15,7 @@ import {
 } from './un1t-online-write.js'
 import { scrubMessage, classifyRefusal } from './un1t-online-write-judge.js'
 import { Un1tSettingsReadError, readUn1tWriteSettings } from './un1t-online-settings.js'
-import { finishAttempt, findDone, ledgerKey } from './un1t-online-write-ledger.js'
+import { finishAttempt, findDone, ledgerKey, UN1T_IN_FLIGHT_MS } from './un1t-online-write-ledger.js'
 import { applyUn1tWriteToMirror } from './un1t-online-mirror-write.js'
 import { un1tOnlineReads } from './membership/reads/un1t-online.js'
 import { resolveCustomerBaseUrl } from './tenant-host.js'
@@ -650,6 +650,8 @@ export async function createCheckoutLink(db, args = {}, deps = {}) {
 // ── grantTrial ─────────────────────────────────────────────────────────────
 
 const TRIAL_REASONS = new Set(['trial_used', 'membership_history', 'paid_pack'])
+/** An in-doubt trial row younger than this, with no credits, goes to staff; older counts as used. */
+export const UN1T_TRIAL_DOUBT_WINDOW_MS = 24 * 60 * 60_000
 const TRIAL_ORIGINS = new Set(['funnel', 'approval', 'mia', 'test_account'])
 const trialFailed = (code) => `un1t_trial_failed:${code ?? 'unknown'}`
 
@@ -694,10 +696,15 @@ async function findOpenTrial(db, { locationId, un1tUserId, productId }) {
 /**
  * UN1TWRITE.10 — give a person the studio's free trial in un1t.online.
  *
- * Order (spec 6.6): the switch and the token (ensureOp) → the trial product
- * configured → a trial this person already has from us (a done row by EITHER
- * method is granted again, nothing sent) → an open (sent or unknown) row
- * (nothing sent: granted only if credits show, else un1t_trial_unverified) →
+ * Order (spec 6.6, with our own ledger read BEFORE A's eligibility, which
+ * counts our done/sent/unknown rows as used and so would call our own grant
+ * "trial_used"): the switch and the token (ensureOp) → the trial product
+ * configured → the customer site root (read before anything is sent) → a
+ * done trial by EITHER method (nothing sent: granted while its credits show,
+ * else ineligible trial_used) → an open row (a sent one under
+ * UN1T_IN_FLIGHT_MS is another process: retry; otherwise nothing sent, and
+ * credits decide: granted and the row settled done, else
+ * un1t_trial_unverified within UN1T_TRIAL_DOUBT_WINDOW_MS, trial_used after) →
  * A's eligibility (skipped only for test_account) → the live product, active
  * and priced exactly 0 (else trial_product_not_free, nothing sent) → the €0
  * charge (POST /purchases/charge, policy never, key trial:…:charge) → on a
@@ -710,12 +717,13 @@ async function findOpenTrial(db, { locationId, un1tUserId, productId }) {
  *   ineligible trial_used. An unmapped refusal is never guessed as used.
  * - charge unknown → the credits read decides (granted / un1t_trial_unverified);
  *   the free checkout is never tried after an unclear charge.
- * - free checkout done and free → granted only if credits show, else
- *   un1t_trial_unverified. A checkout answer with no transaction id (a free
- *   one that carries no URL is unclear under the judge) is unknown, and the
- *   credits read decides the same way. One that says free: false is refused
- *   checkout_not_free (un1t_trial_failed): its URL is never stored, returned
- *   or logged.
+ * - free checkout: the judge reads the documented { checkoutUrl, free }
+ *   under expect.freeCheckout. free true is done, granted only if credits
+ *   show (else un1t_trial_unverified); free false is refused
+ *   checkout_not_free (un1t_trial_failed); no `free` at all is unknown and
+ *   the credits read decides. The URL is never stored, returned or logged
+ *   (op trial keeps no checkout_url, and the id is the transaction id or
+ *   null).
  * - a credits read that fails → retry (credits_unreadable); the retry finds
  *   the open row and never sends again.
  * - a switch, studio or permission refusal → needs_staff
@@ -759,23 +767,53 @@ export async function grantTrial(db, args = {}, deps = {}) {
     op: 'trial', locationId, contactId, un1tUserId, studioId: writer.studioId, productId, data, ledgerId,
   }, mirrorDeps(writer, now)), { ...meta, ledgerId })
 
-  // Credits decide whenever un1t.online's answer, or an earlier attempt, is in doubt.
-  const byCredits = async (method, ledgerId) => {
+  // Credits decide whenever un1t.online's answer, or an earlier attempt, is
+  // in doubt. Credits showing also settles an in-doubt ledger row as done.
+  const settleDone = (ledgerId) => (ledgerId
+    ? finishAttempt(db, ledgerId, { stage: 'done', recovered: 'credits_show' })
+    : null)
+  const byCredits = async (method, ledgerId, { noCredits = 'unverified' } = {}) => {
     const credits = await readTrialCredits(writer, un1tUserId)
     if (!credits) return { outcome: 'retry', code: 'credits_unreadable' }
-    if (!credits.shows) return { outcome: 'needs_staff', reason: 'un1t_trial_unverified', ledgerId: ledgerId ?? null }
+    if (!credits.shows) {
+      if (noCredits === 'used') return { outcome: 'ineligible', reason: 'trial_used' }
+      return { outcome: 'needs_staff', reason: 'un1t_trial_unverified', ledgerId: ledgerId ?? null }
+    }
+    await settleDone(ledgerId)
     await mirror({ credits: credits.ledger }, ledgerId)
     logInfo(LOG_MODULE, 'trial granted on the credits read', fields({ ...meta, ledgerId: ledgerId ?? undefined, recovered: 'credits_show' }))
     return { outcome: 'granted', method, ledgerId: ledgerId ?? null }
   }
+  const methodOf = (row) => (row.method === 'free_checkout' ? 'free_checkout' : 'charge')
+  const ageMs = (row) => now().getTime() - Date.parse(row.created_at)
 
-  // 1. What we already did: a done trial by either method, then an open one.
+  // The customer site root (the free checkout's return pages), read before
+  // anything is sent: an unreadable one rejects with nothing sent.
+  const base = await resolveCustomerBaseUrl(db, locationId).catch(() => null)
+  let root = null
+  try {
+    const u = new URL(base)
+    if (u.protocol === 'https:') root = `${u.origin}/`
+  } catch { /* falls through */ }
+  if (!root) throw new Un1tSettingsReadError("this studio's customer site could not be read", { code: 'customer_url_unreadable' })
+
+  // 1. What we already did. A trial we granted before stands only while its
+  //    credits do: with none left the person has had it (trial_used), so the
+  //    funnel sends them the trial-used email instead of a doomed booking.
   const done = await findDoneTrial(db, { locationId, un1tUserId, productId })
-  if (done) return { outcome: 'granted', method: done.method === 'free_checkout' ? 'free_checkout' : 'charge', ledgerId: done.id }
+  if (done) return byCredits(methodOf(done), done.id, { noCredits: 'used' })
   const open = await findOpenTrial(db, { locationId, un1tUserId, productId })
   if (open) {
+    const age = ageMs(open)
+    // Another process is sending it right now: wait for it, never judge it.
+    if (open.stage === 'sent' && (!Number.isFinite(age) || age < UN1T_IN_FLIGHT_MS)) {
+      return { outcome: 'retry', code: C.ATTEMPT_IN_FLIGHT }
+    }
     logWarn(LOG_MODULE, 'an earlier trial attempt is in doubt; nothing sent', fields({ ...meta, ledgerId: open.id, verdict: 'unknown' }))
-    return byCredits(open.method === 'free_checkout' ? 'free_checkout' : 'charge', open.id)
+    // Recent: staff check it (un1t_trial_unverified). Older with no credits:
+    // whatever it did is spent, and A counts the row as used anyway.
+    const recent = Number.isFinite(age) && age < UN1T_TRIAL_DOUBT_WINDOW_MS
+    return byCredits(methodOf(open), open.id, { noCredits: recent ? 'unverified' : 'used' })
   }
 
   // 2. A's eligibility.
@@ -842,13 +880,6 @@ export async function grantTrial(db, args = {}, deps = {}) {
   if (isTrialUsed(charged)) return { outcome: 'ineligible', reason: 'trial_used' }
 
   // 5. One free checkout, completed by the server.
-  const base = await resolveCustomerBaseUrl(db, locationId).catch(() => null)
-  let root = null
-  try {
-    const u = new URL(base)
-    if (u.protocol === 'https:') root = `${u.origin}/`
-  } catch { /* falls through */ }
-  if (!root) throw new Un1tSettingsReadError("this studio's customer site could not be read", { code: 'customer_url_unreadable' })
   const checkoutBody = { productId, successUrl: root, cancelUrl: root, userId: un1tUserId }
   writer.assertAllowed('trial', 'POST', '/purchases/checkout', checkoutBody)
   const checkoutAttempt = attemptFor('free_checkout')
@@ -856,13 +887,13 @@ export async function grantTrial(db, args = {}, deps = {}) {
     attempt: checkoutAttempt,
     policy: 'never',
     send: (row) => writer.send('POST', '/purchases/checkout', {
-      body: checkoutBody, policy: 'never', idempotencyKey: checkoutAttempt.key, op: 'trial', origin, ledgerId: row.id, expect: {},
+      body: checkoutBody, policy: 'never', idempotencyKey: checkoutAttempt.key, op: 'trial', origin, ledgerId: row.id, expect: { freeCheckout: true },
     }),
   })
   if (checked.verdict === 'done') {
     const credits = await readTrialCredits(writer, un1tUserId)
     if (!credits) return { outcome: 'retry', code: 'credits_unreadable' }
-    if (checked.data?.free !== true || !credits.shows) {
+    if (!credits.shows) {
       logWarn(LOG_MODULE, 'the free checkout did not show the trial credits', fields({ ...meta, ledgerId: checked.ledgerId, code: 'un1t_trial_unverified' }))
       return { outcome: 'needs_staff', reason: 'un1t_trial_unverified', ledgerId: checked.ledgerId }
     }
