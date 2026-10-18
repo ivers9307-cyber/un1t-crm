@@ -13,7 +13,7 @@ describe('failureExplanation (shared)', () => {
     // src/app/api/agent/membership-requests/[id]/route.js and
     // src/lib/agent/trial-grant.js
     const codes = [
-      'YOU_HAVE_NO_CREDITS_LEFT', 'NOT_EXECUTABLE', 'ACCOUNT_MISMATCH', 'NO_END_DATE', 'NO_USER_MEMBERSHIP',
+      'YOU_HAVE_NO_CREDITS_LEFT', 'NOT_EXECUTABLE', 'NOT_EXECUTABLE_UN1T', 'ACCOUNT_MISMATCH', 'NO_END_DATE', 'NO_USER_MEMBERSHIP',
       'GLOFOX_SETTINGS_UNREADABLE', 'TRIAL_GRANT_FAILED', 'TRIAL_NOT_CONFIGURED', 'TRIAL_GRANT_UNVERIFIED',
       'TRIAL_GRANT_UNRECORDED', 'TRIAL_ALREADY_GRANTED', 'TRIAL_HISTORY_UNREADABLE', 'TRIAL_PRODUCT_UNKNOWN',
     ]

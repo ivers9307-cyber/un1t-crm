@@ -34,7 +34,9 @@ import { notifyAgentApprovalRequest } from './approval-notify'
 import { formatClassTime } from './dublin-format'
 import { DEFAULT_TZ } from '@/lib/location-time'
 import { logError } from '@/lib/log'
-import { refuseToolForTurn } from './tool-capability'
+import { refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
+import { parseAgentId } from './studio-ids'
+import { renderMiaCopy } from './mia-copy'
 
 // REGISTRYREAD.1b — what Mia is told when the auto lane has no usable Glofox
 // credentials. A failed settings READ (creds.readError) is a blip, not "this
@@ -667,6 +669,27 @@ async function reelectSiblingWithCredits({
   return probes.find((p) => p.entitled)?.account || null
 }
 
+// MIAHATCH.2 — book_class / cancel_class_booking named a `un1t:` id. Only
+// the dual block offers those tools beside un1t.online reads; there the
+// member's un1t.online studio answers with its chat_booking_unavailable_text
+// ({studio}, {link} = that studio's booking_url, from its own resolved
+// settings). No answerable un1t.online studio: the not-at-this-studio refusal.
+async function un1tChatBookingAnswer(toolName, ctx) {
+  const studio = ctx?.turn?.block === 'un1t_read_dual'
+    ? (ctx.turn.answerable || []).find((s) => s?.providerKey === 'un1t_online')
+    : null
+  if (!studio) return { ...TOOL_NOT_AT_THIS_STUDIO }
+  let settings = null
+  try {
+    settings = typeof ctx.actionStudio === 'function' ? await ctx.actionStudio(studio.locationId) : null
+  } catch { settings = null }
+  if (!settings && studio.locationId === ctx.locationId) settings = ctx.settings || null
+  const text = renderMiaCopy('chat_booking_unavailable_text', settings, { studio: studio.name, link: settings?.booking_url || null })
+  return toolName === 'book_class'
+    ? { booked: false, chat_booking_unavailable: true, text }
+    : { cancelled: false, chat_booking_unavailable: true, text }
+}
+
 // ── executor (IO) ───────────────────────────────────────────────────
 // ctx: { db, conversationId, conversationsTable, contactId,
 //        verifiedContactId, locationId, channel, nameHint, settings }
@@ -677,6 +700,17 @@ export async function executeBookingTool(toolName, input, ctx) {
   // whose source takes no bookings is refused before any read or Glofox call.
   const refused = refuseToolForTurn(toolName, ctx)
   if (refused) return refused
+
+  // MIAHATCH.2 — a `un1t:` event or booking id is a un1t.online class. Chat
+  // booking there is not live yet (slice 1): in the dual block the answer is
+  // the studio's operator-editable "not from chat yet" line with its booking
+  // link; anywhere else (no un1t.online studio answerable for this sender, or
+  // a block without one) it is no studio Mia answers for. Decided before any
+  // read: a `un1t:` id never reaches Glofox.
+  if (toolName === 'book_class' || toolName === 'cancel_class_booking') {
+    const id = parseAgentId(toolName === 'book_class' ? input?.event_id : input?.booking_id)
+    if (id?.provider === 'un1t_online') return un1tChatBookingAnswer(toolName, ctx)
+  }
 
   // MIAHATCH.2 Task 6 — on a turn whose tool block reads un1t.online the
   // timetable comes from the answerable studios (event ids and `full`), not the

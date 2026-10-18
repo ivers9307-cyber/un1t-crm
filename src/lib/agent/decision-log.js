@@ -22,7 +22,7 @@ const META_MAX_STUDIOS = 8
  * Returns null when the trace holds nothing worth persisting, so decision
  * rows from skip paths (never called the model) stay meta-free. Pure.
  * @param {{tools?: Array<{name:string,input?:object}>, stopReason?: string|null, iterations?: number}} [trace]
- * @returns {{tools?: Array, stop_reason?: string, iterations?: number}|null}
+ * @returns {{tools?: Array, stop_reason?: string, iterations?: number, member_studios?: Array, tool_block?: string}|null}
  */
 export function compactDecisionMeta(trace = {}) {
   const meta = {}
@@ -70,6 +70,9 @@ export function compactDecisionMeta(trace = {}) {
       answerable: s?.answerable === true,
     }))
   }
+  // MIAHATCH.2 — the tool block the turn's last request sent (glofox,
+  // no_booking, un1t_read, un1t_read_dual, un1t_full): a name, nothing else.
+  if (typeof trace.toolBlock === 'string' && trace.toolBlock) meta.tool_block = trace.toolBlock.slice(0, 20)
   return Object.keys(meta).length ? meta : null
 }
 
