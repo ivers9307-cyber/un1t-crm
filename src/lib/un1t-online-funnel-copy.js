@@ -36,7 +36,12 @@ export function un1tFunnelCopyFromBlocks(blocks) {
   return out
 }
 
-/** Em and en dashes out of customer copy (the same rule as the agent's scrub). */
+/**
+ * Em and en dashes out of customer copy: the same rule as stripEmDashes in
+ * agent/core.js, copied because this module runs in the browser and that one
+ * pulls in the agent's prompt. un1t-online-funnel-copy.test.js pins the two
+ * to the same output.
+ */
 export function stripDashes(s) {
   return String(s ?? '')
     .replace(/\s*[—–]\s+/g, ', ')
@@ -61,6 +66,8 @@ export function fillCopy(template, vars = {}) {
  */
 export function termsLabelSegments(copy, { studioName = '' } = {}) {
   const c = { ...DEFAULT_UN1T_FUNNEL_COPY, ...(copy || {}) }
+  // A studio with no name still reads as a sentence.
+  const name = String(studioName || '').trim() || 'the studio'
   let label = String(c.terms_label ?? '')
   if (!label.includes('{terms}')) label += ' {terms}'
   if (!label.includes('{waiver}')) label += ' {waiver}'
@@ -69,7 +76,7 @@ export function termsLabelSegments(copy, { studioName = '' } = {}) {
     if (piece === '{terms}') out.push({ text: stripDashes(c.terms_link_label), link: 'terms' })
     else if (piece === '{waiver}') out.push({ text: stripDashes(c.waiver_link_label), link: 'waiver' })
     // Plain text keeps its spaces: they sit between the words and the links.
-    else if (piece) out.push({ text: stripDashes(piece.replace(/\{studio_name\}/g, studioName).replace(/\{[a-z_]+\}/g, '')) })
+    else if (piece) out.push({ text: stripDashes(piece.replace(/\{studio_name\}/g, name).replace(/\{[a-z_]+\}/g, '')) })
   }
   return out.filter((s) => s.text !== '')
 }

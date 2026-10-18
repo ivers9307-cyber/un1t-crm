@@ -8,32 +8,43 @@
 // client and so take a slot of the studio's write budget like every other
 // request the write side makes.
 //
-// Never throws. A failed read is that document null (logged with no body
-// text); the result is cached an hour per location per instance only when
-// both documents read, so a blip is retried on the next view.
+// A PUBLIC page drives these reads, so a stranger refreshing it must never be
+// able to spend the studio's write budget or hold a request open:
+//   - each document is cached on its own: an hour when it read, a minute when
+//     it failed (a studio with no waiver published costs one slot a minute
+//     per instance, not one per view);
+//   - one read per location is in flight at a time; concurrent views share it;
+//   - one attempt per document: no retry, no rate-limit wait (the writer's
+//     sleep refuses), and a 4 s timeout on each request;
+//   - the cache is keyed by location AND the token's studio, so repointing
+//     the token never serves the old studio's text.
 //
-// `version` is what a request's terms_version records: each document's
-// updated_at, or a short hash of its text when it carries none; null unless
-// both read.
+// Never throws. `version` is what a request's terms_version records: each
+// document's updated_at, or a short hash of its text when it carries none (a
+// non-string updated_at counts as none); null unless both documents read.
 
 import { createHash } from 'node:crypto'
 import { createUn1tWriter } from './un1t-online-write.js'
 import { logWarn } from './log'
 
 export const UN1T_LEGAL_TTL_MS = 60 * 60_000
+export const UN1T_LEGAL_FAILURE_TTL_MS = 60_000
+export const UN1T_LEGAL_TIMEOUT_MS = 4_000
 const DOCS = Object.freeze({
   terms: 'terms-and-conditions',
   waiver: 'liability-waiver',
 })
 
-const cache = new Map() // locationId → { atMs, value }
+const cache = new Map() // `${locationId}:${studioId}:${doc}` → { atMs, doc }
+const inFlight = new Map() // locationId → Promise
 
 /** Test seam only: the cache is module state. */
 export function _resetUn1tLegalCacheForTests() {
   cache.clear()
+  inFlight.clear()
 }
 
-const EMPTY = Object.freeze({ terms: null, waiver: null, version: null })
+const empty = () => ({ terms: null, waiver: null, version: null })
 
 /** The public page for a studio's document. */
 export function legalDocPathFor(publicPath, doc) {
@@ -51,41 +62,64 @@ function shapeDoc(data) {
 }
 
 const stamp = (doc) => doc.updatedAt ?? `sha256-${createHash('sha256').update(doc.content).digest('hex').slice(0, 12)}`
+const copyOf = (doc) => (doc ? { ...doc } : null)
+
+// One attempt, bounded in time; no waits.
+const noWait = async () => {
+  throw Object.assign(new Error('un1t.online legal read does not wait'), { code: 'no_wait' })
+}
+const timedFetch = (url, init = {}) => fetch(url, { ...init, signal: AbortSignal.timeout(UN1T_LEGAL_TIMEOUT_MS) })
+
+async function readOnce(db, locationId, { createWriter, now }) {
+  let writer
+  try {
+    writer = await createWriter(db, locationId, { fetchImpl: timedFetch, sleep: noWait })
+  } catch (err) {
+    logWarn('un1t-online-legal', 'could not open the un1t.online reader; documents not loaded', { locationId, code: err?.code ?? err?.name ?? 'error' })
+    return empty()
+  }
+  if (!writer?.studioId) {
+    logWarn('un1t-online-legal', 'no un1t.online studio id; documents not loaded', { locationId, code: 'no_studio' })
+    return empty()
+  }
+
+  const t = now()
+  const out = empty()
+  await Promise.all(Object.entries(DOCS).map(async ([key, slug]) => {
+    const ck = `${locationId}:${writer.studioId}:${key}`
+    const hit = cache.get(ck)
+    const ttl = hit?.doc ? UN1T_LEGAL_TTL_MS : UN1T_LEGAL_FAILURE_TTL_MS
+    if (hit && t >= hit.atMs && t - hit.atMs < ttl) {
+      out[key] = copyOf(hit.doc)
+      return
+    }
+    let doc = null
+    try {
+      doc = shapeDoc(await writer.read(`/studios/${encodeURIComponent(writer.studioId)}/legal/${slug}`))
+      if (!doc) logWarn('un1t-online-legal', 'un1t.online sent an empty document', { locationId, code: `${key}_empty` })
+    } catch (err) {
+      logWarn('un1t-online-legal', 'un1t.online document read failed', { locationId, code: `${key}_unreadable`, status: err?.status ?? null })
+    }
+    cache.set(ck, { atMs: t, doc })
+    out[key] = copyOf(doc)
+  }))
+  if (out.terms && out.waiver) out.version = `terms:${stamp(out.terms)}|waiver:${stamp(out.waiver)}`
+  return out
+}
 
 /**
  * @returns {Promise<{ terms: {content: string, updatedAt: string|null}|null,
  *   waiver: {content: string, updatedAt: string|null}|null, version: string|null }>}
  */
 export async function readUn1tLegalDocs(db, locationId, deps = {}) {
-  const { createWriter = (d, loc) => createUn1tWriter(d, loc), now = () => Date.now() } = deps
-  const t = now()
-  const hit = cache.get(locationId)
-  if (hit && t >= hit.atMs && t - hit.atMs < UN1T_LEGAL_TTL_MS) return hit.value
-
-  let writer
-  try {
-    writer = await createWriter(db, locationId)
-  } catch (err) {
-    logWarn('un1t-online-legal', 'could not open the un1t.online reader; documents not loaded', { locationId, code: err?.code ?? err?.name ?? 'error' })
-    return EMPTY
+  const { createWriter = createUn1tWriter, now = () => Date.now() } = deps
+  const running = inFlight.get(locationId)
+  if (running) {
+    const shared = await running
+    return { terms: copyOf(shared.terms), waiver: copyOf(shared.waiver), version: shared.version }
   }
-  if (!writer?.studioId) {
-    logWarn('un1t-online-legal', 'no un1t.online studio id; documents not loaded', { locationId, code: 'no_studio' })
-    return EMPTY
-  }
-
-  const out = { terms: null, waiver: null, version: null }
-  for (const [key, slug] of Object.entries(DOCS)) {
-    try {
-      out[key] = shapeDoc(await writer.read(`/studios/${encodeURIComponent(writer.studioId)}/legal/${slug}`))
-      if (!out[key]) logWarn('un1t-online-legal', 'un1t.online sent an empty document', { locationId, code: `${key}_empty` })
-    } catch (err) {
-      logWarn('un1t-online-legal', 'un1t.online document read failed', { locationId, code: `${key}_unreadable`, status: err?.status ?? null })
-    }
-  }
-  if (out.terms && out.waiver) {
-    out.version = `terms:${stamp(out.terms)}|waiver:${stamp(out.waiver)}`
-    cache.set(locationId, { atMs: t, value: out })
-  }
-  return out
+  const p = readOnce(db, locationId, { createWriter, now }).finally(() => inFlight.delete(locationId))
+  inFlight.set(locationId, p)
+  const res = await p
+  return { terms: copyOf(res.terms), waiver: copyOf(res.waiver), version: res.version }
 }
