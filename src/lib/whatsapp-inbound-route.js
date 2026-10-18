@@ -16,19 +16,17 @@
 //                   deterministic (ids are random, not time-ordered; Review Focus 4);
 //   5. home       — the member's home studio (contacts.location_id, which the
 //                   caller must pass), if a candidate;
-//   6. numberless_home — TRANSITIONAL (WAHOMESTUDIO.1, deleted in WAORGNUMBER.6):
-//                   a home studio of the same organisation with nothing switched
-//                   on (numberlessHomeStudio), or a thread staff moved to such a
-//                   studio (the webhook's old F1 rule), so Hatch Street's threads
-//                   stay at Hatch until Hatch switches the number on;
-//   7. number_home — N's home studio.
+//   6. number_home — N's home studio.
+//
+// WAORGNUMBER.6 deleted the transitional `numberless_home` step (WAHOMESTUDIO.1):
+// a studio with nothing switched on is never a candidate, so no message files
+// there (it could not be answered).
 //
 // Any failed read is logged and falls through to the next step: the webhook
 // must answer Meta 200, and a message filed at the number's home studio is
 // answerable where a lost one is not. Never throws.
 import { logWarn } from './log'
-import { studiosUsingNumbers, locationsWithWhatsApp } from './whatsapp-config'
-import { numberlessHomeStudio } from './whatsapp-thread-location'
+import { studiosUsingNumbers } from './whatsapp-config'
 import { adSignal, replySignal } from './wa-studio-pick/signals'
 
 export const RECENT_OUTBOUND_MS = 7 * 24 * 60 * 60 * 1000
@@ -94,45 +92,15 @@ async function recentThread(db, threads, now) {
   }
 }
 
-// TRANSITIONAL (WAHOMESTUDIO.1 F1, deleted in WAORGNUMBER.6) — the one thread
-// for this sender, stamped with the receiving number, at a studio of the
-// organisation (never `excludeLocationId`) that has nothing switched on: staff
-// moved it there (Move to studio, or the studio picker), and it keeps replying
-// through this number, so the message follows it. None, several, or a failed
-// read → null.
-async function movedNumberlessThread(db, { waPhone, numberId, organizationId, excludeLocationId }) {
-  if (!waPhone || !numberId || !organizationId) return null
-  try {
-    const { data: locs, error: locErr } = await db.from('locations').select('id').eq('organization_id', organizationId)
-    if (locErr) throw locErr
-    const orgLocIds = (locs || []).map((l) => l.id).filter((id) => id && id !== excludeLocationId)
-    if (orgLocIds.length === 0) return null
-    const { data: rows, error } = await db.from('whatsapp_conversations')
-      .select(CONVERSATION_COLUMNS)
-      .eq('wa_phone', String(waPhone))
-      .eq('whatsapp_number_id', numberId)
-      .in('location_id', orgLocIds)
-      .limit(20)
-    if (error) throw error
-    if (!rows?.length) return null
-    const withNumber = await locationsWithWhatsApp(db, [...new Set(rows.map((r) => r.location_id))])
-    const numberless = rows.filter((r) => !withNumber.has(r.location_id))
-    return numberless.length === 1 ? numberless[0] : null
-  } catch (e) {
-    warn('moved-thread lookup failed', { numberId }, e)
-    return null
-  }
-}
-
 /**
  * @returns {Promise<{ locationId: string, conversation: object|null,
- *   by: 'quoted'|'ad'|'recent'|'home'|'numberless_home'|'number_home',
+ *   by: 'quoted'|'ad'|'recent'|'home'|'number_home',
  *   switchedOn: boolean }>}  `switchedOn`: the number is switched on at the
  *   winning studio (assumed for its home studio when the link read failed),
  *   i.e. whether the caller stamps it on the thread.
  */
 export async function routeInboundThread(db, {
-  numberId, numberHomeLocationId, organizationId, waPhone, bsuid, contact,
+  numberId, numberHomeLocationId, waPhone, bsuid, contact,
   contextMessageId, referral, now = Date.now(),
 }) {
   let linked = null
@@ -167,20 +135,8 @@ export async function routeInboundThread(db, {
     if (recent) return await win(recent.location_id, 'recent', recent)
 
     const home = contact?.location_id
-    let result
-    if (home && candidates.includes(home)) {
-      result = await win(home, 'home')
-    } else {
-      const numberless = await numberlessHomeStudio(db, contact, numberHomeLocationId)
-      result = numberless
-        ? await win(numberless, 'numberless_home')
-        : await win(numberHomeLocationId, 'number_home')
-    }
-    if (!result.conversation) {
-      const moved = await movedNumberlessThread(db, { waPhone, numberId, organizationId, excludeLocationId: result.locationId })
-      if (moved) return { locationId: moved.location_id, by: 'numberless_home', conversation: moved, switchedOn: switchedOnSet.has(moved.location_id) }
-    }
-    return result
+    if (home && candidates.includes(home)) return await win(home, 'home')
+    return await win(numberHomeLocationId, 'number_home')
   } catch (e) {
     warn('inbound routing failed; filing at the number’s home studio', { numberId }, e)
     return { locationId: numberHomeLocationId, by: 'number_home', conversation: null, switchedOn: switchedOnSet.has(numberHomeLocationId) }

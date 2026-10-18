@@ -189,8 +189,8 @@ describe('GET /api/whatsapp/conversations/[id] — the number the block confirm 
   it('the stamp switched on here is named', async () => {
     expect(await named({ data: [{ whatsapp_number_id: 'n-1' }], error: null })).toEqual({ display_phone: '+353 1 000 0000' })
   })
-  it('nothing switched on here (the send-through-thread case): the stamp is named', async () => {
-    expect(await named({ data: [], error: null })).toEqual({ display_phone: '+353 1 000 0000' })
+  it('nothing switched on here (the block is refused, WAORGNUMBER.6): not named', async () => {
+    expect(await named({ data: [], error: null })).toBeNull()
   })
   it("another number switched on here (the block uses the studio's default): not named", async () => {
     expect(await named({ data: [{ whatsapp_number_id: 'n-2' }], error: null })).toBeNull()

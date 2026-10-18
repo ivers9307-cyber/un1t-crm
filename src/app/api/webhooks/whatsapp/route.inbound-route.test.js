@@ -237,47 +237,44 @@ describe('POST /api/webhooks/whatsapp — a reply lands with the studio that spo
   })
 })
 
-// WAHOMESTUDIO.1 (R2/F1), rewritten for WAORGNUMBER.5: until Hatch switches the
-// number on, its threads still land at Hatch ('numberless_home') and are
-// stamped with the receiving number, which they reply through.
-describe('POST /api/webhooks/whatsapp — while Hatch has nothing switched on (transitional numberless_home)', () => {
-  it('a Hatch member with no recent outbound gets the thread AT Hatch, stamped with the receiving number', async () => {
+// WAORGNUMBER.6 — the transitional numberless_home step is gone: a studio with
+// nothing switched on never receives a message (it could not answer it). A
+// Hatch member files where the number is switched on, and the CTWA Lead and a
+// Flow completion act at the routed studio.
+describe('POST /api/webhooks/whatsapp — a studio with nothing switched on (WAORGNUMBER.6)', () => {
+  it('a member homed there files at the number’s studio, stamped, and Mia answers there', async () => {
     pickInboundContact.mockReturnValue({ id: 'c-1', location_id: HATCH })
     await run(makeState({ links: PRE_GO_LIVE }))
-    const hatchThread = state.conversations.find((c) => c.location_id === HATCH)
-    expect(hatchThread).toMatchObject({ contact_id: 'c-1' })
-    expect(inboundRow()).toMatchObject({ conversation_id: hatchThread.id, location_id: HATCH })
-    expect(stampsOn(hatchThread.id)).toEqual([expect.objectContaining({ payload: { whatsapp_number_id: NUM } })])
-    expect(maybeAutoReply).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ locationId: HATCH }))
-  })
-
-  it('a Hatch member’s click-to-WhatsApp Lead is still sent for Stillorgan (Hatch has no number to send it with)', async () => {
-    pickInboundContact.mockReturnValue({ id: 'c-1', location_id: HATCH })
-    await run(makeState({ links: PRE_GO_LIVE }), { referral: { source_type: 'ad', source_id: 'ad-x', ctwa_clid: 'clid-pre' } })
-    expect(inboundRow()).toMatchObject({ location_id: HATCH })
-    expect(recordCtwaTouch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ ctwaClid: 'clid-pre', locationId: STILL }))
-  })
-
-  it('a Flow completed in a Hatch thread books at Stillorgan, the studio whose number sent it', async () => {
-    pickInboundContact.mockReturnValue({ id: 'c-1', location_id: HATCH })
-    await run(makeState({ links: PRE_GO_LIVE }), { type: 'interactive', interactive: { type: 'nfm_reply', nfm_reply: { name: 'flow', response_json: '{}' } } })
-    expect(inboundRow()).toMatchObject({ location_id: HATCH })
-    expect(handleFlowCompletion).toHaveBeenCalledTimes(1)
-    expect(handleFlowCompletion).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ locationId: STILL }))
-  })
-
-  it('an unknown sender whose thread staff moved to Hatch stays in that thread (F1)', async () => {
-    await run(makeState({ links: PRE_GO_LIVE, conversations: [thread('conv-hatch', HATCH, { contact_id: null, whatsapp_number_id: NUM })] }))
-    expect(state.conversations).toHaveLength(1)
-    expect(inboundRow()).toMatchObject({ conversation_id: 'conv-hatch', location_id: HATCH })
-    expect(maybeAutoReply).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ conversationId: 'conv-hatch', locationId: HATCH }))
-  })
-
-  it('an unknown sender with no moved thread files at Stillorgan, stamped', async () => {
-    await run(makeState({ links: PRE_GO_LIVE }))
+    expect(state.conversations.find((c) => c.location_id === HATCH)).toBeUndefined()
     const still = state.conversations.find((c) => c.location_id === STILL)
-    expect(still).toMatchObject({ contact_id: null })
-    expect(stampsOn(still.id)).toHaveLength(1)
+    expect(still).toMatchObject({ contact_id: 'c-1' })
+    expect(inboundRow()).toMatchObject({ conversation_id: still.id, location_id: STILL })
+    expect(stampsOn(still.id)).toEqual([expect.objectContaining({ payload: { whatsapp_number_id: NUM } })])
+    expect(maybeAutoReply).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ locationId: STILL }))
+  })
+
+  it('a thread staff moved there is not followed: the message files at the number’s studio', async () => {
+    await run(makeState({ links: PRE_GO_LIVE, conversations: [thread('conv-hatch', HATCH, { contact_id: null, whatsapp_number_id: NUM })] }))
+    expect(inboundRow()).toMatchObject({ location_id: STILL })
+    expect(inboundRow().conversation_id).not.toBe('conv-hatch')
+  })
+})
+
+// The CTWA Lead and a Flow completion act at the ROUTED studio (WAORGNUMBER.6
+// removed the "act at the receiving number's studio" carve-out).
+describe('POST /api/webhooks/whatsapp — CTWA and Flow act at the routed studio', () => {
+  it('a Hatch member’s click-to-WhatsApp Lead is recorded for Hatch once the number is switched on there', async () => {
+    pickInboundContact.mockReturnValue({ id: 'c-1', location_id: HATCH })
+    await run(makeState({ links: GO_LIVE }), { referral: { source_type: 'ad', source_id: 'ad-x', ctwa_clid: 'clid-live' } })
+    expect(inboundRow()).toMatchObject({ location_id: HATCH })
+    expect(recordCtwaTouch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ ctwaClid: 'clid-live', locationId: HATCH }))
+  })
+
+  it('a Flow completed in a Hatch thread acts at Hatch', async () => {
+    pickInboundContact.mockReturnValue({ id: 'c-1', location_id: HATCH })
+    await run(makeState({ links: GO_LIVE }), { type: 'interactive', interactive: { type: 'nfm_reply', nfm_reply: { name: 'flow', response_json: '{}' } } })
+    expect(inboundRow()).toMatchObject({ location_id: HATCH })
+    expect(handleFlowCompletion).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ locationId: HATCH }))
   })
 })
 

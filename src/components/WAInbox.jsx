@@ -321,9 +321,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     return () => clearInterval(pollRef.current)
   }, [locationId, fetchConversations, fetchTemplates])
 
-  // WAHOMESTUDIO.1 (R5) — inside a thread, ask for templates by conversation: a
-  // thread replying through a same-organisation sibling's number lists that
-  // studio's templates. A separate effect keyed on the thread id, NOT a change
+  // WAHOMESTUDIO.1 (R5) — inside a thread, ask for templates by conversation:
+  // the thread's own studio's (a thread at another studio than the active one
+  // lists its studio's). A separate effect keyed on the thread id, NOT a change
   // to fetchTemplates' deps: its identity must stay put or every thread click
   // would re-run the initial-load effect (fetchConversations + the 60s poll).
   // With no thread open the location list above stays as it is.

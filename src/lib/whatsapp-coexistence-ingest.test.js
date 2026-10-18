@@ -330,8 +330,7 @@ describe('ingestCoexistenceMessage — phone-app echoes are staff (C106 d)', () 
 
 // WAORGNUMBER.5 (R4) — a phone-app echo / history row files where the inbound
 // router says, and the receiving number is stamped when it is switched on
-// there, or (transitionally, WAHOMESTUDIO.1) the thread is at a number-less
-// home studio.
+// there (WAORGNUMBER.6: never anywhere else).
 describe('ingestCoexistenceMessage — the inbound router decides the thread (WAORGNUMBER.5)', () => {
   beforeEach(() => { vi.clearAllMocks() })
 
@@ -349,24 +348,14 @@ describe('ingestCoexistenceMessage — the inbound router decides the thread (WA
   const echoAt = { waMessageId: 'wamid.HOME1', peerPhone: '353222', direction: 'outbound', messageType: 'text', body: 'x', tsSeconds: 1700000000, origin: 'echo' }
   const convInsert = (writes) => writes.find((w) => w.table === 'whatsapp_conversations' && w.op === 'insert')
 
-  it('asks the router with the receiving number, its home, its organisation and the matched contact', async () => {
+  it('asks the router with the receiving number, its home and the matched contact', async () => {
     const { db } = routedDb()
-    await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', organizationId: 'org-1', descriptor: echoAt })
+    await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: echoAt })
     expect(routeInboundThread).toHaveBeenCalledWith(db, {
-      numberId: 'wn-1', numberHomeLocationId: 'loc-still', organizationId: 'org-1', waPhone: '353222', bsuid: null,
+      numberId: 'wn-1', numberHomeLocationId: 'loc-still', waPhone: '353222', bsuid: null,
       contact: { id: 'k1', location_id: 'loc-hatch' }, contextMessageId: null, referral: null,
       now: 1700000000 * 1000, // the message's own time, not the import's
     })
-  })
-
-  it('numberless_home: the thread is at the number-less home studio, stamped with the receiving number', async () => {
-    routeInboundThread.mockResolvedValueOnce({ locationId: 'loc-hatch', conversation: null, by: 'numberless_home', switchedOn: false })
-    const { db, writes } = routedDb()
-    const r = await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: echoAt })
-    expect(r).toMatchObject({ inserted: true, conversationId: 'conv1', contactId: 'k1' })
-    expect(convInsert(writes).values).toMatchObject({ location_id: 'loc-hatch', contact_id: 'k1', whatsapp_number_id: 'wn-1' })
-    const msgInsert = writes.find((w) => w.table === 'whatsapp_messages' && w.op === 'insert')
-    expect(msgInsert.values).toMatchObject({ location_id: 'loc-hatch', conversation_id: 'conv1', contact_id: 'k1' })
   })
 
   it('a studio the number is switched on at gets a stamped thread (R4 step 6)', async () => {
@@ -376,7 +365,7 @@ describe('ingestCoexistenceMessage — the inbound router decides the thread (WA
     expect(convInsert(writes).values).toEqual({ location_id: 'loc-hatch', contact_id: 'k1', wa_phone: '353222', status: 'active', whatsapp_number_id: 'wn-1' })
   })
 
-  it('a studio the number is NOT switched on at (and not number-less) gets an unstamped thread', async () => {
+  it('a studio the number is NOT switched on at gets an unstamped thread', async () => {
     routeInboundThread.mockResolvedValueOnce({ locationId: 'loc-still', conversation: null, by: 'number_home', switchedOn: false })
     const { db, writes } = routedDb()
     await ingestCoexistenceMessage(db, { locationId: 'loc-still', numberId: 'wn-1', descriptor: echoAt })
@@ -407,7 +396,7 @@ describe('ingestCoexistenceMessage — an existing unstamped thread is stamped (
     })
     return { db, writes }
   }
-  const routedTo = (existing) => routeInboundThread.mockResolvedValueOnce({ locationId: 'loc-hatch', conversation: existing, by: 'numberless_home', switchedOn: false })
+  const routedTo = (existing) => routeInboundThread.mockResolvedValueOnce({ locationId: 'loc-hatch', conversation: existing, by: 'recent', switchedOn: true })
   const inbound = { waMessageId: 'wamid.HOME9', peerPhone: '353222', direction: 'inbound', messageType: 'text', body: 'x', tsSeconds: 1700000000 }
   const stampWrites = (writes) => writes.filter((w) => w.table === 'whatsapp_conversations' && w.op === 'update' && 'whatsapp_number_id' in (w.values || {}))
 

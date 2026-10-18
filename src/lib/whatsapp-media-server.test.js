@@ -56,7 +56,7 @@ describe('ensureMediaRehosted — the location’s own number only', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 
-  it('WAHOMESTUDIO.1 — a message in a thread replying through a sibling’s number is fetched with THAT number’s token', async () => {
+  it('a message in a thread whose number is switched on at the studio is fetched with THAT number’s token', async () => {
     getConversationNumberConfig.mockResolvedValue({ source: 'db', token: 'tok-thread', phoneNumberId: 'PNI-THREAD', locationId: 'a0000000-0000-4000-8000-000000000009' })
     const db = makeDb()
     const path = await ensureMediaRehosted(db, { ...MSG, conversation_id: 'c0000000-0000-4000-8000-000000000001' })

@@ -2,7 +2,6 @@ import { createServerClient } from './supabase'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
 import { getWhatsAppConfig, getLocationWhatsAppNumberConfig, getLocationNumberForWaba, getConversationReplyConfig, META_API_URL } from './whatsapp-config'
 import { isWhatsAppNumberMissing, WhatsAppNumberMissingError } from './whatsapp-number-missing'
-import { numberlessHomeStudio } from './whatsapp-thread-location'
 import { agentOptionId } from './whatsapp-inbound-tap'
 import {
   PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
@@ -47,10 +46,8 @@ import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
 //                       customer wrote to (getConversationReplyConfig), else
 //                       the location default. Needs opts.locationId. A template
 //                       goes from the thread number only within the default's
-//                       WABA, except (WAHOMESTUDIO.1) a number-less studio's
-//                       thread, which uses a same-org sibling's stamped number
-//                       and whose templates come from that number's owner
-//                       (templateLocationIdFor).
+//                       WABA. A studio with nothing switched on refuses
+//                       (WAORGNUMBER.6: no sibling's stamped number).
 //   opts.businessAccountId — WAORGNUMBER.2 (R5): the WABA a template lives on
 //                       (whatsapp_templates.business_account_id). Meta sends a
 //                       template only from a number on its own WABA, so the
@@ -2165,9 +2162,9 @@ export async function getOrCreateConversation(db, contact, locationId) {
       return data
     }
     // The number switched on at the sending studio (WAORGNUMBER.1: the link
-    // default first, else the newest switch-on, whatever its home): the stamp a
-    // thread at a number-less home studio replies through (R3/R4). The
-    // resolver throws on a failed read; a lost stamp is logged, never thrown.
+    // default first, else the newest switch-on, whatever its home): the stamp
+    // replies resolve (R3/R4). The resolver throws on a failed read; a lost
+    // stamp is logged, never thrown.
     const sendingNumberId = async () => {
       try {
         return (await getLocationWhatsAppNumberConfig(locationId))?.id || null
@@ -2227,39 +2224,12 @@ export async function getOrCreateConversation(db, contact, locationId) {
       return linkContact(existing)
     }
 
-    // WAHOMESTUDIO.1 (R1) — a contact whose home studio has no WhatsApp number
-    // of its own (same organisation) gets the thread at their home studio, the
-    // same place the webhook files their reply, stamped with the sending
-    // studio's number so replies resolve it (R3/R4). Only on a NEW thread: an
-    // existing one at the sending studio is the backfill's (mig 724) to move.
-    const home = await numberlessHomeStudio(db, contact, locationId)
-    let fileAt = locationId
-    if (home) {
-      const atHome = await findAt(home)
-      if (atHome) {
-        // An existing home thread with no stamp (opened before WAHOMESTUDIO.1)
-        // gets the sending number too, or a reply into it has no number to
-        // resolve. Only an unstamped row; a lost stamp is logged, never thrown.
-        if (!atHome.whatsapp_number_id) {
-          const numberId = await sendingNumberId()
-          if (numberId) {
-            const { error: stampErr } = await db.from('whatsapp_conversations')
-              .update({ whatsapp_number_id: numberId })
-              .eq('id', atHome.id)
-              .is('whatsapp_number_id', null)
-            if (stampErr) console.error('[whatsapp] getOrCreateConversation: number stamp on the home thread failed', atHome.id, stampErr.message)
-          }
-        }
-        return linkContact(atHome)
-      }
-      fileAt = home
-    }
-    // A new thread is stamped with the sending studio's number (R3; at a
-    // number-less home studio it replies through it, WAHOMESTUDIO.1).
+    // A new thread files at the sending studio (R3) and is stamped with the
+    // number it sends from, so replies resolve it (R4).
     const stamp = await sendingNumberId()
 
     const { data: created, error } = await db.from('whatsapp_conversations').insert({
-      location_id: fileAt,
+      location_id: locationId,
       contact_id: contact.id,
       wa_phone: waPhone,
       status: 'active',
@@ -2269,10 +2239,10 @@ export async function getOrCreateConversation(db, contact, locationId) {
 
     // Lost a race with the inbound webhook (or another send) on the same
     // wa_phone — the unique constraint rejected us; re-read the winner.
-    const raced = await findAt(fileAt)
+    const raced = await findAt(locationId)
     // WAORGNUMBER.4 — say why when there is no thread at all (the staff routes
     // answer a bare "Could not open a conversation").
-    if (!raced) console.error('[whatsapp] getOrCreateConversation: insert failed and no thread to adopt', fileAt, error?.message || 'no row')
+    if (!raced) console.error('[whatsapp] getOrCreateConversation: insert failed and no thread to adopt', locationId, error?.message || 'no row')
     return raced?.id
   }
 

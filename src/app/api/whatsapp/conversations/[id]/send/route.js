@@ -103,9 +103,8 @@ export async function POST(request, props) {
     }
     const language = body.template_language || 'en'
 
-    // WAHOMESTUDIO.1 (R5) — templates are synced per studio from the default
-    // number's WABA; a thread replying through a same-organisation sibling's
-    // number sends that sibling's templates.
+    // Templates are per studio (WAORGNUMBER.2): the thread's studio's
+    // (templateLocationIdFor; WAORGNUMBER.6 removed the sibling case).
     const templateLocationId = await templateLocationIdFor(conversation.location_id, conversation.id)
 
     // WATPLSEND.1 — read the row BEFORE sending, and judge the read. It decides
@@ -189,8 +188,6 @@ export async function POST(request, props) {
     // location with none is refused (WACONFIGFALLBACK.1), never another's.
     // WAREPLYNUMBER.1 — the number this thread was written to when it
     // shares the default's WABA, else the default (getConversationReplyConfig).
-    // WAHOMESTUDIO.1 — or, for a number-less studio's thread, the same-org
-    // sibling's number stamped on it, whose owner's templates were read above.
     // WAORGNUMBER.2 (R5) — on the template's own WABA: the thread number when
     // it is on it, else this studio's number on it (none → 409 below).
     const templateOpts = { ...replyOpts, ...(tplRow.business_account_id && { businessAccountId: tplRow.business_account_id }) }

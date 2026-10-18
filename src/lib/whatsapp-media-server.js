@@ -48,10 +48,9 @@ export async function ensureMediaRehosted(db, message) {
   if (!externalId || !message.location_id) return null
 
   // WACONFIGFALLBACK.1 — the message's location's OWN number, never another
-  // studio's by accident. WAHOMESTUDIO.1 — or, for a message in a thread that
-  // replies through a same-organisation sibling's number (a studio with none
-  // of its own), the thread's number, which is the one Meta delivered it to.
-  // None → null (the inbox's graceful gap).
+  // studio's by accident: the thread's number while it is switched on at the
+  // message's studio (the one Meta delivered it to), else the studio's
+  // default. None → null (the inbox's graceful gap).
   let config
   try {
     config = (message.conversation_id && await getConversationNumberConfig(message.location_id, message.conversation_id))
