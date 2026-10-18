@@ -15,7 +15,7 @@
 // studio with neither a pick nor a template of the old name gets null and the
 // sender skips quietly (Hatch, until it has its own approved templates).
 
-import { logWarn } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 
 export const PURPOSES = {
   class_confirmed: { fallbackName: 'booking_class_confirmed_', categories: ['UTILITY'] },
@@ -60,10 +60,11 @@ function shape(row) {
  * `fallbackName` overrides the purpose's default name (the ad-lead welcome is
  * configured per campaign in LEAD_CAMPAIGNS).
  *
- * A failed read THROWS: falling back to the default name because the setting
- * could not be read would send a template the studio did not pick. Every
- * caller already runs inside a try/catch that turns a throw into a quiet
- * `send_failed`.
+ * A failed read of the setting or of the chosen template is logged
+ * (logError) and the default name is used, as it was before picks existed:
+ * losing a confirmation is worse than sending the default one. Only a failed
+ * read of the default-named template throws (the sender's try/catch turns it
+ * into a quiet `send_failed`, as today).
  *
  * @returns {Promise<{ id, name, language, category, components, business_account_id, header_media_url } | null>}
  */
@@ -71,21 +72,31 @@ export async function resolvePurposeTemplate(db, locationId, purpose, { fallback
   const def = PURPOSES[purpose]
   if (!def) throw new Error(`Unknown WhatsApp template purpose: ${purpose}`)
 
+  // A failed read of the studio's pick or of the chosen template must not cost
+  // the customer their confirmation (the booking is already made and most of
+  // these senders are one-shot): log it loudly and carry on with the default
+  // name, which is exactly what the sender did before picks existed.
   const { data: location, error: locErr } = await db
     .from('locations').select('id, settings').eq('id', locationId).maybeSingle()
-  if (locErr) throw new Error(`Could not read the studio's template settings: ${locErr.message}`)
+  if (locErr) {
+    logError('wa-purpose-templates', 'studio template settings unreadable; using the default template name', { purpose, locationId, err: locErr })
+  }
 
   const chosenId = location?.settings?.whatsapp_purpose_templates?.[purpose]
   if (typeof chosenId === 'string' && chosenId) {
     const { data: chosen, error: chosenErr } = await db
       .from('whatsapp_templates').select(TEMPLATE_COLUMNS).eq('id', chosenId).maybeSingle()
-    if (chosenErr) throw new Error(`Could not read the chosen template: ${chosenErr.message}`)
-    if (chosen && chosen.location_id !== locationId) {
+    if (chosenErr) {
+      logError('wa-purpose-templates', 'chosen template unreadable; using the default template name', { purpose, locationId, templateId: chosenId, err: chosenErr })
+    } else if (chosen && chosen.location_id !== locationId) {
       logWarn('wa-purpose-templates', 'template not at studio', { purpose, locationId, templateId: chosenId, templateLocationId: chosen.location_id })
     } else if (chosen && chosen.status === 'APPROVED') {
       return shape(chosen)
+    } else if (chosen) {
+      logWarn('wa-purpose-templates', 'chosen template is not approved; using the default template name', { purpose, locationId, templateId: chosenId, status: chosen.status })
+    } else {
+      logWarn('wa-purpose-templates', 'chosen template no longer exists; using the default template name', { purpose, locationId, templateId: chosenId })
     }
-    // Missing, or not APPROVED (paused, rejected, pending): fall through to the default name.
   }
 
   const { data: rows, error: nameErr } = await db

@@ -3,24 +3,26 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 import { PURPOSES, resolvePurposeTemplate } from './whatsapp-purpose-templates'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 
 const STILL = 'a0000000-0000-4000-8000-000000000001'
 const HATCH = 'a0000000-0000-4000-8000-000000000002'
 
 // A tiny supabase-js-shaped fake over in-memory tables: eq filters, order,
 // limit, maybeSingle. Enough for the two reads the helper makes.
-function fakeDb(tables, { fail } = {}) {
+function fakeDb(tables, { fail, failOn } = {}) {
   return {
     from(table) {
       let rows = [...(tables[table] || [])]
+      const filters = {}
+      const broken = () => fail === table || (failOn && failOn(table, filters))
       const q = {
         select() { return q },
-        eq(col, val) { rows = rows.filter((r) => r[col] === val); return q },
+        eq(col, val) { filters[col] = val; rows = rows.filter((r) => r[col] === val); return q },
         order(col, { ascending = true } = {}) { rows.sort((a, b) => (a[col] < b[col] ? -1 : a[col] > b[col] ? 1 : 0) * (ascending ? 1 : -1)); return q },
         limit(n) { rows = rows.slice(0, n); return q },
-        maybeSingle() { return Promise.resolve(fail === table ? { data: null, error: { message: 'boom' } } : { data: rows[0] || null, error: null }) },
-        then(res, rej) { return Promise.resolve(fail === table ? { data: null, error: { message: 'boom' } } : { data: rows, error: null }).then(res, rej) },
+        maybeSingle() { return Promise.resolve(broken() ? { data: null, error: { message: 'boom' } } : { data: rows[0] || null, error: null }) },
+        then(res, rej) { return Promise.resolve(broken() ? { data: null, error: { message: 'boom' } } : { data: rows, error: null }).then(res, rej) },
       }
       return q
     },
@@ -110,8 +112,36 @@ describe('resolvePurposeTemplate', () => {
     expect(await resolvePurposeTemplate(db, STILL, 'meta_ad_welcome')).toBeNull()
   })
 
-  it('a failed read throws instead of quietly using the default name', async () => {
-    await expect(resolvePurposeTemplate(fakeDb({ locations: [] }, { fail: 'locations' }), STILL, 'class_confirmed')).rejects.toThrow(/template settings/)
+  it('a failed settings read still resolves the default-named template, and logs it', async () => {
+    const db = fakeDb(
+      { locations: [loc(STILL, { class_confirmed: 'T-PICK' })], whatsapp_templates: [tpl('T-DEF', STILL, 'booking_class_confirmed_')] },
+      { failOn: (table) => table === 'locations' },
+    )
+    expect((await resolvePurposeTemplate(db, STILL, 'class_confirmed')).id).toBe('T-DEF')
+    expect(logError).toHaveBeenCalledWith('wa-purpose-templates', expect.stringContaining('settings unreadable'), expect.objectContaining({ purpose: 'class_confirmed', locationId: STILL }))
+  })
+
+  it('a failed read of the chosen template still resolves the default-named template, and logs it', async () => {
+    const db = fakeDb(
+      { locations: [loc(STILL, { class_confirmed: 'T-PICK' })], whatsapp_templates: [tpl('T-PICK', STILL, 'custom'), tpl('T-DEF', STILL, 'booking_class_confirmed_')] },
+      { failOn: (table, f) => table === 'whatsapp_templates' && f.id === 'T-PICK' },
+    )
+    expect((await resolvePurposeTemplate(db, STILL, 'class_confirmed')).id).toBe('T-DEF')
+    expect(logError).toHaveBeenCalledWith('wa-purpose-templates', expect.stringContaining('chosen template unreadable'), expect.objectContaining({ templateId: 'T-PICK' }))
+  })
+
+  it('a pick that is not APPROVED is logged with its status before falling back', async () => {
+    const db = fakeDb({
+      locations: [loc(STILL, { class_confirmed: 'T-PAUSED' })],
+      whatsapp_templates: [tpl('T-PAUSED', STILL, 'custom', { status: 'PAUSED' }), tpl('T-DEF', STILL, 'booking_class_confirmed_')],
+    })
+    expect((await resolvePurposeTemplate(db, STILL, 'class_confirmed')).id).toBe('T-DEF')
+    expect(logWarn).toHaveBeenCalledWith('wa-purpose-templates', expect.stringContaining('not approved'), expect.objectContaining({ templateId: 'T-PAUSED', status: 'PAUSED' }))
+  })
+
+  it('a failed read of the default-named template still throws (today\'s semantics)', async () => {
+    const db = fakeDb({ locations: [loc(STILL)] }, { failOn: (table) => table === 'whatsapp_templates' })
+    await expect(resolvePurposeTemplate(db, STILL, 'class_confirmed')).rejects.toThrow(/studio's templates/)
   })
 
   it('an unknown purpose throws', async () => {

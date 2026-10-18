@@ -227,4 +227,27 @@ describe('maybeSendCampaignWhatsappWelcome — purpose template', () => {
     const r = await maybeSendCampaignWhatsappWelcome({ db: makeDb(null), locationId: HATCH, contact, templateName: 'meta_ad_whatsapp_lead', purpose: 'meta_ad_welcome' })
     expect(r).toEqual({ sent: false, reason: 'send_failed' })
   })
+
+  it('a failed settings read still sends the default-named template', async () => {
+    const real = await vi.importActual('@/lib/whatsapp-purpose-templates')
+    resolvePurposeTemplate.mockImplementationOnce(real.resolvePurposeTemplate)
+    const defaultTpl = { ...APPROVED, id: 'T-DEF', location_id: HATCH, category: 'MARKETING', business_account_id: 'WABA-1' }
+    const base = makeDb(null)
+    const db = {
+      from(tbl) {
+        if (tbl === 'locations') {
+          // The welcome's own read ('settings, features') works; the resolver's ('id, settings') fails.
+          return { select: (cols) => ({ eq: () => ({ maybeSingle: async () => (cols === 'id, settings' ? { data: null, error: { message: 'down' } } : { data: { settings: {}, features: {} }, error: null }) }) }) }
+        }
+        if (tbl === 'whatsapp_templates') {
+          const q = { eq: () => q, order: () => q, limit: async () => ({ data: [defaultTpl], error: null }) }
+          return { select: () => q }
+        }
+        return base.from(tbl)
+      },
+    }
+    const r = await maybeSendCampaignWhatsappWelcome({ db, locationId: HATCH, contact, templateName: 'meta_ad_whatsapp_lead', purpose: 'meta_ad_welcome' })
+    expect(r.sent).toBe(true)
+    expect(sendTemplateMessage.mock.calls[0][1]).toBe('meta_ad_whatsapp_lead')
+  })
 })

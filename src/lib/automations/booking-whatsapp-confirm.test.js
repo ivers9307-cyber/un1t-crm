@@ -93,11 +93,34 @@ describe('maybeSendBookingWhatsappConfirm', () => {
       expect(sendTemplateMessage).not.toHaveBeenCalled()
     })
 
-    it('a failed template read is a quiet send_failed, never thrown', async () => {
+    it('a failed read of the default-named template is a quiet send_failed, never thrown', async () => {
       resolvePurposeTemplate.mockRejectedValueOnce(new Error('read failed'))
       const r = await maybeSendBookingWhatsappConfirm({ db: makeDb(null), locationId: HATCH, contact, purpose: 'event_waitlist_offer', bodyParams: ['Sarah'] })
       expect(r).toEqual({ sent: false, reason: 'send_failed' })
       expect(sendTemplateMessage).not.toHaveBeenCalled()
+    })
+
+    it('a failed settings read still sends the default-named template', async () => {
+      const real = await vi.importActual('@/lib/whatsapp-purpose-templates')
+      resolvePurposeTemplate.mockImplementationOnce(real.resolvePurposeTemplate)
+      const defaultTpl = { id: 'T-DEF', location_id: HATCH, name: 'booking_class_confirmed_', language: 'en', category: 'UTILITY', components: [], status: 'APPROVED', business_account_id: 'WABA-1', header_media_url: null }
+      const base = makeDb(null)
+      const db = {
+        from(tbl) {
+          if (tbl === 'locations') {
+            // The gate read (select 'id, features') works; the resolver's settings read fails.
+            return { select: (cols) => ({ eq: () => ({ maybeSingle: async () => (cols === 'id, settings' ? { data: null, error: { message: 'down' } } : { data: { id: 'L', features: {} }, error: null }) }) }) }
+          }
+          if (tbl === 'whatsapp_templates') {
+            const q = { eq: () => q, order: () => q, limit: async () => ({ data: [defaultTpl], error: null }) }
+            return { select: () => q }
+          }
+          return base.from(tbl)
+        },
+      }
+      const r = await maybeSendBookingWhatsappConfirm({ db, locationId: HATCH, contact, purpose: 'class_confirmed', bodyParams: ['Sarah', 'Spin', 'Tue 6pm'] })
+      expect(r.sent).toBe(true)
+      expect(sendTemplateMessage.mock.calls[0][1]).toBe('booking_class_confirmed_')
     })
 
     it('without a purpose it still sends the named template (an event type\'s own confirmation)', async () => {
