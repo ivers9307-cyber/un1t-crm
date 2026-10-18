@@ -1350,7 +1350,7 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
   // Gated AFTER the pending count is known, so on refusal we un-strand the row
   // this call just flipped draft→sending; a 'sending' entry (crash resume)
   // stays 'sending' — re-running later is legitimate.
-  const budget = await getSendBudget(db, { locationId: broadcast.location_id, tier: broadcastConfig.messagingLimitTier })
+  const budget = await getSendBudget(db, { numberId: broadcastConfig.id, locationId: broadcast.location_id, tier: broadcastConfig.messagingLimitTier })
   const budgetBlock = blastBudgetBlockError(budget, pending.length)
   if (budgetBlock) {
     if (broadcast.status === 'draft') {
@@ -1680,7 +1680,7 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   // whatever the tier has left; a fully-spent tier parks the drip until
   // earlier sends age out of the rolling 24h window (no pause needed — the
   // next tick re-checks). Ungated tier (null budget) changes nothing.
-  const budget = await getSendBudget(db, { locationId: broadcast.location_id, tier: config.messagingLimitTier })
+  const budget = await getSendBudget(db, { numberId: config.id, locationId: broadcast.location_id, tier: config.messagingLimitTier })
   const headroom = effectiveTickHeadroom(capHeadroom, budget)
   if (headroom <= 0) return { status: 'sending', skipped: 'no_tier_headroom', headroom: 0, sent: 0, failed: 0 }
 
