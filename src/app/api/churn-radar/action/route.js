@@ -47,7 +47,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendTextMessage } from '@/lib/whatsapp'
 import { sendRadarOutreach } from '@/lib/radar-outreach'
-import { whatsappErrorStatus, isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
+import { isWhatsAppNumberMissing, noNumberSwitchedOnMessage } from '@/lib/whatsapp-number-missing'
 import { enrolContacts } from '@/lib/sequences'
 import { capturePaymentForRun, refreshActiveRunPayment } from '@/lib/dunning-payment'
 import { isMembershipInvoice } from '@/lib/glofox-arrears'
@@ -85,6 +85,15 @@ const TASK_DUE_DAYS = 2
 
 function isoDatePlus(days) {
   return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
+}
+
+// WAORGNUMBER.4 (R8) — the 409 for a radar studio with no WhatsApp number
+// switched on, naming it: "No WhatsApp number is switched on at {studio}." A
+// failed name read still refuses, without the name.
+async function noNumberRefusal(db, locationId) {
+  const { data: loc, error } = await db.from('locations').select('name').eq('id', locationId).maybeSingle()
+  if (error) logWarn('churn-radar', 'studio name read failed for the no-number refusal', { locationId, code: error.code || null })
+  return NextResponse.json({ success: false, error: noNumberSwitchedOnMessage(error ? null : loc?.name) }, { status: 409 })
 }
 
 export async function POST(request) {
@@ -161,10 +170,8 @@ export async function POST(request) {
       logWarn('churn-radar', 'winback whatsapp failed', { err: e, contactId })
       // WACONFIGFALLBACK.1 — no WhatsApp number at this location: say so (409).
       // The copy below would blame the member's message window, and the send
-      // used to go out on the env number.
-      if (isWhatsAppNumberMissing(e)) {
-        return NextResponse.json({ success: false, error: e.message }, { status: 409 })
-      }
+      // used to go out on the env number. WAORGNUMBER.4 — naming the studio.
+      if (isWhatsAppNumberMissing(e)) return noNumberRefusal(db, locationId)
       return NextResponse.json({
         success: false,
         error: 'Couldn\'t send the WhatsApp — the member has no open message window. Reach out manually.',
@@ -182,11 +189,13 @@ export async function POST(request) {
       await sendRadarOutreach({ db, contact, templateName, locationId, sentBy: user.id })
     } catch (e) {
       logWarn('churn-radar', 'outreach send failed', { err: e, contactId })
-      // WACONFIGFALLBACK.1 — no WhatsApp number at this location → 409.
+      // WACONFIGFALLBACK.1 — no WhatsApp number at this location → 409
+      // (WAORGNUMBER.4: naming the studio).
+      if (isWhatsAppNumberMissing(e)) return noNumberRefusal(db, locationId)
       return NextResponse.json({
         success: false,
         error: e.message || 'Could not send the WhatsApp template.',
-      }, { status: whatsappErrorStatus(e, 502) })
+      }, { status: 502 })
     }
     logRow.template_name = templateName
   }

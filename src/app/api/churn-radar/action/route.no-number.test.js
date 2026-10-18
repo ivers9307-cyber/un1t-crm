@@ -27,13 +27,17 @@ import { WhatsAppNumberMissingError } from '@/lib/whatsapp-number-missing'
 const CONTACT = { id: 'c1', name: 'Synthetic Member', first_name: 'Synthetic', location_id: 'loc-1', wa_phone: '+353000000000', phone: null }
 let db
 let inserts
+let locationRead
 function makeDb() {
   return {
     from: (table) => {
       const chain = {}
       for (const m of ['select', 'eq', 'order', 'limit']) chain[m] = () => chain
       chain.insert = (row) => { inserts.push({ table, row }); return Promise.resolve({ data: null, error: null }) }
-      chain.maybeSingle = () => Promise.resolve({ data: table === 'contacts' ? CONTACT : null, error: null })
+      chain.maybeSingle = () => {
+        if (table === 'locations') return Promise.resolve(locationRead)
+        return Promise.resolve({ data: table === 'contacts' ? CONTACT : null, error: null })
+      }
       chain.then = (res, rej) => Promise.resolve({ data: null, error: null }).then(res, rej)
       return chain
     },
@@ -41,20 +45,23 @@ function makeDb() {
 }
 const req = (url, body) => new Request(url, { method: 'POST', body: JSON.stringify(body) })
 const NO_NUMBER = { success: false, error: 'No WhatsApp number is connected at this location.' }
+// WAORGNUMBER.4 (R8) — the churn radar names its studio.
+const NOT_SWITCHED_ON = { success: false, error: 'No WhatsApp number is switched on at UN1T Hatch Street.' }
 
 beforeEach(() => {
   vi.clearAllMocks()
   inserts = []
+  locationRead = { data: { name: 'UN1T Hatch Street' }, error: null }
   db = makeDb()
   sendTextMessage.mockRejectedValue(new WhatsAppNumberMissingError('loc-1'))
   sendRadarOutreach.mockRejectedValue(new WhatsAppNumberMissingError('loc-1'))
 })
 
 describe('churn radar — no WhatsApp number at the active location', () => {
-  it('winback_sent → 409 with the resolver message (not the message-window copy), nothing logged', async () => {
+  it('winback_sent → 409, radar refusal names the studio (not the message-window copy), nothing logged', async () => {
     const res = await churnPOST(req('http://localhost/api/churn-radar/action', { contact_id: 'c1', action: 'winback_sent' }))
     expect(res.status).toBe(409)
-    expect(await res.json()).toEqual(NO_NUMBER)
+    expect(await res.json()).toEqual(NOT_SWITCHED_ON)
     expect(inserts).toEqual([])
   })
 
@@ -65,11 +72,24 @@ describe('churn radar — no WhatsApp number at the active location', () => {
     expect((await res.json()).error).toMatch(/no open message window/)
   })
 
-  it('outreach_sent → 409, nothing logged', async () => {
+  it('outreach_sent → 409, radar refusal names the studio, nothing logged', async () => {
     const res = await churnPOST(req('http://localhost/api/churn-radar/action', { contact_id: 'c1', action: 'outreach_sent', template_name: 'checkin' }))
     expect(res.status).toBe(409)
-    expect(await res.json()).toEqual(NO_NUMBER)
+    expect(await res.json()).toEqual(NOT_SWITCHED_ON)
     expect(inserts).toEqual([])
+  })
+
+  it('a failed studio-name read still refuses (409), without the name', async () => {
+    locationRead = { data: null, error: { message: 'boom' } }
+    const res = await churnPOST(req('http://localhost/api/churn-radar/action', { contact_id: 'c1', action: 'winback_sent' }))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('No WhatsApp number is switched on at this studio.')
+  })
+
+  it('any other outreach failure keeps its 502', async () => {
+    sendRadarOutreach.mockRejectedValue(new Error('Template not found'))
+    const res = await churnPOST(req('http://localhost/api/churn-radar/action', { contact_id: 'c1', action: 'outreach_sent', template_name: 'checkin' }))
+    expect(res.status).toBe(502)
   })
 })
 

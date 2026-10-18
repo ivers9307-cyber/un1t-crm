@@ -53,11 +53,13 @@ export async function GET(request, props) {
   }
 
   // WhatsApp 24h window — open while the most recent conversation's
-  // window_expires_at is still in the future.
+  // window_expires_at is still in the future. WAORGNUMBER.4 (R3): the
+  // contact's HOME studio's thread, the one the composer sends on.
   const { data: convs } = await db
     .from('whatsapp_conversations')
     .select('window_expires_at')
     .eq('contact_id', contactId)
+    .eq('location_id', contact.location_id)
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .limit(1)
   const windowExpiresAt = convs?.[0]?.window_expires_at || null

@@ -29,14 +29,14 @@ import {
   hasMobilePermissionAtAnyLocation, hasMobilePermissionForLocation,
 } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
-import { sendTextMessage, sendTemplateMessage, isWindowOpen, headerComponentFor } from '@/lib/whatsapp'
+import { sendTextMessage, sendTemplateMessage, isWindowOpen, headerComponentFor, getOrCreateConversation } from '@/lib/whatsapp'
 import {
   extractTemplateBody,
   isSendableUtilityTemplate,
   buildBodyComponents,
 } from '@/lib/radar-outreach'
 import { manualTakeoverPatch } from '@/lib/agent/core'
-import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
+import { contactWaPhone, loadSendConversation } from '@/lib/whatsapp-conversations'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 import { getConversationNumberConfig, pickReplyConfig, pickTemplateConfig } from '@/lib/whatsapp-config'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
@@ -103,13 +103,19 @@ export async function POST(request, props) {
   const own = await ownNumberOrRefusal(contact.location_id, 'contact-whatsapp-send')
   if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
 
-  // CANCEL-FORM.4 — get-or-create moved to lib/whatsapp-conversations so the
-  // cancellation-form send opens the same thread this composer does.
-  const opened = await getOrCreateContactConversation(db, contact)
+  // WAORGNUMBER.4 (R3) — the composer sends for the contact's HOME studio, so
+  // its thread files there (getOrCreateConversation at contact.location_id),
+  // never on the contact's most recent thread at another studio, which could
+  // pair that studio's thread with this studio's number. The cancellation-form
+  // send opens the same thread (CANCEL-FORM.4).
+  const waPhone = contactWaPhone(contact)
+  if (!waPhone) return NextResponse.json({ success: false, error: 'Contact has no phone number on file' }, { status: 400 })
+  const opened = await loadSendConversation(db,
+    await getOrCreateConversation(db, { ...contact, wa_phone: waPhone }, contact.location_id))
   if (!opened.ok) {
     return NextResponse.json({ success: false, error: opened.error }, { status: opened.status })
   }
-  const { conversation, waPhone } = opened
+  const { conversation } = opened
   // WAREPLYNUMBER.1 (C86) — a reply into this thread goes from the number the
   // customer wrote to (stamped by the webhook) while it is active here, like
   // the inbox send; else the checked default. Read by its id: the location is

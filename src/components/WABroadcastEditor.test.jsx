@@ -226,3 +226,36 @@ describe('WABroadcastEditor — the drip panel names the parked share of Remaini
     expect(screen.queryByTestId('wa-drip-capped')).toBeNull()
   })
 })
+
+// WAORGNUMBER.4 (R7) — blast sign-off on the Send button. `signoff` is set
+// by the page only while the studio's window is open. Fictional ids only.
+describe('WABroadcastEditor — blast sign-off', () => {
+  const DRAFT = { id: 'b2', name: 'Launch', status: 'draft', delivery_mode: 'blast', template_id: 't1', whatsapp_broadcast_recipients: [] }
+  const TEMPLATES = [{ id: 't1', name: 'launch', status: 'APPROVED', components: [] }]
+  const COPY = 'Blasts at UN1T Hatch Street need sign-off from an organisation admin until 16 Nov 2026.'
+  const renderWith = (signoff) => render(
+    <WABroadcastEditor broadcast={DRAFT} signoff={signoff} templates={TEMPLATES} locationId="loc-1" userId="u1" />
+  )
+
+  it('blocked: shows the copy and a Request sign-off note in place of the button', () => {
+    renderWith({ message: COPY, canSignOff: false, signedOff: false })
+    expect(screen.getByText(COPY)).toBeTruthy()
+    expect(screen.getByText(/Request sign-off/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Send Broadcast/ })).toBeNull()
+  })
+  it('signed off: a manager sees the Send button', () => {
+    renderWith({ message: COPY, canSignOff: false, signedOff: true })
+    expect(screen.getByRole('button', { name: /Send Broadcast/ })).toBeTruthy()
+    expect(screen.queryByText(COPY)).toBeNull()
+  })
+  it('an org admin sees Sign off beside Send', () => {
+    renderWith({ message: COPY, canSignOff: true, signedOff: false })
+    expect(screen.getByRole('button', { name: /Sign off/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Send Broadcast/ })).toBeTruthy()
+  })
+  it('no window: no notice', () => {
+    renderWith(null)
+    expect(screen.getByRole('button', { name: /Send Broadcast/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Sign off/ })).toBeNull()
+  })
+})

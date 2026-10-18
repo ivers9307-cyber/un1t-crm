@@ -6,6 +6,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema, url } from '@/lib/schemas'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { logError } from '@/lib/log'
+import { readSignoffLocation, signoffWindow, routeSignoffGate, changesSignedContent, isOrganizationAdminFor } from '@/lib/whatsapp-blast-signoff'
 
 // GATES-2 — GET/PUT/DELETE took membership only, so a member with WhatsApp
 // switched off could read the recipient list, rewrite or delete a broadcast
@@ -38,7 +39,9 @@ const BroadcastUpdateSchema = z.object({
 // GATES-3 (f) — the read's error is read: a failed read is a 500, never
 // "not found" (PGRST116 = no row).
 async function loadBroadcastForUpdate(db, id) {
-  const { data, error } = await db.from('whatsapp_broadcasts').select('location_id, status, scheduled_at').eq('id', id).single()
+  const { data, error } = await db.from('whatsapp_broadcasts')
+    .select('location_id, status, scheduled_at, signed_off_by, template_id, variable_mapping, header_media_url, audience_filter, daily_cap, per_tick_max')
+    .eq('id', id).single()
   if (error && error.code !== 'PGRST116') return { row: null, failed: true }
   return { row: data || null, failed: false }
 }
@@ -128,6 +131,42 @@ export async function PUT(request, props) {
     }
     if (new Date(nextScheduledAt).getTime() <= Date.now()) {
       return NextResponse.json({ success: false, error: 'scheduled_at must be in the future' }, { status: 400 })
+    }
+  }
+
+  // WAORGNUMBER.4 (R7) — blast sign-off. Inside the studio's window: an org
+  // admin's schedule signs the broadcast off; anyone else's change to the
+  // signed content (SIGNED_CONTENT_FIELDS: what goes out, and a drip's pace)
+  // clears the sign-off whatever the row held when read (a sign-off landing
+  // in between must not survive it), is refused on a running send (it would
+  // strand it), and their schedule of an unsigned broadcast is a 403.
+  const contentChanged = changesSignedContent(updates, row)
+  if (updates.status === 'scheduled' || contentChanged) {
+    let location
+    try {
+      location = await readSignoffLocation(db, row.location_id)
+    } catch {
+      return NextResponse.json({ success: false, error: 'Could not check whether this broadcast needs sign-off. Try again.' }, { status: 503 })
+    }
+    if (signoffWindow(location) && !isOrganizationAdminFor(user, location?.organization_id)) {
+      if (contentChanged) {
+        if (row.status === 'sending') {
+          return NextResponse.json({
+            success: false,
+            error: 'This broadcast is sending, and blasts at this studio need sign-off, so its content and pace cannot change now. Pause or cancel it instead.',
+          }, { status: 409 })
+        }
+        Object.assign(updates, { signed_off_by: null, signed_off_at: null })
+      }
+      if (updates.status === 'scheduled') {
+        const gate = routeSignoffGate({ user, location, row: contentChanged ? { signed_off_by: null } : row })
+        if (gate.blocked) {
+          return NextResponse.json({ success: false, error: gate.blocked, signoff_required: true }, { status: 403 })
+        }
+      }
+    } else if (updates.status === 'scheduled') {
+      const gate = routeSignoffGate({ user, location, row })
+      if (gate.stamp) Object.assign(updates, gate.stamp)
     }
   }
 

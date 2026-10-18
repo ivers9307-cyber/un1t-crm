@@ -141,18 +141,18 @@ describe('countBusinessInitiatedContactsLast24h', () => {
     const db = usageDb([
       { id: 1, contact_id: 'a' }, { id: 2, contact_id: 'a' }, { id: 3, contact_id: 'b' },
     ])
-    expect(await countBusinessInitiatedContactsLast24h(db, 'loc1')).toBe(2)
+    expect(await countBusinessInitiatedContactsLast24h(db, { numberId: null, locationId: 'loc1' })).toBe(2)
   })
   it('rows with no linked contact each count once (conservative)', async () => {
     const db = usageDb([
       { id: 1, contact_id: 'a' }, { id: 2, contact_id: null }, { id: 3, contact_id: null },
     ])
-    expect(await countBusinessInitiatedContactsLast24h(db, 'loc1')).toBe(3)
+    expect(await countBusinessInitiatedContactsLast24h(db, { numberId: null, locationId: 'loc1' })).toBe(3)
   })
   it('scopes to the location, outbound templates, trailing 24h', async () => {
     const calls = {}
     const db = usageDb([], calls)
-    await countBusinessInitiatedContactsLast24h(db, 'loc1')
+    await countBusinessInitiatedContactsLast24h(db, { numberId: null, locationId: 'loc1' })
     expect(calls.table).toBe('whatsapp_messages')
     expect(calls.filters).toEqual(expect.arrayContaining([
       ['in', 'location_id', ['loc1']],
@@ -171,48 +171,84 @@ describe('countBusinessInitiatedContactsLast24h', () => {
   it('excludes phone-app rows (coexistence echoes and history)', async () => {
     const calls = {}
     const db = usageDb([], calls)
-    await countBusinessInitiatedContactsLast24h(db, 'loc1')
+    await countBusinessInitiatedContactsLast24h(db, { numberId: null, locationId: 'loc1' })
     expect(calls.filters).toContainEqual(['not', 'source', 'in', '(app_echo,history_sync)'])
   })
-  // WAHOMESTUDIO.1 — a template sent from studio S into a thread filed at a
-  // number-less same-org sibling H carries location_id = H (the trigger in
-  // mig 723), so S's tier budget must count H's rows too.
-  it('counts a template row at a number-less same-organisation sibling against the sending studio', async () => {
+  // WAORGNUMBER.4 (R7) — Meta's limit belongs to the NUMBER, so every studio
+  // with it switched on spends from one budget.
+  it('counts template sends at every studio using the number', async () => {
     const calls = {}
     const world = {
-      locations: [{ id: 'hatch', organization_id: 'org1' }, { id: 'elsewhere', organization_id: 'org2' }],
-      numbers: [],
+      locations: [{ id: 'hatch', organization_id: 'org1' }],
+      numbers: [{ id: 'n1', location_id: 'loc1', is_active: true }],
+      links: [link('loc1', 'n1'), link('hatch', 'n1')],
     }
     const db = usageDb([
       { id: 1, contact_id: 'a', location_id: 'loc1' },
       { id: 2, contact_id: 'b', location_id: 'hatch' },
-      { id: 3, contact_id: 'c', location_id: 'elsewhere' },
     ], calls, world)
-    expect(await countBusinessInitiatedContactsLast24h(db, 'loc1')).toBe(2)
-    expect(calls.filters).toContainEqual(['in', 'location_id', ['loc1', 'hatch']])
+    expect(await countBusinessInitiatedContactsLast24h(db, { numberId: 'n1', locationId: 'hatch' })).toBe(2)
+    const inFilter = calls.filters.find(([op, c]) => op === 'in' && c === 'location_id')
+    expect([...inFilter[2]].sort()).toEqual(['hatch', 'loc1'])
   })
-  it('does not count a sibling that has its own number', async () => {
+  it('a studio that does not use the number is not counted', async () => {
     const calls = {}
-    const world = { locations: [{ id: 'hatch', organization_id: 'org1' }], numbers: [{ id: 'n', location_id: 'hatch', is_active: true }] }
-    const db = usageDb([{ id: 1, contact_id: 'a', location_id: 'loc1' }, { id: 2, contact_id: 'b', location_id: 'hatch' }], calls, world)
-    expect(await countBusinessInitiatedContactsLast24h(db, 'loc1')).toBe(1)
+    const world = {
+      locations: [{ id: 'third', organization_id: 'org1' }, { id: 'away', organization_id: 'org2' }],
+      numbers: [{ id: 'n1', location_id: 'loc1', is_active: true }, { id: 'n2', location_id: 'third', is_active: true },
+        { id: 'n3', location_id: 'away', is_active: true }],
+      links: [link('loc1', 'n1'), link('third', 'n2'), link('away', 'n3')],
+    }
+    const db = usageDb([
+      { id: 1, contact_id: 'a', location_id: 'loc1' },
+      { id: 3, contact_id: 'c', location_id: 'third' },
+      { id: 4, contact_id: 'd', location_id: 'away' },
+    ], calls, world)
+    expect(await countBusinessInitiatedContactsLast24h(db, { numberId: 'n1', locationId: 'loc1' })).toBe(1)
     expect(calls.filters).toContainEqual(['in', 'location_id', ['loc1']])
   })
-  it('does not count a sibling the organisation number is switched on at (WAORGNUMBER.1)', async () => {
+  // WAHOMESTUDIO.1 (transitional until WAORGNUMBER.6) — a template sent from
+  // S into a thread filed at a number-less same-org sibling H carries
+  // location_id = H (mig 723): it still counts against S's number.
+  it('still counts a number-less same-organisation sibling (until go-live switches it on)', async () => {
     const calls = {}
     const world = {
       locations: [{ id: 'hatch', organization_id: 'org1' }],
-      numbers: [{ id: 'n', location_id: 'loc1', is_active: true }],
-      links: [link('loc1', 'n'), link('hatch', 'n')],
+      numbers: [{ id: 'n1', location_id: 'loc1', is_active: true }],
+      links: [link('loc1', 'n1')],
     }
-    const db = usageDb([{ id: 1, contact_id: 'a', location_id: 'loc1' }, { id: 2, contact_id: 'b', location_id: 'hatch' }], calls, world)
-    expect(await countBusinessInitiatedContactsLast24h(db, 'loc1')).toBe(1)
+    const db = usageDb([
+      { id: 1, contact_id: 'a', location_id: 'loc1' },
+      { id: 2, contact_id: 'b', location_id: 'hatch' },
+    ], calls, world)
+    expect(await countBusinessInitiatedContactsLast24h(db, { numberId: 'n1', locationId: 'loc1' })).toBe(2)
+  })
+  it('always counts the sending studio, even when its link row is gone', async () => {
+    const calls = {}
+    // The number is switched on only at 'other'; the send was for 'loc1'.
+    const world = {
+      locations: [{ id: 'other', organization_id: 'org1' }],
+      numbers: [{ id: 'n1', location_id: 'other', is_active: true }, { id: 'n9', location_id: 'loc1', is_active: true }],
+      links: [link('other', 'n1'), link('loc1', 'n9')],
+    }
+    const db = usageDb([
+      { id: 1, contact_id: 'a', location_id: 'loc1' },
+      { id: 2, contact_id: 'b', location_id: 'other' },
+    ], calls, world)
+    expect(await countBusinessInitiatedContactsLast24h(db, { numberId: 'n1', locationId: 'loc1' })).toBe(2)
+    const inFilter = calls.filters.find(([op, c]) => op === 'in' && c === 'location_id')
+    expect([...inFilter[2]].sort()).toEqual(['loc1', 'other'])
+  })
+  it('no number id counts the studio alone', async () => {
+    const calls = {}
+    const db = usageDb([{ id: 1, contact_id: 'a', location_id: 'loc1' }], calls)
+    expect(await countBusinessInitiatedContactsLast24h(db, { numberId: null, locationId: 'loc1' })).toBe(1)
     expect(calls.filters).toContainEqual(['in', 'location_id', ['loc1']])
   })
-  it('fails closed when the sibling lookup fails (never counts a smaller set)', async () => {
-    for (const table of ['locations', 'location_whatsapp_numbers']) {
+  it('failed link read throws (never counts a smaller set)', async () => {
+    for (const table of ['location_whatsapp_numbers', 'locations']) {
       const db = usageDb([], {}, { fault: table, locations: [{ id: 'hatch', organization_id: 'org1' }] })
-      await expect(countBusinessInitiatedContactsLast24h(db, 'loc1')).rejects.toThrow(/boom/)
+      await expect(countBusinessInitiatedContactsLast24h(db, { numberId: 'n1', locationId: 'loc1' })).rejects.toThrow(/boom/)
     }
   })
   it('paginates past the 1,000-row PostgREST cap', async () => {
@@ -221,7 +257,7 @@ describe('countBusinessInitiatedContactsLast24h', () => {
     for (let i = 0; i < 500; i++) rows.push({ id: 1000 + i, contact_id: `c${i}` }) // dupes of page 1
     rows.push({ id: 9999, contact_id: 'extra' })
     const db = usageDb(rows)
-    expect(await countBusinessInitiatedContactsLast24h(db, 'loc1')).toBe(1001)
+    expect(await countBusinessInitiatedContactsLast24h(db, { numberId: null, locationId: 'loc1' })).toBe(1001)
   })
 })
 
@@ -235,9 +271,22 @@ describe('getSendBudget', () => {
     const db = { from: () => { throw new Error('must not query without a location') } }
     expect(await getSendBudget(db, { locationId: null, tier: 'TIER_250' })).toBeNull()
   })
+  it('budgets the number across every studio using it', async () => {
+    const world = {
+      locations: [{ id: 'hatch', organization_id: 'org1' }],
+      numbers: [{ id: 'n1', location_id: 'loc1', is_active: true }],
+      links: [link('loc1', 'n1'), link('hatch', 'n1')],
+    }
+    const db = usageDb([
+      { id: 1, contact_id: 'a', location_id: 'loc1' },
+      { id: 2, contact_id: 'b', location_id: 'hatch' },
+    ], {}, world)
+    expect(await getSendBudget(db, { numberId: 'n1', locationId: 'hatch', tier: 'TIER_50' }))
+      .toEqual({ tier: 'TIER_50', limit: 50, used: 2, remaining: 48 })
+  })
   it('returns the snapshot for a gated tier', async () => {
     const db = usageDb([{ id: 1, contact_id: 'a' }, { id: 2, contact_id: 'b' }])
-    expect(await getSendBudget(db, { locationId: 'loc1', tier: 'TIER_250' }))
+    expect(await getSendBudget(db, { numberId: null, locationId: 'loc1', tier: 'TIER_250' }))
       .toEqual({ tier: 'TIER_250', limit: 250, used: 2, remaining: 248 })
   })
 })

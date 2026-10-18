@@ -25,7 +25,9 @@ export async function GET(request, props) {
   const limit = parseInt(searchParams.get('limit') || '50')
 
   const { data: conversation, error } = await db.from('whatsapp_conversations')
-    .select('*, contacts!contact_id(id, name, first_name, email, phone, wa_phone, pipeline_stage_slug, wa_status)')
+    // WAORGNUMBER.4 — the thread's stamped number, for the block confirm
+    // (display_phone only: whatsapp_numbers holds the access token).
+    .select('*, contacts!contact_id(id, name, first_name, email, phone, wa_phone, pipeline_stage_slug, wa_status), whatsapp_numbers:whatsapp_number_id(display_phone)')
     .eq('id', params.id)
     .single()
 
@@ -39,6 +41,19 @@ export async function GET(request, props) {
   // INBOXLOC.1 — WhatsApp (web or mobile) judged at THIS studio, not the active one.
   const permHere = requireWhatsAppInboxAt(user, conversation.location_id)
   if (permHere) return permHere
+
+  // WAORGNUMBER.4 (R8) — the block confirm names the number a block acts on.
+  // The block goes through the thread's stamp when it is switched on here, or
+  // when nothing is (the WAHOMESTUDIO.1 send-through-thread case); otherwise
+  // through the studio's own default, so the stamp is not named. Display
+  // only: an unreadable link read just drops the name ("this number").
+  if (conversation.whatsapp_number_id) {
+    const { data: links, error: linkErr } = await db.from('location_whatsapp_numbers')
+      .select('whatsapp_number_id')
+      .eq('location_id', conversation.location_id)
+    const ids = (links || []).map((l) => l.whatsapp_number_id)
+    if (linkErr || (ids.length > 0 && !ids.includes(conversation.whatsapp_number_id))) conversation.whatsapp_numbers = null
+  }
 
   // Get messages
   // Newest rows first then reversed for display — ascending+limit returns

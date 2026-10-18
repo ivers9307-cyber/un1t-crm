@@ -245,8 +245,25 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     })
     const data = await res.json()
-    if (!res.ok || data?.success === false) throw new Error(data?.error || `Request failed (${res.status})`)
+    if (!res.ok || data?.success === false) {
+      const err = new Error(data?.error || `Request failed (${res.status})`)
+      // WAORGNUMBER.4 (R7) — the studio's blasts need an organisation admin's sign-off.
+      err.signoffRequired = data?.signoff_required === true
+      throw err
+    }
     return data
+  }
+
+  // WAORGNUMBER.4 (R7) — /send refused for sign-off: the broadcast is a saved
+  // draft an organisation admin can sign off, so say that and link to it
+  // instead of an error (a retry would only leave another draft).
+  async function startOrSignoff(id, onStarted) {
+    try {
+      onStarted(await postJson(`/api/whatsapp/broadcasts/${id}/send`, {}))
+    } catch (e) {
+      if (!e.signoffRequired) throw e
+      setResult({ channel: 'whatsapp', mode: 'needs_signoff', message: e.message, id, detail: `/communications/sent/whatsapp/${id}` })
+    }
   }
 
   async function send() {
@@ -279,12 +296,10 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
           // C120 GATES-3 (e) — the create made a draft; /send runs the entry
           // checks and starts the drip (draft→sending), sending nothing itself.
           // The run-whatsapp-broadcasts cron drives it during the window.
-          await postJson(`/api/whatsapp/broadcasts/${broadcast.id}/send`, {})
-          setResult({ channel, mode: 'drip', id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}`,
-            dailyCap: Number(dailyCap) || 500, windowStart, windowEnd, windowTz: broadcast.send_window_tz || zone })
+          await startOrSignoff(broadcast.id, () => setResult({ channel, mode: 'drip', id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}`,
+            dailyCap: Number(dailyCap) || 500, windowStart, windowEnd, windowTz: broadcast.send_window_tz || zone }))
         } else {
-          const data = await postJson(`/api/whatsapp/broadcasts/${broadcast.id}/send`, {})
-          setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}`, ...data })
+          await startOrSignoff(broadcast.id, (data) => setResult({ channel, mode: 'sent', id: broadcast.id, detail: `/communications/sent/whatsapp/${broadcast.id}`, ...data }))
         }
       } else {
         // Email — design inline with Unlayer, create the campaign, then queue
@@ -344,7 +359,15 @@ export default function UnifiedSendComposer({ locationId, locationTimeZone = nul
         <div className="w-12 h-12 rounded-full bg-emerald-500/15 text-emerald-700 flex items-center justify-center mx-auto mb-3">
           {result.mode === 'scheduled' || result.mode === 'drip' ? <Clock size={22} /> : <Check size={22} />}
         </div>
-        {result.mode === 'drip' ? (
+        {result.mode === 'needs_signoff' ? (
+          <>
+            <h2 className="text-lg font-semibold text-un1t-text">Saved, waiting for sign-off</h2>
+            <p className="text-sm text-amber-700 mt-1">{result.message}</p>
+            <p className="text-sm text-un1t-subtle mt-1">
+              Request sign-off: ask an organisation admin to open this broadcast and press Sign off. Nothing has been sent.
+            </p>
+          </>
+        ) : result.mode === 'drip' ? (
           <>
             <h2 className="text-lg font-semibold text-un1t-text">Drip started</h2>
             <p className="text-sm text-un1t-subtle mt-1">

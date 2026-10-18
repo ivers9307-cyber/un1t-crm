@@ -36,9 +36,9 @@ import {
 import { validateBody } from '@/lib/validate'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { sendTransactionalEmail } from '@/lib/postmark'
-import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents, renderTemplateBody } from '@/lib/whatsapp'
+import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents, renderTemplateBody, getOrCreateConversation } from '@/lib/whatsapp'
 import { URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
-import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
+import { contactWaPhone, loadSendConversation } from '@/lib/whatsapp-conversations'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 import { pickTemplateConfig } from '@/lib/whatsapp-config'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
@@ -132,10 +132,12 @@ export async function GET(request, props) {
     latestLinkForContact(db, contact.id),
     loadTemplate(db, contact.location_id, copy.whatsapp_template_name),
   ])
-  // Window state without creating a conversation: read the newest thread.
+  // Window state without creating a conversation: read the newest thread at
+  // the contact's HOME studio, the one the POST sends on (WAORGNUMBER.4, R3).
   const { data: convs } = await db.from('whatsapp_conversations')
     .select('id, window_expires_at')
     .eq('contact_id', contact.id)
+    .eq('location_id', contact.location_id)
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .limit(1)
   const conversation = convs?.[0] || null
@@ -212,10 +214,12 @@ export async function POST(request, props) {
     const own = await ownNumberOrRefusal(contact.location_id, 'cancel-form-send')
     if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
     numberConfig = own.config
-    const opened = await getOrCreateContactConversation(db, contact)
+    // WAORGNUMBER.4 (R3) — the contact's HOME studio's thread, as the composer.
+    waPhone = contactWaPhone(contact)
+    const opened = await loadSendConversation(db,
+      await getOrCreateConversation(db, { ...contact, wa_phone: waPhone }, contact.location_id))
     if (!opened.ok) return NextResponse.json({ success: false, error: opened.error }, { status: opened.status })
     conversation = opened.conversation
-    waPhone = opened.waPhone
     if (!isWindowOpen(conversation)) {
       template = await loadTemplate(db, contact.location_id, copy.whatsapp_template_name)
       if (!templateUsable(template, baseUrl)) {

@@ -1006,7 +1006,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
     const gated = numbers.find((n) => n.isActive && n.tier && tierDailyLimit(n.tier) != null)
     if (gated) {
       try {
-        budget = await getSendBudget(db, { locationId: loc.id, tier: gated.tier })
+        budget = await getSendBudget(db, { numberId: gated.id, locationId: loc.id, tier: gated.tier })
       } catch {
         budget = null // meter is decorative — never fail the hub for it
       }

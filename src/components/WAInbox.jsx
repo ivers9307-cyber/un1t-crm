@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { blockConfirmMessage } from '@/lib/whatsapp-block-copy'
 import Link from 'next/link'
 import { createBrowserClient } from '@/lib/supabase'
 import { isServableMedia } from '@shared/whatsapp-media'
@@ -225,7 +226,8 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   async function toggleBlocked(conv) {
     const next = !conv.is_blocked
     const msg = next
-      ? 'Block this sender? They will no longer be able to message this number (and it cannot message them).'
+      // WAORGNUMBER.4 (R8) — a block is on the number, shared across studios.
+      ? blockConfirmMessage(conv.whatsapp_numbers?.display_phone)
       : 'Unblock this sender?'
     if (!window.confirm(msg)) return
     try {
