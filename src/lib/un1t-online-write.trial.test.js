@@ -229,7 +229,7 @@ describe('grantTrial — what the ledger already holds', () => {
 
   it('a done trial by EITHER method: granted again while its credits show, trial_used once spent; nothing sent', async () => {
     for (const method of ['charge', 'free_checkout']) {
-      const tables = () => ({ un1t_write_events: [row({ id: `tw-${method}`, stage: 'done', method, idempotency_key: `trial:${LOC}:${USER}:${PRODUCT}:${method}`, un1t_ref: 'tx-old' })] })
+      const tables = () => ({ un1t_write_events: [row({ id: `tw-${method}`, stage: 'done', method, idempotency_key: `trial:${LOC}:${USER}:${PRODUCT}:${method}`, un1t_ref: 'tx-old', created_at: new Date(Date.now() - 40 * 86_400_000).toISOString() })] })
       const a = await setup({ routes: { [CREDITS]: [creditsShow()] }, db: { tables: tables() } })
       expect(await grantTrial(a.db, args(), a.deps)).toMatchObject({ outcome: 'granted', method, ledgerId: `tw-${method}` })
       expect(a.fetchImpl.writes()).toHaveLength(0)
@@ -238,6 +238,15 @@ describe('grantTrial — what the ledger already holds', () => {
       expect(await grantTrial(b.db, args(), b.deps)).toEqual({ outcome: 'ineligible', reason: 'trial_used' })
       expect(b.fetchImpl.writes()).toHaveLength(0)
     }
+    // A done row is final: re-checking it never tries to finish it again.
+    const { logError } = await import('./log')
+    expect(logError.mock.calls.filter(([, msg]) => /touched no row/.test(msg))).toHaveLength(0)
+  })
+
+  it('a grant from us inside the last day stands without a credits read', async () => {
+    const s = await setup({ db: { tables: { un1t_write_events: [row({ id: 'tw-new', stage: 'done', method: 'charge', idempotency_key: `trial:${LOC}:${USER}:${PRODUCT}:charge`, un1t_ref: 'tx', created_at: new Date(Date.now() - 60_000).toISOString() })] } } })
+    expect(await grantTrial(s.db, args(), s.deps)).toEqual({ outcome: 'granted', method: 'charge', ledgerId: 'tw-new' })
+    expect(s.fetchImpl.count(CREDITS)).toBe(0)
   })
 
   it('a sent row another process is still sending (under 3 minutes) is retry in flight, never judged', async () => {
