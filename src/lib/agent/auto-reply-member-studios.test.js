@@ -275,6 +275,22 @@ describe('Hatch-only member on a Stillorgan thread, Hatch off', () => {
     expect(JSON.stringify(result)).not.toContain('Hatch')
   })
 
+  it('a Stillorgan contact on classpass_payg who is Hatch-active keeps the Glofox executor', async () => {
+    // The resolver's classifier marks a live Stillorgan relationship; Hatch is active but unanswerable.
+    resolveMemberStudios.mockResolvedValue({
+      studios: [stillorganStudio({ liveRelationship: true }), hatchStudio()], readFailed: false,
+    })
+    const { fetchFn, bodies } = modelTurns([toolTurn('get_my_membership'), textTurn('You are on ClassPass.')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db } = turnDb({ conv: VERIFIED_THREAD })
+
+    await runChannelAgent(db, makeAdapter(), turnCtx())
+
+    expect(executeAccountTool).toHaveBeenCalledWith('get_my_membership', {}, expect.any(Object))
+    expect(toolResultOf(bodies[1])).toEqual({ marker: 'REAL_ACCOUNT_TOOL_RAN' })
+    expect(JSON.stringify(toolResultOf(bodies[1]))).not.toContain('membership_at_other_studio')
+  })
+
   it('a tool outside the booking-system set still runs its executor', async () => {
     resolveMemberStudios.mockResolvedValue(HATCH_ONLY)
     const { fetchFn, bodies } = modelTurns([toolTurn('list_upcoming_classes'), textTurn('Here you go')])
@@ -445,6 +461,27 @@ describe('re-resolution after verify_identity in the same turn', () => {
     // The decision row describes the LATEST resolution.
     const decision = inserts.find((i) => i.table === 'agent_decisions')
     expect(decision.row.meta.member_studios.map((s) => s.location_id)).toEqual([STILLORGAN, HATCH])
+  })
+
+  it('a re-resolve that yields nothing CLEARS the earlier resolution: no stale membership_at_other_studio', async () => {
+    resolveMemberStudios
+      .mockResolvedValueOnce(HATCH_ONLY)
+      .mockRejectedValueOnce(new Error('boom'))
+    const { fetchFn, bodies } = modelTurns([
+      toolTurn('verify_identity', { email: 'a@example.test', surname: 'Example' }),
+      toolTurn('get_my_membership'),
+      textTurn('Done'),
+    ])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, inserts } = turnDb({ conv: UNVERIFIED_THREAD, freshVerified: HATCH_CONTACT })
+
+    await runChannelAgent(db, makeAdapter(), turnCtx())
+
+    expect(resolveMemberStudios).toHaveBeenCalledTimes(2)
+    // The first resolution was anchored on the thread contact; it must not decide the verified turn.
+    expect(toolResultOf(bodies[2])).toEqual({ marker: 'REAL_ACCOUNT_TOOL_RAN' })
+    const decision = inserts.find((i) => i.table === 'agent_decisions')
+    expect(decision.row.meta).not.toHaveProperty('member_studios')
   })
 
   it('a failed verify_identity does not re-resolve', async () => {

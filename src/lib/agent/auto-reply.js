@@ -907,7 +907,14 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       } catch { return undefined }
     }
     const applyMemberStudios = (resolution) => {
-      if (!resolution) return
+      // No resolution (e.g. after verify the acting account has no anchor or
+      // the call threw) CLEARS an earlier one: it was anchored on a different
+      // contact and must not keep deciding this turn.
+      if (!resolution) {
+        toolCtx.memberStudios = undefined
+        trace.memberStudios = null
+        return
+      }
       toolCtx.memberStudios = resolution
       // The decision row records the LATEST resolution (a failed read records none).
       trace.memberStudios = resolution.readFailed ? null : resolution.studios
@@ -1022,7 +1029,8 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
               // Answer with the studio's name instead, before any executor
               // (and before the no-booking refusal) runs. A failed or absent
               // resolution never reaches here: today's behaviour exactly.
-              // Only once verified: unverified, the executor path below answers not_verified and reads nothing.
+              // Only once verified: unverified, the executor path below
+              // answers not_verified and reads nothing.
               const otherStudio = BOOKING_SYSTEM_TOOL_NAMES.has(block.name)
                 && toolCtx.verifiedContactId && toolCtx.memberStudios && !toolCtx.memberStudios.readFailed
                 ? otherStudioOnly(toolCtx.memberStudios.studios, locationId)

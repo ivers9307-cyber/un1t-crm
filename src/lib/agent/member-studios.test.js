@@ -161,6 +161,28 @@ describe('classifyMemberStudios', () => {
   })
 })
 
+describe('liveRelationship (a live Glofox relationship at the thread studio)', () => {
+  const live = (over) => byLoc(classify({ contacts: [stillContact(over)] }), STILL).liveRelationship
+  it('true for a member in any state, and for classpass_payg', () => {
+    expect(live({})).toBe(true)
+    expect(live({ glofox_membership_state: 'paused' })).toBe(true)
+    expect(live({ glofox_membership_state: 'locked' })).toBe(true)
+    expect(live({ glofox_membership_state: 'future' })).toBe(true)
+    expect(live({ glofox_membership_status: 'credit_member', glofox_membership_state: 'paused' })).toBe(true)
+    expect(live({ glofox_membership_status: 'classpass_payg' })).toBe(true)
+  })
+  it('false for a lead, a trialist, a null status, or no contact at all', () => {
+    expect(live({ glofox_membership_status: 'lead' })).toBe(false)
+    expect(live({ glofox_membership_status: 'trial' })).toBe(false)
+    expect(live({ glofox_membership_status: null })).toBe(false)
+    expect(byLoc(classify({}), STILL).liveRelationship).toBe(false)
+  })
+  it('counts a group contact at the studio even without a glofox_member_id; ignores one at another studio', () => {
+    expect(live({ glofox_member_id: null })).toBe(true)
+    expect(byLoc(classify({ contacts: [stillContact({ location_id: HATCH })] }), STILL).liveRelationship).toBe(false)
+  })
+})
+
 const studio = (over) => ({
   locationId: STILL, name: 'S', providerKey: 'glofox', active: false, answerable: false, contactIds: [], ...over,
 })
@@ -222,6 +244,30 @@ describe('otherStudioOnly', () => {
     expect(otherStudioOnly([S({ active: true, answerable: true }), H({ active: true, answerable: false })], STILL)).toBeNull()
     expect(otherStudioOnly([S(), H({ active: false, answerable: false })], STILL)).toBeNull()
     expect(otherStudioOnly([S({ active: true, answerable: false }), H()], HATCH)).toBeNull()
+  })
+
+  it('null when the person has a live relationship at the thread studio, active or not', () => {
+    const hatchActive = H({ active: true, answerable: false })
+    // A paused/locked/future member or a ClassPass customer: inactive, but live.
+    expect(otherStudioOnly([S({ liveRelationship: true }), hatchActive], STILL)).toBeNull()
+    // A lead with a Glofox id: no live relationship, so Hatch is named.
+    expect(otherStudioOnly([S({ liveRelationship: false }), hatchActive], STILL)?.locationId).toBe(HATCH)
+  })
+
+  it('end to end from contacts: paused, future, classpass_payg -> null; lead with a glofox id -> Hatch', () => {
+    const run = (over) => {
+      const studios = classify({
+        contacts: [stillContact(over), hatchContact()],
+        un1tClients: [hatchClient()],
+        un1tSubscriptions: [hatchSub()],
+        agentOn: { [STILL]: true, [HATCH]: false },
+      })
+      return otherStudioOnly(studios, STILL)
+    }
+    expect(run({ glofox_membership_state: 'paused' })).toBeNull()
+    expect(run({ glofox_membership_state: 'future' })).toBeNull()
+    expect(run({ glofox_membership_status: 'classpass_payg' })).toBeNull()
+    expect(run({ glofox_membership_status: 'lead', glofox_membership_state: 'active' })?.locationId).toBe(HATCH)
   })
 
   it('null when something else is answerable-active', () => {

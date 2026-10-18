@@ -18,7 +18,7 @@
 
 import { logWarn } from '@/lib/log'
 import { MEMBERSHIP_ACTIVE_STATUSES } from '@/lib/un1t-online-map'
-import { hasBookableMembership, linkedAccountsForContact, chunkIds } from '@/lib/person-accounts'
+import { hasBookableMembership, linkedAccountsForContact, chunkIds, MEMBER_STATUSES } from '@/lib/person-accounts'
 import { resolveAgentGate, phoneMatchesAllowlist } from './core'
 import { resolveAgentSettings } from './settings-resolve'
 
@@ -59,12 +59,20 @@ function providerKeyOf(membershipSource) {
 
 const time = (v) => (v ? Date.parse(v) || 0 : 0)
 
+// A relationship at a Glofox studio that is live even when it cannot book today:
+// a genuine member/credit_member of ANY state (paused, locked, future included)
+// or a ClassPass pay-as-you-go customer. Not active (nothing to book with), but
+// not "no relationship" either: Glofox is where their answers live.
+const LIVE_RELATIONSHIP_STATUSES = Object.freeze([...MEMBER_STATUSES, 'classpass_payg'])
+
 function glofoxStudioFor(location, contacts) {
   const accounts = contacts.filter((c) => c?.location_id === location.id && c.glofox_member_id)
   const ordered = [...accounts].sort((a, b) =>
     Number(hasBookableMembership(b)) - Number(hasBookableMembership(a)) || String(a.id).localeCompare(String(b.id)))
   return {
     active: glofoxStudioActive(accounts),
+    // Read off EVERY group contact at the studio, not just those carrying a Glofox id.
+    liveRelationship: contacts.some((c) => c?.location_id === location.id && LIVE_RELATIONSHIP_STATUSES.includes(c.glofox_membership_status)),
     contactIds: ordered.map((c) => c.id),
     glofoxMemberId: ordered[0]?.glofox_member_id,
   }
@@ -116,7 +124,11 @@ export function classifyMemberStudios({ contacts = [], un1tClients = [], un1tSub
     const answerable = agentOnByLocation?.[location.id] === true
     if (providerKey === 'glofox') {
       const g = glofoxStudioFor(location, contacts)
-      const studio = { ...base, active: g.active, answerable, contactIds: g.contactIds }
+      // liveRelationship is the one field beyond the documented MemberStudio
+      // shape, set on Glofox studios only; otherStudioOnly reads it off the
+      // thread studio so a paused/future member or a ClassPass customer keeps
+      // today's Glofox answers.
+      const studio = { ...base, active: g.active, answerable, contactIds: g.contactIds, liveRelationship: g.liveRelationship }
       if (g.glofoxMemberId) studio.glofoxMemberId = g.glofoxMemberId
       return studio
     }
@@ -155,11 +167,16 @@ export function answerableStudios(studios, threadLocationId) {
  * A un1t.online studio the person is active at but Mia may not answer for,
  * while the thread studio is not active and nothing is answerable-active: the
  * case where the reply should point them at the other studio. Pure.
+ *
+ * Null too when the person has a live relationship at the thread studio (a
+ * member in any state, or ClassPass pay-as-you-go): they keep today's Glofox
+ * answers. Only people with none there (a lead, a lapsed trialist, no
+ * account) are pointed at the other studio.
  */
 export function otherStudioOnly(studios, threadLocationId) {
   const list = studios || []
   if (list.some((s) => s.active && s.answerable)) return null
-  if (list.some((s) => s.locationId === threadLocationId && s.active)) return null
+  if (list.some((s) => s.locationId === threadLocationId && (s.active || s.liveRelationship))) return null
   return list.find((s) => s.providerKey === 'un1t_online' && s.active && !s.answerable && s.locationId !== threadLocationId) || null
 }
 
@@ -199,7 +216,7 @@ export async function resolveMemberStudios(db, { anchorContactId, threadLocation
     // linkedAccountsForContact's rows do not carry un1t_user_id (and its
     // column list stays as it is): read it for the same ids here.
     const groupIds = [...new Set([anchorContactId, ...group.contacts.map((c) => c.id)])]
-    const linkRows = await readChunked(db, 'contacts', 'id, un1t_user_id, location_id', 'id', groupIds)
+    const linkRows = await readChunked(db, 'contacts', 'id, un1t_user_id', 'id', groupIds)
     const linkById = new Map(linkRows.map((r) => [r.id, r]))
     const contacts = group.contacts.map((c) => ({ ...c, un1t_user_id: linkById.get(c.id)?.un1t_user_id ?? null }))
 
