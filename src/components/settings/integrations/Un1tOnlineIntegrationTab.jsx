@@ -122,7 +122,8 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
     if (!r.ok) { setError(r.error); return }
     setToken('')
     setSourceNotSet(r.json.data?.membership_source_set === false)
-    setState({ loading: false, data: r.json.data, error: null })
+    // The connect answer has no write block; keep what the tab already shows.
+    setState((s) => ({ loading: false, data: { ...r.json.data, write: s.data?.write, writes_enabled: s.data?.writes_enabled }, error: null }))
     setNotice('Connected.')
     router.refresh()
   }
@@ -149,7 +150,10 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
     }))
     setBusy(null)
     if (!r.ok) { setError(r.error); return }
-    setState((s) => ({ ...s, data: { ...s.data, write: { ...(s.data?.write || {}), ...(r.json.data?.write || {}) } } }))
+    setState((s) => {
+      const next = { ...(s.data?.write || {}), ...(r.json.data?.write || {}) }
+      return { ...s, data: { ...s.data, write: next, writes_enabled: !!next.writes_enabled } }
+    })
     setNotice('Saved.')
   }
 
@@ -216,7 +220,7 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
           {data.last_error && (
             <div className="text-xs text-red-700">Last error: {data.last_error}</div>
           )}
-          {data.has_write_permissions && !write?.writes_enabled && (
+          {data.has_write_permissions && !data.writes_enabled && !write?.writes_enabled && (
             <div className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-xs rounded-md p-2">
               This token can change data on un1t.online. The CRM only reads, so a read-only token is safer: create one with the Read-only preset and paste it here.
             </div>
@@ -253,7 +257,11 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
           <div className={write.permissions?.all_present ? 'text-green-700' : 'text-amber-700'}>
             {write.permissions?.unreadable
               ? 'Write permissions could not be checked just now.'
-              : write.permissions?.all_present
+              : write.permissions?.not_connected
+                ? 'Connect a token first.'
+                : write.permissions?.wrong_studio
+                  ? 'This token is for a different un1t.online studio.'
+                  : write.permissions?.all_present
                 ? 'Write permissions: all present'
                 : `Write permissions missing: ${(write.permissions?.missing || []).join(', ')}`}
           </div>

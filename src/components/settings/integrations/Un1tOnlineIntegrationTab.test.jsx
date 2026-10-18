@@ -310,6 +310,13 @@ describe('Un1tOnlineIntegrationTab — Writes (UN1TWRITE.12)', () => {
     expect(JSON.parse(callsOf('PATCH')[1][1].body)).toEqual({ trial_product_id: 'p-trial' })
   })
 
+  it('an owner (no write block) is not told a write token is unsafe once writes are on', async () => {
+    current = connected({ has_write_permissions: true, writes_enabled: true })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    await screen.findByText('UN1T Hatch Street')
+    expect(screen.queryByText(/a read-only token is safer/)).toBeNull()
+  })
+
   it('with writes on, the read-only token note is not shown (writes need a write token)', async () => {
     current = connected({ has_write_permissions: true, write: write({ writes_enabled: true }) })
     render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
