@@ -12,11 +12,15 @@ export function dayScreen(days, path) {
 export function slotScreen({ day, slots, path }) {
   return { screen: SCREEN.SLOT, data: { day, slots, path } }
 }
-// UN1TWRITE.19 — `terms` drives the un1t.online terms and waiver OptIn. The
-// terms_* keys are sent ONLY when the studio needs the tick: the Flow
-// published in Meta before this change declares none of them, and a studio
-// that never asks (Stillorgan) must answer it exactly as before.
-export function detailsScreen(prefill = {}, carry = {}, terms = {}) {
+// UN1TWRITE.19 — `terms` drives the un1t.online terms and waiver OptIn. Each
+// Flow version gets exactly the keys it declares: the Flow published before
+// this change declares no terms_* key, the new one declares all five and
+// marks itself by posting `terms_flow` from SLOT (TERMS_FLOW_MARKER). So the
+// five keys go out whenever the request came from the new Flow (`declared`),
+// and otherwise only when the studio asks (an old Flow at a studio whose
+// funnel is on, which the rollout order rules out: publish first).
+export const TERMS_FLOW_MARKER = 'terms_flow'
+export function detailsScreen(prefill = {}, carry = {}, terms = {}, { declared = false } = {}) {
   const data = {
     name: prefill.name || '',
     email: prefill.email || '',
@@ -24,9 +28,9 @@ export function detailsScreen(prefill = {}, carry = {}, terms = {}) {
     path: carry.path,
     slot: carry.slot,
   }
-  if (terms.required === true) {
+  if (declared || terms.required === true) {
     Object.assign(data, {
-      terms_required: true,
+      terms_required: terms.required === true,
       terms_label: terms.label || '',
       terms_url: terms.url || '',
       terms_accepted: terms.accepted === true,
@@ -68,7 +72,7 @@ export const FLOW_JSON = {
       layout: { type: 'SingleColumnLayout', children: [{
         type: 'Form', name: 'form', children: [
           { type: 'RadioButtonsGroup', name: 'slot', label: 'Available times', required: true, 'data-source': '${data.slots}' },
-          { type: 'Footer', label: 'Continue', 'on-click-action': { name: 'data_exchange', payload: { path: '${data.path}', slot: '${form.slot}' } } },
+          { type: 'Footer', label: 'Continue', 'on-click-action': { name: 'data_exchange', payload: { path: '${data.path}', slot: '${form.slot}', terms_flow: true } } },
         ] }] },
     },
     {

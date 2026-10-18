@@ -55,6 +55,11 @@ describe('FLOW_JSON', () => {
     for (const k of ['terms_required', 'terms_label', 'terms_url', 'terms_accepted', 'terms_error']) expect(byId.DETAILS.data[k], k).toBeDefined()
   })
 
+  it('the SLOT footer marks the new Flow so the handler can send every declared key', () => {
+    const slotFooter = byId.SLOT.layout.children[0].children.find((c) => c.type === 'Footer')
+    expect(slotFooter['on-click-action'].payload.terms_flow).toBe(true)
+  })
+
   it('every DETAILS to CONFIRM to complete payload forwards terms_accepted', () => {
     expect(form.children.find((c) => c.type === 'Footer')['on-click-action'].payload.terms_accepted).toBe('${form.terms_accepted}')
     expect(byId.CONFIRM.data.selection.properties.terms_accepted).toEqual({ type: 'boolean' })
@@ -105,6 +110,12 @@ describe('handler', () => {
     }
     readUn1tWriteSettings.mockRejectedValueOnce(new Error('down'))
     expect((await exchange(SCREEN.SLOT, { path: 'class', slot: 's' })).data).not.toHaveProperty('terms_required')
+  })
+
+  it('the new Flow (terms_flow posted) gets every declared key at a studio that does not ask', async () => {
+    settings = glofox
+    const d = await exchange(SCREEN.SLOT, { path: 'class', slot: 's', terms_flow: true })
+    expect(d.data).toMatchObject({ terms_required: false, terms_label: '', terms_url: '', terms_accepted: false, terms_error: '' })
   })
 
   it('the Flow published before this change (no terms_accepted posted) is never trapped on DETAILS', async () => {

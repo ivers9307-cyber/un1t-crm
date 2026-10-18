@@ -5,7 +5,7 @@
 //   consult: `${event_id}|${date}|${start}|${end}`
 import { computeAvailableSlots } from '@/lib/booking-slots.js'
 import { listPublicClasses } from '@/lib/public-classes.js'
-import { SCREEN, dayScreen, slotScreen, detailsScreen, confirmScreen } from './screens.js'
+import { SCREEN, dayScreen, slotScreen, detailsScreen, confirmScreen, TERMS_FLOW_MARKER } from './screens.js'
 import { formatInZone, getLocationZone, LocationZoneReadError, DEFAULT_TZ } from '@/lib/location-time'
 import { logWarn, logError } from '@/lib/log'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
@@ -141,7 +141,7 @@ export async function handleDataExchange(db, { decryptedBody, contact, locationI
 
   if (screen === SCREEN.SLOT) {
     const terms = data.path === 'consult' ? { required: false } : await flowTermsFor(db, locationId)
-    return detailsScreen({ name: contact?.name, email: contact?.email }, { path: data.path, slot: data.slot }, terms)
+    return detailsScreen({ name: contact?.name, email: contact?.email }, { path: data.path, slot: data.slot }, terms, { declared: Object.hasOwn(data, TERMS_FLOW_MARKER) })
   }
 
   if (screen === SCREEN.DETAILS) {
@@ -160,6 +160,7 @@ export async function handleDataExchange(db, { decryptedBody, contact, locationI
           { name: data.name, email: data.email, marketing_opt_in: asBool(data.marketing_opt_in) },
           { path: data.path, slot: data.slot },
           { ...terms, accepted: false, error: terms.message },
+          { declared: true },
         )
       }
     }
