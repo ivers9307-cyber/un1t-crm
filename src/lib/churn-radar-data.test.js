@@ -847,7 +847,7 @@ describe('UN1TRADAR.2 arrears at a un1t studio', () => {
 
   it('un1t: unpaid charges and awaiting authorization are unavailable, not empty', async () => {
     asUn1t()
-    fakeReads.radarPastDue.mockResolvedValue(un1tFold())
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold()).mockResolvedValueOnce(un1tFold())
     expect(await loadUnpaidCharges(un1tDb(), FIX_LOC, FIX_NOW)).toEqual({ charges: [], summary: { total: null, totalValueCents: null, unavailable: true } })
     expect(await loadAwaitingAuth(un1tDb(), FIX_LOC, FIX_NOW)).toEqual({ charges: [], summary: { total: null, totalValueCents: null, unavailable: true } })
   })

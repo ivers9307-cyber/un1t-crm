@@ -73,7 +73,7 @@ export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()
     const zone = await displayZoneFor(db, user, locationId, 'business-kpis')
     const [revenue, arrears, membershipLive, radar, approvalsCount, churnPrev] = await Promise.all([
       m.reads.revenueMtd(db, locationId, new Date(nowMs), zone),
-      // un1t has no arrears read (past-due amounts are not synced): null, not a Glofox zero.
+      // un1t reads arrears from spec A's past-due rows since UN1TRADAR.2; a source with no arrears read is null, not a Glofox zero.
       supportsRead(m, 'arrears') ? m.reads.arrears(db, locationId) : Promise.resolve(null),
       // Guarded like radar/approvals — any of its internal count
       // queries throwing must not reject the whole Promise.all and

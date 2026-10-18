@@ -411,7 +411,7 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   for (const [id, agg] of overdueById) {
     if (dismissed.has(id)) continue
     overdueCount++; overdueValueCents += agg.amountCents || 0
-    if (agg.amountEstimated === true) overdueValueEstimated = true
+    if (agg.amountEstimated === true || agg.amountUnknown === true) overdueValueEstimated = true
   }
   for (const [id, agg] of unpaidById) {
     if (dismissed.has(id)) continue
@@ -544,7 +544,7 @@ const UNAVAILABLE_TAB = () => ({ charges: [], summary: { total: null, totalValue
 export async function loadOverdue(db, locationId, nowMs = Date.now()) {
   const { overdue } = await loadArrearsRows(db, locationId, nowMs)
   const totalValueCents = overdue.reduce((sum, r) => sum + (r.amountOwedCents || 0), 0)
-  const estimated = overdue.some((r) => r.amountEstimated === true)
+  const estimated = overdue.some((r) => r.amountEstimated === true || r.amountUnknown === true)
   return { overdue, summary: { total: overdue.length, totalValueCents, ...(estimated ? { totalValueEstimated: true } : {}) } }
 }
 

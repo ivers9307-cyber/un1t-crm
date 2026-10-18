@@ -17,7 +17,7 @@
 // client; reads only. Every list read is selectAll paginated with an explicit
 // order; `.in()` lists are chunked (event ids at 200, contact ids at 300).
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
-import { logInfo } from '@/lib/log'
+import { logInfo, logWarn } from '@/lib/log'
 import { MEMBER_STATUSES } from './un1t-online-shape'
 // un1t-online.js registers these reads, so this import is a cycle: safe, because
 // both sides only touch the other's bindings at CALL time (and these are
@@ -204,6 +204,8 @@ const ID_CHUNK = 200
  * prices (for an unreported amount) and the members' last attendance, both at
  * L. Throws on `success:false` or a failed read: never "nobody owes".
  */
+// `nowMs` is accepted for the seam's signature; freshness is spec A's
+// freshCutoff (relative to the newest sync), never the clock.
 export async function radarPastDue(db, locationId, { nowMs: _nowMs = Date.now() } = {}) {
   if (!locationId) throw new Error('No location')
   const res = await un1tOnlineReads.pastDue(db, locationId)
@@ -221,17 +223,21 @@ export async function radarPastDue(db, locationId, { nowMs: _nowMs = Date.now() 
     byKeys('un1t_subscriptions', 'un1t_id, price_cents', 'un1t_id', subIds),
     byKeys('un1t_clients', 'un1t_user_id, last_attended_at', 'un1t_user_id', userIds),
   ])
-  return foldPastDue(rows, {
+  const fold = foldPastDue(rows, {
     priceBySubscriptionId: new Map(subs.map((s) => [s.un1t_id, s.price_cents])),
     lastAttendedByUser: new Map(clients.map((c) => [c.un1t_user_id, c.last_attended_at])),
   })
+  const unknown = [...fold.membershipById.values()].filter((a) => a.amountUnknown === true).length
+  if (unknown > 0) logWarn('churn-radar', 'un1t past-due rows with no euro amount', { locationId, count: unknown })
+  return fold
 }
 
 /**
  * UN1TRADAR.2 — the business "In arrears" figure (fetchArrearsSummary's
  * envelope): `{ success, data: { totalCents, memberCount, estimated } }`, built
- * on the same fold as the Overdue tab, so the two agree. `estimated` is true
- * when any amount was un1t.online's unreported one (the card says so).
+ * on the same fold as the Overdue tab, so the two agree (members with a contact
+ * only; see foldPastDue). `estimated` is true when any amount is an estimate or
+ * has no euro figure (the card says so).
  */
 export async function arrears(db, locationId) {
   if (!locationId) return { success: false, error: 'No location' }

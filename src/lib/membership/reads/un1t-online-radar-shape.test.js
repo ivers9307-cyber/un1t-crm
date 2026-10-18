@@ -660,15 +660,37 @@ describe('foldPastDue', () => {
     expect(f.unavailable).toEqual(['unpaidCharges', 'awaitingAuth'])
   })
 
-  it('null amount becomes the subscription price with amountEstimated', () => {
-    const f = foldPastDue([pd({ amountCents: null })], deps)
+  it('null amount (flag only, no open invoice) becomes the subscription price with amountEstimated', () => {
+    const f = foldPastDue([pd({ amountCents: null, openInvoiceIds: [] })], deps)
     expect(f.membershipById.get('c1')).toEqual({ amountCents: 12000, count: 1, oldestDueAt: '2026-10-01T00:00:00Z', amountEstimated: true })
+  })
+
+  it('no amount and no price: kept as amountUnknown (never dropped), adds 0', () => {
+    const f = foldPastDue([pd({ amountCents: null, subscriptionId: 'gone' })], deps)
+    expect(f.membershipById.get('c1')).toEqual({ amountCents: 0, count: 1, oldestDueAt: '2026-10-01T00:00:00Z', amountUnknown: true })
+    expect(arrearsFromFold(f)).toEqual({ totalCents: 0, memberCount: 1, estimated: true })
+  })
+
+  it('mixed currencies (amount null with open invoices) and a non-EUR amount are unknown, never priced or added', () => {
+    const mixed = foldPastDue([pd({ amountCents: null, currency: null, openInvoiceIds: ['a', 'b'] })], deps)
+    expect(mixed.membershipById.get('c1')).toMatchObject({ amountCents: 0, amountUnknown: true })
+    expect(mixed.membershipById.get('c1').amountEstimated).toBeUndefined()
+    const gbp = foldPastDue([pd({ amountCents: 3000, currency: 'GBP' })], deps)
+    expect(gbp.membershipById.get('c1')).toMatchObject({ amountCents: 0, amountUnknown: true })
+  })
+
+  it('the plan shown is the one owed longest', () => {
+    const f = foldPastDue([
+      pd({ productTitle: 'Newer', since: '2026-10-05T00:00:00Z' }),
+      pd({ subscriptionId: 's2', productTitle: 'Older', since: '2026-09-01T00:00:00Z' }),
+    ], deps)
+    expect(f.profileById.get('c1').glofox_membership_plan).toBe('Older')
   })
 
   it('two rows for one contact sum and keep the earliest since', () => {
     const f = foldPastDue([
       pd({ since: '2026-10-05T00:00:00Z' }),
-      pd({ subscriptionId: 's2', amountCents: null, since: '2026-09-20T00:00:00Z' }),
+      pd({ subscriptionId: 's2', amountCents: null, openInvoiceIds: [], since: '2026-09-20T00:00:00Z' }),
     ], deps)
     expect(f.membershipById.get('c1')).toEqual({ amountCents: 13500, count: 2, oldestDueAt: '2026-09-20T00:00:00Z', amountEstimated: true })
   })
@@ -691,9 +713,9 @@ describe('foldPastDue', () => {
 describe('arrearsFromFold', () => {
   it('arrears: totals, member count and estimated flag', () => {
     const deps = { priceBySubscriptionId: new Map([['s1', 12000]]), lastAttendedByUser: new Map() }
-    const exact = foldPastDue([{ contactId: 'a', subscriptionId: 's1', amountCents: 4500, since: null }, { contactId: 'b', subscriptionId: 's1', amountCents: 500, since: null }], deps)
+    const exact = foldPastDue([{ contactId: 'a', subscriptionId: 's1', amountCents: 4500, currency: 'EUR', since: null }, { contactId: 'b', subscriptionId: 's1', amountCents: 500, currency: 'EUR', since: null }], deps)
     expect(arrearsFromFold(exact)).toEqual({ totalCents: 5000, memberCount: 2, estimated: false })
-    const est = foldPastDue([{ contactId: 'a', subscriptionId: 's1', amountCents: null, since: null }], deps)
+    const est = foldPastDue([{ contactId: 'a', subscriptionId: 's1', amountCents: null, openInvoiceIds: [], since: null }], deps)
     expect(arrearsFromFold(est)).toEqual({ totalCents: 12000, memberCount: 1, estimated: true })
     expect(arrearsFromFold(foldPastDue([], deps))).toEqual({ totalCents: 0, memberCount: 0, estimated: false })
   })
