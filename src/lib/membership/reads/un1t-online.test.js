@@ -563,7 +563,29 @@ describe('pastDue and paymentsFor', () => {
       { at: '2026-09-01T09:00:00Z', productTitle: 'Unlimited', type: 'sub_renewal', amountCents: 18900, currency: 'EUR', refunded: false },
     ])
     expect(out.data.invoices.map((i) => i.at)).toEqual(['2026-10-01T10:00:00Z', '2026-09-01T10:00:00Z'])
-    expect(out.data.pastDue).toMatchObject({ subscriptionId: 's1', since: '2026-10-01T10:00:00Z', amountCents: 18900 })
+    expect(out.data.pastDues).toHaveLength(1)
+    expect(out.data.pastDues[0]).toMatchObject({ subscriptionId: 's1', since: '2026-10-01T10:00:00Z', amountCents: 18900 })
+    // The single-row field is gone: nothing reads it any more.
+    expect(out.data).not.toHaveProperty('pastDue')
+  })
+
+  it('paymentsFor returns EVERY past-due row, earliest since first: a member with two overdue subscriptions at one studio keeps both', async () => {
+    const { db } = makeDb({
+      un1t_subscriptions: [
+        psub({ id: 'a', un1t_id: 's1', status: 'past_due', past_due_at: '2026-10-05T09:00:00Z' }),
+        psub({ id: 'b', un1t_id: 's2', product_title: 'Pack', price_cents: 4000, status: 'past_due', past_due_at: '2026-09-20T09:00:00Z' }),
+      ],
+      un1t_invoices: [
+        pinv({ un1t_id: 'i1', subscription_id: 's1', amount_cents: 18900, remote_created_at: '2026-10-01T10:00:00Z' }),
+        pinv({ un1t_id: 'i2', subscription_id: 's2', amount_cents: 4000, remote_created_at: '2026-09-20T10:00:00Z' }),
+      ],
+    })
+    const out = await un1tOnlineReads.paymentsFor(db, HATCH, ['c1'])
+    expect(out.success).toBe(true)
+    expect(out.data.pastDues.map((p) => [p.subscriptionId, p.amountCents, p.currency])).toEqual([
+      ['s2', 4000, 'EUR'],
+      ['s1', 18900, 'EUR'],
+    ])
   })
 
   it('paymentsFor upper-cases currency on subscriptions, transactions and invoices; a null currency stays null', async () => {
@@ -579,13 +601,13 @@ describe('pastDue and paymentsFor', () => {
     expect(out.data.invoices.map((i) => i.currency)).toEqual(['EUR', null])
   })
 
-  it('paymentsFor defaults to 25, and pastDue is null when nothing is owed', async () => {
+  it('paymentsFor defaults to 25, and pastDues is empty when nothing is owed', async () => {
     const txs = Array.from({ length: 30 }, (_, n) => ptx({ un1t_id: `t${n}`, remote_created_at: `2026-09-${String(n + 1).padStart(2, '0')}T09:00:00Z` }))
     const { db } = makeDb({ un1t_subscriptions: [psub()], un1t_invoices: [pinv({ status: 'paid' })], un1t_transactions: txs })
     const out = await un1tOnlineReads.paymentsFor(db, HATCH, ['c1'])
     expect(out.data.transactions).toHaveLength(25)
     expect(out.data.transactions[0].at).toBe('2026-09-30T09:00:00Z')
-    expect(out.data.pastDue).toBeNull()
+    expect(out.data.pastDues).toEqual([])
   })
 
   it('paymentsFor drops stale subscription and invoice rows', async () => {
@@ -596,13 +618,13 @@ describe('pastDue and paymentsFor', () => {
     const out = await un1tOnlineReads.paymentsFor(db, HATCH, ['c1'])
     expect(out.data.subscriptions.map((s) => s.productTitle)).toEqual(['Unlimited'])
     expect(out.data.invoices).toHaveLength(1)
-    expect(out.data.pastDue).toBeNull()
+    expect(out.data.pastDues).toEqual([])
   })
 
   it('paymentsFor with no contacts succeeds with empty lists and no query', async () => {
     const { db, log } = makeDb(base())
     const out = await un1tOnlineReads.paymentsFor(db, HATCH, [])
-    expect(out).toEqual({ success: true, data: { subscriptions: [], transactions: [], invoices: [], pastDue: null } })
+    expect(out).toEqual({ success: true, data: { subscriptions: [], transactions: [], invoices: [], pastDues: [] } })
     expect(log).toHaveLength(0)
   })
 
