@@ -11,6 +11,15 @@
 // (src/lib/whatsapp-number-missing.js) and each caller decides what that
 // means for it. This table is that decision, one row per calling file.
 //
+// WAORGNUMBER.1 changed what "has a number" means: a number belongs to an
+// organisation (whatsapp_numbers.organization_id; location_id is only its home
+// studio) and a studio HAS one when it is switched on there, i.e. a
+// location_whatsapp_numbers link row to an ACTIVE whatsapp_numbers row. The
+// resolvers read the link table, the studio's default link first, so the env
+// tier stays retired and "no number" now means "none switched on at this
+// studio", whoever owns the number. The refusal semantics below are unchanged;
+// each row's `why` says what that caller does with it.
+//
 // What is scanned: every .js/.jsx/.mjs file under src/, shared/ and scripts/
 // except tests and test helpers. A file is a CALLER when it imports one of
 // the resolving names below from src/lib/whatsapp.js,
@@ -85,37 +94,37 @@ const CALLERS = {
   'src/lib/whatsapp.js': {
     calls: { getWhatsAppConfig: 3, getConversationReplyConfig: 1, getLocationWhatsAppNumberConfig: 1 },
     decision: 'resolver',
-    why: 'getOrCreateConversation’s sendingNumberId (WAORGNUMBER.1: the number switched on at the sending studio, link default first; a throwing lookup is logged and files the thread unstamped, never thrown: whatsapp-get-or-create-conversation.test.js). resolveConfig (every Meta helper; opts.replyInConversation → getConversationReplyConfig, which falls back to getWhatsAppConfig and so refuses a number-less studio the same way, unless the thread carries a same-organisation sibling’s stamp (WAHOMESTUDIO.1 R4): WAREPLYNUMBER.1, whatsapp-reply-number.test.js), sendBroadcast (blast: throws BEFORE the status flip → route 409 / cron pushes managers), sendDripChunk (pauses the drip). src/lib/whatsapp-no-number-senders.test.js, whatsapp-no-number-broadcasts.test.js.',
+    why: 'WAORGNUMBER.1: getOrCreateConversation’s sendingNumberId is the number switched on at the sending studio (link default first); a throwing lookup is logged and files the thread unstamped, never thrown (whatsapp-get-or-create-conversation.test.js). resolveConfig (every Meta helper; getWhatsAppConfig reads the studio’s switched-on numbers, none → WhatsAppNumberMissingError; opts.replyInConversation → getConversationReplyConfig, which falls back to getWhatsAppConfig and so refuses a studio with nothing switched on the same way, unless the thread carries a same-organisation sibling’s stamp, a transitional clause (WAHOMESTUDIO.1 R4, WAREPLYNUMBER.1, whatsapp-reply-number.test.js) that goes at WAORGNUMBER.6 once every studio switches its own numbers on). sendBroadcast (blast: throws BEFORE the status flip → route 409 / cron pushes managers), sendDripChunk (pauses the drip). src/lib/whatsapp-no-number-senders.test.js, whatsapp-no-number-broadcasts.test.js.',
   },
   'src/app/api/whatsapp/spend/route.js': {
     calls: { getLocationWhatsAppNumberConfig: 1 },
     decision: 'refuse-quiet',
-    why: 'WAORGNUMBER.1: Meta pricing_analytics for the WABA + token of the number switched on at the studio (it read whatsapp_numbers by the studio’s home id). Optional enrichment inside its try/catch: no number or a failed lookup → meta null, the local rollup still served, logged. route.test.js.',
+    why: 'WAORGNUMBER.1: Meta pricing_analytics for the WABA + token of the studio’s default switched-on number (link table; it read whatsapp_numbers by the studio’s home id, so a shared number was invisible to the studios using it). Optional enrichment inside its try/catch: no number or a failed lookup → meta null, the local rollup still served, logged. route.test.js.',
   },
   'src/app/communications/(hub)/wa-hub-health.js': {
     calls: { getLocationWhatsAppNumberConfig: 1 },
     decision: 'refuse-quiet',
-    why: 'WAORGNUMBER.1: the hub’s health card reads the studio’s default switched-on number (it read whatsapp_numbers by home studio). Decorative: no number or a failed lookup → null, the card hidden, logged, never thrown into the page. wa-hub-health.test.js.',
+    why: 'WAORGNUMBER.1: the hub’s health card reads the studio’s default switched-on number (link table; it read whatsapp_numbers by home studio, so a studio using an organisation number saw no card). Decorative: no number or a failed lookup → null, the card hidden, logged, never thrown into the page. wa-hub-health.test.js.',
   },
   'src/lib/meta-capi.js': {
     calls: { getLocationWhatsAppNumberConfig: 1 },
     decision: 'refuse-quiet',
-    why: 'WAORGNUMBER.1: (one helper, two sites) the CAPI token + WABA of the number switched on at the studio (CTWA conversion; website conversion when the dataset has no token of its own). Best-effort, never throws: no number or a failed lookup → { sent:false, reason:\'no_token\' }, logged. meta-capi.test.js, meta-capi-website.test.js.',
+    why: 'WAORGNUMBER.1: (one helper, two sites) the CAPI token + WABA of the studio’s default switched-on number (link table, not the number’s home studio) (CTWA conversion; website conversion when the dataset has no token of its own). Best-effort, never throws: no number or a failed lookup → { sent:false, reason:\'no_token\' }, logged. meta-capi.test.js, meta-capi-website.test.js.',
   },
   'src/lib/whatsapp-own-number.js': {
     calls: { getLocationWhatsAppNumberConfig: 1 },
     decision: 'resolver',
-    why: 'ownNumberOrRefusal: 409 no number / 500 lookup failed. whatsapp-own-number.test.js.',
+    why: 'WAORGNUMBER.1: ownNumberOrRefusal; “own” now means switched on at the studio (a link row to an active number, whoever owns it), not a number whose home is the studio. 409 none switched on / 500 lookup failed. whatsapp-own-number.test.js.',
   },
   'src/lib/whatsapp-media-server.js': {
     calls: { getLocationWhatsAppNumberConfig: 1, getConversationNumberConfig: 1 },
     decision: 'own-number',
-    why: 'inbound media fetched with the thread’s number when it replies through a same-org sibling’s (WAHOMESTUDIO.1), else the message location’s own token; none → null (the inbox’s graceful gap). whatsapp-media-server.test.js.',
+    why: 'WAORGNUMBER.1: inbound media fetched with the token of the number switched on at the message’s studio; transitional WAHOMESTUDIO.1 clause (until WAORGNUMBER.6): the thread’s number when the studio has none switched on and the thread replies through a same-org sibling’s. None → null (the inbox’s graceful gap). whatsapp-media-server.test.js.',
   },
   'src/app/api/webhooks/whatsapp/route.js': {
     calls: { resolveWhatsAppNumberByPhoneNumberId: 2, getLocationWhatsAppNumberConfig: 1 },
     decision: 'resolver',
-    why: 'inbound routing: only an active row owns inbound (classifyInboundOwner); the env branch is gone (it could only produce a location-less config, which was dropped anyway). WAHOMESTUDIO.1: a contact’s thread is filed at their own studio; getLocationWhatsAppNumberConfig decides only whether the receiving number is stamped on it (none there, or a failed lookup, logged → stamped; replies then go through it, R4); route.reply-number.test.js.',
+    why: 'inbound routing: only an active row owns inbound (classifyInboundOwner); the env branch is gone (it could only produce a location-less config, which was dropped anyway). WAORGNUMBER.1: inbound routing by phone_number_id is unchanged in PR 1 (the number’s home studio still owns the thread; a studio-level routing of shared numbers is a later PR), and account_update events now reach every studio the number is switched on at (link rows). getLocationWhatsAppNumberConfig asks whether the thread’s studio has a number switched on. Transitional WAHOMESTUDIO.1 clause (until WAORGNUMBER.6): a contact’s thread is filed at their own studio, and that lookup decides only whether the receiving number is stamped on it (nothing switched on there, or a failed lookup, logged → stamped; replies then go through it, R4); route.reply-number.test.js, route.account-update.test.js.',
   },
   'src/app/api/whatsapp/conversational-automation/route.js': {
     calls: { setConversationalAutomation: 1, ownNumberOrRefusal: 1 },
@@ -215,7 +224,7 @@ const CALLERS = {
   'src/lib/agent/followups.js': {
     calls: { sendTextMessage: 2, sendTemplateMessage: 2, getConversationNumberConfig: 1, templateLocationIdFor: 1 },
     decision: 'refuse-skip',
-    why: 'Mia nudges / first-class check-ins: only at locations with the agent enabled. A studio with its own active number (one whatsapp_numbers read per studio per tick; a failed read counts as owning one, logged) sends exactly as before: { locationId }, its own templates, per-contact catch → skipped, counted. MIAORG.1 Task 6 (WAHOMESTUDIO.1): a number-less studio sends only through an existing thread whose stamped number getConversationNumberConfig resolves (replyInConversation; none → skip no_thread_number / no_conversation, nothing composed, never getOrCreateConversation), with templates from templateLocationIdFor; a refusal there is a recorded skip (no_number; a check-in claim is released). followups-through-thread.test.js.',
+    why: 'Mia nudges / first-class check-ins: only at locations with the agent enabled. WAORGNUMBER.1: a studio with a number switched on (locationsWithWhatsApp: a location_whatsapp_numbers link to an active number, one read per studio per tick; a failed read counts as having one, logged) sends exactly as before: { locationId }, its own templates, per-contact catch → skipped, counted. MIAORG.1 Task 6 (transitional WAHOMESTUDIO.1 clause, until WAORGNUMBER.6): a studio with nothing switched on sends only through an existing thread whose stamped number getConversationNumberConfig resolves (replyInConversation; none → skip no_thread_number / no_conversation, nothing composed, never getOrCreateConversation), with templates from templateLocationIdFor; a refusal there is a recorded skip (no_number; a check-in claim is released). followups-through-thread.test.js.',
   },
   'src/lib/automations/booking-whatsapp-confirm.js': {
     calls: { sendTemplateMessage: 1 },
