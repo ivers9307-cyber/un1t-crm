@@ -77,15 +77,14 @@ describe('membershipReadsFor', () => {
     for (const k of READ_KEYS) expect(supportsRead(r, k)).toBe(false)
   })
 
-  it('configured un1t_online → reads is the un1t adapter (no arrears; pastDue and paymentsFor yes)', async () => {
+  it('configured un1t_online → reads is the un1t adapter (arrears since UN1TRADAR.2; pastDue and paymentsFor yes)', async () => {
     membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: {} })
     const r = await membershipReadsFor(db, LOC)
     expect(r).toMatchObject({ source: 'un1t_online', state: 'configured', error: null })
     expect(r.reads).toBe(un1tOnlineReads)
-    for (const k of GLOFOX_KEYS.filter((k) => k !== 'arrears')) expect(supportsRead(r, k)).toBe(true)
+    for (const k of GLOFOX_KEYS) expect(supportsRead(r, k)).toBe(true)
     expect(supportsRead(r, 'pastDue')).toBe(true)
     expect(supportsRead(r, 'paymentsFor')).toBe(true)
-    expect(supportsRead(r, 'arrears')).toBe(false)
   })
 
   it('an inherited key (e.g. "constructor") is not a registered source', async () => {
@@ -154,9 +153,10 @@ describe('radarReadsFor', () => {
     await expect(radarReadsFor(db, LOC)).rejects.toMatchObject({ code: 'MEMBERSHIP_SOURCE_UNREADABLE' })
   })
 
-  it('pinArrears mirrors the adapter flag', async () => {
+  it('pinArrears is true for un1t_online and false for glofox', async () => {
     membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online' })
-    const r = await radarReadsFor(db, LOC)
-    expect(r.pinArrears).toBe(un1tOnlineReads.pinArrears === true)
+    expect((await radarReadsFor(db, LOC)).pinArrears).toBe(true)
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox' })
+    expect((await radarReadsFor(db, LOC)).pinArrears).toBe(false)
   })
 })

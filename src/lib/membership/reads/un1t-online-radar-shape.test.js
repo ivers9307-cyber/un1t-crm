@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest'
 import { shapeCounts, packHolderIds } from './un1t-online-shape'
 import {
   RENEWAL_EXPIRY_RULE, expiryFor, pickLiveMembership, shapeRadarMembers, shapeWinbackRows, shapeLeadRows,
+  foldPastDue, arrearsFromFold,
 } from './un1t-online-radar-shape'
 import { shapePipelineSnapshot } from './un1t-online-shape'
 import { buildFunnel, buildClassPass, NON_MEMBER_STATUSES } from '@/lib/lead-radar'
@@ -637,5 +638,63 @@ describe('shapeLeadRows', () => {
   it('an owned contact who IS a un1t client is not listed twice', () => {
     const rows = run({ ownedWithoutClient: [{ id: 'ld', name: 'x', created_at: '2026-10-11T00:00:00Z' }] })
     expect(rows.filter((r) => r.id === 'ld')).toHaveLength(1)
+  })
+})
+
+// UN1TRADAR.2 — spec A's past-due rows folded into fetchPastDue's Map shape.
+describe('foldPastDue', () => {
+  const pd = (over = {}) => ({
+    contactId: 'c1', un1tUserId: 'u1', subscriptionId: 's1', productTitle: 'Hatch plan', since: '2026-10-01T00:00:00Z',
+    amountCents: 4500, currency: 'EUR', openInvoiceIds: ['i1'], cancelAtPeriodEnd: false, pausedUntil: null, ...over,
+  })
+  const deps = { priceBySubscriptionId: new Map([['s1', 12000], ['s2', 9000]]), lastAttendedByUser: new Map([['u1', '2026-10-10T09:00:00Z']]) }
+
+  it("folds A's rows into fetchPastDue's Map shape", () => {
+    const f = foldPastDue([pd({ since: '2026-10-01' })], deps)
+    expect(f.ids).toEqual(new Set(['c1']))
+    expect(f.membershipById.get('c1')).toEqual({ amountCents: 4500, count: 1, oldestDueAt: '2026-10-01' })
+    expect(f.byId.get('c1')).toEqual({ amountCents: 4500, count: 1, oldestDueAt: '2026-10-01' })
+    expect(f.byId.get('c1')).not.toBe(f.membershipById.get('c1'))
+    expect(f.chargesById.size).toBe(0)
+    expect(f.pendingById.size).toBe(0)
+    expect(f.unavailable).toEqual(['unpaidCharges', 'awaitingAuth'])
+  })
+
+  it('null amount becomes the subscription price with amountEstimated', () => {
+    const f = foldPastDue([pd({ amountCents: null })], deps)
+    expect(f.membershipById.get('c1')).toEqual({ amountCents: 12000, count: 1, oldestDueAt: '2026-10-01T00:00:00Z', amountEstimated: true })
+  })
+
+  it('two rows for one contact sum and keep the earliest since', () => {
+    const f = foldPastDue([
+      pd({ since: '2026-10-05T00:00:00Z' }),
+      pd({ subscriptionId: 's2', amountCents: null, since: '2026-09-20T00:00:00Z' }),
+    ], deps)
+    expect(f.membershipById.get('c1')).toEqual({ amountCents: 13500, count: 2, oldestDueAt: '2026-09-20T00:00:00Z', amountEstimated: true })
+  })
+
+  it('a row with no contact is not surfaced; a row with no since keeps the other', () => {
+    const f = foldPastDue([pd({ contactId: null }), pd({ contactId: 'c2', since: null })], deps)
+    expect([...f.ids]).toEqual(['c2'])
+    expect(f.membershipById.get('c2').oldestDueAt).toBeNull()
+  })
+
+  it('profileById carries the un1t plan and last attended, never the contact row', () => {
+    const f = foldPastDue([pd()], deps)
+    expect(f.profileById.get('c1')).toEqual({
+      glofox_membership_status: 'member', glofox_membership_type: 'time',
+      glofox_membership_plan: 'Hatch plan', last_attended_at: '2026-10-10T09:00:00Z',
+    })
+  })
+})
+
+describe('arrearsFromFold', () => {
+  it('arrears: totals, member count and estimated flag', () => {
+    const deps = { priceBySubscriptionId: new Map([['s1', 12000]]), lastAttendedByUser: new Map() }
+    const exact = foldPastDue([{ contactId: 'a', subscriptionId: 's1', amountCents: 4500, since: null }, { contactId: 'b', subscriptionId: 's1', amountCents: 500, since: null }], deps)
+    expect(arrearsFromFold(exact)).toEqual({ totalCents: 5000, memberCount: 2, estimated: false })
+    const est = foldPastDue([{ contactId: 'a', subscriptionId: 's1', amountCents: null, since: null }], deps)
+    expect(arrearsFromFold(est)).toEqual({ totalCents: 12000, memberCount: 1, estimated: true })
+    expect(arrearsFromFold(foldPastDue([], deps))).toEqual({ totalCents: 0, memberCount: 0, estimated: false })
   })
 })

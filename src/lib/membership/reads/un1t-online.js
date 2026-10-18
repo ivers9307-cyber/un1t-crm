@@ -16,14 +16,19 @@
 //   pipelineInputs    { success, data: { contacts, snapshots, evidence, unlinked } } | { success:false, error }
 //   trialEligibility  { success, data: { eligible, reasons } } | { success:false, error }
 //
-//   radarMembers / winbackContacts / leadContacts (UN1TRADAR.1, ./un1t-online-radar.js):
-//   the churn / lead radar rows in the scorer's shape; each THROWS on a failed read.
+//   radarMembers / winbackContacts / leadContacts / radarPastDue (UN1TRADAR.1-2,
+//   ./un1t-online-radar.js): the churn / lead radar rows in the scorer's shape;
+//   each THROWS on a failed read.
+//   arrears           ← fetchArrearsSummary       { success, data: { totalCents, memberCount, estimated } } | { success:false, error }
 //
-// There is no `arrears`: the Glofox arrears summary is a different number from
-// the per-subscription `pastDue` below (surviving open invoices, netted), so the
-// surface shows "unavailable" rather than a Glofox-shaped zero (supportsRead
-// false). `pastDue` / `paymentsFor` / `pipelineInputs` / `trialEligibility` are
-// un1t-only reads (HATCHPIPE.2): the Glofox adapter lacks them.
+// `arrears` (UN1TRADAR.2) is NOT the Glofox arrears summary re-derived: it
+// is the sum of spec A's per-subscription `pastDue` rows (surviving open
+// invoices, netted, plus flagged subscriptions), folded by radarPastDue, the
+// same figure the radar's Overdue tab shows. A row whose amount un1t.online
+// does not report counts at its subscription's price and is labelled an
+// estimate (`data.estimated`). `pastDue` / `paymentsFor` / `pipelineInputs` /
+// `trialEligibility` are un1t-only reads (HATCHPIPE.2): the Glofox adapter
+// lacks them. `pinArrears: true` is a flag, not a read.
 //
 // SCOPE. Every query filters `<table>.location_id = locationId`, the studio the
 // MEMBERSHIP is held at. Nothing here reads `contacts`, so a contact who lives
@@ -50,7 +55,7 @@ import {
   shapePastDue, normaliseUn1tInvoiceStatus, glofoxInterval,
   shapePipelineSnapshot, shapePipelineDateEvidence, shapeTrialEligibility,
 } from './un1t-online-shape'
-import { radarMembers, winbackContacts, leadContacts } from './un1t-online-radar'
+import { radarMembers, winbackContacts, leadContacts, radarPastDue, arrears } from './un1t-online-radar'
 
 const PAGE = 1000
 const API_SOURCE = 'un1t_online_api'
@@ -832,4 +837,9 @@ export const un1tOnlineReads = Object.freeze({
   radarMembers,
   winbackContacts,
   leadContacts,
+  // UN1TRADAR.2 — arrears on spec A's pastDue (./un1t-online-radar.js)
+  radarPastDue,
+  arrears,
+  // the radar pins past-due members above At-risk at a un1t studio (spec B §3)
+  pinArrears: true,
 })

@@ -469,3 +469,77 @@ export function shapeLeadRows({
   }
   return rows
 }
+
+// ---------------------------------------------------------------------------
+// UN1TRADAR.2 — arrears from spec A's past-due read (spec B §4). Every un1t
+// past-due row is a SUBSCRIPTION payment, so it lands in `byId` and
+// `membershipById` (the Overdue tab). un1t.online exposes no unpaid
+// non-membership charge and no awaiting-authorization charge, so those two
+// maps stay empty and the fold says so (`unavailable`): every renderer shows
+// "not available from un1t.online" for them, never 0.
+// ---------------------------------------------------------------------------
+
+export const UN1T_ARREARS_UNAVAILABLE = Object.freeze(['unpaidCharges', 'awaitingAuth'])
+
+/**
+ * Fold spec A's `pastDue` rows into fetchPastDue's shape:
+ * `{ ids, byId, membershipById, chargesById, pendingById, unavailable, profileById }`.
+ * Each aggregate is `{ amountCents, count, oldestDueAt, amountEstimated? }`:
+ * a row whose amount un1t.online does not report counts the subscription's
+ * price and marks the aggregate `amountEstimated: true` (bucketArrears drops a
+ * zero amount, so the member would vanish from the Overdue tab; Claude's call
+ * 11). Several rows for one contact sum, keeping the earliest `since`.
+ * `profileById` is what the Overdue rows show for plan and last attended: from
+ * un1t, because the contact row of a dual-studio member is Stillorgan's.
+ *
+ * @param {object[]} rows  spec A's pastDue data
+ * @param {{ priceBySubscriptionId: Map<string, number>, lastAttendedByUser: Map<string, string> }} deps
+ */
+export function foldPastDue(rows = [], { priceBySubscriptionId = new Map(), lastAttendedByUser = new Map() } = {}) {
+  const byId = new Map()
+  const membershipById = new Map()
+  const profileById = new Map()
+  const add = (target, contactId, amountCents, since, estimated) => {
+    const cur = target.get(contactId) || { amountCents: 0, count: 0, oldestDueAt: null }
+    cur.amountCents += amountCents
+    cur.count += 1
+    if (since && (!cur.oldestDueAt || (msOf(since) ?? Infinity) < (msOf(cur.oldestDueAt) ?? Infinity))) cur.oldestDueAt = since
+    if (estimated) cur.amountEstimated = true
+    target.set(contactId, cur)
+  }
+  for (const r of rows) {
+    if (r?.contactId == null) continue
+    const estimated = r.amountCents == null
+    const amount = estimated ? Number(priceBySubscriptionId.get(r.subscriptionId)) || 0 : Number(r.amountCents) || 0
+    add(byId, r.contactId, amount, r.since ?? null, estimated)
+    add(membershipById, r.contactId, amount, r.since ?? null, estimated)
+    const prev = profileById.get(r.contactId)
+    const attended = latestOf([prev?.last_attended_at, lastAttendedByUser.get(r.un1tUserId)])
+    profileById.set(r.contactId, {
+      glofox_membership_status: 'member',
+      glofox_membership_type: 'time',
+      glofox_membership_plan: prev?.glofox_membership_plan ?? r.productTitle ?? null,
+      last_attended_at: attended,
+    })
+  }
+  return {
+    ids: new Set(byId.keys()),
+    byId,
+    membershipById,
+    chargesById: new Map(),
+    pendingById: new Map(),
+    unavailable: [...UN1T_ARREARS_UNAVAILABLE],
+    profileById,
+  }
+}
+
+/** The business "In arrears" figure from a fold: { totalCents, memberCount, estimated }. */
+export function arrearsFromFold(fold) {
+  let totalCents = 0
+  let estimated = false
+  for (const agg of fold?.membershipById?.values?.() ?? []) {
+    totalCents += agg.amountCents || 0
+    if (agg.amountEstimated === true) estimated = true
+  }
+  return { totalCents, memberCount: fold?.membershipById?.size ?? 0, estimated }
+}
