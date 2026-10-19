@@ -161,12 +161,12 @@ const CACHED_BLOCKS = {
 // whose booking Flow is switched on (bookingFlowOffered). Built once at load,
 // so each variant is a byte-stable cached prefix of its own; the blocks above
 // are untouched, and there is no Glofox variant (Stillorgan is unchanged).
-const UN1T_DUAL_FLOW_TOOLS = withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }), SEND_BOOKING_FLOW_TOOL])
+const DUAL_READ_FLOW_TOOLS = withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }), SEND_BOOKING_FLOW_TOOL])
 export const CACHED_BOOKING_FLOW_BLOCKS = Object.freeze({
   no_booking: withCacheBreakpoint([...NO_BOOKING_AGENT_TOOLS, SEND_BOOKING_FLOW_TOOL]),
   un1t_read: withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: false }), SEND_BOOKING_FLOW_TOOL]),
-  un1t_read_dual: UN1T_DUAL_FLOW_TOOLS,
-  un1t_full: UN1T_DUAL_FLOW_TOOLS,
+  un1t_read_dual: DUAL_READ_FLOW_TOOLS,
+  un1t_full: DUAL_READ_FLOW_TOOLS,
 })
 /**
  * The cached tool block for a turn. The live turn sends CACHED_BLOCKS[block]

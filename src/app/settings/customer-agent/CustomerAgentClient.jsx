@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { BarChart3 } from 'lucide-react'
 import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-form/defaults'
-import { defaultHoldingMessage, defaultWelcomeGreeting, DEFAULT_BOOKING_CTA_LABEL } from '@/lib/agent/default-copy'
+import { defaultHoldingMessage, defaultWelcomeGreeting, DEFAULT_BOOKING_CTA_LABEL, DEFAULT_FLOW_BOOKING_ACK_TEXT, DEFAULT_FLOW_BOOKING_HOLDING_TEXT, DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT } from '@/lib/agent/default-copy'
 import { productName } from '@/lib/brand-name'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
 import { zoneCity } from '@/lib/record-time'
@@ -762,6 +762,33 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
         {/* MIA-EXPIRY-QUIET.1 — the "Missed-booking apology" field lived here
             until 2026-08-31. A booking that outlives its class is now silent to
             the member and only alerts staff, so there is no copy to edit. */}
+
+        {/* FLOWACK.1 — the WhatsApp booking Flow: one acknowledgement on a
+            class submission (Mia does not answer it), and the holding line when
+            the booking goes to the team. Defaults in default-copy.js. */}
+        <div>
+          <FieldLabel tag={sourceTag(['flow_booking_ack_text'])}>Booking form received message (WhatsApp)</FieldLabel>
+          <input className={inputCls} maxLength={500} value={settings.flow_booking_ack_text || ''}
+            onChange={e => setField('flow_booking_ack_text', e.target.value)}
+            placeholder={DEFAULT_FLOW_BOOKING_ACK_TEXT} />
+          <p className="text-xs text-un1t-muted mt-1">Sent once when a customer books a class through the WhatsApp booking form, while the booking is made. When it is booked they get the booking confirmation (the confirmation template, or the booking confirmation message above). Leave blank to use the default shown.</p>
+        </div>
+
+        <div>
+          <FieldLabel tag={sourceTag(['flow_booking_holding_text'])}>Booking form needs the team message (WhatsApp)</FieldLabel>
+          <input className={inputCls} maxLength={500} value={settings.flow_booking_holding_text || ''}
+            onChange={e => setField('flow_booking_holding_text', e.target.value)}
+            placeholder={DEFAULT_FLOW_BOOKING_HOLDING_TEXT} />
+          <p className="text-xs text-un1t-muted mt-1">Sent when a class booked through the WhatsApp booking form could not be booked automatically and goes to the team in Approvals. Approving or declining the request there then tells the customer in the chat. Leave blank to use the default shown.</p>
+        </div>
+
+        <div>
+          <FieldLabel tag={sourceTag(['flow_booking_duplicate_text'])}>Booking form sent twice message (WhatsApp)</FieldLabel>
+          <input className={inputCls} maxLength={500} value={settings.flow_booking_duplicate_text || ''}
+            onChange={e => setField('flow_booking_duplicate_text', e.target.value)}
+            placeholder={DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT} />
+          <p className="text-xs text-un1t-muted mt-1">Sent when a customer sends the WhatsApp booking form for a class they have already asked for. If that class is already booked they get the booking confirmation instead. Leave blank to use the default shown.</p>
+        </div>
 
         {/* APPROVALS-STUDIO.1 — sent in-thread when staff decline a customer
             request, so a decline is never silence. Default mirrors
