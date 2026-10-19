@@ -63,12 +63,14 @@ function makeFakeDb(opts = {}) {
       return { data: opts.contacts || [], error: null }
     }
     if (q.table === 'contact_tags' && q.op === 'select') return { data: [], error: null }
+    // GLOFOXSIBLING.1 — the organisation-wide fallback reads the studio's org.
+    if (q.table === 'locations') return { data: { organization_id: 'org-1' }, error: null }
     return { data: null, error: null }
   }
   const from = (table) => {
     const q = { table, op: 'select', payload: null, filters: [] }
     const chain = {}
-    for (const m of ['select', 'order', 'limit', 'single', 'maybeSingle']) chain[m] = () => chain
+    for (const m of ['select', 'order', 'limit', 'single', 'maybeSingle', 'ilike']) chain[m] = () => chain
     chain.eq = (col, val) => { q.filters.push([col, val]); return chain }
     for (const op of ['insert', 'update', 'upsert', 'delete']) {
       chain[op] = (payload) => { q.op = op; q.payload = payload; calls.push(q); return chain }

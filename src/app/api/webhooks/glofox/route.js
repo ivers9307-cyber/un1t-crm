@@ -52,6 +52,7 @@ import { applyServiceWebhook } from '@/lib/glofox-services'
 import { applyMembershipPauseWindow } from '@/lib/glofox-membership'
 import { maybeEnrolDunning, exitDunningForContact, dunningActionFor } from '@/lib/dunning'
 import { applyMemberSync } from '@/lib/glofox-sync'
+import { findGlofoxCrossoverContact } from '@/lib/glofox-crossover'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { buildGlofoxWebhookAttempt, recordGlofoxWebhookAttempt } from '@/lib/glofox-webhook-attempts'
 
@@ -272,6 +273,31 @@ export async function POST(request) {
       }
       contact = contactRows?.[0] || null
     }
+    // 6a. GLOFOXSIBLING.1 — nothing at this studio: the member's one contact
+    // may live at a sibling studio of the same organisation (one contact per
+    // email per org, mig 712). Found that way, it is the same person; the
+    // member-sync step below links it here (glofox_crossover_members).
+    let crossoverHow = null
+    if (!contact) {
+      const x = await findGlofoxCrossoverContact(db, creds.locationId, {
+        glofoxMemberId: parsed.userId || null, email: parsed.contactEmail || null, select: 'id, last_booked_at',
+      })
+      if (x.error) {
+        await markEvent(db, attemptCtx, 'failed', null, `Contact lookup across the organisation: ${x.error}`)
+        return NextResponse.json({ success: true, status: 'lookup_error' })
+      }
+      if (x.conflict) {
+        logWarn('glofox-webhook', 'Glofox member matches more than one organisation contact', {
+          locationId: creds.locationId, reason: x.conflict.reason, contact_ids: x.conflict.contact_ids,
+        })
+        await markEvent(db, attemptCtx, 'contact_ambiguous', null, x.conflict.reason)
+        return NextResponse.json({ success: true, status: 'contact_ambiguous' })
+      }
+      if (x.contact) {
+        contact = { id: x.contact.id, last_booked_at: x.contact.last_booked_at ?? null }
+        crossoverHow = x.how
+      }
+    }
     // 6b. SEQ-GLOFOX.1 — real-time contact creation for brand-new Glofox
     // leads/members. MEMBER_CREATED for a contact we don't know used to
     // dead-end as contact_not_found: the webhook never creates, and the
@@ -300,7 +326,26 @@ export async function POST(request) {
               } catch (e) {
                 logWarn('glofox-webhook', 'contact_created trigger threw', { err: e?.message, contact_id: memberSyncResult.contact_id })
               }
+            } else if (memberSyncResult.crossover && memberSyncResult.crossover_link?.linked) {
+              // GLOFOXSIBLING.1 — a new Glofox signup whose contact lives at a
+              // sibling studio has joined THIS studio: its contact_created
+              // sequences fire here ('joined_studio'), as the un1t sync does.
+              try {
+                await triggerSequencesForContactCreated(memberSyncResult.contact_id, { locationId: creds.locationId })
+              } catch (e) {
+                logWarn('glofox-webhook', 'contact_created (joined studio) trigger threw', { err: e?.message, contact_id: memberSyncResult.contact_id })
+              }
             }
+          } else if (memberSyncResult?.error || memberSyncResult?.action === 'ambiguous') {
+            // GLOFOXSIBLING.1 — the sync refused or failed (a refused insert, a
+            // failed lookup, two candidate contacts). Recorded as what it is,
+            // never as contact_not_found, which read as "nobody to match".
+            const why = memberSyncResult.error || memberSyncResult.reason || 'ambiguous'
+            logError('glofox-webhook', 'MEMBER_CREATED member sync did not produce a contact', {
+              locationId: creds.locationId, action: memberSyncResult.action ?? null, error: why,
+            })
+            await markEvent(db, attemptCtx, memberSyncResult.action === 'ambiguous' ? 'contact_ambiguous' : 'failed', null, `Member sync: ${why}`)
+            return NextResponse.json({ success: true, status: memberSyncResult.action === 'ambiguous' ? 'contact_ambiguous' : 'member_sync_failed' })
           }
         } else {
           memberSyncResult = { ok: false, status: r.status, reason: 'glofox_fetch_failed' }
@@ -525,6 +570,8 @@ export async function POST(request) {
       contact_id: contact.id, tags: appliedTags, ltv: ltvResult,
       service: serviceResult, membership_pause: membershipPauseResult,
       dunning: dunningResult, member_sync: memberSyncResult,
+      // GLOFOXSIBLING.1 — how a sibling studio's contact was matched, if it was.
+      crossover: crossoverHow,
     }, null)
     return NextResponse.json({
       success: true,

@@ -50,8 +50,8 @@ export const UN1T_ACCOUNT_MISMATCH = 'ACCOUNT_MISMATCH'
 export const UN1T_ACCOUNT_UNREADABLE = 'UN1T_ACCOUNT_UNREADABLE'
 export const MIA_NO_CREDITS = 'MIA_NO_CREDITS'
 // Staff-facing. The failure label map is shared/agent-request-failure.js
-// (shared with the phone, so a change there is an OTA); until it carries this
-// code the card holds the words on details.result.message.
+// (shared with the phone, so a change there is an OTA), which reads this code
+// in un1t.online's terms; the card also holds the words on details.result.message.
 export const MIA_NO_CREDITS_COPY = 'No credits show in un1t.online. Add credits there, then approve again.'
 // D's code for "credits_only found no credits" (un1t-online-approval-execute.js).
 const D_NO_CREDITS_CODE = 'un1t_trial_unverified'

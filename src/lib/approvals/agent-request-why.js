@@ -250,40 +250,12 @@ export function approvalGrantsTrialCredit(details) {
   return details?.reason === 'needs_credit_grant'
 }
 
-// MIAHATCH.5 — failed un1t.online executions, web side. The shared label map
-// (shared/agent-request-failure.js) is the phone's too, so changing it is an
-// OTA; until it learns these codes the web cards read them here first
-// (explainFailure in event-move-card.js). The three un1t-only codes are read
-// on any row (the decide card's post-approve outcome carries only the result);
-// ACCOUNT_MISMATCH only on a un1t.online card (Glofox has its own); any other
-// failed Mia card shows the staff words D's executor stored.
-const UN1T_FAILURES = {
-  MIA_NO_CREDITS:
-    'No credits show in un1t.online, so nothing was booked. Add credits there, then approve again.',
-  UN1T_ACCOUNT_UNREADABLE:
-    "This member's un1t.online account could not be read (a temporary database error), so nothing was sent to un1t.online. Retry.",
-  NOT_EXECUTABLE_UN1T:
-    'This could not be done automatically, so nothing was sent to un1t.online. Do it by hand in un1t.online.',
-}
-const UN1T_ACCOUNT_MISMATCH =
-  'This was queued for a different un1t.online account than the one the contact holds now, so nothing was sent to un1t.online. Check which account is right in un1t.online, then retry.'
-
-/** Operator line for a failed un1t.online execution, or null (the shared copy then applies). Pure. */
-export function un1tFailureExplanation(row) {
-  if (!row || row.status !== 'failed') return null
-  const result = row.details?.result || {}
-  const code = result.message_code || result.code || null
-  if (code && UN1T_FAILURES[code]) return UN1T_FAILURES[code]
-  if (row.details?.provider !== 'un1t_online') return null
-  if (code === 'ACCOUNT_MISMATCH') return UN1T_ACCOUNT_MISMATCH
-  if (isMiaUn1tRow(row) && typeof result.message === 'string' && result.message.trim()) return result.message.trim()
-  return null
-}
-
 // C85 (c) — failureExplanation moved to shared/agent-request-failure.js so the
 // phone's post-approve alert can use it (it printed the raw code). One
-// definition, re-exported here for every web caller.
-export { failureExplanation, FAILURE_CODES } from '@shared/agent-request-failure'
+// definition, re-exported here for every web caller. MIAHATCH.5's un1t.online
+// wording for failed Hatch cards (un1tFailureExplanation, which
+// failureExplanation reads first) lives there too, so the phone shares it.
+export { failureExplanation, FAILURE_CODES, un1tFailureExplanation, UN1T_FAILURE_CODES } from '@shared/agent-request-failure'
 
 // PERSON-ACCT.3 — states that mean the membership (whatever its status)
 // cannot book right now. glofox_membership_status is NEVER the string
