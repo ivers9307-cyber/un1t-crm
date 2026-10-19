@@ -31,6 +31,15 @@
 //                with a bare event id, origin 'mia', originRef = the row id,
 //                actor null; the row is finalised from D's verdict.
 //
+// MIAHATCH.6 (Task 20): the free trial (purchase-intents.js) shares steps 1
+// and 5: prepareUn1tBooking is the class pre-flight, executeUn1tBook runs D's
+// book on a write-ahead row, and the card helpers below file and close rows.
+// needs_purchase carries trial_available from offersForBooking; a failed trial
+// eligibility read is one un1t_trial_check_failed card + the handoff text.
+// MIAHATCH.6 (Task 21): a PAID purchase intent's class runs the same execute
+// step with afterPurchase, so a booking that did not go through is ONE staff
+// card (reason paid_booking_failed), never an upsell.
+//
 // What the model may hear: `booked: true` only when D said done (an
 // alreadyBooked or recovered done included) or step 2 found the booking.
 // Never bypassCredit, never a refund or a charge endpoint. Customer text
@@ -63,7 +72,7 @@ import { freshCutoff } from '@/lib/un1t-online-freshness'
 import { logError, logWarn } from '@/lib/log'
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { notifyAgentApprovalRequest } from './approval-notify'
-import { formatClassTime } from './dublin-format'
+import { UN1T_RETRY_CODES, actionSettings, executingContactOf, classTimeLabel, relayedStartMatches } from './un1t-action-studio'
 import { renderMiaCopy } from './mia-copy'
 import { parseAgentId } from './studio-ids'
 import { TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
@@ -74,8 +83,7 @@ const LOG_MODULE = 'mia-un1t'
 const PROVIDER = 'un1t_online'
 const C = UN1T_WRITE_CODES
 const WRITES_OFF_CODES = new Set([C.WRITES_OFF, C.PERMISSION_MISSING])
-// D's RETRYABLE set (un1t-online-write.js): nothing was sent, a later try is safe.
-const RETRY_CODES = new Set([C.RATE_BUDGET, C.RATE_LIMITED, C.ATTEMPT_IN_FLIGHT, C.PERMISSIONS_UNREADABLE])
+const RETRY_CODES = UN1T_RETRY_CODES
 
 // ── pure ────────────────────────────────────────────────────────────
 
@@ -134,37 +142,10 @@ export function un1tCancelOutcome(result) {
   return 'card_rejected'
 }
 
-// An ISO-looking relay, and one that names its offset (Z or ±hh:mm). An
-// offset-less one would be read in the host's zone by Date.parse (CLAUDE.md
-// forbids), so it is refused as no match.
-const ISO_LIKE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
-const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/i
-const normLabel = (s) => String(s).toLowerCase().replace(/[,\s]+/g, ' ').trim()
-const labelOf = (ms, zone) => formatClassTime(Math.floor(ms / 1000), zone)
-
-/**
- * Does the class time the model relayed name this class? Both sides are
- * compared as formatClassTime labels in the studio's own zone: the relayed
- * label as given (case, spaces and commas aside), or an ISO instant WITH an
- * offset (Z or ±hh:mm) rendered in that zone; an offset-less ISO is no match. A label for another studio's class, or one rendered with the
- * wrong offset across a DST change, does not match. Missing is no match. Pure.
- *
- * @param {string} eventStartsAtIso the class's starts_at (mirror)
- * @param {string|null|undefined} relayed the starts_at the model passed
- * @param {string} zone the studio's IANA zone
- */
-export function relayedStartMatches(eventStartsAtIso, relayed, zone) {
-  const eventMs = Date.parse(eventStartsAtIso || '')
-  if (!Number.isFinite(eventMs) || typeof relayed !== 'string' || !relayed.trim()) return false
-  const want = labelOf(eventMs, zone)
-  const given = relayed.trim()
-  if (ISO_LIKE.test(given)) {
-    if (!ISO_WITH_OFFSET.test(given)) return false
-    const givenMs = Date.parse(given)
-    return Number.isFinite(givenMs) && labelOf(givenMs, zone) === want
-  }
-  return normLabel(given) === normLabel(want)
-}
+// relayedStartMatches lives in un1t-action-studio.js (purchase-intents.js checks a
+// relayed class time too); re-exported here, where its callers and tests look.
+export { relayedStartMatches }
+const labelOf = classTimeLabel
 
 // ── answers the model reads ─────────────────────────────────────────
 
@@ -195,10 +176,17 @@ const PENDING_APPROVAL = Object.freeze({
   pending_approval: true,
   message: 'Queued for the team to confirm. Tell the customer they will hear back shortly. Never say it is booked yet.',
 })
+/** The one wording for a failed trial eligibility read (purchase-intents.js uses it too). */
+export const UN1T_TRIAL_CHECK_FAILED_LEAD = 'Whether they can have the free trial could not be checked just now, so no trial was offered or given and nothing was booked, and the team has been asked to help.'
+
 const HANDOFF_LEAD = Object.freeze({
   booking_rejected: 'un1t.online did not accept this booking, and the team has been asked to sort it out.',
   un1t_outcome_unknown: 'un1t.online did not confirm whether this booking went through, and the team has been asked to check.',
   un1t_book_not_sent: 'The booking could not be sent just now, so nothing was booked.',
+  // MIAHATCH.6 (Task 20) — whether they may have the free trial could not be read.
+  un1t_trial_check_failed: UN1T_TRIAL_CHECK_FAILED_LEAD,
+  // A trial was just given, but book still found no credits: never an upsell.
+  un1t_trial_granted_no_credits: 'The free trial is on their account, but its credits did not show for this booking yet, so nothing was booked, and the team has been asked to book it.',
   cancel_rejected: 'un1t.online did not accept this cancellation, and the team has been asked to sort it out.',
   cancel_outcome_unknown: 'un1t.online did not confirm whether this cancellation went through, and the team has been asked to check.',
   un1t_cancel_not_sent: 'The cancellation could not be sent just now, so nothing was cancelled.',
@@ -269,18 +257,6 @@ function notLinked(studio, settings) {
 }
 
 // ── IO ──────────────────────────────────────────────────────────────
-
-/** The action studio's resolved Mia settings (booking_mode, booking_url, copy), or null. */
-async function actionSettings(ctx, studio) {
-  let settings = null
-  try {
-    settings = typeof ctx.actionStudio === 'function' ? await ctx.actionStudio(studio.locationId) : null
-  } catch {
-    settings = null
-  }
-  if (!settings && studio.locationId === ctx.locationId) settings = ctx.settings || null
-  return settings
-}
 
 /** The class at the studio, checked as the /start funnel checks it (UN1TBOOK.20). */
 async function readEvent(db, studio, eventId, nowMs) {
@@ -417,19 +393,29 @@ async function finishRequest(db, studio, requestId, { status, details }) {
   }
 }
 
+/** The team's push for a card. Best effort: a failed notify never aborts the filing or what follows it. */
 async function alertStaff(db, ctx, studio, { kind, requestId, summary }) {
-  await notifyAgentApprovalRequest(db, {
-    requestId, locationId: studio.locationId, kind, customerName: ctx.nameHint || null, summary,
-  })
+  try {
+    await notifyAgentApprovalRequest(db, {
+      requestId, locationId: studio.locationId, kind, customerName: ctx.nameHint || null, summary,
+    })
+  } catch (err) {
+    logWarn(LOG_MODULE, 'card alert failed; the card stands', { locationId: studio.locationId, op: `${OP_OF_KIND[kind] ?? 'card'}_alert`, requestId, status: null, errClass: err?.name ?? null })
+  }
+}
+
+/** File (or reuse) a pending card of `kind` at the studio: { id (or null), reused }. */
+async function fileOrReuseCard(db, ctx, studio, { kind, contactId, match, details, summary }) {
+  const existing = await pendingCardId(db, studio, { kind, contactId, match })
+  if (existing) return { id: existing, reused: true }
+  const id = await insertRequest(db, ctx, studio, { kind, contactId, status: 'pending', details })
+  if (id) await alertStaff(db, ctx, studio, { kind, requestId: id, summary })
+  return { id, reused: false }
 }
 
 /** File (or reuse) a pending card of `kind` at the studio; its id or null. */
-async function fileCard(db, ctx, studio, { kind, contactId, match, details, summary }) {
-  const existing = await pendingCardId(db, studio, { kind, contactId, match })
-  if (existing) return existing
-  const id = await insertRequest(db, ctx, studio, { kind, contactId, status: 'pending', details })
-  if (id) await alertStaff(db, ctx, studio, { kind, requestId: id, summary })
-  return id
+async function fileCard(db, ctx, studio, card) {
+  return (await fileOrReuseCard(db, ctx, studio, card)).id
 }
 
 /** What D's result recorded on the request row says (un1t.online's words scrubbed). */
@@ -444,37 +430,46 @@ function recordedResult(result) {
   }
 }
 
-/** The account's own contact runs a write (and is its card's contact): the verified one when it holds the account, else the studio's first. */
-function executingContactOf(ctx, studio) {
-  const ids = Array.isArray(studio.contactIds) ? studio.contactIds.filter(Boolean) : []
-  return ids.includes(ctx.verifiedContactId) ? ctx.verifiedContactId : (ids[0] || ctx.verifiedContactId)
-}
-
 /** booking_mode at the action studio: 'draft' when its settings are unreadable (never an unsanctioned write). */
 const modeOf = (settings) => (settings ? (settings.booking_mode === 'draft' ? 'draft' : 'auto') : 'draft')
 
-/** PR 5: no offer list yet (Task 19 plugs listPurchaseOptions in here). */
-async function noOffers() {
-  return { offers: [], trial_available: false }
+// MIAHATCH.6 — the studio's offer list and whether the free trial may be
+// offered (purchase-intents.js's offersForBooking). Loaded lazily: that module
+// imports this one for the booking steps the trial shares.
+async function defaultOffersFor(ctx, studio) {
+  const { offersForBooking } = await import('./purchase-intents')
+  return offersForBooking(ctx, studio)
 }
 
 async function purchaseOptions(offersFor, ctx, studio) {
   try {
     const r = await offersFor(ctx, studio)
-    return { offers: Array.isArray(r?.offers) ? r.offers : [], trial_available: r?.trial_available === true }
+    return {
+      offers: Array.isArray(r?.offers) ? r.offers : [],
+      trial_available: r?.trial_available === true,
+      trial_check_failed: r?.trial_check_failed === true,
+    }
   } catch (err) {
     logWarn(LOG_MODULE, 'offer list unreadable; the no-credits card instead', { locationId: studio.locationId, op: 'book_offers', errClass: err?.name })
-    return { offers: [], trial_available: false }
+    return { offers: [], trial_available: false, trial_check_failed: false }
   }
 }
 
-const needsPurchase = (options, settings, studio) => ({
-  booked: false,
-  needs_purchase: true,
-  offers: options.offers,
-  trial_available: options.trial_available,
-  wording: renderMiaCopy('purchase_offer_intro_text', settings, { studio: studio.name }),
-})
+// The free trial is offered first, and only when the tool said so (spec R1).
+const TRIAL_FIRST = 'They can have the free trial: offer it first, before the paid offers. To give it, get a clear yes, then call send_purchase_link with offer_id "trial" and this class. Never say the trial is on their account or that the class is booked until a tool says so.'
+
+const hasSomethingToOffer = (options) => options.offers.length > 0 || options.trial_available
+
+function needsPurchase(options, settings, studio) {
+  return {
+    booked: false,
+    needs_purchase: true,
+    offers: options.offers,
+    trial_available: options.trial_available,
+    wording: renderMiaCopy('purchase_offer_intro_text', settings, { studio: studio.name }),
+    ...(options.trial_available ? { message: TRIAL_FIRST } : {}),
+  }
+}
 
 const summaryOf = (...parts) => parts.filter(Boolean).join(' · ')
 
@@ -522,44 +517,68 @@ export function un1tStudioForBooking(db, studios, bookingId) {
   return un1tStudioHolding(db, studios, 'un1t_bookings', bookingId, 'cancel_booking_studio')
 }
 
-/**
- * book_class for a `un1t:` event id at one un1t.online studio.
- *
- * @param {object} ctx tool context (db, verifiedContactId, locationId, zone,
- *   settings, actionStudio, channel, conversationId, nameHint)
- * @param {{ event_id: string, class_name?: string, class_time?: string, starts_at?: string }} input
- * @param {import('./member-studios').MemberStudio} studio the answerable un1t.online studio
- * @param {{ offersFor?: (ctx: object, studio: object) => Promise<{ offers: object[], trial_available: boolean }>,
- *   now?: () => number }} [deps]
- * @returns {Promise<object>} one of: { booked: true, class_name, class_time },
- *   { booked: true, already_booked: true, ... }, { booked: false, needs_purchase: true, offers, trial_available, wording },
- *   { booked: false, no_credits: true }, { booked: false, error: 'class_unavailable', reason },
- *   { booked: false, reason: 'class_full' }, { booked: false, not_linked: true, booking_url },
- *   { booked: false, pending_approval: true }, { booked: false, try_again: true },
- *   { booked: false, handoff: true, reason: 'booking_rejected'|'un1t_outcome_unknown'|'un1t_book_not_sent'|'writes_off' }
- */
-export async function un1tBookClass(ctx, input, studio, deps = {}) {
-  const { offersFor = noOffers, now = () => Date.now() } = deps
-  const db = ctx?.db
-  if (!ctx?.verifiedContactId) return { ...NOT_VERIFIED }
-  if (!studio || studio.providerKey !== PROVIDER) return { ...TOOL_NOT_AT_THIS_STUDIO }
+// ── the booking steps the free trial shares (MIAHATCH.6, Task 20) ───
 
-  // 1 guards.
-  const settings = await actionSettings(ctx, studio)
-  if (!studio.un1tUserId) return notLinked(studio, settings)
+/**
+ * A class_booking card of Mia's at the studio (Task 16's filer): an open one
+ * for this contact matching `match` is reused, else one is filed and the team
+ * alerted. Its id, or null.
+ *
+ * @param {object} ctx tool context
+ * @param {object} studio the un1t.online studio
+ * @param {{ contactId: string, match: object, details: object, summary: string }} card
+ */
+export function fileUn1tBookingCard(ctx, studio, { contactId, match, details, summary }) {
+  return fileCard(ctx.db, ctx, studio, { kind: BOOKING_KIND, contactId, match, details, summary })
+}
+
+/**
+ * As fileUn1tBookingCard, and says whether an open card (or a pending
+ * write-ahead row) was reused: { id, reused }. A reused row is not alerted
+ * again here; the caller decides.
+ */
+export function fileOrReuseUn1tBookingCard(ctx, studio, { contactId, match, details, summary }) {
+  return fileOrReuseCard(ctx.db, ctx, studio, { kind: BOOKING_KIND, contactId, match, details, summary })
+}
+
+/** A write-ahead class_booking row (status pending) at the studio: its id, or null (logged). */
+export function insertUn1tBookingRow(ctx, studio, { contactId, details }) {
+  return insertRequest(ctx.db, ctx, studio, { kind: BOOKING_KIND, contactId, status: 'pending', details })
+}
+
+/** Close out a write-ahead class_booking row; a failure is logged loudly. */
+export function finishUn1tBookingRow(ctx, studio, requestId, { status, details }) {
+  return finishRequest(ctx.db, studio, requestId, { status, details })
+}
+
+/** Alert the team about a class_booking row that became a card. */
+export function alertUn1tBookingCard(ctx, studio, { requestId, summary }) {
+  return alertStaff(ctx.db, ctx, studio, { kind: BOOKING_KIND, requestId, summary })
+}
+
+/**
+ * book_class's pre-flight for a `un1t:` event id (step 1, after the account
+ * check): the class in the mirror at the studio, scheduled, in the future and
+ * in the latest pull; the relayed starts_at names it in the studio's zone
+ * (Review Focus 4). Nothing is written.
+ *
+ * @returns {Promise<{ answer: object } | { booking: { eventId: string, className: string,
+ *   classTime: string, executingContactId: string, mode: 'auto'|'draft', details: (extra?: object) => object } }>}
+ */
+export async function prepareUn1tBooking(ctx, input, studio, settings, nowMs) {
   const parsed = parseAgentId(input?.event_id)
-  if (parsed?.provider !== PROVIDER) return classUnavailable('unknown_class')
+  if (parsed?.provider !== PROVIDER) return { answer: classUnavailable('unknown_class') }
   const eventId = parsed.id
 
-  const ev = await readEvent(db, studio, eventId, now())
-  if (ev.error) return { ...TRY_AGAIN }
-  if (ev.unavailable) return classUnavailable(ev.unavailable)
+  const ev = await readEvent(ctx.db, studio, eventId, nowMs)
+  if (ev.error) return { answer: { ...TRY_AGAIN } }
+  if (ev.unavailable) return { answer: classUnavailable(ev.unavailable) }
   const zone = await zoneFor(ctx, studio)
   if (!relayedStartMatches(ev.event.starts_at, input?.starts_at, zone)) {
     logWarn(LOG_MODULE, 'relayed class time does not match the class; nothing sent', {
       locationId: studio.locationId, op: 'book', relayed: typeof input?.starts_at === 'string' ? 'given' : 'missing',
     })
-    return classUnavailable('starts_at_mismatch')
+    return { answer: classUnavailable('starts_at_mismatch') }
   }
   const className = String(ev.event.title || '').trim() || String(input?.class_name || '').trim() || 'Class'
   const classTime = labelOf(ev.startsMs, zone)
@@ -578,6 +597,161 @@ export async function un1tBookClass(ctx, input, studio, deps = {}) {
     mode,
     ...extra,
   })
+  return { booking: { eventId, className, classTime, executingContactId, mode, details } }
+}
+
+/**
+ * book_class's step 5 once its write-ahead row exists: D's book with a bare
+ * event id, origin 'mia', originRef = the row id, actor null, and the row
+ * finalised from D's verdict (every outcome book_class answers). The free
+ * trial (purchase-intents.js) runs it on its own write-ahead row after D's
+ * grantTrial said granted.
+ *
+ * @param {object} ctx tool context
+ * @param {object} studio the un1t.online studio
+ * @param {object} booking prepareUn1tBooking's `booking`
+ * @param {string} requestId the write-ahead class_booking row
+ * @param {{ settings: object|null, offersFor?: Function, afterTrial?: boolean, afterPurchase?: boolean }} opts
+ *   afterTrial: D just granted the free trial, so a no_credits answer is a
+ *   staff card (un1t_trial_granted_no_credits), never the offer list.
+ *   afterPurchase (MIAHATCH.6 Task 21): the member has just paid for this
+ *   class through Mia's link, so anything but booked or class_full is this
+ *   row as ONE staff card, reason 'paid_booking_failed' (never the offer
+ *   list, a try-again or the not-from-chat line): see paidBookingCard.
+ * @returns {Promise<object>} book_class's answer
+ */
+export async function executeUn1tBook(ctx, studio, booking, requestId, { settings, offersFor = defaultOffersFor, afterTrial = false, afterPurchase = false } = {}) {
+  const db = ctx.db
+  const { eventId, className, classTime, executingContactId, details } = booking
+  let result
+  try {
+    result = await book(db, {
+      locationId: studio.locationId,
+      contactId: executingContactId,
+      un1tUserId: studio.un1tUserId,
+      eventId,
+      origin: 'mia',
+      originRef: requestId,
+      actor: null,
+    })
+  } catch (err) {
+    // D rejects only before anything was sent (settings or ledger read).
+    logError(LOG_MODULE, 'book was not sent', { locationId: studio.locationId, op: 'book', requestId, status: null, code: err?.code ?? null, errClass: err?.name })
+    if (afterPurchase) return paidBookingCard(ctx, studio, booking, requestId, { paidOutcome: 'un1t_book_not_sent', details: details() })
+    await finishRequest(db, studio, requestId, { status: 'failed', details: details({ reason: 'un1t_book_not_sent' }) })
+    return handoffAnswer('un1t_book_not_sent', settings)
+  }
+
+  const recorded = (extra = {}) => details({ un1t_write_id: result?.ledgerId ?? null, result: recordedResult(result), ...extra })
+  const words = recordedResult(result).message
+  const outcome = un1tBookOutcome(result)
+
+  if (afterPurchase && outcome !== 'booked' && outcome !== 'class_full') {
+    return paidBookingCard(ctx, studio, booking, requestId, { paidOutcome: outcome, details: recorded() })
+  }
+
+  if (outcome === 'booked') {
+    await finishRequest(db, studio, requestId, { status: 'actioned', details: recorded() })
+    return { booked: true, class_name: className, class_time: classTime }
+  }
+  if (outcome === 'class_full') {
+    await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'class_full' }) })
+    return { ...CLASS_FULL }
+  }
+  if (outcome === 'retry') {
+    await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'un1t_retry' }) })
+    return { ...TRY_AGAIN }
+  }
+  if (outcome === 'writes_off') {
+    await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'writes_off' }) })
+    return writesOffAnswer(settings, studio, 'book')
+  }
+  if (outcome === 'no_credits' && afterTrial) {
+    // The free trial was just given: never an upsell after it. This row is the card.
+    await finishRequest(db, studio, requestId, { status: 'pending', details: recorded({ reason: 'un1t_trial_granted_no_credits' }) })
+    await alertStaff(db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: summaryOf(className, classTime, 'free trial given but no credits showed, Mia handed over') })
+    return handoffAnswer('un1t_trial_granted_no_credits', settings)
+  }
+  if (outcome === 'no_credits') {
+    // A race after the pre-flight: the offer list, else this row is the card.
+    const options = await purchaseOptions(offersFor, ctx, studio)
+    if (options.trial_check_failed) {
+      // The trial check failed: this row is the one card, nothing offered.
+      await finishRequest(db, studio, requestId, { status: 'pending', details: recorded({ reason: 'un1t_trial_check_failed' }) })
+      await alertStaff(db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: summaryOf(className, classTime, 'free trial check failed, Mia handed over') })
+      return handoffAnswer('un1t_trial_check_failed', settings)
+    }
+    if (hasSomethingToOffer(options)) {
+      await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'no_credits' }) })
+      return needsPurchase(options, settings, studio)
+    }
+    await finishRequest(db, studio, requestId, { status: 'pending', details: recorded({ reason: 'no_credits' }) })
+    await alertStaff(db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: summaryOf(className, classTime, 'no credits in un1t.online, Mia handed over') })
+    return { ...NO_CREDITS }
+  }
+  if (outcome === 'card_rejected') {
+    const quoted = words ? `: "${words}"` : ''
+    const summary = `un1t.online refused this booking (${result?.code ?? 'no code'})${quoted}. Check the member in un1t.online, then Approve to try the booking again.`
+    await finishRequest(db, studio, requestId, { status: 'pending', details: recorded({ reason: 'booking_rejected', summary }) })
+    await alertStaff(db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: summaryOf(className, classTime, 'un1t.online refused the booking') })
+    return handoffAnswer('booking_rejected', settings)
+  }
+  // card_unknown: D's check read already ran and could not tell.
+  const summary = 'un1t.online did not confirm whether this booking went through. Check the class in un1t.online; Approve books it only if it is not there already.'
+  await finishRequest(db, studio, requestId, { status: 'pending', details: recorded({ reason: 'un1t_outcome_unknown', summary }) })
+  await alertStaff(db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: summaryOf(className, classTime, 'booking not confirmed by un1t.online') })
+  return handoffAnswer('un1t_outcome_unknown', settings)
+}
+
+const PAID_CARD_SUMMARY = Object.freeze({
+  card_unknown: 'The member paid for this class through Mia\'s payment link, but un1t.online did not confirm whether the booking went through. Check the class in un1t.online; Approve books it only if it is not there already.',
+  default: 'The member paid for this class through Mia\'s payment link, but the booking did not go through. Check the member in un1t.online, then Approve to book the class.',
+})
+
+/**
+ * MIAHATCH.6 (Task 21) — a paid class that did not book: the write-ahead row
+ * becomes ONE pending class_booking card, reason 'paid_booking_failed' (not
+ * record-only, so Approve runs D's executor and books it), with what D said
+ * kept as `paid_outcome`, and the team is alerted. The member is told by the
+ * caller (purchase_paid_booking_failed_text); the answer is internal.
+ */
+async function paidBookingCard(ctx, studio, booking, requestId, { paidOutcome, details }) {
+  const summary = PAID_CARD_SUMMARY[paidOutcome] || PAID_CARD_SUMMARY.default
+  await finishRequest(ctx.db, studio, requestId, { status: 'pending', details: { ...details, reason: 'paid_booking_failed', paid_outcome: paidOutcome, summary } })
+  await alertStaff(ctx.db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: summaryOf(booking.className, booking.classTime, 'paid, booking not made, Mia handed over') })
+  logWarn(LOG_MODULE, 'paid class not booked; staff card', { locationId: studio.locationId, op: 'paid_book', requestId, status: null, code: paidOutcome })
+  return { booked: false, handoff: true, reason: 'paid_booking_failed', paid_outcome: paidOutcome, request_id: requestId }
+}
+
+/**
+ * book_class for a `un1t:` event id at one un1t.online studio.
+ *
+ * @param {object} ctx tool context (db, verifiedContactId, locationId, zone,
+ *   settings, actionStudio, channel, conversationId, nameHint)
+ * @param {{ event_id: string, class_name?: string, class_time?: string, starts_at?: string }} input
+ * @param {import('./member-studios').MemberStudio} studio the answerable un1t.online studio
+ * @param {{ offersFor?: (ctx: object, studio: object) => Promise<{ offers: object[], trial_available: boolean, trial_check_failed?: boolean }>,
+ *   now?: () => number }} [deps]
+ * @returns {Promise<object>} one of: { booked: true, class_name, class_time },
+ *   { booked: true, already_booked: true, ... }, { booked: false, needs_purchase: true, offers, trial_available, wording },
+ *   { booked: false, no_credits: true }, { booked: false, error: 'class_unavailable', reason },
+ *   { booked: false, reason: 'class_full' }, { booked: false, not_linked: true, booking_url },
+ *   { booked: false, pending_approval: true }, { booked: false, try_again: true },
+ *   { booked: false, handoff: true, reason: 'booking_rejected'|'un1t_outcome_unknown'|'un1t_book_not_sent'|'un1t_trial_check_failed'|'writes_off' }
+ */
+export async function un1tBookClass(ctx, input, studio, deps = {}) {
+  const { offersFor = defaultOffersFor, now = () => Date.now() } = deps
+  const db = ctx?.db
+  if (!ctx?.verifiedContactId) return { ...NOT_VERIFIED }
+  if (!studio || studio.providerKey !== PROVIDER) return { ...TOOL_NOT_AT_THIS_STUDIO }
+
+  // 1 guards.
+  const settings = await actionSettings(ctx, studio)
+  if (!studio.un1tUserId) return notLinked(studio, settings)
+  const prepared = await prepareUn1tBooking(ctx, input, studio, settings, now())
+  if (prepared.answer) return prepared.answer
+  const { booking } = prepared
+  const { eventId, className, classTime, executingContactId, mode, details } = booking
 
   // 2 already booked. One reader serves this and the ledger read.
   const reader = await openReader(db, studio, 'book')
@@ -591,7 +765,16 @@ export async function un1tBookClass(ctx, input, studio, deps = {}) {
     && Array.isArray(ent.liveSubscriptionIds) && ent.liveSubscriptionIds.length === 0
   if (confirmedNothing) {
     const options = await purchaseOptions(offersFor, ctx, studio)
-    if (options.offers.length) return needsPurchase(options, settings, studio)
+    if (options.trial_check_failed) {
+      // MIAHATCH.6 — the trial check failed: no trial offered, one card, the team takes over.
+      await fileCard(db, ctx, studio, {
+        kind: BOOKING_KIND, contactId: executingContactId, match: { event_id: eventId },
+        details: details({ reason: 'un1t_trial_check_failed' }),
+        summary: summaryOf(className, classTime, 'free trial check failed, Mia handed over'),
+      })
+      return handoffAnswer('un1t_trial_check_failed', settings)
+    }
+    if (hasSomethingToOffer(options)) return needsPurchase(options, settings, studio)
     await fileCard(db, ctx, studio, {
       kind: BOOKING_KIND, contactId: executingContactId, match: { event_id: eventId },
       details: details({ reason: 'no_credits' }),
@@ -614,68 +797,7 @@ export async function un1tBookClass(ctx, input, studio, deps = {}) {
     kind: BOOKING_KIND, contactId: executingContactId, status: 'pending', details: details({ stage: 'executing' }),
   })
   if (!requestId) return { ...TRY_AGAIN }
-
-  let result
-  try {
-    result = await book(db, {
-      locationId: studio.locationId,
-      contactId: executingContactId,
-      un1tUserId: studio.un1tUserId,
-      eventId,
-      origin: 'mia',
-      originRef: requestId,
-      actor: null,
-    })
-  } catch (err) {
-    // D rejects only before anything was sent (settings or ledger read).
-    logError(LOG_MODULE, 'book was not sent', { locationId: studio.locationId, op: 'book', requestId, status: null, code: err?.code ?? null, errClass: err?.name })
-    await finishRequest(db, studio, requestId, { status: 'failed', details: details({ reason: 'un1t_book_not_sent' }) })
-    return handoffAnswer('un1t_book_not_sent', settings)
-  }
-
-  const recorded = (extra = {}) => details({ un1t_write_id: result?.ledgerId ?? null, result: recordedResult(result), ...extra })
-  const words = recordedResult(result).message
-  const outcome = un1tBookOutcome(result)
-
-  if (outcome === 'booked') {
-    await finishRequest(db, studio, requestId, { status: 'actioned', details: recorded() })
-    return { booked: true, class_name: className, class_time: classTime }
-  }
-  if (outcome === 'class_full') {
-    await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'class_full' }) })
-    return { ...CLASS_FULL }
-  }
-  if (outcome === 'retry') {
-    await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'un1t_retry' }) })
-    return { ...TRY_AGAIN }
-  }
-  if (outcome === 'writes_off') {
-    await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'writes_off' }) })
-    return writesOffAnswer(settings, studio, 'book')
-  }
-  if (outcome === 'no_credits') {
-    // A race after the pre-flight: the offer list, else this row is the card.
-    const options = await purchaseOptions(offersFor, ctx, studio)
-    if (options.offers.length) {
-      await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'no_credits' }) })
-      return needsPurchase(options, settings, studio)
-    }
-    await finishRequest(db, studio, requestId, { status: 'pending', details: recorded({ reason: 'no_credits' }) })
-    await alertStaff(db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: summaryOf(className, classTime, 'no credits in un1t.online, Mia handed over') })
-    return { ...NO_CREDITS }
-  }
-  if (outcome === 'card_rejected') {
-    const quoted = words ? `: "${words}"` : ''
-    const summary = `un1t.online refused this booking (${result?.code ?? 'no code'})${quoted}. Check the member in un1t.online, then Approve to try the booking again.`
-    await finishRequest(db, studio, requestId, { status: 'pending', details: recorded({ reason: 'booking_rejected', summary }) })
-    await alertStaff(db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: summaryOf(className, classTime, 'un1t.online refused the booking') })
-    return handoffAnswer('booking_rejected', settings)
-  }
-  // card_unknown: D's check read already ran and could not tell.
-  const summary = 'un1t.online did not confirm whether this booking went through. Check the class in un1t.online; Approve books it only if it is not there already.'
-  await finishRequest(db, studio, requestId, { status: 'pending', details: recorded({ reason: 'un1t_outcome_unknown', summary }) })
-  await alertStaff(db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: summaryOf(className, classTime, 'booking not confirmed by un1t.online') })
-  return handoffAnswer('un1t_outcome_unknown', settings)
+  return executeUn1tBook(ctx, studio, booking, requestId, { settings, offersFor })
 }
 
 // ── cancel_class_booking ────────────────────────────────────────────

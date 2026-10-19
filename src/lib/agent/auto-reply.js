@@ -61,6 +61,7 @@ import {
   BOOKING_SYSTEM_TOOL_NAMES, deriveNoBookingTools, membershipAtOtherStudio,
   refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO,
 } from './tool-capability'
+import { PURCHASE_TOOL_NAMES } from './purchase-tools'
 import { deriveUn1tReadTools, deriveUn1tFullTools, selectToolBlock, withCacheBreakpoint } from './tool-blocks'
 import { resolveMemberStudios, otherStudioOnly } from './member-studios'
 import {
@@ -146,8 +147,8 @@ export const CACHED_NO_BOOKING_TOOLS = withCacheBreakpoint(NO_BOOKING_AGENT_TOOL
 export const CACHED_UN1T_READ_TOOLS = withCacheBreakpoint(deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: false }))
 export const CACHED_UN1T_READ_DUAL_TOOLS = withCacheBreakpoint(deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }))
 // MIAHATCH.5 — block 3b (`un1t_full`): the dual block plus request_refund, with
-// the two booking writes working at the un1t.online studio too. Built once like
-// the others. Only a WhatsApp turn whose un1t.online studio has writes_enabled
+// the two booking writes working at the un1t.online studio too, then (MIAHATCH.6)
+// the three purchase tools (purchase-tools.js). Built once like the others. Only a WhatsApp turn whose un1t.online studio has writes_enabled
 // AND its Mia switch (un1t_chat_actions_enabled) gets it (turn-studios.js).
 export const CACHED_UN1T_FULL_TOOLS = withCacheBreakpoint(deriveUn1tFullTools(ALL_AGENT_TOOLS))
 const CACHED_BLOCKS = {
@@ -1007,7 +1008,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       let extra = null
       if (!next.sameAsToday) {
         try {
-          extra = await promptOptionsForPlan(db, next, actionStudios)
+          extra = await promptOptionsForPlan(db, next, actionStudios, { conversationId, channel: adapter.name })
         } catch (err) {
           logWarn('mia-un1t', 'turn prompt options failed; using the today block', { block: next.block, errClass: err?.name })
           next = todayPlan(planArgs())
@@ -1150,6 +1151,11 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
                 || refuseToolForTurn(block.name, execCtx) || (block.name === SEND_BOOKING_FLOW_TOOL_NAME
                 // MIAFLOW.1 — never throws; refuses itself unless this turn offers it.
                 ? await executeSendBookingFlow(execCtx)
+                // MIAHATCH.6 — the purchase tools (block 3b only; refused above
+                // everywhere else). Loaded lazily: no other turn imports the
+                // write side.
+                : PURCHASE_TOOL_NAMES.has(block.name)
+                ? await (await import('./purchase-intents')).executePurchaseTool(block.name, block.input || {}, execCtx)
                 : ACCOUNT_TOOL_NAMES.has(block.name)
                 ? await executeAccountTool(block.name, block.input || {}, execCtx)
                 : EVENT_TOOL_NAMES.has(block.name)
@@ -1171,6 +1177,13 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
                 is_error: true,
               })
               continue
+            }
+            // MIAHATCH.6 — a purchase result names its intent for the decision
+            // trace only; the model never needs the id.
+            if (PURCHASE_TOOL_NAMES.has(block.name) && result && typeof result === 'object' && 'intent_id' in result) {
+              const { intent_id: intentId, ...forModel } = result
+              if (intentId) trace.tools[trace.tools.length - 1].intentId = intentId
+              result = forModel
             }
             if (block.name === 'book_class' && result?.no_credits === true) {
               noCreditsHandoff = true

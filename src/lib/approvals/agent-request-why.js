@@ -152,6 +152,35 @@ const MIA_UN1T_REASONS = {
     'un1t.online did not answer clearly. Approving checks un1t.online first and books only if it is not already done.',
   cancel_outcome_unknown:
     'un1t.online did not answer clearly. Approving checks un1t.online first and cancels only if it is still booked.',
+  // MIAHATCH.6 (Task 20) — the free trial (src/lib/agent/purchase-intents.js).
+  un1t_trial_check_failed:
+    'Mia could not check whether they can have the free trial (the check failed), so she offered no trial and handed over. Check their account in un1t.online and talk to them in the conversation.',
+  trial_not_configured:
+    'Mia tried to give them the free trial, but no trial product is set for this studio, so nothing was given. Set the trial product in the un1t.online settings, or sort it in un1t.online by hand.',
+  un1t_trial_unverified:
+    'Mia asked un1t.online for the free trial, but it could not be confirmed. Check their account in un1t.online for the trial credits.',
+  trial_product_not_free:
+    "The studio's trial product is not a live free product in un1t.online, so no trial was given. Fix the product or the trial setting, then sort the member in un1t.online.",
+  un1t_trial_granted_no_credits:
+    'Mia gave them the free trial in un1t.online, but its credits did not show when she booked the class, so nothing was booked. Check their credits in un1t.online.',
+  // Mia's closed trial rows (status failed), as Fix & retry may show them.
+  un1t_trial_used:
+    'un1t.online says they have had the free trial before, so Mia gave no trial and showed them the paid options instead.',
+  un1t_trial_retry:
+    'un1t.online was busy when Mia asked for the free trial, so nothing was given and the member was asked to try again.',
+  un1t_trial_not_sent:
+    'The free trial request could not be sent to un1t.online, so nothing was given and Mia handed over.',
+}
+
+// What approving a Mia trial card does: the class on it is booked only if
+// credits show (Ruling 28, never a trial); with no class there is nothing to book.
+const TRIAL_REASON = /^(un1t_trial_check_failed|trial_not_configured|un1t_trial_unverified|trial_product_not_free|un1t_trial_granted_no_credits|un1t_trial_used|un1t_trial_retry|un1t_trial_not_sent|un1t_trial_failed:)/
+function trialApproveLine(d) {
+  // un1t_trial_used is record-only in D's executor (UN1T_RECORD_ONLY_REASONS).
+  if (d.reason === 'un1t_trial_used') return 'Approving only records this; it books nothing and never gives a trial.'
+  return d.event_id
+    ? 'Approving books the class on this card only if credits show in un1t.online; it never gives a trial.'
+    : 'No class is named on this card, so approving books nothing.'
 }
 
 // un1t.online's own words, as Mia's card recorded them (scrubbed), quoted.
@@ -164,6 +193,13 @@ function miaUn1tWhy(d) {
   const reason = typeof d.reason === 'string' ? d.reason : null
   if (reason === 'booking_rejected') return refusedLine('booking', d, 'Check the member in un1t.online, then approve to try the booking again.')
   if (reason === 'cancel_rejected') return refusedLine('cancellation', d, 'Check the booking in un1t.online, then approve to try the cancellation again.')
+  if (reason && TRIAL_REASON.test(reason)) {
+    const code = reason.startsWith('un1t_trial_failed:') ? reason.slice('un1t_trial_failed:'.length) || 'unknown' : null
+    const why = code
+      ? `un1t.online did not give them the free trial (${code}), so nothing was given or booked. Check their account in un1t.online, and give the trial or credits there by hand if they should have it.`
+      : MIA_UN1T_REASONS[reason]
+    return `${why} ${trialApproveLine(d)}`
+  }
   if (reason && MIA_UN1T_REASONS[reason]) return MIA_UN1T_REASONS[reason]
   // A reason this list does not know yet: never the raw code, never Glofox.
   return 'Mia passed this to the team. Check the member in un1t.online before approving.'

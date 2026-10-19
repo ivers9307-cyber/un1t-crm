@@ -124,6 +124,8 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
     '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/',
     // the paid class leg, the host portal and host onboarding, embeds:
     '/class-pay/', '/h/', '/host', '/host-connect/', '/api/host/', '/embed/',
+    // MIAHATCH.6 — the page un1t.online's hosted checkout returns a member to:
+    '/pay-done/',
   ]),
   rootHandler: 'rewrite',
   rootRewriteTo: '/welcome',

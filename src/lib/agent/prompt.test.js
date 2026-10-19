@@ -12,6 +12,7 @@ import {
   CUSTOMER_AGENT_BASE_PROMPT,
   renderCustomerAgentBasePrompt,
   buildStudioFactsBlock,
+  buildTrialUsedClassLine,
 } from './prompt'
 
 describe('buildKnowledgeBlock', () => {
@@ -682,6 +683,38 @@ describe('un1t.online prompt variants', () => {
       expect(named(false, null)).not.toMatch(/Say which studio each answer is for/)
     })
 
+    // MIAHATCH.6 (Task 19) — the upsell rules, in 'full' only.
+    it('carries the upsell rules: restate product and price, a clear yes, buttons for 3 or fewer, never a price or "paid" the tools did not give', () => {
+      for (const multi of [false, true]) {
+        for (const url of [null, 'https://hatch.example.test/book']) {
+          const out = named(multi, url)
+          expect(out).toMatch(/## Buying classes or a membership/)
+          expect(out).toMatch(/restate the product and its price and get a clear yes before you call send_purchase_link/)
+          expect(out).toMatch(/With 3 or fewer offers, offer them as tap choices[^\n]*With more, list them[^\n]*Never show more offers than the tool gave you/)
+          expect(out).toMatch(/Never invent, round or change a price/)
+          expect(out).toMatch(/Never say they have paid[^\n]*until a tool says so/)
+          expect(out).toMatch(/call check_my_purchase/)
+          expect(out).toMatch(/end your message with its url/)
+          // MIAHATCH.6 (Task 20, R1) — the trial first, only when a tool says so.
+          expect(out).toMatch(/offer the free trial first, before the paid offers, only when book_class or list_purchase_options says trial_available is true/)
+          expect(out).toMatch(/Never say "free trial" or offer one otherwise/)
+          expect(out).toMatch(/call send_purchase_link with offer_id "trial"/)
+          expect(out).toMatch(/Say the trial is on their account, or that a class is booked, only when that tool says so/)
+          expect(out.split('\n').find((l) => l.startsWith('- FREE TRIAL:'))).not.toMatch(/[–—]/)
+        }
+      }
+      expect(named(true, null)).toMatch(/## Buying classes or a membership at Hatch Street/)
+      expect(named(true, null)).toMatch(/Buying from chat is only for Hatch Street; for the other studio, hand off\./)
+      expect(named(false, null)).not.toMatch(/for the other studio, hand off\./)
+      for (const multi of [false, true]) {
+        for (const url of [null, 'https://hatch.example.test/book']) {
+          const read = render('read', multi, url)
+          expect(read).not.toMatch(/send_purchase_link|list_purchase_options|check_my_purchase|Buying classes|free trial first/)
+        }
+      }
+      expect(CUSTOMER_AGENT_BASE_PROMPT).not.toMatch(/send_purchase_link/)
+    })
+
     it('the stable prefix is byte-identical across two turns', () => {
       const o = { businessName: 'B', locationName: 'Hatch', un1tVariant: 'full', un1tStudioName: 'Hatch Street', multiStudio: false, bookings: false, bookingUrl: 'https://hatch.example.test/book', membershipSource: UN1T_SOURCE, knowledge: [{ category: 'faq', title: 'Q', content: 'A' }] }
       const a = buildCachedSystem({ ...o, today: 'Saturday' })
@@ -898,5 +931,38 @@ describe('facts blocks in the uncached suffix only', () => {
   it('with no un1t options the prompt is unchanged', () => {
     expect(buildCustomerSystemPrompt({ ...base, un1tVariant: null, multiStudio: false, factsBlocks: [] }))
       .toBe(buildCustomerSystemPrompt(base))
+  })
+})
+
+// MIAHATCH.6 (Task 25 fix round 1) — the class a trial-used hand-off left on
+// the thread, one line in the uncached suffix of a un1t_full turn.
+describe('the trial-used class line', () => {
+  const base = { businessName: 'B', locationName: 'Hatch Street', today: 'Saturday', knowledge: [{ category: 'faq', title: 'Q', content: 'A' }], un1tVariant: 'full', un1tStudioName: 'Hatch Street' }
+  const line = buildTrialUsedClassLine({ className: 'Strength', classTime: 'Thu 23 Oct, 19:30', eventId: 'un1t:e0000000-0000-4000-8000-000000000001' })
+
+  it('names the class, its time and the ids send_purchase_link needs, on one line with no em or en dash', () => {
+    expect(line).toContain('Strength at Thu 23 Oct, 19:30')
+    expect(line).toContain('event_id un1t:e0000000-0000-4000-8000-000000000001, starts_at Thu 23 Oct, 19:30')
+    expect(line).toMatch(/send_purchase_link/)
+    expect(line).toMatch(/gone or has started, say so and offer another/)
+    expect(line).not.toMatch(/[\n\u2013\u2014]/)
+    expect(buildTrialUsedClassLine({ className: 'Lift \u2014 Heavy\nDay', classTime: 'Thu 23 Oct, 19:30', eventId: 'un1t:x' })).toContain('Lift - Heavy Day at')
+    expect(buildTrialUsedClassLine({ classTime: 'Thu 23 Oct, 19:30', eventId: '' })).toBe('')
+    expect(buildTrialUsedClassLine({ classTime: '', eventId: 'un1t:x' })).toBe('')
+  })
+
+  it('goes in the uncached suffix only: stable text and cache_control unchanged', () => {
+    const without = buildCachedSystem(base)
+    const withLine = buildCachedSystem({ ...base, trialUsedClassLine: line })
+    expect(withLine[0]).toEqual(without[0])
+    expect(withLine[0].text).not.toContain('Strength')
+    expect(withLine[1].cache_control).toBeUndefined()
+    expect(withLine[1].text.endsWith(line)).toBe(true)
+    expect(buildCustomerSystemPromptParts({ ...base, trialUsedClassLine: line }).stable).toBe(buildCustomerSystemPromptParts(base).stable)
+  })
+
+  it('absent or blank: the prompt is byte-identical', () => {
+    expect(buildCachedSystem({ ...base, trialUsedClassLine: '' })).toEqual(buildCachedSystem(base))
+    expect(buildCachedSystem({ ...base, trialUsedClassLine: '   ' })).toEqual(buildCachedSystem(base))
   })
 })

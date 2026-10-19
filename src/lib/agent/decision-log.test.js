@@ -156,3 +156,22 @@ describe('compactDecisionMeta tool_block (MIAHATCH.2)', () => {
     expect(compactDecisionMeta({ toolBlock: 7 })).toBeNull()
   })
 })
+
+describe('compactDecisionMeta intent_id (MIAHATCH.6)', () => {
+  it('records a purchase tool\'s intent id on its own entry, and nothing on the others', () => {
+    const meta = compactDecisionMeta({
+      tools: [
+        { name: 'list_purchase_options', input: {} },
+        { name: 'send_purchase_link', input: { offer_id: 'o-1' }, intentId: '90000000-0000-4000-8000-000000000001' },
+      ],
+    })
+    expect(meta.tools).toEqual([
+      { name: 'list_purchase_options', input: '{}' },
+      { name: 'send_purchase_link', input: '{"offer_id":"o-1"}', intent_id: '90000000-0000-4000-8000-000000000001' },
+    ])
+  })
+  it('ignores a non-string or empty intent id', () => {
+    const meta = compactDecisionMeta({ tools: [{ name: 'send_purchase_link', input: {}, intentId: 7 }, { name: 'x', input: {}, intentId: '' }] })
+    expect(meta.tools.every((t) => !('intent_id' in t))).toBe(true)
+  })
+})

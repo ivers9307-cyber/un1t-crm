@@ -97,6 +97,10 @@ const COMPLIANCE_PATHS = [
     path: '/legal/un1t/hatch-street/terms',
     why: 'UN1TWRITE.17: the un1t.online terms and waiver the class funnel tick links to; a customer must read them before accepting, on every host',
   },
+  {
+    path: '/pay-done/dG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4',
+    why: 'MIAHATCH.6: the return page un1t.online checkout sends a member to after paying; the member has no session and lands on the customer (marketing) host, so a login wall or a rewrite to /welcome strands them',
+  },
 ]
 
 // The embed's post-submit hop. RaceSignupWidget sends a PAID signup to a
@@ -530,6 +534,50 @@ describe('BOOKINGSELF.1 — the booking manage page flow is public on every host
     for (const [label, allowed] of [['un1t-marketing', marketingBrand().allowedPaths], ['DB_BRAND_DEFAULTS', DB_BRAND_DEFAULTS.allowedPaths]]) {
       expect(allowed, `${label} lost '/book/manage/'`).toContain('/book/manage/')
     }
+  })
+})
+
+// ── 7c. MIAHATCH.6 — the pay-done return page is public on every host ──
+//
+// un1t.online's hosted checkout redirects a member to
+// <customer base>/pay-done/<token> (success) or ...?c=1 (cancel). The member
+// has no session, and the customer base is the studio's customer host (the
+// marketing host or a tenant domain), so all FOUR lists must carry it.
+
+describe('MIAHATCH.6 — /pay-done is public on every host', () => {
+  const PAY_DONE = '/pay-done/dG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4'
+  beforeEach(() => {
+    tenantBrandImpl = async (hostname) =>
+      hostname && hostname.split(':')[0] === TENANT_HOST
+        ? { id: `tenant:${TENANT_HOST}`, hostnames: [TENANT_HOST], ...DB_BRAND_DEFAULTS }
+        : null
+  })
+
+  // (the cancel variant is the same path with ?c=1; the matchers read the pathname only)
+  for (const host of [CRM_HOST, MARKETING_HOST, TENANT_HOST]) {
+    it(`${host} admits ${PAY_DONE} anonymously without a rewrite`, async () => {
+      const res = await proxy(makeReq({ host, path: PAY_DONE }))
+      expect(rewrittenTo(res), `${PAY_DONE} fell through to the /welcome fallback on ${host}`).toBe(null)
+      expect(admitted(res), `${PAY_DONE} is not admitted on ${host}`).toBe(true)
+      expect(ssrClient.auth.getUser).not.toHaveBeenCalled()
+    })
+  }
+
+  it('AppShell renders the page with no session', () => {
+    pathnameImpl = PAY_DONE
+    const html = renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)
+    expect(html, '/pay-done is missing from AppShell PUBLIC_PATHS').toContain('page-body')
+  })
+
+  it('the marketing brand and the tenant defaults name /pay-done/ explicitly', () => {
+    for (const [label, allowed] of [['un1t-marketing', marketingBrand().allowedPaths], ['DB_BRAND_DEFAULTS', DB_BRAND_DEFAULTS.allowedPaths]]) {
+      expect(allowed, `${label} lost '/pay-done/'`).toContain('/pay-done/')
+    }
+  })
+
+  it('a same-stem sibling (/pay-donefoo) does not inherit the exemption', async () => {
+    const res = await proxy(makeReq({ host: MARKETING_HOST, path: '/pay-donefoo' }))
+    expect(rewrittenTo(res)).toContain('/welcome')
   })
 })
 

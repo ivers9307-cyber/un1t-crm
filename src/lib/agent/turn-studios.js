@@ -34,11 +34,13 @@ import { answerableStudios } from './member-studios'
 import { selectToolBlock } from './tool-blocks'
 import { BOOKING_SYSTEM_TOOL_NAMES, providerTakesBookings } from './tool-capability'
 import { parseAgentId } from './studio-ids'
-import { buildStudioFactsBlock } from './prompt'
+import { buildStudioFactsBlock, buildTrialUsedClassLine } from './prompt'
+import { classTimeLabel } from './un1t-action-studio'
 import { resolveAgentSettings } from './settings-resolve'
 import { providerFor } from '@/lib/membership/source'
 import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { zoneOfLocation } from '@/lib/location-time'
+import { latestTrialUsedClass } from '@/lib/un1t-online-trial-used'
 import { logWarn } from '@/lib/log'
 
 const LOG_MODULE = 'mia-un1t'
@@ -283,20 +285,36 @@ async function readKnowledge(db, locationId) {
   }
 }
 
+// MIAHATCH.6 — the offer titles and price labels for a un1t.online studio's
+// facts block, in block 3b only (where Mia can sell them). The list module is
+// loaded lazily: it sits next to the write side, which no other turn imports.
+// An unreadable list is a block without offers.
+async function readOffers(db, studio, withOffers) {
+  if (!withOffers || studio?.providerKey !== 'un1t_online') return []
+  try {
+    const { listPurchaseOptions } = await import('./purchase-intents')
+    const { offers } = await listPurchaseOptions(db, studio.locationId)
+    return offers.map((o) => ({ title: o.title, price_label: o.price_label, blurb: o.blurb }))
+  } catch (err) {
+    logWarn(LOG_MODULE, 'studio offers unreadable; facts block without them', { locationId: studio.locationId, errClass: err?.name })
+    return []
+  }
+}
+
 /** One facts block for an answerable studio that is not the thread's. Never throws. */
-async function factsBlockFor(db, studio, studios) {
-  const [settings, address, knowledge] = await Promise.all([
+async function factsBlockFor(db, studio, studios, { withOffers = false } = {}) {
+  const [settings, address, knowledge, offers] = await Promise.all([
     studios.settings(studio.locationId),
     readAddress(db, studio.locationId),
     readKnowledge(db, studio.locationId),
+    readOffers(db, studio, withOffers),
   ])
   return buildStudioFactsBlock({
     studioName: studio.name,
     address,
     bookingUrl: settings?.booking_url || null,
     membershipUrl: settings?.membership_signup_url || null,
-    // Slice 2 (the purchase tools) fills the offers.
-    offers: [],
+    offers,
     knowledge,
   })
 }
@@ -306,18 +324,41 @@ const sourceView = (key) => {
   return { key: p.key, label: p.label }
 }
 
+// MIAHATCH.6 (Task 25) — the class a trial-used hand-off recorded on this
+// thread in the last 23h (un1t-online-trial-used.js), as one prompt line with
+// its time in that studio's zone; '' when there is none, it is another
+// studio's, or the read failed (logged by the reader). Never throws.
+async function trialUsedClassLineFor(db, un1tStudio, studios, { conversationId, nowMs }) {
+  if (!conversationId) return ''
+  try {
+    const found = await latestTrialUsedClass(db, { conversationId, ...(nowMs !== undefined ? { nowMs } : {}) })
+    if (!found || found.locationId !== un1tStudio.locationId) return ''
+    const zone = await studios.zone(found.locationId)
+    return buildTrialUsedClassLine({ className: found.className, classTime: classTimeLabel(found.startsAtMs, zone), eventId: found.eventId })
+  } catch (err) {
+    logWarn(LOG_MODULE, 'trial-used class line failed; the turn goes without it', { locationId: un1tStudio.locationId, errClass: err?.name })
+    return ''
+  }
+}
+
 /**
  * The buildCachedSystem options a plan adds to today's. Call only when the
  * plan is NOT today's block (today's request is built from today's options
  * alone). The un1t variant names the un1t.online studio and carries ITS
  * booking link; the Glofox override renders the Glofox prompt. Both carry a
- * facts block per answerable studio that is not the thread's.
+ * facts block per answerable studio that is not the thread's. A un1t_full
+ * WhatsApp turn also carries the class a trial-used hand-off left on this
+ * conversation (`conversationId`), as one uncached prompt line.
  */
-export async function promptOptionsForPlan(db, plan, studios) {
+export async function promptOptionsForPlan(db, plan, studios, { conversationId = null, channel = null, nowMs } = {}) {
   const factsBlocks = []
-  for (const studio of plan.otherStudios) factsBlocks.push(await factsBlockFor(db, studio, studios))
+  const withOffers = plan.block === 'un1t_full'
+  for (const studio of plan.otherStudios) factsBlocks.push(await factsBlockFor(db, studio, studios, { withOffers }))
   if (plan.block.startsWith('un1t_') && plan.un1tStudio) {
     const settings = await studios.settings(plan.un1tStudio.locationId)
+    const trialUsedClassLine = plan.block === 'un1t_full' && channel === 'whatsapp'
+      ? await trialUsedClassLineFor(db, plan.un1tStudio, studios, { conversationId, nowMs })
+      : ''
     return {
       membershipSource: sourceView('un1t_online'),
       un1tVariant: plan.block === 'un1t_full' ? 'full' : 'read',
@@ -325,6 +366,7 @@ export async function promptOptionsForPlan(db, plan, studios) {
       un1tStudioName: plan.un1tStudio.name,
       bookingUrl: settings?.booking_url || null,
       factsBlocks,
+      ...(trialUsedClassLine ? { trialUsedClassLine } : {}),
     }
   }
   if (plan.block === 'glofox') {

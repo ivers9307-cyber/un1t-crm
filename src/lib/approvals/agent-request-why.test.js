@@ -437,6 +437,42 @@ describe("whyFlagged: Mia's un1t.online cards", () => {
       .toMatch(/^un1t\.online refused the cancellation: "Too late to cancel"\./)
   })
 
+  // MIAHATCH.6 (Task 20) — the free trial's cards.
+  it('trial cards: check failed, not configured, unverified, not free and un1t_trial_failed:<code>, in un1t.online terms', () => {
+    const check = whyFlagged(mia('class_booking', { reason: 'un1t_trial_check_failed' }))
+    noGlofoxNoDash(check)
+    expect(check).toMatch(/could not check whether they can have the free trial/)
+    expect(check).toMatch(/No class is named on this card, so approving books nothing\./)
+    const withClass = whyFlagged(mia('class_booking', { reason: 'un1t_trial_check_failed', event_id: 'e-fictional' }))
+    expect(withClass).toMatch(/Approving books the class on this card only if credits show in un1t\.online; it never gives a trial\./)
+    const failed = whyFlagged(mia('class_booking', { reason: 'un1t_trial_failed:SOME_FICTIONAL_CODE', event_id: 'e-fictional' }))
+    noGlofoxNoDash(failed)
+    expect(failed).toMatch(/^un1t\.online did not give them the free trial \(SOME_FICTIONAL_CODE\)/)
+    expect(failed).toMatch(/never gives a trial/)
+    expect(whyFlagged(mia('class_booking', { reason: 'un1t_trial_failed:' }))).toMatch(/\(unknown\)/)
+    for (const reason of ['trial_not_configured', 'un1t_trial_unverified', 'trial_product_not_free']) {
+      const out = whyFlagged(mia('class_booking', { reason }))
+      noGlofoxNoDash(out)
+      expect(out).not.toMatch(new RegExp(`\\b${reason}\\b`))
+      expect(out).toMatch(/free trial|trial product/)
+      expect(out).toMatch(/approving books nothing/)
+    }
+    expect(whyFlagged(mia('class_booking', { reason: 'trial_not_configured' }))).toMatch(/no trial product is set/)
+  })
+
+  it("Mia's closed trial rows and a granted trial with no credits read in un1t.online terms", () => {
+    for (const reason of ['un1t_trial_granted_no_credits', 'un1t_trial_used', 'un1t_trial_retry', 'un1t_trial_not_sent']) {
+      const out = whyFlagged(mia('class_booking', { reason, event_id: 'e-fictional' }))
+      noGlofoxNoDash(out)
+      expect(out).not.toMatch(new RegExp(`\\b${reason}\\b`))
+      expect(out).not.toMatch(/Mia passed this to the team/)
+    }
+    expect(whyFlagged(mia('class_booking', { reason: 'un1t_trial_granted_no_credits', event_id: 'e-fictional' })))
+      .toMatch(/gave them the free trial in un1t\.online, but its credits did not show[^.]*\. Check their credits in un1t\.online\. Approving books the class on this card only if credits show/)
+    expect(whyFlagged(mia('class_booking', { reason: 'un1t_trial_used', event_id: 'e-fictional' })))
+      .toMatch(/had the free trial before[^.]*\. Approving only records this; it books nothing and never gives a trial\./)
+  })
+
   it('an unknown Mia reason is never a raw code and never Glofox', () => {
     const out = whyFlagged(mia('class_booking', { reason: 'some_new_code' }))
     noGlofoxNoDash(out)

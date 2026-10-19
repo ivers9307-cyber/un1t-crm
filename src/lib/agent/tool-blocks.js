@@ -6,8 +6,9 @@
 // studio only: no booking writes), `un1t_read_dual` (the person is also
 // answerable at a Glofox studio, so the Glofox booking tools stay) and
 // `un1t_full` (MIAHATCH.5, block 3b: the dual block plus request_refund, with
-// book_class and cancel_class_booking working at either studio; WhatsApp,
-// writes_enabled and the studio's Mia switch only). Each is derived ONCE by the
+// book_class and cancel_class_booking working at either studio, then the three
+// purchase tools from MIAHATCH.6; WhatsApp, writes_enabled and the studio's Mia
+// switch only). Each is derived ONCE by the
 // caller, so the prompt-cache prefix never moves between turns.
 //
 // Pure: tool lists come in as arguments, so this file imports no executor and
@@ -16,6 +17,7 @@
 import {
   UN1T_WRITE_TOOL_NAMES, UN1T_PURCHASE_TOOL_NAMES, providerTakesBookings,
 } from './tool-capability'
+import { PURCHASE_TOOLS } from './purchase-tools'
 
 export { UN1T_WRITE_TOOL_NAMES, UN1T_PURCHASE_TOOL_NAMES }
 
@@ -176,10 +178,10 @@ export const REQUEST_REFUND_TOOL = Object.freeze({
  * Block 3b's tools (MIAHATCH.5): the dual read block (every tool of the full
  * list, the reads re-described), with book_class and cancel_class_booking
  * re-described for either studio, then request_refund, then `extraTools`
- * (Task 19's purchase tools). A re-described tool is a new object; the input
- * is never touched. Pure.
+ * (MIAHATCH.6: the three purchase tools, purchase-tools.js, by default). A
+ * re-described tool is a new object; the input is never touched. Pure.
  */
-export function deriveUn1tFullTools(tools, { extraTools = [] } = {}) {
+export function deriveUn1tFullTools(tools, { extraTools = PURCHASE_TOOLS } = {}) {
   const dual = deriveUn1tReadTools(tools, { dual: true }).map((t) => {
     const description = UN1T_FULL_TOOL_DESCRIPTIONS[t.name]
     if (!description) return t

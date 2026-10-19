@@ -98,9 +98,16 @@ describe('agent tool schemas', () => {
   // adopting strict for 3b would mean shedding one more optional parameter.
   // Task 19 adds the purchase tools to 3b and must raise UN1T_FULL_CEILING here
   // with its own note.
+  //
+  // NOTE (MIAHATCH.6, Task 19): raised deliberately by send_purchase_link's
+  // four optional class fields (event_id, class_name, class_time, starts_at:
+  // a purchase without a class is the normal case, so they cannot be
+  // required). list_purchase_options and check_my_purchase take none. 3b is
+  // now 37, five past the Glofox block; strict tool use for 3b would mean
+  // shedding 13 optional parameters against the API's 24, so it stays off.
   it('reports the optional-parameter budget for every block', () => {
     const GLOFOX_CEILING = 32
-    const UN1T_FULL_CEILING = GLOFOX_CEILING + 1
+    const UN1T_FULL_CEILING = GLOFOX_CEILING + 1 + 4
     const blocks = {
       glofox: CACHED_ACCOUNT_TOOLS,
       no_booking: CACHED_NO_BOOKING_TOOLS,
