@@ -36,9 +36,8 @@ import { writeMembershipSnapshot, computeMembershipCounts } from '@/lib/membersh
 import { un1tOnlineReads } from '@/lib/membership/reads/un1t-online'
 import { logError } from '@/lib/log'
 import { fakeDb } from '@/lib/time-off.test-helpers'
-import { ESTATE_2026_10, ESTATE_2026_10_17, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
+import { ESTATE_2026_10, ESTATE_2026_10_17, HATCH_ID, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
 
-const HATCH_ID = '28c78d6b-0000-0000-0000-000000000002'
 const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } })
 const visited = () => writeMembershipSnapshot.mock.calls.map(([, id]) => id)
 const useEstate = (rows, opts) => { h.rows = rows; h.db = fakeDb(locationsResolver(rows, opts)) }

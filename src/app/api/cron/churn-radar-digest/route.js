@@ -63,7 +63,7 @@ export async function GET(request) {
   // W1.M3b — a location with NO membership source has no Glofox-shaped data
   // to read: skipped with a counted skipped_no_source. A failed seam read is a
   // 500 with no heartbeat, never "nobody to skip".
-  const { ids: noSource, error: srcErr } = await locationIdsWithoutCapability(db, 'memberships') // UN1TCAP.1: a configured source can lack memberships (un1t.online)
+  const { ids: noSource, error: srcErr } = await locationIdsWithoutCapability(db, 'memberships') // UN1TCAP.1: a configured source can lack memberships (none; un1t.online provides them since UN1TRADAR.4)
   if (srcErr) {
     console.warn(`[cron][churn-radar-digest] failed to read membership sources: ${srcErr.message}`)
     return NextResponse.json({ success: false, error: srcErr.message }, { status: 500 })

@@ -72,10 +72,10 @@ describe('membership source (W1.M1)', () => {
     expect(await membershipSourceState(dbWith('glofox'), 'loc-err')).toEqual({ source: 'glofox', state: 'unknown', readError: 'GLOFOX_SETTINGS_UNREADABLE' })
   })
 
-  it('un1t_online is registered (invoices (HATCHINV.1) and credits (MIAHATCH.2) on) and resolves as itself', async () => {
+  it('un1t_online is registered (memberships (UN1TRADAR.4), invoices (HATCHINV.1) and credits (MIAHATCH.2) on) and resolves as itself', async () => {
     expect(MEMBERSHIP_SOURCES.un1t_online.key).toBe('un1t_online')
     expect(MEMBERSHIP_SOURCES.un1t_online.label).toBe('un1t.online')
-    expect(MEMBERSHIP_SOURCES.un1t_online.capabilities).toEqual({ memberships: false, bookings: false, credits: true, invoices: true, schedule: false })
+    expect(MEMBERSHIP_SOURCES.un1t_online.capabilities).toEqual({ memberships: true, bookings: false, credits: true, invoices: true, schedule: false })
     expect((await resolveMembershipSource(dbWith('un1t_online'), 'loc-ok')).key).toBe('un1t_online')
   })
 

@@ -132,11 +132,11 @@ export function membershipStatePayload(s, { canManage = false, countsRead = fals
     // the none provider's ("No membership source"), which would mix unknown
     // with a known none.
     label: state === 'unknown' ? null : (s?.label || null),
-    // UN1TREAD.3 — DELIBERATE, OPT-IN OR. `capabilities.memberships` stays
-    // false for un1t.online (its radars, engagement page and Mia read Glofox
-    // tables), but its adapter DOES read member counts, so on a route that
-    // serves those counts (`countsRead`) a configured source that implements
-    // 'membershipCounts' shows its numbers on the phone too. UN1TREAD.7: other
+    // UN1TREAD.3 — DELIBERATE, OPT-IN OR. A configured source whose static
+    // `capabilities.memberships` is false but whose adapter DOES read member
+    // counts shows its numbers on the phone on a route that serves those
+    // counts (`countsRead`). un1t.online was that source until UN1TRADAR.4
+    // made its capability true; the OR is kept for the next such source. UN1TREAD.7: other
     // routes (studio-contacts, whose funnel stages come from Glofox) get the
     // capability alone, or the phone would drop the "does not provide
     // membership data" note for a funnel that cannot move.
