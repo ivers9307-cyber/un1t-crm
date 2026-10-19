@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createHash } from 'node:crypto'
 
-const h = vi.hoisted(() => ({ checkout: null, grantTrial: null, book: null, elig: null, readsFor: null }))
+const h = vi.hoisted(() => ({ checkout: null, grantTrial: null, book: null, elig: null, readsFor: null, send: null, refund: null, settings: null }))
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/un1t-online-write-ops', async () => {
@@ -32,6 +32,22 @@ vi.mock('@/lib/membership/reads', async (importOriginal) => {
   return { ...(await importOriginal()), membershipReadsFor: h.readsFor }
 })
 vi.mock('./approval-notify', () => ({ notifyAgentApprovalRequest: vi.fn(async () => {}) }))
+// MIAHATCH.6 (Task 21) — the in-thread confirmation, D's record-only refund
+// card and the studio's resolved Mia settings (settle runs with no turn).
+vi.mock('./notify', async (importOriginal) => {
+  const { vi: v } = await import('vitest')
+  h.send = v.fn()
+  return { ...(await importOriginal()), sendAgentThreadMessage: h.send }
+})
+vi.mock('@/lib/un1t-online-approval', async (importOriginal) => {
+  const { vi: v } = await import('vitest')
+  h.refund = v.fn()
+  return { ...(await importOriginal()), fileRefundCard: h.refund }
+})
+vi.mock('./settings-resolve', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolveAgentSettings: async () => ({ ok: true, settings: h.settings }),
+}))
 // The refusal table is empty until the MIA TEST run fills it (D's PR 6); a
 // fictional table classifies class_full and no_credits the way it will.
 vi.mock('@/lib/un1t-online-write-judge', async (importOriginal) => {
@@ -45,6 +61,7 @@ import { Un1tWriteRefused, Un1tWriteUnknown, UN1T_WRITE_CODES as C } from '@/lib
 import { Un1tSettingsReadError } from '@/lib/un1t-online-settings'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { fetchLiveEntitlement } from './un1t-member-read'
+import { renderMiaCopy } from './mia-copy'
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { DEFAULT_PURCHASE_LINK_OPEN_TEXT } from './default-copy'
 import { formatClassTime } from './dublin-format'
@@ -52,6 +69,7 @@ import { TOOL_NOT_AT_THIS_STUDIO, refuseToolForTurn } from './tool-capability'
 import {
   formatPriceLabel, listPurchaseOptions, mintPayDoneToken, hashPayDoneToken, sendPurchaseLink,
   executePurchaseTool, PURCHASE_INTENT_TTL_MS, trialAvailable, offersForBooking,
+  paidSinceSnapshot, settlePurchaseIntent, checkMyPurchase, expireStaleIntents,
 } from './purchase-intents'
 import { un1tBookClass } from './un1t-booking'
 import { DEFAULT_TRIAL_USED_TEXT } from './default-copy'
@@ -133,6 +151,9 @@ function fakeDb(tables = {}, { fail = {}, onInsert = null } = {}) {
       eq: (c, v) => { st.filters.push((r) => r[c] === v); return b },
       in: (c, vs) => { st.filters.push((r) => vs.includes(r[c])); return b },
       gte: (c, v) => { st.filters.push((r) => r[c] >= v); return b },
+      gt: (c, v) => { st.filters.push((r) => r[c] > v); return b },
+      lt: (c, v) => { st.filters.push((r) => r[c] < v); return b },
+      lte: (c, v) => { st.filters.push((r) => r[c] <= v); return b },
       contains: (c, obj) => { st.filters.push((r) => Object.entries(obj).every(([k, v]) => r[c]?.[k] === v)); return b },
       order: (c, { ascending = true } = {}) => { st.orders.push([c, ascending]); return b },
       range: (a, z) => { st.limit = z - a + 1; return b },
@@ -178,6 +199,12 @@ beforeEach(() => {
   h.elig.mockReset()
   h.elig.mockResolvedValue({ success: true, data: { eligible: true, reasons: [] } })
   h.readsFor.mockImplementation(async () => ({ state: 'configured', reads: { trialEligibility: h.elig } }))
+  h.send.mockReset()
+  h.send.mockResolvedValue({ sent: true })
+  h.refund.mockReset()
+  h.refund.mockResolvedValue({ approvalId: 'appr-double-1' })
+  h.settings = { booking_mode: 'auto' }
+  fetchLiveEntitlement.mockImplementation(async () => ({ ok: true, balance: 0, unlimited: false, liveSubscriptionIds: [] }))
 })
 
 describe('formatPriceLabel', () => {
@@ -458,15 +485,22 @@ describe('sendPurchaseLink', () => {
     expect(data.mia_purchase_intents[0].status).toBe('link_sent')
   })
 
-  it('free true -> settled at once (status paid, detected_by checkout_free), no link sent', async () => {
+  // MIAHATCH.6 (Task 21, Task 19 carry 1) — free: true is settled at once
+  // through settlePurchaseIntent: no row stays in the non-terminal 'paid'.
+  it('free: true settles at once through settle: no class -> no_class + purchase_paid_no_class_text, no link sent', async () => {
     h.checkout.mockResolvedValueOnce({ checkoutUrl: urlFor('free'), free: true })
     const { db, data } = fakeDb(offers())
     const out = await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id }, hatch(), deps)
     const intent = data.mia_purchase_intents[0]
-    expect(intent).toMatchObject({ status: 'paid', detected_by: 'checkout_free', paid_detected_at: new Date(NOW).toISOString() })
+    expect(intent).toMatchObject({ status: 'no_class', detected_by: 'tool', paid_detected_at: new Date(NOW).toISOString() })
+    expect(intent.outcome).toMatchObject({ free: true, result: 'paid_no_class' })
     expect(intent.checkout_url ?? null).toBeNull()
-    expect(out).toMatchObject({ link_sent: false, paid: true, product: '10 Class Pack' })
+    expect(h.book).not.toHaveBeenCalled()
+    expect(h.send).toHaveBeenCalledTimes(1)
+    expect(h.send.mock.calls[0][1].text).toBe(renderMiaCopy('purchase_paid_no_class_text', h.settings))
+    expect(out).toMatchObject({ link_sent: false, paid: true, outcome: 'paid_no_class', product: '10 Class Pack' })
     expect(out.url).toBeUndefined()
+    expect(data.mia_purchase_intents.some((r) => r.status === 'paid')).toBe(false)
   })
 
   it('checkout URL never in a log call', async () => {
@@ -565,12 +599,13 @@ describe('executePurchaseTool', () => {
     expect(h.checkout.mock.calls[0][1].locationId).toBe(HATCH)
   })
 
-  it('check_my_purchase never says paid: an open link or none, from a read', async () => {
+  it('check_my_purchase: nothing paid yet is neutral (an open intent, or none); never says paid', async () => {
     const open = await executePurchaseTool('check_my_purchase', {}, ctxFor(fakeDb({ mia_purchase_intents: [liveIntent()] }).db))
-    expect(open).toMatchObject({ paid: false, open_link: true, product: '10 Class Pack' })
+    expect(open).toMatchObject({ paid: false, open_intent: true, product: '10 Class Pack' })
+    expect(open.message).toMatch(/not showing yet/)
     expect(JSON.stringify(open)).not.toContain('pay.example.test')
     const none = await executePurchaseTool('check_my_purchase', {}, ctxFor(fakeDb().db))
-    expect(none).toMatchObject({ paid: false, open_link: false })
+    expect(none).toMatchObject({ paid: false, open_intent: false })
     const broken = await executePurchaseTool('check_my_purchase', {}, ctxFor(fakeDb({}, { fail: { mia_purchase_intents: { select: true } } }).db))
     expect(broken).toMatchObject({ paid: false, error: 'purchase_unreadable' })
     expect(await executePurchaseTool('check_my_purchase', {}, ctxFor(fakeDb().db, { verifiedContactId: null }))).toMatchObject({ error: 'not_verified' })
@@ -1007,6 +1042,402 @@ describe('the free trial (Task 20)', () => {
       const logs = allLogText()
       expect(logs).not.toMatch(/conv-1|Fictional Member|@|\+353/)
       for (const fn of [logWarn, logError, logInfo]) for (const call of fn.mock.calls) expect(call[0]).toBe('mia-un1t')
+    })
+  })
+})
+
+// MIAHATCH.6 (Task 21) — settling a paid intent exactly once and booking its
+// class. D's book (h.book), the thread send (h.send) and D's refund card filer
+// (h.refund) are fakes; the live entitlement is the stub above; the mirror is
+// the fake db. Nothing reaches un1t.online.
+describe('settlePurchaseIntent (Task 21)', () => {
+  const now = () => NOW
+  const SNAP0 = Object.freeze({ ok: true, balance: 0, unlimited: false, live_subscription_ids: [] })
+  const EVENT_ROW = { location_id: HATCH, un1t_id: EVENT, title: 'Fictional Hatch HIIT', starts_at: STARTS, status: 'scheduled', synced_at: '2026-10-20T08:55:00Z' }
+  const CLASS = `Fictional Hatch HIIT, ${LABEL}`
+  const paidIntent = (over = {}) => liveIntent({
+    contact_id: HATCH_CONTACT, conversation_id: 'conv-1', channel: 'whatsapp', entitlement_snapshot: SNAP0,
+    event_un1t_id: EVENT, class_name: 'Fictional Hatch HIIT', class_time: LABEL, starts_at: STARTS, outcome: null, ...over,
+  })
+  const settleDb = (over = {}, opts) => fakeDb({
+    un1t_events: [EVENT_ROW], agent_membership_requests: [], un1t_clients: [], un1t_subscriptions: [], un1t_transactions: [],
+    mia_purchase_intents: [paidIntent()], ...over,
+  }, opts)
+  const paidLive = () => fetchLiveEntitlement.mockImplementation(async () => ({ ok: true, balance: 10, unlimited: false, liveSubscriptionIds: [] }))
+  const tx = (over = {}) => ({
+    location_id: HATCH, un1t_id: 'tx-1', un1t_user_id: USER, product_id: PRODUCT.pack10.un1t_id, product_title: '10 Class Pack',
+    type: 'one_time', product_type: 'pack', amount_cents: 12500, currency: 'eur', refunded: false,
+    remote_created_at: new Date(NOW - 600_000).toISOString(), ...over,
+  })
+  const bookResult = (over) => ({ verdict: 'refused', sent: false, id: null, code: null, message: null, alreadyBooked: false, recovered: null, retryable: false, data: null, ledgerId: 'led-book-9', ...over })
+  const ID = '80000000-0000-4000-8000-000000000001'
+  const settle = (db, opts = {}) => settlePurchaseIntent(db, ID, { detectedBy: 'tool', source: 'live', now, ...opts })
+  const cards = (data) => data.agent_membership_requests.filter((r) => r.status === 'pending')
+
+  describe('paidSinceSnapshot', () => {
+    it('balance up, unlimited on, or a new live subscription id; anything else (or an unusable snapshot) is not paid', () => {
+      const now0 = { balance: 0, unlimited: false, liveSubscriptionIds: [] }
+      expect(paidSinceSnapshot(SNAP0, { ...now0, balance: 1 })).toBe(true)
+      expect(paidSinceSnapshot(SNAP0, { ...now0, unlimited: true })).toBe(true)
+      expect(paidSinceSnapshot(SNAP0, { ...now0, liveSubscriptionIds: ['sub-new'] })).toBe(true)
+      expect(paidSinceSnapshot(SNAP0, now0)).toBe(false)
+      expect(paidSinceSnapshot({ ...SNAP0, balance: 3 }, { ...now0, balance: 2 })).toBe(false)
+      expect(paidSinceSnapshot({ ...SNAP0, unlimited: true }, { ...now0, unlimited: true })).toBe(false)
+      expect(paidSinceSnapshot({ ...SNAP0, live_subscription_ids: ['sub-a'] }, { ...now0, liveSubscriptionIds: ['sub-a'] })).toBe(false)
+      expect(paidSinceSnapshot({ ok: false, reason: 'read_failed' }, { ...now0, balance: 10 })).toBe(false)
+      expect(paidSinceSnapshot(null, { ...now0, balance: 10 })).toBe(false)
+      expect(paidSinceSnapshot(SNAP0, null)).toBe(false)
+      expect(paidSinceSnapshot({ ...SNAP0, balance: null }, { ...now0, balance: 4 })).toBe(false)
+    })
+  })
+
+  it('three detectors racing settle once (Promise.all of pay_done, tool, watcher -> exactly one book() and one send)', async () => {
+    paidLive()
+    const { db, data } = settleDb({
+      un1t_clients: [{ location_id: HATCH, un1t_user_id: USER, credit_balance: 10, credit_unlimited: false, synced_at: new Date(NOW - 60_000).toISOString() }],
+    })
+    const outs = await Promise.all([
+      settle(db, { detectedBy: 'pay_done', source: 'live' }),
+      settle(db, { detectedBy: 'tool', source: 'live' }),
+      settle(db, { detectedBy: 'watcher', source: 'mirror' }),
+    ])
+    expect(outs.map((o) => o.outcome).sort()).toEqual(['already_settled', 'already_settled', 'paid_booked'])
+    expect(outs.filter((o) => o.sent)).toHaveLength(1)
+    expect(h.book).toHaveBeenCalledTimes(1)
+    expect(h.send).toHaveBeenCalledTimes(1)
+    expect(h.send.mock.calls[0][1]).toEqual({ channel: 'whatsapp', conversationId: 'conv-1', text: renderMiaCopy('purchase_paid_booked_text', h.settings, { class: CLASS }) })
+    const intent = data.mia_purchase_intents[0]
+    expect(intent).toMatchObject({ status: 'booked', paid_detected_at: new Date(NOW).toISOString(), updated_at: new Date(NOW).toISOString() })
+    expect(['pay_done', 'tool', 'watcher']).toContain(intent.detected_by)
+    // Task 16's execute step: one write-ahead row, its id the originRef.
+    expect(data.agent_membership_requests).toHaveLength(1)
+    const row = data.agent_membership_requests[0]
+    expect(row).toMatchObject({ kind: 'class_booking', status: 'actioned', contact_id: HATCH_CONTACT })
+    expect(row.details).toMatchObject({ provider: 'un1t_online', origin: 'mia', event_id: EVENT, purchase_intent_id: ID })
+    expect(h.book.mock.calls[0][1]).toMatchObject({ locationId: HATCH, un1tUserId: USER, eventId: EVENT, origin: 'mia', originRef: row.id, actor: null })
+    expect(intent.outcome).toMatchObject({ result: 'paid_booked', confirmation: { sent: true } })
+    // A later detector finds it settled and does nothing.
+    expect(await settle(db, { detectedBy: 'watcher', source: 'mirror' })).toEqual({ outcome: 'already_settled', sent: false })
+    expect(h.book).toHaveBeenCalledTimes(1)
+    expect(h.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('not paid: nothing written, booked or sent (a failed live read falls back to the mirror)', async () => {
+    const { db, data } = settleDb()
+    expect(await settle(db)).toEqual({ outcome: 'not_paid', sent: false })
+    fetchLiveEntitlement.mockImplementationOnce(async () => ({ ok: false, reason: 'read_failed' }))
+    expect(await settle(db)).toEqual({ outcome: 'not_paid', sent: false })
+    // A mirror client row from before the link says nothing about a payment since.
+    const stale = settleDb({ un1t_clients: [{ location_id: HATCH, un1t_user_id: USER, credit_balance: 8, credit_unlimited: false, synced_at: new Date(NOW - 7200_000).toISOString() }] })
+    expect(await settle(stale.db, { detectedBy: 'watcher', source: 'mirror' })).toEqual({ outcome: 'not_paid', sent: false })
+    expect(data.mia_purchase_intents[0].status).toBe('link_sent')
+    expect(stale.data.mia_purchase_intents[0].status).toBe('link_sent')
+    expect(h.book).not.toHaveBeenCalled()
+    expect(h.send).not.toHaveBeenCalled()
+  })
+
+  it('a snapshot that cannot decide the balance: a purchase in the mirror since the link is the proof', async () => {
+    for (const snapshot of [{ ok: false, reason: 'read_failed' }, { ok: true, balance: null, unlimited: false, live_subscription_ids: [] }, null]) {
+      const none = settleDb({ mia_purchase_intents: [paidIntent({ entitlement_snapshot: snapshot })] })
+      expect(await settle(none.db)).toEqual({ outcome: 'not_paid', sent: false })
+      const bought = settleDb({ mia_purchase_intents: [paidIntent({ entitlement_snapshot: snapshot })], un1t_transactions: [tx()] })
+      expect(await settle(bought.db)).toMatchObject({ outcome: 'paid_booked', sent: true })
+    }
+    // A snapshot that decides: a purchase alone is not enough while the balance has not moved.
+    const decided = settleDb({ un1t_transactions: [tx()] })
+    expect(await settle(decided.db)).toEqual({ outcome: 'not_paid', sent: false })
+  })
+
+  it('the mirror source makes no un1t.online call: a new live subscription in the mirror is paid', async () => {
+    const { db, data } = settleDb({ un1t_subscriptions: [{ location_id: HATCH, un1t_user_id: USER, un1t_id: 'sub-new', status: 'active' }] })
+    const out = await settle(db, { detectedBy: 'watcher', source: 'mirror' })
+    expect(out).toMatchObject({ outcome: 'paid_booked', sent: true })
+    expect(fetchLiveEntitlement).not.toHaveBeenCalled()
+    expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'booked', detected_by: 'watcher' })
+  })
+
+  describe('class full / passed / booking failed messages', () => {
+    it('class full: purchase_paid_class_gone_text, status book_failed, no card', async () => {
+      paidLive()
+      h.book.mockResolvedValueOnce(bookResult({ code: 'TEST_CLASS_FULL' }))
+      const { db, data } = settleDb()
+      expect(await settle(db)).toMatchObject({ outcome: 'paid_class_gone', sent: true })
+      expect(h.send.mock.calls[0][1].text).toBe(renderMiaCopy('purchase_paid_class_gone_text', h.settings, { class: CLASS }))
+      expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'book_failed' })
+      expect(data.mia_purchase_intents[0].outcome).toMatchObject({ result: 'paid_class_gone', booking: { reason: 'class_full' } })
+      expect(cards(data)).toHaveLength(0)
+    })
+
+    it('class passed or gone from the timetable: class gone, D\'s book never called, no card', async () => {
+      for (const ev of [
+        { ...EVENT_ROW, starts_at: new Date(NOW - 3600_000).toISOString() },
+        { ...EVENT_ROW, status: 'cancelled' },
+      ]) {
+        paidLive()
+        const { db, data } = settleDb({ un1t_events: [ev], mia_purchase_intents: [paidIntent({ starts_at: ev.starts_at })] })
+        expect(await settle(db)).toMatchObject({ outcome: 'paid_class_gone', sent: true })
+        expect(data.mia_purchase_intents[0].status).toBe('book_failed')
+        expect(data.agent_membership_requests).toHaveLength(0)
+      }
+      expect(h.book).not.toHaveBeenCalled()
+      expect(h.send).toHaveBeenCalledTimes(2)
+      expect(h.send.mock.calls[0][1].text).toBe(renderMiaCopy('purchase_paid_class_gone_text', h.settings, { class: CLASS }))
+    })
+
+    it('booking refused, unknown, no credits, retry, writes off or not sent: the write-ahead row is ONE class_booking card reason paid_booking_failed + purchase_paid_booking_failed_text, never an upsell', async () => {
+      const cases = [
+        () => h.book.mockResolvedValueOnce(bookResult({ code: 'SOMETHING_ELSE', message: 'Fictional refusal' })),
+        () => h.book.mockResolvedValueOnce(bookResult({ verdict: 'unknown', sent: true })),
+        () => h.book.mockResolvedValueOnce(bookResult({ code: 'TEST_NO_CREDITS' })),
+        () => h.book.mockResolvedValueOnce(bookResult({ code: C.RATE_LIMITED, retryable: true })),
+        () => h.book.mockResolvedValueOnce(bookResult({ code: C.WRITES_OFF })),
+        () => h.book.mockRejectedValueOnce(Object.assign(new Error('fictional'), { code: 'settings_unreadable' })),
+      ]
+      for (const arrange of cases) {
+        paidLive()
+        arrange()
+        h.send.mockClear()
+        const { db, data } = settleDb({ mia_purchase_offers: [OFFER.pack10] })
+        expect(await settle(db)).toMatchObject({ outcome: 'paid_booking_failed', sent: true })
+        expect(h.send.mock.calls[0][1].text).toBe(renderMiaCopy('purchase_paid_booking_failed_text', h.settings, { class: CLASS }))
+        expect(data.agent_membership_requests).toHaveLength(1)
+        expect(cards(data)).toHaveLength(1)
+        expect(cards(data)[0]).toMatchObject({ kind: 'class_booking' })
+        expect(cards(data)[0].details).toMatchObject({ provider: 'un1t_online', origin: 'mia', reason: 'paid_booking_failed', event_id: EVENT, purchase_intent_id: ID })
+        expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'book_failed' })
+        expect(data.mia_purchase_intents[0].outcome).toMatchObject({ result: 'paid_booking_failed', booking: { request_id: cards(data)[0].id } })
+      }
+      expect(h.checkout).not.toHaveBeenCalled()
+      expect(h.grantTrial).not.toHaveBeenCalled()
+    })
+
+    it('draft booking_mode: the class is one draft card for the team, the member told the team will confirm', async () => {
+      paidLive()
+      h.settings = { booking_mode: 'draft' }
+      const { db, data } = settleDb()
+      expect(await settle(db)).toMatchObject({ outcome: 'paid_booking_failed', sent: true })
+      expect(h.book).not.toHaveBeenCalled()
+      expect(cards(data)).toHaveLength(1)
+      expect(cards(data)[0].details).toMatchObject({ event_id: EVENT, purchase_intent_id: ID, mode: 'draft' })
+      expect(data.mia_purchase_intents[0].status).toBe('book_failed')
+    })
+  })
+
+  it('no class -> purchase_paid_no_class_text, status no_class, nothing booked', async () => {
+    paidLive()
+    const { db, data } = settleDb({ mia_purchase_intents: [paidIntent({ event_un1t_id: null, class_name: null, class_time: null, starts_at: null })] })
+    expect(await settle(db)).toMatchObject({ outcome: 'paid_no_class', sent: true })
+    expect(h.send.mock.calls[0][1].text).toBe(renderMiaCopy('purchase_paid_no_class_text', h.settings))
+    expect(data.mia_purchase_intents[0].status).toBe('no_class')
+    expect(h.book).not.toHaveBeenCalled()
+    expect(data.agent_membership_requests).toHaveLength(0)
+  })
+
+  it('free: true with a class: settled and booked at once (detected_by tool, outcome.free), never left in paid', async () => {
+    h.checkout.mockResolvedValueOnce({ checkoutUrl: urlFor('free'), free: true })
+    const { db, data } = fakeDb({ mia_purchase_offers: [OFFER.pack10], un1t_events: [EVENT_ROW], agent_membership_requests: [], un1t_transactions: [] })
+    const out = await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id, event_id: `un1t:${EVENT}`, starts_at: LABEL }, hatch(), deps)
+    expect(out).toMatchObject({ link_sent: false, paid: true, outcome: 'paid_booked' })
+    expect(out.url).toBeUndefined()
+    const intent = data.mia_purchase_intents[0]
+    expect(intent).toMatchObject({ status: 'booked', detected_by: 'tool' })
+    expect(intent.outcome).toMatchObject({ free: true, result: 'paid_booked' })
+    expect(h.book).toHaveBeenCalledTimes(1)
+    expect(h.send).toHaveBeenCalledTimes(1)
+    expect(data.mia_purchase_intents.some((r) => r.status === 'paid')).toBe(false)
+  })
+
+  describe('payment after expiry (Review Focus 3)', () => {
+    it('payment after expiry books nothing, sends nothing', async () => {
+      // An intent the sweep already expired, then paid: nothing at all.
+      paidLive()
+      const swept = settleDb({ mia_purchase_intents: [paidIntent({ status: 'expired' })], un1t_transactions: [tx()] })
+      expect(await settle(swept.db)).toEqual({ outcome: 'expired', sent: false })
+      expect(swept.data.mia_purchase_intents[0].status).toBe('expired')
+      // Still link_sent but past expires_at, paid after it: expired, nothing filed.
+      const lapsed = paidIntent({ expires_at: new Date(NOW - 3600_000).toISOString(), created_at: new Date(NOW - 7200_000).toISOString() })
+      const late = settleDb({ mia_purchase_intents: [lapsed], un1t_transactions: [tx({ remote_created_at: new Date(NOW - 600_000).toISOString() })] })
+      for (const source of ['live', 'mirror']) {
+        const out = await settle(late.db, { source, detectedBy: source === 'live' ? 'pay_done' : 'watcher' })
+        expect(out).toMatchObject({ outcome: 'expired', sent: false })
+      }
+      expect(late.data.mia_purchase_intents[0].status).toBe('link_sent')
+      expect(h.book).not.toHaveBeenCalled()
+      expect(h.send).not.toHaveBeenCalled()
+      expect(h.refund).not.toHaveBeenCalled()
+      expect(late.data.agent_membership_requests).toHaveLength(0)
+      expect(swept.data.agent_membership_requests).toHaveLength(0)
+    })
+
+    it('a payment made inside the window but seen after expiry is settled (the mirror dates it)', async () => {
+      const lapsed = paidIntent({ expires_at: new Date(NOW - 600_000).toISOString(), created_at: new Date(NOW - 7200_000).toISOString() })
+      const { db, data } = settleDb({ mia_purchase_intents: [lapsed], un1t_transactions: [tx({ remote_created_at: new Date(NOW - 1200_000).toISOString() })] })
+      expect(await settle(db, { detectedBy: 'watcher', source: 'mirror' })).toMatchObject({ outcome: 'paid_booked', sent: true })
+      expect(data.mia_purchase_intents[0].status).toBe('booked')
+      expect(h.book).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('different product counts as paid, product recorded', async () => {
+    paidLive()
+    const { db, data } = settleDb({ un1t_transactions: [tx({ un1t_id: 'tx-other', product_id: PRODUCT.monthly.un1t_id, product_title: 'Monthly Foundation', type: 'sub_initial' })] })
+    expect(await settle(db)).toMatchObject({ outcome: 'paid_booked', sent: true })
+    expect(data.mia_purchase_intents[0].outcome.product).toEqual({
+      transaction_id: 'tx-other', product_id: PRODUCT.monthly.un1t_id, product_title: 'Monthly Foundation', matches_intent: false,
+    })
+    // The same product is recorded as a match.
+    const same = settleDb({ un1t_transactions: [tx()] })
+    await settle(same.db)
+    expect(same.data.mia_purchase_intents[0].outcome.product).toMatchObject({ product_id: PRODUCT.pack10.un1t_id, matches_intent: true })
+  })
+
+  it('double payment files one refund_request card and no un1t call', async () => {
+    paidLive()
+    const { db, data } = settleDb({ un1t_transactions: [tx({ un1t_id: 'tx-1' }), tx({ un1t_id: 'tx-2', remote_created_at: new Date(NOW - 300_000).toISOString() })] })
+    expect(await settle(db)).toMatchObject({ outcome: 'paid_booked', sent: true })
+    expect(h.refund).toHaveBeenCalledTimes(1)
+    expect(h.refund.mock.calls[0][1]).toEqual({
+      locationId: HATCH, contactId: HATCH_CONTACT, un1tUserId: USER, reason: 'double_payment', transactionIds: ['tx-1', 'tx-2'],
+      origin: 'mia', originRef: ID, channel: 'whatsapp', conversationId: 'conv-1',
+    })
+    expect(data.mia_purchase_intents[0].outcome.double_payment).toEqual({ transaction_ids: ['tx-1', 'tx-2'], approval_id: 'appr-double-1' })
+    // No refund or charge call anywhere; the member hears no amount.
+    expect(h.checkout).not.toHaveBeenCalled()
+    expect(h.grantTrial).not.toHaveBeenCalled()
+    expect(h.book).toHaveBeenCalledTimes(1)
+    expect(h.send).toHaveBeenCalledTimes(1)
+    expect(h.send.mock.calls[0][1].text).not.toMatch(/€|125|refund/i)
+    // A losing detector afterwards files nothing more.
+    await settle(db, { detectedBy: 'watcher', source: 'mirror' })
+    expect(h.refund).toHaveBeenCalledTimes(1)
+  })
+
+  it('one payment of the product (or a renewal, or a €0 row) is no double payment', async () => {
+    paidLive()
+    const { db } = settleDb({ un1t_transactions: [tx(), tx({ un1t_id: 'tx-r', type: 'sub_renewal' }), tx({ un1t_id: 'tx-0', amount_cents: 0 })] })
+    await settle(db)
+    expect(h.refund).not.toHaveBeenCalled()
+  })
+
+  it('window_closed recorded: no retry, the booking stands, the card carries it', async () => {
+    paidLive()
+    h.send.mockResolvedValue({ sent: false, reason: 'window_closed' })
+    const { db, data } = settleDb()
+    expect(await settle(db)).toMatchObject({ outcome: 'paid_booked', sent: false })
+    expect(h.send).toHaveBeenCalledTimes(1)
+    expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'booked' })
+    expect(data.mia_purchase_intents[0].outcome.confirmation).toEqual({ sent: false, reason: 'window_closed' })
+    // With a card (the booking failed), the card carries it too.
+    h.book.mockResolvedValueOnce(bookResult({ verdict: 'unknown', sent: true }))
+    const failed = settleDb()
+    expect(await settle(failed.db)).toMatchObject({ outcome: 'paid_booking_failed', sent: false })
+    expect(cards(failed.data)[0].details).toMatchObject({ reason: 'paid_booking_failed', confirmation: { sent: false, reason: 'window_closed' } })
+    expect(failed.data.mia_purchase_intents[0].outcome.confirmation).toEqual({ sent: false, reason: 'window_closed' })
+  })
+
+  it('a send that throws never changes the booking result', async () => {
+    paidLive()
+    h.send.mockRejectedValueOnce(new Error('fictional network'))
+    const { db, data } = settleDb()
+    expect(await settle(db)).toMatchObject({ outcome: 'paid_booked', sent: false })
+    expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'booked' })
+    expect(data.mia_purchase_intents[0].outcome.confirmation).toEqual({ sent: false, reason: 'send_error' })
+  })
+
+  it('an unreadable or missing intent settles nothing', async () => {
+    paidLive()
+    const broken = settleDb({}, { fail: { mia_purchase_intents: { select: true } } })
+    expect(await settle(broken.db)).toEqual({ outcome: 'error', sent: false })
+    expect(await settle(settleDb({ mia_purchase_intents: [] }).db)).toEqual({ outcome: 'not_found', sent: false })
+    const casFails = settleDb({}, { fail: { mia_purchase_intents: { update: true } } })
+    expect(await settle(casFails.db)).toEqual({ outcome: 'error', sent: false })
+    expect(h.book).not.toHaveBeenCalled()
+    expect(h.send).not.toHaveBeenCalled()
+  })
+
+  it('logs: module mia-un1t, codes and ids only: no checkout URL, amount, conversation or token', async () => {
+    paidLive()
+    h.book.mockResolvedValueOnce(bookResult({ verdict: 'unknown', sent: true }))
+    h.send.mockResolvedValue({ sent: false, reason: 'window_closed' })
+    const { db } = settleDb({ un1t_transactions: [tx({ un1t_id: 'tx-1' }), tx({ un1t_id: 'tx-2' })] })
+    await settle(db)
+    await settle(settleDb({}, { fail: { mia_purchase_intents: { select: true } } }).db)
+    const logs = allLogText()
+    expect(logs).not.toMatch(/pay\.example\.test|pay-done|12500|€|conv-1|a{64}/)
+    for (const fn of [logWarn, logError, logInfo]) for (const call of fn.mock.calls) expect(call[0]).toBe('mia-un1t')
+  })
+
+  describe('checkMyPurchase', () => {
+    it('paid: settles on the live intent (tool, live) and answers with what was sent; not paid: not showing yet; none: open_intent false', async () => {
+      paidLive()
+      const { db, data } = settleDb()
+      const out = await checkMyPurchase(ctxFor(db), hatch(), { now })
+      expect(out).toMatchObject({ paid: true, outcome: 'paid_booked', told: true })
+      expect(out.text).toBe(renderMiaCopy('purchase_paid_booked_text', h.settings, { class: CLASS }))
+      expect(out.message).toMatch(/do not repeat/i)
+      expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'booked', detected_by: 'tool' })
+      fetchLiveEntitlement.mockImplementation(async () => ({ ok: true, balance: 0, unlimited: false, liveSubscriptionIds: [] }))
+      const open = await checkMyPurchase(ctxFor(settleDb().db), hatch(), { now })
+      expect(open).toMatchObject({ paid: false, open_intent: true })
+      expect(open.message).toMatch(/not showing yet/)
+      expect(await checkMyPurchase(ctxFor(settleDb({ mia_purchase_intents: [] }).db), hatch(), { now })).toMatchObject({ open_intent: false, paid: false })
+      for (const o of [out, open]) expect(JSON.stringify(o)).not.toMatch(/[—–]/)
+    })
+
+    it('a closed window: the model relays the text itself', async () => {
+      paidLive()
+      h.send.mockResolvedValue({ sent: false, reason: 'window_closed' })
+      const out = await checkMyPurchase(ctxFor(settleDb().db), hatch(), { now })
+      expect(out).toMatchObject({ paid: true, told: false })
+      expect(out.message).toContain(out.text)
+    })
+  })
+
+  describe('expireStaleIntents', () => {
+    it('expiry silent: CAS link_sent -> expired past expires_at, paginated under the cap, counts only', async () => {
+      const past = (i) => liveIntent({ id: `80000000-0000-4000-8000-00000000010${i}`, un1t_user_id: `u-test-${i}`, expires_at: new Date(NOW - 1000 * (i + 1)).toISOString() })
+      const rows = [0, 1, 2, 3, 4].map(past)
+      const fresh = liveIntent({ id: '80000000-0000-4000-8000-000000000200', un1t_user_id: 'u-test-fresh' })
+      const paidOld = liveIntent({ id: '80000000-0000-4000-8000-000000000201', un1t_user_id: 'u-test-paid', status: 'booked', expires_at: new Date(NOW - 5000).toISOString() })
+      const { db, data } = fakeDb({ mia_purchase_intents: [...rows, fresh, paidOld] })
+      expect(await expireStaleIntents(db, { now: NOW, pageSize: 2 })).toEqual({ expired: 5 })
+      for (const r of data.mia_purchase_intents.slice(0, 5)) expect(r).toMatchObject({ status: 'expired', updated_at: new Date(NOW).toISOString() })
+      expect(data.mia_purchase_intents[5].status).toBe('link_sent')
+      expect(data.mia_purchase_intents[6].status).toBe('booked')
+      expect(h.send).not.toHaveBeenCalled()
+      expect(h.book).not.toHaveBeenCalled()
+      expect(await expireStaleIntents(db, { now: NOW })).toEqual({ expired: 0 })
+    })
+
+    it('a failed read or write stops the sweep with what it did so far', async () => {
+      const { db } = fakeDb({ mia_purchase_intents: [liveIntent({ expires_at: new Date(NOW - 1000).toISOString() })] }, { fail: { mia_purchase_intents: { update: true } } })
+      expect(await expireStaleIntents(db, { now: NOW })).toEqual({ expired: 0, error: true })
+    })
+  })
+
+  describe('sendPurchaseLink on a lapsed intent settles first (Task 19 carry 2)', () => {
+    it('paid at 22h50, asks again at 23h05: settled and booked, no second link', async () => {
+      const lapsed = paidIntent({ expires_at: new Date(NOW - 300_000).toISOString(), created_at: new Date(NOW - PURCHASE_INTENT_TTL_MS - 300_000).toISOString() })
+      const { db, data } = settleDb({ mia_purchase_offers: [OFFER.pack10], mia_purchase_intents: [lapsed], un1t_transactions: [tx({ remote_created_at: new Date(NOW - 900_000).toISOString() })] })
+      const out = await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id }, hatch(), deps)
+      expect(out).toMatchObject({ link_sent: false, paid: true, outcome: 'paid_booked' })
+      expect(data.mia_purchase_intents).toHaveLength(1)
+      expect(data.mia_purchase_intents[0].status).toBe('booked')
+      expect(h.checkout).not.toHaveBeenCalled()
+      expect(h.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('a payment shows but cannot be dated inside the window yet: no second link, the intent left for the sweep', async () => {
+      paidLive()
+      const lapsed = paidIntent({ expires_at: new Date(NOW - 300_000).toISOString() })
+      const { db, data } = settleDb({ mia_purchase_offers: [OFFER.pack10], mia_purchase_intents: [lapsed] })
+      const out = await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id }, hatch(), deps)
+      expect(out).toMatchObject({ link_sent: false, payment_pending: true })
+      expect(data.mia_purchase_intents).toHaveLength(1)
+      expect(data.mia_purchase_intents[0].status).toBe('link_sent')
+      expect(h.checkout).not.toHaveBeenCalled()
+      expect(h.send).not.toHaveBeenCalled()
+      expect(JSON.stringify(out)).not.toMatch(/[—–]/)
     })
   })
 })

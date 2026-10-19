@@ -36,6 +36,9 @@
 // book on a write-ahead row, and the card helpers below file and close rows.
 // needs_purchase carries trial_available from offersForBooking; a failed trial
 // eligibility read is one un1t_trial_check_failed card + the handoff text.
+// MIAHATCH.6 (Task 21): a PAID purchase intent's class runs the same execute
+// step with afterPurchase, so a booking that did not go through is ONE staff
+// card (reason paid_booking_failed), never an upsell.
 //
 // What the model may hear: `booked: true` only when D said done (an
 // alreadyBooked or recovered done included) or step 2 found the booking.
@@ -589,12 +592,16 @@ export async function prepareUn1tBooking(ctx, input, studio, settings, nowMs) {
  * @param {object} studio the un1t.online studio
  * @param {object} booking prepareUn1tBooking's `booking`
  * @param {string} requestId the write-ahead class_booking row
- * @param {{ settings: object|null, offersFor?: Function, afterTrial?: boolean }} opts
+ * @param {{ settings: object|null, offersFor?: Function, afterTrial?: boolean, afterPurchase?: boolean }} opts
  *   afterTrial: D just granted the free trial, so a no_credits answer is a
  *   staff card (un1t_trial_granted_no_credits), never the offer list.
+ *   afterPurchase (MIAHATCH.6 Task 21): the member has just paid for this
+ *   class through Mia's link, so anything but booked or class_full is this
+ *   row as ONE staff card, reason 'paid_booking_failed' (never the offer
+ *   list, a try-again or the not-from-chat line): see paidBookingCard.
  * @returns {Promise<object>} book_class's answer
  */
-export async function executeUn1tBook(ctx, studio, booking, requestId, { settings, offersFor = defaultOffersFor, afterTrial = false } = {}) {
+export async function executeUn1tBook(ctx, studio, booking, requestId, { settings, offersFor = defaultOffersFor, afterTrial = false, afterPurchase = false } = {}) {
   const db = ctx.db
   const { eventId, className, classTime, executingContactId, details } = booking
   let result
@@ -611,6 +618,7 @@ export async function executeUn1tBook(ctx, studio, booking, requestId, { setting
   } catch (err) {
     // D rejects only before anything was sent (settings or ledger read).
     logError(LOG_MODULE, 'book was not sent', { locationId: studio.locationId, op: 'book', requestId, status: null, code: err?.code ?? null, errClass: err?.name })
+    if (afterPurchase) return paidBookingCard(ctx, studio, booking, requestId, { paidOutcome: 'un1t_book_not_sent', details: details() })
     await finishRequest(db, studio, requestId, { status: 'failed', details: details({ reason: 'un1t_book_not_sent' }) })
     return handoffAnswer('un1t_book_not_sent', settings)
   }
@@ -618,6 +626,10 @@ export async function executeUn1tBook(ctx, studio, booking, requestId, { setting
   const recorded = (extra = {}) => details({ un1t_write_id: result?.ledgerId ?? null, result: recordedResult(result), ...extra })
   const words = recordedResult(result).message
   const outcome = un1tBookOutcome(result)
+
+  if (afterPurchase && outcome !== 'booked' && outcome !== 'class_full') {
+    return paidBookingCard(ctx, studio, booking, requestId, { paidOutcome: outcome, details: recorded() })
+  }
 
   if (outcome === 'booked') {
     await finishRequest(db, studio, requestId, { status: 'actioned', details: recorded() })
@@ -670,6 +682,26 @@ export async function executeUn1tBook(ctx, studio, booking, requestId, { setting
   await finishRequest(db, studio, requestId, { status: 'pending', details: recorded({ reason: 'un1t_outcome_unknown', summary }) })
   await alertStaff(db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: summaryOf(className, classTime, 'booking not confirmed by un1t.online') })
   return handoffAnswer('un1t_outcome_unknown', settings)
+}
+
+const PAID_CARD_SUMMARY = Object.freeze({
+  card_unknown: 'The member paid for this class through Mia\'s payment link, but un1t.online did not confirm whether the booking went through. Check the class in un1t.online; Approve books it only if it is not there already.',
+  default: 'The member paid for this class through Mia\'s payment link, but the booking did not go through. Check the member in un1t.online, then Approve to book the class.',
+})
+
+/**
+ * MIAHATCH.6 (Task 21) — a paid class that did not book: the write-ahead row
+ * becomes ONE pending class_booking card, reason 'paid_booking_failed' (not
+ * record-only, so Approve runs D's executor and books it), with what D said
+ * kept as `paid_outcome`, and the team is alerted. The member is told by the
+ * caller (purchase_paid_booking_failed_text); the answer is internal.
+ */
+async function paidBookingCard(ctx, studio, booking, requestId, { paidOutcome, details }) {
+  const summary = PAID_CARD_SUMMARY[paidOutcome] || PAID_CARD_SUMMARY.default
+  await finishRequest(ctx.db, studio, requestId, { status: 'pending', details: { ...details, reason: 'paid_booking_failed', paid_outcome: paidOutcome, summary } })
+  await alertStaff(ctx.db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: summaryOf(booking.className, booking.classTime, 'paid, booking not made, Mia handed over') })
+  logWarn(LOG_MODULE, 'paid class not booked; staff card', { locationId: studio.locationId, op: 'paid_book', requestId, status: null, code: paidOutcome })
+  return { booked: false, handoff: true, reason: 'paid_booking_failed', paid_outcome: paidOutcome, request_id: requestId }
 }
 
 /**
