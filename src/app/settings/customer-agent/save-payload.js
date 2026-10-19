@@ -9,6 +9,8 @@
 // The PUT stores only `overridden` plus the studio-only keys; a body WITHOUT
 // `overridden` (an older editor) still gets today's code defaults server-side.
 
+import { HATCH_COPY_FIELDS } from './hatch-copy-fields'
+
 // Echo the whole cancellation-form block back exactly as edited: strings as
 // typed (the contract trims/nulls blanks), numbers as numbers, the toggle as a
 // boolean, reason labels per code. Null when the operator has never touched it.
@@ -79,6 +81,8 @@ export function buildSavePayload(settings, overridden) {
     booking_issue_handoff_text: settings.booking_issue_handoff_text || null,
     no_credits_handoff_text: settings.no_credits_handoff_text || null,
     account_conflict_handoff_text: settings.account_conflict_handoff_text || null,
+    // MIAHATCH.4 — the Hatch booking and payment copy (a blank is null: the code default).
+    ...Object.fromEntries(HATCH_COPY_FIELDS.map(({ key }) => [key, (settings[key] || '').trim() || null])),
     approval_decline_text: settings.approval_decline_text || null,
     welcome_greeting: settings.welcome_greeting || null,
     link_button_text: (settings.link_button_text || '').trim() || null,

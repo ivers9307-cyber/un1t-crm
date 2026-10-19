@@ -9,7 +9,7 @@ import { StudioSettingsSchema, buildStudioOverrideBlob, buildCustomerAgentSettin
 import { mergeAgentSettings } from '@/lib/agent/settings-resolve'
 import { initialOverridden } from '@/lib/agent/settings-overrides'
 import { STILLORGAN_BLOB } from '@/lib/agent/settings-fixtures.test-helpers'
-import { buildSavePayload, numberOrNull, compactObject, bookingLinkErrors, bookingIssuesFromResponse } from './save-payload'
+import { buildSavePayload, buildOrgSavePayload, numberOrNull, compactObject, bookingLinkErrors, bookingIssuesFromResponse } from './save-payload'
 
 // What GET hands the editor (the resolved settings + the two siblings).
 const shownFor = (studio, org = null) => ({
@@ -203,5 +203,36 @@ describe('booking link: editor state -> PUT body -> stored blob', () => {
     const { blob } = saveThroughPut(shownFor(STILLORGAN_BLOB), initialOverridden(STILLORGAN_BLOB))
     expect(blob.booking_url ?? null).toBe(STILLORGAN_BLOB.booking_url ?? null)
     expect(blob.monthly_points_target).toBe(STILLORGAN_BLOB.monthly_points_target)
+  })
+})
+
+describe('MIAHATCH.4 Hatch copy keys through the real save payload', () => {
+  const KEYS = [
+    'chat_booking_unavailable_text', 'purchase_offer_intro_text', 'purchase_link_text', 'trial_used_text', 'refund_request_text',
+    'purchase_link_open_text', 'purchase_paid_booked_text', 'purchase_paid_class_gone_text', 'purchase_paid_booking_failed_text',
+    'purchase_paid_no_class_text', 'pay_done_page_text', 'pay_cancel_page_text',
+  ]
+  const shown = shownFor({ enabled: true })
+
+  it('the payload carries every key, trimmed, blank as null', () => {
+    const p = buildSavePayload({ ...shown, purchase_link_text: '  Pay {product}  ', pay_done_page_text: '   ' }, [])
+    for (const k of KEYS) expect(p, k).toHaveProperty(k)
+    expect(p.purchase_link_text).toBe('Pay {product}')
+    expect(p.pay_done_page_text).toBe(null)
+    expect(p.refund_request_text).toBe(null)
+  })
+
+  it('an overridden value is stored by the PUT and resolves; a studio blank leaves the org value showing', () => {
+    const studioSaved = saveThroughPut({ ...shown, trial_used_text: 'Studio trial text.', refund_request_text: '' }, ['trial_used_text', 'refund_request_text']).blob
+    expect(studioSaved.trial_used_text).toBe('Studio trial text.')
+    expect(studioSaved).not.toHaveProperty('refund_request_text')
+    const resolved = mergeAgentSettings({ org: { refund_request_text: 'Org refund.' }, studio: studioSaved }).settings
+    expect(resolved.refund_request_text).toBe('Org refund.')
+    expect(resolved.trial_used_text).toBe('Studio trial text.')
+  })
+
+  it('buildOrgSavePayload carries them too', () => {
+    const { settings } = buildOrgSavePayload({ ...shown, purchase_paid_booked_text: 'Booked {class}.' }, ['purchase_paid_booked_text'], 'org1')
+    expect(settings.purchase_paid_booked_text).toBe('Booked {class}.')
   })
 })

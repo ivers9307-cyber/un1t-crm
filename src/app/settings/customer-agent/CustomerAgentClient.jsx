@@ -16,6 +16,7 @@ import {
   isOverridden, INHERITABLE_SCALAR_KEYS, INHERITABLE_OBJECT_KEYS, INHERITABLE_OBJECT_FIELDS, isHalfQuietWindow,
 } from '@/lib/agent/settings-overrides'
 import { buildSavePayload, bookingLinkErrors, bookingIssuesFromResponse, BOOKING_CTA_LABEL_MAX } from './save-payload'
+import { HATCH_COPY_FIELDS, HATCH_COPY_GROUP_TITLE } from './hatch-copy-fields'
 // MIAORG.1 Task 4 — the organisation defaults, for masters and org admins.
 import OrgDefaultsClient from './OrgDefaultsClient'
 
@@ -86,6 +87,9 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   // no bookings (GET `bookings`): the Booking link fields show there. An
   // older GET without the key shows them too (never hides a saved link).
   const [bookings, setBookings] = useState(null)
+  // MIAHATCH.4 — the studio's membership source key (GET): the Hatch payments
+  // and booking copy group shows only for 'un1t_online'.
+  const [membershipSourceKey, setMembershipSourceKey] = useState(null)
   // The PUT's 400 issues on the booking fields, shown beside them.
   const [serverFieldErrors, setServerFieldErrors] = useState({})
 
@@ -97,6 +101,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
     setOrg(sRes.org || null)
     setInherited(sRes.inherited || null)
     setBookings(typeof sRes.bookings === 'boolean' ? sRes.bookings : null)
+    setMembershipSourceKey(typeof sRes.membership_source_key === 'string' ? sRes.membership_source_key : null)
   }
 
   async function load(isCancelled = () => false) {
@@ -116,6 +121,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
         setBrand(sRes.brand || { companyName: '', shortName: '' })
         setOverridden(initialOverridden(sRes.studio)); setOrg(sRes.org || null); setInherited(sRes.inherited || null)
         setBookings(typeof sRes.bookings === 'boolean' ? sRes.bookings : null)
+        setMembershipSourceKey(typeof sRes.membership_source_key === 'string' ? sRes.membership_source_key : null)
         setLoadFailed(false)
       } else {
         setSettings(null); setLoadFailed(true)
@@ -797,6 +803,28 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
             placeholder="Open link" />
           <p className="text-xs text-un1t-muted mt-1">When the agent sends a link, it appears as a tappable button with this label. Leave blank to use the default shown.</p>
         </div>
+
+        {/* MIAHATCH.4 (spec 6.6) — what Mia and the pay pages say about booking
+            and buying at a un1t.online studio (Hatch Street). Shown only there:
+            a Glofox studio never says any of it. Placeholders are the code
+            defaults (default-copy.js); blank = the default. */}
+        {membershipSourceKey === 'un1t_online' && (
+          <div className="space-y-4 border-t border-un1t-border pt-4" data-testid="hatch-copy-group">
+            <h3 className="text-sm font-semibold text-un1t-text">{HATCH_COPY_GROUP_TITLE}</h3>
+            <p className="text-xs text-un1t-muted">
+              Messages customers get from Mia, and the two pages they land on after paying, at this studio. Leave a field blank to use the default shown.
+            </p>
+            {HATCH_COPY_FIELDS.map(({ key, label, placeholder, help }) => (
+              <div key={key}>
+                <FieldLabel tag={sourceTag([key])}>{label}</FieldLabel>
+                <input className={inputCls} maxLength={500} value={settings[key] || ''}
+                  onChange={e => setField(key, e.target.value)}
+                  placeholder={placeholder} />
+                <p className="text-xs text-un1t-muted mt-1">{help}</p>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div>
           <FieldLabel tag={sourceTag(['quiet_hours'])}>Quiet hours (optional)</FieldLabel>

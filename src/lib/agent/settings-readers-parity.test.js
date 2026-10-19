@@ -18,6 +18,7 @@ import { resolveHandoffSlaMinutes, resolveAutoResolveHours, shouldSweepLocation 
 import { shouldSendWelcome } from './welcome-greeting'
 import { proactiveWindowOpen, FOLLOWUP_DEFAULTS, CHECKIN_DEFAULTS } from './followups'
 import { bookingMode } from './booking-tools'
+import { MIA_HATCH_COPY } from './mia-copy'
 import { agentSignal } from '@/lib/integrations-hub'
 import { resolveCancellationFormCopy } from '@/lib/cancellation-form/copy'
 
@@ -58,7 +59,7 @@ const READERS = {
     'holding_message', 'welcome_greeting', 'link_button_text', 'booking_confirmation_text',
     'cancellation_confirmation_text', 'approval_decline_text', 'event_move_confirmation_text',
     'event_move_failed_text', 'booking_issue_handoff_text', 'no_credits_handoff_text',
-    'account_conflict_handoff_text', 'chat_booking_unavailable_text', 'tone', 'extra_rules', 'membership_signup_url',
+    'account_conflict_handoff_text', ...Object.keys(MIA_HATCH_COPY), 'tone', 'extra_rules', 'membership_signup_url',
   ].map((k) => String(s?.[k] || '').trim() || null),
   cooldown: (s) => s?.handoff_cooldown_hours ?? 12,
 }

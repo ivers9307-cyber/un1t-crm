@@ -11,6 +11,7 @@
 // paths: the override paths the field sets (one, or the quiet-hours pair).
 
 import { DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT } from '@/lib/agent/default-copy'
+import { HATCH_COPY_FIELDS, HATCH_COPY_GROUP_TITLE } from './hatch-copy-fields'
 
 export const ORG_FIELD_GROUPS = [
   {
@@ -56,7 +57,7 @@ export const ORG_FIELD_GROUPS = [
         placeholder: "You're out of class credits at the moment so I can't book that one straight away. I'll escalate this to a team member to help you out now." },
       { id: 'account_conflict_handoff_text', paths: ['account_conflict_handoff_text'], kind: 'text', maxLength: 500, label: 'Duplicate-account escalation message',
         placeholder: "You have more than one account with us so I want to get this booking exactly right. I'll get a team member to sort it for you now." },
-      // MIAHATCH.2 — the studio editor gains this field with the Hatch copy group (a later task).
+      // MIAHATCH.2 — the studio editor shows this field in its Hatch payments and booking group (MIAHATCH.4).
       { id: 'chat_booking_unavailable_text', paths: ['chat_booking_unavailable_text'], kind: 'text', maxLength: 500, label: 'Chat booking not available message (un1t.online studios)',
         placeholder: DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, help: '{studio} becomes the studio name and {link} its booking link. With no booking link, a text that needs {link} is not used: the customer is told the team will help them book.' },
       { id: 'approval_decline_text', paths: ['approval_decline_text'], kind: 'text', maxLength: 500, label: 'Request declined message',
@@ -65,6 +66,15 @@ export const ORG_FIELD_GROUPS = [
         help: 'Blank = the default, built from the agent name and each studio\'s brand.' },
       { id: 'link_button_text', paths: ['link_button_text'], kind: 'text', maxLength: 25, label: 'Link button label', placeholder: 'Open link' },
     ],
+  },
+  // MIAHATCH.4 — the copy a un1t.online studio's customers see about buying and
+  // paying (chat_booking_unavailable_text stays under Messages above).
+  {
+    id: 'hatch',
+    title: HATCH_COPY_GROUP_TITLE,
+    fields: HATCH_COPY_FIELDS.filter((f) => f.key !== 'chat_booking_unavailable_text').map((f) => ({
+      id: f.key, paths: [f.key], kind: 'text', maxLength: 500, label: f.label, placeholder: f.placeholder, help: f.help,
+    })),
   },
   {
     id: 'followups',

@@ -542,4 +542,16 @@ describe('MIAORG.1 final review — booking link + bookings flag', () => {
     }
   })
 
+  it('GET: membership_source_key is the studio\'s locations.membership_source, and no settings blob rides along', async () => {
+    const manager = { id: 'u', role: 'manager', activeLocation: { id: 'loc1' }, locations: [{ id: 'loc1' }] }
+    getCurrentUser.mockResolvedValue(manager)
+    for (const source of ['glofox', 'un1t_online', 'none']) {
+      const db = fakeLocationsDb({ reads: { data: { name: 'S', settings: { un1t_online: { token: 'secret' } }, organization_id: null, membership_source: source }, error: null } })
+      createServerClient.mockReturnValue(db)
+      const body = await (await GET()).json()
+      expect(body.membership_source_key, source).toBe(source)
+      expect(JSON.stringify(body)).not.toContain('secret')
+    }
+  })
+
 })
