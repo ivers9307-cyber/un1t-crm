@@ -37,7 +37,7 @@ const SLICE2_DEFAULTS = {
   purchase_link_text: "Here's your secure payment link for {product}. Once it goes through I'll book you into {class}.",
   trial_used_text: "It looks like you've had your free trial with us before, so here are the ways to keep training:",
   refund_request_text: "I've passed that to the team, they'll look at it and get back to you.",
-  purchase_link_open_text: "You already have a payment link waiting for {product}. Use that one, or I can ask the team if you'd like something different.",
+  purchase_link_open_text: "You already have a payment link waiting for {product}. I've asked the team to help you switch, they'll be in touch shortly.",
   purchase_paid_booked_text: "Payment received, thank you! You're booked into {class}. See you there.",
   purchase_paid_class_gone_text: "Payment received, thank you! {class} is no longer available, so I haven't booked it. Reply here and I'll find you another class.",
   purchase_paid_booking_failed_text: "Payment received, thank you! I couldn't book {class} just now, so the team will sort it and confirm with you shortly.",

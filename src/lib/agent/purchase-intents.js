@@ -14,7 +14,8 @@
 // live row is read again and the same rules apply. Same product: its stored
 // link is resent (or, with none stored yet, D's createCheckoutLink again with
 // the SAME idempotency key, the intent id).
-// Different product: purchase_link_open_text, no second link. Never a tool
+// Different product: purchase_link_open_text, no second link, and the turn
+// hands the thread to the team (open_link_handoff, MIAFIX.1). Never a tool
 // error, never a second live link. A same-product request that names a
 // different class moves the live intent to that class first (status-guarded on
 // link_sent), and the link goes out with the new class's wording: the hosted
@@ -96,7 +97,7 @@ export const PURCHASE_INTENT_TTL_MS = 23 * 60 * 60_000
 export const TRIAL_OFFER_ID = 'trial'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const PRODUCT_COLS = 'id, un1t_id, title, status, price_cents, currency, billing_interval, billing_interval_count, credits_per_period'
+const PRODUCT_COLS = 'id, un1t_id, title, type, status, price_cents, currency, billing_interval, billing_interval_count, credits_per_period'
 const INTENT_COLS = 'id, un1t_product_id, product_title, event_un1t_id, class_name, class_time, checkout_url, expires_at'
 
 // ── pure ────────────────────────────────────────────────────────────
@@ -109,9 +110,18 @@ export function formatPriceLabel({ priceCents, interval = null, intervalCount = 
   return un1tPriceLabel({ price_cents: priceCents, currency, billing_interval: interval, billing_interval_count: intervalCount })
 }
 
-const priceLabelOf = (p) => formatPriceLabel({
-  priceCents: p?.price_cents, interval: p?.billing_interval, intervalCount: p?.billing_interval_count, currency: p?.currency || 'EUR',
-})
+// MIAFIX.1 — un1t_products keeps a billing_interval ('month') even on a
+// one_time pack, so the interval wording ("a month", "every 3 months") is for
+// type 'recurring' only; anything else is quoted as its price alone.
+const priceLabelOf = (p) => {
+  const recurring = p?.type === 'recurring'
+  return formatPriceLabel({
+    priceCents: p?.price_cents,
+    interval: recurring ? p?.billing_interval : null,
+    intervalCount: recurring ? p?.billing_interval_count : null,
+    currency: p?.currency || 'EUR',
+  })
+}
 const classLine = (name, time) => [name, time].map((v) => String(v || '').trim()).filter(Boolean).join(', ')
 
 // ── answers the model reads ─────────────────────────────────────────
@@ -138,7 +148,10 @@ const NOT_LINKED = Object.freeze({
   message: 'No account was found for this person at this studio, so no link was made. Offer to hand off to the team.',
 })
 const LINK_MESSAGE = 'Send the customer the wording, then end your message with the url on its own, with nothing after it and no tap choices, so it shows as a button. Never change the link. Never say they have paid: you will hear when the payment shows.'
-const OPEN_MESSAGE = 'They already have a payment link open, so no new link was made. Relay the text. If they want something different, offer to hand off to the team.'
+// MIAFIX.1 (6) — a link open for a DIFFERENT product: the runner hands the
+// thread to the team in this turn (open_link_handoff) and sends `text` as the
+// customer's message, discarding the model's own reply.
+const OPEN_MESSAGE = 'They already have a payment link open for another product, so no new link was made and the conversation is being handed to the team now. The customer is sent the text. Write nothing more.'
 
 function handoffAnswer(settings) {
   const text = String(settings?.booking_issue_handoff_text || '').trim() || DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT
@@ -387,7 +400,8 @@ const isRetryable = (err) => err instanceof Un1tWriteRefused && (UN1T_RETRY_CODE
 
 /**
  * D's createCheckoutLink for an intent, and what it means:
- * { url } | { free: true } | { failed: err }.
+ * { url, ledgerId } | { free: true, ledgerId } | { failed: err }. ledgerId is
+ * the un1t_write_events row (null when D did not name one).
  */
 async function checkout(db, studio, intentId, productId, urls) {
   try {
@@ -401,8 +415,9 @@ async function checkout(db, studio, intentId, productId, urls) {
       origin: 'mia',
       originRef: intentId,
     })
-    if (out?.free === true) return { free: true }
-    if (typeof out?.checkoutUrl === 'string' && out.checkoutUrl) return { url: out.checkoutUrl }
+    const ledgerId = typeof out?.ledgerId === 'string' && out.ledgerId ? out.ledgerId : null
+    if (out?.free === true) return { free: true, ledgerId }
+    if (typeof out?.checkoutUrl === 'string' && out.checkoutUrl) return { url: out.checkoutUrl, ledgerId }
     return { failed: Object.assign(new Error('checkout answered without a link'), { code: 'no_checkout_url' }) }
   } catch (err) {
     return { failed: err }
@@ -416,6 +431,18 @@ function logCheckoutFailure(studio, intentId, err, op) {
     locationId: studio.locationId, op, intentId, status: null, code: failureCode(err), errClass: err?.name,
     unknown: err instanceof Un1tWriteUnknown,
   })
+}
+
+// MIAFIX.1 (5) — the checkout's ledger row on the intent: un1t_write_id.
+const ledgerPatch = (out) => (out?.ledgerId ? { un1t_write_id: out.ledgerId } : {})
+
+/**
+ * free: true. The ledger id is written (link_sent-guarded, no status change)
+ * before settlePurchaseIntent moves the intent on; a failed write is logged by
+ * writeLiveIntent and never stops the settle.
+ */
+async function storeFreeLedger(db, studio, intentId, out, nowMs) {
+  if (out?.ledgerId) await writeLiveIntent(db, studio, intentId, ledgerPatch(out), 'purchase_store_ledger', nowMs)
 }
 
 /** A checkout that did not give a link: the intent is refused (it frees the member), the team takes over. */
@@ -461,6 +488,7 @@ function openAnswer(intent, settings) {
   return {
     link_sent: false,
     link_open: true,
+    open_link_handoff: true,
     product,
     text: renderMiaCopy('purchase_link_open_text', settings, { product }),
     intent_id: intent.id,
@@ -556,8 +584,11 @@ async function answerLiveIntent(ctx, studio, intent, product, settings, nowMs, b
     // Never refused: its first link may be with the member.
     return handoffAnswer(settings)
   }
-  if (out.free) return settleFree(db, intent.id, title, nowMs)
-  const stored = await writeLiveIntent(db, studio, intent.id, { checkout_url: out.url, success_token_hash: hash }, 'purchase_store_link', nowMs)
+  if (out.free) {
+    await storeFreeLedger(db, studio, intent.id, out, nowMs)
+    return settleFree(db, intent.id, title, nowMs)
+  }
+  const stored = await writeLiveIntent(db, studio, intent.id, { checkout_url: out.url, success_token_hash: hash, ...ledgerPatch(out) }, 'purchase_store_link', nowMs)
   // Still sent: the member can pay, and detection reads the entitlement, not the URL.
   if (!stored) logError(LOG_MODULE, 'payment link not stored on the intent', { locationId: studio.locationId, op: 'purchase_store_link', intentId: intent.id, status: null })
   return answer(out.url)
@@ -935,9 +966,12 @@ export async function sendPurchaseLink(ctx, input, studio, deps = {}) {
     logCheckoutFailure(studio, intentId, out.failed, 'purchase_new')
     return refuseIntent(db, studio, intentId, out.failed, settings, nowMs)
   }
-  if (out.free) return settleFree(db, intentId, title, nowMs)
+  if (out.free) {
+    await storeFreeLedger(db, studio, intentId, out, nowMs)
+    return settleFree(db, intentId, title, nowMs)
+  }
 
-  const stored = await writeLiveIntent(db, studio, intentId, { checkout_url: out.url }, 'purchase_store_link', nowMs)
+  const stored = await writeLiveIntent(db, studio, intentId, { checkout_url: out.url, ...ledgerPatch(out) }, 'purchase_store_link', nowMs)
   // Still sent: the member can pay, and detection reads the entitlement, not the URL.
   if (!stored) logError(LOG_MODULE, 'payment link not stored on the intent', { locationId: studio.locationId, op: 'purchase_store_link', intentId, status: null })
   return linkAnswer(out.url, { product: title, priceLabel: priceLabelOf(product), className: klass.class_name, classTime: klass.class_time, intentId }, settings)
@@ -992,12 +1026,37 @@ export async function executePurchaseTool(toolName, input, ctx) {
     }
   }
   const listLine = 'Give each title and price_label exactly as listed. With 3 or fewer offers, offer them as tap choices; with more, list them. Never offer anything that is not listed.'
+  const message = trial.available
+    ? `${TRIAL_FIRST_MESSAGE} Then introduce the paid offers with the wording. ${listLine}`
+    : `Introduce them with the wording. ${listLine}`
+  // MIAFIX.1 (3) — the member's open link, so Mia never offers a second one.
+  const openLink = ctx.verifiedContactId && studio.un1tUserId ? await openLinkOf(ctx.db, studio, Date.now()) : null
   return {
     offers: listed.offers,
     trial_available: trial.available,
     wording: renderMiaCopy('purchase_offer_intro_text', settings, { studio: studio.name }),
-    message: trial.available
-      ? `${TRIAL_FIRST_MESSAGE} Then introduce the paid offers with the wording. ${listLine}`
-      : `Introduce them with the wording. ${listLine}`,
+    ...(openLink ? { open_link: openLink } : {}),
+    message: openLink ? `${openLinkMessage(openLink.product)} ${message}` : message,
   }
 }
+
+/**
+ * MIAFIX.1 (3) — the member's live payment link at the studio, for
+ * list_purchase_options: { product, link_waiting: true }, or null with none,
+ * one past its expiry (send_purchase_link settles and replaces it), or a read
+ * that failed (logged by readMemberLiveIntent; send_purchase_link reads it
+ * again and still refuses a second link). Never the URL.
+ */
+async function openLinkOf(db, studio, nowMs) {
+  const live = await readLiveIntent(db, studio)
+  if (live.error || !live.intent) return null
+  const expiresMs = Date.parse(live.intent.expires_at || '')
+  if (Number.isFinite(expiresMs) && expiresMs <= nowMs) return null
+  return { product: String(live.intent.product_title || '').trim() || 'their purchase', link_waiting: true }
+}
+
+// Review fix (MIAFIX.1) — a customer asking for a DIFFERENT product is sent to
+// send_purchase_link in this same turn (its open_link_handoff is the
+// deterministic handoff); only a "what can I buy" mentions the waiting link.
+const openLinkMessage = (product) =>
+  `They already have a payment link waiting for ${product}. If the customer is asking for a different product than ${product}, call send_purchase_link with that product's offer_id now, in this turn, with no restating and no yes needed: no new link is made and it hands them to the team. Only when they are just asking what is available, mention their ${product} link is waiting and never offer to send a link for a different product. Never call send_purchase_link for a product they did not ask for.`

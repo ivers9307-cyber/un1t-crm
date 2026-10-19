@@ -110,7 +110,7 @@ import {
 } from './auto-reply'
 import { resolveMemberStudios } from './member-studios'
 import { executeBookingTool } from './booking-tools'
-import { promptOptionsForPlan, planKey, executorCtxFor } from './turn-studios'
+import { promptOptionsForPlan, planKey, executorCtxFor, readOrgStudioLinks } from './turn-studios'
 import { book as un1tBook, cancel as un1tCancel, createCheckoutLink } from '@/lib/un1t-online-write-ops'
 import { fileRefundCard } from '@/lib/un1t-online-approval'
 import { openUn1tMemberReader, fetchLiveUn1tBookings } from './un1t-member-read'
@@ -118,7 +118,8 @@ import { fakeUn1tReader } from './un1t-fakes.test-helpers'
 import { formatClassTime } from './dublin-format'
 import { notifyAgentApprovalRequest } from './approval-notify'
 import { DEFAULT_NO_CREDITS_HANDOFF_TEXT } from './core'
-import { DEFAULT_REFUND_REQUEST_TEXT } from './default-copy'
+import { DEFAULT_REFUND_REQUEST_TEXT, DEFAULT_PURCHASE_LINK_OPEN_TEXT } from './default-copy'
+import { sendPushToRolesAtLocation } from '@/lib/push'
 import { compactDecisionMeta } from './decision-log'
 
 // Fictional ids.
@@ -191,10 +192,12 @@ const DEFAULT_TABLES = () => ({
 
 // A recording fake db. Rows are filtered by every .eq/.in the caller applies,
 // so a read at the wrong studio comes back empty (and is recorded).
-function turnDb({ threadLocationId: _threadLocationId, conv, freshVerified = null, history = 'what is my membership?', tables = {}, failLocationIds = [], failReads = [], ...locOpts }) {
-  const data = { ...DEFAULT_TABLES(), ...tables, locations: locationRows(locOpts) }
+function turnDb({ threadLocationId: _threadLocationId, conv, freshVerified = null, history = 'what is my membership?', tables = {}, failLocationIds = [], failReads = [], extraLocations = [], keepLocations = null, ...locOpts }) {
+  const rows = [...locationRows(locOpts), ...extraLocations]
+  const data = { ...DEFAULT_TABLES(), ...tables, locations: keepLocations ? rows.filter((r) => keepLocations.includes(r.id)) : rows }
   const reads = []
   const inserts = []
+  const updates = []
   const mk = (table) => {
     const state = { op: 'select', cols: null, selectOpts: null, filters: [], single: false, sawGt: false, row: null }
     const pick = (rows) => rows.filter((r) => state.filters.every(([kind, col, val]) => {
@@ -206,7 +209,10 @@ function turnDb({ threadLocationId: _threadLocationId, conv, freshVerified = nul
         inserts.push({ table, row: state.row })
         return { data: state.single ? { id: 'req-1' } : [{ id: 'req-1' }], error: null }
       }
-      if (state.op === 'update') return { data: [{ id: 'conv-1' }], error: null }
+      if (state.op === 'update') {
+        updates.push({ table, patch: state.patch })
+        return { data: [{ id: 'conv-1' }], error: null }
+      }
       reads.push({ table, cols: state.cols, filters: state.filters })
       if (failReads.includes(table)) return { data: null, error: { message: 'fictional read failure', code: 'XX000' } }
       if (table === 'locations' && state.filters.some(([kind, col, val]) => kind === 'eq' && col === 'id' && failLocationIds.includes(val))) {
@@ -227,7 +233,7 @@ function turnDb({ threadLocationId: _threadLocationId, conv, freshVerified = nul
     }
     const builder = {
       select: (cols, opts) => { state.cols = cols; if (opts) state.selectOpts = opts; return builder },
-      update: () => { state.op = 'update'; return builder },
+      update: (patch) => { state.op = 'update'; state.patch = patch; return builder },
       insert: (row) => { state.op = 'insert'; state.row = row; return builder },
       eq: (col, val) => { state.filters.push(['eq', col, val]); return builder },
       in: (col, vals) => { state.filters.push(['in', col, vals]); return builder },
@@ -240,7 +246,7 @@ function turnDb({ threadLocationId: _threadLocationId, conv, freshVerified = nul
     }
     return builder
   }
-  return { db: { from: mk }, reads, inserts }
+  return { db: { from: mk }, reads, inserts, updates }
 }
 
 const whatsappAdapter = () => ({
@@ -898,6 +904,77 @@ describe('un1t_full at the turn (MIAHATCH.5)', () => {
     expect(glofoxCalls()).toBe(0)
   })
 
+  // MIAFIX.1 (6) — a link already open for ANOTHER product: the turn hands the
+  // thread to the team now (the [[HANDOFF]] path's park + push), the customer
+  // reads the open text, and the model's own words are discarded. The same
+  // product again is a plain resend, no handoff.
+  const OPEN_OTHER = () => ({
+    id: '80000000-0000-4000-8000-000000000001', location_id: HATCH, un1t_user_id: 'u-1', un1t_product_id: 'prod-monthly',
+    product_title: 'Fictional Monthly', status: 'link_sent', checkout_url: 'https://pay.example.test/s/open',
+    expires_at: new Date(Date.now() + 3600_000).toISOString(),
+  })
+
+  it('MIAFIX.1: send_purchase_link for a different product while a link is open hands off in the same turn', async () => {
+    resolveMemberStudios.mockResolvedValue(resolution(hatchStudio()))
+    const { fetchFn, bodies } = modelTurns([
+      toolTurn('send_purchase_link', { offer_id: OFFER_ID }),
+      textTurn('MODEL COMPOSED TEXT that must never reach the customer'),
+    ])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, updates } = turnDb({
+      threadLocationId: HATCH, conv: verifiedThread(HATCH_CONTACT), hatchSettings: SWITCH_ON, hatchUn1tOnline: WRITES_ON,
+      tables: { ...SELLING(), mia_purchase_intents: [OPEN_OTHER()] },
+    })
+    const adapter = whatsappAdapter()
+
+    const result = await runChannelAgent(db, adapter, turnCtx(HATCH))
+
+    expect(toolResultOf(bodies[1])).toMatchObject({ link_sent: false, link_open: true, open_link_handoff: true, product: 'Fictional Monthly' })
+    expect(createCheckoutLink).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ handled: true, action: 'handoff', reason: 'purchase_link_open' })
+    expect(adapter.send).toHaveBeenCalledTimes(1)
+    expect(adapter.send.mock.calls[0][1]).toBe(DEFAULT_PURCHASE_LINK_OPEN_TEXT.replace('{product}', 'Fictional Monthly'))
+    const parked = updates.find((u) => u.table === 'whatsapp_conversations' && u.patch?.agent_handed_off_at)
+    expect(parked.patch).toMatchObject({ agent_active: false, handoff_escalated_at: null })
+    expect(sendPushToRolesAtLocation).toHaveBeenCalledWith(HATCH, expect.any(Array), expect.objectContaining({
+      body: 'Agent handed off: purchase_link_open',
+    }))
+  })
+
+  it('MIAFIX.1: an operator purchase_link_open_text is what the customer reads on that handoff', async () => {
+    resolveMemberStudios.mockResolvedValue(resolution(hatchStudio()))
+    const { fetchFn } = modelTurns([toolTurn('send_purchase_link', { offer_id: OFFER_ID }), textTurn('MODEL TEXT')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db } = turnDb({
+      threadLocationId: HATCH, conv: verifiedThread(HATCH_CONTACT),
+      hatchSettings: { ...SWITCH_ON, purchase_link_open_text: 'Your {product} link is open, the team will be in touch.' },
+      hatchUn1tOnline: WRITES_ON, tables: { ...SELLING(), mia_purchase_intents: [OPEN_OTHER()] },
+    })
+    const adapter = whatsappAdapter()
+
+    await runChannelAgent(db, adapter, turnCtx(HATCH))
+
+    expect(adapter.send.mock.calls[0][1]).toBe('Your Fictional Monthly link is open, the team will be in touch.')
+  })
+
+  it('MIAFIX.1: the same product asked for again resends its link and replies normally (no handoff)', async () => {
+    resolveMemberStudios.mockResolvedValue(resolution(hatchStudio()))
+    const { fetchFn, bodies } = modelTurns([toolTurn('send_purchase_link', { offer_id: OFFER_ID }), textTurn('Here it is again')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, updates } = turnDb({
+      threadLocationId: HATCH, conv: verifiedThread(HATCH_CONTACT), hatchSettings: SWITCH_ON, hatchUn1tOnline: WRITES_ON,
+      tables: { ...SELLING(), mia_purchase_intents: [{ ...OPEN_OTHER(), un1t_product_id: 'prod-5', product_title: 'Fictional 5 Pack' }] },
+    })
+    const adapter = whatsappAdapter()
+
+    const result = await runChannelAgent(db, adapter, turnCtx(HATCH))
+
+    expect(toolResultOf(bodies[1])).toMatchObject({ link_sent: true, url: 'https://pay.example.test/s/open' })
+    expect(result).toMatchObject({ handled: true, action: 'reply' })
+    expect(updates.some((u) => u.patch?.agent_handed_off_at)).toBe(false)
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
+  })
+
   it('the facts block for Hatch on a Stillorgan thread lists its offers in un1t_full only', async () => {
     for (const [hatchSettings, hatchUn1tOnline, withOffers] of [[SWITCH_ON, WRITES_ON, true], [HATCH_TEST_SETTINGS, WRITES_ON, false]]) {
       resolveMemberStudios.mockResolvedValue(resolution(stillorganStudio(), hatchStudio()))
@@ -1051,5 +1128,114 @@ describe('un1t_full at the turn (MIAHATCH.5)', () => {
     expect(systemText(bodies[0])).toContain('Say which studio each answer is for')
     expect(systemText(bodies[0])).toContain('REFUNDS at UN1T Hatch Street')
     expect(decisionMeta(inserts).tool_block).toBe('un1t_full')
+  })
+})
+
+// MIAFIX.1 (8) — a studio of the same organisation that Mia cannot answer for
+// this turn: its booking link (or none) in the uncached suffix, never another
+// tenant's studio, and nothing at all for a one-studio organisation.
+describe('MIAFIX.1: the organisation\'s other studios (booking links)', () => {
+  const STILL_URL = 'https://www.un1tdublin.com/start'
+  const HEADING = '## Other studios in the group'
+  const volatileOf = (body) => body.system.slice(1).map((b) => b.text).join('\n\n')
+  const runHatch = async (dbOpts) => {
+    resolveMemberStudios.mockResolvedValue(resolution(hatchStudio()))
+    const { fetchFn, bodies } = modelTurns([textTurn('ok')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db } = turnDb({ threadLocationId: HATCH, conv: verifiedThread(HATCH_CONTACT), ...dbOpts })
+    await runChannelAgent(db, whatsappAdapter(), turnCtx(HATCH))
+    return bodies[0]
+  }
+
+  it('Hatch thread, Stillorgan with a booking_url: listed with its link, in the uncached suffix only', async () => {
+    const body = await runHatch({ stillorganSettings: { ...STILLORGAN_SETTINGS, booking_url: STILL_URL } })
+    const vol = volatileOf(body)
+    expect(vol).toContain(HEADING)
+    expect(vol).toContain(`- UN1T Stillorgan: booking link ${STILL_URL}`)
+    expect(vol).toContain(`- UN1T Second Studio: booking link ${HATCH_BOOKING_URL}`)
+    expect(vol).not.toContain('- UN1T Hatch Street:')
+    expect(body.system[0].text).not.toContain(HEADING)
+  })
+
+  it('Stillorgan with no booking_url: listed with no link', async () => {
+    const vol = volatileOf(await runHatch({}))
+    expect(vol).toContain('- UN1T Stillorgan: no booking link set')
+  })
+
+  it('another organisation\'s studio, an inactive one and a host anchor are never listed', async () => {
+    const vol = volatileOf(await runHatch({
+      extraLocations: [
+        { id: 'a9000000-0000-0000-0000-000000000001', name: 'Other Tenant Gym', organization_id: 'b9000000-0000-0000-0000-000000000009', active: true, is_host_anchor: false, settings: { customer_agent: { booking_url: 'https://other.example.test/book' } } },
+        { id: 'a1000000-0000-0000-0000-000000000004', name: 'UN1T Closed Studio', organization_id: ORG, active: false, is_host_anchor: false, settings: { customer_agent: { booking_url: 'https://closed.example.test/book' } } },
+        { id: 'a1000000-0000-0000-0000-000000000005', name: 'UN1T Host Anchor', organization_id: ORG, active: true, is_host_anchor: true, settings: {} },
+      ],
+    }))
+    expect(vol).toContain(HEADING)
+    expect(vol).not.toMatch(/Other Tenant Gym|other\.example\.test|UN1T Closed Studio|UN1T Host Anchor/)
+  })
+
+  // Review fix 1 — live UN1T Group holds "Test Studio" (active, not a host
+  // anchor, membership_source 'none'): not a studio a customer can book.
+  it('a location with membership_source none in the same organisation is never listed', async () => {
+    const vol = volatileOf(await runHatch({
+      extraLocations: [
+        { id: 'a1000000-0000-0000-0000-000000000006', name: 'Test Studio', organization_id: ORG, membership_source: 'none', active: true, is_host_anchor: false, settings: { customer_agent: { booking_url: 'https://test.example.test/book' } } },
+      ],
+    }))
+    expect(vol).toContain(HEADING)
+    expect(vol).not.toMatch(/Test Studio|test\.example\.test/)
+  })
+
+  it('a one-studio organisation: no block at all', async () => {
+    const vol = volatileOf(await runHatch({ keepLocations: [HATCH] }))
+    expect(vol).not.toContain(HEADING)
+  })
+
+  it('a studio answerable this turn has its facts block instead, never a second listing', async () => {
+    resolveMemberStudios.mockResolvedValue(resolution(hatchStudio(), stillorganStudio()))
+    const { fetchFn, bodies } = modelTurns([textTurn('ok')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db } = turnDb({ threadLocationId: HATCH, conv: verifiedThread(HATCH_CONTACT), stillorganSettings: { ...STILLORGAN_SETTINGS, booking_url: STILL_URL } })
+    await runChannelAgent(db, whatsappAdapter(), turnCtx(HATCH))
+    const vol = volatileOf(bodies[0])
+    expect(vol).not.toContain('- UN1T Stillorgan:')
+    expect(vol).toContain('- UN1T Second Studio:')
+  })
+
+  // Review fix 4 — the other studios' settings resolve in parallel; one that
+  // throws or fails is a studio with no link, never a lost block.
+  it('readOrgStudioLinks: settings resolve in parallel, a failed one is that studio with no link', async () => {
+    const rows = [
+      { id: 's-1', name: 'B Studio', membership_source: 'glofox' },
+      { id: 's-2', name: 'A Studio', membership_source: 'un1t_online' },
+    ]
+    const db = { from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ eq: () => Promise.resolve({ data: rows, error: null }) }) }) }) }) }
+    let inFlight = 0
+    let peak = 0
+    const studios = {
+      settings: async (id) => {
+        inFlight += 1
+        peak = Math.max(peak, inFlight)
+        await new Promise((r) => setTimeout(r, 5))
+        inFlight -= 1
+        if (id === 's-1') throw new Error('fictional')
+        return { booking_url: 'https://a.example.test/book' }
+      },
+    }
+    const out = await readOrgStudioLinks(db, { organizationId: ORG, threadLocationId: HATCH }, studios)
+    expect(peak).toBe(2)
+    expect(out).toEqual([
+      { locationId: 's-2', name: 'A Studio', bookingUrl: 'https://a.example.test/book' },
+      { locationId: 's-1', name: 'B Studio', bookingUrl: null },
+    ])
+  })
+
+  it('readOrgStudioLinks: a failed read is null (logged), never a throw', async () => {
+    const failing = { from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ eq: () => Promise.resolve({ data: null, error: { code: 'XX000', message: 'fictional' } }) }) }) }) }) }
+    await expect(readOrgStudioLinks(failing, { organizationId: ORG, threadLocationId: HATCH })).resolves.toBeNull()
+    expect(JSON.stringify(warnSpy.mock.calls)).toContain('other studios unreadable')
+    const throwing = { from: () => { throw new TypeError('fictional') } }
+    await expect(readOrgStudioLinks(throwing, { organizationId: ORG, threadLocationId: HATCH })).resolves.toBeNull()
+    await expect(readOrgStudioLinks(throwing, { organizationId: null, threadLocationId: HATCH })).resolves.toEqual([])
   })
 })

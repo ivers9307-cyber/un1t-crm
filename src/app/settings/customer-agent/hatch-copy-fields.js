@@ -30,7 +30,7 @@ export const HATCH_COPY_FIELDS = Object.freeze([
   { key: 'refund_request_text', label: 'Refund request message', placeholder: DEFAULT_REFUND_REQUEST_TEXT,
     help: 'Sent when a customer asks for a refund. The request goes to the team as an approval; Mia never refunds.' },
   { key: 'purchase_link_open_text', label: 'Payment link already open message', placeholder: DEFAULT_PURCHASE_LINK_OPEN_TEXT,
-    help: `Sent when the customer asks for a link they already have waiting. ${PRODUCT}` },
+    help: `Sent when the customer asks for a different product while a payment link is still waiting; the conversation then goes to the team. ${PRODUCT}` },
   { key: 'purchase_paid_booked_text', label: 'Paid and booked message', placeholder: DEFAULT_PURCHASE_PAID_BOOKED_TEXT, help: CLASS },
   { key: 'purchase_paid_class_gone_text', label: 'Paid but class gone message', placeholder: DEFAULT_PURCHASE_PAID_CLASS_GONE_TEXT, help: CLASS },
   { key: 'purchase_paid_booking_failed_text', label: 'Paid but booking failed message', placeholder: DEFAULT_PURCHASE_PAID_BOOKING_FAILED_TEXT, help: CLASS },

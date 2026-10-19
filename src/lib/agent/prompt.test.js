@@ -13,6 +13,7 @@ import {
   renderCustomerAgentBasePrompt,
   buildStudioFactsBlock,
   buildTrialUsedClassLine,
+  buildOtherStudiosBlock,
 } from './prompt'
 
 describe('buildKnowledgeBlock', () => {
@@ -989,5 +990,149 @@ describe('the trial-done line', () => {
     expect(buildCachedSystem({ ...base, trialDoneLine: '' })).toEqual(buildCachedSystem(base))
     expect(buildCachedSystem({ ...base, trialDoneLine: '   ' })).toEqual(buildCachedSystem(base))
     expect(buildCustomerSystemPrompt({ ...base, trialDoneLine: undefined })).toBe(buildCustomerSystemPrompt(base))
+  })
+})
+
+// MIAFIX.1 — live MIA TEST findings (19 Oct 2026).
+describe('MIAFIX.1 prompt rules', () => {
+  const full = (multiStudio = false) =>
+    renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: false, bookingUrl: null, un1tVariant: 'full', multiStudio, un1tStudioName: 'Hatch Street' })
+
+  // 1c — she offered a yes/no without the sentinel line (and imitated the
+  // recorded "[Options: ...]" form instead).
+  it('the OPTIONS rule is a MUST for 2 to 10 discrete choices or a yes/no, and names the recorded form as wrong', () => {
+    const out = buildCustomerSystemPrompt({})
+    const section = out.slice(out.indexOf('## Offering tap choices (buttons)'))
+    const must = section.split('\n').find((l) => l.startsWith('Whenever you offer'))
+    expect(must).toMatch(/Whenever you offer the customer 2 to 10 discrete choices or a yes\/no question[^\n]*you MUST end your reply with ONE extra line in exactly this format/)
+    // Review fix 5 — a link that must end the message wins over the buttons.
+    expect(must).toMatch(/except when your message ends with a link \(a payment link or a booking link\):$/)
+    expect(must).not.toMatch(DASHES)
+    const never = section.split('\n').find((l) => l.includes('[Options:'))
+    expect(never).toMatch(/Never write the choices as "\[Options: \.\.\.\]" or in any other format: only the \[\[OPTIONS\]\] line makes buttons\./)
+    expect(never).not.toMatch(DASHES)
+    expect(section).toContain(`${OPTIONS_PREFIX} First choice | Second choice | Third choice`)
+  })
+
+  // 3 + 6 — a link already open for another product: never offer another;
+  // the tool hands the conversation to the team itself.
+  it('un1t_full: an open link for another product is never offered over, and send_purchase_link hands off itself', () => {
+    for (const multi of [false, true]) {
+      const out = full(multi)
+      const open = out.split('\n').find((l) => l.includes('open_link'))
+      expect(open).toMatch(/When list_purchase_options gives open_link, a payment link for that product is already waiting/)
+      // Review fix 2 — a customer asking for a DIFFERENT product is handed off
+      // in the same turn, not offered the team and handed off next turn.
+      expect(open).toMatch(/If the customer is asking for a different product than that one, call send_purchase_link with that product's offer_id now, in the same turn: no new link is made and it hands them to the team/)
+      expect(open).toMatch(/Only when they are just asking what is available, mention their link for that product is waiting and never offer to send a link for a different product/)
+      expect(open).not.toMatch(/If they still ask/)
+      // Review fix 3 — the no-restate exception is scoped to that turn.
+      expect(open).toMatch(/so in that turn only you need no restating and no yes first/)
+      expect(open).toMatch(/Never call send_purchase_link for a product they did not ask for\./)
+      expect(out).toMatch(/When send_purchase_link says a link is already open for another product, the team has been asked to take over and the customer is told: write nothing more\./)
+      expect(out).not.toMatch(/relay its text and offer the team if they want something else/)
+      for (const l of [open]) expect(l).not.toMatch(DASHES)
+    }
+  })
+
+  // 4 — she called send_purchase_link with invented ids ("10_class_pack").
+  it('un1t_full: the offer_id must come from list_purchase_options in this conversation, never invented', () => {
+    for (const multi of [false, true]) {
+      const line = full(multi).split('\n').find((l) => l.includes('MUST be an offer_id'))
+      expect(line).toMatch(/The offer_id you pass to send_purchase_link MUST be an offer_id that list_purchase_options \(or book_class's needs_purchase offers\) returned in this conversation, copied exactly\. Never invent, guess or build one from a product name: call list_purchase_options first\./)
+      expect(line).not.toMatch(DASHES)
+    }
+    expect(render('read', false, null)).not.toMatch(/MUST be an offer_id/)
+  })
+})
+
+// MIAFIX.1 (7) — at Hatch, "What can you do?" got "... sorting payments and
+// pauses ...". Overdue payments there are chased by the studio and a pause is
+// only ever a request for the team, so neither is listed as something Mia
+// does; each un1t.online variant lists only what its tools do. Glofox and
+// no-booking renders are unchanged (their fixtures pin them byte for byte).
+describe('MIAFIX.1 (7): what Mia says she can do, per variant', () => {
+  const capabilityLine = (out) => out.split('\n').find((l) => l.startsWith('- When someone asks what you can do'))
+  const claim = (line) => line.slice(0, line.indexOf('Never list'))
+
+  it('every un1t.online variant has the line, right under "Who you help and how", with no pause or payment-sorting claim', () => {
+    for (const [variant, multi, url] of VARIANT_CASES) {
+      const out = render(variant, multi, url)
+      const line = capabilityLine(out)
+      expect(line, `${variant} ${multi} ${url}`).toBeTruthy()
+      expect(out).toContain(`- You answer questions about membership and sales, classes and schedules, prices, and general studio info.\n${line}`)
+      expect(claim(line)).not.toMatch(/paus|card|overdue|sort/i)
+      expect(claim(line)).not.toMatch(/payments\b/i)
+      expect(line).toMatch(/Never list pauses, payments or card updates as things you do/)
+      expect(line).not.toMatch(DASHES)
+    }
+  })
+
+  it('read: membership, next class, the timetable and general questions; never booking', () => {
+    for (const url of [null, 'https://hatch.example.test/book']) {
+      const c = claim(capabilityLine(render('read', false, url)))
+      expect(c).toMatch(/checking their membership and their next class, what's on the timetable, and general studio questions/)
+      expect(c).not.toMatch(/book|payment link/i)
+    }
+  })
+
+  it('read dual: booking and cancelling only where the booking section says you can; no payment link', () => {
+    const c = claim(capabilityLine(render('read', true, null)))
+    expect(c).toMatch(/booking and cancelling classes where the booking section says you can/)
+    expect(c).not.toMatch(/payment link/i)
+  })
+
+  it('full: booking and cancelling classes and a payment link for a membership or class pack', () => {
+    for (const multi of [false, true]) {
+      const c = claim(capabilityLine(render('full', multi, null)))
+      expect(c).toMatch(/booking and cancelling classes/)
+      expect(c).toMatch(/sending a secure payment link for a membership or class pack/)
+    }
+  })
+
+  it('Glofox and no-booking renders carry no such line', () => {
+    expect(capabilityLine(renderCustomerAgentBasePrompt())).toBeUndefined()
+    expect(capabilityLine(renderCustomerAgentBasePrompt(undefined, { bookings: false }))).toBeUndefined()
+  })
+})
+
+// MIAFIX.1 (8) — on a Hatch thread "Book a class in Stillorgan" got "check
+// with that studio directly". The organisation's other studios Mia cannot
+// answer for this turn are listed in the uncached suffix with their booking
+// links.
+describe('MIAFIX.1 (8): buildOtherStudiosBlock', () => {
+  const STUDIOS = [
+    { name: 'UN1T Stillorgan', bookingUrl: 'https://www.un1tdublin.com/start' },
+    { name: 'UN1T Second Studio', bookingUrl: null },
+  ]
+
+  it('nothing to list is the empty string', () => {
+    expect(buildOtherStudiosBlock([])).toBe('')
+    expect(buildOtherStudiosBlock(undefined)).toBe('')
+    expect(buildOtherStudiosBlock([{ name: '  ', bookingUrl: 'https://x.example.test' }])).toBe('')
+  })
+
+  it('names each studio with its booking link, or says there is none; the rule sends the link and never claims a booking', () => {
+    const out = buildOtherStudiosBlock(STUDIOS)
+    expect(out.split('\n')[0]).toBe('## Other studios in the group (you cannot book or check accounts there from this chat)')
+    expect(out).toContain('- UN1T Stillorgan: booking link https://www.un1tdublin.com/start')
+    expect(out).toContain('- UN1T Second Studio: no booking link set')
+    expect(out).toMatch(/asks to book, or about classes or prices, at one of these studios, send that studio's booking link/)
+    expect(out).toMatch(/end your message with it, with nothing after it and no tap choices/)
+    expect(out).toMatch(/no booking link set, offer to pass them to the team/)
+    expect(out).toMatch(/Never say you can book, cancel or check anything there/)
+    expect(out).not.toMatch(DASHES)
+  })
+
+  it('rides the uncached suffix only; an empty block leaves both parts byte-identical', () => {
+    const base = { businessName: 'B', locationName: 'Hatch', today: '2026-10-19', knowledge: [] }
+    const without = buildCustomerSystemPromptParts(base)
+    expect(buildCustomerSystemPromptParts({ ...base, otherStudiosBlock: '' })).toEqual(without)
+    expect(buildCustomerSystemPromptParts({ ...base, otherStudiosBlock: null })).toEqual(without)
+    const block = buildOtherStudiosBlock(STUDIOS)
+    const withBlock = buildCustomerSystemPromptParts({ ...base, otherStudiosBlock: block })
+    expect(withBlock.stable).toBe(without.stable)
+    expect(withBlock.volatile).toBe(`${without.volatile}\n\n${block}`)
+    expect(buildCachedSystem({ ...base, otherStudiosBlock: '' })).toEqual(buildCachedSystem(base))
   })
 })

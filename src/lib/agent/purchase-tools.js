@@ -16,7 +16,8 @@ export const LIST_PURCHASE_OPTIONS_TOOL = Object.freeze({
     'offer_id, a title, a price_label, the credits it gives when known and a short blurb, and trial_available: whether ' +
     'this member can have the free trial first. Use it when a member asks ' +
     'to buy classes or a membership, or asks what they can buy. Give each title and price_label exactly as listed; ' +
-    'never invent, round or change a price, and never offer anything that is not on the list.',
+    'never invent, round or change a price, and never offer anything that is not on the list. When it gives open_link, ' +
+    'a payment link for that product is already waiting: never offer to send a link for a different product.',
   input_schema: { type: 'object', properties: {} },
 })
 
@@ -25,15 +26,18 @@ export const SEND_PURCHASE_LINK_TOOL = Object.freeze({
   description:
     "Create the VERIFIED member's secure payment link for one offer from list_purchase_options (or from book_class's " +
     'needs_purchase offers), or give the free trial with offer_id "trial", only when a tool said trial_available. ' +
+    "The offer_id MUST be one that list_purchase_options (or book_class's needs_purchase offers) returned in this " +
+    'conversation, copied exactly; never invent, guess or build one from a product name. ' +
     'Before calling this, restate the product and its price and get a clear yes; never call it ' +
     'on an ambiguous message. When they wanted a class, also pass that class exactly as list_upcoming_classes gave it. ' +
-    'Only one payment link is open per member: if one is already waiting, the result says so and gives its wording. ' +
+    'Only one payment link is open per member: for the same product the result resends it; if one is already waiting ' +
+    'for a different product, no link is made and the conversation is handed to the team. ' +
     'Relay the result honestly. Never say they have paid until a tool says so. Only works after verify_identity has ' +
     'succeeded this conversation.',
   input_schema: {
     type: 'object',
     properties: {
-      offer_id: { type: 'string', description: 'The offer_id of the offer they chose, copied exactly, or "trial" for the free trial.' },
+      offer_id: { type: 'string', description: 'The offer_id of the offer they chose, as returned by list_purchase_options in this conversation and copied exactly, or "trial" for the free trial; never invent one.' },
       event_id: { type: 'string', description: 'Only when they wanted a class: its "un1t:" event_id from list_upcoming_classes, copied exactly.' },
       class_name: { type: 'string', description: 'Only with event_id: the class name you confirmed.' },
       class_time: { type: 'string', description: 'Only with event_id: the class day and time you confirmed.' },

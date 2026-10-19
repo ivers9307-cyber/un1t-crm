@@ -154,7 +154,9 @@ function un1tUpsellLines({ name, multiStudio }) {
     '- FREE TRIAL: offer the free trial first, before the paid offers, only when book_class or list_purchase_options says trial_available is true. Never say "free trial" or offer one otherwise. When they want it, get a clear yes, then call send_purchase_link with offer_id "trial" (and the class, when they wanted one). Say the trial is on their account, or that a class is booked, only when that tool says so. When it says trial_used, send its text and then its offers.',
     '- With 3 or fewer offers, offer them as tap choices, one per offer. With more, list them in your message. Never show more offers than the tool gave you.',
     '- When they pick one, restate the product and its price and get a clear yes before you call send_purchase_link with its offer_id. When they wanted a class, pass that class too (its event_id, class_name, class_time and starts_at as list_upcoming_classes gave them). Never send a link on an ambiguous message.' + (multiStudio ? ` Buying from chat is only for ${name || 'the un1t.online studio'}; for the other studio, hand off.` : ''),
-    '- When send_purchase_link says link_sent, send its wording and end your message with its url, with nothing after it and no tap choices, so it shows as a button. Never change the link. When it says a link is already open, relay its text and offer the team if they want something else. When it says anything else, relay that and never send or invent a link.',
+    "- The offer_id you pass to send_purchase_link MUST be an offer_id that list_purchase_options (or book_class's needs_purchase offers) returned in this conversation, copied exactly. Never invent, guess or build one from a product name: call list_purchase_options first.",
+    '- When list_purchase_options gives open_link, a payment link for that product is already waiting. If the customer is asking for a different product than that one, call send_purchase_link with that product\'s offer_id now, in the same turn: no new link is made and it hands them to the team, so in that turn only you need no restating and no yes first. Only when they are just asking what is available, mention their link for that product is waiting and never offer to send a link for a different product. Never call send_purchase_link for a product they did not ask for.',
+    '- When send_purchase_link says link_sent, send its wording and end your message with its url, with nothing after it and no tap choices, so it shows as a button. Never change the link. When send_purchase_link says a link is already open for another product, the team has been asked to take over and the customer is told: write nothing more. When it says anything else, relay that and never send or invent a link.',
     '- Never say they have paid, that a payment went through, or that a class is booked after paying, until a tool says so. If they say they have paid, call check_my_purchase and relay what it says: a payment can take a few minutes to show.',
   ]
 }
@@ -273,7 +275,17 @@ function un1tSections({ bookingUrl, multiStudio, studioName, writes = false }) {
       ? "- POSITIVE: celebrate briefly and move it forward. If they'd like to come again, end your message with the studio's booking link so they can book. If they're on a trial and the moment fits, you can naturally mention booking a consultation or that the team can talk membership options, an invitation, never a pitch."
       : "- POSITIVE: celebrate briefly and move it forward. If they'd like to book again, hand off so the team books them. If they're on a trial and the moment fits, you can naturally mention booking a consultation or that the team can talk membership options, an invitation, never a pitch.")
   const accountChangeHandoff = full ? full.accountChangeHandoff : '- The person wants a refund, a billing/payment change, disputes a payment, or wants any account change other than a pause or cancellation (those two you capture as requests, see above).'
-  return { hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff }
+  // MIAFIX.1 (7) — asked "what can you do?" at Hatch, Mia listed "sorting
+  // payments and pauses": overdue payments there are chased by the studio and
+  // a pause is only a request for the team. List only what this block's tools
+  // do. A pause or cancellation request still works when they ask for one.
+  const can = full
+    ? 'checking their membership and their next class, booking and cancelling classes, sending a secure payment link for a membership or class pack, and general studio questions'
+    : multiStudio
+      ? "checking their membership and their next class, what's on the timetable, booking and cancelling classes where the booking section says you can, and general studio questions"
+      : "checking their membership and their next class, what's on the timetable, and general studio questions"
+  const capabilityLine = `- When someone asks what you can do, list only these: ${can}. Never list pauses, payments or card updates as things you do (if they ask to pause or cancel, follow the pause and cancellation section below).`
+  return { hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff, capabilityLine }
 }
 
 export function renderCustomerAgentBasePrompt(membershipSource = GLOFOX_PROMPT_SOURCE, { bookings = true, bookingUrl = null, un1tVariant = null, multiStudio = false, un1tStudioName = null } = {}) {
@@ -281,6 +293,8 @@ export function renderCustomerAgentBasePrompt(membershipSource = GLOFOX_PROMPT_S
   const label = hasApp ? membershipSource.label : null
   const app = hasApp ? `the ${label} app` : null
   let hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff
+  // MIAFIX.1 (7) — un1t.online variants only; '' keeps every other render's bytes.
+  let capabilityLine = ''
   // MIAHATCH.2 Task 7: a un1t.online variant ('read', or 'full' for block 3b,
   // MIAHATCH.5) swaps the two capacity lines below; null keeps the pre-Task-7
   // bytes (pinned by the Glofox and no-booking fixtures).
@@ -291,7 +305,7 @@ export function renderCustomerAgentBasePrompt(membershipSource = GLOFOX_PROMPT_S
   // system. Each Glofox text below is the pre-Task-5 prompt VERBATIM (pinned
   // byte-for-byte by __fixtures__/glofox-system-prompt.fixture.json).
   if (un1t) {
-    ;({ hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff } = un1tSections({ bookingUrl, multiStudio: multiStudio === true, studioName: un1tStudioName, writes: un1tVariant === 'full' }))
+    ;({ hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff, capabilityLine } = un1tSections({ bookingUrl, multiStudio: multiStudio === true, studioName: un1tStudioName, writes: un1tVariant === 'full' }))
     capacityRule = READ_COUNT_RULE
     eventsRelay = READ_EVENTS_RELAY
   } else if (bookings) {
@@ -341,7 +355,7 @@ You CAN cancel a verified member's class booking.
   return `You reply to people who message the studio on WhatsApp and Instagram.
 
 ## Who you help and how
-- You answer questions about membership and sales, classes and schedules, prices, and general studio info.
+- You answer questions about membership and sales, classes and schedules, prices, and general studio info.${capabilityLine ? `\n${capabilityLine}` : ''}
 - Earlier messages the studio sent this person (campaigns, offers, booking confirmations, reminders) appear in the conversation as YOUR own previous messages — read them as context for what the customer is replying to. A short reply like "what time?" or "how much?" usually refers to the most recent studio message.
 - You are warm, concise, and human. Keep replies short — this is a chat, not an email. A sentence or two is usually right. Never use markdown headings or bullet-point dumps.
 - Write in plain language a member would use. Don't sound robotic or corporate.
@@ -391,9 +405,10 @@ Someone may want to bring a partner or friend ("can my girlfriend come too?", "b
 Once a booking is confirmed, it stays confirmed. If the customer then asks a question ("is my friend booked too?", "is that definitely confirmed?"), ANSWER THE QUESTION from what actually happened this conversation — do not re-check availability, do not offer new times, and never claim their slot is gone. Only touch the booking again if they explicitly ask to change or cancel it.
 
 ## Offering tap choices (buttons)
-When you offer a small set of discrete choices — class times, consultation slots, or a final go-ahead — end your reply with ONE extra line in exactly this format:
+Whenever you offer the customer 2 to 10 discrete choices or a yes/no question (class times, consultation slots, offers, a final go-ahead), you MUST end your reply with ONE extra line in exactly this format, except when your message ends with a link (a payment link or a booking link):
 ${OPTIONS_PREFIX} First choice | Second choice | Third choice
 - 2 to 10 choices, each under 20 characters (e.g. "7am", "10:30", "Yes, book me in", "Different time").
+- Never write the choices as "[Options: ...]" or in any other format: only the [[OPTIONS]] line makes buttons.
 - The customer sees them as tap buttons and their tap comes back as that exact text — so make each one self-contained.
 - The line is removed from your message automatically; never mention buttons or this format to the customer.
 - Use it for the class-time list, the slot list, and the booking confirmation ("Yes, book me in" / "Pick another time"). Don't use it for open questions like asking their name or email.
@@ -543,6 +558,7 @@ function todayWithWeekday(today) {
  * @param {boolean}[opts.bookingFlow] MIAFLOW.1: the turn offers send_booking_flow (the studio's WhatsApp booking Flow); adds BOOKING_FLOW_PROMPT_SECTION
  * @param {string} [opts.trialUsedClassLine] MIAHATCH.6: buildTrialUsedClassLine's output (un1t_full turns only); uncached suffix only
  * @param {string|null}[opts.trialDoneLine] TRIALDONE.6: trialDoneLineFor's output (the studio's trial-done brief); uncached suffix only
+ * @param {string} [opts.otherStudiosBlock] MIAFIX.1: buildOtherStudiosBlock's output; uncached suffix only
  * @returns {{ stable: string, volatile: string }}
  */
 export function buildCustomerSystemPromptParts(opts = {}) {
@@ -630,6 +646,11 @@ export function buildCustomerSystemPromptParts(opts = {}) {
     )
   }
 
+  // MIAFIX.1 (8) — the organisation's other studios Mia cannot answer for this
+  // turn, with their booking links (buildOtherStudiosBlock). Uncached; absent
+  // or empty, both parts are byte-identical to before.
+  if (typeof opts.otherStudiosBlock === 'string' && opts.otherStudiosBlock.trim()) volatileParts.push(opts.otherStudiosBlock.trim())
+
   // MIAHATCH.2 E-4: facts for an answerable studio that is not the thread's.
   // Volatile (uncached) only: the stable block above never sees them, so its
   // bytes and cache_control placement do not move with who is answerable.
@@ -672,6 +693,37 @@ export function buildTrialUsedClassLine({ className = null, classTime, eventId }
 }
 
 const oneLine = (v) => String(v ?? '').replace(/\s+/g, ' ').trim()
+
+/**
+ * MIAFIX.1 (8) — the organisation's other active studios that Mia cannot
+ * answer for this turn (not the thread's, not answerable), each with its
+ * booking link (customer_agent.booking_url) or none. On a Hatch thread "book a
+ * class in Stillorgan" was turned away; it now gets Stillorgan's link, or the
+ * team when no link is set. '' with nothing to list, so the prompt is
+ * byte-identical for a one-studio organisation. Rendered in the uncached
+ * suffix. Pure.
+ *
+ * @param {Array<{ name: string, bookingUrl?: string|null }>} studios
+ * @returns {string}
+ */
+export function buildOtherStudiosBlock(studios) {
+  const lines = (Array.isArray(studios) ? studios : [])
+    .map((s) => {
+      const name = promptValue(s?.name)
+      if (!name) return null
+      const url = promptValue(s?.bookingUrl)
+      return url ? `- ${name}: booking link ${url}` : `- ${name}: no booking link set`
+    })
+    .filter(Boolean)
+  if (!lines.length) return ''
+  return [
+    '## Other studios in the group (you cannot book or check accounts there from this chat)',
+    ...lines,
+    "- When someone asks to book, or about classes or prices, at one of these studios, send that studio's booking link and end your message with it, with nothing after it and no tap choices, so it shows as a button. Never change or invent a link.",
+    '- For a studio with no booking link set, offer to pass them to the team, and hand off when they say yes.',
+    '- Never say you can book, cancel or check anything there, and never turn them away without the link or the team.',
+  ].join('\n')
+}
 
 /**
  * MIAHATCH.2 E-4: a short facts block for an answerable studio that is NOT the
