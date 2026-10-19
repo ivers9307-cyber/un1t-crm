@@ -66,12 +66,47 @@ const TRIAL_GRANT_NO_ANSWER =
 const NO_CREDITS_AFTER_TRIAL =
   'The trial was added in Glofox, but Glofox still refused the booking for no credits. The trial may be set to start later (Glofox starts a new membership after one they already hold ends). Check their memberships in Glofox, then retry. Retrying does not add another trial.'
 
+// MIAHATCH.5 — failed un1t.online executions (Mia's Hatch Street cards,
+// details.provider 'un1t_online'), in un1t.online's terms: such a studio has
+// no Glofox, so "Glofox rejected the action" was wrong there. The three
+// un1t-only codes are read on any row (a post-approve outcome carries only
+// the result); ACCOUNT_MISMATCH only on a un1t.online card (Glofox has its
+// own above); any other failed Mia card shows the staff words the executor
+// stored on details.result.message.
+const UN1T_FAILURES = {
+  MIA_NO_CREDITS:
+    'No credits show in un1t.online, so nothing was booked. Add credits there, then approve again.',
+  UN1T_ACCOUNT_UNREADABLE:
+    "This member's un1t.online account could not be read (a temporary database error), so nothing was sent to un1t.online. Retry.",
+  NOT_EXECUTABLE_UN1T:
+    'This could not be done automatically, so nothing was sent to un1t.online. Do it by hand in un1t.online.',
+}
+const UN1T_ACCOUNT_MISMATCH =
+  'This was queued for a different un1t.online account than the one the contact holds now, so nothing was sent to un1t.online. Check which account is right in un1t.online, then retry.'
+
+const isMiaUn1tRow = (row) => row?.details?.provider === 'un1t_online' && row?.details?.origin === 'mia'
+
+/** Operator line for a failed un1t.online execution, or null (the Glofox copy then applies). Pure. */
+export function un1tFailureExplanation(row) {
+  if (!row || row.status !== 'failed') return null
+  const result = row.details?.result || {}
+  const code = result.message_code || result.code || null
+  if (code && UN1T_FAILURES[code]) return UN1T_FAILURES[code]
+  if (row.details?.provider !== 'un1t_online') return null
+  if (code === 'ACCOUNT_MISMATCH') return UN1T_ACCOUNT_MISMATCH
+  if (isMiaUn1tRow(row) && typeof result.message === 'string' && result.message.trim()) return result.message.trim()
+  return null
+}
+
 /**
  * Operator-readable line for a failed execution, or null when the row is
- * not a failed execution. Pure.
+ * not a failed execution. A un1t.online failure reads in un1t.online's
+ * terms (un1tFailureExplanation); everything else in Glofox's. Pure.
  */
 export function failureExplanation(row) {
   if (!row || row.status !== 'failed') return null
+  const un1t = un1tFailureExplanation(row)
+  if (un1t) return un1t
   const result = row.details?.result || {}
   const code = result.message_code || result.reason || null
   if (!code) return 'The execution failed. Check the account in Glofox, fix what is wrong, then retry.'
@@ -91,3 +126,6 @@ export function failureExplanation(row) {
 
 /** Every code with its own sentence (the rest read "Glofox rejected the action (CODE)"). */
 export const FAILURE_CODES = Object.freeze(Object.keys(FAILURE_EXPLANATIONS))
+
+/** The un1t-only codes, read in un1t.online's terms on any row. */
+export const UN1T_FAILURE_CODES = Object.freeze(Object.keys(UN1T_FAILURES))
