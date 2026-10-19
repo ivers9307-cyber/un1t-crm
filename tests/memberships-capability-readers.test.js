@@ -60,6 +60,8 @@ const MANIFEST = Object.freeze({
   'src/lib/membership/state-for-page.js': 'providesCapability / membershipStatePayload: provides_memberships true on the phone (business dashboard, studio-contacts)',
   'src/lib/membership/reads/index.js': "radarReadsFor's providesMemberships: the static capability every radar gate reads",
   'src/lib/membership/locations-for-source.js': 'locationIdsWithoutCapability: Hatch leaves the without-memberships list, so the snapshot and digest crons visit it',
+  'src/lib/account-home.js': "portfolio home: Hatch's Members tile counts total_members through the seam's membershipCounts instead of the glofox_* head-count (Glofox studios unchanged)",
+  'src/lib/dashboard/business-rail.js': "business rail Leads row: at Hatch (manual primary board) counts the acquisition board's uncontacted new_lead deals and links to the lead radar; arrearsRow reads radarReadsFor too",
   'mobile/lib/membership-source-copy.js': 'phone source card: no "does not provide membership data" card at Hatch (reads provides_memberships)',
   // matches of the net that are not the capability
   'src/lib/glofox-sync.js': NOT_CAP + "'memberships' names the Glofox membership read that failed",
