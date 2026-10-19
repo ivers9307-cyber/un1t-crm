@@ -8,11 +8,12 @@
 import { fetchUserCreditsResult, fetchMembershipResult, fetchUserBookings, fetchUserInteractions } from './glofox.js'
 import { classifyContact } from './pipeline-classifier.js'
 import { upsertClassBookings } from './class-bookings.js'
-import { logWarn } from './log.js'
+import { logWarn, logError } from './log.js'
 import { matchesPush } from './glofox-notes.js'
 import { normaliseGender } from './gender.js'
 import { findOpenDealForPipeline, findPrimaryPipeline } from './deal-lookup.js'
 import { PIPELINE_MODES } from '../../shared/pipelines/index.js'
+import { findGlofoxCrossoverContact, recordGlofoxCrossover } from './glofox-crossover.js'
 //
 // Source-of-truth contract:
 //   Glofox owns:  glofox_member_id, glofox_membership_status,
@@ -1190,6 +1191,10 @@ export function mapMembershipStatus(member, ctx = null) {
 // the same precedence: glofox_member_id first, then email). We
 // scope to the location we're syncing for so a member at one
 // location can't accidentally merge into a contact at another.
+// GLOFOXSIBLING.1 — only when that finds nothing does it look across the
+// ORGANISATION (glofox-crossover.js): the email can belong to just one contact
+// there, so a sibling studio's contact is the same person, attached, never
+// moved. Returns `crossover` / `crossoverConflict` / `lookupError` for it.
 
 export async function findExistingContact(db, locationId, mapped) {
   if (!db || !locationId || !mapped) return { byGlofox: null, byEmail: null }
@@ -1225,10 +1230,25 @@ export async function findExistingContact(db, locationId, mapped) {
     )
   }
   const results = await Promise.all(queries)
-  return {
-    byGlofox: results[0]?.data?.[0] || null,
-    byEmail:  results[1]?.data?.[0] || null,
-  }
+  // GLOFOXSIBLING.1 — a failed read is not "no contact". Read as a miss it sent
+  // the caller down the create path, which inserts a duplicate or (with the
+  // org email index) fails for a reason nobody can see.
+  const readError = results.find((r) => r?.error)?.error
+  if (readError) return { byGlofox: null, byEmail: null, lookupError: `contact lookup: ${readError.message || readError}` }
+  const byGlofox = results[0]?.data?.[0] || null
+  const byEmail  = results[1]?.data?.[0] || null
+  if (byGlofox || byEmail) return { byGlofox, byEmail }
+
+  // GLOFOXSIBLING.1 — nothing at this studio: the member's contact may live at
+  // a sibling studio of the same organisation (one contact per email per org,
+  // mig 712). Attach to it rather than insert a duplicate the index refuses.
+  const x = await findGlofoxCrossoverContact(db, locationId, {
+    glofoxMemberId: mapped.glofox_member_id, email: mapped.email, select: SELECT_COLS,
+  })
+  if (x.error) return { byGlofox: null, byEmail: null, lookupError: x.error }
+  if (x.conflict) return { byGlofox: null, byEmail: null, crossoverConflict: x.conflict }
+  if (x.contact) return { byGlofox: null, byEmail: null, crossover: { row: x.contact, how: x.how } }
+  return { byGlofox: null, byEmail: null }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1688,8 +1708,21 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     mapped._glofox_interactions = interactions
   }
 
-  const { byGlofox, byEmail } = await findExistingContact(db, locationId, mapped)
-  const existingRow = byGlofox || byEmail
+  const { byGlofox, byEmail, crossover, crossoverConflict, lookupError } = await findExistingContact(db, locationId, mapped)
+  if (lookupError) {
+    return { action: 'error', mapped, error: lookupError }
+  }
+  // GLOFOXSIBLING.1 — the organisation holds this person under a contact a
+  // person must choose between (or one linked to another Glofox account).
+  if (crossoverConflict) {
+    return {
+      action: 'ambiguous',
+      mapped,
+      conflicts: { sibling_studio_contact_ids: crossoverConflict.contact_ids },
+      reason: `${crossoverConflict.reason}. Merge or relink in the CRM, then re-run.`,
+    }
+  }
+  const existingRow = byGlofox || byEmail || crossover?.row || null
   // LASTATTEND.1 — the bookings fetch is a 30-day window, so a member who last
   // trained before it comes back with null dates. last_attended_at /
   // last_booked_at are advance-only (mergeBookingAggregates): keep the stored
@@ -1770,7 +1803,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     }
   }
 
-  const existing = byGlofox || byEmail
+  const existing = existingRow
   if (!existing) {
     // CREATE path — uses the mapped lead_source (Glofox source
     // → leadSourceSchema enum). Falls back to 'other' when
@@ -1962,6 +1995,9 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     changes,
     deal_action: dealAction,
     interactions_to_sync: interactions ? interactions.length : 0,
+    // GLOFOXSIBLING.1 — the contact lives at a sibling studio; apply links it
+    // here (glofox_crossover_members + this studio's preferences row).
+    ...(crossover ? { crossover: { how: crossover.how, home_location_id: crossover.row.location_id ?? null } } : {}),
   }
 }
 
@@ -1975,6 +2011,12 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
 export async function applyMemberSync(db, locationId, member, opts = {}) {
   const preview = await previewMemberSync(db, locationId, member, opts)
   if (preview.action === 'invalid' || preview.action === 'ambiguous') return preview
+  // GLOFOXSIBLING.1 — the contact lookup failed: write nothing (a create here
+  // could duplicate a contact the failed read would have found).
+  if (preview.action === 'error') {
+    if (preview.mapped) delete preview.mapped.__bookings_list
+    return preview
+  }
   // HR-CLASS-ALLOC.2 — lift the stashed raw bookings off the preview before any
   // further work so it can't ride along on a returned preview object.
   const bookingsForRoster = Array.isArray(preview.mapped?.__bookings_list) ? preview.mapped.__bookings_list : null
@@ -2067,6 +2109,26 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     const { error } = await db.from('contacts').update(updates).eq('id', preview.existing_id)
     if (error) return { ...preview, error: error.message }
     contactId = preview.existing_id
+  }
+
+  // GLOFOXSIBLING.1 — the contact lives at a sibling studio: link it here so
+  // staff holding Contacts at this studio can read it (mig 758), with this
+  // studio's preferences row. Re-run on every sync (idempotent), so a link
+  // that failed once is made by the next tick. A failure is logged loudly and
+  // reported, never fatal: the contact write above already happened.
+  let crossoverLink = null
+  if (preview.crossover) {
+    crossoverLink = await recordGlofoxCrossover(db, {
+      locationId,
+      glofoxMemberId: preview.mapped.glofox_member_id,
+      contactId,
+      contactLocationId: preview.crossover.home_location_id,
+    })
+    if (crossoverLink.error) {
+      logError('glofox-sync', 'Glofox crossover link not recorded', {
+        locationId, contactId, how: preview.crossover.how, error: crossoverLink.error,
+      })
+    }
   }
 
   // FUNNEL.1 — stamp the conversion moment. Runs on the webhook path
@@ -2334,5 +2396,6 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     gympass_tag: gympassTagResult,
     stage_change_trigger: stageChangeTriggerResult,
     membership_state_trigger: membershipStateTriggerResult,
+    ...(crossoverLink ? { crossover_link: crossoverLink } : {}),
   }
 }

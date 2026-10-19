@@ -25,11 +25,12 @@ const LOC = 'a0000000-0000-4000-8000-00000000000a'
 beforeEach(() => vi.clearAllMocks())
 
 describe('membershipReadsFor', () => {
-  it('exposes the fifteen read keys', () => {
+  it('exposes the sixteen read keys', () => {
     expect(READ_KEYS).toEqual([
       'membershipCounts', 'mrr', 'membershipFlows', 'growth', 'engagement', 'revenueMtd', 'arrears',
       'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility',
       'radarMembers', 'winbackContacts', 'leadContacts', 'radarPastDue',
+      'activeMemberContactIds',
     ])
     expect(Object.isFrozen(READ_KEYS)).toBe(true)
   })

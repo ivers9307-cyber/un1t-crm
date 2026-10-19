@@ -363,12 +363,13 @@ describe('MIAORG.1 Task 3 — PUT with `overridden` saves overrides only', () =>
   it('saving without touching inherited fields leaves them out of the blob', async () => {
     const { res, blob } = await save({ ...BODY, overridden: [] })
     expect(res.status).toBe(200)
-    expect(blob).toEqual({ enabled: true, test_mode: false, test_phones: [], booking_mode: 'auto' })
+    // MIAHATCH.5 — un1t_chat_actions_enabled is studio-only, so always saved (false unless ticked).
+    expect(blob).toEqual({ enabled: true, test_mode: false, test_phones: [], booking_mode: 'auto', un1t_chat_actions_enabled: false })
   })
 
   it('editing one field adds just it', async () => {
     const { blob } = await save({ ...BODY, tone: 'Studio tone', overridden: ['tone'] })
-    expect(blob).toEqual({ enabled: true, test_mode: false, test_phones: [], booking_mode: 'auto', tone: 'Studio tone' })
+    expect(blob).toEqual({ enabled: true, test_mode: false, test_phones: [], booking_mode: 'auto', un1t_chat_actions_enabled: false, tone: 'Studio tone' })
   })
 
   it('an object field override stores only that field (T3-A)', async () => {
@@ -539,6 +540,18 @@ describe('MIAORG.1 final review — booking link + bookings flag', () => {
       createServerClient.mockReturnValue(db)
       const body = await (await GET()).json()
       expect(body.bookings, source).toBe(want)
+    }
+  })
+
+  it('GET: membership_source_key is the studio\'s locations.membership_source, and no settings blob rides along', async () => {
+    const manager = { id: 'u', role: 'manager', activeLocation: { id: 'loc1' }, locations: [{ id: 'loc1' }] }
+    getCurrentUser.mockResolvedValue(manager)
+    for (const source of ['glofox', 'un1t_online', 'none']) {
+      const db = fakeLocationsDb({ reads: { data: { name: 'S', settings: { un1t_online: { token: 'secret' } }, organization_id: null, membership_source: source }, error: null } })
+      createServerClient.mockReturnValue(db)
+      const body = await (await GET()).json()
+      expect(body.membership_source_key, source).toBe(source)
+      expect(JSON.stringify(body)).not.toContain('secret')
     }
   })
 

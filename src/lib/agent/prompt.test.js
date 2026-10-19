@@ -12,6 +12,7 @@ import {
   CUSTOMER_AGENT_BASE_PROMPT,
   renderCustomerAgentBasePrompt,
   buildStudioFactsBlock,
+  buildTrialUsedClassLine,
 } from './prompt'
 
 describe('buildKnowledgeBlock', () => {
@@ -160,6 +161,22 @@ describe('multi-person bookings hand off instead of partial-booking', () => {
     expect(out).toMatch(/never book just one of them/i)
     // the old "book each person separately" behaviour is gone
     expect(out).not.toMatch(/book each person separately/i)
+  })
+})
+
+// FLOWACK.1 — Mia told a customer "you're all set for your first visit" 4s
+// after the Flow booking had FAILED, prompted by "(including via the 'Book your
+// first visit' flow)". A class is booked only when a tool or a confirmation in
+// the thread says so; a Flow submission is a request, not a booking.
+describe('a Flow submission is never treated as a booking', () => {
+  it('drops the flow clause and requires a tool or an in-thread confirmation', () => {
+    for (const out of [buildCustomerSystemPrompt({}), renderCustomerAgentBasePrompt(undefined, { bookings: false })]) {
+      expect(out).not.toMatch(/including via the "Book your first visit" flow/)
+      expect(out).toContain('Only treat a class as booked when a booking tool or a booking confirmation already in the thread confirms it.')
+      expect(out).toContain('"[Booking submitted via WhatsApp Flow]" message is a request the system is still processing, never a booking')
+      // FLOWACK.1 review — a submission that was NOT queued is stored differently, and Mia hands it to the team.
+      expect(out).toContain('A "[Booking form submitted but could not be processed]" message means their booking form did not go through: nothing is booked or queued.')
+    }
   })
 })
 
@@ -576,12 +593,135 @@ describe('un1t.online prompt variants', () => {
       .toBe(renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: false, bookingUrl: 'u' }))
   })
 
-  it('slice 1 renders full exactly as read (slice 2 adds the upsell rules)', () => {
+  // MIAHATCH.5 (Task 15) — block 3b's prompt: Mia books and cancels at the
+  // un1t.online studio from chat, and refund requests go to the team.
+  it('full differs from read; read keeps none of the full lines', () => {
     for (const multi of [false, true]) {
       for (const url of [null, 'https://hatch.example.test/book']) {
-        expect(render('full', multi, url)).toBe(render('read', multi, url))
+        const full = render('full', multi, url)
+        const read = render('read', multi, url)
+        expect(full).not.toBe(read)
+        expect(read).not.toMatch(/request_refund/)
+        expect(full).toMatch(/request_refund/)
       }
     }
+  })
+
+  describe('full variant (block 3b)', () => {
+    const named = (multiStudio, bookingUrl) =>
+      renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: false, bookingUrl, un1tVariant: 'full', multiStudio, un1tStudioName: 'Hatch Street' })
+
+    it('names the studio and says Mia can book and cancel there in chat', () => {
+      for (const url of [null, 'https://hatch.example.test/book']) {
+        const out = named(false, url)
+        expect(out).toContain('You can book and cancel classes at Hatch Street in chat for a verified member.')
+        expect(out).not.toMatch(/You can't book or cancel classes/)
+        expect(out).not.toMatch(/never book, cancel or change a class booking at Hatch Street/)
+        expect(out).not.toMatch(/cannot be booked or cancelled from chat/)
+        expect(out).toMatch(/class bookings and class-booking cancellations at Hatch Street/)
+      }
+      expect(render('full', false, null)).toContain('You can book and cancel classes at this studio in chat for a verified member.')
+    })
+
+    it('keeps the read variant\'s "what am I booked into" line at a single studio (final review)', () => {
+      const line = '- Use list_my_upcoming_bookings when a verified member asks what they are booked into.'
+      for (const url of [null, 'https://hatch.example.test/book']) {
+        expect(named(false, url)).toContain(line)
+        expect(named(false, url).split(line)).toHaveLength(2)
+      }
+      expect(render('full', false, null)).toContain(line)
+      // The read variant carries it too, unchanged.
+      expect(render('read', false, null)).toContain(line)
+    })
+
+    it('says booked and cancelled only when the tool result says so', () => {
+      for (const multi of [false, true]) {
+        const out = named(multi, null)
+        expect(out).toMatch(/Say a class is booked only when the book_class result says it is booked/)
+        expect(out).toMatch(/Say a booking is cancelled only when the cancel_class_booking result says it is cancelled/)
+      }
+    })
+
+    it('never promises a refund or a credit back; refunds go through request_refund and the team decides', () => {
+      for (const multi of [false, true]) {
+        const out = named(multi, 'https://hatch.example.test/book')
+        expect(out).toMatch(/never promise a refund or a credit back/i)
+        expect(out).toMatch(/call request_refund/)
+        expect(out).toMatch(/the team decides/)
+        expect(out).toMatch(/Never say a refund is done, approved or on its way/)
+        // The read variant's "wants a refund: hand off" is replaced, not
+        // contradicted. Dual: the Glofox studio's section keeps today's rules
+        // (a refund there is still a handoff), and the refund line says so.
+        if (!multi) expect(out).not.toMatch(/wants a refund, or wants to change plan: hand off/)
+        if (multi) expect(out).toMatch(/REFUNDS at Hatch Street: [^\n]*For a refund at the other studio, hand off\./)
+        expect(out).toMatch(/Wants a refund: request_refund/)
+        expect(out).not.toMatch(/The person wants a refund, a billing\/payment change/)
+      }
+    })
+
+    it('never mentions capacity, spaces or limited, and adds no dash', () => {
+      const base = new Set(CUSTOMER_AGENT_BASE_PROMPT.split('\n'))
+      for (const multi of [false, true]) {
+        for (const url of [null, 'https://hatch.example.test/book']) {
+          const out = named(multi, url)
+          expect(out).not.toMatch(BANNED_WORDS)
+          for (const l of out.split('\n').filter((x) => !base.has(x))) expect(l).not.toMatch(DASHES)
+        }
+      }
+    })
+
+    it('the booking link stays the fallback when chat booking is unavailable', () => {
+      expect(named(false, 'https://hatch.example.test/book')).toContain("send Hatch Street's booking link, https://hatch.example.test/book")
+      expect(named(false, null)).toMatch(/booking from chat is not available right now[^\n]*hand off/)
+    })
+
+    it('multiStudio keeps the read variant\'s dual semantics', () => {
+      const out = named(true, null)
+      expect(out).toMatch(/Say which studio each answer is for/)
+      expect(out).toMatch(/Check which studio a class is at/)
+      expect(out).toMatch(/The rules that follow apply only to the section of the answer for the Glofox studio/)
+      expect(named(false, null)).not.toMatch(/Say which studio each answer is for/)
+    })
+
+    // MIAHATCH.6 (Task 19) — the upsell rules, in 'full' only.
+    it('carries the upsell rules: restate product and price, a clear yes, buttons for 3 or fewer, never a price or "paid" the tools did not give', () => {
+      for (const multi of [false, true]) {
+        for (const url of [null, 'https://hatch.example.test/book']) {
+          const out = named(multi, url)
+          expect(out).toMatch(/## Buying classes or a membership/)
+          expect(out).toMatch(/restate the product and its price and get a clear yes before you call send_purchase_link/)
+          expect(out).toMatch(/With 3 or fewer offers, offer them as tap choices[^\n]*With more, list them[^\n]*Never show more offers than the tool gave you/)
+          expect(out).toMatch(/Never invent, round or change a price/)
+          expect(out).toMatch(/Never say they have paid[^\n]*until a tool says so/)
+          expect(out).toMatch(/call check_my_purchase/)
+          expect(out).toMatch(/end your message with its url/)
+          // MIAHATCH.6 (Task 20, R1) — the trial first, only when a tool says so.
+          expect(out).toMatch(/offer the free trial first, before the paid offers, only when book_class or list_purchase_options says trial_available is true/)
+          expect(out).toMatch(/Never say "free trial" or offer one otherwise/)
+          expect(out).toMatch(/call send_purchase_link with offer_id "trial"/)
+          expect(out).toMatch(/Say the trial is on their account, or that a class is booked, only when that tool says so/)
+          expect(out.split('\n').find((l) => l.startsWith('- FREE TRIAL:'))).not.toMatch(/[–—]/)
+        }
+      }
+      expect(named(true, null)).toMatch(/## Buying classes or a membership at Hatch Street/)
+      expect(named(true, null)).toMatch(/Buying from chat is only for Hatch Street; for the other studio, hand off\./)
+      expect(named(false, null)).not.toMatch(/for the other studio, hand off\./)
+      for (const multi of [false, true]) {
+        for (const url of [null, 'https://hatch.example.test/book']) {
+          const read = render('read', multi, url)
+          expect(read).not.toMatch(/send_purchase_link|list_purchase_options|check_my_purchase|Buying classes|free trial first/)
+        }
+      }
+      expect(CUSTOMER_AGENT_BASE_PROMPT).not.toMatch(/send_purchase_link/)
+    })
+
+    it('the stable prefix is byte-identical across two turns', () => {
+      const o = { businessName: 'B', locationName: 'Hatch', un1tVariant: 'full', un1tStudioName: 'Hatch Street', multiStudio: false, bookings: false, bookingUrl: 'https://hatch.example.test/book', membershipSource: UN1T_SOURCE, knowledge: [{ category: 'faq', title: 'Q', content: 'A' }] }
+      const a = buildCachedSystem({ ...o, today: 'Saturday' })
+      const b = buildCachedSystem({ ...o, today: 'Sunday', identityPreverified: true, factsBlocks: ['## Facts for Other\nx'] })
+      expect(a[0]).toEqual(b[0])
+      expect(a[0].text).toContain('You can book and cancel classes at Hatch Street in chat')
+    })
   })
 
   it('read variant: you cannot book from chat; share the booking link or hand off; account answers from tools only', () => {
@@ -791,5 +931,63 @@ describe('facts blocks in the uncached suffix only', () => {
   it('with no un1t options the prompt is unchanged', () => {
     expect(buildCustomerSystemPrompt({ ...base, un1tVariant: null, multiStudio: false, factsBlocks: [] }))
       .toBe(buildCustomerSystemPrompt(base))
+  })
+})
+
+// MIAHATCH.6 (Task 25 fix round 1) — the class a trial-used hand-off left on
+// the thread, one line in the uncached suffix of a un1t_full turn.
+describe('the trial-used class line', () => {
+  const base = { businessName: 'B', locationName: 'Hatch Street', today: 'Saturday', knowledge: [{ category: 'faq', title: 'Q', content: 'A' }], un1tVariant: 'full', un1tStudioName: 'Hatch Street' }
+  const line = buildTrialUsedClassLine({ className: 'Strength', classTime: 'Thu 23 Oct, 19:30', eventId: 'un1t:e0000000-0000-4000-8000-000000000001' })
+
+  it('names the class, its time and the ids send_purchase_link needs, on one line with no em or en dash', () => {
+    expect(line).toContain('Strength at Thu 23 Oct, 19:30')
+    expect(line).toContain('event_id un1t:e0000000-0000-4000-8000-000000000001, starts_at Thu 23 Oct, 19:30')
+    expect(line).toMatch(/send_purchase_link/)
+    expect(line).toMatch(/gone or has started, say so and offer another/)
+    expect(line).not.toMatch(/[\n\u2013\u2014]/)
+    expect(buildTrialUsedClassLine({ className: 'Lift \u2014 Heavy\nDay', classTime: 'Thu 23 Oct, 19:30', eventId: 'un1t:x' })).toContain('Lift - Heavy Day at')
+    expect(buildTrialUsedClassLine({ classTime: 'Thu 23 Oct, 19:30', eventId: '' })).toBe('')
+    expect(buildTrialUsedClassLine({ classTime: '', eventId: 'un1t:x' })).toBe('')
+  })
+
+  it('goes in the uncached suffix only: stable text and cache_control unchanged', () => {
+    const without = buildCachedSystem(base)
+    const withLine = buildCachedSystem({ ...base, trialUsedClassLine: line })
+    expect(withLine[0]).toEqual(without[0])
+    expect(withLine[0].text).not.toContain('Strength')
+    expect(withLine[1].cache_control).toBeUndefined()
+    expect(withLine[1].text.endsWith(line)).toBe(true)
+    expect(buildCustomerSystemPromptParts({ ...base, trialUsedClassLine: line }).stable).toBe(buildCustomerSystemPromptParts(base).stable)
+  })
+
+  it('absent or blank: the prompt is byte-identical', () => {
+    expect(buildCachedSystem({ ...base, trialUsedClassLine: '' })).toEqual(buildCachedSystem(base))
+    expect(buildCachedSystem({ ...base, trialUsedClassLine: '   ' })).toEqual(buildCachedSystem(base))
+  })
+})
+
+// TRIALDONE.6 — the trial-done brief (trialDoneLineFor's output), one block in
+// the uncached suffix of a turn whose contact just finished their trial.
+describe('the trial-done line', () => {
+  const base = { businessName: 'B', locationName: 'Hatch Street', today: 'Saturday', knowledge: [{ category: 'faq', title: 'Q', content: 'A' }] }
+  const line = 'This customer finished their trial at Hatch Street on Saturday 17 October, and we messaged them about carrying on.'
+
+  it('the trial-done line is in the volatile block, not the cached one', () => {
+    const without = buildCachedSystem(base)
+    const withLine = buildCachedSystem({ ...base, trialDoneLine: line })
+    expect(withLine[0]).toEqual(without[0])
+    expect(withLine[0].text).not.toContain('finished their trial')
+    expect(withLine[0].cache_control).toEqual(without[0].cache_control)
+    expect(withLine[1].cache_control).toBeUndefined()
+    expect(withLine[1].text).toContain(line)
+    expect(buildCustomerSystemPromptParts({ ...base, trialDoneLine: line }).stable).toBe(buildCustomerSystemPromptParts(base).stable)
+  })
+
+  it('absent line changes nothing', () => {
+    expect(buildCachedSystem({ ...base, trialDoneLine: null })).toEqual(buildCachedSystem(base))
+    expect(buildCachedSystem({ ...base, trialDoneLine: '' })).toEqual(buildCachedSystem(base))
+    expect(buildCachedSystem({ ...base, trialDoneLine: '   ' })).toEqual(buildCachedSystem(base))
+    expect(buildCustomerSystemPrompt({ ...base, trialDoneLine: undefined })).toBe(buildCustomerSystemPrompt(base))
   })
 })

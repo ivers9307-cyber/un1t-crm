@@ -32,10 +32,11 @@ import {
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { notifyAgentApprovalRequest } from './approval-notify'
 import { formatClassTime } from './dublin-format'
-import { DEFAULT_TZ } from '@/lib/location-time'
-import { logError } from '@/lib/log'
+import { DEFAULT_TZ, zonedWallClockToInstant } from '@/lib/location-time'
+import { logError, logWarn } from '@/lib/log'
+import { freshCutoff, onlyFreshEvents } from '@/lib/un1t-online-freshness'
 import { refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
-import { UN1T_ID_PREFIX } from './studio-ids'
+import { UN1T_ID_PREFIX, parseAgentId } from './studio-ids'
 import { renderMiaCopy } from './mia-copy'
 
 // REGISTRYREAD.1b — what Mia is told when the auto lane has no usable Glofox
@@ -119,7 +120,10 @@ export const BOOKING_TOOLS = [
       'List available consultation (intro session) slots for a given date — for NEW or ' +
       'prospective customers; no identity verification needed. Use when someone asks to come ' +
       'in, try a class, book a consultation or intro. Returns the bookable times for that ' +
-      'date; if none, try the next day. Dates are YYYY-MM-DD.',
+      'date; if none, try the next day. Dates are YYYY-MM-DD. Work the date out from Today in ' +
+      'Context, then check the returned day_label is the day the customer asked for. Each slot ' +
+      'has a label (weekday, date and time, e.g. "Fri 23 Oct, 11:00") and a slot_id: offer ' +
+      'times with the day exactly as the label gives it, and book with that slot_id.',
     input_schema: {
       type: 'object',
       properties: {
@@ -136,18 +140,25 @@ export const BOOKING_TOOLS = [
       'know it from earlier in the chat), do NOT ask again — leave name/email out and the ' +
       'booking uses the details on file. Only ask a brand-new person we know nothing about for ' +
       'their name and email (a phone number too if it flows naturally). CRITICAL either way: ' +
-      'restate the slot (date + time) and get a clear yes before calling. They will receive a ' +
-      'confirmation automatically.',
+      'restate the slot by its label (day, date and time) and get a clear yes before calling. ' +
+      'Pass the slot_id from list_consultation_slots and the label you confirmed. Only a slot ' +
+      'on a day list_consultation_slots returned in this conversation can be booked; if the ' +
+      'listing was in an earlier message, list that same date again for its slot_id. Never ' +
+      'work a date out from a weekday name. If the booking is refused, relay the reason the ' +
+      'result gives and nothing else. They will receive a confirmation automatically.',
     input_schema: {
       type: 'object',
       properties: {
-        date: { type: 'string', description: 'YYYY-MM-DD, from list_consultation_slots.' },
-        start_time: { type: 'string', description: 'HH:MM start of the chosen slot.' },
+        slot_id: { type: 'string', description: 'The slot_id of the chosen slot, copied exactly from list_consultation_slots.' },
+        confirmed_label: { type: 'string', description: 'The slot as you confirmed it with the customer, e.g. "Fri 23 Oct, 11:00".' },
         name: { type: 'string', description: "The customer's full name. Omit if already on file — do not re-ask a known person." },
         email: { type: 'string', description: "The customer's email address. Omit if already on file — do not re-ask a known person." },
         phone: { type: 'string', description: 'Phone number if given.' },
       },
-      required: ['date', 'start_time'],
+      // MIACONSULT.1 — the slot_id replaced date + start_time (the executor
+      // still accepts that pair, judged the same way); both required, so the
+      // optional-parameter count is unchanged (tool-schemas.test.js ceiling).
+      required: ['slot_id', 'confirmed_label'],
     },
   },
   {
@@ -329,12 +340,16 @@ export async function listUn1tOnlineClasses(db, locationId, zone, nowMs = Date.n
   const fromIso = new Date(nowMs).toISOString()
   const toIso = new Date(nowMs + UN1T_TIMETABLE_DAYS * 86400_000).toISOString()
   try {
-    const { data, error } = await db.from('un1t_events')
+    // UN1TBOOK.19 — only classes the latest sync saw (freshCutoff; a stalled
+    // sync keeps every row). An unreadable cutoff throws into the catch below:
+    // the same hand-off as an unreadable timetable.
+    const cutoffIso = await freshCutoff(db, 'un1t_events', locationId)
+    const { data, error } = await onlyFreshEvents(db.from('un1t_events')
       .select(withEventIds ? 'un1t_id, title, starts_at, capacity, bookings_count' : 'title, starts_at')
       .eq('location_id', locationId)
       .eq('status', UN1T_SCHEDULED_STATUS)
       .gte('starts_at', fromIso)
-      .lte('starts_at', toIso)
+      .lte('starts_at', toIso), cutoffIso)
       .order('starts_at', { ascending: true })
       .limit(UN1T_TIMETABLE_LIMIT)
     if (error) {
@@ -450,7 +465,7 @@ export function consultationInputGuard({ name, email, date, start_time } = {}) {
     return { error: 'need_email', message: 'Ask for a valid email address — the confirmation goes there.' }
   }
   if (!DATE_RE.test(String(date || ''))) {
-    return { error: 'bad_date', message: 'date must be YYYY-MM-DD.' }
+    return { error: 'bad_date', message: 'Pass the slot_id from list_consultation_slots (or date as YYYY-MM-DD).' }
   }
   if (!TIME_RE.test(String(start_time || ''))) {
     return { error: 'bad_time', message: 'start_time must be HH:MM from list_consultation_slots.' }
@@ -461,6 +476,137 @@ export function consultationInputGuard({ name, email, date, start_time } = {}) {
 /** Find a slot by start time. Pure. */
 export function findSlot(slots, startTime) {
   return (slots || []).find((s) => s.start === startTime) || null
+}
+
+// ── MIACONSULT.1: a consultation slot carries its own date ──────────
+//
+// Live 19 Oct 2026 (Hatch Street): Mia listed Fri 23 Oct, offered "Friday at
+// 11am", and on the next turn booked 2026-10-24 (a Saturday) because she had
+// worked the date out again from the word "Friday". A tool result does not
+// survive into the next turn's history, so the date only lived in the model's
+// head. Every slot now carries a studio-zoned label (weekday + day + month +
+// time) and a slot_id, and book_consultation books only a slot on a date that
+// list_consultation_slots returned in this conversation.
+
+const SLOT_ID_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/
+
+/** The slot_id of a consultation slot: its exact date + start pair. Pure. */
+export function consultationSlotId(date, start) {
+  return `${date}T${start}`
+}
+
+/** Parse a slot_id back to { date, start_time }, or null when malformed. Pure. */
+export function parseConsultationSlotId(slotId) {
+  const m = String(slotId || '').trim().match(SLOT_ID_RE)
+  return m ? { date: m[1], start_time: m[2] } : null
+}
+
+/**
+ * The label the model relays for a consultation slot, e.g. "Fri 23 Oct, 11:00":
+ * the studio's wall clock rendered by the agent's one class-time formatter, so
+ * a consultation and a class read the same way. The weekday comes from the
+ * date itself; the zone round trip keeps the wall clock on both sides of a
+ * DST change. Pure.
+ */
+export function consultationSlotLabel(date, start, zone = DEFAULT_TZ) {
+  const ms = zonedWallClockToInstant(date, start, zone)
+  if (ms == null) return null
+  return formatClassTime(Math.floor(ms / 1000), zone)
+}
+
+/** The day part of a slot label, e.g. "Fri 23 Oct". Pure. */
+export function consultationDayLabel(date, zone = DEFAULT_TZ) {
+  const label = consultationSlotLabel(date, '12:00', zone)
+  return label ? label.split(',')[0] : null
+}
+
+const WEEKDAY_RE = /\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b/i
+// A day of the month: 1-2 digits, an optional ordinal suffix, and not part of
+// a time ("11:00", "11am", "11.30").
+const DAY_OF_MONTH_RE = /(?<![\d:.])(\d{1,2})(?:st|nd|rd|th)?\b(?!\s*(?:[:.]\d|am\b|pm\b))/i
+
+/**
+ * Does the label the model confirmed with the customer name a different day
+ * than the slot it is booking? Compares the weekday and the day of the month
+ * when the confirmed label carries them; a label with neither cannot
+ * disagree. Pure.
+ */
+export function confirmedLabelMismatch(confirmedLabel, slotLabel) {
+  const said = String(confirmedLabel || '')
+  const truth = String(slotLabel || '')
+  if (!said.trim() || !truth) return false
+  const saidDay = said.match(WEEKDAY_RE)
+  const truthDay = truth.match(WEEKDAY_RE)
+  if (saidDay && truthDay && saidDay[1].toLowerCase() !== truthDay[1].toLowerCase()) return true
+  const saidDate = said.match(DAY_OF_MONTH_RE)
+  const truthDate = truth.match(DAY_OF_MONTH_RE)
+  if (saidDate && truthDate && Number(saidDate[1]) !== Number(truthDate[1])) return true
+  return false
+}
+
+// How far back an earlier turn's listing still counts.
+const LISTED_LOOKBACK_DAYS = 14
+const LISTED_LOOKBACK_ROWS = 50
+const LISTED_DATE_IN_INPUT_RE = /"date"\s*:\s*"(\d{4}-\d{2}-\d{2})"/
+
+/**
+ * The dates list_consultation_slots returned in this conversation: this
+ * turn's (ctx.consultationDatesListed, filled by the list tool) plus earlier
+ * turns', read from the agent_decisions trace (each row's meta.tools records
+ * the call and its input). An unreadable trace leaves only this turn's dates,
+ * so the book tool refuses and Mia lists the day again: never a booking on an
+ * unoffered date. `known` is false when the caller gave no way to know
+ * (no conversation and no turn set): nothing to check against.
+ */
+async function consultationDatesListed(db, ctx, nowMs = Date.now()) {
+  const dates = new Set(ctx.consultationDatesListed || [])
+  if (!ctx.conversationId) return { dates, known: !!ctx.consultationDatesListed }
+  try {
+    let q = db.from('agent_decisions')
+      .select('meta')
+      .eq('conversation_id', ctx.conversationId)
+    if (ctx.channel) q = q.eq('channel', ctx.channel)
+    const { data, error } = await q
+      .gte('created_at', new Date(nowMs - LISTED_LOOKBACK_DAYS * 86400_000).toISOString())
+      .order('created_at', { ascending: false })
+      .limit(LISTED_LOOKBACK_ROWS)
+    if (error) {
+      logWarn('agent-consultation', 'earlier slot listings unreadable; only this turn counts', { conversationId: ctx.conversationId, err: error })
+      return { dates, known: true }
+    }
+    for (const row of Array.isArray(data) ? data : []) {
+      for (const t of Array.isArray(row?.meta?.tools) ? row.meta.tools : []) {
+        if (t?.name !== 'list_consultation_slots') continue
+        const m = String(t.input || '').match(LISTED_DATE_IN_INPUT_RE)
+        if (m) dates.add(m[1])
+      }
+    }
+  } catch (err) {
+    logWarn('agent-consultation', 'earlier slot listings read threw; only this turn counts', { conversationId: ctx.conversationId, err })
+  }
+  return { dates, known: true }
+}
+
+// A refused consultation booking: the precise reason, the slot as it really
+// is, and what Mia may say. booked:false so nothing reads it as a success.
+function consultationRefusal(reason, message, extra = {}) {
+  return { booked: false, error: reason, reason, ...extra, message }
+}
+
+// The zone a consultation type's slots are written in (its studio's). A failed
+// zone read is a refusal to the model, never a guessed clock.
+const CONSULTATION_ZONE_UNREADABLE = Object.freeze({
+  error: 'availability_unreadable',
+  message: 'Consultation times could not be checked just now. Do not offer or confirm a time. Offer to hand off to the team.',
+})
+async function consultationZone(db, eventType) {
+  const { eventTypeZone } = await import('@/lib/booking-slots')
+  try {
+    return await eventTypeZone(db, eventType)
+  } catch (err) {
+    logWarn('agent-consultation', 'consultation studio zone unreadable', { locationId: eventType?.location_id, errClass: err?.name })
+    return null
+  }
 }
 
 // ── IO helpers ──────────────────────────────────────────────────────
@@ -674,6 +820,8 @@ async function reelectSiblingWithCredits({
 // member's un1t.online studio answers with its chat_booking_unavailable_text
 // ({studio}, {link} = that studio's booking_url, from its own resolved
 // settings). No answerable un1t.online studio: the not-at-this-studio refusal.
+// MIAHATCH.5 — block 3b never reaches this: it books and cancels through
+// un1t-booking.js (Tasks 16 and 17).
 async function un1tChatBookingAnswer(toolName, ctx) {
   const studio = ctx?.turn?.block === 'un1t_read_dual'
     ? (ctx.turn.answerable || []).find((s) => s?.providerKey === 'un1t_online')
@@ -685,9 +833,25 @@ async function un1tChatBookingAnswer(toolName, ctx) {
   } catch { settings = null }
   if (!settings && studio.locationId === ctx.locationId) settings = ctx.settings || null
   const text = renderMiaCopy('chat_booking_unavailable_text', settings, { studio: studio.name, link: settings?.booking_url || null })
+  // MIAFLOW.1 — where this turn offers the thread studio's booking form
+  // (booking-flow.js), a booking there points to it before the link.
+  const bookingForm = toolName === 'book_class' && ctx?.bookingFlow?.offered === true && studio.locationId === ctx.locationId
+    ? { booking_form: 'Call send_booking_flow to send the booking form into the chat instead of sending this text.' }
+    : {}
   return toolName === 'book_class'
-    ? { booked: false, chat_booking_unavailable: true, text }
+    ? { booked: false, chat_booking_unavailable: true, text, ...bookingForm }
     : { cancelled: false, chat_booking_unavailable: true, text }
+}
+
+// MIAHATCH.5 — the answerable un1t.online studio a block 3b write acts at:
+// the one whose mirror holds the `un1t:` id (`studioFor`), else the first.
+// null when the turn has none.
+async function un1tActionStudio(db, ctx, rawId, studioFor) {
+  const un1tStudios = (ctx?.turn?.answerable || []).filter((s) => s?.providerKey === 'un1t_online')
+  if (!un1tStudios.length) return null
+  const parsed = parseAgentId(rawId)
+  const held = parsed?.provider === 'un1t_online' ? await studioFor(db, un1tStudios, parsed.id) : null
+  return held || un1tStudios[0]
 }
 
 // ── executor (IO) ───────────────────────────────────────────────────
@@ -701,8 +865,19 @@ export async function executeBookingTool(toolName, input, ctx) {
   const refused = refuseToolForTurn(toolName, ctx)
   if (refused) return refused
 
-  // MIAHATCH.2 — a `un1t:` event or booking id is a un1t.online class. Chat
-  // booking there is not live yet (slice 1): in the dual block the answer is
+  // MIAHATCH.5 Task 17 — request_refund is offered in block 3b only (refused
+  // above everywhere else): a record-only refund card at the un1t.online
+  // studio (un1t-booking.js, loaded lazily). Nothing is refunded and
+  // un1t.online is not called.
+  if (toolName === 'request_refund') {
+    if (ctx?.turn?.block !== 'un1t_full') return { ...TOOL_NOT_AT_THIS_STUDIO }
+    const { requestRefund, un1tStudioForBooking } = await import('./un1t-booking')
+    const studio = await un1tActionStudio(db, ctx, input?.booking_id, un1tStudioForBooking)
+    return studio ? requestRefund(ctx, input, studio) : { ...TOOL_NOT_AT_THIS_STUDIO }
+  }
+
+  // MIAHATCH.2 — a `un1t:` event or booking id is a un1t.online class. Outside
+  // block 3b chat booking there is not live (slice 1): in the dual block the answer is
   // the studio's operator-editable "not from chat yet" line with its booking
   // link; anywhere else (no un1t.online studio answerable for this sender, or
   // a block without one) it is no studio Mia answers for. Decided before any
@@ -711,7 +886,20 @@ export async function executeBookingTool(toolName, input, ctx) {
     // The prefix itself: a bare `un1t:` (no id after it) is still never a
     // Glofox id.
     const raw = toolName === 'book_class' ? input?.event_id : input?.booking_id
-    if (typeof raw === 'string' && raw.startsWith(UN1T_ID_PREFIX)) return un1tChatBookingAnswer(toolName, ctx)
+    if (typeof raw === 'string' && raw.startsWith(UN1T_ID_PREFIX)) {
+      // MIAHATCH.5 Tasks 16 and 17 — block 3b books and cancels at the
+      // un1t.online studio through D's book and cancel (un1t-booking.js,
+      // loaded lazily so no other turn imports the write side). Every other
+      // block keeps the slice 1 answer.
+      if (ctx?.turn?.block === 'un1t_full') {
+        const { un1tBookClass, un1tCancelBooking, un1tStudioForEvent, un1tStudioForBooking } = await import('./un1t-booking')
+        const isBook = toolName === 'book_class'
+        const studio = await un1tActionStudio(db, ctx, raw, isBook ? un1tStudioForEvent : un1tStudioForBooking)
+        if (!studio) return { ...TOOL_NOT_AT_THIS_STUDIO }
+        return isBook ? un1tBookClass(ctx, input, studio) : un1tCancelBooking(ctx, input, studio)
+      }
+      return un1tChatBookingAnswer(toolName, ctx)
+    }
   }
 
   // MIAHATCH.2 Task 6 — on a turn whose tool block reads un1t.online the
@@ -1353,11 +1541,22 @@ export async function executeBookingTool(toolName, input, ctx) {
     if (!DATE_RE.test(String(input?.date || ''))) {
       return { error: 'bad_date', message: 'date must be YYYY-MM-DD.' }
     }
-    const slots = await computeAvailableSlots(db, eventType, input.date)
+    const zone = await consultationZone(db, eventType)
+    if (!zone) return CONSULTATION_ZONE_UNREADABLE
+    const slots = await computeAvailableSlots(db, eventType, input.date, { zone })
+    // MIACONSULT.1 — remember the date for book_consultation (this turn; later
+    // turns read it back from the agent_decisions trace).
+    ctx.consultationDatesListed?.add(input.date)
     return {
       date: input.date,
+      day_label: consultationDayLabel(input.date, zone),
       booking_type: eventType.name,
-      slots: slots.map((s) => ({ start: s.start, end: s.end })),
+      slots: slots.map((s) => ({
+        slot_id: consultationSlotId(input.date, s.start),
+        label: consultationSlotLabel(input.date, s.start, zone),
+        start: s.start,
+        end: s.end,
+      })),
     }
   }
 
@@ -1375,19 +1574,73 @@ export async function executeBookingTool(toolName, input, ctx) {
         .maybeSingle()
       consultContact = data || {}
     }
-    const identity = resolveConsultationIdentity({ input: input || {}, contact: consultContact, nameHint: ctx.nameHint })
-    const guard = consultationInputGuard({ ...(input || {}), name: identity.name, email: identity.email })
+    // MIACONSULT.1 — the slot comes from its slot_id (the exact date + time
+    // pair list_consultation_slots returned); a bare date + start_time is
+    // still accepted and judged the same way. Both given and disagreeing is the
+    // live-incident shape (a date recomputed from a weekday): refused.
+    const raw = input || {}
+    let want = { date: raw.date, start_time: raw.start_time }
+    if (raw.slot_id != null && String(raw.slot_id).trim()) {
+      const parsed = parseConsultationSlotId(raw.slot_id)
+      if (!parsed) {
+        return consultationRefusal('not_a_listed_slot',
+          'That slot_id is not one list_consultation_slots returned. Copy the slot_id exactly from the list (list the day again if it was in an earlier message). Do not tell the customer the slot was taken.')
+      }
+      if ((raw.date && raw.date !== parsed.date) || (raw.start_time && raw.start_time !== parsed.start_time)) {
+        return consultationRefusal('wrong_date',
+          `The slot_id is for ${parsed.date} at ${parsed.start_time}, but you also passed ${raw.date || parsed.date} at ${raw.start_time || parsed.start_time}. Book with the slot_id alone, for the slot whose label you confirmed with the customer. Do not tell the customer the slot was taken.`)
+      }
+      want = parsed
+    }
+    const identity = resolveConsultationIdentity({ input: raw, contact: consultContact, nameHint: ctx.nameHint })
+    const guard = consultationInputGuard({ ...raw, ...want, name: identity.name, email: identity.email })
     if (!guard.ok) return guard
 
-    const { computeAvailableSlots } = await import('@/lib/booking-slots')
+    const { findBookableSlot, daySlotGrid } = await import('@/lib/booking-slots')
     const eventType = await resolveConsultationEventType(db, locationId, settings)
     if (!eventType) {
       return { error: 'no_consultation_type', message: 'No consultation booking type is configured — hand off to the team.' }
     }
-    const slots = await computeAvailableSlots(db, eventType, input.date)
-    const slot = findSlot(slots, input.start_time)
+    const zone = await consultationZone(db, eventType)
+    if (!zone) return CONSULTATION_ZONE_UNREADABLE
+    const requested = consultationSlotLabel(want.date, want.start_time, zone) || `${want.date} ${want.start_time}`
+
+    // The day the customer agreed to must be the day being booked.
+    if (confirmedLabelMismatch(raw.confirmed_label, requested)) {
+      return consultationRefusal('wrong_date',
+        `You confirmed "${raw.confirmed_label}" with the customer, but ${want.date} at ${want.start_time} is ${requested}. Nothing was booked. Check which day the customer agreed to, using the labels from list_consultation_slots, and confirm again. Do not tell the customer the slot was taken.`,
+        { requested })
+    }
+
+    // Only a slot on a day list_consultation_slots returned in this
+    // conversation (the live incident booked a Saturday nobody offered).
+    const listed = await consultationDatesListed(db, ctx)
+    if (listed.known && !listed.dates.has(want.date)) {
+      const offeredDays = [...listed.dates].sort().map((d) => consultationDayLabel(d, zone))
+      return consultationRefusal('not_a_listed_slot',
+        `${requested} was never offered: list_consultation_slots has not returned ${want.date} in this conversation${offeredDays.length ? ` (it returned ${offeredDays.join(', ')})` : ''}. Nothing was booked. Do not say the slot was taken. Use the slot_id for the slot you actually offered (list that day again if it was in an earlier message), or check the day with the customer.`,
+        { requested, offered_days: offeredDays })
+    }
+
+    // The write path's check (BOOKINGSELF.1): fails closed on an unreadable
+    // bookings/blocked read, never "free".
+    const { slot, error: slotErr } = await findBookableSlot(db, eventType, want.date, want.start_time, { zone })
+    if (slotErr) {
+      logWarn('agent-consultation', 'slot availability unreadable; consultation not booked', { locationId, err: slotErr })
+      return consultationRefusal('availability_unreadable',
+        'Availability could not be checked just now, so nothing was booked. Do not say the slot was taken. Offer to hand off to the team.',
+        { requested })
+    }
     if (!slot) {
-      return { error: 'slot_taken', message: 'That slot is no longer available — re-run list_consultation_slots and offer the fresh times.' }
+      const onGrid = daySlotGrid(eventType, want.date).some((s) => s.start === want.start_time)
+      if (!onGrid) {
+        return consultationRefusal('not_a_listed_slot',
+          `${requested} is not one of the consultation times on that day, so nothing was booked. Do not say the slot was taken. Offer the times list_consultation_slots returned, by their labels.`,
+          { requested })
+      }
+      return consultationRefusal('slot_taken',
+        `${requested} was booked by someone else since it was offered. Nothing was booked. Say exactly that, re-run list_consultation_slots for that day and offer the fresh times by their labels.`,
+        { requested })
     }
 
     // Same insert shape as /api/public/book — the handle_new_booking
@@ -1396,7 +1649,7 @@ export async function executeBookingTool(toolName, input, ctx) {
     const { data: booking, error } = await db.from('bookings').insert({
       event_type_id: eventType.id,
       location_id: eventType.location_id || locationId || null,
-      booking_date: input.date,
+      booking_date: want.date,
       start_time: slot.start,
       end_time: slot.end,
       customer_name: identity.name,
@@ -1431,7 +1684,7 @@ export async function executeBookingTool(toolName, input, ctx) {
       details: {
         booking_id: booking.id,
         booking_type: eventType.name,
-        date: input.date,
+        date: want.date,
         start_time: slot.start,
         customer_name: identity.name,
         mode: 'auto',
@@ -1440,8 +1693,10 @@ export async function executeBookingTool(toolName, input, ctx) {
     return {
       booked: true,
       booking_type: eventType.name,
-      date: input.date,
+      date: want.date,
       start_time: slot.start,
+      slot_id: consultationSlotId(want.date, slot.start),
+      label: requested,
       note: 'A confirmation is being sent to their email/phone automatically.',
     }
   }

@@ -235,4 +235,19 @@ describe('runSequences — branch steps', () => {
     expect(payload.current_step_order).toBe(4)
     expect(payload.status).toBe('active')
   })
+
+  it('passes the sequence studio to the branch, so a studio-scoped predicate reads the right studio', async () => {
+    const steps = [
+      { id: 'st-2', step_order: 2, step_type: 'branch', config: { predicate: { type: 'booked_class_at_studio' }, then_step_order: 5, else_step_order: 3 }, delay_days: 0, delay_hours: 0, delay_minutes: 0 },
+      { id: 'st-5', step_order: 5, step_type: 'sms', sms_body: 'yes arm', config: { next_step_order: 'end' }, delay_days: 0, delay_hours: 0, delay_minutes: 0 },
+    ]
+    const { db } = makeDb(routeFor({ steps, enrollment }))
+    createServerClient.mockReturnValue(db)
+    processBranchStep.mockClear()
+    processBranchStep.mockResolvedValue(5)
+
+    await runSequences()
+
+    expect(processBranchStep).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-1' }))
+  })
 })

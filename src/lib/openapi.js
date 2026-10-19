@@ -3214,6 +3214,42 @@ registry.registerPath({
   },
 })
 
+// MIAHATCH.6 — the payment links Mia has sent a contact, for the contact page's
+// "Payment link sent" chip. Cookie only. Six columns, never the checkout URL or a
+// token; limited to studios where the caller holds Contacts; a contact the caller
+// cannot see is a 404.
+registry.registerPath({
+  method: 'get',
+  path: '/api/contacts/{id}/mia-purchase-intents',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: "Mia's payment-link intents for a contact (no checkout URL, no token)",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: {
+      description: 'Intents at the viewer\'s studios, newest first',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.array(z.object({
+              id: z.string(),
+              location_id: z.string(),
+              product_title: z.string().nullable(),
+              status: z.enum(['link_sent', 'paid', 'booked', 'book_failed', 'no_class', 'expired', 'refused']),
+              created_at: z.string(),
+              expires_at: z.string(),
+            })),
+          }),
+        },
+      },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found (or not visible to the caller)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Intents could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // REPSET-P5 — admin app-account linking (contacts.user_id ↔ auth user).
 // Master/owner only; staff never self-link their member contact.
 registry.registerPath({
@@ -5022,6 +5058,32 @@ registry.registerPath({
     200: { description: 'Per-platform sync results' },
     403: { description: 'Forbidden — admin role at this location required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// Glofox sibling-studio repair (GLOFOXSIBLING.1)
+registry.registerPath({
+  method: 'post',
+  path: '/api/glofox/crossover-backfill',
+  tags: ['Glofox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Find (and optionally link) Glofox members whose contact lives at a sibling studio',
+  description: 'GLOFOXSIBLING.1 — master only. Reads one page of the studio\'s Glofox members and lists those with no contact at the studio whose one contact lives at another studio of the same organisation (contacts are unique per email per organisation, mig 712, so the old sync could not create them). dry_run (default true) only reads; dry_run:false runs the member sync for up to 25 of the page\'s candidates, which links each one (glofox_crossover_members, mig 758, plus the studio\'s preferences row). Ids only in the response.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: uuidLike,
+      page: z.number().int().min(1).optional(),
+      limit: z.number().int().min(1).max(100).optional(),
+      dry_run: z.boolean().optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: '{ success, data: { dry_run, page, has_more, scanned, candidates: [{ glofox_member_id, contact_id, home_location_id, how }], conflicts, errors, applied, left_on_page } }' },
+    400: { description: 'Invalid body, or Glofox not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Master only', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The studio\'s contacts could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'glofox_settings_unreadable: the studio\'s Glofox settings could not be read just now; retry', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -9647,6 +9709,78 @@ registry.registerPath({
   },
 })
 
+// MIAHATCH.4 (Task 14) — what Mia can sell at a un1t.online studio (mig 752).
+const MiaOfferItem = z.object({
+  id: uuidLike,
+  un1t_product_row_id: uuidLike,
+  title: z.string().nullable(),
+  price_cents: z.number().int().nullable(),
+  interval: z.string().nullable(),
+  visibility: z.string().nullable(),
+  private: z.boolean(),
+  blurb: z.string(),
+  sort_order: z.number().int(),
+  inactive: z.boolean(),
+}).openapi('MiaOffer')
+const MiaOfferProduct = z.object({
+  id: uuidLike,
+  title: z.string().nullable(),
+  price_cents: z.number().int(),
+  interval: z.string().nullable(),
+  private: z.boolean(),
+}).openapi('MiaOfferProduct')
+const MiaOffersData = z.object({ offers: z.array(MiaOfferItem), products: z.array(MiaOfferProduct) }).openapi('MiaOffersData')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/mia-offers',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The products Mia can sell at a un1t.online studio, and the products that can be added',
+  description:
+    '`offers` is the studio\'s saved list in order, each flagged `inactive` when its product has gone inactive or free ' +
+    '(Mia skips it) and `private` for a members-only product. `products` is what can be added: active, price above zero, ' +
+    'at this studio, private ones included and flagged. Any member of the studio may read. A location the caller is not ' +
+    'at is 404 (a detail route never confirms an id); a studio that is not on un1t.online is 400.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The offer list and the addable products', content: { 'application/json': { schema: SuccessResponse(MiaOffersData) } } },
+    400: { description: 'The studio is not on un1t.online', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read failed (never an empty list)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/mia-offers',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Replace the products Mia can sell at a un1t.online studio (owner or master)',
+  description:
+    'Body `{ offers: [{ un1t_product_row_id, blurb }] }`; array order is the order Mia offers them, a blurb is at most 140 ' +
+    'characters (blank = none), a product may be listed once, at most 50. Every product must be at this studio, active and ' +
+    'priced above zero, else 400 `{ error: "product_not_sellable", product_id }` and nothing is written; a private product is ' +
+    'allowed. The save updates the rows that stay, inserts the new ones and only then deletes the rest, so a failure part-way ' +
+    'never leaves the studio with no offers. Gate: membership (404), then `canEditMiaSettings` at the target (owner, or master; ' +
+    '403 otherwise), then validation; a studio not on un1t.online is 400. Returns the same data as GET.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      offers: z.array(z.object({ un1t_product_row_id: uuidLike, blurb: z.string().max(140).optional() })).max(50),
+    }).openapi('MiaOffersSave') } } },
+  },
+  responses: {
+    200: { description: 'Saved: the offer list and the addable products', content: { 'application/json': { schema: SuccessResponse(MiaOffersData) } } },
+    400: { description: 'Invalid body, `product_not_sellable`, or the studio is not on un1t.online', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden: owner or master at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A write failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // UN1TSYNC.7 — Hatch Street's un1t.online connection (migs 726, channel_connections
 // platform 'un1t_online'). Owner/master AT the location on every method; the
 // token is write-only and appears in no response.
@@ -10835,7 +10969,8 @@ registry.registerPath({
     'For the live verification run. op create | forgot_password | trial | trial_skip_eligibility | book | cancel | checkout, ' +
     'origin test_account, the master as actor, every write gate still applies. The contact must be in the studio\'s ' +
     'organisation (404) and named MIA TEST in any case (403); create needs terms_confirmed: true. The answer never carries ' +
-    'a password or un1t.online\'s create body; a checkout URL is returned to the master and logged nowhere.',
+    'a password or un1t.online\'s create body; a checkout URL is returned to the master and logged nowhere. forgot_password ' +
+    'allows up to 3 resets per person per 30 minutes; past that it is refused reset_limit with next_allowed_at.',
   request: {
     body: { content: { 'application/json': { schema: z.object({
       op: z.enum(['create', 'forgot_password', 'trial', 'trial_skip_eligibility', 'book', 'cancel', 'checkout']),
@@ -10846,7 +10981,7 @@ registry.registerPath({
     }) } } },
   },
   responses: {
-    200: { description: '{ verdict | outcome, code, message, un1t_user_id?, booking_id?, checkout_url?, free?, ledger_id }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    200: { description: '{ verdict | outcome, code, message, un1t_user_id?, booking_id?, checkout_url?, free?, next_allowed_at?, ledger_id }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
     400: { description: 'Bad body, terms not confirmed, or no un1t.online account linked', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Not a master, or not the MIA TEST contact', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Studio or contact not found in the same organisation', content: { 'application/json': { schema: ErrorResponse } } },

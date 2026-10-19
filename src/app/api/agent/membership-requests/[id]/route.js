@@ -22,6 +22,7 @@ import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { staffActorName } from '@/lib/staff-actor-name'
 import { resolveAgentSettingsForLocation } from '@/lib/agent/settings-resolve'
+import { isMiaUn1tCard } from '@/lib/agent/mia-un1t-card'
 
 // PATCH /api/agent/membership-requests/[id] — staff decides a queued
 // agent request. Decision rights follow the comms surface (any staff
@@ -384,8 +385,13 @@ export async function PATCH(request, { params }) {
     }
   }
 
+  // MIAHATCH.5 — a class_cancellation at a un1t.online studio
+  // (details.provider) is never a Glofox cancel, whatever its origin: Mia's
+  // cards run D's executor below (executeMiaUn1tCard), any other lands failed.
+  const un1tCancellation = row.kind === 'class_cancellation' && details?.provider === 'un1t_online'
+
   // AGENT-CANCEL.1 — approving a drafted cancellation executes it.
-  if (executing && row.kind === 'class_cancellation') {
+  if (executing && row.kind === 'class_cancellation' && !un1tCancellation) {
     const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, cancelBooking } =
       await import('@/lib/glofox')
     const { data: contact } = await db.from('contacts')
@@ -456,11 +462,16 @@ export async function PATCH(request, { params }) {
   // UN1TWRITE.23 — a un1t.online funnel card (details.provider) runs the
   // un1t.online executor, never the Glofox one and never the manual record;
   // its record-only reasons skip the past-start guard like a manual booking.
+  // MIAHATCH.5 — a un1t.online cancellation carries starts_at too, and is
+  // guarded the same way (cancelling a class that has run helps nobody).
   const un1tBooking = row.kind === 'class_booking' && details?.provider === 'un1t_online'
   const un1tRecordOnly = un1tBooking && UN1T_RECORD_ONLY_REASONS.has(details?.reason)
   const manualBooking = row.kind === 'class_booking' && !un1tBooking && isHandBookedEventId(details?.event_id)
+  // Mia's own card; its executor (agent/un1t-approval-branch.js) loads lazily
+  // below like D's, the predicate is import-free.
+  const miaUn1tCard = (un1tBooking || un1tCancellation) && isMiaUn1tCard(details)
   let expiredBeforeExecution = false
-  if (executing && row.kind === 'class_booking' && !manualBooking && !un1tRecordOnly) {
+  if (executing && (row.kind === 'class_booking' || un1tCancellation) && !manualBooking && !un1tRecordOnly) {
     const startsAtMs = Date.parse(row.details?.starts_at || '')
     if (Number.isFinite(startsAtMs) && startsAtMs < Date.now()) {
       expiredBeforeExecution = true
@@ -565,7 +576,7 @@ export async function PATCH(request, { params }) {
 
   // AGENT-HANDS.1 — approving a drafted class booking executes it.
   let un1tNotified = null
-  if (executing && un1tBooking && !expiredBeforeExecution) {
+  if (executing && un1tBooking && !miaUn1tCard && !expiredBeforeExecution) {
     const { executeUn1tApproval } = await import('@/lib/un1t-online-approval-execute')
     try {
       const r = await executeUn1tApproval(db, { row: { ...row, details }, actor: { id: user.id } })
@@ -582,6 +593,33 @@ export async function PATCH(request, { params }) {
     }
   }
 
+  // MIAHATCH.5 — Mia's Hatch Street booking and cancellation cards: the
+  // account she chose must still be the contact's (ACCOUNT_MISMATCH otherwise),
+  // then D's executor, then ONE in-thread confirmation recorded on the card
+  // (src/lib/agent/un1t-approval-branch.js). Past start stays expired above.
+  if (executing && miaUn1tCard) {
+    const { executeMiaUn1tCard } = await import('@/lib/agent/un1t-approval-branch')
+    try {
+      const r = await executeMiaUn1tCard(db, { row, details, actor: { id: user.id }, expiredBeforeExecution })
+      executed = r.executed
+      details = r.details
+      finalStatus = r.finalStatus
+      un1tNotified = r.customerNotified
+    } catch (e) {
+      // As D's branch: a database read failed mid-way, the card stays claimed
+      // and is retried from its stale marker; every un1t.online step resumes
+      // from the ledger.
+      logWarn('agent-requests', 'Mia un1t.online approval failed part way', { requestId: id, err: e })
+      return NextResponse.json({ success: false, error: 'Could not finish this just now. It can be retried from the card in a few minutes; nothing will be done twice.' }, { status: 500 })
+    }
+  } else if (executing && un1tCancellation && !expiredBeforeExecution) {
+    // No other un1t.online cancellation card exists today. Never Glofox:
+    // staff cancel it in un1t.online.
+    executed = { ok: false, message_code: 'NOT_EXECUTABLE_UN1T' }
+    details = { ...details, result: executed }
+    finalStatus = 'failed'
+  }
+
   if (executing && row.kind === 'class_booking' && !expiredBeforeExecution && !manualBooking && !un1tBooking) {
     const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, GLOFOX_BOOKING_MODEL } =
       await import('@/lib/glofox')
@@ -596,6 +634,8 @@ export async function PATCH(request, { params }) {
     // above already makes, and it defaults to row.contact_id, so every row
     // written before this existed executes exactly as it did.
     const executingContactId = row.details?.executing_contact_id || row.contact_id
+    // FLOWACK.1 — whether the in-thread confirmation below actually went.
+    let threadConfirmed = false
     const { data: contact } = await db.from('contacts')
       .select('glofox_member_id')
       .eq('id', executingContactId)
@@ -706,7 +746,7 @@ export async function PATCH(request, { params }) {
         if (success && row.conversation_id) {
           try {
             const { sendAgentThreadMessage, buildBookingConfirmationText } = await import('@/lib/agent/notify')
-            await sendAgentThreadMessage(db, {
+            const sent = await sendAgentThreadMessage(db, {
               channel: row.channel,
               conversationId: row.conversation_id,
               text: buildBookingConfirmationText({
@@ -715,6 +755,7 @@ export async function PATCH(request, { params }) {
                 template: await confirmationTemplate('booking'),
               }),
             })
+            threadConfirmed = sent?.sent === true
           } catch (e) {
             console.warn(`[agent-requests] confirmation send error: ${e?.message || e}`)
           }
@@ -723,9 +764,12 @@ export async function PATCH(request, { params }) {
     }
 
     // /start-funnel class bookings: keep the class_booking_requests queue row in
-    // sync (otherwise it's stuck in 'needs_review' forever) and — because these
-    // public leads have no agent conversation thread — send them the public
+    // sync (otherwise it's stuck in 'needs_review' forever) and send the public
     // booking_class_confirmed WhatsApp directly. Best-effort.
+    // FLOWACK.1 — a WhatsApp Flow card carries its thread (routeToReview links
+    // it) and was confirmed in-thread above; the template goes whenever that
+    // did not happen (a website card with no thread, or a 24h window that
+    // closed before staff approved). Never both.
     if (details?.source === 'start_funnel') {
       try {
         const cbrStatus = finalStatus === 'actioned' ? 'booked' : 'failed'
@@ -733,7 +777,7 @@ export async function PATCH(request, { params }) {
           .update({ status: cbrStatus, last_error: finalStatus === 'actioned' ? null : (executed?.message_code || 'approval_book_failed') })
           .eq('approval_request_id', id)
       } catch (e) { console.warn(`[agent-requests] cbr sync error: ${e?.message || e}`) }
-      if (finalStatus === 'actioned' && !row.conversation_id) {
+      if (finalStatus === 'actioned' && !threadConfirmed) {
         try {
           const { data: c } = await db.from('contacts').select('id, first_name, name, phone, wa_phone').eq('id', row.contact_id).maybeSingle()
           if (c) {
@@ -819,6 +863,31 @@ export async function PATCH(request, { params }) {
   // MANUALCONFIRM.1 — the manual booking's email result rides the same field.
   if (manualNotified) customerNotified = manualNotified
   if (un1tNotified) customerNotified = un1tNotified
+
+  // FLOWACK.1 review — a un1t.online (or hand-booked) card filed from a
+  // WhatsApp Flow carries its thread (routeToReview links it): a real booking
+  // is confirmed there too, like the Glofox approve path (the email above
+  // still goes). A record-only un1t approval records what staff did by hand
+  // and confirms nothing. Best-effort.
+  // Mia's cards confirmed themselves in executeMiaUn1tCard (never twice).
+  const bookedByApproval = (un1tBooking || manualBooking) && !miaUn1tCard && finalStatus === 'actioned'
+    && executed?.ok === true && executed?.record_only !== true
+  if (executing && bookedByApproval && row.conversation_id) {
+    try {
+      const { sendAgentThreadMessage, buildBookingConfirmationText } = await import('@/lib/agent/notify')
+      await sendAgentThreadMessage(db, {
+        channel: row.channel,
+        conversationId: row.conversation_id,
+        text: buildBookingConfirmationText({
+          className: details?.class_name,
+          classTime: details?.class_time,
+          template: await confirmationTemplate('booking'),
+        }),
+      })
+    } catch (e) {
+      console.warn(`[agent-requests] Flow card confirmation send error: ${e?.message || e}`)
+    }
+  }
 
   // APPROVALS-STUDIO.1 — a decline is never silence: tell the customer
   // in-thread (operator-editable approval_decline_text). Best-effort; only

@@ -27,10 +27,25 @@
 //   organisation's unique index (another contact holds that user) is
 //   conflict 'un1t_link_conflict', never an overwrite. Then the un1t_clients row
 //   through mapClient.
+// - book / cancel, then (UN1TWRITE.11, spec D 6.3 and spec C §7): one
+//   class_bookings upsert on location_id,glofox_booking_id, built ONLY by C's
+//   mapUn1tBookingToClassBooking from the same answer (writtenBy 'crm'), so
+//   the coach's list and the dashboard see the change at once. Its
+//   raw.un1t.updated_at is un1t.online's own updated_at from the answer, or
+//   null: never the request time or our clock (C's tie-break compares
+//   un1t.online's clock only; with null, the next sync pull of the same rank
+//   replaces the row, and a terminal sync status always does). Same gate as
+//   C's projection: only at a studio whose membership_source is
+//   'un1t_online'. The event (title, starts_at) is this studio's un1t_events
+//   row; the name is contacts.name (a failed name read writes the row
+//   without member_name, so the stored name stands). With no contact id,
+//   contact_id is left out, never NULL over the sync's link. An unknown
+//   event or a status C does not project writes nothing: the next sync
+//   projects the booking. Never an update or a delete.
 // - checkout: nothing (no money has moved). trial: Task 10.
-// (The class_bookings write-through is Task 11.)
 
 import { mapBooking, mapClient } from './un1t-online-map.js'
+import { mapUn1tBookingToClassBooking } from './un1t-online-bookings.js'
 import { logError, logInfo, logWarn } from './log'
 
 const LOG_MODULE = 'un1t-online-write'
@@ -171,7 +186,85 @@ async function mirrorBooking(db, args, { read, stamp }) {
   }
 
   const credited = await refreshCredits(db, args, { read, stamp })
-  return { ok: ok && credited, row }
+  // UN1TWRITE.11: only when the booking row above had something to say.
+  const projected = row ? await writeClassBooking(db, args, { source, row, stamp }) : true
+  return { ok: ok && credited && projected, row }
+}
+
+/**
+ * UN1TWRITE.11 — the class_bookings row for a done book or cancel, through
+ * C's mapper. Returns false (logged, ids only) when a read or the write
+ * failed; a skip (not a un1t.online studio, no event yet, a status C does
+ * not project) is logged and returns true. The verdict never depends on it.
+ */
+async function writeClassBooking(db, args, { source, row, stamp }) {
+  const { locationId, contactId } = args
+  try {
+    // The projection's own gate: un1t classes only where the timetable is un1t.online.
+    const { data: loc, error: locError } = await db
+      .from('locations')
+      .select('membership_source')
+      .eq('id', locationId)
+      .maybeSingle()
+    if (locError) {
+      logError(LOG_MODULE, 'mirror: class_bookings not written, the studio could not be read', meta(args, locError.code ?? null))
+      return false
+    }
+    if (loc?.membership_source !== 'un1t_online') {
+      logInfo(LOG_MODULE, 'mirror: class_bookings not written, the studio is not a un1t.online studio', meta(args, 'not_un1t_online'))
+      return true
+    }
+
+    const mapped = mapBooking(source, { locationId, now: stamp })
+    const eventId = mapped.event_id
+    // A skip, not a failure (the projection counts these as skipped_*): the
+    // next sync projects the booking.
+    if (!eventId) {
+      logWarn(LOG_MODULE, 'mirror: class_bookings not written, the answer names no event; the next sync projects it', meta(args, 'no_event'))
+      return true
+    }
+    const { data: event, error: eventError } = await db
+      .from('un1t_events')
+      .select('un1t_id, title, starts_at')
+      .eq('location_id', locationId)
+      .eq('un1t_id', eventId)
+      .maybeSingle()
+    if (eventError) {
+      logError(LOG_MODULE, 'mirror: class_bookings not written, the event read failed', meta(args, eventError.code ?? null))
+      return false
+    }
+    if (!event) {
+      logWarn(LOG_MODULE, 'mirror: class_bookings not written, the studio holds no such event yet; the next sync projects it', meta(args, 'no_event'))
+      return true
+    }
+
+    // undefined = the key is left out, so the stored name stands.
+    let memberName
+    if (contactId) {
+      const { data: person, error: nameError } = await db.from('contacts').select('name').eq('id', contactId).maybeSingle()
+      if (nameError) logWarn(LOG_MODULE, 'mirror: contact name unreadable; class_bookings written without member_name', meta(args, nameError.code ?? null))
+      else memberName = person?.name ?? null
+    }
+
+    const bookingRow = { ...mapped, contact_id: contactId ?? null, has_guest: typeof row.has_guest === 'boolean' ? row.has_guest : null }
+    const classRow = mapUn1tBookingToClassBooking(bookingRow, { locationId, event, memberName, nowIso: stamp, writtenBy: 'crm' })
+    if (!classRow) {
+      logWarn(LOG_MODULE, 'mirror: class_bookings not written, a status the projection does not carry', meta(args, 'unprojectable_status'))
+      return true
+    }
+    // Only a known contact: a NULL would undo the sync's own link.
+    if (!contactId) delete classRow.contact_id
+
+    const { error } = await db.from('class_bookings').upsert(classRow, { onConflict: 'location_id,glofox_booking_id' })
+    if (error) {
+      logError(LOG_MODULE, 'mirror: class_bookings write failed', meta(args, error.code ?? null))
+      return false
+    }
+    return true
+  } catch {
+    logError(LOG_MODULE, 'mirror: class_bookings write threw', meta(args, 'threw'))
+    return false
+  }
 }
 
 // mapBooking column → the source keys it is read from. A column the source

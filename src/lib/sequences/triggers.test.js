@@ -595,6 +595,47 @@ describe('triggerSequencesForContactCreated', () => {
     await expect(triggers.triggerSequencesForContactCreated('c1')).resolves.toBeUndefined()
     expect(logWarn).toHaveBeenCalled()
   })
+
+  // SHAREDCONTACT.1 — a contact is one person per organisation; signing up at
+  // a sibling studio is "new to that studio".
+  it('fires the JOINED studio\'s sequences for a same-organisation contact', async () => {
+    const db = mockDb({
+      contacts: { single: { id: 'c1', location_id: 'stillorgan', organization_id: 'org-1' } },
+      locations: { maybeSingle: { id: 'hatch', organization_id: 'org-1' } },
+      email_sequences: { list: [{ id: 'seq-hatch', audience_filter: null }] },
+    })
+    createServerClient.mockReturnValue(db)
+    await triggers.triggerSequencesForContactCreated('c1', { locationId: 'hatch' })
+    const seqBuilder = db.from.mock.results[db.from.mock.calls.findIndex(([t]) => t === 'email_sequences')].value
+    expect(seqBuilder.eq).toHaveBeenCalledWith('location_id', 'hatch')
+    expect(enrolContacts).toHaveBeenCalledWith({
+      sequenceId: 'seq-hatch',
+      contactIds: ['c1'],
+      sourceType: 'contact_created',
+      sourceRef: 'joined_studio',
+    })
+  })
+
+  it('refuses a studio in another organisation and enrols nothing', async () => {
+    createServerClient.mockReturnValue(mockDb({
+      contacts: { single: { id: 'c1', location_id: 'stillorgan', organization_id: 'org-1' } },
+      locations: { maybeSingle: { id: 'elsewhere', organization_id: 'org-2' } },
+    }))
+    await triggers.triggerSequencesForContactCreated('c1', { locationId: 'elsewhere' })
+    expect(enrolContacts).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('sequences', 'contact_created_skipped', { reason: 'cross_organisation', locationId: 'elsewhere' })
+  })
+
+  it('keeps "created" and the home studio when the given studio IS home, and carries a sourceRef', async () => {
+    const db = mockDb({
+      contacts: { single: { id: 'c1', location_id: 'hatch', organization_id: 'org-1' } },
+      email_sequences: { list: [{ id: 'seq-hatch', audience_filter: null }] },
+    })
+    createServerClient.mockReturnValue(db)
+    await triggers.triggerSequencesForContactCreated('c1', { locationId: 'hatch', sourceRef: 'un1t_online_signup' })
+    expect(db.from.mock.calls.map(([t]) => t)).not.toContain('locations')
+    expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({ sequenceId: 'seq-hatch', sourceRef: 'un1t_online_signup' }))
+  })
 })
 
 describe('triggerSequencesForSegmentRemoved', () => {

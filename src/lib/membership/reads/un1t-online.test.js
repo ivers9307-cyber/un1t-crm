@@ -116,7 +116,7 @@ beforeEach(() => vi.clearAllMocks())
 
 describe('un1tOnlineReads surface', () => {
   it('implements six reads plus pastDue, paymentsFor, pipelineInputs, trialEligibility, the four radar reads and arrears (UN1TRADAR.2), and pins arrears', () => {
-    expect(Object.keys(un1tOnlineReads).sort()).toEqual([...READS, 'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility', 'radarMembers', 'winbackContacts', 'leadContacts', 'radarPastDue', 'arrears', 'pinArrears'].sort())
+    expect(Object.keys(un1tOnlineReads).sort()).toEqual([...READS, 'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility', 'radarMembers', 'winbackContacts', 'leadContacts', 'radarPastDue', 'arrears', 'pinArrears', 'activeMemberContactIds'].sort())
     expect(Object.isFrozen(un1tOnlineReads)).toBe(true)
     expect(typeof un1tOnlineReads.arrears).toBe('function')
     expect(un1tOnlineReads.pinArrears).toBe(true)
@@ -895,6 +895,28 @@ describe('pipelineInputs and trialEligibility', () => {
       expect(subCols.some((c) => c.split(', ').includes('remote_created_at'))).toBe(true)
     })
 
+    // TRIALDONE.2 — the trial's expiry and each class's end time.
+    it('reads the trial product\'s expire_credits_in_days and each event\'s ends_at: trial_expires_at and attended_ends', async () => {
+      const w = world({
+        un1t_products: [prod({ expire_credits_in_days: '7' })],
+        un1t_transactions: [ctx({ remote_created_at: '2026-10-01T09:00:00Z' })],
+        un1t_events: [
+          { id: 'e1', location_id: HATCH, un1t_id: 'e1', starts_at: '2026-10-10T18:00:00Z', ends_at: '2026-10-10T18:45:00Z' },
+          { id: 'e0', location_id: HATCH, un1t_id: 'e0', starts_at: '2026-10-03T18:00:00Z', ends_at: null },
+        ],
+      })
+      w.un1t_bookings = [...w.un1t_bookings, { ...w.un1t_bookings[0], id: 'b0', un1t_id: 'b0', event_id: 'e0' }]
+      const { db, log } = makeDb(w)
+      const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      expect(out.data.snapshots.get('c1').trial_expires_at).toBe('2026-10-08T09:00:00.000Z')
+      expect(out.data.evidence.get('c1').trial_expires_at).toBe('2026-10-08T09:00:00.000Z')
+      expect(out.data.evidence.get('c1').attended_ends).toEqual(['2026-10-03T18:00:00Z', '2026-10-10T18:45:00Z'])
+      expect(out.data.snapshots.get('c2').trial_expires_at).toBeNull()
+      const cols = (t) => log.find((q) => q.table === t).cols.split(', ')
+      expect(cols('un1t_products')).toContain('expire_credits_in_days:raw->>expire_credits_in_days')
+      expect(cols('un1t_events')).toContain('ends_at')
+    })
+
     it('counts only done ledger rows as a trial (a sent, unknown or refused row is not on the board)', async () => {
       // 3 credits on the account: with the trial known, they are trial credits (status 'trial')
       const base = {
@@ -1348,5 +1370,55 @@ describe('listLedgerTrials', () => {
     const out = await listLedgerTrials(db, HATCH)
     expect(out).toEqual({ ok: false, error: 'un1t_write_events boom' })
     expect(out.byUser).toBeUndefined()
+  })
+})
+
+// PIPEEXCL.1 — the studio's active members, for other studios' boards.
+describe('activeMemberContactIds', () => {
+  const STALE = '2026-10-17T11:00:00.000Z' // a row the latest pull no longer returned
+  const subRow = (over) => ({ id: `s-${over.un1t_user_id}`, location_id: HATCH, status: 'active', contact_id: null, synced_at: SYNCED, ...over })
+  const clientRow = (over) => ({ id: `cl-${over.un1t_user_id}`, location_id: HATCH, synced_at: SYNCED, ...over })
+
+  it('a fresh active or past-due subscription here is an active member, named by its user\'s contact (else its own contact_id)', async () => {
+    const { db } = makeDb({
+      un1t_subscriptions: [
+        subRow({ un1t_user_id: 'u-active' }),
+        subRow({ un1t_user_id: 'u-pastdue', status: 'past_due' }),
+        subRow({ un1t_user_id: 'u-own', contact_id: 'c-own' }),
+        subRow({ un1t_user_id: 'u-trialing', status: 'trialing' }),
+        subRow({ un1t_user_id: 'u-cancelled', status: 'canceled' }),
+        subRow({ un1t_user_id: 'u-paused', status: 'paused' }),
+        subRow({ un1t_user_id: 'u-stale', synced_at: STALE }),
+        subRow({ un1t_user_id: 'u-unlinked' }),
+        subRow({ un1t_user_id: 'u-other', location_id: STILLORGAN }),
+      ],
+      un1t_clients: [
+        clientRow({ un1t_user_id: 'u-active', contact_id: 'c-active' }),
+        clientRow({ un1t_user_id: 'u-pastdue', contact_id: 'c-pastdue' }),
+        clientRow({ un1t_user_id: 'u-trialing', contact_id: 'c-trialing' }),
+        clientRow({ un1t_user_id: 'u-cancelled', contact_id: 'c-cancelled' }),
+        clientRow({ un1t_user_id: 'u-paused', contact_id: 'c-paused' }),
+        clientRow({ un1t_user_id: 'u-stale', contact_id: 'c-stale' }),
+        clientRow({ un1t_user_id: 'u-unlinked', contact_id: null }),
+        clientRow({ un1t_user_id: 'u-other', contact_id: 'c-other', location_id: STILLORGAN }),
+      ],
+    })
+    const out = await un1tOnlineReads.activeMemberContactIds(db, HATCH)
+    expect(out.success).toBe(true)
+    expect(out.data.contactIds.sort()).toEqual(['c-active', 'c-own', 'c-pastdue'])
+  })
+
+  it('a studio with no subscription rows has no active members', async () => {
+    const { db } = makeDb({ un1t_subscriptions: [], un1t_clients: [] })
+    expect(await un1tOnlineReads.activeMemberContactIds(db, HATCH)).toEqual({ success: true, data: { contactIds: [] } })
+  })
+
+  it('a failed read is success:false, never an empty list', async () => {
+    for (const table of ['un1t_subscriptions', 'un1t_clients']) {
+      const { db } = makeDb({ un1t_subscriptions: [subRow({ un1t_user_id: 'u' })], un1t_clients: [clientRow({ un1t_user_id: 'u', contact_id: 'c' })] }, { fail: [table] })
+      const out = await un1tOnlineReads.activeMemberContactIds(db, HATCH)
+      expect(out.success).toBe(false)
+      expect(out.error).toMatch(/boom/)
+    }
   })
 })

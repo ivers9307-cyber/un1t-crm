@@ -1,7 +1,9 @@
 import { z } from 'zod'
 import {
   STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS, isKnownOverridePath, expandOverridden,
+  TRIAL_DONE_MIA_INSTRUCTION_DEFAULT,
 } from './settings-overrides'
+import { UUID_SHAPE } from '../uuid-shape'
 
 // MIA-HYGIENE.1 — the customer-agent settings CONTRACT, extracted from the
 // settings route so the schema, the defaults and the persisted-object builder
@@ -20,6 +22,9 @@ import {
 // settings-contract.test.js asserts every SettingsSchema key survives into its
 // output. Add a key to the schema without adding it here and CI fails —
 // which is the point.
+
+// TRIALDONE.3 — re-exported: one definition (settings-overrides.js, zod-free).
+export { TRIAL_DONE_MIA_INSTRUCTION_DEFAULT }
 
 export const DEFAULTS = {
   enabled: false,
@@ -56,6 +61,32 @@ export const DEFAULTS = {
   // {link} (the studio's booking_url) are filled in. Null → the code defaults
   // in lib/agent/default-copy.js, rendered by renderMiaCopy (mia-copy.js).
   chat_booking_unavailable_text: null,
+  // MIAHATCH.4 (spec 6.6) — Hatch purchase and pay-page copy, each null → the
+  // code default in lib/agent/default-copy.js via renderMiaCopy (mia-copy.js).
+  purchase_offer_intro_text: null,
+  purchase_link_text: null,
+  trial_used_text: null,
+  refund_request_text: null,
+  purchase_link_open_text: null,
+  purchase_paid_booked_text: null,
+  purchase_paid_class_gone_text: null,
+  purchase_paid_booking_failed_text: null,
+  purchase_paid_no_class_text: null,
+  pay_done_page_text: null,
+  pay_cancel_page_text: null,
+  // MIAFLOW.1 — the line on the booking Flow Mia sends at a studio whose Flow
+  // is switched on (settings.whatsapp_flow). Null → the code default in
+  // lib/agent/default-copy.js, rendered by renderMiaCopy (mia-copy.js).
+  booking_flow_text: null,
+  // FLOWACK.1 — the WhatsApp booking Flow's texts: the one acknowledgement a
+  // class submission gets (instead of a Mia turn), and the holding line when
+  // the booking goes to the team. Null → the code defaults in
+  // lib/agent/default-copy.js (sent by lib/whatsapp-flow/booking-notice.js).
+  // A booked Flow class is confirmed with booking_confirmation_text.
+  flow_booking_ack_text: null,
+  flow_booking_holding_text: null,
+  // FLOWACK.1 review — a re-submit of a class already asked for.
+  flow_booking_duplicate_text: null,
   // MIA-EXPIRY-QUIET.1 — booking_expired_text was RETIRED 2026-08-31. An
   // expired booking is now silent to the member (staff-push only), so there
   // is no customer copy left to edit. Stored values are ignored and dropped
@@ -85,6 +116,25 @@ export const DEFAULTS = {
   membership_cta_label: null,
   followups: { enabled: false, nudge_after_hours: 3, template_name: null, daily_cap: 50 },
   first_class_checkin: { enabled: false, delay_hours: 2, template_name: null, daily_cap: 20 },
+  // TRIALDONE.3 — the trial-finisher outreach (a un1t.online studio's opener
+  // template, follow-up and Mia's brief). STUDIO-ONLY and OFF: an org value
+  // never reaches a studio. `only_contact_ids` non-empty = a TEST: the runner
+  // acts on those contacts and nobody else, so enabled + a list is never live
+  // for everyone.
+  trial_done: {
+    enabled: false,
+    delay_hours: 2,
+    stale_after_hours: 24,
+    opener_template: 'hatch_trial_done_checkin',
+    followup_template: 'hatch_trial_done_followup',
+    followup_after_hours: 22,
+    followup_max_hours: 30,
+    nudge_after_hours: 3,
+    nudge_max_hours: 20,
+    daily_cap: 20,
+    only_contact_ids: [],
+    mia_instruction: TRIAL_DONE_MIA_INSTRUCTION_DEFAULT,
+  },
   // INBOX-APPROVALS-AI.4 — Wave 3 inline suggestion after approvals.
   // Absent/enabled-undefined means ON (the suggest route only treats an
   // explicit `enabled === false` as off); default true here matches that.
@@ -115,6 +165,11 @@ export const DEFAULTS = {
   // every studio). Null = no link set; Mia hands the thread to staff instead.
   booking_url: null,
   booking_cta_label: null,
+  // MIAHATCH.5 (Ruling 25) — Mia books, cancels and takes refund requests in
+  // chat at this un1t.online studio only when this is true AND the studio's
+  // locations.settings.un1t_online.writes_enabled is true (and only on
+  // WhatsApp). Studio-only, default off: with it off nothing changes.
+  un1t_chat_actions_enabled: false,
   // MIAORG.1 — minutes before an unanswered handoff escalates. Read by
   // lib/agent/handoff-sla.js (resolveHandoffSlaMinutes) but never part of this
   // contract, so every editor save erased it. Null = the code default.
@@ -126,6 +181,8 @@ export const DEFAULTS = {
 // settings-overrides.js, so the studio editor can use them without shipping
 // zod to the browser. Re-exported here: one definition, the same import path.
 export { STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS } from './settings-overrides'
+
+const TEMPLATE_NAME_SHAPE = /^[a-z0-9_]{1,512}$/
 
 export const SettingsSchema = z.object({
   enabled: z.boolean(),
@@ -142,6 +199,21 @@ export const SettingsSchema = z.object({
   no_credits_handoff_text: z.string().max(500).nullable().optional(),
   account_conflict_handoff_text: z.string().max(500).nullable().optional(),
   chat_booking_unavailable_text: z.string().max(500).nullable().optional(),
+  purchase_offer_intro_text: z.string().max(500).nullable().optional(),
+  purchase_link_text: z.string().max(500).nullable().optional(),
+  trial_used_text: z.string().max(500).nullable().optional(),
+  refund_request_text: z.string().max(500).nullable().optional(),
+  purchase_link_open_text: z.string().max(500).nullable().optional(),
+  purchase_paid_booked_text: z.string().max(500).nullable().optional(),
+  purchase_paid_class_gone_text: z.string().max(500).nullable().optional(),
+  purchase_paid_booking_failed_text: z.string().max(500).nullable().optional(),
+  purchase_paid_no_class_text: z.string().max(500).nullable().optional(),
+  pay_done_page_text: z.string().max(500).nullable().optional(),
+  pay_cancel_page_text: z.string().max(500).nullable().optional(),
+  booking_flow_text: z.string().max(500).nullable().optional(),
+  flow_booking_ack_text: z.string().max(500).nullable().optional(),
+  flow_booking_holding_text: z.string().max(500).nullable().optional(),
+  flow_booking_duplicate_text: z.string().max(500).nullable().optional(),
   approval_decline_text: z.string().max(500).nullable().optional(),
   welcome_greeting: z.string().max(500).nullable().optional(),
   link_button_text: z.string().max(25).nullable().optional(),
@@ -169,6 +241,8 @@ export const SettingsSchema = z.object({
     max_replies_per_location_per_day: z.number().int().min(1).max(100000).optional(),
   }).nullable().optional(),
   booking_mode: z.enum(['auto', 'draft']).optional().default('auto'),
+  // MIAHATCH.5 — studio-only, like test_mode: a real boolean, default false.
+  un1t_chat_actions_enabled: z.boolean().optional().default(false),
   agent_name: z.string().max(40).nullable().optional(),
   membership_signup_url: z.string().url().max(512).nullable().optional()
     .or(z.literal('').transform(() => null)),
@@ -184,6 +258,25 @@ export const SettingsSchema = z.object({
     delay_hours: z.number().min(1).max(24).optional().default(2),
     template_name: z.string().max(512).nullable().optional(),
     daily_cap: z.number().min(1).max(200).optional().default(20),
+  }).nullable().optional(),
+  // TRIALDONE.3 — studio-only (see STUDIO_ONLY_KEYS). Hours are whole numbers
+  // 1-72; templates are Meta template names; the instruction is customer-
+  // facing copy, so an em-dash is refused.
+  trial_done: z.object({
+    enabled: z.boolean().optional().default(false),
+    delay_hours: z.number().int().min(1).max(72).optional().default(DEFAULTS.trial_done.delay_hours),
+    stale_after_hours: z.number().int().min(1).max(72).optional().default(DEFAULTS.trial_done.stale_after_hours),
+    opener_template: z.string().regex(TEMPLATE_NAME_SHAPE).optional().default(DEFAULTS.trial_done.opener_template),
+    followup_template: z.string().regex(TEMPLATE_NAME_SHAPE).optional().default(DEFAULTS.trial_done.followup_template),
+    followup_after_hours: z.number().int().min(1).max(72).optional().default(DEFAULTS.trial_done.followup_after_hours),
+    followup_max_hours: z.number().int().min(1).max(72).optional().default(DEFAULTS.trial_done.followup_max_hours),
+    nudge_after_hours: z.number().int().min(1).max(72).optional().default(DEFAULTS.trial_done.nudge_after_hours),
+    nudge_max_hours: z.number().int().min(1).max(72).optional().default(DEFAULTS.trial_done.nudge_max_hours),
+    daily_cap: z.number().int().min(1).max(200).optional().default(DEFAULTS.trial_done.daily_cap),
+    only_contact_ids: z.array(z.string().regex(UUID_SHAPE, 'Must be a 36-character UUID-shaped string')).max(20).optional().default([]),
+    mia_instruction: z.string().min(1).max(1000)
+      .refine((s) => !s.includes('\u2014'), { message: 'No em-dashes in customer-facing copy' })
+      .optional().default(DEFAULTS.trial_done.mia_instruction),
   }).nullable().optional(),
   inline_suggestion: z.object({
     enabled: z.boolean().optional().default(true),
@@ -320,12 +413,28 @@ function buildFullBlob(data) {
     no_credits_handoff_text: data.no_credits_handoff_text?.trim() || null,
     account_conflict_handoff_text: data.account_conflict_handoff_text?.trim() || null,
     chat_booking_unavailable_text: data.chat_booking_unavailable_text?.trim() || null,
+    purchase_offer_intro_text: data.purchase_offer_intro_text?.trim() || null,
+    purchase_link_text: data.purchase_link_text?.trim() || null,
+    trial_used_text: data.trial_used_text?.trim() || null,
+    refund_request_text: data.refund_request_text?.trim() || null,
+    purchase_link_open_text: data.purchase_link_open_text?.trim() || null,
+    purchase_paid_booked_text: data.purchase_paid_booked_text?.trim() || null,
+    purchase_paid_class_gone_text: data.purchase_paid_class_gone_text?.trim() || null,
+    purchase_paid_booking_failed_text: data.purchase_paid_booking_failed_text?.trim() || null,
+    purchase_paid_no_class_text: data.purchase_paid_no_class_text?.trim() || null,
+    pay_done_page_text: data.pay_done_page_text?.trim() || null,
+    pay_cancel_page_text: data.pay_cancel_page_text?.trim() || null,
+    booking_flow_text: data.booking_flow_text?.trim() || null,
+    flow_booking_ack_text: data.flow_booking_ack_text?.trim() || null,
+    flow_booking_holding_text: data.flow_booking_holding_text?.trim() || null,
+    flow_booking_duplicate_text: data.flow_booking_duplicate_text?.trim() || null,
     approval_decline_text: data.approval_decline_text?.trim() || null,
     welcome_greeting: data.welcome_greeting?.trim() || null,
     link_button_text: data.link_button_text?.trim() || null,
     quiet_hours: normalizeQuietHours(data.quiet_hours),
     limits: data.limits || null,
     booking_mode: data.booking_mode === 'draft' ? 'draft' : 'auto',
+    un1t_chat_actions_enabled: data.un1t_chat_actions_enabled === true,
     agent_name: data.agent_name?.trim() || DEFAULTS.agent_name,
     membership_signup_url: data.membership_signup_url || null,
     membership_cta_label: data.membership_cta_label?.trim() || null,
@@ -337,6 +446,7 @@ function buildFullBlob(data) {
     auto_resolve_stale_hours: data.auto_resolve_stale_hours ?? DEFAULTS.auto_resolve_stale_hours,
     followups: { ...DEFAULTS.followups, ...(data.followups || {}) },
     first_class_checkin: { ...DEFAULTS.first_class_checkin, ...(data.first_class_checkin || {}) },
+    trial_done: { ...DEFAULTS.trial_done, ...(data.trial_done || {}) },
     inline_suggestion: { ...DEFAULTS.inline_suggestion, ...(data.inline_suggestion || {}) },
     consultation_event_type_id: data.consultation_event_type_id || null,
     monthly_points_target: data.monthly_points_target ?? null,
@@ -367,8 +477,9 @@ export const StudioSettingsSchema = SettingsSchema.extend({
  *
  * * Studio-only keys present in the parsed body are ALWAYS kept, whatever
  *   `overridden` says (T3-B). The parsed body carries the schema defaults
- *   for enabled / test_mode / test_phones / booking_mode, so those four are
- *   always written, exactly as the full build writes them today.
+ *   for enabled / test_mode / test_phones / booking_mode /
+ *   un1t_chat_actions_enabled, so those five are always written, exactly as
+ *   the full build writes them.
  * * An overridden top-level key is kept only when the body gives it a value
  *   (not null / blank). The full build fills some blanks with a code default
  *   (agent_name 'Mia', handoff_cooldown_hours 12, the auto-resolve windows);

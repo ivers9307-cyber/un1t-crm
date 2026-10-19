@@ -15,6 +15,7 @@ import { uuidLike } from '@/lib/schemas'
 import { gateUn1tStaffBooking } from '@/lib/un1t-staff-booking'
 import { getLocationZone, formatInZone, DEFAULT_TZ } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
+import { freshCutoff, onlyFreshEvents } from '@/lib/un1t-online-freshness'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -39,13 +40,23 @@ export async function GET(request) {
   if (!gate.ok) return NextResponse.json({ success: false, error: gate.error }, { status: gate.status })
 
   const now = Date.now()
-  const { data: events, error: evErr } = await db
+  // UN1TBOOK.19 — only classes the latest sync saw: the mirror never deletes,
+  // so a class deleted upstream stays 'scheduled' and its booking 404s. A
+  // stalled sync keeps every row (freshCutoff is relative to the newest run).
+  let cutoffIso
+  try {
+    cutoffIso = await freshCutoff(db, 'un1t_events', locationId)
+  } catch (err) {
+    logWarn('un1t-staff-classes', 'timetable freshness unreadable', { locationId, err })
+    return NextResponse.json({ success: false, error: 'Could not read the timetable just now. Try again.' }, { status: 503 })
+  }
+  const { data: events, error: evErr } = await onlyFreshEvents(db
     .from('un1t_events')
     .select('un1t_id, title, starts_at, capacity, bookings_count, access_mode')
     .eq('location_id', locationId)
     .eq('status', 'scheduled')
     .gt('starts_at', new Date(now).toISOString())
-    .lte('starts_at', new Date(now + WINDOW_DAYS * 86_400_000).toISOString())
+    .lte('starts_at', new Date(now + WINDOW_DAYS * 86_400_000).toISOString()), cutoffIso)
     .order('starts_at', { ascending: true })
     .limit(LIMIT)
   if (evErr) return NextResponse.json({ success: false, error: 'Could not read the timetable just now. Try again.' }, { status: 503 })

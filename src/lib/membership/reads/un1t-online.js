@@ -56,6 +56,7 @@ import {
   shapePipelineSnapshot, shapePipelineDateEvidence, shapeTrialEligibility,
 } from './un1t-online-shape'
 import { radarMembers, winbackContacts, leadContacts, radarPastDue, arrears } from './un1t-online-radar'
+import { freshCutoff } from '@/lib/un1t-online-freshness'
 
 const PAGE = 1000
 const API_SOURCE = 'un1t_online_api'
@@ -67,38 +68,10 @@ const EXPORT_SOURCE = 'un1t_online_export'
 // ---------------------------------------------------------------------------
 // STALE-ACTIVE GUARD. The sync (every 15 min) stamps each subscription it
 // pulled with the run time, and a subscription the API stopped returning is
-// never touched again, so its status stays 'active' for ever. A row absent from
-// the latest pull therefore lags the newest by >= 15 min: only rows within
-// STALE_WINDOW_MS (10 min) of the studio's newest `synced_at` are counted. If
-// the sync itself stopped, every row is equally old and all still count (the
-// freshness is relative, never against the clock; a dead sync is the sync
-// health check's job).
-const STALE_WINDOW_MS = 10 * 60 * 1000
-
-const FRESH_TABLES = Object.freeze(['un1t_subscriptions', 'un1t_invoices', 'un1t_clients'])
-
-/**
- * The freshness cutoff for one studio's rows in `table`: its newest `synced_at`
- * minus STALE_WINDOW_MS, as an ISO string. A row below it was not in the latest
- * pull. `null` when the studio has no rows in the table (or no readable
- * `synced_at`). Throws on a read error; any table but the three the sync stamps
- * with a run time is refused.
- */
-export async function freshCutoff(db, table, locationId) {
-  if (!FRESH_TABLES.includes(table)) {
-    throw new Error(`freshCutoff: ${table} is not one of ${FRESH_TABLES.join(', ')}`)
-  }
-  const { data: newest, error } = await db
-    .from(table)
-    .select('synced_at')
-    .eq('location_id', locationId)
-    .order('synced_at', { ascending: false })
-    .range(0, 0)
-  if (error) throw new Error(error.message)
-  const newestAt = Date.parse(newest?.[0]?.synced_at)
-  if (!Number.isFinite(newestAt)) return null
-  return new Date(newestAt - STALE_WINDOW_MS).toISOString()
-}
+// never touched again, so its status stays 'active' for ever. Only rows the
+// latest pull saw are counted: see freshCutoff (../../un1t-online-freshness.js,
+// shared with the class lists since UN1TBOOK.19; re-exported here).
+export { freshCutoff }
 
 // The statuses that hold a membership: see MEMBER_STATUSES in un1t-online-shape.js
 // (the sync's MEMBERSHIP_ACTIVE_STATUSES minus 'trialing').
@@ -490,9 +463,11 @@ const CLIENT_COLS = 'un1t_user_id, contact_id, credit_balance, credit_unlimited,
 const PIPE_SUB_COLS = 'un1t_user_id, contact_id, status, paused_at, remote_created_at'
 const ELIGIBILITY_SUB_COLS = 'un1t_id, un1t_user_id, contact_id, status'
 const PIPE_TX_COLS = 'un1t_id, un1t_user_id, contact_id, product_id, product_type, type, amount_cents, refunded, remote_created_at'
-const PRODUCT_COLS = 'un1t_id, type, price_cents, credits_per_period, title'
+// TRIALDONE.2 — expire_credits_in_days (from raw, as text) dates the trial's expiry.
+const PRODUCT_COLS = 'un1t_id, type, price_cents, credits_per_period, title, expire_credits_in_days:raw->>expire_credits_in_days'
 const BOOKING_COLS = 'un1t_user_id, contact_id, event_id, status, source, credit_charged, external_member_ref, remote_created_at'
-const EVENT_COLS = 'un1t_id, starts_at'
+// TRIALDONE.2 — ends_at (mig 726) dates "the 3rd class ended" for the outreach.
+const EVENT_COLS = 'un1t_id, starts_at, ends_at'
 const MEMBERSHIP_COLS = 'contact_id, source, status, ended_at'
 // Exactly these six, by id: no Glofox column is read (membership and the
 // pipeline are separate per studio; only the contact is shared).
@@ -672,11 +647,15 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
     // a row's person: its un1t user's contact, else its own contact_id
     const owner = (r) => (r.un1t_user_id != null ? contactOfUser.get(r.un1t_user_id) : null) ?? r.contact_id ?? null
 
-    const startsAt = new Map(events.map((e) => [e.un1t_id, e.starts_at ?? null]))
+    const eventsById = new Map(events.map((e) => [e.un1t_id, e]))
     const subsBy = groupBy(subs, owner)
     const txsBy = groupBy(txs, owner)
     const bookingsBy = groupBy(
-      bookings.map((b) => ({ ...b, starts_at: startsAt.get(b.event_id) ?? null })),
+      bookings.map((b) => ({
+        ...b,
+        starts_at: eventsById.get(b.event_id)?.starts_at ?? null,
+        ends_at: eventsById.get(b.event_id)?.ends_at ?? null,
+      })),
       owner,
     )
     const membershipsBy = groupBy(memberships, (m) => m.contact_id)
@@ -710,6 +689,36 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
     }
     if (skipped > 0) logWarn('un1t-pipeline', 'client contact missing', { locationId, count: skipped })
     return { success: true, data: { contacts, snapshots, evidence, unlinked, skipped_no_contact: skipped } }
+  } catch (e) {
+    return { success: false, error: errMessage(e) }
+  }
+}
+
+/**
+ * PIPEEXCL.1 — this studio's ACTIVE members, as contact ids, for another
+ * studio's acquisition board (src/lib/pipeline-other-studio-members.js).
+ * Active = a FRESH subscription here in MEMBER_STATUSES (active, past_due: the
+ * statuses membershipCounts counts; trialing, paused and ended are not). The
+ * subscription's person is its un1t user's contact (a fresh un1t_clients row
+ * here), else its own contact_id. contact_memberships' api rows are the sync's
+ * mirror of these subscriptions, so they are not read twice.
+ * { success, data: { contactIds } } | { success:false, error }.
+ */
+async function activeMemberContactIds(db, locationId) {
+  if (!locationId) return { success: false, error: 'No location' }
+  try {
+    const [subs, clients] = await Promise.all([
+      listFresh(db, locationId, 'un1t_subscriptions', 'un1t_user_id, contact_id, status'),
+      listFresh(db, locationId, 'un1t_clients', 'un1t_user_id, contact_id'),
+    ])
+    const contactOfUser = new Map(clients.filter((c) => c.contact_id != null).map((c) => [c.un1t_user_id, c.contact_id]))
+    const ids = new Set()
+    for (const s of subs) {
+      if (!MEMBER_STATUSES.includes(s.status)) continue
+      const id = (s.un1t_user_id != null ? contactOfUser.get(s.un1t_user_id) : null) ?? s.contact_id ?? null
+      if (id) ids.add(id)
+    }
+    return { success: true, data: { contactIds: [...ids] } }
   } catch (e) {
     return { success: false, error: errMessage(e) }
   }
@@ -837,6 +846,8 @@ export const un1tOnlineReads = Object.freeze({
   paymentsFor,
   pipelineInputs,
   trialEligibility,
+  // PIPEEXCL.1 — active members, for other studios' acquisition boards
+  activeMemberContactIds,
   // UN1TRADAR.1 — the radar row fetches (./un1t-online-radar.js)
   radarMembers,
   winbackContacts,

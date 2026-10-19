@@ -10,7 +10,9 @@
 // is MANIFEST below, one entry per file that calls `.from('class_bookings')`
 // and one per SQL function / view whose body reads the table. Kinds: display,
 // data-writing, customer-messaging, reward, conversational-read (a reply the
-// member asked for: not a reminder), staff-messaging, device. Pinned:
+// member asked for: not a reminder), staff-messaging, device, suppression (a
+// read that can only WITHHOLD a send: it asks "does a booking exist?" and
+// never carries a booking's class, time or platform into anything). Pinned:
 //
 //  1. A new reader (a file, or a SQL object, not in MANIFEST) fails with its
 //     path: decide what a un1t.online row means for it, then list it.
@@ -57,7 +59,7 @@ const SCAN_DIRS = ['src', 'shared', 'mobile', 'supabase/functions']
 const SKIP_DIRS = new Set(['node_modules', 'ios', 'android', 'dist', 'web-build'])
 const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
 
-const KINDS = ['display', 'data-writing', 'customer-messaging', 'reward', 'conversational-read', 'staff-messaging', 'device']
+const KINDS = ['display', 'data-writing', 'customer-messaging', 'reward', 'conversational-read', 'staff-messaging', 'device', 'suppression']
 /** The kinds whose every class_bookings chain must be scoped to the CRM-actionable rows. */
 const SCOPED_KINDS = ['customer-messaging', 'reward']
 
@@ -78,6 +80,18 @@ const MANIFEST = Object.freeze({
   'src/lib/class-bookings.js': {
     kind: 'data-writing',
     reason: 'Audit rows 6-8 and 11: upsertClassBookings (Glofox writer, 24-hex ids; the mig 737 CHECK refuses a mis-tagged row), getClassRoster (staff /live display: a un1t row is meant to show), lookupBookedMember and resolveBookedOccurrenceForMember (device / HR linking, keyed on glofox_member_id, which un1t rows never carry).',
+  },
+  'src/lib/un1t-online-bookings.js': {
+    kind: 'data-writing',
+    reason: 'UN1TBOOK.3: the un1t.online sync projects un1t_bookings into class_bookings (upsert only, never update / delete) with source_platform un1t_online and un1t: ids; it sends nothing and credits nothing.',
+  },
+  'src/lib/un1t-online-mirror-write.js': {
+    kind: 'data-writing',
+    reason: 'UN1TWRITE.11: after a done un1t.online book or cancel, one class_bookings upsert built by C\'s mapUn1tBookingToClassBooking (source_platform un1t_online, un1t: ids, raw.un1t.written_by crm); never update / delete; it sends nothing and credits nothing.',
+  },
+  'src/lib/sequences/steps.js': {
+    kind: 'suppression',
+    reason: "HATCHNUDGE.1: the branch predicate booked_class_at_studio asks whether the contact has any non-cancelled class booking at the sequence's studio, from ANY platform (a un1t.online booking must count, or Hatch leads who already booked are told to book). It selects id only, scoped to contact + studio; it decides whether a step proceeds and sends nothing from a booking row.",
   },
   'shared/studio-kpis.js': {
     kind: 'display',
@@ -378,6 +392,22 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
       reader.chains.forEach((c, i) => { if (!isScoped(c)) missing.push(`${p} (chain ${i + 1})`) })
     }
     expect(missing, `Customer-messaging or reward class_bookings reads neither carrying .eq('source_platform', CRM_CLASS_MESSAGING_PLATFORM) nor wrapped in scopeToCrmActionable(: ${missing.join(', ')}`).toEqual([])
+  })
+
+  it('every chain in a suppression file reads existence only: selects id, scoped to a contact and a studio', () => {
+    const bad = []
+    for (const [p, e] of Object.entries(MANIFEST)) {
+      if (e.kind !== 'suppression') continue
+      const reader = jsReaders().get(p)
+      if (!reader) continue // the stale test reports it
+      reader.chains.forEach((c, i) => {
+        const selectsIdOnly = /\.\s*select\(\s*(['"])id\1\s*\)/.test(c)
+        const byContact = /\.\s*eq\(\s*['"]contact_id['"]/.test(c)
+        const byStudio = /\.\s*eq\(\s*['"]location_id['"]/.test(c)
+        if (!selectsIdOnly || !byContact || !byStudio) bad.push(`${p} (chain ${i + 1})`)
+      })
+    }
+    expect(bad, `A suppression reader may only ask whether a booking exists (.select('id') + .eq('contact_id') + .eq('location_id')): ${bad.join(', ')}`).toEqual([])
   })
 
   it('the reminder and crediting crons decide through the class-booking-platform predicate', () => {

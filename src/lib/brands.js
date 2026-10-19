@@ -167,6 +167,12 @@ export const BRANDS = [
       '/host',             // the host portal (auth inside: getCurrentHost)
       '/host-connect/',    // host self-serve Stripe onboarding (signed token in the path)
       '/api/host/',        // host-scoped API (getCurrentHost)
+      // MIAHATCH.6 — where un1t.online's hosted checkout returns a member
+      // (success, or ?c=1 on cancel) after paying for a link Mia sent. The
+      // successUrl is built on the studio's customer host, which may be this
+      // one; the 32-byte token in the path is the only credential. Raw
+      // startsWith, so the trailing slash: only /pay-done/<token> resolves.
+      '/pay-done/',
     ],
     rootHandler: 'rewrite',
     rootRewriteTo: '/welcome',

@@ -15,6 +15,13 @@
 //   * a whole object key (shorthand for every one of its fields): 'followups'
 //   * a studio-only key: accepted, and changes nothing (those are always saved)
 
+// TRIALDONE.3 — the default brief Mia is given for a trial finisher who
+// replies to the "carry on?" message. Lives here (zod-free) so the studio
+// editor can show it as the textarea placeholder; settings-contract.js
+// re-exports it. Customer-facing copy: NO em-dash (the schema refuses one).
+export const TRIAL_DONE_MIA_INSTRUCTION_DEFAULT =
+  'This customer finished their trial at {studio} on {date}, and we messaged them about carrying on. Help them choose between the Foundation membership and a class pack. Call list_purchase_options before naming any product or price, lead with the Foundation membership, and once they choose, send the payment link with send_purchase_link. Answer their questions honestly and never pressure them.'
+
 // Keys that belong to ONE studio and are never read from the organisation
 // layer (resolveAgentSettings / mergeAgentSettings). An org-level
 // `enabled: true` must never switch a studio on (enabled+test_mode is live
@@ -23,6 +30,10 @@
 // too: a value in the org layer would start CRM tier pushes at every studio
 // (live-class.js reads the resolved value), while champ-app reads the raw
 // studio blob and would not see it, so the two would disagree.
+// un1t_chat_actions_enabled (MIAHATCH.5, Ruling 25) lets Mia book, cancel and
+// take refund requests in chat at ONE un1t.online studio: an org value would
+// switch it on at every studio at once. trial_done (TRIALDONE.3) is the same:
+// the trial-finisher outreach is switched on per studio, never from the org.
 export const STUDIO_ONLY_KEYS = new Set([
   'enabled',
   'test_mode',
@@ -35,6 +46,8 @@ export const STUDIO_ONLY_KEYS = new Set([
   'membership_signup_url',
   'membership_cta_label',
   'monthly_points_target',
+  'un1t_chat_actions_enabled',
+  'trial_done',
 ])
 
 // Object-valued keys that merge PER FIELD (org fields under studio fields)
@@ -69,6 +82,21 @@ export const INHERITABLE_SCALAR_KEYS = Object.freeze([
   'no_credits_handoff_text',
   'account_conflict_handoff_text',
   'chat_booking_unavailable_text',
+  'purchase_offer_intro_text',
+  'purchase_link_text',
+  'trial_used_text',
+  'refund_request_text',
+  'purchase_link_open_text',
+  'purchase_paid_booked_text',
+  'purchase_paid_class_gone_text',
+  'purchase_paid_booking_failed_text',
+  'purchase_paid_no_class_text',
+  'pay_done_page_text',
+  'pay_cancel_page_text',
+  'booking_flow_text',
+  'flow_booking_ack_text',
+  'flow_booking_holding_text',
+  'flow_booking_duplicate_text',
   'approval_decline_text',
   'welcome_greeting',
   'link_button_text',

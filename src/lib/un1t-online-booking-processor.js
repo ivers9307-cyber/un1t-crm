@@ -4,8 +4,9 @@
 // a second create, trial or booking.
 //
 //   1 preflight   the class in un1t_events, scheduled and starting in the
-//                 future (else class_unavailable); the contact has an email
-//                 (else no_email)
+//                 future (else class_unavailable), and in the latest pull
+//                 (missing, cancelled or stale: un1t_class_no_longer_available,
+//                 UN1TBOOK.20); the contact has an email (else no_email)
 //   2-3 account   ensureUn1tAccount: find (own link, same-email sibling, API
 //                 walk), else create with the request's recorded acceptance
 //   4 credits     a balance, unlimited, or an active subscription in the
@@ -34,9 +35,12 @@ import { ensureUn1tAccount as ensureAccountOp, runSetPasswordStep as setPassword
 import { sendUn1tTrialUsedEmail as trialUsedEmailOp, sendUn1tAccountEmail } from './un1t-online-funnel-emails.js'
 import { trialUsedHandoff as handoffOp } from './un1t-online-trial-used.js'
 import { MEMBERSHIP_ACTIVE_STATUSES } from './un1t-online-map.js'
+import { freshCutoff } from './un1t-online-freshness.js'
 import { logError, logWarn } from './log'
 
 export const UN1T_PROVIDER = 'un1t_online'
+/** UN1TBOOK.20 — the card for a class removed in un1t.online before it was booked. */
+export const UN1T_CLASS_GONE = 'un1t_class_no_longer_available'
 const LOG = 'un1t-funnel'
 
 /** The queue's retry signal, carrying the card options for the cap. */
@@ -62,6 +66,10 @@ async function defaultCtwa(...args) {
   const { sendCtwaConversion } = await import('./meta-capi.js')
   return sendCtwaConversion(...args)
 }
+async function defaultFlowNotice(...args) {
+  const { notifyFlowBookingOutcome } = await import('./whatsapp-flow/booking-notice.js')
+  return notifyFlowBookingOutcome(...args)
+}
 async function defaultWebsite(...args) {
   const { sendWebsiteConversion } = await import('./meta-capi.js')
   return sendWebsiteConversion(...args)
@@ -81,6 +89,7 @@ function depsOf(deps = {}) {
     routeToReview: deps.routeToReview ?? defaultRouteToReview,
     sendCtwaConversion: deps.sendCtwaConversion ?? defaultCtwa,
     sendWebsiteConversion: deps.sendWebsiteConversion ?? defaultWebsite,
+    notifyFlowBookingOutcome: deps.notifyFlowBookingOutcome ?? defaultFlowNotice,
     now: deps.now ?? (() => Date.now()),
   }
 }
@@ -274,10 +283,21 @@ async function runFunnel(db, request, ctx, deps, holder) {
   const eventId = un1tEventIdOf(rawId) ?? (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawId) ? rawId : null)
   if (!eventId) return card('class_unavailable')
   const { data: event, error: evErr } = await db.from('un1t_events')
-    .select('un1t_id, title, status, starts_at').eq('location_id', request.location_id).eq('un1t_id', eventId).maybeSingle()
+    .select('un1t_id, title, status, starts_at, synced_at').eq('location_id', request.location_id).eq('un1t_id', eventId).maybeSingle()
   if (evErr) throw retry('event_unreadable')
-  const startsMs = Date.parse(event?.starts_at)
-  if (!event || event.status !== 'scheduled' || !Number.isFinite(startsMs) || startsMs <= d.now()) return card('class_unavailable')
+  // UN1TBOOK.20 — a class removed in un1t.online (cancelled, or not in the
+  // latest pull: the mirror never deletes) only 404s there. Staff offer
+  // another class; nothing reaches un1t.online and no trial is granted.
+  if (!event || event.status === 'cancelled') return card(UN1T_CLASS_GONE)
+  const startsMs = Date.parse(event.starts_at)
+  if (event.status !== 'scheduled' || !Number.isFinite(startsMs) || startsMs <= d.now()) return card('class_unavailable')
+  let cutoff
+  try {
+    cutoff = await freshCutoff(db, 'un1t_events', request.location_id)
+  } catch {
+    throw retry('event_freshness_unreadable')
+  }
+  if (cutoff && !(Date.parse(event.synced_at) >= Date.parse(cutoff))) return card(UN1T_CLASS_GONE)
 
   const { data: contact, error: cErr } = await db.from('contacts')
     .select('id, organization_id, first_name, last_name, name, email, phone, un1t_user_id, ctwa_clid')
@@ -331,6 +351,13 @@ async function runFunnel(db, request, ctx, deps, holder) {
     request, contact, account, settings, studio: { ...studio, studioName: studio.studioName || ctx.studioName }, origin: 'funnel', writer,
   }, deps))
   await stampRow(db, request.id, { un1t_steps: steps })
+
+  // FLOWACK.1 — a booking made through the WhatsApp Flow is confirmed on the
+  // customer's thread too (un1t.online sends no WhatsApp; a no-op for a
+  // website row). A card is told by routeToReview. Never changes the outcome.
+  try {
+    await d.notifyFlowBookingOutcome(db, request, { outcome: 'booked' })
+  } catch (err) { logWarn(LOG, 'flow outcome notice failed; the booking stands', { requestId: request.id, err }) }
 
   // 8. Conversions, as the Glofox tail.
   try {

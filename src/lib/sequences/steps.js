@@ -736,6 +736,21 @@ export async function updateFieldStep(db, { step, contact }) {
 //   - has_tag         { tag }           — contact has the active tag
 //   - field_equals    { field, value }  — contact[field] === value
 //   - field_in        { field, values } — contact[field] is in the list
+//   - booked_class_at_studio {}         — the contact has booked a class at
+//                                         the sequence's studio (HATCHNUDGE.1)
+//
+// booked_class_at_studio exists because the only "has booked" signal a
+// branch could read before was the glofox_first_booking tag, which the Glofox
+// webhook alone stamps. A studio whose bookings come from un1t.online (Hatch
+// Street) never gets it, so a "book your first class" nudge gated on the tag
+// would go to people who had already booked. This predicate reads the
+// bookings themselves: any non-cancelled class_bookings row for the contact
+// at the studio, whatever platform it came from, or a /start request at the
+// studio that is still in flight (queued / processing / booked / waiting on
+// staff), since a un1t.online booking only lands in class_bookings on the
+// next 15-minute sync. It selects ids only: it can withhold a step, never
+// put a booking's details into one (tests/class-bookings-readers-guard.test.js,
+// kind 'suppression').
 //
 // Allowed fields mirror update_field's whitelist plus a couple of
 // read-only ones that operators commonly want to fork on. Anything
@@ -760,11 +775,45 @@ const BRANCH_FIELD_WHITELIST = new Set([
   'marketing_opt_in',
 ])
 
-export async function evaluateBranchPredicate(db, { contact, predicate }) {
+// /start requests still on their way to a booking (class_booking_requests
+// status, mig 335). 'failed' is not a booking; 'awaiting_payment' has not
+// been paid for.
+const IN_FLIGHT_CLASS_REQUEST_STATUSES = ['queued', 'processing', 'booked', 'needs_review']
+
+async function hasBookedClassAtStudio(db, { contactId, locationId }) {
+  const { data: bookings, error: bookingsError } = await db
+    .from('class_bookings')
+    .select('id')
+    .eq('contact_id', contactId)
+    .eq('location_id', locationId)
+    .neq('status', 'CANCELLED')
+    .limit(1)
+  if (bookingsError) throw new Error(`branch booked_class_at_studio: ${bookingsError.message}`)
+  if (bookings && bookings.length > 0) return true
+
+  const { data: requests, error: requestsError } = await db
+    .from('class_booking_requests')
+    .select('id')
+    .eq('contact_id', contactId)
+    .eq('location_id', locationId)
+    .in('status', IN_FLIGHT_CLASS_REQUEST_STATUSES)
+    .limit(1)
+  if (requestsError) throw new Error(`branch booked_class_at_studio: ${requestsError.message}`)
+  return Boolean(requests && requests.length > 0)
+}
+
+export async function evaluateBranchPredicate(db, { contact, predicate, locationId = null }) {
   if (!predicate || typeof predicate !== 'object') {
     throw new Error('branch step: config.predicate is required')
   }
   const type = String(predicate.type || '').trim()
+
+  if (type === 'booked_class_at_studio') {
+    // Thrown, not guessed: the runner retries a throwing step, and a branch
+    // that read "no studio" as "not booked" would nudge someone who booked.
+    if (!locationId) throw new Error('branch booked_class_at_studio: the sequence studio is required')
+    return hasBookedClassAtStudio(db, { contactId: contact.id, locationId })
+  }
 
   if (type === 'has_tag') {
     const tag = String(predicate.tag || '').trim()
@@ -809,11 +858,12 @@ export async function evaluateBranchPredicate(db, { contact, predicate }) {
  * own step_order). Falls back to sensible defaults when the config
  * doesn't specify a pointer.
  */
-export async function processBranchStep(db, { step, contact }) {
+export async function processBranchStep(db, { step, contact, locationId = null }) {
   const cfg = step.config || {}
   const branchOrder = step.step_order
   const matched = await evaluateBranchPredicate(db, {
     contact,
+    locationId,
     predicate: cfg.predicate,
   })
   const rawTarget = matched ? cfg.then_step_order : cfg.else_step_order

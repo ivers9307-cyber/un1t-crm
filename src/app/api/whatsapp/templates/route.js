@@ -252,8 +252,11 @@ export async function POST(request) {
   const wabaId = own.config.businessAccountId || null
   const language = body.language || 'en'
   if (wabaId) {
+    // `locations!location_id`: whatsapp_template_events, whatsapp_broadcasts
+    // and event_types each hold FKs to both tables, so a bare `locations` embed
+    // is ambiguous and PostgREST answers 300 (PGRST201), failing every create.
     const { data: clashes, error: clashErr } = await db.from('whatsapp_templates')
-      .select('location_id, language, locations ( name )')
+      .select('location_id, language, locations!location_id ( name )')
       .eq('business_account_id', wabaId)
       .eq('name', body.name)
     if (clashErr) {
