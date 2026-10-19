@@ -29,9 +29,10 @@ function makeDb() {
     from(table) {
       const q = { table, f: [] }
       queries.push(q)
-      const rows = () => (tables[table] || []).filter((r) => q.f.every(([k, c, v]) => (k === 'eq' ? r[c] === v : k === 'in' ? v.includes(r[c]) : k === 'gt' ? r[c] > v : k === 'lte' ? r[c] <= v : true)))
+      const rows = () => (tables[table] || []).filter((r) => q.f.every(([k, c, v]) => (k === 'eq' ? r[c] === v : k === 'in' ? v.includes(r[c]) : k === 'gt' ? r[c] > v : k === 'gte' ? r[c] >= v : k === 'lte' ? r[c] <= v : true)))
       const b = {
-        select: () => b, order: () => b, limit: () => b,
+        select: () => b, order: () => b, limit: () => b, range: () => b,
+        gte: (c, v) => { q.f.push(['gte', c, v]); return b },
         eq: (c, v) => { q.f.push(['eq', c, v]); return b },
         in: (c, v) => { q.f.push(['in', c, v]); return b },
         gt: (c, v) => { q.f.push(['gt', c, v]); return b },

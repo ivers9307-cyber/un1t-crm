@@ -840,7 +840,7 @@ describe('list_upcoming_classes in a un1t block', () => {
     expect(out.classes.map((c) => c.event_id)).toEqual(['un1t:e1', 'un1t:e2', 'un1t:e3'])
     for (const item of out.classes) expect(Object.keys(item)).toEqual(['event_id', 'name', 'starts_at', 'full'])
     expect(JSON.stringify(out)).not.toMatch(/capacity|bookings_count|limited/)
-    const read = db.calls.find((c) => c.table === 'un1t_events')
+    const read = db.calls.find((c) => c.table === 'un1t_events' && c.cols !== 'synced_at')
     expect(read.cols).toBe('un1t_id, title, starts_at, capacity, bookings_count')
     expect(read.eqs).toMatchObject({ location_id: HATCH, status: 'scheduled' })
   })
@@ -853,7 +853,7 @@ describe('list_upcoming_classes in a un1t block', () => {
     const stillThread = { zone: 'Europe/Dublin', locationId: STILL }
     const db = fakeDb({ ...tables(), locations: [{ id: HATCH, timezone: 'Europe/Dublin' }] })
     const out = await run(db, readTurn, stillThread)
-    const read = db.calls.find((c) => c.table === 'un1t_events')
+    const read = db.calls.find((c) => c.table === 'un1t_events' && c.cols !== 'synced_at')
     expect(read.eqs.location_id).toBe(HATCH)
     expect(out.classes).toHaveLength(3)
   })

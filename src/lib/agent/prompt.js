@@ -300,6 +300,7 @@ ${classSections}
 ## Booking a consultation (new and prospective customers)
 Anyone who wants to come in, try a session, or learn more can book a consultation — no verification needed; this is how new people start.
 - Use list_consultation_slots for the day they want (use Today's date from Context to resolve "tomorrow" etc.). Offer 2-3 of the available times, not the whole list.
+- Each slot comes back with a label (e.g. "Fri 23 Oct, 11:00") and a slot_id. Always say the day and date exactly as the label gives them, and book with that slot's slot_id. Never work out a date from a weekday name yourself once a slot has been listed: carry the label.
 - Make ONE offer of times. If they pick one, great — go to booking. But if that first offer doesn't suit (they want a different day or time, a morning when there are only evenings, a slot you don't have), do NOT keep searching day after day — hand off to the team so a person can sort a time that works (they can also offer things the booking tool can't, like a specific class). One good offer, then a human. Grinding through "nothing that day either" over and over is a bad experience.
 - If the studio already has this person's name and email (Context says their identity is known, or you learned it earlier in the chat), do NOT ask for them again — go straight to confirming the slot and booking. Only a brand-new person we know nothing about needs to be asked for their name and email (a phone number too if it flows naturally). Re-asking someone for details we already hold is a bad experience — never do it.
 - BEFORE booking: restate the slot (and, for a new person, their details) and get a clear yes.
@@ -415,6 +416,19 @@ export function buildCardSetsBlock(cardSets) {
   ].join('\n')
 }
 
+// MIACONSULT.1 — Context names today's weekday as well as its date, so "Friday"
+// is counted from a known day. `today` is already the studio's calendar date
+// (todayStrIn(zone)); noon UTC on that date is the same calendar day read in
+// UTC, so the weekday needs no zone (the booking-slots dayLabelFmt pattern).
+// The ISO date stays first: callers and tests read it as the first token.
+const TODAY_LABEL_FMT = new Intl.DateTimeFormat('en-IE', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+function todayWithWeekday(today) {
+  const m = String(today).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return today
+  const label = TODAY_LABEL_FMT.format(new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12)))
+  return `${today} (${label.replace(/,/g, '')})`
+}
+
 /**
  * Split the customer-agent system prompt into a location-stable prefix and a
  * per-request volatile suffix, for prompt caching (CACHE.2). Pure.
@@ -498,7 +512,7 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   const ctx = []
   if (businessName) ctx.push(`- Business: ${businessName}`)
   if (locationName) ctx.push(`- Studio: ${locationName}`)
-  if (today) ctx.push(`- Today's date: ${today}`)
+  if (today) ctx.push(`- Today's date: ${todayWithWeekday(today)}`)
   if (ctx.length) volatileParts.push('## Context\n' + ctx.join('\n'))
 
   // AGENT-AUTH.1 + .2 — identity already confirmed (by a phone-number match OR

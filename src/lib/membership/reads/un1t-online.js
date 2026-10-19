@@ -56,6 +56,7 @@ import {
   shapePipelineSnapshot, shapePipelineDateEvidence, shapeTrialEligibility,
 } from './un1t-online-shape'
 import { radarMembers, winbackContacts, leadContacts, radarPastDue, arrears } from './un1t-online-radar'
+import { freshCutoff } from '@/lib/un1t-online-freshness'
 
 const PAGE = 1000
 const API_SOURCE = 'un1t_online_api'
@@ -67,38 +68,10 @@ const EXPORT_SOURCE = 'un1t_online_export'
 // ---------------------------------------------------------------------------
 // STALE-ACTIVE GUARD. The sync (every 15 min) stamps each subscription it
 // pulled with the run time, and a subscription the API stopped returning is
-// never touched again, so its status stays 'active' for ever. A row absent from
-// the latest pull therefore lags the newest by >= 15 min: only rows within
-// STALE_WINDOW_MS (10 min) of the studio's newest `synced_at` are counted. If
-// the sync itself stopped, every row is equally old and all still count (the
-// freshness is relative, never against the clock; a dead sync is the sync
-// health check's job).
-const STALE_WINDOW_MS = 10 * 60 * 1000
-
-const FRESH_TABLES = Object.freeze(['un1t_subscriptions', 'un1t_invoices', 'un1t_clients'])
-
-/**
- * The freshness cutoff for one studio's rows in `table`: its newest `synced_at`
- * minus STALE_WINDOW_MS, as an ISO string. A row below it was not in the latest
- * pull. `null` when the studio has no rows in the table (or no readable
- * `synced_at`). Throws on a read error; any table but the three the sync stamps
- * with a run time is refused.
- */
-export async function freshCutoff(db, table, locationId) {
-  if (!FRESH_TABLES.includes(table)) {
-    throw new Error(`freshCutoff: ${table} is not one of ${FRESH_TABLES.join(', ')}`)
-  }
-  const { data: newest, error } = await db
-    .from(table)
-    .select('synced_at')
-    .eq('location_id', locationId)
-    .order('synced_at', { ascending: false })
-    .range(0, 0)
-  if (error) throw new Error(error.message)
-  const newestAt = Date.parse(newest?.[0]?.synced_at)
-  if (!Number.isFinite(newestAt)) return null
-  return new Date(newestAt - STALE_WINDOW_MS).toISOString()
-}
+// never touched again, so its status stays 'active' for ever. Only rows the
+// latest pull saw are counted: see freshCutoff (../../un1t-online-freshness.js,
+// shared with the class lists since UN1TBOOK.19; re-exported here).
+export { freshCutoff }
 
 // The statuses that hold a membership: see MEMBER_STATUSES in un1t-online-shape.js
 // (the sync's MEMBERSHIP_ACTIVE_STATUSES minus 'trialing').
