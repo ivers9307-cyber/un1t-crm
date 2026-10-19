@@ -120,6 +120,12 @@ describe('POST /api/admin/un1t-online/test-account', () => {
     expect(cancel.mock.calls[0][1]).toMatchObject({ un1tUserId: 'usr-1', bookingId: 'bk-1', origin: 'test_account' })
   })
 
+  it('UN1TWRITE.25: a reset_limit refusal carries its message and when the next reset is allowed', async () => {
+    forgotPassword.mockResolvedValue({ ...done({ id: null }), verdict: 'refused', sent: false, code: 'reset_limit', message: 'The next one can be sent in 5 minutes.', data: { nextAllowedAt: '2026-10-19T10:30:00.000Z' } })
+    const body = await (await post({ op: 'forgot_password' })).json()
+    expect(body.data).toMatchObject({ verdict: 'refused', code: 'reset_limit', message: expect.stringMatching(/in 5 minutes/), next_allowed_at: '2026-10-19T10:30:00.000Z' })
+  })
+
   it('an op that needs an account refuses a contact with none (400), nothing sent', async () => {
     contactRow = { ...contactRow, un1t_user_id: null }
     expect((await post({ op: 'book', event_id: 'ev-1' })).status).toBe(400)

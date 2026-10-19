@@ -21,10 +21,13 @@
 // for that un1t.online user: our explanation email first (skipped when
 // un1t.online sends its own welcome), then POST /auth/forgot-password
 // (skipped when that welcome also lets them set a password). Our email
-// failing never blocks the call. The pw:<loc>:<user> key allows one reset per
-// person ever; a reset that answered unclearly stays in doubt on the ledger,
-// and the person can always use "Forgot password" in the un1t.online app
-// (UN1T_SET_PASSWORD_HELP is the staff-facing line for that).
+// failing never blocks the call. The step itself runs once per account: any
+// earlier reset for this un1t.online user (whatever its key: the bare
+// pw:<loc>:<user> from before UN1TWRITE.25, or a per-attempt
+// pw:<loc>:<user>:<n>) settles it, done or in doubt. Further resets (up to 3
+// per person per 30 minutes, forgotPassword's rule) are a deliberate ask, never
+// this step's; the person can always use "Forgot password" in the un1t.online
+// app (UN1T_SET_PASSWORD_HELP is the staff-facing line for that).
 
 import { escapeLikePattern } from './like-escape.js'
 import { classifyRefusal } from './un1t-online-write-judge.js'
@@ -33,9 +36,9 @@ import {
   createClient as createClientOp,
   forgotPassword as forgotPasswordOp,
   findClientByEmail as findClientByEmailOp,
+  UN1T_RESET_ALREADY_REQUESTED_CODE,
 } from './un1t-online-write-ops.js'
 import { applyUn1tWriteToMirror } from './un1t-online-mirror-write.js'
-import { ledgerKey } from './un1t-online-write-ledger.js'
 import { logWarn } from './log'
 
 const LOG = 'un1t-online-write'
@@ -206,12 +209,12 @@ export async function runSetPasswordStep(db, { locationId, contact, un1tUserId, 
   if (createErr) throw Object.assign(new Error(`un1t_write_events create read failed (${createErr.code ?? 'no code'})`), { code: createErr.code ?? null })
   if (!creates || creates.length === 0) return { explanation: 'skipped_not_created', forgotPassword: 'skipped_not_created' }
 
-  // Any earlier reset for this user, whatever its stage: done is final, and an
-  // in-doubt one holds the key (no second request will go), so our "a code is
-  // on its way" email is never sent twice, nor sent for a code that cannot come.
-  const pwKey = ledgerKey.pw(locationId, un1tUserId)
+  // Any earlier reset for this user, whatever its stage or key: done settles
+  // the step, and an in-doubt one may have sent the code, so our "a code is on
+  // its way" email is never sent twice, and a later booking never re-runs it.
+  // (UN1TWRITE.25: each reset attempt has its own key, so this reads by user.)
   const { data: resets, error: resetErr } = await db.from('un1t_write_events')
-    .select('id, stage').eq('location_id', locationId).eq('op', 'forgot_password').eq('idempotency_key', pwKey).limit(10)
+    .select('id, stage').eq('location_id', locationId).eq('op', 'forgot_password').eq('un1t_user_id', un1tUserId).limit(200)
   if (resetErr) throw Object.assign(new Error(`un1t_write_events reset read failed (${resetErr.code ?? 'no code'})`), { code: resetErr.code ?? null })
   const stages = new Set((resets || []).map((r) => r.stage))
   if (stages.has('done')) return { explanation: 'skipped_already_done', forgotPassword: 'skipped_already_done' }
@@ -231,13 +234,14 @@ export async function runSetPasswordStep(db, { locationId, contact, un1tUserId, 
   }
   const resent = stages.has('refused')
 
-  let explanation
-  if (settings?.sendsWelcome) {
-    explanation = 'skipped_flag'
-  } else if (resent) {
-    // A refused reset earlier: our email went out before it; not again.
-    explanation = 'skipped_already_sent'
-  } else {
+  // Our explanation email goes through forgotPassword's beforeSend: only once
+  // this run owns the reset attempt and is about to send it. The ledger read
+  // above is a fast path, not the guard: another run for this account (a
+  // second booking, an overlapping retry, the approval executor beside the
+  // processor) can finish its reset after it, and firstOnly + the attempt key
+  // then stop this run before either email (review fix, UN1TWRITE.25).
+  let explanation = null
+  const sendExplanation = async () => {
     try {
       const sent = await d.sendUn1tAccountEmail(db, {
         locationId, contact, className: request?.class_name ?? null, startsAt: request?.starts_at ?? null, ...emailArgs,
@@ -248,10 +252,29 @@ export async function runSetPasswordStep(db, { locationId, contact, un1tUserId, 
       explanation = 'send_error'
     }
   }
+  const ours = !settings?.sendsWelcome && !resent
+  if (settings?.sendsWelcome) explanation = 'skipped_flag'
+  // A refused reset earlier: our email went out before it; not again.
+  else if (resent) explanation = 'skipped_already_sent'
 
   if (settings?.sendsWelcome && settings?.welcomeSetsLogin) return { explanation, forgotPassword: 'skipped_flag' }
-  const r = await d.forgotPassword(db, { locationId, contactId: contact.id, un1tUserId, email: contact.email, origin, originRef: request?.id ?? null },
-    writer ? { writerFactory: async () => writer } : undefined)
+  const r = await d.forgotPassword(db, {
+    locationId, contactId: contact.id, un1tUserId, email: contact.email, origin, originRef: request?.id ?? null,
+    firstOnly: true, ...(ours ? { beforeSend: sendExplanation } : {}),
+  }, writer ? { writerFactory: async () => writer } : undefined)
+
+  // Another run's reset got there first: this run sent nothing, emails included.
+  if (r.code === UN1T_RESET_ALREADY_REQUESTED_CODE) {
+    return r.data?.priorStage === 'done'
+      ? { explanation: 'skipped_already_done', forgotPassword: 'skipped_already_done' }
+      : { explanation: 'skipped_reset_in_doubt', forgotPassword: 'in_doubt', help: UN1T_SET_PASSWORD_HELP }
+  }
+  if (ours && explanation == null) {
+    // beforeSend never ran: nothing of ours went. A done here is the other
+    // run's attempt handed back by the post-insert check.
+    if (r.verdict === 'done') return { explanation: 'skipped_already_done', forgotPassword: 'skipped_already_done' }
+    explanation = 'deferred'
+  }
   const out = { explanation, forgotPassword: r.verdict === 'refused' && r.retryable ? 'retry' : r.verdict }
   if (r.code) out.code = r.code
   if (r.verdict !== 'done') out.help = UN1T_SET_PASSWORD_HELP

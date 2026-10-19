@@ -10835,7 +10835,8 @@ registry.registerPath({
     'For the live verification run. op create | forgot_password | trial | trial_skip_eligibility | book | cancel | checkout, ' +
     'origin test_account, the master as actor, every write gate still applies. The contact must be in the studio\'s ' +
     'organisation (404) and named MIA TEST in any case (403); create needs terms_confirmed: true. The answer never carries ' +
-    'a password or un1t.online\'s create body; a checkout URL is returned to the master and logged nowhere.',
+    'a password or un1t.online\'s create body; a checkout URL is returned to the master and logged nowhere. forgot_password ' +
+    'allows up to 3 resets per person per 30 minutes; past that it is refused reset_limit with next_allowed_at.',
   request: {
     body: { content: { 'application/json': { schema: z.object({
       op: z.enum(['create', 'forgot_password', 'trial', 'trial_skip_eligibility', 'book', 'cancel', 'checkout']),
@@ -10846,7 +10847,7 @@ registry.registerPath({
     }) } } },
   },
   responses: {
-    200: { description: '{ verdict | outcome, code, message, un1t_user_id?, booking_id?, checkout_url?, free?, ledger_id }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    200: { description: '{ verdict | outcome, code, message, un1t_user_id?, booking_id?, checkout_url?, free?, next_allowed_at?, ledger_id }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
     400: { description: 'Bad body, terms not confirmed, or no un1t.online account linked', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Not a master, or not the MIA TEST contact', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Studio or contact not found in the same organisation', content: { 'application/json': { schema: ErrorResponse } } },
