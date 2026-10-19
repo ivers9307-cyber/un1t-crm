@@ -966,3 +966,28 @@ describe('the trial-used class line', () => {
     expect(buildCachedSystem({ ...base, trialUsedClassLine: '   ' })).toEqual(buildCachedSystem(base))
   })
 })
+
+// TRIALDONE.6 — the trial-done brief (trialDoneLineFor's output), one block in
+// the uncached suffix of a turn whose contact just finished their trial.
+describe('the trial-done line', () => {
+  const base = { businessName: 'B', locationName: 'Hatch Street', today: 'Saturday', knowledge: [{ category: 'faq', title: 'Q', content: 'A' }] }
+  const line = 'This customer finished their trial at Hatch Street on Saturday 17 October, and we messaged them about carrying on.'
+
+  it('the trial-done line is in the volatile block, not the cached one', () => {
+    const without = buildCachedSystem(base)
+    const withLine = buildCachedSystem({ ...base, trialDoneLine: line })
+    expect(withLine[0]).toEqual(without[0])
+    expect(withLine[0].text).not.toContain('finished their trial')
+    expect(withLine[0].cache_control).toEqual(without[0].cache_control)
+    expect(withLine[1].cache_control).toBeUndefined()
+    expect(withLine[1].text).toContain(line)
+    expect(buildCustomerSystemPromptParts({ ...base, trialDoneLine: line }).stable).toBe(buildCustomerSystemPromptParts(base).stable)
+  })
+
+  it('absent line changes nothing', () => {
+    expect(buildCachedSystem({ ...base, trialDoneLine: null })).toEqual(buildCachedSystem(base))
+    expect(buildCachedSystem({ ...base, trialDoneLine: '' })).toEqual(buildCachedSystem(base))
+    expect(buildCachedSystem({ ...base, trialDoneLine: '   ' })).toEqual(buildCachedSystem(base))
+    expect(buildCustomerSystemPrompt({ ...base, trialDoneLine: undefined })).toBe(buildCustomerSystemPrompt(base))
+  })
+})

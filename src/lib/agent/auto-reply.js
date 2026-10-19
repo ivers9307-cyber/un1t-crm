@@ -30,6 +30,7 @@ import { getLocationBranding } from '@/lib/location-branding'
 import { providerFor } from '@/lib/membership/source'
 import { noneSource } from '@/lib/membership/sources/none'
 import { DEFAULTS } from './settings-contract'
+import { trialDoneLineFor } from './trial-done-context'
 import { resolveAgentSettings } from './settings-resolve'
 import {
   shouldAgentReply,
@@ -857,6 +858,16 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       }
     }
 
+    // TRIALDONE.6 — a trial finisher replying to the studio's trial-done
+    // opener: the studio's brief (trial_done.mia_instruction, filled) rides the
+    // uncached suffix so Mia helps them choose an offer. Read once per turn,
+    // only where the thread's studio has trial_done on (a studio-only key) and
+    // the thread has a contact. Never throws: a failed read is no brief.
+    const trialDoneContactId = conv?.contact_id || contactId || null
+    const trialDoneLine = settings?.trial_done?.enabled === true && trialDoneContactId
+      ? await trialDoneLineFor(db, { locationId, contactId: trialDoneContactId, nowMs: Date.now(), settings, studioName: loc?.name || branding.companyName || null, zone })
+      : null
+
     // CACHE.2 — content blocks with a cache breakpoint on the location-stable
     // prefix (base prompt + knowledge). Caches cumulatively after the tool
     // block; the volatile suffix (today + identity override) stays uncached.
@@ -890,6 +901,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // AGENT-AUTH.3 — number linked to >1 person → ask which account by email.
       multipleAccounts,
       knownContact,
+      trialDoneLine,
     }
 
     // EFFORT.1 — operator-tunable reasoning effort (defaults to `medium`, one
