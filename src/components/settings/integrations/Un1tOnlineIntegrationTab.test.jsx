@@ -324,3 +324,39 @@ describe('Un1tOnlineIntegrationTab — Writes (UN1TWRITE.12)', () => {
     expect(screen.queryByText(/a read-only token is safer/)).toBeNull()
   })
 })
+
+describe('Un1tOnlineIntegrationTab — funnel settings (UN1TWRITE.24)', () => {
+  const write = (over = {}) => ({
+    writes_enabled: false, funnel_enabled: false, trial_product_id: null, trial_products: [],
+    hidden_class_keywords: '', un1t_sends_welcome: false, un1t_welcome_sets_login: false, un1t_sends_booking_confirmation: false,
+    permissions: { all_present: true, missing: [] }, ...over,
+  })
+
+  it('the funnel switch is disabled while writes are off', async () => {
+    current = connected({ write: write() })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    const funnel = await screen.findByRole('checkbox', { name: 'Take new people through un1t.online' })
+    expect(funnel.disabled).toBe(true)
+    cleanup()
+    current = connected({ write: write({ writes_enabled: true }) })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    expect((await screen.findByRole('checkbox', { name: 'Take new people through un1t.online' })).disabled).toBe(false)
+  })
+
+  it('the keyword box and the three flags PATCH their keys', async () => {
+    current = connected({ write: write({ writes_enabled: true }) })
+    fetchMock.mockImplementation(async (url, init) => {
+      if ((init?.method || 'GET') === 'PATCH') return reply({ write: { ...current.write, ...JSON.parse(init.body) } })
+      return reply(current)
+    })
+    render(<Un1tOnlineIntegrationTab location={LOC} canEdit />)
+    const box = await screen.findByLabelText('Classes to hide from new people')
+    fireEvent.change(box, { target: { value: 'elite' } })
+    fireEvent.blur(box)
+    await waitFor(() => expect(callsOf('PATCH')).toHaveLength(1))
+    expect(JSON.parse(callsOf('PATCH')[0][1].body)).toEqual({ hidden_class_keywords: 'elite' })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'un1t.online sends its own welcome email' }))
+    await waitFor(() => expect(callsOf('PATCH')).toHaveLength(2))
+    expect(JSON.parse(callsOf('PATCH')[1][1].body)).toEqual({ un1t_sends_welcome: true })
+  })
+})

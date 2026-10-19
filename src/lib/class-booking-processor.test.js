@@ -237,6 +237,8 @@ describe('processClassBookingRequest', () => {
     glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: null })
     missingGlofoxCredentialsForLocation.mockReturnValueOnce(['Branch ID', 'API Key', 'API Token'])
     const db = makeDb(null)
+    // UN1TWRITE.22 — the dispatch reads the studio: un1t.online, funnel off.
+    db.maybeSingle = async () => ({ data: db._table === 'locations' ? { id: 'loc', name: 'Hatch Street', organization_id: 'org', membership_source: 'un1t_online', settings: {} } : null, error: null })
     const inserts = []
     const statusWrites = []
     db.insert = (row) => { inserts.push(row); return { select: () => ({ maybeSingle: async () => ({ data: { id: 'amr2' } }) }) } }

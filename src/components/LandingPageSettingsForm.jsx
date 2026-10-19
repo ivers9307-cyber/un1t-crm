@@ -47,7 +47,7 @@ import { centsToEuros, eurosToCents } from '@/lib/price-format'
 import { DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE, DEFAULT_CLASS_FUNNEL_CTA_LABEL } from '@/lib/public-landing'
 import { parseManualTimetable, DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
 import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
-import { DEFAULT_FUNNEL_TERMS_COPY } from '@/lib/un1t-online-funnel-copy'
+import { DEFAULT_FUNNEL_TERMS_COPY, DEFAULT_FUNNEL_EMAIL_COPY } from '@/lib/un1t-online-funnel-copy'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -1052,6 +1052,19 @@ function Un1tFunnelCopyFields({ block, onUpdate }) {
       </Field>
       <Field label="Terms not ticked: message (un1t.online studios)">
         <Input value={block.terms_required_message || ''} onChange={(v) => onUpdate({ terms_required_message: v })} maxLength={200} placeholder={D.terms_required_message} />
+      </Field>
+      {/* UN1TWRITE.21 — the un1t.online funnel's two customer emails. */}
+      <Field label="New account email: subject (un1t.online studios)" hint="Sent when a booking made a new un1t.online account. {first_name} {class_name} {class_time} {studio_name} {address}. Leave blank for the default.">
+        <Input value={block.account_email_subject || ''} onChange={(v) => onUpdate({ account_email_subject: v })} maxLength={150} placeholder={DEFAULT_FUNNEL_EMAIL_COPY.account_email_subject} />
+      </Field>
+      <Field label="New account email: message (un1t.online studios)">
+        <Textarea value={block.account_email_body || ''} onChange={(v) => onUpdate({ account_email_body: v })} maxLength={2000} rows={6} placeholder={DEFAULT_FUNNEL_EMAIL_COPY.account_email_body} />
+      </Field>
+      <Field label="Trial already used email: subject (un1t.online studios)" hint="Sent when someone has had the free trial, so nothing was booked. {options} is the studio's offer list. Leave blank for the default.">
+        <Input value={block.trial_used_email_subject || ''} onChange={(v) => onUpdate({ trial_used_email_subject: v })} maxLength={150} placeholder={DEFAULT_FUNNEL_EMAIL_COPY.trial_used_email_subject} />
+      </Field>
+      <Field label="Trial already used email: message (un1t.online studios)">
+        <Textarea value={block.trial_used_email_body || ''} onChange={(v) => onUpdate({ trial_used_email_body: v })} maxLength={2000} rows={6} placeholder={DEFAULT_FUNNEL_EMAIL_COPY.trial_used_email_body} />
       </Field>
       <Field label="Terms page could not load: message (un1t.online studios)">
         <Textarea value={block.legal_unavailable_message || ''} onChange={(v) => onUpdate({ legal_unavailable_message: v })} maxLength={300} rows={2} placeholder={D.legal_unavailable_message} />
