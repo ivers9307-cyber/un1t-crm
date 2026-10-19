@@ -51,7 +51,7 @@ NODE TYPES (${ACTIVE_NODE_TYPES.join(', ')}). Channel/timing nodes are ${CHANNEL
 - internal_task:    { subject } (+ optional note, due_offset_minutes).
 - webhook:          { url } (MUST be https), { method }.
 - glofox_provision: {} (no config). Creates the contact's Glofox account + attaches the studio trial. Use when the request is about registering/adding a new lead in Glofox (e.g. "when a new lead comes in, add them to Glofox with a trial").
-- branch:  { predicate } where predicate is { type:"has_tag", tag } OR { type:"field_equals", field, value } OR { type:"field_in", field, values:[...] }.
+- branch:  { predicate } where predicate is { type:"has_tag", tag } OR { type:"field_equals", field, value } OR { type:"field_in", field, values:[...] } OR { type:"booked_class_at_studio" } (true when the contact has booked a class at this studio on any booking platform, or has a /start booking request in flight; use it, not the glofox_first_booking tag, for "have they booked yet" at a studio that is not on Glofox).
 
 EDGES & STRUCTURE RULES (these are validated — follow them exactly):
 - The first node(s) are reached by an edge from the literal source id "${TRIGGER_SOURCE_ID}".

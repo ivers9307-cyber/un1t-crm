@@ -232,6 +232,79 @@ describe('evaluateBranchPredicate', () => {
     })
   })
 
+  describe('booked_class_at_studio', () => {
+    // Records every chain per table so the test can see exactly what was
+    // asked of class_bookings / class_booking_requests.
+    function recordingDb({ bookings = [], requests = [], bookingsError = null, requestsError = null } = {}) {
+      const calls = { class_bookings: [], class_booking_requests: [] }
+      const result = { class_bookings: { data: bookings, error: bookingsError }, class_booking_requests: { data: requests, error: requestsError } }
+      return {
+        calls,
+        from: vi.fn((table) => {
+          const ops = []
+          calls[table]?.push(ops)
+          const builder = {}
+          for (const m of ['select', 'eq', 'neq', 'not', 'in', 'is', 'limit']) {
+            builder[m] = vi.fn((...args) => { ops.push([m, ...args]); return builder })
+          }
+          builder.then = (onF, onR) => Promise.resolve(result[table] || { data: [], error: null }).then(onF, onR)
+          return builder
+        }),
+      }
+    }
+    const pred = { type: 'booked_class_at_studio' }
+
+    it('is true when the contact has a class booking at the studio, whatever platform it came from', async () => {
+      const db = recordingDb({ bookings: [{ id: 'cb-1' }] })
+      expect(await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(true)
+      const ops = db.calls.class_bookings[0]
+      expect(ops).toContainEqual(['eq', 'contact_id', 'c1'])
+      expect(ops).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+      expect(ops).toContainEqual(['neq', 'status', 'CANCELLED'])
+      // A un1t.online booking must count: the read never narrows by platform.
+      expect(ops.some(([, col]) => col === 'source_platform')).toBe(false)
+      // Booked already: no need to look at the request queue.
+      expect(db.calls.class_booking_requests).toHaveLength(0)
+    })
+
+    it('is true when the only sign is an in-flight /start request at the studio (not yet synced back)', async () => {
+      const db = recordingDb({ bookings: [], requests: [{ id: 'req-1' }] })
+      expect(await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(true)
+      const ops = db.calls.class_booking_requests[0]
+      expect(ops).toContainEqual(['eq', 'contact_id', 'c1'])
+      expect(ops).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+      expect(ops).toContainEqual(['in', 'status', ['queued', 'processing', 'booked', 'needs_review']])
+    })
+
+    it('is false when the contact has neither a booking nor a live request at the studio', async () => {
+      const db = recordingDb()
+      expect(await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(false)
+    })
+
+    it('throws without the sequence studio rather than guessing', async () => {
+      await expect(steps.evaluateBranchPredicate(recordingDb(), { contact, predicate: pred }))
+        .rejects.toThrow(/studio/)
+    })
+
+    it('throws on a read error (the runner retries) instead of reading it as "not booked"', async () => {
+      await expect(steps.evaluateBranchPredicate(recordingDb({ bookingsError: { message: 'boom' } }), { contact, predicate: pred, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/boom/)
+      await expect(steps.evaluateBranchPredicate(recordingDb({ requestsError: { message: 'bang' } }), { contact, predicate: pred, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/bang/)
+    })
+
+    it('processBranchStep hands the studio through to the predicate', async () => {
+      const db = recordingDb({ bookings: [{ id: 'cb-1' }] })
+      const target = await steps.processBranchStep(db, {
+        step: { step_order: 2, config: { predicate: pred, then_step_order: 3, else_step_order: 4 } },
+        contact,
+        locationId: 'loc-hatch',
+      })
+      expect(target).toBe(3)
+      expect(db.calls.class_bookings[0]).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+    })
+  })
+
   describe('field_in', () => {
     it('throws when field is not whitelisted', async () => {
       await expect(steps.evaluateBranchPredicate(mockDb(), {
