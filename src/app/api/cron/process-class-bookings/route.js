@@ -59,7 +59,9 @@ export async function GET(request) {
       // row is already out of 'processing', so a next tick cannot retry it.
       for (const row of flagged || []) {
         try {
-          const review = await routeToReview(db, row, 'max_attempts_stuck_processing')
+          // UN1TWRITE.22 — a row the un1t.online processor owns (it stamps
+          // un1t_steps first) is carded for the un1t.online executor.
+          const review = await routeToReview(db, row, 'max_attempts_stuck_processing', ...(row.un1t_steps ? [{ provider: 'un1t_online' }] : []))
           if (review?.outcome === 'needs_review') stats.reap_carded++
           else logError('process-class-bookings', 'stuck row flagged but no staff card could be filed', { requestId: row.id, detail: review?.detail })
         } catch (e) {

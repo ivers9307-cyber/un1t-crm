@@ -10,7 +10,7 @@
 // Glofox studio's `data` JSON is byte-identical): `dataAsOf` is the newest
 // successful un1t.online sync at the location, so the page can say how fresh
 // its numbers are; null for any other source.
-import { logInfo } from '@/lib/log'
+import { logInfo, logWarn } from '@/lib/log'
 import { radarReadsFor } from '@/lib/membership/reads/index'
 import { getLocationZone } from '@/lib/location-time'
 import { getLocationWhatsAppNumberConfig } from '@/lib/whatsapp-config'
@@ -64,7 +64,12 @@ export async function radarAvailability(db, locationId, { module, withZone = fal
   // (no number), null (the read failed: unknown, so the picker stays and the
   // send route answers for itself).
   if (withOutreach) {
-    try { out.outreachAvailable = Boolean(await getLocationWhatsAppNumberConfig(locationId)) } catch { out.outreachAvailable = null }
+    try {
+      out.outreachAvailable = Boolean(await getLocationWhatsAppNumberConfig(locationId))
+    } catch {
+      out.outreachAvailable = null
+      logWarn(module, 'whatsapp number read failed', { locationId })
+    }
   }
   return out
 }

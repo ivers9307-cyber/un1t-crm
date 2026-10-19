@@ -113,12 +113,16 @@ async function leadsRow(db, locationId, now) {
     const cutoffIso = new Date(now.getTime() - DAY_MS).toISOString()
     // UN1TRADAR.3 — contacts.pipeline_stage_slug follows the PRIMARY board
     // (mig 595). Where that is not the acquisition board (Hatch: the manual
-    // waitlist), count the acquisition board's own deals instead.
+    // waitlist), count the acquisition board's own deals instead, but only
+    // once the studio's provider supplies memberships (UN1TRADAR.4): the row
+    // links to the lead radar, which is gated on that capability until then,
+    // so before the flip a manual-primary studio keeps main's contacts count.
+    // An acquisition-primary studio (Stillorgan) never reaches the check.
     const { data: boards, error: boardErr } = await db.from('pipelines')
       .select('id, key, is_primary, enabled')
       .eq('location_id', locationId)
     const primary = boardErr ? null : (boards || []).find((p) => p.is_primary)
-    if (primary && primary.key !== 'acquisition') {
+    if (primary && primary.key !== 'acquisition' && await providesMembershipsAt(db, locationId)) {
       const acq = (boards || []).find((p) => p.key === 'acquisition' && p.enabled)
       if (!acq) return null
       return leadsRowRender(await uncontactedAcquisitionLeads(db, locationId, acq.id, cutoffIso))
@@ -154,17 +158,31 @@ function leadsRowRender(uncontacted) {
   }
 }
 
+// The provider's static memberships capability (radarReadsFor, as arrearsRow
+// reads it). An unreadable source answers false: the caller then takes main's
+// contacts path, which is what this studio showed before UN1TRADAR.3.
+async function providesMembershipsAt(db, locationId) {
+  try {
+    return (await radarReadsFor(db, locationId)).providesMemberships === true
+  } catch {
+    return false
+  }
+}
+
 // Open deals at the acquisition board's new_lead stage created over 24h ago
-// (capped at 100, as the contacts query is), minus contacted / outreach-sent.
+// (capped at 100, as the contacts query is), minus contacted / outreach-sent
+// at THIS studio. A failed read throws, so the row is omitted (as every rail
+// row is on failure) rather than over-counting uncontacted leads.
 async function uncontactedAcquisitionLeads(db, locationId, pipelineId, cutoffIso) {
-  const { data: stages } = await db.from('pipeline_stages')
+  const { data: stages, error: stageErr } = await db.from('pipeline_stages')
     .select('id')
     .eq('location_id', locationId)
     .eq('pipeline_id', pipelineId)
     .eq('slug', 'new_lead')
+  if (stageErr) throw stageErr
   const stageIds = (stages || []).map((st) => st.id)
   if (stageIds.length === 0) return 0
-  const { data: deals } = await db.from('deals')
+  const { data: deals, error: dealErr } = await db.from('deals')
     .select('contact_id')
     .eq('location_id', locationId)
     .eq('pipeline_id', pipelineId)
@@ -173,14 +191,17 @@ async function uncontactedAcquisitionLeads(db, locationId, pipelineId, cutoffIso
     .lt('created_at', cutoffIso)
     .order('created_at', { ascending: true })
     .limit(100)
+  if (dealErr) throw dealErr
   const ids = [...new Set((deals || []).map((d) => d.contact_id).filter(Boolean))]
   if (ids.length === 0) return 0
   // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- ids is capped at 100 deals above; contacting actions per contact are a tiny set, so 1000 captures every row
-  const { data: actions } = await db.from('lead_radar_actions')
+  const { data: actions, error: actionErr } = await db.from('lead_radar_actions')
     .select('contact_id')
+    .eq('location_id', locationId)
     .in('contact_id', ids)
     .in('action', ['contacted', 'outreach_sent'])
     .limit(1000)
+  if (actionErr) throw actionErr
   const touched = new Set((actions || []).map((a) => a.contact_id))
   return ids.filter((id) => !touched.has(id)).length
 }
