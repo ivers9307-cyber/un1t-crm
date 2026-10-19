@@ -78,6 +78,8 @@ describe('failureExplanation', () => {
   it('is the shared definition the phone uses too (C85 c)', async () => {
     const shared = await import('@shared/agent-request-failure')
     expect(failureExplanation).toBe(shared.failureExplanation)
+    // MIAHATCH.5 — the un1t.online wording moved there too, so the phone shares it.
+    expect(un1tFailureExplanation).toBe(shared.un1tFailureExplanation)
   })
   it('explains the no-credits Glofox rejection with a fix instruction', () => {
     const out = failureExplanation({ status: 'failed', details: { result: { ok: false, message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } } })

@@ -26,7 +26,10 @@ export function approveFailureAlert(res) {
   if (res?.request?.status === 'expired' || executed.reason === 'CLASS_ALREADY_STARTED') {
     return { title: 'Not booked', message: CLASS_STARTED_MESSAGE }
   }
-  const explain = failureExplanation({ status: 'failed', details: { result: executed } })
+  // The card's provider/origin say whether a code reads in un1t.online's
+  // terms (a Hatch card's ACCOUNT_MISMATCH) or Glofox's.
+  const d = res?.request?.details || {}
+  const explain = failureExplanation({ status: 'failed', details: { provider: d.provider, origin: d.origin, result: executed } })
   return { title: 'Approved, but the action failed', message: `${explain} The customer has NOT been confirmed.` }
 }
 
