@@ -34,6 +34,7 @@ function db(settings) {
       const b = {
         select: () => b, eq: () => b, gt: () => b, lt: () => b, order: () => b,
         limit: () => Promise.resolve(events),
+        range: () => Promise.resolve({ data: [], error: null }), // UN1TBOOK.19 freshness read: no stamp, no cutoff
         maybeSingle: async () => (table === 'locations'
           ? { data: { membership_source: 'un1t_online', settings }, error: null }
           : { data: { blocks: [{ type: 'class_funnel', min_notice_hours: 1 }] }, error: null }),

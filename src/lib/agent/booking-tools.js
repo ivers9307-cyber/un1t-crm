@@ -34,6 +34,7 @@ import { notifyAgentApprovalRequest } from './approval-notify'
 import { formatClassTime } from './dublin-format'
 import { DEFAULT_TZ } from '@/lib/location-time'
 import { logError } from '@/lib/log'
+import { freshCutoff, onlyFreshEvents } from '@/lib/un1t-online-freshness'
 import { refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
 import { UN1T_ID_PREFIX } from './studio-ids'
 import { renderMiaCopy } from './mia-copy'
@@ -329,12 +330,16 @@ export async function listUn1tOnlineClasses(db, locationId, zone, nowMs = Date.n
   const fromIso = new Date(nowMs).toISOString()
   const toIso = new Date(nowMs + UN1T_TIMETABLE_DAYS * 86400_000).toISOString()
   try {
-    const { data, error } = await db.from('un1t_events')
+    // UN1TBOOK.19 — only classes the latest sync saw (freshCutoff; a stalled
+    // sync keeps every row). An unreadable cutoff throws into the catch below:
+    // the same hand-off as an unreadable timetable.
+    const cutoffIso = await freshCutoff(db, 'un1t_events', locationId)
+    const { data, error } = await onlyFreshEvents(db.from('un1t_events')
       .select(withEventIds ? 'un1t_id, title, starts_at, capacity, bookings_count' : 'title, starts_at')
       .eq('location_id', locationId)
       .eq('status', UN1T_SCHEDULED_STATUS)
       .gte('starts_at', fromIso)
-      .lte('starts_at', toIso)
+      .lte('starts_at', toIso), cutoffIso)
       .order('starts_at', { ascending: true })
       .limit(UN1T_TIMETABLE_LIMIT)
     if (error) {
