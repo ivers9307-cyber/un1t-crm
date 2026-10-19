@@ -80,6 +80,7 @@ describe('describeNode — operator-facing one-line summary per type', () => {
     [{ type: 'webhook', config: { url: 'https://x.io/hook', method: 'POST' } }, 'Webhook', 'POST https://x.io/hook'],
     [{ type: 'move_pipeline_stage', config: { stage_slug: 'converted' } }, 'Move pipeline', 'Move to converted'],
     [{ type: 'branch', config: { predicate: { type: 'has_tag', tag: 'vip' } } }, 'Branch', 'Has tag “vip”'],
+    [{ type: 'branch', config: { predicate: { type: 'booked_class_at_studio' } } }, 'Branch', 'Has booked a class at this studio'],
     [{ type: 'branch', config: { predicate: { type: 'field_equals', field: 'label', value: 'hot' } } }, 'Branch', 'label = hot'],
     [{ type: 'glofox_provision', config: {} }, 'Create in Glofox', 'Create Glofox account + trial'],
   ]
