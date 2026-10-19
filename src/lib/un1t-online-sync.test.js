@@ -44,6 +44,8 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
       if (kind === 'in') return val.includes(row[col])
       if (kind === 'ilike') return ilikeMatches(val, row[col])
       if (kind === 'lt') return row[col] != null && String(row[col]) < String(val)
+      if (kind === 'gt') return row[col] != null && Date.parse(row[col]) > Date.parse(val)
+      if (kind === 'is') return val === null ? row[col] == null : row[col] === val
       return true
     })
   }
@@ -126,6 +128,8 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
     const api = {
       select(_cols, o) { if (o?.head) s.head = true; return api },
       lt(c, v) { s.filters.push(['lt', c, v]); return api },
+      gt(c, v) { s.filters.push(['gt', c, v]); return api },
+      is(c, v) { s.filters.push(['is', c, v]); return api },
       insert(p) { s.op = 'insert'; s.payload = p; return api },
       upsert(p, o) { s.op = 'upsert'; s.payload = p; s.options = o || null; return api },
       update(p) { s.op = 'update'; s.payload = p; return api },
@@ -531,11 +535,52 @@ describe('runUn1tSync', () => {
       const { factory } = makeClient({ self: SELF, lists })
       const r = await runUn1tSync(db, HATCH, opts(factory))
       expect(r.ok).toBe(true)
-      expect(r.counts.class_occurrences).toEqual({ upserted: 2 })
+      expect(r.counts.class_occurrences).toEqual({ upserted: 2, cancelled: 0 })
       expect(tables.class_occurrences.map((o) => o.glofox_event_id).sort()).toEqual(['un1t:e1', 'un1t:e2'])
       expect(tables.class_occurrences.every((o) => o.source_platform === 'un1t_online' && o.location_id === HATCH)).toBe(true)
       expect(tables.class_occurrences.find((o) => o.glofox_event_id === 'un1t:e2').cancelled_at).toBe(NOW_ISO)
-      expect(runRow(tables).counts.class_occurrences).toEqual({ upserted: 2 })
+      expect(runRow(tables).counts.class_occurrences).toEqual({ upserted: 2, cancelled: 0 })
+    })
+
+    // UN1TBOOK.20 — a class deleted in un1t.online leaves the TVs.
+    const priorOcc = (id, startsAt, over = {}) => ({
+      id: `occ-${id}`, location_id: HATCH, glofox_event_id: `un1t:${id}`, source_platform: 'un1t_online', name: id,
+      starts_at: startsAt, cancelled_at: null, synced_at: '2026-10-16T09:45:00.000Z', ...over,
+    })
+    const oneEvent = () => {
+      const lists = fixtureLists()
+      lists['/events'] = [{ id: 'e1', title: 'HYROX', studio_id: STUDIO, status: 'scheduled', start_time: '2026-10-20T17:30:00Z', end_time: '2026-10-20T18:30:00Z' }]
+      return lists
+    }
+
+    it('a future un1t occurrence this pull did not return is stamped cancelled; a past one and a Glofox one are not', async () => {
+      const seed = baseSeed({
+        class_occurrences: [
+          priorOcc('deleted', '2026-10-22T17:30:00.000Z'),
+          priorOcc('pastgone', '2026-10-10T17:30:00.000Z'),
+          priorOcc('g', '2026-10-22T17:30:00.000Z', { glofox_event_id: 'b'.repeat(24), source_platform: 'glofox' }),
+        ],
+      })
+      const { db, tables } = makeDb(seed)
+      const { factory } = makeClient({ self: SELF, lists: oneEvent() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(r.counts.class_occurrences).toEqual({ upserted: 1, cancelled: 1 })
+      const occ = (id) => tables.class_occurrences.find((o) => o.glofox_event_id === id)
+      expect(occ('un1t:deleted').cancelled_at).toBe(NOW_ISO)
+      expect(occ('un1t:pastgone').cancelled_at).toBeNull()
+      expect(occ('b'.repeat(24)).cancelled_at).toBeNull()
+      expect(occ('un1t:e1').cancelled_at).toBeNull()
+      expect(tables.class_occurrences).toHaveLength(4)
+    })
+
+    it('a run that refuses its pull (a list cut off) cancels nothing', async () => {
+      const seed = baseSeed({ class_occurrences: [priorOcc('deleted', '2026-10-22T17:30:00.000Z')] })
+      const { db, tables } = makeDb(seed)
+      const { factory } = makeClient({ self: SELF, lists: oneEvent(), truncated: ['/events'] })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r).toMatchObject({ ok: false, reason: 'truncated' })
+      expect(tables.class_occurrences[0].cancelled_at).toBeNull()
     })
 
     it('a projection failure leaves the run ok and the connection connected, with counts.class_occurrences.error', async () => {

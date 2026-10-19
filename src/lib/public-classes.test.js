@@ -250,6 +250,9 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
             lt: (c, v) => { r.ops.push(['lt', c, v]); return b },
             order: (c, o) => { r.ops.push(['order', c, o]); return b },
             limit: (n) => { r.ops.push(['limit', n]); return Promise.resolve(events) },
+            // UN1TBOOK.19's freshness read (newest synced_at): none stamped here,
+            // so no cutoff applies (un1t-stale-events.test.js covers the filter).
+            range: (a, z) => { r.ops.push(['range', a, z]); return Promise.resolve({ data: [], error: null }) },
             maybeSingle: async () => (table === 'locations' ? location : landing),
           }
           return b
@@ -269,7 +272,7 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
     const before = Date.now()
     const out = await readPublicClasses(db, 'HATCH', 7)
     expect(out.error).toBeNull()
-    const r = reads.find((x) => x.table === 'un1t_events')
+    const r = reads.find((x) => x.table === 'un1t_events' && !x.ops.some((o) => o[0] === 'range'))
     expect(r.ops).toContainEqual(['select', 'un1t_id, title, starts_at, capacity, bookings_count'])
     expect(r.ops).toContainEqual(['eq', 'location_id', 'HATCH'])
     expect(r.ops).toContainEqual(['eq', 'status', 'scheduled'])
