@@ -91,4 +91,17 @@ describe('GET /api/cron/glofox-sync — REGISTRYREAD.1b', () => {
     expect(done.summary).toMatchObject({ update: 2, credits_unread: 1 })
     expect(done.summary.glofox_http).toEqual({ requests: 9, retries: 1, status_429: 1, status_5xx: 0, network_errors: 0, gave_up: 0 })
   })
+
+  it('GLOFOXSIBLING.1 — a result carrying an error counts as an error, not as its action; crossover links are counted', async () => {
+    glofoxCredentialsForLocation.mockResolvedValue({ branchId: 'b', apiKey: 'k', apiToken: 't', readError: null })
+    fetchAllMembersPage.mockResolvedValueOnce({ data: [{ _id: 'm1', modified: 0 }, { _id: 'm2', modified: 0 }], total: 2, hasMore: false })
+    applyMemberSync
+      // the org email index refused the insert: it used to count as a 'create'
+      .mockResolvedValueOnce({ action: 'create', error: 'duplicate key value violates unique constraint "contacts_email_org_unique"' })
+      .mockResolvedValueOnce({ action: 'update', crossover_link: { linked: true, preferences_created: 1 } })
+    const out = await (await GET(req())).json()
+    expect(out.per_location[0].summary).toMatchObject({ create: 0, update: 1, error: 1, crossover_linked: 1 })
+    const done = h.runUpdates.find((u) => u.status === 'completed')
+    expect(done.first_error).toMatch(/^\[m1\] duplicate key/)
+  })
 })
