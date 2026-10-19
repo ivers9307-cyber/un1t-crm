@@ -143,12 +143,15 @@ const READ_EVENTS_RELAY = "- Use list_upcoming_events when someone asks what's o
 // MIAHATCH.6 — the upsell rules (spec 6.5), block 3b only: offers come from the
 // tools, restate product and price and get a clear yes before a link, buttons
 // for 3 or fewer offers and a list otherwise, never a price the tools did not
-// give, and never "paid" until a tool says so.
+// give, and never "paid" until a tool says so. Task 20 (R1): the free trial
+// first, only when a tool says trial_available, given through
+// send_purchase_link with offer_id "trial"; never named otherwise.
 function un1tUpsellLines({ name, multiStudio }) {
   const at = multiStudio ? ` at ${name || 'the un1t.online studio'}` : ''
   return [
     `## Buying classes or a membership${at}`,
     `- When book_class says needs_purchase, or a verified member asks to buy classes or a membership${at}, show the offers from that result or from list_purchase_options. Introduce them with the tool's wording. Give each offer's title and price_label exactly as the tool gives them, and its blurb when it helps. Never invent, round or change a price, and never offer anything the tool did not list.`,
+    '- FREE TRIAL: offer the free trial first, before the paid offers, only when book_class or list_purchase_options says trial_available is true. Never say "free trial" or offer one otherwise. When they want it, get a clear yes, then call send_purchase_link with offer_id "trial" (and the class, when they wanted one). Say the trial is on their account, or that a class is booked, only when that tool says so. When it says trial_used, send its text and then its offers.',
     '- With 3 or fewer offers, offer them as tap choices, one per offer. With more, list them in your message. Never show more offers than the tool gave you.',
     '- When they pick one, restate the product and its price and get a clear yes before you call send_purchase_link with its offer_id. When they wanted a class, pass that class too (its event_id, class_name, class_time and starts_at as list_upcoming_classes gave them). Never send a link on an ambiguous message.' + (multiStudio ? ` Buying from chat is only for ${name || 'the un1t.online studio'}; for the other studio, hand off.` : ''),
     '- When send_purchase_link says link_sent, send its wording and end your message with its url, with nothing after it and no tap choices, so it shows as a button. Never change the link. When it says a link is already open, relay its text and offer the team if they want something else. When it says anything else, relay that and never send or invent a link.',

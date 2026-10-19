@@ -694,6 +694,12 @@ describe('un1t.online prompt variants', () => {
           expect(out).toMatch(/Never say they have paid[^\n]*until a tool says so/)
           expect(out).toMatch(/call check_my_purchase/)
           expect(out).toMatch(/end your message with its url/)
+          // MIAHATCH.6 (Task 20, R1) — the trial first, only when a tool says so.
+          expect(out).toMatch(/offer the free trial first, before the paid offers, only when book_class or list_purchase_options says trial_available is true/)
+          expect(out).toMatch(/Never say "free trial" or offer one otherwise/)
+          expect(out).toMatch(/call send_purchase_link with offer_id "trial"/)
+          expect(out).toMatch(/Say the trial is on their account, or that a class is booked, only when that tool says so/)
+          expect(out.split('\n').find((l) => l.startsWith('- FREE TRIAL:'))).not.toMatch(/[–—]/)
         }
       }
       expect(named(true, null)).toMatch(/## Buying classes or a membership at Hatch Street/)
@@ -702,7 +708,7 @@ describe('un1t.online prompt variants', () => {
       for (const multi of [false, true]) {
         for (const url of [null, 'https://hatch.example.test/book']) {
           const read = render('read', multi, url)
-          expect(read).not.toMatch(/send_purchase_link|list_purchase_options|check_my_purchase|Buying classes/)
+          expect(read).not.toMatch(/send_purchase_link|list_purchase_options|check_my_purchase|Buying classes|free trial first/)
         }
       }
       expect(CUSTOMER_AGENT_BASE_PROMPT).not.toMatch(/send_purchase_link/)

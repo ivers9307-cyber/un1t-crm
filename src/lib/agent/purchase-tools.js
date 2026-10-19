@@ -13,7 +13,8 @@ export const LIST_PURCHASE_OPTIONS_TOOL = Object.freeze({
   name: 'list_purchase_options',
   description:
     'List what a member can buy from chat at the un1t.online studio: class packs and memberships, each with an ' +
-    'offer_id, a title, a price_label, the credits it gives when known and a short blurb. Use it when a member asks ' +
+    'offer_id, a title, a price_label, the credits it gives when known and a short blurb, and trial_available: whether ' +
+    'this member can have the free trial first. Use it when a member asks ' +
     'to buy classes or a membership, or asks what they can buy. Give each title and price_label exactly as listed; ' +
     'never invent, round or change a price, and never offer anything that is not on the list.',
   input_schema: { type: 'object', properties: {} },
@@ -23,7 +24,8 @@ export const SEND_PURCHASE_LINK_TOOL = Object.freeze({
   name: 'send_purchase_link',
   description:
     "Create the VERIFIED member's secure payment link for one offer from list_purchase_options (or from book_class's " +
-    'needs_purchase offers). Before calling this, restate the product and its price and get a clear yes; never call it ' +
+    'needs_purchase offers), or give the free trial with offer_id "trial", only when a tool said trial_available. ' +
+    'Before calling this, restate the product and its price and get a clear yes; never call it ' +
     'on an ambiguous message. When they wanted a class, also pass that class exactly as list_upcoming_classes gave it. ' +
     'Only one payment link is open per member: if one is already waiting, the result says so and gives its wording. ' +
     'Relay the result honestly. Never say they have paid until a tool says so. Only works after verify_identity has ' +
@@ -31,7 +33,7 @@ export const SEND_PURCHASE_LINK_TOOL = Object.freeze({
   input_schema: {
     type: 'object',
     properties: {
-      offer_id: { type: 'string', description: 'The offer_id of the offer they chose, copied exactly.' },
+      offer_id: { type: 'string', description: 'The offer_id of the offer they chose, copied exactly, or "trial" for the free trial.' },
       event_id: { type: 'string', description: 'Only when they wanted a class: its "un1t:" event_id from list_upcoming_classes, copied exactly.' },
       class_name: { type: 'string', description: 'Only with event_id: the class name you confirmed.' },
       class_time: { type: 'string', description: 'Only with event_id: the class day and time you confirmed.' },

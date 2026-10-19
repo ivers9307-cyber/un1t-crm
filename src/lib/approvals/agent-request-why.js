@@ -152,6 +152,24 @@ const MIA_UN1T_REASONS = {
     'un1t.online did not answer clearly. Approving checks un1t.online first and books only if it is not already done.',
   cancel_outcome_unknown:
     'un1t.online did not answer clearly. Approving checks un1t.online first and cancels only if it is still booked.',
+  // MIAHATCH.6 (Task 20) — the free trial (src/lib/agent/purchase-intents.js).
+  un1t_trial_check_failed:
+    'Mia could not check whether they can have the free trial (the check failed), so she offered no trial and handed over. Check their account in un1t.online and talk to them in the conversation.',
+  trial_not_configured:
+    'Mia tried to give them the free trial, but no trial product is set for this studio, so nothing was given. Set the trial product in the un1t.online settings, or sort it in un1t.online by hand.',
+  un1t_trial_unverified:
+    'Mia asked un1t.online for the free trial, but it could not be confirmed. Check their account in un1t.online for the trial credits.',
+  trial_product_not_free:
+    "The studio's trial product is not a live free product in un1t.online, so no trial was given. Fix the product or the trial setting, then sort the member in un1t.online.",
+}
+
+// What approving a Mia trial card does: the class on it is booked only if
+// credits show (Ruling 28, never a trial); with no class there is nothing to book.
+const TRIAL_REASON = /^(un1t_trial_check_failed|trial_not_configured|un1t_trial_unverified|trial_product_not_free|un1t_trial_failed:)/
+function trialApproveLine(d) {
+  return d.event_id
+    ? 'Approving books the class on this card only if credits show in un1t.online; it never gives a trial.'
+    : 'No class is named on this card, so approving books nothing.'
 }
 
 // un1t.online's own words, as Mia's card recorded them (scrubbed), quoted.
@@ -164,6 +182,13 @@ function miaUn1tWhy(d) {
   const reason = typeof d.reason === 'string' ? d.reason : null
   if (reason === 'booking_rejected') return refusedLine('booking', d, 'Check the member in un1t.online, then approve to try the booking again.')
   if (reason === 'cancel_rejected') return refusedLine('cancellation', d, 'Check the booking in un1t.online, then approve to try the cancellation again.')
+  if (reason && TRIAL_REASON.test(reason)) {
+    const code = reason.startsWith('un1t_trial_failed:') ? reason.slice('un1t_trial_failed:'.length) || 'unknown' : null
+    const why = code
+      ? `un1t.online did not give them the free trial (${code}), so nothing was given or booked. Check their account in un1t.online, and give the trial or credits there by hand if they should have it.`
+      : MIA_UN1T_REASONS[reason]
+    return `${why} ${trialApproveLine(d)}`
+  }
   if (reason && MIA_UN1T_REASONS[reason]) return MIA_UN1T_REASONS[reason]
   // A reason this list does not know yet: never the raw code, never Glofox.
   return 'Mia passed this to the team. Check the member in un1t.online before approving.'

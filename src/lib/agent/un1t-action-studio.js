@@ -2,8 +2,9 @@
 // un1t-booking.js (book, cancel, refund requests) and purchase-intents.js
 // (payment links), so the two can never disagree on which studio settings,
 // which contact, which retryable codes or which class time they act on.
-// (One module, not an import between the two: un1t-booking.js imports
-// purchase-intents.js for its offer list.)
+// (purchase-intents.js imports un1t-booking.js for the booking steps the free
+// trial shares; un1t-booking.js loads purchase-intents.js lazily for its offer
+// list, so neither needs the other at load time.)
 import { UN1T_WRITE_CODES as C } from '@/lib/un1t-online-write'
 import { formatClassTime } from './dublin-format'
 

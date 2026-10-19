@@ -7,20 +7,31 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createHash } from 'node:crypto'
 
-const h = vi.hoisted(() => ({ checkout: null }))
+const h = vi.hoisted(() => ({ checkout: null, grantTrial: null, book: null, elig: null, readsFor: null }))
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/un1t-online-write-ops', async () => {
   const { fakeUn1tWrite } = await import('./un1t-fakes.test-helpers')
   const { vi: v } = await import('vitest')
   h.checkout = v.fn()
-  return fakeUn1tWrite({ createCheckoutLink: h.checkout })['@/lib/un1t-online-write-ops']()
+  h.grantTrial = v.fn()
+  h.book = v.fn()
+  return fakeUn1tWrite({ createCheckoutLink: h.checkout, grantTrial: h.grantTrial, book: h.book })['@/lib/un1t-online-write-ops']()
 })
 vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://hatch.example.test') }))
 vi.mock('./un1t-member-read', async (importOriginal) => ({
   ...(await importOriginal()),
+  openUn1tMemberReader: vi.fn(async () => ({ ok: false, reason: 'read_failed' })),
   fetchLiveEntitlement: vi.fn(async () => ({ ok: true, balance: 0, unlimited: false, liveSubscriptionIds: [] })),
 }))
+// MIAHATCH.6 (Task 20) — A's trialEligibility, reached through the reads seam.
+vi.mock('@/lib/membership/reads', async (importOriginal) => {
+  const { vi: v } = await import('vitest')
+  h.elig = v.fn()
+  h.readsFor = v.fn(async () => ({ state: 'configured', reads: { trialEligibility: h.elig } }))
+  return { ...(await importOriginal()), membershipReadsFor: h.readsFor }
+})
+vi.mock('./approval-notify', () => ({ notifyAgentApprovalRequest: vi.fn(async () => {}) }))
 
 import { logWarn, logError, logInfo } from '@/lib/log'
 import { Un1tWriteRefused, Un1tWriteUnknown, UN1T_WRITE_CODES as C } from '@/lib/un1t-online-write'
@@ -33,8 +44,10 @@ import { formatClassTime } from './dublin-format'
 import { TOOL_NOT_AT_THIS_STUDIO, refuseToolForTurn } from './tool-capability'
 import {
   formatPriceLabel, listPurchaseOptions, mintPayDoneToken, hashPayDoneToken, sendPurchaseLink,
-  executePurchaseTool, PURCHASE_INTENT_TTL_MS,
+  executePurchaseTool, PURCHASE_INTENT_TTL_MS, trialAvailable, offersForBooking,
 } from './purchase-intents'
+import { un1tBookClass } from './un1t-booking'
+import { DEFAULT_TRIAL_USED_TEXT } from './default-copy'
 
 // Fictional ids.
 const ORG = 'b2000000-0000-0000-0000-000000000001'
@@ -112,7 +125,10 @@ function fakeDb(tables = {}, { fail = {}, onInsert = null } = {}) {
       update: (patch) => { st.op = 'update'; st.patch = patch; return b },
       eq: (c, v) => { st.filters.push((r) => r[c] === v); return b },
       in: (c, vs) => { st.filters.push((r) => vs.includes(r[c])); return b },
+      gte: (c, v) => { st.filters.push((r) => r[c] >= v); return b },
+      contains: (c, obj) => { st.filters.push((r) => Object.entries(obj).every(([k, v]) => r[c]?.[k] === v)); return b },
       order: (c, { ascending = true } = {}) => { st.orders.push([c, ascending]); return b },
+      range: (a, z) => { st.limit = z - a + 1; return b },
       limit: (n) => { st.limit = n; return b },
       maybeSingle: () => { st.single = true; return b },
       single: () => { st.single = true; return b },
@@ -148,6 +164,13 @@ const allLogText = () => JSON.stringify([logWarn, logError, logInfo].flatMap((fn
 beforeEach(() => {
   vi.clearAllMocks()
   h.checkout.mockImplementation(async (_db, args) => ({ checkoutUrl: urlFor(args.idempotencyKey), free: false }))
+  h.grantTrial.mockReset()
+  h.grantTrial.mockResolvedValue({ outcome: 'granted', method: 'charge', ledgerId: 'led-trial-1' })
+  h.book.mockReset()
+  h.book.mockResolvedValue({ verdict: 'done', sent: true, id: 'bk-new', code: null, message: null, alreadyBooked: false, recovered: null, retryable: false, data: null, ledgerId: 'led-book-1' })
+  h.elig.mockReset()
+  h.elig.mockResolvedValue({ success: true, data: { eligible: true, reasons: [] } })
+  h.readsFor.mockImplementation(async () => ({ state: 'configured', reads: { trialEligibility: h.elig } }))
 })
 
 describe('formatPriceLabel', () => {
@@ -470,14 +493,6 @@ describe('sendPurchaseLink', () => {
     expect(out.link_sent).toBe(true)
   })
 
-  it("offer_id 'trial' is reserved: neutral not available, nothing read or written", async () => {
-    const { db, calls } = fakeDb(offers())
-    const out = await sendPurchaseLink(ctxFor(db), { offer_id: 'trial' }, hatch(), deps)
-    expect(out).toMatchObject({ link_sent: false, error: 'offer_not_available' })
-    expect(calls).toHaveLength(0)
-    expect(h.checkout).not.toHaveBeenCalled()
-  })
-
   it('an unknown, inactive or free offer is not available; no intent', async () => {
     const { db, data } = fakeDb({ mia_purchase_offers: [OFFER.old, OFFER.free] })
     for (const offer_id of ['not-an-id', 'd0000000-0000-4000-8000-0000000000ff', OFFER.old.id, OFFER.free.id]) {
@@ -563,5 +578,352 @@ describe('executePurchaseTool', () => {
     ]
     for (const o of outs) expect(JSON.stringify(o)).not.toMatch(/[—–]/)
     expect(isUuid(OFFER.pack10.id)).toBe(true)
+  })
+})
+
+// MIAHATCH.6 (Task 20, spec R1) — the free trial first, only to eligible
+// members, through D's grantTrial. A's trialEligibility (h.elig) is reached
+// through the reads seam; grantTrial (h.grantTrial) and book (h.book) are
+// fakes; the trial never goes through createCheckoutLink.
+describe('the free trial (Task 20)', () => {
+  const TRIAL_LOC = { id: HATCH, organization_id: ORG, settings: { un1t_online: { trial_product_id: 'prod-trial-1' } } }
+  const NO_TRIAL_LOC = { id: HATCH, organization_id: ORG, settings: { un1t_online: {} } }
+  const EVENT_ROW = { location_id: HATCH, un1t_id: EVENT, title: 'Fictional Hatch HIIT', starts_at: STARTS, status: 'scheduled', synced_at: '2026-10-20T08:55:00Z' }
+  const withTrial = (over = {}) => fakeDb({ locations: [TRIAL_LOC], mia_purchase_offers: [OFFER.pack10], un1t_events: [EVENT_ROW], agent_membership_requests: [], ...over })
+  const classInput = (over = {}) => ({ offer_id: 'trial', event_id: `un1t:${EVENT}`, class_name: 'Fictional Hatch HIIT', class_time: LABEL, starts_at: LABEL, ...over })
+  const requestInserts = (calls) => calls.filter((c) => c.table === 'agent_membership_requests' && c.op === 'insert')
+  const pendingCards = (data) => (data.agent_membership_requests || []).filter((r) => r.status === 'pending')
+  const PACK_OFFER = { offer_id: OFFER.pack10.id, title: '10 Class Pack', price_label: '€125', credits: 10, blurb: 'Use within three months' }
+
+  describe('trialAvailable', () => {
+    it('reads A\'s trialEligibility with { un1tUserId, contactId } and is available only on eligible === true', async () => {
+      const { db } = withTrial()
+      expect(await trialAvailable(db, { locationId: HATCH, un1tUserId: USER, contactId: HATCH_CONTACT })).toEqual({ available: true, reasons: [] })
+      expect(h.readsFor).toHaveBeenCalledWith(db, HATCH)
+      expect(h.elig).toHaveBeenCalledWith(db, HATCH, { un1tUserId: USER, contactId: HATCH_CONTACT })
+    })
+
+    it('success true but data.eligible missing (or not exactly true): not available, fail closed', async () => {
+      for (const data of [{ reasons: [] }, { eligible: 'yes', reasons: [] }, null]) {
+        h.elig.mockResolvedValueOnce({ success: true, data })
+        const out = await trialAvailable(withTrial().db, { locationId: HATCH, un1tUserId: USER, contactId: HATCH_CONTACT })
+        expect(out.available).toBe(false)
+        expect(out.readFailed).toBeUndefined()
+      }
+    })
+
+    it('not eligible: the reasons as A gives them', async () => {
+      h.elig.mockResolvedValueOnce({ success: true, data: { eligible: false, reasons: ['trial_used', 'paid_pack'] } })
+      expect(await trialAvailable(withTrial().db, { locationId: HATCH, un1tUserId: USER, contactId: HATCH_CONTACT }))
+        .toEqual({ available: false, reasons: ['trial_used', 'paid_pack'] })
+    })
+
+    it('no trial_product_id: not available, no reasons, A is never asked', async () => {
+      expect(await trialAvailable(fakeDb({ locations: [NO_TRIAL_LOC] }).db, { locationId: HATCH, un1tUserId: USER, contactId: HATCH_CONTACT }))
+        .toEqual({ available: false, reasons: [] })
+      expect(h.elig).not.toHaveBeenCalled()
+    })
+
+    it('a failed read (A says success false, A throws, no adapter, settings unreadable) is readFailed, never available', async () => {
+      const ask = (db) => trialAvailable(db, { locationId: HATCH, un1tUserId: USER, contactId: HATCH_CONTACT })
+      h.elig.mockResolvedValueOnce({ success: false, error: 'fictional' })
+      expect(await ask(withTrial().db)).toEqual({ available: false, reasons: [], readFailed: true })
+      h.elig.mockRejectedValueOnce(new Error('fictional'))
+      expect(await ask(withTrial().db)).toEqual({ available: false, reasons: [], readFailed: true })
+      h.readsFor.mockResolvedValueOnce({ state: 'unconfigured', reads: null })
+      expect(await ask(withTrial().db)).toEqual({ available: false, reasons: [], readFailed: true })
+      expect(await ask(fakeDb({ locations: [TRIAL_LOC] }, { fail: { locations: { select: true } } }).db)).toEqual({ available: false, reasons: [], readFailed: true })
+    })
+  })
+
+  describe('offered before anything else', () => {
+    it('list_purchase_options asks A before the trial is offered: trial_available true, with the offers', async () => {
+      const out = await executePurchaseTool('list_purchase_options', {}, ctxFor(withTrial().db))
+      expect(h.elig).toHaveBeenCalledWith(expect.anything(), HATCH, { un1tUserId: USER, contactId: HATCH_CONTACT })
+      expect(out).toMatchObject({ offers: [PACK_OFFER], trial_available: true })
+      expect(out.message).toMatch(/free trial[^\n]*first/i)
+      expect(out.message).toMatch(/offer_id "trial"/)
+    })
+
+    it('book_class needs_purchase carries trial_available from A (default offersFor)', async () => {
+      const ok = await un1tBookClass(ctxFor(withTrial().db), classInput(), hatch(), deps)
+      expect(ok).toMatchObject({ booked: false, needs_purchase: true, trial_available: true, offers: [PACK_OFFER] })
+      expect(ok.message).toMatch(/free trial: offer it first/)
+      h.elig.mockResolvedValueOnce({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+      const used = await un1tBookClass(ctxFor(withTrial().db), classInput(), hatch(), deps)
+      expect(used).toMatchObject({ needs_purchase: true, trial_available: false })
+      expect(used.message).toBeUndefined()
+      expect(h.book).not.toHaveBeenCalled()
+      expect(h.grantTrial).not.toHaveBeenCalled()
+    })
+
+    it('book_class with no paid offers but the trial: needs_purchase with the trial alone, no card', async () => {
+      const { db, data } = withTrial({ mia_purchase_offers: [] })
+      expect(await un1tBookClass(ctxFor(db), classInput(), hatch(), deps)).toMatchObject({ needs_purchase: true, trial_available: true, offers: [] })
+      expect(pendingCards(data)).toEqual([])
+    })
+
+    it('offersForBooking: offers + trial_available, and trial_check_failed on a failed read', async () => {
+      const ctx = ctxFor(withTrial().db)
+      expect(await offersForBooking(ctx, hatch())).toEqual({ offers: [PACK_OFFER], trial_available: true })
+      h.elig.mockResolvedValueOnce({ success: false, error: 'fictional' })
+      expect(await offersForBooking(ctx, hatch())).toEqual({ offers: [PACK_OFFER], trial_available: false, trial_check_failed: true })
+    })
+
+    it('no trial_product_id: offers only (list_purchase_options and book_class), A never asked', async () => {
+      const db = fakeDb({ locations: [NO_TRIAL_LOC], mia_purchase_offers: [OFFER.pack10], un1t_events: [EVENT_ROW] }).db
+      expect(await executePurchaseTool('list_purchase_options', {}, ctxFor(db))).toMatchObject({ offers: [PACK_OFFER], trial_available: false })
+      expect(await un1tBookClass(ctxFor(db), classInput(), hatch(), deps)).toMatchObject({ needs_purchase: true, trial_available: false })
+      expect(h.elig).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('a failed eligibility read before the offer', () => {
+    it('list_purchase_options: no trial offered, ONE class_booking card un1t_trial_check_failed + booking_issue_handoff_text', async () => {
+      h.elig.mockResolvedValue({ success: false, error: 'fictional' })
+      const { db, data } = withTrial()
+      const out = await executePurchaseTool('list_purchase_options', {}, ctxFor(db))
+      expect(out).toMatchObject({ handoff: true, reason: 'un1t_trial_check_failed' })
+      expect(out.trial_available).not.toBe(true)
+      expect(out.message).toContain(DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT)
+      const cards = pendingCards(data)
+      expect(cards).toHaveLength(1)
+      expect(cards[0]).toMatchObject({ kind: 'class_booking', location_id: HATCH, contact_id: HATCH_CONTACT })
+      expect(cards[0].details).toMatchObject({ provider: 'un1t_online', origin: 'mia', reason: 'un1t_trial_check_failed', un1t_user_id: USER, executing_contact_id: HATCH_CONTACT })
+      // A second ask reuses the card.
+      await executePurchaseTool('list_purchase_options', {}, ctxFor(db))
+      expect(pendingCards(data)).toHaveLength(1)
+      expect(h.grantTrial).not.toHaveBeenCalled()
+    })
+
+    it('book_class: one card carrying the class keys Task 16 uses + handoff, nothing booked or granted', async () => {
+      h.elig.mockResolvedValue({ success: false, error: 'fictional' })
+      const { db, data } = withTrial()
+      const out = await un1tBookClass(ctxFor(db), classInput(), hatch(), deps)
+      expect(out).toMatchObject({ booked: false, handoff: true, reason: 'un1t_trial_check_failed' })
+      expect(out.message).toContain(DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT)
+      expect(out.offers).toBeUndefined()
+      const cards = pendingCards(data)
+      expect(cards).toHaveLength(1)
+      expect(cards[0].details).toMatchObject({
+        provider: 'un1t_online', origin: 'mia', reason: 'un1t_trial_check_failed', event_id: EVENT, un1t_user_id: USER,
+        executing_contact_id: HATCH_CONTACT, starts_at: new Date(STARTS).toISOString(), class_name: 'Fictional Hatch HIIT', class_time: LABEL,
+      })
+      expect(h.book).not.toHaveBeenCalled()
+      expect(h.grantTrial).not.toHaveBeenCalled()
+    })
+
+    it('send_purchase_link trial: card (with the class keys when named) + handoff, no grant', async () => {
+      h.elig.mockResolvedValue({ success: false, error: 'fictional' })
+      const named = withTrial()
+      const out = await sendPurchaseLink(ctxFor(named.db), classInput(), hatch(), deps)
+      expect(out).toMatchObject({ handoff: true, reason: 'un1t_trial_check_failed' })
+      expect(out.message).toContain(DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT)
+      expect(pendingCards(named.data)).toHaveLength(1)
+      expect(pendingCards(named.data)[0].details).toMatchObject({ reason: 'un1t_trial_check_failed', event_id: EVENT, class_name: 'Fictional Hatch HIIT' })
+      const bare = withTrial()
+      await sendPurchaseLink(ctxFor(bare.db), { offer_id: 'trial' }, hatch(), deps)
+      expect(pendingCards(bare.data)).toHaveLength(1)
+      expect(pendingCards(bare.data)[0].details.event_id).toBeUndefined()
+      expect(h.grantTrial).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('send_purchase_link({ offer_id: "trial" })', () => {
+    it('each not-eligible reason, and two at once: trial_used_text + offers, grantTrial never called', async () => {
+      for (const reasons of [['trial_used'], ['membership_history'], ['paid_pack'], ['trial_used', 'paid_pack']]) {
+        h.elig.mockResolvedValueOnce({ success: true, data: { eligible: false, reasons } })
+        const { db, data } = withTrial()
+        const out = await sendPurchaseLink(ctxFor(db), { offer_id: 'trial' }, hatch(), deps)
+        expect(out).toMatchObject({ link_sent: false, trial_used: true, text: DEFAULT_TRIAL_USED_TEXT, offers: [PACK_OFFER] })
+        expect(data.agent_membership_requests).toEqual([])
+      }
+      expect(h.grantTrial).not.toHaveBeenCalled()
+    })
+
+    it('eligible missing (fail closed) or no trial_product_id: not given, offers only, never trial_used_text', async () => {
+      h.elig.mockResolvedValueOnce({ success: true, data: { reasons: [] } })
+      const missing = await sendPurchaseLink(ctxFor(withTrial().db), { offer_id: 'trial' }, hatch(), deps)
+      const unset = await sendPurchaseLink(ctxFor(fakeDb({ locations: [NO_TRIAL_LOC], mia_purchase_offers: [OFFER.pack10] }).db), { offer_id: 'trial' }, hatch(), deps)
+      for (const out of [missing, unset]) {
+        expect(out).toMatchObject({ link_sent: false, trial_available: false, offers: [PACK_OFFER] })
+        expect(out.trial_used).toBeUndefined()
+        expect(JSON.stringify(out)).not.toContain(DEFAULT_TRIAL_USED_TEXT)
+      }
+      expect(h.grantTrial).not.toHaveBeenCalled()
+    })
+
+    it('granted with a class: the write-ahead class_booking row (stage trial) first, its id the originRef, then Task 16\'s book -> booked', async () => {
+      const { db, data, calls } = withTrial()
+      const out = await sendPurchaseLink(ctxFor(db), classInput(), hatch(), deps)
+      expect(out).toMatchObject({ trial_granted: true, booked: true, class_name: 'Fictional Hatch HIIT', class_time: LABEL })
+      const inserted = requestInserts(calls)
+      expect(inserted).toHaveLength(1)
+      expect(inserted[0].row).toMatchObject({ kind: 'class_booking', status: 'pending', contact_id: HATCH_CONTACT })
+      expect(inserted[0].row.details).toMatchObject({ provider: 'un1t_online', origin: 'mia', stage: 'trial', event_id: EVENT, un1t_user_id: USER })
+      const rowId = data.agent_membership_requests[0].id
+      expect(h.grantTrial).toHaveBeenCalledTimes(1)
+      expect(h.grantTrial.mock.calls[0][1]).toEqual({ locationId: HATCH, un1tUserId: USER, contactId: HATCH_CONTACT, origin: 'mia', originRef: rowId, actor: null })
+      expect(h.book).toHaveBeenCalledTimes(1)
+      expect(h.book.mock.calls[0][1]).toMatchObject({ locationId: HATCH, un1tUserId: USER, eventId: EVENT, origin: 'mia', originRef: rowId, actor: null })
+      // The grant came first.
+      expect(h.grantTrial.mock.invocationCallOrder[0]).toBeLessThan(h.book.mock.invocationCallOrder[0])
+      expect(data.agent_membership_requests[0]).toMatchObject({ status: 'actioned' })
+      expect(data.agent_membership_requests[0].details.trial).toMatchObject({ outcome: 'granted', method: 'charge', ledger_id: 'led-trial-1' })
+    })
+
+    it('granted with a class, then Task 16\'s outcome handling (class full) applies', async () => {
+      h.book.mockResolvedValueOnce({ verdict: 'unknown', sent: true, id: null, code: null, message: null, alreadyBooked: false, recovered: null, retryable: false, data: null, ledgerId: 'led-book-2' })
+      const { db, data } = withTrial()
+      const out = await sendPurchaseLink(ctxFor(db), classInput(), hatch(), deps)
+      expect(out).toMatchObject({ trial_granted: true, booked: false, handoff: true, reason: 'un1t_outcome_unknown' })
+      expect(pendingCards(data)).toHaveLength(1)
+      expect(pendingCards(data)[0].details).toMatchObject({ reason: 'un1t_outcome_unknown', trial: { outcome: 'granted' } })
+    })
+
+    it('granted with no class: originRef mia-trial:<conversation>, no row, told the trial is on their account', async () => {
+      const { db, data } = withTrial()
+      const out = await sendPurchaseLink(ctxFor(db), { offer_id: 'trial' }, hatch(), deps)
+      expect(out).toMatchObject({ link_sent: false, trial_granted: true })
+      expect(out.booked).toBeUndefined()
+      expect(out.message).toMatch(/on their account/)
+      expect(h.grantTrial.mock.calls[0][1]).toMatchObject({ originRef: 'mia-trial:conv-1', origin: 'mia', actor: null })
+      expect(data.agent_membership_requests).toEqual([])
+      expect(h.book).not.toHaveBeenCalled()
+      // No conversation: a non-null ref no other filer uses.
+      const ctx = { ...ctxFor(withTrial().db), conversationId: null }
+      await sendPurchaseLink(ctx, { offer_id: 'trial' }, hatch(), deps)
+      expect(h.grantTrial.mock.calls[1][1].originRef).toBe(`mia-trial-noconv:${HATCH_CONTACT}`)
+    })
+
+    it('grantTrial ineligible: trial_used_text + offers, and never grantTrial again in that turn', async () => {
+      h.grantTrial.mockResolvedValue({ outcome: 'ineligible', reason: 'membership_history' })
+      const { db, data } = withTrial()
+      const ctx = ctxFor(db)
+      const out = await sendPurchaseLink(ctx, classInput(), hatch(), deps)
+      expect(out).toMatchObject({ link_sent: false, trial_used: true, text: DEFAULT_TRIAL_USED_TEXT, offers: [PACK_OFFER] })
+      expect(out.booked).not.toBe(true)
+      expect(data.agent_membership_requests[0]).toMatchObject({ status: 'failed' })
+      expect(pendingCards(data)).toEqual([])
+      const again = await sendPurchaseLink(ctx, { offer_id: 'trial' }, hatch(), deps)
+      expect(again).toMatchObject({ trial_used: true, text: DEFAULT_TRIAL_USED_TEXT })
+      expect(h.grantTrial).toHaveBeenCalledTimes(1)
+      expect(h.book).not.toHaveBeenCalled()
+    })
+
+    it('needs_staff: exactly ONE class_booking card with needs_staff.reason + handoff text, never booked', async () => {
+      h.grantTrial.mockResolvedValue({ outcome: 'needs_staff', reason: 'un1t_trial_unverified', ledgerId: 'led-trial-9' })
+      const named = withTrial()
+      const out = await sendPurchaseLink(ctxFor(named.db), classInput(), hatch(), deps)
+      expect(out).toMatchObject({ handoff: true, reason: 'un1t_trial_unverified' })
+      expect(out.booked).not.toBe(true)
+      expect(out.trial_granted).not.toBe(true)
+      expect(out.message).toContain(DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT)
+      // The write-ahead row IS the card: one row in all.
+      expect(named.data.agent_membership_requests).toHaveLength(1)
+      expect(pendingCards(named.data)[0].details).toMatchObject({
+        provider: 'un1t_online', origin: 'mia', reason: 'un1t_trial_unverified', event_id: EVENT, class_name: 'Fictional Hatch HIIT',
+      })
+      expect(pendingCards(named.data)[0].details.stage).toBeUndefined()
+      expect(h.book).not.toHaveBeenCalled()
+
+      const bare = withTrial()
+      const out2 = await sendPurchaseLink(ctxFor(bare.db), { offer_id: 'trial' }, hatch(), deps)
+      expect(out2).toMatchObject({ handoff: true, reason: 'un1t_trial_unverified' })
+      expect(bare.data.agent_membership_requests).toHaveLength(1)
+      expect(pendingCards(bare.data)[0].details).toMatchObject({ provider: 'un1t_online', origin: 'mia', reason: 'un1t_trial_unverified', un1t_user_id: USER })
+    })
+
+    it('needs_staff un1t_trial_failed:<code> (an unmapped trial refusal): card, never trial_used_text; trial_not_configured too', async () => {
+      for (const reason of ['un1t_trial_failed:SOME_FICTIONAL_CODE', 'trial_not_configured']) {
+        h.grantTrial.mockResolvedValueOnce({ outcome: 'needs_staff', reason, message: 'fictional words' })
+        const { db, data } = withTrial()
+        const out = await sendPurchaseLink(ctxFor(db), { offer_id: 'trial' }, hatch(), deps)
+        expect(out).toMatchObject({ handoff: true, reason })
+        expect(out.trial_used).toBeUndefined()
+        expect(JSON.stringify(out)).not.toContain(DEFAULT_TRIAL_USED_TEXT)
+        expect(pendingCards(data)).toHaveLength(1)
+        expect(pendingCards(data)[0].details.reason).toBe(reason)
+      }
+    })
+
+    it('retry: no card, try-again wording; a SECOND retry in the same turn is booking_issue_handoff_text', async () => {
+      h.grantTrial.mockResolvedValue({ outcome: 'retry', code: 'UN1T_RATE_BUDGET' })
+      const { db, data } = withTrial()
+      const ctx = ctxFor(db)
+      const first = await sendPurchaseLink(ctx, classInput(), hatch(), deps)
+      expect(first).toMatchObject({ link_sent: false, try_again: true })
+      expect(first.message).toMatch(/try again in a few minutes/)
+      expect(first.handoff).toBeUndefined()
+      expect(pendingCards(data)).toEqual([])
+      expect(data.agent_membership_requests[0]).toMatchObject({ status: 'failed' })
+      const second = await sendPurchaseLink(ctx, classInput(), hatch(), deps)
+      expect(second).toMatchObject({ handoff: true })
+      expect(second.message).toContain(DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT)
+      expect(pendingCards(data)).toEqual([])
+      expect(h.book).not.toHaveBeenCalled()
+      // A new turn starts counting again.
+      const fresh = await sendPurchaseLink(ctxFor(db), { offer_id: 'trial' }, hatch(), deps)
+      expect(fresh).toMatchObject({ try_again: true })
+    })
+
+    it('grantTrial rejects (nothing sent): the row is closed, handoff, no card', async () => {
+      h.grantTrial.mockRejectedValueOnce(new Un1tSettingsReadError('fictional'))
+      const { db, data } = withTrial()
+      const out = await sendPurchaseLink(ctxFor(db), classInput(), hatch(), deps)
+      expect(out).toMatchObject({ handoff: true })
+      expect(out.message).toContain(DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT)
+      expect(pendingCards(data)).toEqual([])
+    })
+
+    it('the trial never goes through createCheckoutLink and never makes a purchase intent', async () => {
+      for (const grant of [
+        { outcome: 'granted', method: 'free_checkout', ledgerId: 'led-t' }, { outcome: 'ineligible', reason: 'trial_used' },
+        { outcome: 'needs_staff', reason: 'un1t_trial_failed:X' }, { outcome: 'retry', code: 'UN1T_RATE_LIMITED' },
+      ]) {
+        h.grantTrial.mockResolvedValueOnce(grant)
+        const { db, data, calls } = withTrial()
+        await sendPurchaseLink(ctxFor(db), classInput(), hatch(), deps)
+        expect(data.mia_purchase_intents).toEqual([])
+        expect(calls.some((c) => c.table === 'mia_purchase_intents')).toBe(false)
+      }
+      expect(h.checkout).not.toHaveBeenCalled()
+    })
+
+    it('a class that does not match (or is gone): nothing granted, no row', async () => {
+      const { db, data } = withTrial()
+      expect(await sendPurchaseLink(ctxFor(db), classInput({ starts_at: 'Sat 24 Oct, 09:00' }), hatch(), deps))
+        .toMatchObject({ error: 'class_unavailable', reason: 'starts_at_mismatch' })
+      expect(h.grantTrial).not.toHaveBeenCalled()
+      expect(data.agent_membership_requests).toEqual([])
+    })
+
+    it('draft booking_mode: the trial is given, the class becomes one draft card for the team', async () => {
+      const { db, data } = withTrial()
+      const out = await sendPurchaseLink(ctxFor(db, { settings: { booking_mode: 'draft' } }), classInput(), hatch(), deps)
+      expect(out).toMatchObject({ trial_granted: true, booked: false, pending_approval: true })
+      expect(h.book).not.toHaveBeenCalled()
+      expect(pendingCards(data)).toHaveLength(1)
+      expect(pendingCards(data)[0].details).toMatchObject({ reason: 'mia_booking', mode: 'draft', event_id: EVENT })
+      expect(pendingCards(data)[0].details.stage).toBeUndefined()
+    })
+
+    it('logs carry no personal keys or ids beyond codes; no em or en dash in any answer', async () => {
+      const outs = []
+      for (const grant of [
+        { outcome: 'granted', method: 'charge', ledgerId: 'l' }, { outcome: 'ineligible', reason: 'trial_used' },
+        { outcome: 'needs_staff', reason: 'un1t_trial_failed:X' }, { outcome: 'retry', code: 'UN1T_RATE_LIMITED' },
+      ]) {
+        h.grantTrial.mockResolvedValueOnce(grant)
+        outs.push(await sendPurchaseLink(ctxFor(withTrial().db), { offer_id: 'trial' }, hatch(), deps))
+      }
+      h.elig.mockResolvedValueOnce({ success: false, error: 'fictional' })
+      outs.push(await executePurchaseTool('list_purchase_options', {}, ctxFor(withTrial().db)))
+      outs.push(await executePurchaseTool('list_purchase_options', {}, ctxFor(withTrial().db)))
+      for (const o of outs) expect(JSON.stringify(o)).not.toMatch(/[—–]/)
+      const logs = allLogText()
+      expect(logs).not.toMatch(/conv-1|Fictional Member|@|\+353/)
+      for (const fn of [logWarn, logError, logInfo]) for (const call of fn.mock.calls) expect(call[0]).toBe('mia-un1t')
+    })
   })
 })

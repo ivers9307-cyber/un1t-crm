@@ -75,7 +75,8 @@ const unknown = (over = {}) => ({ verdict: 'unknown', sent: true, id: null, code
 // A recording fake db: every .eq/.in/.gte/.lte/.contains filters, order and
 // range work, inserts get an id and land in the table, updates apply.
 function fakeDb(tables = {}, { fail = {} } = {}) {
-  const data = { un1t_events: [event()], un1t_bookings: [], un1t_subscriptions: [], agent_membership_requests: [], ...tables }
+  // The studio's row: no trial product set (Task 20's trial is tested in purchase-intents.test.js).
+  const data = { locations: [{ id: HATCH, name: 'UN1T Hatch Street', settings: { un1t_online: {} } }], un1t_events: [event()], un1t_bookings: [], un1t_subscriptions: [], agent_membership_requests: [], ...tables }
   const inserts = []
   const updates = []
   let next = 1
@@ -438,6 +439,46 @@ describe('un1tBookClass', () => {
     expect(fin.patch.status).toBe('pending')
     expect(fin.patch.details).toMatchObject({ provider: 'un1t_online', reason: 'no_credits', un1t_write_id: 'led-1' })
     expect(notifyAgentApprovalRequest).toHaveBeenCalledTimes(1)
+  })
+
+  // MIAHATCH.6 (Task 20) — the free trial's eligibility read failed: no trial
+  // offered, ONE class_booking card un1t_trial_check_failed, the handoff text.
+  it('trial check failed -> one un1t_trial_check_failed card + handoff, before or after book (the row is the card)', async () => {
+    const offers = [{ offer_id: 'o-1', title: '5 Class Pack', price_label: '€60', credits: 5, blurb: null }]
+    const offersFor = async () => ({ offers, trial_available: false, trial_check_failed: true })
+    h.reader = empty()
+    const pre = fakeDb()
+    const r = await un1tBookClass(ctxFor(pre.db), input(), hatch(), deps({ offersFor }))
+    expect(r).toMatchObject({ booked: false, handoff: true, reason: 'un1t_trial_check_failed' })
+    expect(r.message).toContain(DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT)
+    expect(r.offers).toBeUndefined()
+    expect(h.book).not.toHaveBeenCalled()
+    const rows = requestRows(pre.inserts)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].row.details).toMatchObject({ provider: 'un1t_online', origin: 'mia', reason: 'un1t_trial_check_failed', event_id: EVENT, class_name: 'Fictional Hatch HIIT' })
+    expect(notifyAgentApprovalRequest).toHaveBeenCalledTimes(1)
+
+    // A no_credits race after the pre-flight: the write-ahead row is the one card.
+    vi.clearAllMocks()
+    h.reader = entitled()
+    h.book.mockResolvedValueOnce(refused('TEST_NO_CREDITS', 'No credits left'))
+    const race = fakeDb()
+    const r2 = await un1tBookClass(ctxFor(race.db), input(), hatch(), deps({ offersFor }))
+    expect(r2).toMatchObject({ booked: false, handoff: true, reason: 'un1t_trial_check_failed' })
+    expect(requestRows(race.inserts)).toHaveLength(1)
+    const fin = lastUpdate(race.updates)
+    expect(fin.patch.status).toBe('pending')
+    expect(fin.patch.details).toMatchObject({ reason: 'un1t_trial_check_failed', un1t_write_id: 'led-1' })
+    expect(notifyAgentApprovalRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('trial_available with no paid offers is still needs_purchase, with the trial-first line', async () => {
+    h.reader = empty()
+    const { db, inserts } = fakeDb()
+    const r = await un1tBookClass(ctxFor(db), input(), hatch(), deps({ offersFor: async () => ({ offers: [], trial_available: true }) }))
+    expect(r).toMatchObject({ booked: false, needs_purchase: true, offers: [], trial_available: true })
+    expect(r.message).toMatch(/offer_id "trial"/)
+    expect(inserts).toEqual([])
   })
 
   it('refused unmapped -> card booking_rejected quoting un1t.online words + booking_issue_handoff_text', async () => {
