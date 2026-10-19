@@ -136,10 +136,13 @@ Hatch templates are.
 **Follow-up** `hatch_trial_done_followup` (MARKETING, {{1}} = first
 name):
 
-> Hi {{1}}, just checking in after your trial at UN1T Hatch Street. Would
-> you be interested in our limited Foundation membership pricing or class pack offerings?
-> I can help you pick the option that suits you best.
-> Garrett, Studio Owner
+> Hey {{1}}, just bumping this in case it got buried in your notifications!
+> Let me know if you want me to save you one of those Foundation slots
+> before they're gone. 👍
+> Garrett
+>
+> (Richard's wording, 19 Oct; his "— Garrett" sign-off written without the
+> em-dash, per his no-em-dash rule for customer messages.)
 
 Quick-reply buttons are optional. If used, they are plain replies such
 as "Tell me more" that reach Mia (#2064), never an opt-out button
