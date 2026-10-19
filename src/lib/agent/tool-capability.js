@@ -81,15 +81,59 @@ export const TOOL_NOT_AT_THIS_STUDIO = Object.freeze({
     'otherwise hand off to the team. For membership, payments or account questions, hand off to the team.',
 })
 
+// MIAHATCH.2 — the tools that act on, or buy from, un1t.online. None exists in
+// any block yet (a later task adds them behind un1tWrites); the names are fixed
+// now so the executor refuses them in every block that does not offer them.
+// book_class and cancel_class_booking are Glofox tools today: they appear here
+// because on a un1t.online turn they are WRITES, gated like the rest.
+export const UN1T_WRITE_TOOL_NAMES = Object.freeze(new Set(['book_class', 'cancel_class_booking', 'request_refund']))
+export const UN1T_PURCHASE_TOOL_NAMES = Object.freeze(new Set(['list_purchase_options', 'send_purchase_link', 'check_my_purchase']))
+
+// Per block, the tools NOT offered in it (the executor-side mirror of the
+// block's name list; tool-blocks.test.js proves the two agree). An exclusion
+// list rather than an inclusion one so this stays a leaf module: the offered
+// list lives with the tool definitions, which import this file.
+const UN1T_ONLY = ['request_refund', ...UN1T_PURCHASE_TOOL_NAMES]
+const NOT_OFFERED_IN_BLOCK = Object.freeze({
+  glofox: new Set(UN1T_ONLY),
+  no_booking: new Set([...BOOKING_SYSTEM_TOOL_NAMES, ...UN1T_ONLY]),
+  // get_my_payment_reminder is offered in both un1t read blocks (MIAHATCH.3):
+  // the un1t.online half reads the past-due seam, the Glofox half is today's.
+  un1t_read: new Set(['book_class', 'cancel_class_booking', ...UN1T_ONLY]),
+  un1t_read_dual: new Set([...UN1T_ONLY]),
+  un1t_full: new Set(),
+})
+
 /**
- * The executor-side refusal. `ctx.canBook === false` is the only "no": a
- * caller that never set it (an older caller, the eval harness) keeps today's
- * behaviour. Returns the refusal result, or null when the tool may run.
+ * The executor-side refusal. Returns the refusal result, or null when the
+ * tool may run.
+ *
+ * With `ctx.turn = { block, answerable, channel, un1tWrites }` (MIAHATCH.2) the
+ * turn's tool block decides: a tool the block does not offer is refused, and a
+ * un1t.online write or purchase tool runs only in `un1t_full` on WhatsApp with
+ * `un1tWrites`. Without `ctx.turn` (an older caller, the eval harness) it is
+ * today's rule: `ctx.canBook === false` is the only "no" for a booking-system
+ * tool. Sonnet 5 has invented tool names before, so this runs before any read.
  */
-export function refuseAtNoBookingStudio(toolName, ctx) {
-  if (ctx?.canBook !== false) return null
-  if (!BOOKING_SYSTEM_TOOL_NAMES.has(toolName)) return null
-  return { ...TOOL_NOT_AT_THIS_STUDIO }
+export function refuseToolForTurn(toolName, ctx) {
+  const turn = ctx?.turn
+  const excluded = turn ? NOT_OFFERED_IN_BLOCK[turn.block] : undefined
+  if (!excluded) {
+    // No turn, or a block this build does not know: today's canBook rule, and
+    // the un1t-only tools are refused regardless (no block unknown to us may
+    // offer them).
+    if (turn && UN1T_ONLY.includes(toolName)) return { ...TOOL_NOT_AT_THIS_STUDIO }
+    if (ctx?.canBook !== false) return null
+    if (!BOOKING_SYSTEM_TOOL_NAMES.has(toolName)) return null
+    return { ...TOOL_NOT_AT_THIS_STUDIO }
+  }
+  if (excluded.has(toolName)) return { ...TOOL_NOT_AT_THIS_STUDIO }
+  const full = turn.block === 'un1t_full' && turn.channel === 'whatsapp' && turn.un1tWrites === true
+  if (!full && (UN1T_ONLY.includes(toolName)
+    || (turn.block === 'un1t_full' && UN1T_WRITE_TOOL_NAMES.has(toolName)))) {
+    return { ...TOOL_NOT_AT_THIS_STUDIO }
+  }
+  return null
 }
 
 // MIAHATCH.1 — a person whose only live membership is at ANOTHER studio of the

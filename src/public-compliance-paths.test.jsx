@@ -93,6 +93,10 @@ const COMPLIANCE_PATHS = [
     path: '/cancel/eyJsIjoieCJ9.c2ln',
     why: 'CANCEL-FORM.3: per-contact membership cancellation form link sent by email/WhatsApp; must render without a session on every host, incl. the marketing host when the operator builds links there',
   },
+  {
+    path: '/legal/un1t/hatch-street/terms',
+    why: 'UN1TWRITE.17: the un1t.online terms and waiver the class funnel tick links to; a customer must read them before accepting, on every host',
+  },
 ]
 
 // The embed's post-submit hop. RaceSignupWidget sends a PAID signup to a

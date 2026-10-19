@@ -10,6 +10,8 @@ import {
   OPTIONS_PREFIX,
   SKIP_PREFIX,
   CUSTOMER_AGENT_BASE_PROMPT,
+  renderCustomerAgentBasePrompt,
+  buildStudioFactsBlock,
 } from './prompt'
 
 describe('buildKnowledgeBlock', () => {
@@ -528,5 +530,266 @@ describe('renderCustomerAgentBasePrompt (W1.M3b)', () => {
   it('buildCustomerSystemPrompt threads membershipSource into the stable prefix; absent → the Glofox default', () => {
     expect(buildCustomerSystemPrompt({ membershipSource: { key: 'none', label: 'No membership source' } })).not.toContain('Glofox')
     expect(buildCustomerSystemPrompt({})).toContain(CUSTOMER_AGENT_BASE_PROMPT)
+  })
+})
+
+// ── MIAHATCH.2 Task 7: the un1t.online prompt variants and the facts block ──
+const UN1T_SOURCE = { key: 'un1t_online', label: 'un1t.online' }
+const BANNED_WORDS = /limited|spaces|capacity/i
+const DASHES = /[\u2014\u2013]/
+const FACTS_RULE = (studio) => `Prices and the timetable for ${studio} come only from your tools and this block, never from the studio knowledge above.`
+const VARIANT_CASES = [
+  ['read', false, null],
+  ['read', false, 'https://hatch.example.test/book'],
+  ['read', true, null],
+  ['read', true, 'https://hatch.example.test/book'],
+  ['full', false, 'https://hatch.example.test/book'],
+  ['full', true, null],
+]
+const render = (variant, multiStudio, bookingUrl) =>
+  renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: false, bookingUrl, un1tVariant: variant, multiStudio })
+
+describe('un1t.online prompt variants', () => {
+  it('read variant never says limited, spaces or capacity (the whole render)', () => {
+    for (const [variant, multi, url] of VARIANT_CASES) {
+      expect(render(variant, multi, url)).not.toMatch(BANNED_WORDS)
+      const { stable, volatile } = buildCustomerSystemPromptParts({
+        businessName: 'Studio', locationName: 'Hatch', un1tVariant: variant, multiStudio: multi,
+        bookings: false, bookingUrl: url, membershipSource: UN1T_SOURCE,
+        knowledge: [{ category: 'faq', title: 'Hours', content: 'Fictional: 6am to 9pm.' }],
+      })
+      expect(stable).not.toMatch(BANNED_WORDS)
+      expect(volatile).not.toMatch(BANNED_WORDS)
+    }
+  })
+
+  it('keeps the no-count rule without the banned words', () => {
+    const out = render('read', false, null)
+    expect(out).toMatch(/NEVER tell a customer how many places are left/)
+    expect(out).toMatch(/whether something is full, never a count/)
+  })
+
+  it('the default (null) variant is today\'s bytes, for any source and booking mode', () => {
+    expect(renderCustomerAgentBasePrompt()).toBe(CUSTOMER_AGENT_BASE_PROMPT)
+    expect(renderCustomerAgentBasePrompt(undefined, { un1tVariant: null, multiStudio: true })).toBe(CUSTOMER_AGENT_BASE_PROMPT)
+    expect(renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: false, bookingUrl: 'u', un1tVariant: null }))
+      .toBe(renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: false, bookingUrl: 'u' }))
+  })
+
+  it('slice 1 renders full exactly as read (slice 2 adds the upsell rules)', () => {
+    for (const multi of [false, true]) {
+      for (const url of [null, 'https://hatch.example.test/book']) {
+        expect(render('full', multi, url)).toBe(render('read', multi, url))
+      }
+    }
+  })
+
+  it('read variant: you cannot book from chat; share the booking link or hand off; account answers from tools only', () => {
+    const withLink = render('read', false, 'https://hatch.example.test/book')
+    expect(withLink).toContain("You can't book or cancel classes from chat at this studio. To book, send the studio's booking link.")
+    expect(withLink).toContain("The studio's booking link is https://hatch.example.test/book.")
+    const noLink = render('read', false, null)
+    expect(noLink).toContain("You can't book or cancel classes from chat at this studio. To book, hand the customer to the team.")
+    expect(noLink).not.toContain('http')
+    for (const out of [withLink, noLink]) {
+      expect(out).toMatch(/Account answers come from your tools only/)
+      expect(out).not.toContain('You CAN book classes')
+      expect(out).not.toContain('You CAN cancel')
+    }
+  })
+
+  it('multiStudio asks to say which studio each answer is for; single studio does not', () => {
+    expect(render('read', true, null)).toMatch(/Say which studio each answer is for/)
+    expect(render('read', false, null)).not.toMatch(/Say which studio each answer is for/)
+  })
+
+  it('MIAHATCH.3: the single-studio read variant has its own overdue payment rules, with no pay link', () => {
+    const out = render('read', false, null)
+    expect(out).toMatch(/## Overdue payments/)
+    expect(out).toMatch(/call get_my_payment_reminder BEFORE answering/)
+    expect(out).toMatch(/"am I paid up"/)
+    expect(out).toMatch(/Overdue payments at the un1t\.online studio are chased by the studio itself\. There is no pay link for them, and you never send or invent one/)
+    expect(out).toMatch(/update the card on file at the un1t\.online studio, they can do it in the un1t\.online app, or the team can help/)
+    expect(out).toMatch(/never state an amount or a date the tool did not give/)
+    expect(out).toMatch(/still_overdue is 'unknown': never guess/)
+    // The Glofox-only wording does not leak into the single-studio un1t render.
+    expect(out).not.toMatch(/Pay now|send pay_link|first_sent_at|Glofox/)
+    // The old blanket "hand off any payment reminder question" lines are gone.
+    expect(out).not.toMatch(/You do NOT have their price, payment history or billing standing\./)
+    expect(out).not.toMatch(/asks about a payment reminder or a failed payment/)
+    expect(out).not.toMatch(/If the answer lists more than one studio/)
+  })
+
+  it('MIAHATCH.3 fix 1: the dual render scopes the no-pay-link rule to the named un1t studio and carries the Glofox rules for the other section', () => {
+    const named = renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: false, bookingUrl: null, un1tVariant: 'read', multiStudio: true, un1tStudioName: 'Hatch Street' })
+    expect(named).toMatch(/Overdue payments at Hatch Street are chased by the studio itself\. There is no pay link for them/)
+    expect(named).toMatch(/update the card on file at Hatch Street, they can do it in the un1t\.online app/)
+    expect(named).not.toMatch(/There is no pay link for these payments/)
+    expect(named).toMatch(/If the answer lists more than one studio, say which studio each part is for/)
+    expect(named).toMatch(/The rules that follow apply only to the section of the answer for the Glofox studio, which can carry its own reminder details and pay link\. They never apply to the section for Hatch Street\./)
+    // The shared lines are today's Glofox lines, byte for byte.
+    const glofoxBullets = CUSTOMER_AGENT_BASE_PROMPT.slice(
+      CUSTOMER_AGENT_BASE_PROMPT.indexOf('- When a message is about a payment reminder'),
+      CUSTOMER_AGENT_BASE_PROMPT.indexOf('- NEVER ask for or accept card numbers, expiry dates, CVV or bank details in chat. If a customer sends them, do not repeat them back; say the secure link'),
+    ).trimEnd()
+    expect(glofoxBullets.split('\n')).toHaveLength(7)
+    expect(named).toContain(glofoxBullets)
+    expect(named).toContain('send pay_link in plain text')
+    // Unnamed dual: the unnamed wording.
+    expect(render('read', true, null)).toMatch(/section for the un1t\.online studio\./)
+    // The added lines (everything not in today's prompt) are dash free; the reused ones have none either.
+    expect(named.split('\n').filter((l) => /Pay now|pay_link/.test(l)).join('\n')).not.toMatch(DASHES)
+    expect(named).not.toMatch(BANNED_WORDS)
+  })
+
+  it('every line a un1t variant adds is free of em and en dashes', () => {
+    const base = new Set(CUSTOMER_AGENT_BASE_PROMPT.split('\n'))
+    for (const [variant, multi, url] of VARIANT_CASES) {
+      const added = render(variant, multi, url).split('\n').filter((l) => !base.has(l))
+      expect(added.length).toBeGreaterThan(5)
+      for (const l of added) expect(l).not.toMatch(DASHES)
+    }
+  })
+
+  it('the stable prefix is byte-identical across two turns at the same studio and variant', () => {
+    const o = { businessName: 'B', locationName: 'Hatch', un1tVariant: 'read', multiStudio: true, bookings: false, bookingUrl: 'https://hatch.example.test/book', membershipSource: UN1T_SOURCE, knowledge: [{ category: 'faq', title: 'Q', content: 'A' }] }
+    const a = buildCachedSystem({ ...o, today: 'Saturday', identityPreverified: false })
+    const b = buildCachedSystem({ ...o, today: 'Sunday', identityPreverified: true, knownContact: { firstName: 'Aoife' }, factsBlocks: ['## Facts for Other\nx'] })
+    expect(a[0]).toEqual(b[0])
+    expect(a[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
+  })
+
+  it('a un1t variant at a booking thread (bookings true) still carries the link and the variant text', () => {
+    const { stable } = buildCustomerSystemPromptParts({ un1tVariant: 'read', multiStudio: true, bookings: true, bookingUrl: 'https://hatch.example.test/book' })
+    expect(stable).toContain("The studio's booking link is https://hatch.example.test/book.")
+  })
+})
+
+describe('un1t variant names the studio it answers for', () => {
+  const CARVE_OUT = "When a facts block below names another studio, that studio's prices, offers, timetable and links come only from its facts block and your tools."
+  const named = (variant, multiStudio, bookingUrl) =>
+    renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: true, bookingUrl, un1tVariant: variant, multiStudio, un1tStudioName: 'Hatch Street' })
+
+  it('un1tStudioName replaces "this studio" in the booking lines (single and multi studio)', () => {
+    for (const [multi, url] of [[false, 'https://hatch.example.test/book'], [false, null], [true, 'https://hatch.example.test/book'], [true, null]]) {
+      const out = named('read', multi, url)
+      expect(out).toContain('at Hatch Street')
+      expect(out).not.toMatch(/at this studio/)
+      expect(out).not.toMatch(BANNED_WORDS)
+      if (!multi) expect(out).toContain("You can't book or cancel classes at Hatch Street from chat.")
+      if (url) expect(out).toContain("Hatch Street's booking link is https://hatch.example.test/book.")
+      if (!multi && url) expect(out).toContain("To book, send Hatch Street's booking link.")
+    }
+    expect(named('read', false, null)).toContain('You never book, cancel or change a class booking at Hatch Street from chat')
+  })
+
+  it('without a name the wording is unchanged, and a name is ignored without a un1t variant', () => {
+    expect(render('read', false, 'https://hatch.example.test/book')).toContain("You can't book or cancel classes from chat at this studio.")
+    expect(renderCustomerAgentBasePrompt(undefined, { un1tStudioName: 'Hatch Street' })).toBe(CUSTOMER_AGENT_BASE_PROMPT)
+    const parts = buildCustomerSystemPromptParts({ un1tStudioName: 'Hatch Street' })
+    expect(parts.stable).toBe(buildCustomerSystemPromptParts({}).stable)
+  })
+
+  it('the stable prefix stays identical across two turns with the name set', () => {
+    const o = { businessName: 'B', locationName: 'Stillorgan', un1tVariant: 'read', un1tStudioName: 'Hatch Street', multiStudio: true, bookings: true, bookingUrl: 'https://hatch.example.test/book', knowledge: [{ category: 'faq', title: 'Q', content: 'A' }] }
+    const a = buildCachedSystem({ ...o, today: 'Saturday' })
+    const b = buildCachedSystem({ ...o, today: 'Sunday', identityPreverified: true, factsBlocks: ['## Facts for Hatch Street\nx'] })
+    expect(a[0]).toEqual(b[0])
+    expect(a[0].text).toContain('at Hatch Street')
+  })
+
+  it('the carve-out is in the read and full renders, in the stable text, and absent from Glofox and no-booking', () => {
+    for (const variant of ['read', 'full']) {
+      for (const multi of [false, true]) {
+        for (const url of [null, 'https://hatch.example.test/book']) {
+          const out = render(variant, multi, url)
+          expect(out).toContain(CARVE_OUT)
+          expect(out).toContain('The KNOWLEDGE section and the membership sign-up link describe the studio of this conversation only.')
+          expect(out).not.toMatch(BANNED_WORDS)
+        }
+      }
+    }
+    expect(buildCustomerSystemPromptParts({ un1tVariant: 'read', bookings: false, membershipSource: UN1T_SOURCE }).stable).toContain(CARVE_OUT)
+    expect(CUSTOMER_AGENT_BASE_PROMPT).not.toContain(CARVE_OUT)
+    expect(renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: false, bookingUrl: 'u' })).not.toContain(CARVE_OUT)
+  })
+})
+
+describe('buildStudioFactsBlock', () => {
+  const full = {
+    studioName: 'Hatch Street', address: '1 Fictional Row, Dublin 2',
+    bookingUrl: 'https://hatch.example.test/book', membershipUrl: 'https://hatch.example.test/join',
+    offers: [
+      { title: '10 class pack', price_label: '€125', blurb: 'Valid for three months' },
+      { title: 'Monthly', price_label: '€189 a month' },
+    ],
+    knowledge: [
+      { category: 'faq', title: 'Showers', content: 'Fictional: showers on the ground floor.', enabled: true },
+      { category: 'faq', title: 'Hidden', content: 'secret', enabled: false },
+      { category: 'faq', title: 'Blank', content: '   ' },
+    ],
+  }
+
+  it('carries name, address, both links, offers, knowledge and the exact rule line last', () => {
+    const out = buildStudioFactsBlock(full)
+    expect(out).toContain('Hatch Street')
+    expect(out).toContain('1 Fictional Row, Dublin 2')
+    expect(out).toContain('https://hatch.example.test/book')
+    expect(out).toContain('https://hatch.example.test/join')
+    expect(out).toContain('10 class pack')
+    expect(out).toContain('€125')
+    expect(out).toContain('Valid for three months')
+    expect(out).toContain('€189 a month')
+    expect(out).toContain('Showers: Fictional: showers on the ground floor.')
+    expect(out).not.toContain('secret')
+    expect(out).not.toContain('Blank')
+    expect(out.endsWith(FACTS_RULE('Hatch Street'))).toBe(true)
+    expect(out).not.toMatch(DASHES)
+  })
+
+  it('omits anything missing: no "undefined", no empty label lines', () => {
+    const out = buildStudioFactsBlock({ studioName: 'Hatch Street' })
+    expect(out).not.toMatch(/undefined|null/)
+    for (const l of out.split('\n')) expect(l.trim()).not.toMatch(/:\s*$/)
+    expect(out.replace(FACTS_RULE('Hatch Street'), '')).not.toMatch(/Address|Booking link|sign-up|Offers|About/)
+    expect(out.endsWith(FACTS_RULE('Hatch Street'))).toBe(true)
+    const partial = buildStudioFactsBlock({ studioName: 'Hatch Street', address: '  ', bookingUrl: 'https://hatch.example.test/book', offers: null, knowledge: undefined })
+    expect(partial).toContain('https://hatch.example.test/book')
+    expect(partial).not.toMatch(/Address|sign-up|undefined/)
+  })
+
+  it('an offer without a title is skipped; a price-less offer shows just its title', () => {
+    const out = buildStudioFactsBlock({ studioName: 'H', offers: [{ price_label: '€5' }, { title: 'Trial' }] })
+    expect(out).toContain('- Trial')
+    expect(out).not.toContain('€5')
+  })
+})
+
+describe('facts blocks in the uncached suffix only', () => {
+  const base = { businessName: 'B', locationName: 'Stillorgan', today: 'Saturday', knowledge: [{ category: 'faq', title: 'Q', content: 'A' }] }
+  const block = buildStudioFactsBlock({ studioName: 'Hatch Street', address: '1 Fictional Row', bookingUrl: 'https://hatch.example.test/book' })
+
+  it('stable text and cache_control are unchanged by factsBlocks', () => {
+    const without = buildCachedSystem(base)
+    const withFacts = buildCachedSystem({ ...base, factsBlocks: [block] })
+    expect(withFacts[0]).toEqual(without[0])
+    expect(buildCustomerSystemPromptParts({ ...base, factsBlocks: [block] }).stable)
+      .toBe(buildCustomerSystemPromptParts(base).stable)
+    expect(withFacts[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
+    expect(withFacts.slice(1).every((b) => !b.cache_control)).toBe(true)
+    expect(withFacts[0].text).not.toContain('Hatch Street')
+    expect(withFacts[1].text).toContain(block)
+  })
+
+  it('facts blocks render after Context in the volatile part; empty and blank ones are dropped', () => {
+    const { volatile } = buildCustomerSystemPromptParts({ ...base, factsBlocks: [block, '', '  ', null] })
+    expect(volatile.indexOf('## Context')).toBeLessThan(volatile.indexOf(block))
+    expect(volatile.endsWith(block)).toBe(true)
+    expect(buildCachedSystem({ ...base, factsBlocks: [] })).toEqual(buildCachedSystem(base))
+  })
+
+  it('with no un1t options the prompt is unchanged', () => {
+    expect(buildCustomerSystemPrompt({ ...base, un1tVariant: null, multiStudio: false, factsBlocks: [] }))
+      .toBe(buildCustomerSystemPrompt(base))
   })
 })

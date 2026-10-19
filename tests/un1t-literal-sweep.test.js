@@ -269,6 +269,9 @@ const KEEP = {
   // document must keep rendering what it said; rewriting it is tampering,
   // not a sweep (appendix row contracting-entity.js:57, `keep`).
   'src/lib/contracting-entity.js': ['UN1T Dublin Ltd'],
+  // MIAHATCH.2 — exported identifiers for the un1t.online tool blocks, never
+  // customer or staff copy.
+  'src/lib/agent/auto-reply.js': ['CACHED_UN1T_READ_DUAL_TOOLS', 'CACHED_UN1T_READ_TOOLS'],
 }
 
 describe('UN1T literal sweep (W1.S*)', () => {

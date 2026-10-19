@@ -34,7 +34,9 @@ import { notifyAgentApprovalRequest } from './approval-notify'
 import { formatClassTime } from './dublin-format'
 import { DEFAULT_TZ } from '@/lib/location-time'
 import { logError } from '@/lib/log'
-import { refuseAtNoBookingStudio } from './tool-capability'
+import { refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
+import { UN1T_ID_PREFIX } from './studio-ids'
+import { renderMiaCopy } from './mia-copy'
 
 // REGISTRYREAD.1b — what Mia is told when the auto lane has no usable Glofox
 // credentials. A failed settings READ (creds.readError) is a blip, not "this
@@ -316,12 +318,19 @@ export function shapeUn1tClassesForAgent(rows, zone = DEFAULT_TZ) {
   return out
 }
 
-async function listUn1tOnlineClasses(db, locationId, zone, nowMs = Date.now()) {
+/**
+ * The timetable at one un1t.online studio. The no-booking block calls it with
+ * defaults and gets `{ name, starts_at }` per class (two columns selected).
+ * A `un1t_*` block passes `withEventIds` and gets `{ event_id, name, starts_at,
+ * full }`: capacity and bookings_count are selected for that one case, only to
+ * compute `full` inside the shaper, and are in no returned object, log or error.
+ */
+export async function listUn1tOnlineClasses(db, locationId, zone, nowMs = Date.now(), { withEventIds = false } = {}) {
   const fromIso = new Date(nowMs).toISOString()
   const toIso = new Date(nowMs + UN1T_TIMETABLE_DAYS * 86400_000).toISOString()
   try {
     const { data, error } = await db.from('un1t_events')
-      .select('title, starts_at')
+      .select(withEventIds ? 'un1t_id, title, starts_at, capacity, bookings_count' : 'title, starts_at')
       .eq('location_id', locationId)
       .eq('status', UN1T_SCHEDULED_STATUS)
       .gte('starts_at', fromIso)
@@ -333,7 +342,13 @@ async function listUn1tOnlineClasses(db, locationId, zone, nowMs = Date.now()) {
       return noBookingSystemAnswer(null, { state: 'none' })
     }
     const rows = Array.isArray(data) ? data : []
-    const classes = shapeUn1tClassesForAgent(rows, zone)
+    let classes
+    if (withEventIds) {
+      const { shapeUn1tTimetableForAgent } = await import('./un1t-tools')
+      classes = shapeUn1tTimetableForAgent(rows, zone)
+    } else {
+      classes = shapeUn1tClassesForAgent(rows, zone)
+    }
     // A full page means there may be more after the last class shown.
     return rows.length >= UN1T_TIMETABLE_LIMIT ? { classes, truncated: true } : { classes }
   } catch (err) {
@@ -654,6 +669,27 @@ async function reelectSiblingWithCredits({
   return probes.find((p) => p.entitled)?.account || null
 }
 
+// MIAHATCH.2 — book_class / cancel_class_booking named a `un1t:` id. Only
+// the dual block offers those tools beside un1t.online reads; there the
+// member's un1t.online studio answers with its chat_booking_unavailable_text
+// ({studio}, {link} = that studio's booking_url, from its own resolved
+// settings). No answerable un1t.online studio: the not-at-this-studio refusal.
+async function un1tChatBookingAnswer(toolName, ctx) {
+  const studio = ctx?.turn?.block === 'un1t_read_dual'
+    ? (ctx.turn.answerable || []).find((s) => s?.providerKey === 'un1t_online')
+    : null
+  if (!studio) return { ...TOOL_NOT_AT_THIS_STUDIO }
+  let settings = null
+  try {
+    settings = typeof ctx.actionStudio === 'function' ? await ctx.actionStudio(studio.locationId) : null
+  } catch { settings = null }
+  if (!settings && studio.locationId === ctx.locationId) settings = ctx.settings || null
+  const text = renderMiaCopy('chat_booking_unavailable_text', settings, { studio: studio.name, link: settings?.booking_url || null })
+  return toolName === 'book_class'
+    ? { booked: false, chat_booking_unavailable: true, text }
+    : { cancelled: false, chat_booking_unavailable: true, text }
+}
+
 // ── executor (IO) ───────────────────────────────────────────────────
 // ctx: { db, conversationId, conversationsTable, contactId,
 //        verifiedContactId, locationId, channel, nameHint, settings }
@@ -662,8 +698,30 @@ export async function executeBookingTool(toolName, input, ctx) {
 
   // MIAORG.1 Task 5 — defence in depth: a booking-system tool at a studio
   // whose source takes no bookings is refused before any read or Glofox call.
-  const refused = refuseAtNoBookingStudio(toolName, ctx)
+  const refused = refuseToolForTurn(toolName, ctx)
   if (refused) return refused
+
+  // MIAHATCH.2 — a `un1t:` event or booking id is a un1t.online class. Chat
+  // booking there is not live yet (slice 1): in the dual block the answer is
+  // the studio's operator-editable "not from chat yet" line with its booking
+  // link; anywhere else (no un1t.online studio answerable for this sender, or
+  // a block without one) it is no studio Mia answers for. Decided before any
+  // read: a `un1t:` id never reaches Glofox.
+  if (toolName === 'book_class' || toolName === 'cancel_class_booking') {
+    // The prefix itself: a bare `un1t:` (no id after it) is still never a
+    // Glofox id.
+    const raw = toolName === 'book_class' ? input?.event_id : input?.booking_id
+    if (typeof raw === 'string' && raw.startsWith(UN1T_ID_PREFIX)) return un1tChatBookingAnswer(toolName, ctx)
+  }
+
+  // MIAHATCH.2 Task 6 — on a turn whose tool block reads un1t.online the
+  // timetable comes from the answerable studios (event ids and `full`), not the
+  // thread studio. A turn without one is untouched; the module loads lazily so
+  // a Glofox turn never imports it. No verification: the timetable is public.
+  if (toolName === 'list_upcoming_classes' && String(ctx.turn?.block || '').startsWith('un1t_')) {
+    const { executeUn1tTimetable } = await import('./un1t-tools')
+    return executeUn1tTimetable(input, ctx, ctx.turn.answerable)
+  }
 
   if (toolName === 'list_upcoming_classes' && ctx.canBook === false) {
     // MIAORG.1 Task 5 — no Glofox here. un1t.online studios answer from their
@@ -1016,6 +1074,14 @@ export async function executeBookingTool(toolName, input, ctx) {
   if (toolName === 'list_my_upcoming_bookings') {
     if (!verifiedContactId) {
       return { error: 'not_verified', message: 'Identity not verified yet. Call verify_identity first.' }
+    }
+    // MIAHATCH.2 — on a turn whose tool block reads un1t.online (ctx.turn.block
+    // starts with `un1t_`) the list comes from the answerable studios. A turn
+    // without one is untouched; the module loads lazily so a Glofox turn never
+    // imports it.
+    if (String(ctx.turn?.block || '').startsWith('un1t_')) {
+      const { executeUn1tRead } = await import('./un1t-tools')
+      return executeUn1tRead(toolName, input, ctx, ctx.turn.answerable)
     }
     // PERSON-ACCT.2 — one person routinely holds 2-3 `contacts` rows, each
     // linked to a DIFFERENT Glofox account, and the conversation is attached

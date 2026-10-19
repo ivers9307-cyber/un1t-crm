@@ -162,6 +162,21 @@ export async function PUT(request) {
   if (body.blocks  !== undefined) payload.blocks  = body.blocks
 
   const db = createServerClient()
+
+  // UN1TWRITE.18 — no paid intro at a un1t.online studio: anything paid
+  // there goes through un1t.online checkout. Only a priced class_funnel needs
+  // the studio's membership source, and an unreadable one saves nothing.
+  const priced = Array.isArray(body.blocks) && body.blocks.some((b) => b?.type === 'class_funnel' && Number(b.price_cents) > 0)
+  if (priced) {
+    const { data: loc, error: locErr } = await db.from('locations').select('membership_source').eq('id', body.location_id).maybeSingle()
+    if (locErr || !loc) {
+      return NextResponse.json({ success: false, error: 'Could not check this studio just now. Nothing was saved; please try again.' }, { status: 503 })
+    }
+    if (loc.membership_source === 'un1t_online') {
+      return NextResponse.json({ success: false, error: 'Paid intros are not available at a un1t.online studio: anything paid goes through un1t.online checkout.' }, { status: 400 })
+    }
+  }
+
   const { data, error } = await db
     .from('landing_page_settings')
     .upsert(payload, { onConflict: 'location_id' })

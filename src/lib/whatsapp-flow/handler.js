@@ -5,11 +5,61 @@
 //   consult: `${event_id}|${date}|${start}|${end}`
 import { computeAvailableSlots } from '@/lib/booking-slots.js'
 import { listPublicClasses } from '@/lib/public-classes.js'
-import { SCREEN, dayScreen, slotScreen, detailsScreen, confirmScreen } from './screens.js'
+import { SCREEN, dayScreen, slotScreen, detailsScreen, confirmScreen, TERMS_FLOW_MARKER } from './screens.js'
 import { formatInZone, getLocationZone, LocationZoneReadError, DEFAULT_TZ } from '@/lib/location-time'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
+import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
+import { un1tFunnelCopyFromBlocks, termsLabelText } from '@/lib/un1t-online-funnel-copy'
+import { legalDocPathFor } from '@/lib/un1t-online-legal'
+import { getAppUrl } from '@/lib/app-url'
 
 const PING = { data: { status: 'active' } }
+
+const asBool = (v) => v === true || v === 'true'
+const FLOW_OPTIN_LABEL_MAX = 120
+
+/**
+ * UN1TWRITE.19 — does this studio's Flow need the un1t.online terms and
+ * waiver accepted (a un1t.online studio with the funnel on), and in the
+ * operator's words. The Flow is a live answer to Meta, so this never throws:
+ * an unreadable settings row is "not required" (the processor still refuses
+ * to create an account for a request with no recorded acceptance).
+ * @returns {Promise<{ required: boolean, label?: string, url?: string, message?: string }>}
+ */
+export async function flowTermsFor(db, locationId) {
+  let s
+  try {
+    s = await readUn1tWriteSettings(db, locationId)
+  } catch (e) {
+    logWarn('whatsapp-flow', 'un1t.online settings unreadable; terms not asked', { locationId, err: e })
+    return { required: false }
+  }
+  if (s.membershipSource !== 'un1t_online' || !s.settings.funnelEnabled) return { required: false }
+  let landing = null
+  try {
+    const { data, error } = await db.from('landing_page_settings').select('public_path, blocks').eq('location_id', locationId).maybeSingle()
+    if (error) throw error
+    landing = data
+  } catch (e) {
+    logWarn('whatsapp-flow', 'landing row unreadable; default terms copy used', { locationId, err: e })
+  }
+  const copy = un1tFunnelCopyFromBlocks(landing?.blocks)
+  // Never ask someone to accept documents they cannot open: no link, no ask
+  // (the processor then refuses to create an account without an acceptance).
+  let url = ''
+  try {
+    if (landing?.public_path) url = `${getAppUrl()}${legalDocPathFor(landing.public_path, 'terms')}`
+  } catch (e) {
+    logWarn('whatsapp-flow', 'app url unset; terms link unavailable', { locationId, err: e })
+  }
+  if (!url) {
+    logError('whatsapp-flow', 'un1t.online terms link unavailable; the Flow does not ask for the tick', { locationId })
+    return { required: false }
+  }
+  // Meta caps an OptIn label; an operator's long label is cut, never refused.
+  const label = termsLabelText(copy, { studioName: s.studioName }).slice(0, FLOW_OPTIN_LABEL_MAX)
+  return { required: true, label, url, message: copy.terms_required_message }
+}
 
 async function resolveConsultEvent(db, locationId, config) {
   const { data: event } = await db.from('event_types')
@@ -90,12 +140,33 @@ export async function handleDataExchange(db, { decryptedBody, contact, locationI
   }
 
   if (screen === SCREEN.SLOT) {
-    return detailsScreen({ name: contact?.name, email: contact?.email }, { path: data.path, slot: data.slot })
+    const terms = data.path === 'consult' ? { required: false } : await flowTermsFor(db, locationId)
+    return detailsScreen({ name: contact?.name, email: contact?.email }, { path: data.path, slot: data.slot }, terms, { declared: Object.hasOwn(data, TERMS_FLOW_MARKER) })
   }
 
   if (screen === SCREEN.DETAILS) {
+    const accepted = asBool(data.terms_accepted)
+    // Only the new Flow posts terms_accepted at all. The Flow published before
+    // UN1TWRITE.19 has no OptIn, so asking there would refresh DETAILS forever:
+    // it goes through with no acceptance instead (no account is created
+    // without one; an existing account books as normal).
+    const flowHasOptIn = Object.hasOwn(data, 'terms_accepted')
+    if (data.path !== 'consult' && flowHasOptIn && !accepted) {
+      // UN1TWRITE.19 — the tick is required at a un1t.online funnel studio:
+      // DETAILS again, with what they typed and the operator's message.
+      const terms = await flowTermsFor(db, locationId)
+      if (terms.required) {
+        return detailsScreen(
+          { name: data.name, email: data.email, marketing_opt_in: asBool(data.marketing_opt_in) },
+          { path: data.path, slot: data.slot },
+          { ...terms, accepted: false, error: terms.message },
+          { declared: true },
+        )
+      }
+    }
     const summary = data.path === 'consult' ? 'Confirm your consultation' : 'Confirm your class'
     const selection = { path: data.path, slot: data.slot, name: data.name, email: data.email, marketing_opt_in: data.marketing_opt_in }
+    if (flowHasOptIn) selection.terms_accepted = accepted
     return confirmScreen(summary, selection)
   }
 
@@ -107,6 +178,6 @@ export function parseFlowCompletion(interactive) {
   let payload
   try { payload = JSON.parse(interactive.nfm_reply?.response_json || '{}') } catch { return null }
   if (!payload.path) return null
-  const { path, name, email, marketing_opt_in, ...selection } = payload
-  return { path, selection, contactFields: { name, email, marketing_opt_in: marketing_opt_in === true || marketing_opt_in === 'true' } }
+  const { path, name, email, marketing_opt_in, terms_accepted, ...selection } = payload
+  return { path, selection, contactFields: { name, email, marketing_opt_in: asBool(marketing_opt_in), terms_accepted: asBool(terms_accepted) } }
 }
