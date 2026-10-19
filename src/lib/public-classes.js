@@ -14,6 +14,7 @@ import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 import { parseHiddenKeywords } from '@/lib/class-keywords'
+import { freshCutoff, onlyFreshEvents } from '@/lib/un1t-online-freshness'
 
 // The exact Intl options the Dublin formatters used, so a Dublin studio's
 // day/time/label text is byte-identical (TZ.7).
@@ -191,7 +192,10 @@ async function readUn1tListingSource(db, locationId) {
 // Same filters a customer-facing list needs anywhere: scheduled, open to the
 // public ('community' classes are members-only), starting after the block's
 // minimum notice (staff book it by hand), not full (PUBCAP.1: judged here,
-// never sent), and not hidden by settings.un1t_online.hidden_class_keywords.
+// never sent), not hidden by settings.un1t_online.hidden_class_keywords, and
+// seen by the latest sync (UN1TBOOK.19: the mirror never deletes, so a class
+// deleted upstream stays 'scheduled' and un1t.online 404s its booking; see
+// freshCutoff — a stalled sync keeps every row).
 // The window matches the Glofox read (at most 14 days); un1t.online runs ~60
 // classes a fortnight, so 200 rows is never the binding limit.
 const UN1T_LISTING_LIMIT = 200
@@ -201,13 +205,14 @@ async function readUn1tClasses(db, locationId, days, { blocks, hidden }) {
   const toMs = nowMs + Math.min(14, Math.max(1, days)) * 86_400_000
   let res
   try {
-    res = await db.from('un1t_events')
+    const cutoffIso = await freshCutoff(db, 'un1t_events', locationId)
+    res = await onlyFreshEvents(db.from('un1t_events')
       .select('un1t_id, title, starts_at, capacity, bookings_count')
       .eq('location_id', locationId)
       .eq('status', 'scheduled')
       .eq('access_mode', 'open')
       .gt('starts_at', new Date(fromMs).toISOString())
-      .lt('starts_at', new Date(toMs).toISOString())
+      .lt('starts_at', new Date(toMs).toISOString()), cutoffIso)
       .order('starts_at', { ascending: true })
       .limit(UN1T_LISTING_LIMIT)
   } catch (err) {
