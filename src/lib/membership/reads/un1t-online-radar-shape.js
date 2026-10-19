@@ -487,8 +487,8 @@ export const UN1T_ARREARS_UNAVAILABLE = Object.freeze(['unpaidCharges', 'awaitin
  * Each aggregate is `{ amountCents, count, oldestDueAt, amountEstimated?, amountUnknown? }`
  * (the flags appear only when true). A row's euro amount is, in order:
  *   - its reported amount, when un1t.online reported one above 0 in EUR;
- *   - else, when no invoice is open (the subscription's own past-due flag),
- *     the subscription's price, marked `amountEstimated` (bucketArrears drops a
+ *   - else, when no invoice is open (the subscription's own past-due flag) and
+ *     the row's currency is EUR or unset, the subscription's price, marked `amountEstimated` (bucketArrears drops a
  *     zero amount, so the member would vanish from the Overdue tab; Claude's
  *     call 11);
  *   - else nothing: the debt is real but has no euro figure (no or a €0
@@ -522,7 +522,11 @@ export function foldPastDue(rows = [], { priceBySubscriptionId = new Map(), last
     // A debt is never shown as €0: a zero (or unreadable) reported sum, or a
     // €0 price, is a debt with no euro figure (bucketArrears drops a plain 0).
     if (r.amountCents != null && currency === 'EUR' && Number(r.amountCents) > 0) return { amount: Number(r.amountCents), flag: null }
+    // A flag-only row's currency is its subscription's (shapePastDue takes
+    // sub.currency first when no invoice is open), so the price is euros only
+    // when that is EUR or unset.
     const flagOnly = r.amountCents == null && !(Array.isArray(r.openInvoiceIds) && r.openInvoiceIds.length > 0)
+      && (currency == null || currency === 'EUR')
     const price = Number(priceBySubscriptionId.get(r.subscriptionId))
     if (flagOnly && Number.isFinite(price) && price > 0) return { amount: price, flag: 'amountEstimated' }
     return { amount: 0, flag: 'amountUnknown' }

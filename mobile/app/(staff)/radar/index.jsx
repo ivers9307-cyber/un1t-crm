@@ -21,7 +21,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
 import { canMobile } from '../../../lib/permissions'
 import { fetchRadarGlance } from '../../../lib/radar-api'
-import { overdueValueNote } from '../../../lib/arrears-estimate-label'
+import { overdueValueNote, overdueValueText } from '../../../lib/arrears-estimate-label'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 
 // Whole euros — the glance never needs cent precision.
@@ -192,7 +192,7 @@ export default function RadarGlance() {
                   <StatRow
                     key={r.key}
                     label={r.label}
-                    value={r.money ? fmtMoney(churn[r.key]) : fmtCount(churn[r.key])}
+                    value={r.key === 'overdueValueCents' ? overdueValueText(churn, fmtMoney) : r.money ? fmtMoney(churn[r.key]) : fmtCount(churn[r.key])}
                     delta={churn.trend?.deltas?.[r.key]}
                     goodDir={r.goodDir}
                     money={r.money}

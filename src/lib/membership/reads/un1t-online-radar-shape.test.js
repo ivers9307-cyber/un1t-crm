@@ -665,6 +665,15 @@ describe('foldPastDue', () => {
     expect(f.membershipById.get('c1')).toEqual({ amountCents: 12000, count: 1, oldestDueAt: '2026-10-01T00:00:00Z', amountEstimated: true })
   })
 
+  it('flag only: the price stands in only for a EUR (or currency-less) subscription; another currency is amountUnknown', () => {
+    const gbp = foldPastDue([pd({ amountCents: null, openInvoiceIds: [], currency: 'GBP' })], deps)
+    expect(gbp.membershipById.get('c1')).toEqual({ amountCents: 0, count: 1, oldestDueAt: '2026-10-01T00:00:00Z', amountUnknown: true })
+    const eur = foldPastDue([pd({ amountCents: null, openInvoiceIds: [], currency: 'eur' })], deps)
+    expect(eur.membershipById.get('c1').amountEstimated).toBe(true)
+    const none = foldPastDue([pd({ amountCents: null, openInvoiceIds: [], currency: null })], deps)
+    expect(none.membershipById.get('c1')).toEqual({ amountCents: 12000, count: 1, oldestDueAt: '2026-10-01T00:00:00Z', amountEstimated: true })
+  })
+
   it('no amount and no price: kept as amountUnknown (never dropped), adds 0', () => {
     const f = foldPastDue([pd({ amountCents: null, subscriptionId: 'gone' })], deps)
     expect(f.membershipById.get('c1')).toEqual({ amountCents: 0, count: 1, oldestDueAt: '2026-10-01T00:00:00Z', amountUnknown: true })
