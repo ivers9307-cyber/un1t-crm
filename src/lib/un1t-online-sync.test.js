@@ -653,6 +653,30 @@ describe('runUn1tSync', () => {
       expect(logWarn).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('class_bookings'), expect.objectContaining({ err: { code: null, message: 'class_bookings upsert boom' } }))
     })
 
+    it('counts.class_bookings carries upserted, kept_stored, skipped_no_event and skipped_unknown_status (UN1TBOOK.18)', async () => {
+      const seed = baseSeed()
+      // A CANCELLED the CRM wrote (D's write-through): a sync BOOKED never undoes it.
+      seed.class_bookings = [{ id: 'cb-crm', location_id: HATCH, glofox_booking_id: 'un1t:b1', status: 'CANCELLED', attended: false, raw: { un1t: { written_by: 'crm', updated_at: null } } }]
+      const { db, tables } = makeDb(seed)
+      const lists = fixtureLists()
+      lists['/bookings'] = [
+        { id: 'b1', user_id: 'u1', event_id: 'e1', status: 'booked', studio_id: STUDIO },
+        { id: 'b2', user_id: 'u2', event_id: 'e1', status: 'booked', studio_id: STUDIO },
+        { id: 'b3', user_id: 'u2', event_id: 'e1', status: 'waitlisted', studio_id: STUDIO },
+        { id: 'b4', user_id: 'u2', event_id: 'e-not-pulled', status: 'booked', studio_id: STUDIO },
+      ]
+      const { factory } = makeClient({ self: SELF, lists })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      const want = { upserted: 1, kept_stored: 1, skipped_no_event: 1, skipped_unknown_status: 1 }
+      expect(r.counts.class_bookings).toEqual(want)
+      expect(runRow(tables).counts.class_bookings).toEqual(want)
+      expect(tables.class_bookings.find((b) => b.glofox_booking_id === 'un1t:b1')).toMatchObject({ status: 'CANCELLED' })
+      // Step 6c still runs after the projection.
+      expect(r.counts.history.un1t_bookings).toMatchObject({ absent_from_pull: 0 })
+      expect(runRow(tables).counts.history).toEqual(r.counts.history)
+    })
+
     it('does not project when the un1t_bookings upsert fails (the run stops with db)', async () => {
       const { db, log } = makeDb(baseSeed(), { failUpsert: ['un1t_bookings'] })
       const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
