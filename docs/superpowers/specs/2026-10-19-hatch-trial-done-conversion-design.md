@@ -126,14 +126,14 @@ Hatch templates are.
 
 > Hi {{1}}, well done on finishing your trial at UN1T Hatch Street! How
 > did you find the classes? Would you be interested in our limited Foundation
-> Membership or class pack offerings?
+> membership pricing or class pack offerings?
 > Garrett, Studio Owner
 
 **Follow-up** `hatch_trial_done_followup` (MARKETING, {{1}} = first
 name):
 
 > Hi {{1}}, just checking in after your trial at UN1T Hatch Street. Would
-> you be interested in our limited Foundation Membership or class pack offerings?
+> you be interested in our limited Foundation membership pricing or class pack offerings?
 > I can help you pick the option that suits you best.
 > Garrett, Studio Owner
 
