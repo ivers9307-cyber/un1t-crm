@@ -363,12 +363,13 @@ describe('MIAORG.1 Task 3 — PUT with `overridden` saves overrides only', () =>
   it('saving without touching inherited fields leaves them out of the blob', async () => {
     const { res, blob } = await save({ ...BODY, overridden: [] })
     expect(res.status).toBe(200)
-    expect(blob).toEqual({ enabled: true, test_mode: false, test_phones: [], booking_mode: 'auto' })
+    // MIAHATCH.5 — un1t_chat_actions_enabled is studio-only, so always saved (false unless ticked).
+    expect(blob).toEqual({ enabled: true, test_mode: false, test_phones: [], booking_mode: 'auto', un1t_chat_actions_enabled: false })
   })
 
   it('editing one field adds just it', async () => {
     const { blob } = await save({ ...BODY, tone: 'Studio tone', overridden: ['tone'] })
-    expect(blob).toEqual({ enabled: true, test_mode: false, test_phones: [], booking_mode: 'auto', tone: 'Studio tone' })
+    expect(blob).toEqual({ enabled: true, test_mode: false, test_phones: [], booking_mode: 'auto', un1t_chat_actions_enabled: false, tone: 'Studio tone' })
   })
 
   it('an object field override stores only that field (T3-A)', async () => {

@@ -592,12 +592,103 @@ describe('un1t.online prompt variants', () => {
       .toBe(renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: false, bookingUrl: 'u' }))
   })
 
-  it('slice 1 renders full exactly as read (slice 2 adds the upsell rules)', () => {
+  // MIAHATCH.5 (Task 15) — block 3b's prompt: Mia books and cancels at the
+  // un1t.online studio from chat, and refund requests go to the team.
+  it('full differs from read; read keeps none of the full lines', () => {
     for (const multi of [false, true]) {
       for (const url of [null, 'https://hatch.example.test/book']) {
-        expect(render('full', multi, url)).toBe(render('read', multi, url))
+        const full = render('full', multi, url)
+        const read = render('read', multi, url)
+        expect(full).not.toBe(read)
+        expect(read).not.toMatch(/request_refund/)
+        expect(full).toMatch(/request_refund/)
       }
     }
+  })
+
+  describe('full variant (block 3b)', () => {
+    const named = (multiStudio, bookingUrl) =>
+      renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: false, bookingUrl, un1tVariant: 'full', multiStudio, un1tStudioName: 'Hatch Street' })
+
+    it('names the studio and says Mia can book and cancel there in chat', () => {
+      for (const url of [null, 'https://hatch.example.test/book']) {
+        const out = named(false, url)
+        expect(out).toContain('You can book and cancel classes at Hatch Street in chat for a verified member.')
+        expect(out).not.toMatch(/You can't book or cancel classes/)
+        expect(out).not.toMatch(/never book, cancel or change a class booking at Hatch Street/)
+        expect(out).not.toMatch(/cannot be booked or cancelled from chat/)
+        expect(out).toMatch(/class bookings and class-booking cancellations at Hatch Street/)
+      }
+      expect(render('full', false, null)).toContain('You can book and cancel classes at this studio in chat for a verified member.')
+    })
+
+    it('keeps the read variant\'s "what am I booked into" line at a single studio (final review)', () => {
+      const line = '- Use list_my_upcoming_bookings when a verified member asks what they are booked into.'
+      for (const url of [null, 'https://hatch.example.test/book']) {
+        expect(named(false, url)).toContain(line)
+        expect(named(false, url).split(line)).toHaveLength(2)
+      }
+      expect(render('full', false, null)).toContain(line)
+      // The read variant carries it too, unchanged.
+      expect(render('read', false, null)).toContain(line)
+    })
+
+    it('says booked and cancelled only when the tool result says so', () => {
+      for (const multi of [false, true]) {
+        const out = named(multi, null)
+        expect(out).toMatch(/Say a class is booked only when the book_class result says it is booked/)
+        expect(out).toMatch(/Say a booking is cancelled only when the cancel_class_booking result says it is cancelled/)
+      }
+    })
+
+    it('never promises a refund or a credit back; refunds go through request_refund and the team decides', () => {
+      for (const multi of [false, true]) {
+        const out = named(multi, 'https://hatch.example.test/book')
+        expect(out).toMatch(/never promise a refund or a credit back/i)
+        expect(out).toMatch(/call request_refund/)
+        expect(out).toMatch(/the team decides/)
+        expect(out).toMatch(/Never say a refund is done, approved or on its way/)
+        // The read variant's "wants a refund: hand off" is replaced, not
+        // contradicted. Dual: the Glofox studio's section keeps today's rules
+        // (a refund there is still a handoff), and the refund line says so.
+        if (!multi) expect(out).not.toMatch(/wants a refund, or wants to change plan: hand off/)
+        if (multi) expect(out).toMatch(/REFUNDS at Hatch Street: [^\n]*For a refund at the other studio, hand off\./)
+        expect(out).toMatch(/Wants a refund: request_refund/)
+        expect(out).not.toMatch(/The person wants a refund, a billing\/payment change/)
+      }
+    })
+
+    it('never mentions capacity, spaces or limited, and adds no dash', () => {
+      const base = new Set(CUSTOMER_AGENT_BASE_PROMPT.split('\n'))
+      for (const multi of [false, true]) {
+        for (const url of [null, 'https://hatch.example.test/book']) {
+          const out = named(multi, url)
+          expect(out).not.toMatch(BANNED_WORDS)
+          for (const l of out.split('\n').filter((x) => !base.has(x))) expect(l).not.toMatch(DASHES)
+        }
+      }
+    })
+
+    it('the booking link stays the fallback when chat booking is unavailable', () => {
+      expect(named(false, 'https://hatch.example.test/book')).toContain("send Hatch Street's booking link, https://hatch.example.test/book")
+      expect(named(false, null)).toMatch(/booking from chat is not available right now[^\n]*hand off/)
+    })
+
+    it('multiStudio keeps the read variant\'s dual semantics', () => {
+      const out = named(true, null)
+      expect(out).toMatch(/Say which studio each answer is for/)
+      expect(out).toMatch(/Check which studio a class is at/)
+      expect(out).toMatch(/The rules that follow apply only to the section of the answer for the Glofox studio/)
+      expect(named(false, null)).not.toMatch(/Say which studio each answer is for/)
+    })
+
+    it('the stable prefix is byte-identical across two turns', () => {
+      const o = { businessName: 'B', locationName: 'Hatch', un1tVariant: 'full', un1tStudioName: 'Hatch Street', multiStudio: false, bookings: false, bookingUrl: 'https://hatch.example.test/book', membershipSource: UN1T_SOURCE, knowledge: [{ category: 'faq', title: 'Q', content: 'A' }] }
+      const a = buildCachedSystem({ ...o, today: 'Saturday' })
+      const b = buildCachedSystem({ ...o, today: 'Sunday', identityPreverified: true, factsBlocks: ['## Facts for Other\nx'] })
+      expect(a[0]).toEqual(b[0])
+      expect(a[0].text).toContain('You can book and cancel classes at Hatch Street in chat')
+    })
   })
 
   it('read variant: you cannot book from chat; share the booking link or hand off; account answers from tools only', () => {

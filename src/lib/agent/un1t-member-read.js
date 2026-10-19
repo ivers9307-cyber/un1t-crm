@@ -21,6 +21,7 @@ import { createUn1tClient, Un1tAuthError, Un1tApiError } from '@/lib/un1t-online
 import { UN1T_WRITE_BUDGET } from '@/lib/un1t-online-write'
 import { readConnection } from '@/lib/connection-registry'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { MEMBERSHIP_ACTIVE_STATUSES } from '@/lib/un1t-online-map'
 import { logWarn } from '@/lib/log'
 
 const LOG_MODULE = 'mia-un1t'
@@ -112,12 +113,14 @@ function logReadFailure(locationId, op, err) {
  *
  * @param {object} db
  * @param {{ locationId: string, un1tUserId: string }} args
- * @param {{ clientFactory?: Function, fetchImpl?: Function, sleep?: Function }} [deps]
+ * @param {{ reader?: object, clientFactory?: Function, fetchImpl?: Function, sleep?: Function }} [deps]
+ *   `reader`: one openUn1tMemberReader answer already held for this studio
+ *   (MIAHATCH.5: book_class opens one for both of its reads).
  * @returns {Promise<{ ok: true, rows: object[], truncated?: true } | { ok: false, reason: 'not_connected' | 'read_failed' | 'budget_spent' }>}
  */
 export async function fetchLiveUn1tBookings(db, { locationId, un1tUserId } = {}, deps = {}) {
   if (!locationId || !un1tUserId) return { ok: false, reason: 'read_failed' }
-  const reader = await openUn1tMemberReader(db, locationId, deps)
+  const reader = deps.reader ?? await openUn1tMemberReader(db, locationId, deps)
   if (!reader.ok) return { ok: false, reason: reader.reason }
   try {
     const { rows, total, truncated } = await reader.listAll(`/users/${encodeURIComponent(String(un1tUserId))}/bookings`)
@@ -137,6 +140,63 @@ export async function fetchLiveUn1tBookings(db, { locationId, un1tUserId } = {},
       return { ok: false, reason: 'budget_spent' }
     }
     logReadFailure(locationId, 'bookings', err)
+    return { ok: false, reason: 'read_failed' }
+  }
+}
+
+/**
+ * MIAHATCH.5 — what the member can book with at a un1t.online studio right
+ * now: the live credits ledger (GET /credits/ledgers/{userId}/{studioId}, one
+ * budgeted request) and the mirror's live subscriptions
+ * (MEMBERSHIP_ACTIVE_STATUSES). `ok: true` only when BOTH were read: a
+ * caller may treat an ok answer with nothing in it as "confirmed nothing", so
+ * any read it could not make is `ok: false` ("could not look"), never zero.
+ * `balance` is null when the ledger gave only is_unlimited.
+ *
+ * @param {object} db
+ * @param {{ locationId: string, un1tUserId: string }} args
+ * @param {{ reader?: object, clientFactory?: Function, fetchImpl?: Function, sleep?: Function }} [deps]
+ * @returns {Promise<{ ok: true, balance: number|null, unlimited: boolean, liveSubscriptionIds: string[] }
+ *   | { ok: false, reason: 'not_connected' | 'read_failed' | 'budget_spent' }>}
+ */
+export async function fetchLiveEntitlement(db, { locationId, un1tUserId } = {}, deps = {}) {
+  if (!locationId || !un1tUserId) return { ok: false, reason: 'read_failed' }
+  const reader = deps.reader ?? await openUn1tMemberReader(db, locationId, deps)
+  if (!reader?.ok) return { ok: false, reason: reader?.reason ?? 'read_failed' }
+  let ledger
+  try {
+    ledger = await reader.getOne(`/credits/ledgers/${encodeURIComponent(String(un1tUserId))}/${encodeURIComponent(String(reader.studioId))}`)
+  } catch (err) {
+    if (err instanceof Un1tBudgetSpent) {
+      logWarn(LOG_MODULE, 'read budget spent', { locationId, op: 'credits_ledger', status: null, retryAfterSec: err.retryAfterSec })
+      return { ok: false, reason: 'budget_spent' }
+    }
+    logReadFailure(locationId, 'credits_ledger', err)
+    return { ok: false, reason: 'read_failed' }
+  }
+  const isObj = ledger !== null && typeof ledger === 'object' && !Array.isArray(ledger)
+  const balance = isObj && typeof ledger.balance === 'number' && Number.isFinite(ledger.balance) ? ledger.balance : null
+  const unlimitedKnown = isObj && typeof ledger.is_unlimited === 'boolean'
+  if (balance === null && !unlimitedKnown) {
+    logWarn(LOG_MODULE, 'un1t.online sent a credits ledger with no balance', { locationId, op: 'credits_ledger', status: null })
+    return { ok: false, reason: 'read_failed' }
+  }
+
+  try {
+    const { data, error } = await db.from('un1t_subscriptions')
+      .select('un1t_id')
+      .eq('location_id', locationId)
+      .eq('un1t_user_id', String(un1tUserId))
+      .in('status', [...MEMBERSHIP_ACTIVE_STATUSES])
+      .order('un1t_id')
+    if (error) {
+      logWarn(LOG_MODULE, 'mirror read failed', { locationId, op: 'subscriptions', code: error.code ?? null })
+      return { ok: false, reason: 'read_failed' }
+    }
+    const liveSubscriptionIds = (Array.isArray(data) ? data : []).map((r) => r?.un1t_id).filter(Boolean).map(String)
+    return { ok: true, balance, unlimited: unlimitedKnown && ledger.is_unlimited === true, liveSubscriptionIds }
+  } catch (err) {
+    logWarn(LOG_MODULE, 'mirror read threw', { locationId, op: 'subscriptions', errClass: err?.name })
     return { ok: false, reason: 'read_failed' }
   }
 }

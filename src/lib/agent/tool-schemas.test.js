@@ -19,7 +19,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   ALL_AGENT_TOOLS, CACHED_ACCOUNT_TOOLS, CACHED_NO_BOOKING_TOOLS,
-  CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS,
+  CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS, CACHED_UN1T_FULL_TOOLS,
 } from './auto-reply'
 
 // The API rejects these inside a strict schema. The official SDKs strip them
@@ -91,24 +91,35 @@ describe('agent tool schemas', () => {
   // is the count when strict was attempted; the Glofox block has since grown
   // to 32 by this same counter, measured on the base-commit fixture. 32 is the
   // ceiling: a block may be smaller, never bigger.)
+  //
+  // NOTE (MIAHATCH.5, Task 15): block 3b (`un1t_full`) is the one block allowed
+  // past the Glofox ceiling, by exactly request_refund's optional booking_id
+  // (33). Strict tool use is off, so nothing is rejected; the cost is only that
+  // adopting strict for 3b would mean shedding one more optional parameter.
+  // Task 19 adds the purchase tools to 3b and must raise UN1T_FULL_CEILING here
+  // with its own note.
   it('reports the optional-parameter budget for every block', () => {
     const GLOFOX_CEILING = 32
+    const UN1T_FULL_CEILING = GLOFOX_CEILING + 1
     const blocks = {
       glofox: CACHED_ACCOUNT_TOOLS,
       no_booking: CACHED_NO_BOOKING_TOOLS,
       un1t_read: CACHED_UN1T_READ_TOOLS,
       un1t_read_dual: CACHED_UN1T_READ_DUAL_TOOLS,
+      un1t_full: CACHED_UN1T_FULL_TOOLS,
     }
     const counts = Object.fromEntries(Object.entries(blocks).map(([k, v]) => [k, countOptionalParams(v)]))
     console.log(`optional-parameter budget per block: ${JSON.stringify(counts)}`)
     expect(counts.glofox).toBe(GLOFOX_CEILING)
+    expect(counts.un1t_full).toBe(UN1T_FULL_CEILING)
     for (const [block, n] of Object.entries(counts)) {
+      if (block === 'un1t_full') continue
       expect(n, `${block} grew past the Glofox block`).toBeLessThanOrEqual(GLOFOX_CEILING)
     }
   })
 
   it('no block uses a constraint that strict mode rejects, and every required property exists', () => {
-    for (const block of [CACHED_NO_BOOKING_TOOLS, CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS]) {
+    for (const block of [CACHED_NO_BOOKING_TOOLS, CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS, CACHED_UN1T_FULL_TOOLS]) {
       for (const tool of block) {
         const json = JSON.stringify(tool.input_schema || {})
         for (const key of UNSUPPORTED) expect(json.includes(`"${key}"`), `${tool.name}.${key}`).toBe(false)

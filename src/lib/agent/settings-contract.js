@@ -141,6 +141,11 @@ export const DEFAULTS = {
   // every studio). Null = no link set; Mia hands the thread to staff instead.
   booking_url: null,
   booking_cta_label: null,
+  // MIAHATCH.5 (Ruling 25) — Mia books, cancels and takes refund requests in
+  // chat at this un1t.online studio only when this is true AND the studio's
+  // locations.settings.un1t_online.writes_enabled is true (and only on
+  // WhatsApp). Studio-only, default off: with it off nothing changes.
+  un1t_chat_actions_enabled: false,
   // MIAORG.1 — minutes before an unanswered handoff escalates. Read by
   // lib/agent/handoff-sla.js (resolveHandoffSlaMinutes) but never part of this
   // contract, so every editor save erased it. Null = the code default.
@@ -210,6 +215,8 @@ export const SettingsSchema = z.object({
     max_replies_per_location_per_day: z.number().int().min(1).max(100000).optional(),
   }).nullable().optional(),
   booking_mode: z.enum(['auto', 'draft']).optional().default('auto'),
+  // MIAHATCH.5 — studio-only, like test_mode: a real boolean, default false.
+  un1t_chat_actions_enabled: z.boolean().optional().default(false),
   agent_name: z.string().max(40).nullable().optional(),
   membership_signup_url: z.string().url().max(512).nullable().optional()
     .or(z.literal('').transform(() => null)),
@@ -382,6 +389,7 @@ function buildFullBlob(data) {
     quiet_hours: normalizeQuietHours(data.quiet_hours),
     limits: data.limits || null,
     booking_mode: data.booking_mode === 'draft' ? 'draft' : 'auto',
+    un1t_chat_actions_enabled: data.un1t_chat_actions_enabled === true,
     agent_name: data.agent_name?.trim() || DEFAULTS.agent_name,
     membership_signup_url: data.membership_signup_url || null,
     membership_cta_label: data.membership_cta_label?.trim() || null,
@@ -423,8 +431,9 @@ export const StudioSettingsSchema = SettingsSchema.extend({
  *
  * * Studio-only keys present in the parsed body are ALWAYS kept, whatever
  *   `overridden` says (T3-B). The parsed body carries the schema defaults
- *   for enabled / test_mode / test_phones / booking_mode, so those four are
- *   always written, exactly as the full build writes them today.
+ *   for enabled / test_mode / test_phones / booking_mode /
+ *   un1t_chat_actions_enabled, so those five are always written, exactly as
+ *   the full build writes them.
  * * An overridden top-level key is kept only when the body gives it a value
  *   (not null / blank). The full build fills some blanks with a code default
  *   (agent_name 'Mia', handoff_cooldown_hours 12, the auto-resolve windows);

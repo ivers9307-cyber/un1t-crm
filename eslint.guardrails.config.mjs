@@ -483,6 +483,10 @@ const config = [
       'src/lib/un1t-online-write-ops.js',
       'src/lib/un1t-online-mirror-write.js',
       'src/lib/un1t-online-write-ledger.js',
+      // MIAHATCH.5 — Mia's book_class at a un1t.online studio: born clean;
+      // the write-ahead row, its finalise and every mirror read judge their
+      // error (a failed write-ahead row sends nothing).
+      'src/lib/agent/un1t-booking.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

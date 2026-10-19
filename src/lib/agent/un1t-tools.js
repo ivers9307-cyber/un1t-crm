@@ -539,7 +539,7 @@ async function un1tSection(toolName, ctx, studio, zone) {
 }
 
 /** The studio's own zone: the thread's when it is the thread studio, else its location row's. */
-async function zoneFor(ctx, studio) {
+export async function zoneFor(ctx, studio) {
   const threadZone = ctx.zone || DEFAULT_TZ
   if (!studio.locationId || studio.locationId === ctx.locationId) return threadZone
   try {

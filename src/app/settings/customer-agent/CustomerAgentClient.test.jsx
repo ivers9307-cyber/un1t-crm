@@ -744,7 +744,7 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     await ready()
     expect(screen.getByText(GROUP)).toBeTruthy()
     const group = screen.getByTestId('hatch-copy-group')
-    expect(group.querySelectorAll('input').length).toBe(12)
+    expect(group.querySelectorAll('input:not([type="checkbox"])').length).toBe(12)
     expect(within(group).getByPlaceholderText('Thanks! You can go back to WhatsApp now.')).toBeTruthy()
     expect(within(group).getByPlaceholderText("Here's your secure payment link for {product}. Once it goes through I'll book you into {class}.")).toBeTruthy()
   })
@@ -755,7 +755,7 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     await ready()
     const group = screen.getByTestId('hatch-copy-group')
     expect(group.textContent).not.toMatch(/[—–]/)
-    for (const input of group.querySelectorAll('input')) expect(input.getAttribute('placeholder')).not.toMatch(/[—–]/)
+    for (const input of group.querySelectorAll('input:not([type="checkbox"])')) expect(input.getAttribute('placeholder')).not.toMatch(/[—–]/)
   })
 
   it('a Glofox studio, no source, or an older GET shows no group', async () => {
@@ -844,6 +844,50 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     await ready()
     expect(screen.getByLabelText('Booking link')).toBeTruthy()
     expect(screen.getByLabelText('Booking button label')).toBeTruthy()
+  })
+
+  // MIAHATCH.5 (Ruling 25) — Mia's switch for booking, cancelling and taking
+  // payments in chat at this studio. Off unless ticked; saved with the studio.
+  const SWITCH = 'Mia can book and cancel classes and pass refund requests to the team in chat at this studio'
+
+  it('the Hatch group carries the chat actions switch, unticked by default, no dash in its words', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const group = screen.getByTestId('hatch-copy-group')
+    const box = within(group).getByLabelText(SWITCH)
+    expect(box.type).toBe('checkbox')
+    expect(box.checked).toBe(false)
+    expect(group.textContent).not.toMatch(/[—–]/)
+  })
+
+  it('a stored true shows ticked; ticking it puts true in the PUT body, unticking false', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' }), reply(200, { success: true, settings: {} }), answer({ membership_source_key: 'un1t_online' })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.click(screen.getByLabelText(SWITCH))
+    fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().un1t_chat_actions_enabled).toBe(true)
+  })
+
+  it('a stored true is shown ticked and saved false when unticked', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online', studio: { enabled: true, un1t_chat_actions_enabled: true } }), reply(200, { success: true, settings: {} }), answer({ membership_source_key: 'un1t_online' })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const box = screen.getByLabelText(SWITCH)
+    expect(box.checked).toBe(true)
+    fireEvent.click(box)
+    fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().un1t_chat_actions_enabled).toBe(false)
+  })
+
+  it('a Glofox studio never shows the switch', async () => {
+    mockFetch([answer({ membership_source_key: 'glofox' })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.queryByLabelText(SWITCH)).toBeNull()
   })
 
   it('every button in the editor\'s form-like surface is typed', async () => {

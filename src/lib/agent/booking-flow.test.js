@@ -80,10 +80,12 @@ describe('bookingFlowOffered', () => {
     expect(bookingFlowOffered(base)).toBe(true)
     for (const block of ['no_booking', 'un1t_read', 'un1t_read_dual']) expect(bookingFlowOffered({ ...base, block }), block).toBe(true)
   })
-  it('not offered: Instagram, a studio Mia books at, the Glofox block, Flow off or unset, no flow_id, no contact', () => {
+  it('not offered: Instagram, a studio Mia books at, the Glofox block, the un1t full block, Flow off or unset, no flow_id, no contact', () => {
     expect(bookingFlowOffered({ ...base, channel: 'instagram' })).toBe(false)
     expect(bookingFlowOffered({ ...base, canBook: true })).toBe(false)
     expect(bookingFlowOffered({ ...base, block: 'glofox' })).toBe(false)
+    // Ruling 24 — block 3b: known Hatch members book in chat, never through the Flow.
+    expect(bookingFlowOffered({ ...base, block: 'un1t_full' })).toBe(false)
     expect(bookingFlowOffered({ ...base, flowConfig: { ...FLOW, enabled: false } })).toBe(false)
     expect(bookingFlowOffered({ ...base, flowConfig: { flow_id: FLOW.flow_id } })).toBe(false)
     expect(bookingFlowOffered({ ...base, flowConfig: { enabled: true } })).toBe(false)

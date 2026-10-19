@@ -81,9 +81,10 @@ export const TOOL_NOT_AT_THIS_STUDIO = Object.freeze({
     'otherwise hand off to the team. For membership, payments or account questions, hand off to the team.',
 })
 
-// MIAHATCH.2 — the tools that act on, or buy from, un1t.online. None exists in
-// any block yet (a later task adds them behind un1tWrites); the names are fixed
-// now so the executor refuses them in every block that does not offer them.
+// MIAHATCH.2 — the tools that act on, or buy from, un1t.online. Only block 3b
+// (`un1t_full`, behind un1tWrites) offers any: the writes since MIAHATCH.5, the
+// purchase tools from Task 19. The names are fixed here so the executor
+// refuses them in every block that does not offer them.
 // book_class and cancel_class_booking are Glofox tools today: they appear here
 // because on a un1t.online turn they are WRITES, gated like the rest.
 export const UN1T_WRITE_TOOL_NAMES = Object.freeze(new Set(['book_class', 'cancel_class_booking', 'request_refund']))
@@ -101,7 +102,10 @@ const NOT_OFFERED_IN_BLOCK = Object.freeze({
   // the un1t.online half reads the past-due seam, the Glofox half is today's.
   un1t_read: new Set(['book_class', 'cancel_class_booking', ...UN1T_ONLY]),
   un1t_read_dual: new Set([...UN1T_ONLY]),
-  un1t_full: new Set(),
+  // MIAHATCH.5 — block 3b offers the writes (book_class, cancel_class_booking,
+  // request_refund); the purchase tools join it in Task 19 (MIAHATCH.6), so
+  // until then they are not offered and the executor refuses them here too.
+  un1t_full: new Set([...UN1T_PURCHASE_TOOL_NAMES]),
 })
 
 /**

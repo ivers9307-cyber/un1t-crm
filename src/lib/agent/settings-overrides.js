@@ -23,6 +23,9 @@
 // too: a value in the org layer would start CRM tier pushes at every studio
 // (live-class.js reads the resolved value), while champ-app reads the raw
 // studio blob and would not see it, so the two would disagree.
+// un1t_chat_actions_enabled (MIAHATCH.5, Ruling 25) lets Mia book, cancel and
+// take refund requests in chat at ONE un1t.online studio: an org value would
+// switch it on at every studio at once.
 export const STUDIO_ONLY_KEYS = new Set([
   'enabled',
   'test_mode',
@@ -35,6 +38,7 @@ export const STUDIO_ONLY_KEYS = new Set([
   'membership_signup_url',
   'membership_cta_label',
   'monthly_points_target',
+  'un1t_chat_actions_enabled',
 ])
 
 // Object-valued keys that merge PER FIELD (org fields under studio fields)

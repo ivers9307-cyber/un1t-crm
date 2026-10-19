@@ -123,15 +123,61 @@ function glofoxReminderRules(label, app) {
 // studio) keeps the two booking writes, whose `un1t:` ids answer "not from chat
 // yet". Nothing here says "limited", "spaces" or "capacity", and the tools only
 // say whether a class is full, so the no-count rule is worded around that.
-// Slice 2 (the write tools) adds the upsell rules to 'full'; until then 'full'
-// renders exactly as 'read'. No em or en dashes in this text.
+// MIAHATCH.5: 'full' (block 3b, `writes`) books and cancels at the un1t.online
+// studio from chat, says "booked" / "cancelled" only on the tool's word, never
+// promises a refund or a credit back, and sends refund requests to the team
+// through request_refund. Every 'read' line is untouched (the read renders are
+// byte-identical to before). Task 19 adds the upsell rules to 'full'.
+// No em or en dashes in this text.
 // The carve-out for a studio that is not this conversation's: its facts block
 // is the only place (besides the tools) its prices and links may come from.
 const OTHER_STUDIO_FACTS_RULE = "\n- When a facts block below names another studio, that studio's prices, offers, timetable and links come only from its facts block and your tools. The KNOWLEDGE section and the membership sign-up link describe the studio of this conversation only."
 const READ_COUNT_RULE = '- NEVER tell a customer how many places are left, and never give any count, headcount or attendance number for a class, wave or event. The tools only tell you whether something is full, never a count, so there is no number to give and you must never invent one. The most you may say is that a class or wave is full.'
 const READ_EVENTS_RELAY = "- Use list_upcoming_events when someone asks what's on. Relay the dates and the wave times naturally, never how many places are left; never offer a wave marked full."
 
-function un1tSections({ bookingUrl, multiStudio, studioName }) {
+// MIAHATCH.5 — the 'full' variant's own lines (block 3b). `who` is the studio
+// the booking writes are about; `fallback` is what to do when a write answers
+// that booking from chat is not available right now (writes switched off at
+// call time).
+function un1tFullLines({ name, url, multiStudio }) {
+  const who = name || 'this studio'
+  const fallback = url
+    ? `- If a booking tool says booking from chat is not available right now, send ${name ? `${name}'s` : "the studio's"} booking link, ${url}, and end your message with it, with nothing after it and no tap choices, so it shows as a button. Never invent or change a link.`
+    : '- If a booking tool says booking from chat is not available right now, hand off ("wants to book <class and time>").'
+  const bookAndCancel = [
+    '- BEFORE booking, the customer must have clearly confirmed the exact class and day/time. If YOUR previous message already stated the exact class and time and they explicitly pick it, that IS the clear yes. Only restate-and-ask when their request is ambiguous. Never book from an ambiguous message. Then call book_class with the event_id from the list.',
+    '- Say a class is booked only when the book_class result says it is booked, then confirm warmly with the class and time. If the result says the team will confirm, say exactly that and never claim it\'s booked; if it failed (class full, already booked, or anything else), say why and offer an alternative.',
+    '- To cancel, use list_my_upcoming_bookings first so you have the booking_id, confirm exactly which class they mean, then call cancel_class_booking. Say a booking is cancelled only when the cancel_class_booking result says it is cancelled. If the system refuses (for example a late cancellation, or a class that already happened), relay the reason honestly and offer to hand off. Never promise a refund or a credit back for a cancelled or missed class. A class reschedule is a cancel plus a new booking: confirm both halves in one question, cancel first, then book.',
+    (multiStudio ? `- REFUNDS at ${name || 'the un1t.online studio'}: when` : '- REFUNDS: when') + ' a verified member asks for a refund or their money back (for a late cancellation, a class or a payment), call request_refund with their reason, and the booking_id when it is about one booking. Then tell them you\'ve passed it to the team, who will look at it and get back to them: the team decides. Never say a refund is done, approved or on its way, and never promise one. If request_refund returns an error, apologise briefly and hand off.' + (multiStudio ? ' For a refund at the other studio, hand off.' : ''),
+    fallback,
+    '- For any other payment or account change, hand off to the team.',
+  ]
+  const listLine = '- Use list_upcoming_classes to see what\'s on (they must be verified first), and relay the options naturally. Give the class name and the time, and answer what they asked (e.g. tomorrow morning\'s classes) rather than the whole list. Each class carries a full flag: if a class is full, say so and offer the nearest alternative, and never offer a full class or put one on a button. Never give a number of places, a headcount or an attendance figure, and never hint that a class is nearly full.'
+  const classSections = (multiStudio ? [
+    '## Classes and booking',
+    `- Check which studio a class is at. A class whose event_id starts with "un1t:" is at ${name || 'the un1t.online studio'}; any other class is at the other studio. You can book and cancel classes at both in chat for a verified member.`,
+    listLine,
+    ...bookAndCancel,
+  ] : [
+    '## Classes and booking',
+    `You can book and cancel classes at ${who} in chat for a verified member.`,
+    listLine,
+    '- Use list_my_upcoming_bookings when a verified member asks what they are booked into.',
+    ...bookAndCancel,
+  ]).join('\n')
+  const where = multiStudio ? `${name || 'the un1t.online studio'} and at the other studio` : who
+  const hardRuleOwnActions = '- Never confirm, promise, or claim that a change to someone\'s account, membership or payment has been MADE. You can log a pause, cancellation or refund REQUEST for the team (see below), but always frame it as "requested": the team actions and confirms it, not you. The exception is the handful of actions your OWN tools execute in this conversation: ' +
+    `class bookings and class-booking cancellations at ${where}, consultation bookings, free event entries and their cancellations, and wave moves. When one of those tool results says it succeeded, confirm it plainly; when a tool returns anything else (queued for the team, failed, full, not available from chat), relay exactly that and never claim it happened. Never say a refund is done, approved or on its way.`
+  return {
+    hardRuleOwnActions,
+    classSections,
+    positiveCheckin: "- POSITIVE: celebrate briefly and move it forward. If they'd like to come again, offer to book their next class right there. If they're on a trial and the moment fits, you can naturally mention booking a consultation or that the team can talk membership options, an invitation, never a pitch.",
+    accountChangeHandoff: '- The person wants a billing/payment change, disputes a payment, or wants any account change other than a pause, a cancellation or a refund request (those you capture as requests, see above).',
+    refundPaymentLine: '- Can\'t pay now, wants more time, disputes the amount, asks why the payment failed, or wants to change plan: hand off. Wants a refund: request_refund (see the classes section). Wants to cancel: the cancellation flow below.',
+  }
+}
+
+function un1tSections({ bookingUrl, multiStudio, studioName, writes = false }) {
   const url = String(bookingUrl || '').trim() || null
   // Named when the caller knows which studio the booking rules are about (a
   // Stillorgan thread answering a Hatch member must not read "this studio" as
@@ -142,7 +188,8 @@ function un1tSections({ bookingUrl, multiStudio, studioName }) {
     : 'To book, hand the customer to the team.'
   // The studio the un1t.online payment rules are about (the thread may be at the other studio).
   const un1tWho = name || 'the un1t.online studio'
-  const hardRuleOwnActions = (multiStudio
+  const full = writes ? un1tFullLines({ name, url, multiStudio }) : null
+  const hardRuleOwnActions = (full ? full.hardRuleOwnActions : multiStudio
     ? '- Never confirm, promise, or claim that a change to someone\'s account, membership or payment has been MADE. You can log a pause or cancellation REQUEST for the team (see below), but always frame it as "requested": the team actions and confirms it, not you. The exception is the handful of actions your OWN tools execute in this conversation: class bookings and class-booking cancellations at a studio where the booking section says you can make them, consultation bookings, free event entries and their cancellations, and wave moves. When one of those tool results says it succeeded, confirm it plainly; when a tool returns anything else (queued for the team, failed, full), relay exactly that and never claim it happened. Where you cannot book from chat, never say you have booked, cancelled or changed a class.'
     : '- Never confirm, promise, or claim that a change to someone\'s account, membership or payment has been MADE. You can log a pause or cancellation REQUEST for the team (see below), but always frame it as "requested": the team actions and confirms it, not you. The exception is the handful of actions your OWN tools execute in this conversation: consultation bookings, free event entries and their cancellations, and wave moves. When one of those tool results says it succeeded, confirm it plainly; when a tool returns anything else (queued for the team, failed, full), relay exactly that and never claim it happened. ' + (name ? `You never book, cancel or change a class booking at ${name} from chat, so never say you have.` : 'You never book, cancel or change a class booking from chat at this studio, so never say you have.')) + OTHER_STUDIO_FACTS_RULE
   const accountSections = [
@@ -167,7 +214,7 @@ function un1tSections({ bookingUrl, multiStudio, studioName }) {
     '- If still_overdue is true: say a payment is showing as overdue on their account. Use since and amount_label only when the tool gives them, and never state an amount or a date the tool did not give. If they say they have paid: a payment can take a few minutes to show, so do NOT contradict them and do NOT say it is paid. Hand off, putting what the tool gave in the reason so the team checks.',
     '- If still_overdue is \'unknown\': never guess either way. Say you cannot check it right now and hand off.',
     `- To sort out an overdue payment or update the card on file at ${un1tWho}, they can do it in the un1t.online app, or the team can help. If that does not work for them, hand off.`,
-    '- Can\'t pay now, wants more time, disputes the amount, asks why the payment failed, wants a refund, or wants to change plan: hand off. Wants to cancel: the cancellation flow below.',
+    full ? full.refundPaymentLine : '- Can\'t pay now, wants more time, disputes the amount, asks why the payment failed, wants a refund, or wants to change plan: hand off. Wants to cancel: the cancellation flow below.',
     ...(multiStudio ? [
       'The rules that follow apply only to the section of the answer for the Glofox studio, which can carry its own reminder details and pay link. They never apply to the section for ' + un1tWho + '.',
       glofoxReminderRules(GLOFOX_PROMPT_SOURCE.label, `the ${GLOFOX_PROMPT_SOURCE.label} app`),
@@ -184,7 +231,7 @@ function un1tSections({ bookingUrl, multiStudio, studioName }) {
   const linkLine = url
     ? `- ${name ? `${name}'s` : "The studio's"} booking link is ${url}. When someone wants to book, cancel or change a class there, tell them they can do it there and end your message with the link, with nothing after it and no tap choices, so it shows as a button. Never invent or change a link, and never say you've booked, cancelled or moved anything.`
     : '- When someone wants to book, cancel or change a class there, hand off ("wants to book <class and time>"). Never say you\'ve booked, cancelled or moved anything.'
-  const classSections = (multiStudio ? [
+  const classSections = full ? full.classSections : (multiStudio ? [
     '## Classes and booking',
     `- Check which studio a class is at. A class whose event_id starts with "un1t:" cannot be booked or cancelled from chat ${name ? `at ${name} ` : 'at this studio '}yet. ${toBook}`,
     linkLine,
@@ -200,12 +247,12 @@ function un1tSections({ bookingUrl, multiStudio, studioName }) {
     linkLine,
     `- ${NO_BOOKING_ACCOUNT_HANDOFF}`,
   ]).join('\n')
-  const positiveCheckin = multiStudio
+  const positiveCheckin = full ? full.positiveCheckin : multiStudio
     ? "- POSITIVE: celebrate briefly and move it forward. If they'd like to come again, offer to book their next class right there when it is at a studio where you can book from chat, otherwise share that studio's booking link or hand off so the team books them. If they're on a trial and the moment fits, you can naturally mention booking a consultation or that the team can talk membership options, an invitation, never a pitch."
     : (url
       ? "- POSITIVE: celebrate briefly and move it forward. If they'd like to come again, end your message with the studio's booking link so they can book. If they're on a trial and the moment fits, you can naturally mention booking a consultation or that the team can talk membership options, an invitation, never a pitch."
       : "- POSITIVE: celebrate briefly and move it forward. If they'd like to book again, hand off so the team books them. If they're on a trial and the moment fits, you can naturally mention booking a consultation or that the team can talk membership options, an invitation, never a pitch.")
-  const accountChangeHandoff = '- The person wants a refund, a billing/payment change, disputes a payment, or wants any account change other than a pause or cancellation (those two you capture as requests, see above).'
+  const accountChangeHandoff = full ? full.accountChangeHandoff : '- The person wants a refund, a billing/payment change, disputes a payment, or wants any account change other than a pause or cancellation (those two you capture as requests, see above).'
   return { hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff }
 }
 
@@ -214,10 +261,9 @@ export function renderCustomerAgentBasePrompt(membershipSource = GLOFOX_PROMPT_S
   const label = hasApp ? membershipSource.label : null
   const app = hasApp ? `the ${label} app` : null
   let hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff
-  // MIAHATCH.2 Task 7: a un1t.online variant ('read'; 'full' is slice 2 and
-  // renders as 'read' until its upsell rules land) swaps the two capacity lines
-  // below; null keeps the pre-Task-7 bytes (pinned by the Glofox and no-booking
-  // fixtures).
+  // MIAHATCH.2 Task 7: a un1t.online variant ('read', or 'full' for block 3b,
+  // MIAHATCH.5) swaps the two capacity lines below; null keeps the pre-Task-7
+  // bytes (pinned by the Glofox and no-booking fixtures).
   const un1t = un1tVariant === 'read' || un1tVariant === 'full'
   let capacityRule = "- NEVER tell a customer how many spots, spaces or places are left, and never give any capacity, headcount or attendance number for a class, wave or event. The tools only tell you whether something is full or nearly full, never a count, so there is no number to give and you must never invent one. The most you may say is that a class or wave is full, or that spaces are limited."
   let eventsRelay = "- Use list_upcoming_events when someone asks what's on. Relay the dates and the wave times naturally, never how many spaces are left; never offer a wave marked full."
@@ -225,7 +271,7 @@ export function renderCustomerAgentBasePrompt(membershipSource = GLOFOX_PROMPT_S
   // system. Each Glofox text below is the pre-Task-5 prompt VERBATIM (pinned
   // byte-for-byte by __fixtures__/glofox-system-prompt.fixture.json).
   if (un1t) {
-    ;({ hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff } = un1tSections({ bookingUrl, multiStudio: multiStudio === true, studioName: un1tStudioName }))
+    ;({ hardRuleOwnActions, accountSections, classSections, positiveCheckin, accountChangeHandoff } = un1tSections({ bookingUrl, multiStudio: multiStudio === true, studioName: un1tStudioName, writes: un1tVariant === 'full' }))
     capacityRule = READ_COUNT_RULE
     eventsRelay = READ_EVENTS_RELAY
   } else if (bookings) {

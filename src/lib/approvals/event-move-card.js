@@ -15,6 +15,7 @@
 
 import { APPROVAL_KIND_LABELS, approvalCardSummary } from '@shared/approval-cards'
 import { failureExplanation } from '@shared/agent-request-failure'
+import { un1tFailureExplanation } from './agent-request-why'
 
 export const EVENT_MOVE_KIND = 'event_move'
 export const EVENT_MOVE_LABEL = 'Event move'
@@ -92,5 +93,5 @@ export function approvalSummary(row) {
 /** Operator line for a failed execution, or null when the row is not one. */
 export function explainFailure(row) {
   if (!row || row.status !== 'failed') return null
-  return eventMoveFailureExplanation(row.details?.result) || failureExplanation(row)
+  return eventMoveFailureExplanation(row.details?.result) || un1tFailureExplanation(row) || failureExplanation(row)
 }

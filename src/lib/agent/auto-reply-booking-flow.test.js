@@ -59,7 +59,7 @@ vi.mock('./un1t-member-read', async (importOriginal) => ({
 import { sendFlowMessage } from '@/lib/whatsapp'
 import { flowTokenFor } from '@/lib/whatsapp-flow/config'
 import {
-  CACHED_ACCOUNT_TOOLS, CACHED_NO_BOOKING_TOOLS, CACHED_UN1T_READ_TOOLS, CACHED_BOOKING_FLOW_BLOCKS, runChannelAgent,
+  CACHED_ACCOUNT_TOOLS, CACHED_NO_BOOKING_TOOLS, CACHED_UN1T_READ_TOOLS, CACHED_UN1T_FULL_TOOLS, CACHED_BOOKING_FLOW_BLOCKS, runChannelAgent,
 } from './auto-reply'
 import { resolveMemberStudios } from './member-studios'
 import { BOOKING_FLOW_PROMPT_SECTION, SEND_BOOKING_FLOW_TOOL_NAME } from './booking-flow'
@@ -87,7 +87,7 @@ const nobody = () => ({ studios: [], readFailed: false })
 const HATCH_SETTINGS = { enabled: false, test_mode: true, test_phones: [`+${MIA_TEST_PHONE}`], booking_url: HATCH_BOOKING_URL, booking_mode: 'auto' }
 const STILLORGAN_SETTINGS = { enabled: false, test_mode: true, test_phones: [`+${MIA_TEST_PHONE}`] }
 
-function locationRows({ hatchFlow = FLOW_ON, stillorganFlow = FLOW_ON } = {}) {
+function locationRows({ hatchFlow = FLOW_ON, stillorganFlow = FLOW_ON, hatchSettings = HATCH_SETTINGS, hatchUn1tOnline } = {}) {
   return [
     {
       id: STILLORGAN, name: 'UN1T Stillorgan', timezone: 'Europe/Dublin', organization_id: ORG, membership_source: 'glofox',
@@ -95,7 +95,7 @@ function locationRows({ hatchFlow = FLOW_ON, stillorganFlow = FLOW_ON } = {}) {
     },
     {
       id: HATCH, name: 'UN1T Hatch Street', timezone: 'Europe/Dublin', organization_id: ORG, membership_source: 'un1t_online',
-      settings: { customer_agent: HATCH_SETTINGS, whatsapp_flow: hatchFlow },
+      settings: { customer_agent: hatchSettings, whatsapp_flow: hatchFlow, ...(hatchUn1tOnline ? { un1t_online: hatchUn1tOnline } : {}) },
     },
   ]
 }
@@ -219,7 +219,8 @@ afterEach(() => {
 
 describe('the Flow variants of the tool blocks', () => {
   it('each is its block plus send_booking_flow last, with the one cache breakpoint on it; no Glofox variant', () => {
-    expect(Object.keys(CACHED_BOOKING_FLOW_BLOCKS).sort()).toEqual(['no_booking', 'un1t_full', 'un1t_read', 'un1t_read_dual'])
+    // Ruling 24: no un1t_full variant either (members book in chat there).
+    expect(Object.keys(CACHED_BOOKING_FLOW_BLOCKS).sort()).toEqual(['no_booking', 'un1t_read', 'un1t_read_dual'])
     for (const [block, tools] of Object.entries(CACHED_BOOKING_FLOW_BLOCKS)) {
       expect(tools.at(-1).name, block).toBe(SEND_BOOKING_FLOW_TOOL_NAME)
       expect(tools.at(-1).cache_control, block).toEqual({ type: 'ephemeral', ttl: '1h' })
@@ -274,6 +275,49 @@ describe('Hatch WhatsApp, Flow on: the Flow is sent', () => {
     expect(systemText(bodies[0])).toContain(BOOKING_FLOW_PROMPT_SECTION)
     expect(sendFlowMessage).toHaveBeenCalledTimes(1)
     expect(toolResultOf(bodies[1])).toMatchObject({ sent: true })
+  })
+})
+
+// Ruling 24 (MIAHATCH.5) — in block 3b a known Hatch member books in chat, so
+// the Flow is not offered there; leads, unknown senders, members with no
+// un1t.online account and the switch off keep it.
+describe('Hatch WhatsApp, Flow on: the un1t full block offers no Flow', () => {
+  const WRITES_ON = { writes_enabled: true, funnel_enabled: true }
+  const SWITCH_ON = { ...HATCH_SETTINGS, un1t_chat_actions_enabled: true }
+
+  it('switch on (un1t_full): no send_booking_flow tool and no Flow prompt section; the same studio with the switch off (un1t_read) still offers it', async () => {
+    for (const [hatchSettings, tools, offered] of [
+      [SWITCH_ON, CACHED_UN1T_FULL_TOOLS, false],
+      [HATCH_SETTINGS, CACHED_BOOKING_FLOW_BLOCKS.un1t_read, true],
+    ]) {
+      resolveMemberStudios.mockResolvedValue(resolution(hatchStudio()))
+      const { fetchFn, bodies } = modelTurns([textTurn('ok')])
+      vi.stubGlobal('fetch', fetchFn)
+      const { db, inserts } = turnDb({ conv: thread(HATCH_CONTACT), hatchSettings, hatchUn1tOnline: WRITES_ON })
+
+      await runChannelAgent(db, whatsappAdapter(), turnCtx(HATCH))
+
+      same(bodies[0].tools, tools)
+      expect(toolNames(bodies[0]).includes(SEND_BOOKING_FLOW_TOOL_NAME), JSON.stringify(hatchSettings)).toBe(offered)
+      expect(systemText(bodies[0]).includes(BOOKING_FLOW_PROMPT_SECTION)).toBe(offered)
+      expect(inserts.find((i) => i.table === 'agent_decisions').row.meta.tool_block).toBe(offered ? 'un1t_read' : 'un1t_full')
+      expect(sendFlowMessage).not.toHaveBeenCalled()
+      vi.unstubAllGlobals()
+      vi.clearAllMocks()
+    }
+  })
+
+  it('an invented send_booking_flow call in un1t_full sends nothing and points to the booking link', async () => {
+    resolveMemberStudios.mockResolvedValue(resolution(hatchStudio()))
+    const { fetchFn, bodies } = modelTurns([toolTurn(SEND_BOOKING_FLOW_TOOL_NAME), textTurn('ok')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db } = turnDb({ conv: thread(HATCH_CONTACT), hatchSettings: SWITCH_ON, hatchUn1tOnline: WRITES_ON })
+
+    await runChannelAgent(db, whatsappAdapter(), turnCtx(HATCH))
+
+    same(bodies[0].tools, CACHED_UN1T_FULL_TOOLS)
+    expect(sendFlowMessage).not.toHaveBeenCalled()
+    expect(toolResultOf(bodies[1])).not.toMatchObject({ sent: true })
   })
 })
 

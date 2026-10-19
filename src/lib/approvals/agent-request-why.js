@@ -135,7 +135,44 @@ const MANUAL_BOOKING =
 const TRIAL_UNSETTLED_AT_MINT =
   'Their Glofox account was just created, but Glofox gave no clear answer when the trial was being added, so it may already be there. Approving books only if class credits show on the account, and will not buy a second trial. Check their account in Glofox for a €0 trial invoice; if there is none, add a credit by hand, then approve.'
 
+// MIAHATCH.5 — Mia's own un1t.online cards (details.provider 'un1t_online',
+// origin 'mia', filed by src/lib/agent/un1t-booking.js) at a studio with no
+// Glofox. Their reasons are machine codes, so they are explained here in
+// un1t.online's terms and never rendered as the customer's words (customerWords).
+const isMiaUn1tRow = (row) => row?.details?.provider === 'un1t_online' && row?.details?.origin === 'mia'
+
+const MIA_UN1T_REASONS = {
+  mia_booking:
+    "Mia drafted this booking because the studio's booking mode needs approval. Approving books it in un1t.online.",
+  mia_cancellation:
+    "Mia drafted this cancellation because the studio's booking mode needs approval. Approving cancels it in un1t.online.",
+  no_credits:
+    'Mia escalated: they asked to book, but no credits or membership show in un1t.online. Talk to them in the conversation, add credits there, then approve to book.',
+  un1t_outcome_unknown:
+    'un1t.online did not answer clearly. Approving checks un1t.online first and books only if it is not already done.',
+  cancel_outcome_unknown:
+    'un1t.online did not answer clearly. Approving checks un1t.online first and cancels only if it is still booked.',
+}
+
+// un1t.online's own words, as Mia's card recorded them (scrubbed), quoted.
+function refusedLine(what, d, next) {
+  const words = typeof d.result?.message === 'string' && d.result.message.trim() ? d.result.message.trim() : null
+  return `un1t.online refused the ${what}${words ? `: "${words}"` : ''}. ${next}`
+}
+
+function miaUn1tWhy(d) {
+  const reason = typeof d.reason === 'string' ? d.reason : null
+  if (reason === 'booking_rejected') return refusedLine('booking', d, 'Check the member in un1t.online, then approve to try the booking again.')
+  if (reason === 'cancel_rejected') return refusedLine('cancellation', d, 'Check the booking in un1t.online, then approve to try the cancellation again.')
+  if (reason && MIA_UN1T_REASONS[reason]) return MIA_UN1T_REASONS[reason]
+  // A reason this list does not know yet: never the raw code, never Glofox.
+  return 'Mia passed this to the team. Check the member in un1t.online before approving.'
+}
+
 export function whyFlagged(row) {
+  if (row && (row.kind === 'class_booking' || row.kind === 'class_cancellation') && isMiaUn1tRow(row)) {
+    return miaUn1tWhy(row.details)
+  }
   if (!row || row.kind !== 'class_booking') return null
   const d = row.details || {}
   const reason = typeof d.reason === 'string' ? d.reason : null
@@ -175,6 +212,36 @@ export function whyFlagged(row) {
 // UNKNOWN, and the member may already hold a paid pack). Pure.
 export function approvalGrantsTrialCredit(details) {
   return details?.reason === 'needs_credit_grant'
+}
+
+// MIAHATCH.5 — failed un1t.online executions, web side. The shared label map
+// (shared/agent-request-failure.js) is the phone's too, so changing it is an
+// OTA; until it learns these codes the web cards read them here first
+// (explainFailure in event-move-card.js). The three un1t-only codes are read
+// on any row (the decide card's post-approve outcome carries only the result);
+// ACCOUNT_MISMATCH only on a un1t.online card (Glofox has its own); any other
+// failed Mia card shows the staff words D's executor stored.
+const UN1T_FAILURES = {
+  MIA_NO_CREDITS:
+    'No credits show in un1t.online, so nothing was booked. Add credits there, then approve again.',
+  UN1T_ACCOUNT_UNREADABLE:
+    "This member's un1t.online account could not be read (a temporary database error), so nothing was sent to un1t.online. Retry.",
+  NOT_EXECUTABLE_UN1T:
+    'This could not be done automatically, so nothing was sent to un1t.online. Do it by hand in un1t.online.',
+}
+const UN1T_ACCOUNT_MISMATCH =
+  'This was queued for a different un1t.online account than the one the contact holds now, so nothing was sent to un1t.online. Check which account is right in un1t.online, then retry.'
+
+/** Operator line for a failed un1t.online execution, or null (the shared copy then applies). Pure. */
+export function un1tFailureExplanation(row) {
+  if (!row || row.status !== 'failed') return null
+  const result = row.details?.result || {}
+  const code = result.message_code || result.code || null
+  if (code && UN1T_FAILURES[code]) return UN1T_FAILURES[code]
+  if (row.details?.provider !== 'un1t_online') return null
+  if (code === 'ACCOUNT_MISMATCH') return UN1T_ACCOUNT_MISMATCH
+  if (isMiaUn1tRow(row) && typeof result.message === 'string' && result.message.trim()) return result.message.trim()
+  return null
 }
 
 // C85 (c) — failureExplanation moved to shared/agent-request-failure.js so the
@@ -271,6 +338,8 @@ export function customerWords(row) {
   const note = typeof rawNote === 'string' ? rawNote.trim() : ''
   if (note) return note
   if (row.kind === 'class_booking') return null
+  // MIAHATCH.5 — a Mia un1t.online card's reason is a machine code (whyFlagged).
+  if (isMiaUn1tRow(row)) return null
   const reason = row.details && typeof row.details.reason === 'string' ? row.details.reason.trim() : ''
   return reason || null
 }

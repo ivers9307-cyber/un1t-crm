@@ -61,7 +61,7 @@ import {
   BOOKING_SYSTEM_TOOL_NAMES, deriveNoBookingTools, membershipAtOtherStudio,
   refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO,
 } from './tool-capability'
-import { deriveUn1tReadTools, selectToolBlock, withCacheBreakpoint } from './tool-blocks'
+import { deriveUn1tReadTools, deriveUn1tFullTools, selectToolBlock, withCacheBreakpoint } from './tool-blocks'
 import { resolveMemberStudios, otherStudioOnly } from './member-studios'
 import {
   threadTakesBookings, resolveTurnPlan, todayPlan, planKey, turnForPlan, createActionStudios, loadAgentKnowledge,
@@ -145,28 +145,29 @@ export const CACHED_NO_BOOKING_TOOLS = withCacheBreakpoint(NO_BOOKING_AGENT_TOOL
 // sender is answerable at a un1t.online studio.
 export const CACHED_UN1T_READ_TOOLS = withCacheBreakpoint(deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: false }))
 export const CACHED_UN1T_READ_DUAL_TOOLS = withCacheBreakpoint(deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }))
+// MIAHATCH.5 — block 3b (`un1t_full`): the dual block plus request_refund, with
+// the two booking writes working at the un1t.online studio too. Built once like
+// the others. Only a WhatsApp turn whose un1t.online studio has writes_enabled
+// AND its Mia switch (un1t_chat_actions_enabled) gets it (turn-studios.js).
+export const CACHED_UN1T_FULL_TOOLS = withCacheBreakpoint(deriveUn1tFullTools(ALL_AGENT_TOOLS))
 const CACHED_BLOCKS = {
   glofox: CACHED_ACCOUNT_TOOLS,
   no_booking: CACHED_NO_BOOKING_TOOLS,
   un1t_read: CACHED_UN1T_READ_TOOLS,
   un1t_read_dual: CACHED_UN1T_READ_DUAL_TOOLS,
-  // The un1t.online write block does not exist yet (selectToolBlock only
-  // returns un1t_full when un1tWrites is true, which nothing sets): the read
-  // block that includes every Glofox tool stands in, offering strictly fewer
-  // tools than the executor would allow.
-  un1t_full: CACHED_UN1T_READ_DUAL_TOOLS,
+  un1t_full: CACHED_UN1T_FULL_TOOLS,
 }
 // MIAFLOW.1 — each block Mia can be in where she cannot book in chat, plus
 // send_booking_flow last (booking-flow.js), for a WhatsApp turn at a studio
 // whose booking Flow is switched on (bookingFlowOffered). Built once at load,
 // so each variant is a byte-stable cached prefix of its own; the blocks above
-// are untouched, and there is no Glofox variant (Stillorgan is unchanged).
-const DUAL_READ_FLOW_TOOLS = withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }), SEND_BOOKING_FLOW_TOOL])
+// are untouched. There is no Glofox variant (Stillorgan is unchanged) and no
+// `un1t_full` one (Ruling 24: a known Hatch member books in chat there, so a
+// un1t_full turn always sends CACHED_BLOCKS.un1t_full).
 export const CACHED_BOOKING_FLOW_BLOCKS = Object.freeze({
   no_booking: withCacheBreakpoint([...NO_BOOKING_AGENT_TOOLS, SEND_BOOKING_FLOW_TOOL]),
   un1t_read: withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: false }), SEND_BOOKING_FLOW_TOOL]),
-  un1t_read_dual: DUAL_READ_FLOW_TOOLS,
-  un1t_full: DUAL_READ_FLOW_TOOLS,
+  un1t_read_dual: withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }), SEND_BOOKING_FLOW_TOOL]),
 })
 /**
  * The cached tool block for a turn. The live turn sends CACHED_BLOCKS[block]
@@ -970,7 +971,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // executors run at) and the prompt the block needs. actionStudio is
     // another studio's resolved settings (booking_mode, booking_url, copy);
     // voice, quiet hours and caps stay this thread's.
-    const actionStudios = createActionStudios(db, { threadLocationId: locationId, threadSettings: settings, threadZone: zone })
+    const actionStudios = createActionStudios(db, { threadLocationId: locationId, threadSettings: settings, threadZone: zone, threadLocationSettings: loc?.settings ?? null })
     // MIAFLOW.1 — the thread studio's booking Flow (locations.settings.whatsapp_flow),
     // offered per block (bookingFlowOffered); tools, prompt and executor agree.
     const flowConfig = loc?.settings?.whatsapp_flow || null
