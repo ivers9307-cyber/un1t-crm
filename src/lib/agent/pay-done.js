@@ -18,7 +18,7 @@
 // when the per-intent 30 s rate slot is free, so a refresh storm costs one
 // settle. A settle that throws never breaks the page. Logs carry ids and
 // codes only (module 'mia-un1t'), never the token or a URL.
-import { hashPayDoneToken } from './purchase-intents'
+import { PAY_DONE_TOKEN_SHAPE, hashPayDoneToken } from './pay-done-token'
 import { settlePurchaseIntent } from './purchase-settle'
 import { resolveAgentSettings } from './settings-resolve'
 import { renderMiaCopy } from './mia-copy'
@@ -30,9 +30,6 @@ const LOG_MODULE = 'mia-un1t'
 const TABLE = 'mia_purchase_intents'
 const LIVE = 'link_sent'
 const SETTLE_SLOT = Object.freeze({ max: 1, windowMs: 30_000 })
-
-// mintPayDoneToken: randomBytes(32).toString('base64url') is always 43 chars.
-const TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/
 
 /**
  * The intent whose success token hashes to `hash`, as { id, location_id, status },
@@ -83,7 +80,7 @@ async function checkPayment(db, intent) {
  *   branding is null for an unknown, malformed or unreadable token.
  */
 export async function payDonePage(db, token, { cancelled = false } = {}) {
-  if (typeof token !== 'string' || !TOKEN_SHAPE.test(token)) return genericPayDonePage(cancelled)
+  if (typeof token !== 'string' || !PAY_DONE_TOKEN_SHAPE.test(token)) return genericPayDonePage(cancelled)
   const intent = await findIntentByTokenHash(db, hashPayDoneToken(token))
   if (!intent) return genericPayDonePage(cancelled)
 

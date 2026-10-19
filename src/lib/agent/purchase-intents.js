@@ -56,7 +56,6 @@
 //
 // Every supabase read and write judges `error`; every intent write stamps
 // updated_at (mig 752 has no trigger).
-import { createHash, randomBytes } from 'node:crypto'
 import { createCheckoutLink, grantTrial } from '@/lib/un1t-online-write-ops'
 import { Un1tWriteRefused, Un1tWriteUnknown } from '@/lib/un1t-online-write'
 import { Un1tSettingsReadError, readUn1tWriteSettings } from '@/lib/un1t-online-settings'
@@ -66,6 +65,7 @@ import { logError, logWarn } from '@/lib/log'
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { UN1T_RETRY_CODES, actionSettings, executingContactOf, classTimeLabel, relayedStartMatches } from './un1t-action-studio'
 import { renderMiaCopy } from './mia-copy'
+import { hashPayDoneToken, mintPayDoneToken } from './pay-done-token'
 import { isSellableUn1tProduct } from './mia-offer-limits'
 import { parseAgentId } from './studio-ids'
 import { TOOL_NOT_AT_THIS_STUDIO, refuseToolForTurn } from './tool-capability'
@@ -78,6 +78,9 @@ import {
   UN1T_TRIAL_CHECK_FAILED_LEAD, alertUn1tBookingCard, executeUn1tBook, fileUn1tBookingCard, finishUn1tBookingRow,
   insertUn1tBookingRow, prepareUn1tBooking,
 } from './un1t-booking'
+
+// The token helpers live in the leaf ./pay-done-token; re-exported for callers.
+export { hashPayDoneToken, mintPayDoneToken }
 
 const LOG_MODULE = 'mia-un1t'
 const PROVIDER = 'un1t_online'
@@ -101,17 +104,6 @@ const INTENT_COLS = 'id, un1t_product_id, product_title, class_name, class_time,
  */
 export function formatPriceLabel({ priceCents, interval = null, intervalCount = null, currency = 'EUR' } = {}) {
   return un1tPriceLabel({ price_cents: priceCents, currency, billing_interval: interval, billing_interval_count: intervalCount })
-}
-
-/** sha256 hex of a pay-done token (what the intent stores). Pure. */
-export function hashPayDoneToken(token) {
-  return createHash('sha256').update(String(token)).digest('hex')
-}
-
-/** A fresh pay-done token (32 random bytes, base64url) and its hash. */
-export function mintPayDoneToken() {
-  const token = randomBytes(32).toString('base64url')
-  return { token, hash: hashPayDoneToken(token) }
 }
 
 const priceLabelOf = (p) => formatPriceLabel({
