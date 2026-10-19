@@ -274,6 +274,8 @@ export function normaliseUn1tInvoiceStatus(raw) {
   return INVOICE_STATUS[raw.trim().toLowerCase()] ?? 'unknown'
 }
 
+const DAY_MS = 86_400_000
+
 const msOf = (v) => {
   const n = Date.parse(v)
   return Number.isFinite(n) ? n : null
@@ -488,13 +490,19 @@ function trialsTaken({ transactions = [], productsById, ledgerTrials = [] }) {
  * paid pack exists (A-2: the whole balance is never read as "trial", and a
  * balance with no paid pack behind it is never read as paid).
  *
+ * `newestTrialAt` is the newest trial's grant time and `newestTrialProductId`
+ * its product (TRIALDONE.2: the trial's expiry is read off that product). When
+ * several trials share the newest time, one whose product resolves names it.
+ *
  * @returns {{ trialCreditsLeft: number, paidCredits: number, hasPaidPack: boolean,
- *   tookTrial: boolean, newestTrialAt: string|null }}
+ *   tookTrial: boolean, newestTrialAt: string|null, newestTrialProductId: string|null }}
  */
 export function splitUn1tCredits({ client, transactions = [], productsById = new Map(), bookings = [], ledgerTrials = [] } = {}) {
   const balance = Math.max(0, Number(client?.credit_balance) || 0)
   const trials = trialsTaken({ transactions, productsById, ledgerTrials })
   const newestTrialAt = latestOf(trials.map((t) => t.at))
+  const atNewest = newestTrialAt == null ? [] : trials.filter((t) => t.at === newestTrialAt)
+  const newestTrial = atNewest.find((t) => productOf(productsById, t.product_id) != null) ?? atNewest[0] ?? null
   // The newest trial whose product resolves sets the grant; an unreadable one
   // (grants 0) is only the fallback when no trial resolves at all.
   const resolved = trials.filter((t) => productOf(productsById, t.product_id) != null)
@@ -517,7 +525,25 @@ export function splitUn1tCredits({ client, transactions = [], productsById = new
     hasPaidPack,
     tookTrial: trials.length > 0,
     newestTrialAt,
+    newestTrialProductId: newestTrial?.product_id ?? null,
   }
+}
+
+/**
+ * TRIALDONE.2 — when the newest trial runs out: its grant time plus its
+ * product's `expire_credits_in_days` (un1t_products.raw, selected as text) in
+ * whole days of 24 hours (an instant, never re-zoned). Null when there is no
+ * dated trial, its product cannot be read, or the product carries no positive
+ * expiry. Read off the newest trial only: an older trial's expiry never stands
+ * in for a newer one we cannot read.
+ */
+function trialExpiresAt(credits, productsById) {
+  const grantMs = msOf(credits.newestTrialAt)
+  if (grantMs == null) return null
+  const raw = productOf(productsById, credits.newestTrialProductId)?.expire_credits_in_days
+  const days = raw == null || raw === '' ? NaN : Number(raw)
+  if (!Number.isFinite(days) || days <= 0) return null
+  return new Date(grantMs + days * DAY_MS).toISOString()
 }
 
 /**
@@ -563,8 +589,11 @@ function aggregatorOf(bookings) {
 
 /**
  * One person's classifier input at one un1t.online studio: exactly the keys
- * `classifyContact` (shared/pipeline-classifier.js) reads, built from this
- * studio's rows only. Pure; reads nothing but its arguments.
+ * `classifyContact` (shared/pipeline-classifier.js) reads, plus
+ * `trial_expires_at` (TRIALDONE.2), which only the un1t board's classify
+ * wrapper reads (shared/pipelines/acquisition-un1t.js: 2 attended + an expired
+ * trial is trial_done). Built from this studio's rows only. Pure; reads
+ * nothing but its arguments.
  *
  * Every list is this person's rows at `locationId` (the caller groups them):
  * `freshSubs` the FRESH un1t_subscriptions (see freshCutoff; a stale row never
@@ -659,6 +688,7 @@ export function shapePipelineSnapshot({
     pipeline_dismissed_at: owned ? (contact.pipeline_dismissed_at ?? null) : null,
     last_lead_source_at: owned ? (contact.last_lead_source_at ?? null) : null,
     gympass_member_id: aggregator.gympassMemberId,
+    trial_expires_at: trialExpiresAt(credits, productsById),
   }
 }
 
@@ -668,20 +698,23 @@ const isoOrNull = (ms) => (ms == null ? null : new Date(ms).toISOString())
  * HATCHPIPE.5 — the evidence the board's date rules read
  * (un1t-pipeline-dates.js), from the SAME rows shapePipelineSnapshot was given
  * plus that snapshot. Kept apart from the snapshot so the snapshot stays
- * exactly classifyContact's input keys. Pure.
+ * classify's input keys. Pure.
  *
  *   client_created_at   the (merged) un1t_clients.remote_created_at
  *   attended_starts     EVERY attended booking's start, oldest first (the
  *                       snapshot keeps only the newest 10 bookings); the same
  *                       "attended" test as recent_bookings (status
  *                       'attended', readable starts_at)
+ *   attended_ends       TRIALDONE.2: every attended booking's END, oldest
+ *                       first: the event's ends_at, else its starts_at; one
+ *                       with neither is left out
  *   member_since        earliest remote_created_at of a fresh subscription
  *                       that holds a membership (the snapshot's member rule)
  *   classpass_since / gympass_since  first aggregator booking of each pile
  *   membership_ended_at latest end among this source's ended memberships
  *   dismissed_at        the snapshot's pipeline_dismissed_at (owned only)
  *   membership_status, joined_at, last_attended_at, converted_at,
- *   pack_customer_at    copied from the snapshot
+ *   pack_customer_at, trial_expires_at  copied from the snapshot
  */
 export function shapePipelineDateEvidence({
   client, freshSubs = [], bookings = [], memberships = [], snapshot = {},
@@ -690,12 +723,18 @@ export function shapePipelineDateEvidence({
     .filter((b) => lower(b?.status) === 'attended' && msOf(b?.starts_at) != null)
     .map((b) => b.starts_at)
     .sort((a, b) => msOf(a) - msOf(b))
+  const attendedEnds = bookings
+    .filter((b) => lower(b?.status) === 'attended')
+    .map((b) => (msOf(b.ends_at) != null ? b.ends_at : b.starts_at))
+    .filter((v) => msOf(v) != null)
+    .sort((a, b) => msOf(a) - msOf(b))
   const aggregator = aggregatorOf(bookings)
   const ended = memberships
     .filter((m) => m && (m.source == null || m.source === 'un1t_online_api') && lower(m.status) === 'ended')
   return {
     client_created_at: client?.remote_created_at ?? null,
     attended_starts: attendedStarts,
+    attended_ends: attendedEnds,
     last_attended_at: snapshot.last_attended_at ?? null,
     joined_at: snapshot.joined_at ?? null,
     membership_status: snapshot.glofox_membership_status ?? null,
@@ -706,6 +745,7 @@ export function shapePipelineDateEvidence({
     gympass_since: isoOrNull(aggregator.gympassSinceMs),
     dismissed_at: snapshot.pipeline_dismissed_at ?? null,
     membership_ended_at: latestOf(ended.map((m) => m.ended_at)),
+    trial_expires_at: snapshot.trial_expires_at ?? null,
   }
 }
 

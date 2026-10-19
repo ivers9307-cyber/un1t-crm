@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { classifyContact } from '@shared/pipeline-classifier'
 import { un1tDealDates } from './un1t-pipeline-dates'
+import { classify as classifyUn1t } from '@shared/pipelines/acquisition-un1t'
 import {
   UN1T_CANCEL_TRACKING_START, glofoxInterval, shapeCounts, shapeMrr, shapeFlows,
   shapeRevenue, firstSales, engagementRows, isTrialProduct, cancelsComparable,
@@ -577,6 +578,8 @@ const SNAPSHOT_KEYS = [
   'total_attended_7d', 'total_attended_30d', 'last_payment_at', 'joined_at', 'created_at',
   'trial_credits_remaining', 'recent_bookings', 'converted_at', 'pack_customer_at',
   'pipeline_dismissed_at', 'last_lead_source_at', 'gympass_member_id',
+  // TRIALDONE.2 — read by the un1t board's classify wrapper, not by classifyContact
+  'trial_expires_at',
 ]
 
 const pclient = (over = {}) => ({
@@ -605,7 +608,7 @@ const snap = (over = {}) => shapePipelineSnapshot({
 const stage = (s) => classifyContact(s, NOW)
 
 describe('shapePipelineSnapshot', () => {
-  it('has exactly the classifier input keys', () => {
+  it('has exactly the classifier input keys, plus trial_expires_at for the un1t wrapper', () => {
     expect(Object.keys(snap()).sort()).toEqual([...SNAPSHOT_KEYS].sort())
   })
 
@@ -907,7 +910,7 @@ describe('shapePipelineSnapshot', () => {
       last_attended_at: null, total_attended_7d: null, total_attended_30d: null, last_payment_at: null,
       joined_at: daysAgo(200), created_at: null, trial_credits_remaining: 0, recent_bookings: [],
       converted_at: null, pack_customer_at: null, pipeline_dismissed_at: null, last_lead_source_at: null,
-      gympass_member_id: null,
+      gympass_member_id: null, trial_expires_at: null,
     })
     expect(stage(s)).toBe('dormant')
     // owned by Hatch: only the two named contact fields cross over
@@ -1009,6 +1012,58 @@ describe('shapeTrialEligibility', () => {
   })
 })
 
+// TRIALDONE.2 — when the trial runs out: the newest grant + its product's expiry.
+describe('snapshot.trial_expires_at', () => {
+  const EXP = 'prod-trial-exp'
+  // the read selects expire_credits_in_days:raw->>expire_credits_in_days, so it arrives as text
+  const withExpiry = (days) => new Map([...PRODUCTS_BY_ID, [EXP, {
+    un1t_id: EXP, type: 'one_time', price_cents: 0, credits_per_period: 3, title: 'The UN1T Trial', expire_credits_in_days: days,
+  }]])
+  const GRANT = '2026-10-10T09:00:00Z'
+
+  it('snapshot.trial_expires_at is grant + expire_credits_in_days', () => {
+    const s = snap({ productsById: withExpiry('7'), transactions: [trialTx({ product_id: EXP, remote_created_at: GRANT })] })
+    expect(s.trial_expires_at).toBe('2026-10-17T09:00:00.000Z')
+    // a number reads the same as its text
+    expect(snap({ productsById: withExpiry(7), transactions: [trialTx({ product_id: EXP, remote_created_at: GRANT })] }).trial_expires_at)
+      .toBe('2026-10-17T09:00:00.000Z')
+  })
+
+  it('no expiry when the product carries none', () => {
+    expect(snap({ transactions: [trialTx({ remote_created_at: GRANT })] }).trial_expires_at).toBeNull()
+    for (const days of [null, '', '0', '-3', 'soon']) {
+      expect(snap({ productsById: withExpiry(days), transactions: [trialTx({ product_id: EXP, remote_created_at: GRANT })] }).trial_expires_at, String(days))
+        .toBeNull()
+    }
+  })
+
+  it('no trial, no expiry', () => {
+    expect(snap({ productsById: withExpiry('7') }).trial_expires_at).toBeNull()
+  })
+
+  it('ledger-only grant counts', () => {
+    const s = snap({ productsById: withExpiry('7'), ledgerTrials: [{ at: GRANT, product_id: EXP }] })
+    expect(s.trial_expires_at).toBe('2026-10-17T09:00:00.000Z')
+  })
+
+  it('the NEWEST trial sets the expiry; one whose product cannot be read leaves it unknown', () => {
+    const older = trialTx({ product_id: EXP, remote_created_at: '2026-09-01T09:00:00Z' })
+    expect(snap({ productsById: withExpiry('7'), transactions: [older, trialTx({ product_id: EXP, remote_created_at: GRANT })] }).trial_expires_at)
+      .toBe('2026-10-17T09:00:00.000Z')
+    // a newer trial on a product we cannot read: its expiry is unknown, never the older one's
+    expect(snap({ productsById: withExpiry('7'), transactions: [older, trialTx({ product_id: 'prod-gone', remote_created_at: GRANT })] }).trial_expires_at)
+      .toBeNull()
+  })
+
+  it('splitUn1tCredits names the newest trial and its product', () => {
+    expect(splitUn1tCredits({
+      client: pclient(), productsById: withExpiry('7'),
+      transactions: [trialTx({ product_id: EXP, remote_created_at: GRANT })],
+    })).toMatchObject({ newestTrialAt: GRANT, newestTrialProductId: EXP })
+    expect(splitUn1tCredits({ client: pclient() })).toMatchObject({ newestTrialAt: null, newestTrialProductId: null })
+  })
+})
+
 // HATCHPIPE.5 — the evidence the date rules read, from the same rows as the snapshot.
 describe('shapePipelineDateEvidence', () => {
   const args = (over = {}) => ({
@@ -1068,6 +1123,29 @@ describe('shapePipelineDateEvidence', () => {
     expect(evidence({ contact: pcontact({ location_id: STILLORGAN, pipeline_dismissed_at: daysAgo(2) }) }).dismissed_at).toBeNull()
   })
 
+  it('attended_ends uses events.ends_at, ascending', () => {
+    const e = evidence({ bookings: [
+      attended(3, { ends_at: new Date(NOW - 3 * DAY + 3_600_000).toISOString() }),
+      attended(12, { ends_at: new Date(NOW - 12 * DAY + 3_600_000).toISOString() }),
+      // no end on the event: its start stands in
+      attended(7, { ends_at: null }),
+      booking({ status: 'cancelled', starts_at: daysAgo(5), ends_at: daysAgo(4.9) }),
+      attended(40, { starts_at: null, ends_at: null }),
+    ] })
+    expect(e.attended_ends).toEqual([
+      new Date(NOW - 12 * DAY + 3_600_000).toISOString(),
+      daysAgo(7),
+      new Date(NOW - 3 * DAY + 3_600_000).toISOString(),
+    ])
+  })
+
+  it('trial_expires_at is copied from the snapshot', () => {
+    expect(evidence().trial_expires_at).toBeNull()
+    const a = args()
+    expect(shapePipelineDateEvidence({ ...a, snapshot: { ...shapePipelineSnapshot(a), trial_expires_at: daysAgo(1) } }).trial_expires_at)
+      .toBe(daysAgo(1))
+  })
+
   it('membership_ended_at: the latest end of this source\'s ended memberships', () => {
     const e = evidence({ memberships: [ended({ ended_at: daysAgo(100) }), ended({ ended_at: daysAgo(90) }), ended({ source: 'glofox', ended_at: daysAgo(1) })] })
     expect(e.membership_ended_at).toBe(daysAgo(90))
@@ -1084,6 +1162,23 @@ describe('shapePipelineDateEvidence', () => {
     expect(placed({ client: c, bookings: [attended(5), attended(20)] })).toMatchObject({ slug: 'second_class', stage_entered_at: daysAgo(5) })
     expect(placed({ client: c, bookings: [attended(1), attended(5), attended(20), attended(9)] }))
       .toMatchObject({ slug: 'trial_done', created_at: daysAgo(30), stage_entered_at: daysAgo(5) })
+  })
+
+  it('end to end (un1t board): 2 attended + an expired trial is trial_done, dated at the expiry', () => {
+    const EXP = 'prod-trial-exp'
+    const productsById = new Map([...PRODUCTS_BY_ID, [EXP, { un1t_id: EXP, type: 'one_time', price_cents: 0, credits_per_period: 3, expire_credits_in_days: '7' }]])
+    const a = args({
+      client: pclient({ remote_created_at: daysAgo(12) }), productsById,
+      transactions: [trialTx({ product_id: EXP, remote_created_at: daysAgo(10) })],
+      bookings: [attended(8, { credit_charged: true }), attended(5, { credit_charged: true })],
+    })
+    const s = shapePipelineSnapshot(a)
+    expect(s.trial_expires_at).toBe(daysAgo(3))
+    expect(classifyContact(s, NOW)).toBe('second_class')
+    const slug = classifyUn1t(s, NOW)
+    expect(slug).toBe('trial_done')
+    expect(un1tDealDates(slug, shapePipelineDateEvidence({ ...a, snapshot: s }), NOW))
+      .toEqual({ created_at: daysAgo(12), stage_entered_at: daysAgo(3) })
   })
 
   it('end to end: converted dates from the first sub_initial', () => {
