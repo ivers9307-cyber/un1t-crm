@@ -16,7 +16,7 @@
 // one legitimate way to set wa_phone from phone — see the broadcast-
 // reachability note in MEMORY).
 
-import { toE164Ireland } from '@/lib/phone-validate'
+import { contactWhatsAppNumber } from '@/lib/phone-validate'
 import {
   sendTemplateMessage,
   buildTemplateComponents,
@@ -76,13 +76,14 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
     }
 
     if (!templateName && !purpose) return { sent: false, reason: 'no_template_configured' }
-    if (!contact?.phone) return { sent: false, reason: 'no_phone' }
+    if (!contact?.phone && !contact?.wa_phone) return { sent: false, reason: 'no_phone' }
 
-    const waPhone = toE164Ireland(contact.phone)
-    // toE164Ireland returns the cleaned digits unchanged when it can't
-    // confidently format (e.g. a foreign/garbage number) — require a
-    // plausible E.164 before we hand it to Meta.
-    if (!waPhone || !/^\+\d{10,15}$/.test(waPhone)) return { sent: false, reason: 'unnormalisable_phone' }
+    // WAPHONE.1 — the contact's WhatsApp number (a stored wa_phone, else the
+    // phone through the one rule the contacts trigger also uses), E.164 digits
+    // without '+' (Meta accepts both; wa_phone is stored without). Null for a
+    // landline, junk, or a bare foreign number with no country-code marker.
+    const waPhone = contactWhatsAppNumber(contact)
+    if (!waPhone) return { sent: false, reason: 'unnormalisable_phone' }
 
     // Resolve the template; must be this location's and APPROVED to send.
     let template
@@ -130,7 +131,8 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
     // the outbound so staff/Mia see what was sent.
     if (!contact.wa_phone) {
       try {
-        await db.from('contacts').update({ wa_phone: waPhone }).eq('id', contact.id).is('wa_phone', null)
+        const { error: waErr } = await db.from('contacts').update({ wa_phone: waPhone }).eq('id', contact.id).is('wa_phone', null)
+        if (waErr) logWarn('meta-ad-wa-welcome', 'wa_phone backfill failed', { err: waErr })
       } catch (e) { logWarn('meta-ad-wa-welcome', 'wa_phone backfill failed', { err: e }) }
       contact = { ...contact, wa_phone: waPhone }
     }
