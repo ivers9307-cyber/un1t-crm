@@ -25,6 +25,7 @@ import { logWarn } from './log.js'
 import { getBoardModule, PIPELINE_MODES } from '../../shared/pipelines/index.js'
 import { membershipReadsFor, supportsRead } from './membership/reads/index.js'
 import { un1tDealDates } from './membership/reads/un1t-pipeline-dates.js'
+import { loadActiveElsewhere, leavesBoard } from './pipeline-other-studio-members.js'
 
 // HATCHPIPE.2 — a board whose module declares this inputSource is classified
 // from the location's membership read adapter (un1tOnlineReads.pipelineInputs:
@@ -74,6 +75,14 @@ function selectColsFor(modules) {
  *   unlinked?: number,             un1t path: clients with no contact
  *   skipped_no_contact?: number,   un1t path: clients whose contact is gone
  *   stage_histogram?: object,      dry runs only: { [target slug]: n }
+ *   deals_left_board: number,      PIPEEXCL.1: open deals closed (status 'lost')
+ *                                  because the person is an active member at
+ *                                  another studio of the organisation
+ *   creates_withheld: number,      PIPEEXCL.1: the same people with no deal here,
+ *                                  for whom none was created
+ *   other_studio_check: 'ok'|'unavailable',  PIPEEXCL.1: 'unavailable' = that
+ *                                  read failed, so no deal left the board and no
+ *                                  deal was created this run (creates_held)
  *   error?: string,
  * }>}
  */
@@ -358,15 +367,45 @@ export async function reclassifyAllContacts(db, args) {
     if (!dealByContact.has(d.contact_id)) dealByContact.set(d.contact_id, d)
   }
 
+  // 4b. PIPEEXCL.1 — the people who are active members at ANOTHER studio of
+  //     this organisation (Richard, 19 Oct 2026: a Stillorgan member is not a
+  //     Hatch prospect, and the same rule runs the other way). Unless the board
+  //     already shows them as a customer HERE (leavesBoard), their open deal
+  //     leaves the board and none is created for them.
+  //
+  //     The classifier itself has never removed a deal: a contact who stops
+  //     qualifying for the funnel moves to an off-funnel pile, still on the
+  //     board. Leaving uses the one way a deal already leaves a board, the
+  //     staff close (deals.status 'lost', PUT /api/deals/[id], the phone's
+  //     Mark lost): the row and its history stay, every board reads open deals
+  //     only, and if the membership elsewhere ends a NEW deal is created at the
+  //     classifier's stage on a later run. Never a delete.
+  //
+  //     A failed read is never "nobody is a member there": this run closes
+  //     nothing and creates nothing (a create could re-open a deal a person
+  //     left the board with), logs why, and still makes the stage moves, so
+  //     time-based decay keeps working. Manual boards are never read here.
+  let elsewhere
+  try {
+    elsewhere = await loadActiveElsewhere(db, locationId)
+  } catch (e) {
+    elsewhere = { ok: false, reason: 'threw', err: boundedErr(e?.message || e) }
+  }
+  const activeElsewhere = elsewhere?.ok ? elsewhere.contactIds : null
+
   // 5. Classify each contact + decide move / leave / create.
   let dealsMoved = 0
   let dealsUnchanged = 0
   let dealsCreated = 0
+  let dealsLeftBoard = 0
   let errors = 0
   const movementMatrix = {} // { from_slug: { to_slug: count } }
   const samples = []
   const movesToApply = [] // [{ deal_id, contact_id, from_slug, to_slug, target_stage_id, contact_name }]
   const createsToApply = [] // [{ contact_id, target_stage_id, target_slug, contact_name }]
+  const leavesToApply = [] // PIPEEXCL.1: [{ deal_id, contact_id, from_slug, contact_name }]
+  let createsWithheld = 0
+  let createsHeld = 0
   const stageHistogram = {} // dry runs only: { target_slug: count }
 
   // HATCHPIPE.2 — the un1t path classifies the contact's snapshot (built from
@@ -405,10 +444,28 @@ export async function reclassifyAllContacts(db, args) {
       errors++
       continue
     }
+    const existing = dealByContact.get(c.id)
+
+    // PIPEEXCL.1 — an active member at another studio leaves this board.
+    if (activeElsewhere && leavesBoard(targetSlug, activeElsewhere.has(c.id))) {
+      if (existing) {
+        leavesToApply.push({
+          deal_id: existing.id,
+          contact_id: c.id,
+          from_slug: stageSlugById.get(existing.stage_id) || 'unknown',
+          contact_name: c.name || c.email || null,
+        })
+      } else {
+        createsWithheld++
+      }
+      continue
+    }
+
     if (dryRun) stageHistogram[targetSlug] = (stageHistogram[targetSlug] || 0) + 1
 
-    const existing = dealByContact.get(c.id)
     if (!existing) {
+      // PIPEEXCL.1 — the other-studio read failed: hold every create this run.
+      if (!activeElsewhere) { createsHeld++; continue }
       // No open deal yet — create one in the right stage.
       createsToApply.push({
         contact_id: c.id,
@@ -523,6 +580,52 @@ export async function reclassifyAllContacts(db, args) {
       movementMatrix[''] = movementMatrix[''] || {}
       movementMatrix[''][c.target_slug] = (movementMatrix[''][c.target_slug] || 0) + 1
     }
+
+    // PIPEEXCL.1 — close the deals of people who are active members at another
+    // studio. Guarded on this studio and on status 'open'; only the rows the
+    // UPDATE returns are counted (a deal closed or moved off 'open' since the
+    // read is not).
+    const leftActivities = []
+    for (let i = 0; i < leavesToApply.length; i += BULK_UPDATE_CHUNK) {
+      const chunk = leavesToApply.slice(i, i + BULK_UPDATE_CHUNK)
+      const { data: closed, error: closeErr } = await db
+        .from('deals')
+        .update({ status: 'lost' })
+        .in('id', chunk.map((m) => m.deal_id))
+        .eq('location_id', locationId)
+        .eq('status', 'open')
+        .select('id')
+      if (closeErr) {
+        errors += chunk.length
+        logWarn('pipeline-reclassify', 'leave-board chunk failed', {
+          err: boundedErr(closeErr.message), chunk_start: i, chunk_size: chunk.length, locationId,
+        })
+        continue
+      }
+      const closedIds = new Set((closed || []).map((r) => r.id))
+      for (const m of chunk) {
+        if (!closedIds.has(m.deal_id)) continue
+        dealsLeftBoard++
+        movementMatrix[m.from_slug] = movementMatrix[m.from_slug] || {}
+        movementMatrix[m.from_slug][LEFT_BOARD] = (movementMatrix[m.from_slug][LEFT_BOARD] || 0) + 1
+        leftActivities.push({
+          subject: 'Pipeline: left the board (active member at another studio)',
+          type: 'pipeline',
+          contact_id: m.contact_id,
+          deal_id: m.deal_id,
+          note: 'Active member at another studio of this organisation, so not a prospect here. '
+            + 'A new deal opens on this board if that membership ends.',
+          done: true,
+          location_id: locationId,
+        })
+      }
+    }
+    // The contact's timeline says why the deal closed. Best-effort: the close
+    // already landed, and a lost note is not worth failing the run for.
+    for (let i = 0; i < leftActivities.length; i += BULK_UPDATE_CHUNK) {
+      const { error: actErr } = await db.from('activities').insert(leftActivities.slice(i, i + BULK_UPDATE_CHUNK))
+      if (actErr) logWarn('pipeline-reclassify', 'leave-board activity write failed', { err: boundedErr(actErr.message), locationId })
+    }
   } else {
     // Dry-run — populate movement_matrix + samples for the operator
     // preview without touching DB.
@@ -540,12 +643,31 @@ export async function reclassifyAllContacts(db, args) {
     }
     dealsMoved = movesToApply.length
     dealsCreated = createsToApply.length
+    for (const m of leavesToApply) {
+      movementMatrix[m.from_slug] = movementMatrix[m.from_slug] || {}
+      movementMatrix[m.from_slug][LEFT_BOARD] = (movementMatrix[m.from_slug][LEFT_BOARD] || 0) + 1
+    }
+    dealsLeftBoard = leavesToApply.length
+  }
+
+  // PIPEEXCL.1 — a failed other-studio read is logged once, structurally.
+  let otherStudioError = null
+  if (!activeElsewhere) {
+    otherStudioError = `other-studio members unavailable: ${elsewhere?.reason || 'unknown'}`
+    logWarn('pipeline-reclassify', 'other-studio members unavailable', {
+      locationId,
+      reason: elsewhere?.reason || 'unknown',
+      ...(elsewhere?.studioId ? { studioId: elsewhere.studioId } : {}),
+      ...(elsewhere?.err ? { err: elsewhere.err } : {}),
+      creates_held: createsHeld,
+    })
   }
 
   // 7. Close the audit row.
-  const status = errors === 0 ? 'success' : (dealsMoved + dealsCreated > 0 ? 'partial' : 'failed')
+  const status = errors === 0 ? 'success' : (dealsMoved + dealsCreated + dealsLeftBoard > 0 ? 'partial' : 'failed')
   await markRun(db, runId, {
     status,
+    ...(otherStudioError ? { error_message: otherStudioError } : {}),
     contacts_seen: contacts.length,
     deals_moved: dealsMoved,
     deals_unchanged: dealsUnchanged,
@@ -566,6 +688,10 @@ export async function reclassifyAllContacts(db, args) {
     movement_matrix: movementMatrix,
     samples,
     pipelines_skipped: pipelinesSkipped,
+    deals_left_board: dealsLeftBoard,
+    creates_withheld: createsWithheld,
+    other_studio_check: activeElsewhere ? 'ok' : 'unavailable',
+    ...(activeElsewhere ? {} : { creates_held: createsHeld }),
     ...un1tCounts(inputSource, un1tInputs),
     ...(dryRun ? { stage_histogram: stageHistogram } : {}),
   }
@@ -740,6 +866,9 @@ export async function restampUn1tDealDates(db, { locationId, dryRun = false, now
   }
   return { ok: true, ...base, ...counts, sample }
 }
+
+// PIPEEXCL.1 — the movement_matrix column a deal that left the board lands in.
+const LEFT_BOARD = '(left board)'
 
 // HATCHPIPE.2 — the input fields a run result carries: always input_source,
 // and on the un1t path the clients pipelineInputs could not place.

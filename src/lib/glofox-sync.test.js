@@ -1,4 +1,11 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// PIPEEXCL.1 — the create path asks who is an active member at another studio
+// (its own module and tests); every fixture here answers "nobody" by default.
+vi.mock('./pipeline-other-studio-members.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  loadActiveElsewhere: vi.fn(async () => ({ ok: true, contactIds: new Set(), studios: [] })),
+}))
 import {
   mapGlofoxMember,
   mapMembershipStatus,
@@ -2396,5 +2403,83 @@ describe('ensureDealForContact — move result names the board (HATCHPIPE.1)', (
       pipeline_id: 'p-primary',
       location_id: 'loc-1',
     })
+  })
+})
+
+// PIPEEXCL.1 — the per-event placement (webhook sync, the staff Cold toggle)
+// must not re-create a deal the nightly pass took off the board.
+describe('ensureDealForContact — an active member at another studio gets no new deal (PIPEEXCL.1)', () => {
+  function createDb() {
+    const inserts = []
+    const from = (table) => {
+      let mode = null
+      const c = {}
+      c.select = () => c
+      c.insert = (row) => { mode = 'insert'; inserts.push({ table, row }); return c }
+      c.single = () => c
+      c.eq = () => c
+      c.order = () => c
+      c.limit = () => c
+      c.then = (resolve) => {
+        let data = []
+        if (table === 'pipelines') data = [{ id: 'p-primary', mode: 'derived' }]
+        else if (table === 'deals' && mode === 'insert') data = { id: 'd-new' }
+        else if (table === 'deals') data = [] // no open deal yet
+        else if (table === 'pipeline_stages') data = [{ id: 's-target' }]
+        resolve({ data, error: null })
+      }
+      return c
+    }
+    return { db: { from }, inserts }
+  }
+
+  beforeEach(async () => {
+    const { loadActiveElsewhere } = await import('./pipeline-other-studio-members.js')
+    vi.mocked(loadActiveElsewhere).mockReset()
+  })
+
+  const lead = { glofox_membership_status: 'lead', joined_at: new Date().toISOString(), recent_bookings: [] }
+  const member = { glofox_membership_status: 'member', converted_at: new Date(Date.now() - 200 * 86_400_000).toISOString(), recent_bookings: [] }
+
+  it('active elsewhere and a prospect here: no insert, answered leave with the reason', async () => {
+    const { loadActiveElsewhere } = await import('./pipeline-other-studio-members.js')
+    vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(['c1']), studios: [] })
+    const { db, inserts } = createDb()
+    const out = await ensureDealForContact(db, 'loc-1', 'c1', lead, 'Lee')
+    expect(loadActiveElsewhere).toHaveBeenCalledWith(db, 'loc-1')
+    expect(inserts).toHaveLength(0)
+    expect(out).toEqual({ action: 'leave', deal_id: null, stage_slug: null, reason: 'active_member_elsewhere' })
+  })
+
+  it('active elsewhere and a member here too: created as today', async () => {
+    const { loadActiveElsewhere } = await import('./pipeline-other-studio-members.js')
+    vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(['c1']), studios: [] })
+    const { db, inserts } = createDb()
+    const out = await ensureDealForContact(db, 'loc-1', 'c1', member, 'Mo')
+    expect(inserts).toHaveLength(1)
+    expect(out).toMatchObject({ action: 'create', deal_id: 'd-new', stage_slug: 'member' })
+  })
+
+  it('not active elsewhere (a lapsed member there): created as today', async () => {
+    const { loadActiveElsewhere } = await import('./pipeline-other-studio-members.js')
+    vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(['someone-else']), studios: [] })
+    const { db, inserts } = createDb()
+    const out = await ensureDealForContact(db, 'loc-1', 'c1', lead, 'Lee')
+    expect(inserts).toHaveLength(1)
+    expect(out).toMatchObject({ action: 'create', stage_slug: 'new_lead' })
+  })
+
+  it('the read fails: created as today (never lose a lead to a blip; the nightly pass, which fails closed, decides), and logged', async () => {
+    const { loadActiveElsewhere } = await import('./pipeline-other-studio-members.js')
+    vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: false, reason: 'read_failed', studioId: 'loc-2', err: 'boom' })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { db, inserts } = createDb()
+    const out = await ensureDealForContact(db, 'loc-1', 'c1', lead, 'Lee')
+    const logged = warn.mock.calls.map((c) => c.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')).join('\n')
+    warn.mockRestore()
+    expect(inserts).toHaveLength(1)
+    expect(out).toMatchObject({ action: 'create' })
+    expect(logged).toMatch(/glofox-sync.*other-studio members unavailable/)
+    expect(logged).toMatch(/read_failed/)
   })
 })

@@ -16,6 +16,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { reclassifyAllContacts } from './pipeline-reclassify.js'
 import { membershipReadsFor } from './membership/reads/index.js'
 import { logWarn } from './log.js'
+import { loadActiveElsewhere } from './pipeline-other-studio-members.js'
+
+beforeEach(() => {
+  vi.mocked(loadActiveElsewhere).mockReset()
+  vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(), studios: [] })
+})
 
 // HATCHPIPE.2 — the membership read seam is mocked: the un1t.online boards ask
 // it for their inputs, and the contacts-input (Stillorgan) path must never ask
@@ -25,6 +31,13 @@ vi.mock('./membership/reads/index.js', () => ({
   supportsRead: (r, key) => typeof r?.reads?.[key] === 'function',
 }))
 vi.mock('./log.js', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+// PIPEEXCL.1 — who is an active member at another studio is its own module
+// (pipeline-other-studio-members.test.js); here it answers "nobody" unless a
+// test says otherwise, so every fixture below keeps describing today's board.
+vi.mock('./pipeline-other-studio-members.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  loadActiveElsewhere: vi.fn(),
+}))
 
 const isoDaysAgo = (d) => new Date(Date.now() - d * 86_400_000).toISOString()
 
@@ -895,5 +908,245 @@ describe('HATCHPIPE.5 — un1t create dates', () => {
     await reclassifyAllContacts(db, { locationId: 'loc-1' })
     const row = argOf(writesTo('deals')[0], 'insert')[1]
     expect(Object.keys(row).sort()).toEqual(['contact_id', 'location_id', 'pipeline_id', 'stage_id', 'status', 'title'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PIPEEXCL.1 — a studio's acquisition board leaves out people who are active
+// members at another studio of the organisation.
+// ---------------------------------------------------------------------------
+describe('PIPEEXCL.1 — active members at another studio leave the board', () => {
+  beforeEach(() => { vi.mocked(membershipReadsFor).mockReset(); vi.mocked(logWarn).mockClear() })
+
+  // Records every call; a deals UPDATE answers the ids it matched (so the
+  // orchestrator can count what really closed), or `closeError`.
+  function exclDb(fixtures = {}, { closeError = null } = {}) {
+    const calls = []
+    function chain(table) {
+      const entry = [table]
+      calls.push(entry)
+      let op = 'select'
+      let inIds = null
+      const filters = []
+      const c = {}
+      for (const m of ['select', 'eq', 'in', 'order', 'range', 'single', 'limit', 'update', 'insert']) {
+        c[m] = (...args) => {
+          entry.push([m, ...args])
+          if (m === 'update' || m === 'insert') op = m
+          if (m === 'eq') filters.push({ op: 'eq', col: args[0], val: args[1] })
+          if (m === 'in') { filters.push({ op: 'in', col: args[0], vals: args[1] }); inIds = args[1] }
+          return c
+        }
+      }
+      const applyFilters = (rows) => rows.filter((row) => filters.every((f) => {
+        if (!Object.prototype.hasOwnProperty.call(row, f.col)) return true
+        return f.op === 'in' ? f.vals.includes(row[f.col]) : row[f.col] === f.val
+      }))
+      c.then = (resolve) => {
+        if (op === 'insert') return resolve({ data: table === 'pipeline_classification_runs' ? { id: 'run-1' } : null, error: null })
+        if (op === 'update') {
+          if (table === 'deals' && entry.some((x) => x[0] === 'update' && x[1]?.status === 'lost')) {
+            if (closeError) return resolve({ data: null, error: closeError })
+            return resolve({ data: (inIds || []).map((id) => ({ id })), error: null })
+          }
+          return resolve({ data: null, error: null })
+        }
+        return resolve({ data: applyFilters(fixtures[table] || []), error: null })
+      }
+      return c
+    }
+    const writes = (table, method) => calls.filter((e) => e[0] === table && e.some((x) => x[0] === method))
+    const arg = (entry, method) => entry.find((x) => x[0] === method)
+    return { db: { from: (t) => chain(t) }, calls, writes, arg }
+  }
+  const elsewhere = (...ids) => vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(ids), studios: [{ locationId: 'loc-st', members: ids.length }] })
+  const closesIn = (rec) => rec.writes('deals', 'update').filter((e) => rec.arg(e, 'update')[1]?.status === 'lost')
+
+  describe('Hatch (un1t.online board)', () => {
+    const hatch = (contacts, snapshots, deals, opts) => {
+      seamWith(vi.fn().mockResolvedValue(hatchInputs({ contacts, snapshots, unlinked: 0, skipped: 0 })))
+      return exclDb({ pipelines: HATCH_PIPELINES, pipeline_stages: HATCH_STAGES, deals }, opts)
+    }
+
+    it('an active Stillorgan member\'s open Hatch deal is closed (status lost, guarded open, at this studio): never moved, never deleted', async () => {
+      elsewhere('c-still')
+      const rec = hatch(
+        [{ id: 'c-still', name: 'Sam', email: null, location_id: 'loc-st' }],
+        [['c-still', leadSnap()]],
+        [{ id: 'd-h', contact_id: 'c-still', stage_id: 'h-first', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' }],
+      )
+
+      const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+
+      expect(loadActiveElsewhere).toHaveBeenCalledWith(rec.db, HATCH)
+      const closes = closesIn(rec)
+      expect(closes).toHaveLength(1)
+      expect(closes[0]).toEqual(['deals',
+        ['update', { status: 'lost' }], ['in', 'id', ['d-h']], ['eq', 'location_id', HATCH], ['eq', 'status', 'open'], ['select', 'id']])
+      // no stage move for it, no insert, and no delete anywhere
+      expect(rec.writes('deals', 'update')).toHaveLength(1)
+      expect(rec.writes('deals', 'insert')).toHaveLength(0)
+      expect(rec.calls.some((e) => e.some((x) => x[0] === 'delete'))).toBe(false)
+      // the contact's timeline says why
+      const acts = rec.writes('activities', 'insert')
+      expect(acts).toHaveLength(1)
+      expect(rec.arg(acts[0], 'insert')[1]).toEqual([expect.objectContaining({
+        type: 'pipeline', contact_id: 'c-still', deal_id: 'd-h', location_id: HATCH, done: true,
+        subject: 'Pipeline: left the board (active member at another studio)',
+      })])
+      expect(out).toMatchObject({ ok: true, deals_left_board: 1, creates_withheld: 0, deals_moved: 0, deals_unchanged: 0, errors: 0, other_studio_check: 'ok' })
+      expect(out.movement_matrix).toEqual({ first_class: { '(left board)': 1 } })
+    })
+
+    it('an active member elsewhere with no deal here gets none', async () => {
+      elsewhere('c-still')
+      const rec = hatch([{ id: 'c-still', name: 'Sam', email: null, location_id: 'loc-st' }], [['c-still', leadSnap()]], [])
+
+      const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+
+      expect(rec.writes('deals', 'insert')).toHaveLength(0)
+      expect(closesIn(rec)).toHaveLength(0)
+      expect(out).toMatchObject({ deals_created: 0, creates_withheld: 1, deals_left_board: 0 })
+    })
+
+    it('a lapsed member elsewhere (not in the active set) is still a prospect: created and moved as today', async () => {
+      elsewhere() // nobody active elsewhere
+      const rec = hatch(
+        [
+          { id: 'c-lapsed-new', name: 'New', email: null, location_id: 'loc-st' },
+          { id: 'c-lapsed-old', name: 'Old', email: null, location_id: 'loc-st' },
+        ],
+        [['c-lapsed-new', leadSnap()], ['c-lapsed-old', leadSnap()]],
+        [{ id: 'd-old', contact_id: 'c-lapsed-old', stage_id: 'h-dormant', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' }],
+      )
+
+      const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+
+      expect(closesIn(rec)).toHaveLength(0)
+      expect(rec.writes('deals', 'insert')).toHaveLength(1)
+      expect(out).toMatchObject({ deals_created: 1, deals_moved: 1, deals_left_board: 0, creates_withheld: 0 })
+    })
+
+    it('a member of BOTH studios keeps today\'s placement (member here)', async () => {
+      elsewhere('c-both', 'c-both-new')
+      const rec = hatch(
+        [
+          { id: 'c-both', name: 'Both', email: null, location_id: 'loc-st' },
+          { id: 'c-both-new', name: 'Both new', email: null, location_id: 'loc-st' },
+        ],
+        [['c-both', memberSnap()], ['c-both-new', memberSnap()]],
+        [{ id: 'd-both', contact_id: 'c-both', stage_id: 'h-member', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' }],
+      )
+
+      const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+
+      expect(closesIn(rec)).toHaveLength(0)
+      expect(rec.writes('deals', 'insert').map((e) => rec.arg(e, 'insert')[1].contact_id)).toEqual(['c-both-new'])
+      expect(out).toMatchObject({ deals_unchanged: 1, deals_created: 1, deals_left_board: 0, creates_withheld: 0 })
+    })
+
+    it('the other-studio read FAILS: nothing leaves and nothing is created (the board stays as it is); moves still run; logged structurally', async () => {
+      vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: false, reason: 'read_failed', studioId: 'loc-st', err: 'contacts boom' })
+      const rec = hatch(
+        [
+          { id: 'c-a', name: 'A', email: null, location_id: 'loc-st' },
+          { id: 'c-b', name: 'B', email: null, location_id: 'loc-st' },
+        ],
+        [['c-a', leadSnap()], ['c-b', leadSnap()]],
+        [{ id: 'd-a', contact_id: 'c-a', stage_id: 'h-dormant', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' }],
+      )
+
+      const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+
+      expect(closesIn(rec)).toHaveLength(0)
+      expect(rec.writes('deals', 'insert')).toHaveLength(0)
+      // the stage move is not about membership elsewhere, so decay keeps working
+      expect(rec.writes('deals', 'update')).toHaveLength(1)
+      expect(rec.arg(rec.writes('deals', 'update')[0], 'update')[1]).toEqual({ stage_id: 'h-new' })
+      expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'other-studio members unavailable', {
+        locationId: HATCH, reason: 'read_failed', studioId: 'loc-st', err: 'contacts boom', creates_held: 1,
+      })
+      expect(out).toMatchObject({ ok: true, other_studio_check: 'unavailable', deals_left_board: 0, deals_created: 0, creates_withheld: 0, deals_moved: 1 })
+      const close = rec.calls.filter((e) => e[0] === 'pipeline_classification_runs').at(-1)
+      expect(rec.arg(close, 'update')[1]).toMatchObject({ error_message: 'other-studio members unavailable: read_failed' })
+    })
+
+    it('a failed close is an error, logged, and the deal stays (no activity written)', async () => {
+      elsewhere('c-still')
+      const rec = hatch(
+        [{ id: 'c-still', name: 'Sam', email: null, location_id: 'loc-st' }],
+        [['c-still', leadSnap()]],
+        [{ id: 'd-h', contact_id: 'c-still', stage_id: 'h-new', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' }],
+        { closeError: { message: 'deals boom' } },
+      )
+
+      const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+
+      expect(out).toMatchObject({ deals_left_board: 0, errors: 1 })
+      expect(rec.writes('activities', 'insert')).toHaveLength(0)
+      expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'leave-board chunk failed', expect.objectContaining({ err: 'deals boom', chunk_size: 1 }))
+    })
+
+    it('dry run: counts who would leave, writes nothing', async () => {
+      elsewhere('c-still')
+      const rec = hatch(
+        [{ id: 'c-still', name: 'Sam', email: null, location_id: 'loc-st' }, { id: 'c-new', name: 'New', email: null, location_id: 'loc-st' }],
+        [['c-still', leadSnap()], ['c-new', leadSnap()]],
+        [{ id: 'd-h', contact_id: 'c-still', stage_id: 'h-new', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' }],
+      )
+      vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(['c-still', 'c-new']), studios: [] })
+
+      const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
+
+      expect(rec.calls.filter((e) => e.some((x) => x[0] === 'update' || x[0] === 'insert'))).toHaveLength(0)
+      expect(out).toMatchObject({ deals_left_board: 1, creates_withheld: 1, deals_created: 0 })
+      expect(out.movement_matrix).toEqual({ new_lead: { '(left board)': 1 } })
+    })
+
+    it('the manual waitlist board is never touched, even for an active member elsewhere', async () => {
+      elsewhere('c-still')
+      const rec = hatch(
+        [{ id: 'c-still', name: 'Sam', email: null, location_id: 'loc-st' }],
+        [['c-still', leadSnap()]],
+        [{ id: 'd-wait', contact_id: 'c-still', stage_id: 'h-wait-new', pipeline_id: 'p-h-wait', location_id: HATCH, status: 'open' }],
+      )
+
+      await reclassifyAllContacts(rec.db, { locationId: HATCH })
+
+      // the deals read is scoped to the derived board, so the waitlist deal is never seen
+      const dealRead = rec.calls.find((e) => e[0] === 'deals' && e.some((x) => x[0] === 'select'))
+      expect(dealRead).toContainEqual(['in', 'pipeline_id', ['p-h-acq']])
+      expect(closesIn(rec)).toHaveLength(0)
+    })
+  })
+
+  describe('Stillorgan (Glofox board): the same rule, with Hatch as the other studio', () => {
+    const ST_PIPELINES = [{ id: 'p-acq', location_id: 'loc-st', key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true }]
+    const ST_STAGES = [
+      { id: 's-new', slug: 'new_lead', pipeline_id: 'p-acq' },
+      { id: 's-dormant', slug: 'dormant', pipeline_id: 'p-acq' },
+      { id: 's-member', slug: 'member', pipeline_id: 'p-acq' },
+    ]
+    const lead = (id) => ({ id, name: id, email: null, glofox_membership_status: 'lead', joined_at: new Date().toISOString(), created_at: new Date().toISOString(), recent_bookings: [] })
+    const member = (id) => ({ id, name: id, email: null, glofox_membership_status: 'member', converted_at: isoBefore(300), joined_at: isoBefore(400), created_at: isoBefore(400), recent_bookings: [] })
+
+    it('an active Hatch member who is a Stillorgan lead leaves Stillorgan\'s board; a member of both stays a member', async () => {
+      vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(['c-hatch-lead', 'c-both']), studios: [{ locationId: HATCH, members: 2 }] })
+      const rec = exclDb({
+        pipelines: ST_PIPELINES, pipeline_stages: ST_STAGES,
+        contacts: [lead('c-hatch-lead'), member('c-both'), lead('c-local')],
+        deals: [
+          { id: 'd-1', contact_id: 'c-hatch-lead', stage_id: 's-new', pipeline_id: 'p-acq', status: 'open' },
+          { id: 'd-2', contact_id: 'c-both', stage_id: 's-member', pipeline_id: 'p-acq', status: 'open' },
+          { id: 'd-3', contact_id: 'c-local', stage_id: 's-new', pipeline_id: 'p-acq', status: 'open' },
+        ],
+      })
+
+      const out = await reclassifyAllContacts(rec.db, { locationId: 'loc-st' })
+
+      expect(membershipReadsFor).not.toHaveBeenCalled() // the contacts-input path still never asks the seam for inputs
+      expect(closesIn(rec).map((e) => rec.arg(e, 'in')[2])).toEqual([['d-1']])
+      expect(out).toMatchObject({ deals_left_board: 1, deals_unchanged: 2, input_source: 'contacts' })
+    })
   })
 })
