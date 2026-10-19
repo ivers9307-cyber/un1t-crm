@@ -50,6 +50,69 @@ export function numberOrNull(v) {
 // since the schema refuses null there.
 const numberOrOmit = (v) => numberOrNull(v) ?? undefined
 
+// TRIALDONE.3 — the trial-finisher block (studio-only). The editor holds the
+// test-contact list as free text (`only_contact_ids_text`) so a newline can be
+// typed; the body carries the parsed ids. Fields the operator cleared are left
+// OUT (the schema refuses null), so the default fills in. Limits mirror
+// SettingsSchema.trial_done (settings-contract.js), kept here so this client
+// file stays zod-free.
+const TRIAL_DONE_HOUR_FIELDS = ['delay_hours', 'stale_after_hours', 'followup_after_hours', 'followup_max_hours', 'nudge_after_hours', 'nudge_max_hours']
+const TRIAL_DONE_TEMPLATE_FIELDS = ['opener_template', 'followup_template']
+const TRIAL_DONE_TEMPLATE_SHAPE = /^[a-z0-9_]{1,512}$/
+const TRIAL_DONE_ID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+export const TRIAL_DONE_IDS_MAX = 20
+export const TRIAL_DONE_INSTRUCTION_MAX = 1000
+export const TRIAL_DONE_TEMPLATE_ERROR = 'Use lowercase letters, numbers and underscores only.'
+export const TRIAL_DONE_DASH_ERROR = 'No em-dashes in customer messages.'
+
+const trimmedOrOmit = (v) => (typeof v === 'string' ? v.trim() : '') || undefined
+
+// The ids typed into the test-contact box (spaces, commas or lines), de-duplicated.
+export function parseTrialDoneContactIds(text) {
+  return [...new Set(String(text ?? '').split(/[\s,;]+/).filter(Boolean))]
+}
+
+function trialDoneIds(td) {
+  if (typeof td.only_contact_ids_text === 'string') return parseTrialDoneContactIds(td.only_contact_ids_text)
+  return Array.isArray(td.only_contact_ids) ? td.only_contact_ids : []
+}
+
+/** The PUT body's `trial_done`, or undefined when the editor holds no block (nothing is written). */
+export function buildTrialDonePayload(td) {
+  if (!td || typeof td !== 'object') return undefined
+  const out = { enabled: td.enabled === true }
+  for (const f of TRIAL_DONE_HOUR_FIELDS) out[f] = numberOrOmit(td[f])
+  for (const f of TRIAL_DONE_TEMPLATE_FIELDS) out[f] = trimmedOrOmit(td[f])
+  out.daily_cap = numberOrOmit(td.daily_cap)
+  out.only_contact_ids = trialDoneIds(td)
+  out.mia_instruction = trimmedOrOmit(td.mia_instruction)
+  return out
+}
+
+/** What the PUT would refuse in the trial-finisher block, as inline messages (staff copy). */
+export function trialDoneErrors(settings) {
+  const td = settings?.trial_done
+  const errors = {}
+  if (!td || typeof td !== 'object') return errors
+  for (const f of TRIAL_DONE_HOUR_FIELDS) {
+    const n = numberOrNull(td[f])
+    if (n !== null && !(Number.isInteger(n) && n >= 1 && n <= 72)) errors[f] = 'A whole number from 1 to 72.'
+  }
+  const cap = numberOrNull(td.daily_cap)
+  if (cap !== null && !(Number.isInteger(cap) && cap >= 1 && cap <= 200)) errors.daily_cap = 'A whole number from 1 to 200.'
+  for (const f of TRIAL_DONE_TEMPLATE_FIELDS) {
+    const v = typeof td[f] === 'string' ? td[f].trim() : ''
+    if (v && !TRIAL_DONE_TEMPLATE_SHAPE.test(v)) errors[f] = TRIAL_DONE_TEMPLATE_ERROR
+  }
+  const instruction = typeof td.mia_instruction === 'string' ? td.mia_instruction : ''
+  if (instruction.includes('\u2014')) errors.mia_instruction = TRIAL_DONE_DASH_ERROR
+  else if (instruction.trim().length > TRIAL_DONE_INSTRUCTION_MAX) errors.mia_instruction = `At most ${TRIAL_DONE_INSTRUCTION_MAX} characters.`
+  const ids = trialDoneIds(td)
+  if (ids.some((id) => !TRIAL_DONE_ID_SHAPE.test(id))) errors.only_contact_ids = 'Each id must be a 36-character contact id.'
+  else if (ids.length > TRIAL_DONE_IDS_MAX) errors.only_contact_ids = `At most ${TRIAL_DONE_IDS_MAX} contacts.`
+  return errors
+}
+
 // MIAORG.1 Task 4 (T4-A) — `{ off: true }` is a studio's "no quiet hours
 // (ignore the organisation's)": the window is not sent with it. Otherwise
 // both ends or nothing. TZ.5 — no zone is written when none was stored: null
@@ -140,6 +203,9 @@ export function buildSavePayload(settings, overridden) {
     inline_suggestion: {
       enabled: settings.inline_suggestion?.enabled !== false,
     },
+    // TRIALDONE.3 — studio-only, always saved (undefined = no block held, so
+    // JSON drops it and nothing is written over a stored one).
+    trial_done: buildTrialDonePayload(settings.trial_done),
   }
 }
 
@@ -150,7 +216,7 @@ export function buildSavePayload(settings, overridden) {
 export const ORG_PAYLOAD_DROPPED_KEYS = Object.freeze([
   'enabled', 'test_mode', 'test_phones', 'consultation_event_type_id', 'booking_mode', 'cancellation_form',
   'booking_url', 'booking_cta_label', 'membership_signup_url', 'membership_cta_label', 'monthly_points_target',
-  'un1t_chat_actions_enabled', 'social_enabled', 'glofox_auto_cancel',
+  'un1t_chat_actions_enabled', 'trial_done', 'social_enabled', 'glofox_auto_cancel',
 ])
 
 /**

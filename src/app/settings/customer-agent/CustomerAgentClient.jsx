@@ -14,8 +14,12 @@ import { Button } from '@/components/ui'
 import {
   initialOverridden, withOverride, withoutOverride, valueAt, fieldSource, sourceTagLabel, orgSetsAny,
   isOverridden, INHERITABLE_SCALAR_KEYS, INHERITABLE_OBJECT_KEYS, INHERITABLE_OBJECT_FIELDS, isHalfQuietWindow,
+  TRIAL_DONE_MIA_INSTRUCTION_DEFAULT,
 } from '@/lib/agent/settings-overrides'
-import { buildSavePayload, bookingLinkErrors, bookingIssuesFromResponse, BOOKING_CTA_LABEL_MAX } from './save-payload'
+import {
+  buildSavePayload, bookingLinkErrors, bookingIssuesFromResponse, BOOKING_CTA_LABEL_MAX,
+  trialDoneErrors, parseTrialDoneContactIds,
+} from './save-payload'
 import { HATCH_COPY_FIELDS, HATCH_COPY_GROUP_TITLE } from './hatch-copy-fields'
 import MiaOffersSection from './MiaOffersSection'
 // MIAORG.1 Task 4 — the organisation defaults, for masters and org admins.
@@ -186,6 +190,11 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   const showBookingLink = bookings !== true || membershipSourceKey === 'un1t_online'
   const bookingErrors = { ...serverFieldErrors, ...bookingLinkErrors(settings) }
   const bookingInvalid = showBookingLink && Object.keys(bookingLinkErrors(settings)).length > 0
+  // TRIALDONE.3 — the trial-finisher card (a un1t.online studio only), checked
+  // as the PUT checks it; an invalid value shows beside its field and holds Save.
+  const showTrialDone = membershipSourceKey === 'un1t_online'
+  const trialErrors = showTrialDone ? trialDoneErrors(settings) : {}
+  const trialInvalid = Object.keys(trialErrors).length > 0
 
   // "Use organisation default": the field stops being the studio's own and
   // shows the value it now inherits (GET's `inherited`).
@@ -342,6 +351,9 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
     setSettings(s => ({ ...s, first_class_checkin: { ...(s.first_class_checkin || {}), [key]: value } }))
     markOverridden(`first_class_checkin.${key}`)
   }
+  // TRIALDONE.3 — studio-only, so no override bookkeeping: the block is always saved.
+  const setTrialDone = (key, value) =>
+    setSettings(s => ({ ...s, trial_done: { ...(s.trial_done || {}), [key]: value } }))
   const setInlineSuggestion = (key, value) => {
     setSettings(s => ({ ...s, inline_suggestion: { ...(s.inline_suggestion || {}), [key]: value } }))
     markOverridden(`inline_suggestion.${key}`)
@@ -896,7 +908,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
         {error && <div className="text-sm text-red-600">{error}</div>}
         {canEdit && (
           <div>
-            <button type="button" onClick={saveSettings} disabled={saving || quietHalf || bookingInvalid}
+            <button type="button" onClick={saveSettings} disabled={saving || quietHalf || bookingInvalid || trialInvalid}
               className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
               {saving ? 'Saving…' : 'Save settings'}
             </button>
@@ -1112,7 +1124,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
 
         {canEdit && (
           <div className="mt-5">
-            <button type="button" onClick={saveSettings} disabled={saving || quietHalf}
+            <button type="button" onClick={saveSettings} disabled={saving || quietHalf || trialInvalid}
               className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
               {saving ? 'Saving…' : 'Save settings'}
             </button>
@@ -1260,6 +1272,96 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
           </div>
         </div>
       </section>
+
+      {/* ── Trial finisher follow-up (TRIALDONE.3) ────────────
+          Studio-only (an organisation can never switch it on) and shown only
+          at a un1t.online studio (Hatch Street). After a trial member's last
+          class the studio sends the opener template below; a reply goes to
+          Mia, briefed by the instruction. Off by default. A list of test
+          contacts makes it a test: nobody else is messaged. */}
+      {showTrialDone && settings.trial_done && (() => {
+        const td = settings.trial_done
+        const idsText = td.only_contact_ids_text ?? (Array.isArray(td.only_contact_ids) ? td.only_contact_ids : []).join('\n')
+        const testCount = parseTrialDoneContactIds(idsText).length
+        return (
+          <section className="border border-un1t-border rounded-lg p-5 mt-6" data-testid="trial-done-card">
+            <h2 className="text-base font-semibold text-un1t-text mb-1">Trial finisher follow-up</h2>
+            <p className="text-sm text-un1t-muted mb-4">
+              After a trial member attends their second class and their trial ends, the studio sends them the
+              opener template below. If they reply, Mia helps them choose between a membership and a class pack
+              and sends the payment link. A second message follows if they stay quiet.
+            </p>
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <label className="flex items-center gap-2 text-sm text-un1t-text">
+                <input type="checkbox" checked={!!td.enabled}
+                  onChange={e => setTrialDone('enabled', e.target.checked)} />
+                Enable trial finisher follow-up
+              </label>
+              {testCount > 0 && (
+                <span className="text-[11px] rounded-full bg-amber-500/10 text-amber-700 px-2 py-0.5 whitespace-nowrap">
+                  {`Test: ${testCount} contact${testCount === 1 ? '' : 's'} only`}
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <FieldLabel>Opener template</FieldLabel>
+                <input className={inputCls} maxLength={512} aria-label="Opener template"
+                  value={td.opener_template ?? ''}
+                  aria-invalid={trialErrors.opener_template ? 'true' : undefined}
+                  onChange={e => setTrialDone('opener_template', e.target.value)} />
+                {trialErrors.opener_template
+                  ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.opener_template}</p>
+                  : <p className="text-xs text-un1t-subtle mt-1">The approved WhatsApp template name sent first. Variables: {'{{1}}'} first name.</p>}
+              </div>
+              <div>
+                <FieldLabel>Follow-up template</FieldLabel>
+                <input className={inputCls} maxLength={512} aria-label="Follow-up template"
+                  value={td.followup_template ?? ''}
+                  aria-invalid={trialErrors.followup_template ? 'true' : undefined}
+                  onChange={e => setTrialDone('followup_template', e.target.value)} />
+                {trialErrors.followup_template
+                  ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.followup_template}</p>
+                  : <p className="text-xs text-un1t-subtle mt-1">The approved template name sent once if they have not replied.</p>}
+              </div>
+              <div>
+                <FieldLabel>Send after (hours)</FieldLabel>
+                <input type="number" min={1} max={72} className={inputCls} aria-label="Send after (hours)"
+                  value={td.delay_hours ?? ''}
+                  placeholder="2"
+                  aria-invalid={trialErrors.delay_hours ? 'true' : undefined}
+                  onChange={e => setTrialDone('delay_hours', e.target.value === '' ? null : Number(e.target.value))} />
+                {trialErrors.delay_hours
+                  ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.delay_hours}</p>
+                  : <p className="text-xs text-un1t-subtle mt-1">Hours after their last class before the opener goes out.</p>}
+              </div>
+            </div>
+            <div className="mt-4">
+              <FieldLabel>Mia&apos;s instruction</FieldLabel>
+              <textarea className={inputCls} rows={4} aria-label="Mia's instruction"
+                value={td.mia_instruction ?? ''}
+                placeholder={TRIAL_DONE_MIA_INSTRUCTION_DEFAULT}
+                aria-invalid={trialErrors.mia_instruction ? 'true' : undefined}
+                onChange={e => setTrialDone('mia_instruction', e.target.value)} />
+              {trialErrors.mia_instruction
+                ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.mia_instruction}</p>
+                : <p className="text-xs text-un1t-subtle mt-1">What Mia is told when a trial finisher replies. Leave blank for the default shown. Placeholders: {'{studio}'} {'{date}'}. No em-dashes.</p>}
+            </div>
+            <div className="mt-4">
+              <FieldLabel>Test contact ids</FieldLabel>
+              <textarea className={inputCls} rows={2} aria-label="Test contact ids"
+                value={idsText}
+                aria-invalid={trialErrors.only_contact_ids ? 'true' : undefined}
+                onChange={e => setTrialDone('only_contact_ids_text', e.target.value)} />
+              {trialErrors.only_contact_ids
+                ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.only_contact_ids}</p>
+                : <p className="text-xs text-un1t-subtle mt-1">
+                    Up to 20 contact ids, one per line. While this list has anyone in it, ONLY those contacts are messaged: use it to test before clearing it to go live for everyone.
+                  </p>}
+            </div>
+          </section>
+        )
+      })()}
 
       {/* ── Inline suggestion after approvals (INBOX-APPROVALS-AI.4) ── */}
       <section className="border border-un1t-border rounded-lg p-5 mt-6">
