@@ -55,6 +55,10 @@ const MACHINE_REASONS = {
     'un1t.online did not answer clearly. Approving checks un1t.online first and books only if it is not already done.',
   un1t_trial_unverified:
     'The free trial could not be confirmed in un1t.online. Approving books only if their credits show; it never buys a trial.',
+  // UN1TBOOK.20 — the class left un1t.online's timetable before the queued
+  // booking ran; nothing was sent there (record-only).
+  un1t_class_no_longer_available:
+    'This class was removed in un1t.online before it could be booked. Offer the customer another class.',
   // PERSON-ACCT.7 — the agent elects ONE linked account per booking and
   // escalates instead of coin-flipping between two that are both live.
   account_conflict:
@@ -135,6 +139,9 @@ export function whyFlagged(row) {
   if (!row || row.kind !== 'class_booking') return null
   const d = row.details || {}
   const reason = typeof d.reason === 'string' ? d.reason : null
+  // A un1t.online funnel reason names what happened on that card, so it wins
+  // over the studio's book-by-hand line (its un1t: event id is hand-booked).
+  if (reason?.startsWith('un1t_') && MACHINE_REASONS[reason]) return MACHINE_REASONS[reason]
   if (isHandBookedEventId(d.event_id)) return MANUAL_BOOKING
   if (reason) {
     if (reason === 'credit_check_failed') {

@@ -86,6 +86,10 @@ function makeDb({ existing = [], failSelect = false, failUpsertAt = null } = {})
       upsert(p, o) { s.op = 'upsert'; s.payload = p; s.options = o; return api },
       eq(c, v) { s.filters.push(['eq', c, v]); return api },
       in(c, v) { s.filters.push(['in', c, v]); return api },
+      gt(c, v) { s.filters.push(['gt', c, v]); return api },
+      is(c, v) { s.filters.push(['is', c, v]); return api },
+      order() { return api },
+      range() { return api },
       then(res, rej) { return Promise.resolve().then(run).then(res, rej) },
     }
     return api
@@ -93,14 +97,15 @@ function makeDb({ existing = [], failSelect = false, failUpsertAt = null } = {})
   return { db: { from: (t) => { log.push({ table: t }); return builder() } }, log }
 }
 const upsertEntries = (log) => log.filter((e) => e.op === 'upsert')
-const selectEntries = (log) => log.filter((e) => e.op === 'select')
+// The existing-cancelled reads (by id); the UN1TBOOK.20 reconcile read has no IN-list.
+const selectEntries = (log) => log.filter((e) => e.op === 'select' && e.filters.some((f) => f[0] === 'in'))
 
 describe('projectUn1tOccurrences', () => {
   it('upserts in chunks of 200 on location_id,glofox_event_id and never deletes', async () => {
     const events = Array.from({ length: 450 }, (_, i) => event({ un1t_id: `e${i}` }))
     const { db, log } = makeDb()
     const r = await projectUn1tOccurrences(db, { locationId: LOC, events, nowIso: NOW })
-    expect(r).toEqual({ upserted: 450 })
+    expect(r).toEqual({ upserted: 450, cancelled: 0 })
     const ups = upsertEntries(log)
     expect(ups.map((u) => u.payload.length)).toEqual([200, 200, 50])
     for (const u of ups) expect(u.options).toEqual({ onConflict: 'location_id,glofox_event_id' })
@@ -119,7 +124,7 @@ describe('projectUn1tOccurrences', () => {
       events: [event({ un1t_id: 'e1', status: 'cancelled' }), event({ un1t_id: 'e2', status: 'cancelled' })],
       nowIso: NOW,
     })
-    expect(r).toEqual({ upserted: 2 })
+    expect(r).toEqual({ upserted: 2, cancelled: 0 })
     expect(selectEntries(log)[0].filters.find((f) => f[0] === 'in')[2]).toEqual(['un1t:e1', 'un1t:e2'])
     const payload = upsertEntries(log)[0].payload
     expect(payload.find((p) => p.glofox_event_id === 'un1t:e1').cancelled_at).toBe(earlier)
@@ -151,5 +156,143 @@ describe('projectUn1tOccurrences', () => {
     const db = { from: () => { throw new Error('client exploded') } }
     const r = await projectUn1tOccurrences(db, { locationId: LOC, events: [event()], nowIso: NOW })
     expect(r.error.message).toContain('client exploded')
+  })
+})
+
+// UN1TBOOK.20 — a FUTURE un1t occurrence whose event this pull did not return
+// was deleted in un1t.online: it is stamped cancelled, so it leaves the TVs.
+// A filter-applying fake over one class_occurrences table.
+function makeTableDb(seed, { failReconcileRead = false, failUpdate = false } = {}) {
+  const rows = seed.map((r) => ({ ...r }))
+  const log = []
+  const matches = (r, filters) => filters.every(([k, c, v]) => {
+    if (k === 'eq') return r[c] === v
+    if (k === 'in') return v.includes(r[c])
+    if (k === 'gt') return r[c] != null && Date.parse(r[c]) > Date.parse(v)
+    if (k === 'is') return v === null ? r[c] == null : r[c] === v
+    return true
+  })
+  const builder = () => {
+    const s = { op: 'select', filters: [], payload: null, options: null, range: null }
+    const run = () => {
+      log.push({ op: s.op, payload: s.payload, filters: s.filters })
+      if (s.op === 'select') {
+        const reconcile = !s.filters.some((f) => f[0] === 'in')
+        if (reconcile && failReconcileRead) return { data: null, error: { code: '57014', message: 'reconcile read boom' } }
+        let out = rows.filter((r) => matches(r, s.filters)).map((r) => ({ ...r }))
+        if (s.range) out = out.slice(s.range[0], s.range[1] + 1)
+        return { data: out, error: null }
+      }
+      if (s.op === 'upsert') {
+        for (const p of s.payload) {
+          const hit = rows.find((r) => r.location_id === p.location_id && r.glofox_event_id === p.glofox_event_id)
+          if (hit) Object.assign(hit, p)
+          else rows.push({ ...p })
+        }
+        return { data: null, error: null }
+      }
+      if (s.op === 'update') {
+        if (failUpdate) return { data: null, error: { code: '40001', message: 'update boom' } }
+        const hit = rows.filter((r) => matches(r, s.filters))
+        for (const r of hit) Object.assign(r, s.payload)
+        return { data: hit.map((r) => ({ glofox_event_id: r.glofox_event_id })), error: null }
+      }
+      throw new Error(`unexpected op ${s.op}`)
+    }
+    const api = {
+      select() { return api },
+      upsert(p, o) { s.op = 'upsert'; s.payload = p; s.options = o; return api },
+      update(p) { s.op = 'update'; s.payload = p; return api },
+      delete() { s.op = 'delete'; return api },
+      eq(c, v) { s.filters.push(['eq', c, v]); return api },
+      in(c, v) { s.filters.push(['in', c, v]); return api },
+      gt(c, v) { s.filters.push(['gt', c, v]); return api },
+      is(c, v) { s.filters.push(['is', c, v]); return api },
+      order() { return api },
+      range(a, b) { s.range = [a, b]; return api },
+      then(res, rej) { return Promise.resolve().then(run).then(res, rej) },
+    }
+    return api
+  }
+  return { db: { from: () => builder() }, rows, log }
+}
+
+const FUTURE = '2026-10-22T17:30:00.000Z'
+const PAST = '2026-10-15T17:30:00.000Z'
+const occ = (over = {}) => ({
+  location_id: LOC, glofox_event_id: 'un1t:gone', source_platform: 'un1t_online', name: 'Gone', starts_at: FUTURE, cancelled_at: null, ...over,
+})
+const byId = (rows, id) => rows.find((r) => r.glofox_event_id === id)
+
+describe('projectUn1tOccurrences: a class deleted in un1t.online (UN1TBOOK.20)', () => {
+  it('stamps cancelled_at on a FUTURE un1t occurrence this pull did not return, and never deletes', async () => {
+    const { db, rows, log } = makeTableDb([occ()])
+    const r = await projectUn1tOccurrences(db, { locationId: LOC, events: [event({ un1t_id: 'e1' })], nowIso: NOW })
+    expect(r).toEqual({ upserted: 1, cancelled: 1 })
+    expect(byId(rows, 'un1t:gone').cancelled_at).toBe(NOW)
+    expect(byId(rows, 'un1t:e1').cancelled_at).toBeNull()
+    expect(log.some((e) => e.op === 'delete')).toBe(false)
+    // The cancel is bounded: this studio, un1t rows, the future, not yet cancelled.
+    const upd = log.find((e) => e.op === 'update')
+    expect(upd.payload).toEqual({ cancelled_at: NOW })
+    expect(upd.filters).toEqual(expect.arrayContaining([
+      ['eq', 'location_id', LOC], ['eq', 'source_platform', 'un1t_online'], ['gt', 'starts_at', NOW], ['is', 'cancelled_at', null], ['in', 'glofox_event_id', ['un1t:gone']],
+    ]))
+  })
+
+  it('a stamped class that reappears in a later pull is un-cancelled', async () => {
+    const { db, rows } = makeTableDb([occ({ glofox_event_id: 'un1t:back', cancelled_at: '2026-10-15T09:00:00.000Z' })])
+    const r = await projectUn1tOccurrences(db, { locationId: LOC, events: [event({ un1t_id: 'back', starts_at: FUTURE })], nowIso: NOW })
+    expect(r).toEqual({ upserted: 1, cancelled: 0 })
+    expect(byId(rows, 'un1t:back').cancelled_at).toBeNull()
+  })
+
+  it('a PAST un1t occurrence absent from the pull is untouched (the list is a window; the past rolls off it)', async () => {
+    const { db, rows, log } = makeTableDb([occ({ glofox_event_id: 'un1t:old', starts_at: PAST })])
+    const r = await projectUn1tOccurrences(db, { locationId: LOC, events: [event({ un1t_id: 'e1' })], nowIso: NOW })
+    expect(r).toEqual({ upserted: 1, cancelled: 0 })
+    expect(byId(rows, 'un1t:old').cancelled_at).toBeNull()
+    expect(log.some((e) => e.op === 'update')).toBe(false)
+  })
+
+  it('a Glofox occurrence (and another studio\'s) is never touched', async () => {
+    const { db, rows } = makeTableDb([
+      occ({ glofox_event_id: 'a'.repeat(24), source_platform: 'glofox' }),
+      occ({ glofox_event_id: 'un1t:elsewhere', location_id: 'loc-other' }),
+    ])
+    const r = await projectUn1tOccurrences(db, { locationId: LOC, events: [event({ un1t_id: 'e1' })], nowIso: NOW })
+    expect(r).toEqual({ upserted: 1, cancelled: 0 })
+    expect(byId(rows, 'a'.repeat(24)).cancelled_at).toBeNull()
+    expect(byId(rows, 'un1t:elsewhere').cancelled_at).toBeNull()
+  })
+
+  it('a pull that returned no events cancels nothing (an empty list is an upstream fault, not every class deleted)', async () => {
+    const { db, rows, log } = makeTableDb([occ()])
+    expect(await projectUn1tOccurrences(db, { locationId: LOC, events: [], nowIso: NOW })).toEqual({ upserted: 0 })
+    expect(byId(rows, 'un1t:gone').cancelled_at).toBeNull()
+    expect(log).toEqual([])
+  })
+
+  it('an event the pull returned without a start still counts as seen (never cancelled for an unmappable row)', async () => {
+    const { db, rows } = makeTableDb([occ({ glofox_event_id: 'un1t:nostart' })])
+    const r = await projectUn1tOccurrences(db, {
+      locationId: LOC, events: [event({ un1t_id: 'e1' }), event({ un1t_id: 'nostart', starts_at: null })], nowIso: NOW,
+    })
+    expect(r).toEqual({ upserted: 1, cancelled: 0 })
+    expect(byId(rows, 'un1t:nostart').cancelled_at).toBeNull()
+  })
+
+  it('a failed reconcile read cancels nothing and returns the error (the upsert stands)', async () => {
+    const { db, rows, log } = makeTableDb([occ()], { failReconcileRead: true })
+    const r = await projectUn1tOccurrences(db, { locationId: LOC, events: [event({ un1t_id: 'e1' })], nowIso: NOW })
+    expect(r).toEqual({ upserted: 1, cancelled: 0, error: { code: '57014', message: 'reconcile read boom' } })
+    expect(byId(rows, 'un1t:gone').cancelled_at).toBeNull()
+    expect(log.some((e) => e.op === 'update')).toBe(false)
+  })
+
+  it('a failed cancel write returns the error, never throws', async () => {
+    const { db } = makeTableDb([occ()], { failUpdate: true })
+    const r = await projectUn1tOccurrences(db, { locationId: LOC, events: [event({ un1t_id: 'e1' })], nowIso: NOW })
+    expect(r).toEqual({ upserted: 1, cancelled: 0, error: { code: '40001', message: 'update boom' } })
   })
 })
