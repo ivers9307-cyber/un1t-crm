@@ -69,6 +69,7 @@ export const INHERITABLE_SCALAR_KEYS = Object.freeze([
   'no_credits_handoff_text',
   'account_conflict_handoff_text',
   'chat_booking_unavailable_text',
+  'booking_flow_text',
   'approval_decline_text',
   'welcome_greeting',
   'link_button_text',

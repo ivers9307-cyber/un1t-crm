@@ -10,7 +10,7 @@
 // kind: text | textarea | number | select | checkbox | quiet_hours
 // paths: the override paths the field sets (one, or the quiet-hours pair).
 
-import { DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT } from '@/lib/agent/default-copy'
+import { DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, DEFAULT_BOOKING_FLOW_TEXT } from '@/lib/agent/default-copy'
 
 export const ORG_FIELD_GROUPS = [
   {
@@ -59,6 +59,9 @@ export const ORG_FIELD_GROUPS = [
       // MIAHATCH.2 — the studio editor gains this field with the Hatch copy group (a later task).
       { id: 'chat_booking_unavailable_text', paths: ['chat_booking_unavailable_text'], kind: 'text', maxLength: 500, label: 'Chat booking not available message (un1t.online studios)',
         placeholder: DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, help: '{studio} becomes the studio name and {link} its booking link. With no booking link, a text that needs {link} is not used: the customer is told the team will help them book.' },
+      // MIAFLOW.1 — the line on the booking Flow Mia sends where the studio's Flow is switched on.
+      { id: 'booking_flow_text', paths: ['booking_flow_text'], kind: 'text', maxLength: 500, label: 'Booking form message (studios with the WhatsApp booking Flow)',
+        placeholder: DEFAULT_BOOKING_FLOW_TEXT, help: 'Shown on the booking form Mia sends in WhatsApp, above its button.' },
       { id: 'approval_decline_text', paths: ['approval_decline_text'], kind: 'text', maxLength: 500, label: 'Request declined message',
         placeholder: "Sorry, we couldn't complete that request this time. The team will be in touch to help." },
       { id: 'welcome_greeting', paths: ['welcome_greeting'], kind: 'textarea', maxLength: 500, label: 'Welcome greeting (sent when someone opens the chat without typing)',

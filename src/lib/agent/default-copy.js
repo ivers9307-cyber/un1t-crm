@@ -47,3 +47,10 @@ export const DEFAULT_BOOKING_CTA_LABEL = 'Book a class'
  */
 export const DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT = "I can't book classes at {studio} from here just yet. You can book here: {link}"
 export const DEFAULT_CHAT_BOOKING_UNAVAILABLE_NO_LINK_TEXT = "I can't book classes at {studio} from here just yet. The team will help you book."
+
+/**
+ * MIAFLOW.1 — the line on the booking Flow message Mia sends at a studio whose
+ * Flow is switched on (settings.whatsapp_flow), right above its button. The
+ * operator's booking_flow_text overrides it (renderMiaCopy, mia-copy.js).
+ */
+export const DEFAULT_BOOKING_FLOW_TEXT = 'Tap below to pick a class and book it.'

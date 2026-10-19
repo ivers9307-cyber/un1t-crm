@@ -685,8 +685,13 @@ async function un1tChatBookingAnswer(toolName, ctx) {
   } catch { settings = null }
   if (!settings && studio.locationId === ctx.locationId) settings = ctx.settings || null
   const text = renderMiaCopy('chat_booking_unavailable_text', settings, { studio: studio.name, link: settings?.booking_url || null })
+  // MIAFLOW.1 — where this turn offers the thread studio's booking form
+  // (booking-flow.js), a booking there points to it before the link.
+  const bookingForm = toolName === 'book_class' && ctx?.bookingFlow?.offered === true && studio.locationId === ctx.locationId
+    ? { booking_form: 'Call send_booking_flow to send the booking form into the chat instead of sending this text.' }
+    : {}
   return toolName === 'book_class'
-    ? { booked: false, chat_booking_unavailable: true, text }
+    ? { booked: false, chat_booking_unavailable: true, text, ...bookingForm }
     : { cancelled: false, chat_booking_unavailable: true, text }
 }
 

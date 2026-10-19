@@ -10,13 +10,15 @@
 //
 // Pure and dependency-free apart from the default texts, so the settings
 // editor can show the defaults as placeholders.
-import { DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, DEFAULT_CHAT_BOOKING_UNAVAILABLE_NO_LINK_TEXT } from './default-copy'
+import { DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, DEFAULT_CHAT_BOOKING_UNAVAILABLE_NO_LINK_TEXT, DEFAULT_BOOKING_FLOW_TEXT } from './default-copy'
 
 export const MIA_HATCH_COPY = Object.freeze({
   chat_booking_unavailable_text: Object.freeze({
     text: DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT,
     without: Object.freeze({ var: 'link', text: DEFAULT_CHAT_BOOKING_UNAVAILABLE_NO_LINK_TEXT }),
   }),
+  // MIAFLOW.1 — the line on the booking Flow Mia sends (booking-flow.js).
+  booking_flow_text: Object.freeze({ text: DEFAULT_BOOKING_FLOW_TEXT }),
 })
 
 const isBlank = (v) => v === null || v === undefined || String(v).trim() === ''
