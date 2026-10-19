@@ -69,6 +69,19 @@ export const DEFAULTS = {
   purchase_paid_no_class_text: null,
   pay_done_page_text: null,
   pay_cancel_page_text: null,
+  // MIAFLOW.1 — the line on the booking Flow Mia sends at a studio whose Flow
+  // is switched on (settings.whatsapp_flow). Null → the code default in
+  // lib/agent/default-copy.js, rendered by renderMiaCopy (mia-copy.js).
+  booking_flow_text: null,
+  // FLOWACK.1 — the WhatsApp booking Flow's texts: the one acknowledgement a
+  // class submission gets (instead of a Mia turn), and the holding line when
+  // the booking goes to the team. Null → the code defaults in
+  // lib/agent/default-copy.js (sent by lib/whatsapp-flow/booking-notice.js).
+  // A booked Flow class is confirmed with booking_confirmation_text.
+  flow_booking_ack_text: null,
+  flow_booking_holding_text: null,
+  // FLOWACK.1 review — a re-submit of a class already asked for.
+  flow_booking_duplicate_text: null,
   // MIA-EXPIRY-QUIET.1 — booking_expired_text was RETIRED 2026-08-31. An
   // expired booking is now silent to the member (staff-push only), so there
   // is no customer copy left to edit. Stored values are ignored and dropped
@@ -171,6 +184,10 @@ export const SettingsSchema = z.object({
   purchase_paid_no_class_text: z.string().max(500).nullable().optional(),
   pay_done_page_text: z.string().max(500).nullable().optional(),
   pay_cancel_page_text: z.string().max(500).nullable().optional(),
+  booking_flow_text: z.string().max(500).nullable().optional(),
+  flow_booking_ack_text: z.string().max(500).nullable().optional(),
+  flow_booking_holding_text: z.string().max(500).nullable().optional(),
+  flow_booking_duplicate_text: z.string().max(500).nullable().optional(),
   approval_decline_text: z.string().max(500).nullable().optional(),
   welcome_greeting: z.string().max(500).nullable().optional(),
   link_button_text: z.string().max(25).nullable().optional(),
@@ -362,6 +379,10 @@ function buildFullBlob(data) {
     purchase_paid_no_class_text: data.purchase_paid_no_class_text?.trim() || null,
     pay_done_page_text: data.pay_done_page_text?.trim() || null,
     pay_cancel_page_text: data.pay_cancel_page_text?.trim() || null,
+    booking_flow_text: data.booking_flow_text?.trim() || null,
+    flow_booking_ack_text: data.flow_booking_ack_text?.trim() || null,
+    flow_booking_holding_text: data.flow_booking_holding_text?.trim() || null,
+    flow_booking_duplicate_text: data.flow_booking_duplicate_text?.trim() || null,
     approval_decline_text: data.approval_decline_text?.trim() || null,
     welcome_greeting: data.welcome_greeting?.trim() || null,
     link_button_text: data.link_button_text?.trim() || null,

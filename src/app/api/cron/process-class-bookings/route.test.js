@@ -9,10 +9,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 let updateResults = []
 let queueResult = { data: [], error: null }
 const patches = []
+const queueReads = []
 
 function builder(table) {
-  const b = { op: 'select', patch: null }
-  for (const m of ['select', 'eq', 'lt', 'gte', 'order', 'limit']) b[m] = () => b
+  const b = { op: 'select', patch: null, ops: [] }
+  for (const m of ['select', 'eq', 'lt', 'gte', 'order', 'limit']) b[m] = (...a) => { b.ops.push([m, ...a]); return b }
   b.update = (patch) => { b.op = 'update'; b.patch = patch; return b }
   b.then = (resolve, reject) => {
     let out = { data: null, error: null }
@@ -21,6 +22,7 @@ function builder(table) {
         patches.push(b.patch)
         out = updateResults.shift() || { data: [], error: null }
       } else {
+        queueReads.push(b.ops)
         out = queueResult
       }
     }
@@ -53,6 +55,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   updateResults = []
   patches.length = 0
+  queueReads.length = 0
   queueResult = { data: [], error: null }
   claimAndProcessBookingJob.mockResolvedValue({ status: 'processed', outcome: 'booked' })
 })
@@ -161,5 +164,22 @@ describe('GET /api/cron/process-class-bookings — stuck rows past the cap get a
     updateResults = [{ data: [], error: null }, { data: null, error: ERR }]
     await GET(req())
     expect(routeToReview).not.toHaveBeenCalled()
+  })
+})
+
+// FLOWACK.1 review — the sweeper never claims a row in its first moments: the
+// WhatsApp Flow webhook acknowledges the customer and only THEN wakes the
+// processor (QStash), so a sweep that claimed a just-queued row could deliver
+// a fast outcome ("the team is confirming") ahead of "we're booking your spot".
+describe('GET /api/cron/process-class-bookings — a just-queued row is left to its push', () => {
+  it('reads only queued rows older than the grace', async () => {
+    const before = Date.now()
+    await GET(req())
+    const read = queueReads.find((ops) => ops.some(([m, c, v]) => m === 'eq' && c === 'status' && v === 'queued'))
+    const lt = read.find(([m, c]) => m === 'lt' && c === 'created_at')
+    expect(lt).toBeTruthy()
+    const cutoff = Date.parse(lt[2])
+    expect(before - cutoff).toBeGreaterThanOrEqual(29_000)
+    expect(before - cutoff).toBeLessThanOrEqual(31_000)
   })
 })

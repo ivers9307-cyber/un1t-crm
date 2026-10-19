@@ -224,6 +224,11 @@ const CALLERS = {
     decision: 'refuse-quiet',
     why: 'Mia confirmations into an EXISTING thread at its location; caught → { sent:false, reason }. Unreachable at a location that never had a number (no threads there).',
   },
+  'src/lib/agent/booking-flow.js': {
+    calls: { sendFlowMessage: 1 },
+    decision: 'refuse-quiet',
+    why: 'MIAFLOW.1 — Mia’s send_booking_flow tool, in-session into the thread she is answering (replyInConversation). A refusal (or any send failure) is caught → { sent:false, reason: send_failed } with the booking link, logged structurally, no thread row; the model is told it was NOT sent and sends the link instead. booking-flow.test.js, auto-reply-booking-flow.test.js.',
+  },
   'src/lib/agent/followups.js': {
     calls: { sendTextMessage: 2, sendTemplateMessage: 2 },
     decision: 'refuse-skip',

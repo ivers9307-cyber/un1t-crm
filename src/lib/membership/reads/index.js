@@ -24,6 +24,8 @@ export const READ_KEYS = Object.freeze([
   'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility',
   // UN1TRADAR.1 — the radar row fetches (churn, win-back, lead, arrears fold)
   'radarMembers', 'winbackContacts', 'leadContacts', 'radarPastDue',
+  // PIPEEXCL.1 — the studio's active members, for other studios' acquisition boards
+  'activeMemberContactIds',
 ])
 
 export { READS_BY_SOURCE }

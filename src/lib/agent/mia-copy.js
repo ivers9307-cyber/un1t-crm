@@ -15,8 +15,8 @@ import {
   DEFAULT_PURCHASE_OFFER_INTRO_TEXT, DEFAULT_PURCHASE_LINK_TEXT, DEFAULT_PURCHASE_LINK_NO_CLASS_TEXT,
   DEFAULT_TRIAL_USED_TEXT, DEFAULT_REFUND_REQUEST_TEXT, DEFAULT_PURCHASE_LINK_OPEN_TEXT,
   DEFAULT_PURCHASE_PAID_BOOKED_TEXT, DEFAULT_PURCHASE_PAID_CLASS_GONE_TEXT,
-  DEFAULT_PURCHASE_PAID_BOOKING_FAILED_TEXT, DEFAULT_PURCHASE_PAID_NO_CLASS_TEXT,
-  DEFAULT_PAY_DONE_PAGE_TEXT, DEFAULT_PAY_CANCEL_PAGE_TEXT,
+  DEFAULT_PURCHASE_PAID_BOOKING_FAILED_TEXT, DEFAULT_PURCHASE_PAID_NO_CLASS_TEXT, DEFAULT_PAY_DONE_PAGE_TEXT,
+  DEFAULT_PAY_CANCEL_PAGE_TEXT, DEFAULT_BOOKING_FLOW_TEXT,
 } from './default-copy'
 
 export const MIA_HATCH_COPY = Object.freeze({
@@ -39,6 +39,8 @@ export const MIA_HATCH_COPY = Object.freeze({
   purchase_paid_no_class_text: Object.freeze({ text: DEFAULT_PURCHASE_PAID_NO_CLASS_TEXT }),
   pay_done_page_text: Object.freeze({ text: DEFAULT_PAY_DONE_PAGE_TEXT }),
   pay_cancel_page_text: Object.freeze({ text: DEFAULT_PAY_CANCEL_PAGE_TEXT }),
+  // MIAFLOW.1 — the line on the booking Flow Mia sends (booking-flow.js).
+  booking_flow_text: Object.freeze({ text: DEFAULT_BOOKING_FLOW_TEXT }),
 })
 
 const isBlank = (v) => v === null || v === undefined || String(v).trim() === ''

@@ -40,6 +40,7 @@ const MANIFEST = Object.freeze({
   'src/app/dashboard/engagement/page.js': 'loadEngagementChurn cross-tab at Hatch (rows through the seam)',
   'src/app/dashboard/studio/page.js': 'radar-derived scorecard cells (radarOk) at Hatch',
   'src/app/dashboard/business/page.js': 'business page gate: the churn KPI and membership block read the seam',
+  'src/lib/pipeline-other-studio-members.js': "PIPEEXCL.1: another studio's active members leave a un1t.online studio's acquisition board; at a studio with memberships true its activeMemberContactIds read counts them (Hatch members leave Stillorgan's board only if that board were acquisition_un1t, which it is not)",
   'src/app/(marketing)/automations/page.js': NOT_CAP + 'its MembershipSourceGate passes capability="schedule"',
   // radar read APIs (radarAvailability)
   'src/app/api/churn-radar/route.js': RA,

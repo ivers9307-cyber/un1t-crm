@@ -163,6 +163,22 @@ describe('multi-person bookings hand off instead of partial-booking', () => {
   })
 })
 
+// FLOWACK.1 — Mia told a customer "you're all set for your first visit" 4s
+// after the Flow booking had FAILED, prompted by "(including via the 'Book your
+// first visit' flow)". A class is booked only when a tool or a confirmation in
+// the thread says so; a Flow submission is a request, not a booking.
+describe('a Flow submission is never treated as a booking', () => {
+  it('drops the flow clause and requires a tool or an in-thread confirmation', () => {
+    for (const out of [buildCustomerSystemPrompt({}), renderCustomerAgentBasePrompt(undefined, { bookings: false })]) {
+      expect(out).not.toMatch(/including via the "Book your first visit" flow/)
+      expect(out).toContain('Only treat a class as booked when a booking tool or a booking confirmation already in the thread confirms it.')
+      expect(out).toContain('"[Booking submitted via WhatsApp Flow]" message is a request the system is still processing, never a booking')
+      // FLOWACK.1 review — a submission that was NOT queued is stored differently, and Mia hands it to the team.
+      expect(out).toContain('A "[Booking form submitted but could not be processed]" message means their booking form did not go through: nothing is booked or queued.')
+    }
+  })
+})
+
 describe('known-contact awareness (no re-asking for on-file details)', () => {
   it('tells Mia not to re-ask when the contact has a name/email on file', () => {
     const out = buildCustomerSystemPrompt({ knownContact: { firstName: 'Edel', hasEmail: true } })
