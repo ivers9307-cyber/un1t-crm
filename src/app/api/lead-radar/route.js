@@ -33,10 +33,10 @@ export async function GET() {
   const db = createServerClient()
   try {
     // UN1TRADAR.1 — before the cache: a source without membership data answers data:null
-    const avail = await radarAvailability(db, locationId, { module: 'lead-radar' })
+    const avail = await radarAvailability(db, locationId, { module: 'lead-radar', withOutreach: true })
     if (!avail.available) return NextResponse.json(RADAR_UNAVAILABLE)
     const data = await radarCache('lead', locationId, 'funnel', () => loadFunnel(db, locationId))
-    return NextResponse.json({ success: true, data, source: avail.source, dataAsOf: avail.dataAsOf })
+    return NextResponse.json({ success: true, data, source: avail.source, dataAsOf: avail.dataAsOf, outreachAvailable: avail.outreachAvailable ?? null })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message || 'fetch_failed' }, { status: 500 })
   }

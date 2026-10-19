@@ -57,6 +57,9 @@ import { logWarn, logInfo } from '@/lib/log'
 import { getLocationBranding } from '@/lib/location-branding'
 import { defaultWinbackMessage } from '@/lib/churn-winback'
 import { validateBody } from '@/lib/validate'
+import { isCrossoverAt } from '@/lib/contact-crossovers'
+import { radarReadsFor } from '@/lib/membership/reads/index'
+import { SOURCE_UNREADABLE } from '@/lib/radar-copy'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -87,10 +90,17 @@ function isoDatePlus(days) {
   return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
 }
 
+// UN1TRADAR.3 — the payment_reminder refusals (a un1t.online studio; a crossover).
+const PAYMENT_REMINDER_UN1T = 'Payment reminders are not available for un1t.online studios yet.'
+const PAYMENT_REMINDER_NOT_HOME = "Payment reminders go from the member's home studio."
+
 // WAORGNUMBER.4 (R8) — the 409 for a radar studio with no WhatsApp number
 // switched on, naming it: "No WhatsApp number is switched on at {studio}." A
 // failed name read still refuses, without the name.
+
 async function noNumberRefusal(db, locationId) {
+  // UN1TRADAR.3 — one structured line per refusal (no Meta call was made, no row written)
+  logInfo('churn-radar', 'outreach refused: studio has no WhatsApp number', { locationId })
   const { data: loc, error } = await db.from('locations').select('name').eq('id', locationId).maybeSingle()
   if (error) logWarn('churn-radar', 'studio name read failed for the no-number refusal', { locationId, code: error.code || null })
   return NextResponse.json({ success: false, error: noNumberSwitchedOnMessage(error ? null : loc?.name) }, { status: 409 })
@@ -130,7 +140,9 @@ export async function POST(request) {
     .select('id, name, first_name, location_id, wa_phone, phone')
     .eq('id', contactId)
     .maybeSingle()
-  if (!contact || contact.location_id !== locationId) {
+  // UN1TRADAR.3 — or a crossover AT the active studio (an active membership
+  // or a un1t client there); never the caller's other studios. Fails closed.
+  if (!contact || (contact.location_id !== locationId && !(await isCrossoverAt(db, contact.id, locationId)))) {
     return NextResponse.json({ success: false, error: 'Contact not in your active location' }, { status: 404 })
   }
 
@@ -208,6 +220,23 @@ export async function POST(request) {
   // them. enrolContacts is idempotent — a re-click on a member already
   // mid-sequence is a no-op, not a double-send.
   if (action === 'payment_reminder') {
+    // UN1TRADAR.3 — the reminder reads glofox_invoices and mints a Glofox pay
+    // link: refused at a un1t.online studio (the button is hidden there too).
+    let source
+    try {
+      ({ source } = await radarReadsFor(db, locationId))
+    } catch (err) {
+      logWarn('churn-radar', 'membership source unreadable', { locationId, code: err?.code ?? null })
+      return NextResponse.json({ success: false, error: SOURCE_UNREADABLE }, { status: 503 })
+    }
+    if (source === 'un1t_online') {
+      return NextResponse.json({ success: false, error: PAYMENT_REMINDER_UN1T }, { status: 409 })
+    }
+    // A crossover's billing columns and invoices are its home studio's: never
+    // drive this studio's dunning from them.
+    if (contact.location_id !== locationId) {
+      return NextResponse.json({ success: false, error: PAYMENT_REMINDER_NOT_HOME }, { status: 409 })
+    }
     const { data: loc } = await db
       .from('locations')
       .select('dunning_sequence_id')

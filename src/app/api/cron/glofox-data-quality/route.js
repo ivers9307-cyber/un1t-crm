@@ -18,7 +18,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
-import { locationIdsWithoutCapability } from '@/lib/membership/locations-for-source'
+import { listLocationsByMembershipSource } from '@/lib/membership/source'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { logWarn } from '@/lib/log'
 import { isPackCreditDataStale, PACK_CREDIT_MAX_AGE_DAYS } from '@/lib/glofox-data-quality'
@@ -50,11 +50,16 @@ export async function GET(request) {
   // W1.M3b — a location with NO membership source has no Glofox-shaped data
   // to read: skipped with a counted skipped_no_source. A failed seam read is a
   // 500 with no heartbeat, never "nobody to skip".
-  const { ids: noSource, error: srcErr } = await locationIdsWithoutCapability(db, 'memberships') // UN1TCAP.1: a configured source can lack memberships (un1t.online)
+  // UN1TRADAR.3 — Glofox-source locations only: this checks GLOFOX pack-sync
+  // freshness, which means nothing at a source that gains the memberships
+  // capability (un1t.online). Every other active location is a counted skip.
+  const { ids: glofoxIds, error: srcErr } = await listLocationsByMembershipSource(db, 'glofox')
   if (srcErr) {
     console.warn(`[cron][glofox-data-quality] failed to read membership sources: ${srcErr.message}`)
     return NextResponse.json({ success: false, error: srcErr.message }, { status: 500 })
   }
+  const glofoxSet = new Set(glofoxIds || [])
+  const noSource = { has: (id) => !glofoxSet.has(id) }
   let skippedNoSource = 0
 
   const perLocation = []

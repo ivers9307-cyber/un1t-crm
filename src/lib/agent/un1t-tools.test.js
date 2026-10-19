@@ -334,16 +334,27 @@ describe('executeUn1tRead: get_my_membership', () => {
     }
   })
   it('with memberships and bookings capabilities false the four reads still answer (E-1)', async () => {
-    const caps = providerFor('un1t_online').capabilities
-    expect(caps.memberships).toBe(false)
-    expect(caps.bookings).toBe(false)
-    const db = fakeDb(tables())
-    fetchLiveUn1tBookings.mockResolvedValue({ ok: true, rows: [{ id: 'b1', event_id: 'e1', status: 'booked' }] })
-    const ctx = ctxFor(db)
-    expect((await executeUn1tRead('get_my_membership', {}, ctx, [hatchStudio])).status).toBe('active')
-    expect((await executeUn1tRead('get_my_next_class', {}, ctx, [hatchStudio])).found).toBe(true)
-    expect((await executeUn1tRead('list_my_upcoming_bookings', {}, ctx, [hatchStudio])).bookings).toHaveLength(1)
-    expect((await executeUn1tRead('get_my_recent_attendance', {}, ctx, [hatchStudio])).found).toBe(true)
+    // UN1TRADAR.4 turned un1t.online's memberships on; the reads must not
+    // depend on it, so pin a provider with both capabilities off.
+    const real = providerFor.getMockImplementation()
+    providerFor.mockImplementation((key) => {
+      const p = real(key)
+      return key === 'un1t_online' ? { ...p, capabilities: { ...p.capabilities, memberships: false, bookings: false } } : p
+    })
+    try {
+      const caps = providerFor('un1t_online').capabilities
+      expect(caps.memberships).toBe(false)
+      expect(caps.bookings).toBe(false)
+      const db = fakeDb(tables())
+      fetchLiveUn1tBookings.mockResolvedValue({ ok: true, rows: [{ id: 'b1', event_id: 'e1', status: 'booked' }] })
+      const ctx = ctxFor(db)
+      expect((await executeUn1tRead('get_my_membership', {}, ctx, [hatchStudio])).status).toBe('active')
+      expect((await executeUn1tRead('get_my_next_class', {}, ctx, [hatchStudio])).found).toBe(true)
+      expect((await executeUn1tRead('list_my_upcoming_bookings', {}, ctx, [hatchStudio])).bookings).toHaveLength(1)
+      expect((await executeUn1tRead('get_my_recent_attendance', {}, ctx, [hatchStudio])).found).toBe(true)
+    } finally {
+      providerFor.mockImplementation(real)
+    }
   })
   it('a un1t studio with no un1tUserId is "no account found", read from nowhere', async () => {
     const db = fakeDb(tables())

@@ -1,0 +1,152 @@
+{
+  "radar": [
+    {
+      "contactId": "c02",
+      "name": "Regular",
+      "score": 3,
+      "tier": "medium",
+      "signals": [
+        {
+          "key": "disengaging",
+          "label": "Disengaging",
+          "detail": "Regular (6/30d) — nothing for 8 days",
+          "weight": 3,
+          "severity": "warning"
+        }
+      ],
+      "daysSinceAttended": 8,
+      "membershipStatus": "member",
+      "membershipPlan": "Monthly Membership",
+      "segment": "member",
+      "monthlyValueCents": 12000,
+      "daysToRenewal": null
+    },
+    {
+      "contactId": "c04",
+      "name": "Pack",
+      "score": 3,
+      "tier": "medium",
+      "signals": [
+        {
+          "key": "pack_low",
+          "label": "Pack running low",
+          "detail": "1 class left — nudge a rebuy",
+          "weight": 3,
+          "severity": "critical"
+        }
+      ],
+      "daysSinceAttended": 3,
+      "membershipStatus": "credit_member",
+      "membershipPlan": "10 Class Pack",
+      "segment": "credit",
+      "monthlyValueCents": 12000,
+      "daysToRenewal": null
+    },
+    {
+      "contactId": "c03",
+      "name": "Renewing",
+      "score": 3,
+      "tier": "medium",
+      "signals": [
+        {
+          "key": "renewal_cliff",
+          "label": "Renewal cliff",
+          "detail": "Renews in 10 days — low recent attendance",
+          "weight": 3,
+          "severity": "critical"
+        }
+      ],
+      "daysSinceAttended": 2,
+      "membershipStatus": "member",
+      "membershipPlan": "Monthly Membership",
+      "segment": "member",
+      "monthlyValueCents": 12000,
+      "daysToRenewal": 10
+    },
+    {
+      "contactId": "c01",
+      "name": "Quiet",
+      "score": 2,
+      "tier": "low",
+      "signals": [
+        {
+          "key": "gone_quiet",
+          "label": "Gone quiet",
+          "detail": "No class in 20 days",
+          "weight": 2,
+          "severity": "warning"
+        }
+      ],
+      "daysSinceAttended": 20,
+      "membershipStatus": "member",
+      "membershipPlan": "Monthly Membership",
+      "segment": "member",
+      "monthlyValueCents": 12000,
+      "daysToRenewal": null
+    },
+    {
+      "contactId": "c10",
+      "name": "Snoozed",
+      "score": 2,
+      "tier": "low",
+      "signals": [
+        {
+          "key": "gone_quiet",
+          "label": "Gone quiet",
+          "detail": "No class in 20 days",
+          "weight": 2,
+          "severity": "warning"
+        }
+      ],
+      "daysSinceAttended": 20,
+      "membershipStatus": "member",
+      "membershipPlan": "Monthly Membership",
+      "segment": "member",
+      "monthlyValueCents": 12000,
+      "daysToRenewal": null
+    },
+    {
+      "contactId": "c11",
+      "name": "Dismissed",
+      "score": 2,
+      "tier": "low",
+      "signals": [
+        {
+          "key": "gone_quiet",
+          "label": "Gone quiet",
+          "detail": "No class in 20 days",
+          "weight": 2,
+          "severity": "warning"
+        }
+      ],
+      "daysSinceAttended": 20,
+      "membershipStatus": "member",
+      "membershipPlan": "Monthly Membership",
+      "segment": "member",
+      "monthlyValueCents": 12000,
+      "daysToRenewal": null
+    }
+  ],
+  "summary": {
+    "activeBase": 10,
+    "atRisk": 6,
+    "highRisk": 0,
+    "quarantine": 1,
+    "paused": 1,
+    "overdue": 2,
+    "revenueAtRiskCents": 72000,
+    "overdueValueCents": 13500,
+    "bySegment": {
+      "member": {
+        "activeBase": 9,
+        "atRisk": 5,
+        "highRisk": 0
+      },
+      "credit": {
+        "activeBase": 1,
+        "atRisk": 1,
+        "highRisk": 0
+      }
+    }
+  }
+}

@@ -119,10 +119,12 @@ describe('locationIdsWithoutCapability (UN1TCAP.1)', () => {
     locationRow({ id: 'loc-reserved', name: 'Reserved key', source: 'un1t' }),
   ]
 
-  it('is every location whose source does not provide the capability: none, un1t_online (all false) and an unregistered key', async () => {
+  it('is every location whose source does not provide the capability: none and an unregistered key (un1t_online provides memberships since UN1TRADAR.4, not bookings)', async () => {
     const out = await locationIdsWithoutCapability(dbOf(MIXED), 'memberships')
     expect(out.error).toBeNull()
-    expect([...out.ids].sort()).toEqual(['loc-b', 'loc-reserved', 'loc-u1'])
+    expect([...out.ids].sort()).toEqual(['loc-b', 'loc-reserved'])
+    const bookings = await locationIdsWithoutCapability(dbOf(MIXED), 'bookings')
+    expect([...bookings.ids].sort()).toEqual(['loc-b', 'loc-reserved', 'loc-u1'])
   })
 
   it('never includes a Glofox location (Glofox provides every capability)', async () => {

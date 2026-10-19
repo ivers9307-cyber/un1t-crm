@@ -13,7 +13,7 @@ import { GET } from './route.js'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { loadRadar } from '@/lib/churn-radar-data'
 import { fakeDb, queriesOf } from '@/lib/time-off.test-helpers'
-import { ESTATE_2026_10, ESTATE_2026_10_17, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
+import { ESTATE_2026_10, ESTATE_2026_10_17, HATCH_ID, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
 
 const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } })
 const dbFor = (rows, opts) => { const loc = locationsResolver(rows, opts); return fakeDb((q) => (q.table === 'locations' ? loc(q) : { data: null, error: null })) }
@@ -30,12 +30,12 @@ describe('GET /api/cron/churn-radar-snapshot — skips locations with no members
     expect(stampHeartbeat).toHaveBeenCalledWith('churn-radar-snapshot')
   })
 
-  it('UN1TCAP.1 — Hatch on un1t.online (configured, no data) is still skipped: snapshots Stillorgan only, counts the five skips, writes one row, stamps', async () => {
+  it('UN1TRADAR.4 — snapshot crons include a un1t location once its provider has the capability', async () => {
     h.db = dbFor(ESTATE_2026_10_17)
     const out = await (await GET(req())).json()
-    expect(visited()).toEqual([STILLORGAN_ID])
-    expect(out).toMatchObject({ success: true, locations: 1, skipped_no_source: 5, snapshots_written: 1 })
-    expect(queriesOf(h.db, 'churn_radar_snapshots', 'insert')[0].payload.map((r) => r.location_id)).toEqual([STILLORGAN_ID])
+    expect(visited()).toEqual([STILLORGAN_ID, HATCH_ID])
+    expect(out).toMatchObject({ success: true, locations: 2, skipped_no_source: 4, snapshots_written: 2 })
+    expect(queriesOf(h.db, 'churn_radar_snapshots', 'insert')[0].payload.map((r) => r.location_id)).toEqual([STILLORGAN_ID, HATCH_ID])
     expect(stampHeartbeat).toHaveBeenCalledWith('churn-radar-snapshot')
   })
   it('a failed seam read answers 500 and does NOT stamp', async () => {

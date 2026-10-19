@@ -130,13 +130,13 @@ describe('radarReadsFor', () => {
     })
   }
 
-  it('resolves un1t_online with providesMemberships false today (the static table, not the state)', async () => {
-    // even a state claiming memberships cannot widen what the provider declares
-    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: true } })
+  it('resolves un1t_online with providesMemberships true since UN1TRADAR.4 (the static table, not the state)', async () => {
+    // even a state claiming no memberships cannot narrow what the provider declares
+    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: false } })
     const r = await radarReadsFor(db, LOC)
     expect(r.source).toBe('un1t_online')
     expect(r.reads).toBe(un1tOnlineReads)
-    expect(r.providesMemberships).toBe(false)
+    expect(r.providesMemberships).toBe(true)
   })
 
   it('none and an unregistered source resolve to noneReads, providing nothing', async () => {
