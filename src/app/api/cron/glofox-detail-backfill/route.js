@@ -47,6 +47,7 @@ import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { applyMemberSync } from '@/lib/glofox-sync'
 import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
 import { logWarn, logError } from '@/lib/log'
+import { glofoxCrossoverContactIds, scopeToGlofoxStudio } from '@/lib/glofox-crossover'
 import {
   DETAIL_PER_TICK, DETAIL_SWEEP_DAYS, DETAIL_RETRY_HOURS,
   detailDueFilter, nextDetailDueAt,
@@ -197,10 +198,21 @@ async function backfillLocation(db, location, startedAt) {
     // DETAIL_PER_TICK < 1,000, so this one explicitly ordered page is the
     // whole tick; the next tick's page is the next slice because every
     // attempt below moves its contact's due date.
-    const { data: candidates, error: candErr } = await db
+    // GLOFOXREADERS.1 — the studio's Glofox members whose contact lives at a
+    // sibling studio (glofox_crossover_members) are due here too; readOne's
+    // applyMemberSync already resolves them. A failed read is logged and the
+    // tick runs on the studio's own contacts.
+    const crossover = await glofoxCrossoverContactIds(db, location.id)
+    if (crossover.error) {
+      logWarn('glofox-detail-backfill', 'crossover contacts unreadable; backfilling studio contacts only', {
+        locationId: location.id, err: crossover.error,
+      })
+    }
+    const crossoverIds = crossover.ids
+
+    const { data: candidates, error: candErr } = await scopeToGlofoxStudio(db
       .from('contacts')
-      .select('id, glofox_member_id, glofox_detail_due_at, glofox_synced_at')
-      .eq('location_id', location.id)
+      .select('id, glofox_member_id, glofox_detail_due_at, glofox_synced_at'), location.id, crossoverIds)
       .in('glofox_membership_status', RELATIONSHIP_STATUSES)
       .not('glofox_member_id', 'is', null)
       .or(detailDueFilter(new Date().toISOString()))
@@ -247,10 +259,9 @@ async function backfillLocation(db, location, startedAt) {
 
     // Progress signal: how many in the cohort are still due. A failed count
     // is null (unknown), never 0.
-    const { count, error: countErr } = await db
+    const { count, error: countErr } = await scopeToGlofoxStudio(db
       .from('contacts')
-      .select('id', { count: 'exact', head: true })
-      .eq('location_id', location.id)
+      .select('id', { count: 'exact', head: true }), location.id, crossoverIds)
       .in('glofox_membership_status', RELATIONSHIP_STATUSES)
       .not('glofox_member_id', 'is', null)
       .or(detailDueFilter(new Date().toISOString()))

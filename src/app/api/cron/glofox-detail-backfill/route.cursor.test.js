@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const h = vi.hoisted(() => ({
   candidates: [], candErr: null, stampErr: null, countResult: { count: 0, error: null },
   candidateChains: [], countChains: [], contactUpdates: [], runInserts: [], runUpdates: [],
+  crossover: [], crossoverErr: null,
 }))
 
 const LOC = { id: 'loc-1', name: 'Studio', active: true, membership_source: 'glofox', settings: { glofox: { branch_id: 'b', api_key: 'k', api_token: 't' } } }
@@ -22,6 +23,8 @@ const STATUSES = ['member', 'credit_member', 'trial', 'classpass_payg', 'no_sale
 
 function result(st) {
   if (st.table === 'locations') return { data: st.single ? LOC : [LOC], error: null }
+  // GLOFOXREADERS.1 — the studio's crossover contacts.
+  if (st.table === 'glofox_crossover_members') return h.crossoverErr ? { data: null, error: h.crossoverErr } : { data: h.crossover, error: null }
   if (st.table === 'glofox_sync_runs' && st.op === 'insert') { h.runInserts.push(st.payload); return { data: { id: 'run-1' }, error: null } }
   if (st.table === 'glofox_sync_runs' && st.op === 'update') { h.runUpdates.push(st.payload); return { data: null, error: null } }
   if (st.table === 'contacts' && st.op === 'update') {
@@ -88,6 +91,7 @@ beforeEach(() => {
     candidates: [cand('good1'), cand('refused1'), cand('gone1')],
     candErr: null, stampErr: null, countResult: { count: 0, error: null },
     candidateChains: [], countChains: [], contactUpdates: [], runInserts: [], runUpdates: [],
+    crossover: [], crossoverErr: null,
   })
   vi.stubGlobal('fetch', vi.fn(async (url) => glofoxAnswer(url)))
 })
@@ -221,5 +225,35 @@ describe('GET /api/cron/glofox-detail-backfill — DETAILBACKFILL.1 cursor', () 
       failed: [{ locationId: 'loc-1', error: 'column contacts.glofox_detail_due_at does not exist' }],
     })
     expect(h.runUpdates.at(-1)).toMatchObject({ status: 'failed', first_error: 'column contacts.glofox_detail_due_at does not exist' })
+  })
+})
+
+// GLOFOXREADERS.1 — Glofox members whose contact lives at a sibling studio are
+// due here too: both the candidate page and the remaining count widen.
+describe('GET /api/cron/glofox-detail-backfill — crossover contacts (GLOFOXREADERS.1)', () => {
+  const scopeOf = (chain) => chain.filter(([m, v]) => m === 'or' && String(v).startsWith('location_id.eq.')).map(([, v]) => v)
+  const eqLocationOf = (chain) => chain.some(([m, c, v]) => m === 'eq' && c === 'location_id' && v === 'loc-1')
+
+  it('no crossover contacts: the plain studio filter, unchanged', async () => {
+    await GET(req())
+    expect(eqLocationOf(h.candidateChains[0])).toBe(true)
+    expect(scopeOf(h.candidateChains[0])).toEqual([])
+  })
+
+  it('crossover contacts widen the candidate page AND the remaining count', async () => {
+    h.crossover = [{ contact_id: 'c-hatch-1' }]
+    await GET(req())
+    const want = ['location_id.eq.loc-1,id.in.(c-hatch-1)']
+    expect(scopeOf(h.candidateChains[0])).toEqual(want)
+    expect(eqLocationOf(h.candidateChains[0])).toBe(false)
+    expect(scopeOf(h.countChains[0])).toEqual(want)
+  })
+
+  it('an unreadable crossover table is logged and the tick runs on the studio alone', async () => {
+    h.crossoverErr = { message: 'down' }
+    await GET(req())
+    expect(logWarn).toHaveBeenCalledWith('glofox-detail-backfill', expect.stringContaining('crossover'), expect.objectContaining({ locationId: 'loc-1' }))
+    expect(eqLocationOf(h.candidateChains[0])).toBe(true)
+    expect(applyMemberSync).toHaveBeenCalled()
   })
 })

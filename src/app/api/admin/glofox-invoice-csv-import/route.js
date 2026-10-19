@@ -25,6 +25,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { parseCsv } from '@/lib/csv-parse'
+import { glofoxCrossoverContactIds, scopeToGlofoxStudio } from '@/lib/glofox-crossover'
 import {
   parseInvoicePayload,
   upsertGlofoxInvoice,
@@ -137,10 +138,27 @@ export async function POST(request) {
   const db = createServerClient()
 
   // Build email + glofox_member_id lookups for the location once.
-  const { data: contactRows } = await db
-    .from('contacts')
-    .select('id, email, glofox_member_id')
-    .eq('location_id', locationId)
+  // GLOFOXREADERS.1 — the studio's own contacts plus its Glofox members whose
+  // contact lives at a sibling studio (glofox_crossover_members), paged past
+  // the 1,000-row cap (a studio holds thousands; the single read used to see
+  // the first 1,000 only), and a failed read is a 500, never "no matches".
+  const crossover = await glofoxCrossoverContactIds(db, locationId)
+  if (crossover.error) {
+    return NextResponse.json({ ok: false, error: `Could not read the studio's linked contacts: ${crossover.error}` }, { status: 500 })
+  }
+  const contactRows = []
+  for (let from = 0; ; from += 1000) {
+    const { data: page, error: pageErr } = await scopeToGlofoxStudio(db
+      .from('contacts')
+      .select('id, email, glofox_member_id'), locationId, crossover.ids)
+      .order('id', { ascending: true })
+      .range(from, from + 999)
+    if (pageErr) {
+      return NextResponse.json({ ok: false, error: `Could not read the studio's contacts: ${pageErr.message}` }, { status: 500 })
+    }
+    contactRows.push(...(page || []))
+    if (!page || page.length < 1000) break
+  }
   const contactByEmail = new Map(
     (contactRows || []).filter((r) => r.email).map((r) => [r.email.toLowerCase(), r.id]),
   )

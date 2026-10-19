@@ -463,3 +463,32 @@ describe('resolveMemberStudios', () => {
     })
   })
 })
+
+// GLOFOXREADERS.1 — ONE contact living at Hatch holds both the un1t.online
+// client and a Stillorgan Glofox account linked by glofox_crossover_members
+// (linkedAccountsForContact sets glofox_link_location_ids).
+describe('classifyMemberStudios — a Hatch contact with a linked Stillorgan Glofox account', () => {
+  const dual = (over = {}) => ({
+    id: 'c-dual', location_id: HATCH, un1t_user_id: 'u-1', glofox_member_id: 'gx-9',
+    glofox_membership_status: 'member', glofox_membership_state: 'active', trial_credits_remaining: 0,
+    glofox_link_location_ids: [STILL], ...over,
+  })
+
+  it('counts at Stillorgan through the link, and at Hatch through un1t.online', () => {
+    const studios = classify({
+      contacts: [dual()],
+      un1tClients: [hatchClient({ contact_id: 'c-dual' })],
+      un1tSubscriptions: [hatchSub()],
+      agentOn: { [STILL]: true, [HATCH]: true },
+    })
+    expect(byLoc(studios, STILL)).toMatchObject({ active: true, contactIds: ['c-dual'], glofoxMemberId: 'gx-9', liveRelationship: true })
+    expect(byLoc(studios, HATCH)).toMatchObject({ active: true, contactIds: ['c-dual'], un1tUserId: 'u-1' })
+  })
+
+  it('without the link the Stillorgan account is invisible there, as before', () => {
+    const { glofox_link_location_ids: _drop, ...unlinked } = dual()
+    const studios = classify({ contacts: [unlinked], agentOn: { [STILL]: true } })
+    expect(byLoc(studios, STILL)).toMatchObject({ active: false, contactIds: [] })
+    expect(byLoc(studios, STILL).glofoxMemberId).toBeUndefined()
+  })
+})

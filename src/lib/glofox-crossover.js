@@ -160,3 +160,98 @@ export async function recordGlofoxCrossover(db, { locationId, glofoxMemberId, co
     return { ...out, error: message(err) }
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Readers (GLOFOXREADERS.1)
+// ─────────────────────────────────────────────────────────────
+//
+// A crossover contact keeps its home location_id (Hatch), so every reader that
+// selects `contacts WHERE location_id = <Glofox studio> AND glofox_member_id`
+// skipped it: no attendance refresh, no detail backfill, and Mia not counting
+// it as a member of the Glofox studio. These helpers let a reader widen
+// "lives at the studio" to "lives at the studio, or is linked there".
+
+const READ_PAGE = 1000
+const IN_CHUNK = 150
+
+/**
+ * The contact ids linked at `locationId` by glofox_crossover_members, paged
+ * past the 1,000-row cap. The table not existing yet is an empty list; any
+ * other failure is `error` (the caller decides; never read it as "none").
+ *
+ * @returns {Promise<{ ids: string[], error?: string }>}
+ */
+export async function glofoxCrossoverContactIds(db, locationId) {
+  const ids = []
+  try {
+    for (let from = 0; ; from += READ_PAGE) {
+      const { data, error } = await db.from(GLOFOX_CROSSOVER_TABLE).select('contact_id')
+        .eq('location_id', locationId)
+        .order('contact_id', { ascending: true })
+        .range(from, from + READ_PAGE - 1)
+      if (error) {
+        if (TABLE_MISSING.has(error.code)) return { ids: [] }
+        return { ids: [], error: `${GLOFOX_CROSSOVER_TABLE} read: ${message(error)}` }
+      }
+      ids.push(...(data || []).map((r) => r.contact_id).filter(Boolean))
+      if (!data || data.length < READ_PAGE) break
+    }
+    return { ids: [...new Set(ids)] }
+  } catch (err) {
+    return { ids: [], error: message(err) }
+  }
+}
+
+/**
+ * The PostgREST or() filter for "the studio's own contacts, or its crossover
+ * contacts", or null when there are no crossover contacts (the caller then
+ * keeps its plain `.eq('location_id', …)`). Ids are uuids from our own table.
+ */
+export function glofoxStudioOrCrossoverFilter(locationId, crossoverIds) {
+  const ids = (crossoverIds || []).filter(Boolean)
+  if (!ids.length) return null
+  return `location_id.eq.${locationId},id.in.(${ids.join(',')})`
+}
+
+/** Apply the studio scope to a contacts query builder (see the filter above). */
+export function scopeToGlofoxStudio(query, locationId, crossoverIds) {
+  const f = glofoxStudioOrCrossoverFilter(locationId, crossoverIds)
+  return f ? query.or(f) : query.eq('location_id', locationId)
+}
+
+/**
+ * For each contact id, the Glofox studios it is linked at by a crossover row
+ * (not its home studio). The table not existing yet is an empty map; any other
+ * failure is `error`.
+ *
+ * @returns {Promise<{ byContact: Map<string, string[]>, error?: string }>}
+ */
+export async function glofoxLinkLocationsByContact(db, contactIds) {
+  const byContact = new Map()
+  const ids = [...new Set((contactIds || []).filter(Boolean))]
+  try {
+    for (let i = 0; i < ids.length; i += IN_CHUNK) {
+      const { data, error } = await db.from(GLOFOX_CROSSOVER_TABLE).select('contact_id, location_id')
+        .in('contact_id', ids.slice(i, i + IN_CHUNK))
+      if (error) {
+        if (TABLE_MISSING.has(error.code)) return { byContact: new Map() }
+        return { byContact: new Map(), error: `${GLOFOX_CROSSOVER_TABLE} read: ${message(error)}` }
+      }
+      for (const r of data || []) {
+        const list = byContact.get(r.contact_id) || []
+        if (!list.includes(r.location_id)) list.push(r.location_id)
+        byContact.set(r.contact_id, list)
+      }
+    }
+    return { byContact }
+  } catch (err) {
+    return { byContact: new Map(), error: message(err) }
+  }
+}
+
+/** Does this contact row belong to the Glofox studio: home there, or linked there? Pure. */
+export function contactAtGlofoxStudio(contact, locationId) {
+  if (!contact || !locationId) return false
+  if (contact.location_id === locationId) return true
+  return Array.isArray(contact.glofox_link_location_ids) && contact.glofox_link_location_ids.includes(locationId)
+}

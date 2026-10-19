@@ -21,6 +21,7 @@ import { MEMBERSHIP_ACTIVE_STATUSES } from '@/lib/un1t-online-map'
 import { hasBookableMembership, linkedAccountsForContact, chunkIds, MEMBER_STATUSES } from '@/lib/person-accounts'
 import { resolveAgentGate, phoneMatchesAllowlist } from './core'
 import { resolveAgentSettings } from './settings-resolve'
+import { contactAtGlofoxStudio } from '@/lib/glofox-crossover'
 
 const LOG_MODULE = 'mia-un1t'
 
@@ -65,14 +66,17 @@ const time = (v) => (v ? Date.parse(v) || 0 : 0)
 // not "no relationship" either: Glofox is where their answers live.
 const LIVE_RELATIONSHIP_STATUSES = Object.freeze([...MEMBER_STATUSES, 'classpass_payg'])
 
+// GLOFOXREADERS.1 — a contact counts at a Glofox studio when it lives there OR
+// a crossover row links its Glofox account there (a Hatch contact holding a
+// Stillorgan account; linkedAccountsForContact sets glofox_link_location_ids).
 function glofoxStudioFor(location, contacts) {
-  const accounts = contacts.filter((c) => c?.location_id === location.id && c.glofox_member_id)
+  const accounts = contacts.filter((c) => contactAtGlofoxStudio(c, location.id) && c.glofox_member_id)
   const ordered = [...accounts].sort((a, b) =>
     Number(hasBookableMembership(b)) - Number(hasBookableMembership(a)) || String(a.id).localeCompare(String(b.id)))
   return {
     active: glofoxStudioActive(accounts),
     // Read off EVERY group contact at the studio, not just those carrying a Glofox id.
-    liveRelationship: contacts.some((c) => c?.location_id === location.id && LIVE_RELATIONSHIP_STATUSES.includes(c.glofox_membership_status)),
+    liveRelationship: contacts.some((c) => contactAtGlofoxStudio(c, location.id) && LIVE_RELATIONSHIP_STATUSES.includes(c.glofox_membership_status)),
     contactIds: ordered.map((c) => c.id),
     glofoxMemberId: ordered[0]?.glofox_member_id,
   }
@@ -251,6 +255,8 @@ export async function resolveMemberStudios(db, { anchorContactId, threadLocation
 
     const accountLocationIds = new Set([
       ...contacts.filter((c) => c.glofox_member_id && c.location_id).map((c) => c.location_id),
+      // GLOFOXREADERS.1 — the Glofox studios a crossover row links them at.
+      ...contacts.filter((c) => c.glofox_member_id).flatMap((c) => c.glofox_link_location_ids || []),
       ...un1tClients.map((r) => r.location_id),
       ...un1tSubscriptions.map((r) => r.location_id),
     ])
