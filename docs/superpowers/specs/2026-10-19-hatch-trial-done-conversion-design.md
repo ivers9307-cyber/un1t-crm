@@ -124,14 +124,20 @@ Hatch templates are.
 
 **Opener** `hatch_trial_done_checkin` (MARKETING, {{1}} = first name):
 
-> Hi {{1}}, well done on finishing your trial at UN1T Hatch Street! 🏋️‍♂️
-> I wanted to reach out personally because we have a few spots left on our
-> limited Foundation membership pricing.
-> Would you like me to send over the details for that, or are you looking
-> more at class packs?
-> Garrett, Studio Owner
+> Hi {{1}},
+> Well done on finishing your trial at UN1T Hatch Street! 🏋️‍♂️
 >
-> (Richard's wording, 19 Oct.)
+> I wanted to reach out personally because we have a few spots left on
+> our limited Foundation membership pricing.
+>
+> Would you like me to send over the details for that, or are you
+> looking more at class packs?
+>
+> Garrett
+> Studio Owner
+
+(Richard's wording and line layout, 19 Oct. Each `>` line above is one
+line in the template; the wrapped lines are one line each in Meta.)
 
 **Follow-up** `hatch_trial_done_followup` (MARKETING, {{1}} = first
 name):
