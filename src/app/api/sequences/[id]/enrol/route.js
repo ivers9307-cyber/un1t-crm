@@ -20,6 +20,7 @@ import { sequenceNotFound } from '@/lib/sequence-access'
 import { logError } from '@/lib/log'
 import { uuidLike } from '@/lib/schemas'
 import { enrolContacts } from '@/lib/sequences'
+import { contactIdsLinkedToStudio } from '@/lib/contact-studio-link'
 import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
@@ -68,13 +69,20 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
 
-  // Constrain enrolments to contacts at the same location.
-  const { data: validContacts } = await db
-    .from('contacts')
-    .select('id')
-    .eq('location_id', sequence.location_id)
-    .in('id', parsed.data.contact_ids)
-  const validIds = (validContacts || []).map(c => c.id)
+  // Constrain enrolments to the sequence's studio's people: its own contacts,
+  // plus a sibling studio's contact (same organisation) who has joined it, a
+  // deal on its board or a marketing-preference row there (SHAREDCONTACT.1).
+  // Every step then acts as the sequence's studio: its consent row, its number,
+  // its branding.
+  const linked = await contactIdsLinkedToStudio(db, {
+    locationId: sequence.location_id,
+    contactIds: parsed.data.contact_ids,
+  })
+  if (!linked.ok) {
+    logError('sequences', 'enrol: contact studio check failed', { sequenceId: params.id, reason: linked.reason, err: linked.err || null })
+    return NextResponse.json({ success: false, error: 'Could not check the contacts' }, { status: 500 })
+  }
+  const validIds = linked.ids
   const invalidIds = parsed.data.contact_ids.filter((id) => !validIds.includes(id))
   const invalidCount = invalidIds.length
 
@@ -111,11 +119,9 @@ export async function POST(request, props) {
         .from('contacts')
         .select('id, name, first_name, last_name, email')
         .in('id', sampleIds)
-      // Annotate each row with the classification bucket. Defensive: a
-      // contact in `invalidIds` won't actually be returned because the
-      // RLS filter on contacts is also location-scoped — show those
-      // as "no_access" so the operator sees something rather than a
-      // silent omission.
+      // Annotate each row with the classification bucket. A contact in
+      // `invalidIds` belongs to another studio it has not joined (or to no
+      // contact at all): shown as wrong_location rather than silently omitted.
       const byId = new Map((contactRows || []).map((c) => [c.id, c]))
       sample = sampleIds.map((id) => {
         const c = byId.get(id)

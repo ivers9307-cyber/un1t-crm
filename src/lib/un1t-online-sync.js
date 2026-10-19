@@ -473,6 +473,17 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
       const msg = `un1t.online sync failed writing contact_memberships: ${membership.error}`
       return failure('db', msg, errorPatch(msg, tokenFields))
     }
+
+    // 7b. New signups start this studio's contact_created sequences
+    // (SHAREDCONTACT.1). Last, so the bookings this run projected are already
+    // there for a "booked a class here?" branch. Informational: a failure is
+    // logged by the trigger and never changes the run's status.
+    counts.signups = await fireSignupTriggers({
+      locationId,
+      membershipSource: loc.membership_source,
+      newlyLinked: resolved.newlyLinked || [],
+      nowIso,
+    })
   } catch (err) {
     const msg = `un1t.online sync failed: ${messageOf(err)}`
     logError('un1t-online-sync', 'unexpected exception in a sync run', { locationId, runId, err: safeErr(err) })
@@ -715,4 +726,66 @@ async function updateConnection(db, locationId, patch, identity) {
   if (error) return failed(error)
   if (!Array.isArray(data) || data.length === 0) return superseded()
   return {}
+}
+
+// ── SHAREDCONTACT.1: fresh signups → contact_created at this studio ──────────
+//
+// A client who became a contact of this studio on this run (inserted, or
+// attached by email to a sibling studio's contact: one person per
+// organisation, mig 712) is a new lead HERE, so this studio's contact_created
+// sequences fire for them (Hatch Street's "New Lead – First Class Booking
+// Nudge"). Before this nothing fired: the sync inserted contacts silently and
+// a Stillorgan member who signed up at Hatch was never "created" at all.
+//
+// Three fences keep this off the mass-create path the trigger's own comment
+// forbids: only a studio whose membership source IS un1t.online; only a
+// client created upstream in the last SIGNUP_MAX_AGE_DAYS (an old account
+// first matched today, or a backlog import, is not a new lead); and at most
+// SIGNUP_TRIGGER_CAP a run (the rest are counted, never fired). A client
+// attached to a contact that already lives at this studio was already new
+// here when that contact was made, so it is not fired again.
+
+export const SIGNUP_MAX_AGE_DAYS = 3
+export const SIGNUP_TRIGGER_CAP = 25
+
+/** Pure: which newly linked clients count as fresh signups at this studio. */
+export function pickFreshSignups(newlyLinked, { locationId, nowIso, maxAgeDays = SIGNUP_MAX_AGE_DAYS }) {
+  const now = Date.parse(nowIso)
+  const floor = Number.isFinite(now) ? now - maxAgeDays * 86400000 : NaN
+  const out = []
+  const seen = new Set()
+  let stale = 0
+  let alreadyHere = 0
+  for (const n of Array.isArray(newlyLinked) ? newlyLinked : []) {
+    if (!n?.contactId || seen.has(n.contactId)) continue
+    if (n.how === 'attached' && n.homeLocationId === locationId) { alreadyHere += 1; continue }
+    const created = Date.parse(n.remoteCreatedAt || '')
+    if (!Number.isFinite(created) || !Number.isFinite(floor) || created < floor) { stale += 1; continue }
+    seen.add(n.contactId)
+    out.push(n)
+  }
+  return { fresh: out, stale, alreadyHere }
+}
+
+async function fireSignupTriggers({ locationId, membershipSource, newlyLinked, nowIso }) {
+  if (membershipSource !== 'un1t_online') return { skipped: 'membership_source' }
+  if (!newlyLinked.length) return { fired: 0 }
+  const { fresh, stale, alreadyHere } = pickFreshSignups(newlyLinked, { locationId, nowIso })
+  const toFire = fresh.slice(0, SIGNUP_TRIGGER_CAP)
+  const overCap = fresh.length - toFire.length
+  if (overCap > 0) {
+    logWarn('un1t-online-sync', 'more fresh signups than the per-run trigger cap; the rest were not fired', {
+      locationId, fresh: fresh.length, cap: SIGNUP_TRIGGER_CAP,
+    })
+  }
+  let fired = 0
+  if (toFire.length) {
+    const { triggerSequencesForContactCreated } = await import('./sequences/triggers.js')
+    for (const n of toFire) {
+      // Best-effort: the trigger swallows and logs its own failures.
+      await triggerSequencesForContactCreated(n.contactId, { locationId, sourceRef: 'un1t_online_signup' })
+      fired += 1
+    }
+  }
+  return { fired, joined: toFire.filter((n) => n.homeLocationId !== locationId).length, stale, already_here: alreadyHere, over_cap: overCap }
 }

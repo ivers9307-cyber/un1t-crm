@@ -43,7 +43,7 @@ function reasonOf(error) {
  * @param {string} args.organizationId
  * @param {Array<object>} args.clients  raw un1t.online client rows
  * @param {string} args.now          ISO timestamp for un1t_synced_at
- * @returns {Promise<{contactIdByUserId: Map<string,string>, contactLocationByUserId: Map<string,string|null>, counts: object, errors: Array}>}
+ * @returns {Promise<{contactIdByUserId: Map<string,string>, contactLocationByUserId: Map<string,string|null>, newlyLinked: Array<{userId: string, contactId: string, how: 'created'|'attached', homeLocationId: string|null, remoteCreatedAt: string|null}>, counts: object, errors: Array}>}
  *   contactLocationByUserId is the resolved contact's OWN location_id, which
  *   differs from `locationId` when the client was linked to another studio's contact.
  */
@@ -60,6 +60,10 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
     failed: 0,
   }
   const errors = []
+  // SHAREDCONTACT.1 — clients that became a contact of this studio on THIS
+  // run: inserted (rule 3) or attached by email to an existing contact (rule
+  // 2). The sync fires contact_created at this studio for the recent ones.
+  const newlyLinked = []
 
   // `extra` carries the candidate contact(s) when the resolver knew them
   // (contact_id, or contact_ids for an ambiguous email), so the sync can
@@ -172,6 +176,7 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
           continue
         }
         counts.attached_by_email += 1
+        newlyLinked.push({ userId, contactId: match.id, how: 'attached', homeLocationId: match.location_id ?? null, remoteCreatedAt: client?.created_at ?? null })
         contactIdByUserId.set(userId, match.id)
         contactLocationByUserId.set(userId, match.location_id ?? null)
         continue
@@ -203,11 +208,12 @@ export async function resolveUn1tContacts(db, { locationId, organizationId, clie
     }
     counts.created += 1
     if (!fields.email) counts.no_email += 1
+    newlyLinked.push({ userId, contactId: created.id, how: 'created', homeLocationId: locationId, remoteCreatedAt: client?.created_at ?? null })
     contactIdByUserId.set(userId, created.id)
     contactLocationByUserId.set(userId, locationId)
   }
 
-  return { contactIdByUserId, contactLocationByUserId, counts, errors }
+  return { contactIdByUserId, contactLocationByUserId, newlyLinked, counts, errors }
 }
 
 async function updateContact(db, contact, fields, { now, attach, userId }) {
