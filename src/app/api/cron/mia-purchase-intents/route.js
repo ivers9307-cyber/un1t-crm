@@ -15,7 +15,9 @@
 //      purchase of the product up to 60 min after the payment, never past
 //      expiry; a second payment the mirror shows only later), one record-only
 //      card per intent;
-//   4. the silent expiry sweep (expireStaleIntents).
+//   4. the silent expiry sweep (expireStaleIntents), only for intents more than
+//      45 minutes past expiry (EXPIRY_GRACE_MS), so step 1 still settles a
+//      payment made just before expiry once the mirror syncs it.
 // Off until intents exist: an empty run is four cheap reads.
 //
 // Heartbeat 'mia-purchase-intents' (mig 755, 300 + 600). Stamped when the run

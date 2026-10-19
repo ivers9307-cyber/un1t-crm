@@ -67,6 +67,13 @@ const TX_COLS = 'un1t_id, product_id, product_title, type, amount_cents, remote_
 const TX_PAGE = 100
 /** Rows per page of the expiry sweep (under the 1,000-row select cap). */
 export const EXPIRE_PAGE = 500
+/**
+ * How long past expires_at the sweep leaves a live intent alone: longer than
+ * one 15-minute un1t mirror sync plus one 5-minute watcher tick, with margin,
+ * so a payment made just before expiry is still dated by the mirror and
+ * settled by the watcher before the sweep can close the intent.
+ */
+export const EXPIRY_GRACE_MS = 45 * 60_000
 
 /** The outcomes where the member paid and has been (or should have been) told. */
 export const PAID_OUTCOMES = new Set(['paid_booked', 'paid_class_gone', 'paid_booking_failed', 'paid_no_class'])
@@ -661,9 +668,10 @@ export async function recheckDoublePayment(db, intentId, { now = Date.now() } = 
 }
 
 /**
- * The silent expiry sweep: every live intent past expires_at becomes
- * 'expired' (CAS on status and expiry), which frees the member for a new
- * link. Nothing is sent and nothing filed (MIA-EXPIRY-QUIET). Paged under the
+ * The silent expiry sweep: every live intent more than EXPIRY_GRACE_MS past
+ * expires_at becomes 'expired' (CAS on status and expiry), which frees the
+ * member for a new link. Inside the grace the watcher keeps settling it from
+ * the mirror (a payment dated inside the window is booked). Nothing is sent and nothing filed (MIA-EXPIRY-QUIET). Paged under the
  * 1,000-row cap with an explicit order; an expired row leaves the filter, so
  * each page is read from the top. The watcher cron (Task 23) settles
  * each live intent first.
@@ -674,13 +682,14 @@ export async function recheckDoublePayment(db, intentId, { now = Date.now() } = 
  */
 export async function expireStaleIntents(db, { now = Date.now(), pageSize = EXPIRE_PAGE } = {}) {
   const nowIso = new Date(now).toISOString()
+  const cutoffIso = new Date(now - EXPIRY_GRACE_MS).toISOString()
   let expired = 0
   try {
     for (;;) {
       const { data: rows, error } = await db.from(INTENTS)
         .select('id')
         .eq('status', LIVE)
-        .lt('expires_at', nowIso)
+        .lt('expires_at', cutoffIso)
         .order('expires_at', { ascending: true })
         .order('id', { ascending: true })
         .range(0, pageSize - 1)
@@ -694,7 +703,7 @@ export async function expireStaleIntents(db, { now = Date.now(), pageSize = EXPI
         .update({ status: 'expired', updated_at: nowIso })
         .in('id', ids)
         .eq('status', LIVE)
-        .lt('expires_at', nowIso)
+        .lt('expires_at', cutoffIso)
         .select('id')
       if (writeError) {
         logError(LOG_MODULE, 'expiry sweep write failed', { op: 'expire_write', status: null, code: writeError.code ?? null, expired })

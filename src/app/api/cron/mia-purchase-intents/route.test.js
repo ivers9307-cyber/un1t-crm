@@ -325,6 +325,15 @@ describe('GET /api/cron/mia-purchase-intents', () => {
     expect(settle.settlePurchaseIntent.mock.invocationCallOrder[0]).toBeLessThan(settle.expireStaleIntents.mock.invocationCallOrder[0])
   })
 
+  it('an intent 30 min past expiry stays live (inside the 45-min grace): the next sync may still date a payment', async () => {
+    const { data } = install({
+      mia_purchase_intents: [intent(1, { created_at: iso(NOW - 24 * 60 * MIN), expires_at: iso(NOW - 30 * MIN) })],
+    })
+    const body = await (await call()).json()
+    expect(data.mia_purchase_intents[0].status).toBe('link_sent')
+    expect(body.data).toMatchObject({ settled: { expired: 1 }, expired: 0 })
+  })
+
   it('stamps the heartbeat with counts only (no ids, no PII)', async () => {
     install({
       mia_purchase_intents: [

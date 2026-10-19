@@ -70,7 +70,7 @@ import {
   formatPriceLabel, listPurchaseOptions, mintPayDoneToken, hashPayDoneToken, sendPurchaseLink,
   executePurchaseTool, PURCHASE_INTENT_TTL_MS, trialAvailable, offersForBooking,
 } from './purchase-intents'
-import { paidSinceSnapshot, settlePurchaseIntent, checkMyPurchase, expireStaleIntents, markStuckPaidIntent, recheckDoublePayment } from './purchase-settle'
+import { EXPIRY_GRACE_MS, paidSinceSnapshot, settlePurchaseIntent, checkMyPurchase, expireStaleIntents, markStuckPaidIntent, recheckDoublePayment } from './purchase-settle'
 import { notifyAgentApprovalRequest } from './approval-notify'
 import { un1tBookClass } from './un1t-booking'
 import { DEFAULT_TRIAL_USED_TEXT } from './default-copy'
@@ -1576,7 +1576,7 @@ describe('settlePurchaseIntent (Task 21)', () => {
 
   describe('expireStaleIntents', () => {
     it('expiry silent: CAS link_sent -> expired past expires_at, paginated under the cap, counts only', async () => {
-      const past = (i) => liveIntent({ id: `80000000-0000-4000-8000-00000000010${i}`, un1t_user_id: `u-test-${i}`, expires_at: new Date(NOW - 1000 * (i + 1)).toISOString() })
+      const past = (i) => liveIntent({ id: `80000000-0000-4000-8000-00000000010${i}`, un1t_user_id: `u-test-${i}`, expires_at: new Date(NOW - EXPIRY_GRACE_MS - 1000 * (i + 1)).toISOString() })
       const rows = [0, 1, 2, 3, 4].map(past)
       const fresh = liveIntent({ id: '80000000-0000-4000-8000-000000000200', un1t_user_id: 'u-test-fresh' })
       const paidOld = liveIntent({ id: '80000000-0000-4000-8000-000000000201', un1t_user_id: 'u-test-paid', status: 'booked', expires_at: new Date(NOW - 5000).toISOString() })
@@ -1591,8 +1591,42 @@ describe('settlePurchaseIntent (Task 21)', () => {
     })
 
     it('a failed read or write stops the sweep with what it did so far', async () => {
-      const { db } = fakeDb({ mia_purchase_intents: [liveIntent({ expires_at: new Date(NOW - 1000).toISOString() })] }, { fail: { mia_purchase_intents: { update: true } } })
+      const { db } = fakeDb({ mia_purchase_intents: [liveIntent({ expires_at: new Date(NOW - EXPIRY_GRACE_MS - 1000).toISOString() })] }, { fail: { mia_purchase_intents: { update: true } } })
       expect(await expireStaleIntents(db, { now: NOW })).toEqual({ expired: 0, error: true })
+    })
+
+    describe('the grace after expires_at (a payment just before expiry is still seen by the watcher)', () => {
+      it('the grace is 45 minutes: one 15-min mirror sync plus one 5-min watcher tick, with margin', () => {
+        expect(EXPIRY_GRACE_MS).toBe(45 * 60_000)
+      })
+
+      it('30 min past expiry: not expired by the sweep; 50 min past: expired', async () => {
+        const at = (n, minsPast) => liveIntent({ id: `80000000-0000-4000-8000-00000000030${n}`, un1t_user_id: `u-test-g${n}`, expires_at: new Date(NOW - minsPast * 60_000).toISOString() })
+        const { db, data } = fakeDb({ mia_purchase_intents: [at(1, 30), at(2, 50)] })
+        expect(await expireStaleIntents(db, { now: NOW })).toEqual({ expired: 1 })
+        expect(data.mia_purchase_intents.map((r) => r.status)).toEqual(['link_sent', 'expired'])
+      })
+
+      it('paid 10 min before expiry, the mirror shows it only 20 min after: the watcher settles and books it', async () => {
+        const E = NOW
+        const lapsing = paidIntent({ expires_at: new Date(E).toISOString(), created_at: new Date(E - PURCHASE_INTENT_TTL_MS).toISOString() })
+        const { db, data } = settleDb({ mia_purchase_intents: [lapsing] })
+        const watcherTick = async (t) => {
+          const out = await settlePurchaseIntent(db, ID, { detectedBy: 'watcher', source: 'mirror', now: () => t })
+          await expireStaleIntents(db, { now: t })
+          return out
+        }
+        // E+5 and E+15: the mirror has not synced the payment yet; the sweep leaves the intent live.
+        expect(await watcherTick(E + 5 * 60_000)).toMatchObject({ outcome: 'expired', sent: false })
+        expect(await watcherTick(E + 15 * 60_000)).toMatchObject({ outcome: 'expired', sent: false })
+        expect(data.mia_purchase_intents[0].status).toBe('link_sent')
+        // The sync lands the purchase (made at E-10); the E+20 tick settles and books.
+        data.un1t_transactions.push(tx({ remote_created_at: new Date(E - 10 * 60_000).toISOString() }))
+        expect(await watcherTick(E + 20 * 60_000)).toMatchObject({ outcome: 'paid_booked', sent: true })
+        expect(data.mia_purchase_intents[0].status).toBe('booked')
+        expect(h.book).toHaveBeenCalledTimes(1)
+        expect(h.send).toHaveBeenCalledTimes(1)
+      })
     })
   })
 
