@@ -23,6 +23,7 @@ import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
 import { contactMatchesSequenceAudience } from './audience.js'
 import { enrolContacts } from './enrol.js'
+import { contactInStudioOrganisation } from '../contact-studio-link.js'
 
 // ── segment_added / segment_removed (SEG-TRIG.1) ─────────────────
 //
@@ -704,6 +705,16 @@ export async function triggerSequencesForFirstBooking(bookingId) {
  * arrives for an unknown member and the real-time sync INSERTS the contact
  * — per-event single-member creation, so it sits outside the guard below.
  *
+ * SHAREDCONTACT.1 — "created" means NEW TO A STUDIO. A contact is one person
+ * per organisation (mig 712), so a Stillorgan member who signs up at Hatch
+ * Street is attached to their Stillorgan row and nothing is inserted. Pass
+ * `locationId` (the studio they signed up at) and that studio's
+ * contact_created sequences fire, not their home studio's: the lead form
+ * passes its studio, and the un1t.online sync passes its studio for a fresh
+ * signup it created or attached (un1t-online-sync.js, recency-gated). A studio
+ * outside the contact's organisation is refused (`cross_organisation`). With
+ * no `locationId` the home studio is used, as before.
+ *
  * Deliberately NOT wired into bulk-import or the nightly Glofox bulk sync
  * (the mass-create guard) — same scoping as the curated
  * glofox_lead_provisioning hook.
@@ -712,22 +723,35 @@ export async function triggerSequencesForFirstBooking(bookingId) {
  * contact insert.
  *
  * @param {string} contactId
+ * @param {{ locationId?: string|null, sourceRef?: string }} [opts]
  */
-export async function triggerSequencesForContactCreated(contactId) {
+export async function triggerSequencesForContactCreated(contactId, { locationId = null, sourceRef = null } = {}) {
   if (!contactId) return
   const db = createServerClient()
   try {
     const { data: contact } = await db
       .from('contacts')
-      .select('id, location_id')
+      .select('id, location_id, organization_id')
       .eq('id', contactId)
       .single()
     if (!contact) return
 
+    const studioId = locationId || contact.location_id
+    if (!studioId) return
+    let joined = false
+    if (studioId !== contact.location_id) {
+      const check = await contactInStudioOrganisation(db, { contact, locationId: studioId })
+      if (!check.ok) {
+        logWarn('sequences', 'contact_created_skipped', { reason: check.reason, locationId: studioId })
+        return
+      }
+      joined = !check.sameStudio
+    }
+
     const { data: sequences } = await db
       .from('email_sequences')
       .select('id, audience_filter')
-      .eq('location_id', contact.location_id)
+      .eq('location_id', studioId)
       .eq('trigger_type', 'contact_created')
       .eq('status', 'active')
     if (!sequences || sequences.length === 0) return
@@ -739,7 +763,7 @@ export async function triggerSequencesForContactCreated(contactId) {
         sequenceId: seq.id,
         contactIds: [contactId],
         sourceType: 'contact_created',
-        sourceRef: 'created',
+        sourceRef: sourceRef || (joined ? 'joined_studio' : 'created'),
       })
     }
   } catch (e) {
