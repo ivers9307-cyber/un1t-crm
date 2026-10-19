@@ -26,6 +26,7 @@ vi.mock('@/lib/manual-booking-confirm', () => ({ sendManualBookingConfirmEmail: 
 import * as glofox from '@/lib/glofox'
 import { executeUn1tApproval } from '@/lib/un1t-online-approval-execute'
 import { sendManualBookingConfirmEmail } from '@/lib/manual-booking-confirm'
+import { sendAgentThreadMessage } from '@/lib/agent/notify'
 import { PATCH, maxDuration } from './route.js'
 
 const future = new Date(Date.now() + 86_400_000).toISOString()
@@ -114,5 +115,37 @@ describe('approval route — un1t.online funnel cards', () => {
     const j = await (await approve()).json()
     expect(j.executed).toEqual({ ok: true, manual: true })
     expect(executeUn1tApproval).not.toHaveBeenCalled()
+  })
+})
+
+// FLOWACK.1 review — a un1t.online card filed from a WhatsApp Flow carries its
+// thread (routeToReview links it): approving it confirms there too, like the
+// Glofox approve path (the email still goes). A record-only approval records
+// what staff did by hand and confirms nothing.
+describe('approval route — un1t.online Flow cards confirm on the thread', () => {
+  const flow = (reason, over = {}) => ({ ...ROW(reason, over), channel: 'whatsapp', conversation_id: 'conv1' })
+
+  it('actioned with a thread: the in-thread confirmation goes', async () => {
+    db = makeDbFor(flow('un1t_outcome_unknown'))
+    await approve()
+    expect(sendAgentThreadMessage).toHaveBeenCalledOnce()
+    expect(sendAgentThreadMessage.mock.calls[0][1]).toMatchObject({ channel: 'whatsapp', conversationId: 'conv1', text: 'Booked!' })
+  })
+
+  it('a record-only approval or a failed execution confirms nothing', async () => {
+    db = makeDbFor(flow('account_ambiguous'))
+    executeUn1tApproval.mockResolvedValueOnce({ finalStatus: 'actioned', details: {}, executed: { ok: true, record_only: true }, customerNotified: null })
+    await approve()
+    updates = []
+    db = makeDbFor(flow('un1t_outcome_unknown'))
+    executeUn1tApproval.mockResolvedValueOnce({ finalStatus: 'failed', details: {}, executed: { ok: false }, customerNotified: null })
+    await approve()
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+  })
+
+  it('no thread (a website card): email only, as before', async () => {
+    db = makeDbFor(ROW('un1t_outcome_unknown'))
+    await approve()
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
   })
 })

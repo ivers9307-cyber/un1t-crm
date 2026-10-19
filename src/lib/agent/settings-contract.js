@@ -56,6 +56,15 @@ export const DEFAULTS = {
   // {link} (the studio's booking_url) are filled in. Null → the code defaults
   // in lib/agent/default-copy.js, rendered by renderMiaCopy (mia-copy.js).
   chat_booking_unavailable_text: null,
+  // FLOWACK.1 — the WhatsApp booking Flow's texts: the one acknowledgement a
+  // class submission gets (instead of a Mia turn), and the holding line when
+  // the booking goes to the team. Null → the code defaults in
+  // lib/agent/default-copy.js (sent by lib/whatsapp-flow/booking-notice.js).
+  // A booked Flow class is confirmed with booking_confirmation_text.
+  flow_booking_ack_text: null,
+  flow_booking_holding_text: null,
+  // FLOWACK.1 review — a re-submit of a class already asked for.
+  flow_booking_duplicate_text: null,
   // MIA-EXPIRY-QUIET.1 — booking_expired_text was RETIRED 2026-08-31. An
   // expired booking is now silent to the member (staff-push only), so there
   // is no customer copy left to edit. Stored values are ignored and dropped
@@ -142,6 +151,9 @@ export const SettingsSchema = z.object({
   no_credits_handoff_text: z.string().max(500).nullable().optional(),
   account_conflict_handoff_text: z.string().max(500).nullable().optional(),
   chat_booking_unavailable_text: z.string().max(500).nullable().optional(),
+  flow_booking_ack_text: z.string().max(500).nullable().optional(),
+  flow_booking_holding_text: z.string().max(500).nullable().optional(),
+  flow_booking_duplicate_text: z.string().max(500).nullable().optional(),
   approval_decline_text: z.string().max(500).nullable().optional(),
   welcome_greeting: z.string().max(500).nullable().optional(),
   link_button_text: z.string().max(25).nullable().optional(),
@@ -320,6 +332,9 @@ function buildFullBlob(data) {
     no_credits_handoff_text: data.no_credits_handoff_text?.trim() || null,
     account_conflict_handoff_text: data.account_conflict_handoff_text?.trim() || null,
     chat_booking_unavailable_text: data.chat_booking_unavailable_text?.trim() || null,
+    flow_booking_ack_text: data.flow_booking_ack_text?.trim() || null,
+    flow_booking_holding_text: data.flow_booking_holding_text?.trim() || null,
+    flow_booking_duplicate_text: data.flow_booking_duplicate_text?.trim() || null,
     approval_decline_text: data.approval_decline_text?.trim() || null,
     welcome_greeting: data.welcome_greeting?.trim() || null,
     link_button_text: data.link_button_text?.trim() || null,

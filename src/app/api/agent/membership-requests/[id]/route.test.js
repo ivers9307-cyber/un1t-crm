@@ -30,7 +30,8 @@ vi.mock('@/lib/connection-registry', async (importOriginal) => ({
   readGlofoxConfig: vi.fn(async () => ({ cfg: { trial_membership_id: 'tm-1', trial_plan_code: 'tp-1' }, error: null })),
 }))
 vi.mock('@/lib/agent/notify', () => ({
-  sendAgentThreadMessage: vi.fn(async () => ({ ok: true })),
+  // FLOWACK.1 — the real helper answers { sent }; the route now reads it.
+  sendAgentThreadMessage: vi.fn(async () => ({ sent: true })),
   buildBookingConfirmationText: vi.fn(() => 'Booked!'),
   buildCancellationConfirmationText: vi.fn(() => 'Cancelled.'),
   buildDeclineNoticeText: vi.fn(() => "Sorry, we couldn't complete that request this time."),
@@ -50,6 +51,11 @@ vi.mock('@/lib/manual-booking-confirm', () => ({
   sendManualBookingConfirmEmail: vi.fn(async () => ({ sent: true, channel: 'email' })),
 }))
 import { sendManualBookingConfirmEmail } from '@/lib/manual-booking-confirm'
+// FLOWACK.1 — the class_confirmed template is a lib call too.
+vi.mock('@/lib/automations/booking-whatsapp-confirm', () => ({
+  maybeSendBookingWhatsappConfirm: vi.fn(async () => ({ sent: true })),
+}))
+import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
 
 import { createBooking, cancelBooking, glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, purchaseGlofoxMembership, fetchUserCreditsResult } from '@/lib/glofox'
 import { readGlofoxConfig } from '@/lib/connection-registry'
@@ -1122,5 +1128,53 @@ describe('PATCH class_booking approval — manual booking emails the customer', 
     db = makeDbFor(ROW, updates)
     await approve()
     expect(sendManualBookingConfirmEmail).not.toHaveBeenCalled()
+  })
+})
+
+// FLOWACK.1 — a /start (WhatsApp Flow) card now carries the thread
+// (routeToReview stamps conversation_id + channel), so the approve confirms
+// in-thread. The 24h window may have closed by the time staff approve: then
+// the class_confirmed template still goes, as it did for every funnel card
+// before. Never both.
+describe('PATCH class_booking approval — Flow card confirmation (FLOWACK.1)', () => {
+  const flowRow = { ...ROW, details: { ...ROW.details, reason: 'booking_failed:EVENT_FULL', source: 'start_funnel' } }
+
+  it('in-thread confirmation sent: no template', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { _id: 'gfb-1' } })
+    db = makeDbFor(flowRow, updates)
+    await approve()
+    expect(updates.at(-1).patch.status).toBe('actioned')
+    expect(sendAgentThreadMessage).toHaveBeenCalledOnce()
+    expect(maybeSendBookingWhatsappConfirm).not.toHaveBeenCalled()
+  })
+
+  it('the thread send did not go (window closed): the class_confirmed template goes instead', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { _id: 'gfb-1' } })
+    sendAgentThreadMessage.mockResolvedValueOnce({ sent: false, reason: 'window_closed' })
+    db = makeDbFor(flowRow, updates)
+    await approve()
+    expect(updates.at(-1).patch.status).toBe('actioned')
+    expect(maybeSendBookingWhatsappConfirm).toHaveBeenCalledOnce()
+    expect(maybeSendBookingWhatsappConfirm).toHaveBeenCalledWith(expect.objectContaining({ purpose: 'class_confirmed', locationId: 'L1' }))
+  })
+
+  it('a funnel card with no thread (website /start) still gets the template, as before', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { _id: 'gfb-1' } })
+    db = makeDbFor({ ...flowRow, conversation_id: null, channel: null }, updates)
+    await approve()
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+    expect(maybeSendBookingWhatsappConfirm).toHaveBeenCalledOnce()
+  })
+
+  it('declining a Flow card tells the customer in-thread', async () => {
+    db = makeDbFor(flowRow, updates)
+    await PATCH(
+      new Request('http://localhost/api/agent/membership-requests/r1', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'declined' }),
+      }),
+      { params: Promise.resolve({ id: 'r1' }) },
+    )
+    expect(sendAgentThreadMessage).toHaveBeenCalledOnce()
+    expect(sendAgentThreadMessage.mock.calls[0][1]).toMatchObject({ channel: 'whatsapp', conversationId: 'conv1' })
   })
 })
