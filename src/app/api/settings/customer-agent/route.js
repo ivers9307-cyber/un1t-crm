@@ -149,6 +149,10 @@ export async function GET() {
     // derivation as the reply path (providerFor / providerTakesBookings off
     // locations.membership_source, mig 717 NOT NULL).
     bookings: providerTakesBookings(loc.membership_source ? providerFor(loc.membership_source) : null),
+    // MIAHATCH.4 — the studio's membership source key (locations.membership_source,
+    // a plain column, never the settings blob): the editor shows the Hatch
+    // payments and booking copy group only for 'un1t_online'.
+    membership_source_key: loc.membership_source || null,
     // W1.S3 — the editor's placeholders render the studio's own brand
     // (default hand-off / welcome copy, the "{Brand} Points" label).
     brand: { companyName: branding.companyName, shortName: branding.shortName },

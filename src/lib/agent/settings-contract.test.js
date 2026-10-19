@@ -96,6 +96,34 @@ describe('settings write-through contract', () => {
     expect(own.sources.chat_booking_unavailable_text).toBe('studio')
   })
 
+  // MIAHATCH.4 (spec 6.6) — the slice-2 Hatch booking and payment copy keys.
+  const SLICE2_KEYS = [
+    'purchase_offer_intro_text', 'purchase_link_text', 'trial_used_text', 'refund_request_text',
+    'purchase_link_open_text', 'purchase_paid_booked_text', 'purchase_paid_class_gone_text',
+    'purchase_paid_booking_failed_text', 'purchase_paid_no_class_text', 'pay_done_page_text', 'pay_cancel_page_text',
+  ]
+
+  it('every slice-2 copy key round-trips through buildCustomerAgentSettings; blank is null', () => {
+    for (const key of SLICE2_KEYS) {
+      expect(DEFAULTS[key], key).toBe(null)
+      expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, [key]: '  Hello {product}  ' }))[key], key).toBe('Hello {product}')
+      expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, [key]: '   ' }))[key], key).toBe(null)
+      expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true }))[key], key).toBe(null)
+      expect(SettingsSchema.safeParse({ enabled: true, [key]: 'x'.repeat(501) }).success, key).toBe(false)
+    }
+  })
+
+  it('each slice-2 copy key is inheritable from the org; a studio value wins', () => {
+    for (const key of SLICE2_KEYS) {
+      expect(INHERITABLE_SCALAR_KEYS, key).toContain(key)
+      const inherited = mergeAgentSettings({ org: { [key]: 'Org text' }, studio: { enabled: true } })
+      expect(inherited.settings[key], key).toBe('Org text')
+      expect(inherited.sources[key], key).toBe('org')
+      const own = mergeAgentSettings({ org: { [key]: 'Org text' }, studio: { enabled: true, [key]: 'Studio text' } })
+      expect(own.settings[key], key).toBe('Studio text')
+      expect(own.sources[key], key).toBe('studio')
+    }
+  })
   // FLOWACK.1 — the WhatsApp Flow booking acknowledgement and holding line.
   for (const key of ['flow_booking_ack_text', 'flow_booking_holding_text', 'flow_booking_duplicate_text']) {
     it(`${key} round-trips, blank → null (default-copy), inherits from the org`, () => {

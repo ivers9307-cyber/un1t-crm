@@ -1,4 +1,4 @@
-// MIAHATCH.2 — Mia's operator-editable customer copy for un1t.online studios.
+// MIAHATCH.2 / MIAHATCH.4 — Mia's operator-editable customer copy for un1t.online studios.
 //
 // Each key is a settings.customer_agent field (settings-contract.js, null by
 // default, inheritable from the organisation) with a code default here. The
@@ -10,13 +10,35 @@
 //
 // Pure and dependency-free apart from the default texts, so the settings
 // editor can show the defaults as placeholders.
-import { DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, DEFAULT_CHAT_BOOKING_UNAVAILABLE_NO_LINK_TEXT, DEFAULT_BOOKING_FLOW_TEXT } from './default-copy'
+import {
+  DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, DEFAULT_CHAT_BOOKING_UNAVAILABLE_NO_LINK_TEXT,
+  DEFAULT_PURCHASE_OFFER_INTRO_TEXT, DEFAULT_PURCHASE_LINK_TEXT, DEFAULT_PURCHASE_LINK_NO_CLASS_TEXT,
+  DEFAULT_TRIAL_USED_TEXT, DEFAULT_REFUND_REQUEST_TEXT, DEFAULT_PURCHASE_LINK_OPEN_TEXT,
+  DEFAULT_PURCHASE_PAID_BOOKED_TEXT, DEFAULT_PURCHASE_PAID_CLASS_GONE_TEXT,
+  DEFAULT_PURCHASE_PAID_BOOKING_FAILED_TEXT, DEFAULT_PURCHASE_PAID_NO_CLASS_TEXT, DEFAULT_PAY_DONE_PAGE_TEXT,
+  DEFAULT_PAY_CANCEL_PAGE_TEXT, DEFAULT_BOOKING_FLOW_TEXT,
+} from './default-copy'
 
 export const MIA_HATCH_COPY = Object.freeze({
   chat_booking_unavailable_text: Object.freeze({
     text: DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT,
     without: Object.freeze({ var: 'link', text: DEFAULT_CHAT_BOOKING_UNAVAILABLE_NO_LINK_TEXT }),
   }),
+  // MIAHATCH.4 (spec 6.6) — buying a pack or membership at a un1t.online studio.
+  purchase_offer_intro_text: Object.freeze({ text: DEFAULT_PURCHASE_OFFER_INTRO_TEXT }),
+  purchase_link_text: Object.freeze({
+    text: DEFAULT_PURCHASE_LINK_TEXT,
+    without: Object.freeze({ var: 'class', text: DEFAULT_PURCHASE_LINK_NO_CLASS_TEXT }),
+  }),
+  trial_used_text: Object.freeze({ text: DEFAULT_TRIAL_USED_TEXT }),
+  refund_request_text: Object.freeze({ text: DEFAULT_REFUND_REQUEST_TEXT }),
+  purchase_link_open_text: Object.freeze({ text: DEFAULT_PURCHASE_LINK_OPEN_TEXT }),
+  purchase_paid_booked_text: Object.freeze({ text: DEFAULT_PURCHASE_PAID_BOOKED_TEXT }),
+  purchase_paid_class_gone_text: Object.freeze({ text: DEFAULT_PURCHASE_PAID_CLASS_GONE_TEXT }),
+  purchase_paid_booking_failed_text: Object.freeze({ text: DEFAULT_PURCHASE_PAID_BOOKING_FAILED_TEXT }),
+  purchase_paid_no_class_text: Object.freeze({ text: DEFAULT_PURCHASE_PAID_NO_CLASS_TEXT }),
+  pay_done_page_text: Object.freeze({ text: DEFAULT_PAY_DONE_PAGE_TEXT }),
+  pay_cancel_page_text: Object.freeze({ text: DEFAULT_PAY_CANCEL_PAGE_TEXT }),
   // MIAFLOW.1 — the line on the booking Flow Mia sends (booking-flow.js).
   booking_flow_text: Object.freeze({ text: DEFAULT_BOOKING_FLOW_TEXT }),
 })

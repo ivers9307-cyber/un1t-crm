@@ -719,3 +719,137 @@ describe('CustomerAgentClient — booking link fields (MIAORG.1 final review)', 
     expect(putBody().monthly_points_target).toBe(3500)
   })
 })
+
+describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)', () => {
+  function answer({ membership_source_key, studio = { enabled: true }, org = null } = {}) {
+    const { settings, sources } = mergeAgentSettings({ org, studio })
+    return reply(200, {
+      success: true,
+      settings: { ...settings, social_enabled: false, glofox_auto_cancel: false },
+      studio, org, sources,
+      inherited: mergeAgentSettings({ org, studio: null }).settings,
+      ...(membership_source_key === undefined ? {} : { membership_source_key }),
+      location: { id: 'loc1', name: 'Test Studio' },
+      checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
+    })
+  }
+  const puts = () => global.fetch.mock.calls.filter(([url, init]) => String(url).startsWith('/api/settings/customer-agent') && init?.method === 'PUT')
+  const putBody = () => { const p = puts()[0]; return p && JSON.parse(p[1].body) }
+  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+  const GROUP = 'Hatch payments and booking'
+
+  it('a un1t.online studio shows the group with every field and the code defaults as placeholders', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByText(GROUP)).toBeTruthy()
+    const group = screen.getByTestId('hatch-copy-group')
+    expect(group.querySelectorAll('input').length).toBe(12)
+    expect(within(group).getByPlaceholderText('Thanks! You can go back to WhatsApp now.')).toBeTruthy()
+    expect(within(group).getByPlaceholderText("Here's your secure payment link for {product}. Once it goes through I'll book you into {class}.")).toBeTruthy()
+  })
+
+  it('no dash (em or en) in the group\'s labels, help or placeholders', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const group = screen.getByTestId('hatch-copy-group')
+    expect(group.textContent).not.toMatch(/[—–]/)
+    for (const input of group.querySelectorAll('input')) expect(input.getAttribute('placeholder')).not.toMatch(/[—–]/)
+  })
+
+  it('a Glofox studio, no source, or an older GET shows no group', async () => {
+    for (const key of ['glofox', 'none', undefined]) {
+      mockFetch([answer({ membership_source_key: key })])
+      const { unmount } = render(<CustomerAgentClient canEdit />)
+      await ready()
+      expect(screen.queryByText(GROUP), String(key)).toBeNull()
+      expect(screen.queryByTestId('hatch-copy-group'), String(key)).toBeNull()
+      unmount()
+    }
+  })
+
+  it('an edit is the studio\'s own and goes into the PUT body; a blank is null', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' }), reply(200, { success: true, settings: {} }), answer({ membership_source_key: 'un1t_online' })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    fireEvent.change(screen.getByPlaceholderText('Thanks! You can go back to WhatsApp now.'), { target: { value: '  All done, back to WhatsApp.  ' } })
+    fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().overridden).toContain('pay_done_page_text')
+    expect(putBody().pay_done_page_text).toBe('All done, back to WhatsApp.')
+    expect(putBody().pay_cancel_page_text).toBe(null)
+  })
+
+  it('an organisation value is shown as inherited', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online', org: { refund_request_text: 'Org refund text.' } })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const group = screen.getByTestId('hatch-copy-group')
+    expect(within(group).getByDisplayValue('Org refund text.')).toBeTruthy()
+    expect(within(screen.getByText('Refund request message').parentElement).getByText('Organisation default')).toBeTruthy()
+  })
+
+  // MIAHATCH.4 (Task 14) — "What Mia can sell" mounts in the same gate, and the
+  // booking link fields stay for a un1t.online studio even though its source
+  // takes bookings (Mia books there, but a link remains the fallback).
+  function withOffers() {
+    const real = global.fetch
+    global.fetch = vi.fn(async (url, init) => {
+      if (String(url).startsWith('/api/locations/loc1/mia-offers')) {
+        return reply(200, { success: true, data: { offers: [], products: [{ id: 'p1', title: '1 Class Credit', price_cents: 1500, interval: null, private: false }] } })
+      }
+      return real(url, init)
+    })
+  }
+
+  it('a un1t.online studio shows What Mia can sell, reading its own location\'s offers', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    withOffers()
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByText('What Mia can sell')).toBeTruthy()
+    await screen.findByTestId('offer-picker')
+    expect(global.fetch.mock.calls.some(([u]) => String(u) === '/api/locations/loc1/mia-offers')).toBe(true)
+  })
+
+  it('a non-owner sees the offer list without controls', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    withOffers()
+    render(<CustomerAgentClient canEdit={false} />)
+    await waitFor(() => expect(screen.getByText('What Mia can sell')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('No offers yet. Mia will not offer to sell anything.')).toBeTruthy())
+    expect(screen.queryByTestId('offer-picker')).toBeNull()
+  })
+
+  it('a Glofox studio, no source, or an older GET shows no offers section and never fetches it', async () => {
+    for (const key of ['glofox', 'none', undefined]) {
+      mockFetch([answer({ membership_source_key: key })])
+      withOffers()
+      const { unmount } = render(<CustomerAgentClient canEdit />)
+      await ready()
+      expect(screen.queryByText('What Mia can sell'), String(key)).toBeNull()
+      expect(global.fetch.mock.calls.some(([u]) => String(u).includes('mia-offers')), String(key)).toBe(false)
+      unmount()
+    }
+  })
+
+  it('the booking link fields stay visible at a un1t.online studio even when bookings is true', async () => {
+    mockFetch([reply(200, {
+      ...(await answer({ membership_source_key: 'un1t_online' }).json()),
+      bookings: true,
+    })])
+    withOffers()
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByLabelText('Booking link')).toBeTruthy()
+    expect(screen.getByLabelText('Booking button label')).toBeTruthy()
+  })
+
+  it('every button in the editor\'s form-like surface is typed', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    const { container } = render(<CustomerAgentClient canEdit />)
+    await ready()
+    for (const b of container.querySelectorAll('[data-testid="hatch-copy-group"] button')) expect(b.getAttribute('type')).toBe('button')
+  })
+})
