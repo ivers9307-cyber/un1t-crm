@@ -54,6 +54,17 @@ export const GLOFOX_PROMPT_SOURCE = Object.freeze({ key: 'glofox', label: 'Glofo
 // sent as the reply's trailing link so it renders as a button) or, with no
 // link, to the team. Stable per studio: it depends on the link alone.
 // No em dashes in this text (Richard's rule for anything a customer may read).
+// MIAFLOW.1 — the rules that go with send_booking_flow (booking-flow.js),
+// rendered only on a turn that offers it: a WhatsApp turn at a studio Mia
+// cannot book at, whose booking Flow is switched on. No em or en dashes.
+export const BOOKING_FLOW_PROMPT_SECTION =
+  '## Booking form in WhatsApp\n' +
+  'This studio has a booking form you can send in this chat with send_booking_flow. When someone wants to book a ' +
+  'class here, call send_booking_flow instead of sending the booking link. If it says sent: true, the form is already ' +
+  'in the chat, so reply in one short line telling them to tap the button to pick a class and book it, with no link. ' +
+  'If it says already_sent: true, point them back to the form above. If it says sent: false, follow the booking rules ' +
+  'above (the booking link, or the team). Never say the form was sent unless the tool said sent: true.'
+
 export const NO_BOOKING_ACCOUNT_HANDOFF = 'For membership, payments or account questions, hand off to the team.'
 
 function noBookingSections(bookingUrl) {
@@ -463,6 +474,7 @@ function todayWithWeekday(today) {
  * @param {string} [opts.un1tStudioName] MIAHATCH.2: the un1t.online studio the booking lines are about (named instead of "this studio"); stable per studio
  * @param {boolean}[opts.multiStudio] MIAHATCH.2: answerable at more than one studio; the prompt says which studio each answer is for (read only with un1tVariant)
  * @param {string[]}[opts.factsBlocks] MIAHATCH.2: buildStudioFactsBlock outputs for answerable studios that are not the thread's; uncached suffix only
+ * @param {boolean}[opts.bookingFlow] MIAFLOW.1: the turn offers send_booking_flow (the studio's WhatsApp booking Flow); adds BOOKING_FLOW_PROMPT_SECTION
  * @returns {{ stable: string, volatile: string }}
  */
 export function buildCustomerSystemPromptParts(opts = {}) {
@@ -488,6 +500,9 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   // blocks, then KNOWLEDGE last (the base prompt refers to "the KNOWLEDGE
   // section below").
   const stableParts = [identity + ' ' + renderCustomerAgentBasePrompt(membershipSource || GLOFOX_PROMPT_SOURCE, { bookings, bookingUrl, un1tVariant, multiStudio: opts.multiStudio === true, un1tStudioName: un1tVariant ? opts.un1tStudioName : null })]
+  // MIAFLOW.1 — only on a turn offered send_booking_flow (booking-flow.js);
+  // absent or false, the prompt is byte-identical to before.
+  if (opts.bookingFlow === true) stableParts.push(BOOKING_FLOW_PROMPT_SECTION)
   if (membershipUrl) {
     stableParts.push(
       '## Joining the studio (membership sign-up link)\n' +

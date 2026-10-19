@@ -54,6 +54,7 @@ import {
 import { personGroupResolver } from '@/lib/person-links'
 import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account-tools'
 import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
+import { SEND_BOOKING_FLOW_TOOL, SEND_BOOKING_FLOW_TOOL_NAME, bookingFlowOffered, executeSendBookingFlow } from './booking-flow'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
 import {
@@ -155,6 +156,18 @@ const CACHED_BLOCKS = {
   // tools than the executor would allow.
   un1t_full: CACHED_UN1T_READ_DUAL_TOOLS,
 }
+// MIAFLOW.1 — each block Mia can be in where she cannot book in chat, plus
+// send_booking_flow last (booking-flow.js), for a WhatsApp turn at a studio
+// whose booking Flow is switched on (bookingFlowOffered). Built once at load,
+// so each variant is a byte-stable cached prefix of its own; the blocks above
+// are untouched, and there is no Glofox variant (Stillorgan is unchanged).
+const DUAL_READ_FLOW_TOOLS = withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }), SEND_BOOKING_FLOW_TOOL])
+export const CACHED_BOOKING_FLOW_BLOCKS = Object.freeze({
+  no_booking: withCacheBreakpoint([...NO_BOOKING_AGENT_TOOLS, SEND_BOOKING_FLOW_TOOL]),
+  un1t_read: withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: false }), SEND_BOOKING_FLOW_TOOL]),
+  un1t_read_dual: DUAL_READ_FLOW_TOOLS,
+  un1t_full: DUAL_READ_FLOW_TOOLS,
+})
 /**
  * The cached tool block for a turn. The live turn sends CACHED_BLOCKS[block]
  * for its plan's block (turn-studios.js), the same array objects this returns.
@@ -958,6 +971,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // another studio's resolved settings (booking_mode, booking_url, copy);
     // voice, quiet hours and caps stay this thread's.
     const actionStudios = createActionStudios(db, { threadLocationId: locationId, threadSettings: settings, threadZone: zone })
+    // MIAFLOW.1 — the thread studio's booking Flow (locations.settings.whatsapp_flow),
+    // offered per block (bookingFlowOffered); tools, prompt and executor agree.
+    const flowConfig = loc?.settings?.whatsapp_flow || null
     toolCtx.actionStudio = actionStudios.settings
     let plan
     let system
@@ -971,6 +987,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       plan = p
       toolCtx.turn = turnForPlan(p, adapter.name)
       toolCtx.glofoxLocationId = p.glofoxLocationId
+      toolCtx.bookingFlow = {
+        offered: bookingFlowOffered({ channel: adapter.name, canBook, block: p.block, flowConfig, contactId: toolCtx.contactId }),
+        config: flowConfig,
+      }
     }
     // Plan the turn and build its system blocks together, so the tools and the
     // prompt always describe the same block. A prompt that cannot be built
@@ -993,7 +1013,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
         }
       }
       applyPlan(next)
-      system = buildCachedSystem(extra && !next.sameAsToday ? { ...systemOpts, ...extra } : systemOpts)
+      system = buildCachedSystem({
+        ...(extra && !next.sameAsToday ? { ...systemOpts, ...extra } : systemOpts),
+        bookingFlow: toolCtx.bookingFlow?.offered === true,
+      })
     }
     await settleTurn()
 
@@ -1035,7 +1058,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
             output_config: { effort: agentEffort },
             system,
             messages,
-            tools: CACHED_BLOCKS[plan.block],
+            tools: (toolCtx.bookingFlow?.offered && CACHED_BOOKING_FLOW_BLOCKS[plan.block]) || CACHED_BLOCKS[plan.block],
           },
           { apiKey, locationId, source: 'mia_auto_reply' },
           {
@@ -1123,7 +1146,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
               const execCtx = otherStudio ? toolCtx : await executorCtxFor(block.name, block.input || {}, toolCtx, actionStudios)
               result = (otherStudio ? membershipAtOtherStudio(otherStudio.name) : null)
                 || (execCtx ? null : { ...TOOL_NOT_AT_THIS_STUDIO })
-                || refuseToolForTurn(block.name, execCtx) || (ACCOUNT_TOOL_NAMES.has(block.name)
+                || refuseToolForTurn(block.name, execCtx) || (block.name === SEND_BOOKING_FLOW_TOOL_NAME
+                // MIAFLOW.1 — never throws; refuses itself unless this turn offers it.
+                ? await executeSendBookingFlow(execCtx)
+                : ACCOUNT_TOOL_NAMES.has(block.name)
                 ? await executeAccountTool(block.name, block.input || {}, execCtx)
                 : EVENT_TOOL_NAMES.has(block.name)
                   ? await executeEventTool(block.name, block.input || {}, execCtx)
