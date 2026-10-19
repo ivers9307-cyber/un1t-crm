@@ -10,8 +10,14 @@
 // The template list is fetched once and memoised module-side, so
 // dropping this button onto every radar row costs a single request.
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, createContext, useContext } from 'react'
 import { MessageCircle, X } from 'lucide-react'
+
+// UN1TRADAR.3 — whether the studio has a WhatsApp number switched on (the
+// radar GETs' `outreachAvailable`). A radar page provides it once; a row's
+// button reads it unless given the prop.
+export const RadarOutreachAvailable = createContext(true)
+export const NO_NUMBER_NOTE = 'No WhatsApp number at this studio yet'
 
 let templatesCache = null
 let templatesInflight = null
@@ -31,7 +37,15 @@ async function fetchTemplatesOnce() {
   return templatesInflight
 }
 
-export default function RadarOutreachButton({ contactName, disabled, busy, onSelect }) {
+export default function RadarOutreachButton({ outreachAvailable, ...props }) {
+  const fromPage = useContext(RadarOutreachAvailable)
+  if ((outreachAvailable ?? fromPage) === false) {
+    return <span className="inline-flex items-center gap-1 px-1 py-1 text-xs text-un1t-subtle"><MessageCircle size={13} />{NO_NUMBER_NOTE}</span>
+  }
+  return <OutreachPicker {...props} />
+}
+
+function OutreachPicker({ contactName, disabled, busy, onSelect }) {
   const [open, setOpen] = useState(false)
   const [templates, setTemplates] = useState(templatesCache)
   const [loading, setLoading] = useState(false)

@@ -23,10 +23,11 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendRadarOutreach } from '@/lib/radar-outreach'
-import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
+import { whatsappErrorStatus, isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
+import { isCrossoverAt } from '@/lib/contact-crossovers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -77,7 +78,9 @@ export async function POST(request) {
     .select('id, location_id, name, first_name, wa_phone, phone')
     .eq('id', contactId)
     .maybeSingle()
-  if (!contact || contact.location_id !== locationId) {
+  // UN1TRADAR.3 — or a crossover AT the active studio (an active membership
+  // or a un1t client there); never the caller's other studios. Fails closed.
+  if (!contact || (contact.location_id !== locationId && !(await isCrossoverAt(db, contact.id, locationId)))) {
     return NextResponse.json({ success: false, error: 'Contact not in your active location' }, { status: 404 })
   }
 
@@ -93,6 +96,8 @@ export async function POST(request) {
       await sendRadarOutreach({ db, contact, templateName, locationId, sentBy: user.id })
     } catch (e) {
       logWarn('lead-radar', 'outreach send failed', { err: e, contactId })
+      // UN1TRADAR.3 — one structured line for the no-number refusal
+      if (isWhatsAppNumberMissing(e)) logInfo('lead-radar', 'outreach refused: studio has no WhatsApp number', { locationId })
       // WACONFIGFALLBACK.1 — no WhatsApp number at this location → 409.
       return NextResponse.json({
         success: false,

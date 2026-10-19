@@ -49,7 +49,9 @@
 
 import { resolveAdminOrgId } from '@/lib/org-admin'
 import { todayStrIn, addDaysISO, zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
-import { membershipSourceState } from '@/lib/membership/source'
+import { membershipSourceState, MEMBERSHIP_SOURCES } from '@/lib/membership/source'
+import { READS_BY_SOURCE } from '@/lib/membership/reads/registry'
+import { logWarn } from '@/lib/log'
 
 // Glofox statuses that count as an active member (same cohort as
 // membership-snapshot.js).
@@ -175,7 +177,29 @@ export function resolveAccountScope(user, requestedOrgId) {
 // bad studio can't blank the whole portfolio.
 // ---------------------------------------------------------------------------
 
-async function countMembers(db, locationId) {
+// UN1TRADAR.3 — Glofox keeps the contacts head-count (Stillorgan's number
+// does not move); any other source whose provider SUPPLIES memberships (its
+// static capability, as radarReadsFor reads it) and whose read seam counts
+// members reports its total_members (a failed read is 0, as a failed count
+// is). Until UN1TRADAR.4 flips un1t.online's capability, a un1t studio keeps
+// main's head-count. A narrowing of spec B §5's "one line": the head-count
+// would read Hatch's Stillorgan-shaped glofox_* columns.
+function providesMemberships(source) {
+  return Object.hasOwn(MEMBERSHIP_SOURCES, source) && MEMBERSHIP_SOURCES[source]?.capabilities?.memberships === true
+}
+
+async function countMembers(db, locationId, source) {
+  const counts = source && source !== 'glofox' && providesMemberships(source)
+    ? READS_BY_SOURCE[source]?.membershipCounts
+    : null
+  if (typeof counts === 'function') {
+    try {
+      return Number((await counts(db, locationId))?.total_members) || 0
+    } catch (err) {
+      logWarn('account-home', 'member count read failed', { locationId, source, code: err?.code ?? null })
+      return 0
+    }
+  }
   const { count } = await db
     .from('contacts')
     .select('id', { count: 'exact', head: true })
@@ -240,7 +264,7 @@ async function assembleStudio(db, location, now) {
   const membershipSource = await membershipSourceState(db, location.id)
   try {
     const [members, bookings7d, atRiskHigh, openApprovals] = await Promise.all([
-      countMembers(db, location.id),
+      countMembers(db, location.id, membershipSource?.source),
       countBookings7d(db, location.id, window),
       latestAtRiskHigh(db, location.id),
       countOpenApprovals(db, location.id, window.end),

@@ -12,12 +12,27 @@ import { describe, it, expect, vi } from 'vitest'
 // W1.M2 — the studio card's integration chip is the membership-source STATE
 // (src/lib/membership/source.js), not a sniff of settings.glofox. Mocked
 // here so the table-scripted db below never sees a `locations` read.
+const un1tProvider = vi.hoisted(() => ({ capabilities: { memberships: true } }))
 vi.mock('@/lib/membership/source', () => ({
   membershipSourceState: vi.fn(async (_db, locationId) => (
     locationId === 'loc-1' ? { source: 'glofox', state: 'configured' }
+      : locationId === 'loc-un1t' ? { source: 'un1t_online', state: 'configured' }
+      : locationId === 'loc-un1t-bad' ? { source: 'un1t_online', state: 'configured' }
       : locationId === 'loc-err' ? { source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE' }
         : { source: 'none', state: 'none' }
   )),
+  // the providers' STATIC capability; un1t_online's is flipped per test
+  MEMBERSHIP_SOURCES: {
+    glofox: { capabilities: { memberships: true } },
+    none: { capabilities: { memberships: false } },
+    un1t_online: un1tProvider,
+  },
+}))
+
+// UN1TRADAR.3 — the source-key registry, so a un1t studio counts members through the seam.
+const un1tCounts = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/membership/reads/registry', () => ({
+  READS_BY_SOURCE: { glofox: { membershipCounts: vi.fn() }, none: {}, un1t_online: { membershipCounts: un1tCounts } },
 }))
 
 import {
@@ -285,5 +300,47 @@ describe('assembleAccountHome', () => {
       now: Date.now(),
     })
     expect(res.studios[0].membershipSource).toEqual({ source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE' })
+  })
+})
+
+// UN1TRADAR.3 — Glofox keeps its contacts head-count (Stillorgan unchanged);
+// another source with a membershipCounts read reports its total_members.
+describe('assembleAccountHome members by source', () => {
+  it('account-home members: glofox head-count unchanged; un1t from membershipCounts; a failed read is 0', async () => {
+    un1tProvider.capabilities.memberships = true // as after UN1TRADAR.4
+    un1tCounts.mockImplementation(async (_db, id) => {
+      if (id === 'loc-un1t-bad') throw new Error('down')
+      return { total_members: 26 }
+    })
+    const { db, selectCalls } = mockDb({ 'loc-1': { members: 268 }, 'loc-un1t': { members: 999 }, 'loc-un1t-bad': { members: 999 } })
+    const res = await assembleAccountHome(db, {
+      organization: { id: 'o', name: 'O', slug: 'o' },
+      locations: [{ id: 'loc-1', name: 'S' }, { id: 'loc-un1t', name: 'H' }, { id: 'loc-un1t-bad', name: 'X' }],
+      now: Date.parse('2026-10-18T12:00:00Z'),
+    })
+    const by = Object.fromEntries(res.studios.map((st) => [st.id, st.members]))
+    expect(by).toEqual({ 'loc-1': 268, 'loc-un1t': 26, 'loc-un1t-bad': 0 })
+    expect(un1tCounts).toHaveBeenCalledWith(db, 'loc-un1t')
+    // the contacts head-count ran for the Glofox studio only
+    expect(selectCalls.filter((c) => c.table === 'contacts')).toHaveLength(1)
+  })
+
+  it('a un1t studio whose provider does not supply memberships yet keeps the contacts head-count (main today)', async () => {
+    un1tProvider.capabilities.memberships = false
+    un1tCounts.mockReset()
+    try {
+      const { db, selectCalls } = mockDb({ 'loc-1': { members: 268 }, 'loc-un1t': { members: 41 } })
+      const res = await assembleAccountHome(db, {
+        organization: { id: 'o', name: 'O', slug: 'o' },
+        locations: [{ id: 'loc-1', name: 'S' }, { id: 'loc-un1t', name: 'H' }],
+        now: Date.parse('2026-10-18T12:00:00Z'),
+      })
+      const by = Object.fromEntries(res.studios.map((st) => [st.id, st.members]))
+      expect(by).toEqual({ 'loc-1': 268, 'loc-un1t': 41 })
+      expect(un1tCounts).not.toHaveBeenCalled()
+      expect(selectCalls.filter((c) => c.table === 'contacts')).toHaveLength(2)
+    } finally {
+      un1tProvider.capabilities.memberships = true
+    }
   })
 })

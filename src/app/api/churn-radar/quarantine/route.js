@@ -21,6 +21,9 @@ import { radarCache, invalidateRadar } from '@/lib/radar-cache'
 import { radarAvailability, RADAR_UNAVAILABLE } from '@/lib/radar-availability'
 import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
+import { crossoverIdsAt } from '@/lib/contact-crossovers'
+import { radarReadsFor } from '@/lib/membership/reads/index'
+import { SOURCE_UNREADABLE } from '@/lib/radar-copy'
 
 const QuarantineTriageSchema = z.object({
   decision:    z.enum(['stale', 'keep']),
@@ -90,20 +93,38 @@ export async function POST(request) {
   if (scopeErr) {
     return NextResponse.json({ success: false, error: scopeErr.message }, { status: 500 })
   }
-  const ids = (scoped || []).map((c) => c.id)
+  const ownedIds = (scoped || []).map((c) => c.id)
+  // UN1TRADAR.3 — plus crossovers AT the active studio (a membership or a
+  // un1t client there). A failed probe adds none (owned contacts only).
+  const owned = new Set(ownedIds)
+  const crossover = await crossoverIdsAt(db, contactIds.filter((id) => !owned.has(id)), locationId)
+  const ids = [...ownedIds, ...crossover]
   if (ids.length === 0) {
     return NextResponse.json({ success: false, error: 'No contacts in scope' }, { status: 400 })
   }
 
   // 'stale' — reclassify the pipeline stage out of the active base.
+  // UN1TRADAR.3 — at a studio whose membership source is not Glofox the
+  // decision is logged only: contacts.pipeline_stage_slug follows the primary
+  // board there, which spec A's classifier owns (Claude's call 6).
+  // Read only for 'stale': a 'keep' never touches contacts.
   if (decision === 'stale') {
-    const { error: updErr } = await db
-      .from('contacts')
-      .update({ pipeline_stage_slug: 'dormant' })
-      .in('id', ids)
-    if (updErr) {
-      logWarn('churn-radar', 'quarantine reclassify failed', { err: updErr })
-      return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+    let source
+    try {
+      ({ source } = await radarReadsFor(db, locationId))
+    } catch (err) {
+      logWarn('churn-radar', 'membership source unreadable', { locationId, code: err?.code ?? null })
+      return NextResponse.json({ success: false, error: SOURCE_UNREADABLE }, { status: 503 })
+    }
+    if (source === 'glofox' && ownedIds.length > 0) {
+      const { error: updErr } = await db
+        .from('contacts')
+        .update({ pipeline_stage_slug: 'dormant' })
+        .in('id', ownedIds) // owned only: a crossover's row is another studio's
+      if (updErr) {
+        logWarn('churn-radar', 'quarantine reclassify failed', { err: updErr })
+        return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+      }
     }
   }
 

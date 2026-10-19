@@ -54,3 +54,15 @@ describe('GET /api/cron/glofox-data-quality — skips locations with no membersh
     expect(stampTenantHeartbeat).not.toHaveBeenCalled()
   })
 })
+
+// UN1TRADAR.3 — the check reads Glofox pack-sync freshness, so it visits
+// Glofox-source locations only, whatever capability another source gains.
+describe('GET /api/cron/glofox-data-quality — Glofox sources only (UN1TRADAR.3)', () => {
+  it('glofox-data-quality skips non-Glofox sources (lists by membership_source = glofox)', async () => {
+    h.db = dbFor(ESTATE_2026_10_17)
+    await GET(req())
+    const listed = queriesOf(h.db, 'locations').filter((q) => q.eq.membership_source)
+    expect(listed.map((q) => q.eq.membership_source)).toEqual(['glofox'])
+    expect(queriesOf(h.db, 'contacts').map((q) => q.eq.location_id)).toEqual([STILLORGAN_ID])
+  })
+})

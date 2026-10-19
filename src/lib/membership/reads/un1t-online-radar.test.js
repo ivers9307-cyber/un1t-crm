@@ -180,6 +180,22 @@ describe('radarMembers', () => {
     await expect(radarMembers(db, HATCH, { nowMs: NOW })).rejects.toThrow(/refusing a truncated radar/)
   })
 
+  // last_booked_at reads un1t_bookings from now - 400 days only (never the
+  // studio's whole booking history): 399 days counts, 401 does not.
+  it('last_booked_at looks back 400 days: a booking at 399 days counts, 401 does not', async () => {
+    const at = (days) => [{ id: id(), location_id: HATCH, un1t_user_id: 'u1', contact_id: 'c1', event_id: 'old', status: 'attended', remote_created_at: iso(NOW - days * DAY) }]
+    const in399 = await radarMembers(makeDb(seed({ un1t_bookings: at(399) })).db, HATCH, { nowMs: NOW })
+    expect(in399[0].last_booked_at).toBe(iso(NOW - 399 * DAY))
+    const in401 = await radarMembers(makeDb(seed({ un1t_bookings: at(401) })).db, HATCH, { nowMs: NOW })
+    expect(in401[0].last_booked_at).toBeNull()
+    const { db, log } = makeDb(seed())
+    await radarMembers(db, HATCH, { nowMs: NOW })
+    const q = log.find((x) => x.table === 'un1t_bookings' && x.cols === 'un1t_user_id, contact_id, remote_created_at')
+    expect(q.filters).toContainEqual(['gte', 'remote_created_at', iso(NOW - 400 * DAY)])
+    expect(q.orders).toEqual(['id'])
+    expect(q.range).not.toBeNull()
+  })
+
   it('events are read for the 30-day window only', async () => {
     const { db, log } = makeDb(seed())
     await radarMembers(db, HATCH, { nowMs: NOW })
@@ -224,7 +240,7 @@ describe('radarMembers', () => {
   it('build log carries counts and locationId only', async () => {
     const { db } = makeDb(seed())
     await radarMembers(db, HATCH, { nowMs: NOW })
-    expect(logInfo).toHaveBeenCalledWith('churn-radar', 'un1t radar built', { locationId: HATCH, members: 1, packHolders: 0, unlinkedClients: 0, pinned: 0 })
+    expect(logInfo).toHaveBeenCalledWith('churn-radar', 'un1t radar built', { locationId: HATCH, members: 1, packHolders: 0, unlinkedClients: 0 })
   })
 
   it('is registered on un1tOnlineReads', () => {
@@ -277,6 +293,21 @@ describe('leadContacts', () => {
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]))
     expect(byId.c1).toMatchObject({ glofox_membership_status: 'lead', email: 'alex@example.com', last_booked_at: iso(NOW - 3 * DAY) })
     expect(byId.own).toMatchObject({ glofox_membership_status: 'lead', joined_at: '2026-10-10T00:00:00Z', lead_source: 'form' })
+  })
+
+  it('leadContacts last_booked_at looks back 400 days: 399 counts, 401 does not', async () => {
+    const run = async (days) => {
+      const { db } = makeDb(seed({
+        un1t_subscriptions: [],
+        un1t_clients: [client({ last_attended_at: null })],
+        un1t_bookings: [{ id: id(), location_id: HATCH, un1t_user_id: 'u1', contact_id: 'c1', event_id: 'old', status: 'attended', remote_created_at: iso(NOW - days * DAY) }],
+        contacts: [contact({ glofox_membership_status: 'member' })],
+      }))
+      const rows = await leadContacts(db, HATCH, { nowMs: NOW })
+      return rows.find((r) => r.id === 'c1')?.last_booked_at ?? null
+    }
+    expect(await run(399)).toBe(iso(NOW - 399 * DAY))
+    expect(await run(401)).toBeNull()
   })
 
   it('leadContacts throws when pipelineInputs returns success:false', async () => {
