@@ -15,6 +15,13 @@
 //   * a whole object key (shorthand for every one of its fields): 'followups'
 //   * a studio-only key: accepted, and changes nothing (those are always saved)
 
+// TRIALDONE.3 — the default brief Mia is given for a trial finisher who
+// replies to the "carry on?" message. Lives here (zod-free) so the studio
+// editor can show it as the textarea placeholder; settings-contract.js
+// re-exports it. Customer-facing copy: NO em-dash (the schema refuses one).
+export const TRIAL_DONE_MIA_INSTRUCTION_DEFAULT =
+  'This customer finished their trial at {studio} on {date}, and we messaged them about carrying on. Help them choose between the Foundation membership and a class pack. Call list_purchase_options before naming any product or price, lead with the Foundation membership, and once they choose, send the payment link with send_purchase_link. Answer their questions honestly and never pressure them.'
+
 // Keys that belong to ONE studio and are never read from the organisation
 // layer (resolveAgentSettings / mergeAgentSettings). An org-level
 // `enabled: true` must never switch a studio on (enabled+test_mode is live
@@ -25,7 +32,8 @@
 // studio blob and would not see it, so the two would disagree.
 // un1t_chat_actions_enabled (MIAHATCH.5, Ruling 25) lets Mia book, cancel and
 // take refund requests in chat at ONE un1t.online studio: an org value would
-// switch it on at every studio at once.
+// switch it on at every studio at once. trial_done (TRIALDONE.3) is the same:
+// the trial-finisher outreach is switched on per studio, never from the org.
 export const STUDIO_ONLY_KEYS = new Set([
   'enabled',
   'test_mode',
@@ -39,6 +47,7 @@ export const STUDIO_ONLY_KEYS = new Set([
   'membership_cta_label',
   'monthly_points_target',
   'un1t_chat_actions_enabled',
+  'trial_done',
 ])
 
 // Object-valued keys that merge PER FIELD (org fields under studio fields)

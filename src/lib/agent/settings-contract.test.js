@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest'
 import {
   SettingsSchema, DEFAULTS, buildCustomerAgentSettings, STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS,
   StudioSettingsSchema, buildStudioOverrideBlob, OrgSettingsSchema, ORG_REFUSED_KEYS,
+  TRIAL_DONE_MIA_INSTRUCTION_DEFAULT, orgSettingsRefusals,
 } from './settings-contract'
 import { INHERITABLE_OBJECT_FIELDS, INHERITABLE_SCALAR_KEYS, initialOverridden } from './settings-overrides'
 import { mergeAgentSettings } from './settings-resolve'
@@ -203,7 +204,7 @@ describe('settings write-through contract', () => {
       'booking_cta_label', 'booking_mode', 'booking_url', 'cancellation_form',
       'consultation_event_type_id', 'enabled', 'membership_cta_label',
       'membership_signup_url', 'monthly_points_target', 'test_mode', 'test_phones',
-      'un1t_chat_actions_enabled',
+      'trial_done', 'un1t_chat_actions_enabled',
     ])
     for (const k of STUDIO_ONLY_KEYS) expect(k in DEFAULTS).toBe(true)
     expect(INHERITABLE_OBJECT_KEYS).toEqual(['limits', 'followups', 'first_class_checkin', 'inline_suggestion', 'quiet_hours'])
@@ -411,5 +412,106 @@ describe('buildStudioOverrideBlob (MIAORG.1 Task 3)', () => {
   it('without overridden the route still builds the whole blob (buildCustomerAgentSettings, unchanged)', () => {
     const data = parse({ enabled: true, tone: 'x' })
     expect(Object.keys(buildCustomerAgentSettings(data)).length).toBeGreaterThan(30)
+  })
+})
+
+// TRIALDONE.3 — the per-studio trial-finisher outreach block. Studio-only and
+// off by default: an org value must never switch it on at every studio.
+describe('trial_done (TRIALDONE.3)', () => {
+  const ID_A = '11111111-1111-4111-8111-111111111111'
+
+  it('DEFAULTS.trial_done matches the spec', () => {
+    expect(TRIAL_DONE_MIA_INSTRUCTION_DEFAULT).toBe(
+      'This customer finished their trial at {studio} on {date}, and we messaged them about carrying on. Help them choose between the Foundation membership and a class pack. Call list_purchase_options before naming any product or price, lead with the Foundation membership, and once they choose, send the payment link with send_purchase_link. Answer their questions honestly and never pressure them.',
+    )
+    expect(TRIAL_DONE_MIA_INSTRUCTION_DEFAULT).not.toContain('\u2014')
+    expect(DEFAULTS.trial_done).toEqual({
+      enabled: false,
+      delay_hours: 2,
+      stale_after_hours: 24,
+      opener_template: 'hatch_trial_done_checkin',
+      followup_template: 'hatch_trial_done_followup',
+      followup_after_hours: 22,
+      followup_max_hours: 30,
+      nudge_after_hours: 3,
+      nudge_max_hours: 20,
+      daily_cap: 20,
+      only_contact_ids: [],
+      mia_instruction: TRIAL_DONE_MIA_INSTRUCTION_DEFAULT,
+    })
+  })
+
+  it('trial_done is studio-only: an org blob\'s trial_done is ignored, the studio\'s wins', () => {
+    expect(STUDIO_ONLY_KEYS.has('trial_done')).toBe(true)
+    expect(INHERITABLE_OBJECT_KEYS).not.toContain('trial_done')
+    expect(INHERITABLE_SCALAR_KEYS).not.toContain('trial_done')
+    expect(ORG_REFUSED_KEYS.has('trial_done')).toBe(true)
+    expect('trial_done' in OrgSettingsSchema.shape).toBe(false)
+    const orgOn = { trial_done: { enabled: true, daily_cap: 99 } }
+    const ignored = mergeAgentSettings({ org: orgOn, studio: { enabled: true } })
+    expect(ignored.settings.trial_done).toEqual(DEFAULTS.trial_done)
+    expect(ignored.sources.trial_done).toBe('default')
+    const own = mergeAgentSettings({ org: orgOn, studio: { enabled: true, trial_done: { ...DEFAULTS.trial_done, enabled: true, daily_cap: 5 } } })
+    expect(own.settings.trial_done).toMatchObject({ enabled: true, daily_cap: 5 })
+    expect(own.sources.trial_done).toBe('studio')
+  })
+
+  it('the org PUT refuses a trial_done in the body', () => {
+    const issues = orgSettingsRefusals({ trial_done: { enabled: true } })
+    expect(issues.map((i) => i.path)).toContain('settings.trial_done')
+  })
+
+  it('absent -> the full default block, off; a partial block is filled from DEFAULTS', () => {
+    expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true })).trial_done).toEqual(DEFAULTS.trial_done)
+    const built = buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, trial_done: { enabled: true, delay_hours: 4 } }))
+    expect(built.trial_done).toEqual({ ...DEFAULTS.trial_done, enabled: true, delay_hours: 4 })
+  })
+
+  it('round-trips every field through the studio save', () => {
+    const block = {
+      enabled: true, delay_hours: 6, stale_after_hours: 30, opener_template: 'my_opener', followup_template: 'my_followup',
+      followup_after_hours: 20, followup_max_hours: 40, nudge_after_hours: 5, nudge_max_hours: 25, daily_cap: 7,
+      only_contact_ids: [ID_A], mia_instruction: 'Help {studio} members carry on after {date}.',
+    }
+    const data = StudioSettingsSchema.parse({ enabled: true, trial_done: block })
+    expect(buildStudioOverrideBlob(data, []).trial_done).toEqual(block)
+    expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, trial_done: block })).trial_done).toEqual(block)
+    // a studio body that never mentions it stores nothing for it
+    expect(buildStudioOverrideBlob(StudioSettingsSchema.parse({ enabled: true }), [])).not.toHaveProperty('trial_done')
+  })
+
+  it('rejects an em-dash in mia_instruction (customer-facing copy rule)', () => {
+    const bad = SettingsSchema.safeParse({ enabled: true, trial_done: { mia_instruction: 'Welcome back \u2014 let us help.' } })
+    expect(bad.success).toBe(false)
+    expect(StudioSettingsSchema.safeParse({ enabled: true, trial_done: { mia_instruction: 'a \u2014 b' } }).success).toBe(false)
+    expect(SettingsSchema.safeParse({ enabled: true, trial_done: { mia_instruction: 'Welcome back, let us help.' } }).success).toBe(true)
+  })
+
+  it('bounds: hours 1-72 integers, daily_cap 1-200, template charset, instruction 1-1000, up to 20 uuids', () => {
+    const ok = (td) => SettingsSchema.safeParse({ enabled: true, trial_done: td }).success
+    for (const f of ['delay_hours', 'stale_after_hours', 'followup_after_hours', 'followup_max_hours', 'nudge_after_hours', 'nudge_max_hours']) {
+      expect(ok({ [f]: 1 }), f).toBe(true)
+      expect(ok({ [f]: 72 }), f).toBe(true)
+      expect(ok({ [f]: 0 }), f).toBe(false)
+      expect(ok({ [f]: 73 }), f).toBe(false)
+      expect(ok({ [f]: 2.5 }), f).toBe(false)
+    }
+    expect(ok({ daily_cap: 1 })).toBe(true)
+    expect(ok({ daily_cap: 200 })).toBe(true)
+    expect(ok({ daily_cap: 0 })).toBe(false)
+    expect(ok({ daily_cap: 201 })).toBe(false)
+    for (const f of ['opener_template', 'followup_template']) {
+      expect(ok({ [f]: 'abc_123' }), f).toBe(true)
+      expect(ok({ [f]: 'Has Caps' }), f).toBe(false)
+      expect(ok({ [f]: 'has-dash' }), f).toBe(false)
+      expect(ok({ [f]: '' }), f).toBe(false)
+      expect(ok({ [f]: 'a'.repeat(513) }), f).toBe(false)
+    }
+    expect(ok({ mia_instruction: '' })).toBe(false)
+    expect(ok({ mia_instruction: 'x'.repeat(1000) })).toBe(true)
+    expect(ok({ mia_instruction: 'x'.repeat(1001) })).toBe(false)
+    expect(ok({ only_contact_ids: Array(20).fill(ID_A) })).toBe(true)
+    expect(ok({ only_contact_ids: Array(21).fill(ID_A) })).toBe(false)
+    expect(ok({ only_contact_ids: ['not-a-uuid'] })).toBe(false)
   })
 })

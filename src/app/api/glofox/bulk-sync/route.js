@@ -260,11 +260,13 @@ export async function POST(request) {
       const result = dryRun
         ? await previewMemberSync(db, locationId, lead, { creds, membershipCache })
         : await applyMemberSync(db, locationId, lead, { creds, membershipCache })
-      summary[result.action] = (summary[result.action] || 0) + 1
+      // GLOFOXSIBLING.1 — a result carrying `error` did not do its action.
+      const action = result.error ? 'error' : result.action
+      summary[action] = (summary[action] || 0) + 1
       processed.push({
         glofox_member_id: memberId,
         name,
-        action: result.action,
+        action,
         contact_id: result.contact_id || null,
         deal: result.deal || null,
         interactions: result.interactions || null,

@@ -10,7 +10,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup, within, act } from '@testing-library/react'
 import { DEFAULTS, buildCustomerAgentSettings, SettingsSchema } from '@/lib/agent/settings-contract'
 import { mergeAgentSettings } from '@/lib/agent/settings-resolve'
-import { initialOverridden } from '@/lib/agent/settings-overrides'
+import { initialOverridden, TRIAL_DONE_MIA_INSTRUCTION_DEFAULT } from '@/lib/agent/settings-overrides'
 import CustomerAgentClient from './CustomerAgentClient.jsx'
 
 const NOTE = 'Could not load the customer agent settings just now, so nothing is shown and nothing can be changed here until it loads.'
@@ -897,5 +897,125 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     const { container } = render(<CustomerAgentClient canEdit />)
     await ready()
     for (const b of container.querySelectorAll('[data-testid="hatch-copy-group"] button')) expect(b.getAttribute('type')).toBe('button')
+  })
+})
+
+// TRIALDONE.3 — the trial-finisher card: studio-only, a un1t.online studio only.
+describe('CustomerAgentClient — trial finisher card (TRIALDONE.3)', () => {
+  function answer({ membership_source_key, studio = { enabled: true }, org = null } = {}) {
+    const { settings, sources } = mergeAgentSettings({ org, studio })
+    return reply(200, {
+      success: true,
+      settings: { ...settings, social_enabled: false, glofox_auto_cancel: false },
+      studio, org, sources,
+      inherited: mergeAgentSettings({ org, studio: null }).settings,
+      ...(membership_source_key === undefined ? {} : { membership_source_key }),
+      location: { id: 'loc1', name: 'Test Studio' },
+      checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
+    })
+  }
+  const puts = () => global.fetch.mock.calls.filter(([url, init]) => String(url).startsWith('/api/settings/customer-agent') && init?.method === 'PUT')
+  const putBody = () => { const p = puts()[0]; return p && JSON.parse(p[1].body) }
+  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+  const saveButton = () => screen.getAllByRole('button', { name: /Save settings/ })[0]
+  const TITLE = 'Trial finisher follow-up'
+  const ID_A = '11111111-1111-4111-8111-111111111111'
+
+  it('shows at a un1t.online studio, off, with both template names, the delay and the default instruction as placeholder', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByText(TITLE)).toBeTruthy()
+    const card = screen.getByTestId('trial-done-card')
+    expect(within(card).getByLabelText('Enable trial finisher follow-up').checked).toBe(false)
+    expect(within(card).getByLabelText('Opener template').value).toBe('hatch_trial_done_checkin')
+    expect(within(card).getByLabelText('Follow-up template').value).toBe('hatch_trial_done_followup')
+    expect(within(card).getByLabelText('Send after (hours)').value).toBe('2')
+    expect(within(card).getByLabelText("Mia's instruction").getAttribute('placeholder')).toBe(TRIAL_DONE_MIA_INSTRUCTION_DEFAULT)
+    expect(card.textContent).not.toMatch(/[\u2014\u2013]/)
+  })
+
+  // TRIALDONE.7 — the card says who gets it, and what the delay counts from.
+  it('describes the trigger as 3 trial classes, or 2 and an expired trial, timed from the trial ending', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const card = screen.getByTestId('trial-done-card')
+    expect(card.textContent).toContain('has done 3 trial classes, or 2 classes and the trial has expired')
+    expect(card.textContent).toContain('Hours after the trial ends')
+    expect(card.textContent).not.toContain('attends their second class')
+    expect(card.textContent).not.toContain('Hours after their last class')
+  })
+
+  it('a Glofox studio, no source, or an older GET shows no card', async () => {
+    for (const key of ['glofox', 'none', undefined]) {
+      mockFetch([answer({ membership_source_key: key })])
+      const { unmount } = render(<CustomerAgentClient canEdit />)
+      await ready()
+      expect(screen.queryByText(TITLE), String(key)).toBeNull()
+      expect(screen.queryByTestId('trial-done-card'), String(key)).toBeNull()
+      unmount()
+    }
+  })
+
+  it('an edit goes into the PUT body as the studio\'s own block', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' }), reply(200, { success: true, settings: {} }), answer({ membership_source_key: 'un1t_online' })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const card = screen.getByTestId('trial-done-card')
+    fireEvent.click(within(card).getByLabelText('Enable trial finisher follow-up'))
+    fireEvent.change(within(card).getByLabelText('Opener template'), { target: { value: 'my_opener' } })
+    fireEvent.change(within(card).getByLabelText('Send after (hours)'), { target: { value: '6' } })
+    fireEvent.change(within(card).getByLabelText("Mia's instruction"), { target: { value: 'Help them carry on.' } })
+    fireEvent.change(within(card).getByLabelText('Test contact ids'), { target: { value: ID_A } })
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().trial_done).toMatchObject({
+      enabled: true, opener_template: 'my_opener', delay_hours: 6, mia_instruction: 'Help them carry on.', only_contact_ids: [ID_A],
+      followup_template: 'hatch_trial_done_followup',
+    })
+  })
+
+  it('a stored block is shown, and a test list is flagged as a test', async () => {
+    const studio = { enabled: true, trial_done: { ...DEFAULTS.trial_done, enabled: true, opener_template: 'stored_opener', only_contact_ids: [ID_A] } }
+    mockFetch([answer({ membership_source_key: 'un1t_online', studio })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const card = screen.getByTestId('trial-done-card')
+    expect(within(card).getByLabelText('Enable trial finisher follow-up').checked).toBe(true)
+    expect(within(card).getByLabelText('Opener template').value).toBe('stored_opener')
+    expect(within(card).getByLabelText('Test contact ids').value).toBe(ID_A)
+    expect(within(card).getByText('Test: 1 contact only')).toBeTruthy()
+  })
+
+  it('an organisation value never reaches the card', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online', org: { trial_done: { enabled: true, daily_cap: 99 } } })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(screen.getByTestId('trial-done-card')).getByLabelText('Enable trial finisher follow-up').checked).toBe(false)
+  })
+
+  it('an invalid value is named beside its field and holds Save; an em-dash is refused', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const card = screen.getByTestId('trial-done-card')
+    expect(saveButton().disabled).toBe(false)
+    fireEvent.change(within(card).getByLabelText('Opener template'), { target: { value: 'Has Caps' } })
+    expect(within(card).getByText(/lowercase letters, numbers and underscores/)).toBeTruthy()
+    expect(saveButton().disabled).toBe(true)
+    fireEvent.change(within(card).getByLabelText('Opener template'), { target: { value: 'ok_name' } })
+    expect(saveButton().disabled).toBe(false)
+    fireEvent.change(within(card).getByLabelText("Mia's instruction"), { target: { value: 'Hi \u2014 there' } })
+    expect(within(card).getByText(/No em-dashes/)).toBeTruthy()
+    expect(saveButton().disabled).toBe(true)
+  })
+
+  it('is read-only without edit rights, and every button in it is typed', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    const { container } = render(<CustomerAgentClient canEdit={false} />)
+    await waitFor(() => expect(screen.getByTestId('trial-done-card')).toBeTruthy())
+    expect(screen.getByTestId('trial-done-card').closest('fieldset').disabled).toBe(true)
+    for (const b of container.querySelectorAll('[data-testid="trial-done-card"] button')) expect(b.getAttribute('type')).toBe('button')
   })
 })

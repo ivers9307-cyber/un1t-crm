@@ -3,6 +3,7 @@ import {
   mapGlofoxMember,
   mapMembershipStatus,
   previewMemberSync,
+  applyMemberSync,
   parseGlofoxDate,
   parseGlofoxJoinedAt,
   normalizePhone,
@@ -1510,32 +1511,59 @@ describe('mapGlofoxMember (real Glofox payload — Cathy, comp\'d Credit Member)
 //                                  primary board every live location runs, so
 //                                  every fixture below keeps its assertions;
 //                                  pass [] to model a location with no board.
+//   GLOFOXSIBLING.1 — the organisation-wide fallback (glofox-crossover.js),
+//   read only when the location-scoped lookups find nothing:
+//   crossoverLinks               — glofox_crossover_members rows ({ contact_id })
+//   orgRowsByGlofoxId / orgRowsByEmail — contacts across the organisation
+//   contactsById                 — contacts read by id (a link row's contact)
+//   lookupError                  — the location-scoped contact read fails
+//   writes                       — every insert/update/upsert, in order
 function fakeDb({
   rowsByGlofoxId = [], rowsByEmail = [], openDeal = null,
   pipelines = [{ id: 'p-acq', mode: 'derived' }],
+  crossoverLinks = [], orgRowsByGlofoxId = [], orgRowsByEmail = [], contactsById = {},
+  lookupError = null, writes = [],
 } = {}) {
   function chain(table) {
     let mode = null
+    let scope = null
+    let single = false
+    let byId = null
     const c = {}
     c.select = () => c
-    c.eq = (col) => {
+    c.eq = (col, val) => {
+      if (col === 'location_id')                            scope = scope || 'location'
+      if (col === 'organization_id')                        scope = 'org'
       if (table === 'deals' && col === 'contact_id')        mode = 'open_deal'
       else if (table === 'pipeline_stages' && col === 'id') mode = 'stage_by_id'
+      else if (table === 'contacts' && col === 'id')        { mode = 'contact_by_id'; byId = val }
       else if (col === 'glofox_member_id')                  mode = 'glofox'
       else if (col === 'email')                             mode = 'email'
       return c
     }
+    c.ilike = (col) => { if (col === 'email') mode = 'email'; return c }
     c.limit = () => c
     c.order = () => c
+    c.in = () => c
+    c.is = () => c
+    c.maybeSingle = () => { single = true; return c }
+    for (const op of ['insert', 'update', 'upsert']) {
+      c[op] = (payload) => { writes.push({ table, op, payload }); return c }
+    }
     c.then = (resolve) => {
       let data
-      if (table === 'pipelines')        data = pipelines
-      else if (mode === 'glofox')       data = rowsByGlofoxId
-      else if (mode === 'email')        data = rowsByEmail
+      if (table === 'pipelines')                                data = pipelines
+      else if (table === 'locations')                           data = [{ organization_id: 'org-1' }]
+      else if (table === 'glofox_crossover_members')            data = writes.length && writes.at(-1).table === table ? [{ id: 'gx-1' }] : crossoverLinks
+      else if (table === 'contact_location_preferences')        data = writes.length && writes.at(-1).table === table ? [{ contact_id: writes.at(-1).payload[0]?.contact_id }] : []
+      else if (mode === 'contact_by_id')                        data = contactsById[byId] ? [contactsById[byId]] : []
+      else if (table === 'contacts' && scope === 'location' && lookupError) return resolve({ data: null, error: lookupError })
+      else if (mode === 'glofox')       data = scope === 'org' ? orgRowsByGlofoxId : rowsByGlofoxId
+      else if (mode === 'email')        data = scope === 'org' ? orgRowsByEmail : rowsByEmail
       else if (mode === 'open_deal')    data = openDeal ? [{ id: openDeal.id, stage_id: openDeal.stage_id }] : []
       else if (mode === 'stage_by_id')  data = openDeal ? [{ slug: openDeal.stage_slug }] : []
       else                              data = []
-      resolve({ data })
+      resolve({ data: single ? (data[0] ?? null) : data, error: null })
     }
     return c
   }
@@ -2396,5 +2424,81 @@ describe('ensureDealForContact — move result names the board (HATCHPIPE.1)', (
       pipeline_id: 'p-primary',
       location_id: 'loc-1',
     })
+  })
+})
+
+// GLOFOXSIBLING.1 — a Glofox member whose one contact lives at a sibling
+// studio of the same organisation (one contact per email per org, mig 712).
+describe('previewMemberSync / applyMemberSync — sibling-studio contact (GLOFOXSIBLING.1)', () => {
+  const member = { _id: 'g1', email: 'craig@x.com', first_name: 'Craig', last_name: 'C', phone: '+447000000000' }
+  const hatch = (over = {}) => ({ id: 'c-hatch', location_id: 'hatch', email: 'craig@x.com', first_name: 'Craig', last_name: 'C', phone: null, glofox_member_id: null, ...over })
+
+  it('a miss at the studio finds the organisation contact by email: update it, never create', async () => {
+    const out = await previewMemberSync(fakeDb({ orgRowsByEmail: [hatch()] }), 'stillorgan', member)
+    expect(out.action).toBe('update')
+    expect(out.existing_id).toBe('c-hatch')
+    expect(out.crossover).toEqual({ how: 'email', home_location_id: 'hatch' })
+    expect(out.changes.glofox_member_id).toEqual({ from: null, to: 'g1' })
+    // the home studio's name is kept; only an empty phone is filled
+    expect(out.changes.first_name).toBeUndefined()
+    expect(out.changes.phone).toEqual({ from: null, to: '+447000000000' })
+  })
+
+  it('a contact already linked at the studio (link row) is found by it', async () => {
+    const out = await previewMemberSync(fakeDb({
+      crossoverLinks: [{ contact_id: 'c-hatch' }], contactsById: { 'c-hatch': hatch({ glofox_member_id: 'g1' }) },
+    }), 'stillorgan', member)
+    expect(out.action).toBe('update')
+    expect(out.crossover).toEqual({ how: 'link', home_location_id: 'hatch' })
+  })
+
+  it('a contact at the studio is never a crossover (the org fallback is not read)', async () => {
+    const out = await previewMemberSync(fakeDb({
+      rowsByEmail: [{ id: 'c-here', email: 'craig@x.com', glofox_member_id: null }], orgRowsByEmail: [hatch()],
+    }), 'stillorgan', member)
+    expect(out.action).toBe('update')
+    expect(out.existing_id).toBe('c-here')
+    expect(out.crossover).toBeUndefined()
+  })
+
+  it('the email holder is linked to a DIFFERENT Glofox member: ambiguous, never overwritten', async () => {
+    const out = await previewMemberSync(fakeDb({ orgRowsByEmail: [hatch({ glofox_member_id: 'g-other' })] }), 'stillorgan', member)
+    expect(out.action).toBe('ambiguous')
+    expect(out.conflicts).toEqual({ sibling_studio_contact_ids: ['c-hatch'] })
+    expect(out.reason).toMatch(/different Glofox member/)
+  })
+
+  it('two organisation contacts for the member: ambiguous', async () => {
+    const out = await previewMemberSync(fakeDb({
+      orgRowsByGlofoxId: [hatch({ glofox_member_id: 'g1' })], orgRowsByEmail: [hatch({ id: 'c-other' })],
+    }), 'stillorgan', member)
+    expect(out.action).toBe('ambiguous')
+    expect(out.conflicts.sibling_studio_contact_ids.sort()).toEqual(['c-hatch', 'c-other'])
+  })
+
+  it('a failed studio lookup is an error, not a miss: apply writes nothing', async () => {
+    const writes = []
+    const db = fakeDb({ lookupError: { message: 'boom' }, orgRowsByEmail: [hatch()], writes })
+    const preview = await previewMemberSync(db, 'stillorgan', member)
+    expect(preview).toMatchObject({ action: 'error', error: 'contact lookup: boom' })
+    const applied = await applyMemberSync(db, 'stillorgan', member, { skipBookings: true, skipInteractions: true })
+    expect(applied.action).toBe('error')
+    expect(writes).toEqual([])
+  })
+
+  it('apply updates the sibling contact, links it at the studio, and gives it the studio preferences row', async () => {
+    const writes = []
+    const out = await applyMemberSync(fakeDb({ orgRowsByEmail: [hatch()], writes }), 'stillorgan', member, { skipBookings: true, skipInteractions: true })
+    expect(out.contact_id).toBe('c-hatch')
+    expect(out.error).toBeUndefined()
+    expect(writes.some((w) => w.table === 'contacts' && w.op === 'insert')).toBe(false)
+    const update = writes.find((w) => w.table === 'contacts' && w.op === 'update')
+    expect(update.payload.glofox_member_id).toBe('g1')
+    expect(update.payload).not.toHaveProperty('location_id')
+    const link = writes.find((w) => w.table === 'glofox_crossover_members')
+    expect(link).toMatchObject({ op: 'upsert', payload: { location_id: 'stillorgan', glofox_member_id: 'g1', contact_id: 'c-hatch' } })
+    const prefs = writes.find((w) => w.table === 'contact_location_preferences')
+    expect(prefs.payload[0]).toMatchObject({ contact_id: 'c-hatch', location_id: 'stillorgan', source: 'glofox_sync' })
+    expect(out.crossover_link).toMatchObject({ linked: true, preferences_created: 1 })
   })
 })

@@ -118,6 +118,9 @@ export const CONSENT_SOURCE_CATEGORY = Object.freeze({
   // studio its marketing-preferences row here. A sync rule created it, not the
   // person's choice, so it must not move the NET LIST CHANGE headline.
   un1t_online_sync:               POLICY,
+  // GLOFOXSIBLING.1 — the same, from the Glofox sync: a Glofox member whose
+  // contact lives at another studio gets the Glofox studio's row.
+  glofox_sync:                    POLICY,
 
   // ── bulk: one-off migrations and corrections ──────────────────────
   bulk_import:                    BULK,

@@ -37,6 +37,43 @@ const attendedMs = (e) => (Array.isArray(e?.attended_starts) ? e.attended_starts
 
 const hasAttended = (e) => attendedMs(e).length > 0 || msOf(e?.last_attended_at) != null
 
+// TRIALDONE.2 — attended booking ENDS, oldest first (attended_starts stands in
+// for evidence built before attended_ends existed).
+const attendedEndsMs = (e) => (Array.isArray(e?.attended_ends) ? e.attended_ends : attendedMs(e))
+  .map(msOf).filter((m) => m != null).sort((a, b) => a - b)
+
+/**
+ * TRIALDONE.2 — what made the person Trial done, and when: the trigger the
+ * trial-done outreach times from.
+ *
+ *   three_attended        TRIAL_DONE_MIN_ATTENDED (3) or more attended: the END
+ *                         of the third attended class (attended_ends)
+ *   two_attended_expired  exactly two attended and a readable trial_expires_at:
+ *                         the later of the expiry and the END of the second
+ *                         attended class (the un1t board's classify makes them
+ *                         trial_done once the trial has expired AND they have
+ *                         two classes, so a second class attended after the
+ *                         expiry is when they became Trial done)
+ *
+ * Null otherwise (0 or 1 attended is never Trial done, nor 2 with no known
+ * expiry). Reads no clock: whether `at` has passed is the caller's to judge
+ * (classify, for the expiry). Pure.
+ *
+ * @param {object|null} evidence  see shapePipelineDateEvidence
+ * @returns {{ kind: 'three_attended'|'two_attended_expired', at: string }|null}
+ */
+export function trialDoneEvidenceAt(evidence) {
+  if (!evidence || typeof evidence !== 'object') return null
+  const ends = attendedEndsMs(evidence)
+  const min = PIPELINE_THRESHOLDS.TRIAL_DONE_MIN_ATTENDED
+  if (ends.length >= min) return { kind: 'three_attended', at: new Date(ends[min - 1]).toISOString() }
+  const expires = msOf(evidence.trial_expires_at)
+  if (ends.length === 2 && expires != null) {
+    return { kind: 'two_attended_expired', at: new Date(Math.max(expires, ends[1])).toISOString() }
+  }
+  return null
+}
+
 /**
  * When the deal entered `stageSlug`, from the person's un1t.online evidence.
  *
@@ -52,7 +89,11 @@ const hasAttended = (e) => attendedMs(e).length > 0 || msOf(e?.last_attended_at)
  *   trial_done    start of the attended booking that made the count reach
  *                 TRIAL_DONE_MIN_ATTENDED (3): classify's own trial_done rule
  *                 is "attended >= TRIAL_DONE_MIN_ATTENDED", so the trial was
- *                 done when that class happened, not at the latest one.
+ *                 done when that class happened, not at the latest one. With
+ *                 exactly two attended, the later of the trial's expiry and
+ *                 the second attended class's start (TRIALDONE.2: the un1t
+ *                 board's classify makes 2 attended + an expired trial
+ *                 trial_done; trialDoneEvidenceAt).
  *   converted     converted_at: the first sub_initial sale, which is the
  *                 field classify reads for the converted window.
  *   member        converted_at + CONVERTED_WINDOW_DAYS: when classify moves a
@@ -98,8 +139,19 @@ export function un1tStageEnteredAt(stageSlug, evidence, now = Date.now()) {
       return past(attended.length ? attended[0] : msOf(e.last_attended_at), now)
     case 'second_class':
       return past(nth(2), now)
-    case 'trial_done':
-      return past(nth(PIPELINE_THRESHOLDS.TRIAL_DONE_MIN_ATTENDED), now)
+    case 'trial_done': {
+      // Intentional: the board dates 3+ from the 3rd class's START (as every
+      // attendance stage here), while trialDoneEvidenceAt (the outreach
+      // trigger) uses the 3rd class's END.
+      const third = nth(PIPELINE_THRESHOLDS.TRIAL_DONE_MIN_ATTENDED)
+      if (third != null) return past(third, now)
+      const trigger = trialDoneEvidenceAt(e)
+      if (trigger?.kind !== 'two_attended_expired') return null
+      // never before the second class: the later of the expiry and its start
+      const expires = msOf(e.trial_expires_at)
+      const second = nth(2)
+      return past(second != null ? Math.max(expires, second) : expires, now)
+    }
     case 'converted':
       return past(msOf(e.converted_at), now)
     case 'member': {

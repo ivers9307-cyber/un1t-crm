@@ -208,6 +208,17 @@ describe('POST — create on the location’s own WABA only', () => {
     expect(writesTo('insert')[0].row).toMatchObject({ location_id: HATCH, business_account_id: 'WABA-HATCH' })
   })
 
+  it('the name check names its locations FK: a bare embed is ambiguous in prod (PGRST201)', async () => {
+    // Modelled on the live answer (19 Oct 2026): three tables hold FKs to both
+    // whatsapp_templates and locations, so `locations ( name )` 300s.
+    state.faults['whatsapp_templates:select'] = (cols) => (/locations\s*\(/.test(cols)
+      ? { code: 'PGRST201', message: 'Could not embed because more than one relationship was found' }
+      : null)
+    const res = await POST(createReq())
+    expect(res.status).toBe(200)
+    expect(createMetaTemplate).toHaveBeenCalledTimes(1)
+  })
+
   it('a failed name check: 500, Meta never called', async () => {
     state.faults['whatsapp_templates:select'] = { message: 'timeout' }
     const res = await POST(createReq())
