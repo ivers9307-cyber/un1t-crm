@@ -117,6 +117,25 @@ describe('book', () => {
     expect(r.ledgerId).toBe(ledger(t.store)[0].id)
   })
 
+  it('UN1TWRITE.11: book done writes the class_bookings row with written_by crm and the answer\'s updated_at', async () => {
+    const answer = bookingDto({ updated_at: '2026-10-18T09:59:59.000Z' })
+    const t = await setup({
+      routes: { 'POST /bookings': [created(answer)], [CREDITS_PATH]: [credits()] },
+      db: { tables: {
+        un1t_events: [{ id: 'ue-1', location_id: LOC, un1t_id: EVENT, title: 'HYROX', starts_at: '2026-10-20T17:30:00.000Z' }],
+        contacts: [{ id: CONTACT, organization_id: ORG, name: 'Test Person', un1t_user_id: USER }],
+      } },
+    })
+    const r = await book(t.db, bookArgs(), t.deps)
+    expect(r.verdict).toBe('done')
+    expect(t.store.class_bookings).toHaveLength(1)
+    expect(t.store.class_bookings[0]).toMatchObject({
+      location_id: LOC, glofox_booking_id: `un1t:${BOOKING}`, glofox_event_id: `un1t:${EVENT}`, source_platform: 'un1t_online',
+      contact_id: CONTACT, member_name: 'Test Person', status: 'BOOKED', attended: false,
+      raw: { un1t: { written_by: 'crm', updated_at: '2026-10-18T09:59:59.000Z' } },
+    })
+  })
+
   it('book already booked is done with alreadyBooked true and a done ledger row', async () => {
     const t = await setup({
       routes: {
@@ -256,6 +275,24 @@ describe('cancel', () => {
     expect(t.store.un1t_clients[0].credit_balance).toBe(4)
     expect(r.data).toMatchObject({ un1t_id: BOOKING, status: 'cancelled' })
     expect(ledger(t.store)[0]).toMatchObject({ op: 'cancel', stage: 'done', un1t_ref: BOOKING, target: BOOKING, idempotency_key: `cancel:${LOC}:${BOOKING}` })
+  })
+
+  it('UN1TWRITE.11: cancel done turns the same class_bookings key CANCELLED', async () => {
+    const t = await setup({
+      routes: {
+        [CANCEL_PATH]: [res(200, undefined)],
+        [BOOKING_PATH]: [ok(bookingDto({ status: 'cancelled', updated_at: '2026-10-18T10:00:01.000Z' }))],
+        [CREDITS_PATH]: [credits()],
+      },
+      db: { tables: {
+        un1t_events: [{ id: 'ue-1', location_id: LOC, un1t_id: EVENT, title: 'HYROX', starts_at: '2026-10-20T17:30:00.000Z' }],
+        class_bookings: [{ id: 'cb-1', location_id: LOC, glofox_booking_id: `un1t:${BOOKING}`, source_platform: 'un1t_online', status: 'BOOKED', attended: false, raw: { un1t: { written_by: 'sync' } } }],
+      } },
+    })
+    const r = await cancel(t.db, cancelArgs(), t.deps)
+    expect(r.verdict).toBe('done')
+    expect(t.store.class_bookings).toHaveLength(1)
+    expect(t.store.class_bookings[0]).toMatchObject({ id: 'cb-1', status: 'CANCELLED', raw: { un1t: { status: 'cancelled', written_by: 'crm', updated_at: '2026-10-18T10:00:01.000Z' } } })
   })
 
   describe('cancel dedupe: cancelled landed, booked absent, attended or no_show refused already_happened', () => {
@@ -671,6 +708,23 @@ describe('the mirror never changes the verdict', () => {
     expect(r).toMatchObject({ verdict: 'done', id: BOOKING })
     expect(JSON.stringify(logError.mock.calls)).not.toContain(EMAIL)
     expect(logError).toHaveBeenCalled()
+  })
+
+  it('UN1TWRITE.11: a class_bookings failure is logged and the verdict stays done', async () => {
+    const t = await setup({
+      routes: { 'POST /bookings': [created(bookingDto())], [CREDITS_PATH]: [credits()] },
+      db: {
+        tables: { un1t_events: [{ id: 'ue-1', location_id: LOC, un1t_id: EVENT, title: 'HYROX', starts_at: '2026-10-20T17:30:00.000Z' }] },
+        fail: { 'class_bookings.upsert': { code: '23514', message: `boom for ${EMAIL}` } },
+      },
+    })
+    const r = await book(t.db, bookArgs(), t.deps)
+    expect(r).toMatchObject({ verdict: 'done', id: BOOKING })
+    expect(ledger(t.store)[0].stage).toBe('done')
+    expect(t.store.un1t_bookings).toHaveLength(1)
+    const errs = logError.mock.calls.filter(([mod, msg]) => mod === 'un1t-online-write' && /class_bookings/.test(msg))
+    expect(errs).toHaveLength(1)
+    expect(JSON.stringify(errs)).not.toContain(EMAIL)
   })
 
   it('a credits read that fails leaves the booking row and the verdict done', async () => {
