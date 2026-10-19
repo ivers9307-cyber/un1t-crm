@@ -7,17 +7,21 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   ALL_AGENT_TOOLS, CACHED_ACCOUNT_TOOLS, CACHED_NO_BOOKING_TOOLS,
-  CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS, agentToolsFor,
+  CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS, CACHED_UN1T_FULL_TOOLS, agentToolsFor,
 } from './auto-reply'
 import {
-  UN1T_TOOL_DESCRIPTIONS, UN1T_DUAL_TOOL_DESCRIPTIONS, UN1T_WRITE_TOOL_NAMES, UN1T_PURCHASE_TOOL_NAMES,
-  deriveUn1tReadTools, selectToolBlock, withCacheBreakpoint,
+  UN1T_TOOL_DESCRIPTIONS, UN1T_DUAL_TOOL_DESCRIPTIONS, UN1T_FULL_TOOL_DESCRIPTIONS, UN1T_WRITE_TOOL_NAMES, UN1T_PURCHASE_TOOL_NAMES,
+  REQUEST_REFUND_TOOL, deriveUn1tReadTools, deriveUn1tFullTools, selectToolBlock, withCacheBreakpoint,
 } from './tool-blocks'
+import { planTurnTools, resolveTurnPlan, turnForPlan } from './turn-studios'
+import { logWarn } from '@/lib/log'
 import { UN1T_ID_PREFIX, tagUn1tId, parseAgentId } from './studio-ids'
 import { TOOL_NOT_AT_THIS_STUDIO, refuseToolForTurn, deriveNoBookingTools } from './tool-capability'
 import { executeAccountTool } from './account-tools'
 import { executeBookingTool } from './booking-tools'
 import { MEMBERSHIP_SOURCES } from '@/lib/membership/source'
+
+vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn(), logError: vi.fn() }))
 
 const FIX_DIR = path.join(__dirname, '__fixtures__')
 const GLOFOX_FIXTURE = JSON.parse(fs.readFileSync(path.join(FIX_DIR, 'glofox-agent-tools.fixture.json'), 'utf8'))
@@ -61,7 +65,7 @@ describe('cache stability', () => {
   })
 
   it('exactly one cache_control (ttl 1h) per block, on its last tool; Glofox and no-booking blocks still equal the fixtures', () => {
-    for (const block of [CACHED_ACCOUNT_TOOLS, CACHED_NO_BOOKING_TOOLS, CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS]) {
+    for (const block of [CACHED_ACCOUNT_TOOLS, CACHED_NO_BOOKING_TOOLS, CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS, CACHED_UN1T_FULL_TOOLS]) {
       const marked = block.filter((t) => t.cache_control)
       expect(marked).toHaveLength(1)
       expect(block.at(-1).cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
@@ -156,6 +160,163 @@ describe('the un1t read blocks', () => {
         expect(json, t.name).not.toMatch(/limited|spaces|capacity|glofox/i)
       }
     }
+  })
+})
+
+// MIAHATCH.5 (Task 15) — block 3b: the dual read block plus request_refund,
+// with book_class and cancel_class_booking re-described for either studio.
+describe('the un1t full block (3b)', () => {
+  const NEW_IN_FULL = ['book_class', 'cancel_class_booking']
+
+  it('is the dual block plus request_refund, in the same order', () => {
+    expect(names(CACHED_UN1T_FULL_TOOLS)).toEqual([...names(CACHED_UN1T_READ_DUAL_TOOLS), 'request_refund'])
+    expect(names(deriveUn1tFullTools(ALL_AGENT_TOOLS))).toEqual(names(CACHED_UN1T_FULL_TOOLS))
+  })
+
+  it('built once: agentToolsFor returns the SAME array for a WhatsApp turn with writes, one 1h breakpoint on request_refund', () => {
+    const turn = { answerable: [hatch], threadProvider: un1t, channel: 'whatsapp', un1tWrites: true }
+    expect(agentToolsFor(turn)).toBe(CACHED_UN1T_FULL_TOOLS)
+    expect(agentToolsFor({ ...turn, answerable: [hatch, stillorgan] })).toBe(CACHED_UN1T_FULL_TOOLS)
+    expect(CACHED_UN1T_FULL_TOOLS.filter((t) => t.cache_control)).toHaveLength(1)
+    expect(CACHED_UN1T_FULL_TOOLS.at(-1)).toMatchObject({ name: 'request_refund', cache_control: { type: 'ephemeral', ttl: '1h' } })
+    // Writes off, or Instagram, never reach it.
+    expect(agentToolsFor({ ...turn, un1tWrites: false })).toBe(CACHED_UN1T_READ_TOOLS)
+    expect(agentToolsFor({ ...turn, channel: 'instagram' })).toBe(CACHED_NO_BOOKING_TOOLS)
+  })
+
+  it('request_refund: reason required, booking_id optional; neutral words that never promise a refund', () => {
+    expect(REQUEST_REFUND_TOOL.name).toBe('request_refund')
+    expect(REQUEST_REFUND_TOOL.input_schema).toMatchObject({ type: 'object', required: ['reason'] })
+    expect(Object.keys(REQUEST_REFUND_TOOL.input_schema.properties).sort()).toEqual(['booking_id', 'reason'])
+    expect(REQUEST_REFUND_TOOL.input_schema.properties.reason.type).toBe('string')
+    expect(REQUEST_REFUND_TOOL.input_schema.properties.booking_id.type).toBe('string')
+    expect(REQUEST_REFUND_TOOL.input_schema.properties.booking_id.description).toMatch(/un1t:/)
+    const text = JSON.stringify(REQUEST_REFUND_TOOL)
+    expect(REQUEST_REFUND_TOOL.description).toMatch(/pass(es)? .*refund request to the team/i)
+    expect(REQUEST_REFUND_TOOL.description).toMatch(/team .*decides?/i)
+    expect(text).not.toMatch(/will be refunded|refund is on its way|we will refund|you will get/i)
+    expect(text).not.toMatch(/[—–]/)
+    expect(text).not.toMatch(/limited|spaces|capacity|glofox/i)
+  })
+
+  it('book_class and cancel_class_booking are re-described for either studio, schemas unchanged in shape', () => {
+    for (const name of NEW_IN_FULL) {
+      const tool = CACHED_UN1T_FULL_TOOLS.find((t) => t.name === name)
+      const glofoxTool = ALL_AGENT_TOOLS.find((t) => t.name === name)
+      expect(tool.description).toBe(UN1T_FULL_TOOL_DESCRIPTIONS[name])
+      expect(Object.keys(tool.input_schema.properties)).toEqual(Object.keys(glofoxTool.input_schema.properties))
+      expect(tool.input_schema.required).toEqual(glofoxTool.input_schema.required)
+      const json = JSON.stringify(tool)
+      expect(json, name).not.toMatch(/[—–]/)
+      expect(json, name).not.toMatch(/limited|spaces|capacity|glofox|24-hex/i)
+      expect(json, name).toMatch(/un1t:/)
+    }
+    expect(UN1T_FULL_TOOL_DESCRIPTIONS.book_class).toMatch(/booked only when/i)
+    expect(UN1T_FULL_TOOL_DESCRIPTIONS.cancel_class_booking).toMatch(/cancelled only when/i)
+    expect(UN1T_FULL_TOOL_DESCRIPTIONS.cancel_class_booking).toMatch(/never promise a refund or a credit/i)
+    expect(Object.keys(UN1T_FULL_TOOL_DESCRIPTIONS).sort()).toEqual([...NEW_IN_FULL].sort())
+  })
+
+  it('every other tool is the dual block\'s own object; the full list is never touched', () => {
+    for (const t of CACHED_UN1T_FULL_TOOLS.slice(0, -1)) {
+      if (NEW_IN_FULL.includes(t.name)) continue
+      const dualTool = deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }).find((x) => x.name === t.name)
+      expect(JSON.stringify(t), t.name).toBe(JSON.stringify(dualTool))
+    }
+    expect(JSON.stringify(CACHED_ACCOUNT_TOOLS)).toBe(JSON.stringify(GLOFOX_FIXTURE.cached_tools))
+    expect(JSON.stringify(CACHED_NO_BOOKING_TOOLS)).toBe(JSON.stringify(NO_BOOKING_FIXTURE.cached_tools))
+  })
+
+  it('extraTools are appended after request_refund (Task 19 adds the purchase tools there)', () => {
+    const extra = [{ name: 'list_purchase_options', description: 'x', input_schema: { type: 'object', properties: {} } }]
+    const out = deriveUn1tFullTools(ALL_AGENT_TOOLS, { extraTools: extra })
+    expect(names(out).slice(-2)).toEqual(['request_refund', 'list_purchase_options'])
+    expect(out.at(-1)).toBe(extra[0])
+  })
+})
+
+// MIAHATCH.5 (Task 15) — Ruling 25: un1t_full needs WhatsApp, the un1t.online
+// studio's writes_enabled AND its Mia switch un1t_chat_actions_enabled.
+describe('un1t_full selection (planTurnTools / resolveTurnPlan)', () => {
+  const memberStudios = (...studios) => ({ studios, readFailed: false })
+  const args = (over = {}) => ({
+    memberStudios: memberStudios(hatch), threadLocationId: HATCH_ID, threadProvider: un1t, channel: 'whatsapp', ...over,
+  })
+  // A fake per-turn studios accessor (createActionStudios' shape).
+  function studiosWith({ mia = {}, writes = {}, settingsFail = [], writesFail = [] } = {}) {
+    return {
+      settings: vi.fn(async (id) => (settingsFail.includes(id) ? null : { ...(mia[id] || {}) })),
+      zone: vi.fn(async () => 'Europe/Dublin'),
+      un1tWriteSettings: vi.fn(async (id) => {
+        if (writesFail.includes(id)) throw Object.assign(new Error('read failed'), { name: 'Un1tSettingsReadError', code: 'XX000' })
+        return { writesEnabled: writes[id] === true }
+      }),
+    }
+  }
+  const on = { [HATCH_ID]: { un1t_chat_actions_enabled: true } }
+  const writesOn = { [HATCH_ID]: true }
+
+  it('un1t_full only on WhatsApp with writes_enabled and the Mia switch', async () => {
+    const plan = await resolveTurnPlan(args(), studiosWith({ mia: on, writes: writesOn }))
+    expect(plan.block).toBe('un1t_full')
+    expect(plan.un1tStudio.locationId).toBe(HATCH_ID)
+    expect(turnForPlan(plan, 'whatsapp')).toEqual({ block: 'un1t_full', answerable: [hatch], channel: 'whatsapp', un1tWrites: true })
+    const dual = await resolveTurnPlan(args({ memberStudios: memberStudios(hatch, stillorgan) }), studiosWith({ mia: on, writes: writesOn }))
+    expect(dual.block).toBe('un1t_full')
+    expect(dual.multiStudio).toBe(true)
+    expect(plan.multiStudio).toBe(false)
+  })
+
+  it('writes_enabled true but the switch absent (the live Hatch state): un1t_read / un1t_read_dual, as today', async () => {
+    const studios = studiosWith({ writes: writesOn })
+    const plan = await resolveTurnPlan(args(), studios)
+    expect(plan.block).toBe('un1t_read')
+    expect(turnForPlan(plan, 'whatsapp').un1tWrites).toBe(false)
+    expect((await resolveTurnPlan(args({ memberStudios: memberStudios(hatch, stillorgan) }), studios)).block).toBe('un1t_read_dual')
+    // The switch decides first: writes_enabled is never even read with it off.
+    expect(studios.un1tWriteSettings).not.toHaveBeenCalled()
+    for (const v of [false, 'true', 1, null]) {
+      expect((await resolveTurnPlan(args(), studiosWith({ mia: { [HATCH_ID]: { un1t_chat_actions_enabled: v } }, writes: writesOn }))).block, String(v)).toBe('un1t_read')
+    }
+  })
+
+  it('writes off -> un1t_read(_dual), switch or not', async () => {
+    expect((await resolveTurnPlan(args(), studiosWith({ mia: on }))).block).toBe('un1t_read')
+    expect((await resolveTurnPlan(args({ memberStudios: memberStudios(hatch, stillorgan) }), studiosWith({ mia: on }))).block).toBe('un1t_read_dual')
+  })
+
+  it("Instagram -> today's block even with writes and the switch on (R3)", async () => {
+    const studios = studiosWith({ mia: on, writes: writesOn })
+    const plan = await resolveTurnPlan(args({ channel: 'instagram' }), studios)
+    expect(plan.block).toBe('no_booking')
+    expect(turnForPlan(plan, 'instagram')).toBeUndefined()
+    expect(studios.settings).not.toHaveBeenCalledWith(HATCH_ID)
+  })
+
+  it('a failed settings read for the decision fails closed to the read block, logged', async () => {
+    vi.mocked(logWarn).mockClear()
+    expect((await resolveTurnPlan(args(), studiosWith({ mia: on, writes: writesOn, writesFail: [HATCH_ID] }))).block).toBe('un1t_read')
+    expect(logWarn).toHaveBeenCalledWith('mia-un1t', expect.stringMatching(/un1t write settings/), expect.objectContaining({ locationId: HATCH_ID }))
+    vi.mocked(logWarn).mockClear()
+    expect((await resolveTurnPlan(args(), studiosWith({ mia: on, writes: writesOn, settingsFail: [HATCH_ID] }))).block).toBe('un1t_read')
+    expect(logWarn).toHaveBeenCalledWith('mia-un1t', expect.any(String), expect.objectContaining({ locationId: HATCH_ID }))
+    const throwing = { ...studiosWith({ mia: on, writes: writesOn }), settings: vi.fn(async () => { throw new Error('boom') }) }
+    expect((await resolveTurnPlan(args(), throwing)).block).toBe('un1t_read')
+  })
+
+  it('with two un1t.online studios answerable, every one must pass', async () => {
+    const SECOND = 'a1000000-0000-0000-0000-000000000009'
+    const second = { ...hatch, locationId: SECOND, name: 'UN1T Second' }
+    const both = args({ memberStudios: memberStudios(hatch, second) })
+    expect((await resolveTurnPlan(both, studiosWith({ mia: on, writes: writesOn }))).block).toBe('un1t_read')
+    const allOn = studiosWith({ mia: { ...on, [SECOND]: { un1t_chat_actions_enabled: true } }, writes: { ...writesOn, [SECOND]: true } })
+    expect((await resolveTurnPlan(both, allOn)).block).toBe('un1t_full')
+  })
+
+  it('planTurnTools is still pure and read-only by default (un1tWrites false)', () => {
+    expect(planTurnTools(args()).block).toBe('un1t_read')
+    expect(planTurnTools(args({ un1tWrites: true })).block).toBe('un1t_full')
+    expect(planTurnTools(args({ un1tWrites: true, channel: 'instagram' })).block).toBe('no_booking')
   })
 })
 
@@ -267,13 +428,43 @@ describe('refuseToolForTurn', () => {
 
   it('un1t_full allows writes only on WhatsApp with un1tWrites; a malformed gate refuses', () => {
     const full = { block: 'un1t_full', answerable: [hatch], channel: 'whatsapp', un1tWrites: true }
-    for (const name of [...UN1T_WRITE_TOOL_NAMES, ...UN1T_PURCHASE_TOOL_NAMES]) {
+    for (const name of UN1T_WRITE_TOOL_NAMES) {
       expect(refuseToolForTurn(name, { turn: full }), name).toBeNull()
       expect(refuseToolForTurn(name, { turn: { ...full, channel: 'instagram' } }), name).toEqual(TOOL_NOT_AT_THIS_STUDIO)
       expect(refuseToolForTurn(name, { turn: { ...full, un1tWrites: false } }), name).toEqual(TOOL_NOT_AT_THIS_STUDIO)
       expect(refuseToolForTurn(name, { turn: { ...full, un1tWrites: 'yes' } }), name).toEqual(TOOL_NOT_AT_THIS_STUDIO)
     }
     expect(refuseToolForTurn('get_my_membership', { turn: { ...full, un1tWrites: false } })).toBeNull()
+  })
+
+  // MIAHATCH.5 (Task 15) — the purchase tools join un1t_full in Task 19; until
+  // then the block does not offer them, so the executor refuses them there too.
+  it('un1t_full refuses the three purchase tools until they join the block', () => {
+    const full = { block: 'un1t_full', answerable: [hatch], channel: 'whatsapp', un1tWrites: true }
+    for (const name of UN1T_PURCHASE_TOOL_NAMES) {
+      expect(names(CACHED_UN1T_FULL_TOOLS)).not.toContain(name)
+      expect(refuseToolForTurn(name, { turn: full }), name).toEqual(TOOL_NOT_AT_THIS_STUDIO)
+    }
+  })
+
+  it('invented tools: request_refund and book_class refused in un1t_read, allowed in un1t_full, before any db call', () => {
+    const db = throwingDb()
+    const full = { block: 'un1t_full', answerable: [hatch], channel: 'whatsapp', un1tWrites: true }
+    for (const name of ['request_refund', 'book_class', 'cancel_class_booking']) {
+      expect(refuseToolForTurn(name, { db, turn: turn('un1t_read') }), name).toEqual(TOOL_NOT_AT_THIS_STUDIO)
+      expect(refuseToolForTurn(name, { db, turn: full }), name).toBeNull()
+    }
+    expect(refuseToolForTurn('request_refund', { db, turn: turn('un1t_read_dual') })).toEqual(TOOL_NOT_AT_THIS_STUDIO)
+    expect(db.from).not.toHaveBeenCalled()
+  })
+
+  it('the refusal rule matches what un1t_full offers (block names agree with the executor)', () => {
+    const full = { block: 'un1t_full', answerable: [hatch], channel: 'whatsapp', un1tWrites: true }
+    const offered = new Set(names(CACHED_UN1T_FULL_TOOLS))
+    const every = [...new Set([...names(ALL_AGENT_TOOLS), 'request_refund', ...UN1T_PURCHASE_TOOL_NAMES])]
+    for (const name of every) {
+      expect(refuseToolForTurn(name, { turn: full }) !== null, `un1t_full/${name}`).toBe(!offered.has(name))
+    }
   })
 
   it('an unknown block still refuses the purchase tools and otherwise keeps the canBook rule', () => {

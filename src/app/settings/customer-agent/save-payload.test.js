@@ -236,3 +236,22 @@ describe('MIAHATCH.4 Hatch copy keys through the real save payload', () => {
     expect(settings.purchase_paid_booked_text).toBe('Booked {class}.')
   })
 })
+
+// MIAHATCH.5 (Ruling 25) — Mia's chat booking switch at a un1t.online studio:
+// studio-only, always saved, a real boolean.
+describe('un1t_chat_actions_enabled: editor state -> PUT body -> stored blob', () => {
+  const HATCH = { enabled: true, test_mode: false }
+
+  it('ticked is stored true, whatever `overridden` says; unticked or never set is false', () => {
+    expect(buildSavePayload({ ...shownFor(HATCH), un1t_chat_actions_enabled: true }, []).un1t_chat_actions_enabled).toBe(true)
+    expect(saveThroughPut({ ...shownFor(HATCH), un1t_chat_actions_enabled: true }, []).blob.un1t_chat_actions_enabled).toBe(true)
+    expect(saveThroughPut({ ...shownFor({ ...HATCH, un1t_chat_actions_enabled: true }), un1t_chat_actions_enabled: false }, []).blob.un1t_chat_actions_enabled).toBe(false)
+    expect(saveThroughPut(shownFor(HATCH), []).blob.un1t_chat_actions_enabled).toBe(false)
+    expect(buildSavePayload({ ...shownFor(HATCH), un1t_chat_actions_enabled: 'yes' }, []).un1t_chat_actions_enabled).toBe(false)
+  })
+
+  it('a saved true survives a re-save untouched (idempotent)', () => {
+    const { blob } = saveThroughPut({ ...shownFor(HATCH), un1t_chat_actions_enabled: true }, [])
+    expect(saveThroughPut(shownFor(blob), initialOverridden(blob)).blob).toEqual(blob)
+  })
+})

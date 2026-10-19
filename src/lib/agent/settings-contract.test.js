@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   SettingsSchema, DEFAULTS, buildCustomerAgentSettings, STUDIO_ONLY_KEYS, INHERITABLE_OBJECT_KEYS,
-  StudioSettingsSchema, buildStudioOverrideBlob,
+  StudioSettingsSchema, buildStudioOverrideBlob, OrgSettingsSchema, ORG_REFUSED_KEYS,
 } from './settings-contract'
 import { INHERITABLE_OBJECT_FIELDS, INHERITABLE_SCALAR_KEYS, initialOverridden } from './settings-overrides'
 import { mergeAgentSettings } from './settings-resolve'
@@ -189,9 +189,31 @@ describe('settings write-through contract', () => {
       'booking_cta_label', 'booking_mode', 'booking_url', 'cancellation_form',
       'consultation_event_type_id', 'enabled', 'membership_cta_label',
       'membership_signup_url', 'monthly_points_target', 'test_mode', 'test_phones',
+      'un1t_chat_actions_enabled',
     ])
     for (const k of STUDIO_ONLY_KEYS) expect(k in DEFAULTS).toBe(true)
     expect(INHERITABLE_OBJECT_KEYS).toEqual(['limits', 'followups', 'first_class_checkin', 'inline_suggestion', 'quiet_hours'])
+  })
+
+  // MIAHATCH.5 (Ruling 25) — Mia's switch for booking, cancelling and refund
+  // requests in chat at a un1t.online studio. Studio-only (an organisation can
+  // never switch it on for every studio), default false, a real boolean only.
+  it('un1t_chat_actions_enabled: studio-only boolean, default false, round-trips', () => {
+    expect(DEFAULTS.un1t_chat_actions_enabled).toBe(false)
+    expect(STUDIO_ONLY_KEYS.has('un1t_chat_actions_enabled')).toBe(true)
+    expect(INHERITABLE_SCALAR_KEYS).not.toContain('un1t_chat_actions_enabled')
+    expect(SettingsSchema.parse({ enabled: true }).un1t_chat_actions_enabled).toBe(false)
+    expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, un1t_chat_actions_enabled: true })).un1t_chat_actions_enabled).toBe(true)
+    expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true })).un1t_chat_actions_enabled).toBe(false)
+    for (const bad of ['true', 1, 'yes']) expect(SettingsSchema.safeParse({ enabled: true, un1t_chat_actions_enabled: bad }).success, String(bad)).toBe(false)
+    // Always saved by the studio editor, whatever `overridden` says.
+    const data = StudioSettingsSchema.parse({ enabled: true, un1t_chat_actions_enabled: true })
+    expect(buildStudioOverrideBlob(data, [])).toMatchObject({ un1t_chat_actions_enabled: true })
+    // Never from the organisation layer.
+    expect(ORG_REFUSED_KEYS.has('un1t_chat_actions_enabled')).toBe(true)
+    expect('un1t_chat_actions_enabled' in OrgSettingsSchema.shape).toBe(false)
+    expect(mergeAgentSettings({ org: { un1t_chat_actions_enabled: true }, studio: { enabled: true } }).settings.un1t_chat_actions_enabled).toBe(false)
+    expect(mergeAgentSettings({ org: null, studio: { enabled: true, un1t_chat_actions_enabled: true } }).settings.un1t_chat_actions_enabled).toBe(true)
   })
 
   it('booking_url: http(s) only, <= 500, blank -> null, round-trips; default null', () => {
@@ -284,6 +306,7 @@ describe('buildStudioOverrideBlob (MIAORG.1 Task 3)', () => {
     const data = parse({ enabled: true, tone: 'Warm', extra_rules: 'No politics', agent_name: 'Zed', booking_url: 'https://book.example/a' })
     expect(buildStudioOverrideBlob(data, ['tone'])).toEqual({
       enabled: true, test_mode: false, test_phones: [], booking_mode: 'auto',
+      un1t_chat_actions_enabled: false,
       booking_url: 'https://book.example/a',
       tone: 'Warm',
     })

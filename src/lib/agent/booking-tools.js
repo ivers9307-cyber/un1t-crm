@@ -680,7 +680,9 @@ async function reelectSiblingWithCredits({
 // ({studio}, {link} = that studio's booking_url, from its own resolved
 // settings). No answerable un1t.online studio: the not-at-this-studio refusal.
 async function un1tChatBookingAnswer(toolName, ctx) {
-  const studio = ctx?.turn?.block === 'un1t_read_dual'
+  // MIAHATCH.5 — block 3b gives the same "not from chat yet" line until the
+  // un1t.online book and cancel executors land (Task 16).
+  const studio = ctx?.turn?.block === 'un1t_read_dual' || ctx?.turn?.block === 'un1t_full'
     ? (ctx.turn.answerable || []).find((s) => s?.providerKey === 'un1t_online')
     : null
   if (!studio) return { ...TOOL_NOT_AT_THIS_STUDIO }
@@ -705,6 +707,12 @@ export async function executeBookingTool(toolName, input, ctx) {
   // whose source takes no bookings is refused before any read or Glofox call.
   const refused = refuseToolForTurn(toolName, ctx)
   if (refused) return refused
+
+  // MIAHATCH.5 — request_refund is offered in block 3b only (refused above
+  // everywhere else). Its executor (a staff refund card, Task 17) is not here
+  // yet: until then it answers as a tool this studio does not have, so Mia
+  // hands off and never says a refund was passed on or made.
+  if (toolName === 'request_refund') return { ...TOOL_NOT_AT_THIS_STUDIO }
 
   // MIAHATCH.2 — a `un1t:` event or booking id is a un1t.online class. Chat
   // booking there is not live yet (slice 1): in the dual block the answer is

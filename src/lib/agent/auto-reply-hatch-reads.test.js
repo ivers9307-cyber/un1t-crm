@@ -94,7 +94,8 @@ vi.mock('./un1t-member-read', async (importOriginal) => ({
 
 import * as glofox from '@/lib/glofox'
 import {
-  CACHED_ACCOUNT_TOOLS, CACHED_NO_BOOKING_TOOLS, CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS, runChannelAgent,
+  CACHED_ACCOUNT_TOOLS, CACHED_NO_BOOKING_TOOLS, CACHED_UN1T_READ_TOOLS, CACHED_UN1T_READ_DUAL_TOOLS, CACHED_UN1T_FULL_TOOLS,
+  runChannelAgent,
 } from './auto-reply'
 import { resolveMemberStudios } from './member-studios'
 import { executeBookingTool } from './booking-tools'
@@ -124,7 +125,7 @@ const resolution = (...studios) => ({ studios, readFailed: false })
 const STILLORGAN_SETTINGS = { enabled: true }
 const HATCH_TEST_SETTINGS = { enabled: false, test_mode: true, test_phones: [`+${MIA_TEST_PHONE}`], booking_url: HATCH_BOOKING_URL, booking_mode: 'auto' }
 
-function locationRows({ hatchSettings = HATCH_TEST_SETTINGS, stillorganSettings = STILLORGAN_SETTINGS } = {}) {
+function locationRows({ hatchSettings = HATCH_TEST_SETTINGS, stillorganSettings = STILLORGAN_SETTINGS, hatchUn1tOnline } = {}) {
   return [
     {
       id: STILLORGAN, name: 'UN1T Stillorgan', timezone: 'Europe/Dublin', organization_id: ORG, membership_source: 'glofox',
@@ -132,7 +133,8 @@ function locationRows({ hatchSettings = HATCH_TEST_SETTINGS, stillorganSettings 
     },
     {
       id: HATCH, name: 'UN1T Hatch Street', timezone: 'Europe/Dublin', organization_id: ORG, membership_source: 'un1t_online',
-      address: 'Fictional 2 Hatch Street, Dublin', settings: { customer_agent: hatchSettings },
+      address: 'Fictional 2 Hatch Street, Dublin',
+      settings: { customer_agent: hatchSettings, ...(hatchUn1tOnline ? { un1t_online: hatchUn1tOnline } : {}) },
     },
     {
       id: HATCH_2, name: 'UN1T Second Studio', timezone: 'Europe/Dublin', organization_id: ORG, membership_source: 'un1t_online',
@@ -741,5 +743,105 @@ describe('fix round 1 (rulings 14, 15 and the minors)', () => {
     expect(systemText(bodies[0])).not.toContain("You can't book or cancel classes")
     expect(systemText(bodies[0])).not.toContain('## Facts for')
     expect(decisionMeta(inserts).tool_block).toBe('glofox')
+  })
+})
+
+// MIAHATCH.5 (Task 15, Ruling 25) — block 3b at the turn: Hatch's
+// writes_enabled (ALREADY true live, for the funnel) is not enough on its own;
+// the studio's Mia switch un1t_chat_actions_enabled must be on too.
+describe('un1t_full at the turn (MIAHATCH.5)', () => {
+  const WRITES_ON = { writes_enabled: true, funnel_enabled: true }
+  const SWITCH_ON = { ...HATCH_TEST_SETTINGS, un1t_chat_actions_enabled: true }
+
+  it('writes_enabled true, switch absent: a Hatch turn stays un1t_read, a dual one un1t_read_dual (the live state)', async () => {
+    for (const [threadLocationId, studios, tools, block, conv] of [
+      [HATCH, [hatchStudio()], CACHED_UN1T_READ_TOOLS, 'un1t_read', verifiedThread(HATCH_CONTACT)],
+      [STILLORGAN, [stillorganStudio(), hatchStudio()], CACHED_UN1T_READ_DUAL_TOOLS, 'un1t_read_dual', verifiedThread(STILLORGAN_CONTACT)],
+    ]) {
+      resolveMemberStudios.mockResolvedValue(resolution(...studios))
+      const { fetchFn, bodies } = modelTurns([toolTurn('request_refund', { reason: 'late cancel' }), textTurn('ok')])
+      vi.stubGlobal('fetch', fetchFn)
+      const { db, inserts } = turnDb({ threadLocationId, conv, hatchUn1tOnline: WRITES_ON })
+
+      await runChannelAgent(db, whatsappAdapter(), turnCtx(threadLocationId))
+
+      same(bodies[0].tools, tools)
+      expect(toolResultOf(bodies[1])).toMatchObject({ error: 'not_available_at_this_studio' })
+      expect(systemText(bodies[0])).not.toMatch(/request_refund/)
+      expect(decisionMeta(inserts).tool_block).toBe(block)
+      vi.unstubAllGlobals()
+      vi.clearAllMocks()
+    }
+  })
+
+  it('switch on but writes_enabled off: still the read block', async () => {
+    resolveMemberStudios.mockResolvedValue(resolution(hatchStudio()))
+    const { fetchFn, bodies } = modelTurns([textTurn('ok')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, inserts } = turnDb({ threadLocationId: HATCH, conv: verifiedThread(HATCH_CONTACT), hatchSettings: SWITCH_ON, hatchUn1tOnline: { writes_enabled: false } })
+
+    await runChannelAgent(db, whatsappAdapter(), turnCtx(HATCH))
+
+    same(bodies[0].tools, CACHED_UN1T_READ_TOOLS)
+    expect(decisionMeta(inserts).tool_block).toBe('un1t_read')
+  })
+
+  it('both on, Hatch thread: un1t_full tools and prompt; book/cancel keep the slice 1 answer and request_refund its placeholder until Tasks 16-17', async () => {
+    resolveMemberStudios.mockResolvedValue(resolution(hatchStudio()))
+    const { fetchFn, bodies } = modelTurns([
+      toolTurn('book_class', { event_id: 'un1t:ev-1', class_name: 'Fictional Hatch HIIT' }),
+      toolTurn('request_refund', { reason: 'late cancel', booking_id: 'un1t:bk-1' }),
+      toolTurn('send_purchase_link', { offer_id: 'o-1' }),
+      textTurn('ok'),
+    ])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, inserts } = turnDb({ threadLocationId: HATCH, conv: verifiedThread(HATCH_CONTACT), hatchSettings: SWITCH_ON, hatchUn1tOnline: WRITES_ON })
+
+    await runChannelAgent(db, whatsappAdapter(), turnCtx(HATCH))
+
+    for (const body of bodies) same(body.tools, CACHED_UN1T_FULL_TOOLS)
+    const stable = bodies[0].system[0].text
+    expect(stable).toContain('You can book and cancel classes at UN1T Hatch Street in chat for a verified member.')
+    expect(stable).toMatch(/call request_refund/)
+    expect(stable).not.toMatch(/limited|spaces|capacity/i)
+    expect(toolResultOf(bodies[1])).toMatchObject({ booked: false, chat_booking_unavailable: true })
+    expect(toolResultOf(bodies[2])).toMatchObject({ error: 'not_available_at_this_studio' })
+    expect(toolResultOf(bodies[3])).toMatchObject({ error: 'not_available_at_this_studio' })
+    expect(glofoxCalls()).toBe(0)
+    expect(inserts.some((i) => i.table === 'agent_membership_requests')).toBe(false)
+    expect(decisionMeta(inserts).tool_block).toBe('un1t_full')
+  })
+
+  it('both on, Hatch-only member: a raw Glofox booking id is refused, never run at Hatch', async () => {
+    resolveMemberStudios.mockResolvedValue(resolution(hatchStudio()))
+    const { fetchFn, bodies } = modelTurns([
+      toolTurn('book_class', { event_id: '64aa00000000000000000001' }),
+      toolTurn('cancel_class_booking', { booking_id: '64bb00000000000000000001' }),
+      textTurn('ok'),
+    ])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, inserts } = turnDb({ threadLocationId: HATCH, conv: verifiedThread(HATCH_CONTACT), hatchSettings: SWITCH_ON, hatchUn1tOnline: WRITES_ON })
+
+    await runChannelAgent(db, whatsappAdapter(), turnCtx(HATCH))
+
+    same(bodies[0].tools, CACHED_UN1T_FULL_TOOLS)
+    expect(toolResultOf(bodies[1])).toMatchObject({ error: 'not_available_at_this_studio' })
+    expect(toolResultOf(bodies[2])).toMatchObject({ error: 'not_available_at_this_studio' })
+    expect(glofoxCalls()).toBe(0)
+    expect(inserts.some((i) => i.table === 'agent_membership_requests')).toBe(false)
+  })
+
+  it('both on, dual member on a Stillorgan thread: un1t_full with the dual prompt', async () => {
+    resolveMemberStudios.mockResolvedValue(resolution(stillorganStudio(), hatchStudio()))
+    const { fetchFn, bodies } = modelTurns([textTurn('ok')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, inserts } = turnDb({ threadLocationId: STILLORGAN, conv: verifiedThread(STILLORGAN_CONTACT), hatchSettings: SWITCH_ON, hatchUn1tOnline: WRITES_ON })
+
+    await runChannelAgent(db, whatsappAdapter(), turnCtx(STILLORGAN))
+
+    same(bodies[0].tools, CACHED_UN1T_FULL_TOOLS)
+    expect(systemText(bodies[0])).toContain('Say which studio each answer is for')
+    expect(systemText(bodies[0])).toContain('REFUNDS at UN1T Hatch Street')
+    expect(decisionMeta(inserts).tool_block).toBe('un1t_full')
   })
 })

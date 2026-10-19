@@ -88,6 +88,9 @@ export function buildSavePayload(settings, overridden) {
     link_button_text: (settings.link_button_text || '').trim() || null,
     quiet_hours: buildQuietHoursPayload(settings.quiet_hours),
     booking_mode: settings.booking_mode === 'draft' ? 'draft' : 'auto',
+    // MIAHATCH.5 — studio-only, always saved (the Hatch group's switch). Only a
+    // real true turns it on.
+    un1t_chat_actions_enabled: settings.un1t_chat_actions_enabled === true,
     agent_name: (settings.agent_name || '').trim() || null,
     membership_signup_url: (settings.membership_signup_url || '').trim() || null,
     membership_cta_label: (settings.membership_cta_label || '').trim() || null,
@@ -143,7 +146,7 @@ export function buildSavePayload(settings, overridden) {
 export const ORG_PAYLOAD_DROPPED_KEYS = Object.freeze([
   'enabled', 'test_mode', 'test_phones', 'consultation_event_type_id', 'booking_mode', 'cancellation_form',
   'booking_url', 'booking_cta_label', 'membership_signup_url', 'membership_cta_label', 'monthly_points_target',
-  'social_enabled', 'glofox_auto_cancel',
+  'un1t_chat_actions_enabled', 'social_enabled', 'glofox_auto_cancel',
 ])
 
 /**
