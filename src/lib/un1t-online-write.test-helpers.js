@@ -71,9 +71,11 @@ const clone = (v) => JSON.parse(JSON.stringify(v))
  *
  * `fail` maps 'table.op' (op: select | insert | update | upsert) to the
  * error the call returns. `locationError` fails the settings read.
+ * `membershipSource` is the studio's locations.membership_source.
  */
 export function makeDb({
   settings = { un1t_online: { writes_enabled: true } },
+  membershipSource = 'un1t_online',
   conn = CONN_ROW(),
   connError = null,
   locationError = null,
@@ -114,7 +116,7 @@ export function makeDb({
       if (failure) return { data: null, error: failure }
       if (name === 'locations') {
         if (locationError) return { data: null, error: locationError }
-        return { data: [{ id: LOC, name: 'Test Studio', organization_id: ORG, membership_source: 'un1t_online', settings }], error: null }
+        return { data: [{ id: LOC, name: 'Test Studio', organization_id: ORG, membership_source: membershipSource, settings }], error: null }
       }
       if (name === 'channel_connections') {
         if (connError) return { data: null, error: connError }

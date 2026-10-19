@@ -83,6 +83,10 @@ const MANIFEST = Object.freeze({
     kind: 'data-writing',
     reason: 'UN1TBOOK.3: the un1t.online sync projects un1t_bookings into class_bookings (upsert only, never update / delete) with source_platform un1t_online and un1t: ids; it sends nothing and credits nothing.',
   },
+  'src/lib/un1t-online-mirror-write.js': {
+    kind: 'data-writing',
+    reason: 'UN1TWRITE.11: after a done un1t.online book or cancel, one class_bookings upsert built by C\'s mapUn1tBookingToClassBooking (source_platform un1t_online, un1t: ids, raw.un1t.written_by crm); never update / delete; it sends nothing and credits nothing.',
+  },
   'shared/studio-kpis.js': {
     kind: 'display',
     reason: 'Audit row 9: fetchFloor for the staff /dashboard/studio no-show, attended and activation figures.',
