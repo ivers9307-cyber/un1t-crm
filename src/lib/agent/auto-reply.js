@@ -921,6 +921,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // false, and list_upcoming_classes reads un1t_events at un1t.online.
       canBook,
       membershipSourceKey: membershipSource.key,
+      // MIACONSULT.1 — dates list_consultation_slots returned this turn, so
+      // book_consultation only books a day that was offered (earlier turns are
+      // read back from agent_decisions).
+      consultationDatesListed: new Set(),
     }
     // MIA-REVIEW.3 — surface the acting account to the decision log.
     trace.actingContactId = toolCtx.verifiedContactId || null

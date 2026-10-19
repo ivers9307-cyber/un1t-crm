@@ -1,5 +1,5 @@
 {
-  "_note": "CACHED_NO_BOOKING_TOOLS at the base commit of MIAHATCH.2 (05994fc4), before Task 3. The no-booking tool block; must never change.",
+  "_note": "CACHED_NO_BOOKING_TOOLS at the base commit of MIAHATCH.2 (05994fc4), before Task 3. The no-booking tool block; must never change. MIACONSULT.1 (2026-10-19) re-captured the consultation lines only: the slot label + slot_id rule and the list_consultation_slots / book_consultation definitions.",
   "names": [
     "verify_identity",
     "request_pause",
@@ -83,7 +83,7 @@
     },
     {
       "name": "list_consultation_slots",
-      "description": "List available consultation (intro session) slots for a given date — for NEW or prospective customers; no identity verification needed. Use when someone asks to come in, try a class, book a consultation or intro. Returns the bookable times for that date; if none, try the next day. Dates are YYYY-MM-DD.",
+      "description": "List available consultation (intro session) slots for a given date — for NEW or prospective customers; no identity verification needed. Use when someone asks to come in, try a class, book a consultation or intro. Returns the bookable times for that date; if none, try the next day. Dates are YYYY-MM-DD. Work the date out from Today in Context, then check the returned day_label is the day the customer asked for. Each slot has a label (weekday, date and time, e.g. \"Fri 23 Oct, 11:00\") and a slot_id: offer times with the day exactly as the label gives it, and book with that slot_id.",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -99,17 +99,17 @@
     },
     {
       "name": "book_consultation",
-      "description": "Book a consultation slot from list_consultation_slots. If the studio already has this person's name and email on file (Context says their identity is known, or you already know it from earlier in the chat), do NOT ask again — leave name/email out and the booking uses the details on file. Only ask a brand-new person we know nothing about for their name and email (a phone number too if it flows naturally). CRITICAL either way: restate the slot (date + time) and get a clear yes before calling. They will receive a confirmation automatically.",
+      "description": "Book a consultation slot from list_consultation_slots. If the studio already has this person's name and email on file (Context says their identity is known, or you already know it from earlier in the chat), do NOT ask again — leave name/email out and the booking uses the details on file. Only ask a brand-new person we know nothing about for their name and email (a phone number too if it flows naturally). CRITICAL either way: restate the slot by its label (day, date and time) and get a clear yes before calling. Pass the slot_id from list_consultation_slots and the label you confirmed. Only a slot on a day list_consultation_slots returned in this conversation can be booked; if the listing was in an earlier message, list that same date again for its slot_id. Never work a date out from a weekday name. If the booking is refused, relay the reason the result gives and nothing else. They will receive a confirmation automatically.",
       "input_schema": {
         "type": "object",
         "properties": {
-          "date": {
+          "slot_id": {
             "type": "string",
-            "description": "YYYY-MM-DD, from list_consultation_slots."
+            "description": "The slot_id of the chosen slot, copied exactly from list_consultation_slots."
           },
-          "start_time": {
+          "confirmed_label": {
             "type": "string",
-            "description": "HH:MM start of the chosen slot."
+            "description": "The slot as you confirmed it with the customer, e.g. \"Fri 23 Oct, 11:00\"."
           },
           "name": {
             "type": "string",
@@ -125,8 +125,8 @@
           }
         },
         "required": [
-          "date",
-          "start_time"
+          "slot_id",
+          "confirmed_label"
         ]
       }
     },
