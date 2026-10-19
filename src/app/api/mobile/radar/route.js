@@ -79,6 +79,8 @@ export async function GET() {
         quarantine: summary.quarantine || 0,
         revenueAtRiskCents: summary.revenueAtRiskCents || 0,
         overdueValueCents: summary.overdueValueCents || 0,
+        // UN1TRADAR.2 — only when the total includes an estimate
+        ...(summary.overdueValueEstimated === true ? { overdueValueEstimated: true } : {}),
         recovery: summary.recovery || null,
         trend: summary.trend || null,
       }

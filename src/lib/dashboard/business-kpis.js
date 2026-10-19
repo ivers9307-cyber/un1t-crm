@@ -11,6 +11,7 @@
 // a compact error cell on null — the web page's DASH-REBUILD error
 // posture, mirrored by the route as a null block key).
 
+import { arrearsBriefingLabel } from '@/lib/radar-copy'
 import { buildBusinessBriefing } from '@shared/business-briefing'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
@@ -73,7 +74,7 @@ export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()
     const zone = await displayZoneFor(db, user, locationId, 'business-kpis')
     const [revenue, arrears, membershipLive, radar, approvalsCount, churnPrev] = await Promise.all([
       m.reads.revenueMtd(db, locationId, new Date(nowMs), zone),
-      // un1t has no arrears read (past-due amounts are not synced): null, not a Glofox zero.
+      // un1t reads arrears from spec A's past-due rows since UN1TRADAR.2; a source with no arrears read is null, not a Glofox zero.
       supportsRead(m, 'arrears') ? m.reads.arrears(db, locationId) : Promise.resolve(null),
       // Guarded like radar/approvals — any of its internal count
       // queries throwing must not reject the whole Promise.all and
@@ -103,7 +104,7 @@ export async function buildBusinessKpis(db, user, locationId, nowMs = Date.now()
     // different registers, not a bug.
     const labels = []
     if (approvalsCount > 0) labels.push(`${approvalsCount} pending approval${approvalsCount === 1 ? '' : 's'}`)
-    if (arrearsData?.memberCount > 0) labels.push(`${arrearsData.memberCount} in arrears (€${Math.round(arrearsData.totalCents / 100).toLocaleString('en-IE')})`)
+    if (arrearsData?.memberCount > 0) labels.push(arrearsBriefingLabel(arrearsData))
     if (churnCount > 0) labels.push(`${churnCount} at churn risk`)
 
     const briefing = buildBusinessBriefing({

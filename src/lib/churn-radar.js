@@ -551,7 +551,9 @@ export function bucketArrears(arrears) {
     const out = new Map()
     if (!(m instanceof Map)) return out
     for (const [id, agg] of m) {
-      if ((agg?.amountCents || 0) > 0) out.set(id, agg)
+      // UN1TRADAR.2 — a un1t.online debt with no euro figure (amountUnknown)
+      // stays on its tab; a Glofox aggregate never carries the flag.
+      if ((agg?.amountCents || 0) > 0 || agg?.amountUnknown === true) out.set(id, agg)
     }
     return out
   }
@@ -593,6 +595,10 @@ export function buildOverdue(contacts, nowMs = Date.now(), ctx = {}) {
       daysOverdue: dDue == null ? null : Math.floor(dDue),
       lastAttendedAt: c.last_attended_at || null,
       daysSinceAttended: dAtt == null ? null : Math.floor(dAtt),
+      // UN1TRADAR.2 — only when the amount is an estimate (a un1t.online
+      // past-due row with no reported amount), so a Glofox row is unchanged.
+      ...(pd.amountEstimated === true ? { amountEstimated: true } : {}),
+      ...(pd.amountUnknown === true ? { amountUnknown: true } : {}),
     })
   }
   rows.sort((a, b) => {

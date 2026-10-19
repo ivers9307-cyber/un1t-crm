@@ -15,6 +15,7 @@
 // All data comes from /api/churn-radar/*; this component is pure UI +
 // fetch orchestration.
 
+import { UN1T_UNAVAILABLE, countOrUnavailable, overdueCardBreakdown, rowAmountLabel, syncedAtLine } from '@/lib/radar-copy'
 import { useEffect, useState, useCallback } from 'react'
 import {
   Radar, AlertTriangle, Clock, TrendingDown, UserX, Phone,
@@ -58,6 +59,8 @@ function formatJoined(iso) {
 export default function ChurnRadar() {
   const [tab, setTab] = useState('radar')
   const [radar, setRadar] = useState(null)
+  // UN1TRADAR.2 — the response's source and data freshness (beside `data`)
+  const [radarMeta, setRadarMeta] = useState({ source: null, dataAsOf: null, zone: null })
   const [quarantine, setQuarantine] = useState(null)
   const [winback, setWinback] = useState(null)
   const [overdue, setOverdue] = useState(null)
@@ -76,6 +79,7 @@ export default function ChurnRadar() {
       const j = await r.json()
       if (!r.ok || !j.success) throw new Error(j.error || 'Failed to load radar')
       setRadar(j.data)
+      setRadarMeta({ source: j.source ?? null, dataAsOf: j.dataAsOf ?? null, zone: j.dataAsOfZone ?? null })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -251,6 +255,9 @@ export default function ChurnRadar() {
   // RADAR-TREND.1 — week-over-week deltas, null until the first
   // weekly snapshot exists.
   const td = summary.trend?.deltas || null
+  const freshness = radarMeta.source === 'un1t_online' && radarMeta.zone
+    ? syncedAtLine(radarMeta.dataAsOf, radarMeta.zone)
+    : null
 
   return (
     <div>
@@ -267,6 +274,10 @@ export default function ChurnRadar() {
         <p className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>
       )}
 
+      {/* UN1TRADAR.2 — how fresh a un1t.online studio's numbers are, on the
+          studio's clock (no zone, no line) */}
+      {freshness && <p className="mb-3 text-xs text-un1t-subtle">{freshness}</p>}
+
       {/* Summary cards — the Active base is every live membership
           (active, paused, overdue and quarantine alike), split into
           subscriptions vs class packs. Overdue is a chase-list of
@@ -280,7 +291,7 @@ export default function ChurnRadar() {
           delta={td?.revenueAtRiskCents} deltaGoodDir="down" deltaIsMoney />
         <StatCard label="High risk" value={summary.highRisk} accent="red"
           delta={td?.highRisk} deltaGoodDir="down" />
-        <StatCard label="Overdue" value={summary.overdue} accent="red" breakdown={`${formatMoney(summary.overdueValueCents)} owed`}
+        <StatCard label="Overdue" value={summary.overdue} accent="red" breakdown={overdueCardBreakdown(summary)}
           delta={td?.overdue} deltaGoodDir="down" />
         <StatCard label="Paused" value={summary.paused} breakdown="planned freeze"
           delta={td?.paused} />
@@ -310,9 +321,9 @@ export default function ChurnRadar() {
         <Tab active={tab === 'overdue'} onClick={() => setTab('overdue')}
           icon={CreditCard} label={`Overdue (${summary.overdue})`} />
         <Tab active={tab === 'charges'} onClick={() => setTab('charges')}
-          icon={Coins} label={`Unpaid charges (${summary.unpaidCharges || 0})`} />
+          icon={Coins} label={`Unpaid charges (${countOrUnavailable(summary.unpaidCharges)})`} />
         <Tab active={tab === 'awaiting'} onClick={() => setTab('awaiting')}
-          icon={Hourglass} label={`Awaiting authorization (${summary.awaitingAuth || 0})`} />
+          icon={Hourglass} label={`Awaiting authorization (${countOrUnavailable(summary.awaitingAuth)})`} />
         <Tab active={tab === 'quarantine'} onClick={() => setTab('quarantine')}
           icon={AlertTriangle}
           label={`Quarantine (${quarantine ? quarantine.length : summary.quarantine})`} />
@@ -891,6 +902,16 @@ function OverdueList({ data, busy, onAction, onRefresh }) {
   )
 }
 
+// UN1TRADAR.2 — a tab the studio's source cannot read: say so, never an
+// "all clear" empty state.
+function UnavailableTab({ what }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
+      <p className="font-medium text-un1t-text">{what}: {UN1T_UNAVAILABLE}</p>
+    </div>
+  )
+}
+
 // ARREARS-TYPE.1 — every confirmed past-due charge that is NOT a membership
 // payment: fees, custom charges, class bookings, class packs, products — any
 // amount. Same row shape as Overdue, so it reuses OverdueRow; only the framing
@@ -899,6 +920,7 @@ function OverdueList({ data, busy, onAction, onRefresh }) {
 // payments, and the reminder copy says "membership payment".
 function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
   if (data === null) return <p className="text-sm text-un1t-subtle">Loading unpaid charges…</p>
+  if (data.summary?.unavailable) return <UnavailableTab what="Unpaid charges" />
   const rows = data.charges || []
   if (rows.length === 0) {
     return (
@@ -933,6 +955,7 @@ function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
 // OverdueRow with the 'awaiting' variant (amber pill, "awaiting authorization").
 function AwaitingAuthList({ data, busy, onAction, onRefresh }) {
   if (data === null) return <p className="text-sm text-un1t-subtle">Loading awaiting authorization…</p>
+  if (data.summary?.unavailable) return <UnavailableTab what="Charges awaiting authorization" />
   const rows = data.charges || []
   if (rows.length === 0) {
     return (
@@ -991,7 +1014,7 @@ function OverdueRow({ m, busy, onAction, onRefresh, variant = 'owed', canRemind 
           awaiting ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-red-200 bg-red-50 text-red-700'
         }`}>
           <PillIcon size={12} />
-          {formatMoney(m.amountOwedCents)}{awaiting ? ' awaiting authorization' : ' owed'}
+          {rowAmountLabel(m, { awaiting })}
           {m.daysOverdue != null && (awaiting ? ` · applied ${m.daysOverdue}d ago` : ` · ${m.daysOverdue}d overdue`)}
         </span>
       </div>

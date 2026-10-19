@@ -400,3 +400,18 @@ describe('/dashboard/studio — un1t.online column reads through the seam (UN1TR
     expect(membershipStateForPage).toHaveBeenCalledTimes(2) // two columns, one read each
   })
 })
+
+// UN1TRADAR.2 — the scorecard's Arrears cell labels an estimated total.
+describe('studio Arrears estimate (UN1TRADAR.2)', () => {
+  it('an estimated overdue total says "includes an estimate"; an exact one does not', async () => {
+    membershipStateForPage.mockImplementation(async () => CONFIGURED)
+    loadRadar.mockResolvedValue({ summary: { overdue: 2, overdueValueCents: 16500, overdueValueEstimated: true, highRisk: 0, atRisk: 0, revenueAtRiskCents: 0 } })
+    const [col] = await renderColumns()
+    expect(col).toContain('2 members overdue, includes an estimate')
+    loadRadar.mockResolvedValue({ summary: { overdue: 2, overdueValueCents: 16500, highRisk: 0, atRisk: 0, revenueAtRiskCents: 0 } })
+    const [col2] = await renderColumns()
+    expect(col2).toContain('2 members overdue')
+    expect(col2).not.toContain('includes an estimate')
+    loadRadar.mockResolvedValue({ summary: null })
+  })
+})

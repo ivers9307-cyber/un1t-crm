@@ -134,3 +134,24 @@ describe('LEAD-DIGEST.1 — Lead Radar section', () => {
     expect(html).not.toContain('lead-radar')
   })
 })
+
+// UN1TRADAR.2 — a un1t.online studio: arrears it cannot read say so, never 0;
+// an estimated total is labelled.
+describe('buildDigestEmail at a un1t.online studio', () => {
+  const base = { activeBase: 10, atRisk: 1, highRisk: 0, overdue: 2, paused: 0, quarantine: 0, revenueAtRiskCents: 0, overdueValueCents: 16500 }
+  it('digest renders the not-available line and never "0" for null unpaid counts', () => {
+    const { html } = buildDigestEmail({ ...base, unpaidCharges: null, unpaidChargesValueCents: null, awaitingAuth: null, awaitingAuthValueCents: null })
+    expect(html).toContain('Unpaid charges and awaiting authorization: not available from un1t.online')
+  })
+  it('digest Overdue value says "includes an estimate" when estimated', () => {
+    const { html } = buildDigestEmail({ ...base, overdueValueEstimated: true })
+    expect(html).toContain('€165, includes an estimate')
+  })
+  it('a Glofox summary renders exactly as before (no new line, no label)', () => {
+    const glofox = { ...base, unpaidCharges: 3, unpaidChargesValueCents: 900, awaitingAuth: 0, awaitingAuthValueCents: 0 }
+    const { html } = buildDigestEmail(glofox)
+    expect(html).not.toContain('not available from un1t.online')
+    expect(html).not.toContain('includes an estimate')
+    expect(html).toContain('€165')
+  })
+})

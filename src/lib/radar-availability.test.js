@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/membership/reads/index', () => ({ radarReadsFor: vi.fn() }))
+vi.mock('@/lib/location-time', () => ({ getLocationZone: vi.fn(async () => 'Europe/Dublin') }))
 
 import { logInfo } from '@/lib/log'
 import { radarReadsFor } from '@/lib/membership/reads/index'
@@ -32,7 +33,7 @@ describe('radarAvailability', () => {
     radarReadsFor.mockResolvedValue({ source: 'un1t_online', reads: {}, providesMemberships: false, pinArrears: false })
     const { db } = runsDb([])
     const a = await radarAvailability(db, L, { module: 'churn-radar' })
-    expect(a).toEqual({ available: false, source: 'un1t_online', dataAsOf: null })
+    expect(a).toEqual({ available: false, source: 'un1t_online', dataAsOf: null, dataAsOfZone: null })
     expect(logInfo).toHaveBeenCalledTimes(1)
     expect(logInfo).toHaveBeenCalledWith('churn-radar', 'radar skipped: source lacks memberships', { locationId: L, source: 'un1t_online' })
   })
@@ -40,7 +41,7 @@ describe('radarAvailability', () => {
   it('Glofox location → available, source "glofox", dataAsOf null, no sync read', async () => {
     radarReadsFor.mockResolvedValue({ source: 'glofox', reads: {}, providesMemberships: true, pinArrears: false })
     const { db, calls } = runsDb([])
-    expect(await radarAvailability(db, L, { module: 'churn-radar' })).toEqual({ available: true, source: 'glofox', dataAsOf: null })
+    expect(await radarAvailability(db, L, { module: 'churn-radar' })).toEqual({ available: true, source: 'glofox', dataAsOf: null, dataAsOfZone: null })
     expect(calls).toEqual([])
     expect(logInfo).not.toHaveBeenCalled()
   })
@@ -48,7 +49,8 @@ describe('radarAvailability', () => {
   it('a un1t studio with the capability carries dataAsOf', async () => {
     radarReadsFor.mockResolvedValue({ source: 'un1t_online', reads: {}, providesMemberships: true, pinArrears: true })
     const { db } = runsDb([{ finished_at: '2026-10-18T11:45:00Z' }])
-    expect(await radarAvailability(db, L, { module: 'lead-radar' })).toEqual({ available: true, source: 'un1t_online', dataAsOf: '2026-10-18T11:45:00Z' })
+    expect(await radarAvailability(db, L, { module: 'lead-radar' })).toEqual({ available: true, source: 'un1t_online', dataAsOf: '2026-10-18T11:45:00Z', dataAsOfZone: null })
+    expect(await radarAvailability(db, L, { module: 'churn-radar', withZone: true })).toEqual({ available: true, source: 'un1t_online', dataAsOf: '2026-10-18T11:45:00Z', dataAsOfZone: 'Europe/Dublin' })
   })
 
   it('an unreadable source throws (the route answers 500)', async () => {

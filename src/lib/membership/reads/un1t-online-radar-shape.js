@@ -469,3 +469,103 @@ export function shapeLeadRows({
   }
   return rows
 }
+
+// ---------------------------------------------------------------------------
+// UN1TRADAR.2 — arrears from spec A's past-due read (spec B §4). Every un1t
+// past-due row is a SUBSCRIPTION payment, so it lands in `byId` and
+// `membershipById` (the Overdue tab). un1t.online exposes no unpaid
+// non-membership charge and no awaiting-authorization charge, so those two
+// maps stay empty and the fold says so (`unavailable`): every renderer shows
+// "not available from un1t.online" for them, never 0.
+// ---------------------------------------------------------------------------
+
+export const UN1T_ARREARS_UNAVAILABLE = Object.freeze(['unpaidCharges', 'awaitingAuth'])
+
+/**
+ * Fold spec A's `pastDue` rows into fetchPastDue's shape:
+ * `{ ids, byId, membershipById, chargesById, pendingById, unavailable, profileById }`.
+ * Each aggregate is `{ amountCents, count, oldestDueAt, amountEstimated?, amountUnknown? }`
+ * (the flags appear only when true). A row's euro amount is, in order:
+ *   - its reported amount, when un1t.online reported one above 0 in EUR;
+ *   - else, when no invoice is open (the subscription's own past-due flag),
+ *     the subscription's price, marked `amountEstimated` (bucketArrears drops a
+ *     zero amount, so the member would vanish from the Overdue tab; Claude's
+ *     call 11);
+ *   - else nothing: the debt is real but has no euro figure (no or a €0
+ *     price, a €0 or non-EUR amount, or invoices in mixed currencies), so the row adds 0 and
+ *     is marked `amountUnknown`, which bucketArrears keeps on the Overdue tab.
+ * Several rows for one contact sum, keeping the earliest `since`; the plan
+ * shown is the one owed longest. A row with no contact cannot be surfaced on a
+ * contact-keyed list and is skipped (so the business total covers linked
+ * members only, unlike Glofox's sum over every past-due invoice).
+ * `profileById` is what the Overdue rows show for plan and last attended: from
+ * un1t, because the contact row of a dual-studio member is Stillorgan's.
+ *
+ * @param {object[]} rows  spec A's pastDue data
+ * @param {{ priceBySubscriptionId: Map<string, number>, lastAttendedByUser: Map<string, string> }} deps
+ */
+export function foldPastDue(rows = [], { priceBySubscriptionId = new Map(), lastAttendedByUser = new Map() } = {}) {
+  const byId = new Map()
+  const membershipById = new Map()
+  const profileById = new Map()
+  const planSince = new Map()
+  const add = (target, contactId, amountCents, since, flag) => {
+    const cur = target.get(contactId) || { amountCents: 0, count: 0, oldestDueAt: null }
+    cur.amountCents += amountCents
+    cur.count += 1
+    if (since && (!cur.oldestDueAt || (msOf(since) ?? Infinity) < (msOf(cur.oldestDueAt) ?? Infinity))) cur.oldestDueAt = since
+    if (flag) cur[flag] = true
+    target.set(contactId, cur)
+  }
+  const euroOf = (r) => {
+    const currency = r.currency == null ? null : String(r.currency).toUpperCase()
+    // A debt is never shown as €0: a zero (or unreadable) reported sum, or a
+    // €0 price, is a debt with no euro figure (bucketArrears drops a plain 0).
+    if (r.amountCents != null && currency === 'EUR' && Number(r.amountCents) > 0) return { amount: Number(r.amountCents), flag: null }
+    const flagOnly = r.amountCents == null && !(Array.isArray(r.openInvoiceIds) && r.openInvoiceIds.length > 0)
+    const price = Number(priceBySubscriptionId.get(r.subscriptionId))
+    if (flagOnly && Number.isFinite(price) && price > 0) return { amount: price, flag: 'amountEstimated' }
+    return { amount: 0, flag: 'amountUnknown' }
+  }
+  for (const r of rows) {
+    if (r?.contactId == null) continue
+    const { amount, flag } = euroOf(r)
+    add(byId, r.contactId, amount, r.since ?? null, flag)
+    add(membershipById, r.contactId, amount, r.since ?? null, flag)
+    const prev = profileById.get(r.contactId)
+    const sinceMs = msOf(r.since) ?? Infinity
+    const takePlan = !prev || sinceMs < (planSince.get(r.contactId) ?? Infinity)
+    if (takePlan) planSince.set(r.contactId, sinceMs)
+    profileById.set(r.contactId, {
+      glofox_membership_status: 'member',
+      glofox_membership_type: 'time',
+      glofox_membership_plan: takePlan ? (r.productTitle ?? null) : prev.glofox_membership_plan,
+      last_attended_at: latestOf([prev?.last_attended_at, lastAttendedByUser.get(r.un1tUserId)]),
+    })
+  }
+  return {
+    ids: new Set(byId.keys()),
+    byId,
+    membershipById,
+    chargesById: new Map(),
+    pendingById: new Map(),
+    unavailable: [...UN1T_ARREARS_UNAVAILABLE],
+    profileById,
+  }
+}
+
+/**
+ * The business "In arrears" figure from a fold: { totalCents, memberCount,
+ * estimated }. `estimated` is true when any member's figure is an estimate OR
+ * has no euro amount at all (the total then understates the debt), so every
+ * total built on it carries "includes an estimate".
+ */
+export function arrearsFromFold(fold) {
+  let totalCents = 0
+  let estimated = false
+  for (const agg of fold?.membershipById?.values?.() ?? []) {
+    totalCents += agg.amountCents || 0
+    if (agg.amountEstimated === true || agg.amountUnknown === true) estimated = true
+  }
+  return { totalCents, memberCount: fold?.membershipById?.size ?? 0, estimated }
+}

@@ -14,7 +14,8 @@
 // (belt-and-braces) with order fixed structurally by the array literal.
 
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
-import { fetchArrearsSummary } from '@shared/dashboard-data'
+import { radarReadsFor } from '@/lib/membership/reads/index'
+import { totalLabel } from '@/lib/radar-copy'
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -62,13 +63,22 @@ async function failedRow(db, locationId, now) {
 }
 
 // 3. Arrears — same source as the KPI card (PAST_DUE post-reconcile).
+// UN1TRADAR.2 — through the membership seam by source key (the Glofox
+// adapter's `arrears` is fetchArrearsSummary, so Stillorgan's text is
+// unchanged); a source with no arrears read, or a failed one, omits the row.
 async function arrearsRow(db, locationId) {
   try {
-    const res = await fetchArrearsSummary(db, locationId)
+    const { source, reads } = await radarReadsFor(db, locationId)
+    if (typeof reads.arrears !== 'function') return null
+    const res = await reads.arrears(db, locationId)
     if (res.success && res.data.memberCount > 0) {
+      const n = res.data.memberCount
       return {
         key: 'arrears', chip: 'Arrears', tone: 'amber',
-        text: `${res.data.memberCount} member${res.data.memberCount === 1 ? '' : 's'} — €${Math.round(res.data.totalCents / 100).toLocaleString('en-IE')} owed`,
+        // Glofox keeps its exact text; other sources get the dash-free form
+        text: source === 'glofox'
+          ? `${n} member${n === 1 ? '' : 's'} — €${Math.round(res.data.totalCents / 100).toLocaleString('en-IE')} owed`
+          : `${n} member${n === 1 ? ' owes' : 's owe'} ${totalLabel(res.data.totalCents, { estimated: res.data.estimated === true })}`,
         href: '/dashboard/churn-radar',
       }
     }

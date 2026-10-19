@@ -5,6 +5,8 @@
 //   radarMembers(db, L, { nowMs })     → Row[]      the churn radar's active base
 //   winbackContacts(db, L, { nowMs })  → Row[]      live rows + ex-members
 //   leadContacts(db, L, { nowMs })     → LeadRow[]  spec A's snapshot, lead-radar shaped
+//   radarPastDue(db, L, { nowMs })     → fetchPastDue's shape, from spec A's pastDue (UN1TRADAR.2)
+//   arrears(db, L)                     → fetchArrearsSummary's { success, data } (+ estimated)
 //
 // Each THROWS on any failed read (a radar that cannot read is a 500, never an
 // empty radar). SCOPE: every un1t_* and contact_memberships query filters
@@ -15,13 +17,13 @@
 // client; reads only. Every list read is selectAll paginated with an explicit
 // order; `.in()` lists are chunked (event ids at 200, contact ids at 300).
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
-import { logInfo } from '@/lib/log'
+import { logInfo, logWarn } from '@/lib/log'
 import { MEMBER_STATUSES } from './un1t-online-shape'
 // un1t-online.js registers these reads, so this import is a cycle: safe, because
 // both sides only touch the other's bindings at CALL time (and these are
 // hoisted function declarations).
 import { freshCutoff, un1tOnlineReads } from './un1t-online'
-import { shapeRadarMembers, shapeWinbackRows, shapeLeadRows } from './un1t-online-radar-shape'
+import { shapeRadarMembers, shapeWinbackRows, shapeLeadRows, foldPastDue, arrearsFromFold } from './un1t-online-radar-shape'
 
 const PAGE = 1000
 const EVENT_CHUNK = 200
@@ -192,4 +194,56 @@ export async function leadContacts(db, locationId, { nowMs = Date.now() } = {}) 
     ownedWithoutClient: owned.filter((c) => !inPipeline.has(c.id) && !clientContacts.has(c.id)),
     newestBookingAtByContact,
   })
+}
+
+const ID_CHUNK = 200
+
+/**
+ * UN1TRADAR.2 — fetchPastDue's shape at a un1t.online studio, folded from spec
+ * A's `pastDue` (never re-derived here). Reads the past-due subscriptions'
+ * prices (for an unreported amount) and the members' last attendance, both at
+ * L. Throws on `success:false` or a failed read: never "nobody owes".
+ */
+// `nowMs` is accepted for the seam's signature; freshness is spec A's
+// freshCutoff (relative to the newest sync), never the clock.
+export async function radarPastDue(db, locationId, { nowMs: _nowMs = Date.now() } = {}) {
+  if (!locationId) throw new Error('No location')
+  const res = await un1tOnlineReads.pastDue(db, locationId)
+  if (!res?.success) throw new Error(res?.error || 'pastDue failed')
+  const rows = res.data || []
+  const subIds = [...new Set(rows.map((r) => r.subscriptionId).filter((v) => v != null))]
+  const userIds = [...new Set(rows.map((r) => r.un1tUserId).filter((v) => v != null))]
+  const byKeys = (table, cols, column, keys) => selectAllByKeys(
+    keys,
+    (chunk, from, to) => db.from(table).select(cols).eq('location_id', locationId).in(column, chunk)
+      .order('id', { ascending: true }).range(from, to),
+    { chunkSize: ID_CHUNK, pageSize: PAGE },
+  )
+  const [subs, clients] = await Promise.all([
+    byKeys('un1t_subscriptions', 'un1t_id, price_cents', 'un1t_id', subIds),
+    byKeys('un1t_clients', 'un1t_user_id, last_attended_at', 'un1t_user_id', userIds),
+  ])
+  const fold = foldPastDue(rows, {
+    priceBySubscriptionId: new Map(subs.map((s) => [s.un1t_id, s.price_cents])),
+    lastAttendedByUser: new Map(clients.map((c) => [c.un1t_user_id, c.last_attended_at])),
+  })
+  const unknown = [...fold.membershipById.values()].filter((a) => a.amountUnknown === true).length
+  if (unknown > 0) logWarn('churn-radar', 'un1t past-due rows with no euro amount', { locationId, count: unknown })
+  return fold
+}
+
+/**
+ * UN1TRADAR.2 — the business "In arrears" figure (fetchArrearsSummary's
+ * envelope): `{ success, data: { totalCents, memberCount, estimated } }`, built
+ * on the same fold as the Overdue tab, so the two agree (members with a contact
+ * only; see foldPastDue). `estimated` is true when any amount is an estimate or
+ * has no euro figure (the card says so).
+ */
+export async function arrears(db, locationId) {
+  if (!locationId) return { success: false, error: 'No location' }
+  try {
+    return { success: true, data: arrearsFromFold(await radarPastDue(db, locationId)) }
+  } catch (e) {
+    return { success: false, error: (e && e.message) || String(e) }
+  }
 }

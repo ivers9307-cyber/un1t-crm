@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 import { logInfo } from '@/lib/log'
-import { radarMembers, winbackContacts, leadContacts } from './un1t-online-radar'
+import { radarMembers, winbackContacts, leadContacts, radarPastDue, arrears } from './un1t-online-radar'
 import { un1tOnlineReads } from './un1t-online'
 
 const HATCH = 'loc-hatch'
@@ -301,5 +301,52 @@ describe('leadContacts', () => {
     const byLocation = log.filter((q) => q.table === 'contacts' && q.filters.some(([k, c]) => k === 'eq' && c === 'location_id'))
     expect(byLocation.length).toBe(1)
     expect(byLocation[0].filters).toContainEqual(['eq', 'location_id', HATCH])
+  })
+})
+
+// UN1TRADAR.2 — arrears from spec A's pastDue (un1t_invoices + subscriptions).
+describe('radarPastDue and arrears', () => {
+  const pdSeed = (extra = {}) => seed({
+    un1t_subscriptions: [
+      sub({ un1t_id: 's1', status: 'past_due', past_due_at: '2026-10-01T00:00:00Z', price_cents: 12000 }),
+      sub({ un1t_id: 's2', un1t_user_id: 'u2', contact_id: 'c2', price_cents: 9000 }),
+    ],
+    un1t_invoices: [
+      { id: id(), location_id: HATCH, un1t_id: 'i9', un1t_user_id: 'u2', contact_id: 'c2', subscription_id: 's2', status: 'open', amount_cents: 9000, currency: 'eur', remote_created_at: '2026-10-05T00:00:00Z', synced_at: SYNCED },
+    ],
+    ...extra,
+  })
+
+  it('folds past-due rows: a flagged sub with no invoice is an estimate at its price; an open invoice is exact', async () => {
+    const { db } = makeDb(pdSeed())
+    const f = await radarPastDue(db, HATCH, { nowMs: NOW })
+    expect(f.membershipById.get('c1')).toEqual({ amountCents: 12000, count: 1, oldestDueAt: '2026-10-01T00:00:00Z', amountEstimated: true })
+    expect(f.membershipById.get('c2')).toEqual({ amountCents: 9000, count: 1, oldestDueAt: '2026-10-05T00:00:00Z' })
+    expect(f.unavailable).toEqual(['unpaidCharges', 'awaitingAuth'])
+    expect(f.profileById.get('c1').last_attended_at).toBe(client().last_attended_at)
+  })
+
+  it('every read is location-scoped', async () => {
+    const { db, log } = makeDb(pdSeed())
+    await radarPastDue(db, HATCH, { nowMs: NOW })
+    for (const q of log) expect(q.filters).toContainEqual(['eq', 'location_id', HATCH])
+  })
+
+  it('radarPastDue throws on success:false (never "nobody owes")', async () => {
+    const { db } = makeDb(pdSeed(), { fail: ['un1t_invoices'] })
+    await expect(radarPastDue(db, HATCH, { nowMs: NOW })).rejects.toThrow()
+  })
+
+  it('arrears has fetchArrearsSummary\'s envelope, plus estimated', async () => {
+    const { db } = makeDb(pdSeed())
+    expect(await arrears(db, HATCH)).toEqual({ success: true, data: { totalCents: 21000, memberCount: 2, estimated: true } })
+    const { db: bad } = makeDb(pdSeed(), { fail: ['un1t_invoices'] })
+    expect(await arrears(bad, HATCH)).toMatchObject({ success: false })
+  })
+
+  it('un1tOnlineReads exposes radarPastDue, arrears and pinArrears true', () => {
+    expect(un1tOnlineReads.radarPastDue).toBe(radarPastDue)
+    expect(un1tOnlineReads.arrears).toBe(arrears)
+    expect(un1tOnlineReads.pinArrears).toBe(true)
   })
 })

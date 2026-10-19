@@ -896,3 +896,15 @@ describe('bucketArrears — by charge type (ARREARS-TYPE.1)', () => {
     expect(bucketArrears({ membershipById: null, chargesById: 'nope' })).toEqual({ overdueById: new Map(), unpaidById: new Map(), awaitingAuthById: new Map() })
   })
 })
+
+// UN1TRADAR.2 — a un1t.online debt with no euro figure stays on its tab.
+describe('bucketArrears and amountUnknown', () => {
+  it('keeps an amountUnknown aggregate; still drops a plain zero', async () => {
+    const { bucketArrears, buildOverdue } = await import('./churn-radar')
+    const m = new Map([['a', { amountCents: 0, count: 1, oldestDueAt: null, amountUnknown: true }], ['b', { amountCents: 0, count: 1, oldestDueAt: null }]])
+    const { overdueById } = bucketArrears({ membershipById: m })
+    expect([...overdueById.keys()]).toEqual(['a'])
+    const row = buildOverdue([{ id: 'a', name: 'A' }], 0, { pastDueById: overdueById })[0]
+    expect(row.amountUnknown).toBe(true)
+  })
+})

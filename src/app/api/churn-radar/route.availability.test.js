@@ -80,7 +80,10 @@ describe('radar read APIs and the memberships capability', () => {
       expect(body.success).toBe(true)
       expect(body.source).toBe('glofox')
       expect(body.dataAsOf).toBeNull()
-      expect(Object.keys(body).sort()).toEqual(['data', 'dataAsOf', 'source', 'success'])
+      // the radar page's own route also carries the studio zone for its freshness line
+      expect(Object.keys(body).sort()).toEqual(name === 'churn-radar'
+        ? ['data', 'dataAsOf', 'dataAsOfZone', 'source', 'success']
+        : ['data', 'dataAsOf', 'source', 'success'])
       expect(mod[loader]).toHaveBeenCalledTimes(1)
     })
 
