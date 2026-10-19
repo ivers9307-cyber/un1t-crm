@@ -1287,8 +1287,8 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
           <section className="border border-un1t-border rounded-lg p-5 mt-6" data-testid="trial-done-card">
             <h2 className="text-base font-semibold text-un1t-text mb-1">Trial finisher follow-up</h2>
             <p className="text-sm text-un1t-muted mb-4">
-              After a trial member attends their second class and their trial ends, the studio sends them the
-              opener template below. If they reply, Mia helps them choose between a membership and a class pack
+              After a trial member has done 3 trial classes, or 2 classes and the trial has expired, the studio
+              sends them the opener template below. If they reply, Mia helps them choose between a membership and a class pack
               and sends the payment link. A second message follows if they stay quiet.
             </p>
             <div className="flex items-center justify-between gap-2 mb-4">
@@ -1333,7 +1333,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
                   onChange={e => setTrialDone('delay_hours', e.target.value === '' ? null : Number(e.target.value))} />
                 {trialErrors.delay_hours
                   ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.delay_hours}</p>
-                  : <p className="text-xs text-un1t-subtle mt-1">Hours after their last class before the opener goes out.</p>}
+                  : <p className="text-xs text-un1t-subtle mt-1">Hours after the trial ends before the opener goes out.</p>}
               </div>
             </div>
             <div className="mt-4">

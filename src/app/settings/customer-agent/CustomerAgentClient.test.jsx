@@ -935,6 +935,18 @@ describe('CustomerAgentClient — trial finisher card (TRIALDONE.3)', () => {
     expect(card.textContent).not.toMatch(/[\u2014\u2013]/)
   })
 
+  // TRIALDONE.7 — the card says who gets it, and what the delay counts from.
+  it('describes the trigger as 3 trial classes, or 2 and an expired trial, timed from the trial ending', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const card = screen.getByTestId('trial-done-card')
+    expect(card.textContent).toContain('has done 3 trial classes, or 2 classes and the trial has expired')
+    expect(card.textContent).toContain('Hours after the trial ends')
+    expect(card.textContent).not.toContain('attends their second class')
+    expect(card.textContent).not.toContain('Hours after their last class')
+  })
+
   it('a Glofox studio, no source, or an older GET shows no card', async () => {
     for (const key of ['glofox', 'none', undefined]) {
       mockFetch([answer({ membership_source_key: key })])
