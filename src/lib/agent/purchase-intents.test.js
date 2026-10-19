@@ -69,8 +69,8 @@ import { TOOL_NOT_AT_THIS_STUDIO, refuseToolForTurn } from './tool-capability'
 import {
   formatPriceLabel, listPurchaseOptions, mintPayDoneToken, hashPayDoneToken, sendPurchaseLink,
   executePurchaseTool, PURCHASE_INTENT_TTL_MS, trialAvailable, offersForBooking,
-  paidSinceSnapshot, settlePurchaseIntent, checkMyPurchase, expireStaleIntents,
 } from './purchase-intents'
+import { paidSinceSnapshot, settlePurchaseIntent, checkMyPurchase, expireStaleIntents } from './purchase-settle'
 import { un1tBookClass } from './un1t-booking'
 import { DEFAULT_TRIAL_USED_TEXT } from './default-copy'
 
