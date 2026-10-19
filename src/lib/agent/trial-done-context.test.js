@@ -89,18 +89,39 @@ describe('trialDoneLineFor', () => {
   })
 
   it('null when closed purchased', async () => {
-    const db = fakeDb({ data: row({ closed_reason: 'purchased' }), error: null })
+    const db = fakeDb({ data: row({ closed_at: '2026-10-18T09:00:00Z', closed_reason: 'purchased' }), error: null })
     expect(await trialDoneLineFor(db, args())).toBeNull()
   })
 
   it('null when closed opted_out', async () => {
-    const db = fakeDb({ data: row({ closed_reason: 'opted_out' }), error: null })
+    const db = fakeDb({ data: row({ closed_at: '2026-10-18T09:00:00Z', closed_reason: 'opted_out' }), error: null })
     expect(await trialDoneLineFor(db, args())).toBeNull()
   })
 
-  it('a row closed for another reason still gets the line', async () => {
-    const db = fakeDb({ data: row({ closed_reason: 'no_reply' }), error: null })
+  it('reads closed_at with the row', async () => {
+    const db = fakeDb({ data: row(), error: null })
+    await trialDoneLineFor(db, args())
+    expect(db.calls.select.split(',').map((c) => c.trim())).toEqual(expect.arrayContaining(['closed_at', 'closed_reason']))
+  })
+
+  // TRIALDONE.7 — an allowlist, not a denylist: only an open row, or a close
+  // that still means "a trial-done conversation", gets the brief.
+  it.each(['window_passed', 'nothing_open'])('a row closed %s still gets the line', async (reason) => {
+    const db = fakeDb({ data: row({ closed_at: '2026-10-18T09:00:00Z', closed_reason: reason }), error: null })
     expect(await trialDoneLineFor(db, args())).toContain('Hatch Street')
+  })
+
+  it.each([
+    'purchased', 'opted_out', 'staff', 'active_elsewhere', 'not_trial_done', 'left_trial_done',
+    'stale', 'no_consent', 'nudge_not_sendable', 'no_reply', 'some_future_reason',
+  ])('a row closed %s gets no line', async (reason) => {
+    const db = fakeDb({ data: row({ closed_at: '2026-10-18T09:00:00Z', closed_reason: reason }), error: null })
+    expect(await trialDoneLineFor(db, args())).toBeNull()
+  })
+
+  it('a closed row with no reason gets no line', async () => {
+    const db = fakeDb({ data: row({ closed_at: '2026-10-18T09:00:00Z', closed_reason: null }), error: null })
+    expect(await trialDoneLineFor(db, args())).toBeNull()
   })
 
   it('null and no throw when the read fails', async () => {

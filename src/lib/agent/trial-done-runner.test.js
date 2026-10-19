@@ -43,6 +43,7 @@ vi.mock('./followups', async (importOriginal) => ({
 }))
 
 import { runTrialDoneOutreach } from './trial-done-runner'
+import { trialDoneLineFor } from './trial-done-context'
 
 const H = 3600_000
 const MIN = 60_000
@@ -78,7 +79,12 @@ function trialFinisher(thirdEnd = THIRD_END) {
 const hatchLocation = (customerAgent = {}, extra = {}) => ({
   id: HATCH, name: 'UN1T Hatch Street', organization_id: null, membership_source: 'un1t_online', active: true,
   timezone: 'Europe/Dublin',
-  settings: { customer_agent: { enabled: true, ...customerAgent, trial_done: { enabled: true, ...(customerAgent.trial_done || {}) } }, ...extra },
+  // TRIALDONE.7 — the sale path (MIAHATCH.6's switch + un1t writes) is on by default here.
+  settings: {
+    customer_agent: { enabled: true, un1t_chat_actions_enabled: true, ...customerAgent, trial_done: { enabled: true, ...(customerAgent.trial_done || {}) } },
+    un1t_online: { writes_enabled: true },
+    ...extra,
+  },
 })
 
 const contactRow = (id, over = {}) => ({
@@ -135,6 +141,7 @@ function parseOr(expr) {
 function matches(row, f) {
   const [op, col, val] = f
   if (op === 'or') return parseOr(col).some((g) => matches(row, g))
+  if (op === 'not') return !matches(row, [f[2], col, f[3]])
   if (col.includes('.')) return true // an embedded resource's filter
   const v = row[col]
   switch (op) {
@@ -217,6 +224,7 @@ function makeDb(tables, { answer } = {}) {
         update: (patch) => { q.op = 'update'; q.patch = patch; return b },
         eq: add('eq'), neq: add('neq'), in: add('in'), is: add('is'), gte: add('gte'), lte: add('lte'), lt: add('lt'), gt: add('gt'), ilike: add('ilike'),
         or: (expr) => { q.filters.push(['or', expr]); return b },
+        not: (col, op, val) => { q.filters.push(['not', col, op, val]); return b },
         order: (c, o) => { q.order = [c, o]; return b },
         range: (f, t) => { q.range = [f, t]; return b },
         limit: (n) => { q.limit = n; return b },
@@ -736,10 +744,15 @@ describe('runTrialDoneOutreach — the one follow-up', () => {
     const msgReads = db.log.filter((q) => q.table === 'whatsapp_messages' && q.op === 'select')
     expect(msgReads).toHaveLength(2)
     for (const r of msgReads) {
-      expect(r.filters).toEqual(expect.arrayContaining([['eq', 'conversation_id', 'conv-1'], ['gt', 'created_at', iso(NOW - 22 * H)]]))
+      expect(r.filters).toEqual(expect.arrayContaining([['gt', 'created_at', iso(NOW - 22 * H)]]))
       expect(r.order).toEqual(['created_at', { ascending: false }])
       expect(r.limit).toBe(1)
     }
+    // TRIALDONE.7: replies on any of the organisation's threads for them; Mia's
+    // last word on the studio's own thread only
+    const [inRead, outRead] = ['inbound', 'outbound'].map((d) => msgReads.find((r) => r.filters.some((f) => f[0] === 'eq' && f[1] === 'direction' && f[2] === d)))
+    expect(inRead.filters).toEqual(expect.arrayContaining([['in', 'conversation_id', ['conv-1']]]))
+    expect(outRead.filters).toEqual(expect.arrayContaining([['eq', 'conversation_id', 'conv-1']]))
   })
 
   it('a reply from before the opener is not a reply: still the template', async () => {
@@ -766,7 +779,7 @@ describe('runTrialDoneOutreach — the one follow-up', () => {
     expect(m.sendTemplateMessage).not.toHaveBeenCalled()
     expect(m.composeAgentText).toHaveBeenCalledTimes(1)
     const compose = m.composeAgentText.mock.calls[0][0]
-    expect(compose.instruction).toBe('[STUDIO SYSTEM - not the customer] They finished their trial and talked with you about continuing, then went quiet. Write one short, friendly check-in that picks up where you left off. No prices unless you already gave them. No pressure.')
+    expect(compose.instruction).toBe('[STUDIO SYSTEM - not the customer] They finished their trial and talked with you about continuing, then went quiet. Write one short, friendly check-in that picks up where you left off. No prices unless you already gave them. No pressure. If they declined, said they will decide later, or there is nothing open to follow up on, reply with exactly [[SKIP]] and nothing else.')
     expect(compose.location).toMatchObject({ id: HATCH, name: 'UN1T Hatch Street' })
     expect(compose.zone).toBe('Europe/Dublin')
     expect(compose.companyName).toBe('UN1T')
@@ -1107,6 +1120,261 @@ describe('runTrialDoneOutreach — hardening', () => {
   it('an empty only_contact_ids is everyone (the operator listed none)', async () => {
     const location = hatchLocation({ trial_done: { only_contact_ids: [] } })
     const db = makeDb(baseTables({ location }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.openers).toBe(1)
+  })
+})
+
+// ── TRIALDONE.7 — the final whole-branch review's findings ────────────
+describe('runTrialDoneOutreach — final review fixes (TRIALDONE.7)', () => {
+  const ORG = 'org-1'
+  // Mia's brief for C1 at Hatch, read through the same fake.
+  const brief = (db, nowMs = NOW) => trialDoneLineFor(db, {
+    locationId: HATCH, contactId: C1, nowMs, settings: { trial_done: { enabled: true } }, studioName: 'Hatch', zone: 'Europe/Dublin',
+  })
+
+  // Finding 1 — a person who left the trial_done column after the opener.
+  describe('the sweep of opened rows off the column', () => {
+    beforeEach(() => {
+      people = new Map([[C1, trialFinisher(NOW - 30 * H)], [C2, trialFinisher(NOW - 30 * H)]])
+    })
+
+    it('bought at the desk after the opener: row closed purchased, no brief', async () => {
+      eligibility.set(C1, ['trial_used', 'membership_history'])
+      const tables = followupTables({ openerAt: NOW - 10 * H, messages: [msg('inbound', NOW - 9 * H), msg('outbound', NOW - 9 * H + MIN)] })
+      tables.deals[0].status = 'won' // the board moved them off the column
+      const db = makeDb(tables)
+      expect(await brief(db)).not.toBeNull() // open row: the brief is live before the sweep
+
+      const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+      expect(res.reasons).toEqual({ purchased: 1 })
+      expect(outreach(db, C1)).toMatchObject({ closed_at: iso(NOW), closed_reason: 'purchased', updated_at: iso(NOW) })
+      expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+      expect(m.sendTextMessage).not.toHaveBeenCalled()
+      expect(m.trialEligibility).toHaveBeenCalledWith(db, HATCH, expect.objectContaining({ contactId: C1 }))
+      expect(await brief(db)).toBeNull()
+    })
+
+    it('left the column while still eligible: closed left_trial_done', async () => {
+      const tables = followupTables({ openerAt: NOW - 10 * H })
+      tables.deals[0].stage_id = 'st-2'
+      const db = makeDb(tables)
+      const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+      expect(res.reasons).toEqual({ left_trial_done: 1 })
+      expect(outreach(db, C1)).toMatchObject({ closed_at: iso(NOW), closed_reason: 'left_trial_done' })
+      expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+      expect(await brief(db)).toBeNull()
+    })
+
+    it('every other verdict closes with its own reason (staff, active elsewhere, no consent as opted_out)', async () => {
+      const contacts = [contactRow(C1, { email: 'coach@example.com' }), contactRow(C2), contactRow(C3)]
+      people = new Map(contacts.map((c) => [c.id, trialFinisher(NOW - 30 * H)]))
+      activeElsewhere = { ok: true, contactIds: new Set([C2]), studios: [] }
+      const tables = followupTables({ openerAt: NOW - 10 * H, contacts })
+      tables.contact_location_preferences.find((p) => p.contact_id === C3).whatsapp_marketing = false
+      tables.deals = []
+      const db = makeDb(tables)
+      const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+      expect(res.reasons).toEqual({ staff: 1, active_elsewhere: 1, opted_out: 1 })
+      expect(outreach(db, C1).closed_reason).toBe('staff')
+      expect(outreach(db, C2).closed_reason).toBe('active_elsewhere')
+      expect(outreach(db, C3).closed_reason).toBe('opted_out')
+    })
+
+    it('reads only open rows whose opener went, paginated and ordered', async () => {
+      const tables = followupTables({ openerAt: NOW - 10 * H })
+      tables.deals = []
+      tables.trial_done_outreach.push(
+        { ...openedRow(C2, NOW - 10 * H), id: 'r-closed', closed_at: iso(NOW - H), closed_reason: 'window_passed' },
+        { ...openedRow(C3, NOW - 10 * H), id: 'r-unsent', opener_claimed_at: null, opener_sent_at: null },
+      )
+      const db = makeDb(tables)
+      const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+      expect(res.reasons).toEqual({ left_trial_done: 1 })
+      const sweep = db.log.find((q) => q.table === 'trial_done_outreach' && q.op === 'select' && q.filters.some((f) => f[0] === 'not'))
+      expect(sweep.filters).toEqual(expect.arrayContaining([
+        ['eq', 'location_id', HATCH], ['is', 'closed_at', null], ['not', 'opener_sent_at', 'is', null],
+      ]))
+      expect(sweep.order).toEqual(['id', { ascending: true }])
+      expect(sweep.range).toEqual([0, 999])
+      expect(tables.trial_done_outreach.find((r) => r.id === 'r-closed').closed_reason).toBe('window_passed')
+      expect(tables.trial_done_outreach.find((r) => r.id === 'r-unsent').closed_at).toBeNull()
+    })
+
+    it('a failed sweep read defers: nothing closed, the candidates still run', async () => {
+      const tables = followupTables({ openerAt: NOW - 10 * H, contacts: [contactRow(C1), contactRow(C2)] })
+      tables.deals = tables.deals.filter((d) => d.contact_id === C2)
+      tables.trial_done_outreach = [openedRow(C1, NOW - 10 * H)] // C2 has no row yet: a candidate, stale trigger
+      const db = makeDb(tables, {
+        answer: (q) => (q.table === 'trial_done_outreach' && q.op === 'select' && q.filters.some((f) => f[0] === 'not')
+          ? { data: null, error: { message: 'timeout' } } : undefined),
+      })
+      const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+      expect(res.reasons).toEqual({ sweep_read_failed: 1, stale: 1 })
+      expect(outreach(db, C1)).toMatchObject({ closed_at: null, closed_reason: null })
+    })
+
+    it('a failed eligibility read for a swept row defers, never closes', async () => {
+      m.trialEligibility = vi.fn(async () => ({ success: false, error: 'boom' }))
+      const tables = followupTables({ openerAt: NOW - 10 * H })
+      tables.deals = []
+      const db = makeDb(tables)
+      const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+      expect(res.reasons).toEqual({ eligibility_unreadable: 1 })
+      expect(outreach(db, C1).closed_at).toBeNull()
+    })
+
+    it('with only_contact_ids set, a row of a contact outside the list is never swept', async () => {
+      const location = hatchLocation({ trial_done: { only_contact_ids: [C3] } })
+      const tables = followupTables({ openerAt: NOW - 10 * H, location })
+      tables.deals = []
+      const db = makeDb(tables)
+      const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+      expect(res.reasons).toEqual({})
+      expect(outreach(db, C1).closed_at).toBeNull()
+    })
+  })
+
+  // Finding 2 — Mia may decline to nudge.
+  it('declined: Mia answers [[SKIP]], the row closes nothing_open and nothing is sent', async () => {
+    m.composeAgentText = vi.fn(async () => ({ text: '[[SKIP]]' }))
+    const lastIn = NOW - 3 * H
+    const db = makeDb(followupTables({
+      openerAt: NOW - 10 * H,
+      messages: [msg('inbound', lastIn, { body: 'No thanks, not for me right now' }), msg('outbound', lastIn + MIN, { body: 'No problem at all!' })],
+    }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ nothing_open: 1 })
+    expect(m.composeAgentText.mock.calls[0][0].instruction).toContain(
+      'If they declined, said they will decide later, or there is nothing open to follow up on, reply with exactly [[SKIP]] and nothing else.')
+    expect(m.sendTextMessage).not.toHaveBeenCalled()
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(outreach(db, C1)).toMatchObject({ closed_at: iso(NOW), closed_reason: 'nothing_open', followup_sent_at: null })
+  })
+
+  // Finding 3 — a reply filed at another studio of the organisation.
+  describe('a reply on another studio\'s thread', () => {
+    beforeEach(() => {
+      people = new Map([[C1, trialFinisher(NOW - 30 * H)]])
+    })
+    const orgTables = () => {
+      const tables = followupTables({ openerAt: NOW - 22 * H })
+      tables.locations[0].organization_id = ORG
+      tables.locations[1].organization_id = ORG
+      return tables
+    }
+
+    it('reply filed at Stillorgan after the opener: no template follow-up', async () => {
+      const tables = orgTables()
+      tables.whatsapp_conversations.push({ id: 'conv-s', location_id: STILL, wa_phone: contactRow(C1).wa_phone, contact_id: C1, agent_active: true })
+      tables.whatsapp_messages.push(msg('inbound', NOW - 5 * H, { conversation_id: 'conv-s', location_id: STILL }))
+      const db = makeDb(tables)
+      const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+      expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+      expect(res.reasons).toEqual({ awaiting_mia: 1 })
+      expect(outreach(db, C1)).toMatchObject({ followup_claimed_at: null, closed_at: null })
+      // the inbound read spans the organisation's threads for this contact or number
+      const convRead = db.log.find((q) => q.table === 'whatsapp_conversations' && q.filters.some((f) => f[0] === 'in'))
+      expect(convRead.filters).toEqual(expect.arrayContaining([
+        ['in', 'location_id', expect.arrayContaining([HATCH, STILL])],
+        ['or', `contact_id.eq.${C1},wa_phone.eq.${contactRow(C1).wa_phone}`],
+      ]))
+    })
+
+    it('a Stillorgan thread found by contact_id alone counts too', async () => {
+      const tables = orgTables()
+      tables.whatsapp_conversations.push({ id: 'conv-s', location_id: STILL, wa_phone: '353860000000', contact_id: C1, agent_active: true })
+      tables.whatsapp_messages.push(msg('inbound', NOW - 5 * H, { conversation_id: 'conv-s', location_id: STILL }))
+      const res = await runTrialDoneOutreach(makeDb(tables), { nowMs: NOW })
+      expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+      expect(res.reasons).toEqual({ awaiting_mia: 1 })
+    })
+
+    it('a thread at a studio of another organisation does not count', async () => {
+      const tables = orgTables()
+      tables.locations.push({ id: 'loc-other', name: 'Elsewhere', organization_id: 'org-2', membership_source: 'glofox', active: true, settings: {} })
+      tables.whatsapp_conversations.push({ id: 'conv-x', location_id: 'loc-other', wa_phone: contactRow(C1).wa_phone, contact_id: C1, agent_active: true })
+      tables.whatsapp_messages.push(msg('inbound', NOW - 5 * H, { conversation_id: 'conv-x', location_id: 'loc-other' }))
+      const res = await runTrialDoneOutreach(makeDb(tables), { nowMs: NOW })
+      expect(res.followups).toBe(1)
+      expect(m.sendTemplateMessage.mock.calls[0][1]).toBe('hatch_trial_done_followup')
+    })
+
+    it('Mia\'s last outbound and the nudge stay on the studio\'s own thread', async () => {
+      const tables = orgTables()
+      const lastIn = NOW - 3 * H
+      tables.trial_done_outreach = [openedRow(C1, NOW - 10 * H)]
+      tables.whatsapp_conversations.push({ id: 'conv-s', location_id: STILL, wa_phone: contactRow(C1).wa_phone, contact_id: C1, agent_active: true })
+      // she answered on Stillorgan's thread only: not an answer on Hatch's
+      tables.whatsapp_messages.push(
+        msg('inbound', lastIn, { conversation_id: 'conv-s', location_id: STILL }),
+        msg('outbound', lastIn + MIN, { conversation_id: 'conv-s', location_id: STILL }),
+      )
+      const db = makeDb(tables)
+      const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+      expect(res.reasons).toEqual({ awaiting_mia: 1 })
+      // answered on Hatch's thread: the nudge goes there
+      db.tables.whatsapp_messages.push(msg('outbound', lastIn + 2 * MIN))
+      const res2 = await runTrialDoneOutreach(db, { nowMs: NOW + MIN })
+      expect(res2.followups).toBe(1)
+      expect(db.tables.whatsapp_messages.at(-1)).toMatchObject({ conversation_id: CONV1, location_id: HATCH, wa_message_id: 'wamid.text' })
+    })
+
+    it('an unreadable organisation studio list skips this tick: never sent, never closed', async () => {
+      const tables = orgTables()
+      const db = makeDb(tables, {
+        answer: (q) => (q.table === 'locations' && q.filters.some((f) => f[0] === 'eq' && f[1] === 'organization_id')
+          ? { data: null, error: { message: 'timeout' } } : undefined),
+      })
+      const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+      expect(res.reasons).toEqual({ thread_read_failed: 1 })
+      expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+      expect(outreach(db, C1)).toMatchObject({ closed_at: null, followup_claimed_at: null })
+    })
+  })
+
+  // Finding 4 — the sale path must be on.
+  it.each([
+    ['the chat-actions switch off', hatchLocation({ un1t_chat_actions_enabled: false })],
+    ['the switch absent', (() => { const l = hatchLocation(); delete l.settings.customer_agent.un1t_chat_actions_enabled; return l })()],
+    ['un1t writes off', hatchLocation({}, { un1t_online: { writes_enabled: false } })],
+  ])('%s: the studio is skipped sale_path_off before any candidate read', async (_label, location) => {
+    const db = makeDb(baseTables({ location }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ sale_path_off: 1 })
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(tablesRead(db)).not.toContain('deals')
+    expect(tablesRead(db)).not.toContain('trial_done_outreach')
+  })
+
+  // Finding 7 — the stored trigger times a row whose evidence has none now.
+  it('no trigger in the evidence: the stored trigger_at still closes the row stale', async () => {
+    people = new Map([[C1, { ...trialFinisher(), evidence: {} }]])
+    const tables = baseTables()
+    tables.trial_done_outreach = [{
+      id: 'r-1', location_id: HATCH, contact_id: C1, deal_id: 'deal-1', trigger_kind: 'three_attended', trigger_at: iso(NOW - 25 * H),
+      opener_claimed_at: null, opener_sent_at: null, opener_wa_message_id: null,
+      followup_kind: null, followup_claimed_at: null, followup_sent_at: null, followup_wa_message_id: null,
+      closed_at: null, closed_reason: null, updated_at: iso(NOW - 25 * H),
+    }]
+    const db = makeDb(tables)
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ stale: 1 })
+    expect(outreach(db, C1)).toMatchObject({ closed_at: iso(NOW), closed_reason: 'stale' })
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+  })
+
+  it('no trigger in the evidence: inside the window the stored trigger_at times the opener', async () => {
+    people = new Map([[C1, { ...trialFinisher(), evidence: {} }]])
+    const tables = baseTables()
+    tables.trial_done_outreach = [{
+      id: 'r-1', location_id: HATCH, contact_id: C1, deal_id: 'deal-1', trigger_kind: 'three_attended', trigger_at: iso(NOW - 2 * H - MIN),
+      opener_claimed_at: null, opener_sent_at: null, opener_wa_message_id: null,
+      followup_kind: null, followup_claimed_at: null, followup_sent_at: null, followup_wa_message_id: null,
+      closed_at: null, closed_reason: null, updated_at: iso(NOW - 3 * H),
+    }]
+    const db = makeDb(tables)
+    expect((await runTrialDoneOutreach(db, { nowMs: NOW - 2 * MIN })).reasons).toEqual({ too_soon: 1 })
     const res = await runTrialDoneOutreach(db, { nowMs: NOW })
     expect(res.openers).toBe(1)
   })

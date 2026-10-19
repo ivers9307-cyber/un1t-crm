@@ -27,7 +27,8 @@
 //
 // TRIALDONE.5 — once the opener went, the same row runs the follow-up stage
 // instead (at most one follow-up, ever):
-//   a. followupDecision on the studio's thread, after opener_sent_at only:
+//   a. followupDecision after opener_sent_at only (their replies on any
+//      thread of the organisation, the studio's own last word on its thread):
 //      no reply = the follow-up template 22-30 h after the opener; replied and
 //      Mia answered last = one Mia-written nudge 3-20 h after their last
 //      message (inside WhatsApp's 24 h window); the customer waiting on Mia =
@@ -40,8 +41,25 @@
 //   d. claim on the followup_* columns (followup_kind set at claim), send,
 //      record exactly as the opener.
 //
+// TRIALDONE.7 — the final review's fixes:
+//   * the sale path must be on (Mia's un1t chat actions: the studio's
+//     un1t_chat_actions_enabled AND its un1t writes_enabled, the rule
+//     turn-studios.js applies to a turn), else the studio is skipped
+//     'sale_path_off': no opener goes out that Mia could not follow through;
+//   * the sweep: an OPEN row whose opener went, for a person no longer on the
+//     trial_done column, is judged fresh like a send and closed with its
+//     reason (purchased, opted_out, staff, ...), or 'left_trial_done' when
+//     still eligible, so Mia's brief (trial-done-context.js) stops for them.
+//     A failed read defers, never closes;
+//   * a reply counts on ANY thread of the organisation for this contact or
+//     number (a reply on the shared org number can file at another studio);
+//     Mia's last outbound and the nudge stay on the studio's own thread;
+//   * an opener whose evidence has no trigger now is timed from the stored
+//     trigger_at, so the row still goes stale.
+//
 // Every skip is a counted reason (results.reasons), carried on the cron
-// heartbeat. Never throws for one person or one studio.
+// heartbeat and on the arm's own row ('trial-done-outreach', mig 757). Never
+// throws for one person or one studio.
 
 import { DEFAULTS } from './settings-contract'
 import { resolveAgentSettingsForLocation } from './settings-resolve'
@@ -66,6 +84,7 @@ import { getLocationZones, LocationZoneReadError, dayStrIn, dayStartMsIn } from 
 import { escapeLikePattern } from '@/lib/like-escape'
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
+import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { logError, logWarn } from '@/lib/log'
 
 const MODULE = 'trial-done'
@@ -125,6 +144,7 @@ export async function runTrialDoneOutreach(db, { nowMs = Date.now() } = {}) {
     const td = { ...DEFAULTS.trial_done, ...(settings.trial_done || {}) }
     if (td.enabled !== true) continue
     if (!settings.enabled && !settings.test_mode) continue
+    if (!salePathOn(settings, location)) { skip('sale_path_off'); continue }
     live.push({ location, settings, td })
   }
   if (live.length === 0) return results
@@ -139,6 +159,16 @@ export async function runTrialDoneOutreach(db, { nowMs = Date.now() } = {}) {
     }
   }
   return results
+}
+
+// TRIALDONE.7 — may Mia sell at this studio? The same rule turn-studios.js
+// (un1tChatActionsOn) applies before a turn gets the purchase tools: the
+// studio's Mia switch un1t_chat_actions_enabled (MIAHATCH.6, studio-only,
+// default off) AND its locations.settings.un1t_online.writes_enabled. Only a
+// literal true counts.
+function salePathOn(settings, location) {
+  if (settings?.un1t_chat_actions_enabled !== true) return false
+  return un1tWriteSettingsFrom(location?.settings).writesEnabled === true
 }
 
 // TZ.5 — every live studio's zone, once per tick. A failed read is never a
@@ -190,26 +220,44 @@ async function runStudio(db, { location, settings, td, zone, nowMs, results, ski
     const keep = new Set(testList.ids)
     candidates = new Map([...candidates].filter(([contactId]) => keep.has(contactId)))
   }
-  if (candidates.size === 0) return
+  // TRIALDONE.7 — opened rows whose person left the column. A failed read
+  // defers the sweep (nothing closed); the candidates still run.
+  let strays = []
+  try {
+    strays = await openedRowsOffColumn(db, studioId, deals.byContact, testList.ids)
+  } catch (e) {
+    logError(MODULE, 'opened rows unreadable; the sweep waits for the next tick (nothing closed)', { locationId: studioId, err: e })
+    skip('sweep_read_failed')
+  }
+  if (candidates.size === 0 && strays.length === 0) return
 
   const inputs = await loadInputs(db, studioId, nowMs)
   if (!inputs.ok) { skip(inputs.reason); return }
 
-  let rows
+  const ctx = {
+    db, location, settings, td, zone, nowMs, nowIso: iso(nowMs), cap, results, skip,
+    reads: inputs.reads, inputs: inputs.data, rows: new Map(),
+    // read at most once per studio per tick, and only when a send is near
+    once: new Map(),
+  }
+  for (const row of strays) {
+    try {
+      await sweepRow(ctx, row)
+    } catch (e) {
+      logError(MODULE, 'sweep of an opened row failed; the next tick retries', { locationId: studioId, contactId: row.contact_id, err: e })
+      skip('error')
+    }
+  }
+  if (candidates.size === 0) return
+
   try {
-    rows = await outreachRows(db, studioId, [...candidates.keys()])
+    ctx.rows = await outreachRows(db, studioId, [...candidates.keys()])
   } catch (e) {
     logError(MODULE, 'outreach rows unreadable; studio skipped this tick', { locationId: studioId, err: e })
     skip('outreach_read_failed')
     return
   }
 
-  const ctx = {
-    db, location, settings, td, zone, nowMs, nowIso: iso(nowMs), cap, results, skip,
-    reads: inputs.reads, inputs: inputs.data, rows,
-    // read at most once per studio per tick, and only when a send is near
-    once: new Map(),
-  }
   for (const [contactId, deal] of candidates) {
     let outcome
     try {
@@ -329,6 +377,36 @@ async function outreachRows(db, studioId, contactIds) {
     .order('id', { ascending: true })
     .range(from, to), { chunkSize: KEY_CHUNK, pageSize: PAGE })
   return new Map(rows.map((r) => [r.contact_id, r]))
+}
+
+// TRIALDONE.7 — this studio's OPEN rows whose opener went, for people not on
+// the trial_done column this tick (with only_contact_ids set, its contacts
+// only: nobody outside the test list is touched). Paginated past the
+// 1,000-row cap. Throws on a failed read.
+async function openedRowsOffColumn(db, studioId, onColumn, testIds) {
+  const rows = await selectAll((from, to) => db.from('trial_done_outreach')
+    .select(OUTREACH_COLS)
+    .eq('location_id', studioId)
+    .is('closed_at', null)
+    .not('opener_sent_at', 'is', null)
+    .order('id', { ascending: true })
+    .range(from, to), { pageSize: PAGE })
+  const keep = testIds ? new Set(testIds) : null
+  return rows.filter((r) => !onColumn.has(r.contact_id) && (!keep || keep.has(r.contact_id)))
+}
+
+// TRIALDONE.7 — one opened row whose person left the column: the same fresh
+// eligibility as before a send closes it with its reason (no consent after
+// the opener is 'opted_out'); still eligible closes 'left_trial_done'. An
+// unreadable read is a skip (judgeEligibility), never a close. No un1t
+// record for them now is no classification (never trial_done).
+async function sweepRow(ctx, row) {
+  const contact = await readContact(ctx, row.contact_id)
+  if (!contact) return
+  const snapshot = ctx.inputs.snapshots.get(row.contact_id) || null
+  if (!(await judgeEligibility(ctx, { contact, snapshot, row, closeAs: followupCloseReason }))) return
+  await closeRow(ctx, row, 'left_trial_done')
+  ctx.skip('left_trial_done')
 }
 
 /**
@@ -488,7 +566,8 @@ async function readContact(ctx, contactId) {
 async function judgeEligibility(ctx, { contact, snapshot, row, closeAs = (reason) => reason }) {
   const facts = await eligibilityInputs(ctx, contact)
   if (!facts.ok) { ctx.skip(facts.reason); return false }
-  const verdict = eligibilityVerdict({ stage: classifyUn1t(snapshot, ctx.nowMs), ...facts.values })
+  const stage = snapshot ? classifyUn1t(snapshot, ctx.nowMs) : null
+  const verdict = eligibilityVerdict({ stage, ...facts.values })
   if (verdict.ok) return true
   if (verdict.reason === 'inputs_missing') {
     logError(MODULE, 'eligibility inputs missing; skipped this tick', { locationId: ctx.location.id, contactId: contact.id })
@@ -675,7 +754,10 @@ async function afterSend(ctx, { row, stage, contact, messageId, conversationId, 
 async function openerStage(ctx, { contactId, snapshot, trigger, row }) {
   const { nowMs, td, skip } = ctx
 
-  const decision = openerDecision({ trigger, outreach: row, nowMs, settings: td })
+  // TRIALDONE.7 — evidence with no trigger now still has the one stored on
+  // the row, so the opener is timed (and goes stale) from that.
+  const timing = trigger || (row.trigger_at ? { kind: row.trigger_kind, at: row.trigger_at } : null)
+  const decision = openerDecision({ trigger: timing, outreach: row, nowMs, settings: td })
   if (decision.action !== 'opener') {
     if (decision.reason === 'stale') await closeRow(ctx, row, 'stale')
     skip(decision.reason)
@@ -708,9 +790,33 @@ async function openerStage(ctx, { contactId, snapshot, trigger, row }) {
 
 // ── TRIALDONE.5 — the one follow-up ──────────────────────────────────
 
+// The ids of every studio in this studio's organisation (itself alone with
+// no organisation): once per studio per tick. null = unreadable.
+function orgStudioIds(ctx) {
+  return once(ctx, 'org_studios', async () => {
+    const { location, db } = ctx
+    if (!location.organization_id) return [location.id]
+    const { data, error } = await db.from('locations')
+      .select('id')
+      .eq('organization_id', location.organization_id)
+      .order('id', { ascending: true })
+      .range(0, PAGE - 1)
+    if (error) {
+      logError(MODULE, 'organisation studios unreadable; follow-ups skipped this tick', { locationId: location.id, err: error })
+      return null
+    }
+    const ids = new Set((data || []).map((l) => l.id))
+    ids.add(location.id)
+    return [...ids]
+  })
+}
+
 // The studio's thread for this number (unique (location_id, wa_phone), mig
-// 008) and the newest inbound and outbound message on it after the opener.
-// No thread yet = no reply. A failed read is a skip, never "no reply".
+// 008), the newest outbound on it after the opener, and the newest INBOUND
+// after the opener on ANY thread of the organisation for this contact or this
+// number (TRIALDONE.7: on the shared org number a reply can file at another
+// studio, WAORGNUMBER.1). No thread anywhere = no reply. A failed read is a
+// skip, never "no reply".
 async function threadFacts(ctx, contact, openerSentAt) {
   const { db, location } = ctx
   const { data: conversation, error } = await db.from('whatsapp_conversations')
@@ -722,16 +828,35 @@ async function threadFacts(ctx, contact, openerSentAt) {
     logError(MODULE, 'thread read failed; skipped this tick', { locationId: location.id, contactId: contact.id, err: error })
     return { ok: false, reason: 'thread_read_failed' }
   }
-  if (!conversation) return { ok: true, conversation: null, lastInboundAtMs: null, lastOutboundAtMs: null }
 
-  const newest = (direction) => db.from('whatsapp_messages')
-    .select('created_at')
-    .eq('conversation_id', conversation.id)
-    .eq('direction', direction)
+  const studios = await orgStudioIds(ctx)
+  if (!studios) return { ok: false, reason: 'thread_read_failed' }
+  const { data: threads, error: threadsErr } = await db.from('whatsapp_conversations')
+    .select('id')
+    .in('location_id', studios)
+    .or(`contact_id.eq.${contact.id},wa_phone.eq.${contact.wa_phone}`)
+    .order('id', { ascending: true })
+    .range(0, PAGE - 1)
+  if (threadsErr) {
+    logError(MODULE, 'organisation threads unreadable; skipped this tick', { locationId: location.id, contactId: contact.id, err: threadsErr })
+    return { ok: false, reason: 'thread_read_failed' }
+  }
+  const threadIds = (threads || []).map((t) => t.id)
+  if (conversation && !threadIds.includes(conversation.id)) threadIds.push(conversation.id)
+
+  const none = Promise.resolve({ data: [], error: null })
+  const newest = (query) => query
     .gt('created_at', openerSentAt)
     .order('created_at', { ascending: false })
     .limit(1)
-  const [inbound, outbound] = await Promise.all([newest('inbound'), newest('outbound')])
+  const [inbound, outbound] = await Promise.all([
+    threadIds.length
+      ? newest(db.from('whatsapp_messages').select('created_at').in('conversation_id', threadIds).eq('direction', 'inbound'))
+      : none,
+    conversation
+      ? newest(db.from('whatsapp_messages').select('created_at').eq('conversation_id', conversation.id).eq('direction', 'outbound'))
+      : none,
+  ])
   if (inbound.error || outbound.error) {
     logError(MODULE, 'thread read failed; skipped this tick', { locationId: location.id, contactId: contact.id, err: inbound.error || outbound.error })
     return { ok: false, reason: 'thread_read_failed' }

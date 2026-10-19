@@ -12,6 +12,10 @@
 import { DEFAULTS } from './settings-contract'
 
 const H_MS = 3600_000
+// TRIALDONE.7 — the nudge is a free-form message, legal only inside WhatsApp's
+// 24h customer-service window from their last message: nudge_max_hours is
+// clamped below it whatever the setting says.
+const NUDGE_MAX_HOURS_CAP = 23
 
 /**
  * How long an opener CLAIM holds before a later tick may take it again. The
@@ -26,8 +30,10 @@ export const TRIAL_DONE_CLAIM_LEASE_MS = 30 * 60_000
  * Mia's instruction for the in-window nudge (TRIALDONE.5). It is an
  * instruction to the model, never sent to the customer as written; what she
  * writes goes through parseAgentResponse (em-dash scrub) before the send.
+ * TRIALDONE.7: she may answer [[SKIP]] (a decline, a "later", nothing open),
+ * which the runner closes as 'nothing_open' with nothing sent.
  */
-export const TRIAL_DONE_NUDGE_INSTRUCTION = '[STUDIO SYSTEM - not the customer] They finished their trial and talked with you about continuing, then went quiet. Write one short, friendly check-in that picks up where you left off. No prices unless you already gave them. No pressure.'
+export const TRIAL_DONE_NUDGE_INSTRUCTION = '[STUDIO SYSTEM - not the customer] They finished their trial and talked with you about continuing, then went quiet. Write one short, friendly check-in that picks up where you left off. No prices unless you already gave them. No pressure. If they declined, said they will decide later, or there is nothing open to follow up on, reply with exactly [[SKIP]] and nothing else.'
 
 // wa_status values that mean "never message this number" (whatsapp-consent.js).
 const OPTED_OUT_STATUSES = new Set(['opted_out', 'blocked', 'undeliverable'])
@@ -64,16 +70,18 @@ export function openerDecision({ trigger, outreach, nowMs, settings } = {}) {
 
 /**
  * Is the one follow-up due for this person, and which kind? Pure; reads no
- * clock but `nowMs`. The runner reads the two timestamps from the studio's
- * thread, after opener_sent_at only.
+ * clock but `nowMs`. The runner reads the two timestamps after
+ * opener_sent_at only: their last message on any of the organisation's
+ * threads for them (TRIALDONE.7), the studio's last on its own thread.
  *
  * - No reply since the opener: a `template` from opener + followup_after_hours
  *   (22) to opener + followup_max_hours (30), both inclusive; after that
  *   `window_passed` (the runner closes the row).
  * - They replied: while their last message is newer than the last outbound
  *   (Mia has not answered yet) `awaiting_mia`; otherwise a `nudge` from their
- *   last message + nudge_after_hours (3) to + nudge_max_hours (20), inside
- *   WhatsApp's 24h window; after that `window_passed`.
+ *   last message + nudge_after_hours (3) to + nudge_max_hours (20, clamped
+ *   to 23 so it stays inside WhatsApp's 24h window); after that
+ *   `window_passed`.
  *
  * @param {object} p
  * @param {object|null} p.outreach            their trial_done_outreach row
@@ -100,7 +108,8 @@ export function followupDecision({ outreach, lastInboundAtMs = null, lastOutboun
     return { action: null, reason: 'awaiting_mia' }
   }
   if (nowMs < lastInboundAtMs + Number(s.nudge_after_hours) * H_MS) return { action: null, reason: 'too_soon' }
-  if (nowMs > lastInboundAtMs + Number(s.nudge_max_hours) * H_MS) return { action: null, reason: 'window_passed' }
+  const nudgeMaxHours = Math.min(Number(s.nudge_max_hours), NUDGE_MAX_HOURS_CAP)
+  if (nowMs > lastInboundAtMs + nudgeMaxHours * H_MS) return { action: null, reason: 'window_passed' }
   return { action: 'nudge' }
 }
 

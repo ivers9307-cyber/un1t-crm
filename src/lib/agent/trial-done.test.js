@@ -213,11 +213,29 @@ describe('followupDecision', () => {
   it('defaults apply when settings are missing', () => {
     expect(followupDecision({ outreach: sent, nowMs: O + 22 * H })).toEqual({ action: 'template' })
   })
+
+  // TRIALDONE.7 — the nudge is a free-form reply: it must land inside
+  // WhatsApp's 24h window, so nudge_max_hours is clamped to 23.
+  it('nudge_max_hours above 23 behaves as 23 (inside the 24h window)', () => {
+    const IN = O + 1 * H
+    const replied = { lastInboundAtMs: IN, lastOutboundAtMs: IN + 5 * M }
+    const s = { ...settings, nudge_max_hours: 30 }
+    expect(fu(IN + 23 * H, { ...replied, settings: s })).toEqual({ action: 'nudge' })
+    expect(fu(IN + 23 * H + M, { ...replied, settings: s })).toEqual({ action: null, reason: 'window_passed' })
+    expect(fu(IN + 29 * H, { ...replied, settings: s })).toEqual({ action: null, reason: 'window_passed' })
+    // at or below 23 the setting is read as is
+    expect(fu(IN + 22 * H + M, { ...replied, settings: { ...settings, nudge_max_hours: 22 } })).toEqual({ action: null, reason: 'window_passed' })
+  })
 })
 
 describe('TRIAL_DONE_NUDGE_INSTRUCTION', () => {
   it('is the brief\'s instruction, verbatim, with no em-dash', () => {
-    expect(TRIAL_DONE_NUDGE_INSTRUCTION).toBe('[STUDIO SYSTEM - not the customer] They finished their trial and talked with you about continuing, then went quiet. Write one short, friendly check-in that picks up where you left off. No prices unless you already gave them. No pressure.')
+    expect(TRIAL_DONE_NUDGE_INSTRUCTION).toBe('[STUDIO SYSTEM - not the customer] They finished their trial and talked with you about continuing, then went quiet. Write one short, friendly check-in that picks up where you left off. No prices unless you already gave them. No pressure. If they declined, said they will decide later, or there is nothing open to follow up on, reply with exactly [[SKIP]] and nothing else.')
     expect(TRIAL_DONE_NUDGE_INSTRUCTION).not.toMatch(/[\u2013\u2014]/)
+  })
+
+  // TRIALDONE.7 — Mia may skip: a decline or a "later" ends the sequence.
+  it('lets Mia skip with exactly [[SKIP]] when they declined or there is nothing open', () => {
+    expect(TRIAL_DONE_NUDGE_INSTRUCTION).toContain('If they declined, said they will decide later, or there is nothing open to follow up on, reply with exactly [[SKIP]] and nothing else.')
   })
 })
