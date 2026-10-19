@@ -92,6 +92,8 @@ export const CLOSED_FUNCTIONS = [
     why: 'a trigger function (a sync upsert pulled before a CRM write keeps the CRM’s un1t_* mirror row); a trigger fires without EXECUTE' },
   { fn: 'public.sync_contact_location_preferences', args: '()', closedBy: 747,
     why: 'a SECURITY DEFINER trigger function (closed since mig 490); 747 re-states the REVOKE after its CREATE OR REPLACE' },
+  { fn: 'public.normalize_wa_phone', args: '(text)', closedBy: 753,
+    why: 'called only inside the INVOKER contacts trigger, which service_role fires; contacts is read-only for clients' },
 ]
 
 /** The client roles a closed function is closed to. */

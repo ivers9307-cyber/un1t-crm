@@ -122,6 +122,23 @@ describe('resolveUn1tContacts', () => {
     expect(r.contactLocationByUserId.has('u5')).toBe(false)
   })
 
+  it('newlyLinked lists exactly the clients created or attached on this run (SHAREDCONTACT.1)', async () => {
+    const { db } = makeDb([
+      { id: 'c-linked', organization_id: ORG, location_id: HATCH, un1t_user_id: 'u1', email: 'one@x.ie', first_name: 'One', last_name: 'X', phone: '+353870000001' },
+      { id: 'c-still', organization_id: ORG, location_id: STILLORGAN, un1t_user_id: null, email: 'two@x.ie', first_name: 'Two', last_name: 'X', phone: '+353870000002' },
+    ])
+    const r = await resolveUn1tContacts(db, args([
+      { id: 'u1', email: 'one@x.ie', created_at: '2026-10-01T00:00:00Z' },
+      { id: 'u2', email: 'two@x.ie', created_at: '2026-10-18T09:00:00Z' },
+      { id: 'u3', email: 'three@x.ie', first_name: 'Three', created_at: '2026-10-19T09:00:00Z' },
+    ]))
+    const created = r.contactIdByUserId.get('u3')
+    expect(r.newlyLinked).toEqual([
+      { userId: 'u2', contactId: 'c-still', how: 'attached', homeLocationId: STILLORGAN, remoteCreatedAt: '2026-10-18T09:00:00Z' },
+      { userId: 'u3', contactId: created, how: 'created', homeLocationId: HATCH, remoteCreatedAt: '2026-10-19T09:00:00Z' },
+    ])
+  })
+
   it('attaches to a Stillorgan contact across studios by email, case-insensitively', async () => {
     const { db, log } = makeDb([
       { id: 'c1', organization_id: ORG, location_id: STILLORGAN, email: 'Jane@x.ie', un1t_user_id: null, first_name: 'Jane', last_name: null, phone: null },

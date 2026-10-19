@@ -4,7 +4,7 @@
 // the message logs to a conversation and any reply routes to Mia. Mirrors
 // the send pattern in meta-ad-whatsapp-welcome.js. Never throws.
 
-import { toE164Ireland } from '@/lib/phone-validate'
+import { contactWhatsAppNumber } from '@/lib/phone-validate'
 import { sendTemplateMessage, getOrCreateConversation } from '@/lib/whatsapp'
 import { logTransactionalWalletState } from '@/lib/wallet-enforcement'
 import { logWarn } from '@/lib/log'
@@ -45,10 +45,14 @@ export async function maybeSendBookingWhatsappConfirm({ db, locationId, contact,
     }
 
     if (!templateName && !purpose) return { sent: false, reason: 'no_template_configured' }
-    if (!contact?.phone) return { sent: false, reason: 'no_phone' }
+    if (!contact?.phone && !contact?.wa_phone) return { sent: false, reason: 'no_phone' }
 
-    const waPhone = toE164Ireland(contact.phone)
-    if (!waPhone || !/^\+\d{10,15}$/.test(waPhone)) return { sent: false, reason: 'unnormalisable_phone' }
+    // WAPHONE.1 — the contact's WhatsApp number (a stored wa_phone, else the
+    // phone through the one rule the contacts trigger also uses). The Irish
+    // formatter used before passed a landline or a bare 9-digit non-mobile
+    // through as '+353…', which was then sent to and stored as wa_phone.
+    const waPhone = contactWhatsAppNumber(contact)
+    if (!waPhone) return { sent: false, reason: 'unnormalisable_phone' }
 
     let template
     if (purpose) {
@@ -78,8 +82,10 @@ export async function maybeSendBookingWhatsappConfirm({ db, locationId, contact,
     const result = await sendTemplateMessage(waPhone, template.name, template.language || 'en', components, { locationId, ...(template.business_account_id && { businessAccountId: template.business_account_id }) })
 
     if (!contact.wa_phone) {
-      try { await db.from('contacts').update({ wa_phone: waPhone }).eq('id', contact.id).is('wa_phone', null) }
-      catch (e) { logWarn('booking-wa-confirm', 'wa_phone backfill failed', { err: e }) }
+      try {
+        const { error: waErr } = await db.from('contacts').update({ wa_phone: waPhone }).eq('id', contact.id).is('wa_phone', null)
+        if (waErr) logWarn('booking-wa-confirm', 'wa_phone backfill failed', { err: waErr })
+      } catch (e) { logWarn('booking-wa-confirm', 'wa_phone backfill failed', { err: e }) }
       contact = { ...contact, wa_phone: waPhone }
     }
     try {
