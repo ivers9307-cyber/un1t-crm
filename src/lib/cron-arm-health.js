@@ -38,6 +38,12 @@
 //                       the "Offer to team" arm of the */5 send-push-reminders
 //                       cron. Seeded by mig 642, applied RIGHT AFTER the deploy.
 //
+// TRIALDONE.7 adds a sixth, the first on the */15 agent-followups cron:
+//
+//   'trial-done-outreach' — runTrialDoneOutreach (src/lib/agent/trial-done-runner.js),
+//                       the trial-finisher opener and follow-up arm. Seeded by
+//                       mig 757, applied RIGHT AFTER the deploy.
+//
 // THE RULE. Stamp only when the arm RETURNED an outcome object (a throw, or a
 // resolved non-object, has not shown it ran) and that outcome carries no
 // fault in the arm's own machinery. A run with nothing to send is healthy (a
@@ -151,6 +157,38 @@ export function replaceNoticeArmHealthy(outcome) {
 export function offerSweepArmHealthy(outcome) {
   if (!isOutcome(outcome)) return false
   return count(outcome.errors) === 0 && count(outcome.stamp_failed) === 0
+}
+
+// TRIALDONE.7 — the trial-done outreach arm (src/lib/agent/trial-done-runner.js
+// runTrialDoneOutreach) of the */15 agent-followups cron. Seeded by mig 757,
+// applied RIGHT AFTER the deploy that stamps it.
+export const TRIAL_DONE_HEARTBEAT = 'trial-done-outreach'
+
+// runTrialDoneOutreach's skip reasons that mean the ARM went wrong: a
+// studio-level read it needs for everyone failed (so nobody at that studio
+// was served this tick), or the arm threw (studio_error for a studio, error
+// for one person or one swept row). NOT here, like mig 755's per-intent
+// errors: a per-person deferral (eligibility, consent, staff, thread or
+// contact unreadable, a lost claim or row insert: each retried next tick and
+// logged), a failed delivery (claim released), a closed row (stale,
+// window_passed, purchased, left_trial_done ...) and a studio config gap
+// (no_number, template_not_approved, sale_path_off, test_list_invalid,
+// no_board, reads_unavailable), which integration health and the settings
+// card show.
+export const TRIAL_DONE_ARM_FAULT_KEYS = Object.freeze([
+  'locations_read_failed', 'settings_unreadable', 'zone_read_failed', 'cap_read_failed', 'board_read_failed',
+  'deals_read_failed', 'inputs_unreadable', 'outreach_read_failed', 'sweep_read_failed', 'studio_error', 'error',
+])
+
+/**
+ * TRIALDONE.7 — true when a runTrialDoneOutreach() outcome shows a clean run.
+ * The outcome must carry its reasons object (the arm always returns one); a
+ * throw or anything else has not shown it ran. A tick with every studio
+ * switched off (the default), outside daytime or with nobody due is healthy.
+ */
+export function trialDoneArmHealthy(outcome) {
+  if (!isOutcome(outcome) || !isOutcome(outcome.reasons)) return false
+  return TRIAL_DONE_ARM_FAULT_KEYS.every((key) => count(outcome.reasons[key]) === 0)
 }
 
 // C5 REPLACENITS.1 — the */5 send-push-reminders tick log line. The route

@@ -542,6 +542,7 @@ function todayWithWeekday(today) {
  * @param {string[]}[opts.factsBlocks] MIAHATCH.2: buildStudioFactsBlock outputs for answerable studios that are not the thread's; uncached suffix only
  * @param {boolean}[opts.bookingFlow] MIAFLOW.1: the turn offers send_booking_flow (the studio's WhatsApp booking Flow); adds BOOKING_FLOW_PROMPT_SECTION
  * @param {string} [opts.trialUsedClassLine] MIAHATCH.6: buildTrialUsedClassLine's output (un1t_full turns only); uncached suffix only
+ * @param {string|null}[opts.trialDoneLine] TRIALDONE.6: trialDoneLineFor's output (the studio's trial-done brief); uncached suffix only
  * @returns {{ stable: string, volatile: string }}
  */
 export function buildCustomerSystemPromptParts(opts = {}) {
@@ -639,6 +640,12 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   // MIAHATCH.6 — the class a trial-used hand-off left on this thread (un1t_full
   // only, promptOptionsForPlan). Per-conversation: uncached suffix only.
   if (typeof opts.trialUsedClassLine === 'string' && opts.trialUsedClassLine.trim()) volatileParts.push(opts.trialUsedClassLine.trim())
+
+  // TRIALDONE.6 — this contact just finished their trial and the studio sent
+  // the trial-done opener (trialDoneLineFor). Per-contact: uncached suffix only.
+  if (typeof opts.trialDoneLine === 'string' && opts.trialDoneLine.trim()) {
+    volatileParts.push('## This person just finished their trial\n' + opts.trialDoneLine.trim())
+  }
 
   return { stable: stableParts.join('\n\n'), volatile: volatileParts.join('\n\n') }
 }

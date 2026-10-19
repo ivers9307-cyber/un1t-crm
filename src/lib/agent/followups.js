@@ -317,7 +317,7 @@ function skipLog(conversationId, reason) {
   console.warn('[radar-agent] followup-skip', JSON.stringify({ conversationId, reason }))
 }
 
-async function recordProactiveMessage(db, conv, { body, waMessageId, messageType, templateName }) {
+export async function recordProactiveMessage(db, conv, { body, waMessageId, messageType, templateName }) {
   const { error } = await db.from('whatsapp_messages').insert({
     conversation_id: conv.id,
     contact_id: conv.contact_id,
@@ -346,8 +346,9 @@ async function stampStage(db, conversationId, stage, sent) {
 /**
  * The location's enabled knowledge, same query the live reply path runs
  * (auto-reply.js). Best-effort: a failure just yields an empty list.
+ * Exported for the trial-done nudge (TRIALDONE.5), which composes the same way.
  */
-async function loadAgentKnowledge(db, locationId) {
+export async function loadAgentKnowledge(db, locationId) {
   const { data } = await db.from('agent_knowledge')
     .select('category, title, content, enabled, sort_order')
     .eq('location_id', locationId)
@@ -384,7 +385,7 @@ export function promptCapabilityFor(location, settings) {
 // (WAORGNUMBER.6: it no longer sends through a sibling's stamped number). A
 // failed read is "owns a number", logged: the send is then refused before any
 // Meta call and counted as a skip, so the doubt can never be louder.
-async function studioOwnsWhatsAppNumber(db, locationId) {
+export async function studioOwnsWhatsAppNumber(db, locationId) {
   try {
     return (await locationsWithWhatsApp(db, [locationId])).has(locationId)
   } catch (err) {

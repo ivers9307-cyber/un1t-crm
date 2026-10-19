@@ -463,9 +463,11 @@ const CLIENT_COLS = 'un1t_user_id, contact_id, credit_balance, credit_unlimited,
 const PIPE_SUB_COLS = 'un1t_user_id, contact_id, status, paused_at, remote_created_at'
 const ELIGIBILITY_SUB_COLS = 'un1t_id, un1t_user_id, contact_id, status'
 const PIPE_TX_COLS = 'un1t_id, un1t_user_id, contact_id, product_id, product_type, type, amount_cents, refunded, remote_created_at'
-const PRODUCT_COLS = 'un1t_id, type, price_cents, credits_per_period, title'
+// TRIALDONE.2 — expire_credits_in_days (from raw, as text) dates the trial's expiry.
+const PRODUCT_COLS = 'un1t_id, type, price_cents, credits_per_period, title, expire_credits_in_days:raw->>expire_credits_in_days'
 const BOOKING_COLS = 'un1t_user_id, contact_id, event_id, status, source, credit_charged, external_member_ref, remote_created_at'
-const EVENT_COLS = 'un1t_id, starts_at'
+// TRIALDONE.2 — ends_at (mig 726) dates "the 3rd class ended" for the outreach.
+const EVENT_COLS = 'un1t_id, starts_at, ends_at'
 const MEMBERSHIP_COLS = 'contact_id, source, status, ended_at'
 // Exactly these six, by id: no Glofox column is read (membership and the
 // pipeline are separate per studio; only the contact is shared).
@@ -645,11 +647,15 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
     // a row's person: its un1t user's contact, else its own contact_id
     const owner = (r) => (r.un1t_user_id != null ? contactOfUser.get(r.un1t_user_id) : null) ?? r.contact_id ?? null
 
-    const startsAt = new Map(events.map((e) => [e.un1t_id, e.starts_at ?? null]))
+    const eventsById = new Map(events.map((e) => [e.un1t_id, e]))
     const subsBy = groupBy(subs, owner)
     const txsBy = groupBy(txs, owner)
     const bookingsBy = groupBy(
-      bookings.map((b) => ({ ...b, starts_at: startsAt.get(b.event_id) ?? null })),
+      bookings.map((b) => ({
+        ...b,
+        starts_at: eventsById.get(b.event_id)?.starts_at ?? null,
+        ends_at: eventsById.get(b.event_id)?.ends_at ?? null,
+      })),
       owner,
     )
     const membershipsBy = groupBy(memberships, (m) => m.contact_id)
