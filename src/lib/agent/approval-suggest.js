@@ -191,7 +191,11 @@ async function un1tCardContext(db, row, zone) {
     .select('name, first_name, un1t_user_id')
     .eq('id', row.contact_id)
     .maybeSingle()
-  if (cErr || !contact) return out
+  if (cErr) {
+    logWarn('mia-un1t', 'suggest contact read failed', { locationId: row.location_id, op: 'suggest_contact', status: null, code: cErr.code ?? null })
+    return out
+  }
+  if (!contact) return out
   out.firstName = contact.first_name || (contact.name ? contact.name.split(' ')[0] : null)
   const un1tUserId = idText(row.details?.un1t_user_id) || idText(contact.un1t_user_id)
   if (!un1tUserId) return out

@@ -22,6 +22,7 @@ import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { staffActorName } from '@/lib/staff-actor-name'
 import { resolveAgentSettingsForLocation } from '@/lib/agent/settings-resolve'
+import { isMiaUn1tCard } from '@/lib/agent/mia-un1t-card'
 
 // PATCH /api/agent/membership-requests/[id] — staff decides a queued
 // agent request. Decision rights follow the comms surface (any staff
@@ -466,9 +467,9 @@ export async function PATCH(request, { params }) {
   const un1tBooking = row.kind === 'class_booking' && details?.provider === 'un1t_online'
   const un1tRecordOnly = un1tBooking && UN1T_RECORD_ONLY_REASONS.has(details?.reason)
   const manualBooking = row.kind === 'class_booking' && !un1tBooking && isHandBookedEventId(details?.event_id)
-  // Mia's own card (isMiaUn1tCard in agent/un1t-approval-branch.js, loaded lazily
-  // below like D's executor): a un1t.online card with details.origin 'mia'.
-  const miaUn1tCard = (un1tBooking || un1tCancellation) && details?.origin === 'mia'
+  // Mia's own card; its executor (agent/un1t-approval-branch.js) loads lazily
+  // below like D's, the predicate is import-free.
+  const miaUn1tCard = (un1tBooking || un1tCancellation) && isMiaUn1tCard(details)
   let expiredBeforeExecution = false
   if (executing && (row.kind === 'class_booking' || un1tCancellation) && !manualBooking && !un1tRecordOnly) {
     const startsAtMs = Date.parse(row.details?.starts_at || '')

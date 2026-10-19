@@ -203,6 +203,14 @@ describe('composeApprovalSuggestion — un1t.online vs Glofox context', () => {
     expect(logWarn).toHaveBeenCalledWith('mia-un1t', 'suggest membership read failed', expect.objectContaining({ locationId: 'loc-hatch', code: 'XX000' }))
   })
 
+  it('an unreadable contact is logged like the other un1t reads, and leaves the context out', async () => {
+    const db = recordingDb({ contacts: { data: null, error: { code: 'XX000', message: 'down' } } })
+    const r = await composeApprovalSuggestion(db, { ...BASE, location_id: 'loc-hatch', kind: 'class_booking', details: { provider: 'un1t_online', un1t_user_id: 'u-1' } })
+    expect(r).toEqual({ text: 'See you there.' })
+    expect(logWarn).toHaveBeenCalledWith('mia-un1t', 'suggest contact read failed', expect.objectContaining({ locationId: 'loc-hatch', status: null, code: 'XX000' }))
+    expect(db.reads.some((x) => x.table.startsWith('un1t_'))).toBe(false)
+  })
+
   it('Glofox fields for Glofox cards; no un1t mirror read', async () => {
     const db = recordingDb({
       contacts: { data: { first_name: 'Member', glofox_membership_state: 'ACTIVE', recent_bookings: [{ time_start: Math.floor(Date.now() / 1000) + 86_400, event_name: 'HYROX', status: 'BOOKED' }] }, error: null },

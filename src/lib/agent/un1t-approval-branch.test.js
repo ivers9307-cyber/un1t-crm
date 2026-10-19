@@ -177,13 +177,48 @@ describe('executeMiaUn1tCard', () => {
     expect(r.customerNotified).toEqual({ sent: false, channel: 'whatsapp', reason: 'window_closed' })
   })
 
-  it('a send that throws never flips the card', async () => {
-    sendAgentThreadMessage.mockRejectedValueOnce(new Error('boom'))
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('a send that throws never flips the card, and is logged structurally', async () => {
+    sendAgentThreadMessage.mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 503 }))
     const r = await executeMiaUn1tCard(fakeDb(), { row: ROW('class_booking', BOOK()), details: BOOK(), actor: { id: 'staff-1' }, expiredBeforeExecution: false })
-    warn.mockRestore()
     expect(r.finalStatus).toBe('actioned')
     expect(r.details.confirmation).toEqual({ sent: false, reason: 'send_error' })
+    expect(logWarn).toHaveBeenCalledWith('mia-un1t', 'approval confirmation send failed', expect.objectContaining({ locationId: LOC, requestId: 'r-1', status: 503, errClass: 'Error' }))
+    expect(JSON.stringify(logWarn.mock.calls)).not.toMatch(/boom/)
+  })
+
+  // Ruling 28 — a staff approval of a Mia card never grants the €0 trial: D's
+  // bookOnce runs credits_only, so no credits is a failed card, never a purchase.
+  it.each(['mia_booking', 'no_credits', 'booking_rejected', 'un1t_outcome_unknown'])('the bookOnce hook forces credits_only for a %s card; grantTrial is never reached', async (reason) => {
+    const d = BOOK({ reason })
+    await executeMiaUn1tCard(fakeDb(), { row: ROW('class_booking', d), details: d, actor: { id: 'staff-1' }, expiredBeforeExecution: false })
+    const deps = h.execute.mock.calls[0][2]
+    expect(typeof deps.bookOnce).toBe('function')
+    const grantTrial = vi.fn()
+    const book = vi.fn()
+    const once = await deps.bookOnce(fakeDb(), {
+      request: { id: null, location_id: LOC }, contact: { id: 'c-1' }, organizationId: 'org-1', eventId: 'ev-1',
+      origin: 'approval', originRef: 'r-1', actor: { id: 'staff-1' },
+      writer: { studioId: 'studio-test-1', read: async () => ({ balance: 0, is_unlimited: false }) },
+      trialMode: 'normal',
+    }, { ensureUn1tAccount: async () => ({ kind: 'existing', un1tUserId: 'u-1', executingContactId: 'c-1' }), grantTrial, book })
+    expect(once).toMatchObject({ kind: 'card', reason: 'un1t_trial_unverified' })
+    expect(grantTrial).not.toHaveBeenCalled()
+    expect(book).not.toHaveBeenCalled()
+  })
+
+  it("no credits lands failed as MIA_NO_CREDITS with Mia's staff words, not D's trial copy", async () => {
+    h.execute.mockResolvedValueOnce({
+      finalStatus: 'failed',
+      details: { ...BOOK(), result: { ok: false, code: 'un1t_trial_unverified', message: 'The trial could not be confirmed' } },
+      executed: { ok: false, verdict: null, code: 'un1t_trial_unverified', message: 'The trial could not be confirmed', retryable: false, ledger_id: null },
+      customerNotified: { sent: false, channel: 'email', reason: 'not_executed' },
+    })
+    const r = await executeMiaUn1tCard(fakeDb(), { row: ROW('class_booking', BOOK()), details: BOOK(), actor: { id: 'staff-1' }, expiredBeforeExecution: false })
+    expect(r.finalStatus).toBe('failed')
+    expect(r.executed).toMatchObject({ ok: false, code: 'MIA_NO_CREDITS', message_code: 'MIA_NO_CREDITS', message: 'No credits show in un1t.online. Add credits there, then approve again.' })
+    expect(r.details.result).toEqual(r.executed)
+    expect(JSON.stringify(r)).not.toMatch(/trial could not be confirmed/)
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
   })
 
   it('a failed or record-only execution, or a card with no thread, sends nothing', async () => {

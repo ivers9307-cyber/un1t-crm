@@ -21,7 +21,11 @@
 //                (the PERSON-ACCT.7 rule for Glofox class bookings).
 //   execute      executeUn1tApproval, the approver as actor. Its step 7 (the
 //                set-password and booking confirmation emails) is replaced by
-//                a no-op: E sends no email (R4).
+//                a no-op: E sends no email (R4). Its bookOnce runs
+//                trialMode 'credits_only' (Ruling 28): a staff approval never
+//                grants the €0 trial, which Mia offers only in her
+//                eligible-first upsell. No credits is a failed card,
+//                MIA_NO_CREDITS, in Mia's words rather than D's trial copy.
 //   confirm      on 'actioned' (a real write, not a record), ONE in-thread
 //                confirmation via sendAgentThreadMessage with the operator's
 //                booking or cancellation text. Its answer is recorded on the
@@ -35,18 +39,22 @@ import { executeUn1tApproval } from '@/lib/un1t-online-approval-execute'
 import { UN1T_RECORD_ONLY_REASONS } from '@/lib/un1t-online-approval'
 import { findUn1tAccount } from '@/lib/un1t-online-account'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
+import { un1tBookOnce } from '@/lib/un1t-online-booking-processor'
 import { logWarn } from '@/lib/log'
 
+export { isMiaUn1tCard } from './mia-un1t-card'
+
 const LOG_MODULE = 'mia-un1t'
-const PROVIDER = 'un1t_online'
 
 export const UN1T_ACCOUNT_MISMATCH = 'ACCOUNT_MISMATCH'
 export const UN1T_ACCOUNT_UNREADABLE = 'UN1T_ACCOUNT_UNREADABLE'
-
-/** A un1t.online card Mia filed (not a /start funnel card). Pure. */
-export function isMiaUn1tCard(details) {
-  return details?.provider === PROVIDER && details?.origin === 'mia'
-}
+export const MIA_NO_CREDITS = 'MIA_NO_CREDITS'
+// Staff-facing. The failure label map is shared/agent-request-failure.js
+// (shared with the phone, so a change there is an OTA); until it carries this
+// code the card holds the words on details.result.message.
+export const MIA_NO_CREDITS_COPY = 'No credits show in un1t.online. Add credits there, then approve again.'
+// D's code for "credits_only found no credits" (un1t-online-approval-execute.js).
+const D_NO_CREDITS_CODE = 'un1t_trial_unverified'
 
 const idText = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
 
@@ -82,6 +90,9 @@ async function currentAccount(db, { locationId, contactId }) {
 }
 
 const noEmail = async () => ({})
+// Ruling 28: whatever reason the card carries, never a trial grant on approval.
+const creditsOnlyBookOnce = (db, args, deps) => un1tBookOnce(db, { ...args, trialMode: 'credits_only' }, deps)
+const MIA_EXECUTOR_DEPS = Object.freeze({ afterBooking: noEmail, bookOnce: creditsOnlyBookOnce })
 
 /**
  * @param {object} db
@@ -109,8 +120,12 @@ export async function executeMiaUn1tCard(db, { row, details, actor, expiredBefor
     }
   }
 
-  const r = await executeUn1tApproval(db, { row: { ...row, details }, actor }, { afterBooking: noEmail })
+  const r = await executeUn1tApproval(db, { row: { ...row, details }, actor }, MIA_EXECUTOR_DEPS)
   let out = { finalStatus: r.finalStatus, details: r.details, executed: r.executed, customerNotified: null }
+  if (out.finalStatus === 'failed' && out.executed?.code === D_NO_CREDITS_CODE) {
+    const executed = { ...out.executed, code: MIA_NO_CREDITS, message_code: MIA_NO_CREDITS, message: MIA_NO_CREDITS_COPY }
+    out = { ...out, executed, details: { ...out.details, result: executed } }
+  }
 
   const confirms = out.finalStatus === 'actioned' && out.executed?.ok === true && out.executed?.record_only !== true
   if (confirms && row.conversation_id) {
@@ -136,8 +151,11 @@ async function sendConfirmation(db, row, details) {
     const res = await notify.sendAgentThreadMessage(db, { channel: row.channel, conversationId: row.conversation_id, text })
     if (res?.sent === true) return { sent: true }
     return { sent: false, reason: res?.reason || 'not_sent' }
-  } catch (e) {
-    console.warn(`[agent-requests] un1t confirmation send error: ${e?.message || e}`)
+  } catch (err) {
+    logWarn(LOG_MODULE, 'approval confirmation send failed', {
+      locationId: row.location_id, op: 'approval_confirmation', requestId: row.id,
+      status: err?.status ?? null, code: err?.code ?? null, errClass: err?.name ?? null,
+    })
     return { sent: false, reason: 'send_error' }
   }
 }
