@@ -6,8 +6,9 @@ import { runHandoffSlaSweep, runHandoffAutoResolve } from '@/lib/agent/handoff-s
 import { runApprovalsSlaSweep } from '@/lib/agent/approvals-sla'
 import { rollupCheckinDay } from '@/lib/agent/checkin-day-rollup'
 import { runTrialDoneOutreach } from '@/lib/agent/trial-done-runner'
+import { TRIAL_DONE_HEARTBEAT, trialDoneArmHealthy } from '@/lib/cron-arm-health'
 import { dayStrIn, PLATFORM_TZ } from '@/lib/location-time'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 
 // AGENT-FOLLOWUP.1 — every 15 min (vercel.json): run Mia's proactive
 // follow-up ladder for every location that enabled it. Stage 1 =
@@ -46,6 +47,14 @@ export async function GET(request) {
     trialDone = await runTrialDoneOutreach(db)
   } catch (e) {
     logError('cron-agent-followups', 'trial-done tick failed', { err: e })
+  }
+  // TRIALDONE.7 — the arm's OWN row, 'trial-done-outreach' (mig 757): stamped
+  // only when it returned an outcome with no fault of its own
+  // (cron-arm-health.js trialDoneArmHealthy), right here so no later arm can
+  // cost it its stamp, under its own catch. A tick with nothing to send stamps.
+  if (trialDoneArmHealthy(trialDone)) {
+    await stampHeartbeat(TRIAL_DONE_HEARTBEAT, trialDone).catch((err) =>
+      logWarn('cron-agent-followups', 'trial-done-outreach heartbeat failed', { err }))
   }
   // AGENT-HANDOFF-SLA.1 — same tick, independent failure domain: re-alert
   // managers about handed-off threads no human has picked up.

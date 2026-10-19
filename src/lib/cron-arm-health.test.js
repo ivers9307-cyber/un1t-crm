@@ -336,3 +336,72 @@ describe('pushReminderTickIsNews (REPLACENITS.1)', () => {
     for (const k of OFFER_SWEEP_NEWS_KEYS) expect(offers).toHaveProperty(k, 0)
   })
 })
+
+// TRIALDONE.7 — the trial-done outreach arm of the */15 agent-followups cron
+// gets its own row, 'trial-done-outreach' (mig 757).
+const { TRIAL_DONE_HEARTBEAT, TRIAL_DONE_ARM_FAULT_KEYS, trialDoneArmHealthy } = await import('./cron-arm-health')
+
+describe('trialDoneArmHealthy (TRIALDONE.7)', () => {
+  const CLEAN = { openers: 1, followups: 0, skipped: 3, reasons: { too_soon: 1, purchased: 1, consent_read_failed: 1 } }
+
+  it('the row name is the one mig 757 seeds', () => {
+    expect(TRIAL_DONE_HEARTBEAT).toBe('trial-done-outreach')
+  })
+
+  it('a clean run, an idle run and a run with every studio switched off are healthy', () => {
+    expect(trialDoneArmHealthy(CLEAN)).toBe(true)
+    expect(trialDoneArmHealthy({ openers: 0, followups: 0, skipped: 0, reasons: {} })).toBe(true)
+    expect(trialDoneArmHealthy({ openers: 0, followups: 0, skipped: 1, reasons: { outside_daytime: 1 } })).toBe(true)
+  })
+
+  it('a per-person deferral, a failed delivery, a closed row or a studio config gap is not an arm fault', () => {
+    for (const k of [
+      'send_failed', 'no_number', 'template_not_approved', 'frequency_capped', 'daily_cap', 'sale_path_off', 'test_list_invalid',
+      'eligibility_unreadable', 'thread_read_failed', 'claim_failed', 'outreach_write_failed', 'contact_read_failed',
+      'left_trial_done', 'stale', 'window_passed', 'nothing_open', 'no_board', 'reads_unavailable',
+    ]) {
+      expect(trialDoneArmHealthy({ ...CLEAN, reasons: { [k]: 2 } }), k).toBe(true)
+    }
+  })
+
+  it('a studio-level read failure or a throw in the arm is a fault', () => {
+    expect(TRIAL_DONE_ARM_FAULT_KEYS).toEqual([
+      'locations_read_failed', 'settings_unreadable', 'zone_read_failed', 'cap_read_failed', 'board_read_failed',
+      'deals_read_failed', 'inputs_unreadable', 'outreach_read_failed', 'sweep_read_failed', 'studio_error', 'error',
+    ])
+    for (const k of TRIAL_DONE_ARM_FAULT_KEYS) expect(trialDoneArmHealthy({ ...CLEAN, reasons: { ...CLEAN.reasons, [k]: 1 } }), k).toBe(false)
+  })
+
+  it.each([[undefined], [null], ['ok'], [0], [[CLEAN]], [{ openers: 0 }], [{ reasons: [] }], [{ reasons: null }]])(
+    'an outcome %j that does not show what it did is not healthy', (v) => {
+      expect(trialDoneArmHealthy(v)).toBe(false)
+    })
+
+  it('drift guard: every fault key is a reason the runner really counts', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(new URL('./agent/trial-done-runner.js', import.meta.url), 'utf8')
+    for (const k of TRIAL_DONE_ARM_FAULT_KEYS) {
+      expect(src.includes(`skip('${k}')`) || src.includes(`reason: '${k}'`), k).toBe(true)
+    }
+  })
+
+  it('drift guard: the REAL arm with no un1t.online studios returns an outcome that stamps', async () => {
+    const { runTrialDoneOutreach } = await import('./agent/trial-done-runner')
+    const b = {}
+    for (const m of ['select', 'eq']) b[m] = () => b
+    b.then = (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej)
+    const outcome = await runTrialDoneOutreach({ from: () => b }, { nowMs: Date.UTC(2026, 9, 20, 12, 0) })
+    expect(outcome).toEqual({ openers: 0, followups: 0, skipped: 0, reasons: {} })
+    expect(trialDoneArmHealthy(outcome)).toBe(true)
+  })
+
+  it('drift guard: a failed studio read in the REAL arm does not stamp', async () => {
+    const { runTrialDoneOutreach } = await import('./agent/trial-done-runner')
+    const b = {}
+    for (const m of ['select', 'eq']) b[m] = () => b
+    b.then = (res, rej) => Promise.resolve({ data: null, error: { message: 'timeout' } }).then(res, rej)
+    const outcome = await runTrialDoneOutreach({ from: () => b }, { nowMs: Date.UTC(2026, 9, 20, 12, 0) })
+    expect(outcome.reasons).toEqual({ locations_read_failed: 1 })
+    expect(trialDoneArmHealthy(outcome)).toBe(false)
+  })
+})

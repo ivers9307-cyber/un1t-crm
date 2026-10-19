@@ -17,13 +17,16 @@ import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { runAgentFollowups, runFirstClassCheckins } from '@/lib/agent/followups'
 import { runTrialDoneOutreach } from '@/lib/agent/trial-done-runner'
+import { runHandoffSlaSweep } from '@/lib/agent/handoff-sla'
 
 const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer s' : null) } })
 function hbDb(result) {
   const b = { select: () => b, eq: () => b, maybeSingle: () => (result instanceof Error ? Promise.reject(result) : Promise.resolve(result)) }
   return { from: vi.fn(() => b) }
 }
-const outcome = () => stampHeartbeat.mock.calls[0][1]
+// The parent's own stamp (TRIALDONE.7: the trial-done arm stamps a row of its own too).
+const outcome = () => stampHeartbeat.mock.calls.find(([name]) => name === 'agent-followups')[1]
+const armStamps = () => stampHeartbeat.mock.calls.filter(([name]) => name === 'trial-done-outreach')
 
 beforeEach(() => {
   process.env.CRON_SECRET = 's'
@@ -116,5 +119,57 @@ describe('GET /api/cron/agent-followups — checkins_day', () => {
     expect(res.status).toBe(200)
     expect(outcome().trial_done).toBeNull()
     expect(outcome().checkins).toMatchObject({ templates: 1 })
+  })
+})
+
+// TRIALDONE.7 — the trial-done arm stamps its OWN row, 'trial-done-outreach'
+// (mig 757), only on a clean outcome (cron-arm-health.js trialDoneArmHealthy).
+describe('GET /api/cron/agent-followups — the trial-done arm heartbeat', () => {
+  beforeEach(() => { createServerClient.mockReturnValue(hbDb({ data: null, error: null })) })
+  afterEach(() => {
+    stampHeartbeat.mockImplementation(() => Promise.resolve())
+    runHandoffSlaSweep.mockImplementation(async () => ({}))
+  })
+
+  it('a clean run stamps the arm row with its outcome, and the parent row too', async () => {
+    await GET(req())
+    expect(armStamps()).toEqual([['trial-done-outreach', { openers: 1, followups: 0, skipped: 2, reasons: { too_soon: 2 } }]])
+    expect(stampHeartbeat).toHaveBeenCalledWith('agent-followups', expect.any(Object))
+  })
+
+  it('an idle run (every studio off) stamps: nothing to send is healthy', async () => {
+    runTrialDoneOutreach.mockResolvedValue({ openers: 0, followups: 0, skipped: 0, reasons: {} })
+    await GET(req())
+    expect(armStamps()).toHaveLength(1)
+  })
+
+  it('a run with a fault of its own does not stamp the arm row (the parent still stamps)', async () => {
+    runTrialDoneOutreach.mockResolvedValue({ openers: 0, followups: 0, skipped: 1, reasons: { deals_read_failed: 1 } })
+    await GET(req())
+    expect(armStamps()).toEqual([])
+    expect(outcome().trial_done).toEqual({ openers: 0, followups: 0, skipped: 1, reasons: { deals_read_failed: 1 } })
+  })
+
+  it('a throw does not stamp the arm row (the parent still stamps)', async () => {
+    runTrialDoneOutreach.mockRejectedValue(new Error('boom'))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(armStamps()).toEqual([])
+    expect(outcome().trial_done).toBeNull()
+  })
+
+  it('stamps right after the arm, before the later arms run', async () => {
+    const order = []
+    stampHeartbeat.mockImplementation(async (name) => { order.push(`stamp:${name}`) })
+    runHandoffSlaSweep.mockImplementation(async () => { order.push('handoff-sla'); return {} })
+    await GET(req())
+    expect(order).toEqual(['stamp:trial-done-outreach', 'handoff-sla', 'stamp:agent-followups'])
+  })
+
+  it('a stamp that rejects costs neither the tick nor the parent stamp', async () => {
+    stampHeartbeat.mockImplementation(async (name) => { if (name === 'trial-done-outreach') throw new Error('db down') })
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(stampHeartbeat).toHaveBeenCalledWith('agent-followups', expect.any(Object))
   })
 })
