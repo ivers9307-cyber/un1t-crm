@@ -61,7 +61,7 @@ export async function readMemberLiveIntent(db, studio, cols) {
   return { intent: data ?? null }
 }
 
-const SETTLE_COLS = 'id, location_id, contact_id, conversation_id, channel, un1t_user_id, un1t_product_id, product_title, event_un1t_id, class_name, class_time, starts_at, status, entitlement_snapshot, created_at, expires_at'
+const SETTLE_COLS = 'id, location_id, contact_id, conversation_id, channel, un1t_user_id, un1t_product_id, product_title, event_un1t_id, class_name, class_time, starts_at, status, entitlement_snapshot, outcome, created_at, expires_at'
 const TX_COLS = 'un1t_id, product_id, product_title, type, amount_cents, remote_created_at'
 /** Purchases read per settle: far above what one member makes in a 23h window. */
 const TX_PAGE = 100
@@ -245,8 +245,11 @@ async function fileDoublePayment(db, intent, purchases) {
 async function settingsFor(db, locationId) {
   try {
     const r = await resolveAgentSettings(db, locationId)
-    return r?.ok ? r.settings : null
-  } catch {
+    if (r?.ok) return r.settings
+    logWarn(LOG_MODULE, 'studio Mia settings unreadable; copy defaults, draft booking', { locationId, op: 'settle_settings', status: null, code: r?.reason ?? null })
+    return null
+  } catch (err) {
+    logWarn(LOG_MODULE, 'studio Mia settings threw; copy defaults, draft booking', { locationId, op: 'settle_settings', status: null, code: 'threw', errClass: err?.name ?? null })
     return null
   }
 }
@@ -262,18 +265,11 @@ async function eventStartsAt(db, intent) {
 }
 
 /**
- * The paid intent's class: re-checked (Task 16's pre-flight: scheduled, not
- * started, in the latest pull), then Task 16's execute step on a write-ahead
- * class_booking row (its id the originRef). Settle has no turn, so the tool
- * context is built from the intent.
- *
- * @returns {Promise<{ outcome: string, className: string|null, classTime: string|null, record: object, requestId?: string|null }>}
+ * The tool context and studio settle runs Task 16's booking steps with: it has
+ * no turn, so both are built from the intent (its contact is the executing
+ * contact; the studio's own zone, the default when unreadable).
  */
-async function bookPaidClass(db, intent, settings, nowMs) {
-  const className = intent.class_name ?? null
-  const classTime = intent.class_time ?? null
-  if (!intent.event_un1t_id) return { outcome: 'paid_no_class', className, classTime, record: {} }
-
+async function contextFor(db, intent, settings) {
   let zone = DEFAULT_TZ
   try {
     zone = await getLocationZone(db, intent.location_id)
@@ -289,6 +285,23 @@ async function bookPaidClass(db, intent, settings, nowMs) {
     channel: intent.channel || 'whatsapp', conversationId: intent.conversation_id ?? null, settings, nameHint: null,
     actionStudio: async () => settings,
   }
+  return { ctx, studio }
+}
+
+/**
+ * The paid intent's class: re-checked (Task 16's pre-flight: scheduled, not
+ * started, in the latest pull), then Task 16's execute step on a write-ahead
+ * class_booking row (its id the originRef). Settle has no turn, so the tool
+ * context is built from the intent.
+ *
+ * @returns {Promise<{ outcome: string, className: string|null, classTime: string|null, record: object, requestId?: string|null }>}
+ */
+async function bookPaidClass(db, intent, settings, nowMs) {
+  const className = intent.class_name ?? null
+  const classTime = intent.class_time ?? null
+  if (!intent.event_un1t_id) return { outcome: 'paid_no_class', className, classTime, record: {} }
+
+  const { ctx, studio } = await contextFor(db, intent, settings)
   const startsAt = intent.starts_at ?? await eventStartsAt(db, intent)
   const prepared = await prepareUn1tBooking(ctx, { event_id: `un1t:${intent.event_un1t_id}`, class_name: className, starts_at: startsAt }, studio, settings, nowMs)
   if (prepared.answer) {
@@ -379,6 +392,11 @@ async function noteConfirmationOnCard(db, intent, requestId, confirmation) {
  * booked through Task 16's execute step, ONE purchase_paid_* message
  * (sendAgentThreadMessage; a closed window is recorded, never retried), the
  * final status booked / book_failed / no_class with everything in `outcome`.
+ * Paid = a purchase the mirror dates inside the window (any product), or the
+ * entitlement up since the snapshot (a live intent only). A throw after the
+ * CAS closes the intent book_failed with one paid_booking_failed card
+ * (settleThrew) and is never rethrown; a process killed mid-settle leaves it
+ * 'paid' for the watcher's markStuckPaidIntent.
  *
  * @param {object} db service-role client
  * @param {string} intentId
@@ -386,7 +404,7 @@ async function noteConfirmationOnCard(db, intent, requestId, confirmation) {
  *   source 'mirror': zero un1t.online calls. free: un1t.online answered the
  *   checkout as free, so it is paid now (no entitlement check).
  * @returns {Promise<{ outcome: 'not_paid'|'paid_booked'|'paid_class_gone'|'paid_booking_failed'|'paid_no_class'
- *   |'already_settled'|'expired'|'not_found'|'error', sent: boolean, text?: string, payment_seen?: boolean }>}
+ *   |'already_settled'|'expired'|'refused'|'not_found'|'error', sent: boolean, text?: string, payment_seen?: boolean, error?: string }>}
  *   `text` is what the member was (or, with sent false, should be) told;
  *   `payment_seen` (expired only) is a payment the entitlement shows that the
  *   mirror cannot yet date inside the window.
@@ -398,27 +416,24 @@ export async function settlePurchaseIntent(db, intentId, { detectedBy, source = 
   const intent = read.intent
   if (!intent) return { outcome: 'not_found', sent: false }
   if (intent.status === 'expired') return { outcome: 'expired', sent: false }
+  // A link that was never made (checkout refused): nothing to pay, never "paid".
+  if (intent.status === 'refused') return { outcome: 'refused', sent: false }
   if (intent.status !== LIVE) return { outcome: 'already_settled', sent: false }
 
   const purchases = await purchasesSince(db, intent)
   const expiresMs = Date.parse(intent.expires_at || '')
   const lapsed = !(expiresMs > nowMs)
+  // Any purchase of the member's the mirror dates inside the window (any
+  // product) proves payment, live or lapsed alike.
+  const inWindow = purchases.some((p) => Date.parse(p.remote_created_at) <= expiresMs)
   let paid
-  if (free) paid = true
+  if (free || inWindow) paid = true
   else if (lapsed) {
-    // Review Focus 3: only a purchase the mirror dates inside the window counts.
-    paid = purchases.some((p) => Date.parse(p.remote_created_at) <= expiresMs)
-    if (!paid) {
-      const ent = await entitlementNow(db, intent, source)
-      return { outcome: 'expired', sent: false, payment_seen: purchases.length > 0 || paidSinceSnapshot(intent.entitlement_snapshot, ent) }
-    }
-  } else {
+    // Review Focus 3: a lapsed intent settles only on a purchase dated inside its window.
     const ent = await entitlementNow(db, intent, source)
-    // A snapshot that cannot decide the balance (unreadable at link time, or a
-    // ledger with no balance): a purchase the mirror shows since is the proof.
-    const snap = intent.entitlement_snapshot
-    const snapshotDecides = snap?.ok === true && finiteOrNull(snap.balance) !== null
-    paid = paidSinceSnapshot(snap, ent) || (!snapshotDecides && purchases.length > 0)
+    return { outcome: 'expired', sent: false, payment_seen: purchases.length > 0 || paidSinceSnapshot(intent.entitlement_snapshot, ent) }
+  } else {
+    paid = paidSinceSnapshot(intent.entitlement_snapshot, await entitlementNow(db, intent, source))
   }
   if (!paid) return { outcome: 'not_paid', sent: false }
 
@@ -448,12 +463,25 @@ export async function settlePurchaseIntent(db, intentId, { detectedBy, source = 
   }
   if (!won) return { outcome: 'already_settled', sent: false }
 
-  // The winner.
+  // The winner. Nothing after the CAS may leave the intent in 'paid': a throw
+  // closes it book_failed with one staff card, and never reaches the caller.
+  const progress = { confirmation: null, text: null }
+  try {
+    return await settleWinner(db, intent, outcome, purchases, nowMs, progress)
+  } catch (err) {
+    return settleThrew(db, intent, outcome, err, nowMs, progress)
+  }
+}
+
+/** The winner's steps (see settlePurchaseIntent). `progress` records the send, so a later throw never sends twice. */
+async function settleWinner(db, intent, outcome, purchases, nowMs, progress) {
   const doubled = await fileDoublePayment(db, intent, purchases)
   const settings = await settingsFor(db, intent.location_id)
   const booked = await bookPaidClass(db, intent, settings, nowMs)
   const text = renderMiaCopy(COPY_KEY[booked.outcome], settings, { class: classLine(booked.className, booked.classTime) || null })
+  progress.text = text
   const confirmation = await sendPaidMessage(db, intent, text)
+  progress.confirmation = confirmation
   if (!confirmation.sent && booked.requestId) await noteConfirmationOnCard(db, intent, booked.requestId, confirmation)
   if (!confirmation.sent) {
     logWarn(LOG_MODULE, 'paid confirmation not sent', { locationId: intent.location_id, op: 'settle_send', intentId: intent.id, status: null, code: confirmation.reason })
@@ -466,19 +494,108 @@ export async function settlePurchaseIntent(db, intentId, { detectedBy, source = 
     ...(doubled ? { double_payment: doubled } : {}),
     confirmation,
   }
+  const { data, error } = await db.from(INTENTS)
+    .update({ status: FINAL_STATUS[booked.outcome], outcome: final, updated_at: new Date(nowMs).toISOString() })
+    .eq('id', intent.id)
+    .eq('status', 'paid')
+    .select('id')
+  if (error || !Array.isArray(data) || data.length === 0) {
+    logError(LOG_MODULE, 'settled intent not finalised (left paid)', { locationId: intent.location_id, op: 'settle_final', intentId: intent.id, status: null, code: error?.code ?? null })
+  }
+  return { outcome: booked.outcome, sent: confirmation.sent, text }
+}
+
+const errCode = (err) => String(err?.code ?? err?.name ?? 'threw')
+
+/**
+ * Something after the winning CAS threw. The member has paid: they hear the
+ * booking-failed text (unless a message already went), the team gets ONE
+ * paid_booking_failed card, and the intent is closed book_failed with the
+ * error code. Never rethrows.
+ */
+async function settleThrew(db, intent, outcome, err, nowMs, progress) {
+  const code = errCode(err)
+  logError(LOG_MODULE, 'settle threw after the CAS; intent closed book_failed', { locationId: intent.location_id, op: 'settle_threw', intentId: intent.id, status: null, code, errClass: err?.name ?? null })
+  let confirmation = progress.confirmation
+  let text = progress.text
+  if (!confirmation) {
+    const settings = await settingsFor(db, intent.location_id)
+    const key = intent.event_un1t_id ? 'purchase_paid_booking_failed_text' : 'purchase_paid_no_class_text'
+    text = renderMiaCopy(key, settings, { class: classLine(intent.class_name, intent.class_time) || null })
+    confirmation = await sendPaidMessage(db, intent, text)
+  }
+  await closeStuckPaid(db, intent, { baseOutcome: outcome, code, confirmation, nowMs })
+  return { outcome: 'paid_booking_failed', sent: confirmation?.sent === true, text, error: code }
+}
+
+/** ONE paid_booking_failed card for a paid intent whose booking never finished (best effort, logged); its id or null. */
+async function fileStuckCard(db, intent, code) {
+  try {
+    const { ctx, studio } = await contextFor(db, intent, null)
+    const className = intent.class_name ?? null
+    const classTime = intent.class_time ?? null
+    return await fileUn1tBookingCard(ctx, studio, {
+      contactId: intent.contact_id ?? null,
+      // The write-ahead row (pending, same purchase_intent_id) is reused when it is still open.
+      match: { purchase_intent_id: intent.id },
+      details: {
+        provider: PROVIDER, origin: 'mia', reason: 'paid_booking_failed', paid_outcome: code,
+        event_id: intent.event_un1t_id ?? null, un1t_user_id: String(intent.un1t_user_id), executing_contact_id: intent.contact_id ?? null,
+        starts_at: intent.starts_at ?? null, class_name: className, class_time: classTime, purchase_intent_id: intent.id,
+        summary: 'The member paid through Mia\'s payment link, but settling it did not finish. Check the member and the class in un1t.online; Approve books the class only if it is not there already.',
+      },
+      summary: [className, classTime, 'paid, settling did not finish, Mia handed over'].filter(Boolean).join(' · '),
+    })
+  } catch (err) {
+    logError(LOG_MODULE, 'stuck paid intent card not filed', { locationId: intent.location_id, op: 'settle_stuck_card', intentId: intent.id, status: null, errClass: err?.name ?? null })
+    return null
+  }
+}
+
+/** File the card, then close the intent paid -> book_failed (status-guarded, updated_at, the code in outcome). Never throws. */
+async function closeStuckPaid(db, intent, { baseOutcome, code, confirmation = null, nowMs }) {
+  const requestId = await fileStuckCard(db, intent, code)
+  const final = {
+    ...(baseOutcome || {}),
+    result: 'paid_booking_failed',
+    error: { code },
+    booking: { reason: 'settle_did_not_finish', request_id: requestId },
+    ...(confirmation ? { confirmation } : {}),
+  }
   try {
     const { data, error } = await db.from(INTENTS)
-      .update({ status: FINAL_STATUS[booked.outcome], outcome: final, updated_at: new Date(nowMs).toISOString() })
+      .update({ status: 'book_failed', outcome: final, updated_at: new Date(nowMs).toISOString() })
       .eq('id', intent.id)
       .eq('status', 'paid')
       .select('id')
     if (error || !Array.isArray(data) || data.length === 0) {
-      logError(LOG_MODULE, 'settled intent not finalised (left paid)', { locationId: intent.location_id, op: 'settle_final', intentId: intent.id, status: null, code: error?.code ?? null })
+      logError(LOG_MODULE, 'stuck paid intent not closed', { locationId: intent.location_id, op: 'settle_stuck_close', intentId: intent.id, status: null, code: error?.code ?? null })
+      return { closed: false, requestId }
     }
+    return { closed: true, requestId }
   } catch (err) {
-    logError(LOG_MODULE, 'settled intent finalise threw (left paid)', { locationId: intent.location_id, op: 'settle_final', intentId: intent.id, status: null, errClass: err?.name })
+    logError(LOG_MODULE, 'stuck paid intent close threw', { locationId: intent.location_id, op: 'settle_stuck_close', intentId: intent.id, status: null, errClass: err?.name ?? null })
+    return { closed: false, requestId }
   }
-  return { outcome: booked.outcome, sent: confirmation.sent, text }
+}
+
+/**
+ * For the post-sync watcher (Task 23): an intent left in 'paid' (a process
+ * killed mid-settle) is closed book_failed with ONE paid_booking_failed staff
+ * card. Nothing is booked again and nothing is sent. A no-op unless the
+ * intent is still 'paid'. Never throws.
+ *
+ * @param {object} db service-role client
+ * @param {string} intentId
+ * @param {{ code?: string, now?: number }} [opts] code recorded as outcome.error.code
+ * @returns {Promise<{ marked: boolean, requestId?: string|null }>}
+ */
+export async function markStuckPaidIntent(db, intentId, { code = 'stuck_paid', now = Date.now() } = {}) {
+  const read = await readIntent(db, intentId)
+  if (read.error || !read.intent || read.intent.status !== 'paid') return { marked: false }
+  const intent = read.intent
+  const { closed, requestId } = await closeStuckPaid(db, intent, { baseOutcome: intent.outcome, code, confirmation: intent.outcome?.confirmation ?? null, nowMs: now })
+  return { marked: closed, requestId }
 }
 
 /**
@@ -496,34 +613,39 @@ export async function settlePurchaseIntent(db, intentId, { detectedBy, source = 
 export async function expireStaleIntents(db, { now = Date.now(), pageSize = EXPIRE_PAGE } = {}) {
   const nowIso = new Date(now).toISOString()
   let expired = 0
-  for (;;) {
-    const { data: rows, error } = await db.from(INTENTS)
-      .select('id')
-      .eq('status', LIVE)
-      .lt('expires_at', nowIso)
-      .order('expires_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(0, pageSize - 1)
-    if (error) {
-      logWarn(LOG_MODULE, 'expiry sweep read failed', { op: 'expire_read', status: null, code: error.code ?? null, expired })
-      return { expired, error: true }
+  try {
+    for (;;) {
+      const { data: rows, error } = await db.from(INTENTS)
+        .select('id')
+        .eq('status', LIVE)
+        .lt('expires_at', nowIso)
+        .order('expires_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(0, pageSize - 1)
+      if (error) {
+        logWarn(LOG_MODULE, 'expiry sweep read failed', { op: 'expire_read', status: null, code: error.code ?? null, expired })
+        return { expired, error: true }
+      }
+      const ids = (Array.isArray(rows) ? rows : []).map((r) => r.id).filter(Boolean)
+      if (!ids.length) return { expired }
+      const { data: done, error: writeError } = await db.from(INTENTS)
+        .update({ status: 'expired', updated_at: nowIso })
+        .in('id', ids)
+        .eq('status', LIVE)
+        .lt('expires_at', nowIso)
+        .select('id')
+      if (writeError) {
+        logError(LOG_MODULE, 'expiry sweep write failed', { op: 'expire_write', status: null, code: writeError.code ?? null, expired })
+        return { expired, error: true }
+      }
+      const n = Array.isArray(done) ? done.length : 0
+      expired += n
+      // Nothing moved (every row settled between the read and the write) or a short page: done.
+      if (n === 0 || ids.length < pageSize) return { expired }
     }
-    const ids = (Array.isArray(rows) ? rows : []).map((r) => r.id).filter(Boolean)
-    if (!ids.length) return { expired }
-    const { data: done, error: writeError } = await db.from(INTENTS)
-      .update({ status: 'expired', updated_at: nowIso })
-      .in('id', ids)
-      .eq('status', LIVE)
-      .lt('expires_at', nowIso)
-      .select('id')
-    if (writeError) {
-      logError(LOG_MODULE, 'expiry sweep write failed', { op: 'expire_write', status: null, code: writeError.code ?? null, expired })
-      return { expired, error: true }
-    }
-    const n = Array.isArray(done) ? done.length : 0
-    expired += n
-    // Nothing moved (every row settled between the read and the write) or a short page: done.
-    if (n === 0 || ids.length < pageSize) return { expired }
+  } catch (err) {
+    logError(LOG_MODULE, 'expiry sweep threw', { op: 'expire', status: null, errClass: err?.name ?? null, expired })
+    return { expired, error: true }
   }
 }
 
@@ -597,6 +719,13 @@ export async function checkMyPurchase(ctx, studio, deps = {}) {
   const settled = await settlePurchaseIntent(ctx.db, live.intent.id, { detectedBy: 'tool', source: 'live', now })
   if (PAID_OUTCOMES.has(settled.outcome)) return paidAnswer(settled, product, live.intent.id)
   if (settled.outcome === 'already_settled') return { ...ALREADY_SETTLED }
+  if (settled.outcome === 'refused') {
+    return {
+      paid: false,
+      open_intent: false,
+      message: 'Their payment link could not be made, so there is nothing to pay on it and nothing was booked. Never say a payment has gone through. Offer to hand off to the team.',
+    }
+  }
   if (settled.outcome === 'not_paid') {
     return {
       paid: false,

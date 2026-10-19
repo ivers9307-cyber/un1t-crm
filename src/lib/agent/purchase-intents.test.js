@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createHash } from 'node:crypto'
 
-const h = vi.hoisted(() => ({ checkout: null, grantTrial: null, book: null, elig: null, readsFor: null, send: null, refund: null, settings: null }))
+const h = vi.hoisted(() => ({ checkout: null, grantTrial: null, book: null, elig: null, readsFor: null, send: null, refund: null, settings: null, settingsResult: null }))
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/un1t-online-write-ops', async () => {
@@ -46,7 +46,7 @@ vi.mock('@/lib/un1t-online-approval', async (importOriginal) => {
 })
 vi.mock('./settings-resolve', async (importOriginal) => ({
   ...(await importOriginal()),
-  resolveAgentSettings: async () => ({ ok: true, settings: h.settings }),
+  resolveAgentSettings: async () => h.settingsResult ?? { ok: true, settings: h.settings },
 }))
 // The refusal table is empty until the MIA TEST run fills it (D's PR 6); a
 // fictional table classifies class_full and no_credits the way it will.
@@ -70,7 +70,8 @@ import {
   formatPriceLabel, listPurchaseOptions, mintPayDoneToken, hashPayDoneToken, sendPurchaseLink,
   executePurchaseTool, PURCHASE_INTENT_TTL_MS, trialAvailable, offersForBooking,
 } from './purchase-intents'
-import { paidSinceSnapshot, settlePurchaseIntent, checkMyPurchase, expireStaleIntents } from './purchase-settle'
+import { paidSinceSnapshot, settlePurchaseIntent, checkMyPurchase, expireStaleIntents, markStuckPaidIntent } from './purchase-settle'
+import { notifyAgentApprovalRequest } from './approval-notify'
 import { un1tBookClass } from './un1t-booking'
 import { DEFAULT_TRIAL_USED_TEXT } from './default-copy'
 
@@ -108,7 +109,7 @@ const isUuid = (v) => /^[0-9a-f-]{36}$/.test(v)
 // index (location_id, un1t_user_id) WHERE status = 'link_sent' with a 23505.
 // `onInsert(table, row, data)` runs before an insert is judged (a concurrent
 // turn landing its row first).
-function fakeDb(tables = {}, { fail = {}, onInsert = null } = {}) {
+function fakeDb(tables = {}, { fail = {}, onInsert = null, throwOn = {}, afterSelect = null } = {}) {
   const data = {
     locations: [{ id: HATCH, organization_id: ORG }],
     mia_purchase_offers: [], un1t_products: Object.values(PRODUCT), un1t_events: [], mia_purchase_intents: [],
@@ -117,6 +118,7 @@ function fakeDb(tables = {}, { fail = {}, onInsert = null } = {}) {
   const calls = []
   let next = 1
   const from = (table) => {
+    if (throwOn[table]) throw new TypeError('fictional thrown builder')
     const st = { op: 'select', cols: null, filters: [], orders: [], limit: null, single: false, row: null, patch: null, returning: false }
     const pick = (rows) => rows.filter((r) => st.filters.every((f) => f(r)))
     const finish = () => {
@@ -142,7 +144,9 @@ function fakeDb(tables = {}, { fail = {}, onInsert = null } = {}) {
         rows = [...rows].sort((a, b) => (a[col] < b[col] ? -1 : a[col] > b[col] ? 1 : 0) * (asc ? 1 : -1))
       }
       if (st.limit != null) rows = rows.slice(0, st.limit)
-      return { data: st.single ? (rows[0] ?? null) : rows, error: null }
+      const out = { data: st.single ? (rows[0] ?? null) : rows, error: null }
+      afterSelect?.(table, data)
+      return out
     }
     const b = {
       select: (cols) => { if (st.op === 'select') st.cols = cols; else st.returning = true; return b },
@@ -204,6 +208,7 @@ beforeEach(() => {
   h.refund.mockReset()
   h.refund.mockResolvedValue({ approvalId: 'appr-double-1' })
   h.settings = { booking_mode: 'auto' }
+  h.settingsResult = null
   fetchLiveEntitlement.mockImplementation(async () => ({ ok: true, balance: 0, unlimited: false, liveSubscriptionIds: [] }))
 })
 
@@ -1136,16 +1141,19 @@ describe('settlePurchaseIntent (Task 21)', () => {
     expect(h.send).not.toHaveBeenCalled()
   })
 
-  it('a snapshot that cannot decide the balance: a purchase in the mirror since the link is the proof', async () => {
-    for (const snapshot of [{ ok: false, reason: 'read_failed' }, { ok: true, balance: null, unlimited: false, live_subscription_ids: [] }, null]) {
+  it('any purchase of the member\'s dated inside the window (any product) proves payment, whatever the snapshot', async () => {
+    for (const snapshot of [{ ok: false, reason: 'read_failed' }, { ok: true, balance: null, unlimited: false, live_subscription_ids: [] }, null, SNAP0]) {
       const none = settleDb({ mia_purchase_intents: [paidIntent({ entitlement_snapshot: snapshot })] })
       expect(await settle(none.db)).toEqual({ outcome: 'not_paid', sent: false })
-      const bought = settleDb({ mia_purchase_intents: [paidIntent({ entitlement_snapshot: snapshot })], un1t_transactions: [tx()] })
-      expect(await settle(bought.db)).toMatchObject({ outcome: 'paid_booked', sent: true })
+      for (const product of [PRODUCT.pack10, PRODUCT.monthly]) {
+        const bought = settleDb({ mia_purchase_intents: [paidIntent({ entitlement_snapshot: snapshot })], un1t_transactions: [tx({ product_id: product.un1t_id })] })
+        expect(await settle(bought.db)).toMatchObject({ outcome: 'paid_booked', sent: true })
+      }
     }
-    // A snapshot that decides: a purchase alone is not enough while the balance has not moved.
-    const decided = settleDb({ un1t_transactions: [tx()] })
-    expect(await settle(decided.db)).toEqual({ outcome: 'not_paid', sent: false })
+    // A purchase alone is proof: the live entitlement is not even read.
+    fetchLiveEntitlement.mockClear()
+    await settle(settleDb({ un1t_transactions: [tx()] }).db)
+    expect(fetchLiveEntitlement).not.toHaveBeenCalled()
   })
 
   it('the mirror source makes no un1t.online call: a new live subscription in the mirror is paid', async () => {
@@ -1365,6 +1373,91 @@ describe('settlePurchaseIntent (Task 21)', () => {
     const logs = allLogText()
     expect(logs).not.toMatch(/pay\.example\.test|pay-done|12500|€|conv-1|a{64}/)
     for (const fn of [logWarn, logError, logInfo]) for (const call of fn.mock.calls) expect(call[0]).toBe('mia-un1t')
+  })
+
+  describe('review fixes (round 1)', () => {
+    it('a throw after the winning CAS: closed book_failed with the code, ONE paid_booking_failed card, the member told, never rethrown', async () => {
+      paidLive()
+      // The class read throws (a thrown builder, not a resolved error).
+      const { db, data } = settleDb({}, { throwOn: { un1t_events: true } })
+      const out = await settle(db)
+      expect(out).toMatchObject({ outcome: 'paid_booking_failed', sent: true, error: 'TypeError' })
+      const intent = data.mia_purchase_intents[0]
+      expect(intent.status).toBe('book_failed')
+      expect(intent.updated_at).toBe(new Date(NOW).toISOString())
+      expect(intent.outcome).toMatchObject({ result: 'paid_booking_failed', error: { code: 'TypeError' }, confirmation: { sent: true } })
+      expect(cards(data)).toHaveLength(1)
+      expect(cards(data)[0].details).toMatchObject({ reason: 'paid_booking_failed', paid_outcome: 'TypeError', purchase_intent_id: ID, event_id: EVENT })
+      expect(intent.outcome.booking.request_id).toBe(cards(data)[0].id)
+      expect(h.book).not.toHaveBeenCalled()
+      expect(h.send).toHaveBeenCalledTimes(1)
+      expect(h.send.mock.calls[0][1].text).toBe(renderMiaCopy('purchase_paid_booking_failed_text', h.settings, { class: CLASS }))
+      expect(logError).toHaveBeenCalledWith('mia-un1t', expect.any(String), expect.objectContaining({ op: 'settle_threw', code: 'TypeError' }))
+    })
+
+    it('a failed team alert never aborts the card: the paid class still becomes one card and the intent is closed', async () => {
+      paidLive()
+      notifyAgentApprovalRequest.mockRejectedValueOnce(new Error('fictional push outage'))
+      h.book.mockResolvedValueOnce(bookResult({ verdict: 'unknown', sent: true }))
+      const { db, data } = settleDb()
+      expect(await settle(db)).toMatchObject({ outcome: 'paid_booking_failed', sent: true })
+      expect(cards(data)).toHaveLength(1)
+      expect(cards(data)[0].details).toMatchObject({ reason: 'paid_booking_failed' })
+      expect(data.mia_purchase_intents[0].status).toBe('book_failed')
+      expect(logWarn).toHaveBeenCalledWith('mia-un1t', expect.any(String), expect.objectContaining({ op: 'book_alert' }))
+    })
+
+    it('markStuckPaidIntent (for the watcher): a paid intent is closed book_failed with one card; nothing booked or sent; a no-op otherwise', async () => {
+      const stuck = paidIntent({ status: 'paid', outcome: { source: 'live', confirmation: { sent: true } } })
+      const { db, data } = settleDb({ mia_purchase_intents: [stuck] })
+      expect(await markStuckPaidIntent(db, ID, { code: 'stuck_paid', now: NOW })).toMatchObject({ marked: true })
+      expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'book_failed', updated_at: new Date(NOW).toISOString() })
+      expect(data.mia_purchase_intents[0].outcome).toMatchObject({ source: 'live', result: 'paid_booking_failed', error: { code: 'stuck_paid' }, confirmation: { sent: true } })
+      expect(cards(data)).toHaveLength(1)
+      expect(cards(data)[0].details).toMatchObject({ reason: 'paid_booking_failed', paid_outcome: 'stuck_paid', purchase_intent_id: ID })
+      // Again: no longer paid, nothing more.
+      expect(await markStuckPaidIntent(db, ID, { now: NOW })).toEqual({ marked: false })
+      for (const status of ['link_sent', 'booked', 'expired']) {
+        const other = settleDb({ mia_purchase_intents: [paidIntent({ status })] })
+        expect(await markStuckPaidIntent(other.db, ID, { now: NOW })).toEqual({ marked: false })
+        expect(other.data.agent_membership_requests).toHaveLength(0)
+      }
+      expect(h.book).not.toHaveBeenCalled()
+      expect(h.send).not.toHaveBeenCalled()
+    })
+
+    it('a refused intent is its own outcome, never paid; check_my_purchase never says paid for it', async () => {
+      paidLive()
+      const { db } = settleDb({ mia_purchase_intents: [paidIntent({ status: 'refused' })], un1t_transactions: [tx()] })
+      expect(await settle(db)).toEqual({ outcome: 'refused', sent: false })
+      // Read as live, refused by the time it is settled (another turn's checkout failed).
+      let flipped = false
+      const race = settleDb({ un1t_transactions: [tx()] }, {
+        afterSelect: (table, data) => {
+          if (table === 'mia_purchase_intents' && !flipped) { flipped = true; data.mia_purchase_intents[0].status = 'refused' }
+        },
+      })
+      const out = await checkMyPurchase(ctxFor(race.db), hatch(), { now })
+      expect(out).toMatchObject({ paid: false, open_intent: false })
+      expect(out.message).toMatch(/Never say a payment has gone through/)
+      expect(h.book).not.toHaveBeenCalled()
+      expect(h.send).not.toHaveBeenCalled()
+    })
+
+    it('unreadable Mia settings are logged (code) and still fall back to the draft card', async () => {
+      paidLive()
+      h.settingsResult = { ok: false, reason: 'read_failed' }
+      const { db, data } = settleDb()
+      expect(await settle(db)).toMatchObject({ outcome: 'paid_booking_failed', sent: true })
+      expect(h.book).not.toHaveBeenCalled()
+      expect(cards(data)[0].details).toMatchObject({ mode: 'draft', purchase_intent_id: ID })
+      expect(logWarn).toHaveBeenCalledWith('mia-un1t', expect.any(String), expect.objectContaining({ op: 'settle_settings', code: 'read_failed' }))
+    })
+
+    it('expireStaleIntents never throws: a thrown builder is { expired, error: true }', async () => {
+      const { db } = fakeDb({}, { throwOn: { mia_purchase_intents: true } })
+      expect(await expireStaleIntents(db, { now: NOW })).toEqual({ expired: 0, error: true })
+    })
   })
 
   describe('checkMyPurchase', () => {

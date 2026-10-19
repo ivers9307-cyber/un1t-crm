@@ -814,9 +814,10 @@ export async function sendPurchaseLink(ctx, input, studio, deps = {}) {
       if (PAID_OUTCOMES.has(settled.outcome)) return { ...paidAnswer(settled, title, live.intent.id), link_sent: false }
       if (settled.outcome === 'already_settled') return { ...ALREADY_SETTLED, link_sent: false }
       if (settled.outcome === 'expired' && settled.payment_seen) return { ...PAYMENT_PENDING }
-      if (settled.outcome !== 'expired') return { ...TRY_AGAIN }
-      // Not paid: expire it quietly (the post-sync sweep would), which frees the member.
-      await writeLiveIntent(db, studio, live.intent.id, { status: 'expired' }, 'purchase_expire', nowMs)
+      if (settled.outcome !== 'expired' && settled.outcome !== 'refused') return { ...TRY_AGAIN }
+      // Not paid: expire it quietly (the post-sync sweep would), which frees
+      // the member (a refused one is no longer live already).
+      if (settled.outcome === 'expired') await writeLiveIntent(db, studio, live.intent.id, { status: 'expired' }, 'purchase_expire', nowMs)
       const again = await readLiveIntent(db, studio)
       if (again.error) return { ...TRY_AGAIN }
       if (again.intent) return answerLiveIntent(ctx, studio, again.intent, product, settings, nowMs)

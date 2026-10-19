@@ -5,8 +5,8 @@
 // A refund is a record-only refund_request card (fileRefundCard) that staff
 // act on by hand in un1t.online.
 //
-// What is scanned: every .js/.jsx/.mjs/.ts/.tsx file under src/ except tests
-// and test helpers. Files are parsed with the TypeScript parser and only
+// What is scanned: every .js/.jsx/.mjs/.ts/.tsx file under src/, shared/ and
+// supabase/functions/ except tests and test helpers. Files are parsed with the TypeScript parser and only
 // identifiers and string, template and regex literals are read, so prose in a
 // comment ("never forceRefund", "no /refunds") is not a violation, and a
 // function or kind NAMED for refunds (fileRefundCard, 'refund_request',
@@ -30,7 +30,7 @@ import path from 'node:path'
 import ts from 'typescript'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
-const SRC = path.join(ROOT, 'src')
+const SCAN_DIRS = Object.freeze(['src', 'shared', 'supabase/functions'].map((d) => path.join(ROOT, d)))
 const rel = (file) => path.relative(ROOT, file).split(path.sep).join('/')
 const WHOLE_TREE_TIMEOUT_MS = 120_000
 
@@ -42,10 +42,10 @@ const CHARGE_ALLOWED_IN = Object.freeze([TRANSPORT, OPS])
 const BANNED_KEYS = Object.freeze(['forceRefund', 'bypassCredit'])
 const BANNED_KEYS_DECLARED_IN = { file: TRANSPORT, name: 'BANNED_BODY_KEYS' }
 
-// A literal whose text holds a /refund or /refunds PATH SEGMENT: followed by
-// the end, a slash, a query or a fragment. '/refunded' and 'refund_request'
-// are not paths.
-const REFUND_PATH = /\/refunds?(?=$|[/?#])/
+// A literal whose text holds a /refund or /refunds PATH SEGMENT, in any case:
+// followed by the end, a slash, a query or a fragment. '/refunded' and
+// 'refund_request' are not paths.
+const REFUND_PATH = /\/refunds?(?=$|[/?#])/i
 const CREDITS_GRANT = /\/credits\/grant/
 const PURCHASES_CHARGE = /\/purchases\/charge/
 
@@ -164,7 +164,7 @@ function sourceFiles(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) {
-      if (['node_modules', '__tests__', '.next'].includes(entry.name)) continue
+      if (['node_modules', '__tests__', '.next', 'ios', 'android', 'dist'].includes(entry.name)) continue
       out.push(...sourceFiles(full))
     } else if (isScanned(entry.name)) out.push(full)
   }
@@ -172,7 +172,7 @@ function sourceFiles(dir) {
 }
 let tree = null
 function sources() {
-  if (!tree) tree = sourceFiles(SRC).map((file) => ({ key: rel(file), text: fs.readFileSync(file, 'utf8'), file }))
+  if (!tree) tree = SCAN_DIRS.flatMap((dir) => sourceFiles(dir)).map((file) => ({ key: rel(file), text: fs.readFileSync(file, 'utf8'), file }))
   return tree
 }
 const parsedCache = new Map()
@@ -209,8 +209,9 @@ describe('the rules, on fixtures', () => {
       "const s = 'completed/refunded'",
       "// POST /refund in a comment",
       "const t = 'request_refund'",
+      "post('/v1/Refunds/' + id)",
     ].join('\n'))
-    expect(refundPathViolations('src/x.js', sf).map((v) => v.split(' ')[0])).toEqual(['src/x.js:1', 'src/x.js:2', 'src/x.js:3', 'src/x.js:4'])
+    expect(refundPathViolations('src/x.js', sf).map((v) => v.split(' ')[0])).toEqual(['src/x.js:1', 'src/x.js:2', 'src/x.js:3', 'src/x.js:4', 'src/x.js:10'])
     expect(refundPathViolations('src/lib/revolut.js', sf)).toEqual([])
   })
 
@@ -239,7 +240,11 @@ describe('the rules, on fixtures', () => {
 })
 
 // ── The tree ───────────────────────────────────────────────────────────────
-describe('src/ (non-test)', { timeout: WHOLE_TREE_TIMEOUT_MS }, () => {
+describe('src/, shared/ and supabase/functions/ (non-test)', { timeout: WHOLE_TREE_TIMEOUT_MS }, () => {
+  it('reads all three trees', () => {
+    for (const dir of ['src/', 'shared/', 'supabase/functions/']) expect(sources().some((e) => e.key.startsWith(dir)), dir).toBe(true)
+  })
+
   it('no forceRefund or bypassCredit outside the transport\'s refusal list', () => {
     const bad = mentioning(/forceRefund|bypassCredit/).flatMap((e) => bannedKeyViolations(e.key, e.sf))
     expect(bad).toEqual([])

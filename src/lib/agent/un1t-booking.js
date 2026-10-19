@@ -393,10 +393,15 @@ async function finishRequest(db, studio, requestId, { status, details }) {
   }
 }
 
+/** The team's push for a card. Best effort: a failed notify never aborts the filing or what follows it. */
 async function alertStaff(db, ctx, studio, { kind, requestId, summary }) {
-  await notifyAgentApprovalRequest(db, {
-    requestId, locationId: studio.locationId, kind, customerName: ctx.nameHint || null, summary,
-  })
+  try {
+    await notifyAgentApprovalRequest(db, {
+      requestId, locationId: studio.locationId, kind, customerName: ctx.nameHint || null, summary,
+    })
+  } catch (err) {
+    logWarn(LOG_MODULE, 'card alert failed; the card stands', { locationId: studio.locationId, op: `${OP_OF_KIND[kind] ?? 'card'}_alert`, requestId, status: null, errClass: err?.name ?? null })
+  }
 }
 
 /** File (or reuse) a pending card of `kind` at the studio; its id or null. */
