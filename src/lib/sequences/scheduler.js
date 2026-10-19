@@ -599,7 +599,9 @@ export async function runSequences({ now = new Date() } = {}) {
       } else if (step.step_type === 'branch') {
         // Mig 091 / Tier 3E. No send. Pick the target step_order
         // based on the predicate; the cursor jumps below.
-        branchTargetOrder = await processBranchStep(db, { step, contact })
+        // HATCHNUDGE.1 — the studio is the sequence's, never the contact's
+        // home: an org-shared contact can live at another studio.
+        branchTargetOrder = await processBranchStep(db, { step, contact, locationId: sequence.location_id })
         sendId = null
       } else if (step.step_type === 'move_pipeline_stage') {
         // RETIRED (FUNNEL.1) — stage is classifier-derived; the
