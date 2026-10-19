@@ -1,10 +1,10 @@
-// GLOFOXSIBLING.1 — behavioural test for migration 756.
+// GLOFOXSIBLING.1 — behavioural test for migration 758.
 //
 // Builds prod's state the way the 732 test does (the shared fixture in
 // tests/helpers/contacts-resolvers-699-fixture.js: post-677 privileges, the
 // REAL 690 and 691 files; then the REAL 699, 731 and 732 files, with
 // contact_memberships and un1t_clients as 722/726 left them), and applies the
-// REAL 756 file. Then:
+// REAL 758 file. Then:
 //   * a contact who lives elsewhere and is linked by a glofox_crossover_members
 //     row at B is readable by staff holding Contacts at B; not by staff
 //     without Contacts at B; a row at a studio where the caller lacks Contacts
@@ -26,15 +26,15 @@ const MIG_251 = mig('251_crossover_contact_ids_rpc.sql')
 const MIG_699 = mig('699_org_admins_in_resolvers_uid_resolver_closed.sql')
 const MIG_731 = mig('731_contacts_read_by_studio_membership.sql')
 const MIG_732 = mig('732_contacts_read_by_studio_client.sql')
-const MIG_756 = mig('756_glofox_crossover_members.sql')
+const MIG_758 = mig('758_glofox_crossover_members.sql')
 
 const QUAL_731 = '((location_id = ANY (( SELECT private.auth_contact_read_location_ids() AS auth_contact_read_location_ids)::uuid[])) OR (user_id = ( SELECT auth.uid() AS uid)) OR (id = ANY (( SELECT private.auth_contact_membership_contact_ids() AS auth_contact_membership_contact_ids)::uuid[])))'
 const HELPER = 'private.auth_contact_membership_contact_ids()'
 const CROSS = 'public.crossover_contact_ids(uuid)'
 const MD5_732_HELPER = '1746a3d246350da442317c60b031f198'
 const MD5_732_CROSS = '2405785fc7747bfd34dd08a9fe7f20af'
-const MD5_756_HELPER = '7cd4abc90399d971eb0c7f347dd63da4'
-const MD5_756_CROSS = 'b9489caf0954b06c3102d802133013e8'
+const MD5_758_HELPER = '7cd4abc90399d971eb0c7f347dd63da4'
+const MD5_758_CROSS = 'b9489caf0954b06c3102d802133013e8'
 const md5Of = async (db, fn) => (await db.query(`SELECT md5(regexp_replace(regexp_replace(prosrc, '--[^\\n]*', '', 'g'), '\\s+', '', 'g')) AS h
   FROM pg_proc WHERE oid = to_regprocedure($1)`, [fn])).rows[0]?.h
 
@@ -44,8 +44,8 @@ const section = (sql, from, to) => {
   if (i < 0 || j < 0) throw new Error(`section not found: ${from}`)
   return sql.slice(i, j + to.length)
 }
-// The rollback record in 756's header: sections 1 and 3 of mig 732, verbatim.
-const ROLLBACK_756 = `
+// The rollback record in 758's header: sections 1 and 3 of mig 732, verbatim.
+const ROLLBACK_758 = `
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 ${section(MIG_732, 'CREATE OR REPLACE FUNCTION private.auth_contact_membership_contact_ids()',
@@ -86,7 +86,7 @@ const BEFORE2 = `
   INSERT INTO public.un1t_clients (location_id, un1t_user_id, contact_id, status) VALUES
     ('${LOC_B}', 'u-b-1', '${C_D1}', 'inactive');
 `
-// Rows the Glofox sync would write once 756 exists.
+// Rows the Glofox sync would write once 758 exists.
 const GLOFOX_ROWS = `
   INSERT INTO public.glofox_crossover_members (location_id, glofox_member_id, contact_id) VALUES
     ('${LOC_B}', 'gf-b-1', '${C_A2}'),
@@ -94,8 +94,8 @@ const GLOFOX_ROWS = `
     ('${LOC_D}', 'gf-d-1', '${C_A}');
 `
 
-const boot756 = async () => {
-  const db = await bootProd({ before2: BEFORE2, migrate: [MIG_699, MIG_731, MIG_732, MIG_756] })
+const boot758 = async () => {
+  const db = await bootProd({ before2: BEFORE2, migrate: [MIG_699, MIG_731, MIG_732, MIG_758] })
   await db['exec'](GLOFOX_ROWS)
   return db
 }
@@ -104,12 +104,12 @@ const sees = async (db, uid, id) => (await asUser(db, uid, `SELECT count(*)::int
 const crossover = async (db, loc) => (await asRole(db, 'service_role',
   `SELECT contact_id::text AS id FROM public.crossover_contact_ids('${loc}') ORDER BY 1`)).map((r) => r.id)
 
-describe('before 756: prod with 690 + 691 + 699 + 731 + 732 applied', () => {
+describe('before 758: prod with 690 + 691 + 699 + 731 + 732 applied', () => {
   let db
   beforeAll(async () => { db = await bootProd({ before2: BEFORE2, migrate: [MIG_699, MIG_731, MIG_732] }) }, 60_000)
   afterAll(() => db?.close())
 
-  it("prod's bodies are 732's (the md5s 756's pre-check accepts); a Glofox member living elsewhere is invisible", async () => {
+  it("prod's bodies are 732's (the md5s 758's pre-check accepts); a Glofox member living elsewhere is invisible", async () => {
     expect(await md5Of(db, HELPER)).toBe(MD5_732_HELPER)
     expect(await md5Of(db, CROSS)).toBe(MD5_732_CROSS)
     expect(await sees(db, IDS.STAFF_B, C_A2)).toBe(false)
@@ -117,9 +117,9 @@ describe('before 756: prod with 690 + 691 + 699 + 731 + 732 applied', () => {
   })
 })
 
-describe('after 756', () => {
+describe('after 758', () => {
   let db
-  beforeAll(async () => { db = await boot756() }, 60_000)
+  beforeAll(async () => { db = await boot758() }, 60_000)
   afterAll(() => db?.close())
 
   it('Contacts at B + a glofox_crossover_members row at B on a contact living elsewhere: readable', async () => {
@@ -180,8 +180,8 @@ describe('after 756', () => {
       VALUES ($1, '  ', $2)`, [LOC_B, C_A])).rejects.toThrow(/check constraint/)
   })
 
-  it('the helper: 756 body, DEFINER, STABLE, search_path pinned; authenticated + service_role only', async () => {
-    expect(await md5Of(db, HELPER)).toBe(MD5_756_HELPER)
+  it('the helper: 758 body, DEFINER, STABLE, search_path pinned; authenticated + service_role only', async () => {
+    expect(await md5Of(db, HELPER)).toBe(MD5_758_HELPER)
     const { rows: [r] } = await db.query(`SELECT prosecdef d, provolatile v, proconfig c,
         has_function_privilege('authenticated', to_regprocedure($1), 'EXECUTE') a,
         has_function_privilege('anon', to_regprocedure($1), 'EXECUTE') n
@@ -193,7 +193,7 @@ describe('after 756', () => {
     // B: C_A by deal; C_C1 by membership; C_D1 by un1t client; C_A2 by Glofox; C_B lives at B
     expect(await crossover(db, LOC_B)).toEqual([C_A, C_A2, C_C1, C_D1].sort())
     expect(await crossover(db, LOC_D)).toEqual([C_A])
-    expect(await md5Of(db, CROSS)).toBe(MD5_756_CROSS)
+    expect(await md5Of(db, CROSS)).toBe(MD5_758_CROSS)
     for (const role of ['anon', 'authenticated']) {
       await expect(asRole(db, role, `SELECT * FROM public.crossover_contact_ids('${LOC_B}')`)).rejects.toThrow(/permission denied for function crossover_contact_ids/)
     }
@@ -217,9 +217,9 @@ describe('after 756', () => {
 
   it('a second run passes and changes nothing', async () => {
     await signedOut(db)
-    await expect(db['exec'](MIG_756)).resolves.toBeDefined()
-    expect(await md5Of(db, HELPER)).toBe(MD5_756_HELPER)
-    expect(await md5Of(db, CROSS)).toBe(MD5_756_CROSS)
+    await expect(db['exec'](MIG_758)).resolves.toBeDefined()
+    expect(await md5Of(db, HELPER)).toBe(MD5_758_HELPER)
+    expect(await md5Of(db, CROSS)).toBe(MD5_758_CROSS)
     expect(await count(db, IDS.STAFF_B)).toBe(4)
   })
 })
@@ -239,37 +239,37 @@ describe('the file aborts as a whole', () => {
   it('when the read helper was edited by hand', async () => {
     await prepAfter(`CREATE OR REPLACE FUNCTION private.auth_contact_membership_contact_ids() RETURNS uuid[]
       LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $f$ SELECT '{}'::uuid[] $f$;`)
-    expect(await abortMessage(db, MIG_756)).toMatch(/mig 756: private\.auth_contact_membership_contact_ids\(\) is not the mig 732 body/)
+    expect(await abortMessage(db, MIG_758)).toMatch(/mig 758: private\.auth_contact_membership_contact_ids\(\) is not the mig 732 body/)
     await noTable()
   }, 60_000)
 
   it('when crossover_contact_ids was edited by hand', async () => {
     await prepAfter(`CREATE OR REPLACE FUNCTION public.crossover_contact_ids(loc uuid) RETURNS TABLE (contact_id uuid)
       LANGUAGE sql STABLE SET search_path = '' AS $f$ SELECT NULL::uuid $f$;`)
-    expect(await abortMessage(db, MIG_756)).toMatch(/mig 756: public\.crossover_contact_ids\(uuid\) is not the mig 732 body/)
+    expect(await abortMessage(db, MIG_758)).toMatch(/mig 758: public\.crossover_contact_ids\(uuid\) is not the mig 732 body/)
     expect(await md5Of(db, HELPER)).toBe(MD5_732_HELPER)
     await noTable()
   }, 60_000)
 
   it('when contacts_select was changed by hand', async () => {
     await prepAfter(`ALTER POLICY contacts_select ON public.contacts USING (true);`)
-    expect(await abortMessage(db, MIG_756)).toMatch(/mig 756: public\.contacts does not have exactly the mig 731 contacts_select policy/)
+    expect(await abortMessage(db, MIG_758)).toMatch(/mig 758: public\.contacts does not have exactly the mig 731 contacts_select policy/)
     await noTable()
   }, 60_000)
 
   it('when 732 was never applied', async () => {
     db = await bootProd({ before2: BEFORE2, migrate: [MIG_699, MIG_731] })
     await signedOut(db)
-    expect(await abortMessage(db, MIG_756)).toMatch(/mig 756: private\.auth_contact_membership_contact_ids\(\) is not the mig 732 body/)
+    expect(await abortMessage(db, MIG_758)).toMatch(/mig 758: private\.auth_contact_membership_contact_ids\(\) is not the mig 732 body/)
     await noTable()
   }, 60_000)
 })
 
 describe('the file carries no placeholder', () => {
   it('ends with the self-check and COMMIT, never touches the policy, and carries no unfilled md5', () => {
-    expect(MIG_756).toMatch(/END \$\$;\s*COMMIT;\s*$/)
-    expect(MIG_756).not.toMatch(/^\s*ALTER\s+POLICY/im)
-    expect(MIG_756).not.toMatch(/@@/)
+    expect(MIG_758).toMatch(/END \$\$;\s*COMMIT;\s*$/)
+    expect(MIG_758).not.toMatch(/^\s*ALTER\s+POLICY/im)
+    expect(MIG_758).not.toMatch(/@@/)
   })
 })
 
@@ -277,16 +277,16 @@ describe("the header's rollback record", () => {
   let db
   afterAll(() => db?.close())
 
-  it("restores 732's two bodies; the policy is unchanged; 756 applies again", async () => {
-    db = await boot756()
-    await db['exec'](ROLLBACK_756)
+  it("restores 732's two bodies; the policy is unchanged; 758 applies again", async () => {
+    db = await boot758()
+    await db['exec'](ROLLBACK_758)
     expect(await md5Of(db, HELPER)).toBe(MD5_732_HELPER)
     expect(await md5Of(db, CROSS)).toBe(MD5_732_CROSS)
     expect((await policiesOf(db, ['contacts']))[0].qual).toBe(QUAL_731)
     expect(await sees(db, IDS.STAFF_B, C_A2)).toBe(false)
     expect(await sees(db, IDS.STAFF_B, C_D1)).toBe(true)   // 732's un1t client
     await signedOut(db)
-    await db['exec'](MIG_756)
+    await db['exec'](MIG_758)
     expect(await sees(db, IDS.STAFF_B, C_A2)).toBe(true)
   }, 60_000)
 })

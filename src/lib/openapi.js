@@ -5068,7 +5068,7 @@ registry.registerPath({
   tags: ['Glofox'],
   security: [{ CookieAuth: [] }],
   summary: 'Find (and optionally link) Glofox members whose contact lives at a sibling studio',
-  description: 'GLOFOXSIBLING.1 — master only. Reads one page of the studio\'s Glofox members and lists those with no contact at the studio whose one contact lives at another studio of the same organisation (contacts are unique per email per organisation, mig 712, so the old sync could not create them). dry_run (default true) only reads; dry_run:false runs the member sync for up to 25 of the page\'s candidates, which links each one (glofox_crossover_members, mig 756, plus the studio\'s preferences row). Ids only in the response.',
+  description: 'GLOFOXSIBLING.1 — master only. Reads one page of the studio\'s Glofox members and lists those with no contact at the studio whose one contact lives at another studio of the same organisation (contacts are unique per email per organisation, mig 712, so the old sync could not create them). dry_run (default true) only reads; dry_run:false runs the member sync for up to 25 of the page\'s candidates, which links each one (glofox_crossover_members, mig 758, plus the studio\'s preferences row). Ids only in the response.',
   request: {
     body: { content: { 'application/json': { schema: z.object({
       location_id: uuidLike,

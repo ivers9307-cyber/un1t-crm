@@ -1,8 +1,8 @@
--- 756 — GLOFOXSIBLING.1: a Stillorgan Glofox member whose one CRM contact
+-- 758 — GLOFOXSIBLING.1: a Stillorgan Glofox member whose one CRM contact
 -- lives at another studio of the same organisation (Hatch Street) is linked,
 -- not dropped, and is readable by staff who hold Contacts at the Glofox studio.
 --
--- Proven by tests/migration-756-glofox-crossover-members.test.js (PGlite; the
+-- Proven by tests/migration-758-glofox-crossover-members.test.js (PGlite; the
 -- real 690, 691, 699, 731 and 732 files first, then this one).
 --
 -- ===========================================================================
@@ -55,7 +55,7 @@
 --   CREATE OR REPLACE of private.auth_contact_membership_contact_ids() with
 --   its REVOKE / GRANT, and of public.crossover_contact_ids(uuid) with its
 --   REVOKE / GRANT). The table may stay: with neither function reading it, it
---   grants nothing. (tests/migration-756-glofox-crossover-members.test.js
+--   grants nothing. (tests/migration-758-glofox-crossover-members.test.js
 --   runs this record.)
 -- ===========================================================================
 
@@ -84,30 +84,30 @@ BEGIN
                      WHERE schemaname = 'public' AND tablename = 'contacts' AND policyname = 'contacts_select'
                        AND permissive = 'PERMISSIVE' AND cmd = 'SELECT' AND roles::text = '{public}'
                        AND with_check IS NULL AND qual = v_qual) THEN
-    RAISE EXCEPTION 'mig 756: public.contacts does not have exactly the mig 731 contacts_select policy; re-plan (found: %)',
+    RAISE EXCEPTION 'mig 758: public.contacts does not have exactly the mig 731 contacts_select policy; re-plan (found: %)',
       (SELECT string_agg(policyname || ' ' || cmd || ' ' || roles::text || ' USING ' || coalesce(qual, '-'), ' ; ')
          FROM pg_policies WHERE schemaname = 'public' AND tablename = 'contacts');
   END IF;
   IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.contacts'::regclass) THEN
-    RAISE EXCEPTION 'mig 756: row level security is off on public.contacts';
+    RAISE EXCEPTION 'mig 758: row level security is off on public.contacts';
   END IF;
   IF v_fn IS NULL OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = v_fn AND prosecdef AND prorettype = 'uuid[]'::regtype) THEN
-    RAISE EXCEPTION 'mig 756: private.auth_contact_read_location_ids() is missing or not a SECURITY DEFINER uuid[] resolver; apply 690/699 first';
+    RAISE EXCEPTION 'mig 758: private.auth_contact_read_location_ids() is missing or not a SECURITY DEFINER uuid[] resolver; apply 690/699 first';
   END IF;
   -- both functions are replaced whole, so a hand edit on prod aborts this file
   SELECT md5(regexp_replace(regexp_replace(prosrc, '--[^\n]*', '', 'g'), '\s+', '', 'g')) INTO v_h
     FROM pg_proc WHERE oid = to_regprocedure('private.auth_contact_membership_contact_ids()');
   IF v_h IS NULL OR v_h NOT IN (v_old_helper, v_new_helper) THEN
-    RAISE EXCEPTION 'mig 756: private.auth_contact_membership_contact_ids() is not the mig 732 body (normalised md5 %); re-plan', v_h;
+    RAISE EXCEPTION 'mig 758: private.auth_contact_membership_contact_ids() is not the mig 732 body (normalised md5 %); re-plan', v_h;
   END IF;
   SELECT md5(regexp_replace(regexp_replace(prosrc, '--[^\n]*', '', 'g'), '\s+', '', 'g')) INTO v_h
     FROM pg_proc WHERE oid = to_regprocedure('public.crossover_contact_ids(uuid)');
   IF v_h IS NULL OR v_h NOT IN (v_old_cross, v_new_cross) THEN
-    RAISE EXCEPTION 'mig 756: public.crossover_contact_ids(uuid) is not the mig 732 body (normalised md5 %); re-plan', v_h;
+    RAISE EXCEPTION 'mig 758: public.crossover_contact_ids(uuid) is not the mig 732 body (normalised md5 %); re-plan', v_h;
   END IF;
 END $$;
 
-CREATE TEMP TABLE m756_acl ON COMMIT DROP AS
+CREATE TEMP TABLE m758_acl ON COMMIT DROP AS
   SELECT oid::regclass::text AS rel, relacl::text AS acl FROM pg_class
    WHERE oid IN ('public.contacts'::regclass, 'public.un1t_clients'::regclass);
 
@@ -132,7 +132,7 @@ REVOKE ALL ON public.glofox_crossover_members FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.glofox_crossover_members TO service_role;
 
 COMMENT ON TABLE public.glofox_crossover_members IS
-  'GLOFOXSIBLING.1 (mig 756): a Glofox member of this studio whose CRM contact lives at another studio of the same organisation (one contact per email per organisation, mig 712). Written only by the service-role Glofox sync (src/lib/glofox-crossover.js). Read by private.auth_contact_membership_contact_ids() and public.crossover_contact_ids(uuid) so staff holding Contacts here can read the contact. RLS on, no policy, no client privilege.';
+  'GLOFOXSIBLING.1 (mig 758): a Glofox member of this studio whose CRM contact lives at another studio of the same organisation (one contact per email per organisation, mig 712). Written only by the service-role Glofox sync (src/lib/glofox-crossover.js). Read by private.auth_contact_membership_contact_ids() and public.crossover_contact_ids(uuid) so staff holding Contacts here can read the contact. RLS on, no policy, no client privilege.';
 
 -- 2. The read helper: active memberships (731), un1t clients (732), and
 --    Glofox crossover members (this file), all at the studios the Contacts
@@ -163,7 +163,7 @@ AS $function$
 $function$;
 
 COMMENT ON FUNCTION private.auth_contact_membership_contact_ids() IS
-  'UN1TDUAL.1 (mig 731) + UN1TDUAL.4 (mig 732) + GLOFOXSIBLING.1 (mig 756): contact ids with an ACTIVE contact_memberships row, linked by a un1t_clients row (any un1t status), or linked by a glofox_crossover_members row, at a studio where the caller holds Contacts (private.auth_contact_read_location_ids(), so every tier of that resolver applies). Read by contacts_select as an InitPlan. tests/contacts-read-scope-migration-guard.test.js pins the body.';
+  'UN1TDUAL.1 (mig 731) + UN1TDUAL.4 (mig 732) + GLOFOXSIBLING.1 (mig 758): contact ids with an ACTIVE contact_memberships row, linked by a un1t_clients row (any un1t status), or linked by a glofox_crossover_members row, at a studio where the caller holds Contacts (private.auth_contact_read_location_ids(), so every tier of that resolver applies). Read by contacts_select as an InitPlan. tests/contacts-read-scope-migration-guard.test.js pins the body.';
 
 REVOKE ALL ON FUNCTION private.auth_contact_membership_contact_ids() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION private.auth_contact_membership_contact_ids() TO authenticated, service_role;
@@ -226,7 +226,7 @@ BEGIN
           AND prorettype = 'uuid[]'::regtype AND proconfig @> ARRAY['search_path=""']
           AND proowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
           AND md5(regexp_replace(regexp_replace(prosrc, '--[^\n]*', '', 'g'), '\s+', '', 'g')) = v_new_helper) THEN
-    RAISE EXCEPTION 'mig 756: private.auth_contact_membership_contact_ids is not this file''s body, or not SECURITY DEFINER / STABLE / search_path '''' / uuid[] / owned by %', current_user;
+    RAISE EXCEPTION 'mig 758: private.auth_contact_membership_contact_ids is not this file''s body, or not SECURITY DEFINER / STABLE / search_path '''' / uuid[] / owned by %', current_user;
   END IF;
   -- b. EXECUTE: authenticated and service_role only, on both helpers
   IF NOT has_function_privilege('authenticated', v_fn, 'EXECUTE')
@@ -235,7 +235,7 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a WHERE p.oid = v_fn AND a.grantee = 0)
      OR NOT has_function_privilege('authenticated', v_read, 'EXECUTE')
      OR has_function_privilege('anon', v_read, 'EXECUTE') THEN
-    RAISE EXCEPTION 'mig 756: EXECUTE on the contact read helpers must be authenticated + service_role only';
+    RAISE EXCEPTION 'mig 758: EXECUTE on the contact read helpers must be authenticated + service_role only';
   END IF;
   -- c. exactly one policy, 731's, untouched
   SELECT string_agg(policyname || ' ' || permissive || ' ' || cmd || ' ' || roles::text || ' USING ' || coalesce(qual, '-')
@@ -246,7 +246,7 @@ BEGIN
                      WHERE schemaname = 'public' AND tablename = 'contacts' AND policyname = 'contacts_select'
                        AND permissive = 'PERMISSIVE' AND cmd = 'SELECT' AND roles::text = '{public}'
                        AND with_check IS NULL AND qual = v_qual) THEN
-    RAISE EXCEPTION 'mig 756: contacts_select is not mig 731''s policy; found: %', v_found;
+    RAISE EXCEPTION 'mig 758: contacts_select is not mig 731''s policy; found: %', v_found;
   END IF;
   -- d. the link table: RLS on, no policy, no client privilege (column-level
   --    too: has_table_privilege cannot see a column grant)
@@ -259,35 +259,35 @@ BEGIN
      OR has_any_column_privilege('authenticated', 'public.glofox_crossover_members', 'UPDATE')
      OR has_table_privilege('authenticated', 'public.glofox_crossover_members', 'DELETE')
      OR NOT has_table_privilege('service_role', 'public.glofox_crossover_members', 'INSERT') THEN
-    RAISE EXCEPTION 'mig 756: glofox_crossover_members must have RLS on, no policy, and no client privilege';
+    RAISE EXCEPTION 'mig 758: glofox_crossover_members must have RLS on, no policy, and no client privilege';
   END IF;
   -- e. contacts and un1t_clients: RLS and ACLs untouched
   IF NOT (SELECT relrowsecurity AND NOT relforcerowsecurity FROM pg_class WHERE oid = 'public.contacts'::regclass)
      OR NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.un1t_clients'::regclass) THEN
-    RAISE EXCEPTION 'mig 756: contacts or un1t_clients RLS changed';
+    RAISE EXCEPTION 'mig 758: contacts or un1t_clients RLS changed';
   END IF;
-  IF EXISTS (SELECT 1 FROM m756_acl a JOIN pg_class c ON c.oid = a.rel::regclass
+  IF EXISTS (SELECT 1 FROM m758_acl a JOIN pg_class c ON c.oid = a.rel::regclass
               WHERE c.relacl::text IS DISTINCT FROM a.acl) THEN
-    RAISE EXCEPTION 'mig 756: the contacts or un1t_clients ACL changed; this file must not touch their privileges';
+    RAISE EXCEPTION 'mig 758: the contacts or un1t_clients ACL changed; this file must not touch their privileges';
   END IF;
   -- f. crossover_contact_ids: this file's body, INVOKER, service_role only
   IF v_cross IS NULL OR NOT EXISTS (
        SELECT 1 FROM pg_proc WHERE oid = v_cross AND NOT prosecdef AND provolatile = 's'
           AND md5(regexp_replace(regexp_replace(prosrc, '--[^\n]*', '', 'g'), '\s+', '', 'g')) = v_new_cross) THEN
-    RAISE EXCEPTION 'mig 756: public.crossover_contact_ids is not this file''s SECURITY INVOKER / STABLE body';
+    RAISE EXCEPTION 'mig 758: public.crossover_contact_ids is not this file''s SECURITY INVOKER / STABLE body';
   END IF;
   IF has_function_privilege('authenticated', v_cross, 'EXECUTE')
      OR has_function_privilege('anon', v_cross, 'EXECUTE')
      OR has_function_privilege('public', v_cross, 'EXECUTE')
      OR NOT has_function_privilege('service_role', v_cross, 'EXECUTE') THEN
-    RAISE EXCEPTION 'mig 756: EXECUTE on public.crossover_contact_ids must be service_role only';
+    RAISE EXCEPTION 'mig 758: EXECUTE on public.crossover_contact_ids must be service_role only';
   END IF;
   -- g. the helper runs: with no signed-in user it returns no contact
   IF private.auth_contact_membership_contact_ids() IS DISTINCT FROM '{}'::uuid[] THEN
-    RAISE EXCEPTION 'mig 756: the read helper returned contacts with no signed-in user';
+    RAISE EXCEPTION 'mig 758: the read helper returned contacts with no signed-in user';
   END IF;
 
-  RAISE NOTICE 'mig 756: glofox_crossover_members created (service role only); contacts_select also admits a Glofox studio''s crossover members to staff holding Contacts there; crossover_contact_ids counts them; policy unchanged.';
+  RAISE NOTICE 'mig 758: glofox_crossover_members created (service role only); contacts_select also admits a Glofox studio''s crossover members to staff holding Contacts there; crossover_contact_ids counts them; policy unchanged.';
 END $$;
 
 COMMIT;

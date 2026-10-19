@@ -15,7 +15,7 @@
 //     then email). Two candidates, or an email holder already linked to a
 //     different Glofox member, is a conflict for a person to resolve, never a
 //     guess.
-//   - recordGlofoxCrossover: the glofox_crossover_members row (mig 756) that
+//   - recordGlofoxCrossover: the glofox_crossover_members row (mig 758) that
 //     makes the contact readable by staff holding Contacts at the studio, and
 //     the studio's marketing-preferences row, as the un1t sync gives Hatch.
 //
@@ -63,7 +63,7 @@ export async function findGlofoxCrossoverContact(db, locationId, { glofoxMemberI
     if (glofoxMemberId) {
       const link = await db.from(GLOFOX_CROSSOVER_TABLE).select('contact_id')
         .eq('location_id', locationId).eq('glofox_member_id', glofoxMemberId).maybeSingle()
-      // The table not existing yet (code deployed before mig 756) means no
+      // The table not existing yet (code deployed before mig 758) means no
       // link rows, not an outage: steps 2 and 3 still find the contact.
       // Any other read failure is an error.
       if (link.error && !TABLE_MISSING.has(link.error.code)) {
@@ -124,7 +124,7 @@ export async function findGlofoxCrossoverContact(db, locationId, { glofoxMemberI
 /**
  * Record that a Glofox member of `locationId` is the contact `contactId`, who
  * lives at another studio: the glofox_crossover_members row (readability at
- * the studio, mig 756) and the studio's marketing-preferences row
+ * the studio, mig 758) and the studio's marketing-preferences row
  * (insert-if-missing; an existing row, an unsubscribe included, is never
  * touched). A contact who lives AT the studio needs neither and is skipped.
  *

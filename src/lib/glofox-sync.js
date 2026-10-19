@@ -2112,7 +2112,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
   }
 
   // GLOFOXSIBLING.1 — the contact lives at a sibling studio: link it here so
-  // staff holding Contacts at this studio can read it (mig 756), with this
+  // staff holding Contacts at this studio can read it (mig 758), with this
   // studio's preferences row. Re-run on every sync (idempotent), so a link
   // that failed once is made by the next tick. A failure is logged loudly and
   // reported, never fatal: the contact write above already happened.

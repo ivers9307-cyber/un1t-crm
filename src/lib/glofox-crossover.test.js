@@ -101,7 +101,7 @@ describe('findGlofoxCrossoverContact', () => {
     }
   })
 
-  it('the link table not existing yet (code before mig 756) is "no link", not an error', async () => {
+  it('the link table not existing yet (code before mig 758) is "no link", not an error', async () => {
     for (const code of ['PGRST205', '42P01']) {
       const db = fakeDb(base(), { errors: { 'glofox_crossover_members:select': { code, message: 'missing' } } })
       const out = await findGlofoxCrossoverContact(db, LOC, { glofoxMemberId: 'g1', email: 'craig@x.com' })
