@@ -32,6 +32,16 @@
 //   - A failed names read writes the rows WITHOUT member_name (every row of
 //     the run alike, so one bulk upsert never nulls the key for some rows),
 //     and existing names are kept.
+//   - Who wins (spec C §7, Richard 17 Oct; shouldReplaceStored): before the
+//     upsert the stored rows for these ids are read (location-scoped, chunks
+//     of 100; a failed read writes nothing). A row the SYNC wrote
+//     (raw.un1t.written_by not 'crm', missing included) is always replaced, so
+//     a cancel-then-rebook or an un-marked attendance follows un1t.online.
+//     Against a row the CRM wrote (D's write-through): a terminal status
+//     beats BOOKED, a lower rank never overwrites a higher one, and within a
+//     rank the newer un1t.online updated_at wins (either missing: the sync
+//     wins). Our clock is never compared with un1t.online's. A kept row is
+//     counted kept_stored.
 //   - NEVER deletes and NEVER updates: upsert only. NEVER throws: the sync
 //     records the result in its counts, and a failure never fails the run.
 
@@ -148,6 +158,44 @@ export function mapUn1tBookingToClassBooking(bookingRow, { locationId, event, me
   return row
 }
 
+/** An instant from un1t.online's clock, or null when absent or unreadable. */
+function un1tInstant(value) {
+  if (!hasValue(value)) return null
+  const ms = Date.parse(String(value))
+  return Number.isFinite(ms) ? ms : null
+}
+
+/**
+ * Pure: may this projected row replace the stored class_bookings row with the
+ * same key? spec C §7 as decided 17 Oct, in order:
+ *   0. nothing stored, or a stored row the sync wrote (raw.un1t.written_by is
+ *      not 'crm', a missing value included): replace, always;
+ *   for a stored row the CRM wrote:
+ *   1. a higher rank replaces (a terminal sync status beats a CRM BOOKED);
+ *   2. a lower rank never does (a sync BOOKED never undoes a CRM CANCELLED);
+ *   3. same rank: the newer un1t.online updated_at wins (equal re-writes);
+ *      either timestamp missing or unreadable: the sync row wins.
+ * A stored status outside UN1T_STATUS_RANK ranks 0.
+ *
+ * @param {{ status: string, raw?: object|null }} incoming the projected row
+ * @param {{ status: string|null, raw?: object|null }|null|undefined} stored
+ * @returns {boolean}
+ */
+export function shouldReplaceStored(incoming, stored) {
+  if (!stored) return true
+  const storedUn1t = stored.raw?.un1t
+  if (storedUn1t?.written_by !== 'crm') return true
+  const rankOf = (status) => (Object.prototype.hasOwnProperty.call(UN1T_STATUS_RANK, status) ? UN1T_STATUS_RANK[status] : 0)
+  const incomingRank = rankOf(incoming?.status)
+  const storedRank = rankOf(stored.status)
+  if (incomingRank > storedRank) return true
+  if (incomingRank < storedRank) return false
+  const incomingAt = un1tInstant(incoming?.raw?.un1t?.updated_at)
+  const storedAt = un1tInstant(storedUn1t.updated_at)
+  if (incomingAt == null || storedAt == null) return true
+  return incomingAt >= storedAt
+}
+
 /** A status for the unknown-status warning: never empty, never long. */
 function loggedStatus(status) {
   const s = status == null ? '' : String(status).trim()
@@ -161,7 +209,10 @@ function loggedStatus(status) {
  * at this location (if that read fails nothing is written: a later run
  * retries). Never throws.
  *
- * @returns {Promise<{ upserted: number, skipped_no_event: number, skipped_unknown_status: number, names?: 'unreadable' } | { error: { code: string|null, message: string } }>}
+ * Before the upsert the stored rows for these ids are read and judged by
+ * shouldReplaceStored; a failed read writes nothing.
+ *
+ * @returns {Promise<{ upserted: number, kept_stored: number, skipped_no_event: number, skipped_unknown_status: number, names?: 'unreadable' } | { error: { code: string|null, message: string } }>}
  */
 export async function projectUn1tBookings(db, { locationId, bookings, events, nowIso }) {
   try {
@@ -170,7 +221,7 @@ export async function projectUn1tBookings(db, { locationId, bookings, events, no
     for (const b of Array.isArray(bookings) ? bookings : []) {
       if (b && hasValue(b.un1t_id)) latest.set(String(b.un1t_id), b)
     }
-    if (latest.size === 0) return { upserted: 0, skipped_no_event: 0, skipped_unknown_status: 0 }
+    if (latest.size === 0) return { upserted: 0, kept_stored: 0, skipped_no_event: 0, skipped_unknown_status: 0 }
 
     // An unprojectable status is skipped before anything is read for it.
     const byId = new Map()
@@ -234,15 +285,30 @@ export async function projectUn1tBookings(db, { locationId, bookings, events, no
       else skippedNoEvent += 1
     }
 
+    // spec C §7: read what is stored for these ids and keep a CRM-written row
+    // the rule says this pull must not overwrite.
+    const storedById = new Map()
+    for (const idChunk of chunks(rows.map((r) => r.glofox_booking_id), READ_CHUNK)) {
+      const { data, error } = await db
+        .from('class_bookings')
+        .select('glofox_booking_id, status, raw')
+        .eq('location_id', locationId)
+        .in('glofox_booking_id', idChunk)
+      if (error) return { error: safeError(error) }
+      for (const r of data || []) storedById.set(r.glofox_booking_id, r)
+    }
+    const toWrite = rows.filter((r) => shouldReplaceStored(r, storedById.get(r.glofox_booking_id) ?? null))
+    const keptStored = rows.length - toWrite.length
+
     let upserted = 0
-    for (const chunk of chunks(rows, CHUNK)) {
+    for (const chunk of chunks(toWrite, CHUNK)) {
       const { error } = await db
         .from('class_bookings')
         .upsert(chunk, { onConflict: 'location_id,glofox_booking_id' })
       if (error) return { error: safeError(error) }
       upserted += chunk.length
     }
-    const result = { upserted, skipped_no_event: skippedNoEvent, skipped_unknown_status: skippedUnknownStatus }
+    const result = { upserted, kept_stored: keptStored, skipped_no_event: skippedNoEvent, skipped_unknown_status: skippedUnknownStatus }
     if (namesUnreadable) result.names = 'unreadable'
     return result
   } catch (err) {

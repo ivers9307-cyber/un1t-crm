@@ -557,7 +557,7 @@ describe('runUn1tSync', () => {
       expect(logWarn).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('class_occurrences'), expect.objectContaining({ err: { code: null, message: 'class_occurrences upsert boom' } }))
       // The bookings projection is independent of the occurrences one.
       expect(tables.class_bookings).toHaveLength(2)
-      expect(r.counts.class_bookings).toEqual({ upserted: 2, skipped_no_event: 0, skipped_unknown_status: 0 })
+      expect(r.counts.class_bookings).toEqual({ upserted: 2, kept_stored: 0, skipped_no_event: 0, skipped_unknown_status: 0 })
     })
 
     it('does not project when the un1t_events upsert fails (the run stops with db)', async () => {
@@ -596,8 +596,8 @@ describe('runUn1tSync', () => {
       const { factory } = makeClient({ self: SELF, lists })
       const r = await runUn1tSync(db, HATCH, opts(factory))
       expect(r.ok).toBe(true)
-      expect(r.counts.class_bookings).toEqual({ upserted: 2, skipped_no_event: 0, skipped_unknown_status: 0 })
-      expect(runRow(tables).counts.class_bookings).toEqual({ upserted: 2, skipped_no_event: 0, skipped_unknown_status: 0 })
+      expect(r.counts.class_bookings).toEqual({ upserted: 2, kept_stored: 0, skipped_no_event: 0, skipped_unknown_status: 0 })
+      expect(runRow(tables).counts.class_bookings).toEqual({ upserted: 2, kept_stored: 0, skipped_no_event: 0, skipped_unknown_status: 0 })
 
       const tablesInOrder = upserts(log).map((e) => e.table)
       expect(tablesInOrder.indexOf('class_bookings')).toBe(tablesInOrder.indexOf('un1t_bookings') + 1)
