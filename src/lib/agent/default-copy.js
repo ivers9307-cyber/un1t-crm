@@ -68,3 +68,38 @@ export const DEFAULT_PURCHASE_PAID_BOOKING_FAILED_TEXT = "Payment received, than
 export const DEFAULT_PURCHASE_PAID_NO_CLASS_TEXT = "Payment received, thank you! It's on your account now. Would you like me to book you a class?"
 export const DEFAULT_PAY_DONE_PAGE_TEXT = 'Thanks! You can go back to WhatsApp now.'
 export const DEFAULT_PAY_CANCEL_PAGE_TEXT = 'No problem, nothing was charged. You can go back to WhatsApp.'
+
+/**
+ * MIAFLOW.1 — the line on the booking Flow message Mia sends at a studio whose
+ * Flow is switched on (settings.whatsapp_flow), right above its button. The
+ * operator's booking_flow_text overrides it (renderMiaCopy, mia-copy.js).
+ */
+export const DEFAULT_BOOKING_FLOW_TEXT = 'Tap below to pick a class and book it.'
+
+/**
+ * FLOWACK.1 — the one reply to a completed WhatsApp booking Flow (a class
+ * request), sent instead of a Mia turn. It must never claim the class is
+ * booked: the booking is processed afterwards and its real outcome follows
+ * (whatsapp-flow/booking-notice.js). The operator's flow_booking_ack_text
+ * overrides it.
+ */
+export const DEFAULT_FLOW_BOOKING_ACK_TEXT = "Got it, we're booking your spot now. You'll get a confirmation shortly."
+
+/**
+ * FLOWACK.1 — sent on the thread when a Flow booking could not be completed
+ * automatically and went to the team (a staff card). The operator's
+ * flow_booking_holding_text overrides it.
+ */
+export const DEFAULT_FLOW_BOOKING_HOLDING_TEXT = 'Thanks, the team is confirming your class and will be in touch shortly.'
+
+/**
+ * FLOWACK.1 review — the reply to a Flow submission for a class this customer
+ * has already asked for (the queue's one-request-per-class index refused a
+ * second row). Not "we're booking your spot": nothing new is booked. The
+ * confirmation of the original request still follows (the class_confirmed
+ * template, the Flow outcome notice or the un1t.online email), so it does not
+ * promise it "here". A duplicate of a class already BOOKED gets the booking
+ * confirmation instead. The operator's flow_booking_duplicate_text overrides it.
+ */
+export const DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT = "You've already asked for that class. You'll get a confirmation shortly."
+

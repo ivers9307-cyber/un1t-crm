@@ -54,6 +54,17 @@ export const GLOFOX_PROMPT_SOURCE = Object.freeze({ key: 'glofox', label: 'Glofo
 // sent as the reply's trailing link so it renders as a button) or, with no
 // link, to the team. Stable per studio: it depends on the link alone.
 // No em dashes in this text (Richard's rule for anything a customer may read).
+// MIAFLOW.1 — the rules that go with send_booking_flow (booking-flow.js),
+// rendered only on a turn that offers it: a WhatsApp turn at a studio Mia
+// cannot book at, whose booking Flow is switched on. No em or en dashes.
+export const BOOKING_FLOW_PROMPT_SECTION =
+  '## Booking form in WhatsApp\n' +
+  'This studio has a booking form you can send in this chat with send_booking_flow. When someone wants to book a ' +
+  'class here, call send_booking_flow instead of sending the booking link. If it says sent: true, the form is already ' +
+  'in the chat, so reply in one short line telling them to tap the button to pick a class and book it, with no link. ' +
+  'If it says already_sent: true, point them back to the form above. If it says sent: false, follow the booking rules ' +
+  'above (the booking link, or the team). Never say the form was sent unless the tool said sent: true.'
+
 export const NO_BOOKING_ACCOUNT_HANDOFF = 'For membership, payments or account questions, hand off to the team.'
 
 function noBookingSections(bookingUrl) {
@@ -300,11 +311,12 @@ ${classSections}
 ## Booking a consultation (new and prospective customers)
 Anyone who wants to come in, try a session, or learn more can book a consultation — no verification needed; this is how new people start.
 - Use list_consultation_slots for the day they want (use Today's date from Context to resolve "tomorrow" etc.). Offer 2-3 of the available times, not the whole list.
+- Each slot comes back with a label (e.g. "Fri 23 Oct, 11:00") and a slot_id. Always say the day and date exactly as the label gives them, and book with that slot's slot_id. Never work out a date from a weekday name yourself once a slot has been listed: carry the label.
 - Make ONE offer of times. If they pick one, great — go to booking. But if that first offer doesn't suit (they want a different day or time, a morning when there are only evenings, a slot you don't have), do NOT keep searching day after day — hand off to the team so a person can sort a time that works (they can also offer things the booking tool can't, like a specific class). One good offer, then a human. Grinding through "nothing that day either" over and over is a bad experience.
 - If the studio already has this person's name and email (Context says their identity is known, or you learned it earlier in the chat), do NOT ask for them again — go straight to confirming the slot and booking. Only a brand-new person we know nothing about needs to be asked for their name and email (a phone number too if it flows naturally). Re-asking someone for details we already hold is a bad experience — never do it.
 - BEFORE booking: restate the slot (and, for a new person, their details) and get a clear yes.
 - Then call book_consultation. On success, confirm warmly and mention they'll get a confirmation by email. If the slot was taken in the meantime, apologise, re-check the list and offer fresh times.
-- PROACTIVE OFFER — right after a new lead books their FIRST class (including via the "Book your first visit" flow), warmly offer a free consultation as an optional next step: meet a coach, set goals, get a plan. Frame it as a friendly extra ("Want me to line you up with a coach too before your first session? It's free"), never a hard sell. Offer it once — if they decline or don't take it up, leave it and don't ask again.
+- PROACTIVE OFFER — right after a new lead books their FIRST class, warmly offer a free consultation as an optional next step: meet a coach, set goals, get a plan. Only treat a class as booked when a booking tool or a booking confirmation already in the thread confirms it. A "[Booking submitted via WhatsApp Flow]" message is a request the system is still processing, never a booking: never tell them they are booked or all set because of it. A "[Booking form submitted but could not be processed]" message means their booking form did not go through: nothing is booked or queued. Never say it is booked or being processed; hand off so the team books them. Frame it as a friendly extra ("Want me to line you up with a coach too before your first session? It's free"), never a hard sell. Offer it once — if they decline or don't take it up, leave it and don't ask again.
 
 ## Booking for two or more people
 Someone may want to bring a partner or friend ("can my girlfriend come too?", "book us both in"). This is rare and fiddly, and booking only one of them by mistake is worse than not trying — so do NOT attempt a multi-person booking yourself. As soon as it's clear more than one person wants to come in, HAND OFF to a human so the team books them together. A handoff turn is internal (see "How to hand off"), so don't write them a message of your own — the studio system answers them. NEVER book just one of them, and never collect one person's details and book only them.
@@ -415,6 +427,19 @@ export function buildCardSetsBlock(cardSets) {
   ].join('\n')
 }
 
+// MIACONSULT.1 — Context names today's weekday as well as its date, so "Friday"
+// is counted from a known day. `today` is already the studio's calendar date
+// (todayStrIn(zone)); noon UTC on that date is the same calendar day read in
+// UTC, so the weekday needs no zone (the booking-slots dayLabelFmt pattern).
+// The ISO date stays first: callers and tests read it as the first token.
+const TODAY_LABEL_FMT = new Intl.DateTimeFormat('en-IE', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+function todayWithWeekday(today) {
+  const m = String(today).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return today
+  const label = TODAY_LABEL_FMT.format(new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12)))
+  return `${today} (${label.replace(/,/g, '')})`
+}
+
 /**
  * Split the customer-agent system prompt into a location-stable prefix and a
  * per-request volatile suffix, for prompt caching (CACHE.2). Pure.
@@ -449,6 +474,7 @@ export function buildCardSetsBlock(cardSets) {
  * @param {string} [opts.un1tStudioName] MIAHATCH.2: the un1t.online studio the booking lines are about (named instead of "this studio"); stable per studio
  * @param {boolean}[opts.multiStudio] MIAHATCH.2: answerable at more than one studio; the prompt says which studio each answer is for (read only with un1tVariant)
  * @param {string[]}[opts.factsBlocks] MIAHATCH.2: buildStudioFactsBlock outputs for answerable studios that are not the thread's; uncached suffix only
+ * @param {boolean}[opts.bookingFlow] MIAFLOW.1: the turn offers send_booking_flow (the studio's WhatsApp booking Flow); adds BOOKING_FLOW_PROMPT_SECTION
  * @returns {{ stable: string, volatile: string }}
  */
 export function buildCustomerSystemPromptParts(opts = {}) {
@@ -474,6 +500,9 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   // blocks, then KNOWLEDGE last (the base prompt refers to "the KNOWLEDGE
   // section below").
   const stableParts = [identity + ' ' + renderCustomerAgentBasePrompt(membershipSource || GLOFOX_PROMPT_SOURCE, { bookings, bookingUrl, un1tVariant, multiStudio: opts.multiStudio === true, un1tStudioName: un1tVariant ? opts.un1tStudioName : null })]
+  // MIAFLOW.1 — only on a turn offered send_booking_flow (booking-flow.js);
+  // absent or false, the prompt is byte-identical to before.
+  if (opts.bookingFlow === true) stableParts.push(BOOKING_FLOW_PROMPT_SECTION)
   if (membershipUrl) {
     stableParts.push(
       '## Joining the studio (membership sign-up link)\n' +
@@ -498,7 +527,7 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   const ctx = []
   if (businessName) ctx.push(`- Business: ${businessName}`)
   if (locationName) ctx.push(`- Studio: ${locationName}`)
-  if (today) ctx.push(`- Today's date: ${today}`)
+  if (today) ctx.push(`- Today's date: ${todayWithWeekday(today)}`)
   if (ctx.length) volatileParts.push('## Context\n' + ctx.join('\n'))
 
   // AGENT-AUTH.1 + .2 — identity already confirmed (by a phone-number match OR

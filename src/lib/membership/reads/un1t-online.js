@@ -688,6 +688,36 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
   }
 }
 
+/**
+ * PIPEEXCL.1 — this studio's ACTIVE members, as contact ids, for another
+ * studio's acquisition board (src/lib/pipeline-other-studio-members.js).
+ * Active = a FRESH subscription here in MEMBER_STATUSES (active, past_due: the
+ * statuses membershipCounts counts; trialing, paused and ended are not). The
+ * subscription's person is its un1t user's contact (a fresh un1t_clients row
+ * here), else its own contact_id. contact_memberships' api rows are the sync's
+ * mirror of these subscriptions, so they are not read twice.
+ * { success, data: { contactIds } } | { success:false, error }.
+ */
+async function activeMemberContactIds(db, locationId) {
+  if (!locationId) return { success: false, error: 'No location' }
+  try {
+    const [subs, clients] = await Promise.all([
+      listFresh(db, locationId, 'un1t_subscriptions', 'un1t_user_id, contact_id, status'),
+      listFresh(db, locationId, 'un1t_clients', 'un1t_user_id, contact_id'),
+    ])
+    const contactOfUser = new Map(clients.filter((c) => c.contact_id != null).map((c) => [c.un1t_user_id, c.contact_id]))
+    const ids = new Set()
+    for (const s of subs) {
+      if (!MEMBER_STATUSES.includes(s.status)) continue
+      const id = (s.un1t_user_id != null ? contactOfUser.get(s.un1t_user_id) : null) ?? s.contact_id ?? null
+      if (id) ids.add(id)
+    }
+    return { success: true, data: { contactIds: [...ids] } }
+  } catch (e) {
+    return { success: false, error: errMessage(e) }
+  }
+}
+
 /** Rows from two reads (by un1t user, by contact), de-duplicated on un1t_id. */
 function unionByUn1tId(...lists) {
   const seen = new Set()
@@ -810,6 +840,8 @@ export const un1tOnlineReads = Object.freeze({
   paymentsFor,
   pipelineInputs,
   trialEligibility,
+  // PIPEEXCL.1 — active members, for other studios' acquisition boards
+  activeMemberContactIds,
   // UN1TRADAR.1 — the radar row fetches (./un1t-online-radar.js)
   radarMembers,
   winbackContacts,

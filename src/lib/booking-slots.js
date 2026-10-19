@@ -111,6 +111,27 @@ async function readDayOccupancy(db, eventTypeId, date, excludeBookingId = null) 
   return { booked, blocked, error: bookingsRes?.error || blockedRes?.error || null }
 }
 
+/**
+ * The day's full slot grid for an event type, before any booking, block or
+ * past-time filter: every slot the availability windows generate on that
+ * weekday. MIACONSULT.1 uses it to tell "that slot was offered but has been
+ * taken since" from "that time was never a slot at all". Pure.
+ * @param {object} event  { availability, duration_minutes, buffer_minutes }
+ * @param {string} date   'YYYY-MM-DD' (studio wall clock)
+ * @returns {Array<{ start: string, end: string }>}
+ */
+export function daySlotGrid(event, date) {
+  if (!event || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return []
+  const dayName = DAY_NAMES[new Date(date + 'T00:00:00Z').getUTCDay()]
+  // BOOKINGWINDOWS.1: a day may hold several windows; each starts its own
+  // duration+buffer grid, and nothing is offered in the gaps between them.
+  const windows = dayWindows(event.availability, dayName)
+  return windows.flatMap((win) => generateDaySlots(win, {
+    durationMinutes: event.duration_minutes,
+    bufferMinutes: event.buffer_minutes,
+  }))
+}
+
 // Everything computeAvailableSlots decides, plus the occupancy read's error.
 async function availableSlotsWithError(db, event, date, { zone, nowMs = Date.now(), excludeBookingId = null } = {}) {
   if (!event || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return { slots: [], error: null }
@@ -120,16 +141,8 @@ async function availableSlotsWithError(db, event, date, { zone, nowMs = Date.now
   const maxDateStr = addDaysISO(todayStr, event.max_advance_days)
   if (date < todayStr || date > maxDateStr) return { slots: [], error: null }
 
-  const dayName = DAY_NAMES[new Date(date + 'T00:00:00Z').getUTCDay()]
-  // BOOKINGWINDOWS.1: a day may hold several windows; each starts its own
-  // duration+buffer grid, and nothing is offered in the gaps between them.
-  const windows = dayWindows(event.availability, dayName)
-  if (!windows.length) return { slots: [], error: null }
-
-  const slots = windows.flatMap((win) => generateDaySlots(win, {
-    durationMinutes: event.duration_minutes,
-    bufferMinutes: event.buffer_minutes,
-  }))
+  const slots = daySlotGrid(event, date)
+  if (!slots.length) return { slots: [], error: null }
 
   const { booked, blocked, error } = await readDayOccupancy(db, event.id, date, excludeBookingId)
   const nowMinutes = date === todayStr ? nowMinutesIn(tz, nowMs) : -1

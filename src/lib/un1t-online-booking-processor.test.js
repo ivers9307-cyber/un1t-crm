@@ -225,3 +225,39 @@ describe('processUn1tClassBookingRequest', () => {
     expect(deps.writerFactory).not.toHaveBeenCalled()
   })
 })
+
+// FLOWACK.1 — a booking made through the WhatsApp Flow is confirmed on the
+// thread (un1t.online sends no WhatsApp; the confirmation email still goes).
+// notifyFlowBookingOutcome decides whether the row came from the Flow; a card
+// is told by routeToReview, never here. A notice never changes the outcome.
+describe('processUn1tClassBookingRequest — the WhatsApp Flow outcome (FLOWACK.1)', () => {
+  it('booked: one booked notice, after the row is stamped booked', async () => {
+    deps.notifyFlowBookingOutcome = vi.fn(async () => { order.push('flow_notice'); return { flow: true, sent: true } })
+    const r = await run()
+    expect(r.outcome).toBe('booked')
+    expect(deps.notifyFlowBookingOutcome).toHaveBeenCalledTimes(1)
+    expect(deps.notifyFlowBookingOutcome).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'q-1' }), { outcome: 'booked' })
+    expect(rowUpdates.findIndex((u) => u.status === 'booked')).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf('flow_notice')).toBeGreaterThan(order.indexOf('book'))
+  })
+
+  it('a notice that throws never changes the booking', async () => {
+    deps.notifyFlowBookingOutcome = vi.fn(async () => { throw new Error('boom') })
+    const r = await run()
+    expect(r.outcome).toBe('booked')
+    expect(lastRow().status).toBe('booked')
+  })
+
+  it('a card is told by routeToReview, not here', async () => {
+    deps.notifyFlowBookingOutcome = vi.fn(async () => ({ flow: true, sent: true }))
+    deps.book.mockResolvedValueOnce({ verdict: 'refused', code: 'CLASS_FULL', retryable: false })
+    const r = await run()
+    expect(r.outcome).toBe('needs_review')
+    expect(deps.notifyFlowBookingOutcome).not.toHaveBeenCalled()
+  })
+
+  it('with no notifier injected, a website row (no Flow thread) sends nothing and still books', async () => {
+    const r = await run()
+    expect(r.outcome).toBe('booked')
+  })
+})

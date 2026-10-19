@@ -10,7 +10,10 @@
 // kind: text | textarea | number | select | checkbox | quiet_hours
 // paths: the override paths the field sets (one, or the quiet-hours pair).
 
-import { DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT } from '@/lib/agent/default-copy'
+import {
+  DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, DEFAULT_BOOKING_FLOW_TEXT, DEFAULT_FLOW_BOOKING_ACK_TEXT,
+  DEFAULT_FLOW_BOOKING_HOLDING_TEXT, DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT,
+} from '@/lib/agent/default-copy'
 import { HATCH_COPY_FIELDS, HATCH_COPY_GROUP_TITLE } from './hatch-copy-fields'
 
 export const ORG_FIELD_GROUPS = [
@@ -60,6 +63,15 @@ export const ORG_FIELD_GROUPS = [
       // MIAHATCH.2 — the studio editor shows this field in its Hatch payments and booking group (MIAHATCH.4).
       { id: 'chat_booking_unavailable_text', paths: ['chat_booking_unavailable_text'], kind: 'text', maxLength: 500, label: 'Chat booking not available message (un1t.online studios)',
         placeholder: DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, help: '{studio} becomes the studio name and {link} its booking link. With no booking link, a text that needs {link} is not used: the customer is told the team will help them book.' },
+      // MIAFLOW.1 — the line on the booking Flow Mia sends where the studio's Flow is switched on.
+      { id: 'booking_flow_text', paths: ['booking_flow_text'], kind: 'text', maxLength: 500, label: 'Booking form message (studios with the WhatsApp booking Flow)',
+        placeholder: DEFAULT_BOOKING_FLOW_TEXT, help: 'Shown on the booking form Mia sends in WhatsApp, above its button.' },
+      { id: 'flow_booking_ack_text', paths: ['flow_booking_ack_text'], kind: 'text', maxLength: 500, label: 'Booking form received message (WhatsApp)',
+        placeholder: DEFAULT_FLOW_BOOKING_ACK_TEXT, help: 'Sent once when a customer books a class through the WhatsApp booking form, while the booking is made. The confirmation follows when it is booked.' },
+      { id: 'flow_booking_holding_text', paths: ['flow_booking_holding_text'], kind: 'text', maxLength: 500, label: 'Booking form needs the team message (WhatsApp)',
+        placeholder: DEFAULT_FLOW_BOOKING_HOLDING_TEXT, help: 'Sent when a class booked through the WhatsApp booking form could not be completed automatically and goes to the team in Approvals.' },
+      { id: 'flow_booking_duplicate_text', paths: ['flow_booking_duplicate_text'], kind: 'text', maxLength: 500, label: 'Booking form sent twice message (WhatsApp)',
+        placeholder: DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT, help: 'Sent when a customer sends the WhatsApp booking form for a class they have already asked for. If that class is already booked they get the booking confirmation instead.' },
       { id: 'approval_decline_text', paths: ['approval_decline_text'], kind: 'text', maxLength: 500, label: 'Request declined message',
         placeholder: "Sorry, we couldn't complete that request this time. The team will be in touch to help." },
       { id: 'welcome_greeting', paths: ['welcome_greeting'], kind: 'textarea', maxLength: 500, label: 'Welcome greeting (sent when someone opens the chat without typing)',
