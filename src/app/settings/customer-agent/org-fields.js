@@ -71,7 +71,7 @@ export const ORG_FIELD_GROUPS = [
   // paying (chat_booking_unavailable_text stays under Messages above).
   {
     id: 'hatch',
-    title: HATCH_COPY_GROUP_TITLE,
+    title: `${HATCH_COPY_GROUP_TITLE} (un1t.online studios)`,
     fields: HATCH_COPY_FIELDS.filter((f) => f.key !== 'chat_booking_unavailable_text').map((f) => ({
       id: f.key, paths: [f.key], kind: 'text', maxLength: 500, label: f.label, placeholder: f.placeholder, help: f.help,
     })),

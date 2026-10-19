@@ -78,6 +78,13 @@ CREATE TABLE IF NOT EXISTS public.mia_purchase_offers (
   UNIQUE (location_id, un1t_product_row_id)
 );
 
+-- Unindexed-FK advisor: the contact ON DELETE SET NULL and the product ON
+-- DELETE CASCADE each scan their child without these.
+CREATE INDEX IF NOT EXISTS mia_purchase_intents_contact_id
+  ON public.mia_purchase_intents (contact_id);
+CREATE INDEX IF NOT EXISTS mia_purchase_offers_product_row_id
+  ON public.mia_purchase_offers (un1t_product_row_id);
+
 COMMENT ON TABLE public.mia_purchase_intents IS
   'MIAHATCH.4 (mig 752): one row per payment link Mia sent at a un1t.online studio. Partial unique index mia_purchase_intents_one_live = one live link per member. Service role only.';
 COMMENT ON TABLE public.mia_purchase_offers IS

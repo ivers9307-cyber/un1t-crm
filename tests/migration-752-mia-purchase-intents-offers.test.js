@@ -177,6 +177,19 @@ describe('migration 752 — mia_purchase_intents / mia_purchase_offers', () => {
     expect(rows[0].n).toBe(0)
   })
 
+  it('indexes the two foreign keys the advisor flags (contact_id, un1t_product_row_id)', async () => {
+    const { rows } = await db.query(`
+      SELECT tablename, indexname, indexdef FROM pg_indexes
+       WHERE schemaname = 'public'
+         AND indexname IN ('mia_purchase_intents_contact_id', 'mia_purchase_offers_product_row_id')
+       ORDER BY indexname`)
+    expect(rows.map((r) => r.indexname)).toEqual(['mia_purchase_intents_contact_id', 'mia_purchase_offers_product_row_id'])
+    expect(rows[0].tablename).toBe('mia_purchase_intents')
+    expect(rows[0].indexdef).toMatch(/\(contact_id\)/)
+    expect(rows[1].tablename).toBe('mia_purchase_offers')
+    expect(rows[1].indexdef).toMatch(/\(un1t_product_row_id\)/)
+  })
+
   it('file does not touch agent_membership_requests_kind_check (refund_request is D\'s migration)', () => {
     const code = MIG_752.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')
     expect(code).not.toMatch(/agent_membership_requests_kind_check/)

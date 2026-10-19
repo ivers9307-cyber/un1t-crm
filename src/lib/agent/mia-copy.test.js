@@ -32,7 +32,7 @@ describe('MIA_HATCH_COPY', () => {
 })
 
 // MIAHATCH.4 (spec 6.6) — the slice-2 keys, exact.
-export const SLICE2_DEFAULTS = {
+const SLICE2_DEFAULTS = {
   purchase_offer_intro_text: "You've used all your classes. Here's how to keep training with us:",
   purchase_link_text: "Here's your secure payment link for {product}. Once it goes through I'll book you into {class}.",
   trial_used_text: "It looks like you've had your free trial with us before, so here are the ways to keep training:",

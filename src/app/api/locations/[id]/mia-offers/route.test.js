@@ -59,11 +59,14 @@ function makeDb({ failOn = null } = {}) {
   function from(table) {
     if (!t[table]) throw new Error(`unexpected table ${table}`)
     const filters = []
-    let orderCol = null
+    let orderCols = []
     const match = (r) => filters.every((f) => f(r))
     const rows = () => {
       let out = t[table].filter(match)
-      if (orderCol) out = [...out].sort((a, b) => (a[orderCol] > b[orderCol] ? 1 : a[orderCol] < b[orderCol] ? -1 : 0))
+      if (orderCols.length) out = [...out].sort((a, b) => {
+        for (const c of orderCols) if (a[c] !== b[c]) return a[c] > b[c] ? 1 : -1
+        return 0
+      })
       return out
     }
     const chain = {
@@ -71,7 +74,7 @@ function makeDb({ failOn = null } = {}) {
       eq: (c, v) => { filters.push((r) => r[c] === v); return chain },
       in: (c, vs) => { filters.push((r) => vs.includes(r[c])); return chain },
       gt: (c, v) => { filters.push((r) => r[c] > v); return chain },
-      order: (c) => { orderCol = c; return chain },
+      order: (c) => { orderCols.push(c); return chain },
       maybeSingle: () => Promise.resolve({ data: rows()[0] ?? null, error: null }),
       then: (res, rej) => Promise.resolve(
         failOn === `read:${table}` ? { data: null, error: { message: 'boom' } } : { data: rows(), error: null },
@@ -159,6 +162,15 @@ describe('GET /api/locations/[id]/mia-offers', () => {
       id: 'o2', un1t_product_row_id: P3, title: 'Founders', price_cents: 9900, interval: 'month',
       visibility: 'private', private: true, blurb: 'Best value', sort_order: 1, inactive: false,
     })
+  })
+
+  it('offers that share a sort_order come back by id, so the order is stable mid-save', async () => {
+    db.t.mia_purchase_offers.push(
+      { id: 'o-b', location_id: HATCH, un1t_product_row_id: P2, sort_order: 0, blurb: '' },
+      { id: 'o-a', location_id: HATCH, un1t_product_row_id: P1, sort_order: 0, blurb: '' },
+    )
+    const { data } = await (await GET(get(HATCH), props(HATCH))).json()
+    expect(data.offers.map((o) => o.id)).toEqual(['o-a', 'o-b'])
   })
 
   it('GET marks an offer inactive after the product goes inactive', async () => {

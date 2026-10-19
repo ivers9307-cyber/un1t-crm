@@ -34,6 +34,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { miaOffersPutSchema } from '@/lib/schemas'
 import { canEditMiaSettings } from '@/lib/agent/settings-access'
+import { isSellableUn1tProduct } from '@/lib/agent/mia-offer-limits'
 import { UN1T_PRODUCT_ACTIVE_STATUS, UN1T_PRODUCT_PRIVATE_VISIBILITY } from '@/lib/agent/un1t-tools'
 import { logError } from '@/lib/log'
 
@@ -46,7 +47,7 @@ const PRODUCT_COLS = 'id, title, price_cents, billing_interval, status, visibili
 const fail = (status, error, extra = {}) => NextResponse.json({ success: false, error, ...extra }, { status })
 const unreadable = () => fail(500, 'Could not read the offer list.')
 
-const isSellable = (p) => !!p && p.status === UN1T_PRODUCT_ACTIVE_STATUS && Number(p.price_cents) > 0
+const isSellable = isSellableUn1tProduct
 
 // null = the studio is on un1t.online; otherwise the response to return.
 async function requireUn1tStudio(db, locationId) {
@@ -69,6 +70,7 @@ async function readOffers(db, locationId) {
     .select('id, un1t_product_row_id, blurb, sort_order')
     .eq('location_id', locationId)
     .order('sort_order')
+    .order('id')
   if (offersErr) {
     logError('mia-offers', 'offers read failed', { locationId, err: offersErr })
     return { response: unreadable() }
