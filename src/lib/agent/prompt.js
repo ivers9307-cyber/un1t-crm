@@ -162,6 +162,7 @@ function un1tFullLines({ name, url, multiStudio }) {
     '## Classes and booking',
     `You can book and cancel classes at ${who} in chat for a verified member.`,
     listLine,
+    '- Use list_my_upcoming_bookings when a verified member asks what they are booked into.',
     ...bookAndCancel,
   ]).join('\n')
   const where = multiStudio ? `${name || 'the un1t.online studio'} and at the other studio` : who

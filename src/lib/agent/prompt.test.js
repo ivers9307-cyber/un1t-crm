@@ -622,6 +622,17 @@ describe('un1t.online prompt variants', () => {
       expect(render('full', false, null)).toContain('You can book and cancel classes at this studio in chat for a verified member.')
     })
 
+    it('keeps the read variant\'s "what am I booked into" line at a single studio (final review)', () => {
+      const line = '- Use list_my_upcoming_bookings when a verified member asks what they are booked into.'
+      for (const url of [null, 'https://hatch.example.test/book']) {
+        expect(named(false, url)).toContain(line)
+        expect(named(false, url).split(line)).toHaveLength(2)
+      }
+      expect(render('full', false, null)).toContain(line)
+      // The read variant carries it too, unchanged.
+      expect(render('read', false, null)).toContain(line)
+    })
+
     it('says booked and cancelled only when the tool result says so', () => {
       for (const multi of [false, true]) {
         const out = named(multi, null)

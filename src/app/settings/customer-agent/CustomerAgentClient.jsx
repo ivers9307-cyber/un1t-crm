@@ -849,7 +849,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
               <label className="flex items-center gap-3">
                 <input type="checkbox" className="h-4 w-4" checked={settings.un1t_chat_actions_enabled === true}
                   onChange={e => setField('un1t_chat_actions_enabled', e.target.checked)} />
-                <span className="text-sm text-un1t-text font-medium">Mia can book, cancel and take payments in chat at this studio</span>
+                <span className="text-sm text-un1t-text font-medium">Mia can book and cancel classes and pass refund requests to the team in chat at this studio</span>
               </label>
               <p className="text-xs text-un1t-muted mt-1 pl-7">
                 Off: Mia answers questions and shares the booking link, as now. On: on WhatsApp, Mia books and cancels classes and passes refund requests to the team, once un1t.online writes are also switched on for this studio.

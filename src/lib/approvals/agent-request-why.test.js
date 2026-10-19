@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { whyFlagged, customerWords, approvalGrantsTrialCredit } from './agent-request-why'
+import { whyFlagged, customerWords, approvalGrantsTrialCredit, un1tFailureExplanation } from './agent-request-why'
 
 describe('whyFlagged', () => {
   it('translates every routeToReview machine code for class bookings', () => {
@@ -388,5 +388,103 @@ describe('whyFlagged: a manual-timetable booking', () => {
   it('a un1t.online class (un1t:<id>) gets the same book-by-hand copy', () => {
     const un1tRow = { kind: 'class_booking', details: { event_id: 'un1t:7c9e6679', reason: 'processing_error', source: 'start_funnel' } }
     expect(whyFlagged(un1tRow)).toBe(whyFlagged(row('manual_booking')))
+  })
+})
+
+// MIAHATCH.5 final review — Mia's Hatch Street cards (details.provider
+// 'un1t_online', origin 'mia') are explained in un1t.online's terms, never
+// Glofox's, and their machine reasons are never shown as raw codes or as the
+// customer's words.
+describe("whyFlagged: Mia's un1t.online cards", () => {
+  const mia = (kind, details) => ({ kind, details: { provider: 'un1t_online', origin: 'mia', ...details } })
+  const noGlofoxNoDash = (out) => {
+    expect(out).toBeTruthy()
+    expect(out).not.toMatch(/Glofox/)
+    expect(out).not.toMatch(/[–—]/)
+  }
+
+  it('no_credits points at un1t.online credits', () => {
+    const out = whyFlagged(mia('class_booking', { reason: 'no_credits' }))
+    noGlofoxNoDash(out)
+    expect(out).toMatch(/no credits or membership show in un1t\.online/)
+    expect(out).toMatch(/add credits there, then approve to book/)
+  })
+
+  it("booking_rejected carries un1t.online's own words when stored", () => {
+    const out = whyFlagged(mia('class_booking', { reason: 'booking_rejected', result: { code: 'X_REFUSED', message: 'Member is suspended' } }))
+    noGlofoxNoDash(out)
+    expect(out).toMatch(/^un1t\.online refused the booking: "Member is suspended"\./)
+    const bare = whyFlagged(mia('class_booking', { reason: 'booking_rejected', result: { code: 'X_REFUSED', message: null } }))
+    noGlofoxNoDash(bare)
+    expect(bare).toMatch(/^un1t\.online refused the booking\./)
+  })
+
+  it('a draft booking and a draft cancellation say why Mia drafted them', () => {
+    const book = whyFlagged(mia('class_booking', { reason: 'mia_booking' }))
+    noGlofoxNoDash(book)
+    expect(book).toMatch(/Mia drafted this booking because the studio's booking mode needs approval/)
+    expect(book).not.toMatch(/Flagged by the booking pipeline/)
+    const cancel = whyFlagged(mia('class_cancellation', { reason: 'mia_cancellation' }))
+    noGlofoxNoDash(cancel)
+    expect(cancel).toMatch(/Mia drafted this cancellation because the studio's booking mode needs approval/)
+  })
+
+  it('outcome unknown and refused cancellations read in un1t.online terms', () => {
+    for (const [kind, reason] of [['class_booking', 'un1t_outcome_unknown'], ['class_cancellation', 'cancel_outcome_unknown'], ['class_cancellation', 'cancel_rejected']]) {
+      noGlofoxNoDash(whyFlagged(mia(kind, { reason })))
+    }
+    expect(whyFlagged(mia('class_cancellation', { reason: 'cancel_rejected', result: { message: 'Too late to cancel' } })))
+      .toMatch(/^un1t\.online refused the cancellation: "Too late to cancel"\./)
+  })
+
+  it('an unknown Mia reason is never a raw code and never Glofox', () => {
+    const out = whyFlagged(mia('class_booking', { reason: 'some_new_code' }))
+    noGlofoxNoDash(out)
+    expect(out).not.toMatch(/some_new_code/)
+  })
+
+  it('a Glofox card keeps its Glofox copy (no provider)', () => {
+    expect(whyFlagged({ kind: 'class_booking', details: { reason: 'no_credits' } })).toMatch(/Glofox/)
+    expect(whyFlagged({ kind: 'class_booking', details: { reason: 'booking_rejected' } })).toMatch(/^Glofox rejected/)
+    expect(whyFlagged({ kind: 'class_cancellation', details: { reason: 'injured' } })).toBeNull()
+  })
+
+  it("customerWords never quotes a Mia card's machine reason", () => {
+    expect(customerWords(mia('class_cancellation', { reason: 'mia_cancellation' }))).toBeNull()
+    expect(customerWords({ kind: 'class_cancellation', details: { reason: 'injured knee' } })).toBe('injured knee')
+  })
+})
+
+describe("un1tFailureExplanation: a failed Mia un1t.online card", () => {
+  const failed = (result, extra = {}) => ({ status: 'failed', details: { provider: 'un1t_online', origin: 'mia', result, ...extra } })
+
+  it('MIA_NO_CREDITS, the account codes and NOT_EXECUTABLE_UN1T read in un1t.online terms', () => {
+    expect(un1tFailureExplanation(failed({ ok: false, message_code: 'MIA_NO_CREDITS' }))).toMatch(/No credits show in un1t\.online/)
+    expect(un1tFailureExplanation(failed({ ok: false, message_code: 'ACCOUNT_MISMATCH' }))).toMatch(/un1t\.online account/)
+    expect(un1tFailureExplanation(failed({ ok: false, message_code: 'UN1T_ACCOUNT_UNREADABLE' }))).toMatch(/could not be read/)
+    expect(un1tFailureExplanation(failed({ ok: false, message_code: 'NOT_EXECUTABLE_UN1T' }, { origin: undefined }))).toMatch(/in un1t\.online/)
+    for (const code of ['MIA_NO_CREDITS', 'ACCOUNT_MISMATCH', 'UN1T_ACCOUNT_UNREADABLE', 'NOT_EXECUTABLE_UN1T']) {
+      const out = un1tFailureExplanation(failed({ ok: false, message_code: code }))
+      expect(out, code).not.toMatch(/Glofox|[–—]/)
+    }
+  })
+
+  it("the decide card's post-approve outcome (executed only, no provider) still reads the un1t codes", () => {
+    expect(un1tFailureExplanation({ status: 'failed', details: { result: { ok: false, message_code: 'MIA_NO_CREDITS' } } })).toMatch(/un1t\.online/)
+    // ACCOUNT_MISMATCH without a provider is a Glofox card: left to the shared copy.
+    expect(un1tFailureExplanation({ status: 'failed', details: { result: { ok: false, message_code: 'ACCOUNT_MISMATCH' } } })).toBeNull()
+  })
+
+  it("another failed Mia card shows D's staff words; Glofox cards and non-failed rows are left alone", () => {
+    expect(un1tFailureExplanation(failed({ ok: false, code: 'class_unavailable', message: 'This card names no un1t.online class.' })))
+      .toBe('This card names no un1t.online class.')
+    expect(un1tFailureExplanation({ status: 'failed', details: { result: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } } })).toBeNull()
+    expect(un1tFailureExplanation({ status: 'actioned', details: { provider: 'un1t_online', origin: 'mia', result: { message_code: 'MIA_NO_CREDITS' } } })).toBeNull()
+  })
+
+  it('explainFailure (the web cards) prefers it, and falls back to the shared copy', async () => {
+    const { explainFailure } = await import('./event-move-card')
+    expect(explainFailure(failed({ ok: false, message_code: 'MIA_NO_CREDITS' }))).toMatch(/No credits show in un1t\.online/)
+    expect(explainFailure({ status: 'failed', details: { result: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } } })).toMatch(/Glofox refused the booking/)
   })
 })

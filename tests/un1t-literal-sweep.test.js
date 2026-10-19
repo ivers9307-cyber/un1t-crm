@@ -272,6 +272,9 @@ const KEEP = {
   // MIAHATCH.2 — exported identifiers for the un1t.online tool blocks, never
   // customer or staff copy (MIAHATCH.5 adds block 3b's).
   'src/lib/agent/auto-reply.js': ['CACHED_UN1T_READ_DUAL_TOOLS', 'CACHED_UN1T_READ_TOOLS', 'CACHED_UN1T_FULL_TOOLS'],
+  // MIAHATCH.5 — the un1t.online mirror's booked status (un1t-tools.js), an
+  // identifier the suggest path filters on, never copy.
+  'src/lib/agent/approval-suggest.js': ['UN1T_BOOKED_STATUS'],
 }
 
 describe('UN1T literal sweep (W1.S*)', () => {

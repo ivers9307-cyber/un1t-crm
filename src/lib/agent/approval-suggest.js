@@ -183,7 +183,7 @@ export async function composeAgentText(location, settings, historyRows, instruct
 // suggest path, and never Glofox's columns (glofox_membership_state,
 // recent_bookings), which say nothing about a un1t.online member. Best-effort
 // like the rest of this module: an unreadable mirror leaves the line out.
-const UN1T_SUGGEST_BOOKINGS = 200
+const SUGGEST_BOOKINGS_CAP = 200
 
 async function un1tCardContext(db, row, zone) {
   const out = {}
@@ -223,7 +223,7 @@ async function un1tCardContext(db, row, zone) {
     .eq('un1t_user_id', un1tUserId)
     .eq('status', UN1T_BOOKED_STATUS)
     .order('remote_created_at', { ascending: false, nullsFirst: false })
-    .limit(UN1T_SUGGEST_BOOKINGS)
+    .limit(SUGGEST_BOOKINGS_CAP)
   if (bErr) {
     logWarn('mia-un1t', 'suggest bookings read failed', { locationId: row.location_id, op: 'suggest_bookings', status: null, code: bErr.code ?? null })
     return out
