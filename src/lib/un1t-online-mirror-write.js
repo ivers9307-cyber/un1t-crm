@@ -67,14 +67,57 @@ function meta({ locationId, op, ledgerId }, code) {
 export async function applyUn1tWriteToMirror(db, args, { read, now = () => new Date() } = {}) {
   const op = args?.op
   if (op === 'checkout') return { ok: true }
-  if (op === 'trial') throw new TypeError('applyUn1tWriteToMirror: the trial mirror arrives with grantTrial (Task 10)')
-  if (op !== 'book' && op !== 'cancel' && op !== 'create_client') {
+  if (op !== 'book' && op !== 'cancel' && op !== 'create_client' && op !== 'trial') {
     throw new TypeError(`applyUn1tWriteToMirror: unknown op '${op}'`)
   }
   if (!args.locationId) throw new TypeError('applyUn1tWriteToMirror: locationId is required')
   const stamp = now().toISOString()
   if (op === 'create_client') return mirrorCreate(db, args, stamp)
+  if (op === 'trial') return mirrorTrial(db, args, { read, stamp })
   return mirrorBooking(db, args, { read, stamp })
+}
+
+/**
+ * UN1TWRITE.10 — a granted trial. `data` = { transactionId?, product? (the
+ * live un1t.online product: title, type, price_currency), credits? (a
+ * credits answer already read, so it is not read twice) }. A transaction id
+ * inserts its un1t_transactions row (€0, crm_written_at; the next sync's
+ * fuller row wins under the mig 744 rank trigger); every grant refreshes the
+ * client's credits.
+ */
+async function mirrorTrial(db, args, { read, stamp }) {
+  const { locationId, contactId, un1tUserId, data } = args
+  let ok = true
+  const txId = idText(data?.transactionId)
+  if (txId) {
+    const product = isObj(data?.product) ? data.product : {}
+    const row = {
+      location_id: locationId,
+      un1t_id: txId,
+      un1t_user_id: un1tUserId ?? null,
+      contact_id: contactId ?? null,
+      product_id: idText(args.productId) ?? idText(product.id),
+      product_title: hasText(product.title) ? product.title.trim() : null,
+      amount_cents: 0,
+      currency: hasText(product.price_currency) ? product.price_currency.trim().toUpperCase() : null,
+      type: 'one_time',
+      product_type: hasText(product.type) ? product.type.trim() : null,
+      raw: { source: 'crm_write' },
+      crm_written_at: stamp,
+    }
+    try {
+      const { error } = await db.from('un1t_transactions').insert(row)
+      if (error && error.code !== '23505') {
+        ok = false
+        logError(LOG_MODULE, 'mirror: un1t_transactions insert failed', meta(args, error.code ?? null))
+      }
+    } catch {
+      ok = false
+      logError(LOG_MODULE, 'mirror: un1t_transactions insert threw', meta(args, 'threw'))
+    }
+  }
+  const credited = await refreshCredits(db, args, { read, stamp, ledger: data?.credits })
+  return { ok: ok && credited }
 }
 
 async function mirrorBooking(db, args, { read, stamp }) {
@@ -167,18 +210,20 @@ function bookingWrite(source, { locationId, requestedAt, stamp, fromReread }) {
 }
 
 // One GET /credits/ledgers/{userId}/{studioId} → un1t_clients credit columns.
-async function refreshCredits(db, args, { read, stamp }) {
+async function refreshCredits(db, args, { read, stamp, ledger: given = undefined }) {
   const { locationId, un1tUserId, studioId } = args
   if (!un1tUserId || !studioId) {
     logError(LOG_MODULE, 'mirror: credits refresh needs the user and the studio', meta(args, 'credits_args_missing'))
     return false
   }
-  let ledger
-  try {
-    ledger = await read(`/credits/ledgers/${encodeURIComponent(un1tUserId)}/${encodeURIComponent(studioId)}`)
-  } catch (err) {
-    logError(LOG_MODULE, 'mirror: credits read failed', meta(args, err?.code ?? 'credits_read_failed'))
-    return false
+  let ledger = given
+  if (ledger === undefined) {
+    try {
+      ledger = await read(`/credits/ledgers/${encodeURIComponent(un1tUserId)}/${encodeURIComponent(studioId)}`)
+    } catch (err) {
+      logError(LOG_MODULE, 'mirror: credits read failed', meta(args, err?.code ?? 'credits_read_failed'))
+      return false
+    }
   }
   const patch = { crm_written_at: stamp }
   const balance = isObj(ledger) && typeof ledger.balance === 'number' && Number.isFinite(ledger.balance) ? Math.round(ledger.balance) : null

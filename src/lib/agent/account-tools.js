@@ -25,7 +25,7 @@ import { formatClassTime } from './dublin-format'
 import { DEFAULT_TZ } from '@/lib/location-time'
 import { escapeLikePattern } from '../like-escape'
 import { linkedAccountsForContact, hasBookableMembership, electWriteAccount } from '@/lib/person-accounts'
-import { refuseAtNoBookingStudio } from './tool-capability'
+import { refuseToolForTurn } from './tool-capability'
 
 // ── Anthropic tool definitions ──────────────────────────────────────
 export const ACCOUNT_TOOLS = [
@@ -629,6 +629,9 @@ async function getMyPaymentReminder(db, { verifiedId, locationId }) {
   }
 }
 
+// MIAHATCH.2 — the account reads that have a un1t.online source.
+const UN1T_ACCOUNT_READS = new Set(['get_my_membership', 'get_my_next_class', 'get_my_recent_attendance', 'get_my_payment_reminder'])
+
 // ── executor (IO) ───────────────────────────────────────────────────
 // ctx: { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId, channel }
 export async function executeAccountTool(toolName, input, ctx) {
@@ -636,7 +639,7 @@ export async function executeAccountTool(toolName, input, ctx) {
 
   // MIAORG.1 Task 5 — defence in depth: a Glofox-backed tool at a studio whose
   // source takes no bookings (never offered there) is refused before any read.
-  const refused = refuseAtNoBookingStudio(toolName, ctx)
+  const refused = refuseToolForTurn(toolName, ctx)
   if (refused) return refused
 
   if (toolName === 'verify_identity') {
@@ -722,6 +725,15 @@ export async function executeAccountTool(toolName, input, ctx) {
   const verifiedId = verifiedContactId
   if (!verifiedId) {
     return { error: 'not_verified', message: 'Identity not verified yet. Call verify_identity first.' }
+  }
+
+  // MIAHATCH.2 — on a turn whose tool block reads un1t.online (ctx.turn.block
+  // starts with `un1t_`, set by the runner) the account reads answer
+  // from the answerable studios. A turn without one is untouched; the module
+  // loads lazily so a Glofox turn never imports it.
+  if (UN1T_ACCOUNT_READS.has(toolName) && String(ctx.turn?.block || '').startsWith('un1t_')) {
+    const { executeUn1tRead } = await import('./un1t-tools')
+    return executeUn1tRead(toolName, input, ctx, ctx.turn.answerable)
   }
 
   if (toolName === 'get_my_membership') {
@@ -861,6 +873,12 @@ export async function executeAccountTool(toolName, input, ctx) {
     // outcome 'none' (or an unreadable group) leaves targetContactId at
     // verifiedId — today's behaviour, unchanged: never a confident guess
     // when there is nothing to elect from.
+
+    // MIAHATCH.2 — a dual-studio member's request names the other studio
+    // (set by the turn, turn-studios.js executorCtxFor). Ids and a flag only.
+    if (ctx.membershipRequestDetails && typeof ctx.membershipRequestDetails === 'object') {
+      Object.assign(details, ctx.membershipRequestDetails)
+    }
 
     const { data: inserted, error } = await db.from('agent_membership_requests').insert({
       location_id: locationId,

@@ -730,14 +730,19 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(bad).toEqual([])
   })
 
-  it('the scan really sees the ops module\'s five sends (an empty result is not a broken scanner)', () => {
+  it('the scan really sees the ops module\'s seven sends (an empty result is not a broken scanner)', () => {
     const ops = sendFiles().find((e) => e.key === OPS)
     expect(ops).toBeTruthy()
     const calls = writerSendCalls(ops.sf, { writeSide: true })
     expect(calls.map((c) => `${c.verb} ${c.path}`).sort()).toEqual([
-      'PATCH /bookings/:id/cancel', 'POST /auth/forgot-password', 'POST /bookings', 'POST /purchases/checkout', 'POST /users/clients',
+      'PATCH /bookings/:id/cancel', 'POST /auth/forgot-password', 'POST /bookings', 'POST /purchases/charge',
+      'POST /purchases/checkout', 'POST /purchases/checkout', 'POST /users/clients',
     ])
     expect(calls.every((c) => c.optsReadable && c.op != null && c.policy != null)).toBe(true)
+    // UN1TWRITE.10: the trial's charge and free checkout are op trial, never re-sent.
+    const trial = calls.filter((c) => c.op === 'trial')
+    expect(trial.map((c) => `${c.verb} ${c.path}`).sort()).toEqual(['POST /purchases/charge', 'POST /purchases/checkout'])
+    expect(trial.every((c) => c.policy === 'never')).toBe(true)
   })
 
   it("the transport's own allowlist is pinned: exactly the six writes, and the banned body keys it refuses", () => {
@@ -771,7 +776,7 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(banned).toEqual(['bypassCredit', 'forceRefund', 'promoCode'])
   })
 
-  it('/purchases/charge appears only inside the function grantTrial (PR 1: nowhere but the transport allowlist)', () => {
+  it('/purchases/charge appears only inside the function grantTrial (and the transport allowlist)', () => {
     const bad = filesMentioning(/purchases(\/|\\\/)charge/).flatMap((e) => chargeOutsideGrantTrial(e.key, e.sf))
     expect(bad).toEqual([])
   })
