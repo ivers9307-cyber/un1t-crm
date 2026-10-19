@@ -40,6 +40,7 @@ import { logError } from '@/lib/log'
 import { fakeDb, queriesOf } from '@/lib/time-off.test-helpers'
 import { MEMBERSHIP_SOURCES } from '@/lib/membership/source'
 import { ESTATE_2026_10, ESTATE_2026_10_17, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
+import { mapUn1tBookingToClassBooking } from '@/lib/un1t-online-bookings'
 
 const HATCH_ID = ESTATE_2026_10[1].id
 const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } })
@@ -108,6 +109,24 @@ describe('GET /api/cron/credit-attendance — un1t.online hard-off (UN1TBOOK.8, 
     expect(finalizeSessionRewards).not.toHaveBeenCalled()
     expect(out).toMatchObject({ success: true, scanned: 1, credited: 0, skipped_un1t_online: 1 })
     expect(stampHeartbeat).toHaveBeenCalledWith('credit-attendance')
+  })
+
+  it('UN1TBOOK.15-18: every row the projection writes (real mapper: ATTENDED, NO_SHOW, BOOKED, a CRM write-through) is never credited, filters ignored and bookings forced true', async () => {
+    h.un1tBookings = true
+    const startsAt = new Date(Date.now() - 3 * 3600_000).toISOString()
+    const projected = [['attended', 'sync'], ['no_show', 'sync'], ['booked', 'sync'], ['attended', 'crm']].map(([status, writtenBy], i) => ({
+      id: `b-proj-${i}`,
+      ...mapUn1tBookingToClassBooking(
+        { un1t_id: `bk-${i}`, event_id: 'ev-1', status, contact_id: `c-proj-${i}`, has_guest: false, source: 'app', credit_charged: true, remote_updated_at: null },
+        { locationId: HATCH_ID, event: { title: 'HIIT', starts_at: startsAt }, memberName: 'A Member', nowIso: new Date().toISOString(), writtenBy },
+      ),
+    }))
+    expect(projected.filter((r) => r.attended)).toHaveLength(2)
+    h.db = dbFor(ESTATE_2026_10_17, { bookings: [booking('b1', STILLORGAN_ID), ...projected] })
+    const out = await (await GET(req())).json()
+    expect(creditedLocations()).toEqual([STILLORGAN_ID])
+    expect(finalizeSessionRewards).toHaveBeenCalledTimes(1)
+    expect(out).toMatchObject({ success: true, credited: 1, skipped_un1t_online: projected.length })
   })
 
   it('a glofox-tagged row at a un1t_online studio is not credited and counts skipped_un1t_online', async () => {
