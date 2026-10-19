@@ -1,7 +1,7 @@
-// MIAHATCH.6 (Task 23) — behavioural test for migration 753 (the 642 pattern).
+// MIAHATCH.6 (Task 23) — behavioural test for migration 755 (the 642 pattern).
 //
 // Boots PGlite, runs the REAL mig 053 (cron_heartbeats + cron_health), adds mig
-// 315's last_outcome column, runs 753, and proves:
+// 315's last_outcome column, runs 755, and proves:
 //   * the row exists under the name the route stamps (read from the route);
 //   * one missed tick never pages, two in a row do (via cron_health);
 //   * replay RE-ARMS (ON CONFLICT DO UPDATE) and keeps last_outcome;
@@ -15,7 +15,7 @@ import { PGlite } from '@electric-sql/pglite'
 const root = path.resolve(import.meta.dirname, '..')
 const read = (name) => readFileSync(path.join(root, 'supabase/migrations', name), 'utf8')
 const MIG_053 = read('053_cron_heartbeats.sql')
-const MIG_753 = read('753_mia_purchase_intents_heartbeat.sql')
+const MIG_755 = read('755_mia_purchase_intents_heartbeat.sql')
 const ROUTE = readFileSync(path.join(root, 'src/app/api/cron/mia-purchase-intents/route.js'), 'utf8')
 const NAME = 'mia-purchase-intents'
 
@@ -38,11 +38,11 @@ beforeEach(async () => {
 
 afterEach(async () => { await db?.close() })
 
-describe('mig 753 seeds the watcher row', () => {
+describe('mig 755 seeds the watcher row', () => {
   it('under the name the route stamps, on the */5 cadence, born healthy', async () => {
     expect(ROUTE).toMatch(/const HEARTBEAT = 'mia-purchase-intents'/)
     expect(ROUTE).toMatch(/stampHeartbeat\(HEARTBEAT, counts\)/)
-    await runSql(MIG_753)
+    await runSql(MIG_755)
     expect(await row()).toMatchObject({
       expected_interval_seconds: 300, grace_seconds: 600,
       notes: 'MIAHATCH.6 watcher: settles paid Mia payment links from the un1t mirror',
@@ -51,22 +51,22 @@ describe('mig 753 seeds the watcher row', () => {
   })
 
   it('says in its header that it is applied right AFTER the deploy', () => {
-    expect(MIG_753).toMatch(/APPLY THIS MIGRATION RIGHT AFTER THE MIAHATCH\.6 CODE DEPLOYS/)
+    expect(MIG_755).toMatch(/APPLY THIS MIGRATION RIGHT AFTER THE MIAHATCH\.6 CODE DEPLOYS/)
   })
 
   it('one missed tick never pages; 15 minutes without a clean run does', async () => {
-    await runSql(MIG_753)
+    await runSql(MIG_755)
     expect(await staleAfter(10 * 60 + 60)).toBe(false)
     expect(await staleAfter(14 * 60)).toBe(false)
     expect(await staleAfter(16 * 60)).toBe(true)
   })
 
   it('replay re-arms a stale row and keeps last_outcome', async () => {
-    await runSql(MIG_753)
+    await runSql(MIG_755)
     const outcome = { settled: { not_paid: 1 }, stuck_marked: 0, double_payment_cards: 0, expired: 0, errors: 0 }
     await db.query(`UPDATE public.cron_heartbeats SET last_outcome = $2::jsonb, grace_seconds = 60 WHERE name = $1`, [NAME, JSON.stringify(outcome)])
     expect(await staleAfter(30 * 60)).toBe(true)
-    await runSql(MIG_753)
+    await runSql(MIG_755)
     const r = await row()
     expect(r).toMatchObject({ expected_interval_seconds: 300, grace_seconds: 600, last_outcome: outcome })
     expect(Date.now() - new Date(r.last_ok_at).getTime()).toBeLessThan(5_000)
@@ -83,7 +83,7 @@ describe('mig 753 seeds the watcher row', () => {
       CREATE TRIGGER bend_grace BEFORE INSERT OR UPDATE ON public.cron_heartbeats
         FOR EACH ROW EXECUTE FUNCTION public.bend_grace();
     `)
-    await expect(runSql(MIG_753)).rejects.toThrow(/mig 753: cron_heartbeats row mia-purchase-intents .*300.*600/)
+    await expect(runSql(MIG_755)).rejects.toThrow(/mig 755: cron_heartbeats row mia-purchase-intents .*300.*600/)
     expect(await row()).toBeUndefined()
   })
 })

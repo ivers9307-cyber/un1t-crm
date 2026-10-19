@@ -18,7 +18,7 @@
 //   4. the silent expiry sweep (expireStaleIntents).
 // Off until intents exist: an empty run is four cheap reads.
 //
-// Heartbeat 'mia-purchase-intents' (mig 753, 300 + 600). Stamped when the run
+// Heartbeat 'mia-purchase-intents' (mig 755, 300 + 600). Stamped when the run
 // completed, with counts only (no ids, no PII); a run with nothing to do is
 // healthy. Per-intent failures are counts, never a missed stamp. A step that
 // could not read its list (or an expiry sweep that failed) means the run did

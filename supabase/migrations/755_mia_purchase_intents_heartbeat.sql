@@ -1,4 +1,4 @@
--- 753 — MIAHATCH.6 (Task 23): heartbeat row for the Mia purchase-intent
+-- 755 — MIAHATCH.6 (Task 23): heartbeat row for the Mia purchase-intent
 -- watcher (Vercel, */5 * * * *, src/app/api/cron/mia-purchase-intents/route.js).
 --
 -- The watcher settles paid Mia payment links from the un1t mirror (zero
@@ -43,7 +43,7 @@ begin
     perform 1 from public.cron_heartbeats h
      where h.name = e.name and h.expected_interval_seconds = e.interval_s and h.grace_seconds = e.grace_s;
     if not found then
-      raise exception 'mig 753: cron_heartbeats row % did not end up on % + %', e.name, e.interval_s, e.grace_s;
+      raise exception 'mig 755: cron_heartbeats row % did not end up on % + %', e.name, e.interval_s, e.grace_s;
     end if;
   end loop;
 end $$;
