@@ -75,9 +75,9 @@ describe('maybeSendCampaignWhatsappWelcome — happy path', () => {
       contact: { id: 'c1', first_name: 'Sarah', phone: '0871234567', wa_phone: null }, templateName: 'meta_ad_whatsapp_lead',
     })
     expect(r).toEqual({ sent: true, messageId: 'wamid.TEST' })
-    // Irish local 087… is normalised to +353…
+    // Irish local 087… is normalised to the stored wa_phone form (353…, no '+')
     expect(sendTemplateMessage).toHaveBeenCalledWith(
-      '+353871234567', 'meta_ad_whatsapp_lead', 'en', expect.any(Array), { locationId: 'a0000000-0000-0000-0000-000000000001' },
+      '353871234567', 'meta_ad_whatsapp_lead', 'en', expect.any(Array), { locationId: 'a0000000-0000-0000-0000-000000000001' },
     )
   })
 })
@@ -211,7 +211,7 @@ describe('maybeSendCampaignWhatsappWelcome — purpose template', () => {
     // The campaign's name is only the default for a studio that picked nothing.
     expect(resolvePurposeTemplate).toHaveBeenCalledWith(expect.anything(), HATCH, 'meta_ad_welcome', { fallbackName: 'meta_ad_whatsapp_lead' })
     expect(sendTemplateMessage).toHaveBeenCalledWith(
-      '+353871234567', 'hatch_welcome', 'en', expect.any(Array), { locationId: HATCH, businessAccountId: 'WABA-9' },
+      '353871234567', 'hatch_welcome', 'en', expect.any(Array), { locationId: HATCH, businessAccountId: 'WABA-9' },
     )
   })
 
@@ -249,5 +249,21 @@ describe('maybeSendCampaignWhatsappWelcome — purpose template', () => {
     const r = await maybeSendCampaignWhatsappWelcome({ db, locationId: HATCH, contact, templateName: 'meta_ad_whatsapp_lead', purpose: 'meta_ad_welcome' })
     expect(r.sent).toBe(true)
     expect(sendTemplateMessage.mock.calls[0][1]).toBe('meta_ad_whatsapp_lead')
+  })
+})
+
+describe('maybeSendCampaignWhatsappWelcome — WAPHONE.1: the contact\'s WhatsApp number', () => {
+  const send = (contact) => maybeSendCampaignWhatsappWelcome({
+    db: makeDb(APPROVED), locationId: 'L', contact, templateName: 'meta_ad_whatsapp_lead',
+  })
+  it('a stored wa_phone wins over a different phone', async () => {
+    await send({ id: 'c1', first_name: 'Sarah', phone: '0871234567', wa_phone: '447700900123' })
+    expect(sendTemplateMessage.mock.calls[0][0]).toBe('447700900123')
+  })
+  it('a +-prefixed foreign mobile maps; a bare foreign number does not', async () => {
+    await send({ id: 'c1', first_name: 'Sarah', phone: '+380 50 123 4567', wa_phone: null })
+    expect(sendTemplateMessage.mock.calls[0][0]).toBe('380501234567')
+    expect(await send({ id: 'c1', first_name: 'Sarah', phone: '3174278753', wa_phone: null }))
+      .toEqual({ sent: false, reason: 'unnormalisable_phone' })
   })
 })
