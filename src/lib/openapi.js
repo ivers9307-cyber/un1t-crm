@@ -10809,7 +10809,12 @@ registry.registerPath({
     'carries `write`: the switch, the trial product choices and the token\'s missing write permissions.',
   request: {
     params: z.object({ id: uuidLike }),
-    body: { content: { 'application/json': { schema: z.object({ writes_enabled: z.boolean().optional(), trial_product_id: z.string().nullable().optional() }) } } },
+    body: { content: { 'application/json': { schema: z.object({
+      writes_enabled: z.boolean().optional(), trial_product_id: z.string().nullable().optional(),
+      // UN1TWRITE.24 — funnel_enabled needs writes on (400 "Turn writes on first.").
+      funnel_enabled: z.boolean().optional(), hidden_class_keywords: z.string().optional(),
+      un1t_sends_welcome: z.boolean().optional(), un1t_welcome_sets_login: z.boolean().optional(), un1t_sends_booking_confirmation: z.boolean().optional(),
+    }) } } },
   },
   responses: {
     200: { description: '{ write: { writes_enabled, trial_product_id } }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },

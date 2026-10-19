@@ -151,16 +151,24 @@ export async function findCancelState(writer, { bookingId, un1tUserId } = {}) {
 }
 
 /**
- * Every un1t.online client whose email is this one: a full walk of
+ * The most pages an email walk of `GET /users/clients` may read (100 clients
+ * a page, one budget slot each): Hatch has two pages today, and an unbounded
+ * walk could spend the studio's whole 30/min write budget (UN1TWRITE.20).
+ */
+export const UN1T_CLIENT_WALK_MAX_PAGES = 8
+
+/**
+ * Every un1t.online client whose email is this one: a walk of
  * `GET /users/clients` (no search parameter exists, so the address never goes
- * in a URL), compared trimmed, lower-cased and exact. Throws when the walk
- * fails or is cut short: "could not look" is never "no match".
+ * in a URL), compared trimmed, lower-cased and exact, at most
+ * UN1T_CLIENT_WALK_MAX_PAGES pages. Throws when the walk fails or is cut
+ * short (code 'truncated'): "could not look" is never "no match".
  * @returns {Promise<{ matches: string[] }>}
  */
-export async function findClientByEmail(writer, email) {
+export async function findClientByEmail(writer, email, { maxPages = UN1T_CLIENT_WALK_MAX_PAGES } = {}) {
   const want = normEmail(email)
   if (!want) throw new TypeError('findClientByEmail: email is required')
-  const rows = await writer.readAll('/users/clients')
+  const rows = await writer.readAll('/users/clients', { maxPages })
   const matches = new Set()
   for (const r of Array.isArray(rows) ? rows : []) {
     if (isObj(r) && normEmail(r.email) === want && idText(r.id)) matches.add(idText(r.id))

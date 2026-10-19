@@ -139,3 +139,14 @@ export async function fileRefundCard(db, args = {}) {
     return { approvalId: null }
   }
 }
+
+/**
+ * UN1TWRITE.23 — funnel card reasons whose approval executes nothing: staff
+ * sorted the account or booking in un1t.online by hand, and approving
+ * records it (like manual_booking). Here, not in the executor, so the route
+ * can tell a record-only card apart without reaching the write side.
+ */
+export const UN1T_RECORD_ONLY_REASONS = Object.freeze(new Set([
+  'account_ambiguous', 'un1t_email_in_use_elsewhere', 'un1t_link_conflict', 'un1t_trial_used',
+  'terms_not_accepted', 'un1t_funnel_off', 'class_unavailable', 'no_email',
+]))

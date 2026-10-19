@@ -14,7 +14,8 @@ import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { hasBookableMembership, personRowsForContact, corroborated, reusableSibling, electWriteAccount, chunkIds } from '@/lib/person-accounts'
 import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
 import { sendCtwaConversion, sendWebsiteConversion } from '@/lib/meta-capi'
-import { isHandBookedEventId } from '@/lib/manual-timetable'
+import { isHandBookedEventId, isManualEventId, isUn1tEventId } from '@/lib/manual-timetable'
+import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { logWarn } from '@/lib/log'
 import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 
@@ -34,6 +35,7 @@ function requestZone(db, request) {
   return getLocationZone(db, request?.location_id).catch(() => DEFAULT_TZ)
 }
 const MAX_ATTEMPTS = CLASS_BOOKING_MAX_ATTEMPTS // one constant with the queue and the card copy
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 async function setStatus(db, id, fields) {
   try { await db.from('class_booking_requests').update(fields).eq('id', id) } catch (e) { logWarn('cbp', 'status update failed', { err: e }) }
@@ -78,7 +80,11 @@ async function readCredits(creds, memberId) {
 // exhausts its retries on a THROW lands here too, so staff get a card rather
 // than a bare needs_review nobody is shown. Also run by the cron's reaper for
 // rows stuck in 'processing' past the attempt cap.
-export async function routeToReview(db, request, reason, { personContactIds = null, executingContactId = null, electedMemberId = null, creditUnreadAccounts = null, trialGrant = null } = {}) {
+// UN1TWRITE.22 — provider: 'un1t_online' marks a card the un1t.online
+// executor runs (details.provider); rowStatus / rowLastError let a
+// record-only card leave the queue row 'failed' with its own reason (the
+// trial-used email). Existing callers pass neither and are unchanged.
+export async function routeToReview(db, request, reason, { personContactIds = null, executingContactId = null, electedMemberId = null, creditUnreadAccounts = null, trialGrant = null, provider = null, rowStatus = 'needs_review', rowLastError = null } = {}) {
   let approvalId = null
   const zone = await requestZone(db, request)
   // A row that ALREADY names a card keeps it while that card is still pending
@@ -141,6 +147,7 @@ export async function routeToReview(db, request, reason, { personContactIds = nu
           // ISO start for the mobile queue's countdown chip (class_time is a label).
           starts_at: request.starts_at || null,
           mode: 'draft', source: 'start_funnel', reason,
+          ...(provider ? { provider } : {}),
           // PERSON-ACCT.9 — the row is FILED against the funnel contact
           // (attribution: ctwa_clid, and the phone the customer just typed is
           // where the confirmation goes), but the write may belong to a
@@ -183,7 +190,7 @@ export async function routeToReview(db, request, reason, { personContactIds = nu
     await setStatus(db, request.id, { status: next, last_error: `review_unavailable:${reason}` })
     return { outcome: next === 'failed' ? 'failed' : 'needs_review', detail: `review_unavailable:${reason}` }
   }
-  await setStatus(db, request.id, { status: 'needs_review', last_error: reason, approval_request_id: approvalId })
+  await setStatus(db, request.id, { status: rowStatus, last_error: rowLastError ?? reason, approval_request_id: approvalId })
   // APPROVALS-STUDIO.1 — a review item is a customer waiting; ping the
   // approvers. Deduped per (request, recipient), so the reuse-existing
   // path above can't double-notify. Best-effort.
@@ -215,6 +222,31 @@ export async function processClassBookingRequest(db, request) {
     // here. It goes straight to staff, who create the account and the booking
     // by hand and then approve the card to record it. HATCHSTART.1: so is a
     // class off a un1t.online studio's synced timetable ('un1t:' ids).
+    //
+    // UN1TWRITE.22 — at a un1t.online studio with the funnel on, a class off
+    // its synced timetable is booked by the un1t.online processor. With the
+    // funnel off a 'un1t:' id is still booked by hand (a request filed before
+    // the switch flips is never lost), and any other id gets a card. A failed
+    // settings read throws: the queue's retry signal.
+    if (!isManualEventId(request.glofox_event_id)) {
+      let un1t
+      try {
+        un1t = await readUn1tWriteSettings(db, request.location_id)
+      } catch (e) {
+        // A bare uuid is only ever a un1t.online class: its cap card must run
+        // the un1t.online executor. A 'un1t:' id falls back to the manual record.
+        if (UUID_RE.test(String(request.glofox_event_id || ''))) e.reviewOptions = { provider: 'un1t_online' }
+        throw e
+      }
+      if (un1t.membershipSource === 'un1t_online') {
+        const bareUuid = UUID_RE.test(String(request.glofox_event_id || ''))
+        if (un1t.settings.funnelEnabled && (isUn1tEventId(request.glofox_event_id) || bareUuid)) {
+          const { processUn1tClassBookingRequest } = await import('@/lib/un1t-online-booking-processor')
+          return processUn1tClassBookingRequest(db, request, { settings: un1t.settings, studioName: un1t.studioName, organizationId: un1t.organizationId })
+        }
+        if (bareUuid) return routeToReview(db, request, 'un1t_funnel_off', { provider: 'un1t_online' })
+      }
+    }
     if (isHandBookedEventId(request.glofox_event_id)) return routeToReview(db, request, 'manual_booking')
     await setStatus(db, request.id, { status: 'failed', last_error: 'glofox_not_configured' })
     return { outcome: 'failed', detail: 'glofox_not_configured' }
