@@ -853,9 +853,27 @@ export async function un1tCancelBooking(ctx, input, studio) {
 // ── request_refund ──────────────────────────────────────────────────
 
 /**
+ * The originRef of a Mia refund card (Ruling 27). D's fileRefundCard dedupes
+ * pending cards on details->>origin_ref, so the ref is keyed per booking:
+ * `<conversationId>:<bare booking id | none>`. A repeat about the same
+ * booking in the same chat reuses the card; another booking files its own.
+ * Never null (a null ref would match any staff or funnel card with none):
+ * with no conversation it is `mia-noconv:<contact or un1t user>:<booking | none>`,
+ * a prefix no other filer uses. Pure.
+ *
+ * @param {{ conversationId?: string|null, contactId?: string|null, un1tUserId?: string|null, bookingId?: string|null }} args
+ * @returns {string}
+ */
+export function refundOriginRef({ conversationId = null, contactId = null, un1tUserId = null, bookingId = null } = {}) {
+  const booking = bookingId || 'none'
+  if (conversationId) return `${conversationId}:${booking}`
+  return `mia-noconv:${contactId || un1tUserId || 'unknown'}:${booking}`
+}
+
+/**
  * request_refund at one un1t.online studio: one record-only refund_request
- * card (D's fileRefundCard, reason 'member_request', origin 'mia', the
- * conversation as originRef so a repeat in the same chat reuses the card).
+ * card (D's fileRefundCard, reason 'member_request', origin 'mia', originRef
+ * from refundOriginRef: one card per booking per chat).
  * No un1t.online call and nothing refunded (R2). The member's own words
  * (input.reason) are not stored or logged: fileRefundCard has no field for
  * free text, and they may hold personal details. The answer is the studio's
@@ -874,17 +892,20 @@ export async function requestRefund(ctx, input, studio) {
   const settings = await actionSettings(ctx, studio)
   const parsed = parseAgentId(input?.booking_id)
   const conversationId = ctx.conversationId || null
+  const contactId = executingContactOf(ctx, studio)
+  const un1tUserId = studio.un1tUserId || null
+  const bookingId = parsed?.provider === PROVIDER ? parsed.id : null
   let approvalId = null
   let errClass = null
   try {
     ({ approvalId = null } = await fileRefundCard(db, {
       locationId: studio.locationId,
-      contactId: executingContactOf(ctx, studio),
-      un1tUserId: studio.un1tUserId || null,
+      contactId,
+      un1tUserId,
       reason: 'member_request',
-      bookingId: parsed?.provider === PROVIDER ? parsed.id : null,
+      bookingId,
       origin: 'mia',
-      originRef: conversationId,
+      originRef: refundOriginRef({ conversationId, contactId, un1tUserId, bookingId }),
       conversationId,
       channel: 'whatsapp',
     }) || {})

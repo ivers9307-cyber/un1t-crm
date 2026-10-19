@@ -844,7 +844,7 @@ describe('un1t_full at the turn (MIAHATCH.5)', () => {
     expect(writeAhead[1].row).toMatchObject({ location_id: HATCH, kind: 'class_cancellation', details: { provider: 'un1t_online', booking_id: 'bk-1', reason: 'mia_cancellation', stage: 'executing' } })
     expect(toolResultOf(bodies[3])).toEqual({ filed: true, text: DEFAULT_REFUND_REQUEST_TEXT })
     expect(fileRefundCard).toHaveBeenCalledTimes(1)
-    expect(fileRefundCard.mock.calls[0][1]).toMatchObject({ locationId: HATCH, reason: 'member_request', bookingId: 'bk-1', origin: 'mia', channel: 'whatsapp' })
+    expect(fileRefundCard.mock.calls[0][1]).toMatchObject({ locationId: HATCH, reason: 'member_request', bookingId: 'bk-1', origin: 'mia', originRef: 'conv-1:bk-1', channel: 'whatsapp' })
     expect(toolResultOf(bodies[4])).toMatchObject({ error: 'not_available_at_this_studio' })
     expect(glofoxCalls()).toBe(0)
     expect(decisionMeta(inserts).tool_block).toBe('un1t_full')

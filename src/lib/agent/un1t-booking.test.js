@@ -44,7 +44,7 @@ import { DEFAULT_PURCHASE_OFFER_INTRO_TEXT, DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEX
 import { formatClassTime } from './dublin-format'
 import {
   un1tBookClass, un1tBookOutcome, relayedStartMatches, un1tStudioForEvent,
-  un1tCancelBooking, un1tCancelOutcome, un1tStudioForBooking, requestRefund,
+  un1tCancelBooking, un1tCancelOutcome, un1tStudioForBooking, requestRefund, refundOriginRef,
 } from './un1t-booking'
 
 // Fictional ids.
@@ -850,7 +850,7 @@ describe('requestRefund', () => {
     expect(h.fileRefundCard).toHaveBeenCalledTimes(1)
     expect(h.fileRefundCard).toHaveBeenCalledWith(db, {
       locationId: HATCH, contactId: HATCH_CONTACT, un1tUserId: USER, reason: 'member_request', bookingId: BOOKING,
-      origin: 'mia', originRef: 'conv-1', conversationId: 'conv-1', channel: 'whatsapp',
+      origin: 'mia', originRef: `conv-1:${BOOKING}`, conversationId: 'conv-1', channel: 'whatsapp',
     })
     // The member's own words go nowhere: not on the card, not in a log.
     expect(JSON.stringify(h.fileRefundCard.mock.calls)).not.toMatch(/charged twice|example\.test/)
@@ -885,6 +885,55 @@ describe('requestRefund', () => {
   it('not verified: nothing filed', async () => {
     expect(await requestRefund(ctxFor(fakeDb().db, { verifiedContactId: null }), { reason: 'x' }, hatch())).toMatchObject({ error: 'not_verified' })
     expect(h.fileRefundCard).not.toHaveBeenCalled()
+  })
+})
+
+describe('refund cards keyed per booking (Ruling 27)', () => {
+  // A fake fileRefundCard with D's dedupe: one pending card per
+  // (studio, contact, reason, origin_ref).
+  function dedupingFileRefundCard() {
+    const cards = []
+    h.fileRefundCard.mockImplementation(async (_db, a) => {
+      const hit = cards.find((c) => c.locationId === a.locationId && c.contactId === a.contactId && c.reason === a.reason && c.originRef === a.originRef)
+      if (hit) return { approvalId: hit.id }
+      const id = `appr-${cards.length + 1}`
+      cards.push({ id, ...a })
+      return { approvalId: id }
+    })
+    return cards
+  }
+  const OTHER_BOOKING = 'b0000000-0000-4000-8000-000000000002'
+
+  beforeEach(() => { h.fileRefundCard.mockReset() })
+
+  it('two bookings in one conversation file two cards; a repeat about the same booking reuses its card; no booking is <conv>:none', async () => {
+    const cards = dedupingFileRefundCard()
+    const ctx = ctxFor(fakeDb().db)
+    await requestRefund(ctx, { reason: 'x', booking_id: `un1t:${BOOKING}` }, hatch())
+    await requestRefund(ctx, { reason: 'x', booking_id: `un1t:${OTHER_BOOKING}` }, hatch())
+    await requestRefund(ctx, { reason: 'again', booking_id: `un1t:${BOOKING}` }, hatch())
+    await requestRefund(ctx, { reason: 'general' }, hatch())
+    const refs = h.fileRefundCard.mock.calls.map(([, a]) => a.originRef)
+    expect(refs).toEqual([`conv-1:${BOOKING}`, `conv-1:${OTHER_BOOKING}`, `conv-1:${BOOKING}`, 'conv-1:none'])
+    expect(cards.map((c) => c.originRef)).toEqual([`conv-1:${BOOKING}`, `conv-1:${OTHER_BOOKING}`, 'conv-1:none'])
+    expect(cards.map((c) => c.bookingId)).toEqual([BOOKING, OTHER_BOOKING, null])
+  })
+
+  it('no conversation: a never-null mia-noconv ref, so D never matches a staff or funnel card with a null ref', async () => {
+    dedupingFileRefundCard()
+    const ctx = { ...ctxFor(fakeDb().db), conversationId: null }
+    await requestRefund(ctx, { reason: 'x', booking_id: `un1t:${BOOKING}` }, hatch())
+    await requestRefund(ctx, { reason: 'x' }, hatch())
+    expect(h.fileRefundCard.mock.calls.map(([, a]) => a.originRef)).toEqual([`mia-noconv:${HATCH_CONTACT}:${BOOKING}`, `mia-noconv:${HATCH_CONTACT}:none`])
+    for (const [, a] of h.fileRefundCard.mock.calls) expect(a.originRef).not.toBeNull()
+  })
+
+  it('refundOriginRef (pure)', () => {
+    expect(refundOriginRef({ conversationId: 'conv-9', bookingId: 'bk-1' })).toBe('conv-9:bk-1')
+    expect(refundOriginRef({ conversationId: 'conv-9' })).toBe('conv-9:none')
+    expect(refundOriginRef({ contactId: 'c-1', bookingId: 'bk-1' })).toBe('mia-noconv:c-1:bk-1')
+    expect(refundOriginRef({ un1tUserId: 'u-1' })).toBe('mia-noconv:u-1:none')
+    expect(refundOriginRef()).toBe('mia-noconv:unknown:none')
   })
 })
 
