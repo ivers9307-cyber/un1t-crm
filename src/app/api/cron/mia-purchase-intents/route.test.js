@@ -291,6 +291,27 @@ describe('GET /api/cron/mia-purchase-intents', () => {
     expect(again.data.double_payment_cards).toBe(0)
   })
 
+  it('carry B: a later purchase of the same product (past paid + 60 min) is no double payment; a live paid intent is left to its winner', async () => {
+    const { data } = install({
+      mia_purchase_intents: [
+        intent(1, { status: 'booked', paid_detected_at: iso(NOW - 180 * MIN), created_at: iso(NOW - 200 * MIN), expires_at: iso(NOW + 20 * 60 * MIN), outcome: { result: 'paid_booked' } }),
+        intent(2, { status: 'paid', paid_detected_at: iso(NOW - 3 * MIN), outcome: { source: 'mirror' } }),
+      ],
+      un1t_transactions: [
+        tx(1, { un1t_user_id: `${USER}-1`, remote_created_at: iso(NOW - 185 * MIN) }),
+        // Bought again for another class two hours after paying for this one.
+        tx(2, { un1t_user_id: `${USER}-1`, remote_created_at: iso(NOW - 60 * MIN) }),
+        tx(3, { un1t_user_id: `${USER}-2` }), tx(4, { un1t_user_id: `${USER}-2` }),
+      ],
+    })
+    const body = await (await call()).json()
+    expect(settle.recheckDoublePayment.mock.calls.map((c) => c[1])).toEqual([intentId(1)])
+    expect(h.refund).not.toHaveBeenCalled()
+    expect(data.mia_purchase_intents[0].outcome).toEqual({ result: 'paid_booked' })
+    expect(data.mia_purchase_intents[1].status).toBe('paid')
+    expect(body.data.double_payment_cards).toBe(0)
+  })
+
   it('expires stale intents (after settling them from the mirror)', async () => {
     const { data } = install({
       mia_purchase_intents: [intent(1, { created_at: iso(NOW - 25 * 60 * MIN), expires_at: iso(NOW - 60 * MIN) })],

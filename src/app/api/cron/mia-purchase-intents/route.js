@@ -10,8 +10,10 @@
 //   2. an intent left in 'paid' for over 10 minutes (a settle killed mid-way)
 //      -> markStuckPaidIntent: closed book_failed with ONE staff card, never
 //      rebooked, nothing sent;
-//   3. intents settled in the last 24 h -> the winner's double-payment check
-//      again (a second payment the mirror shows only later), one record-only
+//   3. intents settled (booked, book_failed, no_class) in the last 24 h -> the
+//      winner's double-payment check again, on the same window (a second
+//      purchase of the product up to 60 min after the payment, never past
+//      expiry; a second payment the mirror shows only later), one record-only
 //      card per intent;
 //   4. the silent expiry sweep (expireStaleIntents).
 // Off until intents exist: an empty run is four cheap reads.
@@ -28,7 +30,7 @@ import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logError } from '@/lib/log'
 import {
-  SETTLED_STATUSES, expireStaleIntents, markStuckPaidIntent, recheckDoublePayment, settlePurchaseIntent,
+  RECHECK_STATUSES, expireStaleIntents, markStuckPaidIntent, recheckDoublePayment, settlePurchaseIntent,
 } from '@/lib/agent/purchase-settle'
 
 export const runtime = 'nodejs'
@@ -111,7 +113,7 @@ async function runWatcher(db, now) {
 
   // 3. A double payment the mirror shows only after the settle.
   const settledSince = new Date(now - RECHECK_WINDOW_MS).toISOString()
-  const recent = await list('watcher_double', (q) => q.in('status', [...SETTLED_STATUSES]).gte('paid_detected_at', settledSince))
+  const recent = await list('watcher_double', (q) => q.in('status', [...RECHECK_STATUSES]).gte('paid_detected_at', settledSince))
   await eachIsolated(recent, 'watcher_double', async (id) => {
     const { filed } = await recheckDoublePayment(db, id, { now })
     if (filed) counts.double_payment_cards += 1

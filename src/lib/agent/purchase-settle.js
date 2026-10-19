@@ -61,7 +61,7 @@ export async function readMemberLiveIntent(db, studio, cols) {
   return { intent: data ?? null }
 }
 
-const SETTLE_COLS = 'id, location_id, contact_id, conversation_id, channel, un1t_user_id, un1t_product_id, product_title, event_un1t_id, class_name, class_time, starts_at, status, entitlement_snapshot, outcome, created_at, expires_at'
+const SETTLE_COLS = 'id, location_id, contact_id, conversation_id, channel, un1t_user_id, un1t_product_id, product_title, event_un1t_id, class_name, class_time, starts_at, status, entitlement_snapshot, outcome, created_at, expires_at, paid_detected_at'
 const TX_COLS = 'un1t_id, product_id, product_title, type, amount_cents, remote_created_at'
 /** Purchases read per settle: far above what one member makes in a 23h window. */
 const TX_PAGE = 100
@@ -209,13 +209,31 @@ function productBought(purchases, intent) {
   return { transaction_id: String(t.un1t_id), product_id: t.product_id ?? null, product_title: t.product_title ?? null, matches_intent: String(t.product_id) === want }
 }
 
+/** How long after the payment was detected a second purchase still counts as paying twice for this intent. */
+export const DOUBLE_PAYMENT_GRACE_MS = 60 * 60_000
+
 /**
- * Two or more purchases of the intent's product since it was made: ONE
- * record-only refund_request card (D's fileRefundCard, deduped on the intent
- * id). Nothing is refunded and nothing reaches the member (R2).
+ * The end of the double-payment window: min(expires_at, paid + 60 min), with
+ * paid the settle's CAS instant (the winner) or paid_detected_at (the
+ * re-check). A later purchase of the same product is a new purchase (bought
+ * again for another class), never a double payment. NaN when neither is known.
  */
-async function fileDoublePayment(db, intent, purchases) {
-  const same = purchases.filter((p) => String(p.product_id) === String(intent.un1t_product_id))
+function doublePaymentUntil(intent, paidAtMs) {
+  const ends = [Date.parse(intent.expires_at || ''), paidAtMs + DOUBLE_PAYMENT_GRACE_MS].filter(Number.isFinite)
+  return ends.length ? Math.min(...ends) : NaN
+}
+
+/**
+ * Two or more purchases of the intent's product inside its double-payment
+ * window ([created_at, doublePaymentUntil]): ONE record-only refund_request
+ * card (D's fileRefundCard, deduped on the intent id). Nothing is refunded and
+ * nothing reaches the member (R2). The winner and the watcher's re-check both
+ * judge through here, so they agree.
+ */
+async function fileDoublePayment(db, intent, purchases, paidAtMs) {
+  const until = doublePaymentUntil(intent, paidAtMs)
+  const same = purchases.filter((p) => String(p.product_id) === String(intent.un1t_product_id)
+    && Date.parse(p.remote_created_at) <= until)
   if (same.length < 2) return null
   const transactionIds = same.map((p) => String(p.un1t_id))
   let approvalId = null
@@ -475,7 +493,7 @@ export async function settlePurchaseIntent(db, intentId, { detectedBy, source = 
 
 /** The winner's steps (see settlePurchaseIntent). `progress` records the send, so a later throw never sends twice. */
 async function settleWinner(db, intent, outcome, purchases, nowMs, progress) {
-  const doubled = await fileDoublePayment(db, intent, purchases)
+  const doubled = await fileDoublePayment(db, intent, purchases, nowMs)
   const settings = await settingsFor(db, intent.location_id)
   const booked = await bookPaidClass(db, intent, settings, nowMs)
   const text = renderMiaCopy(COPY_KEY[booked.outcome], settings, { class: classLine(booked.className, booked.classTime) || null })
@@ -598,17 +616,22 @@ export async function markStuckPaidIntent(db, intentId, { code = 'stuck_paid', n
   return { marked: closed, requestId }
 }
 
-/** The statuses a settle leaves behind ('paid' while the winner is still at work). */
-export const SETTLED_STATUSES = Object.freeze(['paid', 'booked', 'book_failed', 'no_class'])
+/**
+ * The final statuses a settle leaves behind, the ones the watcher re-checks.
+ * Not 'paid': the live winner judges that itself, and the re-check picks the
+ * intent up once it leaves 'paid'.
+ */
+export const RECHECK_STATUSES = Object.freeze(['booked', 'book_failed', 'no_class'])
 
 /**
  * For the watcher cron (Task 23): the settle winner's double-payment check run
  * again on a settled intent, mirror only (zero un1t.online calls), so a second
  * payment the mirror shows only after the settle still reaches the team as ONE
  * record-only refund_request card (deduped on the intent id while pending).
- * Once a card is filed it is recorded on the intent's outcome (status-guarded;
- * left to the winner while the intent is still 'paid'), so a later run asks
- * nothing again. Nothing is refunded and nothing reaches the member. Never throws.
+ * The same window as the winner (paid = paid_detected_at). Once a card is
+ * filed it is recorded on the intent's outcome (status-guarded), so a later
+ * run asks nothing again. Nothing is refunded and nothing reaches the member.
+ * Never throws.
  *
  * @param {object} db service-role client
  * @param {string} intentId
@@ -618,19 +641,17 @@ export async function recheckDoublePayment(db, intentId, { now = Date.now() } = 
   try {
     const read = await readIntent(db, intentId)
     const intent = read.intent
-    if (read.error || !intent || !SETTLED_STATUSES.includes(intent.status)) return { filed: false }
+    if (read.error || !intent || !RECHECK_STATUSES.includes(intent.status)) return { filed: false }
     if (intent.outcome?.double_payment?.approval_id) return { filed: false }
-    const doubled = await fileDoublePayment(db, intent, await purchasesSince(db, intent))
+    const doubled = await fileDoublePayment(db, intent, await purchasesSince(db, intent), Date.parse(intent.paid_detected_at || ''))
     if (!doubled?.approval_id) return { filed: false }
-    if (intent.status !== 'paid') {
-      const { data, error } = await db.from(INTENTS)
-        .update({ outcome: { ...(intent.outcome || {}), double_payment: doubled }, updated_at: new Date(now).toISOString() })
-        .eq('id', intent.id)
-        .eq('status', intent.status)
-        .select('id')
-      if (error || !Array.isArray(data) || data.length === 0) {
-        logWarn(LOG_MODULE, 'double payment card not recorded on the intent', { locationId: intent.location_id, op: 'double_payment_note', intentId: intent.id, status: null, code: error?.code ?? null })
-      }
+    const { data, error } = await db.from(INTENTS)
+      .update({ outcome: { ...(intent.outcome || {}), double_payment: doubled }, updated_at: new Date(now).toISOString() })
+      .eq('id', intent.id)
+      .eq('status', intent.status)
+      .select('id')
+    if (error || !Array.isArray(data) || data.length === 0) {
+      logWarn(LOG_MODULE, 'double payment card not recorded on the intent', { locationId: intent.location_id, op: 'double_payment_note', intentId: intent.id, status: null, code: error?.code ?? null })
     }
     return { filed: true }
   } catch (err) {

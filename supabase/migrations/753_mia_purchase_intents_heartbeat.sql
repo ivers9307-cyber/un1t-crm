@@ -6,12 +6,15 @@
 -- settles for a double payment and runs the silent expiry sweep. It stamps at
 -- the end of every completed run, with counts only in last_outcome
 -- { settled, stuck_marked, double_payment_cards, expired, errors }. A
--- per-intent failure is a COUNT, not a stale heartbeat; STALE means a list
--- could not be read (or the expiry sweep failed) on every tick for 15
--- minutes, or the cron stopped firing. A run with nothing to do is healthy.
+-- per-intent failure is counted in last_outcome.errors but does NOT page:
+-- the stamp is still taken (only is_stale pages, and last_outcome is for a
+-- person reading the row). STALE means a list could not be read (or the
+-- expiry sweep failed) on every tick for 15 minutes, or the cron stopped
+-- firing. A run with nothing to do is healthy.
 --
--- 300 + 600: a tick is every 5 minutes, so one missed tick (interval + Vercel
--- jitter + a run of up to maxDuration) never pages; two in a row do.
+-- 300 + 600: a tick is every 5 minutes, and the 900 s before is_stale covers
+-- one missed tick plus a normal run (with Vercel jitter), so one missed tick
+-- never pages; two in a row do.
 -- APPLY THIS MIGRATION RIGHT AFTER THE MIAHATCH.6 CODE DEPLOYS (CLAUDE.md
 -- cron rule). It is born healthy (last_ok_at = now()), which leaves 15
 -- minutes before it can page; if the deploy is slower, re-run this insert
