@@ -93,7 +93,7 @@ export function makeDb({
   let seq = 0
 
   function from(name) {
-    const s = { op: 'select', payload: null, opts: null, filters: [], order: null, limit: null }
+    const s = { op: 'select', payload: null, opts: null, filters: [], order: null, limit: null, range: null }
     const matches = (r) => s.filters.every(([kind, c, v]) => {
       if (kind === 'eq') return r[c] === v
       if (kind === 'in') return v.includes(r[c])
@@ -161,6 +161,7 @@ export function makeDb({
         const [c, { ascending = true } = {}] = s.order
         out.sort((a, b) => (a[c] < b[c] ? -1 : a[c] > b[c] ? 1 : 0) * (ascending ? 1 : -1))
       }
+      if (s.range) out = out.slice(s.range[0], s.range[1] + 1)
       if (s.limit != null) out = out.slice(0, s.limit)
       return { data: out, error: null }
     }
@@ -179,6 +180,7 @@ export function makeDb({
       ilike(c, v) { s.filters.push(['ilike', c, v]); return api },
       order(c, o) { s.order = [c, o]; return api },
       limit(n) { s.limit = n; return api },
+      range(a, b) { s.range = [a, b]; return api },
       single() { return Promise.resolve(first(run())) },
       maybeSingle() { return Promise.resolve(first(run())) },
       then(okFn, noFn) { return Promise.resolve(run()).then(okFn, noFn) },

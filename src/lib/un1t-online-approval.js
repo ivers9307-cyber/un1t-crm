@@ -149,4 +149,6 @@ export async function fileRefundCard(db, args = {}) {
 export const UN1T_RECORD_ONLY_REASONS = Object.freeze(new Set([
   'account_ambiguous', 'un1t_email_in_use_elsewhere', 'un1t_link_conflict', 'un1t_trial_used',
   'terms_not_accepted', 'un1t_funnel_off', 'class_unavailable', 'no_email',
+  // UN1TBOOK.20 — the class is gone from un1t.online: booking it only 404s.
+  'un1t_class_no_longer_available',
 ]))
