@@ -20,7 +20,9 @@
 //   5. Resolve un1t.online clients to org-scoped contacts (Task 4).
 //   6. Upsert the seven un1t_* tables in chunks of 200. The first failed
 //      upsert stops the run ('db'); later tables wait for the next run.
-//      The events are then projected into class_occurrences (UN1TCLASS.2),
+//      The events are then projected into class_occurrences (UN1TCLASS.2;
+//      a future un1t occurrence this pull did not return is stamped
+//      cancelled_at, UN1TBOOK.20, so a class deleted upstream leaves the TVs),
 //      and the bookings into class_bookings (UN1TBOOK.3, source_platform
 //      'un1t_online', which the CRM never reminds or credits), both only
 //      where the studio's membership_source is 'un1t_online': a projection
