@@ -1,7 +1,7 @@
 // UN1TRADAR.2 — the staff copy for arrears un1t.online cannot read, or reports
 // without an amount: never "0", estimates always labelled.
 import { describe, it, expect } from 'vitest'
-import { UN1T_UNAVAILABLE, ESTIMATE_NOTE, countOrUnavailable, owedLabel, totalLabel, syncedAtLine, overdueCardBreakdown, rowAmountLabel, arrearsBriefingLabel } from './radar-copy'
+import { UN1T_UNAVAILABLE, ESTIMATE_NOTE, AMOUNT_UNAVAILABLE, amountOrUnavailable, countOrUnavailable, owedLabel, totalLabel, syncedAtLine, overdueCardBreakdown, rowAmountLabel, arrearsBriefingLabel } from './radar-copy'
 
 describe('radar copy', () => {
   it('UN1T_UNAVAILABLE is exact', () => expect(UN1T_UNAVAILABLE).toBe('not available from un1t.online'))
@@ -60,5 +60,25 @@ describe('radar page copy (ChurnRadar.jsx)', () => {
   it('business briefing label: Glofox unchanged; an estimate says so', () => {
     expect(arrearsBriefingLabel({ memberCount: 3, totalCents: 45000 })).toBe('3 in arrears (€450)')
     expect(arrearsBriefingLabel({ memberCount: 1, totalCents: 16500, estimated: true })).toBe('1 in arrears (€165, includes an estimate)')
+  })
+})
+
+describe('amountOrUnavailable (card values)', () => {
+  const fmt = (c) => `F${c}`
+  it('no known amount (flagged and not above 0) is AMOUNT_UNAVAILABLE, never a formatted 0', () => {
+    expect(AMOUNT_UNAVAILABLE).toBe('amount not available from un1t.online')
+    expect(amountOrUnavailable(0, { estimated: true }, fmt)).toBe(AMOUNT_UNAVAILABLE)
+    expect(amountOrUnavailable(0, { unknown: true }, fmt)).toBe(AMOUNT_UNAVAILABLE)
+    expect(amountOrUnavailable(null, { estimated: true }, fmt)).toBe(AMOUNT_UNAVAILABLE)
+  })
+  it('a known amount, or an unflagged (Glofox) one, goes through the formatter unchanged', () => {
+    expect(amountOrUnavailable(16500, { estimated: true }, fmt)).toBe('F16500')
+    expect(amountOrUnavailable(0, {}, fmt)).toBe('F0')
+    expect(amountOrUnavailable(0, undefined, fmt)).toBe('F0')
+    expect(amountOrUnavailable(4500)).toBe('€45')
+  })
+  it('agrees with totalLabel on when there is no number', () => {
+    expect(totalLabel(0, { estimated: true })).toBe(AMOUNT_UNAVAILABLE)
+    expect(owedLabel(0, { unknown: true })).toBe(AMOUNT_UNAVAILABLE)
   })
 })

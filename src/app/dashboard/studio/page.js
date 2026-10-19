@@ -21,7 +21,7 @@
 // through /api/schedule/time-off and /api/schedule/swaps; its contact
 // numbers through /api/dashboard/studio-contacts).
 
-import { ESTIMATE_NOTE } from '@/lib/radar-copy'
+import { ESTIMATE_NOTE, amountOrUnavailable } from '@/lib/radar-copy'
 import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
@@ -280,7 +280,7 @@ async function LocationColumn({ user, location }) {
         />
         <ScoreCell
           label="Arrears"
-          value={radarSummary ? euros(radarSummary.overdueValueCents) : null}
+          value={radarSummary ? amountOrUnavailable(radarSummary.overdueValueCents, { estimated: radarSummary.overdueValueEstimated === true }, euros) : null}
           sublabel={radarSummary
             ? `${radarSummary.overdue} member${radarSummary.overdue === 1 ? '' : 's'} overdue${radarSummary.overdueValueEstimated ? `, ${ESTIMATE_NOTE}` : ''}`
             : UNAVAILABLE}

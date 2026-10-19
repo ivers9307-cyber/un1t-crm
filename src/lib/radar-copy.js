@@ -8,6 +8,7 @@ import { timeLabelIn } from '@shared/zoned-time'
 
 export const UN1T_UNAVAILABLE = 'not available from un1t.online'
 export const ESTIMATE_NOTE = 'includes an estimate'
+export const AMOUNT_UNAVAILABLE = 'amount not available from un1t.online'
 
 const euros = (cents) => `€${Math.round((Number(cents) || 0) / 100).toLocaleString('en-IE')}`
 
@@ -23,7 +24,7 @@ export function countOrUnavailable(n) {
  * all (no price, another currency), so no number is printed.
  */
 export function owedLabel(cents, { estimated = false, unknown = false } = {}) {
-  if (unknown) return 'amount not available from un1t.online'
+  if (unknown) return AMOUNT_UNAVAILABLE
   if (estimated) return `about ${euros(cents)} (estimate: amount not reported by un1t.online)`
   return euros(cents)
 }
@@ -32,8 +33,19 @@ export function owedLabel(cents, { estimated = false, unknown = false } = {}) {
 export function totalLabel(cents, { estimated = false } = {}) {
   if (!estimated) return euros(cents)
   // every figure in it unknown: no number, never "€0"
-  if (!(Number(cents) > 0)) return 'amount not available from un1t.online'
+  if (!(Number(cents) > 0)) return AMOUNT_UNAVAILABLE
   return `${euros(cents)}, ${ESTIMATE_NOTE}`
+}
+
+/**
+ * A card's money value: `format(cents)`, or AMOUNT_UNAVAILABLE when the figure
+ * has no known euro amount (it contains an estimate or an unknown amount and
+ * does not sum above 0), the same rule as totalLabel. Glofox never sets either
+ * flag, so its value is `format(cents)` exactly as before.
+ */
+export function amountOrUnavailable(cents, { estimated = false, unknown = false } = {}, format = euros) {
+  if ((estimated === true || unknown === true) && !(Number(cents) > 0)) return AMOUNT_UNAVAILABLE
+  return format(cents)
 }
 
 /** "un1t.online data as of HH:MM" on `zone`'s clock, or null when there is no sync time. */
