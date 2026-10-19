@@ -47,6 +47,7 @@ import { centsToEuros, eurosToCents } from '@/lib/price-format'
 import { DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE, DEFAULT_CLASS_FUNNEL_CTA_LABEL } from '@/lib/public-landing'
 import { parseManualTimetable, DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
 import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
+import { DEFAULT_FUNNEL_TERMS_COPY } from '@/lib/un1t-online-funnel-copy'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -1034,6 +1035,31 @@ function ManualTimetableFields({ block, onUpdate, publicPath }) {
   )
 }
 
+// UN1TWRITE.18 — the terms and waiver tick a un1t.online studio's funnel
+// shows while its funnel switch is on. Blank keeps each default.
+function Un1tFunnelCopyFields({ block, onUpdate }) {
+  const D = DEFAULT_FUNNEL_TERMS_COPY
+  return (
+    <>
+      <Field label="Terms tick (un1t.online studios)" hint="Shown when this studio books through un1t.online. {studio_name} is the studio; {terms} and {waiver} become the two document links. Leave blank for the default.">
+        <Input value={block.terms_label || ''} onChange={(v) => onUpdate({ terms_label: v })} maxLength={200} placeholder={D.terms_label} />
+      </Field>
+      <Field label="Terms link text (un1t.online studios)">
+        <Input value={block.terms_link_label || ''} onChange={(v) => onUpdate({ terms_link_label: v })} maxLength={60} placeholder={D.terms_link_label} />
+      </Field>
+      <Field label="Waiver link text (un1t.online studios)">
+        <Input value={block.waiver_link_label || ''} onChange={(v) => onUpdate({ waiver_link_label: v })} maxLength={60} placeholder={D.waiver_link_label} />
+      </Field>
+      <Field label="Terms not ticked: message (un1t.online studios)">
+        <Input value={block.terms_required_message || ''} onChange={(v) => onUpdate({ terms_required_message: v })} maxLength={200} placeholder={D.terms_required_message} />
+      </Field>
+      <Field label="Terms page could not load: message (un1t.online studios)">
+        <Textarea value={block.legal_unavailable_message || ''} onChange={(v) => onUpdate({ legal_unavailable_message: v })} maxLength={300} rows={2} placeholder={D.legal_unavailable_message} />
+      </Field>
+    </>
+  )
+}
+
 function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, publicPath }) {
   const bts = availableBookingTypes || []
   // Price is edited as a raw euros string (draft) and only coerced to integer
@@ -1088,6 +1114,7 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, p
       <Field label="Button label" hint="On the buttons that scroll to this funnel (page header, sections, footer). Leave blank for the default.">
         <Input value={block.cta_label || ''} onChange={(v) => onUpdate({ cta_label: v })} maxLength={40} placeholder={DEFAULT_CLASS_FUNNEL_CTA_LABEL} />
       </Field>
+      <Un1tFunnelCopyFields block={block} onUpdate={onUpdate} />
       <ManualTimetableFields block={block} onUpdate={onUpdate} publicPath={publicPath} />
       <Field
         label="Trial product granted on booking"

@@ -9,6 +9,28 @@ import { applyFormMarketingConsent } from '@/lib/marketing-consent.js'
 import { createEventBooking } from '@/lib/bookings-write.js'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash.js'
 import { sendCtwaConversion } from '@/lib/meta-capi'
+import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
+import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
+import { logWarn } from '@/lib/log'
+
+// UN1TWRITE.19 — a tick on the Flow's terms OptIn, at a un1t.online studio
+// with the funnel on, is recorded on the queue row: time, source and the
+// documents' version (null when unread). Anything else records nothing; an
+// unreadable settings row records nothing too (the processor then refuses to
+// create an account without an acceptance, and an existing account books).
+async function flowTermsRecord(db, locationId, accepted) {
+  if (!accepted) return {}
+  try {
+    const s = await readUn1tWriteSettings(db, locationId)
+    if (s.membershipSource !== 'un1t_online' || !s.settings.funnelEnabled) return {}
+  } catch (e) {
+    logWarn('whatsapp-flow', 'un1t.online settings unreadable; terms tick not recorded', { locationId, err: e })
+    return {}
+  }
+  let version = null
+  try { version = (await readUn1tLegalDocs(db, locationId)).version } catch { /* the tick still stands */ }
+  return { terms_accepted_at: new Date().toISOString(), terms_source: 'whatsapp_flow', terms_version: version }
+}
 
 export async function handleFlowCompletion(db, { interactive, contact, locationId }) {
   const parsed = parseFlowCompletion(interactive)
@@ -26,7 +48,9 @@ export async function handleFlowCompletion(db, { interactive, contact, locationI
   if (path === 'class') {
     const [glofoxEventId, startsAt, ...nameParts] = String(selection.slot || '').split('|')
     const className = nameParts.join('|')
+    const termsRecord = await flowTermsRecord(db, locationId, contactFields.terms_accepted)
     const { data: queuedRow, error } = await db.from('class_booking_requests').insert({
+      ...termsRecord,
       location_id: locationId, contact_id: contact.id,
       glofox_event_id: glofoxEventId, class_name: className, starts_at: startsAt,
       customer_name: person.name, customer_email: person.email, customer_phone: person.phone,

@@ -286,7 +286,7 @@ describe('/dashboard/business — un1t.online reads through the seam (UN1TREAD.3
 // UN1TRADAR.2 — an estimated arrears total says so on the card.
 describe('/dashboard/business In arrears estimate (UN1TRADAR.2)', () => {
   it('business In arrears sublabel carries "includes an estimate"', async () => {
-    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: true, bookings: false, credits: false, invoices: true, schedule: false } })
+    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: true, bookings: false, credits: true, invoices: true, schedule: false } })
     buildBusinessKpis.mockResolvedValue({
       revenue: { totalCents: 640_000, deltaPct: null, paidCount: 31 },
       arrearsData: { totalCents: 16500, memberCount: 2, estimated: true }, memberCount: 33, churnCount: null, churnDelta: null, briefing: 'x',

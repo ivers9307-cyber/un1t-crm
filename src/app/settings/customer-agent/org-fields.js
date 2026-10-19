@@ -10,6 +10,8 @@
 // kind: text | textarea | number | select | checkbox | quiet_hours
 // paths: the override paths the field sets (one, or the quiet-hours pair).
 
+import { DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT } from '@/lib/agent/default-copy'
+
 export const ORG_FIELD_GROUPS = [
   {
     id: 'behaviour',
@@ -54,6 +56,9 @@ export const ORG_FIELD_GROUPS = [
         placeholder: "You're out of class credits at the moment so I can't book that one straight away. I'll escalate this to a team member to help you out now." },
       { id: 'account_conflict_handoff_text', paths: ['account_conflict_handoff_text'], kind: 'text', maxLength: 500, label: 'Duplicate-account escalation message',
         placeholder: "You have more than one account with us so I want to get this booking exactly right. I'll get a team member to sort it for you now." },
+      // MIAHATCH.2 — the studio editor gains this field with the Hatch copy group (a later task).
+      { id: 'chat_booking_unavailable_text', paths: ['chat_booking_unavailable_text'], kind: 'text', maxLength: 500, label: 'Chat booking not available message (un1t.online studios)',
+        placeholder: DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, help: '{studio} becomes the studio name and {link} its booking link. With no booking link, a text that needs {link} is not used: the customer is told the team will help them book.' },
       { id: 'approval_decline_text', paths: ['approval_decline_text'], kind: 'text', maxLength: 500, label: 'Request declined message',
         placeholder: "Sorry, we couldn't complete that request this time. The team will be in touch to help." },
       { id: 'welcome_greeting', paths: ['welcome_greeting'], kind: 'textarea', maxLength: 500, label: 'Welcome greeting (sent when someone opens the chat without typing)',
