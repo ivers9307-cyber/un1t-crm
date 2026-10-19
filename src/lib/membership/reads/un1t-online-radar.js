@@ -29,6 +29,13 @@ const PAGE = 1000
 const EVENT_CHUNK = 200
 const CONTACT_CHUNK = 300
 const WINDOW_30D_MS = 30 * 86_400_000
+// last_booked_at is the only thing the BOOKED_AT read feeds, so it reads
+// un1t_bookings from now - 400 days, never a studio's whole history (30-day
+// counts are windowed through events). 400 days covers every consumer: lead
+// classification looks back 90 days (ATTENDING_DAYS) and churn uses
+// last_booked_at only as a footprint test (any booking at all), so a member
+// whose only booking is older than 400 days has no recent footprint to show.
+const BOOKED_AT_LOOKBACK_MS = 400 * 86_400_000
 const STATUS_SOURCES = Object.freeze(['un1t_online_api', 'un1t_online_export'])
 
 const SUB_COLS = 'un1t_id, un1t_user_id, contact_id, status, product_id, product_title, price_cents, billing_interval, billing_interval_count, current_period_end, cancel_at_period_end, paused_at, paused_until, past_due_at, remote_created_at, synced_at'
@@ -60,6 +67,10 @@ async function listAt(db, loc, table, cols, build = (q) => q) {
   if (rows.length >= HARD_CAP) throw new Error(`${table}: ${HARD_CAP} rows at one studio; refusing a truncated radar`)
   return rows
 }
+
+/** un1t_bookings at L created from now - 400 days (see BOOKED_AT_LOOKBACK_MS). */
+const listBookedAt = (db, loc, nowMs) => listAt(db, loc, 'un1t_bookings', BOOKED_AT_COLS,
+  (q) => q.gte('remote_created_at', new Date(nowMs - BOOKED_AT_LOOKBACK_MS).toISOString()))
 
 /** The un1t_subscriptions freshness cutoff (see freshCutoff in ./un1t-online.js). */
 const subsCutoff = (db, loc) => freshCutoff(db, 'un1t_subscriptions', loc)
@@ -94,7 +105,7 @@ async function loadRadarInputs(db, loc, nowMs, subs) {
     listAt(db, loc, 'un1t_products', PRODUCT_COLS),
     listAt(db, loc, 'un1t_transactions', PAYMENT_COLS, (q) => q.in('type', ['sub_initial', 'sub_renewal']).gt('amount_cents', 0)),
     listAt(db, loc, 'un1t_events', EVENT_COLS, (q) => q.gte('starts_at', fromIso).lte('starts_at', toIso)),
-    listAt(db, loc, 'un1t_bookings', BOOKED_AT_COLS),
+    listBookedAt(db, loc, nowMs),
   ])
   const bookings = await selectAllByKeys(
     [...new Set(events.map((e) => e.un1t_id).filter((id) => id != null))],
@@ -178,7 +189,7 @@ export async function leadContacts(db, locationId, { nowMs = Date.now() } = {}) 
       .order('id', { ascending: true })
       .range(from, to), { pageSize: PAGE }),
     listAt(db, locationId, 'un1t_clients', 'un1t_user_id, contact_id'),
-    listAt(db, locationId, 'un1t_bookings', BOOKED_AT_COLS),
+    listBookedAt(db, locationId, nowMs),
   ])
   const contactOfUser = new Map(clients.filter((c) => c.contact_id != null).map((c) => [c.un1t_user_id, c.contact_id]))
   const clientContacts = new Set(contactOfUser.values())
