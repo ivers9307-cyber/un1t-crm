@@ -12,8 +12,9 @@
 //                'scheduled' in the mirror, #2137); the relayed starts_at
 //                renders to the same label as the class in the studio's own
 //                zone (Review Focus 4), else refused before anything is sent.
-//   2 booked?    the live bookings (the mirror when the live read fails or
-//                was cut short) already hold the class: booked, no write.
+//   2 booked?    the LIVE bookings hold the class: booked, no write. A failed
+//                or cut-short live read is no verdict (never the stale
+//                mirror); D's book then decides.
 //   3 credits    fetchLiveEntitlement: live ledger balance > 0, unlimited (a
 //                zero balance included, Review Focus 2) or a live
 //                subscription in the mirror. Only an answer that CONFIRMS
@@ -84,15 +85,19 @@ export function un1tBookOutcome(result) {
   return 'card_rejected'
 }
 
-const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
+// An ISO-looking relay, and one that names its offset (Z or ±hh:mm). An
+// offset-less one would be read in the host's zone by Date.parse (CLAUDE.md
+// forbids), so it is refused as no match.
+const ISO_LIKE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
+const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/i
 const normLabel = (s) => String(s).toLowerCase().replace(/[,\s]+/g, ' ').trim()
 const labelOf = (ms, zone) => formatClassTime(Math.floor(ms / 1000), zone)
 
 /**
  * Does the class time the model relayed name this class? Both sides are
  * compared as formatClassTime labels in the studio's own zone: the relayed
- * label as given (case, spaces and commas aside), or an ISO instant rendered
- * in that zone. A label for another studio's class, or one rendered with the
+ * label as given (case, spaces and commas aside), or an ISO instant WITH an
+ * offset (Z or ±hh:mm) rendered in that zone; an offset-less ISO is no match. A label for another studio's class, or one rendered with the
  * wrong offset across a DST change, does not match. Missing is no match. Pure.
  *
  * @param {string} eventStartsAtIso the class's starts_at (mirror)
@@ -104,7 +109,8 @@ export function relayedStartMatches(eventStartsAtIso, relayed, zone) {
   if (!Number.isFinite(eventMs) || typeof relayed !== 'string' || !relayed.trim()) return false
   const want = labelOf(eventMs, zone)
   const given = relayed.trim()
-  if (ISO_INSTANT.test(given)) {
+  if (ISO_LIKE.test(given)) {
+    if (!ISO_WITH_OFFSET.test(given)) return false
     const givenMs = Date.parse(given)
     return Number.isFinite(givenMs) && labelOf(givenMs, zone) === want
   }
@@ -219,8 +225,12 @@ const bookedOn = (row, eventId) => {
 }
 
 /**
- * Does the member already hold this class? true / false, or null when nothing
- * could say (then D's book arbitrates: its own done-check reads first).
+ * Does the member already hold this class? true / false from the LIVE list
+ * only, or null when it could not say (a failed read, or a list the page cap
+ * cut that does not show the class). Never the mirror: it can be ~15 minutes
+ * behind, so a class cancelled in the app would read as "already booked" and
+ * the member would turn up with no booking. On null D's book decides (its own
+ * done-check reads first; a refusal becomes a card).
  */
 async function alreadyHolds(db, studio, eventId, reader) {
   let live
@@ -228,25 +238,11 @@ async function alreadyHolds(db, studio, eventId, reader) {
     live = await fetchLiveUn1tBookings(db, { locationId: studio.locationId, un1tUserId: studio.un1tUserId }, { reader })
   } catch (err) {
     logWarn(LOG_MODULE, 'live bookings read threw', { locationId: studio.locationId, op: 'book_bookings', status: null, errClass: err?.name })
-    live = { ok: false }
-  }
-  if (live?.ok) {
-    if (live.rows.some((r) => bookedOn(r, eventId))) return true
-    if (!live.truncated) return false
-  }
-  // The live list failed or was cut short: the mirror answers (minutes behind).
-  const { data, error } = await db.from('un1t_bookings')
-    .select('un1t_id')
-    .eq('location_id', studio.locationId)
-    .eq('un1t_user_id', studio.un1tUserId)
-    .eq('event_id', eventId)
-    .eq('status', UN1T_BOOKED_STATUS)
-    .limit(1)
-  if (error) {
-    logWarn(LOG_MODULE, 'mirror read failed', { locationId: studio.locationId, op: 'book_bookings_mirror', code: error.code ?? null })
     return null
   }
-  return Array.isArray(data) && data.length > 0
+  if (!live?.ok) return null
+  if (live.rows.some((r) => bookedOn(r, eventId))) return true
+  return live.truncated ? null : false
 }
 
 /** An open (pending) card for this class and contact at the studio, or null. */

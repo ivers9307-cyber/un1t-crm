@@ -185,6 +185,14 @@ describe('relayedStartMatches (pure, Review Focus 4)', () => {
     // An ISO relay is compared as a label in the zone too.
     expect(relayedStartMatches(afterChange, '2026-10-25T07:00:00Z', ZONE)).toBe(true)
     expect(relayedStartMatches(afterChange, '2026-10-25T07:00:00+01:00', ZONE)).toBe(false)
+    expect(relayedStartMatches(afterChange, '2026-10-25T08:00:00+0100', ZONE)).toBe(true)
+  })
+
+  it('an ISO relay without an offset is refused (Date.parse would read it in the host zone)', () => {
+    const afterChange = '2026-10-25T07:00:00Z'
+    expect(relayedStartMatches(afterChange, '2026-10-25T07:00:00', ZONE)).toBe(false)
+    expect(relayedStartMatches(afterChange, '2026-10-25T07:00', ZONE)).toBe(false)
+    expect(relayedStartMatches(afterChange, '2026-10-25T07:00:00.000Z', ZONE)).toBe(true)
   })
 
   it('a Stillorgan label relayed on a Hatch id does not match the Hatch class', () => {
@@ -232,11 +240,33 @@ describe('un1tBookClass', () => {
     expect(await un1tBookClass(ctxFor(second.db), input(), hatch(), deps())).toMatchObject({ booked: true })
     expect(h.book).toHaveBeenCalledTimes(1)
 
-    // The live read failed: the mirror's booked row answers instead.
+    // The live read failed: the (stale) mirror's booked row is NOT a verdict;
+    // D's book decides (here it refuses, so a card, never "booked").
+    const mirrorBooked = [{ location_id: HATCH, un1t_user_id: USER, event_id: EVENT, status: 'booked', un1t_id: 'bk-9' }]
     h.book.mockClear()
     h.reader = fakeUn1tReader({ fail: 503 })
-    const third = fakeDb({ un1t_bookings: [{ location_id: HATCH, un1t_user_id: USER, event_id: EVENT, status: 'booked', un1t_id: 'bk-9' }] })
-    expect(await un1tBookClass(ctxFor(third.db), input(), hatch(), deps())).toMatchObject({ booked: true, already_booked: true })
+    h.book.mockResolvedValueOnce(refused('E1', 'Already booked'))
+    const third = fakeDb({ un1t_bookings: mirrorBooked })
+    const r3 = await un1tBookClass(ctxFor(third.db), input(), hatch(), deps())
+    expect(r3.booked).toBe(false)
+    expect(r3.already_booked).toBeUndefined()
+    expect(h.book).toHaveBeenCalledTimes(1)
+  })
+
+  it('a TRUNCATED live list without the class falls to book(), never to the mirror', async () => {
+    const mirrorBooked = [{ location_id: HATCH, un1t_user_id: USER, event_id: EVENT, status: 'booked', un1t_id: 'bk-9' }]
+    h.reader = fakeUn1tReader({ bookings: [{ id: 'bk-1', event_id: 'e-other', status: 'booked' }], ledger: { balance: 2, is_unlimited: false }, truncated: true })
+    h.book.mockResolvedValueOnce(unknown())
+    const { db } = fakeDb({ un1t_bookings: mirrorBooked })
+    const r = await un1tBookClass(ctxFor(db), input(), hatch(), deps())
+    expect(h.book).toHaveBeenCalledTimes(1)
+    expect(r).toMatchObject({ booked: false, handoff: true, reason: 'un1t_outcome_unknown' })
+
+    // A truncated live list that DOES show the class is still a live answer.
+    h.book.mockClear()
+    h.reader = fakeUn1tReader({ bookings: [{ id: 'bk-9', event_id: EVENT, status: 'booked' }], ledger: { balance: 2, is_unlimited: false }, truncated: true })
+    const f = fakeDb()
+    expect(await un1tBookClass(ctxFor(f.db), input(), hatch(), deps())).toMatchObject({ booked: true, already_booked: true })
     expect(h.book).not.toHaveBeenCalled()
   })
 
