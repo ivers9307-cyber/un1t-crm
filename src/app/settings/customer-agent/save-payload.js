@@ -83,6 +83,7 @@ export function buildSavePayload(settings, overridden) {
     // FLOWACK.1 — the WhatsApp booking Flow's acknowledgement + holding line.
     flow_booking_ack_text: settings.flow_booking_ack_text || null,
     flow_booking_holding_text: settings.flow_booking_holding_text || null,
+    flow_booking_duplicate_text: settings.flow_booking_duplicate_text || null,
     welcome_greeting: settings.welcome_greeting || null,
     link_button_text: (settings.link_button_text || '').trim() || null,
     quiet_hours: buildQuietHoursPayload(settings.quiet_hours),

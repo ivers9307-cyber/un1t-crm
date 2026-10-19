@@ -18,9 +18,10 @@ vi.mock('@/lib/whatsapp', () => ({
   markUndeliverableIfPermanent: vi.fn(),
 }))
 vi.mock('@/lib/whatsapp-consent', () => ({ applyWhatsappConsentKeyword: vi.fn(), applyMetaUserPreference: vi.fn() }))
-vi.mock('@/lib/whatsapp-flow/completion.js', () => ({ handleFlowCompletion: vi.fn() }))
+vi.mock('@/lib/whatsapp-flow/completion.js', () => ({ handleFlowCompletion: vi.fn(), publishFlowClassBooking: vi.fn(async () => {}) }))
 vi.mock('@/lib/whatsapp-flow/booking-notice', () => ({
   FLOW_SUBMISSION_BODY: '[Booking submitted via WhatsApp Flow]',
+  FLOW_UNPROCESSED_BODY: '[Booking form submitted but could not be processed]',
   sendFlowSubmissionReply: vi.fn(async () => ({ sent: true })),
 }))
 vi.mock('@/lib/whatsapp-config', async (importOriginal) => ({
@@ -59,7 +60,7 @@ import { createServerClient } from '@/lib/supabase'
 import { resolveWhatsAppNumberByPhoneNumberId } from '@/lib/whatsapp-config'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
 import { pickInboundContact } from '@/lib/whatsapp'
-import { handleFlowCompletion } from '@/lib/whatsapp-flow/completion.js'
+import { handleFlowCompletion, publishFlowClassBooking } from '@/lib/whatsapp-flow/completion.js'
 import { sendFlowSubmissionReply } from '@/lib/whatsapp-flow/booking-notice'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { logError } from '@/lib/log'
@@ -132,25 +133,26 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('FLOWACK.1 — a handled Flow class submission', () => {
-  it('books first (after the marker is stored), then ONE acknowledgement, and Mia never runs', async () => {
-    let markerStoredFirst = null
-    handleFlowCompletion.mockImplementationOnce(async () => {
-      markerStoredFirst = !!insertedInbound()
-      return { handled: true, kind: 'class' }
-    })
+  it('queues, stores the marker, acknowledges ONCE, and only THEN wakes the processor; Mia never runs', async () => {
+    const order = []
+    handleFlowCompletion.mockImplementationOnce(async () => { order.push('queued'); return { handled: true, kind: 'class', requestId: 'cbr1' } })
+    sendFlowSubmissionReply.mockImplementationOnce(async () => { order.push(insertedInbound() ? 'ack(marker stored)' : 'ack(no marker)'); return { sent: true } })
+    publishFlowClassBooking.mockImplementationOnce(async () => { order.push('publish') })
     const res = await POST(reqFor(flowSubmit()))
     expect(res.status).toBe(200)
 
     expect(handleFlowCompletion).toHaveBeenCalledTimes(1)
     expect(handleFlowCompletion).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-still', contact: expect.objectContaining({ id: 'ct1' }) }))
-    // The processor finds the thread by this marker, so it must exist before the row is queued.
-    expect(markerStoredFirst).toBe(true)
+    // The ack goes before the processor can run, so a fast outcome ("the team is
+    // confirming") can never arrive ahead of "we're booking your spot".
+    expect(order).toEqual(['queued', 'ack(marker stored)', 'publish'])
+    expect(publishFlowClassBooking).toHaveBeenCalledWith('cbr1')
     expect(insertedInbound().ops.find(([m]) => m === 'insert')[1]).toMatchObject({ message_type: 'interactive', body: '[Booking submitted via WhatsApp Flow]' })
 
     expect(maybeAutoReply).not.toHaveBeenCalled()
     expect(sendFlowSubmissionReply).toHaveBeenCalledTimes(1)
     expect(sendFlowSubmissionReply).toHaveBeenCalledWith(db, {
-      conversationId: 'conv-1', locationId: 'loc-still', completion: { handled: true, kind: 'class' },
+      conversationId: 'conv-1', locationId: 'loc-still', completion: { handled: true, kind: 'class', requestId: 'cbr1' },
     })
     // The system answered the customer: no generic "new WhatsApp" staff push.
     expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
@@ -166,21 +168,34 @@ describe('FLOWACK.1 — a handled Flow class submission', () => {
     expect(sendPushToRolesAtLocation).toHaveBeenCalledTimes(1)
   })
 
-  it('an acknowledgement that throws is logged structurally and the webhook still 200s', async () => {
-    handleFlowCompletion.mockResolvedValueOnce({ handled: true, kind: 'class' })
+  it('an acknowledgement that throws is logged structurally, the processor is still woken, the webhook 200s', async () => {
+    handleFlowCompletion.mockResolvedValueOnce({ handled: true, kind: 'class', requestId: 'cbr1' })
     sendFlowSubmissionReply.mockRejectedValueOnce(new Error('boom'))
     const res = await POST(reqFor(flowSubmit()))
     expect(res.status).toBe(200)
+    expect(publishFlowClassBooking).toHaveBeenCalledWith('cbr1')
     expect(maybeAutoReply).not.toHaveBeenCalled()
     expect(logError).toHaveBeenCalledWith('wa-webhook', expect.stringMatching(/acknowledg/), expect.objectContaining({ conversationId: 'conv-1' }))
   })
 
-  it('the booking runs even when the inbound row could not be stored, and is acknowledged', async () => {
+  it('the booking runs even when the inbound row could not be stored, is acknowledged, and the lost marker is logged', async () => {
     inboundInsert = { data: null, error: { message: 'insert failed' } }
-    handleFlowCompletion.mockResolvedValueOnce({ handled: true, kind: 'class' })
+    handleFlowCompletion.mockResolvedValueOnce({ handled: true, kind: 'class', requestId: 'cbr1' })
     await POST(reqFor(flowSubmit()))
     expect(handleFlowCompletion).toHaveBeenCalledTimes(1)
     expect(sendFlowSubmissionReply).toHaveBeenCalledTimes(1)
+    expect(publishFlowClassBooking).toHaveBeenCalledWith('cbr1')
+    expect(maybeAutoReply).not.toHaveBeenCalled()
+    // Its outcome notices cannot find the thread: say so, structurally.
+    expect(logError).toHaveBeenCalledWith('wa-webhook', expect.stringMatching(/marker/), expect.objectContaining({ requestId: 'cbr1', conversationId: 'conv-1' }))
+  })
+
+  it('a duplicate submission (the class is already asked for) is answered, never re-published', async () => {
+    const completion = { handled: true, kind: 'class', duplicate: true, existingStatus: 'queued' }
+    handleFlowCompletion.mockResolvedValueOnce(completion)
+    await POST(reqFor(flowSubmit()))
+    expect(sendFlowSubmissionReply).toHaveBeenCalledWith(db, { conversationId: 'conv-1', locationId: 'loc-still', completion })
+    expect(publishFlowClassBooking).not.toHaveBeenCalled()
     expect(maybeAutoReply).not.toHaveBeenCalled()
   })
 })
@@ -196,11 +211,14 @@ describe('FLOWACK.1 — a consult submission (booked on submit)', () => {
 })
 
 describe('FLOWACK.1 — a submission that was NOT handled keeps today\'s path', () => {
-  it('handled:false → no acknowledgement, Mia (and staff) see it, logged at error', async () => {
+  it('handled:false → stored as "could not be processed" (never the queued marker), Mia (and staff) see it, logged', async () => {
     handleFlowCompletion.mockResolvedValueOnce({ handled: false })
     await POST(reqFor(flowSubmit()))
     expect(sendFlowSubmissionReply).not.toHaveBeenCalled()
+    expect(publishFlowClassBooking).not.toHaveBeenCalled()
+    expect(insertedInbound().ops.find(([m]) => m === 'insert')[1]).toMatchObject({ message_type: 'interactive', body: '[Booking form submitted but could not be processed]' })
     expect(maybeAutoReply).toHaveBeenCalledTimes(1)
+    expect(maybeAutoReply).toHaveBeenCalledWith(db, expect.objectContaining({ body: '[Booking form submitted but could not be processed]' }))
     expect(logError).toHaveBeenCalledWith('wa-webhook', expect.stringMatching(/not booked/), expect.objectContaining({ conversationId: 'conv-1' }))
   })
 

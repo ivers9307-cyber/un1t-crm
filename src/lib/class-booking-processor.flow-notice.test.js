@@ -126,3 +126,14 @@ describe('FLOWACK.1 — failed without a card', () => {
     expect(notifyFlowBookingOutcome).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'r1' }), { outcome: 'failed' })
   })
 })
+
+// FLOWACK.1 review — a record-only card that leaves the row 'failed' with its
+// own reason (un1t's trial-used: the customer was just emailed their options)
+// gets no "the team is confirming your class" line and no thread link.
+describe('FLOWACK.1 — a card whose customer was already told by email', () => {
+  it('trial_used_options_sent: no Flow notice at all', async () => {
+    const r = await routeToReview(makeDb(member), req, 'un1t_trial_used', { provider: 'un1t_online', rowStatus: 'failed', rowLastError: 'trial_used_options_sent' })
+    expect(r.outcome).toBe('needs_review')
+    expect(notifyFlowBookingOutcome).not.toHaveBeenCalled()
+  })
+})

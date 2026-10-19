@@ -97,7 +97,7 @@ describe('settings write-through contract', () => {
   })
 
   // FLOWACK.1 — the WhatsApp Flow booking acknowledgement and holding line.
-  for (const key of ['flow_booking_ack_text', 'flow_booking_holding_text']) {
+  for (const key of ['flow_booking_ack_text', 'flow_booking_holding_text', 'flow_booking_duplicate_text']) {
     it(`${key} round-trips, blank → null (default-copy), inherits from the org`, () => {
       expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, [key]: '  We are on it.  ' }))[key]).toBe('We are on it.')
       expect(buildCustomerAgentSettings(SettingsSchema.parse({ enabled: true, [key]: '   ' }))[key]).toBe(null)

@@ -16,14 +16,14 @@ vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.f
 import {
   FLOW_SUBMISSION_BODY, findFlowThread, sendFlowSubmissionReply, notifyFlowBookingOutcome,
 } from './booking-notice.js'
-import { DEFAULT_FLOW_BOOKING_ACK_TEXT, DEFAULT_FLOW_BOOKING_HOLDING_TEXT } from '@/lib/agent/default-copy'
+import { DEFAULT_FLOW_BOOKING_ACK_TEXT, DEFAULT_FLOW_BOOKING_HOLDING_TEXT, DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT } from '@/lib/agent/default-copy'
 import { sendAgentThreadMessage } from '@/lib/agent/notify'
 import { resolveAgentSettings } from '@/lib/agent/settings-resolve'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 
 // A recording double: whatsapp_messages answers the marker lookup; every
 // update is recorded with its filters.
-function makeDb({ markers = [], markerError = null, stampError = null, stampRows = [{ id: 'amr1' }] } = {}) {
+function makeDb({ markers = [], markerError = null, stampError = null, stampRows = [{ id: 'amr1' }], card = { data: null, error: null } } = {}) {
   const calls = []
   return {
     calls,
@@ -39,6 +39,8 @@ function makeDb({ markers = [], markerError = null, stampError = null, stampRows
         if (table === 'agent_membership_requests') out = { data: stampError ? null : stampRows, error: stampError }
         return Promise.resolve(out).then(res, rej)
       }
+      // The card re-read after a link that touched no row.
+      b.maybeSingle = async () => { calls.push({ table, ops, terminal: 'maybeSingle' }); return card }
       return b
     },
   }
@@ -87,6 +89,28 @@ describe('sendFlowSubmissionReply', () => {
     expect(sendAgentThreadMessage).toHaveBeenCalledTimes(1)
     expect(sendAgentThreadMessage).toHaveBeenCalledWith(expect.anything(), { channel: 'whatsapp', conversationId: 'conv1', text: DEFAULT_FLOW_BOOKING_ACK_TEXT })
     expect(DEFAULT_FLOW_BOOKING_ACK_TEXT).toBe("Got it, we're booking your spot now. You'll get a confirmation shortly.")
+  })
+
+  // FLOWACK.1 review — a re-submit of a class already asked for (23505) gets no
+  // ack promising a new booking: it is told it already asked, or that it is booked.
+  it('duplicate, still in the queue: the duplicate line (default), never the ack', async () => {
+    await sendFlowSubmissionReply(makeDb(), { conversationId: 'conv1', locationId: 'loc1', completion: { handled: true, kind: 'class', duplicate: true, existingStatus: 'queued' } })
+    expect(sendAgentThreadMessage.mock.calls[0][1].text).toBe(DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT)
+    expect(DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT).toBe("You've already asked for that class. You'll get a confirmation shortly.")
+  })
+
+  it('duplicate, unknown status: the duplicate line; the operator\'s flow_booking_duplicate_text wins', async () => {
+    resolveAgentSettings.mockResolvedValueOnce({ ok: true, settings: { flow_booking_duplicate_text: 'Already on it.' }, location: { id: 'loc1', timezone: null } })
+    await sendFlowSubmissionReply(makeDb(), { conversationId: 'conv1', locationId: 'loc1', completion: { handled: true, kind: 'class', duplicate: true, existingStatus: null } })
+    expect(sendAgentThreadMessage.mock.calls[0][1].text).toBe('Already on it.')
+  })
+
+  it('duplicate of a class already booked: the booking confirmation', async () => {
+    await sendFlowSubmissionReply(makeDb(), {
+      conversationId: 'conv1', locationId: 'loc1',
+      completion: { handled: true, kind: 'class', duplicate: true, existingStatus: 'booked', className: 'HIIT', startsAt: '2026-10-21T17:00:00.000Z' },
+    })
+    expect(sendAgentThreadMessage.mock.calls[0][1].text).toBe("Good news, you're booked in for HIIT, Wed, 21 Oct, 18:00. See you there.")
   })
 
   it('class: the operator\'s flow_booking_ack_text wins (em dashes scrubbed)', async () => {
@@ -168,6 +192,29 @@ describe('notifyFlowBookingOutcome', () => {
     const r = await notifyFlowBookingOutcome(db, REQUEST, { outcome: 'needs_review', approvalId: 'amr1' })
     expect(r).toMatchObject({ sent: true, stamped: false })
     expect(logError).toHaveBeenCalledWith('flow-booking-notice', expect.stringMatching(/card/), expect.objectContaining({ requestId: 'cbr1', approvalId: 'amr1' }))
+  })
+
+  // FLOWACK.1 review — the link is judged on the rows it touched.
+  it('a card already linked to THIS thread counts as linked', async () => {
+    const db = makeDb({ markers: [marker()], stampRows: [], card: { data: { id: 'amr1', conversation_id: 'conv1' }, error: null } })
+    const r = await notifyFlowBookingOutcome(db, REQUEST, { outcome: 'needs_review', approvalId: 'amr1' })
+    expect(r).toMatchObject({ stamped: true, sent: true })
+  })
+
+  it('a card linked to ANOTHER thread is left as it is and logged; the holding line still goes', async () => {
+    const db = makeDb({ markers: [marker()], stampRows: [], card: { data: { id: 'amr1', conversation_id: 'conv-other' }, error: null } })
+    const r = await notifyFlowBookingOutcome(db, REQUEST, { outcome: 'needs_review', approvalId: 'amr1' })
+    expect(r).toMatchObject({ stamped: false, sent: true })
+    const updates = db.calls.filter((c) => c.table === 'agent_membership_requests' && c.ops.some(([m]) => m === 'update'))
+    expect(updates).toHaveLength(1) // the guarded link only: no overwrite
+    expect(logWarn).toHaveBeenCalledWith('flow-booking-notice', expect.stringMatching(/another thread/), expect.objectContaining({ approvalId: 'amr1', conversationId: 'conv1', linkedConversationId: 'conv-other' }))
+  })
+
+  it('a card that is not there is logged at error', async () => {
+    const db = makeDb({ markers: [marker()], stampRows: [], card: { data: null, error: null } })
+    const r = await notifyFlowBookingOutcome(db, REQUEST, { outcome: 'needs_review', approvalId: 'amr1' })
+    expect(r).toMatchObject({ stamped: false })
+    expect(logError).toHaveBeenCalledWith('flow-booking-notice', expect.stringMatching(/card/), expect.objectContaining({ approvalId: 'amr1' }))
   })
 
   it('failed with no card: the holding line goes and the missing card is logged at error', async () => {

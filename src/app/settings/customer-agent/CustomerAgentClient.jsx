@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { BarChart3 } from 'lucide-react'
 import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-form/defaults'
-import { defaultHoldingMessage, defaultWelcomeGreeting, DEFAULT_BOOKING_CTA_LABEL, DEFAULT_FLOW_BOOKING_ACK_TEXT, DEFAULT_FLOW_BOOKING_HOLDING_TEXT } from '@/lib/agent/default-copy'
+import { defaultHoldingMessage, defaultWelcomeGreeting, DEFAULT_BOOKING_CTA_LABEL, DEFAULT_FLOW_BOOKING_ACK_TEXT, DEFAULT_FLOW_BOOKING_HOLDING_TEXT, DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT } from '@/lib/agent/default-copy'
 import { productName } from '@/lib/brand-name'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
 import { zoneCity } from '@/lib/record-time'
@@ -780,6 +780,14 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
             onChange={e => setField('flow_booking_holding_text', e.target.value)}
             placeholder={DEFAULT_FLOW_BOOKING_HOLDING_TEXT} />
           <p className="text-xs text-un1t-muted mt-1">Sent when a class booked through the WhatsApp booking form could not be booked automatically and goes to the team in Approvals. Approving or declining the request there then tells the customer in the chat. Leave blank to use the default shown.</p>
+        </div>
+
+        <div>
+          <FieldLabel tag={sourceTag(['flow_booking_duplicate_text'])}>Booking form sent twice message (WhatsApp)</FieldLabel>
+          <input className={inputCls} maxLength={500} value={settings.flow_booking_duplicate_text || ''}
+            onChange={e => setField('flow_booking_duplicate_text', e.target.value)}
+            placeholder={DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT} />
+          <p className="text-xs text-un1t-muted mt-1">Sent when a customer sends the WhatsApp booking form for a class they have already asked for. If that class is already booked they get the booking confirmation instead. Leave blank to use the default shown.</p>
         </div>
 
         {/* APPROVALS-STUDIO.1 — sent in-thread when staff decline a customer

@@ -218,8 +218,11 @@ export async function routeToReview(db, request, reason, { personContactIds = nu
     })
   } catch (e) { logWarn('cbp', 'approval notify failed', { err: e }) }
   // FLOWACK.1 — a Flow customer hears that the team is confirming, and the card
-  // is linked to their thread so approving or declining it messages them.
-  await flowNotice(db, request, { outcome: 'needs_review', approvalId })
+  // is linked to their thread so approving or declining it messages them. Not
+  // for a record-only card that leaves the row with its own terminal status
+  // (un1t's trial_used_options_sent): that customer was just emailed what to
+  // do, and "the team is confirming your class" would contradict it.
+  if (rowStatus === 'needs_review') await flowNotice(db, request, { outcome: 'needs_review', approvalId })
   return { outcome: 'needs_review', detail: reason }
 }
 

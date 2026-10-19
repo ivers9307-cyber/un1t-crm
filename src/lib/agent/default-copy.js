@@ -63,3 +63,15 @@ export const DEFAULT_FLOW_BOOKING_ACK_TEXT = "Got it, we're booking your spot no
  * flow_booking_holding_text overrides it.
  */
 export const DEFAULT_FLOW_BOOKING_HOLDING_TEXT = 'Thanks, the team is confirming your class and will be in touch shortly.'
+
+/**
+ * FLOWACK.1 review — the reply to a Flow submission for a class this customer
+ * has already asked for (the queue's one-request-per-class index refused a
+ * second row). Not "we're booking your spot": nothing new is booked. The
+ * confirmation of the original request still follows (the class_confirmed
+ * template, the Flow outcome notice or the un1t.online email), so it does not
+ * promise it "here". A duplicate of a class already BOOKED gets the booking
+ * confirmation instead. The operator's flow_booking_duplicate_text overrides it.
+ */
+export const DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT = "You've already asked for that class. You'll get a confirmation shortly."
+

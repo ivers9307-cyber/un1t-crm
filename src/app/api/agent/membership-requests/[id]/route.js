@@ -826,6 +826,30 @@ export async function PATCH(request, { params }) {
   if (manualNotified) customerNotified = manualNotified
   if (un1tNotified) customerNotified = un1tNotified
 
+  // FLOWACK.1 review — a un1t.online (or hand-booked) card filed from a
+  // WhatsApp Flow carries its thread (routeToReview links it): a real booking
+  // is confirmed there too, like the Glofox approve path (the email above
+  // still goes). A record-only un1t approval records what staff did by hand
+  // and confirms nothing. Best-effort.
+  const bookedByApproval = (un1tBooking || manualBooking) && finalStatus === 'actioned'
+    && executed?.ok === true && executed?.record_only !== true
+  if (executing && bookedByApproval && row.conversation_id) {
+    try {
+      const { sendAgentThreadMessage, buildBookingConfirmationText } = await import('@/lib/agent/notify')
+      await sendAgentThreadMessage(db, {
+        channel: row.channel,
+        conversationId: row.conversation_id,
+        text: buildBookingConfirmationText({
+          className: details?.class_name,
+          classTime: details?.class_time,
+          template: await confirmationTemplate('booking'),
+        }),
+      })
+    } catch (e) {
+      console.warn(`[agent-requests] Flow card confirmation send error: ${e?.message || e}`)
+    }
+  }
+
   // APPROVALS-STUDIO.1 — a decline is never silence: tell the customer
   // in-thread (operator-editable approval_decline_text). Best-effort; only
   // for requests that came from a live conversation (funnel rows without a

@@ -28,10 +28,14 @@
 // contact + studio + time find that message and its thread. A website /start
 // row has no such message near it. A failed lookup is "not known to be a Flow
 // request", which is exactly the behaviour before FLOWACK.1.
-import { DEFAULT_FLOW_BOOKING_ACK_TEXT, DEFAULT_FLOW_BOOKING_HOLDING_TEXT } from '@/lib/agent/default-copy'
+import { DEFAULT_FLOW_BOOKING_ACK_TEXT, DEFAULT_FLOW_BOOKING_HOLDING_TEXT, DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT } from '@/lib/agent/default-copy'
 import { logError, logWarn } from '@/lib/log'
 
 export const FLOW_SUBMISSION_BODY = '[Booking submitted via WhatsApp Flow]'
+// FLOWACK.1 review — a submission that was NOT booked or queued is stored with
+// this body instead, so neither Mia (prompt.js) nor findFlowThread can mistake
+// it for a request in progress.
+export const FLOW_UNPROCESSED_BODY = '[Booking form submitted but could not be processed]'
 
 // The submission is stored a moment before its row is queued; a row created
 // more than this after the newest submission is not that submission's.
@@ -126,7 +130,16 @@ export async function sendFlowSubmissionReply(db, { conversationId, locationId, 
   try {
     const { settings, timezone } = await studioCopy(db, locationId)
     let text
-    if (completion?.kind === 'consult') {
+    if (completion?.kind === 'class' && completion.duplicate === true && completion.existingStatus === 'booked') {
+      // Re-sent for a class already booked: say it is booked.
+      const zone = await zoneFor(locationId, timezone)
+      const { classLabel } = await import('@/lib/class-booking-processor')
+      text = await confirmationText(settings, { className: completion.className || 'your class', classTime: classLabel(completion.startsAt, zone) })
+    } else if (completion?.kind === 'class' && completion.duplicate === true) {
+      // Re-sent while the first request is still being booked: nothing new is booked.
+      const { stripEmDashes } = await import('@/lib/agent/core')
+      text = stripEmDashes(operatorText(settings, 'flow_booking_duplicate_text') || DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT).trim()
+    } else if (completion?.kind === 'consult') {
       // Booked on submit (createEventBooking): say so, with the slot on the studio's clock.
       let classTime = null
       if (completion.date && completion.startTime) {
@@ -144,6 +157,40 @@ export async function sendFlowSubmissionReply(db, { conversationId, locationId, 
   } catch (err) {
     logError(LOG, 'flow submission reply failed', { conversationId, locationId, reason: 'error', err })
     return { sent: false, reason: 'error' }
+  }
+}
+
+// Link the staff card to the thread, judged on the rows it touched: only an
+// unlinked card is written; one already linked to this thread counts; one
+// linked to ANOTHER thread is left as it is (its own conversation keeps its
+// notices) and logged; a missing or unreadable card is logged at error.
+async function linkCardToThread(db, { approvalId, conversationId, log }) {
+  const lost = 'approve/decline will not message the customer'
+  try {
+    const { data, error } = await db.from('agent_membership_requests')
+      .update({ conversation_id: conversationId, channel: 'whatsapp' })
+      .eq('id', approvalId)
+      .is('conversation_id', null)
+      .select('id')
+    if (error) {
+      logError(LOG, `staff card not linked to the WhatsApp thread (${lost})`, { ...log, approvalId, conversationId, err: error })
+      return false
+    }
+    if (Array.isArray(data) && data.length > 0) return true
+    const { data: card, error: readErr } = await db.from('agent_membership_requests')
+      .select('id, conversation_id')
+      .eq('id', approvalId)
+      .maybeSingle()
+    if (readErr || !card) {
+      logError(LOG, `staff card link touched no row and the card could not be read (${lost})`, { ...log, approvalId, conversationId, err: readErr ?? null })
+      return false
+    }
+    if (card.conversation_id === conversationId) return true
+    logWarn(LOG, 'staff card already linked to another thread; left as it is', { ...log, approvalId, conversationId, linkedConversationId: card.conversation_id ?? null })
+    return false
+  } catch (err) {
+    logError(LOG, `staff card link threw (${lost})`, { ...log, approvalId, conversationId, err })
+    return false
   }
 }
 
@@ -166,20 +213,8 @@ export async function notifyFlowBookingOutcome(db, request, { outcome, approvalI
     // Link the card first: a lost holding line must not also lose the
     // approve/decline notices, and a lost stamp must not lose the line.
     let stamped
-    if (approvalId) {
-      stamped = false
-      try {
-        const { error } = await db.from('agent_membership_requests')
-          .update({ conversation_id: conversationId, channel: 'whatsapp' })
-          .eq('id', approvalId)
-          .is('conversation_id', null)
-          .select('id')
-        if (error) logError(LOG, 'staff card not linked to the WhatsApp thread (approve/decline will not message the customer)', { ...log, approvalId, conversationId, err: error })
-        else stamped = true
-      } catch (err) {
-        logError(LOG, 'staff card link threw (approve/decline will not message the customer)', { ...log, approvalId, conversationId, err })
-      }
-    } else if (outcome !== 'booked') {
+    if (approvalId) stamped = await linkCardToThread(db, { approvalId, conversationId, log })
+    else if (outcome !== 'booked') {
       logError(LOG, 'Flow booking ended with no staff card; the customer is told the team will confirm', { ...log, conversationId })
     }
 

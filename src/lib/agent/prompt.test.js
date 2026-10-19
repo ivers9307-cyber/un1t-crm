@@ -173,6 +173,8 @@ describe('a Flow submission is never treated as a booking', () => {
       expect(out).not.toMatch(/including via the "Book your first visit" flow/)
       expect(out).toContain('Only treat a class as booked when a booking tool or a booking confirmation already in the thread confirms it.')
       expect(out).toContain('"[Booking submitted via WhatsApp Flow]" message is a request the system is still processing, never a booking')
+      // FLOWACK.1 review — a submission that was NOT queued is stored differently, and Mia hands it to the team.
+      expect(out).toContain('A "[Booking form submitted but could not be processed]" message means their booking form did not go through: nothing is booked or queued.')
     }
   })
 })
