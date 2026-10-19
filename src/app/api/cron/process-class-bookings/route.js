@@ -18,6 +18,12 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 const STALE_MS = 10 * 60_000 // a row 'processing' longer than this lost its run (maxDuration is 5m)
+// FLOWACK.1 review — a row this young belongs to its push. The WhatsApp Flow
+// webhook acknowledges the customer and only then publishes the row to QStash;
+// a sweep that claimed it in between could send a fast outcome ("the team is
+// confirming") ahead of "we're booking your spot". A row whose push never came
+// is swept on a later tick (one minute late at worst, never lost).
+const FRESH_ROW_GRACE_MS = 30_000
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -74,7 +80,8 @@ export async function GET(request) {
     }
 
     const { data: rows, error: rowsErr } = await db.from('class_booking_requests')
-      .select('*').eq('status', 'queued').order('created_at', { ascending: true }).limit(25)
+      .select('*').eq('status', 'queued').lt('created_at', new Date(Date.now() - FRESH_ROW_GRACE_MS).toISOString())
+      .order('created_at', { ascending: true }).limit(25)
     if (rowsErr) {
       // A failed read is not "queue empty". Nothing is claimed; the rows stay
       // queued for the next tick and for the QStash worker.
