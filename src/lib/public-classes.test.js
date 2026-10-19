@@ -289,7 +289,8 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
 
   it('shapes each class to exactly PUBLIC_CLASS_KEYS, id un1t:<id>, name trimmed, no capacity figure', async () => {
     await noGlofox()
-    const out = await readPublicClasses(un1tDb().db, 'HATCH', 7)
+    const startsAt = at(24)
+    const out = await readPublicClasses(un1tDb({ events: { data: [ev({ starts_at: startsAt })], error: null } }).db, 'HATCH', 7)
     expect(out.classes).toHaveLength(1)
     const [c] = out.classes
     expect(Object.keys(c).sort()).toEqual([...PUBLIC_CLASS_KEYS].sort())
@@ -297,7 +298,14 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
     expect(c.event_id).toBe('un1t:u-1')
     expect(c.name).toBe('RALLY')
     expect(/^\d{2}:\d{2}$/.test(c.time)).toBe(true)
-    expect(JSON.stringify(c)).not.toMatch(/36|"3"|:3[,}]/)
+    // PUBCLASSFLAKE.1 — the time fields carry the clock's digits (a "36" in the
+    // milliseconds failed CI on #2155), so pin them to the fixture's start and
+    // look for the capacity figures (36 places, 3 booked, 33 left) only in the rest.
+    expect(c.starts_at).toBe(startsAt)
+    for (const [k, v] of Object.entries(c)) {
+      expect(typeof v).toBe('string')
+      if (!['starts_at', 'day', 'day_label', 'time'].includes(k)) expect(v).not.toMatch(/3/)
+    }
   })
 
   it('never lists the hand-written timetable at a un1t.online studio', async () => {
