@@ -12,5 +12,5 @@ export { graphToTree, treeToGraph, isPureTree, flattenTreeIds } from './tree.js'
 export {
   NODE_TYPES, ACTIVE_NODE_TYPES, RETIRED_NODE_TYPES,
   TRIGGER_TYPES, CHANNEL_NODE_TYPES, CONFIG_NODE_TYPES,
-  TRIGGER_SOURCE_ID, isChannelNode, parseGraphShape,
+  TRIGGER_SOURCE_ID, isChannelNode, parseGraphShape, BRANCH_PREDICATE_TYPES,
 } from './schema.js'
