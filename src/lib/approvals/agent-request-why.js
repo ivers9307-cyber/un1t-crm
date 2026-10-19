@@ -161,12 +161,23 @@ const MIA_UN1T_REASONS = {
     'Mia asked un1t.online for the free trial, but it could not be confirmed. Check their account in un1t.online for the trial credits.',
   trial_product_not_free:
     "The studio's trial product is not a live free product in un1t.online, so no trial was given. Fix the product or the trial setting, then sort the member in un1t.online.",
+  un1t_trial_granted_no_credits:
+    'Mia gave them the free trial in un1t.online, but its credits did not show when she booked the class, so nothing was booked. Check their credits in un1t.online.',
+  // Mia's closed trial rows (status failed), as Fix & retry may show them.
+  un1t_trial_used:
+    'un1t.online says they have had the free trial before, so Mia gave no trial and showed them the paid options instead.',
+  un1t_trial_retry:
+    'un1t.online was busy when Mia asked for the free trial, so nothing was given and the member was asked to try again.',
+  un1t_trial_not_sent:
+    'The free trial request could not be sent to un1t.online, so nothing was given and Mia handed over.',
 }
 
 // What approving a Mia trial card does: the class on it is booked only if
 // credits show (Ruling 28, never a trial); with no class there is nothing to book.
-const TRIAL_REASON = /^(un1t_trial_check_failed|trial_not_configured|un1t_trial_unverified|trial_product_not_free|un1t_trial_failed:)/
+const TRIAL_REASON = /^(un1t_trial_check_failed|trial_not_configured|un1t_trial_unverified|trial_product_not_free|un1t_trial_granted_no_credits|un1t_trial_used|un1t_trial_retry|un1t_trial_not_sent|un1t_trial_failed:)/
 function trialApproveLine(d) {
+  // un1t_trial_used is record-only in D's executor (UN1T_RECORD_ONLY_REASONS).
+  if (d.reason === 'un1t_trial_used') return 'Approving only records this; it books nothing and never gives a trial.'
   return d.event_id
     ? 'Approving books the class on this card only if credits show in un1t.online; it never gives a trial.'
     : 'No class is named on this card, so approving books nothing.'

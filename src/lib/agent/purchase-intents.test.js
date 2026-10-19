@@ -32,6 +32,13 @@ vi.mock('@/lib/membership/reads', async (importOriginal) => {
   return { ...(await importOriginal()), membershipReadsFor: h.readsFor }
 })
 vi.mock('./approval-notify', () => ({ notifyAgentApprovalRequest: vi.fn(async () => {}) }))
+// The refusal table is empty until the MIA TEST run fills it (D's PR 6); a
+// fictional table classifies class_full and no_credits the way it will.
+vi.mock('@/lib/un1t-online-write-judge', async (importOriginal) => {
+  const actual = await importOriginal()
+  const TABLE = Object.freeze({ TEST_CLASS_FULL: 'class_full', TEST_NO_CREDITS: 'no_credits' })
+  return { ...actual, classifyRefusal: (r) => actual.classifyRefusal(r, TABLE) }
+})
 
 import { logWarn, logError, logInfo } from '@/lib/log'
 import { Un1tWriteRefused, Un1tWriteUnknown, UN1T_WRITE_CODES as C } from '@/lib/un1t-online-write'
@@ -772,13 +779,89 @@ describe('the free trial (Task 20)', () => {
       expect(data.agent_membership_requests[0].details.trial).toMatchObject({ outcome: 'granted', method: 'charge', ledger_id: 'led-trial-1' })
     })
 
-    it('granted with a class, then Task 16\'s outcome handling (class full) applies', async () => {
-      h.book.mockResolvedValueOnce({ verdict: 'unknown', sent: true, id: null, code: null, message: null, alreadyBooked: false, recovered: null, retryable: false, data: null, ledgerId: 'led-book-2' })
+    // Fix round 1: after D granted the trial, every booking outcome keeps the
+    // trial (the model hears it is on their account, any retry is book_class)
+    // and nothing is ever sold on top of it.
+    const bookResult = (over) => ({ verdict: 'refused', sent: false, id: null, code: null, message: null, alreadyBooked: false, recovered: null, retryable: false, data: null, ledgerId: 'led-book-2', ...over })
+    const keepsTheTrial = (out) => {
+      expect(out.trial_granted).toBe(true)
+      expect(out.booked).not.toBe(true)
+      expect(out.message).toMatch(/^The free trial is on their account now: tell them so\./)
+      expect(out.message).toMatch(/use book_class/)
+      expect(out.needs_purchase).toBeUndefined()
+      expect(out.offers).toBeUndefined()
+      expect(out.trial_used).toBeUndefined()
+    }
+
+    it('granted, then book unknown: Task 16\'s un1t_outcome_unknown card + handoff, the trial kept', async () => {
+      h.book.mockResolvedValueOnce(bookResult({ verdict: 'unknown', sent: true }))
       const { db, data } = withTrial()
       const out = await sendPurchaseLink(ctxFor(db), classInput(), hatch(), deps)
-      expect(out).toMatchObject({ trial_granted: true, booked: false, handoff: true, reason: 'un1t_outcome_unknown' })
+      keepsTheTrial(out)
+      expect(out).toMatchObject({ handoff: true, reason: 'un1t_outcome_unknown' })
+      expect(out.message).toContain(DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT)
       expect(pendingCards(data)).toHaveLength(1)
       expect(pendingCards(data)[0].details).toMatchObject({ reason: 'un1t_outcome_unknown', trial: { outcome: 'granted' } })
+    })
+
+    it('granted, then class full: relayed, the trial kept, no card', async () => {
+      h.book.mockResolvedValueOnce(bookResult({ code: 'TEST_CLASS_FULL', message: 'Class is full' }))
+      const { db, data } = withTrial()
+      const out = await sendPurchaseLink(ctxFor(db), classInput(), hatch(), deps)
+      keepsTheTrial(out)
+      expect(out).toMatchObject({ reason: 'class_full' })
+      expect(out.message).toMatch(/That class is full/)
+      expect(data.agent_membership_requests[0]).toMatchObject({ status: 'failed' })
+      expect(data.agent_membership_requests[0].details).toMatchObject({ reason: 'class_full', trial: { outcome: 'granted' } })
+      expect(pendingCards(data)).toEqual([])
+    })
+
+    it('granted, then book retry: try again with book_class; a repeat trial call gives nothing more and offers nothing', async () => {
+      h.book.mockResolvedValueOnce(bookResult({ code: C.RATE_BUDGET, retryable: true }))
+      const { db, data } = withTrial()
+      const ctx = ctxFor(db)
+      const out = await sendPurchaseLink(ctx, classInput(), hatch(), deps)
+      keepsTheTrial(out)
+      expect(out).toMatchObject({ try_again: true })
+      expect(pendingCards(data)).toEqual([])
+      // The model's natural next call: the trial again. No grant, no eligibility read, no upsell.
+      h.elig.mockClear()
+      const again = await sendPurchaseLink(ctx, classInput(), hatch(), deps)
+      expect(again).toMatchObject({ link_sent: false, trial_granted: true, already_granted: true })
+      expect(again.message).toMatch(/already on their account/)
+      expect(again.message).toMatch(/book_class/)
+      expect(again.trial_used).toBeUndefined()
+      expect(again.offers).toBeUndefined()
+      expect(JSON.stringify(again)).not.toContain(DEFAULT_TRIAL_USED_TEXT)
+      expect(h.grantTrial).toHaveBeenCalledTimes(1)
+      expect(h.elig).not.toHaveBeenCalled()
+      expect(data.agent_membership_requests).toHaveLength(1)
+    })
+
+    it('granted, then book no_credits: a staff card un1t_trial_granted_no_credits + handoff, never needs_purchase', async () => {
+      h.book.mockResolvedValueOnce(bookResult({ code: 'TEST_NO_CREDITS', message: 'No credits left' }))
+      const { db, data } = withTrial()
+      const out = await sendPurchaseLink(ctxFor(db), classInput(), hatch(), deps)
+      keepsTheTrial(out)
+      expect(out).toMatchObject({ handoff: true, reason: 'un1t_trial_granted_no_credits' })
+      expect(out.message).toContain(DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT)
+      // The write-ahead row is the one card, the trial recorded on it.
+      expect(data.agent_membership_requests).toHaveLength(1)
+      expect(pendingCards(data)).toHaveLength(1)
+      expect(pendingCards(data)[0].details).toMatchObject({
+        provider: 'un1t_online', origin: 'mia', reason: 'un1t_trial_granted_no_credits', event_id: EVENT,
+        trial: { outcome: 'granted', method: 'charge', ledger_id: 'led-trial-1' },
+      })
+      // No offer list was read for an upsell.
+      expect(h.elig).toHaveBeenCalledTimes(1)
+    })
+
+    it('granted with no class, then the trial asked for again in the turn: nothing more given', async () => {
+      const ctx = ctxFor(withTrial().db)
+      expect(await sendPurchaseLink(ctx, { offer_id: 'trial' }, hatch(), deps)).toMatchObject({ trial_granted: true })
+      expect(await sendPurchaseLink(ctx, classInput(), hatch(), deps)).toMatchObject({ already_granted: true })
+      expect(h.grantTrial).toHaveBeenCalledTimes(1)
+      expect(h.book).not.toHaveBeenCalled()
     })
 
     it('granted with no class: originRef mia-trial:<conversation>, no row, told the trial is on their account', async () => {

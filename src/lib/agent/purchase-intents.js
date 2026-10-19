@@ -71,7 +71,8 @@ import { TOOL_NOT_AT_THIS_STUDIO, refuseToolForTurn } from './tool-capability'
 import { fetchLiveEntitlement } from './un1t-member-read'
 import { un1tPriceLabel, zoneFor } from './un1t-tools'
 import {
-  alertUn1tBookingCard, executeUn1tBook, fileUn1tBookingCard, finishUn1tBookingRow, insertUn1tBookingRow, prepareUn1tBooking,
+  UN1T_TRIAL_CHECK_FAILED_LEAD, alertUn1tBookingCard, executeUn1tBook, fileUn1tBookingCard, finishUn1tBookingRow,
+  insertUn1tBookingRow, prepareUn1tBooking,
 } from './un1t-booking'
 
 const LOG_MODULE = 'mia-un1t'
@@ -521,17 +522,27 @@ async function answerLiveIntent(ctx, studio, intent, product, settings, nowMs, b
 
 const TRIAL_FIRST_MESSAGE = 'They can have the free trial: offer it first, before the paid offers. To give it, get a clear yes, then call send_purchase_link with offer_id "trial" (and the class, when they want one). Never say the trial is on their account until a tool says so.'
 const NEVER_TRIAL_YET = 'Never say the trial is on their account or that a class is booked.'
+// After D granted the trial: it is on their account whatever the booking said,
+// and nothing is ever sold or offered on top of it.
+const TRIAL_ON_ACCOUNT = 'The free trial is on their account now: tell them so. Never offer the free trial again and never offer anything to buy for this class; to try the class again, or book another, use book_class.'
+const TRIAL_ALREADY_GRANTED = Object.freeze({
+  link_sent: false,
+  trial_granted: true,
+  already_granted: true,
+  message: 'The free trial is already on their account from earlier in this conversation, so nothing more was given. Never offer the trial or anything to buy for it: to book a class, use list_upcoming_classes, then book_class. Never say a class is booked until book_class says so.',
+})
 
 /**
- * Per turn: how many grantTrial retries, and whether D said ineligible (then
- * it is not asked again). Keyed on the tool context, which auto-reply.js builds
+ * Per turn: how many grantTrial retries, whether D said ineligible (then it is
+ * not asked again), and whether D granted the trial (then a repeat trial call
+ * gives nothing and offers nothing: the next step is book_class). Keyed on the tool context, which auto-reply.js builds
  * once per turn and hands the purchase tools as it is.
  */
 const trialTurns = new WeakMap()
 function trialTurnOf(ctx) {
   let state = trialTurns.get(ctx)
   if (!state) {
-    state = { retries: 0, ineligible: false }
+    state = { retries: 0, ineligible: false, granted: false }
     trialTurns.set(ctx, state)
   }
   return state
@@ -549,7 +560,7 @@ function trialHandoff(reason, settings, lead) {
   }
 }
 const TRIAL_LEAD = Object.freeze({
-  check_failed: 'Whether they can have the free trial could not be checked just now, so no trial was offered or given, and the team has been asked to help.',
+  check_failed: UN1T_TRIAL_CHECK_FAILED_LEAD,
   needs_staff: 'The free trial could not be given automatically, so nothing was given or booked, and the team has been asked to sort it out.',
   retry_again: 'The free trial still could not be added, so nothing was given or booked.',
   not_sent: 'The free trial could not be asked for just now, so nothing was given or booked.',
@@ -644,6 +655,7 @@ async function sendTrial(ctx, input, studio, { now }) {
   const db = ctx.db
   const settings = await actionSettings(ctx, studio)
   const turn = trialTurnOf(ctx)
+  if (turn.granted) return { ...TRIAL_ALREADY_GRANTED }
   if (turn.ineligible) return trialUsedAnswer(db, studio, settings)
 
   // The class, when one is named: Task 16's pre-flight, nothing written.
@@ -697,6 +709,7 @@ async function sendTrial(ctx, input, studio, { now }) {
   const record = trialRecord(granted)
 
   if (granted?.outcome === 'granted') {
+    turn.granted = true
     if (!booking) {
       return {
         link_sent: false,
@@ -718,8 +731,15 @@ async function sendTrial(ctx, input, studio, { now }) {
         message: 'The free trial is on their account now, and the class is queued for the team to confirm. Tell them both, and that they will hear back shortly. Never say the class is booked yet.',
       }
     }
-    const answer = await executeUn1tBook(ctx, studio, withTrial, requestId, { settings, offersFor: offersForBooking })
-    return { trial_granted: true, ...answer }
+    // Task 16's outcome handling, except that no_credits is a staff card
+    // (afterTrial), never an upsell. Whatever the booking said, the model hears
+    // the trial is on their account and that any retry is book_class.
+    const answer = await executeUn1tBook(ctx, studio, withTrial, requestId, { settings, afterTrial: true })
+    return {
+      ...answer,
+      trial_granted: true,
+      message: answer.message ? `${TRIAL_ON_ACCOUNT} ${answer.message}` : TRIAL_ON_ACCOUNT,
+    }
   }
 
   if (granted?.outcome === 'ineligible') {

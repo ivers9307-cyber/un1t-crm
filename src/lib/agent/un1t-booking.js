@@ -173,12 +173,17 @@ const PENDING_APPROVAL = Object.freeze({
   pending_approval: true,
   message: 'Queued for the team to confirm. Tell the customer they will hear back shortly. Never say it is booked yet.',
 })
+/** The one wording for a failed trial eligibility read (purchase-intents.js uses it too). */
+export const UN1T_TRIAL_CHECK_FAILED_LEAD = 'Whether they can have the free trial could not be checked just now, so no trial was offered or given and nothing was booked, and the team has been asked to help.'
+
 const HANDOFF_LEAD = Object.freeze({
   booking_rejected: 'un1t.online did not accept this booking, and the team has been asked to sort it out.',
   un1t_outcome_unknown: 'un1t.online did not confirm whether this booking went through, and the team has been asked to check.',
   un1t_book_not_sent: 'The booking could not be sent just now, so nothing was booked.',
   // MIAHATCH.6 (Task 20) — whether they may have the free trial could not be read.
-  un1t_trial_check_failed: 'Whether they can have the free trial could not be checked just now, so nothing was booked or offered, and the team has been asked to help.',
+  un1t_trial_check_failed: UN1T_TRIAL_CHECK_FAILED_LEAD,
+  // A trial was just given, but book still found no credits: never an upsell.
+  un1t_trial_granted_no_credits: 'The free trial is on their account, but its credits did not show for this booking yet, so nothing was booked, and the team has been asked to book it.',
   cancel_rejected: 'un1t.online did not accept this cancellation, and the team has been asked to sort it out.',
   cancel_outcome_unknown: 'un1t.online did not confirm whether this cancellation went through, and the team has been asked to check.',
   un1t_cancel_not_sent: 'The cancellation could not be sent just now, so nothing was cancelled.',
@@ -584,10 +589,12 @@ export async function prepareUn1tBooking(ctx, input, studio, settings, nowMs) {
  * @param {object} studio the un1t.online studio
  * @param {object} booking prepareUn1tBooking's `booking`
  * @param {string} requestId the write-ahead class_booking row
- * @param {{ settings: object|null, offersFor?: Function }} opts
+ * @param {{ settings: object|null, offersFor?: Function, afterTrial?: boolean }} opts
+ *   afterTrial: D just granted the free trial, so a no_credits answer is a
+ *   staff card (un1t_trial_granted_no_credits), never the offer list.
  * @returns {Promise<object>} book_class's answer
  */
-export async function executeUn1tBook(ctx, studio, booking, requestId, { settings, offersFor = defaultOffersFor } = {}) {
+export async function executeUn1tBook(ctx, studio, booking, requestId, { settings, offersFor = defaultOffersFor, afterTrial = false } = {}) {
   const db = ctx.db
   const { eventId, className, classTime, executingContactId, details } = booking
   let result
@@ -627,6 +634,12 @@ export async function executeUn1tBook(ctx, studio, booking, requestId, { setting
   if (outcome === 'writes_off') {
     await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'writes_off' }) })
     return writesOffAnswer(settings, studio, 'book')
+  }
+  if (outcome === 'no_credits' && afterTrial) {
+    // The free trial was just given: never an upsell after it. This row is the card.
+    await finishRequest(db, studio, requestId, { status: 'pending', details: recorded({ reason: 'un1t_trial_granted_no_credits' }) })
+    await alertStaff(db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: summaryOf(className, classTime, 'free trial given but no credits showed, Mia handed over') })
+    return handoffAnswer('un1t_trial_granted_no_credits', settings)
   }
   if (outcome === 'no_credits') {
     // A race after the pre-flight: the offer list, else this row is the card.
