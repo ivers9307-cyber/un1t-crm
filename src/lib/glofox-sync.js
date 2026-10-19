@@ -513,29 +513,6 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   const existing = await getOpenDealWithStage(db, contactId, pipelineId)
 
   if (!existing) {
-    // PIPEEXCL.1 — an active member at another studio of the organisation is
-    // not a prospect here: the nightly pass (pipeline-reclassify.js) takes
-    // their deal off this board, so this per-event path must not open a new
-    // one. Only the create is fenced (an open deal is the nightly pass's to
-    // close). A failed read creates as before and is logged: losing a real
-    // lead to a read blip is worse than one deal the nightly pass then closes.
-    try {
-      const { loadActiveElsewhere, leavesBoard } = await import('./pipeline-other-studio-members.js')
-      const elsewhere = await loadActiveElsewhere(db, locationId)
-      if (!elsewhere?.ok) {
-        logWarn('glofox-sync', 'other-studio members unavailable', {
-          locationId,
-          reason: elsewhere?.reason || 'unknown',
-          ...(elsewhere?.studioId ? { studioId: elsewhere.studioId } : {}),
-          ...(elsewhere?.err ? { err: elsewhere.err } : {}),
-        })
-      } else if (leavesBoard(targetSlug, elsewhere.contactIds.has(contactId))) {
-        return { action: 'leave', deal_id: null, stage_slug: null, reason: 'active_member_elsewhere' }
-      }
-    } catch (e) {
-      logWarn('glofox-sync', 'other-studio members unavailable', { locationId, reason: 'threw', err: String(e?.message || e).slice(0, 200) })
-    }
-
     // CREATE path — first time this contact has had a deal.
     let stageId = await findStageIdBySlug(db, pipelineId, targetSlug)
     let resolvedSlug = targetSlug

@@ -494,7 +494,9 @@ describe('HATCHPIPE.2 — contacts-input path is unchanged', () => {
         ['eq', 'id', 'run-1']],
     ])
     expect(membershipReadsFor).not.toHaveBeenCalled()
+    expect(loadActiveElsewhere).not.toHaveBeenCalled() // PIPEEXCL.1 is Hatch-only
     expect(out).toMatchObject({ ok: true, input_source: 'contacts', deals_moved: 1, deals_created: 1, pipelines_skipped: ['returning'] })
+    expect(out).not.toHaveProperty('deals_left_board')
     expect(out).not.toHaveProperty('unlinked')
     expect(out).not.toHaveProperty('stage_histogram') // dry runs only
   })
@@ -915,7 +917,7 @@ describe('HATCHPIPE.5 — un1t create dates', () => {
 // PIPEEXCL.1 — a studio's acquisition board leaves out people who are active
 // members at another studio of the organisation.
 // ---------------------------------------------------------------------------
-describe('PIPEEXCL.1 — active members at another studio leave the board', () => {
+describe('PIPEEXCL.1 — active members at another studio leave Hatch\'s (acquisition_un1t) board', () => {
   beforeEach(() => { vi.mocked(membershipReadsFor).mockReset(); vi.mocked(logWarn).mockClear() })
 
   // Records every call; a deals UPDATE answers the ids it matched (so the
@@ -1120,7 +1122,7 @@ describe('PIPEEXCL.1 — active members at another studio leave the board', () =
     })
   })
 
-  describe('Stillorgan (Glofox board): the same rule, with Hatch as the other studio', () => {
+  describe('Stillorgan (Glofox board): untouched — the rule is Hatch only (Richard: "yes hatch pipeline")', () => {
     const ST_PIPELINES = [{ id: 'p-acq', location_id: 'loc-st', key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true }]
     const ST_STAGES = [
       { id: 's-new', slug: 'new_lead', pipeline_id: 'p-acq' },
@@ -1130,23 +1132,36 @@ describe('PIPEEXCL.1 — active members at another studio leave the board', () =
     const lead = (id) => ({ id, name: id, email: null, glofox_membership_status: 'lead', joined_at: new Date().toISOString(), created_at: new Date().toISOString(), recent_bookings: [] })
     const member = (id) => ({ id, name: id, email: null, glofox_membership_status: 'member', converted_at: isoBefore(300), joined_at: isoBefore(400), created_at: isoBefore(400), recent_bookings: [] })
 
-    it('an active Hatch member who is a Stillorgan lead leaves Stillorgan\'s board; a member of both stays a member', async () => {
-      vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(['c-hatch-lead', 'c-both']), studios: [{ locationId: HATCH, members: 2 }] })
+    it('a Glofox board is untouched even for an active member elsewhere: the rule is never read, no deal closes, creates and moves as today', async () => {
+      vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(['c-hatch-lead', 'c-hatch-new', 'c-both']), studios: [{ locationId: HATCH, members: 3 }] })
       const rec = exclDb({
         pipelines: ST_PIPELINES, pipeline_stages: ST_STAGES,
-        contacts: [lead('c-hatch-lead'), member('c-both'), lead('c-local')],
+        contacts: [lead('c-hatch-lead'), lead('c-hatch-new'), member('c-both')],
         deals: [
-          { id: 'd-1', contact_id: 'c-hatch-lead', stage_id: 's-new', pipeline_id: 'p-acq', status: 'open' },
+          { id: 'd-1', contact_id: 'c-hatch-lead', stage_id: 's-dormant', pipeline_id: 'p-acq', status: 'open' },
           { id: 'd-2', contact_id: 'c-both', stage_id: 's-member', pipeline_id: 'p-acq', status: 'open' },
-          { id: 'd-3', contact_id: 'c-local', stage_id: 's-new', pipeline_id: 'p-acq', status: 'open' },
         ],
       })
 
       const out = await reclassifyAllContacts(rec.db, { locationId: 'loc-st' })
 
-      expect(membershipReadsFor).not.toHaveBeenCalled() // the contacts-input path still never asks the seam for inputs
-      expect(closesIn(rec).map((e) => rec.arg(e, 'in')[2])).toEqual([['d-1']])
-      expect(out).toMatchObject({ deals_left_board: 1, deals_unchanged: 2, input_source: 'contacts' })
+      expect(loadActiveElsewhere).not.toHaveBeenCalled()
+      expect(closesIn(rec)).toHaveLength(0)
+      expect(rec.writes('activities', 'insert')).toHaveLength(0)
+      expect(rec.writes('deals', 'insert').map((e) => rec.arg(e, 'insert')[1].contact_id)).toEqual(['c-hatch-new'])
+      expect(rec.arg(rec.writes('deals', 'update')[0], 'update')[1]).toEqual({ stage_id: 's-new' })
+      expect(out).toMatchObject({ deals_moved: 1, deals_created: 1, deals_unchanged: 1, input_source: 'contacts' })
+      for (const k of ['deals_left_board', 'creates_withheld', 'other_studio_check', 'creates_held']) expect(out).not.toHaveProperty(k)
+      expect(JSON.stringify(out.movement_matrix)).not.toContain('left board')
+    })
+
+    it('even a failing other-studio read cannot reach a Glofox board (nothing held)', async () => {
+      vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: false, reason: 'read_failed' })
+      const rec = exclDb({ pipelines: ST_PIPELINES, pipeline_stages: ST_STAGES, contacts: [lead('c-new')], deals: [] })
+      const out = await reclassifyAllContacts(rec.db, { locationId: 'loc-st' })
+      expect(rec.writes('deals', 'insert')).toHaveLength(1)
+      expect(out.deals_created).toBe(1)
+      expect(logWarn).not.toHaveBeenCalledWith('pipeline-reclassify', 'other-studio members unavailable', expect.anything())
     })
   })
 })

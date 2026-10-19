@@ -75,7 +75,7 @@ function selectColsFor(modules) {
  *   unlinked?: number,             un1t path: clients with no contact
  *   skipped_no_contact?: number,   un1t path: clients whose contact is gone
  *   stage_histogram?: object,      dry runs only: { [target slug]: n }
- *   deals_left_board: number,      PIPEEXCL.1: open deals closed (status 'lost')
+ *   deals_left_board?: number,     PIPEEXCL.1 (acquisition_un1t boards only): open deals closed (status 'lost')
  *                                  because the person is an active member at
  *                                  another studio of the organisation
  *   creates_withheld: number,      PIPEEXCL.1: the same people with no deal here,
@@ -369,9 +369,13 @@ export async function reclassifyAllContacts(db, args) {
 
   // 4b. PIPEEXCL.1 — the people who are active members at ANOTHER studio of
   //     this organisation (Richard, 19 Oct 2026: a Stillorgan member is not a
-  //     Hatch prospect, and the same rule runs the other way). Unless the board
-  //     already shows them as a customer HERE (leavesBoard), their open deal
-  //     leaves the board and none is created for them.
+  //     Hatch prospect). Unless the board already shows them as a customer
+  //     HERE (leavesBoard), their open deal leaves the board and none is
+  //     created for them.
+  //
+  //     HATCH ONLY: Richard confirmed the ask is for Hatch's pipeline, so the
+  //     rule runs only on boards whose module is acquisition_un1t. A Glofox
+  //     (contacts-input) board does not read it at all and is unchanged.
   //
   //     The classifier itself has never removed a deal: a contact who stops
   //     qualifying for the funnel moves to an off-funnel pile, still on the
@@ -385,13 +389,17 @@ export async function reclassifyAllContacts(db, args) {
   //     nothing and creates nothing (a create could re-open a deal a person
   //     left the board with), logs why, and still makes the stage moves, so
   //     time-based decay keeps working. Manual boards are never read here.
-  let elsewhere
-  try {
-    elsewhere = await loadActiveElsewhere(db, locationId)
-  } catch (e) {
-    elsewhere = { ok: false, reason: 'threw', err: boundedErr(e?.message || e) }
+  const excludeOtherStudio = activePipelines.some((p) => p.module === EXCLUDING_MODULE)
+  let elsewhere = null
+  if (excludeOtherStudio) {
+    try {
+      elsewhere = await loadActiveElsewhere(db, locationId)
+    } catch (e) {
+      elsewhere = { ok: false, reason: 'threw', err: boundedErr(e?.message || e) }
+    }
   }
   const activeElsewhere = elsewhere?.ok ? elsewhere.contactIds : null
+  const exclusionFailed = excludeOtherStudio && !activeElsewhere
 
   // 5. Classify each contact + decide move / leave / create.
   let dealsMoved = 0
@@ -465,7 +473,7 @@ export async function reclassifyAllContacts(db, args) {
 
     if (!existing) {
       // PIPEEXCL.1 — the other-studio read failed: hold every create this run.
-      if (!activeElsewhere) { createsHeld++; continue }
+      if (exclusionFailed) { createsHeld++; continue }
       // No open deal yet — create one in the right stage.
       createsToApply.push({
         contact_id: c.id,
@@ -652,7 +660,7 @@ export async function reclassifyAllContacts(db, args) {
 
   // PIPEEXCL.1 — a failed other-studio read is logged once, structurally.
   let otherStudioError = null
-  if (!activeElsewhere) {
+  if (exclusionFailed) {
     otherStudioError = `other-studio members unavailable: ${elsewhere?.reason || 'unknown'}`
     logWarn('pipeline-reclassify', 'other-studio members unavailable', {
       locationId,
@@ -688,10 +696,12 @@ export async function reclassifyAllContacts(db, args) {
     movement_matrix: movementMatrix,
     samples,
     pipelines_skipped: pipelinesSkipped,
-    deals_left_board: dealsLeftBoard,
-    creates_withheld: createsWithheld,
-    other_studio_check: activeElsewhere ? 'ok' : 'unavailable',
-    ...(activeElsewhere ? {} : { creates_held: createsHeld }),
+    ...(excludeOtherStudio ? {
+      deals_left_board: dealsLeftBoard,
+      creates_withheld: createsWithheld,
+      other_studio_check: activeElsewhere ? 'ok' : 'unavailable',
+      ...(activeElsewhere ? {} : { creates_held: createsHeld }),
+    } : {}),
     ...un1tCounts(inputSource, un1tInputs),
     ...(dryRun ? { stage_histogram: stageHistogram } : {}),
   }
@@ -867,8 +877,10 @@ export async function restampUn1tDealDates(db, { locationId, dryRun = false, now
   return { ok: true, ...base, ...counts, sample }
 }
 
-// PIPEEXCL.1 — the movement_matrix column a deal that left the board lands in.
+// PIPEEXCL.1 — the movement_matrix column a deal that left the board lands in,
+// and the one board module the rule runs on (Hatch's un1t.online board).
 const LEFT_BOARD = '(left board)'
+const EXCLUDING_MODULE = 'acquisition_un1t'
 
 // HATCHPIPE.2 — the input fields a run result carries: always input_source,
 // and on the un1t path the clients pipelineInputs could not place.

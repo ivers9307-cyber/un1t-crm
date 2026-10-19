@@ -1,6 +1,8 @@
 // PIPEEXCL.1 — a studio's acquisition board leaves out people who are active
 // members at ANOTHER studio of the same organisation (Richard, 19 Oct 2026:
-// "in the pipeline remove people who have active memberships in Stillorgan").
+// "in the pipeline remove people who have active memberships in Stillorgan";
+// confirmed "yes hatch pipeline"). The orchestrator runs it on acquisition_un1t
+// boards only (pipeline-reclassify.js); the read itself is org-generic.
 //
 // Contacts are per studio and one person can hold a contact at each, linked by
 // a person group (person_group_members). So "active elsewhere" is asked of the
