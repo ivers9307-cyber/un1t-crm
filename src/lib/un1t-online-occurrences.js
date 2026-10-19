@@ -10,10 +10,20 @@
 //     auto-end-stale-hr-sessions, the climate automation log) look the column
 //     up with no location filter.
 //   - source_platform = 'un1t_online' (Glofox rows take the column default).
-//   - NEVER deletes, and never cancels a row for being absent from a pull:
-//     /events is a window, so absence proves nothing. Only an explicit
-//     status = 'cancelled' stamps cancelled_at (an earlier stamp is kept, a
-//     reinstated class clears it).
+//   - NEVER deletes. An explicit status = 'cancelled' stamps cancelled_at (an
+//     earlier stamp is kept, a reinstated class clears it).
+//   - UN1TBOOK.20: a FUTURE un1t occurrence whose event this run's pull did
+//     not return was deleted in un1t.online, and is stamped cancelled_at too,
+//     so the TVs and dashboards (which read cancelled_at IS NULL) drop it. The
+//     pull is complete (the sync refuses a truncated list) and /events only
+//     rolls off the PAST, so absence proves nothing for a class that has
+//     started: past rows are never touched. Same rule as the public class
+//     list's freshness (un1t-online-freshness.js), taken from the run's own
+//     pulled ids. A pull with no events cancels nothing (an upstream fault,
+//     not every class deleted), and a sync that stops never gets here, so a
+//     stalled sync changes nothing. If the event reappears, the upsert clears
+//     the stamp (its status is not 'cancelled'). Glofox rows (and every other
+//     studio's) are outside the read and the write.
 //   - NEVER throws and never touches class_bookings. The sync treats the
 //     result as informational: a projection failure must not fail the run,
 //     whose membership and contact data are the primary payload.
@@ -24,6 +34,8 @@ const CHUNK = 200
 // The existing-cancelled read puts every id in the URL's IN-list, so it takes
 // smaller chunks than the upsert (whose ids travel in the body).
 const READ_CHUNK = 100
+// The reconcile read pages through the studio's future un1t occurrences.
+const PAGE = 1000
 // The same prefix the public class list mints for these classes (HATCHSTART.1).
 const PREFIX = UN1T_EVENT_PREFIX
 const SOURCE_PLATFORM = 'un1t_online'
@@ -77,12 +89,14 @@ export function mapUn1tEventToOccurrence(eventRow, { locationId, nowIso, existin
 }
 
 /**
- * IO: upsert the occurrences for these events. Reads the existing
- * cancelled_at first (so a re-cancel keeps its first stamp); if that read
- * fails nothing is written, because writing without it could move an earlier
- * stamp. Never throws.
+ * IO: upsert the occurrences for these events (EVERY event this run pulled,
+ * since the list doubles as the seen set). Reads the existing cancelled_at
+ * first (so a re-cancel keeps its first stamp); if that read fails nothing is
+ * written, because writing without it could move an earlier stamp. Then
+ * stamps the future un1t occurrences the pull did not return (UN1TBOOK.20).
+ * Never throws.
  *
- * @returns {Promise<{ upserted: number } | { error: { code: string|null, message: string } }>}
+ * @returns {Promise<{ upserted: number, cancelled?: number, error?: { code: string|null, message: string } }>}
  */
 export async function projectUn1tOccurrences(db, { locationId, events, nowIso }) {
   try {
@@ -117,7 +131,41 @@ export async function projectUn1tOccurrences(db, { locationId, events, nowIso })
       if (error) return { error: safeError(error) }
       upserted += chunk.length
     }
-    return { upserted }
+
+    // UN1TBOOK.20 — every event this pull returned is seen, mappable or not.
+    const seen = new Set((Array.isArray(events) ? events : [])
+      .filter((e) => e && e.un1t_id != null && e.un1t_id !== '')
+      .map((e) => `${PREFIX}${e.un1t_id}`))
+    const gone = []
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await db
+        .from('class_occurrences')
+        .select('glofox_event_id')
+        .eq('location_id', locationId)
+        .eq('source_platform', SOURCE_PLATFORM)
+        .gt('starts_at', nowIso)
+        .is('cancelled_at', null)
+        .order('glofox_event_id', { ascending: true })
+        .range(from, from + PAGE - 1)
+      if (error) return { upserted, cancelled: 0, error: safeError(error) }
+      for (const r of data || []) if (r.glofox_event_id && !seen.has(r.glofox_event_id)) gone.push(r.glofox_event_id)
+      if (!Array.isArray(data) || data.length < PAGE) break
+    }
+    let cancelled = 0
+    for (const idChunk of chunks(gone, READ_CHUNK)) {
+      const { data, error } = await db
+        .from('class_occurrences')
+        .update({ cancelled_at: nowIso })
+        .eq('location_id', locationId)
+        .eq('source_platform', SOURCE_PLATFORM)
+        .in('glofox_event_id', idChunk)
+        .gt('starts_at', nowIso)
+        .is('cancelled_at', null)
+        .select('glofox_event_id')
+      if (error) return { upserted, cancelled, error: safeError(error) }
+      cancelled += Array.isArray(data) ? data.length : 0
+    }
+    return { upserted, cancelled }
   } catch (err) {
     return { error: safeError(err) }
   }

@@ -19,7 +19,7 @@ function makeDb() {
       const q = { f: [], op: 'select', payload: null }
       const rows = () => (tables[table] || []).filter((r) => q.f.every(([k, c, v]) => (k === 'eq' ? r[c] === v : k === 'in' ? v.includes(r[c]) : true)))
       const b = {
-        select: () => b, order: () => b, limit: () => b,
+        select: () => b, order: () => b, limit: () => b, range: () => b,
         eq: (c, v) => { q.f.push(['eq', c, v]); return b },
         in: (c, v) => { q.f.push(['in', c, v]); return b },
         update: (p) => { q.op = 'update'; q.payload = p; return b },
