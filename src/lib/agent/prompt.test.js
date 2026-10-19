@@ -1004,7 +1004,9 @@ describe('MIAFIX.1 prompt rules', () => {
     const out = buildCustomerSystemPrompt({})
     const section = out.slice(out.indexOf('## Offering tap choices (buttons)'))
     const must = section.split('\n').find((l) => l.startsWith('Whenever you offer'))
-    expect(must).toMatch(/Whenever you offer the customer 2 to 10 discrete choices or a yes\/no question[^\n]*you MUST end your reply with ONE extra line in exactly this format:/)
+    expect(must).toMatch(/Whenever you offer the customer 2 to 10 discrete choices or a yes\/no question[^\n]*you MUST end your reply with ONE extra line in exactly this format/)
+    // Review fix 5 — a link that must end the message wins over the buttons.
+    expect(must).toMatch(/except when your message ends with a link \(a payment link or a booking link\):$/)
     expect(must).not.toMatch(DASHES)
     const never = section.split('\n').find((l) => l.includes('[Options:'))
     expect(never).toMatch(/Never write the choices as "\[Options: \.\.\.\]" or in any other format: only the \[\[OPTIONS\]\] line makes buttons\./)
@@ -1019,8 +1021,14 @@ describe('MIAFIX.1 prompt rules', () => {
       const out = full(multi)
       const open = out.split('\n').find((l) => l.includes('open_link'))
       expect(open).toMatch(/When list_purchase_options gives open_link, a payment link for that product is already waiting/)
-      expect(open).toMatch(/never offer to send a link for a different product/)
-      expect(open).toMatch(/offer to hand off to the team/)
+      // Review fix 2 — a customer asking for a DIFFERENT product is handed off
+      // in the same turn, not offered the team and handed off next turn.
+      expect(open).toMatch(/If the customer is asking for a different product than that one, call send_purchase_link with that product's offer_id now, in the same turn: no new link is made and it hands them to the team/)
+      expect(open).toMatch(/Only when they are just asking what is available, mention their link for that product is waiting and never offer to send a link for a different product/)
+      expect(open).not.toMatch(/If they still ask/)
+      // Review fix 3 — the no-restate exception is scoped to that turn.
+      expect(open).toMatch(/so in that turn only you need no restating and no yes first/)
+      expect(open).toMatch(/Never call send_purchase_link for a product they did not ask for\./)
       expect(out).toMatch(/When send_purchase_link says a link is already open for another product, the team has been asked to take over and the customer is told: write nothing more\./)
       expect(out).not.toMatch(/relay its text and offer the team if they want something else/)
       for (const l of [open]) expect(l).not.toMatch(DASHES)

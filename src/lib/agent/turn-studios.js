@@ -463,12 +463,13 @@ export async function executorCtxFor(toolName, input, toolCtx, studios) {
 
 /**
  * MIAFIX.1 (8) — the organisation's other ACTIVE studios (not host anchors,
- * not the thread's), each with its booking link: booking_url from that
- * studio's resolved Mia settings (`studios.settings`, createActionStudios;
- * booking_url is a STUDIO_ONLY key). Unresolvable settings list the studio
- * with no link (Mia then offers the team). Same organisation only. [] with no
- * organisation; null when the locations read failed (logged): the turn then
- * goes without the block. Never throws.
+ * not membership_source 'none' such as a test location, not the thread's),
+ * each with its booking link: booking_url from that studio's resolved Mia
+ * settings (`studios.settings`, createActionStudios; booking_url is a
+ * STUDIO_ONLY key), resolved in parallel. Settings that fail or throw list
+ * that studio with no link (Mia then offers the team). Same organisation
+ * only. [] with no organisation; null when the locations read failed
+ * (logged): the turn then goes without the block. Never throws.
  *
  * @param {object} db
  * @param {{ organizationId: string|null, threadLocationId: string }} args
@@ -479,7 +480,7 @@ export async function readOrgStudioLinks(db, { organizationId, threadLocationId 
   if (!organizationId) return []
   try {
     const { data, error } = await db.from('locations')
-      .select('id, name')
+      .select('id, name, membership_source')
       .eq('organization_id', organizationId)
       .eq('active', true)
       .eq('is_host_anchor', false)
@@ -488,13 +489,17 @@ export async function readOrgStudioLinks(db, { organizationId, threadLocationId 
       return null
     }
     const others = (Array.isArray(data) ? data : [])
-      .filter((l) => l?.id && l.id !== threadLocationId && String(l.name || '').trim())
-    const out = []
-    for (const l of others) {
-      const settings = studios ? await studios.settings(l.id) : null
+      .filter((l) => l?.id && l.id !== threadLocationId && l.membership_source !== 'none' && String(l.name || '').trim())
+    const out = await Promise.all(others.map(async (l) => {
+      let settings = null
+      try {
+        settings = studios ? await studios.settings(l.id) : null
+      } catch (err) {
+        logWarn(LOG_MODULE, 'other studio settings unreadable; listed without a link', { locationId: l.id, errClass: err?.name })
+      }
       const url = String(settings?.booking_url || '').trim()
-      out.push({ locationId: l.id, name: String(l.name).trim(), bookingUrl: /^https?:\/\//i.test(url) ? url : null })
-    }
+      return { locationId: l.id, name: String(l.name).trim(), bookingUrl: /^https?:\/\//i.test(url) ? url : null }
+    }))
     return out.sort((a, b) => a.name.localeCompare(b.name))
   } catch (err) {
     logWarn(LOG_MODULE, 'other studios read threw; turn goes without their links', { locationId: threadLocationId, errClass: err?.name })

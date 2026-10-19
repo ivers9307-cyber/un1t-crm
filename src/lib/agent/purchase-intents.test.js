@@ -678,8 +678,13 @@ describe('executePurchaseTool', () => {
     expect(out.open_link).toEqual({ product: '10 Class Pack', link_waiting: true })
     expect(out.offers).toHaveLength(2)
     expect(out.message).toMatch(/They already have a payment link waiting for 10 Class Pack/)
-    expect(out.message).toMatch(/Never offer to send a link for a different product/)
-    expect(out.message).toMatch(/offer to hand off to the team/)
+    // Review fix 2 + 3 — a different product asked for now is sent to
+    // send_purchase_link in this turn (the deterministic handoff); only a
+    // "what can I buy" mentions the waiting link. Never an unasked product.
+    expect(out.message).toMatch(/If the customer is asking for a different product than 10 Class Pack, call send_purchase_link with that product's offer_id now, in this turn, with no restating and no yes needed: no new link is made and it hands them to the team\./)
+    expect(out.message).toMatch(/Only when they are just asking what is available, mention their 10 Class Pack link is waiting and never offer to send a link for a different product\./)
+    expect(out.message).toMatch(/Never call send_purchase_link for a product they did not ask for\./)
+    expect(out.message).not.toMatch(/If they still ask/)
     expect(JSON.stringify(out)).not.toContain('pay.example.test')
     expect(JSON.stringify(out)).not.toMatch(/[—–]/)
   })

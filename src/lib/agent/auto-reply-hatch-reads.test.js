@@ -1174,6 +1174,18 @@ describe('MIAFIX.1: the organisation\'s other studios (booking links)', () => {
     expect(vol).not.toMatch(/Other Tenant Gym|other\.example\.test|UN1T Closed Studio|UN1T Host Anchor/)
   })
 
+  // Review fix 1 — live UN1T Group holds "Test Studio" (active, not a host
+  // anchor, membership_source 'none'): not a studio a customer can book.
+  it('a location with membership_source none in the same organisation is never listed', async () => {
+    const vol = volatileOf(await runHatch({
+      extraLocations: [
+        { id: 'a1000000-0000-0000-0000-000000000006', name: 'Test Studio', organization_id: ORG, membership_source: 'none', active: true, is_host_anchor: false, settings: { customer_agent: { booking_url: 'https://test.example.test/book' } } },
+      ],
+    }))
+    expect(vol).toContain(HEADING)
+    expect(vol).not.toMatch(/Test Studio|test\.example\.test/)
+  })
+
   it('a one-studio organisation: no block at all', async () => {
     const vol = volatileOf(await runHatch({ keepLocations: [HATCH] }))
     expect(vol).not.toContain(HEADING)
@@ -1188,6 +1200,34 @@ describe('MIAFIX.1: the organisation\'s other studios (booking links)', () => {
     const vol = volatileOf(bodies[0])
     expect(vol).not.toContain('- UN1T Stillorgan:')
     expect(vol).toContain('- UN1T Second Studio:')
+  })
+
+  // Review fix 4 — the other studios' settings resolve in parallel; one that
+  // throws or fails is a studio with no link, never a lost block.
+  it('readOrgStudioLinks: settings resolve in parallel, a failed one is that studio with no link', async () => {
+    const rows = [
+      { id: 's-1', name: 'B Studio', membership_source: 'glofox' },
+      { id: 's-2', name: 'A Studio', membership_source: 'un1t_online' },
+    ]
+    const db = { from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ eq: () => Promise.resolve({ data: rows, error: null }) }) }) }) }) }
+    let inFlight = 0
+    let peak = 0
+    const studios = {
+      settings: async (id) => {
+        inFlight += 1
+        peak = Math.max(peak, inFlight)
+        await new Promise((r) => setTimeout(r, 5))
+        inFlight -= 1
+        if (id === 's-1') throw new Error('fictional')
+        return { booking_url: 'https://a.example.test/book' }
+      },
+    }
+    const out = await readOrgStudioLinks(db, { organizationId: ORG, threadLocationId: HATCH }, studios)
+    expect(peak).toBe(2)
+    expect(out).toEqual([
+      { locationId: 's-2', name: 'A Studio', bookingUrl: 'https://a.example.test/book' },
+      { locationId: 's-1', name: 'B Studio', bookingUrl: null },
+    ])
   })
 
   it('readOrgStudioLinks: a failed read is null (logged), never a throw', async () => {

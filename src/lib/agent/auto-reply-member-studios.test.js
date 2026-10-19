@@ -326,9 +326,9 @@ describe('Hatch-only member on a Stillorgan thread, Hatch off', () => {
     await runChannelAgent(db, makeAdapter(), turnCtx())
 
     // MIAFIX.1 (8) adds ONE organisation read of its own (the other studios'
-    // booking links, readOrgStudioLinks); the org id still rides the first.
+    // booking links, readOrgStudioLinks, 'id, name, membership_source'); the org id still rides the first.
     expect(reads.filter((r) => r.table === 'locations').map((r) => r.cols))
-      .toEqual(['id, name, timezone, organization_id, membership_source, settings', 'id, name'])
+      .toEqual(['id, name, timezone, organization_id, membership_source, settings', 'id, name, membership_source'])
   })
 
   it('decision meta carries member_studios: ids and flags only', async () => {

@@ -1055,5 +1055,8 @@ async function openLinkOf(db, studio, nowMs) {
   return { product: String(live.intent.product_title || '').trim() || 'their purchase', link_waiting: true }
 }
 
+// Review fix (MIAFIX.1) — a customer asking for a DIFFERENT product is sent to
+// send_purchase_link in this same turn (its open_link_handoff is the
+// deterministic handoff); only a "what can I buy" mentions the waiting link.
 const openLinkMessage = (product) =>
-  `They already have a payment link waiting for ${product}. Never offer to send a link for a different product: say their ${product} link is waiting and offer to hand off to the team. If they still ask for a different product, call send_purchase_link with its offer_id straight away: it hands them to the team.`
+  `They already have a payment link waiting for ${product}. If the customer is asking for a different product than ${product}, call send_purchase_link with that product's offer_id now, in this turn, with no restating and no yes needed: no new link is made and it hands them to the team. Only when they are just asking what is available, mention their ${product} link is waiting and never offer to send a link for a different product. Never call send_purchase_link for a product they did not ask for.`
