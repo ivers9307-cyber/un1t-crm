@@ -15,7 +15,10 @@
 // link is resent (or, with none stored yet, D's createCheckoutLink again with
 // the SAME idempotency key, the intent id).
 // Different product: purchase_link_open_text, no second link. Never a tool
-// error, never a second live link.
+// error, never a second live link. A same-product request that names a
+// different class moves the live intent to that class first (status-guarded on
+// link_sent), and the link goes out with the new class's wording: the hosted
+// payment is the same product, so the settle books the class asked for last.
 //
 // The pay-done token (spec 6.5.2) is 32 random bytes, base64url, in the
 // success and cancel URLs on the studio's customer host
@@ -94,7 +97,7 @@ export const TRIAL_OFFER_ID = 'trial'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const PRODUCT_COLS = 'id, un1t_id, title, status, price_cents, currency, billing_interval, billing_interval_count, credits_per_period'
-const INTENT_COLS = 'id, un1t_product_id, product_title, class_name, class_time, checkout_url, expires_at'
+const INTENT_COLS = 'id, un1t_product_id, product_title, event_un1t_id, class_name, class_time, checkout_url, expires_at'
 
 // ── pure ────────────────────────────────────────────────────────────
 
@@ -465,19 +468,75 @@ function openAnswer(intent, settings) {
   }
 }
 
+/** The statuses a live intent leaves for once a payment is picked up (purchase-settle.js). */
+const SETTLED_STATUSES = new Set(['paid', 'booked', 'book_failed', 'no_class'])
+
+/**
+ * The class a same-product request asks the live intent to move to: null when
+ * the input names no class or the intent's own; { mismatch: true } when the
+ * relayed time does not name the class (classContext); else the new class.
+ */
+async function classSwitchOf(ctx, studio, intent, input) {
+  if (parseAgentId(input?.event_id)?.provider !== PROVIDER) return null
+  const klass = await classContext(ctx, studio, input)
+  if (klass.mismatch) return klass
+  if (!klass.event_un1t_id || String(klass.event_un1t_id) === String(intent.event_un1t_id || '')) return null
+  return klass
+}
+
+/**
+ * Move a live intent to the class the member now wants (same product, so the
+ * hosted payment and its link stay valid): status-guarded on link_sent, so a
+ * settle or expiry that got there first wins. { intent } (the moved intent)
+ * on success; otherwise the answer for the state it is in now: settled is
+ * ALREADY_SETTLED, still live (the write failed) or gone is try again, and a
+ * different live intent (another turn) is answered by the same rules, once
+ * (a second miss is try again).
+ */
+async function switchIntentClass(ctx, studio, intent, klass, product, settings, nowMs, base, input, retried) {
+  const db = ctx.db
+  const patch = { event_un1t_id: klass.event_un1t_id, class_name: klass.class_name, class_time: klass.class_time, starts_at: klass.starts_at }
+  if (await writeLiveIntent(db, studio, intent.id, patch, 'purchase_switch_class', nowMs)) return { intent: { ...intent, ...patch } }
+  const live = await readLiveIntent(db, studio)
+  if (live.error) return { answer: { ...TRY_AGAIN } }
+  if (live.intent && live.intent.id !== intent.id && !retried) {
+    return { answer: await answerLiveIntent(ctx, studio, live.intent, product, settings, nowMs, base, input, { retried: true }) }
+  }
+  if (live.intent) return { answer: { ...TRY_AGAIN } }
+  const { data, error } = await db.from(INTENTS).select('status').eq('id', intent.id).maybeSingle()
+  if (error) {
+    logWarn(LOG_MODULE, 'intent unreadable after a class switch missed', { locationId: studio.locationId, op: 'purchase_switch_class', intentId: intent.id, status: null, code: error.code ?? null })
+    return { answer: { ...TRY_AGAIN } }
+  }
+  if (SETTLED_STATUSES.has(data?.status)) return { answer: { ...ALREADY_SETTLED, link_sent: false } }
+  return { answer: { ...TRY_AGAIN } }
+}
+
 /**
  * The member already has a live intent. Different product: the open text.
  * Same product (Ruling 30): the link it already holds is resent as it is, with
- * no call to D (the same hosted session; nothing to refuse or doubt). Only an
- * intent with no stored link (an earlier store failed, or another turn is
- * still sending) asks D again with the intent's own key; a URL that comes back
- * is stored with the hash of the token minted for that call. Nothing was ever
- * delivered for such an intent, so a non-retryable failure may refuse it; a
- * retryable one (another turn mid-send) leaves it live.
+ * no call to D (the same hosted session; nothing to refuse or doubt). When the
+ * request names a different class (one classContext accepts), the intent moves
+ * to it first (switchIntentClass) and the link goes with the new class's
+ * wording, so the settle books the class the member asked for last; a request
+ * with no class keeps the intent's class. Only an intent with no stored link
+ * (an earlier store failed, or another turn is still sending) asks D again
+ * with the intent's own key; a URL that comes back is stored with the hash of
+ * the token minted for that call. Such an intent's first link MAY have been
+ * delivered (a failed store still sends it), so a D failure never refuses it:
+ * retryable is try again, anything else the handoff, and the intent stays live
+ * so a payment on that first link still settles.
  */
-async function answerLiveIntent(ctx, studio, intent, product, settings, nowMs, base) {
+async function answerLiveIntent(ctx, studio, intent, product, settings, nowMs, base, input = null, { retried = false } = {}) {
   const db = ctx.db
   if (String(intent.un1t_product_id) !== String(product.un1t_id)) return openAnswer(intent, settings)
+  const klass = await classSwitchOf(ctx, studio, intent, input)
+  if (klass?.mismatch) return { ...CLASS_TIME_MISMATCH }
+  if (klass) {
+    const moved = await switchIntentClass(ctx, studio, intent, klass, product, settings, nowMs, base, input, retried)
+    if (moved.answer) return moved.answer
+    intent = moved.intent
+  }
   const title = String(intent.product_title || '').trim() || String(product.title || '').trim()
   const answer = (url) => linkAnswer(url, { product: title, priceLabel: priceLabelOf(product), className: intent.class_name, classTime: intent.class_time, intentId: intent.id }, settings)
   if (typeof intent.checkout_url === 'string' && intent.checkout_url) return answer(intent.checkout_url)
@@ -494,7 +553,8 @@ async function answerLiveIntent(ctx, studio, intent, product, settings, nowMs, b
   if (out.failed) {
     logCheckoutFailure(studio, intent.id, out.failed, 'purchase_resend')
     if (isRetryable(out.failed)) return { ...TRY_AGAIN }
-    return refuseIntent(db, studio, intent.id, out.failed, settings, nowMs)
+    // Never refused: its first link may be with the member.
+    return handoffAnswer(settings)
   }
   if (out.free) return settleFree(db, intent.id, title, nowMs)
   const stored = await writeLiveIntent(db, studio, intent.id, { checkout_url: out.url, success_token_hash: hash }, 'purchase_store_link', nowMs)
@@ -812,9 +872,9 @@ export async function sendPurchaseLink(ctx, input, studio, deps = {}) {
       if (settled.outcome === 'expired') await writeLiveIntent(db, studio, live.intent.id, { status: 'expired' }, 'purchase_expire', nowMs)
       const again = await readLiveIntent(db, studio)
       if (again.error) return { ...TRY_AGAIN }
-      if (again.intent) return answerLiveIntent(ctx, studio, again.intent, product, settings, nowMs)
+      if (again.intent) return answerLiveIntent(ctx, studio, again.intent, product, settings, nowMs, undefined, input)
     } else {
-      return answerLiveIntent(ctx, studio, live.intent, product, settings, nowMs)
+      return answerLiveIntent(ctx, studio, live.intent, product, settings, nowMs, undefined, input)
     }
   }
 
@@ -861,7 +921,7 @@ export async function sendPurchaseLink(ctx, input, studio, deps = {}) {
     // Review Focus 1: another turn made the live intent first. Its rules, never an error.
     const raced = await readLiveIntent(db, studio)
     if (raced.error || !raced.intent) return { ...TRY_AGAIN }
-    return answerLiveIntent(ctx, studio, raced.intent, product, settings, nowMs, base)
+    return answerLiveIntent(ctx, studio, raced.intent, product, settings, nowMs, base, input)
   }
   if (insertError || !inserted?.id) {
     logError(LOG_MODULE, 'intent not written; no link made', { locationId: studio.locationId, op: 'purchase_new', status: null, code: insertError?.code ?? null })

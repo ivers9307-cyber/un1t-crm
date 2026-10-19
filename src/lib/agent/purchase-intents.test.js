@@ -362,15 +362,20 @@ describe('sendPurchaseLink', () => {
       expect(data.mia_purchase_intents[0].updated_at).toBeTruthy()
     })
 
-    it('D unknown or refused: nothing was ever delivered, so the intent is refused and the team takes over', async () => {
+    it('D unknown or refused: the first link may have been delivered, so the team takes over and the intent stays live', async () => {
       for (const err of [new Un1tWriteUnknown('outcome_unknown', 'unclear'), new Un1tWriteRefused('product_not_sellable', 'no')]) {
         vi.clearAllMocks()
         h.checkout.mockRejectedValueOnce(err)
-        const { db, data } = fakeDb({ ...offers(), mia_purchase_intents: [liveIntent({ checkout_url: null })] })
+        const live = liveIntent({ checkout_url: null, entitlement_snapshot: { ok: true, balance: 0, unlimited: false, live_subscription_ids: [] } })
+        const { db, data } = fakeDb({ ...offers(), mia_purchase_intents: [live], un1t_transactions: [], un1t_events: [], agent_membership_requests: [] })
         const out = await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id }, hatch(), deps)
         expect(out).toMatchObject({ link_sent: false, handoff: true })
         expect(out.url).toBeUndefined()
-        expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'refused', outcome: { stage: 'checkout', code: err.code } })
+        expect(data.mia_purchase_intents[0].status).toBe('link_sent')
+        expect(data.mia_purchase_intents[0].outcome).toBeUndefined()
+        // A payment on the first link still settles.
+        fetchLiveEntitlement.mockImplementationOnce(async () => ({ ok: true, balance: 10, unlimited: false, liveSubscriptionIds: [] }))
+        expect(await settlePurchaseIntent(db, live.id, { detectedBy: 'tool', source: 'live', now: () => NOW })).toMatchObject({ outcome: 'paid_no_class' })
       }
     })
   })
@@ -1253,6 +1258,116 @@ describe('settlePurchaseIntent (Task 21)', () => {
     expect(h.book).toHaveBeenCalledTimes(1)
     expect(h.send).toHaveBeenCalledTimes(1)
     expect(data.mia_purchase_intents.some((r) => r.status === 'paid')).toBe(false)
+  })
+
+  describe('a different class asked for before paying (same product, live link)', () => {
+    const EVENT2 = 'e0000000-0000-4000-8000-000000000002'
+    const STARTS2 = '2026-10-24T09:00:00Z'
+    const LABEL2 = formatClassTime(Date.parse(STARTS2) / 1000, ZONE)
+    const EVENT2_ROW = { location_id: HATCH, un1t_id: EVENT2, title: 'Fictional Hatch Yoga', starts_at: STARTS2, status: 'scheduled', synced_at: '2026-10-20T08:55:00Z' }
+    const STORED = 'https://pay.example.test/s/stored'
+    const switchDb = (opts) => settleDb({
+      mia_purchase_offers: [OFFER.pack10], un1t_events: [EVENT_ROW, EVENT2_ROW],
+      mia_purchase_intents: [paidIntent({ checkout_url: STORED })],
+    }, opts)
+    const ask = (db, input = { event_id: `un1t:${EVENT2}`, starts_at: STARTS2 }) => sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id, ...input }, hatch(), deps)
+    const wordingFor = (klass) => `Here's your secure payment link for 10 Class Pack. Once it goes through I'll book you into ${klass}.`
+
+    it('the live intent takes the new class, the stored link is resent with its wording, and settle books the new class', async () => {
+      const { db, data } = switchDb()
+      const out = await ask(db)
+      expect(out).toMatchObject({ link_sent: true, url: STORED, intent_id: ID, wording: wordingFor(`Fictional Hatch Yoga, ${LABEL2}`) })
+      expect(h.checkout).not.toHaveBeenCalled()
+      expect(data.mia_purchase_intents).toHaveLength(1)
+      expect(data.mia_purchase_intents[0]).toMatchObject({
+        status: 'link_sent', checkout_url: STORED, success_token_hash: 'a'.repeat(64),
+        event_un1t_id: EVENT2, class_name: 'Fictional Hatch Yoga', class_time: LABEL2, starts_at: new Date(STARTS2).toISOString(),
+        updated_at: new Date(NOW).toISOString(),
+      })
+      paidLive()
+      expect(await settle(db)).toMatchObject({ outcome: 'paid_booked', sent: true })
+      expect(h.book).toHaveBeenCalledTimes(1)
+      expect(h.book.mock.calls[0][1]).toMatchObject({ eventId: EVENT2 })
+      expect(data.mia_purchase_intents[0].status).toBe('booked')
+    })
+
+    it('no class in the new input: the intent keeps its class, nothing is written, settle books the old class', async () => {
+      const { db, data, calls } = switchDb()
+      const out = await ask(db, {})
+      expect(out).toMatchObject({ link_sent: true, url: STORED, wording: wordingFor(CLASS) })
+      expect(calls.some((c) => c.op !== 'select')).toBe(false)
+      expect(data.mia_purchase_intents[0]).toMatchObject({ event_un1t_id: EVENT, class_name: 'Fictional Hatch HIIT', class_time: LABEL })
+      paidLive()
+      expect(await settle(db)).toMatchObject({ outcome: 'paid_booked' })
+      expect(h.book.mock.calls[0][1]).toMatchObject({ eventId: EVENT })
+    })
+
+    it('the same class again: the stored link resent, nothing written', async () => {
+      const { db, calls } = switchDb()
+      const out = await ask(db, { event_id: `un1t:${EVENT}`, starts_at: STARTS })
+      expect(out).toMatchObject({ link_sent: true, url: STORED, wording: wordingFor(CLASS) })
+      expect(calls.some((c) => c.op !== 'select')).toBe(false)
+    })
+
+    it('a new class whose relayed time does not match: no link, the intent keeps its class', async () => {
+      const { db, data, calls } = switchDb()
+      const out = await ask(db, { event_id: `un1t:${EVENT2}`, starts_at: LABEL })
+      expect(out).toMatchObject({ link_sent: false, error: 'class_time_mismatch' })
+      expect(out.url).toBeUndefined()
+      expect(calls.some((c) => c.op !== 'select')).toBe(false)
+      expect(data.mia_purchase_intents[0].event_un1t_id).toBe(EVENT)
+    })
+
+    it('raced: the intent settled between the read and the switch, so nothing is resent and the class is unchanged', async () => {
+      let raced = false
+      const { db, data } = switchDb({
+        afterSelect: (table, d) => {
+          if (table === 'un1t_events' && !raced) { raced = true; d.mia_purchase_intents[0].status = 'booked' }
+        },
+      })
+      const out = await ask(db)
+      expect(out).toMatchObject({ link_sent: false, paid: true })
+      expect(out.url).toBeUndefined()
+      expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'booked', event_un1t_id: EVENT, class_name: 'Fictional Hatch HIIT' })
+    })
+
+    it('raced: the intent expired between the read and the switch: try again, never the old link', async () => {
+      let raced = false
+      const { db, data } = switchDb({
+        afterSelect: (table, d) => {
+          if (table === 'un1t_events' && !raced) { raced = true; d.mia_purchase_intents[0].status = 'expired' }
+        },
+      })
+      const out = await ask(db)
+      expect(out).toMatchObject({ link_sent: false, try_again: true })
+      expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'expired', event_un1t_id: EVENT })
+    })
+
+    it('raced: another turn\'s live intent replaced it: that intent takes the new class and its link goes out', async () => {
+      const OTHER_ID = '80000000-0000-4000-8000-0000000000bb'
+      let raced = false
+      const { db, data } = switchDb({
+        afterSelect: (table, d) => {
+          if (table === 'un1t_events' && !raced) {
+            raced = true
+            d.mia_purchase_intents[0].status = 'expired'
+            d.mia_purchase_intents.push(paidIntent({ id: OTHER_ID, checkout_url: 'https://pay.example.test/s/other' }))
+          }
+        },
+      })
+      const out = await ask(db)
+      expect(out).toMatchObject({ link_sent: true, url: 'https://pay.example.test/s/other', intent_id: OTHER_ID, wording: wordingFor(`Fictional Hatch Yoga, ${LABEL2}`) })
+      expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'expired', event_un1t_id: EVENT })
+      expect(data.mia_purchase_intents[1]).toMatchObject({ status: 'link_sent', event_un1t_id: EVENT2, class_time: LABEL2 })
+    })
+
+    it('the switch cannot be written (still live): try again, never the old link with the old class', async () => {
+      const { db, data } = switchDb({ fail: { mia_purchase_intents: { update: true } } })
+      const out = await ask(db)
+      expect(out).toMatchObject({ link_sent: false, try_again: true })
+      expect(out.url).toBeUndefined()
+      expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'link_sent', event_un1t_id: EVENT })
+    })
   })
 
   describe('payment after expiry (Review Focus 3)', () => {
