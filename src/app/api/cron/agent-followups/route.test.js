@@ -10,11 +10,13 @@ vi.mock('@/lib/agent/handoff-sla', () => ({
   runHandoffSlaSweep: vi.fn(async () => ({})), runHandoffAutoResolve: vi.fn(async () => ({})),
 }))
 vi.mock('@/lib/agent/approvals-sla', () => ({ runApprovalsSlaSweep: vi.fn(async () => ({})) }))
+vi.mock('@/lib/agent/trial-done-runner', () => ({ runTrialDoneOutreach: vi.fn() }))
 
 import { GET } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { runAgentFollowups, runFirstClassCheckins } from '@/lib/agent/followups'
+import { runTrialDoneOutreach } from '@/lib/agent/trial-done-runner'
 
 const req = () => ({ headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer s' : null) } })
 function hbDb(result) {
@@ -31,6 +33,7 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
   runAgentFollowups.mockResolvedValue({ nudges: 0, templates: 0, skipped: 0 })
   runFirstClassCheckins.mockResolvedValue({ candidates: 2, freeform: 0, templates: 1, skipped: 1, reasons: { human_active: 1 } })
+  runTrialDoneOutreach.mockResolvedValue({ openers: 1, followups: 0, skipped: 2, reasons: { too_soon: 2 } })
 })
 afterEach(() => { vi.useRealTimers(); console.error.mockRestore?.() })
 
@@ -50,7 +53,7 @@ describe('GET /api/cron/agent-followups — checkins_day', () => {
     createServerClient.mockReturnValue(hbDb({ data: null, error: null }))
     await GET(req())
     expect(stampHeartbeat).toHaveBeenCalledWith('agent-followups', expect.any(Object))
-    expect(Object.keys(outcome()).sort()).toEqual(['approvalsSla', 'autoResolve', 'checkins', 'checkins_day', 'followups', 'handoffSla'])
+    expect(Object.keys(outcome()).sort()).toEqual(['approvalsSla', 'autoResolve', 'checkins', 'checkins_day', 'followups', 'handoffSla', 'trial_done'])
     expect(outcome().followups).toEqual({ nudges: 0, templates: 0, skipped: 0 })
     expect(outcome().handoffSla).toEqual({})
     expect(outcome().autoResolve).toEqual({})
@@ -90,5 +93,28 @@ describe('GET /api/cron/agent-followups — checkins_day', () => {
     await GET(req())
     expect(outcome().checkins).toBeNull()
     expect(outcome().checkins_day).toMatchObject({ ticks: 1, failed_ticks: 1 })
+  })
+
+  // TRIALDONE.4 — the trial-done opener rides the same tick, after the check-ins.
+  it('runs the trial-done outreach after the check-ins and carries its counts on the heartbeat', async () => {
+    const order = []
+    runFirstClassCheckins.mockImplementation(async () => { order.push('checkins'); return { candidates: 0, freeform: 0, templates: 0, skipped: 0, reasons: {} } })
+    runTrialDoneOutreach.mockImplementation(async () => { order.push('trial_done'); return { openers: 1, followups: 0, skipped: 2, reasons: { too_soon: 2 } } })
+    const db = hbDb({ data: null, error: null })
+    createServerClient.mockReturnValue(db)
+    const res = await GET(req())
+    expect(order).toEqual(['checkins', 'trial_done'])
+    expect(runTrialDoneOutreach).toHaveBeenCalledWith(db)
+    expect(outcome().trial_done).toEqual({ openers: 1, followups: 0, skipped: 2, reasons: { too_soon: 2 } })
+    expect((await res.json()).trial_done).toEqual({ openers: 1, followups: 0, skipped: 2, reasons: { too_soon: 2 } })
+  })
+
+  it('a trial-done runner that threw does not stop the tick or the stamp', async () => {
+    runTrialDoneOutreach.mockRejectedValue(new Error('boom'))
+    createServerClient.mockReturnValue(hbDb({ data: null, error: null }))
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    expect(outcome().trial_done).toBeNull()
+    expect(outcome().checkins).toMatchObject({ templates: 1 })
   })
 })

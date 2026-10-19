@@ -234,6 +234,11 @@ const CALLERS = {
     decision: 'refuse-skip',
     why: 'Mia nudges / first-class check-ins: only at locations with the agent enabled. WAORGNUMBER.1: a studio with a number switched on (locationsWithWhatsApp: a location_whatsapp_numbers link to an active number, one read per studio per tick; a failed read counts as having one, logged) sends exactly as before: { locationId }, its own templates. WAORGNUMBER.6: a studio with nothing switched on is skipped for the tick before any candidate read or compose (follow-ups: a followup-skip no_number log; check-ins: reasons.no_number), and MIAORG.1 Task 6’s send-through-a-sibling’s-thread path (getConversationNumberConfig, templateLocationIdFor) is gone. A refusal at send time (the number switched off mid-tick, or the unreadable read above) is a recorded skip (no_number; a check-in claim is released), never a throw through the runner. followups-studio-number.test.js.',
   },
+  'src/lib/agent/trial-done-runner.js': {
+    calls: { sendTemplateMessage: 1 },
+    decision: 'refuse-skip',
+    why: 'TRIALDONE.4 — the trial-done opener (agent-followups cron), only at un1t.online studios with customer_agent.trial_done.enabled and Mia on. A studio with nothing switched on (studioOwnsWhatsAppNumber, the check-in runner’s read; a failed read counts as having one, logged) is skipped for the tick before any candidate read (reasons.no_number). A refusal at send time (the number switched off mid-tick, or that unreadable read) is a recorded skip (reasons.no_number), the opener claim released, never a throw through the runner; any other throw or a send with no message id is reasons.send_failed with the claim released. Sends { locationId: studio, businessAccountId: the template’s WABA }. trial-done-runner.test.js.',
+  },
   'src/lib/automations/booking-whatsapp-confirm.js': {
     calls: { sendTemplateMessage: 1 },
     decision: 'refuse-quiet',

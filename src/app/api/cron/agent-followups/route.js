@@ -5,6 +5,7 @@ import { runAgentFollowups, runFirstClassCheckins } from '@/lib/agent/followups'
 import { runHandoffSlaSweep, runHandoffAutoResolve } from '@/lib/agent/handoff-sla'
 import { runApprovalsSlaSweep } from '@/lib/agent/approvals-sla'
 import { rollupCheckinDay } from '@/lib/agent/checkin-day-rollup'
+import { runTrialDoneOutreach } from '@/lib/agent/trial-done-runner'
 import { dayStrIn, PLATFORM_TZ } from '@/lib/location-time'
 import { logError } from '@/lib/log'
 
@@ -37,6 +38,14 @@ export async function GET(request) {
     checkins = await runFirstClassCheckins(db)
   } catch (e) {
     console.error('[radar-agent] checkins tick failed:', e?.message || e)
+  }
+  // TRIALDONE.4 — same tick, independent failure domain: the trial-done
+  // opener at un1t.online studios that switched it on (default off).
+  let trialDone = null
+  try {
+    trialDone = await runTrialDoneOutreach(db)
+  } catch (e) {
+    logError('cron-agent-followups', 'trial-done tick failed', { err: e })
   }
   // AGENT-HANDOFF-SLA.1 — same tick, independent failure domain: re-alert
   // managers about handed-off threads no human has picked up.
@@ -90,6 +99,6 @@ export async function GET(request) {
   // TZ.18b — the check-in rollup is ONE platform-wide heartbeat row across every
   // studio, so its day key is the platform calendar's (PLATFORM_TZ, D4), not a studio's.
   const checkinsDay = rollupCheckinDay(prevDay, checkins, { day: dayStrIn(Date.now(), PLATFORM_TZ), carryFailed })
-  await stampHeartbeat('agent-followups', { followups: results, checkins, checkins_day: checkinsDay, handoffSla, autoResolve, approvalsSla })
-  return NextResponse.json({ success: true, results, checkins, handoffSla, autoResolve, approvalsSla })
+  await stampHeartbeat('agent-followups', { followups: results, checkins, checkins_day: checkinsDay, trial_done: trialDone, handoffSla, autoResolve, approvalsSla })
+  return NextResponse.json({ success: true, results, checkins, trial_done: trialDone, handoffSla, autoResolve, approvalsSla })
 }
