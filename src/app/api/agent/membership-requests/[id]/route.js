@@ -16,6 +16,7 @@ import {
 import { approvalGrantsTrialCredit } from '@/lib/approvals/agent-request-why'
 import { logWarn } from '@/lib/log'
 import { isHandBookedEventId } from '@/lib/manual-timetable'
+import { UN1T_RECORD_ONLY_REASONS } from '@/lib/un1t-online-approval'
 import { zoneOfLocation } from '@/lib/location-time'
 import { hasRoleAtLocation } from '@/lib/role-at-location'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -103,6 +104,10 @@ async function eventMoveApproverRefusal(db, user, row) {
  * caller is named, "<master> as <user>" (the staff move route's actorFor).
  */
 const moveApproverName = staffActorName
+
+// UN1TWRITE.23 — approving a un1t.online card can run a write plus its check
+// read, and a check read waits out at most two spent budget windows (~120 s).
+export const maxDuration = 300
 
 export async function PATCH(request, { params }) {
   const { id } = await params
@@ -448,9 +453,14 @@ export async function PATCH(request, { params }) {
   // the booking, so recording it after the class has run is still true.
   // HATCHSTART.1: a class off a un1t.online studio's synced timetable is
   // booked the same way (staff book it in un1t.online).
-  const manualBooking = row.kind === 'class_booking' && isHandBookedEventId(details?.event_id)
+  // UN1TWRITE.23 — a un1t.online funnel card (details.provider) runs the
+  // un1t.online executor, never the Glofox one and never the manual record;
+  // its record-only reasons skip the past-start guard like a manual booking.
+  const un1tBooking = row.kind === 'class_booking' && details?.provider === 'un1t_online'
+  const un1tRecordOnly = un1tBooking && UN1T_RECORD_ONLY_REASONS.has(details?.reason)
+  const manualBooking = row.kind === 'class_booking' && !un1tBooking && isHandBookedEventId(details?.event_id)
   let expiredBeforeExecution = false
-  if (executing && row.kind === 'class_booking' && !manualBooking) {
+  if (executing && row.kind === 'class_booking' && !manualBooking && !un1tRecordOnly) {
     const startsAtMs = Date.parse(row.details?.starts_at || '')
     if (Number.isFinite(startsAtMs) && startsAtMs < Date.now()) {
       expiredBeforeExecution = true
@@ -554,7 +564,25 @@ export async function PATCH(request, { params }) {
   }
 
   // AGENT-HANDS.1 — approving a drafted class booking executes it.
-  if (executing && row.kind === 'class_booking' && !expiredBeforeExecution && !manualBooking) {
+  let un1tNotified = null
+  if (executing && un1tBooking && !expiredBeforeExecution) {
+    const { executeUn1tApproval } = await import('@/lib/un1t-online-approval-execute')
+    try {
+      const r = await executeUn1tApproval(db, { row: { ...row, details }, actor: { id: user.id } })
+      executed = r.executed
+      details = r.details
+      finalStatus = r.finalStatus
+      un1tNotified = r.customerNotified
+    } catch (e) {
+      // A database read failed mid-way. The card stays claimed ('executing')
+      // and can be retried once its marker is stale (request-recovery.js);
+      // a re-run is safe: every un1t.online step resumes from the ledger.
+      logWarn('agent-requests', 'un1t.online approval failed part way', { requestId: id, err: e })
+      return NextResponse.json({ success: false, error: 'Could not finish this booking just now. It can be retried from the card in a few minutes; nothing will be done twice.' }, { status: 500 })
+    }
+  }
+
+  if (executing && row.kind === 'class_booking' && !expiredBeforeExecution && !manualBooking && !un1tBooking) {
     const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, GLOFOX_BOOKING_MODEL } =
       await import('@/lib/glofox')
     // PERSON-ACCT.9 — the row is FILED against the contact this booking
@@ -790,6 +818,7 @@ export async function PATCH(request, { params }) {
   }
   // MANUALCONFIRM.1 — the manual booking's email result rides the same field.
   if (manualNotified) customerNotified = manualNotified
+  if (un1tNotified) customerNotified = un1tNotified
 
   // APPROVALS-STUDIO.1 — a decline is never silence: tell the customer
   // in-thread (operator-editable approval_decline_text). Best-effort; only
