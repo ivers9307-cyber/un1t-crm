@@ -532,11 +532,30 @@ const DUPLICATE_ATTEMPT = 'duplicate_attempt'
 // done, unknown, or a sent row whose outcome was never recorded. A refused
 // one sent no email and never counts.
 const RESET_MAY_HAVE_SENT = new Set(['sent', 'unknown', 'done'])
+export const UN1T_RESET_ALREADY_REQUESTED_CODE = 'reset_already_requested'
+const RESET_ALREADY_REQUESTED_TEXT = 'A password reset was already asked for this person, so this one-time reset was not sent again.'
 const RESET_IN_FLIGHT_TEXT = 'A password reset for this person is still running, so nothing more was sent. Try again in a few minutes.'
 
 function resetLimitText(nextMs, nowMs) {
   const mins = Math.max(1, Math.ceil((nextMs - nowMs) / 60_000))
   return `The CRM has asked un1t.online for ${UN1T_RESET_LIMIT} password reset emails in the last 30 minutes for this person, so nothing was sent. The next one can be sent in ${mins} ${mins === 1 ? 'minute' : 'minutes'}.`
+}
+
+const msOrNow = (v, nowMs) => {
+  const at = Date.parse(v)
+  // An unparsable created_at counts as now: the safe direction is to count it.
+  return Number.isFinite(at) ? at : nowMs
+}
+
+/** When the limit lifts, or null when fewer than UN1T_RESET_LIMIT resets in `rows` may have sent in the window. */
+function resetLimitLiftsAt(rows, nowMs) {
+  const counted = rows
+    .filter((r) => RESET_MAY_HAVE_SENT.has(r.stage))
+    .map((r) => msOrNow(r.created_at, nowMs))
+    .filter((atMs) => nowMs - atMs < UN1T_RESET_WINDOW_MS)
+    .sort((a, b) => a - b)
+  // Allowed again once all but LIMIT - 1 of them have aged out of the window.
+  return counted.length >= UN1T_RESET_LIMIT ? counted[counted.length - UN1T_RESET_LIMIT] + UN1T_RESET_WINDOW_MS : null
 }
 
 /**
@@ -547,23 +566,18 @@ function resetLimitText(nextMs, nowMs) {
  */
 export function resetAllowance(rows, { locationId, un1tUserId, nowMs }) {
   let maxNo = 0
-  const counted = []
   for (const r of rows) {
     const n = resetAttemptNo(r.idempotency_key, locationId, un1tUserId)
     if (n != null && n > maxNo) maxNo = n
-    const at = Date.parse(r.created_at)
-    // An unparsable created_at counts as now: the safe direction is to count it.
-    const atMs = Number.isFinite(at) ? at : nowMs
-    if (r.stage === 'sent' && nowMs - atMs < UN1T_IN_FLIGHT_MS) return { inFlight: r }
-    if (RESET_MAY_HAVE_SENT.has(r.stage) && nowMs - atMs < UN1T_RESET_WINDOW_MS) counted.push(atMs)
+    if (r.stage === 'sent' && nowMs - msOrNow(r.created_at, nowMs) < UN1T_IN_FLIGHT_MS) return { inFlight: r }
   }
-  if (counted.length >= UN1T_RESET_LIMIT) {
-    // Allowed again once all but LIMIT - 1 of them have aged out of the window.
-    counted.sort((a, b) => a - b)
-    return { nextAllowedAt: counted[counted.length - UN1T_RESET_LIMIT] + UN1T_RESET_WINDOW_MS }
-  }
-  return { attempt: maxNo + 1 }
+  const liftsAt = resetLimitLiftsAt(rows, nowMs)
+  return liftsAt != null ? { nextAllowedAt: liftsAt } : { attempt: maxNo + 1 }
 }
+
+const resetLimitResult = (liftsAt, nowMs) => refusalResult(UN1T_RESET_LIMIT_CODE, resetLimitText(liftsAt, nowMs), {
+  data: { nextAllowedAt: new Date(liftsAt).toISOString() },
+})
 
 /**
  * Ask un1t.online to email this client a set-password code. Up to
@@ -577,19 +591,35 @@ export function resetAllowance(rows, { locationId, un1tUserId, nowMs }) {
  *     one-open index lets one of them send;
  *   - a call that reads while another is in flight sees its sent row and is
  *     refused UN1T_ATTEMPT_IN_FLIGHT;
- *   - a call whose n another call already finished done finds that done row
- *     after its own insert and sends nothing (duplicate_attempt);
+ *   - after its own insert a call checks again: a done row under its n
+ *     (another call took this attempt and finished) sends nothing
+ *     (duplicate_attempt, the earlier done returned), and the window counted
+ *     again without its own row (a caller that stalled while others went)
+ *     refuses reset_limit;
  *   - an unknown row holds only its own key and ages out of the window.
+ * firstOnly (the funnel's set-password step: one reset per account): any
+ * done, sent or unknown reset for this person, whatever its key or age, skips
+ * as refused reset_already_requested (data.priorStage), nothing sent. Two
+ * firstOnly calls that both read "none" take n = 1 together, so the one-open
+ * index still lets only one send.
+ * beforeSend (optional): runs once this call owns the attempt and has passed
+ * the post-insert checks, just before the request (the funnel's explanation
+ * email, so it goes only with the reset that is actually sent). A throw from
+ * it is logged and never blocks the reset.
  * One attempt is never re-sent (a second request is a second email): a 5xx
  * or no reply is unknown after one request. A done here does NOT prove an
  * email went out; no copy may promise it.
  * @param {{ locationId: string, contactId?: string|null, un1tUserId: string, email: string,
- *   origin: string, originRef?: string|null, actor?: { id: string }|null }} args
+ *   origin: string, originRef?: string|null, actor?: { id: string }|null,
+ *   firstOnly?: boolean, beforeSend?: () => Promise<void> }} args
  * @param {{ writerFactory?: typeof createUn1tWriter, now?: () => Date }} [deps]
  */
 export async function forgotPassword(db, args = {}, deps = {}) {
   const { writerFactory = createUn1tWriter, now = () => new Date() } = deps
-  const { locationId, contactId = null, un1tUserId, email: rawEmail, origin, originRef = null, actor = null } = args
+  const {
+    locationId, contactId = null, un1tUserId, email: rawEmail, origin, originRef = null, actor = null,
+    firstOnly = false, beforeSend = null,
+  } = args
   requireBareId('forgotPassword', 'un1tUserId', un1tUserId)
   const email = plainText(rawEmail)
   if (!email) throw new TypeError("forgotPassword: 'email' is required")
@@ -600,15 +630,20 @@ export async function forgotPassword(db, args = {}, deps = {}) {
   writer.assertAllowed('forgot_password', 'POST', '/auth/forgot-password', body)
 
   const nowMs = now().getTime()
-  const allowance = resetAllowance(await listResetAttempts(db, { locationId, un1tUserId }), { locationId, un1tUserId, nowMs })
+  const rows = await listResetAttempts(db, { locationId, un1tUserId })
+  if (firstOnly) {
+    const prior = rows.find((r) => RESET_MAY_HAVE_SENT.has(r.stage))
+    if (prior) {
+      return withLedger(refusalResult(UN1T_RESET_ALREADY_REQUESTED_CODE, RESET_ALREADY_REQUESTED_TEXT, { data: { priorStage: prior.stage } }), prior.id)
+    }
+  }
+  const allowance = resetAllowance(rows, { locationId, un1tUserId, nowMs })
   if (allowance.inFlight) {
     return withLedger(refusalResult(C.ATTEMPT_IN_FLIGHT, RESET_IN_FLIGHT_TEXT), allowance.inFlight.id)
   }
   if (allowance.nextAllowedAt != null) {
     logInfo(LOG_MODULE, 'password reset limit reached; not sent', fields({ locationId, op: 'forgot_password', origin, code: UN1T_RESET_LIMIT_CODE }))
-    return withLedger(refusalResult(UN1T_RESET_LIMIT_CODE, resetLimitText(allowance.nextAllowedAt, nowMs), {
-      data: { nextAllowedAt: new Date(allowance.nextAllowedAt).toISOString() },
-    }))
+    return withLedger(resetLimitResult(allowance.nextAllowedAt, nowMs))
   }
 
   const key = ledgerKey.pw(locationId, un1tUserId, allowance.attempt)
@@ -625,6 +660,18 @@ export async function forgotPassword(db, args = {}, deps = {}) {
       if (prior && prior.id !== row.id) {
         doneBefore = prior
         return refusalResult(DUPLICATE_ATTEMPT, null)
+      }
+      // Count the window again, without our own row: a caller that stalled
+      // between its read and its insert while other resets went out.
+      const others = (await listResetAttempts(db, { locationId, un1tUserId })).filter((o) => o.id !== row.id)
+      const liftsAt = resetLimitLiftsAt(others, now().getTime())
+      if (liftsAt != null) return resetLimitResult(liftsAt, now().getTime())
+      if (typeof beforeSend === 'function') {
+        try {
+          await beforeSend()
+        } catch {
+          logWarn(LOG_MODULE, 'beforeSend threw; the reset still goes', fields({ locationId, op: 'forgot_password', origin, code: 'before_send_threw' }))
+        }
       }
       return writer.send('POST', '/auth/forgot-password', {
         body, policy: 'never', op: 'forgot_password', origin, ledgerId: row.id, secrets: [email], expect: {},

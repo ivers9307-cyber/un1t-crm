@@ -562,6 +562,37 @@ describe('UN1TWRITE.25 — up to 3 password resets per person per 30 minutes', (
   })
   const sends = (t) => t.fetchImpl.count('POST /auth/forgot-password')
   const okRoute = () => ({ 'POST /auth/forgot-password': [ok({ message: 'sent' })] })
+  // A db whose FIRST reset-allowance read (by user, not by key) answers `rows`
+  // (a caller that read the ledger earlier and stalled); every other call is real.
+  const staleFirstRead = (t, rows = []) => {
+    let served = false
+    return {
+      from(name) {
+        const real = t.db.from(name)
+        const f = []
+        const api = new Proxy(real, {
+          get(target, prop) {
+            if (prop === 'then' && !served) {
+              const isAllowanceRead = name === 'un1t_write_events' && f.some(([c, v]) => c === 'un1t_user_id' && v === USER) && !f.some(([c]) => c === 'idempotency_key')
+              if (isAllowanceRead) {
+                served = true
+                return (okFn, noFn) => Promise.resolve({ data: rows, error: null }).then(okFn, noFn)
+              }
+            }
+            const v = target[prop]
+            if (typeof v !== 'function') return v
+            return (...args) => {
+              if (prop === 'eq') f.push(args)
+              const out = v.apply(target, args)
+              return out === target ? api : out
+            }
+          },
+        })
+        return api
+      },
+      rpc: t.db.rpc,
+    }
+  }
 
   it('the 1st, 2nd and 3rd reset in 30 minutes each send, each under its own key', async () => {
     const t = await setup({ routes: okRoute() })
@@ -660,35 +691,92 @@ describe('UN1TWRITE.25 — up to 3 password resets per person per 30 minutes', (
     const first = await forgotPassword(t.db, pwArgs(), t.deps)
     expect(first).toMatchObject({ verdict: 'done', sent: true })
     // The second call's allowance read is served from before the first call's insert.
-    const stale = {
-      from(name) {
-        const real = t.db.from(name)
-        const f = []
-        const api = new Proxy(real, {
-          get(target, prop) {
-            if (prop === 'then') {
-              const isAllowanceRead = name === 'un1t_write_events' && f.some(([c, v]) => c === 'un1t_user_id' && v === USER) && !f.some(([c]) => c === 'idempotency_key')
-              if (isAllowanceRead) return (okFn, noFn) => Promise.resolve({ data: [], error: null }).then(okFn, noFn)
-            }
-            const v = target[prop]
-            if (typeof v !== 'function') return v
-            return (...args) => {
-              if (prop === 'eq') f.push(args)
-              const out = v.apply(target, args)
-              return out === target ? api : out
-            }
-          },
-        })
-        return api
-      },
-      rpc: t.db.rpc,
-    }
+    const stale = staleFirstRead(t)
     const second = await forgotPassword(stale, pwArgs(), t.deps)
     expect(sends(t)).toBe(1)
     expect(second).toMatchObject({ verdict: 'done', sent: false, ledgerId: first.ledgerId })
     const rows = ledger(t.store)
     expect(rows).toHaveLength(2)
     expect(rows[1]).toMatchObject({ idempotency_key: `pw:${LOC}:${USER}:1`, stage: 'refused', code: 'duplicate_attempt' })
+  })
+
+  it('review fix (minor): a stalled caller whose old number is free still counts the window again after its insert, and never sends a 4th', async () => {
+    const t = await setup({ routes: okRoute(), db: { tables: { un1t_write_events: [
+      pwRow(1, 'refused', 6 * MIN), pwRow(2, 'done', 5 * MIN), pwRow(3, 'done', 4 * MIN), pwRow(4, 'done', 3 * MIN),
+    ] } } })
+    // It read the ledger before any of these existed, so it takes n = 1, whose
+    // only row is refused (the key is free): the post-insert recount stops it.
+    const r = await forgotPassword(staleFirstRead(t), pwArgs(), t.deps)
+    expect(r).toMatchObject({ verdict: 'refused', sent: false, code: 'reset_limit' })
+    expect(r.data.nextAllowedAt).toEqual(expect.any(String))
+    expect(sends(t)).toBe(0)
+    expect(ledger(t.store).at(-1)).toMatchObject({ idempotency_key: `pw:${LOC}:${USER}:1`, stage: 'refused', code: 'reset_limit' })
+  })
+
+  describe('firstOnly (the funnel set-password step: one reset per account)', () => {
+    it('sends the first reset, under attempt 1', async () => {
+      const t = await setup({ routes: okRoute() })
+      const r = await forgotPassword(t.db, pwArgs({ firstOnly: true }), t.deps)
+      expect(r).toMatchObject({ verdict: 'done', sent: true })
+      expect(ledger(t.store)[0].idempotency_key).toBe(`pw:${LOC}:${USER}:1`)
+    })
+
+    it('a done, sent or unknown reset for this person (any key) skips: nothing sent, code reset_already_requested, its stage in data', async () => {
+      for (const [row, stage] of [[pwRow(null, 'done', 3 * 24 * 60 * MIN), 'done'], [pwRow(2, 'unknown', 2 * 60 * MIN), 'unknown'], [pwRow(1, 'sent', 10_000, { finished_at: null }), 'sent']]) {
+        const t = await setup({ routes: okRoute(), db: { tables: { un1t_write_events: [row] } } })
+        const r = await forgotPassword(t.db, pwArgs({ firstOnly: true }), t.deps)
+        expect(Object.keys(r).sort()).toEqual(CONTRACT_KEYS)
+        expect(r).toMatchObject({ verdict: 'refused', sent: false, code: 'reset_already_requested', retryable: false, ledgerId: row.id, data: { priorStage: stage } })
+        expect(sends(t)).toBe(0)
+        expect(ledger(t.store)).toHaveLength(1)
+      }
+    })
+
+    it('a refused earlier reset (nothing sent) does not skip', async () => {
+      const t = await setup({ routes: okRoute(), db: { tables: { un1t_write_events: [pwRow(1, 'refused', 5 * MIN)] } } })
+      const r = await forgotPassword(t.db, pwArgs({ firstOnly: true }), t.deps)
+      expect(r).toMatchObject({ verdict: 'done', sent: true })
+      expect(ledger(t.store).at(-1).idempotency_key).toBe(`pw:${LOC}:${USER}:2`)
+    })
+
+    it('the reviewed race: B read "no resets", A finished done before B got here; B sends nothing and its beforeSend never runs', async () => {
+      const t = await setup({ routes: okRoute() })
+      const aHook = vi.fn(async () => {})
+      const a = await forgotPassword(t.db, pwArgs({ firstOnly: true, beforeSend: aHook }), t.deps)
+      expect(a).toMatchObject({ verdict: 'done', sent: true })
+      const bHook = vi.fn(async () => {})
+      // B checked earlier (the account step's own read) but forgotPassword reads now: it sees A's done.
+      const b = await forgotPassword(t.db, pwArgs({ firstOnly: true, beforeSend: bHook }), t.deps)
+      expect(b).toMatchObject({ verdict: 'refused', code: 'reset_already_requested', data: { priorStage: 'done' } })
+      // Even when B's own read is stale too, the post-insert check stops it before the hook.
+      const c = await forgotPassword(staleFirstRead(t), pwArgs({ firstOnly: true, beforeSend: bHook }), t.deps)
+      expect(c).toMatchObject({ verdict: 'done', sent: false, ledgerId: a.ledgerId })
+      expect(sends(t)).toBe(1)
+      expect(aHook).toHaveBeenCalledTimes(1)
+      expect(bHook).not.toHaveBeenCalled()
+    })
+
+    it('two concurrent firstOnly calls take attempt 1 together: one send, one beforeSend', async () => {
+      const t = await setup({ routes: okRoute() })
+      const hook = vi.fn(async () => {})
+      await Promise.all([
+        forgotPassword(t.db, pwArgs({ firstOnly: true, beforeSend: hook }), t.deps),
+        forgotPassword(t.db, pwArgs({ firstOnly: true, beforeSend: hook }), t.deps),
+      ])
+      expect(sends(t)).toBe(1)
+      expect(hook).toHaveBeenCalledTimes(1)
+      expect(new Set(ledger(t.store).map((r) => r.idempotency_key))).toEqual(new Set([`pw:${LOC}:${USER}:1`]))
+    })
+
+    it('beforeSend runs after the attempt is claimed and before the request; its failure never blocks the reset', async () => {
+      const t = await setup({ routes: okRoute() })
+      const order = []
+      const hook = vi.fn(async () => { order.push(['hook', ledger(t.store).map((r) => r.stage), t.fetchImpl.writes().length]); throw new Error('postmark down') })
+      const r = await forgotPassword(t.db, pwArgs({ firstOnly: true, beforeSend: hook }), t.deps)
+      expect(order).toEqual([['hook', ['sent'], 0]])
+      expect(r).toMatchObject({ verdict: 'done', sent: true })
+      expect(sends(t)).toBe(1)
+    })
   })
 
   it('the allowance read failing throws before anything is sent (a retry is safe)', async () => {

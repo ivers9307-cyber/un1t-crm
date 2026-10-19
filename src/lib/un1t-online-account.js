@@ -36,6 +36,7 @@ import {
   createClient as createClientOp,
   forgotPassword as forgotPasswordOp,
   findClientByEmail as findClientByEmailOp,
+  UN1T_RESET_ALREADY_REQUESTED_CODE,
 } from './un1t-online-write-ops.js'
 import { applyUn1tWriteToMirror } from './un1t-online-mirror-write.js'
 import { logWarn } from './log'
@@ -233,13 +234,14 @@ export async function runSetPasswordStep(db, { locationId, contact, un1tUserId, 
   }
   const resent = stages.has('refused')
 
-  let explanation
-  if (settings?.sendsWelcome) {
-    explanation = 'skipped_flag'
-  } else if (resent) {
-    // A refused reset earlier: our email went out before it; not again.
-    explanation = 'skipped_already_sent'
-  } else {
+  // Our explanation email goes through forgotPassword's beforeSend: only once
+  // this run owns the reset attempt and is about to send it. The ledger read
+  // above is a fast path, not the guard: another run for this account (a
+  // second booking, an overlapping retry, the approval executor beside the
+  // processor) can finish its reset after it, and firstOnly + the attempt key
+  // then stop this run before either email (review fix, UN1TWRITE.25).
+  let explanation = null
+  const sendExplanation = async () => {
     try {
       const sent = await d.sendUn1tAccountEmail(db, {
         locationId, contact, className: request?.class_name ?? null, startsAt: request?.starts_at ?? null, ...emailArgs,
@@ -250,10 +252,29 @@ export async function runSetPasswordStep(db, { locationId, contact, un1tUserId, 
       explanation = 'send_error'
     }
   }
+  const ours = !settings?.sendsWelcome && !resent
+  if (settings?.sendsWelcome) explanation = 'skipped_flag'
+  // A refused reset earlier: our email went out before it; not again.
+  else if (resent) explanation = 'skipped_already_sent'
 
   if (settings?.sendsWelcome && settings?.welcomeSetsLogin) return { explanation, forgotPassword: 'skipped_flag' }
-  const r = await d.forgotPassword(db, { locationId, contactId: contact.id, un1tUserId, email: contact.email, origin, originRef: request?.id ?? null },
-    writer ? { writerFactory: async () => writer } : undefined)
+  const r = await d.forgotPassword(db, {
+    locationId, contactId: contact.id, un1tUserId, email: contact.email, origin, originRef: request?.id ?? null,
+    firstOnly: true, ...(ours ? { beforeSend: sendExplanation } : {}),
+  }, writer ? { writerFactory: async () => writer } : undefined)
+
+  // Another run's reset got there first: this run sent nothing, emails included.
+  if (r.code === UN1T_RESET_ALREADY_REQUESTED_CODE) {
+    return r.data?.priorStage === 'done'
+      ? { explanation: 'skipped_already_done', forgotPassword: 'skipped_already_done' }
+      : { explanation: 'skipped_reset_in_doubt', forgotPassword: 'in_doubt', help: UN1T_SET_PASSWORD_HELP }
+  }
+  if (ours && explanation == null) {
+    // beforeSend never ran: nothing of ours went. A done here is the other
+    // run's attempt handed back by the post-insert check.
+    if (r.verdict === 'done') return { explanation: 'skipped_already_done', forgotPassword: 'skipped_already_done' }
+    explanation = 'deferred'
+  }
   const out = { explanation, forgotPassword: r.verdict === 'refused' && r.retryable ? 'retry' : r.verdict }
   if (r.code) out.code = r.code
   if (r.verdict !== 'done') out.help = UN1T_SET_PASSWORD_HELP

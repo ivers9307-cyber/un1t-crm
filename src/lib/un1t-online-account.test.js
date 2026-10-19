@@ -53,7 +53,8 @@ beforeEach(() => {
     writerFactory: vi.fn(async () => ({ locationId: LOC })),
     findClientByEmail: vi.fn(async () => ({ matches: [] })),
     createClient: vi.fn(async () => ({ ...done({ id: 'usr-new' }), conflict: null })),
-    forgotPassword: vi.fn(async () => done()),
+    // The real primitive runs beforeSend (our explanation email) once it owns the attempt.
+    forgotPassword: vi.fn(async (db, a) => { await a?.beforeSend?.(); return done() }),
     linkAccount: vi.fn(async (db, { un1tUserId }) => { writes.push(['link', un1tUserId]); return { ok: true } }),
     sendUn1tAccountEmail: vi.fn(async () => ({ sent: true, channel: 'email' })),
   }
@@ -182,7 +183,8 @@ describe('runSetPasswordStep', () => {
     tables.un1t_write_events = [createdRow]
     const order = []
     deps.sendUn1tAccountEmail.mockImplementation(async () => { order.push('email'); return { sent: true, channel: 'email' } })
-    deps.forgotPassword.mockImplementation(async () => { order.push('forgot'); return done() })
+    // The primitive runs beforeSend (our email) just before its request (pinned in the primitives test).
+    deps.forgotPassword.mockImplementation(async (db, a) => { await a.beforeSend?.(); order.push('forgot'); return done() })
     expect(await step()).toEqual({ explanation: 'sent', forgotPassword: 'done' })
     expect(order).toEqual(['email', 'forgot'])
     // The created-by-us check matches the user, whichever contact the create was for.
@@ -210,6 +212,29 @@ describe('runSetPasswordStep', () => {
     tables.un1t_write_events = [createdRow, { id: 'w-5', location_id: LOC, un1t_user_id: 'usr-other', op: 'forgot_password', stage: 'done', idempotency_key: `pw:${LOC}:usr-other:1`, created_at: '2026-10-18T09:01:00Z' }]
     expect(await step()).toEqual({ explanation: 'sent', forgotPassword: 'done' })
     expect(deps.forgotPassword).toHaveBeenCalledTimes(1)
+  })
+
+  describe('review fix: two runs for one new account (two bookings, an overlapping retry, approval + processor)', () => {
+    it('asks forgotPassword for the FIRST reset only, and sends our email only through its beforeSend', async () => {
+      tables.un1t_write_events = [createdRow]
+      expect(await step()).toEqual({ explanation: 'sent', forgotPassword: 'done' })
+      expect(deps.forgotPassword.mock.calls[0][1]).toMatchObject({ firstOnly: true, beforeSend: expect.any(Function) })
+    })
+
+    it('B read "no resets", then A finished its reset: B sends neither our email nor a reset', async () => {
+      tables.un1t_write_events = [createdRow]
+      deps.forgotPassword.mockResolvedValueOnce(done({ verdict: 'refused', sent: false, code: 'reset_already_requested', data: { priorStage: 'done' }, ledgerId: 'w-a' }))
+      expect(await step()).toEqual({ explanation: 'skipped_already_done', forgotPassword: 'skipped_already_done' })
+      deps.forgotPassword.mockResolvedValueOnce(done({ verdict: 'refused', sent: false, code: 'reset_already_requested', data: { priorStage: 'unknown' }, ledgerId: 'w-a' }))
+      expect(await step()).toEqual({ explanation: 'skipped_reset_in_doubt', forgotPassword: 'in_doubt', help: expect.stringMatching(/Forgot password/) })
+      // The post-insert check: A's done is handed back, our email never went.
+      deps.forgotPassword.mockResolvedValueOnce(done({ sent: false, ledgerId: 'w-a' }))
+      expect(await step()).toEqual({ explanation: 'skipped_already_done', forgotPassword: 'skipped_already_done' })
+      // A is still running: retry later, our email not sent.
+      deps.forgotPassword.mockResolvedValueOnce(done({ verdict: 'refused', sent: false, code: 'UN1T_ATTEMPT_IN_FLIGHT', retryable: true }))
+      expect(await step()).toMatchObject({ explanation: 'deferred', forgotPassword: 'retry', code: 'UN1T_ATTEMPT_IN_FLIGHT' })
+      expect(deps.sendUn1tAccountEmail).not.toHaveBeenCalled()
+    })
   })
 
   it('UN1TWRITE.25: the 3-per-30-minutes refusal is reported with the staff help line', async () => {
