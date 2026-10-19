@@ -10,7 +10,7 @@
 // kind: text | textarea | number | select | checkbox | quiet_hours
 // paths: the override paths the field sets (one, or the quiet-hours pair).
 
-import { DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, DEFAULT_FLOW_BOOKING_ACK_TEXT, DEFAULT_FLOW_BOOKING_HOLDING_TEXT, DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT } from '@/lib/agent/default-copy'
+import { DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, DEFAULT_BOOKING_FLOW_TEXT, DEFAULT_FLOW_BOOKING_ACK_TEXT, DEFAULT_FLOW_BOOKING_HOLDING_TEXT, DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT } from '@/lib/agent/default-copy'
 
 export const ORG_FIELD_GROUPS = [
   {
@@ -59,6 +59,9 @@ export const ORG_FIELD_GROUPS = [
       // MIAHATCH.2 — the studio editor gains this field with the Hatch copy group (a later task).
       { id: 'chat_booking_unavailable_text', paths: ['chat_booking_unavailable_text'], kind: 'text', maxLength: 500, label: 'Chat booking not available message (un1t.online studios)',
         placeholder: DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, help: '{studio} becomes the studio name and {link} its booking link. With no booking link, a text that needs {link} is not used: the customer is told the team will help them book.' },
+      // MIAFLOW.1 — the line on the booking Flow Mia sends where the studio's Flow is switched on.
+      { id: 'booking_flow_text', paths: ['booking_flow_text'], kind: 'text', maxLength: 500, label: 'Booking form message (studios with the WhatsApp booking Flow)',
+        placeholder: DEFAULT_BOOKING_FLOW_TEXT, help: 'Shown on the booking form Mia sends in WhatsApp, above its button.' },
       { id: 'flow_booking_ack_text', paths: ['flow_booking_ack_text'], kind: 'text', maxLength: 500, label: 'Booking form received message (WhatsApp)',
         placeholder: DEFAULT_FLOW_BOOKING_ACK_TEXT, help: 'Sent once when a customer books a class through the WhatsApp booking form, while the booking is made. The confirmation follows when it is booked.' },
       { id: 'flow_booking_holding_text', paths: ['flow_booking_holding_text'], kind: 'text', maxLength: 500, label: 'Booking form needs the team message (WhatsApp)',

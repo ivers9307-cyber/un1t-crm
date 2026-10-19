@@ -56,6 +56,10 @@ export const DEFAULTS = {
   // {link} (the studio's booking_url) are filled in. Null → the code defaults
   // in lib/agent/default-copy.js, rendered by renderMiaCopy (mia-copy.js).
   chat_booking_unavailable_text: null,
+  // MIAFLOW.1 — the line on the booking Flow Mia sends at a studio whose Flow
+  // is switched on (settings.whatsapp_flow). Null → the code default in
+  // lib/agent/default-copy.js, rendered by renderMiaCopy (mia-copy.js).
+  booking_flow_text: null,
   // FLOWACK.1 — the WhatsApp booking Flow's texts: the one acknowledgement a
   // class submission gets (instead of a Mia turn), and the holding line when
   // the booking goes to the team. Null → the code defaults in
@@ -151,6 +155,7 @@ export const SettingsSchema = z.object({
   no_credits_handoff_text: z.string().max(500).nullable().optional(),
   account_conflict_handoff_text: z.string().max(500).nullable().optional(),
   chat_booking_unavailable_text: z.string().max(500).nullable().optional(),
+  booking_flow_text: z.string().max(500).nullable().optional(),
   flow_booking_ack_text: z.string().max(500).nullable().optional(),
   flow_booking_holding_text: z.string().max(500).nullable().optional(),
   flow_booking_duplicate_text: z.string().max(500).nullable().optional(),
@@ -332,6 +337,7 @@ function buildFullBlob(data) {
     no_credits_handoff_text: data.no_credits_handoff_text?.trim() || null,
     account_conflict_handoff_text: data.account_conflict_handoff_text?.trim() || null,
     chat_booking_unavailable_text: data.chat_booking_unavailable_text?.trim() || null,
+    booking_flow_text: data.booking_flow_text?.trim() || null,
     flow_booking_ack_text: data.flow_booking_ack_text?.trim() || null,
     flow_booking_holding_text: data.flow_booking_holding_text?.trim() || null,
     flow_booking_duplicate_text: data.flow_booking_duplicate_text?.trim() || null,
