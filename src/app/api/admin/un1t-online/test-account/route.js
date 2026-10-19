@@ -102,8 +102,10 @@ export async function POST(request) {
         return writeAnswer(r, { un1t_user_id: r.verdict === 'done' ? r.id ?? null : null, conflict: r.conflict ?? null })
       }
       case 'forgot_password': {
+        // Up to 3 resets per person per 30 minutes (UN1TWRITE.25); a
+        // reset_limit refusal says in its message, and here, when the next is allowed.
         const r = await forgotPassword(db, { ...base, contactId: contact.id, un1tUserId, email: contact.email })
-        return writeAnswer(r)
+        return writeAnswer(r, { next_allowed_at: r.data?.nextAllowedAt ?? null })
       }
       case 'trial':
       case 'trial_skip_eligibility': {

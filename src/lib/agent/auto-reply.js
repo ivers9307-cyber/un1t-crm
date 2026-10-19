@@ -30,6 +30,7 @@ import { getLocationBranding } from '@/lib/location-branding'
 import { providerFor } from '@/lib/membership/source'
 import { noneSource } from '@/lib/membership/sources/none'
 import { DEFAULTS } from './settings-contract'
+import { trialDoneLineFor } from './trial-done-context'
 import { resolveAgentSettings } from './settings-resolve'
 import {
   shouldAgentReply,
@@ -54,13 +55,15 @@ import {
 import { personGroupResolver } from '@/lib/person-links'
 import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account-tools'
 import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
+import { SEND_BOOKING_FLOW_TOOL, SEND_BOOKING_FLOW_TOOL_NAME, bookingFlowOffered, executeSendBookingFlow } from './booking-flow'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
 import {
   BOOKING_SYSTEM_TOOL_NAMES, deriveNoBookingTools, membershipAtOtherStudio,
   refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO,
 } from './tool-capability'
-import { deriveUn1tReadTools, selectToolBlock, withCacheBreakpoint } from './tool-blocks'
+import { PURCHASE_TOOL_NAMES } from './purchase-tools'
+import { deriveUn1tReadTools, deriveUn1tFullTools, selectToolBlock, withCacheBreakpoint } from './tool-blocks'
 import { resolveMemberStudios, otherStudioOnly } from './member-studios'
 import {
   threadTakesBookings, resolveTurnPlan, todayPlan, planKey, turnForPlan, createActionStudios, loadAgentKnowledge,
@@ -144,17 +147,30 @@ export const CACHED_NO_BOOKING_TOOLS = withCacheBreakpoint(NO_BOOKING_AGENT_TOOL
 // sender is answerable at a un1t.online studio.
 export const CACHED_UN1T_READ_TOOLS = withCacheBreakpoint(deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: false }))
 export const CACHED_UN1T_READ_DUAL_TOOLS = withCacheBreakpoint(deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }))
+// MIAHATCH.5 — block 3b (`un1t_full`): the dual block plus request_refund, with
+// the two booking writes working at the un1t.online studio too, then (MIAHATCH.6)
+// the three purchase tools (purchase-tools.js). Built once like the others. Only a WhatsApp turn whose un1t.online studio has writes_enabled
+// AND its Mia switch (un1t_chat_actions_enabled) gets it (turn-studios.js).
+export const CACHED_UN1T_FULL_TOOLS = withCacheBreakpoint(deriveUn1tFullTools(ALL_AGENT_TOOLS))
 const CACHED_BLOCKS = {
   glofox: CACHED_ACCOUNT_TOOLS,
   no_booking: CACHED_NO_BOOKING_TOOLS,
   un1t_read: CACHED_UN1T_READ_TOOLS,
   un1t_read_dual: CACHED_UN1T_READ_DUAL_TOOLS,
-  // The un1t.online write block does not exist yet (selectToolBlock only
-  // returns un1t_full when un1tWrites is true, which nothing sets): the read
-  // block that includes every Glofox tool stands in, offering strictly fewer
-  // tools than the executor would allow.
-  un1t_full: CACHED_UN1T_READ_DUAL_TOOLS,
+  un1t_full: CACHED_UN1T_FULL_TOOLS,
 }
+// MIAFLOW.1 — each block Mia can be in where she cannot book in chat, plus
+// send_booking_flow last (booking-flow.js), for a WhatsApp turn at a studio
+// whose booking Flow is switched on (bookingFlowOffered). Built once at load,
+// so each variant is a byte-stable cached prefix of its own; the blocks above
+// are untouched. There is no Glofox variant (Stillorgan is unchanged) and no
+// `un1t_full` one (Ruling 24: a known Hatch member books in chat there, so a
+// un1t_full turn always sends CACHED_BLOCKS.un1t_full).
+export const CACHED_BOOKING_FLOW_BLOCKS = Object.freeze({
+  no_booking: withCacheBreakpoint([...NO_BOOKING_AGENT_TOOLS, SEND_BOOKING_FLOW_TOOL]),
+  un1t_read: withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: false }), SEND_BOOKING_FLOW_TOOL]),
+  un1t_read_dual: withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }), SEND_BOOKING_FLOW_TOOL]),
+})
 /**
  * The cached tool block for a turn. The live turn sends CACHED_BLOCKS[block]
  * for its plan's block (turn-studios.js), the same array objects this returns.
@@ -842,6 +858,16 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       }
     }
 
+    // TRIALDONE.6 — a trial finisher replying to the studio's trial-done
+    // opener: the studio's brief (trial_done.mia_instruction, filled) rides the
+    // uncached suffix so Mia helps them choose an offer. Read once per turn,
+    // only where the thread's studio has trial_done on (a studio-only key) and
+    // the thread has a contact. Never throws: a failed read is no brief.
+    const trialDoneContactId = conv?.contact_id || contactId || null
+    const trialDoneLine = settings?.trial_done?.enabled === true && trialDoneContactId
+      ? await trialDoneLineFor(db, { locationId, contactId: trialDoneContactId, nowMs: Date.now(), settings, studioName: loc?.name || branding.companyName || null, zone })
+      : null
+
     // CACHE.2 — content blocks with a cache breakpoint on the location-stable
     // prefix (base prompt + knowledge). Caches cumulatively after the tool
     // block; the volatile suffix (today + identity override) stays uncached.
@@ -875,6 +901,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // AGENT-AUTH.3 — number linked to >1 person → ask which account by email.
       multipleAccounts,
       knownContact,
+      trialDoneLine,
     }
 
     // EFFORT.1 — operator-tunable reasoning effort (defaults to `medium`, one
@@ -908,6 +935,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // false, and list_upcoming_classes reads un1t_events at un1t.online.
       canBook,
       membershipSourceKey: membershipSource.key,
+      // MIACONSULT.1 — dates list_consultation_slots returned this turn, so
+      // book_consultation only books a day that was offered (earlier turns are
+      // read back from agent_decisions).
+      consultationDatesListed: new Set(),
     }
     // MIA-REVIEW.3 — surface the acting account to the decision log.
     trace.actingContactId = toolCtx.verifiedContactId || null
@@ -953,7 +984,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // executors run at) and the prompt the block needs. actionStudio is
     // another studio's resolved settings (booking_mode, booking_url, copy);
     // voice, quiet hours and caps stay this thread's.
-    const actionStudios = createActionStudios(db, { threadLocationId: locationId, threadSettings: settings, threadZone: zone })
+    const actionStudios = createActionStudios(db, { threadLocationId: locationId, threadSettings: settings, threadZone: zone, threadLocationSettings: loc?.settings ?? null })
+    // MIAFLOW.1 — the thread studio's booking Flow (locations.settings.whatsapp_flow),
+    // offered per block (bookingFlowOffered); tools, prompt and executor agree.
+    const flowConfig = loc?.settings?.whatsapp_flow || null
     toolCtx.actionStudio = actionStudios.settings
     let plan
     let system
@@ -967,6 +1001,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       plan = p
       toolCtx.turn = turnForPlan(p, adapter.name)
       toolCtx.glofoxLocationId = p.glofoxLocationId
+      toolCtx.bookingFlow = {
+        offered: bookingFlowOffered({ channel: adapter.name, canBook, block: p.block, flowConfig, contactId: toolCtx.contactId }),
+        config: flowConfig,
+      }
     }
     // Plan the turn and build its system blocks together, so the tools and the
     // prompt always describe the same block. A prompt that cannot be built
@@ -982,14 +1020,17 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       let extra = null
       if (!next.sameAsToday) {
         try {
-          extra = await promptOptionsForPlan(db, next, actionStudios)
+          extra = await promptOptionsForPlan(db, next, actionStudios, { conversationId, channel: adapter.name })
         } catch (err) {
           logWarn('mia-un1t', 'turn prompt options failed; using the today block', { block: next.block, errClass: err?.name })
           next = todayPlan(planArgs())
         }
       }
       applyPlan(next)
-      system = buildCachedSystem(extra && !next.sameAsToday ? { ...systemOpts, ...extra } : systemOpts)
+      system = buildCachedSystem({
+        ...(extra && !next.sameAsToday ? { ...systemOpts, ...extra } : systemOpts),
+        bookingFlow: toolCtx.bookingFlow?.offered === true,
+      })
     }
     await settleTurn()
 
@@ -1031,7 +1072,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
             output_config: { effort: agentEffort },
             system,
             messages,
-            tools: CACHED_BLOCKS[plan.block],
+            tools: (toolCtx.bookingFlow?.offered && CACHED_BOOKING_FLOW_BLOCKS[plan.block]) || CACHED_BLOCKS[plan.block],
           },
           { apiKey, locationId, source: 'mia_auto_reply' },
           {
@@ -1119,7 +1160,15 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
               const execCtx = otherStudio ? toolCtx : await executorCtxFor(block.name, block.input || {}, toolCtx, actionStudios)
               result = (otherStudio ? membershipAtOtherStudio(otherStudio.name) : null)
                 || (execCtx ? null : { ...TOOL_NOT_AT_THIS_STUDIO })
-                || refuseToolForTurn(block.name, execCtx) || (ACCOUNT_TOOL_NAMES.has(block.name)
+                || refuseToolForTurn(block.name, execCtx) || (block.name === SEND_BOOKING_FLOW_TOOL_NAME
+                // MIAFLOW.1 — never throws; refuses itself unless this turn offers it.
+                ? await executeSendBookingFlow(execCtx)
+                // MIAHATCH.6 — the purchase tools (block 3b only; refused above
+                // everywhere else). Loaded lazily: no other turn imports the
+                // write side.
+                : PURCHASE_TOOL_NAMES.has(block.name)
+                ? await (await import('./purchase-intents')).executePurchaseTool(block.name, block.input || {}, execCtx)
+                : ACCOUNT_TOOL_NAMES.has(block.name)
                 ? await executeAccountTool(block.name, block.input || {}, execCtx)
                 : EVENT_TOOL_NAMES.has(block.name)
                   ? await executeEventTool(block.name, block.input || {}, execCtx)
@@ -1140,6 +1189,13 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
                 is_error: true,
               })
               continue
+            }
+            // MIAHATCH.6 — a purchase result names its intent for the decision
+            // trace only; the model never needs the id.
+            if (PURCHASE_TOOL_NAMES.has(block.name) && result && typeof result === 'object' && 'intent_id' in result) {
+              const { intent_id: intentId, ...forModel } = result
+              if (intentId) trace.tools[trace.tools.length - 1].intentId = intentId
+              result = forModel
             }
             if (block.name === 'book_class' && result?.no_credits === true) {
               noCreditsHandoff = true

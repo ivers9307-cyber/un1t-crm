@@ -334,7 +334,7 @@ function timetableDb({ rows = [], error = null } = {}) {
       const q = { table, ops: [] }
       calls.push(q)
       const b = {}
-      for (const op of ['select', 'eq', 'gte', 'lte', 'order', 'limit']) {
+      for (const op of ['select', 'eq', 'gte', 'lte', 'order', 'limit', 'range']) {
         b[op] = (...args) => { q.ops.push([op, ...args]); return b }
       }
       b.then = (resolve, reject) => Promise.resolve({ data: error ? null : rows, error }).then(resolve, reject)
@@ -350,8 +350,12 @@ describe('list_upcoming_classes at an un1t.online studio (T5-F)', () => {
     const { db, calls } = timetableDb()
     const before = Date.now()
     await executeBookingTool('list_upcoming_classes', {}, { ...HATCH_CTX, db })
-    expect(calls).toHaveLength(1)
-    const { table, ops } = calls[0]
+    // UN1TBOOK.19: the freshness read (the studio's newest synced_at), then the list.
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toEqual({ table: 'un1t_events', ops: [
+      ['select', 'synced_at'], ['eq', 'location_id', HATCH], ['order', 'synced_at', { ascending: false }], ['range', 0, 0],
+    ] })
+    const { table, ops } = calls[1]
     expect(table).toBe('un1t_events')
     expect(ops).toContainEqual(['select', 'title, starts_at'])
     expect(ops).toContainEqual(['eq', 'location_id', HATCH])
@@ -426,7 +430,7 @@ describe('list_upcoming_classes at an un1t.online studio (T5-F)', () => {
       const { db, calls } = timetableDb({ rows })
       const r = await executeBookingTool('list_upcoming_classes', {}, { ...HATCH_CTX, turn, db })
       expect(r).toEqual({ classes: [{ name: 'HYROX', starts_at: 'Tue 20 Oct, 08:00' }] })
-      expect(calls[0].ops).toContainEqual(['select', 'title, starts_at'])
+      expect(calls[1].ops).toContainEqual(['select', 'title, starts_at'])
     }
   })
 
@@ -510,7 +514,7 @@ function turnDb({ locationId, source, settings, conv, rows = [] }) {
       insert: () => Promise.resolve({ error: null }),
       eq: () => builder, or: () => builder, gte: () => builder, lte: () => builder,
       gt: () => { state.sawGt = true; return builder },
-      is: () => builder, in: () => builder, order: () => builder, limit: () => builder,
+      is: () => builder, in: () => builder, order: () => builder, limit: () => builder, range: () => builder,
       single: () => builder, maybeSingle: () => builder,
       then: (resolve, reject) => Promise.resolve(finish()).then(resolve, reject),
     }
@@ -628,7 +632,7 @@ describe('whole turns', () => {
 
     await runChannelAgent(db, makeAdapter(), turnCtx(HATCH))
 
-    expect(reads.find((r) => r.table === 'un1t_events').cols).toBe('title, starts_at')
+    expect(reads.find((r) => r.table === 'un1t_events' && r.cols !== 'synced_at').cols).toBe('title, starts_at')
     const result = toolResultOf(bodies[1])
     expect(result).toEqual({ classes: [{ name: 'HYROX', starts_at: 'Tue 20 Oct, 08:00' }] })
     expect(JSON.stringify(bodies[1].messages.at(-1))).not.toMatch(/capacity|bookings_count|access_mode/)

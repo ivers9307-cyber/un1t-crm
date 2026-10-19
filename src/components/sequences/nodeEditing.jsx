@@ -274,8 +274,14 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
         <>
           <Labeled label="Split the flow when…">
             <Select value={ptype} onChange={v => setPred({ type: v })}
-              options={[['has_tag', 'Contact has a tag'], ['field_equals', 'Field equals a value'], ['field_in', 'Field is one of…']]} />
+              options={[['has_tag', 'Contact has a tag'], ['booked_class_at_studio', 'Contact has booked a class here'], ['field_equals', 'Field equals a value'], ['field_in', 'Field is one of…']]} />
           </Labeled>
+          {ptype === 'booked_class_at_studio' && (
+            <p className="text-xs text-un1t-subtle">
+              Yes when the contact has a class booking at this studio from any booking system
+              (Glofox or un1t.online), or a booking request from the website still being processed.
+            </p>
+          )}
           {ptype === 'has_tag' && (
             <>
               <Labeled label="Tag"><Text value={p.tag} onChange={v => setPred({ tag: v })} placeholder="e.g. vip" /></Labeled>

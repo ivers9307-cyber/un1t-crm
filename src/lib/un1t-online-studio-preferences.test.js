@@ -134,3 +134,29 @@ describe('ensureStudioPreferences', () => {
     expect(await call(db, ['c1'])).toEqual({ created: 0, error: { code: null, message: 'kaboom' } })
   })
 })
+
+// GLOFOXSIBLING.1 — the Glofox sync links a sibling studio's contact the same
+// way; the origin names the consent source, and an unknown origin writes nothing.
+describe('ensureStudioPreferences origin', () => {
+  it("origin 'glofox' writes source glofox_sync on the row and the consent log", async () => {
+    const { db, tables } = makeDb({ contacts: [{ id: 'c1', email_status: null }] })
+    const out = await ensureStudioPreferences(db, { locationId: HATCH, contactIds: ['c1'], nowIso: NOW, origin: 'glofox' })
+    expect(out).toEqual({ created: 1 })
+    expect(tables.contact_location_preferences[0].source).toBe('glofox_sync')
+    expect(tables.consent_log.every((r) => r.source === 'glofox_sync')).toBe(true)
+  })
+
+  it('the default origin is still un1t_online_sync', async () => {
+    const { db, tables } = makeDb({ contacts: [{ id: 'c1', email_status: null }] })
+    await call(db, ['c1'])
+    expect(tables.contact_location_preferences[0].source).toBe('un1t_online_sync')
+  })
+
+  it('an unknown origin writes nothing and says why', async () => {
+    const { db, log } = makeDb({ contacts: [{ id: 'c1', email_status: null }] })
+    const out = await ensureStudioPreferences(db, { locationId: HATCH, contactIds: ['c1'], origin: 'mystery' })
+    expect(out.created).toBe(0)
+    expect(out.error.message).toMatch(/unknown origin/)
+    expect(log).toEqual([])
+  })
+})

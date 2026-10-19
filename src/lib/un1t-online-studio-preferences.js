@@ -32,6 +32,14 @@ const CHUNK = 200
 const READ_CHUNK = 100
 const MAX_ERROR_LEN = 500
 const CHANNELS = ['email_marketing', 'sms_marketing', 'whatsapp_marketing']
+// GLOFOXSIBLING.1 — the Glofox sync links a Stillorgan Glofox member to a
+// contact living at another studio the same way (glofox-crossover.js), so the
+// helper names which sync made the row. Literals, one per origin, so
+// consent-sources.test.js still reads every source this file writes.
+const ORIGIN_SOURCE = Object.freeze({
+  un1t_online: { source: 'un1t_online_sync' },
+  glofox: { source: 'glofox_sync' },
+})
 
 /** Only code and message ever leave this file (never details / hint). */
 function safeError(err) {
@@ -61,12 +69,15 @@ export function initialChannels({ prefs = null, emailStatus = null } = {}) {
 
 /**
  * @param {object} db  supabase service-role client
- * @param {{ locationId: string, contactIds: string[], nowIso?: string }} args
+ * @param {{ locationId: string, contactIds: string[], nowIso?: string, origin?: 'un1t_online'|'glofox' }} args
  *   contactIds: contacts linked at this studio whose own location is another.
+ *   origin: which sync linked them; names the consent source (ORIGIN_SOURCE).
  * @returns {Promise<{ created: number, error?: { code: string|null, message: string } }>}
  */
-export async function ensureStudioPreferences(db, { locationId, contactIds, nowIso = new Date().toISOString() }) {
+export async function ensureStudioPreferences(db, { locationId, contactIds, nowIso = new Date().toISOString(), origin = 'un1t_online' }) {
   let created = 0
+  const consentSource = ORIGIN_SOURCE[origin]?.source
+  if (!consentSource) return { created, error: { code: null, message: `unknown origin '${origin}'` } }
   try {
     const ids = [...new Set((Array.isArray(contactIds) ? contactIds : []).filter(Boolean))]
     if (!locationId || ids.length === 0) return { created }
@@ -108,8 +119,8 @@ export async function ensureStudioPreferences(db, { locationId, contactIds, nowI
           contact_id: contactId,
           location_id: locationId,
           ...on,
-          // Literal, not a constant: consent-sources.test.js scans for `source:` literals.
-          source: 'un1t_online_sync',
+          // ORIGIN_SOURCE holds the literals consent-sources.test.js scans for.
+          source: consentSource,
           subscribed_at: nowIso,
           unsubscribed_at: null,
         }
@@ -131,7 +142,7 @@ export async function ensureStudioPreferences(db, { locationId, contactIds, nowI
             contact_id: row.contact_id,
             channel: ch,
             action: CONSENT_ACTIONS.OPT_IN,
-            source: 'un1t_online_sync',
+            source: consentSource,
             location_id: locationId,
           })
         }

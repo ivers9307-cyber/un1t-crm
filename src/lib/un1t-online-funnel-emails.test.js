@@ -87,7 +87,7 @@ describe('sendUn1tTrialUsedEmail', () => {
 })
 
 describe('the E seam', () => {
-  it('the hand-off default hands off nothing', async () => {
+  it('a request with no Flow thread, contact or studio is not handed off', async () => {
     expect(await trialUsedHandoff({}, { request: {}, contact, locationId: 'loc-1' })).toEqual({ handled: false })
   })
 

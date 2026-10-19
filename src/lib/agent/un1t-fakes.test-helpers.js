@@ -6,7 +6,9 @@ import { Un1tBudgetSpent } from './un1t-member-read'
 
 /**
  * Stand-in for the object openUn1tMemberReader resolves. getOne routes by
- * path: .../bookings, .../ledger, .../history answer the matching list;
+ * path: .../bookings, .../ledger, .../history answer the matching list, and
+ * /credits/ledgers/{userId}/{studioId} answers `ledger` as given (an object
+ * such as { balance, is_unlimited } for fetchLiveEntitlement);
  * listAll answers the same list as { rows, total, truncated } (`truncated` option).
  *
  * `fail` makes every read fail: a number is an HTTP status (Un1tApiError),
@@ -19,6 +21,7 @@ export function fakeUn1tReader({ bookings = [], ledger = [], history = [], fail 
     if (fail === 'budget') throw new Un1tBudgetSpent('un1t read budget spent')
     if (typeof fail === 'number') throw new Un1tApiError(`un1t.online answered HTTP ${fail}`, { status: fail })
     if (fail) throw new Un1tApiError('un1t.online request failed', { status: 0 })
+    if (/^\/credits\/ledgers\//.test(path)) return ledger
     if (/\/bookings(\?|$)/.test(path)) return bookings
     if (/\/ledger(\?|$)/.test(path)) return ledger
     if (/\/history(\?|$)/.test(path)) return history
@@ -73,9 +76,14 @@ export function fakeUn1tWrite(overrides = {}) {
     grantTrial: fn('grantTrial'),
     createCheckoutLink: fn('createCheckoutLink'),
   }
+  // The record-only refund card lives in un1t-online-approval; the write-side
+  // executor in un1t-online-approval-execute (UN1TWRITE.23 split them so the
+  // write guard can prove the former reaches no write module).
   const approval = {
-    executeUn1tApproval: fn('executeUn1tApproval'),
     fileRefundCard: fn('fileRefundCard'),
+  }
+  const approvalExecute = {
+    executeUn1tApproval: fn('executeUn1tApproval'),
   }
   const errors = {
     Un1tWriteRefused: overrides.Un1tWriteRefused ?? FakeRefused,
@@ -85,6 +93,7 @@ export function fakeUn1tWrite(overrides = {}) {
     '@/lib/un1t-online-write': () => ({ ...errors }),
     '@/lib/un1t-online-write-ops': () => ({ ...ops }),
     '@/lib/un1t-online-approval': () => ({ ...approval }),
-    fns: { ...ops, ...approval },
+    '@/lib/un1t-online-approval-execute': () => ({ ...approvalExecute }),
+    fns: { ...ops, ...approval, ...approvalExecute },
   }
 }

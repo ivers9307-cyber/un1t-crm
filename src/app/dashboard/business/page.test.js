@@ -306,4 +306,26 @@ describe('/dashboard/business In arrears estimate (UN1TRADAR.2)', () => {
     expect(html).toContain('>1 member<')
     expect(html).not.toContain('includes an estimate')
   })
+  it('no known euro amount (every past-due row unpriced): the card says so, never "€0"', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: false, bookings: false, credits: false, invoices: true, schedule: false } })
+    buildBusinessKpis.mockResolvedValue({
+      revenue: { totalCents: 640_000, deltaPct: null, paidCount: 31 },
+      arrearsData: { totalCents: 0, memberCount: 3, estimated: true }, memberCount: 33, churnCount: null, churnDelta: null, briefing: 'x',
+      gate: { state: 'configured', showNumbers: true },
+    })
+    const html = await renderBlock('KpiBriefingBlock')
+    expect(html).toContain('amount not available from un1t.online')
+    expect(html).not.toContain('€0')
+  })
+  it('Glofox: a €0 exact total still prints €0', async () => {
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS })
+    buildBusinessKpis.mockResolvedValue({
+      revenue: { totalCents: 640_000, deltaPct: null, paidCount: 31 },
+      arrearsData: { totalCents: 0, memberCount: 0 }, memberCount: 33, churnCount: 0, churnDelta: 0, briefing: 'x',
+      gate: { state: 'configured', showNumbers: true },
+    })
+    const html = await renderBlock('KpiBriefingBlock')
+    expect(html).toContain('€0')
+    expect(html).not.toContain('not available from un1t.online')
+  })
 })

@@ -15,7 +15,7 @@ import {
 } from './un1t-online-write.js'
 import { scrubMessage, classifyRefusal } from './un1t-online-write-judge.js'
 import { Un1tSettingsReadError, readUn1tWriteSettings } from './un1t-online-settings.js'
-import { finishAttempt, findDone, ledgerKey, UN1T_IN_FLIGHT_MS } from './un1t-online-write-ledger.js'
+import { finishAttempt, findDone, ledgerKey, listResetAttempts, resetAttemptNo, UN1T_IN_FLIGHT_MS } from './un1t-online-write-ledger.js'
 import { applyUn1tWriteToMirror } from './un1t-online-mirror-write.js'
 import { un1tOnlineReads } from './membership/reads/un1t-online.js'
 import { resolveCustomerBaseUrl } from './tenant-host.js'
@@ -521,17 +521,105 @@ export async function createClient(db, args = {}, deps = {}) {
 
 // ── forgotPassword ─────────────────────────────────────────────────────────
 
+/** UN1TWRITE.25 (Richard's rule): up to this many resets per person ... */
+export const UN1T_RESET_LIMIT = 3
+/** ... in this rolling window; after that, nothing until the oldest ages out. */
+export const UN1T_RESET_WINDOW_MS = 30 * 60_000
+export const UN1T_RESET_LIMIT_CODE = 'reset_limit'
+// The post-insert check found another call's done reset under this attempt's key.
+const DUPLICATE_ATTEMPT = 'duplicate_attempt'
+// A reset that may have reached un1t.online (and so may have sent an email):
+// done, unknown, or a sent row whose outcome was never recorded. A refused
+// one sent no email and never counts.
+const RESET_MAY_HAVE_SENT = new Set(['sent', 'unknown', 'done'])
+export const UN1T_RESET_ALREADY_REQUESTED_CODE = 'reset_already_requested'
+const RESET_ALREADY_REQUESTED_TEXT = 'A password reset was already asked for this person, so this one-time reset was not sent again.'
+const RESET_IN_FLIGHT_TEXT = 'A password reset for this person is still running, so nothing more was sent. Try again in a few minutes.'
+
+function resetLimitText(nextMs, nowMs) {
+  const mins = Math.max(1, Math.ceil((nextMs - nowMs) / 60_000))
+  return `The CRM has asked un1t.online for ${UN1T_RESET_LIMIT} password reset emails in the last 30 minutes for this person, so nothing was sent. The next one can be sent in ${mins} ${mins === 1 ? 'minute' : 'minutes'}.`
+}
+
+const msOrNow = (v, nowMs) => {
+  const at = Date.parse(v)
+  // An unparsable created_at counts as now: the safe direction is to count it.
+  return Number.isFinite(at) ? at : nowMs
+}
+
+/** When the limit lifts, or null when fewer than UN1T_RESET_LIMIT resets in `rows` may have sent in the window. */
+function resetLimitLiftsAt(rows, nowMs) {
+  const counted = rows
+    .filter((r) => RESET_MAY_HAVE_SENT.has(r.stage))
+    .map((r) => msOrNow(r.created_at, nowMs))
+    .filter((atMs) => nowMs - atMs < UN1T_RESET_WINDOW_MS)
+    .sort((a, b) => a - b)
+  // Allowed again once all but LIMIT - 1 of them have aged out of the window.
+  return counted.length >= UN1T_RESET_LIMIT ? counted[counted.length - UN1T_RESET_LIMIT] + UN1T_RESET_WINDOW_MS : null
+}
+
 /**
- * Ask un1t.online to email this client a set-password code. Never re-sent (a
- * second request is a second email): a 5xx or no reply is unknown after one
- * request, and a done reset for this user on the ledger sends nothing. A done
- * here does NOT prove an email went out; no copy may promise it.
+ * The reset allowance, from this person's forgot-password rows (newest first).
+ * → { inFlight: row } a reset is running now (a sent row under UN1T_IN_FLIGHT_MS);
+ * | { nextAllowedAt: ms } the limit is reached;
+ * | { attempt: n } go, under key pw:<loc>:<user>:<n> (one past every number used).
+ */
+export function resetAllowance(rows, { locationId, un1tUserId, nowMs }) {
+  let maxNo = 0
+  for (const r of rows) {
+    const n = resetAttemptNo(r.idempotency_key, locationId, un1tUserId)
+    if (n != null && n > maxNo) maxNo = n
+    if (r.stage === 'sent' && nowMs - msOrNow(r.created_at, nowMs) < UN1T_IN_FLIGHT_MS) return { inFlight: r }
+  }
+  const liftsAt = resetLimitLiftsAt(rows, nowMs)
+  return liftsAt != null ? { nextAllowedAt: liftsAt } : { attempt: maxNo + 1 }
+}
+
+const resetLimitResult = (liftsAt, nowMs) => refusalResult(UN1T_RESET_LIMIT_CODE, resetLimitText(liftsAt, nowMs), {
+  data: { nextAllowedAt: new Date(liftsAt).toISOString() },
+})
+
+/**
+ * Ask un1t.online to email this client a set-password code. Up to
+ * UN1T_RESET_LIMIT resets per person per UN1T_RESET_WINDOW_MS (UN1TWRITE.25):
+ * a reset that was done, is unknown, or was sent with no recorded outcome
+ * counts (each may have sent an email); the next one is refused reset_limit
+ * with data.nextAllowedAt, nothing sent and no ledger row. Each attempt has
+ * its own key pw:<loc>:<user>:<n> (n one past every number this person has
+ * used), so:
+ *   - two calls that read the ledger together take the SAME n, and the
+ *     one-open index lets one of them send;
+ *   - a call that reads while another is in flight sees its sent row and is
+ *     refused UN1T_ATTEMPT_IN_FLIGHT;
+ *   - after its own insert a call checks again: a done row under its n
+ *     (another call took this attempt and finished) sends nothing
+ *     (duplicate_attempt, the earlier done returned), and the window counted
+ *     again without its own row (a caller that stalled while others went)
+ *     refuses reset_limit;
+ *   - an unknown row holds only its own key and ages out of the window.
+ * firstOnly (the funnel's set-password step: one reset per account): any
+ * done, sent or unknown reset for this person, whatever its key or age, skips
+ * as refused reset_already_requested (data.priorStage), nothing sent. Two
+ * firstOnly calls that both read "none" take n = 1 together, so the one-open
+ * index still lets only one send.
+ * beforeSend (optional): runs once this call owns the attempt and has passed
+ * the post-insert checks, just before the request (the funnel's explanation
+ * email, so it goes only with the reset that is actually sent). A throw from
+ * it is logged and never blocks the reset.
+ * One attempt is never re-sent (a second request is a second email): a 5xx
+ * or no reply is unknown after one request. A done here does NOT prove an
+ * email went out; no copy may promise it.
  * @param {{ locationId: string, contactId?: string|null, un1tUserId: string, email: string,
- *   origin: string, originRef?: string|null, actor?: { id: string }|null }} args
+ *   origin: string, originRef?: string|null, actor?: { id: string }|null,
+ *   firstOnly?: boolean, beforeSend?: () => Promise<void> }} args
+ * @param {{ writerFactory?: typeof createUn1tWriter, now?: () => Date }} [deps]
  */
 export async function forgotPassword(db, args = {}, deps = {}) {
-  const { writerFactory = createUn1tWriter } = deps
-  const { locationId, contactId = null, un1tUserId, email: rawEmail, origin, originRef = null, actor = null } = args
+  const { writerFactory = createUn1tWriter, now = () => new Date() } = deps
+  const {
+    locationId, contactId = null, un1tUserId, email: rawEmail, origin, originRef = null, actor = null,
+    firstOnly = false, beforeSend = null,
+  } = args
   requireBareId('forgotPassword', 'un1tUserId', un1tUserId)
   const email = plainText(rawEmail)
   if (!email) throw new TypeError("forgotPassword: 'email' is required")
@@ -541,18 +629,56 @@ export async function forgotPassword(db, args = {}, deps = {}) {
   const body = { email }
   writer.assertAllowed('forgot_password', 'POST', '/auth/forgot-password', body)
 
-  const key = ledgerKey.pw(locationId, un1tUserId)
-  const prior = await findDone(db, { key })
-  if (prior) return withLedger(result('done'), prior.id)
+  const nowMs = now().getTime()
+  const rows = await listResetAttempts(db, { locationId, un1tUserId })
+  if (firstOnly) {
+    const prior = rows.find((r) => RESET_MAY_HAVE_SENT.has(r.stage))
+    if (prior) {
+      return withLedger(refusalResult(UN1T_RESET_ALREADY_REQUESTED_CODE, RESET_ALREADY_REQUESTED_TEXT, { data: { priorStage: prior.stage } }), prior.id)
+    }
+  }
+  const allowance = resetAllowance(rows, { locationId, un1tUserId, nowMs })
+  if (allowance.inFlight) {
+    return withLedger(refusalResult(C.ATTEMPT_IN_FLIGHT, RESET_IN_FLIGHT_TEXT), allowance.inFlight.id)
+  }
+  if (allowance.nextAllowedAt != null) {
+    logInfo(LOG_MODULE, 'password reset limit reached; not sent', fields({ locationId, op: 'forgot_password', origin, code: UN1T_RESET_LIMIT_CODE }))
+    return withLedger(resetLimitResult(allowance.nextAllowedAt, nowMs))
+  }
 
-  return attemptWrite(db, writer, {
+  const key = ledgerKey.pw(locationId, un1tUserId, allowance.attempt)
+  let doneBefore = null
+  const r = await attemptWrite(db, writer, {
     attempt: { op: 'forgot_password', key, contactId, un1tUserId, target: null, origin, originRef, actorUserId: actorIdOf(actor) },
     policy: 'never',
     secrets: [email],
-    send: (row) => writer.send('POST', '/auth/forgot-password', {
-      body, policy: 'never', op: 'forgot_password', origin, ledgerId: row.id, secrets: [email], expect: {},
-    }),
+    send: async (row) => {
+      // Our row is open now, so no other call can open this key until it
+      // finishes. A done row under it means another call took this attempt
+      // and finished before we inserted: never a second email for it.
+      const prior = await findDone(db, { key })
+      if (prior && prior.id !== row.id) {
+        doneBefore = prior
+        return refusalResult(DUPLICATE_ATTEMPT, null)
+      }
+      // Count the window again, without our own row: a caller that stalled
+      // between its read and its insert while other resets went out.
+      const others = (await listResetAttempts(db, { locationId, un1tUserId })).filter((o) => o.id !== row.id)
+      const liftsAt = resetLimitLiftsAt(others, now().getTime())
+      if (liftsAt != null) return resetLimitResult(liftsAt, now().getTime())
+      if (typeof beforeSend === 'function') {
+        try {
+          await beforeSend()
+        } catch {
+          logWarn(LOG_MODULE, 'beforeSend threw; the reset still goes', fields({ locationId, op: 'forgot_password', origin, code: 'before_send_threw' }))
+        }
+      }
+      return writer.send('POST', '/auth/forgot-password', {
+        body, policy: 'never', op: 'forgot_password', origin, ledgerId: row.id, secrets: [email], expect: {},
+      })
+    },
   })
+  return doneBefore ? withLedger(result('done'), doneBefore.id) : r
 }
 
 // ── createCheckoutLink ─────────────────────────────────────────────────────

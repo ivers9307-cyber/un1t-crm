@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { BarChart3 } from 'lucide-react'
 import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-form/defaults'
-import { defaultHoldingMessage, defaultWelcomeGreeting, DEFAULT_BOOKING_CTA_LABEL } from '@/lib/agent/default-copy'
+import { defaultHoldingMessage, defaultWelcomeGreeting, DEFAULT_BOOKING_CTA_LABEL, DEFAULT_FLOW_BOOKING_ACK_TEXT, DEFAULT_FLOW_BOOKING_HOLDING_TEXT, DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT } from '@/lib/agent/default-copy'
 import { productName } from '@/lib/brand-name'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
 import { zoneCity } from '@/lib/record-time'
@@ -14,8 +14,14 @@ import { Button } from '@/components/ui'
 import {
   initialOverridden, withOverride, withoutOverride, valueAt, fieldSource, sourceTagLabel, orgSetsAny,
   isOverridden, INHERITABLE_SCALAR_KEYS, INHERITABLE_OBJECT_KEYS, INHERITABLE_OBJECT_FIELDS, isHalfQuietWindow,
+  TRIAL_DONE_MIA_INSTRUCTION_DEFAULT,
 } from '@/lib/agent/settings-overrides'
-import { buildSavePayload, bookingLinkErrors, bookingIssuesFromResponse, BOOKING_CTA_LABEL_MAX } from './save-payload'
+import {
+  buildSavePayload, bookingLinkErrors, bookingIssuesFromResponse, BOOKING_CTA_LABEL_MAX,
+  trialDoneErrors, parseTrialDoneContactIds,
+} from './save-payload'
+import { HATCH_COPY_FIELDS, HATCH_COPY_GROUP_TITLE } from './hatch-copy-fields'
+import MiaOffersSection from './MiaOffersSection'
 // MIAORG.1 Task 4 — the organisation defaults, for masters and org admins.
 import OrgDefaultsClient from './OrgDefaultsClient'
 
@@ -86,6 +92,9 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   // no bookings (GET `bookings`): the Booking link fields show there. An
   // older GET without the key shows them too (never hides a saved link).
   const [bookings, setBookings] = useState(null)
+  // MIAHATCH.4 — the studio's membership source key (GET): the Hatch payments
+  // and booking copy group shows only for 'un1t_online'.
+  const [membershipSourceKey, setMembershipSourceKey] = useState(null)
   // The PUT's 400 issues on the booking fields, shown beside them.
   const [serverFieldErrors, setServerFieldErrors] = useState({})
 
@@ -97,6 +106,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
     setOrg(sRes.org || null)
     setInherited(sRes.inherited || null)
     setBookings(typeof sRes.bookings === 'boolean' ? sRes.bookings : null)
+    setMembershipSourceKey(typeof sRes.membership_source_key === 'string' ? sRes.membership_source_key : null)
   }
 
   async function load(isCancelled = () => false) {
@@ -116,6 +126,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
         setBrand(sRes.brand || { companyName: '', shortName: '' })
         setOverridden(initialOverridden(sRes.studio)); setOrg(sRes.org || null); setInherited(sRes.inherited || null)
         setBookings(typeof sRes.bookings === 'boolean' ? sRes.bookings : null)
+        setMembershipSourceKey(typeof sRes.membership_source_key === 'string' ? sRes.membership_source_key : null)
         setLoadFailed(false)
       } else {
         setSettings(null); setLoadFailed(true)
@@ -173,9 +184,17 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   const quietHalf = isHalfQuietWindow(settings?.quiet_hours)
   // MIAORG.1 final review — the Booking link fields, checked as the PUT
   // checks them; an invalid value shows beside its field and holds Save.
-  const showBookingLink = bookings !== true
+  // MIAHATCH.4 (Task 14): a un1t.online studio books through Mia now, but the
+  // link stays as the fallback (and Mia's answer where a class cannot be
+  // booked), so its fields show there whatever `bookings` says.
+  const showBookingLink = bookings !== true || membershipSourceKey === 'un1t_online'
   const bookingErrors = { ...serverFieldErrors, ...bookingLinkErrors(settings) }
   const bookingInvalid = showBookingLink && Object.keys(bookingLinkErrors(settings)).length > 0
+  // TRIALDONE.3 — the trial-finisher card (a un1t.online studio only), checked
+  // as the PUT checks it; an invalid value shows beside its field and holds Save.
+  const showTrialDone = membershipSourceKey === 'un1t_online'
+  const trialErrors = showTrialDone ? trialDoneErrors(settings) : {}
+  const trialInvalid = Object.keys(trialErrors).length > 0
 
   // "Use organisation default": the field stops being the studio's own and
   // shows the value it now inherits (GET's `inherited`).
@@ -332,6 +351,9 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
     setSettings(s => ({ ...s, first_class_checkin: { ...(s.first_class_checkin || {}), [key]: value } }))
     markOverridden(`first_class_checkin.${key}`)
   }
+  // TRIALDONE.3 — studio-only, so no override bookkeeping: the block is always saved.
+  const setTrialDone = (key, value) =>
+    setSettings(s => ({ ...s, trial_done: { ...(s.trial_done || {}), [key]: value } }))
   const setInlineSuggestion = (key, value) => {
     setSettings(s => ({ ...s, inline_suggestion: { ...(s.inline_suggestion || {}), [key]: value } }))
     markOverridden(`inline_suggestion.${key}`)
@@ -763,6 +785,33 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
             until 2026-08-31. A booking that outlives its class is now silent to
             the member and only alerts staff, so there is no copy to edit. */}
 
+        {/* FLOWACK.1 — the WhatsApp booking Flow: one acknowledgement on a
+            class submission (Mia does not answer it), and the holding line when
+            the booking goes to the team. Defaults in default-copy.js. */}
+        <div>
+          <FieldLabel tag={sourceTag(['flow_booking_ack_text'])}>Booking form received message (WhatsApp)</FieldLabel>
+          <input className={inputCls} maxLength={500} value={settings.flow_booking_ack_text || ''}
+            onChange={e => setField('flow_booking_ack_text', e.target.value)}
+            placeholder={DEFAULT_FLOW_BOOKING_ACK_TEXT} />
+          <p className="text-xs text-un1t-muted mt-1">Sent once when a customer books a class through the WhatsApp booking form, while the booking is made. When it is booked they get the booking confirmation (the confirmation template, or the booking confirmation message above). Leave blank to use the default shown.</p>
+        </div>
+
+        <div>
+          <FieldLabel tag={sourceTag(['flow_booking_holding_text'])}>Booking form needs the team message (WhatsApp)</FieldLabel>
+          <input className={inputCls} maxLength={500} value={settings.flow_booking_holding_text || ''}
+            onChange={e => setField('flow_booking_holding_text', e.target.value)}
+            placeholder={DEFAULT_FLOW_BOOKING_HOLDING_TEXT} />
+          <p className="text-xs text-un1t-muted mt-1">Sent when a class booked through the WhatsApp booking form could not be booked automatically and goes to the team in Approvals. Approving or declining the request there then tells the customer in the chat. Leave blank to use the default shown.</p>
+        </div>
+
+        <div>
+          <FieldLabel tag={sourceTag(['flow_booking_duplicate_text'])}>Booking form sent twice message (WhatsApp)</FieldLabel>
+          <input className={inputCls} maxLength={500} value={settings.flow_booking_duplicate_text || ''}
+            onChange={e => setField('flow_booking_duplicate_text', e.target.value)}
+            placeholder={DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT} />
+          <p className="text-xs text-un1t-muted mt-1">Sent when a customer sends the WhatsApp booking form for a class they have already asked for. If that class is already booked they get the booking confirmation instead. Leave blank to use the default shown.</p>
+        </div>
+
         {/* APPROVALS-STUDIO.1 — sent in-thread when staff decline a customer
             request, so a decline is never silence. Default mirrors
             DEFAULT_APPROVAL_DECLINE_TEXT in notify.js. */}
@@ -798,6 +847,42 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
           <p className="text-xs text-un1t-muted mt-1">When the agent sends a link, it appears as a tappable button with this label. Leave blank to use the default shown.</p>
         </div>
 
+        {/* MIAHATCH.4 (spec 6.6) — what Mia and the pay pages say about booking
+            and buying at a un1t.online studio (Hatch Street). Shown only there:
+            a Glofox studio never says any of it. Placeholders are the code
+            defaults (default-copy.js); blank = the default. */}
+        {membershipSourceKey === 'un1t_online' && (
+          <div className="space-y-4 border-t border-un1t-border pt-4" data-testid="hatch-copy-group">
+            <h3 className="text-sm font-semibold text-un1t-text">{HATCH_COPY_GROUP_TITLE}</h3>
+            {/* MIAHATCH.5 (Ruling 25) — Mia books, cancels and takes refund
+                requests in chat here only with this ticked AND un1t.online
+                writes switched on for the studio, and only on WhatsApp.
+                MIAHATCH.6: payment links too. */}
+            <div>
+              <label className="flex items-center gap-3">
+                <input type="checkbox" className="h-4 w-4" checked={settings.un1t_chat_actions_enabled === true}
+                  onChange={e => setField('un1t_chat_actions_enabled', e.target.checked)} />
+                <span className="text-sm text-un1t-text font-medium">Mia can book and cancel classes, send payment links and pass refund requests to the team in chat at this studio</span>
+              </label>
+              <p className="text-xs text-un1t-muted mt-1 pl-7">
+                Off: Mia answers questions and shares the booking link, as now. On: on WhatsApp, Mia books and cancels classes, sends payment links for the offers listed under What Mia can sell, and passes refund requests to the team, once un1t.online writes are also switched on for this studio.
+              </p>
+            </div>
+            <p className="text-xs text-un1t-muted">
+              Messages customers get from Mia, and the two pages they land on after paying, at this studio. Leave a field blank to use the default shown.
+            </p>
+            {HATCH_COPY_FIELDS.map(({ key, label, placeholder, help }) => (
+              <div key={key}>
+                <FieldLabel tag={sourceTag([key])}>{label}</FieldLabel>
+                <input className={inputCls} maxLength={500} value={settings[key] || ''}
+                  onChange={e => setField(key, e.target.value)}
+                  placeholder={placeholder} />
+                <p className="text-xs text-un1t-muted mt-1">{help}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div>
           <FieldLabel tag={sourceTag(['quiet_hours'])}>Quiet hours (optional)</FieldLabel>
           <div className="flex items-center gap-2 text-sm">
@@ -823,7 +908,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
         {error && <div className="text-sm text-red-600">{error}</div>}
         {canEdit && (
           <div>
-            <button type="button" onClick={saveSettings} disabled={saving || quietHalf || bookingInvalid}
+            <button type="button" onClick={saveSettings} disabled={saving || quietHalf || bookingInvalid || trialInvalid}
               className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
               {saving ? 'Saving…' : 'Save settings'}
             </button>
@@ -831,6 +916,13 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
           </div>
         )}
       </section>
+
+      {/* MIAHATCH.4 (Task 14) — the products Mia can sell at a un1t.online
+          studio. Its own section and Save (rows behind its own route), shown
+          only there; a Glofox studio sells nothing through Mia. */}
+      {membershipSourceKey === 'un1t_online' && location?.id && (
+        <MiaOffersSection locationId={location.id} canEdit={canEdit} />
+      )}
 
       {/* ── Membership cancellation form (CANCEL-FORM.2) ───── */}
       <section className="border border-un1t-border rounded-lg p-5 mt-6">
@@ -1032,7 +1124,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
 
         {canEdit && (
           <div className="mt-5">
-            <button type="button" onClick={saveSettings} disabled={saving || quietHalf}
+            <button type="button" onClick={saveSettings} disabled={saving || quietHalf || trialInvalid}
               className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
               {saving ? 'Saving…' : 'Save settings'}
             </button>
@@ -1180,6 +1272,96 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
           </div>
         </div>
       </section>
+
+      {/* ── Trial finisher follow-up (TRIALDONE.3) ────────────
+          Studio-only (an organisation can never switch it on) and shown only
+          at a un1t.online studio (Hatch Street). After a trial member's last
+          class the studio sends the opener template below; a reply goes to
+          Mia, briefed by the instruction. Off by default. A list of test
+          contacts makes it a test: nobody else is messaged. */}
+      {showTrialDone && settings.trial_done && (() => {
+        const td = settings.trial_done
+        const idsText = td.only_contact_ids_text ?? (Array.isArray(td.only_contact_ids) ? td.only_contact_ids : []).join('\n')
+        const testCount = parseTrialDoneContactIds(idsText).length
+        return (
+          <section className="border border-un1t-border rounded-lg p-5 mt-6" data-testid="trial-done-card">
+            <h2 className="text-base font-semibold text-un1t-text mb-1">Trial finisher follow-up</h2>
+            <p className="text-sm text-un1t-muted mb-4">
+              After a trial member has done 3 trial classes, or 2 classes and the trial has expired, the studio
+              sends them the opener template below. If they reply, Mia helps them choose between a membership and a class pack
+              and sends the payment link. A second message follows if they stay quiet.
+            </p>
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <label className="flex items-center gap-2 text-sm text-un1t-text">
+                <input type="checkbox" checked={!!td.enabled}
+                  onChange={e => setTrialDone('enabled', e.target.checked)} />
+                Enable trial finisher follow-up
+              </label>
+              {testCount > 0 && (
+                <span className="text-[11px] rounded-full bg-amber-500/10 text-amber-700 px-2 py-0.5 whitespace-nowrap">
+                  {`Test: ${testCount} contact${testCount === 1 ? '' : 's'} only`}
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <FieldLabel>Opener template</FieldLabel>
+                <input className={inputCls} maxLength={512} aria-label="Opener template"
+                  value={td.opener_template ?? ''}
+                  aria-invalid={trialErrors.opener_template ? 'true' : undefined}
+                  onChange={e => setTrialDone('opener_template', e.target.value)} />
+                {trialErrors.opener_template
+                  ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.opener_template}</p>
+                  : <p className="text-xs text-un1t-subtle mt-1">The approved WhatsApp template name sent first. Variables: {'{{1}}'} first name.</p>}
+              </div>
+              <div>
+                <FieldLabel>Follow-up template</FieldLabel>
+                <input className={inputCls} maxLength={512} aria-label="Follow-up template"
+                  value={td.followup_template ?? ''}
+                  aria-invalid={trialErrors.followup_template ? 'true' : undefined}
+                  onChange={e => setTrialDone('followup_template', e.target.value)} />
+                {trialErrors.followup_template
+                  ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.followup_template}</p>
+                  : <p className="text-xs text-un1t-subtle mt-1">The approved template name sent once if they have not replied.</p>}
+              </div>
+              <div>
+                <FieldLabel>Send after (hours)</FieldLabel>
+                <input type="number" min={1} max={72} className={inputCls} aria-label="Send after (hours)"
+                  value={td.delay_hours ?? ''}
+                  placeholder="2"
+                  aria-invalid={trialErrors.delay_hours ? 'true' : undefined}
+                  onChange={e => setTrialDone('delay_hours', e.target.value === '' ? null : Number(e.target.value))} />
+                {trialErrors.delay_hours
+                  ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.delay_hours}</p>
+                  : <p className="text-xs text-un1t-subtle mt-1">Hours after the trial ends before the opener goes out.</p>}
+              </div>
+            </div>
+            <div className="mt-4">
+              <FieldLabel>Mia&apos;s instruction</FieldLabel>
+              <textarea className={inputCls} rows={4} aria-label="Mia's instruction"
+                value={td.mia_instruction ?? ''}
+                placeholder={TRIAL_DONE_MIA_INSTRUCTION_DEFAULT}
+                aria-invalid={trialErrors.mia_instruction ? 'true' : undefined}
+                onChange={e => setTrialDone('mia_instruction', e.target.value)} />
+              {trialErrors.mia_instruction
+                ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.mia_instruction}</p>
+                : <p className="text-xs text-un1t-subtle mt-1">What Mia is told when a trial finisher replies. Leave blank for the default shown. Placeholders: {'{studio}'} {'{date}'}. No em-dashes.</p>}
+            </div>
+            <div className="mt-4">
+              <FieldLabel>Test contact ids</FieldLabel>
+              <textarea className={inputCls} rows={2} aria-label="Test contact ids"
+                value={idsText}
+                aria-invalid={trialErrors.only_contact_ids ? 'true' : undefined}
+                onChange={e => setTrialDone('only_contact_ids_text', e.target.value)} />
+              {trialErrors.only_contact_ids
+                ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.only_contact_ids}</p>
+                : <p className="text-xs text-un1t-subtle mt-1">
+                    Up to 20 contact ids, one per line. While this list has anyone in it, ONLY those contacts are messaged: use it to test before clearing it to go live for everyone.
+                  </p>}
+            </div>
+          </section>
+        )
+      })()}
 
       {/* ── Inline suggestion after approvals (INBOX-APPROVALS-AI.4) ── */}
       <section className="border border-un1t-border rounded-lg p-5 mt-6">

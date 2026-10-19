@@ -1,12 +1,15 @@
 // MIAHATCH.2 — Mia's tool blocks, and which one a turn gets.
 //
-// Four byte-stable cached blocks exist (a fifth, un1t_full, arrives with the
-// un1t.online write tools): `glofox` (the full list), `no_booking` (Glofox
-// tools dropped, tool-capability.js), and the two un1t.online READ blocks built
-// here from the same full list: `un1t_read` (a member at a un1t.online studio
-// only: no booking writes) and `un1t_read_dual` (the person is also answerable
-// at a Glofox studio, so the Glofox booking tools stay). Each is derived ONCE
-// by the caller, so the prompt-cache prefix never moves between turns.
+// Five byte-stable cached blocks exist: `glofox` (the full list), `no_booking`
+// (Glofox tools dropped, tool-capability.js), and the three un1t.online blocks
+// built here from the same full list: `un1t_read` (a member at a un1t.online
+// studio only: no booking writes), `un1t_read_dual` (the person is also
+// answerable at a Glofox studio, so the Glofox booking tools stay) and
+// `un1t_full` (MIAHATCH.5, block 3b: the dual block plus request_refund, with
+// book_class and cancel_class_booking working at either studio, then the three
+// purchase tools from MIAHATCH.6; WhatsApp, writes_enabled and the studio's Mia
+// switch only). Each is derived ONCE by the
+// caller, so the prompt-cache prefix never moves between turns.
 //
 // Pure: tool lists come in as arguments, so this file imports no executor and
 // the executors can import tool-capability.js without a cycle.
@@ -14,6 +17,7 @@
 import {
   UN1T_WRITE_TOOL_NAMES, UN1T_PURCHASE_TOOL_NAMES, providerTakesBookings,
 } from './tool-capability'
+import { PURCHASE_TOOLS } from './purchase-tools'
 
 export { UN1T_WRITE_TOOL_NAMES, UN1T_PURCHASE_TOOL_NAMES }
 
@@ -103,6 +107,89 @@ export function deriveUn1tReadTools(tools, { dual = false } = {}) {
     })
 }
 
+// MIAHATCH.5 — block 3b's own text for the two booking writes: they work at
+// either studio (a "un1t:" id is the un1t.online studio's, any other id the
+// Glofox studio's), so the Glofox wording ("24-hex Glofox event id") would be
+// wrong. Same input schema shape as the full list (the same four and three
+// properties, the same required one), so the optional-parameter budget does
+// not move. No em or en dashes; never a word about how full a class is.
+export const UN1T_FULL_TOOL_DESCRIPTIONS = Object.freeze({
+  book_class:
+    'Book the VERIFIED member into a class from list_upcoming_classes, at whichever studio the class is at. ' +
+    'Before calling this, restate the exact class name and day and time back to the customer and get a clear yes; ' +
+    'never book on an ambiguous message. Pass the event_id exactly as list_upcoming_classes gave it, plus the class ' +
+    'name, time and starts_at you confirmed. Say the class is booked only when this tool\'s result says it is booked. ' +
+    'If the result says the team will confirm, say exactly that; if it failed (class full, already booked, or anything ' +
+    'else), relay that honestly and offer an alternative.',
+  cancel_class_booking:
+    "Cancel one of the VERIFIED member's upcoming bookings from list_my_upcoming_bookings, at whichever studio it is at. " +
+    'Restate the exact class and day and time and get a clear yes before calling; never cancel on an ambiguous message. ' +
+    "Say it is cancelled only when this tool's result says it is cancelled. If the system refuses (for example a late " +
+    'cancellation, or a class that already happened), relay its reason honestly, and never promise a refund or a credit ' +
+    'back. For a reschedule, confirm both the cancellation and the new class with the customer first, then cancel and ' +
+    'book the new one.',
+})
+
+const UN1T_FULL_SCHEMA_TEXT = Object.freeze({
+  book_class: {
+    event_id: 'The event_id from list_upcoming_classes, copied exactly (a "un1t:" id or another studio\'s id).',
+  },
+  cancel_class_booking: {
+    booking_id: 'The booking_id from list_my_upcoming_bookings, copied exactly (a "un1t:" id or another studio\'s id).',
+  },
+})
+
+// A copy of the tool's input schema with some property descriptions replaced.
+function reworded(schema, texts) {
+  const properties = { ...schema.properties }
+  for (const [prop, description] of Object.entries(texts)) {
+    if (properties[prop]) properties[prop] = { ...properties[prop], description }
+  }
+  return { ...schema, properties }
+}
+
+// MIAHATCH.5 — a refund request goes to the team as a staff approval card
+// (R2: never automatic, no code issues a refund). The executor arrives in a
+// later task; the definition is fixed here so block 3b offers it. Neutral: it
+// passes the request on and never says a refund will happen. One optional
+// parameter (booking_id), counted in tool-schemas.test.js.
+export const REQUEST_REFUND_TOOL = Object.freeze({
+  name: 'request_refund',
+  description:
+    "Pass the VERIFIED member's refund request to the team. Use it when they ask for a refund or their money back " +
+    'for anything (a class, a late cancellation, a payment). It does not refund anything: the team looks at the ' +
+    'request and decides. After it succeeds, tell them you have passed it to the team and they will get back to ' +
+    'them; never say a refund is done, approved or on its way, and never promise one. Only works after ' +
+    'verify_identity has succeeded this conversation.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      reason: { type: 'string', description: "What the member wants refunded and why, briefly, in their words." },
+      booking_id: {
+        type: 'string',
+        description: 'Only when the request is about one booking: its "un1t:" booking_id from list_my_upcoming_bookings, copied exactly.',
+      },
+    },
+    required: ['reason'],
+  },
+})
+
+/**
+ * Block 3b's tools (MIAHATCH.5): the dual read block (every tool of the full
+ * list, the reads re-described), with book_class and cancel_class_booking
+ * re-described for either studio, then request_refund, then `extraTools`
+ * (MIAHATCH.6: the three purchase tools, purchase-tools.js, by default). A
+ * re-described tool is a new object; the input is never touched. Pure.
+ */
+export function deriveUn1tFullTools(tools, { extraTools = PURCHASE_TOOLS } = {}) {
+  const dual = deriveUn1tReadTools(tools, { dual: true }).map((t) => {
+    const description = UN1T_FULL_TOOL_DESCRIPTIONS[t.name]
+    if (!description) return t
+    return { ...t, description, input_schema: reworded(t.input_schema, UN1T_FULL_SCHEMA_TEXT[t.name] || {}) }
+  })
+  return [...dual, REQUEST_REFUND_TOOL, ...extraTools]
+}
+
 /**
  * A cacheable copy of a tool list: the 1h cache breakpoint on the LAST tool
  * only (the whole block caches as one prefix). New last object; the others are
@@ -124,7 +211,8 @@ export function withCacheBreakpoint(tools) {
  * holds for anything but a WhatsApp turn with a un1t.online studio answerable.
  * `answerable` is the MemberStudio[] this sender may be answered for
  * (member-studios.js). With a un1t.online studio answerable: `un1t_full` when
- * `un1tWrites` (false until the write tools ship), else `un1t_read_dual` when a
+ * `un1tWrites` (turn-studios.js decides it: writes_enabled and the studio's
+ * Mia switch, Ruling 25), else `un1t_read_dual` when a
  * Glofox studio is answerable too, else `un1t_read`. Every answerable studio on
  * Glofox is `glofox`; a studio with no provider is neither, so it stays on
  * today's rule. Pure.

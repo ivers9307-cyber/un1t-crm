@@ -23,8 +23,10 @@ export async function POST(request, { params }) {
   const db = createServerClient()
 
   // Confirm the request belongs to a location this user can act on.
+  // MIAHATCH.5 — details: a un1t.online card (details.provider) is followed up
+  // with un1t.online context, never Glofox's (approval-suggest.js).
   const { data: row } = await db.from('agent_membership_requests')
-    .select('id, location_id, kind, status, decision_note, contact_id, channel, conversation_id')
+    .select('id, location_id, kind, status, decision_note, contact_id, channel, conversation_id, details')
     .eq('id', id).maybeSingle()
   if (!row) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const allowed = getUserLocationIds(user) // masters carry every active location in user.locations

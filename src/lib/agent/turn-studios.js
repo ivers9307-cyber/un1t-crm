@@ -12,6 +12,14 @@
 //                               the un1t prompt variant naming that studio,
 //                               a facts block per answerable studio that is not
 //                               the thread's.
+//   un1t_full                   MIAHATCH.5, block 3b: the same, plus booking,
+//                               cancelling and refund requests at the
+//                               un1t.online studio. Only on WhatsApp, and only
+//                               when every answerable un1t.online studio has
+//                               writes_enabled AND its Mia switch
+//                               un1t_chat_actions_enabled (Ruling 25,
+//                               resolveTurnPlan); anything unreadable is the
+//                               read block.
 //   glofox on a non-Glofox      a member at the Glofox studio talking on a
 //   thread                      thread filed at another studio: the Glofox
 //                               block and render, and the Glofox executors run
@@ -26,10 +34,13 @@ import { answerableStudios } from './member-studios'
 import { selectToolBlock } from './tool-blocks'
 import { BOOKING_SYSTEM_TOOL_NAMES, providerTakesBookings } from './tool-capability'
 import { parseAgentId } from './studio-ids'
-import { buildStudioFactsBlock } from './prompt'
+import { buildStudioFactsBlock, buildTrialUsedClassLine } from './prompt'
+import { classTimeLabel } from './un1t-action-studio'
 import { resolveAgentSettings } from './settings-resolve'
 import { providerFor } from '@/lib/membership/source'
+import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { zoneOfLocation } from '@/lib/location-time'
+import { latestTrialUsedClass } from '@/lib/un1t-online-trial-used'
 import { logWarn } from '@/lib/log'
 
 const LOG_MODULE = 'mia-un1t'
@@ -46,12 +57,16 @@ export function threadTakesBookings(provider) {
 /**
  * The turn's plan. Pure.
  *
+ * `un1tWrites` is the caller's decision (resolveTurnPlan); absent or anything
+ * but true plans the read blocks, as before MIAHATCH.5.
+ *
  * @param {{ memberStudios?: { studios: object[], readFailed: boolean }, threadLocationId: string,
- *   threadProvider?: { key: string, capabilities?: object }, channel: string }} args
+ *   threadProvider?: { key: string, capabilities?: object }, channel: string, un1tWrites?: boolean }} args
  * @returns {{ block: string, todayBlock: string, sameAsToday: boolean, answerable: object[],
- *   un1tStudio: object|null, glofoxStudio: object|null, glofoxLocationId: string, otherStudios: object[] }}
+ *   un1tStudio: object|null, glofoxStudio: object|null, glofoxLocationId: string, otherStudios: object[],
+ *   multiStudio: boolean, un1tWrites: boolean }}
  */
-export function planTurnTools({ memberStudios, threadLocationId, threadProvider, channel } = {}) {
+export function planTurnTools({ memberStudios, threadLocationId, threadProvider, channel, un1tWrites = false } = {}) {
   const canBook = threadTakesBookings(threadProvider)
   const todayBlock = canBook ? 'glofox' : 'no_booking'
   const studios = memberStudios && !memberStudios.readFailed && Array.isArray(memberStudios.studios)
@@ -72,7 +87,7 @@ export function planTurnTools({ memberStudios, threadLocationId, threadProvider,
     // The capability as this turn reads it (un1t.online never books here).
     threadProvider: { capabilities: { bookings: canBook } },
     channel,
-    un1tWrites: false,
+    un1tWrites: un1tWrites === true,
   })
   const un1tStudio = block.startsWith('un1t_') ? answerable.find((s) => s?.providerKey === 'un1t_online') || null : null
   // The Glofox studio the Glofox executors run at when the thread is not one.
@@ -88,6 +103,10 @@ export function planTurnTools({ memberStudios, threadLocationId, threadProvider,
     glofoxStudio,
     glofoxLocationId: glofoxStudio?.locationId || threadLocationId,
     otherStudios: answerable.filter((s) => s?.locationId !== threadLocationId),
+    // A un1t block where a Glofox studio is answerable too: the prompt says
+    // which studio each answer is for (always so for un1t_read_dual).
+    multiStudio: block === 'un1t_read_dual' || (block === 'un1t_full' && answerable.some((s) => s?.providerKey === 'glofox')),
+    un1tWrites: block === 'un1t_full',
   }
 }
 
@@ -104,7 +123,32 @@ export function todayPlan({ threadLocationId, threadProvider, channel } = {}) {
 export function planKey(plan) {
   if (!plan) return ''
   const others = (plan.otherStudios || []).map((s) => s?.locationId).filter(Boolean).sort()
-  return [plan.block, plan.un1tStudio?.locationId || '', others.join(',')].join('|')
+  return [plan.block, plan.multiStudio === true ? 'multi' : '', plan.un1tStudio?.locationId || '', others.join(',')].join('|')
+}
+
+/**
+ * Ruling 25 — may this un1t.online studio's member book, cancel and ask for a
+ * refund in chat? Its Mia switch (`un1t_chat_actions_enabled`, studio-only,
+ * default false) AND its `locations.settings.un1t_online.writes_enabled`.
+ * The switch is read first, so with it off (the default) nothing new is read
+ * and the turn is exactly what it was. Anything unreadable is false (the read
+ * block), logged.
+ */
+async function un1tChatActionsOn(studio, studios) {
+  const locationId = studio?.locationId
+  try {
+    const settings = await studios.settings(locationId)
+    if (!settings) {
+      logWarn(LOG_MODULE, 'un1t studio Mia settings unreadable; turn keeps the read block', { locationId })
+      return false
+    }
+    if (settings.un1t_chat_actions_enabled !== true) return false
+    const write = await studios.un1tWriteSettings(locationId)
+    return write?.writesEnabled === true
+  } catch (err) {
+    logWarn(LOG_MODULE, 'un1t write settings unreadable; turn keeps the read block', { locationId, errClass: err?.name, code: err?.code ?? null })
+    return false
+  }
 }
 
 /**
@@ -114,7 +158,18 @@ export function planKey(plan) {
  * block for the thread instead.
  */
 export async function resolveTurnPlan(args, studios) {
-  const plan = planTurnTools(args)
+  let plan = planTurnTools({ ...args, un1tWrites: false })
+  // MIAHATCH.5 (Ruling 25) — block 3b: WhatsApp only (R3), and every
+  // answerable un1t.online studio must allow it (a write runs at the studio
+  // its tagged id names, so one studio's switch never opens another's).
+  if (plan.un1tStudio && args?.channel === 'whatsapp') {
+    const un1tStudios = plan.answerable.filter((s) => s?.providerKey === 'un1t_online')
+    let allowed = un1tStudios.length > 0
+    for (const studio of un1tStudios) {
+      if (!(await un1tChatActionsOn(studio, studios))) { allowed = false; break }
+    }
+    if (allowed) plan = planTurnTools({ ...args, un1tWrites: true })
+  }
   if (plan.glofoxStudio) {
     const settings = await studios.settings(plan.glofoxStudio.locationId)
     if (!settings) {
@@ -128,11 +183,12 @@ export async function resolveTurnPlan(args, studios) {
 /**
  * `toolCtx.turn` for a plan: undefined when the plan is today's block (the
  * executors then keep today's canBook rule exactly), else the block, the
- * answerable studios, the channel and `un1tWrites: false`. Pure.
+ * answerable studios, the channel and `un1tWrites` (true only for un1t_full,
+ * which resolveTurnPlan plans only when Ruling 25's conditions hold). Pure.
  */
 export function turnForPlan(plan, channel) {
   if (!plan || plan.sameAsToday) return undefined
-  return { block: plan.block, answerable: plan.answerable, channel, un1tWrites: false }
+  return { block: plan.block, answerable: plan.answerable, channel, un1tWrites: plan.block === 'un1t_full' }
 }
 
 /**
@@ -142,7 +198,7 @@ export function turnForPlan(plan, channel) {
  * and remembered for the turn. A failed resolve is null settings and the
  * thread's zone: the caller falls back, never guesses another studio's values.
  */
-export function createActionStudios(db, { threadLocationId, threadSettings, threadZone }) {
+export function createActionStudios(db, { threadLocationId, threadSettings, threadZone, threadLocationSettings }) {
   const orgCache = new Map()
   const cache = new Map()
   const resolve = (locationId) => {
@@ -161,6 +217,23 @@ export function createActionStudios(db, { threadLocationId, threadSettings, thre
       if (locationId === threadLocationId) return threadSettings || null
       const r = await resolve(locationId)
       return r?.ok ? r.settings : null
+    },
+    /**
+     * MIAHATCH.5 — that studio's un1t.online write settings
+     * (un1tWriteSettingsFrom), from the locations.settings blob this turn
+     * already read: the thread's own row, or the row its settings resolve read.
+     * Throws when there is no blob to read (a failed resolve): the caller
+     * fails closed.
+     */
+    async un1tWriteSettings(locationId) {
+      if (!locationId) throw new Error('un1t write settings need a location id')
+      if (locationId === threadLocationId) {
+        if (threadLocationSettings === undefined) throw new Error('thread location settings not held')
+        return un1tWriteSettingsFrom(threadLocationSettings)
+      }
+      const r = await resolve(locationId)
+      if (!r?.ok) throw new Error('studio settings resolve failed')
+      return un1tWriteSettingsFrom(r.location?.settings)
     },
     /** That studio's zone (the thread's when it cannot be read). */
     async zone(locationId) {
@@ -212,20 +285,36 @@ async function readKnowledge(db, locationId) {
   }
 }
 
+// MIAHATCH.6 — the offer titles and price labels for a un1t.online studio's
+// facts block, in block 3b only (where Mia can sell them). The list module is
+// loaded lazily: it sits next to the write side, which no other turn imports.
+// An unreadable list is a block without offers.
+async function readOffers(db, studio, withOffers) {
+  if (!withOffers || studio?.providerKey !== 'un1t_online') return []
+  try {
+    const { listPurchaseOptions } = await import('./purchase-intents')
+    const { offers } = await listPurchaseOptions(db, studio.locationId)
+    return offers.map((o) => ({ title: o.title, price_label: o.price_label, blurb: o.blurb }))
+  } catch (err) {
+    logWarn(LOG_MODULE, 'studio offers unreadable; facts block without them', { locationId: studio.locationId, errClass: err?.name })
+    return []
+  }
+}
+
 /** One facts block for an answerable studio that is not the thread's. Never throws. */
-async function factsBlockFor(db, studio, studios) {
-  const [settings, address, knowledge] = await Promise.all([
+async function factsBlockFor(db, studio, studios, { withOffers = false } = {}) {
+  const [settings, address, knowledge, offers] = await Promise.all([
     studios.settings(studio.locationId),
     readAddress(db, studio.locationId),
     readKnowledge(db, studio.locationId),
+    readOffers(db, studio, withOffers),
   ])
   return buildStudioFactsBlock({
     studioName: studio.name,
     address,
     bookingUrl: settings?.booking_url || null,
     membershipUrl: settings?.membership_signup_url || null,
-    // Slice 2 (the purchase tools) fills the offers.
-    offers: [],
+    offers,
     knowledge,
   })
 }
@@ -235,25 +324,49 @@ const sourceView = (key) => {
   return { key: p.key, label: p.label }
 }
 
+// MIAHATCH.6 (Task 25) — the class a trial-used hand-off recorded on this
+// thread in the last 23h (un1t-online-trial-used.js), as one prompt line with
+// its time in that studio's zone; '' when there is none, it is another
+// studio's, or the read failed (logged by the reader). Never throws.
+async function trialUsedClassLineFor(db, un1tStudio, studios, { conversationId, nowMs }) {
+  if (!conversationId) return ''
+  try {
+    const found = await latestTrialUsedClass(db, { conversationId, ...(nowMs !== undefined ? { nowMs } : {}) })
+    if (!found || found.locationId !== un1tStudio.locationId) return ''
+    const zone = await studios.zone(found.locationId)
+    return buildTrialUsedClassLine({ className: found.className, classTime: classTimeLabel(found.startsAtMs, zone), eventId: found.eventId })
+  } catch (err) {
+    logWarn(LOG_MODULE, 'trial-used class line failed; the turn goes without it', { locationId: un1tStudio.locationId, errClass: err?.name })
+    return ''
+  }
+}
+
 /**
  * The buildCachedSystem options a plan adds to today's. Call only when the
  * plan is NOT today's block (today's request is built from today's options
  * alone). The un1t variant names the un1t.online studio and carries ITS
  * booking link; the Glofox override renders the Glofox prompt. Both carry a
- * facts block per answerable studio that is not the thread's.
+ * facts block per answerable studio that is not the thread's. A un1t_full
+ * WhatsApp turn also carries the class a trial-used hand-off left on this
+ * conversation (`conversationId`), as one uncached prompt line.
  */
-export async function promptOptionsForPlan(db, plan, studios) {
+export async function promptOptionsForPlan(db, plan, studios, { conversationId = null, channel = null, nowMs } = {}) {
   const factsBlocks = []
-  for (const studio of plan.otherStudios) factsBlocks.push(await factsBlockFor(db, studio, studios))
+  const withOffers = plan.block === 'un1t_full'
+  for (const studio of plan.otherStudios) factsBlocks.push(await factsBlockFor(db, studio, studios, { withOffers }))
   if (plan.block.startsWith('un1t_') && plan.un1tStudio) {
     const settings = await studios.settings(plan.un1tStudio.locationId)
+    const trialUsedClassLine = plan.block === 'un1t_full' && channel === 'whatsapp'
+      ? await trialUsedClassLineFor(db, plan.un1tStudio, studios, { conversationId, nowMs })
+      : ''
     return {
       membershipSource: sourceView('un1t_online'),
-      un1tVariant: 'read',
-      multiStudio: plan.block === 'un1t_read_dual',
+      un1tVariant: plan.block === 'un1t_full' ? 'full' : 'read',
+      multiStudio: plan.multiStudio === true,
       un1tStudioName: plan.un1tStudio.name,
       bookingUrl: settings?.booking_url || null,
       factsBlocks,
+      ...(trialUsedClassLine ? { trialUsedClassLine } : {}),
     }
   }
   if (plan.block === 'glofox') {
@@ -299,7 +412,8 @@ async function glofoxStudioCtx(toolCtx, studios) {
 
 /**
  * The context one tool runs with, or null when it must not run at all (the
- * Glofox studio's settings are unreadable; the caller refuses the tool).
+ * Glofox studio's settings are unreadable, or a Glofox booking id on a un1t
+ * turn with no Glofox studio answerable; the caller refuses the tool).
  * Today's turn (no `toolCtx.turn`) and every
  * tool that needs nothing else get `toolCtx` itself. Otherwise:
  *   - glofox block on a non-Glofox thread: the Glofox tools run at the Glofox
@@ -321,9 +435,12 @@ export async function executorCtxFor(toolName, input, toolCtx, studios) {
       // un1t.online studio (it can never auto-execute there), and the row says
       // the person is a member at the other studio too, so staff confirm which
       // membership is meant.
+      // MIAHATCH.5: block 3b with a Glofox studio answerable is dual too.
       const other = turn.block === 'un1t_read_dual'
         ? (turn.answerable || []).find((s) => s && s.locationId !== un1t.locationId)
-        : null
+        : turn.block === 'un1t_full'
+          ? (turn.answerable || []).find((s) => s?.providerKey === 'glofox')
+          : null
       const extra = other
         ? { membershipRequestDetails: { member_studios_dual: true, also_member_at_location_id: other.locationId } }
         : {}
@@ -331,7 +448,13 @@ export async function executorCtxFor(toolName, input, toolCtx, studios) {
       return { ...toolCtx, locationId: un1t.locationId, ...extra }
     }
     const field = BOOKING_ID_FIELD[toolName]
-    if (field && parseAgentId(input?.[field])?.provider === 'glofox') return glofoxStudioCtx(toolCtx, studios)
+    if (field && parseAgentId(input?.[field])?.provider === 'glofox') {
+      // MIAHATCH.5 — block 3b can be planned with no Glofox studio answerable
+      // (a Hatch-only member): a Glofox id then has no studio to run at, so
+      // the tool is refused rather than run at the un1t.online thread.
+      if (!(turn.answerable || []).some((s) => s?.providerKey === 'glofox')) return null
+      return glofoxStudioCtx(toolCtx, studios)
+    }
     return toolCtx
   }
   if (turn.block === 'glofox' && GLOFOX_STUDIO_TOOLS.has(toolName)) return glofoxStudioCtx(toolCtx, studios)

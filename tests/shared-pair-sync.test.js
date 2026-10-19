@@ -179,7 +179,8 @@ const PAIRS = {
       'C85 (c) moved failureExplanation (a failed approval\'s code in the operator\'s words) to shared/ so the phone\'s ' +
       'post-approve alert and thread approval card stop printing the raw code; agent-request-why.js re-exports it for ' +
       'every web caller and keeps its web-only helpers (they import server modules). Cross-named, so this entry is ' +
-      'what makes the identity assertion run.',
+      'what makes the identity assertion run. un1tFailureExplanation (the un1t.online wording for Mia\'s Hatch cards, ' +
+      'MIAHATCH.5) moved to shared/ too, so the phone stops reading those codes in Glofox terms.',
   },
 
   'brand-name.js': {

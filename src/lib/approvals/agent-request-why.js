@@ -55,6 +55,10 @@ const MACHINE_REASONS = {
     'un1t.online did not answer clearly. Approving checks un1t.online first and books only if it is not already done.',
   un1t_trial_unverified:
     'The free trial could not be confirmed in un1t.online. Approving books only if their credits show; it never buys a trial.',
+  // UN1TBOOK.20 — the class left un1t.online's timetable before the queued
+  // booking ran; nothing was sent there (record-only).
+  un1t_class_no_longer_available:
+    'This class was removed in un1t.online before it could be booked. Offer the customer another class.',
   // PERSON-ACCT.7 — the agent elects ONE linked account per booking and
   // escalates instead of coin-flipping between two that are both live.
   account_conflict:
@@ -131,10 +135,86 @@ const MANUAL_BOOKING =
 const TRIAL_UNSETTLED_AT_MINT =
   'Their Glofox account was just created, but Glofox gave no clear answer when the trial was being added, so it may already be there. Approving books only if class credits show on the account, and will not buy a second trial. Check their account in Glofox for a €0 trial invoice; if there is none, add a credit by hand, then approve.'
 
+// MIAHATCH.5 — Mia's own un1t.online cards (details.provider 'un1t_online',
+// origin 'mia', filed by src/lib/agent/un1t-booking.js) at a studio with no
+// Glofox. Their reasons are machine codes, so they are explained here in
+// un1t.online's terms and never rendered as the customer's words (customerWords).
+const isMiaUn1tRow = (row) => row?.details?.provider === 'un1t_online' && row?.details?.origin === 'mia'
+
+const MIA_UN1T_REASONS = {
+  mia_booking:
+    "Mia drafted this booking because the studio's booking mode needs approval. Approving books it in un1t.online.",
+  mia_cancellation:
+    "Mia drafted this cancellation because the studio's booking mode needs approval. Approving cancels it in un1t.online.",
+  no_credits:
+    'Mia escalated: they asked to book, but no credits or membership show in un1t.online. Talk to them in the conversation, add credits there, then approve to book.',
+  un1t_outcome_unknown:
+    'un1t.online did not answer clearly. Approving checks un1t.online first and books only if it is not already done.',
+  cancel_outcome_unknown:
+    'un1t.online did not answer clearly. Approving checks un1t.online first and cancels only if it is still booked.',
+  // MIAHATCH.6 (Task 20) — the free trial (src/lib/agent/purchase-intents.js).
+  un1t_trial_check_failed:
+    'Mia could not check whether they can have the free trial (the check failed), so she offered no trial and handed over. Check their account in un1t.online and talk to them in the conversation.',
+  trial_not_configured:
+    'Mia tried to give them the free trial, but no trial product is set for this studio, so nothing was given. Set the trial product in the un1t.online settings, or sort it in un1t.online by hand.',
+  un1t_trial_unverified:
+    'Mia asked un1t.online for the free trial, but it could not be confirmed. Check their account in un1t.online for the trial credits.',
+  trial_product_not_free:
+    "The studio's trial product is not a live free product in un1t.online, so no trial was given. Fix the product or the trial setting, then sort the member in un1t.online.",
+  un1t_trial_granted_no_credits:
+    'Mia gave them the free trial in un1t.online, but its credits did not show when she booked the class, so nothing was booked. Check their credits in un1t.online.',
+  // Mia's closed trial rows (status failed), as Fix & retry may show them.
+  un1t_trial_used:
+    'un1t.online says they have had the free trial before, so Mia gave no trial and showed them the paid options instead.',
+  un1t_trial_retry:
+    'un1t.online was busy when Mia asked for the free trial, so nothing was given and the member was asked to try again.',
+  un1t_trial_not_sent:
+    'The free trial request could not be sent to un1t.online, so nothing was given and Mia handed over.',
+}
+
+// What approving a Mia trial card does: the class on it is booked only if
+// credits show (Ruling 28, never a trial); with no class there is nothing to book.
+const TRIAL_REASON = /^(un1t_trial_check_failed|trial_not_configured|un1t_trial_unverified|trial_product_not_free|un1t_trial_granted_no_credits|un1t_trial_used|un1t_trial_retry|un1t_trial_not_sent|un1t_trial_failed:)/
+function trialApproveLine(d) {
+  // un1t_trial_used is record-only in D's executor (UN1T_RECORD_ONLY_REASONS).
+  if (d.reason === 'un1t_trial_used') return 'Approving only records this; it books nothing and never gives a trial.'
+  return d.event_id
+    ? 'Approving books the class on this card only if credits show in un1t.online; it never gives a trial.'
+    : 'No class is named on this card, so approving books nothing.'
+}
+
+// un1t.online's own words, as Mia's card recorded them (scrubbed), quoted.
+function refusedLine(what, d, next) {
+  const words = typeof d.result?.message === 'string' && d.result.message.trim() ? d.result.message.trim() : null
+  return `un1t.online refused the ${what}${words ? `: "${words}"` : ''}. ${next}`
+}
+
+function miaUn1tWhy(d) {
+  const reason = typeof d.reason === 'string' ? d.reason : null
+  if (reason === 'booking_rejected') return refusedLine('booking', d, 'Check the member in un1t.online, then approve to try the booking again.')
+  if (reason === 'cancel_rejected') return refusedLine('cancellation', d, 'Check the booking in un1t.online, then approve to try the cancellation again.')
+  if (reason && TRIAL_REASON.test(reason)) {
+    const code = reason.startsWith('un1t_trial_failed:') ? reason.slice('un1t_trial_failed:'.length) || 'unknown' : null
+    const why = code
+      ? `un1t.online did not give them the free trial (${code}), so nothing was given or booked. Check their account in un1t.online, and give the trial or credits there by hand if they should have it.`
+      : MIA_UN1T_REASONS[reason]
+    return `${why} ${trialApproveLine(d)}`
+  }
+  if (reason && MIA_UN1T_REASONS[reason]) return MIA_UN1T_REASONS[reason]
+  // A reason this list does not know yet: never the raw code, never Glofox.
+  return 'Mia passed this to the team. Check the member in un1t.online before approving.'
+}
+
 export function whyFlagged(row) {
+  if (row && (row.kind === 'class_booking' || row.kind === 'class_cancellation') && isMiaUn1tRow(row)) {
+    return miaUn1tWhy(row.details)
+  }
   if (!row || row.kind !== 'class_booking') return null
   const d = row.details || {}
   const reason = typeof d.reason === 'string' ? d.reason : null
+  // A un1t.online funnel reason names what happened on that card, so it wins
+  // over the studio's book-by-hand line (its un1t: event id is hand-booked).
+  if (reason?.startsWith('un1t_') && MACHINE_REASONS[reason]) return MACHINE_REASONS[reason]
   if (isHandBookedEventId(d.event_id)) return MANUAL_BOOKING
   if (reason) {
     if (reason === 'credit_check_failed') {
@@ -172,8 +252,10 @@ export function approvalGrantsTrialCredit(details) {
 
 // C85 (c) — failureExplanation moved to shared/agent-request-failure.js so the
 // phone's post-approve alert can use it (it printed the raw code). One
-// definition, re-exported here for every web caller.
-export { failureExplanation, FAILURE_CODES } from '@shared/agent-request-failure'
+// definition, re-exported here for every web caller. MIAHATCH.5's un1t.online
+// wording for failed Hatch cards (un1tFailureExplanation, which
+// failureExplanation reads first) lives there too, so the phone shares it.
+export { failureExplanation, FAILURE_CODES, un1tFailureExplanation, UN1T_FAILURE_CODES } from '@shared/agent-request-failure'
 
 // PERSON-ACCT.3 — states that mean the membership (whatever its status)
 // cannot book right now. glofox_membership_status is NEVER the string
@@ -264,6 +346,8 @@ export function customerWords(row) {
   const note = typeof rawNote === 'string' ? rawNote.trim() : ''
   if (note) return note
   if (row.kind === 'class_booking') return null
+  // MIAHATCH.5 — a Mia un1t.online card's reason is a machine code (whyFlagged).
+  if (isMiaUn1tRow(row)) return null
   const reason = row.details && typeof row.details.reason === 'string' ? row.details.reason.trim() : ''
   return reason || null
 }

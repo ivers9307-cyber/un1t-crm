@@ -21,7 +21,7 @@ const META_MAX_STUDIOS = 8
  * Compact a turn trace into the agent_decisions.meta payload (mig 444).
  * Returns null when the trace holds nothing worth persisting, so decision
  * rows from skip paths (never called the model) stay meta-free. Pure.
- * @param {{tools?: Array<{name:string,input?:object}>, stopReason?: string|null, iterations?: number}} [trace]
+ * @param {{tools?: Array<{name:string,input?:object,intentId?:string}>, stopReason?: string|null, iterations?: number}} [trace]
  * @returns {{tools?: Array, stop_reason?: string, iterations?: number, member_studios?: Array, tool_block?: string}|null}
  */
 export function compactDecisionMeta(trace = {}) {
@@ -36,7 +36,11 @@ export function compactDecisionMeta(trace = {}) {
       } catch {
         input = '{}'
       }
-      return { name: String(t.name || 'unknown'), input }
+      // MIAHATCH.6 — a purchase tool's intent (mia_purchase_intents.id), so a
+      // payment link can be traced back to the turn that sent it. An id only.
+      return typeof t.intentId === 'string' && t.intentId
+        ? { name: String(t.name || 'unknown'), input, intent_id: t.intentId.slice(0, 64) }
+        : { name: String(t.name || 'unknown'), input }
     })
     if (tools.length > META_MAX_TOOLS) meta.tools_truncated = tools.length
   }

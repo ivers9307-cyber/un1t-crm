@@ -20,8 +20,13 @@
 //   5. Resolve un1t.online clients to org-scoped contacts (Task 4).
 //   6. Upsert the seven un1t_* tables in chunks of 200. The first failed
 //      upsert stops the run ('db'); later tables wait for the next run.
-//      The events are then projected into class_occurrences (UN1TCLASS.2): a
-//      projection failure is recorded in counts and never fails the run.
+//      The events are then projected into class_occurrences (UN1TCLASS.2;
+//      a future un1t occurrence this pull did not return is stamped
+//      cancelled_at, UN1TBOOK.20, so a class deleted upstream leaves the TVs),
+//      and the bookings into class_bookings (UN1TBOOK.3, source_platform
+//      'un1t_online', which the CRM never reminds or credits), both only
+//      where the studio's membership_source is 'un1t_online': a projection
+//      failure is recorded in counts and never fails the run.
 //   6c. Measure the history window (UN1THARD.2): per dated table, how many
 //      rows the mirror holds that this pull did not return (every pulled row
 //      was just upserted with synced_at = this run's start, so an older
@@ -71,6 +76,7 @@ import {
   MEMBERSHIP_ACTIVE_STATUSES,
 } from './un1t-online-map.js'
 import { projectUn1tOccurrences } from './un1t-online-occurrences.js'
+import { projectUn1tBookings } from './un1t-online-bookings.js'
 import { resolveUn1tContacts } from './un1t-online-contacts.js'
 import { ensureStudioPreferences } from './un1t-online-studio-preferences.js'
 import { tokenFingerprint } from './un1t-online-token.js'
@@ -422,6 +428,26 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
           logWarn('un1t-online-sync', 'could not project events into class_occurrences', { locationId, runId, err: projected.error })
         }
       }
+
+      // 6b (bookings). Project the bookings just written into class_bookings
+      // (UN1TBOOK.3), so the scorecard, the /live roster and campaign outcomes
+      // see this studio's visits. Same gate and same informational status as 6b; the
+      // rows carry source_platform 'un1t_online', which the reminder and
+      // crediting crons never read (un1t.online reminds and credits itself).
+      if (spec.table === 'un1t_bookings' && loc.membership_source !== 'un1t_online') {
+        counts.class_bookings = { skipped: 'membership_source' }
+      } else if (spec.table === 'un1t_bookings') {
+        const projected = await projectUn1tBookings(db, {
+          locationId,
+          bookings: unique,
+          events: mapped.un1t_events,
+          nowIso,
+        })
+        counts.class_bookings = projected
+        if (projected.error) {
+          logWarn('un1t-online-sync', 'could not project bookings into class_bookings', { locationId, runId, err: projected.error })
+        }
+      }
     }
 
     // 6c. The history window (UN1THARD.2). Informational: a failed count is
@@ -447,6 +473,17 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
       const msg = `un1t.online sync failed writing contact_memberships: ${membership.error}`
       return failure('db', msg, errorPatch(msg, tokenFields))
     }
+
+    // 7b. New signups start this studio's contact_created sequences
+    // (SHAREDCONTACT.1). Last, so the bookings this run projected are already
+    // there for a "booked a class here?" branch. Informational: a failure is
+    // logged by the trigger and never changes the run's status.
+    counts.signups = await fireSignupTriggers({
+      locationId,
+      membershipSource: loc.membership_source,
+      newlyLinked: resolved.newlyLinked || [],
+      nowIso,
+    })
   } catch (err) {
     const msg = `un1t.online sync failed: ${messageOf(err)}`
     logError('un1t-online-sync', 'unexpected exception in a sync run', { locationId, runId, err: safeErr(err) })
@@ -689,4 +726,66 @@ async function updateConnection(db, locationId, patch, identity) {
   if (error) return failed(error)
   if (!Array.isArray(data) || data.length === 0) return superseded()
   return {}
+}
+
+// ── SHAREDCONTACT.1: fresh signups → contact_created at this studio ──────────
+//
+// A client who became a contact of this studio on this run (inserted, or
+// attached by email to a sibling studio's contact: one person per
+// organisation, mig 712) is a new lead HERE, so this studio's contact_created
+// sequences fire for them (Hatch Street's "New Lead – First Class Booking
+// Nudge"). Before this nothing fired: the sync inserted contacts silently and
+// a Stillorgan member who signed up at Hatch was never "created" at all.
+//
+// Three fences keep this off the mass-create path the trigger's own comment
+// forbids: only a studio whose membership source IS un1t.online; only a
+// client created upstream in the last SIGNUP_MAX_AGE_DAYS (an old account
+// first matched today, or a backlog import, is not a new lead); and at most
+// SIGNUP_TRIGGER_CAP a run (the rest are counted, never fired). A client
+// attached to a contact that already lives at this studio was already new
+// here when that contact was made, so it is not fired again.
+
+export const SIGNUP_MAX_AGE_DAYS = 3
+export const SIGNUP_TRIGGER_CAP = 25
+
+/** Pure: which newly linked clients count as fresh signups at this studio. */
+export function pickFreshSignups(newlyLinked, { locationId, nowIso, maxAgeDays = SIGNUP_MAX_AGE_DAYS }) {
+  const now = Date.parse(nowIso)
+  const floor = Number.isFinite(now) ? now - maxAgeDays * 86400000 : NaN
+  const out = []
+  const seen = new Set()
+  let stale = 0
+  let alreadyHere = 0
+  for (const n of Array.isArray(newlyLinked) ? newlyLinked : []) {
+    if (!n?.contactId || seen.has(n.contactId)) continue
+    if (n.how === 'attached' && n.homeLocationId === locationId) { alreadyHere += 1; continue }
+    const created = Date.parse(n.remoteCreatedAt || '')
+    if (!Number.isFinite(created) || !Number.isFinite(floor) || created < floor) { stale += 1; continue }
+    seen.add(n.contactId)
+    out.push(n)
+  }
+  return { fresh: out, stale, alreadyHere }
+}
+
+async function fireSignupTriggers({ locationId, membershipSource, newlyLinked, nowIso }) {
+  if (membershipSource !== 'un1t_online') return { skipped: 'membership_source' }
+  if (!newlyLinked.length) return { fired: 0 }
+  const { fresh, stale, alreadyHere } = pickFreshSignups(newlyLinked, { locationId, nowIso })
+  const toFire = fresh.slice(0, SIGNUP_TRIGGER_CAP)
+  const overCap = fresh.length - toFire.length
+  if (overCap > 0) {
+    logWarn('un1t-online-sync', 'more fresh signups than the per-run trigger cap; the rest were not fired', {
+      locationId, fresh: fresh.length, cap: SIGNUP_TRIGGER_CAP,
+    })
+  }
+  let fired = 0
+  if (toFire.length) {
+    const { triggerSequencesForContactCreated } = await import('./sequences/triggers.js')
+    for (const n of toFire) {
+      // Best-effort: the trigger swallows and logs its own failures.
+      await triggerSequencesForContactCreated(n.contactId, { locationId, sourceRef: 'un1t_online_signup' })
+      fired += 1
+    }
+  }
+  return { fired, joined: toFire.filter((n) => n.homeLocationId !== locationId).length, stale, already_here: alreadyHere, over_cap: overCap }
 }

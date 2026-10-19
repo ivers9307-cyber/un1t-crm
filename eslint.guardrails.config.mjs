@@ -467,6 +467,10 @@ const config = [
       // born clean; the read and every upsert chunk read their error, which
       // is returned (never thrown) for the sync to record in its counts.
       'src/lib/un1t-online-occurrences.js',
+      // UN1TBOOK.3 — the un1t.online bookings → class_bookings projection:
+      // born clean; both reads and every upsert chunk read their error, which
+      // is returned (never thrown) for the sync to record in its counts.
+      'src/lib/un1t-online-bookings.js',
       // UN1TDUAL.3 — the linked-contact Hatch marketing-preferences row: born
       // clean; every read, the insert-if-missing upsert and the consent_log
       // insert read their error, which is returned (never thrown).
@@ -479,6 +483,10 @@ const config = [
       'src/lib/un1t-online-write-ops.js',
       'src/lib/un1t-online-mirror-write.js',
       'src/lib/un1t-online-write-ledger.js',
+      // MIAHATCH.5 — Mia's book_class at a un1t.online studio: born clean;
+      // the write-ahead row, its finalise and every mirror read judge their
+      // error (a failed write-ahead row sends nothing).
+      'src/lib/agent/un1t-booking.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

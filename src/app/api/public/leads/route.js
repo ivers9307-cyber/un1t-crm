@@ -150,7 +150,9 @@ export async function POST(request) {
       const { maybeProvisionLeadInGlofox } = await import('@/lib/automations/glofox-lead-provisioning')
       await maybeProvisionLeadInGlofox({ db, locationId, contact: contactRow, source: 'website_lead' })
       const { triggerSequencesForContactCreated } = await import('@/lib/sequences/triggers')
-      await triggerSequencesForContactCreated(contactRow.id)
+      // SHAREDCONTACT.1 — the form's studio, not the contact's home: a
+      // Stillorgan member joining Hatch Street's list is new to Hatch.
+      await triggerSequencesForContactCreated(contactRow.id, { locationId })
     }
   } catch (e) { logWarn('leads', 'glofox provisioning hook failed', { err: e }) }
 

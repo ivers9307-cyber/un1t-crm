@@ -22,11 +22,16 @@
 --
 -- DML only: no schema object is added or changed, so there is no grant
 -- decision. The location is chosen by membership_source = 'un1t_online', never
--- by id, and the block refuses to run unless exactly one such location exists,
--- the boundary row is there, and no radar row at it is on or after the
--- boundary. Each count is reported with RAISE NOTICE, and a post-check refuses
--- to finish while any pre-boundary row is left. Safe to re-run: a second run
--- finds nothing to delete. Forward-only.
+-- by id. membership_source is operator-editable, so the choice is checked
+-- against the data before anything is deleted: the block refuses to run when
+-- more than one such location exists, when any membership_snapshots row at it
+-- before the boundary has total_members > 0 (Hatch's are all zero; a studio
+-- with real member history, e.g. Stillorgan flipped by mistake, is refused),
+-- when the boundary row is missing, or when a radar row at it is on or after
+-- the boundary. A database with NO un1t_online location (a fresh replay)
+-- raises a NOTICE and does nothing. Each count is reported with RAISE NOTICE,
+-- and a post-check refuses to finish while any pre-boundary row is left. Safe
+-- to re-run: a second run finds nothing to delete. Forward-only.
 DO $$
 DECLARE
   v_boundary   constant date := DATE '2026-10-18';
@@ -39,10 +44,22 @@ DECLARE
   v_lead       integer;
 BEGIN
   SELECT array_agg(id) INTO v_locs FROM public.locations WHERE membership_source = 'un1t_online';
-  IF coalesce(array_length(v_locs, 1), 0) <> 1 THEN
-    RAISE EXCEPTION 'mig 749: expected exactly one un1t_online location, found %', coalesce(array_length(v_locs, 1), 0);
+  IF coalesce(array_length(v_locs, 1), 0) = 0 THEN
+    RAISE NOTICE 'mig 749: no un1t_online location; nothing to delete';
+    RETURN;
+  END IF;
+  IF array_length(v_locs, 1) <> 1 THEN
+    RAISE EXCEPTION 'mig 749: expected exactly one un1t_online location, found %', array_length(v_locs, 1);
   END IF;
   v_loc := v_locs[1];
+
+  -- Glofox-shaped history at Hatch is all zero members. Real member history
+  -- before the boundary means membership_source points at the wrong studio.
+  IF EXISTS (
+    SELECT 1 FROM public.membership_snapshots WHERE location_id = v_loc AND snapshot_date < v_boundary AND total_members > 0
+  ) THEN
+    RAISE EXCEPTION 'mig 749: the un1t_online location has membership_snapshots before 2026-10-18 with total_members > 0; refusing to delete real history';
+  END IF;
 
   IF NOT EXISTS (
     SELECT 1 FROM public.membership_snapshots WHERE location_id = v_loc AND snapshot_date = v_boundary AND total_members > 0

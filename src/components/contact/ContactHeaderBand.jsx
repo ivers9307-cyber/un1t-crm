@@ -11,6 +11,8 @@ import PersonHeader from '@/components/PersonHeader'
 import PersonActionBar from '@/components/PersonActionBar'
 // HOST-MASTER.6 — "No auto-enrol" chip + Manager+ toggle (client component).
 import AutomationsExemptToggle from '@/components/AutomationsExemptToggle'
+// MIAHATCH.6 — "Payment link sent" chip (client component, one small fetch).
+import MiaPaymentLinkChip from './MiaPaymentLinkChip'
 import { formatLastSeen } from '@/lib/person-view'
 import { formatMoney, formatDate, nextClassLabel } from './format'
 import { arrearsTile } from '@/components/command-centre-arrears'
@@ -226,6 +228,8 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
                 {cancelChip.label}
               </span>
             )}
+            {/* MIAHATCH.6 — Mia's open payment link; fetches after render, hides on failure. */}
+            <MiaPaymentLinkChip contactId={contact.id} />
             {/* HOST-MASTER.6 — mig 464 flag on host-sourced contacts. Chip
                 for everyone while the flag is on; toggle for Manager+. Not
                 rendered at all when the flag is off (non-managers never see
