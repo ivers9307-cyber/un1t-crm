@@ -404,13 +404,18 @@ async function alertStaff(db, ctx, studio, { kind, requestId, summary }) {
   }
 }
 
-/** File (or reuse) a pending card of `kind` at the studio; its id or null. */
-async function fileCard(db, ctx, studio, { kind, contactId, match, details, summary }) {
+/** File (or reuse) a pending card of `kind` at the studio: { id (or null), reused }. */
+async function fileOrReuseCard(db, ctx, studio, { kind, contactId, match, details, summary }) {
   const existing = await pendingCardId(db, studio, { kind, contactId, match })
-  if (existing) return existing
+  if (existing) return { id: existing, reused: true }
   const id = await insertRequest(db, ctx, studio, { kind, contactId, status: 'pending', details })
   if (id) await alertStaff(db, ctx, studio, { kind, requestId: id, summary })
-  return id
+  return { id, reused: false }
+}
+
+/** File (or reuse) a pending card of `kind` at the studio; its id or null. */
+async function fileCard(db, ctx, studio, card) {
+  return (await fileOrReuseCard(db, ctx, studio, card)).id
 }
 
 /** What D's result recorded on the request row says (un1t.online's words scrubbed). */
@@ -525,6 +530,15 @@ export function un1tStudioForBooking(db, studios, bookingId) {
  */
 export function fileUn1tBookingCard(ctx, studio, { contactId, match, details, summary }) {
   return fileCard(ctx.db, ctx, studio, { kind: BOOKING_KIND, contactId, match, details, summary })
+}
+
+/**
+ * As fileUn1tBookingCard, and says whether an open card (or a pending
+ * write-ahead row) was reused: { id, reused }. A reused row is not alerted
+ * again here; the caller decides.
+ */
+export function fileOrReuseUn1tBookingCard(ctx, studio, { contactId, match, details, summary }) {
+  return fileOrReuseCard(ctx.db, ctx, studio, { kind: BOOKING_KIND, contactId, match, details, summary })
 }
 
 /** A write-ahead class_booking row (status pending) at the studio: its id, or null (logged). */

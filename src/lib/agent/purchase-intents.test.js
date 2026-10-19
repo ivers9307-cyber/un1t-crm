@@ -1595,6 +1595,38 @@ describe('settlePurchaseIntent (Task 21)', () => {
       expect(h.send).not.toHaveBeenCalled()
     })
 
+    it('a stuck paid intent whose write-ahead row is still pending: that row becomes the card (reason paid_booking_failed) and the team is alerted', async () => {
+      const ROW = '90000000-0000-4000-8000-0000000000c1'
+      const writeAhead = {
+        id: ROW, location_id: HATCH, contact_id: HATCH_CONTACT, kind: 'class_booking', status: 'pending', updated_at: '2026-10-20T08:40:00Z',
+        details: { provider: 'un1t_online', origin: 'mia', stage: 'executing', event_id: EVENT, purchase_intent_id: ID },
+      }
+      const stuck = paidIntent({ status: 'paid', outcome: { source: 'live' } })
+      const { db, data } = settleDb({ mia_purchase_intents: [stuck], agent_membership_requests: [writeAhead] })
+      expect(await markStuckPaidIntent(db, ID, { code: 'stuck_paid', now: NOW })).toEqual({ marked: true, requestId: ROW })
+      expect(data.agent_membership_requests).toHaveLength(1)
+      expect(data.agent_membership_requests[0]).toMatchObject({ status: 'pending', updated_at: new Date(NOW).toISOString() })
+      expect(data.agent_membership_requests[0].details).toMatchObject({
+        provider: 'un1t_online', stage: 'executing', event_id: EVENT, purchase_intent_id: ID, reason: 'paid_booking_failed', paid_outcome: 'stuck_paid',
+      })
+      expect(notifyAgentApprovalRequest).toHaveBeenCalledTimes(1)
+      expect(notifyAgentApprovalRequest.mock.calls[0][1]).toMatchObject({ requestId: ROW, locationId: HATCH, kind: 'class_booking' })
+      expect(data.mia_purchase_intents[0].outcome.booking.request_id).toBe(ROW)
+      expect(h.book).not.toHaveBeenCalled()
+    })
+
+    it('a reused pending row that is already a paid_booking_failed card is left as it is, with no second alert', async () => {
+      const ROW = '90000000-0000-4000-8000-0000000000c2'
+      const card = {
+        id: ROW, location_id: HATCH, contact_id: HATCH_CONTACT, kind: 'class_booking', status: 'pending', updated_at: '2026-10-20T08:40:00Z',
+        details: { provider: 'un1t_online', origin: 'mia', reason: 'paid_booking_failed', paid_outcome: 'class_unreadable', purchase_intent_id: ID },
+      }
+      const { db, data } = settleDb({ mia_purchase_intents: [paidIntent({ status: 'paid' })], agent_membership_requests: [card] })
+      expect(await markStuckPaidIntent(db, ID, { code: 'stuck_paid', now: NOW })).toEqual({ marked: true, requestId: ROW })
+      expect(data.agent_membership_requests[0]).toMatchObject({ updated_at: '2026-10-20T08:40:00Z', details: { paid_outcome: 'class_unreadable' } })
+      expect(notifyAgentApprovalRequest).not.toHaveBeenCalled()
+    })
+
     it('recheckDoublePayment (for the watcher): the winner\'s check again, mirror only; recorded once filed; a no-op otherwise', async () => {
       const two = [tx(), tx({ un1t_id: 'tx-2', remote_created_at: new Date(NOW - 60_000).toISOString() })]
       const PAID_AT = new Date(NOW - 300_000).toISOString()

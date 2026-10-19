@@ -30,7 +30,9 @@ import { sendAgentThreadMessage } from './notify'
 import { resolveAgentSettings } from './settings-resolve'
 import { renderMiaCopy } from './mia-copy'
 import { fetchLiveEntitlement } from './un1t-member-read'
-import { executeUn1tBook, fileUn1tBookingCard, insertUn1tBookingRow, prepareUn1tBooking } from './un1t-booking'
+import {
+  alertUn1tBookingCard, executeUn1tBook, fileOrReuseUn1tBookingCard, fileUn1tBookingCard, insertUn1tBookingRow, prepareUn1tBooking,
+} from './un1t-booking'
 
 const LOG_MODULE = 'mia-un1t'
 const PROVIDER = 'un1t_online'
@@ -553,13 +555,43 @@ async function settleThrew(db, intent, outcome, err, nowMs, progress) {
   return { outcome: 'paid_booking_failed', sent: confirmation?.sent === true, text, error: code }
 }
 
+/**
+ * A reused pending row that is not yet a paid_booking_failed card (Task 16's
+ * write-ahead row, left pending when the settle died mid-book) becomes one:
+ * its details.reason is rewritten (status-guarded on pending, updated_at), and
+ * the team is alerted as for a new card (best effort). A row that already is
+ * that card is left alone (its alert went when it was filed).
+ */
+async function promoteReusedRow(db, ctx, studio, intent, requestId, code, summary, nowMs) {
+  const { data: row, error: readError } = await db.from('agent_membership_requests')
+    .select('details')
+    .eq('id', requestId)
+    .maybeSingle()
+  if (readError || !row) {
+    logError(LOG_MODULE, 'reused booking row unreadable; not made a card', { locationId: intent.location_id, op: 'settle_stuck_card', intentId: intent.id, requestId, status: null, code: readError?.code ?? null })
+    return
+  }
+  if (row.details?.reason === 'paid_booking_failed') return
+  const { data, error } = await db.from('agent_membership_requests')
+    .update({ details: { ...(row.details || {}), reason: 'paid_booking_failed', paid_outcome: code }, updated_at: new Date(nowMs).toISOString() })
+    .eq('id', requestId)
+    .eq('status', 'pending')
+    .select('id')
+  if (error || !Array.isArray(data) || data.length === 0) {
+    logError(LOG_MODULE, 'reused booking row not made a card', { locationId: intent.location_id, op: 'settle_stuck_card', intentId: intent.id, requestId, status: null, code: error?.code ?? null })
+    return
+  }
+  await alertUn1tBookingCard(ctx, studio, { requestId, summary })
+}
+
 /** ONE paid_booking_failed card for a paid intent whose booking never finished (best effort, logged); its id or null. */
-async function fileStuckCard(db, intent, code) {
+async function fileStuckCard(db, intent, code, nowMs) {
   try {
     const { ctx, studio } = await contextFor(db, intent, null)
     const className = intent.class_name ?? null
     const classTime = intent.class_time ?? null
-    return await fileUn1tBookingCard(ctx, studio, {
+    const summary = [className, classTime, 'paid, settling did not finish, Mia handed over'].filter(Boolean).join(' · ')
+    const { id, reused } = await fileOrReuseUn1tBookingCard(ctx, studio, {
       contactId: intent.contact_id ?? null,
       // The write-ahead row (pending, same purchase_intent_id) is reused when it is still open.
       match: { purchase_intent_id: intent.id },
@@ -569,8 +601,10 @@ async function fileStuckCard(db, intent, code) {
         starts_at: intent.starts_at ?? null, class_name: className, class_time: classTime, purchase_intent_id: intent.id,
         summary: 'The member paid through Mia\'s payment link, but settling it did not finish. Check the member and the class in un1t.online; Approve books the class only if it is not there already.',
       },
-      summary: [className, classTime, 'paid, settling did not finish, Mia handed over'].filter(Boolean).join(' · '),
+      summary,
     })
+    if (id && reused) await promoteReusedRow(db, ctx, studio, intent, id, code, summary, nowMs)
+    return id
   } catch (err) {
     logError(LOG_MODULE, 'stuck paid intent card not filed', { locationId: intent.location_id, op: 'settle_stuck_card', intentId: intent.id, status: null, errClass: err?.name ?? null })
     return null
@@ -579,7 +613,7 @@ async function fileStuckCard(db, intent, code) {
 
 /** File the card, then close the intent paid -> book_failed (status-guarded, updated_at, the code in outcome). Never throws. */
 async function closeStuckPaid(db, intent, { baseOutcome, code, confirmation = null, nowMs }) {
-  const requestId = await fileStuckCard(db, intent, code)
+  const requestId = await fileStuckCard(db, intent, code, nowMs)
   const final = {
     ...(baseOutcome || {}),
     result: 'paid_booking_failed',
