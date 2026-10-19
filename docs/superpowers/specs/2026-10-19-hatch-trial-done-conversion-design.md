@@ -142,13 +142,15 @@ line in the template; the wrapped lines are one line each in Meta.)
 **Follow-up** `hatch_trial_done_followup` (MARKETING, {{1}} = first
 name):
 
-> Hey {{1}}, just bumping this in case it got buried in your notifications!
-> Let me know if you want me to save you one of those Foundation slots
-> before they're gone. 👍
-> Garrett
+> Hey {{1}},
 >
-> (Richard's wording, 19 Oct; his "— Garrett" sign-off written without the
-> em-dash, per his no-em-dash rule for customer messages.)
+> just bumping this in case it got buried in your notifications!
+> Let me know if you want me to save you one of those Foundation slots before they’re gone. 👍
+>
+> Garrett
+
+(Richard's wording and line layout, 19 Oct; his earlier "— Garrett"
+sign-off is now plain "Garrett".)
 
 Quick-reply buttons are optional. If used, they are plain replies such
 as "Tell me more" that reach Mia (#2064), never an opt-out button
