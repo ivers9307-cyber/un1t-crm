@@ -1,12 +1,15 @@
-// UN1TBOOK.5 — Review Focus 5, end to end through the real scorecard math.
+// UN1TBOOK.5, rewritten by UN1TBOOK.16 (spec C §3, §5): end to end through
+// the real scorecard math.
 //
 // The two un1t.online projections (events → class_occurrences, bookings →
 // class_bookings) are fed, in the shape fetchFloor reads them
-// (shared/studio-kpis.js), into the real computeFloor
-// (shared/studio-kpi-math.js). This pins what no mocked page test can:
-//   - a past un1t class nobody marked stays booked → BOOKED/attended=false and
-//     counts as a no-show, exactly as an unmarked Glofox booking does;
-//   - a no_show counts as a no-show and an attended as an attended visit;
+// (shared/studio-kpis.js, source_platform included), into the real
+// computeFloor (shared/studio-kpi-math.js, bookingOutcome). This pins what no
+// mocked page test can:
+//   - a past un1t booking nobody marked stays BOOKED and is UNDECIDED: it is
+//     outside the numerator and the denominator (un1t.online marks attendance
+//     explicitly, so an unmarked booking must never read as a no-show);
+//   - NO_SHOW counts as a no-show and ATTENDED as an attended visit;
 //   - a cancelled booking (CANCELLED) is outside the denominator;
 //   - a booking on a cancelled class is excluded (its occurrence is dropped by
 //     fetchFloor's .is('cancelled_at', null));
@@ -77,11 +80,11 @@ function floorOccurrences() {
     }))
 }
 
-/** The bookings exactly as fetchFloor selects them (glofox_event_id, contact_id, status, attended, starts_at). */
-function floorBookings() {
-  return BOOKINGS
+/** The bookings exactly as fetchFloor selects them (glofox_event_id, contact_id, source_platform, status, attended, starts_at). */
+function floorBookings(list = BOOKINGS) {
+  return list
     .map(([b, e]) => mapUn1tBookingToClassBooking(b, { locationId: LOC, event: e, nowIso: NOW }))
-    .map(({ glofox_event_id, contact_id, status, attended, starts_at }) => ({ glofox_event_id, contact_id, status, attended, starts_at }))
+    .map(({ glofox_event_id, contact_id, source_platform, status, attended, starts_at }) => ({ glofox_event_id, contact_id, source_platform, status, attended, starts_at }))
 }
 
 describe('un1t.online projections through computeFloor (Review Focus 5)', () => {
@@ -97,25 +100,51 @@ describe('un1t.online projections through computeFloor (Review Focus 5)', () => 
     expect(occ.map((o) => o.cancelled_at == null)).toEqual([true, false])
   })
 
-  it('an unmarked past booking and a no_show are no-shows, attended is a visit, cancelled is outside the denominator', () => {
+  it('an unmarked past un1t booking is undecided: outside numerator and denominator', () => {
     const bookings = floorBookings()
     expect(bookings.map((b) => [b.status, b.attended])).toEqual([
       ['BOOKED', false], // booked, nobody marked it
-      ['BOOKED', false], // no_show
-      ['BOOKED', true], // attended
+      ['NO_SHOW', false], // no_show
+      ['ATTENDED', true], // attended
       ['CANCELLED', false], // cancelled
       ['BOOKED', false], // booked, on the cancelled class
     ])
+    expect(bookings.every((b) => b.source_platform === 'un1t_online')).toBe(true)
 
     const floor = computeFloor(floorOccurrences(), bookings)
-    // 2 no-shows (unmarked + no_show) of 3 BOOKED on a surviving class.
-    // The cancelled booking is not in the denominator (else 2/4 = 50), and the
-    // booking on the cancelled class is excluded (else 3/4 = 75).
-    expect(floor.noShowPct).toBe(67)
+    // 1 no-show of 2 decided bookings on a surviving class. Counting the
+    // unmarked BOOKED as a no-show would give 2/3 = 67; as a visit, 1/3 = 33.
+    expect(floor.noShowPct).toBe(50)
     expect(floor.attendedVisits).toBe(1)
     expect(floor.classes).toBe(1)
     expect(floor.fillPct).toBe(40)
     expect(floor.groupedBy).toBe('class')
-    expect(floor.groupTable).toEqual([{ label: 'HYROX Tuesday', classes: 1, fillPct: 40, noShowPct: 67 }])
+    expect(floor.groupTable).toEqual([{ label: 'HYROX Tuesday', classes: 1, fillPct: 40, noShowPct: 50 }])
+  })
+
+  it('NO_SHOW is a no-show and ATTENDED a visit, CANCELLED outside', () => {
+    const list = [
+      [booking('bk-a1', PAST_EVENT, 'attended'), PAST_EVENT],
+      [booking('bk-a2', PAST_EVENT, 'attended'), PAST_EVENT],
+      [booking('bk-a3', PAST_EVENT, 'attended'), PAST_EVENT],
+      [booking('bk-ns', PAST_EVENT, 'no_show'), PAST_EVENT],
+      [booking('bk-c1', PAST_EVENT, 'cancelled'), PAST_EVENT],
+      [booking('bk-c2', PAST_EVENT, 'cancelled'), PAST_EVENT],
+    ]
+    const floor = computeFloor(floorOccurrences(), floorBookings(list))
+    // 1 of 4 decided; the two cancellations would make it 1/6 = 17 (or 3/6 = 50).
+    expect(floor.noShowPct).toBe(25)
+    expect(floor.attendedVisits).toBe(3)
+  })
+
+  it('all undecided gives noShowPct null (unavailable), never 0', () => {
+    const list = [
+      [booking('bk-u1', PAST_EVENT, 'booked'), PAST_EVENT],
+      [booking('bk-u2', PAST_EVENT, 'booked'), PAST_EVENT],
+      [booking('bk-c', PAST_EVENT, 'cancelled'), PAST_EVENT],
+    ]
+    const floor = computeFloor(floorOccurrences(), floorBookings(list))
+    expect(floor.noShowPct).toBeNull()
+    expect(floor.groupTable).toEqual([{ label: 'HYROX Tuesday', classes: 1, fillPct: 40, noShowPct: null }])
   })
 })

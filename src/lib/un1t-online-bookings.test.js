@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
-import { mapUn1tBookingStatus, mapUn1tBookingToClassBooking, projectUn1tBookings } from './un1t-online-bookings.js'
+import { UN1T_STATUS_RANK, mapUn1tBookingStatus, mapUn1tBookingToClassBooking, projectUn1tBookings } from './un1t-online-bookings.js'
 import { logWarn } from './log'
 
 const LOC = 'loc-hatch'
@@ -37,16 +37,25 @@ const event = (over = {}) => ({
   ...over,
 })
 
-describe('mapUn1tBookingStatus', () => {
-  it('maps every un1t status to the Glofox shape', () => {
-    expect(mapUn1tBookingStatus('booked')).toEqual({ status: 'BOOKED', attended: false })
-    expect(mapUn1tBookingStatus('attended')).toEqual({ status: 'BOOKED', attended: true })
-    expect(mapUn1tBookingStatus('no_show')).toEqual({ status: 'BOOKED', attended: false })
-    expect(mapUn1tBookingStatus('cancelled')).toEqual({ status: 'CANCELLED', attended: false })
-    expect(mapUn1tBookingStatus('waitlisted')).toEqual({ status: 'WAITLISTED', attended: false })
-    expect(mapUn1tBookingStatus(null)).toEqual({ status: null, attended: false })
-    expect(mapUn1tBookingStatus(undefined)).toEqual({ status: null, attended: false })
-    expect(mapUn1tBookingStatus('')).toEqual({ status: null, attended: false })
+describe('mapUn1tBookingStatus (UN1TBOOK.16, spec C §3 status table)', () => {
+  it('maps every row of the status table, upper-case and padded input too', () => {
+    expect(mapUn1tBookingStatus('booked')).toEqual({ status: 'BOOKED', attended: false, rank: 0 })
+    expect(mapUn1tBookingStatus('attended')).toEqual({ status: 'ATTENDED', attended: true, rank: 1 })
+    expect(mapUn1tBookingStatus('no_show')).toEqual({ status: 'NO_SHOW', attended: false, rank: 1 })
+    expect(mapUn1tBookingStatus('cancelled')).toEqual({ status: 'CANCELLED', attended: false, rank: 1 })
+    expect(mapUn1tBookingStatus('ATTENDED')).toEqual({ status: 'ATTENDED', attended: true, rank: 1 })
+    expect(mapUn1tBookingStatus(' No_Show ')).toEqual({ status: 'NO_SHOW', attended: false, rank: 1 })
+    expect(UN1T_STATUS_RANK).toEqual({ BOOKED: 0, ATTENDED: 1, NO_SHOW: 1, CANCELLED: 1 })
+    expect(Object.isFrozen(UN1T_STATUS_RANK)).toBe(true)
+  })
+
+  it('an unknown, empty or null status is not projectable (null), never uppercased through', () => {
+    expect(mapUn1tBookingStatus('waitlisted')).toBeNull()
+    expect(mapUn1tBookingStatus('canceled')).toBeNull()
+    expect(mapUn1tBookingStatus('')).toBeNull()
+    expect(mapUn1tBookingStatus('   ')).toBeNull()
+    expect(mapUn1tBookingStatus(null)).toBeNull()
+    expect(mapUn1tBookingStatus(undefined)).toBeNull()
   })
 })
 
@@ -63,13 +72,24 @@ describe('mapUn1tBookingToClassBooking', () => {
       member_name: 'One Member',
       class_name: 'HYROX Tuesday',
       starts_at: '2026-10-20T17:30:00.000Z',
-      status: 'BOOKED',
+      status: 'ATTENDED',
       attended: true,
-      raw: { un1t: { status: 'attended', source: 'app', credit_charged: true } },
+      raw: {
+        un1t: {
+          status: 'attended',
+          source: 'app',
+          credit_charged: true,
+          has_guest: false,
+          updated_at: '2026-10-02T00:00:00.000Z',
+          written_by: 'sync',
+        },
+      },
       synced_at: NOW,
     })
     // Never the booking's own raw (guest details live there).
-    expect(JSON.stringify(row)).not.toContain('guest')
+    // (has_guest is the one guest fact kept: a boolean, no details.)
+    expect(JSON.stringify(row)).not.toContain('guest@')
+    expect(JSON.stringify(row)).not.toContain('guest_email')
     expect(JSON.stringify(row)).not.toContain('huge')
   })
 
@@ -82,6 +102,54 @@ describe('mapUn1tBookingToClassBooking', () => {
     expect(long.class_name).toHaveLength(200)
     const untitled = mapUn1tBookingToClassBooking(booking(), { locationId: LOC, event: event({ title: null }), nowIso: NOW })
     expect(untitled.class_name).toBeNull()
+  })
+
+  it('raw holds exactly status, source, credit_charged, has_guest, updated_at, written_by', () => {
+    const row = mapUn1tBookingToClassBooking(booking(), { locationId: LOC, event: event(), memberName: 'One Member', nowIso: NOW })
+    expect(Object.keys(row.raw)).toEqual(['un1t'])
+    expect(Object.keys(row.raw.un1t)).toEqual(['status', 'source', 'credit_charged', 'has_guest', 'updated_at', 'written_by'])
+  })
+
+  it('raw.un1t.updated_at is un1t.online\'s own remote_updated_at, null when it gives none, never our clock', () => {
+    const none = mapUn1tBookingToClassBooking(booking({ remote_updated_at: null }), { locationId: LOC, event: event(), nowIso: NOW })
+    expect(none.raw.un1t.updated_at).toBeNull()
+    const missing = booking()
+    delete missing.remote_updated_at
+    const row = mapUn1tBookingToClassBooking(missing, { locationId: LOC, event: event(), nowIso: NOW })
+    expect(row.raw.un1t.updated_at).toBeNull()
+    expect(JSON.stringify(row.raw)).not.toContain(NOW)
+  })
+
+  it('writtenBy crm is carried into raw.un1t.written_by; the default is sync; anything else throws', () => {
+    const crm = mapUn1tBookingToClassBooking(booking(), { locationId: LOC, event: event(), nowIso: NOW, writtenBy: 'crm' })
+    expect(crm.raw.un1t.written_by).toBe('crm')
+    const dflt = mapUn1tBookingToClassBooking(booking(), { locationId: LOC, event: event(), nowIso: NOW })
+    expect(dflt.raw.un1t.written_by).toBe('sync')
+    expect(() => mapUn1tBookingToClassBooking(booking(), { locationId: LOC, event: event(), nowIso: NOW, writtenBy: 'staff' })).toThrow(TypeError)
+  })
+
+  it('an unprojectable status maps to null', () => {
+    expect(mapUn1tBookingToClassBooking(booking({ status: 'waitlisted' }), { locationId: LOC, event: event(), nowIso: NOW })).toBeNull()
+    expect(mapUn1tBookingToClassBooking(booking({ status: null }), { locationId: LOC, event: event(), nowIso: NOW })).toBeNull()
+  })
+
+  it('a guest booking with no contact is named Guest; a contactless booking without a guest stays null', () => {
+    const guest = mapUn1tBookingToClassBooking(booking({ contact_id: null, un1t_user_id: null, has_guest: true }), { locationId: LOC, event: event(), memberName: null, nowIso: NOW })
+    expect(guest).toMatchObject({ contact_id: null, member_name: 'Guest' })
+    expect(guest.raw.un1t.has_guest).toBe(true)
+    const nobody = mapUn1tBookingToClassBooking(booking({ contact_id: null, has_guest: false }), { locationId: LOC, event: event(), memberName: null, nowIso: NOW })
+    expect(nobody.member_name).toBeNull()
+    // A member who brought a guest keeps their own name.
+    const member = mapUn1tBookingToClassBooking(booking({ has_guest: true }), { locationId: LOC, event: event(), memberName: 'One Member', nowIso: NOW })
+    expect(member.member_name).toBe('One Member')
+    // Names unreadable (memberName undefined): the key stays off every row, guests too.
+    const unread = mapUn1tBookingToClassBooking(booking({ contact_id: null, has_guest: true }), { locationId: LOC, event: event(), nowIso: NOW })
+    expect(unread).not.toHaveProperty('member_name')
+  })
+
+  it('a dual-studio booking keeps its Stillorgan contact_id and the Hatch location_id', () => {
+    const row = mapUn1tBookingToClassBooking(booking({ contact_id: 'contact-at-stillorgan' }), { locationId: LOC, event: event(), memberName: 'Dual Member', nowIso: NOW })
+    expect(row).toMatchObject({ location_id: LOC, contact_id: 'contact-at-stillorgan', source_platform: 'un1t_online' })
   })
 
   it('returns null with no un1t_id, no event_id, no event, or an event with no start', () => {
@@ -135,7 +203,7 @@ describe('projectUn1tBookings', () => {
   it('projects bookings with names from contacts and events from the run', async () => {
     const { db, log } = makeDb({ contacts: [{ id: 'c1', name: 'One Member' }] })
     const r = await projectUn1tBookings(db, { locationId: LOC, bookings: [booking()], events: [event()], nowIso: NOW })
-    expect(r).toEqual({ upserted: 1, skipped_no_event: 0 })
+    expect(r).toEqual({ upserted: 1, skipped_no_event: 0, skipped_unknown_status: 0 })
     const [up] = upsertsOf(log)
     expect(up.table).toBe('class_bookings')
     expect(up.payload[0]).toMatchObject({ glofox_booking_id: 'un1t:b1', member_name: 'One Member', source_platform: 'un1t_online' })
@@ -154,7 +222,7 @@ describe('projectUn1tBookings', () => {
       events: [event()],
       nowIso: NOW,
     })
-    expect(r).toEqual({ upserted: 1, skipped_no_event: 2 })
+    expect(r).toEqual({ upserted: 1, skipped_no_event: 2, skipped_unknown_status: 0 })
     const written = upsertsOf(log).flatMap((e) => e.payload.map((p) => p.glofox_booking_id))
     expect(written).toEqual(['un1t:b1'])
     expect(upsertsOf(log).flatMap((e) => e.payload).every((p) => p.starts_at)).toBe(true)
@@ -173,7 +241,7 @@ describe('projectUn1tBookings', () => {
       events: [event()],
       nowIso: NOW,
     })
-    expect(r).toEqual({ upserted: 2, skipped_no_event: 1 })
+    expect(r).toEqual({ upserted: 2, skipped_no_event: 1, skipped_unknown_status: 0 })
     const read = log.find((e) => e.table === 'un1t_events')
     expect(read.columns).toBe('un1t_id, title, starts_at')
     expect(read.filters).toEqual([['eq', 'location_id', LOC], ['in', 'un1t_id', ['e-old', 'e-other']]])
@@ -185,7 +253,7 @@ describe('projectUn1tBookings', () => {
     const bookings = Array.from({ length: 150 }, (_, i) => booking({ un1t_id: `b${i}`, event_id: `e${i}` }))
     const { db, log } = makeDb()
     const r = await projectUn1tBookings(db, { locationId: LOC, bookings, events: [], nowIso: NOW })
-    expect(r).toEqual({ upserted: 0, skipped_no_event: 150 })
+    expect(r).toEqual({ upserted: 0, skipped_no_event: 150, skipped_unknown_status: 0 })
     const reads = log.filter((e) => e.table === 'un1t_events')
     expect(reads.map((e) => e.filters[1][2].length)).toEqual([100, 50])
   })
@@ -211,7 +279,7 @@ describe('projectUn1tBookings', () => {
       events: [event()],
       nowIso: NOW,
     })
-    expect(r).toEqual({ upserted: 2, skipped_no_event: 0, names: 'unreadable' })
+    expect(r).toEqual({ upserted: 2, skipped_no_event: 0, skipped_unknown_status: 0, names: 'unreadable' })
     const rows = upsertsOf(log).flatMap((e) => e.payload)
     expect(rows).toHaveLength(2)
     for (const row of rows) expect(Object.prototype.hasOwnProperty.call(row, 'member_name')).toBe(false)
@@ -223,7 +291,7 @@ describe('projectUn1tBookings', () => {
     bookings.push(booking({ un1t_id: 'b-none', contact_id: null }))
     const { db, log } = makeDb({ contacts: [{ id: 'c0', name: 'Zero' }] })
     const r = await projectUn1tBookings(db, { locationId: LOC, bookings, events: [event()], nowIso: NOW })
-    expect(r).toEqual({ upserted: 131, skipped_no_event: 0 })
+    expect(r).toEqual({ upserted: 131, skipped_no_event: 0, skipped_unknown_status: 0 })
     expect(log.filter((e) => e.table === 'contacts').map((e) => e.filters[0][2].length)).toEqual([100, 30])
     const rows = upsertsOf(log).flatMap((e) => e.payload)
     expect(rows.find((p) => p.glofox_booking_id === 'un1t:b0').member_name).toBe('Zero')
@@ -235,7 +303,7 @@ describe('projectUn1tBookings', () => {
     const bookings = Array.from({ length: 450 }, (_, i) => booking({ un1t_id: `b${i}`, contact_id: null }))
     const { db, log } = makeDb()
     const r = await projectUn1tBookings(db, { locationId: LOC, bookings, events: [event()], nowIso: NOW })
-    expect(r).toEqual({ upserted: 450, skipped_no_event: 0 })
+    expect(r).toEqual({ upserted: 450, skipped_no_event: 0, skipped_unknown_status: 0 })
     const ups = upsertsOf(log)
     expect(ups.map((e) => e.payload.length)).toEqual([200, 200, 50])
     expect(ups.every((e) => e.table === 'class_bookings' && e.options.onConflict === 'location_id,glofox_booking_id')).toBe(true)
@@ -250,9 +318,69 @@ describe('projectUn1tBookings', () => {
       events: [event()],
       nowIso: NOW,
     })
-    expect(r).toEqual({ upserted: 1, skipped_no_event: 0 })
+    expect(r).toEqual({ upserted: 1, skipped_no_event: 0, skipped_unknown_status: 0 })
     expect(upsertsOf(log)[0].payload).toHaveLength(1)
     expect(upsertsOf(log)[0].payload[0].status).toBe('CANCELLED')
+  })
+
+  it('an unknown, empty or null status is not projected, counted skipped_unknown_status, with one logWarn per run naming the distinct values', async () => {
+    const { db, log } = makeDb()
+    const r = await projectUn1tBookings(db, {
+      locationId: LOC,
+      bookings: [
+        booking({ contact_id: null }),
+        booking({ un1t_id: 'b2', status: 'waitlisted', contact_id: null }),
+        booking({ un1t_id: 'b3', status: 'waitlisted', contact_id: null }),
+        booking({ un1t_id: 'b4', status: 'pending', contact_id: null }),
+        booking({ un1t_id: 'b5', status: '', contact_id: null }),
+        booking({ un1t_id: 'b6', status: null, contact_id: null }),
+      ],
+      events: [event()],
+      nowIso: NOW,
+    })
+    expect(r).toEqual({ upserted: 1, skipped_no_event: 0, skipped_unknown_status: 5 })
+    expect(upsertsOf(log).flatMap((e) => e.payload).map((p) => p.glofox_booking_id)).toEqual(['un1t:b1'])
+    const warns = logWarn.mock.calls.filter(([mod]) => mod === 'un1t-online-bookings')
+    expect(warns).toHaveLength(1)
+    expect(warns[0][2]).toEqual({ locationId: LOC, count: 5, statuses: ['waitlisted', 'pending', '(empty)'] })
+  })
+
+  it('an unknown status is counted as such even when its event is also unknown, and its event is never read', async () => {
+    const { db, log } = makeDb()
+    const r = await projectUn1tBookings(db, {
+      locationId: LOC,
+      bookings: [booking({ status: 'waitlisted', event_id: 'e-unknown', contact_id: null })],
+      events: [],
+      nowIso: NOW,
+    })
+    expect(r).toEqual({ upserted: 0, skipped_no_event: 0, skipped_unknown_status: 1 })
+    expect(log.some((e) => e.table === 'un1t_events')).toBe(false)
+  })
+
+  it('projects the four statuses explicitly, and guests as Guest', async () => {
+    const { db, log } = makeDb({ contacts: [{ id: 'c1', name: 'One Member' }] })
+    const r = await projectUn1tBookings(db, {
+      locationId: LOC,
+      bookings: [
+        booking({ un1t_id: 'b1', status: 'booked' }),
+        booking({ un1t_id: 'b2', status: 'attended' }),
+        booking({ un1t_id: 'b3', status: 'no_show' }),
+        booking({ un1t_id: 'b4', status: 'cancelled' }),
+        booking({ un1t_id: 'b5', status: 'booked', contact_id: null, un1t_user_id: null, has_guest: true }),
+      ],
+      events: [event()],
+      nowIso: NOW,
+    })
+    expect(r).toEqual({ upserted: 5, skipped_no_event: 0, skipped_unknown_status: 0 })
+    const rows = upsertsOf(log).flatMap((e) => e.payload)
+    expect(rows.map((p) => [p.glofox_booking_id, p.status, p.attended, p.member_name])).toEqual([
+      ['un1t:b1', 'BOOKED', false, 'One Member'],
+      ['un1t:b2', 'ATTENDED', true, 'One Member'],
+      ['un1t:b3', 'NO_SHOW', false, 'One Member'],
+      ['un1t:b4', 'CANCELLED', false, 'One Member'],
+      ['un1t:b5', 'BOOKED', false, 'Guest'],
+    ])
+    expect(rows.every((p) => p.raw.un1t.written_by === 'sync')).toBe(true)
   })
 
   it('a CHECK violation from the upsert is returned as {code, message}, never thrown', async () => {
@@ -278,7 +406,7 @@ describe('projectUn1tBookings', () => {
 
   it('no bookings: nothing read or written', async () => {
     const { db, log } = makeDb()
-    expect(await projectUn1tBookings(db, { locationId: LOC, bookings: [], events: [event()], nowIso: NOW })).toEqual({ upserted: 0, skipped_no_event: 0 })
+    expect(await projectUn1tBookings(db, { locationId: LOC, bookings: [], events: [event()], nowIso: NOW })).toEqual({ upserted: 0, skipped_no_event: 0, skipped_unknown_status: 0 })
     expect(log).toHaveLength(0)
   })
 })

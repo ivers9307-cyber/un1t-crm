@@ -199,8 +199,10 @@ function fixtureLists() {
     '/transactions': [{ id: 't1', user_id: 'u1', amount: 12000, studio_id: STUDIO }],
     '/invoices': [{ id: 'i1', user_id: 'u1', amount: 12000, studio_id: STUDIO }],
     '/bookings': [
-      { id: 'b1', user_id: 'u1', event_id: 'e1', studio_id: STUDIO },
-      { id: 'b2', user_id: 'u2', event_id: 'e1', studio_id: STUDIO },
+      // un1t.online always sends a status (UserBookingResponseDto); a row
+      // without one is not projected into class_bookings (UN1TBOOK.16).
+      { id: 'b1', user_id: 'u1', event_id: 'e1', status: 'booked', studio_id: STUDIO },
+      { id: 'b2', user_id: 'u2', event_id: 'e1', status: 'booked', studio_id: STUDIO },
     ],
   }
 }
@@ -555,7 +557,7 @@ describe('runUn1tSync', () => {
       expect(logWarn).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('class_occurrences'), expect.objectContaining({ err: { code: null, message: 'class_occurrences upsert boom' } }))
       // The bookings projection is independent of the occurrences one.
       expect(tables.class_bookings).toHaveLength(2)
-      expect(r.counts.class_bookings).toEqual({ upserted: 2, skipped_no_event: 0 })
+      expect(r.counts.class_bookings).toEqual({ upserted: 2, skipped_no_event: 0, skipped_unknown_status: 0 })
     })
 
     it('does not project when the un1t_events upsert fails (the run stops with db)', async () => {
@@ -594,8 +596,8 @@ describe('runUn1tSync', () => {
       const { factory } = makeClient({ self: SELF, lists })
       const r = await runUn1tSync(db, HATCH, opts(factory))
       expect(r.ok).toBe(true)
-      expect(r.counts.class_bookings).toEqual({ upserted: 2, skipped_no_event: 0 })
-      expect(runRow(tables).counts.class_bookings).toEqual({ upserted: 2, skipped_no_event: 0 })
+      expect(r.counts.class_bookings).toEqual({ upserted: 2, skipped_no_event: 0, skipped_unknown_status: 0 })
+      expect(runRow(tables).counts.class_bookings).toEqual({ upserted: 2, skipped_no_event: 0, skipped_unknown_status: 0 })
 
       const tablesInOrder = upserts(log).map((e) => e.table)
       expect(tablesInOrder.indexOf('class_bookings')).toBe(tablesInOrder.indexOf('un1t_bookings') + 1)
@@ -611,9 +613,9 @@ describe('runUn1tSync', () => {
         member_name: c1.name,
         class_name: 'HYROX',
         starts_at: '2026-10-20T17:30:00Z',
-        status: 'BOOKED',
+        status: 'ATTENDED',
         attended: true,
-        raw: { un1t: { status: 'attended', source: 'app', credit_charged: true } },
+        raw: { un1t: { status: 'attended', source: 'app', credit_charged: true, has_guest: true, updated_at: null, written_by: 'sync' } },
         synced_at: NOW_ISO,
       })
       expect(tables.class_bookings.find((b) => b.glofox_booking_id === 'un1t:b2')).toMatchObject({ status: 'CANCELLED', attended: false })

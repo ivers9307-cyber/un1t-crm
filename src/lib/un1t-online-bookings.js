@@ -1,22 +1,31 @@
-// UN1TBOOK.3 — project a studio's un1t.online bookings into class_bookings,
-// the per-class booking roster the studio scorecard (no-shows, attended,
-// activation), the staff /live roster and the campaign outcomes report read.
-// Glofox fills it for Stillorgan (upsertClassBookings); this fills it for a
-// un1t.online studio from the un1t_bookings rows the sync just mapped, so no
-// extra API call is made.
+// UN1TBOOK.3 / .16 — project a studio's un1t.online bookings into
+// class_bookings, the per-class booking roster the studio scorecard
+// (no-shows, attended visits), the staff /live roster and the campaign
+// outcomes report read. Glofox fills it for Stillorgan (upsertClassBookings);
+// this fills it for a un1t.online studio from the un1t_bookings rows the sync
+// just mapped, so no extra API call is made. D's write-through (after a CRM
+// book or cancel) builds its row with the same mapper, writtenBy 'crm'.
 //
-// Rules (all pinned by un1t-online-bookings.test.js):
-//   - The Glofox shape every reader already understands. Attendance is the
-//     `attended` boolean, never the status: booked / attended / no_show are
-//     all BOOKED (attended true only for 'attended'), cancelled is CANCELLED,
-//     any other value is its uppercase. The un1t status is kept in raw.un1t.
+// Rules (spec C §3 and §7; all pinned by un1t-online-bookings.test.js):
+//   - Explicit statuses (UN1T_STATUS_RANK): booked → BOOKED (rank 0),
+//     attended → ATTENDED (attended true), no_show → NO_SHOW, cancelled →
+//     CANCELLED (rank 1 each). Any other value, an empty one or null is NOT
+//     projected: counted skipped_unknown_status, with one logWarn per run
+//     naming the distinct values (the roster cannot know whether it means
+//     "coming"). A past BOOKED is undecided on the scorecard
+//     (shared/studio-kpi-math.js bookingOutcome), never a no-show.
 //   - glofox_booking_id = 'un1t:' + un1t_id, glofox_event_id = 'un1t:' +
 //     event_id, glofox_member_id = null, source_platform = 'un1t_online'. The
-//     mig 733 CHECK refuses a un1t: id without that platform, and the CRM's
-//     reminder and crediting crons read only source_platform 'glofox', so a
-//     projected row is never reminded or credited (Decision 1).
-//   - raw holds only { un1t: { status, source, credit_charged } }, never the
-//     booking's own raw (which carries guest details).
+//     mig 737 namespace CHECK refuses a un1t: id without that platform, and
+//     the CRM's reminder and crediting crons act only on rows
+//     crmMayActOnClassBooking admits (src/lib/class-booking-platform.js), so a
+//     projected row is never reminded, credited or rewarded (decision 7).
+//   - raw holds only { un1t: { status, source, credit_charged, has_guest,
+//     updated_at, written_by } }, never the booking's own raw (which carries
+//     guest details). updated_at is un1t.online's own clock
+//     (un1t_bookings.remote_updated_at), null when it gives none, never ours.
+//   - member_name is contacts.name; 'Guest' for a booking with no contact
+//     where un1t.online says there is a guest, so the coach's count is right.
 //   - A booking whose event is unknown (not in this run's pull, not in
 //     un1t_events) is skipped and counted, never written with a null
 //     starts_at that would overwrite a good one.
@@ -36,6 +45,26 @@ const PREFIX = 'un1t:'
 const SOURCE_PLATFORM = 'un1t_online'
 const MAX_ERROR_LEN = 500
 const MAX_CLASS_NAME = 200
+const GUEST_NAME = 'Guest'
+const WRITERS = new Set(['sync', 'crm'])
+// The unknown-status warning names at most this many distinct values, each
+// cut short: they are un1t.online's enum values, never customer data.
+const MAX_LOGGED_STATUSES = 10
+const MAX_LOGGED_STATUS_LEN = 40
+
+/**
+ * spec C §3 / §7: the rank of each projected status. A terminal status
+ * (rank 1) is what a CRM-written BOOKED gives way to (shouldReplaceStored).
+ * D imports it.
+ */
+export const UN1T_STATUS_RANK = Object.freeze({ BOOKED: 0, ATTENDED: 1, NO_SHOW: 1, CANCELLED: 1 })
+
+const STATUS_TABLE = Object.freeze({
+  booked: Object.freeze({ status: 'BOOKED', attended: false }),
+  attended: Object.freeze({ status: 'ATTENDED', attended: true }),
+  no_show: Object.freeze({ status: 'NO_SHOW', attended: false }),
+  cancelled: Object.freeze({ status: 'CANCELLED', attended: false }),
+})
 
 /** Only code and message ever leave this file (never details / hint). */
 function safeError(err) {
@@ -53,65 +82,77 @@ function chunks(list, size) {
 const hasValue = (v) => v != null && v !== ''
 
 /**
- * Pure: a un1t booking status in the Glofox shape.
- * @param {string|null} status
- * @returns {{ status: string|null, attended: boolean }}
+ * Pure: a un1t.online booking status as class_bookings stores it.
+ * @param {string|null|undefined} status
+ * @returns {{ status: 'BOOKED'|'ATTENDED'|'NO_SHOW'|'CANCELLED', attended: boolean, rank: 0|1 } | null}
+ *   null = not projectable (an unknown value, empty or null).
  */
 export function mapUn1tBookingStatus(status) {
-  if (status == null) return { status: null, attended: false }
-  const s = String(status).trim()
-  if (s === '') return { status: null, attended: false }
-  switch (s.toLowerCase()) {
-    case 'booked':
-      return { status: 'BOOKED', attended: false }
-    case 'attended':
-      return { status: 'BOOKED', attended: true }
-    case 'no_show':
-      return { status: 'BOOKED', attended: false }
-    case 'cancelled':
-      return { status: 'CANCELLED', attended: false }
-    default:
-      return { status: s.toUpperCase(), attended: false }
-  }
+  if (status == null) return null
+  const key = String(status).trim().toLowerCase()
+  const hit = Object.prototype.hasOwnProperty.call(STATUS_TABLE, key) ? STATUS_TABLE[key] : null
+  if (!hit) return null
+  return { status: hit.status, attended: hit.attended, rank: UN1T_STATUS_RANK[hit.status] }
 }
 
 /**
  * Pure: shape one mapped un1t_bookings row (with its contact_id) into a
  * class_bookings upsert row. Returns null when the booking has no id, no
- * event id, or no event with a start (nothing to put on a class).
+ * event id, no event with a start (nothing to put on a class), or a status
+ * that is not projectable.
  *
  * @param {object} bookingRow  a mapBooking() row carrying contact_id
- * @param {{ locationId: string, event: { title?: string|null, starts_at?: string|null }|null, memberName?: string|null, nowIso: string }} ctx
- *   memberName undefined = the key is omitted, so an upsert keeps the stored name.
+ * @param {{ locationId: string, event: { title?: string|null, starts_at?: string|null }|null, memberName?: string|null, nowIso: string, writtenBy?: 'sync'|'crm' }} ctx
+ *   memberName undefined = the key is omitted, so an upsert keeps the stored
+ *   name (guests included: every row of one upsert carries the same keys).
+ *   writtenBy is 'sync' (this projection) or 'crm' (D's write-through);
+ *   anything else throws TypeError.
  */
-export function mapUn1tBookingToClassBooking(bookingRow, { locationId, event, memberName, nowIso } = {}) {
+export function mapUn1tBookingToClassBooking(bookingRow, { locationId, event, memberName, nowIso, writtenBy = 'sync' } = {}) {
+  if (!WRITERS.has(writtenBy)) {
+    throw new TypeError(`mapUn1tBookingToClassBooking: writtenBy must be 'sync' or 'crm'`)
+  }
   if (!bookingRow || !hasValue(bookingRow.un1t_id) || !hasValue(bookingRow.event_id)) return null
   if (!event || !event.starts_at || !locationId) return null
-  const { status, attended } = mapUn1tBookingStatus(bookingRow.status ?? null)
+  const mapped = mapUn1tBookingStatus(bookingRow.status ?? null)
+  if (!mapped) return null
+  const contactId = bookingRow.contact_id ?? null
   const row = {
     location_id: locationId,
     glofox_booking_id: `${PREFIX}${bookingRow.un1t_id}`,
     glofox_event_id: `${PREFIX}${bookingRow.event_id}`,
     glofox_member_id: null,
     source_platform: SOURCE_PLATFORM,
-    contact_id: bookingRow.contact_id ?? null,
+    contact_id: contactId,
   }
-  if (memberName !== undefined) row.member_name = memberName
+  if (memberName !== undefined) {
+    row.member_name = contactId == null && bookingRow.has_guest === true ? GUEST_NAME : memberName
+  }
   Object.assign(row, {
     class_name: event.title ? String(event.title).slice(0, MAX_CLASS_NAME) : null,
     starts_at: event.starts_at,
-    status,
-    attended,
+    status: mapped.status,
+    attended: mapped.attended,
     raw: {
       un1t: {
         status: bookingRow.status ?? null,
         source: bookingRow.source ?? null,
         credit_charged: bookingRow.credit_charged ?? null,
+        has_guest: bookingRow.has_guest ?? null,
+        updated_at: bookingRow.remote_updated_at ?? null,
+        written_by: writtenBy,
       },
     },
     synced_at: nowIso,
   })
   return row
+}
+
+/** A status for the unknown-status warning: never empty, never long. */
+function loggedStatus(status) {
+  const s = status == null ? '' : String(status).trim()
+  if (s === '') return '(empty)'
+  return s.length > MAX_LOGGED_STATUS_LEN ? `${s.slice(0, MAX_LOGGED_STATUS_LEN)}…` : s
 }
 
 /**
@@ -120,16 +161,34 @@ export function mapUn1tBookingToClassBooking(bookingRow, { locationId, event, me
  * at this location (if that read fails nothing is written: a later run
  * retries). Never throws.
  *
- * @returns {Promise<{ upserted: number, skipped_no_event: number, names?: 'unreadable' } | { error: { code: string|null, message: string } }>}
+ * @returns {Promise<{ upserted: number, skipped_no_event: number, skipped_unknown_status: number, names?: 'unreadable' } | { error: { code: string|null, message: string } }>}
  */
 export async function projectUn1tBookings(db, { locationId, bookings, events, nowIso }) {
   try {
     // Last row wins per id, so one upsert never touches a row twice.
-    const byId = new Map()
+    const latest = new Map()
     for (const b of Array.isArray(bookings) ? bookings : []) {
-      if (b && hasValue(b.un1t_id)) byId.set(String(b.un1t_id), b)
+      if (b && hasValue(b.un1t_id)) latest.set(String(b.un1t_id), b)
     }
-    if (byId.size === 0) return { upserted: 0, skipped_no_event: 0 }
+    if (latest.size === 0) return { upserted: 0, skipped_no_event: 0, skipped_unknown_status: 0 }
+
+    // An unprojectable status is skipped before anything is read for it.
+    const byId = new Map()
+    let skippedUnknownStatus = 0
+    const unknownStatuses = new Set()
+    for (const [id, b] of latest) {
+      if (mapUn1tBookingStatus(b.status ?? null)) {
+        byId.set(id, b)
+      } else {
+        skippedUnknownStatus += 1
+        if (unknownStatuses.size < MAX_LOGGED_STATUSES) unknownStatuses.add(loggedStatus(b.status))
+      }
+    }
+    if (skippedUnknownStatus > 0) {
+      logWarn('un1t-online-bookings', 'bookings with a status the projection does not know were not projected', {
+        locationId, count: skippedUnknownStatus, statuses: [...unknownStatuses],
+      })
+    }
 
     const eventById = new Map()
     for (const e of Array.isArray(events) ? events : []) {
@@ -183,7 +242,7 @@ export async function projectUn1tBookings(db, { locationId, bookings, events, no
       if (error) return { error: safeError(error) }
       upserted += chunk.length
     }
-    const result = { upserted, skipped_no_event: skippedNoEvent }
+    const result = { upserted, skipped_no_event: skippedNoEvent, skipped_unknown_status: skippedUnknownStatus }
     if (namesUnreadable) result.names = 'unreadable'
     return result
   } catch (err) {
