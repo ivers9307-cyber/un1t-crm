@@ -21,7 +21,7 @@ describe('migration file', () => {
   it('is number 749', () => expect(FILE).toBe('749_hatch_drop_glofox_shaped_snapshots.sql'))
   it('migration is DML only, scoped by membership_source, self-checking', () => {
     expect(CODE).toMatch(/membership_source\s*=\s*'un1t_online'/)
-    expect(CODE.match(/RAISE EXCEPTION/g).length).toBeGreaterThanOrEqual(4)
+    expect(CODE.match(/RAISE EXCEPTION/g).length).toBeGreaterThanOrEqual(5)
     expect(CODE).toMatch(/RAISE NOTICE/)
     expect(CODE).not.toMatch(/\b(CREATE|ALTER|DROP|GRANT|REVOKE|TRUNCATE)\b/i)
     expect(CODE).toMatch(/2026-10-18/)
@@ -65,11 +65,36 @@ describe('running the migration', () => {
     expect(await count('lead_radar_snapshots', STILL)).toBe(1)
   })
 
-  it('aborts unless exactly one location is on un1t.online', async () => {
+  it('aborts when more than one location is on un1t.online', async () => {
     await db.exec(`UPDATE public.locations SET membership_source = 'un1t_online' WHERE id = '${STILL}'`)
     await expect(db.exec(SQL)).rejects.toThrow(/exactly one/)
+  })
+
+  it('a database with no un1t.online location (a fresh replay) is a no-op, not an error', async () => {
     await db.exec(`UPDATE public.locations SET membership_source = 'glofox'`)
-    await expect(db.exec(SQL)).rejects.toThrow(/exactly one/)
+    await expect(db.exec(SQL)).resolves.toBeDefined()
+    expect(await count('membership_snapshots', HATCH)).toBe(4)
+    expect(await count('churn_radar_snapshots', HATCH)).toBe(2)
+    expect(await count('lead_radar_snapshots', HATCH)).toBe(1)
+    expect(await count('membership_snapshots', STILL)).toBe(2)
+  })
+
+  it('refuses a location with real pre-boundary members (membership_source pointed at the wrong studio); nothing deleted', async () => {
+    // an operator flips Stillorgan to un1t_online and Hatch off it; Stillorgan's
+    // pre-boundary history has members, so it is not Glofox-shaped noise
+    await db.exec(`UPDATE public.locations SET membership_source = CASE WHEN id = '${STILL}' THEN 'un1t_online' ELSE 'glofox' END`)
+    await db.exec(`INSERT INTO public.membership_snapshots (location_id, snapshot_date, total_members) VALUES ('${STILL}', '2026-10-18', 1000)`)
+    await expect(db.exec(SQL)).rejects.toThrow(/total_members > 0/)
+    expect(await count('membership_snapshots', STILL)).toBe(3)
+    expect(await count('churn_radar_snapshots', STILL)).toBe(1)
+    expect(await count('lead_radar_snapshots', STILL)).toBe(1)
+  })
+
+  it('refuses when even one pre-boundary row at Hatch has members (nothing deleted)', async () => {
+    await db.exec(`UPDATE public.membership_snapshots SET total_members = 3 WHERE location_id = '${HATCH}' AND snapshot_date = '2026-10-10'`)
+    await expect(db.exec(SQL)).rejects.toThrow(/total_members > 0/)
+    expect(await count('membership_snapshots', HATCH)).toBe(4)
+    expect(await count('churn_radar_snapshots', HATCH)).toBe(2)
   })
 
   it('aborts when the first un1t-shaped membership row is missing (nothing deleted)', async () => {

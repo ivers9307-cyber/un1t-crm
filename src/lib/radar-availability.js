@@ -56,8 +56,13 @@ export async function radarAvailability(db, locationId, { module, withZone = fal
   if (source === 'un1t_online') {
     out.dataAsOf = await syncDataAsOf(db, locationId)
     // UN1TRADAR.2 — the studio's clock for the "as of HH:MM" line; an unreadable
-    // zone is null and the page then draws no line rather than guess one.
-    try { out.dataAsOfZone = withZone && out.dataAsOf ? await getLocationZone(db, locationId) : null } catch { out.dataAsOfZone = null }
+    // zone is null (logged) and the page then draws no line rather than guess one.
+    try {
+      out.dataAsOfZone = withZone && out.dataAsOf ? await getLocationZone(db, locationId) : null
+    } catch {
+      logWarn(module, 'radar zone unreadable: no data-as-of line', { locationId })
+      out.dataAsOfZone = null
+    }
   }
   // UN1TRADAR.3 — is a WhatsApp number switched on here (the outreach button's
   // note instead of a picker when not)? Read only. Three states: true, false
