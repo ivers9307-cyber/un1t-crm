@@ -21,7 +21,8 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.f
 import { radarReadsFor } from '@/lib/membership/reads/index'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
 import { sendRadarOutreach } from '@/lib/radar-outreach'
-import { logInfo } from '@/lib/log'
+import { logInfo, logWarn } from '@/lib/log'
+import { getLocationZone } from '@/lib/location-time'
 import { WhatsAppNumberMissingError } from '@/lib/whatsapp-number-missing'
 import { POST as actionPOST } from './action/route.js'
 import { POST as refreshPOST } from './refresh-member/route.js'
@@ -97,6 +98,15 @@ describe('acting routes at a un1t.online studio', () => {
     expect(res.status).toBe(409)
     expect(await res.json()).toEqual({ success: false, error: 'un1t.online data refreshes every 15 minutes, last at 12:45' })
     expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
+  })
+
+  it('refresh-member: an unreadable studio zone still answers the copy (no time) and logs with locationId only', async () => {
+    asSource('un1t_online')
+    getLocationZone.mockRejectedValueOnce(new Error('zone down'))
+    const res = await refreshPOST(req('/api/churn-radar/refresh-member', { contact_id: '00000000-0000-4000-8000-000000000001' }))
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'un1t.online data refreshes every 15 minutes' })
+    expect(logWarn).toHaveBeenCalledWith('churn-radar', 'refresh copy: studio zone unreadable', { locationId: L })
   })
 
   it('outreach at a number-less studio: 409, one log, no action row, no further send', async () => {

@@ -59,6 +59,7 @@ async function un1tRefreshCopy(db, locationId) {
     const hm = timeLabelIn(at, await getLocationZone(db, locationId))
     return hm ? `${UN1T_REFRESH}, last at ${hm}` : UN1T_REFRESH
   } catch {
+    logWarn('churn-radar', 'refresh copy: studio zone unreadable', { locationId })
     return UN1T_REFRESH
   }
 }
