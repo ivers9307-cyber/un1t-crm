@@ -11,21 +11,19 @@
 // 'link_sent'. sendPurchaseLink reads the live intent first; a concurrent turn
 // (or a retry) that inserts between that read and our insert makes our insert
 // fail 23505, and that is read as "a live intent exists" (Review Focus 1): the
-// live row is read again and the same rules apply. Same product: D's
-// createCheckoutLink again with the SAME idempotency key (the intent id), which
-// D's ledger answers with the same hosted session, and that link is resent.
+// live row is read again and the same rules apply. Same product: its stored
+// link is resent (or, with none stored yet, D's createCheckoutLink again with
+// the SAME idempotency key, the intent id).
 // Different product: purchase_link_open_text, no second link. Never a tool
 // error, never a second live link.
 //
 // The pay-done token (spec 6.5.2) is 32 random bytes, base64url, in the
 // success and cancel URLs on the studio's customer host
 // (resolveCustomerBaseUrl, which D checks: https on exactly that host). Only
-// its sha256 hex is stored. A resend passes freshly minted URLs (D wants valid
-// ones) but keeps the intent's hash: D replays the session it already made,
-// whose URLs carry the first token. In the rare case where D had no finished
-// session for the key and makes a new one, its pay-done page will not resolve
-// a token; that page is never proof of payment, and the post-sync detector
-// still finds the purchase (Task 21).
+// its sha256 hex is stored. A same-product resend (Ruling 30) sends the link
+// the intent already holds, with no call to D; only an intent with no stored
+// link asks D again (same key), and then stores the link with the hash of the
+// token minted for that call.
 //
 // The checkout URL is stored on the intent and returned to the model, and is
 // NEVER logged. Every log line is module 'mia-un1t' with codes only.
@@ -43,12 +41,12 @@
 // updated_at (mig 752 has no trigger).
 import { createHash, randomBytes } from 'node:crypto'
 import { createCheckoutLink } from '@/lib/un1t-online-write-ops'
-import { Un1tWriteRefused, Un1tWriteUnknown, UN1T_WRITE_CODES } from '@/lib/un1t-online-write'
+import { Un1tWriteRefused, Un1tWriteUnknown } from '@/lib/un1t-online-write'
 import { Un1tSettingsReadError } from '@/lib/un1t-online-settings'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { logError, logWarn } from '@/lib/log'
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
-import { formatClassTime } from './dublin-format'
+import { UN1T_RETRY_CODES, actionSettings, executingContactOf, classTimeLabel, relayedStartMatches } from './un1t-action-studio'
 import { renderMiaCopy } from './mia-copy'
 import { isSellableUn1tProduct } from './mia-offer-limits'
 import { parseAgentId } from './studio-ids'
@@ -60,9 +58,6 @@ const LOG_MODULE = 'mia-un1t'
 const PROVIDER = 'un1t_online'
 const INTENTS = 'mia_purchase_intents'
 const LIVE = 'link_sent'
-const C = UN1T_WRITE_CODES
-// D's RETRYABLE set: nothing was sent, a later try is safe (and the intent stays live).
-const RETRY_CODES = new Set([C.RATE_BUDGET, C.RATE_LIMITED, C.ATTEMPT_IN_FLIGHT, C.PERMISSIONS_UNREADABLE])
 
 /** A live intent lives 23h, inside the WhatsApp customer-service window. */
 export const PURCHASE_INTENT_TTL_MS = 23 * 60 * 60_000
@@ -111,6 +106,11 @@ const TRY_AGAIN = Object.freeze({
   link_sent: false,
   try_again: true,
   message: 'The payment link could not be made just now, so no link was sent and nothing was charged. Ask them to try again in a few minutes, or offer to hand off to the team. Never send or invent a link.',
+})
+const CLASS_TIME_MISMATCH = Object.freeze({
+  link_sent: false,
+  error: 'class_time_mismatch',
+  message: 'The class time you passed does not match that class, so no link was made. Call list_upcoming_classes again, confirm the class and its day and time with the customer, and pass its event_id and starts_at exactly as listed. Or leave the class out if they only want to buy.',
 })
 const NOT_LINKED = Object.freeze({
   link_sent: false,
@@ -200,24 +200,6 @@ export async function offersForBooking(ctx, studio) {
   return { offers, trial_available: false }
 }
 
-/** The action studio's resolved Mia settings (copy), or null. */
-async function studioSettings(ctx, studio) {
-  let settings = null
-  try {
-    settings = typeof ctx.actionStudio === 'function' ? await ctx.actionStudio(studio.locationId) : null
-  } catch {
-    settings = null
-  }
-  if (!settings && studio.locationId === ctx.locationId) settings = ctx.settings || null
-  return settings
-}
-
-/** The contact holding the account at the studio: the verified one when it does, else the studio's first. */
-function memberContactOf(ctx, studio) {
-  const ids = Array.isArray(studio.contactIds) ? studio.contactIds.filter(Boolean) : []
-  return ids.includes(ctx.verifiedContactId) ? ctx.verifiedContactId : (ids[0] || ctx.verifiedContactId)
-}
-
 /** The offer's product at the studio: { product }, { unavailable: true } or { error: true }. */
 async function readOfferProduct(db, studio, offerId) {
   const { data: offer, error } = await db.from('mia_purchase_offers')
@@ -282,7 +264,12 @@ async function writeLiveIntent(db, studio, intentId, patch, op, nowMs) {
   }
 }
 
-/** The class the member wanted, from the mirror when it holds it, else as relayed. */
+/**
+ * The class the member wanted, from the mirror when it holds it, else as
+ * relayed. When the mirror holds it, the relayed starts_at must name it in the
+ * studio's zone (relayedStartMatches, as book_class checks it; missing is no
+ * match): otherwise { mismatch: true } and no link is made.
+ */
 async function classContext(ctx, studio, input) {
   const parsed = parseAgentId(input?.event_id)
   if (parsed?.provider !== PROVIDER) return { event_un1t_id: null, class_name: null, class_time: null, starts_at: null }
@@ -304,10 +291,16 @@ async function classContext(ctx, studio, input) {
   const startsMs = Date.parse(data?.starts_at || '')
   if (!data || !Number.isFinite(startsMs)) return relayed
   const zone = await zoneFor(ctx, studio)
+  if (!relayedStartMatches(data.starts_at, input?.starts_at, zone)) {
+    logWarn(LOG_MODULE, 'relayed class time does not match the class; no link made', {
+      locationId: studio.locationId, op: 'purchase_class', status: null, relayed: typeof input?.starts_at === 'string' ? 'given' : 'missing',
+    })
+    return { mismatch: true }
+  }
   return {
     event_un1t_id: parsed.id,
     class_name: String(data.title || '').trim() || relayed.class_name,
-    class_time: formatClassTime(Math.floor(startsMs / 1000), zone),
+    class_time: classTimeLabel(startsMs, zone),
     starts_at: new Date(startsMs).toISOString(),
   }
 }
@@ -334,7 +327,7 @@ function payDoneUrls(base, token) {
 
 const failureCode = (err) => err?.code ?? null
 const failureLedgerId = (err) => err?.ledgerId ?? err?.result?.ledgerId ?? null
-const isRetryable = (err) => err instanceof Un1tWriteRefused && (RETRY_CODES.has(err.code) || err.result?.retryable === true)
+const isRetryable = (err) => err instanceof Un1tWriteRefused && (UN1T_RETRY_CODES.has(err.code) || err.result?.retryable === true)
 
 /**
  * D's createCheckoutLink for an intent, and what it means:
@@ -418,34 +411,41 @@ function openAnswer(intent, settings) {
 }
 
 /**
- * The member already has a live intent. Same product: D's checkout again with
- * the intent's own key, and its link resent. Different product: the open text.
+ * The member already has a live intent. Different product: the open text.
+ * Same product (Ruling 30): the link it already holds is resent as it is, with
+ * no call to D (the same hosted session; nothing to refuse or doubt). Only an
+ * intent with no stored link (an earlier store failed, or another turn is
+ * still sending) asks D again with the intent's own key; a URL that comes back
+ * is stored with the hash of the token minted for that call. Nothing was ever
+ * delivered for such an intent, so a non-retryable failure may refuse it; a
+ * retryable one (another turn mid-send) leaves it live.
  */
 async function answerLiveIntent(ctx, studio, intent, product, settings, nowMs, base) {
   const db = ctx.db
   if (String(intent.un1t_product_id) !== String(product.un1t_id)) return openAnswer(intent, settings)
+  const title = String(intent.product_title || '').trim() || String(product.title || '').trim()
+  const answer = (url) => linkAnswer(url, { product: title, priceLabel: priceLabelOf(product), className: intent.class_name, classTime: intent.class_time, intentId: intent.id }, settings)
+  if (typeof intent.checkout_url === 'string' && intent.checkout_url) return answer(intent.checkout_url)
+
   let urls
+  const { token, hash } = mintPayDoneToken()
   try {
-    urls = payDoneUrls(base ?? await resolveCustomerBaseUrl(db, studio.locationId), mintPayDoneToken().token)
+    urls = payDoneUrls(base ?? await resolveCustomerBaseUrl(db, studio.locationId), token)
   } catch (err) {
     logError(LOG_MODULE, 'customer site unreadable; no link resent', { locationId: studio.locationId, op: 'purchase_resend', intentId: intent.id, status: null, errClass: err?.name })
     return { ...TRY_AGAIN }
   }
   const out = await checkout(db, studio, intent.id, product.un1t_id, urls)
-  const title = String(intent.product_title || '').trim() || String(product.title || '').trim()
   if (out.failed) {
     logCheckoutFailure(studio, intent.id, out.failed, 'purchase_resend')
-    // Another turn mid-send, or a budget: the live intent stays as it is.
     if (isRetryable(out.failed)) return { ...TRY_AGAIN }
     return refuseIntent(db, studio, intent.id, out.failed, settings, nowMs)
   }
   if (out.free) return settleFree(db, studio, intent.id, title, nowMs)
-  if (!intent.checkout_url) {
-    // The other turn has not stored it yet (or never will): store it now. Not fatal.
-    const stored = await writeLiveIntent(db, studio, intent.id, { checkout_url: out.url }, 'purchase_store_link', nowMs)
-    if (!stored) logError(LOG_MODULE, 'payment link not stored on the intent', { locationId: studio.locationId, op: 'purchase_store_link', intentId: intent.id, status: null })
-  }
-  return linkAnswer(out.url, { product: title, priceLabel: priceLabelOf(product), className: intent.class_name, classTime: intent.class_time, intentId: intent.id }, settings)
+  const stored = await writeLiveIntent(db, studio, intent.id, { checkout_url: out.url, success_token_hash: hash }, 'purchase_store_link', nowMs)
+  // Still sent: the member can pay, and detection reads the entitlement, not the URL.
+  if (!stored) logError(LOG_MODULE, 'payment link not stored on the intent', { locationId: studio.locationId, op: 'purchase_store_link', intentId: intent.id, status: null })
+  return answer(out.url)
 }
 
 /**
@@ -471,7 +471,7 @@ export async function sendPurchaseLink(ctx, input, studio, deps = {}) {
   // 'trial' is Task 20's (the free trial goes through D's grantTrial, never checkout).
   if (offerId === TRIAL_OFFER_ID || !UUID.test(offerId)) return { ...OFFER_NOT_AVAILABLE }
 
-  const settings = await studioSettings(ctx, studio)
+  const settings = await actionSettings(ctx, studio)
   const resolved = await readOfferProduct(db, studio, offerId)
   if (resolved.error) return { ...TRY_AGAIN }
   if (resolved.unavailable) return { ...OFFER_NOT_AVAILABLE }
@@ -508,6 +508,7 @@ export async function sendPurchaseLink(ctx, input, studio, deps = {}) {
     return { ...TRY_AGAIN }
   }
   const klass = await classContext(ctx, studio, input)
+  if (klass.mismatch) return { ...CLASS_TIME_MISMATCH }
   const snapshot = await entitlementSnapshot(db, studio)
   const { token, hash } = mintPayDoneToken()
   const createdAt = new Date(nowMs).toISOString()
@@ -516,7 +517,7 @@ export async function sendPurchaseLink(ctx, input, studio, deps = {}) {
   const { data: inserted, error: insertError } = await db.from(INTENTS).insert({
     location_id: studio.locationId,
     organization_id: loc.organization_id,
-    contact_id: memberContactOf(ctx, studio),
+    contact_id: executingContactOf(ctx, studio),
     conversation_id: ctx.conversationId || null,
     channel: ctx.channel || 'whatsapp',
     un1t_user_id: String(studio.un1tUserId),
@@ -628,7 +629,7 @@ export async function executePurchaseTool(toolName, input, ctx) {
       message: 'Nothing is set up to buy from chat at this studio. Never invent an offer or a price: hand off to the team.',
     }
   }
-  const settings = await studioSettings(ctx, studio)
+  const settings = await actionSettings(ctx, studio)
   return {
     offers: listed.offers,
     trial_available: false,

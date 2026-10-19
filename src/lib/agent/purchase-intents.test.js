@@ -267,17 +267,50 @@ describe('sendPurchaseLink', () => {
     expect(out.wording).toBe(`Here's your secure payment link for 10 Class Pack. Once it goes through I'll book you into Fictional Hatch HIIT, ${LABEL}.`)
   })
 
-  it('same product resends with the same key', async () => {
-    const live = liveIntent()
-    const { db, data } = fakeDb({ ...offers(), mia_purchase_intents: [live] })
+  // Ruling 30 — a stored link is resent as it is: no call to D at all.
+  it('same product with a stored link: that link resent, no D call, nothing written', async () => {
+    const live = liveIntent({ checkout_url: 'https://pay.example.test/s/stored', class_name: 'Fictional Hatch HIIT', class_time: LABEL })
+    const { db, data, calls } = fakeDb({ ...offers(), mia_purchase_intents: [live] })
     const out = await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id }, hatch(), deps)
-    expect(h.checkout).toHaveBeenCalledTimes(1)
-    expect(h.checkout.mock.calls[0][1]).toMatchObject({ idempotencyKey: live.id, originRef: live.id, userId: USER, productId: 'prod-pack-10' })
+    expect(h.checkout).not.toHaveBeenCalled()
+    expect(resolveCustomerBaseUrl).not.toHaveBeenCalled()
+    expect(out).toEqual({
+      link_sent: true, url: 'https://pay.example.test/s/stored', product: '10 Class Pack', price_label: '€125',
+      wording: `Here's your secure payment link for 10 Class Pack. Once it goes through I'll book you into Fictional Hatch HIIT, ${LABEL}.`,
+      intent_id: live.id, message: expect.any(String),
+    })
     expect(data.mia_purchase_intents).toHaveLength(1)
-    expect(out).toMatchObject({ link_sent: true, url: urlFor(live.id), intent_id: live.id })
-    // The same session: the stored token hash is kept.
     expect(data.mia_purchase_intents[0].success_token_hash).toBe('a'.repeat(64))
+    expect(calls.some((c) => c.op !== 'select')).toBe(false)
     expect(fetchLiveEntitlement).not.toHaveBeenCalled()
+  })
+
+  describe('same product with no stored link (an earlier store failed): D again with the intent key', () => {
+    it('D returns a link: resent, and stored with the hash of the token minted for this call', async () => {
+      const live = liveIntent({ checkout_url: null })
+      const { db, data } = fakeDb({ ...offers(), mia_purchase_intents: [live] })
+      const out = await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id }, hatch(), deps)
+      expect(h.checkout).toHaveBeenCalledTimes(1)
+      const [, args] = h.checkout.mock.calls[0]
+      expect(args).toMatchObject({ idempotencyKey: live.id, originRef: live.id, userId: USER, productId: 'prod-pack-10' })
+      expect(out).toMatchObject({ link_sent: true, url: urlFor(live.id), intent_id: live.id })
+      const token = new URL(args.successUrl).pathname.replace('/pay-done/', '')
+      expect(data.mia_purchase_intents).toHaveLength(1)
+      expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'link_sent', checkout_url: urlFor(live.id), success_token_hash: hashPayDoneToken(token) })
+      expect(data.mia_purchase_intents[0].updated_at).toBeTruthy()
+    })
+
+    it('D unknown or refused: nothing was ever delivered, so the intent is refused and the team takes over', async () => {
+      for (const err of [new Un1tWriteUnknown('outcome_unknown', 'unclear'), new Un1tWriteRefused('product_not_sellable', 'no')]) {
+        vi.clearAllMocks()
+        h.checkout.mockRejectedValueOnce(err)
+        const { db, data } = fakeDb({ ...offers(), mia_purchase_intents: [liveIntent({ checkout_url: null })] })
+        const out = await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id }, hatch(), deps)
+        expect(out).toMatchObject({ link_sent: false, handoff: true })
+        expect(out.url).toBeUndefined()
+        expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'refused', outcome: { stage: 'checkout', code: err.code } })
+      }
+    })
   })
 
   it('different product -> purchase_link_open_text, no second call', async () => {
@@ -362,6 +395,21 @@ describe('sendPurchaseLink', () => {
       expect(out.url).toBeUndefined()
       expect(logWarn.mock.calls.concat(logError.mock.calls).some(([mod, , meta]) => mod === 'mia-un1t' && meta?.code === err.code)).toBe(true)
     }
+  })
+
+  it('a relayed starts_at that does not name the class (or none): no link, no intent, no D call', async () => {
+    const tables = () => ({ ...offers(), un1t_events: [{ location_id: HATCH, un1t_id: EVENT, title: 'Fictional Hatch HIIT', starts_at: STARTS, status: 'scheduled' }] })
+    const other = formatClassTime(Date.parse(STARTS) / 1000 + 3600, ZONE)
+    for (const starts_at of [other, undefined, '2026-10-23T18:30', 'Saturday 7am']) {
+      const { db, data } = fakeDb(tables())
+      const out = await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id, event_id: `un1t:${EVENT}`, starts_at }, hatch(), deps)
+      expect(out, String(starts_at)).toMatchObject({ link_sent: false, error: 'class_time_mismatch' })
+      expect(data.mia_purchase_intents).toHaveLength(0)
+    }
+    expect(h.checkout).not.toHaveBeenCalled()
+    // An ISO instant with an offset that names it matches.
+    const { db } = fakeDb(tables())
+    expect(await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id, event_id: `un1t:${EVENT}`, starts_at: STARTS }, hatch(), deps)).toMatchObject({ link_sent: true })
   })
 
   it('an operator booking_issue_handoff_text is the handoff', async () => {

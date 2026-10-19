@@ -63,7 +63,7 @@ import { freshCutoff } from '@/lib/un1t-online-freshness'
 import { logError, logWarn } from '@/lib/log'
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { notifyAgentApprovalRequest } from './approval-notify'
-import { formatClassTime } from './dublin-format'
+import { UN1T_RETRY_CODES, actionSettings, executingContactOf, classTimeLabel, relayedStartMatches } from './un1t-action-studio'
 import { renderMiaCopy } from './mia-copy'
 import { parseAgentId } from './studio-ids'
 import { TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
@@ -76,8 +76,7 @@ const LOG_MODULE = 'mia-un1t'
 const PROVIDER = 'un1t_online'
 const C = UN1T_WRITE_CODES
 const WRITES_OFF_CODES = new Set([C.WRITES_OFF, C.PERMISSION_MISSING])
-// D's RETRYABLE set (un1t-online-write.js): nothing was sent, a later try is safe.
-const RETRY_CODES = new Set([C.RATE_BUDGET, C.RATE_LIMITED, C.ATTEMPT_IN_FLIGHT, C.PERMISSIONS_UNREADABLE])
+const RETRY_CODES = UN1T_RETRY_CODES
 
 // ── pure ────────────────────────────────────────────────────────────
 
@@ -136,37 +135,10 @@ export function un1tCancelOutcome(result) {
   return 'card_rejected'
 }
 
-// An ISO-looking relay, and one that names its offset (Z or ±hh:mm). An
-// offset-less one would be read in the host's zone by Date.parse (CLAUDE.md
-// forbids), so it is refused as no match.
-const ISO_LIKE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
-const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/i
-const normLabel = (s) => String(s).toLowerCase().replace(/[,\s]+/g, ' ').trim()
-const labelOf = (ms, zone) => formatClassTime(Math.floor(ms / 1000), zone)
-
-/**
- * Does the class time the model relayed name this class? Both sides are
- * compared as formatClassTime labels in the studio's own zone: the relayed
- * label as given (case, spaces and commas aside), or an ISO instant WITH an
- * offset (Z or ±hh:mm) rendered in that zone; an offset-less ISO is no match. A label for another studio's class, or one rendered with the
- * wrong offset across a DST change, does not match. Missing is no match. Pure.
- *
- * @param {string} eventStartsAtIso the class's starts_at (mirror)
- * @param {string|null|undefined} relayed the starts_at the model passed
- * @param {string} zone the studio's IANA zone
- */
-export function relayedStartMatches(eventStartsAtIso, relayed, zone) {
-  const eventMs = Date.parse(eventStartsAtIso || '')
-  if (!Number.isFinite(eventMs) || typeof relayed !== 'string' || !relayed.trim()) return false
-  const want = labelOf(eventMs, zone)
-  const given = relayed.trim()
-  if (ISO_LIKE.test(given)) {
-    if (!ISO_WITH_OFFSET.test(given)) return false
-    const givenMs = Date.parse(given)
-    return Number.isFinite(givenMs) && labelOf(givenMs, zone) === want
-  }
-  return normLabel(given) === normLabel(want)
-}
+// relayedStartMatches lives in un1t-action-studio.js (purchase-intents.js checks a
+// relayed class time too); re-exported here, where its callers and tests look.
+export { relayedStartMatches }
+const labelOf = classTimeLabel
 
 // ── answers the model reads ─────────────────────────────────────────
 
@@ -271,18 +243,6 @@ function notLinked(studio, settings) {
 }
 
 // ── IO ──────────────────────────────────────────────────────────────
-
-/** The action studio's resolved Mia settings (booking_mode, booking_url, copy), or null. */
-async function actionSettings(ctx, studio) {
-  let settings = null
-  try {
-    settings = typeof ctx.actionStudio === 'function' ? await ctx.actionStudio(studio.locationId) : null
-  } catch {
-    settings = null
-  }
-  if (!settings && studio.locationId === ctx.locationId) settings = ctx.settings || null
-  return settings
-}
 
 /** The class at the studio, checked as the /start funnel checks it (UN1TBOOK.20). */
 async function readEvent(db, studio, eventId, nowMs) {
@@ -444,12 +404,6 @@ function recordedResult(result) {
     already_booked: result?.alreadyBooked === true,
     recovered: result?.recovered ?? null,
   }
-}
-
-/** The account's own contact runs a write (and is its card's contact): the verified one when it holds the account, else the studio's first. */
-function executingContactOf(ctx, studio) {
-  const ids = Array.isArray(studio.contactIds) ? studio.contactIds.filter(Boolean) : []
-  return ids.includes(ctx.verifiedContactId) ? ctx.verifiedContactId : (ids[0] || ctx.verifiedContactId)
 }
 
 /** booking_mode at the action studio: 'draft' when its settings are unreadable (never an unsanctioned write). */

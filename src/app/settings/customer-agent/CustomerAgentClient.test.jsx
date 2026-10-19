@@ -859,6 +859,8 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     expect(box.type).toBe('checkbox')
     expect(box.checked).toBe(false)
     expect(group.textContent).not.toMatch(/[—–]/)
+    // MIAHATCH.6 — the help under it says payment links too.
+    expect(group.textContent).toMatch(/sends payment links for the offers listed under What Mia can sell/)
   })
 
   it('a stored true shows ticked; ticking it puts true in the PUT body, unticking false', async () => {

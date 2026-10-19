@@ -844,7 +844,8 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
             <h3 className="text-sm font-semibold text-un1t-text">{HATCH_COPY_GROUP_TITLE}</h3>
             {/* MIAHATCH.5 (Ruling 25) — Mia books, cancels and takes refund
                 requests in chat here only with this ticked AND un1t.online
-                writes switched on for the studio, and only on WhatsApp. */}
+                writes switched on for the studio, and only on WhatsApp.
+                MIAHATCH.6: payment links too. */}
             <div>
               <label className="flex items-center gap-3">
                 <input type="checkbox" className="h-4 w-4" checked={settings.un1t_chat_actions_enabled === true}
@@ -852,7 +853,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
                 <span className="text-sm text-un1t-text font-medium">Mia can book and cancel classes, send payment links and pass refund requests to the team in chat at this studio</span>
               </label>
               <p className="text-xs text-un1t-muted mt-1 pl-7">
-                Off: Mia answers questions and shares the booking link, as now. On: on WhatsApp, Mia books and cancels classes and passes refund requests to the team, once un1t.online writes are also switched on for this studio.
+                Off: Mia answers questions and shares the booking link, as now. On: on WhatsApp, Mia books and cancels classes, sends payment links for the offers listed under What Mia can sell, and passes refund requests to the team, once un1t.online writes are also switched on for this studio.
               </p>
             </div>
             <p className="text-xs text-un1t-muted">
