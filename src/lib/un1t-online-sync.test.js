@@ -276,6 +276,7 @@ describe('runUn1tSync', () => {
       ['un1t_transactions', 'location_id,un1t_id'],
       ['un1t_invoices', 'location_id,un1t_id'],
       ['un1t_bookings', 'location_id,un1t_id'],
+      ['class_bookings', 'location_id,glofox_booking_id'],
       ['contact_memberships', 'contact_id,location_id,source'],
     ])
 
@@ -536,7 +537,7 @@ describe('runUn1tSync', () => {
     })
 
     it('a projection failure leaves the run ok and the connection connected, with counts.class_occurrences.error', async () => {
-      const { db, tables, log } = makeDb(baseSeed(), { failUpsert: ['class_occurrences'] })
+      const { db, tables } = makeDb(baseSeed(), { failUpsert: ['class_occurrences'] })
       const lists = fixtureLists()
       lists['/events'] = [{ id: 'e1', title: 'HYROX', studio_id: STUDIO, status: 'scheduled', start_time: '2026-10-20T17:30:00Z', end_time: '2026-10-20T18:30:00Z' }]
       const { factory } = makeClient({ self: SELF, lists })
@@ -552,7 +553,9 @@ describe('runUn1tSync', () => {
       expect(tables.un1t_bookings).toHaveLength(2)
       expect(tables.contact_memberships).toHaveLength(1)
       expect(logWarn).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('class_occurrences'), expect.objectContaining({ err: { code: null, message: 'class_occurrences upsert boom' } }))
-      expect(log.some((e) => e.table === 'class_bookings')).toBe(false)
+      // The bookings projection is independent of the occurrences one.
+      expect(tables.class_bookings).toHaveLength(2)
+      expect(r.counts.class_bookings).toEqual({ upserted: 2, skipped_no_event: 0 })
     })
 
     it('does not project when the un1t_events upsert fails (the run stops with db)', async () => {
@@ -578,13 +581,83 @@ describe('runUn1tSync', () => {
       expect(connRow(tables).status).toBe('connected')
       expect(tables.contact_memberships).toHaveLength(1)
     })
+  })
 
-    it('class_bookings is never written', async () => {
-      const { db, log } = makeDb(baseSeed())
+  describe('class_bookings projection (UN1TBOOK.3)', () => {
+    it('a un1t_online studio projects its bookings after un1t_bookings is written', async () => {
+      const { db, tables, log } = makeDb(baseSeed())
+      const lists = fixtureLists()
+      lists['/bookings'] = [
+        { id: 'b1', user_id: 'u1', event_id: 'e1', status: 'attended', source: 'app', credit_charged: true, studio_id: STUDIO, guest_email: 'g@x.ie' },
+        { id: 'b2', user_id: 'u2', event_id: 'e1', status: 'cancelled', studio_id: STUDIO },
+      ]
+      const { factory } = makeClient({ self: SELF, lists })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(r.counts.class_bookings).toEqual({ upserted: 2, skipped_no_event: 0 })
+      expect(runRow(tables).counts.class_bookings).toEqual({ upserted: 2, skipped_no_event: 0 })
+
+      const tablesInOrder = upserts(log).map((e) => e.table)
+      expect(tablesInOrder.indexOf('class_bookings')).toBe(tablesInOrder.indexOf('un1t_bookings') + 1)
+
+      const c1 = tables.contacts.find((c) => c.un1t_user_id === 'u1')
+      const b1 = tables.class_bookings.find((b) => b.glofox_booking_id === 'un1t:b1')
+      expect(b1).toMatchObject({
+        location_id: HATCH,
+        glofox_event_id: 'un1t:e1',
+        glofox_member_id: null,
+        source_platform: 'un1t_online',
+        contact_id: c1.id,
+        member_name: c1.name,
+        class_name: 'HYROX',
+        starts_at: '2026-10-20T17:30:00Z',
+        status: 'BOOKED',
+        attended: true,
+        raw: { un1t: { status: 'attended', source: 'app', credit_charged: true } },
+        synced_at: NOW_ISO,
+      })
+      expect(tables.class_bookings.find((b) => b.glofox_booking_id === 'un1t:b2')).toMatchObject({ status: 'CANCELLED', attended: false })
+      expect(log.some((e) => e.table === 'class_bookings' && (e.op === 'delete' || e.op === 'update'))).toBe(false)
+    })
+
+    it('a glofox studio is skipped: { skipped: \'membership_source\' }', async () => {
+      const seed = baseSeed()
+      seed.locations = seed.locations.map((l) => (l.id === HATCH ? { ...l, membership_source: 'glofox' } : l))
+      const { db, tables, log } = makeDb(seed)
       const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
-      await runUn1tSync(db, HATCH, opts(factory))
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(r.counts.class_bookings).toEqual({ skipped: 'membership_source' })
       expect(log.some((e) => e.table === 'class_bookings')).toBe(false)
       expect(writtenTables(log)).not.toContain('class_bookings')
+      expect(tables.un1t_bookings).toHaveLength(2)
+    })
+
+    it('a projection failure leaves the run ok, the connection connected, memberships written, and counts.class_bookings.error set', async () => {
+      const { db, tables } = makeDb(baseSeed(), { failUpsert: ['class_bookings'] })
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(r.reason).toBeUndefined()
+      expect(r.counts.class_bookings).toEqual({ error: { code: null, message: 'class_bookings upsert boom' } })
+      expect(runRow(tables).status).toBe('ok')
+      expect(runRow(tables).first_error).toBeNull()
+      expect(runRow(tables).counts.class_bookings.error).toBeTruthy()
+      expect(connRow(tables).status).toBe('connected')
+      expect(connRow(tables).last_error).toBeNull()
+      expect(tables.un1t_bookings).toHaveLength(2)
+      expect(tables.contact_memberships).toHaveLength(1)
+      expect(r.counts.memberships).toMatchObject({ active: 1 })
+      expect(logWarn).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('class_bookings'), expect.objectContaining({ err: { code: null, message: 'class_bookings upsert boom' } }))
+    })
+
+    it('does not project when the un1t_bookings upsert fails (the run stops with db)', async () => {
+      const { db, log } = makeDb(baseSeed(), { failUpsert: ['un1t_bookings'] })
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r).toMatchObject({ ok: false, reason: 'db' })
+      expect(log.some((e) => e.table === 'class_bookings')).toBe(false)
+      expect(r.counts.class_bookings).toBeUndefined()
     })
   })
 

@@ -20,8 +20,11 @@
 //   5. Resolve un1t.online clients to org-scoped contacts (Task 4).
 //   6. Upsert the seven un1t_* tables in chunks of 200. The first failed
 //      upsert stops the run ('db'); later tables wait for the next run.
-//      The events are then projected into class_occurrences (UN1TCLASS.2): a
-//      projection failure is recorded in counts and never fails the run.
+//      The events are then projected into class_occurrences (UN1TCLASS.2),
+//      and the bookings into class_bookings (UN1TBOOK.3, source_platform
+//      'un1t_online', which the CRM never reminds or credits), both only
+//      where the studio's membership_source is 'un1t_online': a projection
+//      failure is recorded in counts and never fails the run.
 //   6c. Measure the history window (UN1THARD.2): per dated table, how many
 //      rows the mirror holds that this pull did not return (every pulled row
 //      was just upserted with synced_at = this run's start, so an older
@@ -71,6 +74,7 @@ import {
   MEMBERSHIP_ACTIVE_STATUSES,
 } from './un1t-online-map.js'
 import { projectUn1tOccurrences } from './un1t-online-occurrences.js'
+import { projectUn1tBookings } from './un1t-online-bookings.js'
 import { resolveUn1tContacts } from './un1t-online-contacts.js'
 import { ensureStudioPreferences } from './un1t-online-studio-preferences.js'
 import { tokenFingerprint } from './un1t-online-token.js'
@@ -420,6 +424,26 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
         counts.class_occurrences = projected
         if (projected.error) {
           logWarn('un1t-online-sync', 'could not project events into class_occurrences', { locationId, runId, err: projected.error })
+        }
+      }
+
+      // 6b (bookings). Project the bookings just written into class_bookings
+      // (UN1TBOOK.3), so the scorecard, the /live roster and campaign outcomes
+      // see this studio's visits. Same gate and same informational status as 6b; the
+      // rows carry source_platform 'un1t_online', which the reminder and
+      // crediting crons never read (un1t.online reminds and credits itself).
+      if (spec.table === 'un1t_bookings' && loc.membership_source !== 'un1t_online') {
+        counts.class_bookings = { skipped: 'membership_source' }
+      } else if (spec.table === 'un1t_bookings') {
+        const projected = await projectUn1tBookings(db, {
+          locationId,
+          bookings: unique,
+          events: mapped.un1t_events,
+          nowIso,
+        })
+        counts.class_bookings = projected
+        if (projected.error) {
+          logWarn('un1t-online-sync', 'could not project bookings into class_bookings', { locationId, runId, err: projected.error })
         }
       }
     }

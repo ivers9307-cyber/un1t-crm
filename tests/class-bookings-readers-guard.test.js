@@ -79,6 +79,10 @@ const MANIFEST = Object.freeze({
     kind: 'data-writing',
     reason: 'Audit rows 6-8 and 11: upsertClassBookings (Glofox writer, 24-hex ids; the mig 737 CHECK refuses a mis-tagged row), getClassRoster (staff /live display: a un1t row is meant to show), lookupBookedMember and resolveBookedOccurrenceForMember (device / HR linking, keyed on glofox_member_id, which un1t rows never carry).',
   },
+  'src/lib/un1t-online-bookings.js': {
+    kind: 'data-writing',
+    reason: 'UN1TBOOK.3: the un1t.online sync projects un1t_bookings into class_bookings (upsert only, never update / delete) with source_platform un1t_online and un1t: ids; it sends nothing and credits nothing.',
+  },
   'shared/studio-kpis.js': {
     kind: 'display',
     reason: 'Audit row 9: fetchFloor for the staff /dashboard/studio no-show, attended and activation figures.',
