@@ -145,7 +145,7 @@ describe('ensureUn1tAccount', () => {
 
 describe('runSetPasswordStep — never promises a code twice', () => {
   const createdRow = { id: 'w-1', location_id: LOC, contact_id: 'c-funnel', op: 'create_client', stage: 'done', un1t_ref: 'usr-new', created_at: '2026-10-18T09:00:00Z' }
-  const resetRow = (stage) => ({ id: `w-r-${stage}`, location_id: LOC, op: 'forgot_password', stage, idempotency_key: `pw:${LOC}:usr-new`, created_at: '2026-10-18T09:01:00Z' })
+  const resetRow = (stage) => ({ id: `w-r-${stage}`, location_id: LOC, un1t_user_id: 'usr-new', op: 'forgot_password', stage, idempotency_key: `pw:${LOC}:usr-new`, created_at: '2026-10-18T09:01:00Z' })
   const step = (over = {}) => runSetPasswordStep(makeDb(), { locationId: LOC, contact: contact({ email: 'jane@x.ie' }), un1tUserId: 'usr-new', request: { id: 'q-1' }, settings: { sendsWelcome: false, welcomeSetsLogin: false }, origin: 'funnel', ...over }, deps)
 
   it('an in-doubt reset sends neither our email nor another request', async () => {
@@ -174,7 +174,7 @@ describe('runSetPasswordStep — never promises a code twice', () => {
 
 describe('runSetPasswordStep', () => {
   const createdRow = { id: 'w-1', location_id: LOC, contact_id: 'c-other', op: 'create_client', stage: 'done', un1t_ref: 'usr-new', created_at: '2026-10-18T09:00:00Z' }
-  const resetRow = (stage) => ({ id: `w-r-${stage}`, location_id: LOC, op: 'forgot_password', stage, idempotency_key: `pw:${LOC}:usr-new`, created_at: '2026-10-18T09:01:00Z' })
+  const resetRow = (stage) => ({ id: `w-r-${stage}`, location_id: LOC, un1t_user_id: 'usr-new', op: 'forgot_password', stage, idempotency_key: `pw:${LOC}:usr-new`, created_at: '2026-10-18T09:01:00Z' })
   const settings = (over = {}) => ({ sendsWelcome: false, welcomeSetsLogin: false, ...over })
   const step = (over = {}) => runSetPasswordStep(makeDb(), { locationId: LOC, contact: contact({ email: 'jane@x.ie' }), un1tUserId: 'usr-new', request: { id: 'q-1', class_name: 'RALLY', starts_at: '2026-10-20T18:00:00Z' }, settings: settings(), origin: 'funnel', emailArgs: { blocks: [], studioName: 'Hatch', address: null, zone: 'Europe/Dublin' }, ...over }, deps)
 
@@ -196,9 +196,26 @@ describe('runSetPasswordStep', () => {
   })
 
   it('a done forgot-password is never repeated', async () => {
-    tables.un1t_write_events = [createdRow, { id: 'w-2', location_id: LOC, op: 'forgot_password', stage: 'done', idempotency_key: `pw:${LOC}:usr-new`, created_at: '2026-10-18T09:01:00Z' }]
+    tables.un1t_write_events = [createdRow, { id: 'w-2', location_id: LOC, un1t_user_id: 'usr-new', op: 'forgot_password', stage: 'done', idempotency_key: `pw:${LOC}:usr-new`, created_at: '2026-10-18T09:01:00Z' }]
     expect(await step()).toEqual({ explanation: 'skipped_already_done', forgotPassword: 'skipped_already_done' })
     expect(deps.forgotPassword).not.toHaveBeenCalled()
+  })
+
+  it('UN1TWRITE.25: a reset under a per-attempt key (pw:<loc>:<user>:<n>) still settles the step; another user\'s reset does not', async () => {
+    tables.un1t_write_events = [createdRow, { id: 'w-3', location_id: LOC, un1t_user_id: 'usr-new', op: 'forgot_password', stage: 'done', idempotency_key: `pw:${LOC}:usr-new:2`, created_at: '2026-10-18T09:01:00Z' }]
+    expect(await step()).toEqual({ explanation: 'skipped_already_done', forgotPassword: 'skipped_already_done' })
+    tables.un1t_write_events = [createdRow, { id: 'w-4', location_id: LOC, un1t_user_id: 'usr-new', op: 'forgot_password', stage: 'unknown', idempotency_key: `pw:${LOC}:usr-new:1`, created_at: '2026-10-18T09:01:00Z' }]
+    expect(await step()).toMatchObject({ explanation: 'skipped_reset_in_doubt', forgotPassword: 'in_doubt' })
+    expect(deps.forgotPassword).not.toHaveBeenCalled()
+    tables.un1t_write_events = [createdRow, { id: 'w-5', location_id: LOC, un1t_user_id: 'usr-other', op: 'forgot_password', stage: 'done', idempotency_key: `pw:${LOC}:usr-other:1`, created_at: '2026-10-18T09:01:00Z' }]
+    expect(await step()).toEqual({ explanation: 'sent', forgotPassword: 'done' })
+    expect(deps.forgotPassword).toHaveBeenCalledTimes(1)
+  })
+
+  it('UN1TWRITE.25: the 3-per-30-minutes refusal is reported with the staff help line', async () => {
+    tables.un1t_write_events = [createdRow]
+    deps.forgotPassword.mockResolvedValueOnce(done({ verdict: 'refused', sent: false, code: 'reset_limit', retryable: false }))
+    expect(await step()).toMatchObject({ forgotPassword: 'refused', code: 'reset_limit', help: expect.stringMatching(/Forgot password/) })
   })
 
   it('sendsWelcome skips our email; sendsWelcome + welcomeSetsLogin skips the call too; each skip is reported', async () => {

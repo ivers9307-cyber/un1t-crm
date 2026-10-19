@@ -541,15 +541,7 @@ describe('forgotPassword', () => {
     const r = await forgotPassword(t.db, pwArgs(), t.deps)
     expect(r.verdict).toBe('unknown')
     expect(t.fetchImpl.count('POST /auth/forgot-password')).toBe(1)
-    expect(ledger(t.store)[0]).toMatchObject({ op: 'forgot_password', stage: 'unknown', idempotency_key: `pw:${LOC}:${USER}` })
-  })
-
-  it('forgotPassword with a done pw row for this user sends nothing and returns done', async () => {
-    const key = `pw:${LOC}:${USER}`
-    const t = await setup({ db: { tables: { un1t_write_events: [{ id: 'led-pw', location_id: LOC, idempotency_key: key, op: 'forgot_password', stage: 'done', created_at: ago(60_000) }] } } })
-    const r = await forgotPassword(t.db, pwArgs(), t.deps)
-    expect(r).toMatchObject({ verdict: 'done', sent: false, ledgerId: 'led-pw' })
-    expect(t.fetchImpl.writes()).toHaveLength(0)
+    expect(ledger(t.store)[0]).toMatchObject({ op: 'forgot_password', stage: 'unknown', idempotency_key: `pw:${LOC}:${USER}:1` })
   })
 
   it('sends exactly { email }, records done, and keeps the address out of the ledger and the logs', async () => {
@@ -560,13 +552,149 @@ describe('forgotPassword', () => {
     expect(ledger(t.store)[0].stage).toBe('done')
     expect(JSON.stringify([ledger(t.store), allLogs(), r])).not.toContain(EMAIL)
   })
+})
 
-  it('an older open pw row is unknown with nothing sent (a reset email is never sent twice)', async () => {
-    const key = `pw:${LOC}:${USER}`
-    const t = await setup({ db: { tables: { un1t_write_events: [{ id: 'led-pw', location_id: LOC, idempotency_key: key, op: 'forgot_password', stage: 'sent', created_at: ago(10 * 60_000) }] } } })
+describe('UN1TWRITE.25 — up to 3 password resets per person per 30 minutes', () => {
+  const MIN = 60_000
+  const pwRow = (n, stage, ageMs, over = {}) => ({
+    id: `led-pw-${n}-${stage}`, location_id: LOC, un1t_user_id: USER, op: 'forgot_password', origin: 'staff',
+    idempotency_key: n == null ? `pw:${LOC}:${USER}` : `pw:${LOC}:${USER}:${n}`, stage, created_at: ago(ageMs), finished_at: ago(ageMs), ...over,
+  })
+  const sends = (t) => t.fetchImpl.count('POST /auth/forgot-password')
+  const okRoute = () => ({ 'POST /auth/forgot-password': [ok({ message: 'sent' })] })
+
+  it('the 1st, 2nd and 3rd reset in 30 minutes each send, each under its own key', async () => {
+    const t = await setup({ routes: okRoute() })
+    for (let i = 1; i <= 3; i += 1) {
+      const r = await forgotPassword(t.db, pwArgs(), t.deps)
+      expect(r).toMatchObject({ verdict: 'done', sent: true })
+      expect(sends(t)).toBe(i)
+    }
+    expect(ledger(t.store).map((r) => [r.idempotency_key, r.stage])).toEqual([
+      [`pw:${LOC}:${USER}:1`, 'done'], [`pw:${LOC}:${USER}:2`, 'done'], [`pw:${LOC}:${USER}:3`, 'done'],
+    ])
+  })
+
+  it('the 4th within 30 minutes is refused reset_limit, sends nothing, writes no row, and says when the next is allowed', async () => {
+    const t = await setup({ routes: okRoute(), db: { tables: { un1t_write_events: [pwRow(1, 'done', 25 * MIN), pwRow(2, 'done', 10 * MIN), pwRow(3, 'done', 5 * MIN)] } } })
+    const before = Date.now()
     const r = await forgotPassword(t.db, pwArgs(), t.deps)
-    expect(r).toMatchObject({ verdict: 'unknown', ledgerId: 'led-pw' })
-    expect(t.fetchImpl.writes()).toHaveLength(0)
+    expect(Object.keys(r).sort()).toEqual(CONTRACT_KEYS)
+    expect(r).toMatchObject({ verdict: 'refused', sent: false, code: 'reset_limit', retryable: false, ledgerId: null })
+    const next = Date.parse(r.data.nextAllowedAt)
+    // The oldest of the three (25 minutes ago) ages out in 5 minutes.
+    expect(next).toBeGreaterThanOrEqual(before + 5 * MIN - 2_000)
+    expect(next).toBeLessThanOrEqual(Date.now() + 5 * MIN + 2_000)
+    expect(r.message).toMatch(/3 password reset emails in the last 30 minutes/)
+    expect(r.message).toMatch(/in 5 minutes/)
+    expect(r.message).not.toMatch(/—|UN1T/)
+    expect(sends(t)).toBe(0)
+    expect(ledger(t.store)).toHaveLength(3)
+  })
+
+  it('once the oldest of the three is older than 30 minutes, a reset sends again under the next key', async () => {
+    const t = await setup({ routes: okRoute(), db: { tables: { un1t_write_events: [pwRow(1, 'done', 31 * MIN), pwRow(2, 'done', 10 * MIN), pwRow(3, 'done', 5 * MIN)] } } })
+    const r = await forgotPassword(t.db, pwArgs(), t.deps)
+    expect(r).toMatchObject({ verdict: 'done', sent: true })
+    expect(sends(t)).toBe(1)
+    expect(ledger(t.store).at(-1)).toMatchObject({ idempotency_key: `pw:${LOC}:${USER}:4`, stage: 'done' })
+  })
+
+  it('an unknown reset counts toward the 3 (it may have sent an email)', async () => {
+    const t = await setup({ routes: okRoute(), db: { tables: { un1t_write_events: [pwRow(1, 'done', 20 * MIN), pwRow(2, 'unknown', 15 * MIN), pwRow(3, 'done', 2 * MIN)] } } })
+    const r = await forgotPassword(t.db, pwArgs(), t.deps)
+    expect(r).toMatchObject({ verdict: 'refused', code: 'reset_limit' })
+    expect(sends(t)).toBe(0)
+  })
+
+  it('an old unknown or stale sent row never blocks: it holds only its own key, and ages out of the window', async () => {
+    const t = await setup({ routes: okRoute(), db: { tables: { un1t_write_events: [
+      pwRow(null, 'unknown', 2 * 24 * 60 * MIN), pwRow(1, 'unknown', 45 * MIN), pwRow(2, 'sent', 40 * MIN, { finished_at: null }),
+    ] } } })
+    const r = await forgotPassword(t.db, pwArgs(), t.deps)
+    expect(r).toMatchObject({ verdict: 'done', sent: true })
+    expect(sends(t)).toBe(1)
+    expect(ledger(t.store).at(-1)).toMatchObject({ idempotency_key: `pw:${LOC}:${USER}:3`, stage: 'done' })
+  })
+
+  it('the live case: the one legacy done reset (pw:<loc>:<user>, no suffix) no longer blocks the next', async () => {
+    const t = await setup({ routes: okRoute(), db: { tables: { un1t_write_events: [pwRow(null, 'done', 60 * MIN)] } } })
+    const r = await forgotPassword(t.db, pwArgs(), t.deps)
+    expect(r).toMatchObject({ verdict: 'done', sent: true })
+    expect(sends(t)).toBe(1)
+    expect(ledger(t.store).at(-1).idempotency_key).toBe(`pw:${LOC}:${USER}:1`)
+  })
+
+  it('refused attempts (nothing sent) and other people, studios or ops never count', async () => {
+    const t = await setup({ routes: okRoute(), db: { tables: { un1t_write_events: [
+      pwRow(1, 'refused', 5 * MIN), pwRow(2, 'refused', 4 * MIN), pwRow(3, 'refused', 3 * MIN),
+      pwRow(9, 'done', 2 * MIN, { id: 'other-user', un1t_user_id: 'usr-other', idempotency_key: `pw:${LOC}:usr-other:9` }),
+      pwRow(8, 'done', 2 * MIN, { id: 'other-loc', location_id: 'loc-other', idempotency_key: `pw:loc-other:${USER}:8` }),
+      pwRow(7, 'done', 2 * MIN, { id: 'other-op', op: 'book', idempotency_key: `book:${LOC}:${USER}:ev` }),
+    ] } } })
+    const r = await forgotPassword(t.db, pwArgs(), t.deps)
+    expect(r).toMatchObject({ verdict: 'done', sent: true })
+    expect(sends(t)).toBe(1)
+    expect(ledger(t.store).at(-1).idempotency_key).toBe(`pw:${LOC}:${USER}:4`)
+  })
+
+  it('a double-click (two concurrent calls) sends one email: both take the same next key and the open-row index refuses the second', async () => {
+    const t = await setup({ routes: okRoute() })
+    const [a, b] = await Promise.all([forgotPassword(t.db, pwArgs(), t.deps), forgotPassword(t.db, pwArgs(), t.deps)])
+    expect(sends(t)).toBe(1)
+    expect([a.verdict, b.verdict].filter((v) => v === 'done').length).toBeGreaterThanOrEqual(1)
+    expect([a, b].filter((r) => r.sent)).toHaveLength(1)
+    expect(new Set(ledger(t.store).map((r) => r.idempotency_key))).toEqual(new Set([`pw:${LOC}:${USER}:1`]))
+  })
+
+  it('a reset still in flight for this person (a sent row under 3 minutes old) refuses a new one with nothing sent', async () => {
+    const t = await setup({ routes: okRoute(), db: { tables: { un1t_write_events: [pwRow(1, 'sent', 10_000, { finished_at: null })] } } })
+    const r = await forgotPassword(t.db, pwArgs(), t.deps)
+    expect(r).toMatchObject({ verdict: 'refused', sent: false, code: C.ATTEMPT_IN_FLIGHT, retryable: true, ledgerId: 'led-pw-1-sent' })
+    expect(sends(t)).toBe(0)
+    expect(ledger(t.store)).toHaveLength(1)
+  })
+
+  it('a second call that read the ledger before the first began and inserted after it finished still sends nothing (the post-insert done check)', async () => {
+    const t = await setup({ routes: okRoute() })
+    const first = await forgotPassword(t.db, pwArgs(), t.deps)
+    expect(first).toMatchObject({ verdict: 'done', sent: true })
+    // The second call's allowance read is served from before the first call's insert.
+    const stale = {
+      from(name) {
+        const real = t.db.from(name)
+        const f = []
+        const api = new Proxy(real, {
+          get(target, prop) {
+            if (prop === 'then') {
+              const isAllowanceRead = name === 'un1t_write_events' && f.some(([c, v]) => c === 'un1t_user_id' && v === USER) && !f.some(([c]) => c === 'idempotency_key')
+              if (isAllowanceRead) return (okFn, noFn) => Promise.resolve({ data: [], error: null }).then(okFn, noFn)
+            }
+            const v = target[prop]
+            if (typeof v !== 'function') return v
+            return (...args) => {
+              if (prop === 'eq') f.push(args)
+              const out = v.apply(target, args)
+              return out === target ? api : out
+            }
+          },
+        })
+        return api
+      },
+      rpc: t.db.rpc,
+    }
+    const second = await forgotPassword(stale, pwArgs(), t.deps)
+    expect(sends(t)).toBe(1)
+    expect(second).toMatchObject({ verdict: 'done', sent: false, ledgerId: first.ledgerId })
+    const rows = ledger(t.store)
+    expect(rows).toHaveLength(2)
+    expect(rows[1]).toMatchObject({ idempotency_key: `pw:${LOC}:${USER}:1`, stage: 'refused', code: 'duplicate_attempt' })
+  })
+
+  it('the allowance read failing throws before anything is sent (a retry is safe)', async () => {
+    const t = await setup({ routes: okRoute(), db: { fail: { 'un1t_write_events.select': { code: 'XX000' } } } })
+    await expect(forgotPassword(t.db, pwArgs(), t.deps)).rejects.toThrow(/un1t_write_events/)
+    expect(sends(t)).toBe(0)
   })
 })
 

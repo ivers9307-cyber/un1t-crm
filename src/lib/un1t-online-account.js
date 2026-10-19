@@ -21,10 +21,13 @@
 // for that un1t.online user: our explanation email first (skipped when
 // un1t.online sends its own welcome), then POST /auth/forgot-password
 // (skipped when that welcome also lets them set a password). Our email
-// failing never blocks the call. The pw:<loc>:<user> key allows one reset per
-// person ever; a reset that answered unclearly stays in doubt on the ledger,
-// and the person can always use "Forgot password" in the un1t.online app
-// (UN1T_SET_PASSWORD_HELP is the staff-facing line for that).
+// failing never blocks the call. The step itself runs once per account: any
+// earlier reset for this un1t.online user (whatever its key: the bare
+// pw:<loc>:<user> from before UN1TWRITE.25, or a per-attempt
+// pw:<loc>:<user>:<n>) settles it, done or in doubt. Further resets (up to 3
+// per person per 30 minutes, forgotPassword's rule) are a deliberate ask, never
+// this step's; the person can always use "Forgot password" in the un1t.online
+// app (UN1T_SET_PASSWORD_HELP is the staff-facing line for that).
 
 import { escapeLikePattern } from './like-escape.js'
 import { classifyRefusal } from './un1t-online-write-judge.js'
@@ -35,7 +38,6 @@ import {
   findClientByEmail as findClientByEmailOp,
 } from './un1t-online-write-ops.js'
 import { applyUn1tWriteToMirror } from './un1t-online-mirror-write.js'
-import { ledgerKey } from './un1t-online-write-ledger.js'
 import { logWarn } from './log'
 
 const LOG = 'un1t-online-write'
@@ -206,12 +208,12 @@ export async function runSetPasswordStep(db, { locationId, contact, un1tUserId, 
   if (createErr) throw Object.assign(new Error(`un1t_write_events create read failed (${createErr.code ?? 'no code'})`), { code: createErr.code ?? null })
   if (!creates || creates.length === 0) return { explanation: 'skipped_not_created', forgotPassword: 'skipped_not_created' }
 
-  // Any earlier reset for this user, whatever its stage: done is final, and an
-  // in-doubt one holds the key (no second request will go), so our "a code is
-  // on its way" email is never sent twice, nor sent for a code that cannot come.
-  const pwKey = ledgerKey.pw(locationId, un1tUserId)
+  // Any earlier reset for this user, whatever its stage or key: done settles
+  // the step, and an in-doubt one may have sent the code, so our "a code is on
+  // its way" email is never sent twice, and a later booking never re-runs it.
+  // (UN1TWRITE.25: each reset attempt has its own key, so this reads by user.)
   const { data: resets, error: resetErr } = await db.from('un1t_write_events')
-    .select('id, stage').eq('location_id', locationId).eq('op', 'forgot_password').eq('idempotency_key', pwKey).limit(10)
+    .select('id, stage').eq('location_id', locationId).eq('op', 'forgot_password').eq('un1t_user_id', un1tUserId).limit(200)
   if (resetErr) throw Object.assign(new Error(`un1t_write_events reset read failed (${resetErr.code ?? 'no code'})`), { code: resetErr.code ?? null })
   const stages = new Set((resets || []).map((r) => r.stage))
   if (stages.has('done')) return { explanation: 'skipped_already_done', forgotPassword: 'skipped_already_done' }

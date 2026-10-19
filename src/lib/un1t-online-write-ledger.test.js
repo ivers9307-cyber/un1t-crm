@@ -96,12 +96,15 @@ describe('ledgerKey', () => {
     expect(ledgerKey.trial('loc-1', 'u1', 'prod-1', 'free_checkout')).toBe('trial:loc-1:u1:prod-1:free_checkout')
     expect(ledgerKey.book('loc-1', 'u1', 'evt-1')).toBe('book:loc-1:u1:evt-1')
     expect(ledgerKey.cancel('loc-1', 'bk-1')).toBe('cancel:loc-1:bk-1')
-    expect(ledgerKey.pw('loc-1', 'u1')).toBe('pw:loc-1:u1')
+    expect(ledgerKey.pw('loc-1', 'u1', 1)).toBe('pw:loc-1:u1:1')
+    expect(ledgerKey.pw('loc-1', 'u1', 12)).toBe('pw:loc-1:u1:12')
   })
   it('refuses a missing part rather than minting a key with "undefined" in it', () => {
     expect(() => ledgerKey.create('loc-1', undefined)).toThrow(TypeError)
     expect(() => ledgerKey.book('loc-1', 'u1', '')).toThrow(TypeError)
     expect(() => ledgerKey.trial('loc-1', 'u1', 'p', null)).toThrow(TypeError)
+    // UN1TWRITE.25: a reset key names its attempt, a whole number from 1.
+    for (const bad of [undefined, 0, -1, 1.5, '1', NaN]) expect(() => ledgerKey.pw('loc-1', 'u1', bad)).toThrow(TypeError)
   })
   it('the in-flight window is three minutes', () => {
     expect(UN1T_IN_FLIGHT_MS).toBe(180_000)

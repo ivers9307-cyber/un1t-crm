@@ -41,6 +41,11 @@ function part(name, v) {
   return v
 }
 
+function attemptNo(v) {
+  if (!Number.isSafeInteger(v) || v < 1) throw new TypeError("ledgerKey: 'attempt' must be a whole number from 1")
+  return v
+}
+
 /**
  * The idempotency keys, also the `idempotency-key` header on purchase calls.
  * A missing part throws rather than minting a key with "undefined" in it.
@@ -51,8 +56,24 @@ export const ledgerKey = Object.freeze({
     `trial:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}:${part('productId', productId)}:${part('method', method)}`,
   book: (loc, un1tUserId, eventId) => `book:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}:${part('eventId', eventId)}`,
   cancel: (loc, bookingId) => `cancel:${part('loc', loc)}:${part('bookingId', bookingId)}`,
-  pw: (loc, un1tUserId) => `pw:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}`,
+  // UN1TWRITE.25: one key per reset ATTEMPT (n = 1, 2, 3, ... per person),
+  // so the one-open and one-done indexes guard a double-send of the same
+  // attempt and never block the next one. Rows written before it carry the
+  // bare pw:<loc>:<un1tUser> (attempt 0); see resetAttemptNo.
+  pw: (loc, un1tUserId, attempt) => `pw:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}:${attemptNo(attempt)}`,
 })
+
+/**
+ * The attempt number a reset key names for this person: 0 for the bare
+ * pre-UN1TWRITE.25 key, n for pw:<loc>:<user>:<n>, null for anything else.
+ */
+export function resetAttemptNo(key, loc, un1tUserId) {
+  const base = `pw:${loc}:${un1tUserId}`
+  if (key === base) return 0
+  if (typeof key !== 'string' || !key.startsWith(`${base}:`)) return null
+  const tail = key.slice(base.length + 1)
+  return /^[1-9][0-9]{0,8}$/.test(tail) ? Number(tail) : null
+}
 
 // Cut on code points (the CHECK counts characters, and a UTF-16 slice can split
 // an emoji), then drop any lone surrogate so the text is valid to store.
@@ -193,6 +214,25 @@ export async function findDone(db, { key }) {
     .maybeSingle()
   if (error) throw dbError('done read', error)
   return data ?? null
+}
+
+/**
+ * Every forgot-password attempt for one un1t.online user at a location, newest
+ * first (UN1TWRITE.25: the reset allowance and the next attempt number).
+ * Throws on a database error: a failed read must never read as "no resets".
+ */
+export async function listResetAttempts(db, { locationId, un1tUserId }) {
+  if (!locationId || !un1tUserId) throw new TypeError('listResetAttempts: locationId and un1tUserId are required')
+  const { data, error } = await db
+    .from('un1t_write_events')
+    .select(LEDGER_COLUMNS)
+    .eq('location_id', locationId)
+    .eq('un1t_user_id', un1tUserId)
+    .eq('op', 'forgot_password')
+    .order('created_at', { ascending: false })
+    .limit(LIST_LIMIT)
+  if (error) throw dbError('reset list', error)
+  return data ?? []
 }
 
 /** Every attempt for a contact and op at a location, newest first (the processor's resume). */
