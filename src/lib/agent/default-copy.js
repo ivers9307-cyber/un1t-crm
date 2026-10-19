@@ -36,3 +36,14 @@ export function defaultWelcomeGreeting({ agentName, brand } = {}) {
  * The operator's booking_cta_label overrides it.
  */
 export const DEFAULT_BOOKING_CTA_LABEL = 'Book a class'
+
+/**
+ * MIAHATCH.2 — what Mia says when a member asks her to book or cancel a class
+ * at a un1t.online studio (Hatch Street), where chat booking is not live yet.
+ * `{studio}` is that studio's name, `{link}` its booking link
+ * (settings.customer_agent.booking_url); the second text is used when the
+ * studio has no link. The operator's chat_booking_unavailable_text overrides
+ * them (renderMiaCopy, mia-copy.js).
+ */
+export const DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT = "I can't book classes at {studio} from here just yet. You can book here: {link}"
+export const DEFAULT_CHAT_BOOKING_UNAVAILABLE_NO_LINK_TEXT = "I can't book classes at {studio} from here just yet. The team will help you book."

@@ -964,6 +964,15 @@ describe('pipelineInputs and trialEligibility', () => {
   })
 
   describe('trialEligibility', () => {
+    it('UN1TWRITE.10: a user-id-only call reads the transactions and memberships of the account\'s contact too', async () => {
+      const w = world({ un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [], un1t_write_events: [] })
+      const { db, log } = makeDb(w)
+      await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })
+      const byContact = log.filter((q) => q.filters.some(([k, c]) => k === 'in' && c === 'contact_id'))
+      expect(byContact.map((q) => q.table).sort()).toEqual(expect.arrayContaining(['contact_memberships', 'un1t_subscriptions', 'un1t_transactions']))
+      for (const q of byContact) expect(q.filters).toContainEqual(['in', 'contact_id', ['c1']])
+    })
+
     it('a new person is eligible', async () => {
       const { db } = makeDb(world())
       expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'nobody', contactId: 'nobody' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
@@ -972,7 +981,9 @@ describe('pipelineInputs and trialEligibility', () => {
     it('reads the person\'s transactions, subscriptions and the studio\'s FULL products map; a trial product keyed by id → trial_used', async () => {
       const { db, log } = makeDb(world())
       const out = await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })
-      expect(out).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+      // UN1TWRITE.10: the account's contact (c1) is this person too, so its
+      // membership rows count (they used to be read only for a contactId call).
+      expect(out).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used', 'membership_history'] } })
       for (const q of log) expect(q.filters, q.table).toContainEqual(['eq', 'location_id', HATCH])
       const tx = log.find((q) => q.table === 'un1t_transactions')
       const subs = log.find((q) => q.table === 'un1t_subscriptions')
@@ -980,11 +991,11 @@ describe('pipelineInputs and trialEligibility', () => {
       expect(subs.filters).toContainEqual(['in', 'un1t_user_id', ['u1']])
       // the products read is the whole studio's, not narrowed to this person's transactions
       expect(log.find((q) => q.table === 'un1t_products').filters).toEqual([['eq', 'location_id', HATCH]])
-      expect(log.some((q) => q.table === 'contact_memberships')).toBe(false)
+      expect(log.find((q) => q.table === 'contact_memberships').filters).toContainEqual(['in', 'contact_id', ['c1']])
     })
 
     it('a €0 transaction whose product is not in the studio\'s products counts as a trial taken', async () => {
-      const w = world({ un1t_transactions: [ctx({ product_id: 'deleted-upstream' })] })
+      const w = world({ un1t_transactions: [ctx({ product_id: 'deleted-upstream' })], contact_memberships: [] })
       const { db } = makeDb(w)
       expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
     })

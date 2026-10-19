@@ -51,6 +51,11 @@ export const DEFAULTS = {
   // the code default in lib/agent/core.js
   // (DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT).
   account_conflict_handoff_text: null,
+  // MIAHATCH.2 — what Mia says when a member asks her to book or cancel a
+  // class at a un1t.online studio (no chat booking there yet). {studio} and
+  // {link} (the studio's booking_url) are filled in. Null → the code defaults
+  // in lib/agent/default-copy.js, rendered by renderMiaCopy (mia-copy.js).
+  chat_booking_unavailable_text: null,
   // MIA-EXPIRY-QUIET.1 — booking_expired_text was RETIRED 2026-08-31. An
   // expired booking is now silent to the member (staff-push only), so there
   // is no customer copy left to edit. Stored values are ignored and dropped
@@ -136,6 +141,7 @@ export const SettingsSchema = z.object({
   booking_issue_handoff_text: z.string().max(500).nullable().optional(),
   no_credits_handoff_text: z.string().max(500).nullable().optional(),
   account_conflict_handoff_text: z.string().max(500).nullable().optional(),
+  chat_booking_unavailable_text: z.string().max(500).nullable().optional(),
   approval_decline_text: z.string().max(500).nullable().optional(),
   welcome_greeting: z.string().max(500).nullable().optional(),
   link_button_text: z.string().max(25).nullable().optional(),
@@ -313,6 +319,7 @@ function buildFullBlob(data) {
     booking_issue_handoff_text: data.booking_issue_handoff_text?.trim() || null,
     no_credits_handoff_text: data.no_credits_handoff_text?.trim() || null,
     account_conflict_handoff_text: data.account_conflict_handoff_text?.trim() || null,
+    chat_booking_unavailable_text: data.chat_booking_unavailable_text?.trim() || null,
     approval_decline_text: data.approval_decline_text?.trim() || null,
     welcome_greeting: data.welcome_greeting?.trim() || null,
     link_button_text: data.link_button_text?.trim() || null,

@@ -57,10 +57,15 @@ import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
 import {
-  BOOKING_SYSTEM_TOOL_NAMES, deriveNoBookingTools, membershipAtOtherStudio, providerTakesBookings,
-  refuseAtNoBookingStudio,
+  BOOKING_SYSTEM_TOOL_NAMES, deriveNoBookingTools, membershipAtOtherStudio,
+  refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO,
 } from './tool-capability'
+import { deriveUn1tReadTools, selectToolBlock, withCacheBreakpoint } from './tool-blocks'
 import { resolveMemberStudios, otherStudioOnly } from './member-studios'
+import {
+  threadTakesBookings, resolveTurnPlan, todayPlan, planKey, turnForPlan, createActionStudios, loadAgentKnowledge,
+  promptOptionsForPlan, executorCtxFor,
+} from './turn-studios'
 import { DEFAULT_BOOKING_CTA_LABEL } from './default-copy'
 import { anthropicMessages } from '@/lib/anthropic'
 // MIA-HYGIENE.4 — the agent's own caught failures never reached error_events
@@ -69,6 +74,7 @@ import { anthropicMessages } from '@/lib/anthropic'
 import { recordErrorEvent } from '@/lib/error-events'
 import { getAiCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
+import { logWarn } from '@/lib/log'
 
 // MIA-SONNET5 — Claude Sonnet 5. Reaches previous Opus-tier quality on
 // agentic work, and Mia was unusually cheap to migrate: she never sent
@@ -123,25 +129,43 @@ export const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOO
 // Exported so the eval harness sends the EXACT block production sends. It used
 // to rebuild its own copy "in the same shape", which silently drifted the
 // moment the TTL changed here and cost a full eval run to a 400.
-export const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
-  i === ALL_AGENT_TOOLS.length - 1
-    ? { ...tool, cache_control: { type: 'ephemeral', ttl: '1h' } }
-    : tool,
-)
+export const CACHED_ACCOUNT_TOOLS = withCacheBreakpoint(ALL_AGENT_TOOLS)
 // MIAORG.1 Task 5 — the tool block for a studio whose membership source takes
 // no bookings (un1t.online, none): the Glofox tools gone, the timetable tool
 // re-described (tool-capability.js). Derived ONCE here, like the full block,
 // so each variant is a byte-stable cached prefix of its own. The full block
 // above is untouched: Glofox studios send exactly what they sent before.
 export const NO_BOOKING_AGENT_TOOLS = deriveNoBookingTools(ALL_AGENT_TOOLS)
-export const CACHED_NO_BOOKING_TOOLS = NO_BOOKING_AGENT_TOOLS.map((tool, i) =>
-  i === NO_BOOKING_AGENT_TOOLS.length - 1
-    ? { ...tool, cache_control: { type: 'ephemeral', ttl: '1h' } }
-    : tool,
-)
-/** The cached tool block for a turn: the full one where the studio takes bookings. */
-export function agentToolsFor(canBook) {
-  return canBook ? CACHED_ACCOUNT_TOOLS : CACHED_NO_BOOKING_TOOLS
+export const CACHED_NO_BOOKING_TOOLS = withCacheBreakpoint(NO_BOOKING_AGENT_TOOLS)
+// MIAHATCH.2 — the two un1t.online READ blocks (tool-blocks.js), built once at
+// load like the two above: `un1t_read` for a member at a un1t.online studio
+// only, `un1t_read_dual` when the person is also answerable at a Glofox
+// studio. The turn picks one through planTurnTools (turn-studios.js) when the
+// sender is answerable at a un1t.online studio.
+export const CACHED_UN1T_READ_TOOLS = withCacheBreakpoint(deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: false }))
+export const CACHED_UN1T_READ_DUAL_TOOLS = withCacheBreakpoint(deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }))
+const CACHED_BLOCKS = {
+  glofox: CACHED_ACCOUNT_TOOLS,
+  no_booking: CACHED_NO_BOOKING_TOOLS,
+  un1t_read: CACHED_UN1T_READ_TOOLS,
+  un1t_read_dual: CACHED_UN1T_READ_DUAL_TOOLS,
+  // The un1t.online write block does not exist yet (selectToolBlock only
+  // returns un1t_full when un1tWrites is true, which nothing sets): the read
+  // block that includes every Glofox tool stands in, offering strictly fewer
+  // tools than the executor would allow.
+  un1t_full: CACHED_UN1T_READ_DUAL_TOOLS,
+}
+/**
+ * The cached tool block for a turn. The live turn sends CACHED_BLOCKS[block]
+ * for its plan's block (turn-studios.js), the same array objects this returns.
+ * `agentToolsFor(canBook)` (a boolean, what the eval harness passes) is the
+ * full block where the studio takes bookings, else the no-booking one. `agentToolsFor({ answerable,
+ * threadProvider, channel, un1tWrites })` picks through selectToolBlock. Both
+ * return the same array objects on every call, so the cached prefix is stable.
+ */
+export function agentToolsFor(arg) {
+  if (arg !== null && typeof arg === 'object') return CACHED_BLOCKS[selectToolBlock(arg)]
+  return arg ? CACHED_ACCOUNT_TOOLS : CACHED_NO_BOOKING_TOOLS
 }
 // Don't re-acknowledge a burst of non-text messages — one soft handoff
 // per minute is enough.
@@ -521,7 +545,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   // MIAORG.1 Task 5 — what Mia can do follows THIS studio (the thread's, the
   // locationId this turn is answered at), never the contact's home studio.
   // A provider without bookings gets the no-booking tool block and prompt.
-  const canBook = providerTakesBookings(membershipSource)
+  // MIAHATCH.2 — un1t.online never takes the Glofox booking tools, whatever
+  // its `bookings` capability says (its own blocks come from planTurnTools).
+  const canBook = threadTakesBookings(membershipSource)
 
   // Conversation state: kill switch + linked contact + verification.
   const nameCol = adapter.nameColumn
@@ -757,11 +783,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // this. The prompt only acts on it when the sender isn't already verified.
     const multipleAccounts = distinctPersonCount(phoneMatches, groupOf) >= 2
 
-    const { data: knowledge } = await db.from('agent_knowledge')
-      .select('category, title, content, enabled, sort_order')
-      .eq('location_id', locationId)
-      .eq('enabled', true)
-      .order('sort_order', { ascending: true })
+    const { data: knowledge } = await loadAgentKnowledge(db, locationId)
 
     // A still-fresh prior verification, re-read from the stamp.
     // PERSON-ACCT.6 — used AS STAMPED (no primary remap; see the phone lane
@@ -823,7 +845,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // CACHE.2 — content blocks with a cache breakpoint on the location-stable
     // prefix (base prompt + knowledge). Caches cumulatively after the tool
     // block; the volatile suffix (today + identity override) stays uncached.
-    const system = buildCachedSystem({
+    // MIAHATCH.2 — these are TODAY's options; a turn whose plan is not today's
+    // block adds the plan's (settleTurn below).
+    const systemOpts = {
       businessName: branding.companyName,
       locationName: loc?.name || null,
       agentName: settings?.agent_name || DEFAULTS.agent_name,
@@ -851,7 +875,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // AGENT-AUTH.3 — number linked to >1 person → ask which account by email.
       multipleAccounts,
       knownContact,
-    })
+    }
 
     // EFFORT.1 — operator-tunable reasoning effort (defaults to `medium`, one
     // notch below the API's `high` default) for this short transactional turn.
@@ -921,6 +945,54 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     }
     applyMemberStudios(await resolveTurnMemberStudios(resolvedVerifiedContactId || conv?.contact_id))
 
+    // MIAHATCH.2 — the turn's tool block from the studios this sender may be
+    // answered for (turn-studios.js). Today's block (a studio answering its
+    // own member, nobody answerable, Instagram, no resolution) sends exactly
+    // today's request and leaves toolCtx.turn unset; any other sets
+    // toolCtx.turn, toolCtx.glofoxLocationId (the Glofox studio the Glofox
+    // executors run at) and the prompt the block needs. actionStudio is
+    // another studio's resolved settings (booking_mode, booking_url, copy);
+    // voice, quiet hours and caps stay this thread's.
+    const actionStudios = createActionStudios(db, { threadLocationId: locationId, threadSettings: settings, threadZone: zone })
+    toolCtx.actionStudio = actionStudios.settings
+    let plan
+    let system
+    const planArgs = () => ({
+      memberStudios: toolCtx.memberStudios,
+      threadLocationId: locationId,
+      threadProvider: membershipSource,
+      channel: adapter.name,
+    })
+    const applyPlan = (p) => {
+      plan = p
+      toolCtx.turn = turnForPlan(p, adapter.name)
+      toolCtx.glofoxLocationId = p.glofoxLocationId
+    }
+    // Plan the turn and build its system blocks together, so the tools and the
+    // prompt always describe the same block. A prompt that cannot be built
+    // (promptOptionsForPlan threw) drops the turn to today's block: never the
+    // un1t tools with today's prompt. `keepIfKey`: a re-plan whose key (block,
+    // named un1t studio, facts studios) is unchanged keeps the system it has.
+    const settleTurn = async ({ keepIfKey } = {}) => {
+      let next = await resolveTurnPlan(planArgs(), actionStudios)
+      if (keepIfKey !== undefined && planKey(next) === keepIfKey) {
+        applyPlan(next)
+        return
+      }
+      let extra = null
+      if (!next.sameAsToday) {
+        try {
+          extra = await promptOptionsForPlan(db, next, actionStudios)
+        } catch (err) {
+          logWarn('mia-un1t', 'turn prompt options failed; using the today block', { block: next.block, errClass: err?.name })
+          next = todayPlan(planArgs())
+        }
+      }
+      applyPlan(next)
+      system = buildCachedSystem(extra && !next.sameAsToday ? { ...systemOpts, ...extra } : systemOpts)
+    }
+    await settleTurn()
+
     let verifyFails = conv?.agent_verify_attempts ?? 0
     // MIA-CREDITS.1 — set when book_class pre-flights to no_credits; the
     // turn ends in a deterministic handoff (script + park + manager push).
@@ -946,6 +1018,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // failing twice in a turn is not.
       const toolThrows = new Map()
       while (iterations-- > 0 && !done) {
+        // MIAHATCH.2 — the block this request sends (a verify mid-turn can
+        // change it for the next iteration; the last one sent wins).
+        trace.toolBlock = plan.block
         // SAAS4-M1 — metered via the shared wrapper (source: mia_auto_reply);
         // each tool-loop iteration is one API call and one usage event.
         const { res, data, aborted } = await callAgentModel(
@@ -956,7 +1031,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
             output_config: { effort: agentEffort },
             system,
             messages,
-            tools: agentToolsFor(canBook),
+            tools: CACHED_BLOCKS[plan.block],
           },
           { apiKey, locationId, source: 'mia_auto_reply' },
           {
@@ -1035,14 +1110,22 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
                 && toolCtx.verifiedContactId && toolCtx.memberStudios && !toolCtx.memberStudios.readFailed
                 ? otherStudioOnly(toolCtx.memberStudios.studios, locationId)
                 : null
+              // MIAHATCH.2 — the studio this tool runs at (turn-studios.js):
+              // toolCtx itself on today's turn; the Glofox studio for a Glofox
+              // tool when the thread is filed elsewhere; the member's
+              // un1t.online studio for a pause or cancellation request there.
+              // null: the tool's studio could not be resolved, so it is refused
+              // rather than run at the wrong studio.
+              const execCtx = otherStudio ? toolCtx : await executorCtxFor(block.name, block.input || {}, toolCtx, actionStudios)
               result = (otherStudio ? membershipAtOtherStudio(otherStudio.name) : null)
-                || refuseAtNoBookingStudio(block.name, toolCtx) || (ACCOUNT_TOOL_NAMES.has(block.name)
-                ? await executeAccountTool(block.name, block.input || {}, toolCtx)
+                || (execCtx ? null : { ...TOOL_NOT_AT_THIS_STUDIO })
+                || refuseToolForTurn(block.name, execCtx) || (ACCOUNT_TOOL_NAMES.has(block.name)
+                ? await executeAccountTool(block.name, block.input || {}, execCtx)
                 : EVENT_TOOL_NAMES.has(block.name)
-                  ? await executeEventTool(block.name, block.input || {}, toolCtx)
+                  ? await executeEventTool(block.name, block.input || {}, execCtx)
                   : CARD_TOOL_NAMES.has(block.name)
-                    ? await executeCardTool(block.name, block.input || {}, toolCtx)
-                    : await executeBookingTool(block.name, block.input || {}, toolCtx))
+                    ? await executeCardTool(block.name, block.input || {}, execCtx)
+                    : await executeBookingTool(block.name, block.input || {}, execCtx))
             } catch (err) {
               const throws = (toolThrows.get(block.name) || 0) + 1
               toolThrows.set(block.name, throws)
@@ -1086,6 +1169,11 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
                 // MIAHATCH.1 — a different acting account can be a member of
                 // different studios: resolve again from the verified contact.
                 applyMemberStudios(await resolveTurnMemberStudios(toolCtx.verifiedContactId))
+                // MIAHATCH.2 — and the tool block with it. A changed block, or
+                // a changed un1t studio or set of facts studios, sends its own
+                // tools AND matching system blocks from the next iteration; an
+                // unchanged plan keeps the system built once.
+                await settleTurn({ keepIfKey: planKey(plan) })
               }
             }
             toolResults.push({

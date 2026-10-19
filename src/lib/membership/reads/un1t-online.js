@@ -781,27 +781,31 @@ async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) 
         (keys, from, to) => db.from(table).select(cols).eq('location_id', locationId).in('un1t_user_id', keys).order('id', { ascending: true }).range(from, to),
         { chunkSize: KEY_CHUNK, pageSize: PAGE },
       ),
-      contactId == null ? [] : selectAll((from, to) => db
-        .from(table)
-        .select(cols)
-        .eq('location_id', locationId)
-        .eq('contact_id', contactId)
-        .order('id', { ascending: true })
-        .range(from, to), { pageSize: PAGE }),
+      // UN1TWRITE.10: every contact this person is, not only the one asked
+      // about (a un1tUserId-only call reaches its account's contact too).
+      contactIds.length === 0 ? [] : selectAllByKeys(
+        contactIds,
+        (keys, from, to) => db.from(table).select(cols).eq('location_id', locationId).in('contact_id', keys).order('id', { ascending: true }).range(from, to),
+        { chunkSize: KEY_CHUNK, pageSize: PAGE },
+      ),
     ]).then((lists) => unionByUn1tId(...lists))
 
     const [transactions, subscriptions, products, memberships, ledger] = await Promise.all([
       rowsFor('un1t_transactions', PIPE_TX_COLS),
       rowsFor('un1t_subscriptions', ELIGIBILITY_SUB_COLS),
       listAtStudio(db, locationId, 'un1t_products', PRODUCT_COLS),
-      contactId == null ? [] : selectAll((from, to) => db
-        .from('contact_memberships')
-        .select(MEMBERSHIP_COLS)
-        .eq('location_id', locationId)
-        .eq('contact_id', contactId)
-        .in('source', [API_SOURCE, EXPORT_SOURCE])
-        .order('id', { ascending: true })
-        .range(from, to), { pageSize: PAGE }),
+      contactIds.length === 0 ? [] : selectAllByKeys(
+        contactIds,
+        (keys, from, to) => db
+          .from('contact_memberships')
+          .select(MEMBERSHIP_COLS)
+          .eq('location_id', locationId)
+          .in('contact_id', keys)
+          .in('source', [API_SOURCE, EXPORT_SOURCE])
+          .order('id', { ascending: true })
+          .range(from, to),
+        { chunkSize: KEY_CHUNK, pageSize: PAGE },
+      ),
       // Every ledger trial for these people counts, done, sent or unknown alike.
       ledgerTrialsOrThrow(db, locationId, { un1tUserIds: users, contactIds }),
     ])
