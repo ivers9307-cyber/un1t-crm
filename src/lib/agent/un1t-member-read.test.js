@@ -312,6 +312,7 @@ describe('test helpers', () => {
       '@/lib/un1t-online-write',
       '@/lib/un1t-online-write-ops',
       '@/lib/un1t-online-approval',
+      '@/lib/un1t-online-approval-execute',
     ])
     const ops = w['@/lib/un1t-online-write-ops']()
     expect(await ops.book({ a: 1 })).toEqual({ ok: false, code: 'X' })
@@ -321,7 +322,8 @@ describe('test helpers', () => {
     const { Un1tWriteRefused, Un1tWriteUnknown } = w['@/lib/un1t-online-write']()
     expect(new Un1tWriteRefused('C', 'm').code).toBe('C')
     expect(new Un1tWriteUnknown('C', 'm')).toBeInstanceOf(Error)
-    expect(Object.keys(w['@/lib/un1t-online-approval']()).sort()).toEqual(['executeUn1tApproval', 'fileRefundCard'])
+    expect(Object.keys(w['@/lib/un1t-online-approval']())).toEqual(['fileRefundCard'])
+    expect(Object.keys(w['@/lib/un1t-online-approval-execute']())).toEqual(['executeUn1tApproval'])
   })
 })
 

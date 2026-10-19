@@ -76,9 +76,14 @@ export function fakeUn1tWrite(overrides = {}) {
     grantTrial: fn('grantTrial'),
     createCheckoutLink: fn('createCheckoutLink'),
   }
+  // The record-only refund card lives in un1t-online-approval; the write-side
+  // executor in un1t-online-approval-execute (UN1TWRITE.23 split them so the
+  // write guard can prove the former reaches no write module).
   const approval = {
-    executeUn1tApproval: fn('executeUn1tApproval'),
     fileRefundCard: fn('fileRefundCard'),
+  }
+  const approvalExecute = {
+    executeUn1tApproval: fn('executeUn1tApproval'),
   }
   const errors = {
     Un1tWriteRefused: overrides.Un1tWriteRefused ?? FakeRefused,
@@ -88,6 +93,7 @@ export function fakeUn1tWrite(overrides = {}) {
     '@/lib/un1t-online-write': () => ({ ...errors }),
     '@/lib/un1t-online-write-ops': () => ({ ...ops }),
     '@/lib/un1t-online-approval': () => ({ ...approval }),
-    fns: { ...ops, ...approval },
+    '@/lib/un1t-online-approval-execute': () => ({ ...approvalExecute }),
+    fns: { ...ops, ...approval, ...approvalExecute },
   }
 }

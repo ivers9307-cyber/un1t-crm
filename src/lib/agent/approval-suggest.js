@@ -23,6 +23,8 @@ import { noneSource } from '@/lib/membership/sources/none'
 import { providerTakesBookings } from './tool-capability'
 import { anthropicMessages } from '@/lib/anthropic'
 import { resolveAgentSettings } from './settings-resolve'
+import { chunkIds } from '@/lib/person-accounts'
+import { logWarn } from '@/lib/log'
 
 // MIA-SONNET5 — in step with the inbound reply path (see auto-reply.js).
 const AGENT_MODEL = 'claude-sonnet-5'
@@ -175,6 +177,77 @@ export async function composeAgentText(location, settings, historyRows, instruct
   }
 }
 
+// MIAHATCH.5 Task 18 — the context for a un1t.online card (details.provider):
+// the member's membership and next booked class at the card's studio, from
+// the un1t_* mirror through slice 1's shapers. No live un1t.online call on the
+// suggest path, and never Glofox's columns (glofox_membership_state,
+// recent_bookings), which say nothing about a un1t.online member. Best-effort
+// like the rest of this module: an unreadable mirror leaves the line out.
+const UN1T_SUGGEST_BOOKINGS = 200
+
+async function un1tCardContext(db, row, zone) {
+  const out = {}
+  const { data: contact, error: cErr } = await db.from('contacts')
+    .select('name, first_name, un1t_user_id')
+    .eq('id', row.contact_id)
+    .maybeSingle()
+  if (cErr || !contact) return out
+  out.firstName = contact.first_name || (contact.name ? contact.name.split(' ')[0] : null)
+  const un1tUserId = idText(row.details?.un1t_user_id) || idText(contact.un1t_user_id)
+  if (!un1tUserId) return out
+  const { shapeUn1tMembership, shapeUn1tBookingsForAgent, UN1T_BOOKED_STATUS } = await import('./un1t-tools')
+  const nowMs = Date.now()
+
+  const { data: subs, error: sErr } = await db.from('un1t_subscriptions')
+    .select('status, product_id, product_title, price_cents, currency, billing_interval, billing_interval_count, current_period_end, cancel_at_period_end, paused_at, paused_until, past_due_at')
+    .eq('location_id', row.location_id)
+    .eq('un1t_user_id', un1tUserId)
+    .order('un1t_id')
+  if (sErr) {
+    logWarn('mia-un1t', 'suggest membership read failed', { locationId: row.location_id, op: 'suggest_membership', status: null, code: sErr.code ?? null })
+  } else {
+    const m = shapeUn1tMembership({ subscriptions: subs || [], client: null, creditsCapable: false, zone, nowMs })
+    // The mirror runs minutes behind: "none" is never stated as a fact.
+    if (m.status !== 'none') out.membershipStatus = m.plan ? `${m.status} (${m.plan})` : m.status
+  }
+
+  // The most recently made bookings hold the upcoming ones; the events read
+  // keeps only classes still to come.
+  const { data: bookings, error: bErr } = await db.from('un1t_bookings')
+    .select('un1t_id, event_id, status')
+    .eq('location_id', row.location_id)
+    .eq('un1t_user_id', un1tUserId)
+    .eq('status', UN1T_BOOKED_STATUS)
+    .order('remote_created_at', { ascending: false, nullsFirst: false })
+    .limit(UN1T_SUGGEST_BOOKINGS)
+  if (bErr) {
+    logWarn('mia-un1t', 'suggest bookings read failed', { locationId: row.location_id, op: 'suggest_bookings', status: null, code: bErr.code ?? null })
+    return out
+  }
+  const eventIds = [...new Set((bookings || []).map((b) => idText(b.event_id)).filter(Boolean))]
+  const byId = new Map()
+  for (const batch of chunkIds(eventIds)) {
+    const { data: events, error: eErr } = await db.from('un1t_events')
+      .select('un1t_id, title, starts_at, status')
+      .eq('location_id', row.location_id)
+      .in('un1t_id', batch)
+      .gte('starts_at', new Date(nowMs).toISOString())
+    if (eErr) {
+      logWarn('mia-un1t', 'suggest events read failed', { locationId: row.location_id, op: 'suggest_events', status: null, code: eErr.code ?? null })
+      return out
+    }
+    for (const e of events || []) byId.set(String(e.un1t_id), e)
+  }
+  const next = shapeUn1tBookingsForAgent(bookings || [], byId, nowMs, zone)[0]
+  if (next) {
+    out.nextClassName = next.class_name
+    out.nextClassTime = next.starts_at
+  }
+  return out
+}
+
+const idText = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+
 const MESSAGES_TABLE_BY_CHANNEL = {
   whatsapp: 'whatsapp_messages',
   instagram: 'instagram_messages',
@@ -217,7 +290,9 @@ export async function composeApprovalSuggestion(db, row, { signal } = {}) {
   }
 
   const ctx = { reason: row.decision_note || null }
-  if (row.contact_id) {
+  if (row.contact_id && row.details?.provider === 'un1t_online') {
+    Object.assign(ctx, await un1tCardContext(db, row, zoneOfLocation(location)))
+  } else if (row.contact_id) {
     const { data: contact } = await db.from('contacts')
       .select('name, first_name, pipeline_stage_slug, glofox_membership_state, glofox_membership_plan, recent_bookings')
       .eq('id', row.contact_id)

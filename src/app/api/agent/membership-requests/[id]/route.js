@@ -384,8 +384,13 @@ export async function PATCH(request, { params }) {
     }
   }
 
+  // MIAHATCH.5 — a class_cancellation at a un1t.online studio
+  // (details.provider) is never a Glofox cancel, whatever its origin: Mia's
+  // cards run D's executor below (executeMiaUn1tCard), any other lands failed.
+  const un1tCancellation = row.kind === 'class_cancellation' && details?.provider === 'un1t_online'
+
   // AGENT-CANCEL.1 — approving a drafted cancellation executes it.
-  if (executing && row.kind === 'class_cancellation') {
+  if (executing && row.kind === 'class_cancellation' && !un1tCancellation) {
     const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, cancelBooking } =
       await import('@/lib/glofox')
     const { data: contact } = await db.from('contacts')
@@ -456,11 +461,16 @@ export async function PATCH(request, { params }) {
   // UN1TWRITE.23 — a un1t.online funnel card (details.provider) runs the
   // un1t.online executor, never the Glofox one and never the manual record;
   // its record-only reasons skip the past-start guard like a manual booking.
+  // MIAHATCH.5 — a un1t.online cancellation carries starts_at too, and is
+  // guarded the same way (cancelling a class that has run helps nobody).
   const un1tBooking = row.kind === 'class_booking' && details?.provider === 'un1t_online'
   const un1tRecordOnly = un1tBooking && UN1T_RECORD_ONLY_REASONS.has(details?.reason)
   const manualBooking = row.kind === 'class_booking' && !un1tBooking && isHandBookedEventId(details?.event_id)
+  // Mia's own card (isMiaUn1tCard in agent/un1t-approval-branch.js, loaded lazily
+  // below like D's executor): a un1t.online card with details.origin 'mia'.
+  const miaUn1tCard = (un1tBooking || un1tCancellation) && details?.origin === 'mia'
   let expiredBeforeExecution = false
-  if (executing && row.kind === 'class_booking' && !manualBooking && !un1tRecordOnly) {
+  if (executing && (row.kind === 'class_booking' || un1tCancellation) && !manualBooking && !un1tRecordOnly) {
     const startsAtMs = Date.parse(row.details?.starts_at || '')
     if (Number.isFinite(startsAtMs) && startsAtMs < Date.now()) {
       expiredBeforeExecution = true
@@ -565,7 +575,7 @@ export async function PATCH(request, { params }) {
 
   // AGENT-HANDS.1 — approving a drafted class booking executes it.
   let un1tNotified = null
-  if (executing && un1tBooking && !expiredBeforeExecution) {
+  if (executing && un1tBooking && !miaUn1tCard && !expiredBeforeExecution) {
     const { executeUn1tApproval } = await import('@/lib/un1t-online-approval-execute')
     try {
       const r = await executeUn1tApproval(db, { row: { ...row, details }, actor: { id: user.id } })
@@ -580,6 +590,33 @@ export async function PATCH(request, { params }) {
       logWarn('agent-requests', 'un1t.online approval failed part way', { requestId: id, err: e })
       return NextResponse.json({ success: false, error: 'Could not finish this booking just now. It can be retried from the card in a few minutes; nothing will be done twice.' }, { status: 500 })
     }
+  }
+
+  // MIAHATCH.5 — Mia's Hatch Street booking and cancellation cards: the
+  // account she chose must still be the contact's (ACCOUNT_MISMATCH otherwise),
+  // then D's executor, then ONE in-thread confirmation recorded on the card
+  // (src/lib/agent/un1t-approval-branch.js). Past start stays expired above.
+  if (executing && miaUn1tCard) {
+    const { executeMiaUn1tCard } = await import('@/lib/agent/un1t-approval-branch')
+    try {
+      const r = await executeMiaUn1tCard(db, { row, details, actor: { id: user.id }, expiredBeforeExecution })
+      executed = r.executed
+      details = r.details
+      finalStatus = r.finalStatus
+      un1tNotified = r.customerNotified
+    } catch (e) {
+      // As D's branch: a database read failed mid-way, the card stays claimed
+      // and is retried from its stale marker; every un1t.online step resumes
+      // from the ledger.
+      logWarn('agent-requests', 'Mia un1t.online approval failed part way', { requestId: id, err: e })
+      return NextResponse.json({ success: false, error: 'Could not finish this just now. It can be retried from the card in a few minutes; nothing will be done twice.' }, { status: 500 })
+    }
+  } else if (executing && un1tCancellation && !expiredBeforeExecution) {
+    // No other un1t.online cancellation card exists today. Never Glofox:
+    // staff cancel it in un1t.online.
+    executed = { ok: false, message_code: 'NOT_EXECUTABLE_UN1T' }
+    details = { ...details, result: executed }
+    finalStatus = 'failed'
   }
 
   if (executing && row.kind === 'class_booking' && !expiredBeforeExecution && !manualBooking && !un1tBooking) {
@@ -831,7 +868,8 @@ export async function PATCH(request, { params }) {
   // is confirmed there too, like the Glofox approve path (the email above
   // still goes). A record-only un1t approval records what staff did by hand
   // and confirms nothing. Best-effort.
-  const bookedByApproval = (un1tBooking || manualBooking) && finalStatus === 'actioned'
+  // Mia's cards confirmed themselves in executeMiaUn1tCard (never twice).
+  const bookedByApproval = (un1tBooking || manualBooking) && !miaUn1tCard && finalStatus === 'actioned'
     && executed?.ok === true && executed?.record_only !== true
   if (executing && bookedByApproval && row.conversation_id) {
     try {
