@@ -16,6 +16,7 @@ import {
   NON_MEMBER_STATUSES,
 } from '@/lib/lead-radar'
 import { selectAll } from '@/lib/select-all'
+import { radarReads } from '@/lib/churn-radar-data'
 
 // Columns the scorer + UI need from contacts. Narrow on purpose —
 // the non-member base is ~7,000 rows, so every column counts.
@@ -30,7 +31,7 @@ const CONTACTING_ACTIONS = ['contacted', 'outreach_sent']
  * non-member base (~7,000 rows) far exceeds Supabase's ~1000-row
  * response cap.
  */
-async function fetchNonMembers(db, locationId) {
+export async function fetchNonMembers(db, locationId) {
   const rows = []
   const PAGE = 1000
   for (let from = 0; ; from += PAGE) {
@@ -102,8 +103,10 @@ function indexActions(actions) {
  * @returns {Promise<{ funnel: object[], summary: object }>}
  */
 export async function loadFunnel(db, locationId, nowMs = Date.now()) {
+  // UN1TRADAR.1 — rows through the seam (see radarReads in churn-radar-data.js)
+  const r = await radarReads(db, locationId, ['leadContacts'])
   const [contacts, actions] = await Promise.all([
-    fetchNonMembers(db, locationId),
+    r.leadContacts(db, locationId, { nowMs }),
     fetchActions(db, locationId),
   ])
   const { lastContacted, snoozedUntil } = indexActions(actions)
@@ -147,8 +150,9 @@ export async function loadFunnel(db, locationId, nowMs = Date.now()) {
  * @returns {Promise<{ cleanup: object[], summary: object }>}
  */
 export async function loadCleanup(db, locationId, nowMs = Date.now()) {
+  const r = await radarReads(db, locationId, ['leadContacts'])
   const [contacts, actions] = await Promise.all([
-    fetchNonMembers(db, locationId),
+    r.leadContacts(db, locationId, { nowMs }),
     fetchActions(db, locationId),
   ])
   const { triaged } = indexActions(actions)
@@ -168,7 +172,8 @@ export async function loadCleanup(db, locationId, nowMs = Date.now()) {
  * @returns {Promise<{ classpass: object[], summary: object }>}
  */
 export async function loadClassPass(db, locationId, nowMs = Date.now()) {
-  const contacts = await fetchNonMembers(db, locationId)
+  const r = await radarReads(db, locationId, ['leadContacts'])
+  const contacts = await r.leadContacts(db, locationId, { nowMs })
   const classpass = buildClassPass(contacts, nowMs)
   const summary = leadRadarSummary(contacts, nowMs)
   return { classpass, summary }

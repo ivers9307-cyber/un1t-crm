@@ -18,6 +18,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadQuarantine } from '@/lib/churn-radar-data'
 import { radarCache, invalidateRadar } from '@/lib/radar-cache'
+import { radarAvailability, RADAR_UNAVAILABLE } from '@/lib/radar-availability'
 import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 
@@ -49,11 +50,14 @@ export async function GET() {
   if (access.error) return access.error
   const db = createServerClient()
   try {
+    // UN1TRADAR.1 — before the cache: a source without membership data answers data:null
+    const avail = await radarAvailability(db, access.locationId, { module: 'churn-radar' })
+    if (!avail.available) return NextResponse.json(RADAR_UNAVAILABLE)
     const items = await radarCache(
       'churn', access.locationId, 'quarantine',
       () => loadQuarantine(db, access.locationId),
     )
-    return NextResponse.json({ success: true, data: { items } })
+    return NextResponse.json({ success: true, data: { items }, source: avail.source, dataAsOf: avail.dataAsOf })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message || 'fetch_failed' }, { status: 500 })
   }

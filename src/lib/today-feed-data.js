@@ -15,6 +15,7 @@ import { hasPermission } from '@/lib/permissions'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { countInboxIssues } from '@/lib/issues'
 import { loadRadar } from '@/lib/churn-radar-data'
+import { radarAvailability } from '@/lib/radar-availability'
 import { needsAction } from '@/lib/inbox-queues'
 import { formatInZone, getLocationZone, todayStrIn } from '@/lib/location-time'
 import { displayZoneFor } from '@/lib/display-zone'
@@ -124,6 +125,9 @@ async function fetchBookingsToday(db, locationId, todayIso) {
 }
 
 async function fetchChurn(db, locationId) {
+  // UN1TRADAR.1 — no churn row at a source without membership data
+  const avail = await radarAvailability(db, locationId, { module: 'today-feed' })
+  if (!avail.available) return null
   const [{ radar, summary }, snapshotRes] = await Promise.all([
     loadRadar(db, locationId),
     db

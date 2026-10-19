@@ -1,5 +1,25 @@
-import { describe, it, expect } from 'vitest'
-import { loadOverdue, loadUnpaidCharges, loadAwaitingAuth, loadRadar, loadContactArrears } from './churn-radar-data'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// UN1TRADAR.1 — the loaders resolve their row reads through the seam
+// (radarReadsFor, by source key). Every test here is a Glofox studio unless it
+// says otherwise; the un1t adapter is spies, and (as in PR 1) has no radarPastDue.
+const fakeReads = vi.hoisted(() => ({
+  radarMembers: vi.fn(async () => []),
+  winbackContacts: vi.fn(async () => []),
+  leadContacts: vi.fn(async () => []),
+}))
+// Only the resolver is needed here, so the factory builds it outright.
+vi.mock('@/lib/membership/state-for-page', () => ({
+  membershipStateForPage: vi.fn(async () => ({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: { memberships: true } })),
+}))
+// The un1t adapter is replaced by spies.
+vi.mock('@/lib/membership/reads/un1t-online', () => ({ un1tOnlineReads: fakeReads, freshCutoff: vi.fn() }))
+
+import { membershipStateForPage } from '@/lib/membership/state-for-page'
+import { loadOverdue, loadUnpaidCharges, loadAwaitingAuth, loadRadar, loadContactArrears, loadQuarantine, loadWinback } from './churn-radar-data'
+import { loadEngagementChurn } from './engagement-analytics-data'
+import { glofoxFixtureDb, NOW as FIX_NOW, LOC as FIX_LOC } from './radar-glofox-fixture.test-helpers'
+import EXPECTED from './radar-glofox-fixture.expected.json'
 
 // ARREARS-NETTING.1 (Fix B) — the live Overdue feature must net cross-
 // invoice-id payment retries out of the chase-list + total, the same way the
@@ -684,5 +704,61 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
     expect(summary.activeBase).toBeGreaterThanOrEqual(1)
     expect(typeof summary.atRisk).toBe('number')
     // No exception should be thrown
+  })
+})
+
+// ── UN1TRADAR.1 — loaders read rows through the seam ─────────────────────────
+const asJson = (v) => JSON.parse(JSON.stringify(v))
+
+describe('UN1TRADAR.1 seam dispatch', () => {
+  beforeEach(() => vi.useFakeTimers({ now: FIX_NOW, toFake: ['Date'] }))
+  afterEach(() => vi.useRealTimers())
+
+  it("Glofox: every loader's output deep-equals today's (captured before the seam)", async () => {
+    const db = glofoxFixtureDb()
+    expect(asJson(await loadRadar(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.radar)
+    expect(asJson(await loadQuarantine(db, FIX_LOC))).toEqual(EXPECTED.quarantine)
+    expect(asJson(await loadOverdue(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.overdue)
+    expect(asJson(await loadUnpaidCharges(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.unpaid)
+    expect(asJson(await loadAwaitingAuth(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.awaiting)
+    expect(asJson(await loadWinback(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.winback)
+    expect(asJson(await loadEngagementChurn(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.engagement)
+  })
+
+  for (const state of ['configured', 'unconfigured', 'unknown']) {
+    it(`dispatches by source key while ${state}`, async () => {
+      fakeReads.radarMembers.mockClear(); fakeReads.winbackContacts.mockClear()
+      membershipStateForPage.mockResolvedValueOnce({ source: 'un1t_online', state, label: 'x' })
+      const db = glofoxFixtureDb()
+      await loadQuarantine(db, FIX_LOC)
+      expect(fakeReads.radarMembers).toHaveBeenCalledWith(db, FIX_LOC, { nowMs: FIX_NOW })
+      membershipStateForPage.mockResolvedValueOnce({ source: 'un1t_online', state, label: 'x' })
+      await loadWinback(db, FIX_LOC, FIX_NOW)
+      expect(fakeReads.winbackContacts).toHaveBeenCalledWith(db, FIX_LOC, { nowMs: FIX_NOW })
+    })
+  }
+
+  it('Glofox reads by source key while unknown (a credential glitch keeps the stored radar)', async () => {
+    membershipStateForPage.mockResolvedValueOnce({ source: 'glofox', state: 'unknown', label: 'Glofox', readError: 'GLOFOX_CREDENTIALS_UNREADABLE' })
+    const out = await loadRadar(glofoxFixtureDb(), FIX_LOC, FIX_NOW)
+    expect(asJson(out)).toEqual(EXPECTED.radar)
+  })
+
+  it('an unreadable source throws MEMBERSHIP_SOURCE_UNREADABLE (never an empty radar)', async () => {
+    for (const load of [loadRadar, loadQuarantine, loadOverdue, loadWinback, loadEngagementChurn]) {
+      membershipStateForPage.mockResolvedValueOnce({ source: null, state: 'unknown', label: 'x', readError: 'MEMBERSHIP_SOURCE_UNREADABLE' })
+      await expect(load(glofoxFixtureDb(), FIX_LOC, FIX_NOW)).rejects.toMatchObject({ code: 'MEMBERSHIP_SOURCE_UNREADABLE' })
+    }
+  })
+
+  it('un1t adapter without radarPastDue makes loadRadar throw "radar read missing: radarPastDue"', async () => {
+    membershipStateForPage.mockResolvedValueOnce({ source: 'un1t_online', state: 'configured', label: 'un1t.online' })
+    const db = { from: () => { throw new Error('no read may run before the key check') } }
+    await expect(loadRadar(db, FIX_LOC, FIX_NOW)).rejects.toThrow('radar read missing: radarPastDue')
+  })
+
+  it('a source with no adapter (none) throws "radar read missing"', async () => {
+    membershipStateForPage.mockResolvedValueOnce({ source: 'none', state: 'none', label: 'x' })
+    await expect(loadQuarantine(glofoxFixtureDb(), FIX_LOC)).rejects.toThrow('radar read missing: radarMembers')
   })
 })

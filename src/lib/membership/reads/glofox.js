@@ -9,6 +9,11 @@ import { computeMembershipCounts } from '@/lib/membership-snapshot'
 import { fetchMembershipFlows } from '@/lib/membership-flows'
 import { fetchMrr, fetchGrowth, fetchEngagement } from '@shared/studio-kpis'
 import { fetchRevenueMTD, fetchArrearsSummary } from '@shared/dashboard-data'
+// UN1TRADAR.1 — the radar reads load churn-radar-data / lead-radar-data at
+// CALL time: those modules import the seam (reads/index → state-for-page →
+// registry → this file), so a static import would close a module cycle.
+const churnData = () => import('@/lib/churn-radar-data')
+const leadData = () => import('@/lib/lead-radar-data')
 
 export const glofoxReads = Object.freeze({
   membershipCounts: (...args) => computeMembershipCounts(...args),
@@ -18,4 +23,9 @@ export const glofoxReads = Object.freeze({
   engagement: (...args) => fetchEngagement(...args),
   revenueMtd: (...args) => fetchRevenueMTD(...args),
   arrears: (...args) => fetchArrearsSummary(...args),
+  // UN1TRADAR.1 — the radar row fetches: today's contacts / glofox_invoices readers
+  radarMembers: async (...args) => (await churnData()).fetchMembers(...args),
+  winbackContacts: async (...args) => (await churnData()).fetchWinbackContacts(...args),
+  leadContacts: async (...args) => (await leadData()).fetchNonMembers(...args),
+  radarPastDue: async (...args) => (await churnData()).fetchPastDue(...args),
 })

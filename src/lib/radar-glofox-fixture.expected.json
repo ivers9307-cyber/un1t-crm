@@ -1,0 +1,433 @@
+{
+  "radar": {
+    "radar": [
+      {
+        "contactId": "c02",
+        "name": "Regular",
+        "score": 3,
+        "tier": "medium",
+        "signals": [
+          {
+            "key": "disengaging",
+            "label": "Disengaging",
+            "detail": "Regular (6/30d) — nothing for 8 days",
+            "weight": 3,
+            "severity": "warning"
+          }
+        ],
+        "daysSinceAttended": 8,
+        "membershipStatus": "member",
+        "membershipPlan": "Monthly Membership",
+        "segment": "member",
+        "monthlyValueCents": 12000,
+        "daysToRenewal": null,
+        "lastContacted": null
+      },
+      {
+        "contactId": "c04",
+        "name": "Pack",
+        "score": 3,
+        "tier": "medium",
+        "signals": [
+          {
+            "key": "pack_low",
+            "label": "Pack running low",
+            "detail": "1 class left — nudge a rebuy",
+            "weight": 3,
+            "severity": "critical"
+          }
+        ],
+        "daysSinceAttended": 3,
+        "membershipStatus": "credit_member",
+        "membershipPlan": "10 Class Pack",
+        "segment": "credit",
+        "monthlyValueCents": 12000,
+        "daysToRenewal": null,
+        "lastContacted": null
+      },
+      {
+        "contactId": "c03",
+        "name": "Renewing",
+        "score": 3,
+        "tier": "medium",
+        "signals": [
+          {
+            "key": "renewal_cliff",
+            "label": "Renewal cliff",
+            "detail": "Renews in 10 days — low recent attendance",
+            "weight": 3,
+            "severity": "critical"
+          }
+        ],
+        "daysSinceAttended": 2,
+        "membershipStatus": "member",
+        "membershipPlan": "Monthly Membership",
+        "segment": "member",
+        "monthlyValueCents": 12000,
+        "daysToRenewal": 10,
+        "lastContacted": null
+      },
+      {
+        "contactId": "c01",
+        "name": "Quiet",
+        "score": 2,
+        "tier": "low",
+        "signals": [
+          {
+            "key": "gone_quiet",
+            "label": "Gone quiet",
+            "detail": "No class in 20 days",
+            "weight": 2,
+            "severity": "warning"
+          }
+        ],
+        "daysSinceAttended": 20,
+        "membershipStatus": "member",
+        "membershipPlan": "Monthly Membership",
+        "segment": "member",
+        "monthlyValueCents": 12000,
+        "daysToRenewal": null,
+        "lastContacted": {
+          "action": "contacted",
+          "at": "2026-10-15T12:00:00.000Z"
+        }
+      }
+    ],
+    "summary": {
+      "activeBase": 9,
+      "atRisk": 5,
+      "highRisk": 0,
+      "quarantine": 1,
+      "paused": 1,
+      "overdue": 1,
+      "revenueAtRiskCents": 60000,
+      "overdueValueCents": 12000,
+      "bySegment": {
+        "member": {
+          "activeBase": 8,
+          "atRisk": 4,
+          "highRisk": 0
+        },
+        "credit": {
+          "activeBase": 1,
+          "atRisk": 1,
+          "highRisk": 0
+        }
+      },
+      "snoozed": 1,
+      "recovery": {
+        "contacted": 0,
+        "recovered": 0,
+        "recoveryRate": 0
+      },
+      "unpaidCharges": 1,
+      "unpaidChargesValueCents": 1500,
+      "awaitingAuth": 1,
+      "awaitingAuthValueCents": 1000,
+      "trend": {
+        "since": "2026-10-11T12:00:00.000Z",
+        "deltas": {
+          "activeBase": 2,
+          "atRisk": 3,
+          "highRisk": -1,
+          "overdue": 0,
+          "paused": 0,
+          "quarantine": 0,
+          "revenueAtRiskCents": 36000,
+          "overdueValueCents": 0
+        }
+      }
+    }
+  },
+  "quarantine": [
+    {
+      "contactId": "c05",
+      "name": "Ghost",
+      "membershipStatus": "member",
+      "membershipPlan": "Monthly Membership",
+      "joinedAt": "2025-01-01T00:00:00Z",
+      "lifetimeValueCents": 50000
+    }
+  ],
+  "overdue": {
+    "overdue": [
+      {
+        "contactId": "c06",
+        "name": "Owes",
+        "membershipStatus": "member",
+        "membershipPlan": "Monthly Membership",
+        "segment": "member",
+        "amountOwedCents": 12000,
+        "invoiceCount": 1,
+        "oldestDueAt": "2026-10-06T12:00:00.000Z",
+        "daysOverdue": 12,
+        "lastAttendedAt": "2026-10-14T12:00:00.000Z",
+        "daysSinceAttended": 4,
+        "lastContacted": null
+      }
+    ],
+    "summary": {
+      "total": 1,
+      "totalValueCents": 12000
+    }
+  },
+  "unpaid": {
+    "charges": [
+      {
+        "contactId": "c09",
+        "name": "Noshow",
+        "membershipStatus": "member",
+        "membershipPlan": "Monthly Membership",
+        "segment": "member",
+        "amountOwedCents": 1500,
+        "invoiceCount": 1,
+        "oldestDueAt": "2026-10-15T12:00:00.000Z",
+        "daysOverdue": 3,
+        "lastAttendedAt": "2026-10-13T12:00:00.000Z",
+        "daysSinceAttended": 5,
+        "lastContacted": null
+      }
+    ],
+    "summary": {
+      "total": 1,
+      "totalValueCents": 1500
+    }
+  },
+  "awaiting": {
+    "charges": [
+      {
+        "contactId": "c02",
+        "name": "Regular",
+        "membershipStatus": "member",
+        "membershipPlan": "Monthly Membership",
+        "segment": "member",
+        "amountOwedCents": 1000,
+        "invoiceCount": 1,
+        "oldestDueAt": "2026-10-17T12:00:00.000Z",
+        "daysOverdue": 1,
+        "lastAttendedAt": "2026-10-10T12:00:00.000Z",
+        "daysSinceAttended": 8,
+        "lastContacted": null
+      }
+    ],
+    "summary": {
+      "total": 1,
+      "totalValueCents": 1000
+    }
+  },
+  "winback": {
+    "winback": [
+      {
+        "contactId": "c08",
+        "name": "Lapsed",
+        "status": "ex_member",
+        "tier": "high",
+        "daysSinceAttended": 70,
+        "membershipPlan": "Monthly Membership",
+        "monthlyValueCents": 12000,
+        "lifetimeValueCents": 50000,
+        "lastContacted": null
+      }
+    ],
+    "summary": {
+      "total": 1,
+      "snoozed": 0
+    }
+  },
+  "funnel": {
+    "funnel": [
+      {
+        "contactId": "l01",
+        "name": "Trialist",
+        "category": "attending",
+        "status": "trial",
+        "score": 4,
+        "tier": "high",
+        "signal": {
+          "key": "trial_convert",
+          "label": "Trial attending",
+          "detail": "Attending on trial — not yet converted",
+          "weight": 4
+        },
+        "lastActivityAt": "2026-10-12T12:00:00.000Z",
+        "daysSinceActivity": 6,
+        "joinedAt": "2026-10-08T12:00:00.000Z",
+        "daysSinceJoined": 10,
+        "lastContacted": null
+      },
+      {
+        "contactId": "l02",
+        "name": "Fresh lead",
+        "category": "fresh",
+        "status": "lead",
+        "score": 1,
+        "tier": "low",
+        "signal": {
+          "key": "fresh_signup",
+          "label": "New signup",
+          "detail": "Recently joined — no class visit yet",
+          "weight": 1
+        },
+        "lastActivityAt": null,
+        "daysSinceActivity": null,
+        "joinedAt": "2026-09-28T12:00:00.000Z",
+        "daysSinceJoined": 20,
+        "lastContacted": {
+          "action": "contacted",
+          "at": "2026-10-17T12:00:00.000Z"
+        }
+      }
+    ],
+    "summary": {
+      "funnelTotal": 2,
+      "funnel": {
+        "attending": 1,
+        "fresh": 1
+      },
+      "cleanupTotal": 1,
+      "cleanup": {
+        "cooling": 0,
+        "dormant": 1,
+        "no_sale": 0
+      },
+      "classpassTotal": 1,
+      "classpass": {
+        "attending": 1,
+        "lapsed": 0
+      },
+      "snoozed": 0,
+      "conversion": {
+        "contacted": 0,
+        "progressed": 0,
+        "progressionRate": 0
+      },
+      "trend": {
+        "since": "2026-10-11T12:00:00.000Z",
+        "deltas": {
+          "funnelTotal": 1,
+          "attending": 0,
+          "fresh": 1,
+          "cleanupTotal": 0
+        }
+      }
+    }
+  },
+  "cleanup": {
+    "cleanup": [
+      {
+        "contactId": "l03",
+        "name": "Old lead",
+        "status": "lead",
+        "bucket": "dormant",
+        "reason": "Joined over a year ago — no class activity",
+        "joinedAt": "2025-06-05T12:00:00.000Z",
+        "lastActivityAt": null,
+        "daysSinceJoined": 500
+      }
+    ],
+    "summary": {
+      "funnelTotal": 2,
+      "funnel": {
+        "attending": 1,
+        "fresh": 1
+      },
+      "cleanupTotal": 1,
+      "cleanup": {
+        "cooling": 0,
+        "dormant": 1,
+        "no_sale": 0
+      },
+      "classpassTotal": 1,
+      "classpass": {
+        "attending": 1,
+        "lapsed": 0
+      },
+      "triaged": 0
+    }
+  },
+  "classpass": {
+    "classpass": [
+      {
+        "contactId": "l04",
+        "name": "Drop in",
+        "status": "classpass_payg",
+        "attending": true,
+        "lastActivityAt": "2026-10-09T12:00:00.000Z",
+        "daysSinceActivity": 9,
+        "joinedAt": "2025-01-01T00:00:00Z",
+        "daysSinceJoined": 655
+      }
+    ],
+    "summary": {
+      "funnelTotal": 2,
+      "funnel": {
+        "attending": 1,
+        "fresh": 1
+      },
+      "cleanupTotal": 1,
+      "cleanup": {
+        "cooling": 0,
+        "dormant": 1,
+        "no_sale": 0
+      },
+      "classpassTotal": 1,
+      "classpass": {
+        "attending": 1,
+        "lapsed": 0
+      }
+    }
+  },
+  "engagement": {
+    "totalMembers": 10,
+    "withFriends": 0,
+    "adoptionPct": 0,
+    "buckets": [
+      {
+        "key": "0",
+        "label": "No friends",
+        "members": 10,
+        "atRisk": 6,
+        "atRiskPct": 0.6,
+        "avgAttended30d": 1,
+        "avgTenureDays": 656
+      },
+      {
+        "key": "1-2",
+        "label": "1–2 friends",
+        "members": 0,
+        "atRisk": 0,
+        "atRiskPct": null,
+        "avgAttended30d": null,
+        "avgTenureDays": null
+      },
+      {
+        "key": "3-5",
+        "label": "3–5 friends",
+        "members": 0,
+        "atRisk": 0,
+        "atRiskPct": null,
+        "avgAttended30d": null,
+        "avgTenureDays": null
+      },
+      {
+        "key": "6+",
+        "label": "6+ friends",
+        "members": 0,
+        "atRisk": 0,
+        "atRiskPct": null,
+        "avgAttended30d": null,
+        "avgTenureDays": null
+      }
+    ],
+    "headline": {
+      "highSample": 0,
+      "insufficientData": true,
+      "lowAtRiskPct": 0.6,
+      "highAtRiskPct": null,
+      "lowAvgAttended": 1,
+      "highAvgAttended": null,
+      "atRiskDelta": null,
+      "supported": false
+    }
+  }
+}

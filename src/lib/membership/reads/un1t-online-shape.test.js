@@ -1094,3 +1094,25 @@ describe('shapePipelineDateEvidence', () => {
     })).toEqual({ slug: 'converted', created_at: daysAgo(40), stage_entered_at: daysAgo(15) })
   })
 })
+
+// UN1TRADAR.1 — packHolderIds was moved verbatim out of shapeCounts; the
+// counts must not move. Expected values captured from shapeCounts BEFORE the
+// extraction (same fixtures, run against the previous commit).
+describe('shapeCounts output unchanged after packHolderIds extraction', () => {
+  const fixtures = [
+    { subs: [], clients: [], packTxs: [], products: [] },
+    {
+      subs: [sub({ un1t_user_id: 'a' }), sub({ un1t_user_id: 'b', billing_interval_count: 3 }), sub({ un1t_user_id: 'c', status: 'past_due', past_due_at: '2026-10-11T00:00:00Z' }), sub({ un1t_user_id: 'a', billing_interval: 'year' })],
+      clients: [client({ un1t_user_id: 'p1' }), client({ un1t_user_id: 'p2' }), client({ un1t_user_id: 'a' }), client({ un1t_user_id: 'p3', credit_unlimited: true }), client({ un1t_user_id: 'p4', credit_balance: 0 })],
+      packTxs: [ptx({ un1t_user_id: 'p1' }), ptx({ un1t_user_id: 'p2', product_id: 'trial', amount_cents: 0 }), ptx({ un1t_user_id: 'a' }), ptx({ un1t_user_id: 'p3' }), ptx({ un1t_user_id: 'p4' }), ptx({ un1t_user_id: 'p1', product_id: 'gone', amount_cents: 900, remote_created_at: '2026-10-05T00:00:00Z' })],
+      products: PRODUCTS,
+    },
+  ]
+  const expected = [
+    { total_members: 0, monthly_recurring: 0, class_packs: 0, payg: 0, active_recurring: 0, dead_packs: 0, detail: { recurring_by_interval: { '1 month': 0, '3 months': 0, '6 months': 0, '12 months': 0 } } },
+    { total_members: 4, monthly_recurring: 3, class_packs: 1, payg: 0, active_recurring: 2, dead_packs: 0, detail: { recurring_by_interval: { '1 month': 2, '3 months': 1, '6 months': 0, '12 months': 1 } } },
+  ]
+  fixtures.forEach((f, i) => {
+    it(`fixture ${i}`, () => expect(shapeCounts(f)).toEqual(expected[i]))
+  })
+})

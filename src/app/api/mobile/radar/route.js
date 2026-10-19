@@ -22,6 +22,7 @@ import { hasMobilePermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadRadar } from '@/lib/churn-radar-data'
 import { loadFunnel } from '@/lib/lead-radar-data'
+import { radarAvailability } from '@/lib/radar-availability'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -48,6 +49,20 @@ export async function GET() {
 
   const db = createServerClient()
   const data = { churn: null, lead: null }
+
+  // UN1TRADAR.1 — a source without membership data: both sections stay null
+  // (the screen already hides a null section). Asked once; an unreadable
+  // source is a per-section error, as a failed load is.
+  let avail
+  try {
+    avail = await radarAvailability(db, locationId, { module: 'mobile-radar' })
+  } catch (e) {
+    const err = e.message || 'fetch_failed'
+    if (canChurn) data.churnError = err
+    if (canLead) data.leadError = err
+    return NextResponse.json({ success: true, data })
+  }
+  if (!avail.available) return NextResponse.json({ success: true, data })
 
   // Each radar is independent — one failing (or being unentitled)
   // must not sink the other. Errors surface as a per-section flag so

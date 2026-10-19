@@ -115,8 +115,8 @@ const call = (db, key) => ({
 beforeEach(() => vi.clearAllMocks())
 
 describe('un1tOnlineReads surface', () => {
-  it('implements six reads plus pastDue, paymentsFor, pipelineInputs and trialEligibility, and deliberately no arrears', () => {
-    expect(Object.keys(un1tOnlineReads).sort()).toEqual([...READS, 'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility'].sort())
+  it('implements six reads plus pastDue, paymentsFor, pipelineInputs, trialEligibility and the three radar reads, and deliberately no arrears', () => {
+    expect(Object.keys(un1tOnlineReads).sort()).toEqual([...READS, 'pastDue', 'paymentsFor', 'pipelineInputs', 'trialEligibility', 'radarMembers', 'winbackContacts', 'leadContacts'].sort())
     expect(Object.isFrozen(un1tOnlineReads)).toBe(true)
     expect(un1tOnlineReads.arrears).toBeUndefined()
   })
