@@ -820,11 +820,10 @@ async function reelectSiblingWithCredits({
 // member's un1t.online studio answers with its chat_booking_unavailable_text
 // ({studio}, {link} = that studio's booking_url, from its own resolved
 // settings). No answerable un1t.online studio: the not-at-this-studio refusal.
+// MIAHATCH.5 — block 3b never reaches this: it books and cancels through
+// un1t-booking.js (Tasks 16 and 17).
 async function un1tChatBookingAnswer(toolName, ctx) {
-  // MIAHATCH.5 — in block 3b only cancel_class_booking still reaches this
-  // (book_class books through un1t-booking.js since Task 16) until the
-  // un1t.online cancel executor lands (Task 17).
-  const studio = ctx?.turn?.block === 'un1t_read_dual' || ctx?.turn?.block === 'un1t_full'
+  const studio = ctx?.turn?.block === 'un1t_read_dual'
     ? (ctx.turn.answerable || []).find((s) => s?.providerKey === 'un1t_online')
     : null
   if (!studio) return { ...TOOL_NOT_AT_THIS_STUDIO }
@@ -844,6 +843,17 @@ async function un1tChatBookingAnswer(toolName, ctx) {
     : { cancelled: false, chat_booking_unavailable: true, text }
 }
 
+// MIAHATCH.5 — the answerable un1t.online studio a block 3b write acts at:
+// the one whose mirror holds the `un1t:` id (`studioFor`), else the first.
+// null when the turn has none.
+async function un1tActionStudio(db, ctx, rawId, studioFor) {
+  const un1tStudios = (ctx?.turn?.answerable || []).filter((s) => s?.providerKey === 'un1t_online')
+  if (!un1tStudios.length) return null
+  const parsed = parseAgentId(rawId)
+  const held = parsed?.provider === 'un1t_online' ? await studioFor(db, un1tStudios, parsed.id) : null
+  return held || un1tStudios[0]
+}
+
 // ── executor (IO) ───────────────────────────────────────────────────
 // ctx: { db, conversationId, conversationsTable, contactId,
 //        verifiedContactId, locationId, channel, nameHint, settings }
@@ -855,11 +865,16 @@ export async function executeBookingTool(toolName, input, ctx) {
   const refused = refuseToolForTurn(toolName, ctx)
   if (refused) return refused
 
-  // MIAHATCH.5 — request_refund is offered in block 3b only (refused above
-  // everywhere else). Its executor (a staff refund card, Task 17) is not here
-  // yet: until then it answers as a tool this studio does not have, so Mia
-  // hands off and never says a refund was passed on or made.
-  if (toolName === 'request_refund') return { ...TOOL_NOT_AT_THIS_STUDIO }
+  // MIAHATCH.5 Task 17 — request_refund is offered in block 3b only (refused
+  // above everywhere else): a record-only refund card at the un1t.online
+  // studio (un1t-booking.js, loaded lazily). Nothing is refunded and
+  // un1t.online is not called.
+  if (toolName === 'request_refund') {
+    if (ctx?.turn?.block !== 'un1t_full') return { ...TOOL_NOT_AT_THIS_STUDIO }
+    const { requestRefund, un1tStudioForBooking } = await import('./un1t-booking')
+    const studio = await un1tActionStudio(db, ctx, input?.booking_id, un1tStudioForBooking)
+    return studio ? requestRefund(ctx, input, studio) : { ...TOOL_NOT_AT_THIS_STUDIO }
+  }
 
   // MIAHATCH.2 — a `un1t:` event or booking id is a un1t.online class. Outside
   // block 3b chat booking there is not live (slice 1): in the dual block the answer is
@@ -872,16 +887,16 @@ export async function executeBookingTool(toolName, input, ctx) {
     // Glofox id.
     const raw = toolName === 'book_class' ? input?.event_id : input?.booking_id
     if (typeof raw === 'string' && raw.startsWith(UN1T_ID_PREFIX)) {
-      // MIAHATCH.5 Task 16 — block 3b books at the un1t.online studio through
-      // D's book (un1t-booking.js, loaded lazily so no other turn imports the
-      // write side). Every other block keeps the slice 1 answer.
-      if (toolName === 'book_class' && ctx?.turn?.block === 'un1t_full') {
-        const { un1tBookClass, un1tStudioForEvent } = await import('./un1t-booking')
-        const un1tStudios = (ctx.turn.answerable || []).filter((s) => s?.providerKey === 'un1t_online')
-        if (!un1tStudios.length) return { ...TOOL_NOT_AT_THIS_STUDIO }
-        const parsed = parseAgentId(raw)
-        const studio = (parsed ? await un1tStudioForEvent(db, un1tStudios, parsed.id) : null) || un1tStudios[0]
-        return un1tBookClass(ctx, input, studio)
+      // MIAHATCH.5 Tasks 16 and 17 — block 3b books and cancels at the
+      // un1t.online studio through D's book and cancel (un1t-booking.js,
+      // loaded lazily so no other turn imports the write side). Every other
+      // block keeps the slice 1 answer.
+      if (ctx?.turn?.block === 'un1t_full') {
+        const { un1tBookClass, un1tCancelBooking, un1tStudioForEvent, un1tStudioForBooking } = await import('./un1t-booking')
+        const isBook = toolName === 'book_class'
+        const studio = await un1tActionStudio(db, ctx, raw, isBook ? un1tStudioForEvent : un1tStudioForBooking)
+        if (!studio) return { ...TOOL_NOT_AT_THIS_STUDIO }
+        return isBook ? un1tBookClass(ctx, input, studio) : un1tCancelBooking(ctx, input, studio)
       }
       return un1tChatBookingAnswer(toolName, ctx)
     }

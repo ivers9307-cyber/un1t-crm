@@ -1,23 +1,31 @@
-// MIAHATCH.5 Task 16 — book_class at a un1t.online studio (Hatch Street)
-// through spec D's book. un1t.online is never called: D's write primitives
+// MIAHATCH.5 Tasks 16 and 17 — book_class, cancel_class_booking and
+// request_refund at a un1t.online studio (Hatch Street) through spec D's book,
+// cancel and fileRefundCard. un1t.online is never called: D's write primitives
 // are fakes (fakeUn1tWrite), the live member reads go through fakeUn1tReader,
 // and the mirror is a recording fake db. Fictional ids only (the repo is public).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const h = vi.hoisted(() => ({ book: null, reader: null }))
+const h = vi.hoisted(() => ({ book: null, cancel: null, fileRefundCard: null, reader: null }))
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/un1t-online-write-ops', async () => {
   const { fakeUn1tWrite } = await import('./un1t-fakes.test-helpers')
   const { vi: v } = await import('vitest')
   h.book = v.fn()
-  return fakeUn1tWrite({ book: h.book })['@/lib/un1t-online-write-ops']()
+  h.cancel = v.fn()
+  return fakeUn1tWrite({ book: h.book, cancel: h.cancel })['@/lib/un1t-online-write-ops']()
+})
+vi.mock('@/lib/un1t-online-approval', async () => {
+  const { fakeUn1tWrite } = await import('./un1t-fakes.test-helpers')
+  const { vi: v } = await import('vitest')
+  h.fileRefundCard = v.fn()
+  return fakeUn1tWrite({ fileRefundCard: h.fileRefundCard })['@/lib/un1t-online-approval']()
 })
 // The refusal table is empty until the MIA TEST run fills it (PR 6); the tests
 // classify through it with a fictional table, the way it will be filled.
 vi.mock('@/lib/un1t-online-write-judge', async (importOriginal) => {
   const actual = await importOriginal()
-  const TABLE = Object.freeze({ TEST_CLASS_FULL: 'class_full', TEST_NO_CREDITS: 'no_credits' })
+  const TABLE = Object.freeze({ TEST_CLASS_FULL: 'class_full', TEST_NO_CREDITS: 'no_credits', TEST_LATE_CANCEL: 'late_cancel' })
   return { ...actual, classifyRefusal: (r) => actual.classifyRefusal(r, TABLE) }
 })
 vi.mock('./un1t-member-read', async (importOriginal) => ({
@@ -32,9 +40,12 @@ import { fakeUn1tReader } from './un1t-fakes.test-helpers'
 import { openUn1tMemberReader } from './un1t-member-read'
 import { notifyAgentApprovalRequest } from './approval-notify'
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
-import { DEFAULT_PURCHASE_OFFER_INTRO_TEXT, DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT } from './default-copy'
+import { DEFAULT_PURCHASE_OFFER_INTRO_TEXT, DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT, DEFAULT_REFUND_REQUEST_TEXT } from './default-copy'
 import { formatClassTime } from './dublin-format'
-import { un1tBookClass, un1tBookOutcome, relayedStartMatches, un1tStudioForEvent } from './un1t-booking'
+import {
+  un1tBookClass, un1tBookOutcome, relayedStartMatches, un1tStudioForEvent,
+  un1tCancelBooking, un1tCancelOutcome, un1tStudioForBooking, requestRefund,
+} from './un1t-booking'
 
 // Fictional ids.
 const HATCH = 'a1000000-0000-0000-0000-000000000002'
@@ -595,5 +606,294 @@ describe('un1tStudioForEvent', () => {
     expect(await un1tStudioForEvent(db, [glofox], EVENT)).toBeNull()
     const none = fakeDb({ un1t_events: [] })
     expect(await un1tStudioForEvent(none.db, [hatch(), second], EVENT)).toBeNull()
+  })
+})
+
+// ── MIAHATCH.5 Task 17 — cancel_class_booking and request_refund ──────
+
+const BOOKING = 'b0000000-0000-4000-8000-000000000001'
+const bookedRow = (over = {}) => ({ id: BOOKING, event_id: EVENT, status: 'booked', ...over })
+const cinput = (over = {}) => ({ booking_id: `un1t:${BOOKING}`, class_name: 'Fictional Hatch HIIT', class_time: LABEL, ...over })
+const cdone = (over = {}) => done({ id: BOOKING, ...over })
+
+describe('un1tCancelOutcome (pure)', () => {
+  it("maps D's cancel verdicts", () => {
+    expect(un1tCancelOutcome(cdone())).toBe('cancelled')
+    expect(un1tCancelOutcome(cdone({ recovered: 'landed_after_5xx' }))).toBe('cancelled')
+    expect(un1tCancelOutcome(refused(C.ALREADY_HAPPENED, 'attended'))).toBe('already_happened')
+    expect(un1tCancelOutcome(refused('TEST_LATE_CANCEL', 'Too late to cancel'))).toBe('late_cancel')
+    expect(un1tCancelOutcome(refused(C.WRITES_OFF))).toBe('writes_off')
+    expect(un1tCancelOutcome(refused(C.PERMISSION_MISSING))).toBe('writes_off')
+    for (const code of [C.RATE_BUDGET, C.RATE_LIMITED, C.ATTEMPT_IN_FLIGHT, C.PERMISSIONS_UNREADABLE]) {
+      expect(un1tCancelOutcome(refused(code))).toBe('retry')
+    }
+    expect(un1tCancelOutcome(refused(C.BOOKING_NOT_THIS_CLIENT, 'x'))).toBe('card_rejected')
+    expect(un1tCancelOutcome(refused('SOMETHING_NEW', 'y'))).toBe('card_rejected')
+    // A book-side kind is not a cancel answer.
+    expect(un1tCancelOutcome(refused('TEST_CLASS_FULL', 'full'))).toBe('card_rejected')
+    expect(un1tCancelOutcome(unknown())).toBe('card_unknown')
+    expect(un1tCancelOutcome(null)).toBe('card_unknown')
+  })
+})
+
+describe('un1tCancelBooking', () => {
+  beforeEach(() => {
+    h.reader = fakeUn1tReader({ bookings: [bookedRow()] })
+    h.cancel.mockReset()
+    h.cancel.mockResolvedValue(cdone())
+  })
+
+  it('booking id not in live bookings -> CANCELLATION_UNCERTAIN, no cancel()', async () => {
+    const mirrorBooked = [{ location_id: HATCH, un1t_user_id: USER, event_id: EVENT, status: 'booked', un1t_id: BOOKING }]
+    for (const reader of [
+      fakeUn1tReader({ bookings: [bookedRow({ id: 'bk-other' })] }),
+      fakeUn1tReader({ bookings: [] }),
+      // A failed live read is no proof either way; the mirror is never asked.
+      fakeUn1tReader({ fail: 503 }),
+      fakeUn1tReader({ fail: 'budget' }),
+      { ok: false, reason: 'not_connected' },
+    ]) {
+      h.reader = reader
+      const { db, inserts } = fakeDb({ un1t_bookings: mirrorBooked })
+      const r = await un1tCancelBooking(ctxFor(db), cinput(), hatch())
+      expect(r).toMatchObject({ cancelled: false, error: 'CANCELLATION_UNCERTAIN' })
+      expect(r.message).toMatch(/nothing was cancelled/)
+      expect(inserts).toEqual([])
+    }
+    expect(h.cancel).not.toHaveBeenCalled()
+    expect(notifyAgentApprovalRequest).not.toHaveBeenCalled()
+  })
+
+  it('a TRUNCATED live list without the booking is no proof of absence: D decides', async () => {
+    h.reader = fakeUn1tReader({ bookings: [bookedRow({ id: 'bk-other' })], truncated: true })
+    const { db } = fakeDb()
+    expect(await un1tCancelBooking(ctxFor(db), cinput(), hatch())).toMatchObject({ cancelled: true })
+    expect(h.cancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('done -> cancelled; the write-ahead class_cancellation row carries the keys the approval executor reads', async () => {
+    for (const result of [cdone(), cdone({ recovered: 'landed_after_5xx' })]) {
+      h.reader = fakeUn1tReader({ bookings: [bookedRow()] })
+      h.cancel.mockResolvedValueOnce(result)
+      const { db, inserts, updates } = fakeDb()
+      const r = await un1tCancelBooking(ctxFor(db), cinput({ class_name: 'What the model said' }), hatch())
+      // The class name and time come from the class itself, not the relay.
+      expect(r).toEqual({ cancelled: true, class_name: 'Fictional Hatch HIIT', class_time: LABEL })
+      const [row] = requestRows(inserts)
+      expect(row.row).toMatchObject({ location_id: HATCH, contact_id: HATCH_CONTACT, kind: 'class_cancellation', status: 'pending', channel: 'whatsapp', conversation_id: 'conv-1' })
+      expect(row.row.details).toEqual({
+        provider: 'un1t_online', origin: 'mia', reason: 'mia_cancellation', booking_id: BOOKING, un1t_user_id: USER,
+        executing_contact_id: HATCH_CONTACT, starts_at: new Date(STARTS).toISOString(), class_name: 'Fictional Hatch HIIT',
+        class_time: LABEL, mode: 'auto', stage: 'executing',
+      })
+      const fin = lastUpdate(updates)
+      expect(fin.ids).toEqual([row.id])
+      expect(fin.patch.status).toBe('actioned')
+      expect(fin.patch.details).toMatchObject({ booking_id: BOOKING, un1t_write_id: 'led-1', result: { verdict: 'done' } })
+      expect(fin.patch.details.stage).toBeUndefined()
+      expect(h.cancel.mock.calls.at(-1)[1]).toEqual({
+        locationId: HATCH, contactId: HATCH_CONTACT, un1tUserId: USER, bookingId: BOOKING, origin: 'mia', originRef: row.id, actor: null,
+      })
+    }
+    expect(notifyAgentApprovalRequest).not.toHaveBeenCalled()
+  })
+
+  it('a class the mirror does not hold: the relayed name and time, starts_at null', async () => {
+    const { db, inserts } = fakeDb({ un1t_events: [] })
+    const r = await un1tCancelBooking(ctxFor(db), cinput(), hatch())
+    expect(r).toEqual({ cancelled: true, class_name: 'Fictional Hatch HIIT', class_time: LABEL })
+    expect(requestRows(inserts)[0].row.details).toMatchObject({ starts_at: null, class_name: 'Fictional Hatch HIIT', class_time: LABEL })
+  })
+
+  it('late-cancel refusal relayed, never promises a credit', async () => {
+    h.cancel.mockResolvedValueOnce(refused('TEST_LATE_CANCEL', 'Cancellations close 12 hours before class'))
+    const { db, updates } = fakeDb()
+    const r = await un1tCancelBooking(ctxFor(db), cinput(), hatch())
+    expect(r).toMatchObject({ cancelled: false, refused: 'late_cancel' })
+    expect(r.message).toContain('Cancellations close 12 hours before class')
+    expect(r.message).toMatch(/Never promise a refund or a credit/)
+    expect(r.message).not.toMatch(/(will|you'll) (get|receive) (a )?(refund|credit)/i)
+    const fin = lastUpdate(updates)
+    expect(fin.patch.status).toBe('failed')
+    expect(fin.patch.details).toMatchObject({ reason: 'late_cancel', result: { code: 'TEST_LATE_CANCEL' } })
+    expect(notifyAgentApprovalRequest).not.toHaveBeenCalled()
+  })
+
+  it('already happened relayed (UN1T_ALREADY_HAPPENED, attended or a no-show)', async () => {
+    h.cancel.mockResolvedValueOnce(refused(C.ALREADY_HAPPENED, "D's staff words"))
+    const { db, updates } = fakeDb()
+    const r = await un1tCancelBooking(ctxFor(db), cinput(), hatch())
+    expect(r).toMatchObject({ cancelled: false, refused: 'already_happened' })
+    expect(r.message).toMatch(/already happened/)
+    expect(r.message).toMatch(/Never promise a refund or a credit/)
+    expect(lastUpdate(updates).patch.status).toBe('failed')
+    expect(lastUpdate(updates).patch.details.reason).toBe('already_happened')
+    expect(notifyAgentApprovalRequest).not.toHaveBeenCalled()
+  })
+
+  it('unknown -> card + handoff text; an unmapped refusal (another client\'s booking included) -> card', async () => {
+    for (const [result, reason] of [
+      [unknown(), 'cancel_outcome_unknown'],
+      [unknown({ code: C.BOOKING_NOT_THIS_CLIENT }), 'cancel_outcome_unknown'],
+      [refused(C.BOOKING_NOT_THIS_CLIENT, 'not yours'), 'cancel_rejected'],
+      [refused('SOMETHING_NEW', 'Member account is suspended'), 'cancel_rejected'],
+    ]) {
+      vi.mocked(notifyAgentApprovalRequest).mockClear()
+      h.reader = fakeUn1tReader({ bookings: [bookedRow()] })
+      h.cancel.mockResolvedValueOnce(result)
+      const { db, updates } = fakeDb()
+      const r = await un1tCancelBooking(ctxFor(db), cinput(), hatch())
+      expect(r).toMatchObject({ cancelled: false, handoff: true, reason })
+      expect(r.message).toContain(DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT)
+      expect(r.message).toMatch(/Never say it is cancelled/)
+      const fin = lastUpdate(updates)
+      expect(fin.patch.status).toBe('pending')
+      expect(fin.patch.details).toMatchObject({ reason, booking_id: BOOKING, un1t_write_id: 'led-1' })
+      expect(fin.patch.details.summary).toEqual(expect.any(String))
+      expect(notifyAgentApprovalRequest).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: HATCH, kind: 'class_cancellation' }))
+    }
+  })
+
+  it('draft -> card (class_cancellation, pending), no cancel(); a second ask reuses it', async () => {
+    const { db, inserts } = fakeDb()
+    const ctx = ctxFor(db, { settings: { ...HATCH_SETTINGS, booking_mode: 'draft' }, threadLocationId: STILLORGAN })
+    const r = await un1tCancelBooking(ctx, cinput(), hatch())
+    expect(r).toMatchObject({ cancelled: false, pending_approval: true })
+    expect(r.message).toMatch(/Never say it is cancelled/)
+    const [card] = requestRows(inserts)
+    expect(card.row).toMatchObject({ location_id: HATCH, contact_id: HATCH_CONTACT, kind: 'class_cancellation', status: 'pending' })
+    expect(card.row.details).toMatchObject({ provider: 'un1t_online', origin: 'mia', reason: 'mia_cancellation', booking_id: BOOKING, un1t_user_id: USER, executing_contact_id: HATCH_CONTACT, mode: 'draft' })
+    expect(card.row.details.stage).toBeUndefined()
+    expect(notifyAgentApprovalRequest).toHaveBeenCalledWith(db, expect.objectContaining({ requestId: card.id, locationId: HATCH, kind: 'class_cancellation' }))
+
+    h.reader = fakeUn1tReader({ bookings: [bookedRow()] })
+    expect(await un1tCancelBooking(ctx, cinput(), hatch())).toMatchObject({ pending_approval: true })
+    expect(requestRows(inserts)).toHaveLength(1)
+    expect(h.cancel).not.toHaveBeenCalled()
+  })
+
+  it('cancel body never carries forceRefund (a bare booking id, origin mia, nothing else)', async () => {
+    const { db } = fakeDb()
+    await un1tCancelBooking(ctxFor(db), cinput(), hatch({ contactIds: [SIBLING_CONTACT, HATCH_CONTACT] }))
+    expect(h.cancel).toHaveBeenCalledTimes(1)
+    const [passedDb, args] = h.cancel.mock.calls[0]
+    expect(passedDb).toBe(db)
+    expect(Object.keys(args).sort()).toEqual(['actor', 'bookingId', 'contactId', 'locationId', 'origin', 'originRef', 'un1tUserId'])
+    expect(JSON.stringify(h.cancel.mock.calls)).not.toMatch(/forceRefund|bypassCredit|un1t:/)
+  })
+
+  it('writes off -> chat_booking_unavailable_text; retryable -> try again; nothing sent -> handoff', async () => {
+    h.cancel.mockResolvedValueOnce(refused(C.WRITES_OFF))
+    const off = fakeDb()
+    const r = await un1tCancelBooking(ctxFor(off.db), cinput(), hatch())
+    const text = DEFAULT_CHAT_BOOKING_UNAVAILABLE_TEXT.replace('{studio}', 'UN1T Hatch Street').replace('{link}', BOOKING_URL)
+    expect(r).toEqual({ cancelled: false, handoff: true, reason: 'writes_off', chat_booking_unavailable: true, text })
+    expect(lastUpdate(off.updates).patch.status).toBe('failed')
+
+    h.reader = fakeUn1tReader({ bookings: [bookedRow()] })
+    h.cancel.mockResolvedValueOnce(refused(C.RATE_BUDGET, null, { retryable: true }))
+    const retry = fakeDb()
+    expect(await un1tCancelBooking(ctxFor(retry.db), cinput(), hatch())).toMatchObject({ cancelled: false, try_again: true })
+    expect(lastUpdate(retry.updates).patch).toMatchObject({ status: 'failed', details: { reason: 'un1t_retry' } })
+
+    h.reader = fakeUn1tReader({ bookings: [bookedRow()] })
+    h.cancel.mockRejectedValueOnce(Object.assign(new Error('un1t_bookings read failed'), { name: 'Un1tSettingsReadError', code: 'mirror_read_failed' }))
+    const thrown = fakeDb()
+    const r3 = await un1tCancelBooking(ctxFor(thrown.db), cinput(), hatch())
+    expect(r3).toMatchObject({ cancelled: false, handoff: true, reason: 'un1t_cancel_not_sent' })
+    expect(lastUpdate(thrown.updates).patch).toMatchObject({ status: 'failed', details: { reason: 'un1t_cancel_not_sent' } })
+    expect(notifyAgentApprovalRequest).not.toHaveBeenCalled()
+  })
+
+  it('not verified, no account, a non-un1t id or a write-ahead row that cannot be written: nothing is cancelled', async () => {
+    const { db } = fakeDb()
+    expect(await un1tCancelBooking(ctxFor(db, { verifiedContactId: null }), cinput(), hatch())).toMatchObject({ error: 'not_verified' })
+    expect(await un1tCancelBooking(ctxFor(db), cinput(), hatch({ un1tUserId: undefined }))).toMatchObject({ cancelled: false, not_linked: true })
+    expect(await un1tCancelBooking(ctxFor(db), cinput({ booking_id: 'un1t:' }), hatch())).toMatchObject({ cancelled: false, error: 'CANCELLATION_UNCERTAIN' })
+    expect(await un1tCancelBooking(ctxFor(db), cinput({ booking_id: '64a0000000000000000000aa' }), hatch())).toMatchObject({ cancelled: false, error: 'CANCELLATION_UNCERTAIN' })
+    expect(openUn1tMemberReader).not.toHaveBeenCalled()
+    const failing = fakeDb({}, { fail: { agent_membership_requests: { insert: true } } })
+    expect(await un1tCancelBooking(ctxFor(failing.db), cinput(), hatch())).toMatchObject({ cancelled: false, try_again: true })
+    expect(h.cancel).not.toHaveBeenCalled()
+  })
+
+  it('every log line is module mia-un1t with no personal keys; no em or en dash in any answer', async () => {
+    const answers = []
+    for (const result of [cdone(), refused('TEST_LATE_CANCEL', 'late'), refused(C.ALREADY_HAPPENED), refused(C.RATE_BUDGET, null, { retryable: true }), refused('X', 'y'), unknown(), refused(C.WRITES_OFF)]) {
+      h.reader = fakeUn1tReader({ bookings: [bookedRow()] })
+      h.cancel.mockResolvedValueOnce(result)
+      answers.push(await un1tCancelBooking(ctxFor(fakeDb().db), cinput(), hatch()))
+    }
+    h.reader = fakeUn1tReader({ fail: 503 })
+    answers.push(await un1tCancelBooking(ctxFor(fakeDb().db), cinput(), hatch()))
+    h.reader = fakeUn1tReader({ bookings: [bookedRow()] })
+    answers.push(await un1tCancelBooking(ctxFor(fakeDb().db, { settings: { booking_mode: 'draft' } }), cinput(), hatch()))
+    answers.push(await un1tCancelBooking(ctxFor(fakeDb().db), cinput(), hatch({ un1tUserId: undefined })))
+    expect(JSON.stringify(answers)).not.toMatch(/[\u2013\u2014]/)
+    for (const [module, , meta] of [...logWarn.mock.calls, ...logError.mock.calls]) {
+      expect(module).toBe('mia-un1t')
+      expect(Object.keys(meta ?? {}).filter((k) => /email|phone|name|token|url|path/i.test(k))).toEqual([])
+    }
+  })
+})
+
+describe('requestRefund', () => {
+  beforeEach(() => {
+    h.fileRefundCard.mockReset()
+    h.fileRefundCard.mockResolvedValue({ approvalId: 'appr-1' })
+  })
+
+  it('refund request files one card, no un1t call, returns refund_request_text', async () => {
+    const { db, inserts } = fakeDb()
+    const r = await requestRefund(ctxFor(db), { reason: 'I was charged twice, my email is aoife@example.test', booking_id: `un1t:${BOOKING}` }, hatch())
+    expect(r).toEqual({ filed: true, text: DEFAULT_REFUND_REQUEST_TEXT })
+    expect(h.fileRefundCard).toHaveBeenCalledTimes(1)
+    expect(h.fileRefundCard).toHaveBeenCalledWith(db, {
+      locationId: HATCH, contactId: HATCH_CONTACT, un1tUserId: USER, reason: 'member_request', bookingId: BOOKING,
+      origin: 'mia', originRef: 'conv-1', conversationId: 'conv-1', channel: 'whatsapp',
+    })
+    // The member's own words go nowhere: not on the card, not in a log.
+    expect(JSON.stringify(h.fileRefundCard.mock.calls)).not.toMatch(/charged twice|example\.test/)
+    expect(h.book).not.toHaveBeenCalled()
+    expect(h.cancel).not.toHaveBeenCalled()
+    expect(openUn1tMemberReader).not.toHaveBeenCalled()
+    expect(inserts).toEqual([])
+  })
+
+  it('no booking id, or one that is not a un1t.online id: bookingId null; the studio\'s operator text wins', async () => {
+    const { db } = fakeDb()
+    const settings = { ...HATCH_SETTINGS, refund_request_text: 'Fictional: passed to the team at {studio}.' }
+    for (const extra of [{}, { booking_id: '64a0000000000000000000aa' }, { booking_id: 'un1t:' }]) {
+      h.fileRefundCard.mockClear()
+      const r = await requestRefund(ctxFor(db, { settings }), { reason: 'late cancel', ...extra }, hatch())
+      expect(r).toEqual({ filed: true, text: 'Fictional: passed to the team at UN1T Hatch Street.' })
+      expect(h.fileRefundCard.mock.calls[0][1].bookingId).toBeNull()
+    }
+  })
+
+  it('a card that was not filed (approvalId null, or a throw) still answers refund_request_text, logged with ids only', async () => {
+    for (const make of [() => h.fileRefundCard.mockResolvedValueOnce({ approvalId: null }), () => h.fileRefundCard.mockRejectedValueOnce(new Error('boom aoife@example.test'))]) {
+      vi.mocked(logError).mockClear()
+      make()
+      const r = await requestRefund(ctxFor(fakeDb().db), { reason: 'my card ending 4242 was charged twice' }, hatch())
+      expect(r).toEqual({ filed: false, text: DEFAULT_REFUND_REQUEST_TEXT })
+      expect(logError).toHaveBeenCalledWith('mia-un1t', expect.any(String), expect.objectContaining({ locationId: HATCH, op: 'refund_request' }))
+      expect(JSON.stringify(logError.mock.calls)).not.toMatch(/4242|charged|example\.test/)
+    }
+  })
+
+  it('not verified: nothing filed', async () => {
+    expect(await requestRefund(ctxFor(fakeDb().db, { verifiedContactId: null }), { reason: 'x' }, hatch())).toMatchObject({ error: 'not_verified' })
+    expect(h.fileRefundCard).not.toHaveBeenCalled()
+  })
+})
+
+describe('un1tStudioForBooking', () => {
+  it('one un1t studio is that studio; two are told apart by where the booking is', async () => {
+    const second = hatch({ locationId: 'a1000000-0000-0000-0000-000000000009', name: 'UN1T Second Studio' })
+    const { db } = fakeDb({ un1t_bookings: [{ location_id: second.locationId, un1t_id: BOOKING }] })
+    expect(await un1tStudioForBooking(db, [hatch()], BOOKING)).toEqual(hatch())
+    expect(await un1tStudioForBooking(db, [hatch(), second], BOOKING)).toEqual(second)
+    expect(await un1tStudioForBooking(fakeDb().db, [hatch(), second], BOOKING)).toBeNull()
   })
 })

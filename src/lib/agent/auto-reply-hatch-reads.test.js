@@ -92,10 +92,15 @@ vi.mock('./un1t-member-read', async (importOriginal) => ({
   fetchLiveUn1tBookings: vi.fn(async () => ({ ok: false, reason: 'read_failed' })),
   openUn1tMemberReader: vi.fn(async () => ({ ok: false, reason: 'not_connected' })),
 }))
-// MIAHATCH.5 Task 16 — D's write primitives are fakes: un1t.online is never called.
+// MIAHATCH.5 Tasks 16 and 17 — D's write primitives and refund card are fakes:
+// un1t.online is never called.
 vi.mock('@/lib/un1t-online-write-ops', async () => {
   const { fakeUn1tWrite } = await import('./un1t-fakes.test-helpers')
   return fakeUn1tWrite()['@/lib/un1t-online-write-ops']()
+})
+vi.mock('@/lib/un1t-online-approval', async () => {
+  const { fakeUn1tWrite } = await import('./un1t-fakes.test-helpers')
+  return fakeUn1tWrite()['@/lib/un1t-online-approval']()
 })
 
 import * as glofox from '@/lib/glofox'
@@ -106,12 +111,14 @@ import {
 import { resolveMemberStudios } from './member-studios'
 import { executeBookingTool } from './booking-tools'
 import { promptOptionsForPlan, planKey, executorCtxFor } from './turn-studios'
-import { book as un1tBook } from '@/lib/un1t-online-write-ops'
-import { openUn1tMemberReader } from './un1t-member-read'
+import { book as un1tBook, cancel as un1tCancel } from '@/lib/un1t-online-write-ops'
+import { fileRefundCard } from '@/lib/un1t-online-approval'
+import { openUn1tMemberReader, fetchLiveUn1tBookings } from './un1t-member-read'
 import { fakeUn1tReader } from './un1t-fakes.test-helpers'
 import { formatClassTime } from './dublin-format'
 import { notifyAgentApprovalRequest } from './approval-notify'
 import { DEFAULT_NO_CREDITS_HANDOFF_TEXT } from './core'
+import { DEFAULT_REFUND_REQUEST_TEXT } from './default-copy'
 
 // Fictional ids.
 const ORG = 'b2000000-0000-0000-0000-000000000001'
@@ -800,9 +807,15 @@ describe('un1t_full at the turn (MIAHATCH.5)', () => {
 
   const FUTURE_LABEL = formatClassTime(Date.parse(FUTURE) / 1000, 'Europe/Dublin')
 
-  it('both on, Hatch thread: un1t_full tools and prompt; book_class books through D (Task 16), cancel keeps the slice 1 answer and request_refund its placeholder until Task 17', async () => {
+  it('both on, Hatch thread: un1t_full tools and prompt; book_class books (Task 16), cancel cancels and request_refund files a card (Task 17) through D', async () => {
     resolveMemberStudios.mockResolvedValue(resolution(hatchStudio()))
     un1tBook.mockResolvedValueOnce({ verdict: 'done', sent: true, id: 'bk-new', code: null, message: null, alreadyBooked: false, recovered: null, retryable: false, data: null, ledgerId: 'led-1' })
+    un1tCancel.mockResolvedValueOnce({ verdict: 'done', sent: true, id: 'bk-1', code: null, message: null, alreadyBooked: false, recovered: null, retryable: false, data: null, ledgerId: 'led-2' })
+    fileRefundCard.mockResolvedValueOnce({ approvalId: 'appr-1' })
+    // book_class's live read fails (D decides); cancel's finds the booking.
+    fetchLiveUn1tBookings
+      .mockResolvedValueOnce({ ok: false, reason: 'read_failed' })
+      .mockResolvedValueOnce({ ok: true, rows: [{ id: 'bk-1', event_id: 'ev-1', status: 'booked' }] })
     const { fetchFn, bodies } = modelTurns([
       toolTurn('book_class', { event_id: 'un1t:ev-1', class_name: 'Fictional Hatch HIIT', starts_at: FUTURE_LABEL }),
       toolTurn('cancel_class_booking', { booking_id: 'un1t:bk-1' }),
@@ -823,10 +836,15 @@ describe('un1t_full at the turn (MIAHATCH.5)', () => {
     expect(toolResultOf(bodies[1])).toEqual({ booked: true, class_name: 'Fictional Hatch HIIT', class_time: FUTURE_LABEL })
     expect(un1tBook).toHaveBeenCalledTimes(1)
     expect(un1tBook.mock.calls[0][1]).toEqual({ locationId: HATCH, contactId: HATCH_CONTACT, un1tUserId: 'u-1', eventId: 'ev-1', origin: 'mia', originRef: 'req-1', actor: null })
-    const writeAhead = inserts.find((i) => i.table === 'agent_membership_requests')
-    expect(writeAhead.row).toMatchObject({ location_id: HATCH, kind: 'class_booking', details: { provider: 'un1t_online', event_id: 'ev-1', stage: 'executing' } })
-    expect(toolResultOf(bodies[2])).toMatchObject({ cancelled: false, chat_booking_unavailable: true })
-    expect(toolResultOf(bodies[3])).toMatchObject({ error: 'not_available_at_this_studio' })
+    const writeAhead = inserts.filter((i) => i.table === 'agent_membership_requests')
+    expect(writeAhead[0].row).toMatchObject({ location_id: HATCH, kind: 'class_booking', details: { provider: 'un1t_online', event_id: 'ev-1', stage: 'executing' } })
+    expect(toolResultOf(bodies[2])).toEqual({ cancelled: true, class_name: 'Fictional Hatch HIIT', class_time: FUTURE_LABEL })
+    expect(un1tCancel).toHaveBeenCalledTimes(1)
+    expect(un1tCancel.mock.calls[0][1]).toEqual({ locationId: HATCH, contactId: HATCH_CONTACT, un1tUserId: 'u-1', bookingId: 'bk-1', origin: 'mia', originRef: 'req-1', actor: null })
+    expect(writeAhead[1].row).toMatchObject({ location_id: HATCH, kind: 'class_cancellation', details: { provider: 'un1t_online', booking_id: 'bk-1', reason: 'mia_cancellation', stage: 'executing' } })
+    expect(toolResultOf(bodies[3])).toEqual({ filed: true, text: DEFAULT_REFUND_REQUEST_TEXT })
+    expect(fileRefundCard).toHaveBeenCalledTimes(1)
+    expect(fileRefundCard.mock.calls[0][1]).toMatchObject({ locationId: HATCH, reason: 'member_request', bookingId: 'bk-1', origin: 'mia', channel: 'whatsapp' })
     expect(toolResultOf(bodies[4])).toMatchObject({ error: 'not_available_at_this_studio' })
     expect(glofoxCalls()).toBe(0)
     expect(decisionMeta(inserts).tool_block).toBe('un1t_full')
@@ -860,10 +878,12 @@ describe('un1t_full at the turn (MIAHATCH.5)', () => {
     expect(glofoxCalls()).toBe(0)
   })
 
-  it('un1t_read_dual: book_class with a un1t: id keeps the slice 1 answer and never reaches D', async () => {
+  it('un1t_read_dual: book_class and cancel_class_booking with a un1t: id keep the slice 1 answer, request_refund is refused; D is never reached', async () => {
     resolveMemberStudios.mockResolvedValue(resolution(stillorganStudio(), hatchStudio()))
     const { fetchFn, bodies } = modelTurns([
       toolTurn('book_class', { event_id: 'un1t:ev-1', class_name: 'Fictional Hatch HIIT', starts_at: FUTURE_LABEL }),
+      toolTurn('cancel_class_booking', { booking_id: 'un1t:bk-1' }),
+      toolTurn('request_refund', { reason: 'late cancel', booking_id: 'un1t:bk-1' }),
       textTurn('ok'),
     ])
     vi.stubGlobal('fetch', fetchFn)
@@ -873,7 +893,11 @@ describe('un1t_full at the turn (MIAHATCH.5)', () => {
 
     expect(decisionMeta(inserts).tool_block).toBe('un1t_read_dual')
     expect(toolResultOf(bodies[1])).toMatchObject({ booked: false, chat_booking_unavailable: true })
+    expect(toolResultOf(bodies[2])).toMatchObject({ cancelled: false, chat_booking_unavailable: true })
+    expect(toolResultOf(bodies[3])).toMatchObject({ error: 'not_available_at_this_studio' })
     expect(un1tBook).not.toHaveBeenCalled()
+    expect(un1tCancel).not.toHaveBeenCalled()
+    expect(fileRefundCard).not.toHaveBeenCalled()
     expect(inserts.some((i) => i.table === 'agent_membership_requests')).toBe(false)
   })
 
