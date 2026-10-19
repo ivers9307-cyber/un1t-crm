@@ -1,11 +1,13 @@
-// TRIALDONE.4 — the pure decisions behind the trial-done outreach (spec:
+// TRIALDONE.4/.5 — the pure decisions behind the trial-done outreach (spec:
 // docs/superpowers/specs/2026-10-19-hatch-trial-done-conversion-design.md).
 //
 // A trial finisher at a un1t.online studio gets ONE WhatsApp opener, timed
 // from when they finished (trialDoneEvidenceAt: the end of the 3rd attended
 // class, or the later of the trial's expiry and the 2nd class for 2 attended),
-// and only while they are still eligible. The runner
-// (./trial-done-runner.js) does the reads and writes; these functions decide.
+// and at most ONE follow-up after it (a template if they never replied, or a
+// Mia-written in-window nudge if they replied and went quiet), only while they
+// are still eligible. The runner (./trial-done-runner.js) does the reads and
+// writes; these functions decide.
 
 import { DEFAULTS } from './settings-contract'
 
@@ -19,6 +21,13 @@ const H_MS = 3600_000
  * before a send needs a lease). The cron runs every 15 minutes.
  */
 export const TRIAL_DONE_CLAIM_LEASE_MS = 30 * 60_000
+
+/**
+ * Mia's instruction for the in-window nudge (TRIALDONE.5). It is an
+ * instruction to the model, never sent to the customer as written; what she
+ * writes goes through parseAgentResponse (em-dash scrub) before the send.
+ */
+export const TRIAL_DONE_NUDGE_INSTRUCTION = '[STUDIO SYSTEM - not the customer] They finished their trial and talked with you about continuing, then went quiet. Write one short, friendly check-in that picks up where you left off. No prices unless you already gave them. No pressure.'
 
 // wa_status values that mean "never message this number" (whatsapp-consent.js).
 const OPTED_OUT_STATUSES = new Set(['opted_out', 'blocked', 'undeliverable'])
@@ -54,6 +63,48 @@ export function openerDecision({ trigger, outreach, nowMs, settings } = {}) {
 }
 
 /**
+ * Is the one follow-up due for this person, and which kind? Pure; reads no
+ * clock but `nowMs`. The runner reads the two timestamps from the studio's
+ * thread, after opener_sent_at only.
+ *
+ * - No reply since the opener: a `template` from opener + followup_after_hours
+ *   (22) to opener + followup_max_hours (30), both inclusive; after that
+ *   `window_passed` (the runner closes the row).
+ * - They replied: while their last message is newer than the last outbound
+ *   (Mia has not answered yet) `awaiting_mia`; otherwise a `nudge` from their
+ *   last message + nudge_after_hours (3) to + nudge_max_hours (20), inside
+ *   WhatsApp's 24h window; after that `window_passed`.
+ *
+ * @param {object} p
+ * @param {object|null} p.outreach            their trial_done_outreach row
+ * @param {number|null} [p.lastInboundAtMs]   their last message after the opener
+ * @param {number|null} [p.lastOutboundAtMs]  the studio's last message after the opener
+ * @param {number} p.nowMs
+ * @param {object} [p.settings]               the effective trial_done block
+ * @returns {{ action: 'template'|'nudge' } | { action: null, reason: 'no_opener'|'already_followed_up'|'closed'|'too_soon'|'window_passed'|'awaiting_mia' }}
+ */
+export function followupDecision({ outreach, lastInboundAtMs = null, lastOutboundAtMs = null, nowMs, settings } = {}) {
+  const s = { ...DEFAULTS.trial_done, ...(settings || {}) }
+  if (outreach?.closed_at) return { action: null, reason: 'closed' }
+  const openerMs = outreach?.opener_sent_at ? Date.parse(outreach.opener_sent_at) : NaN
+  if (!Number.isFinite(openerMs)) return { action: null, reason: 'no_opener' }
+  if (outreach.followup_sent_at) return { action: null, reason: 'already_followed_up' }
+
+  const replied = Number.isFinite(lastInboundAtMs) && lastInboundAtMs > openerMs
+  if (!replied) {
+    if (nowMs < openerMs + Number(s.followup_after_hours) * H_MS) return { action: null, reason: 'too_soon' }
+    if (nowMs > openerMs + Number(s.followup_max_hours) * H_MS) return { action: null, reason: 'window_passed' }
+    return { action: 'template' }
+  }
+  if (!Number.isFinite(lastOutboundAtMs) || lastOutboundAtMs < lastInboundAtMs) {
+    return { action: null, reason: 'awaiting_mia' }
+  }
+  if (nowMs < lastInboundAtMs + Number(s.nudge_after_hours) * H_MS) return { action: null, reason: 'too_soon' }
+  if (nowMs > lastInboundAtMs + Number(s.nudge_max_hours) * H_MS) return { action: null, reason: 'window_passed' }
+  return { action: 'nudge' }
+}
+
+/**
  * May this person get a trial-done message right now? Pure. The first failing
  * rule names the reason, in this order: a purchase outranks a classification
  * that moved on (a buyer is no longer trial_done either, and "purchased" is
@@ -66,10 +117,17 @@ export function openerDecision({ trigger, outreach, nowMs, settings } = {}) {
  * @param {boolean} p.isStaff                   email of a live staff profile
  * @param {string|null} p.waStatus              contacts.wa_status
  * @param {boolean} p.hasConsent                the studio's whatsapp_marketing row is true
- * @returns {{ ok: true } | { ok: false, reason: 'not_trial_done'|'purchased'|'active_elsewhere'|'staff'|'opted_out'|'no_consent' }}
+ * An input the caller did not supply (reasons not a list, activeElsewhere or
+ * isStaff not a boolean) fails CLOSED with `inputs_missing`: never "eligible",
+ * and the runner treats it as a defer (skip this tick), never a close.
+ *
+ * @returns {{ ok: true } | { ok: false, reason: 'inputs_missing'|'not_trial_done'|'purchased'|'active_elsewhere'|'staff'|'opted_out'|'no_consent' }}
  */
 export function eligibilityVerdict({ stage, eligibilityReasons, activeElsewhere, isStaff, waStatus, hasConsent } = {}) {
-  const reasons = Array.isArray(eligibilityReasons) ? eligibilityReasons : []
+  if (!Array.isArray(eligibilityReasons) || typeof activeElsewhere !== 'boolean' || typeof isStaff !== 'boolean') {
+    return { ok: false, reason: 'inputs_missing' }
+  }
+  const reasons = eligibilityReasons
   if (reasons.some((r) => PURCHASE_REASONS.has(r))) return { ok: false, reason: 'purchased' }
   if (activeElsewhere === true) return { ok: false, reason: 'active_elsewhere' }
   if (isStaff === true) return { ok: false, reason: 'staff' }

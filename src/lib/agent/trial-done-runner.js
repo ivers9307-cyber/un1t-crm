@@ -1,4 +1,4 @@
-// TRIALDONE.4 — the trial-done outreach runner (spec:
+// TRIALDONE.4/.5 — the trial-done outreach runner (spec:
 // docs/superpowers/specs/2026-10-19-hatch-trial-done-conversion-design.md).
 //
 // Rides the agent-followups cron (every 15 min). Per tick, for every active
@@ -25,18 +25,38 @@
 //      row stays open and nothing is claimed);
 //   9. claim (lease TRIAL_DONE_CLAIM_LEASE_MS), send, record.
 //
+// TRIALDONE.5 — once the opener went, the same row runs the follow-up stage
+// instead (at most one follow-up, ever):
+//   a. followupDecision on the studio's thread, after opener_sent_at only:
+//      no reply = the follow-up template 22-30 h after the opener; replied and
+//      Mia answered last = one Mia-written nudge 3-20 h after their last
+//      message (inside WhatsApp's 24 h window); the customer waiting on Mia =
+//      nothing; past either window the row is closed 'window_passed';
+//   b. eligibilityVerdict again, fresh (bought closes 'purchased', opted out
+//      or consent withdrawn closes 'opted_out', and so on);
+//   c. the opener's gates: test-mode allowlist, the frequency cap (template
+//      only: the nudge is a reply inside the window), the template approved;
+//      a nudge also waits while the thread is handed off or paused;
+//   d. claim on the followup_* columns (followup_kind set at claim), send,
+//      record exactly as the opener.
+//
 // Every skip is a counted reason (results.reasons), carried on the cron
-// heartbeat. Never throws for one person or one studio. The follow-up stage
-// (TRIALDONE.5) is a second stage per row: see processCandidate.
+// heartbeat. Never throws for one person or one studio.
 
 import { DEFAULTS } from './settings-contract'
 import { resolveAgentSettingsForLocation } from './settings-resolve'
 import {
   proactiveWindowOpen, buildFollowupComponents, renderFollowupBody,
   recordProactiveMessage, studioOwnsWhatsAppNumber,
+  composeAgentText, loadAgentKnowledge, promptCapabilityFor,
 } from './followups'
-import { phoneMatchesAllowlist } from './core'
-import { openerDecision, eligibilityVerdict, TRIAL_DONE_CLAIM_LEASE_MS } from './trial-done'
+import { phoneMatchesAllowlist, isSkipResponse, parseAgentResponse } from './core'
+import {
+  openerDecision, followupDecision, eligibilityVerdict,
+  TRIAL_DONE_CLAIM_LEASE_MS, TRIAL_DONE_NUDGE_INSTRUCTION,
+} from './trial-done'
+import { getLocationBranding } from '@/lib/location-branding'
+import { UUID_SHAPE } from '@/lib/uuid-shape'
 import { classify as classifyUn1t } from '@shared/pipelines/acquisition-un1t'
 import { trialDoneEvidenceAt } from '@/lib/membership/reads/un1t-pipeline-dates'
 import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
@@ -54,12 +74,22 @@ const BOARD_MODULE = 'acquisition_un1t'
 const STAGE_SLUG = 'trial_done'
 const ACTIVITY_TYPE = 'agent_trial_done'
 const OPENER_SUBJECT = 'Mia messaged after their trial'
+const FOLLOWUP_SUBJECT = 'Mia followed up after their trial'
+const HISTORY_ROWS = 15
 const PAGE = 1000
 const KEY_CHUNK = 200
 
 const OUTREACH_COLS = 'id, location_id, contact_id, deal_id, trigger_kind, trigger_at, opener_claimed_at, opener_sent_at, opener_wa_message_id, followup_kind, followup_claimed_at, followup_sent_at, closed_at, closed_reason'
 const CONTACT_COLS = 'id, first_name, name, email, wa_phone, phone, wa_status, last_marketing_touch_at'
 const TEMPLATE_COLS = 'name, language, status, components, header_media_url, business_account_id'
+const CONVERSATION_COLS = 'id, agent_active, agent_handed_off_at, agent_paused_at'
+const HISTORY_COLS = 'direction, source, sent_by, body, created_at, message_type'
+
+// The two send stages share one claim/send/record path on their own columns.
+const STAGES = {
+  opener: { label: 'opener', claimed: 'opener_claimed_at', sent: 'opener_sent_at', waId: 'opener_wa_message_id', kind: null },
+  followup: { label: 'follow-up', claimed: 'followup_claimed_at', sent: 'followup_sent_at', waId: 'followup_wa_message_id', kind: 'followup_kind' },
+}
 
 const iso = (ms) => new Date(ms).toISOString()
 
@@ -123,8 +153,25 @@ async function readZones(db, ids) {
   }
 }
 
+// only_contact_ids: absent or [] = everyone; a list = those ids only (the
+// malformed entries dropped); anything else, or a list with no valid id, is
+// invalid and the studio is skipped. Never "everyone" by accident.
+function testContactList(value) {
+  if (value === undefined) return { ok: true, ids: null }
+  if (!Array.isArray(value)) return { ok: false }
+  if (value.length === 0) return { ok: true, ids: null }
+  const ids = value.filter((v) => typeof v === 'string' && UUID_SHAPE.test(v))
+  return ids.length > 0 ? { ok: true, ids } : { ok: false }
+}
+
 async function runStudio(db, { location, settings, td, zone, nowMs, results, skip }) {
   const studioId = location.id
+  const testList = testContactList(td.only_contact_ids)
+  if (!testList.ok) {
+    logError(MODULE, 'only_contact_ids is malformed; studio skipped this tick (never everyone)', { locationId: studioId, valueType: Array.isArray(td.only_contact_ids) ? 'array' : typeof td.only_contact_ids })
+    skip('test_list_invalid')
+    return
+  }
   if (!zone) { skip('zone_read_failed'); return }
   const window = proactiveWindowOpen(nowMs, settings, zone)
   if (!window.open) { skip(window.reason); return }
@@ -139,9 +186,8 @@ async function runStudio(db, { location, settings, td, zone, nowMs, results, ski
   if (!deals.ok) { skip(deals.reason); return }
   let candidates = deals.byContact
   // Test contacts only, when the operator listed any.
-  const only = Array.isArray(td.only_contact_ids) ? td.only_contact_ids.filter(Boolean) : []
-  if (only.length > 0) {
-    const keep = new Set(only)
+  if (testList.ids) {
+    const keep = new Set(testList.ids)
     candidates = new Map([...candidates].filter(([contactId]) => keep.has(contactId)))
   }
   if (candidates.size === 0) return
@@ -286,9 +332,8 @@ async function outreachRows(db, studioId, contactIds) {
 }
 
 /**
- * One person on the trial_done column. The opener stage today; TRIALDONE.5
- * adds the follow-up stage for rows whose opener went (opener_sent_at set,
- * not closed) before falling through to the opener stage.
+ * One person on the trial_done column: the opener stage until the opener went,
+ * then the follow-up stage (TRIALDONE.5).
  * Returns 'stop_studio' when the studio must stop for this tick.
  */
 async function processCandidate(ctx, contactId, deal) {
@@ -303,6 +348,7 @@ async function processCandidate(ctx, contactId, deal) {
     if (!row) { ctx.skip('outreach_write_failed'); return null }
     ctx.rows.set(contactId, row)
   }
+  if (row.opener_sent_at) return followupStage(ctx, { contactId, snapshot, row })
   return openerStage(ctx, { contactId, snapshot, trigger, row })
 }
 
@@ -421,17 +467,71 @@ async function eligibilityInputs(ctx, contact) {
   }
 }
 
-// The opener template at this studio, newest first: once per studio per tick.
-function openerTemplate(ctx) {
-  return once(ctx, 'opener_template', async () => {
+// The contact, read fresh. null = skipped (the reason counted).
+async function readContact(ctx, contactId) {
+  const { data: contact, error } = await ctx.db.from('contacts')
+    .select(CONTACT_COLS)
+    .eq('id', contactId)
+    .maybeSingle()
+  if (error) {
+    logError(MODULE, 'contact read failed; skipped this tick', { locationId: ctx.location.id, contactId, err: error })
+    ctx.skip('contact_read_failed')
+    return null
+  }
+  if (!contact) { ctx.skip('contact_missing'); return null }
+  return contact
+}
+
+// eligibilityVerdict on fresh reads. Not eligible closes the row with
+// closeAs(reason); an unreadable read or a missing input is a skip this tick
+// (the row stays open), never "eligible" and never a close. true = eligible.
+async function judgeEligibility(ctx, { contact, snapshot, row, closeAs = (reason) => reason }) {
+  const facts = await eligibilityInputs(ctx, contact)
+  if (!facts.ok) { ctx.skip(facts.reason); return false }
+  const verdict = eligibilityVerdict({ stage: classifyUn1t(snapshot, ctx.nowMs), ...facts.values })
+  if (verdict.ok) return true
+  if (verdict.reason === 'inputs_missing') {
+    logError(MODULE, 'eligibility inputs missing; skipped this tick', { locationId: ctx.location.id, contactId: contact.id })
+    ctx.skip('inputs_missing')
+    return false
+  }
+  const reason = closeAs(verdict.reason)
+  await closeRow(ctx, row, reason)
+  ctx.skip(reason)
+  return false
+}
+
+// After the opener a withdrawn consent row is an opt-out: the row closes
+// 'opted_out' (the reason Mia's trial-done context reads), as wa_status does.
+const followupCloseReason = (reason) => (reason === 'no_consent' ? 'opted_out' : reason)
+
+// The gates every send passes after eligibility: a number to send to, Mia's
+// test-mode allowlist, and (a marketing template only) the studio's frequency
+// cap, which defers and never closes. null = clear, else the skip reason.
+async function sendGate(ctx, contact, { frequencyCap }) {
+  const { db, location, settings, nowMs } = ctx
+  const to = contact.wa_phone
+  if (!to) return 'no_phone'
+  // Mia in test mode (not enabled): her test phones only, as every proactive runner.
+  if (!settings.enabled && settings.test_mode && !phoneMatchesAllowlist(to, settings.test_phones)) return 'test_allowlist'
+  if (frequencyCap) {
+    const capSetting = await once(ctx, 'frequency_cap', () => getLocationFrequencyCap(db, location.id))
+    if (isFrequencyCapped(contact, capSetting, new Date(nowMs))) return 'frequency_capped'
+  }
+  return null
+}
+
+// A template at this studio by name, newest first: once per studio per tick.
+function approvedTemplate(ctx, name) {
+  return once(ctx, `template:${name}`, async () => {
     const { data, error } = await ctx.db.from('whatsapp_templates')
       .select(TEMPLATE_COLS)
       .eq('location_id', ctx.location.id)
-      .eq('name', ctx.td.opener_template)
+      .eq('name', name)
       .order('created_at', { ascending: false })
       .limit(1)
     if (error) {
-      logError(MODULE, 'template read failed; skipped this tick', { locationId: ctx.location.id, err: error })
+      logError(MODULE, 'template read failed; skipped this tick', { locationId: ctx.location.id, template: name, err: error })
       return { ok: false, reason: 'template_read_failed' }
     }
     const template = data?.[0]
@@ -442,18 +542,21 @@ function openerTemplate(ctx) {
   })
 }
 
-// Conditional claim: only an unsent, open row whose claim is empty or past the lease.
-async function claimOpener(ctx, row) {
+// Conditional claim of one stage: only an open row whose stage is unsent and
+// whose claim is empty or past the lease. The follow-up claim also sets
+// followup_kind.
+async function claimStage(ctx, row, stage, kind = null) {
+  const c = STAGES[stage]
   const cutoffIso = iso(ctx.nowMs - TRIAL_DONE_CLAIM_LEASE_MS)
   const { data, error } = await ctx.db.from('trial_done_outreach')
-    .update({ opener_claimed_at: ctx.nowIso, updated_at: ctx.nowIso })
+    .update({ [c.claimed]: ctx.nowIso, ...(c.kind ? { [c.kind]: kind } : {}), updated_at: ctx.nowIso })
     .eq('id', row.id)
-    .is('opener_sent_at', null)
+    .is(c.sent, null)
     .is('closed_at', null)
-    .or(`opener_claimed_at.is.null,opener_claimed_at.lt.${cutoffIso}`)
+    .or(`${c.claimed}.is.null,${c.claimed}.lt.${cutoffIso}`)
     .select('id')
   if (error) {
-    logError(MODULE, 'opener claim failed; nothing sent this tick', { rowId: row.id, err: error })
+    logError(MODULE, `${c.label} claim failed; nothing sent this tick`, { rowId: row.id, err: error })
     return { ok: false, reason: 'claim_failed' }
   }
   if (!data?.length) return { ok: false, reason: 'claimed' }
@@ -462,17 +565,115 @@ async function claimOpener(ctx, row) {
 
 // Undo OUR claim after a send that did not go, so the next tick retries.
 // Pinned to the claim's own value; if this write fails the lease re-opens it.
-async function releaseOpener(ctx, row, claimAt) {
+async function releaseStage(ctx, row, stage, claimAt) {
+  const c = STAGES[stage]
   const { error } = await ctx.db.from('trial_done_outreach')
-    .update({ opener_claimed_at: null, updated_at: ctx.nowIso })
+    .update({ [c.claimed]: null, ...(c.kind ? { [c.kind]: null } : {}), updated_at: ctx.nowIso })
     .eq('id', row.id)
-    .eq('opener_claimed_at', claimAt)
-  if (error) logError(MODULE, 'opener claim release failed; the lease re-opens it', { rowId: row.id, err: error })
+    .eq(c.claimed, claimAt)
+  if (error) logError(MODULE, `${c.label} claim release failed; the lease re-opens it`, { rowId: row.id, err: error })
+}
+
+// A send that did not go: release the claim, count the reason. Always null.
+async function sendFailed(ctx, { row, stage, claimAt, contactId, err }) {
+  await releaseStage(ctx, row, stage, claimAt)
+  const label = STAGES[stage].label
+  if (err && isWhatsAppNumberMissing(err)) { ctx.skip('no_number'); return null }
+  if (err) logError(MODULE, `${label} send failed; claim released, the next tick retries`, { locationId: ctx.location.id, contactId, err })
+  else logWarn(MODULE, `${label} send returned no message id; claim released`, { locationId: ctx.location.id, contactId })
+  ctx.skip('send_failed')
+  return null
+}
+
+const firstNameOf = (contact) => (contact.first_name || String(contact.name || '').split(/\s+/)[0] || 'there').trim() || 'there'
+
+// Send one claimed template with {{1}} = the first name. Returns
+// { messageId, body } once Meta accepted it; null after a failed send (the
+// claim released, the reason counted).
+async function sendClaimedTemplate(ctx, { row, stage, claimAt, contact, template }) {
+  const { extractTemplateBody } = await import('@/lib/radar-outreach')
+  const { sendTemplateMessage, headerComponentFor } = await import('@/lib/whatsapp')
+  const values = [firstNameOf(contact)]
+  const { varCount } = extractTemplateBody(template.components)
+  const components = buildFollowupComponents(varCount, values)
+  const headerComponent = headerComponentFor(template.components, template.header_media_url)
+  if (headerComponent) components.unshift(headerComponent)
+
+  let res
+  try {
+    res = await sendTemplateMessage(contact.wa_phone, template.name, template.language || 'en', components,
+      { locationId: ctx.location.id, ...(template.business_account_id && { businessAccountId: template.business_account_id }) })
+  } catch (err) {
+    return sendFailed(ctx, { row, stage, claimAt, contactId: contact.id, err })
+  }
+  if (!res?.messageId) return sendFailed(ctx, { row, stage, claimAt, contactId: contact.id, err: null })
+  return { messageId: res.messageId, body: renderFollowupBody(template, values) || `[Template: ${template.name}]` }
+}
+
+// Sent. The bookkeeping below never undoes it; each loss is logged, and none
+// stops the next one (a duplicate risk is logged loudly, never a lost message).
+async function afterSend(ctx, { row, stage, contact, messageId, conversationId, body, messageType, templateName, subject, note }) {
+  const { db, location, nowIso } = ctx
+  const studioId = location.id
+  const c = STAGES[stage]
+  ctx.cap.sent++
+  if (stage === 'opener') ctx.results.openers++
+  else ctx.results.followups++
+
+  // Judged by its rows: a zero-row UPDATE is not an error in PostgREST.
+  const { data: stamped, error: sentErr } = await db.from('trial_done_outreach')
+    .update({ [c.sent]: nowIso, [c.waId]: messageId, updated_at: nowIso })
+    .eq('id', row.id)
+    .select('id')
+  if (sentErr || !stamped?.length) {
+    logError(MODULE, `${c.label} sent but not stamped; the lease could send it again`, {
+      rowId: row.id, contactId: contact.id, waMessageId: messageId, rows: stamped?.length ?? null, ...(sentErr ? { err: sentErr } : {}),
+    })
+  }
+
+  let threadId = conversationId || null
+  if (!threadId) {
+    try {
+      const { getOrCreateConversation } = await import('@/lib/whatsapp')
+      threadId = await getOrCreateConversation(db, { id: contact.id, wa_phone: contact.wa_phone, phone: contact.phone, name: contact.name }, studioId)
+    } catch (e) {
+      logError(MODULE, `${c.label} thread unavailable; message not recorded in the inbox`, { locationId: studioId, contactId: contact.id, waMessageId: messageId, err: e })
+    }
+  }
+  if (threadId) {
+    try {
+      await recordProactiveMessage(db, { id: threadId, contact_id: contact.id, location_id: studioId }, {
+        body, waMessageId: messageId, messageType, templateName,
+      })
+    } catch (e) {
+      logError(MODULE, 'message not recorded in the inbox; the activity and marketing touch are still written', {
+        locationId: studioId, contactId: contact.id, waMessageId: messageId, stage, err: e,
+      })
+    }
+  } else {
+    logWarn(MODULE, `${c.label} thread not found or created; message not recorded in the inbox`, { locationId: studioId, contactId: contact.id })
+  }
+
+  try {
+    const { error: actErr } = await db.from('activities').insert({
+      contact_id: contact.id,
+      location_id: studioId,
+      type: ACTIVITY_TYPE,
+      kind: 'event',
+      subject,
+      note,
+    })
+    if (actErr) logError(MODULE, `${c.label} activity not recorded; the daily cap undercounts it`, { locationId: studioId, contactId: contact.id, err: actErr })
+  } catch (e) {
+    logError(MODULE, `${c.label} activity not recorded; the daily cap undercounts it`, { locationId: studioId, contactId: contact.id, err: e })
+  }
+
+  await stampMarketingTouch(db, [contact.id], nowIso)
+  return null
 }
 
 async function openerStage(ctx, { contactId, snapshot, trigger, row }) {
-  const { db, location, settings, td, nowMs, nowIso, skip } = ctx
-  const studioId = location.id
+  const { nowMs, td, skip } = ctx
 
   const decision = openerDecision({ trigger, outreach: row, nowMs, settings: td })
   if (decision.action !== 'opener') {
@@ -482,106 +683,188 @@ async function openerStage(ctx, { contactId, snapshot, trigger, row }) {
   }
   if (ctx.cap.sent >= ctx.cap.max) { skip('daily_cap'); return 'stop_studio' }
 
-  const { data: contact, error: contactErr } = await db.from('contacts')
-    .select(CONTACT_COLS)
-    .eq('id', contactId)
-    .maybeSingle()
-  if (contactErr) {
-    logError(MODULE, 'contact read failed; skipped this tick', { locationId: studioId, contactId, err: contactErr })
-    skip('contact_read_failed')
-    return null
-  }
-  if (!contact) { skip('contact_missing'); return null }
+  const contact = await readContact(ctx, contactId)
+  if (!contact) return null
+  if (!(await judgeEligibility(ctx, { contact, snapshot, row }))) return null
 
-  const facts = await eligibilityInputs(ctx, contact)
-  if (!facts.ok) { skip(facts.reason); return null }
-  const verdict = eligibilityVerdict({ stage: classifyUn1t(snapshot, nowMs), ...facts.values })
-  if (!verdict.ok) {
-    await closeRow(ctx, row, verdict.reason)
-    skip(verdict.reason)
-    return null
-  }
+  const gate = await sendGate(ctx, contact, { frequencyCap: true })
+  if (gate) { skip(gate); return null }
 
-  const to = contact.wa_phone
-  if (!to) { skip('no_phone'); return null }
-  // Mia in test mode (not enabled): her test phones only, as every proactive runner.
-  if (!settings.enabled && settings.test_mode && !phoneMatchesAllowlist(to, settings.test_phones)) {
-    skip('test_allowlist')
-    return null
-  }
-
-  const capSetting = await once(ctx, 'frequency_cap', () => getLocationFrequencyCap(db, studioId))
-  if (isFrequencyCapped(contact, capSetting, new Date(nowMs))) { skip('frequency_capped'); return null }
-
-  const tpl = await openerTemplate(ctx)
+  const tpl = await approvedTemplate(ctx, td.opener_template)
   if (!tpl.ok) { skip(tpl.reason); return null }
   const template = tpl.template
 
-  const claim = await claimOpener(ctx, row)
+  const claim = await claimStage(ctx, row, 'opener')
   if (!claim.ok) { skip(claim.reason); return null }
 
-  const { extractTemplateBody } = await import('@/lib/radar-outreach')
-  const { sendTemplateMessage, headerComponentFor, getOrCreateConversation } = await import('@/lib/whatsapp')
-  const firstName = (contact.first_name || String(contact.name || '').split(/\s+/)[0] || 'there').trim() || 'there'
-  const values = [firstName]
-  const { varCount } = extractTemplateBody(template.components)
-  const components = buildFollowupComponents(varCount, values)
-  const headerComponent = headerComponentFor(template.components, template.header_media_url)
-  if (headerComponent) components.unshift(headerComponent)
+  const sent = await sendClaimedTemplate(ctx, { row, stage: 'opener', claimAt: claim.at, contact, template })
+  if (!sent) return null
+  return afterSend(ctx, {
+    row, stage: 'opener', contact, messageId: sent.messageId, conversationId: null,
+    body: sent.body, messageType: 'template', templateName: template.name,
+    subject: OPENER_SUBJECT, note: template.name,
+  })
+}
 
+// ── TRIALDONE.5 — the one follow-up ──────────────────────────────────
+
+// The studio's thread for this number (unique (location_id, wa_phone), mig
+// 008) and the newest inbound and outbound message on it after the opener.
+// No thread yet = no reply. A failed read is a skip, never "no reply".
+async function threadFacts(ctx, contact, openerSentAt) {
+  const { db, location } = ctx
+  const { data: conversation, error } = await db.from('whatsapp_conversations')
+    .select(CONVERSATION_COLS)
+    .eq('location_id', location.id)
+    .eq('wa_phone', contact.wa_phone)
+    .maybeSingle()
+  if (error) {
+    logError(MODULE, 'thread read failed; skipped this tick', { locationId: location.id, contactId: contact.id, err: error })
+    return { ok: false, reason: 'thread_read_failed' }
+  }
+  if (!conversation) return { ok: true, conversation: null, lastInboundAtMs: null, lastOutboundAtMs: null }
+
+  const newest = (direction) => db.from('whatsapp_messages')
+    .select('created_at')
+    .eq('conversation_id', conversation.id)
+    .eq('direction', direction)
+    .gt('created_at', openerSentAt)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  const [inbound, outbound] = await Promise.all([newest('inbound'), newest('outbound')])
+  if (inbound.error || outbound.error) {
+    logError(MODULE, 'thread read failed; skipped this tick', { locationId: location.id, contactId: contact.id, err: inbound.error || outbound.error })
+    return { ok: false, reason: 'thread_read_failed' }
+  }
+  const atMs = (res) => {
+    const ms = Date.parse(res.data?.[0]?.created_at ?? '')
+    return Number.isFinite(ms) ? ms : null
+  }
+  return { ok: true, conversation, lastInboundAtMs: atMs(inbound), lastOutboundAtMs: atMs(outbound) }
+}
+
+// Mia may write on this thread: not handed to a person, not paused.
+const miaOwnsThread = (conversation) => Boolean(conversation)
+  && conversation.agent_active !== false && !conversation.agent_handed_off_at && !conversation.agent_paused_at
+
+async function followupStage(ctx, { contactId, snapshot, row }) {
+  const { td, nowMs, skip } = ctx
+
+  // A closed or followed-up row needs no reads at all.
+  const settled = followupDecision({ outreach: row, nowMs, settings: td })
+  if (['closed', 'already_followed_up', 'no_opener'].includes(settled.reason)) { skip(settled.reason); return null }
+
+  const contact = await readContact(ctx, contactId)
+  if (!contact) return null
+  if (!contact.wa_phone) { skip('no_phone'); return null }
+  const thread = await threadFacts(ctx, contact, row.opener_sent_at)
+  if (!thread.ok) { skip(thread.reason); return null }
+
+  const decision = followupDecision({
+    outreach: row, lastInboundAtMs: thread.lastInboundAtMs, lastOutboundAtMs: thread.lastOutboundAtMs, nowMs, settings: td,
+  })
+  if (!decision.action) {
+    if (decision.reason === 'window_passed') await closeRow(ctx, row, 'window_passed')
+    skip(decision.reason)
+    return null
+  }
+  if (ctx.cap.sent >= ctx.cap.max) { skip('daily_cap'); return 'stop_studio' }
+
+  if (!(await judgeEligibility(ctx, { contact, snapshot, row, closeAs: followupCloseReason }))) return null
+  const kind = decision.action
+  // A person has the thread: the nudge waits (the window closes the row if it stays so).
+  if (kind === 'nudge' && !miaOwnsThread(thread.conversation)) { skip('mia_not_active'); return null }
+  const gate = await sendGate(ctx, contact, { frequencyCap: kind === 'template' })
+  if (gate) { skip(gate); return null }
+
+  return kind === 'template'
+    ? followupTemplate(ctx, { row, contact })
+    : followupNudge(ctx, { row, contact, conversation: thread.conversation })
+}
+
+// They never replied: the follow-up template (outside the 24 h window).
+async function followupTemplate(ctx, { row, contact }) {
+  const tpl = await approvedTemplate(ctx, ctx.td.followup_template)
+  if (!tpl.ok) { ctx.skip(tpl.reason); return null }
+  const template = tpl.template
+
+  const claim = await claimStage(ctx, row, 'followup', 'template')
+  if (!claim.ok) { ctx.skip(claim.reason); return null }
+
+  const sent = await sendClaimedTemplate(ctx, { row, stage: 'followup', claimAt: claim.at, contact, template })
+  if (!sent) return null
+  return afterSend(ctx, {
+    row, stage: 'followup', contact, messageId: sent.messageId, conversationId: null,
+    body: sent.body, messageType: 'template', templateName: template.name,
+    subject: FOLLOWUP_SUBJECT, note: template.name,
+  })
+}
+
+// They replied and went quiet: one Mia-written message inside the window, on
+// the studio's own thread.
+async function followupNudge(ctx, { row, contact, conversation }) {
+  const { db, location, settings, zone, skip } = ctx
+  const studioId = location.id
+
+  const { data: recent, error: historyErr } = await db.from('whatsapp_messages')
+    .select(HISTORY_COLS)
+    .eq('conversation_id', conversation.id)
+    .order('created_at', { ascending: false })
+    .limit(HISTORY_ROWS)
+  if (historyErr) {
+    logError(MODULE, 'thread history unreadable; skipped this tick', { locationId: studioId, contactId: contact.id, err: historyErr })
+    skip('thread_read_failed')
+    return null
+  }
+
+  const claim = await claimStage(ctx, row, 'followup', 'nudge')
+  if (!claim.ok) { skip(claim.reason); return null }
+
+  let composed
+  try {
+    const branding = await getLocationBranding(db, studioId)
+    composed = await composeAgentText({
+      location, settings, zone,
+      historyRows: (recent || []).slice().reverse(),
+      instruction: TRIAL_DONE_NUDGE_INSTRUCTION,
+      companyName: branding?.companyName,
+      knowledge: await loadAgentKnowledge(db, studioId),
+      ...promptCapabilityFor(location, settings),
+    })
+  } catch (e) {
+    composed = { error: `compose_threw:${e?.message || e}` }
+  }
+  if (!composed || composed.error) {
+    await releaseStage(ctx, row, 'followup', claim.at)
+    logWarn(MODULE, 'nudge not composed; claim released, the next tick retries', { locationId: studioId, contactId: contact.id, reason: String(composed?.error || 'no answer').slice(0, 200) })
+    skip('nudge_compose_failed')
+    return null
+  }
+  // Mia judged there is nothing open to pick up: the sequence ends here.
+  if (!composed.text || isSkipResponse(composed.text)) {
+    await closeRow(ctx, row, 'nothing_open')
+    skip('nothing_open')
+    return null
+  }
+  // parseAgentResponse scrubs em-dashes, as on every reply Mia sends.
+  const parsed = parseAgentResponse(composed.text)
+  if (parsed.action !== 'reply' || !parsed.text) {
+    await closeRow(ctx, row, 'nudge_not_sendable')
+    skip('nudge_not_sendable')
+    return null
+  }
+
+  const { sendTextMessage } = await import('@/lib/whatsapp')
   let res
   try {
-    res = await sendTemplateMessage(to, template.name, template.language || 'en', components,
-      { locationId: studioId, ...(template.business_account_id && { businessAccountId: template.business_account_id }) })
-  } catch (e) {
-    await releaseOpener(ctx, row, claim.at)
-    if (isWhatsAppNumberMissing(e)) { skip('no_number'); return null }
-    logError(MODULE, 'opener send failed; claim released, the next tick retries', { locationId: studioId, contactId, err: e })
-    skip('send_failed')
-    return null
+    res = await sendTextMessage(contact.wa_phone, parsed.text, { locationId: studioId })
+  } catch (err) {
+    return sendFailed(ctx, { row, stage: 'followup', claimAt: claim.at, contactId: contact.id, err })
   }
-  if (!res?.messageId) {
-    await releaseOpener(ctx, row, claim.at)
-    logWarn(MODULE, 'opener send returned no message id; claim released', { locationId: studioId, contactId })
-    skip('send_failed')
-    return null
-  }
-
-  // Sent. The bookkeeping below never undoes it; each loss is logged.
-  ctx.cap.sent++
-  ctx.results.openers++
-  const { error: sentErr } = await db.from('trial_done_outreach')
-    .update({ opener_sent_at: nowIso, opener_wa_message_id: res.messageId, updated_at: nowIso })
-    .eq('id', row.id)
-  if (sentErr) {
-    logError(MODULE, 'opener sent but not stamped; the lease could send it again', { rowId: row.id, contactId, waMessageId: res.messageId, err: sentErr })
-  }
-
-  let conversationId = null
-  try {
-    conversationId = await getOrCreateConversation(db, { id: contact.id, wa_phone: contact.wa_phone, phone: contact.phone, name: contact.name }, studioId)
-  } catch (e) {
-    logError(MODULE, 'opener thread unavailable; message not recorded in the inbox', { locationId: studioId, contactId, err: e })
-  }
-  if (conversationId) {
-    await recordProactiveMessage(db, { id: conversationId, contact_id: contact.id, location_id: studioId }, {
-      body: renderFollowupBody(template, values) || `[Template: ${template.name}]`,
-      waMessageId: res.messageId, messageType: 'template', templateName: template.name,
-    })
-  } else {
-    logWarn(MODULE, 'opener thread not found or created; message not recorded in the inbox', { locationId: studioId, contactId })
-  }
-
-  const { error: actErr } = await db.from('activities').insert({
-    contact_id: contact.id,
-    location_id: studioId,
-    type: ACTIVITY_TYPE,
-    kind: 'event',
-    subject: OPENER_SUBJECT,
-    note: template.name,
+  if (!res?.messageId) return sendFailed(ctx, { row, stage: 'followup', claimAt: claim.at, contactId: contact.id, err: null })
+  return afterSend(ctx, {
+    row, stage: 'followup', contact, messageId: res.messageId, conversationId: conversation.id,
+    body: parsed.text, messageType: 'text', templateName: null,
+    subject: FOLLOWUP_SUBJECT, note: 'nudge',
   })
-  if (actErr) logError(MODULE, 'opener activity not recorded; the daily cap undercounts it', { locationId: studioId, contactId, err: actErr })
-
-  await stampMarketingTouch(db, [contact.id], nowIso)
-  return null
 }

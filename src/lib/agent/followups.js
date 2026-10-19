@@ -346,8 +346,9 @@ async function stampStage(db, conversationId, stage, sent) {
 /**
  * The location's enabled knowledge, same query the live reply path runs
  * (auto-reply.js). Best-effort: a failure just yields an empty list.
+ * Exported for the trial-done nudge (TRIALDONE.5), which composes the same way.
  */
-async function loadAgentKnowledge(db, locationId) {
+export async function loadAgentKnowledge(db, locationId) {
   const { data } = await db.from('agent_knowledge')
     .select('category, title, content, enabled, sort_order')
     .eq('location_id', locationId)

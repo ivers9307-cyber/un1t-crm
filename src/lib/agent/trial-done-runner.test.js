@@ -1,5 +1,5 @@
 // src/lib/agent/trial-done-runner.test.js
-// TRIALDONE.4 — the trial-done opener runner, against a small in-memory
+// TRIALDONE.4/.5 — the trial-done opener and follow-up runner, against a small in-memory
 // PostgREST fake (every chain is recorded; filters are applied to the rows, so
 // a claim that loses a race really returns zero rows).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -9,6 +9,8 @@ import { classify as classifyUn1t } from '@shared/pipelines/acquisition-un1t'
 
 const m = vi.hoisted(() => ({
   sendTemplateMessage: null,
+  sendTextMessage: null,
+  composeAgentText: null,
   getOrCreateConversation: null,
   pipelineInputs: null,
   trialEligibility: null,
@@ -18,6 +20,7 @@ const m = vi.hoisted(() => ({
 
 vi.mock('@/lib/whatsapp', () => ({
   sendTemplateMessage: (...a) => m.sendTemplateMessage(...a),
+  sendTextMessage: (...a) => m.sendTextMessage(...a),
   headerComponentFor: () => null,
   getOrCreateConversation: (...a) => m.getOrCreateConversation(...a),
 }))
@@ -28,6 +31,15 @@ vi.mock('@/lib/membership/reads', () => ({
 }))
 vi.mock('@/lib/pipeline-other-studio-members', () => ({
   loadActiveElsewhere: (...a) => m.loadActiveElsewhere(...a),
+}))
+vi.mock('@/lib/location-branding', () => ({
+  getLocationBranding: async () => ({ companyName: 'UN1T' }),
+}))
+// Mia's composer is the only part of followups.js faked: the runner reuses the
+// rest (recordProactiveMessage, proactiveWindowOpen, the knowledge read) as is.
+vi.mock('./followups', async (importOriginal) => ({
+  ...(await importOriginal()),
+  composeAgentText: (...a) => m.composeAgentText(...a),
 }))
 
 import { runTrialDoneOutreach } from './trial-done-runner'
@@ -94,7 +106,17 @@ function baseTables({ location = hatchLocation(), contacts = [contactRow(C1)], t
       location_id: HATCH, name: 'hatch_trial_done_checkin', language: 'en', status: templateStatus,
       components: [{ type: 'BODY', text: 'Hi {{1}}, well done on finishing your trial!' }],
       header_media_url: null, business_account_id: 'waba-1', created_at: iso(NOW - 48 * H),
+    }, {
+      location_id: HATCH, name: 'hatch_trial_done_followup', language: 'en', status: templateStatus,
+      components: [{ type: 'BODY', text: 'Hey {{1}}, just bumping this in case it got buried!' }],
+      header_media_url: null, business_account_id: 'waba-1', created_at: iso(NOW - 48 * H),
     }],
+    // the studio's thread per person, keyed (location_id, wa_phone) as in mig 008
+    whatsapp_conversations: contacts.map((c) => ({
+      id: `conv-${c.id.slice(0, 1)}`, location_id: HATCH, wa_phone: c.wa_phone, contact_id: c.id,
+      agent_active: true, agent_handed_off_at: null, agent_paused_at: null,
+    })),
+    agent_knowledge: [],
     profiles: [{ id: 'p1', email: 'Coach@Example.com', deleted_at: null }],
     activities: [],
     trial_done_outreach: [],
@@ -123,6 +145,7 @@ function matches(row, f) {
     case 'gte': return v != null && v >= val
     case 'lte': return v != null && v <= val
     case 'lt': return v != null && v < val
+    case 'gt': return v != null && v > val
     case 'ilike': return v != null && ilikeMatches(val, v)
     default: throw new Error(`fake: unsupported filter ${op}`)
   }
@@ -192,7 +215,7 @@ function makeDb(tables, { answer } = {}) {
         insert: (row) => { q.op = 'insert'; q.patch = row; return b },
         upsert: (row, o) => { q.op = 'upsert'; q.patch = row; q.upsert = o || {}; return b },
         update: (patch) => { q.op = 'update'; q.patch = patch; return b },
-        eq: add('eq'), neq: add('neq'), in: add('in'), is: add('is'), gte: add('gte'), lte: add('lte'), lt: add('lt'), ilike: add('ilike'),
+        eq: add('eq'), neq: add('neq'), in: add('in'), is: add('is'), gte: add('gte'), lte: add('lte'), lt: add('lt'), gt: add('gt'), ilike: add('ilike'),
         or: (expr) => { q.filters.push(['or', expr]); return b },
         order: (c, o) => { q.order = [c, o]; return b },
         range: (f, t) => { q.range = [f, t]; return b },
@@ -217,6 +240,8 @@ beforeEach(() => {
   eligibility = new Map()
   activeElsewhere = { ok: true, contactIds: new Set(), studios: [] }
   m.sendTemplateMessage = vi.fn(async () => ({ messageId: 'wamid.1' }))
+  m.sendTextMessage = vi.fn(async () => ({ messageId: 'wamid.text' }))
+  m.composeAgentText = vi.fn(async () => ({ text: 'Hi Aoife, any thoughts on the Foundation spots? Happy to help.' }))
   m.getOrCreateConversation = vi.fn(async () => 'conv-1')
   m.pipelineInputs = vi.fn(async () => ({
     success: true,
@@ -286,7 +311,9 @@ describe('runTrialDoneOutreach — the opener', () => {
     m.sendTemplateMessage.mockClear()
     const again = await runTrialDoneOutreach(db, { nowMs: NOW + 15 * MIN })
     expect(m.sendTemplateMessage).not.toHaveBeenCalled()
-    expect(again.reasons).toEqual({ already_sent: 1 })
+    // the follow-up stage now owns the row: nothing is due 15 minutes later
+    expect(again.reasons).toEqual({ too_soon: 1 })
+    expect(again.openers).toBe(0)
   })
 
   it('the first name falls back to the name, then "there"', async () => {
@@ -634,5 +661,453 @@ describe('runTrialDoneOutreach — the opener', () => {
     const res = await runTrialDoneOutreach(db, { nowMs: NOW })
     expect(res.openers).toBe(1)
     expect(outreach(db, C1)).toMatchObject({ trigger_kind: 'two_attended_expired', trigger_at: iso(expiry) })
+  })
+})
+
+// ── TRIALDONE.5 — the one follow-up ──────────────────────────────────
+const CONV1 = 'conv-1'
+// A row whose opener went at `openerAt`; the person is still a trial finisher.
+function openedRow(contactId, openerAt, over = {}) {
+  return {
+    id: `r-${contactId.slice(0, 1)}`, location_id: HATCH, contact_id: contactId, deal_id: 'deal-1',
+    trigger_kind: 'three_attended', trigger_at: iso(openerAt - 2 * H),
+    opener_claimed_at: iso(openerAt), opener_sent_at: iso(openerAt), opener_wa_message_id: 'wamid.opener',
+    followup_kind: null, followup_claimed_at: null, followup_sent_at: null, followup_wa_message_id: null,
+    closed_at: null, closed_reason: null, updated_at: iso(openerAt),
+    ...over,
+  }
+}
+const msg = (direction, atMs, over = {}) => ({
+  id: `m-${direction}-${atMs}`, conversation_id: CONV1, contact_id: C1, location_id: HATCH, direction,
+  source: direction === 'outbound' ? 'agent' : null, body: direction === 'inbound' ? 'Tell me more' : 'Sure, here you go',
+  message_type: 'text', created_at: iso(atMs), ...over,
+})
+function followupTables({ openerAt, messages = [], contacts = [contactRow(C1)], location, rows } = {}) {
+  const tables = baseTables({ location, contacts })
+  tables.trial_done_outreach = rows || contacts.map((c) => openedRow(c.id, openerAt))
+  tables.whatsapp_messages = messages
+  return tables
+}
+
+describe('runTrialDoneOutreach — the one follow-up', () => {
+  beforeEach(() => {
+    // finished a day ago: still trial_done on the board, long past the opener's 24h
+    people = new Map([[C1, trialFinisher(NOW - 30 * H)], [C2, trialFinisher(NOW - 30 * H)], [C3, trialFinisher(NOW - 30 * H)]])
+  })
+
+  it('template at opener + 22h when they never replied', async () => {
+    const db = makeDb(followupTables({ openerAt: NOW - 22 * H }))
+
+    const early = await runTrialDoneOutreach(db, { nowMs: NOW - MIN })
+    expect(early.reasons).toEqual({ too_soon: 1 })
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(outreach(db, C1)).toMatchObject({ followup_claimed_at: null, followup_kind: null, closed_at: null })
+
+    db.log.length = 0
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res).toMatchObject({ openers: 0, followups: 1, skipped: 0 })
+    expect(m.sendTextMessage).not.toHaveBeenCalled()
+    expect(m.composeAgentText).not.toHaveBeenCalled()
+    expect(m.sendTemplateMessage).toHaveBeenCalledTimes(1)
+    expect(m.sendTemplateMessage).toHaveBeenCalledWith(
+      contactRow(C1).wa_phone, 'hatch_trial_done_followup', 'en',
+      [{ type: 'body', parameters: [{ type: 'text', text: 'Aoife' }] }],
+      { locationId: HATCH, businessAccountId: 'waba-1' },
+    )
+    expect(outreach(db, C1)).toMatchObject({
+      followup_kind: 'template', followup_claimed_at: iso(NOW), followup_sent_at: iso(NOW), followup_wa_message_id: 'wamid.1',
+      updated_at: iso(NOW), closed_at: null, opener_sent_at: iso(NOW - 22 * H),
+    })
+    expect(db.tables.whatsapp_messages).toEqual([expect.objectContaining({
+      conversation_id: 'conv-1', contact_id: C1, location_id: HATCH, wa_message_id: 'wamid.1', direction: 'outbound',
+      message_type: 'template', template_name: 'hatch_trial_done_followup', source: 'agent',
+      body: 'Hey Aoife, just bumping this in case it got buried!',
+    })])
+    expect(db.tables.activities).toEqual([expect.objectContaining({
+      contact_id: C1, location_id: HATCH, type: 'agent_trial_done', kind: 'event', subject: 'Mia followed up after their trial',
+      note: 'hatch_trial_done_followup',
+    })])
+    expect(db.tables.contacts.find((c) => c.id === C1).last_marketing_touch_at).toBe(iso(NOW))
+    // eligibility read fresh before the follow-up
+    expect(m.trialEligibility).toHaveBeenCalledWith(db, HATCH, expect.objectContaining({ contactId: C1 }))
+    // the thread is the studio's, found by its unique key; replies are read after the opener only
+    const convRead = db.log.find((q) => q.table === 'whatsapp_conversations')
+    expect(convRead.filters).toEqual(expect.arrayContaining([['eq', 'location_id', HATCH], ['eq', 'wa_phone', contactRow(C1).wa_phone]]))
+    const msgReads = db.log.filter((q) => q.table === 'whatsapp_messages' && q.op === 'select')
+    expect(msgReads).toHaveLength(2)
+    for (const r of msgReads) {
+      expect(r.filters).toEqual(expect.arrayContaining([['eq', 'conversation_id', 'conv-1'], ['gt', 'created_at', iso(NOW - 22 * H)]]))
+      expect(r.order).toEqual(['created_at', { ascending: false }])
+      expect(r.limit).toBe(1)
+    }
+  })
+
+  it('a reply from before the opener is not a reply: still the template', async () => {
+    const db = makeDb(followupTables({ openerAt: NOW - 22 * H, messages: [msg('inbound', NOW - 30 * H)] }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.followups).toBe(1)
+    expect(outreach(db, C1).followup_kind).toBe('template')
+  })
+
+  it('nudge 3h after their last message when Mia answered last', async () => {
+    const lastIn = NOW - 3 * H
+    m.composeAgentText = vi.fn(async () => ({ text: 'Hi Aoife — any thoughts on the Foundation spots?' }))
+    const db = makeDb(followupTables({
+      openerAt: NOW - 10 * H,
+      messages: [msg('inbound', lastIn), msg('outbound', lastIn + 5 * MIN)],
+    }))
+
+    const early = await runTrialDoneOutreach(db, { nowMs: NOW - MIN })
+    expect(early.reasons).toEqual({ too_soon: 1 })
+    expect(m.composeAgentText).not.toHaveBeenCalled()
+
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res).toMatchObject({ openers: 0, followups: 1, skipped: 0 })
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(m.composeAgentText).toHaveBeenCalledTimes(1)
+    const compose = m.composeAgentText.mock.calls[0][0]
+    expect(compose.instruction).toBe('[STUDIO SYSTEM - not the customer] They finished their trial and talked with you about continuing, then went quiet. Write one short, friendly check-in that picks up where you left off. No prices unless you already gave them. No pressure.')
+    expect(compose.location).toMatchObject({ id: HATCH, name: 'UN1T Hatch Street' })
+    expect(compose.zone).toBe('Europe/Dublin')
+    expect(compose.companyName).toBe('UN1T')
+    expect(compose.historyRows.map((r) => r.direction)).toEqual(['inbound', 'outbound'])
+    expect(compose.membershipSource).toMatchObject({ key: 'un1t_online' })
+    // in the window, on the studio's own number, with no em-dash
+    expect(m.sendTextMessage).toHaveBeenCalledTimes(1)
+    const [to, text, opts] = m.sendTextMessage.mock.calls[0]
+    expect(to).toBe(contactRow(C1).wa_phone)
+    expect(text).not.toMatch(/[–—]/)
+    expect(text).toContain('any thoughts on the Foundation spots?')
+    expect(opts).toEqual({ locationId: HATCH })
+    expect(outreach(db, C1)).toMatchObject({
+      followup_kind: 'nudge', followup_sent_at: iso(NOW), followup_wa_message_id: 'wamid.text', closed_at: null,
+    })
+    // recorded on the studio's own thread like the opener
+    expect(m.getOrCreateConversation).not.toHaveBeenCalled()
+    expect(db.tables.whatsapp_messages.at(-1)).toMatchObject({
+      conversation_id: 'conv-1', contact_id: C1, location_id: HATCH, wa_message_id: 'wamid.text', direction: 'outbound',
+      message_type: 'text', source: 'agent', body: text,
+    })
+    expect(db.tables.activities).toEqual([expect.objectContaining({
+      contact_id: C1, location_id: HATCH, type: 'agent_trial_done', subject: 'Mia followed up after their trial', note: 'nudge',
+    })])
+  })
+
+  it('no follow-up while the customer is waiting on Mia', async () => {
+    const lastIn = NOW - 5 * H
+    const db = makeDb(followupTables({
+      openerAt: NOW - 10 * H,
+      messages: [msg('inbound', lastIn - H), msg('outbound', lastIn - 30 * MIN), msg('inbound', lastIn)],
+    }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ awaiting_mia: 1 })
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(m.sendTextMessage).not.toHaveBeenCalled()
+    expect(m.composeAgentText).not.toHaveBeenCalled()
+    expect(outreach(db, C1)).toMatchObject({ followup_claimed_at: null, closed_at: null })
+  })
+
+  it('followup skipped and closed when the person bought', async () => {
+    eligibility.set(C1, ['trial_used', 'membership_history'])
+    const db = makeDb(followupTables({ openerAt: NOW - 22 * H }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(res.reasons).toEqual({ purchased: 1 })
+    expect(outreach(db, C1)).toMatchObject({ closed_at: iso(NOW), closed_reason: 'purchased', followup_claimed_at: null, updated_at: iso(NOW) })
+  })
+
+  it('opt-out after the opener closes the row', async () => {
+    const contacts = [contactRow(C1, { wa_status: 'opted_out' }), contactRow(C2)]
+    const tables = followupTables({ openerAt: NOW - 22 * H, contacts })
+    // C2 said STOP at the studio: its consent row is now false
+    tables.contact_location_preferences.find((p) => p.contact_id === C2).whatsapp_marketing = false
+    const db = makeDb(tables)
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(res.reasons).toEqual({ opted_out: 2 })
+    expect(outreach(db, C1)).toMatchObject({ closed_at: iso(NOW), closed_reason: 'opted_out' })
+    expect(outreach(db, C2)).toMatchObject({ closed_at: iso(NOW), closed_reason: 'opted_out' })
+  })
+
+  it('a staff or active-elsewhere verdict closes with its own reason', async () => {
+    const contacts = [contactRow(C1, { email: 'coach@example.com' }), contactRow(C2)]
+    activeElsewhere = { ok: true, contactIds: new Set([C2]), studios: [] }
+    const db = makeDb(followupTables({ openerAt: NOW - 22 * H, contacts }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ staff: 1, active_elsewhere: 1 })
+    expect(outreach(db, C1).closed_reason).toBe('staff')
+    expect(outreach(db, C2).closed_reason).toBe('active_elsewhere')
+  })
+
+  it('only one follow-up ever', async () => {
+    const db = makeDb(followupTables({ openerAt: NOW - 22 * H }))
+    const first = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(first.followups).toBe(1)
+
+    // they reply to the template, Mia answers, then they go quiet
+    db.tables.whatsapp_messages.push(msg('inbound', NOW + H), msg('outbound', NOW + H + 2 * MIN))
+    for (const later of [NOW + 15 * MIN, NOW + 5 * H, NOW + 24 * H]) {
+      const res = await runTrialDoneOutreach(db, { nowMs: later })
+      expect(res.followups).toBe(0)
+      expect(res.reasons).toEqual({ already_followed_up: 1 })
+    }
+    expect(m.sendTemplateMessage).toHaveBeenCalledTimes(1)
+    expect(m.sendTextMessage).not.toHaveBeenCalled()
+    expect(m.composeAgentText).not.toHaveBeenCalled()
+    expect(outreach(db, C1).closed_at).toBeNull()
+  })
+
+  it('a second runner losing the follow-up claim sends nothing', async () => {
+    const db = makeDb(followupTables({ openerAt: NOW - 22 * H }))
+    const [a, b] = await Promise.all([
+      runTrialDoneOutreach(db, { nowMs: NOW }),
+      runTrialDoneOutreach(db, { nowMs: NOW }),
+    ])
+    expect(m.sendTemplateMessage).toHaveBeenCalledTimes(1)
+    expect(a.followups + b.followups).toBe(1)
+    expect({ ...a.reasons, ...b.reasons }).toEqual({ claimed: 1 })
+  })
+
+  it('a follow-up claim inside the lease is not taken; past it, it is', async () => {
+    const rows = [openedRow(C1, NOW - 22 * H, { followup_kind: 'template', followup_claimed_at: iso(NOW - 29 * MIN) })]
+    const db = makeDb(followupTables({ rows }))
+    const held = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(held.reasons).toEqual({ claimed: 1 })
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+
+    const taken = await runTrialDoneOutreach(db, { nowMs: NOW + 2 * MIN })
+    expect(taken.followups).toBe(1)
+    expect(outreach(db, C1)).toMatchObject({ followup_claimed_at: iso(NOW + 2 * MIN), followup_sent_at: iso(NOW + 2 * MIN) })
+  })
+
+  it('past opener + 30h with no reply the row is closed window_passed, never sent', async () => {
+    const db = makeDb(followupTables({ openerAt: NOW - 30 * H - MIN }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(res.reasons).toEqual({ window_passed: 1 })
+    expect(outreach(db, C1)).toMatchObject({ closed_at: iso(NOW), closed_reason: 'window_passed' })
+    // no eligibility read is needed to close a passed window
+    expect(m.trialEligibility).not.toHaveBeenCalled()
+  })
+
+  it('past their last message + 20h the nudge window is closed window_passed', async () => {
+    const lastIn = NOW - 20 * H - MIN
+    const db = makeDb(followupTables({ openerAt: NOW - 25 * H, messages: [msg('inbound', lastIn), msg('outbound', lastIn + MIN)] }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ window_passed: 1 })
+    expect(outreach(db, C1).closed_reason).toBe('window_passed')
+    expect(m.composeAgentText).not.toHaveBeenCalled()
+  })
+
+  it('unapproved follow-up template skips without closing or claiming', async () => {
+    const tables = followupTables({ openerAt: NOW - 22 * H })
+    tables.whatsapp_templates.find((t) => t.name === 'hatch_trial_done_followup').status = 'REJECTED'
+    const db = makeDb(tables)
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ template_not_approved: 1 })
+    expect(outreach(db, C1)).toMatchObject({ followup_claimed_at: null, followup_kind: null, closed_at: null })
+  })
+
+  it('the follow-up template name is read from the settings', async () => {
+    const tables = followupTables({ openerAt: NOW - 22 * H, location: hatchLocation({ trial_done: { followup_template: 'my_followup' } }) })
+    tables.whatsapp_templates.push({ ...tables.whatsapp_templates[1], name: 'my_followup' })
+    const db = makeDb(tables)
+    await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(m.sendTemplateMessage.mock.calls[0][1]).toBe('my_followup')
+  })
+
+  it('the frequency cap defers the template, not the in-window nudge', async () => {
+    const location = hatchLocation({}, { comms_frequency_cap: { enabled: true, min_hours_between: 24 } })
+    // the opener stamped the touch
+    const capped = makeDb(followupTables({ openerAt: NOW - 22 * H, location, contacts: [contactRow(C1, { last_marketing_touch_at: iso(NOW - 22 * H) })] }))
+    const res = await runTrialDoneOutreach(capped, { nowMs: NOW })
+    expect(res.reasons).toEqual({ frequency_capped: 1 })
+    expect(outreach(capped, C1)).toMatchObject({ followup_claimed_at: null, closed_at: null })
+
+    const lastIn = NOW - 3 * H
+    const nudge = makeDb(followupTables({
+      openerAt: NOW - 10 * H, location, contacts: [contactRow(C1, { last_marketing_touch_at: iso(NOW - 10 * H) })],
+      messages: [msg('inbound', lastIn), msg('outbound', lastIn + MIN)],
+    }))
+    const res2 = await runTrialDoneOutreach(nudge, { nowMs: NOW })
+    expect(res2.followups).toBe(1)
+    expect(outreach(nudge, C1).followup_kind).toBe('nudge')
+  })
+
+  it('test mode (agent not enabled) follows up only to the test phones', async () => {
+    const contacts = [contactRow(C1), contactRow(C3)]
+    const location = hatchLocation({ enabled: false, test_mode: true, test_phones: [contactRow(C3).wa_phone] })
+    const db = makeDb(followupTables({ openerAt: NOW - 22 * H, contacts, location }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.followups).toBe(1)
+    expect(m.sendTemplateMessage.mock.calls[0][0]).toBe(contactRow(C3).wa_phone)
+    expect(res.reasons).toEqual({ test_allowlist: 1 })
+    expect(outreach(db, C1)).toMatchObject({ followup_claimed_at: null, closed_at: null })
+  })
+
+  it('a nudge waits while the thread is handed off or paused', async () => {
+    const lastIn = NOW - 3 * H
+    const tables = followupTables({ openerAt: NOW - 10 * H, messages: [msg('inbound', lastIn), msg('outbound', lastIn + MIN, { source: 'operator' })] })
+    tables.whatsapp_conversations[0].agent_paused_at = iso(NOW - 2 * H)
+    const db = makeDb(tables)
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ mia_not_active: 1 })
+    expect(m.composeAgentText).not.toHaveBeenCalled()
+    expect(outreach(db, C1)).toMatchObject({ followup_claimed_at: null, closed_at: null })
+  })
+
+  it('a nudge Mia cannot compose releases the claim for the next tick', async () => {
+    m.composeAgentText = vi.fn(async () => ({ error: 'model_http_529' }))
+    const lastIn = NOW - 3 * H
+    const db = makeDb(followupTables({ openerAt: NOW - 10 * H, messages: [msg('inbound', lastIn), msg('outbound', lastIn + MIN)] }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ nudge_compose_failed: 1 })
+    expect(m.sendTextMessage).not.toHaveBeenCalled()
+    expect(outreach(db, C1)).toMatchObject({ followup_claimed_at: null, followup_kind: null, followup_sent_at: null, closed_at: null })
+  })
+
+  it('a nudge Mia skips (nothing open) closes the row', async () => {
+    m.composeAgentText = vi.fn(async () => ({ text: '[[SKIP]]' }))
+    const lastIn = NOW - 3 * H
+    const db = makeDb(followupTables({ openerAt: NOW - 10 * H, messages: [msg('inbound', lastIn), msg('outbound', lastIn + MIN)] }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ nothing_open: 1 })
+    expect(m.sendTextMessage).not.toHaveBeenCalled()
+    expect(outreach(db, C1)).toMatchObject({ closed_at: iso(NOW), closed_reason: 'nothing_open', followup_sent_at: null })
+  })
+
+  it('a nudge send that throws releases the claim; a number refusal is no_number', async () => {
+    const lastIn = NOW - 3 * H
+    const setup = () => makeDb(followupTables({ openerAt: NOW - 10 * H, messages: [msg('inbound', lastIn), msg('outbound', lastIn + MIN)] }))
+
+    m.sendTextMessage = vi.fn(async () => { throw new Error('(#131047) Re-engagement message') })
+    const a = setup()
+    expect((await runTrialDoneOutreach(a, { nowMs: NOW })).reasons).toEqual({ send_failed: 1 })
+    expect(outreach(a, C1)).toMatchObject({ followup_claimed_at: null, followup_kind: null })
+
+    m.sendTextMessage = vi.fn(async () => { throw new WhatsAppNumberMissingError(HATCH) })
+    const b = setup()
+    expect((await runTrialDoneOutreach(b, { nowMs: NOW })).reasons).toEqual({ no_number: 1 })
+    expect(outreach(b, C1).followup_claimed_at).toBeNull()
+
+    m.sendTextMessage = vi.fn(async () => ({ messageId: null }))
+    const c = setup()
+    expect((await runTrialDoneOutreach(c, { nowMs: NOW })).reasons).toEqual({ send_failed: 1 })
+    expect(outreach(c, C1).followup_claimed_at).toBeNull()
+  })
+
+  it('a failed template send releases the follow-up claim', async () => {
+    m.sendTemplateMessage = vi.fn(async () => ({ messageId: null }))
+    const db = makeDb(followupTables({ openerAt: NOW - 22 * H }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ send_failed: 1 })
+    expect(outreach(db, C1)).toMatchObject({ followup_claimed_at: null, followup_kind: null, followup_sent_at: null })
+    expect(db.tables.activities).toEqual([])
+  })
+
+  it('an unreadable thread skips this tick: never sent, never closed', async () => {
+    const db = makeDb(followupTables({ openerAt: NOW - 22 * H }), {
+      answer: (q) => (q.table === 'whatsapp_messages' && q.op === 'select' ? { data: null, error: { message: 'timeout' } } : undefined),
+    })
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ thread_read_failed: 1 })
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(outreach(db, C1)).toMatchObject({ closed_at: null, followup_claimed_at: null })
+  })
+
+  it('no thread at the studio yet means no reply: the template', async () => {
+    const tables = followupTables({ openerAt: NOW - 22 * H })
+    tables.whatsapp_conversations = []
+    const db = makeDb(tables)
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.followups).toBe(1)
+    expect(m.getOrCreateConversation).toHaveBeenCalledWith(db, expect.objectContaining({ id: C1 }), HATCH)
+  })
+
+  it('a follow-up counts against the daily cap', async () => {
+    const contacts = [contactRow(C1), contactRow(C2)]
+    const location = hatchLocation({ trial_done: { daily_cap: 1 } })
+    const db = makeDb(followupTables({ openerAt: NOW - 22 * H, contacts, location }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.followups).toBe(1)
+    expect(res.reasons).toEqual({ daily_cap: 1 })
+  })
+
+  it('the follow-up sent-stamp is judged by its rows: zero rows is logged loudly', async () => {
+    const db = makeDb(followupTables({ openerAt: NOW - 22 * H }), {
+      answer: (q) => (q.table === 'trial_done_outreach' && q.op === 'update' && q.patch.followup_sent_at ? { data: [], error: null } : undefined),
+    })
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.followups).toBe(1)
+    const stamp = db.log.find((q) => q.table === 'trial_done_outreach' && q.op === 'update' && q.patch.followup_sent_at)
+    expect(stamp.returning).toBe(true)
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('[trial-done] follow-up sent but not stamped'),
+      expect.objectContaining({ rowId: 'r-1', waMessageId: 'wamid.1', rows: 0 }),
+    )
+  })
+})
+
+// ── TRIALDONE.5 — hardening of the TRIALDONE.4 review findings ─────────
+describe('runTrialDoneOutreach — hardening', () => {
+  it('the opener sent-stamp is judged by its rows: zero rows is logged loudly', async () => {
+    const db = makeDb(baseTables(), {
+      answer: (q) => (q.table === 'trial_done_outreach' && q.op === 'update' && q.patch.opener_sent_at ? { data: [], error: null } : undefined),
+    })
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.openers).toBe(1)
+    const stamp = db.log.find((q) => q.table === 'trial_done_outreach' && q.op === 'update' && q.patch.opener_sent_at)
+    expect(stamp.returning).toBe(true)
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('[trial-done] opener sent but not stamped'),
+      expect.objectContaining({ contactId: C1, waMessageId: 'wamid.1', rows: 0 }),
+    )
+  })
+
+  it('a throw recording the message still writes the activity and the marketing touch', async () => {
+    const db = makeDb(baseTables(), {
+      answer: (q) => {
+        if (q.table === 'whatsapp_messages' && q.op === 'insert') throw new Error('socket hang up')
+        return undefined
+      },
+    })
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res).toMatchObject({ openers: 1, skipped: 0 })
+    expect(db.tables.activities).toEqual([expect.objectContaining({ contact_id: C1, type: 'agent_trial_done' })])
+    expect(db.tables.contacts.find((c) => c.id === C1).last_marketing_touch_at).toBe(iso(NOW))
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('[trial-done] message not recorded in the inbox'),
+      expect.objectContaining({ contactId: C1, waMessageId: 'wamid.1' }),
+    )
+  })
+
+  it.each([
+    ['a string', 'not-a-list'],
+    ['an object', { id: C1 }],
+    ['a list with no valid id', ['', 'nope', 42, null]],
+  ])('only_contact_ids that is %s skips the studio (test_list_invalid), never everyone', async (_label, value) => {
+    const location = hatchLocation({ trial_done: { only_contact_ids: value } })
+    const db = makeDb(baseTables({ location }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(res.reasons).toEqual({ test_list_invalid: 1 })
+    expect(tablesRead(db)).not.toContain('deals')
+  })
+
+  it('only_contact_ids keeps its valid ids and drops the rest', async () => {
+    const contacts = [contactRow(C1), contactRow(C3, { first_name: 'Test' })]
+    people = new Map(contacts.map((c) => [c.id, trialFinisher()]))
+    const location = hatchLocation({ trial_done: { only_contact_ids: ['nope', C3, ''] } })
+    const db = makeDb(baseTables({ location, contacts }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.openers).toBe(1)
+    expect(m.sendTemplateMessage.mock.calls[0][0]).toBe(contactRow(C3).wa_phone)
+  })
+
+  it('an empty only_contact_ids is everyone (the operator listed none)', async () => {
+    const location = hatchLocation({ trial_done: { only_contact_ids: [] } })
+    const db = makeDb(baseTables({ location }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.openers).toBe(1)
   })
 })
