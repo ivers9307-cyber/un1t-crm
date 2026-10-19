@@ -6,7 +6,8 @@ vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.f
 vi.mock('@/lib/membership/reads/index', () => ({ radarReadsFor: vi.fn() }))
 vi.mock('@/lib/location-time', () => ({ getLocationZone: vi.fn(async () => 'Europe/Dublin') }))
 
-import { logInfo } from '@/lib/log'
+import { logInfo, logWarn } from '@/lib/log'
+import { getLocationZone } from '@/lib/location-time'
 import { radarReadsFor } from '@/lib/membership/reads/index'
 import { radarAvailability, RADAR_UNAVAILABLE, syncDataAsOf } from './radar-availability'
 
@@ -51,6 +52,15 @@ describe('radarAvailability', () => {
     const { db } = runsDb([{ finished_at: '2026-10-18T11:45:00Z' }])
     expect(await radarAvailability(db, L, { module: 'lead-radar' })).toEqual({ available: true, source: 'un1t_online', dataAsOf: '2026-10-18T11:45:00Z', dataAsOfZone: null })
     expect(await radarAvailability(db, L, { module: 'churn-radar', withZone: true })).toEqual({ available: true, source: 'un1t_online', dataAsOf: '2026-10-18T11:45:00Z', dataAsOfZone: 'Europe/Dublin' })
+  })
+
+  it('an unreadable zone is null and logged (locationId only), never thrown', async () => {
+    radarReadsFor.mockResolvedValue({ source: 'un1t_online', reads: {}, providesMemberships: true, pinArrears: true })
+    getLocationZone.mockRejectedValueOnce(new Error('zone read failed'))
+    const { db } = runsDb([{ finished_at: '2026-10-18T11:45:00Z' }])
+    expect(await radarAvailability(db, L, { module: 'churn-radar', withZone: true })).toEqual({ available: true, source: 'un1t_online', dataAsOf: '2026-10-18T11:45:00Z', dataAsOfZone: null })
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalledWith('churn-radar', expect.any(String), { locationId: L })
   })
 
   it('an unreadable source throws (the route answers 500)', async () => {

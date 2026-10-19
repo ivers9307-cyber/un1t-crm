@@ -10,7 +10,7 @@
 // Glofox studio's `data` JSON is byte-identical): `dataAsOf` is the newest
 // successful un1t.online sync at the location, so the page can say how fresh
 // its numbers are; null for any other source.
-import { logInfo } from '@/lib/log'
+import { logInfo, logWarn } from '@/lib/log'
 import { radarReadsFor } from '@/lib/membership/reads/index'
 import { getLocationZone } from '@/lib/location-time'
 
@@ -52,8 +52,13 @@ export async function radarAvailability(db, locationId, { module, withZone = fal
   if (source !== 'un1t_online') return { available: true, source, dataAsOf: null, dataAsOfZone: null }
   const dataAsOf = await syncDataAsOf(db, locationId)
   // UN1TRADAR.2 — the studio's clock for the "as of HH:MM" line; an unreadable
-  // zone is null and the page then draws no line rather than guess one.
+  // zone is null (logged) and the page then draws no line rather than guess one.
   let dataAsOfZone = null
-  try { dataAsOfZone = withZone && dataAsOf ? await getLocationZone(db, locationId) : null } catch { dataAsOfZone = null }
+  try {
+    dataAsOfZone = withZone && dataAsOf ? await getLocationZone(db, locationId) : null
+  } catch {
+    logWarn(module, 'radar zone unreadable: no data-as-of line', { locationId })
+    dataAsOfZone = null
+  }
   return { available: true, source, dataAsOf, dataAsOfZone }
 }
