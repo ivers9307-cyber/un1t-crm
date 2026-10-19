@@ -215,9 +215,14 @@ async function syncOneLocation(db, location, filters, lookbackSec) {
           const result = await applyMemberSync(db, location.id, m, {
             creds, membershipCache,
           })
-          summary[result.action] = (summary[result.action] || 0) + 1
+          // GLOFOXSIBLING.1 — a result carrying `error` did NOT do its action (a
+          // refused insert came back as action 'create'). Counted as an error,
+          // it shows in the run summary instead of reading as a new contact.
+          if (result.error) summary.error++
+          else summary[result.action] = (summary[result.action] || 0) + 1
           // CREDITSREAD.1 — synced, but the stored credits/label were kept.
           if (result.credits_unread) summary.credits_unread++
+          if (result.crossover_link?.linked) summary.crossover_linked = (summary.crossover_linked || 0) + 1
           if (result.error && !firstError) {
             firstError = `[${m._id || 'unknown'}] ${result.error}`
           }

@@ -5061,6 +5061,32 @@ registry.registerPath({
   },
 })
 
+// Glofox sibling-studio repair (GLOFOXSIBLING.1)
+registry.registerPath({
+  method: 'post',
+  path: '/api/glofox/crossover-backfill',
+  tags: ['Glofox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Find (and optionally link) Glofox members whose contact lives at a sibling studio',
+  description: 'GLOFOXSIBLING.1 — master only. Reads one page of the studio\'s Glofox members and lists those with no contact at the studio whose one contact lives at another studio of the same organisation (contacts are unique per email per organisation, mig 712, so the old sync could not create them). dry_run (default true) only reads; dry_run:false runs the member sync for up to 25 of the page\'s candidates, which links each one (glofox_crossover_members, mig 756, plus the studio\'s preferences row). Ids only in the response.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: uuidLike,
+      page: z.number().int().min(1).optional(),
+      limit: z.number().int().min(1).max(100).optional(),
+      dry_run: z.boolean().optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: '{ success, data: { dry_run, page, has_more, scanned, candidates: [{ glofox_member_id, contact_id, home_location_id, how }], conflicts, errors, applied, left_on_page } }' },
+    400: { description: 'Invalid body, or Glofox not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Master only', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The studio\'s contacts could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'glofox_settings_unreadable: the studio\'s Glofox settings could not be read just now; retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Glofox trainer-id reference list (STUDIO-KPI.4)
 registry.registerPath({
   method: 'get',

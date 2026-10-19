@@ -14,8 +14,9 @@
 //      Contacts helper branch; anything else (auth_is_in_location, true, a
 //      raw contact_memberships subquery, another helper) is a breaker. Also
 //      breakers: a (re)definition of the membership helper whose body is not
-//      exactly 731's or 732's (UN1TDUAL.4, which adds un1t_clients rows
-//      linked to a contact; EVERY branch must take its studios from
+//      exactly 731's, 732's (UN1TDUAL.4, which adds un1t_clients rows
+//      linked to a contact) or 756's (GLOFOXSIBLING.1, which adds
+//      glofox_crossover_members rows); EVERY branch must take its studios from
 //      auth_contact_read_location_ids, and the membership branch counts only
 //      active rows), or that is
 //      not SECURITY DEFINER with SET search_path = '' (EVERY CREATE of it is
@@ -86,9 +87,28 @@ export const MEMBERSHIP_HELPER_BODIES = Object.freeze({
        WHERE uc.contact_id IS NOT NULL
          AND uc.location_id = ANY ((SELECT private.${HELPER}())::uuid[])
     ) x`),
+  // 756 (GLOFOXSIBLING.1): plus glofox_crossover_members rows (a Glofox
+  // studio's member whose contact lives at a sibling studio)
+  756: norm(`
+  SELECT coalesce(array_agg(DISTINCT x.contact_id), '{}'::uuid[])
+    FROM (
+      SELECT cm.contact_id
+        FROM public.contact_memberships cm
+       WHERE cm.status = 'active'
+         AND cm.location_id = ANY ((SELECT private.${HELPER}())::uuid[])
+      UNION
+      SELECT uc.contact_id
+        FROM public.un1t_clients uc
+       WHERE uc.contact_id IS NOT NULL
+         AND uc.location_id = ANY ((SELECT private.${HELPER}())::uuid[])
+      UNION
+      SELECT gx.contact_id
+        FROM public.glofox_crossover_members gx
+       WHERE gx.location_id = ANY ((SELECT private.${HELPER}())::uuid[])
+    ) x`),
 })
 // The body the LATEST migration that creates the helper must carry.
-export const LATEST_MEMBERSHIP_HELPER_MIGRATION = 732
+export const LATEST_MEMBERSHIP_HELPER_MIGRATION = 756
 export const MEMBERSHIP_HELPER_BODY = MEMBERSHIP_HELPER_BODIES[LATEST_MEMBERSHIP_HELPER_MIGRATION]
 const ACCEPTED_HELPER_BODIES = Object.values(MEMBERSHIP_HELPER_BODIES)
 
@@ -212,7 +232,7 @@ function definerAttrProblems(attrs) {
   return why
 }
 
-/** Every CREATE of the membership helper in `code` (comments already blanked) whose body is not exactly 731's or 732's. */
+/** Every CREATE of the membership helper in `code` (comments already blanked) whose body is not exactly 731's, 732's or 756's. */
 export function membershipHelperDefBreakers(code) {
   const hits = []
   const creates = new RegExp(`\\bcreate\\s+(?:or\\s+replace\\s+)?function\\s+${fnRef(MEMBERSHIP_HELPER)}`, 'gi')
@@ -221,7 +241,7 @@ export function membershipHelperDefBreakers(code) {
     const why = []
     if (!parts) why.push('no AS body the guard can read')
     else {
-      if (!ACCEPTED_HELPER_BODIES.includes(norm(parts.body))) why.push('body is neither mig 731\'s nor mig 732\'s')
+      if (!ACCEPTED_HELPER_BODIES.includes(norm(parts.body))) why.push('body is not mig 731\'s, 732\'s or 756\'s')
       why.push(...definerAttrProblems(parts.attrs))
     }
     if (why.length) hits.push(`create function private.${MEMBERSHIP_HELPER} (${why.join('; ')})`)
@@ -257,7 +277,7 @@ export function contactReadScopeBreakers(sql) {
       hits.push(m[0].trim().replace(/\s+/g, ' '))
     }
   }
-  // the membership helper (re)defined with any body but 731's or 732's, or not
+  // the membership helper (re)defined with any body but 731's, 732's or 756's, or not
   // SECURITY DEFINER with SET search_path = '' (every CREATE of it)
   hits.push(...membershipHelperDefBreakers(code))
   // contacts' row level security toggled (any ALTER TABLE action list on contacts)
