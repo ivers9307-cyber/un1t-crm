@@ -9,7 +9,11 @@ import { StudioSettingsSchema, buildStudioOverrideBlob, buildCustomerAgentSettin
 import { mergeAgentSettings } from '@/lib/agent/settings-resolve'
 import { initialOverridden } from '@/lib/agent/settings-overrides'
 import { STILLORGAN_BLOB } from '@/lib/agent/settings-fixtures.test-helpers'
-import { buildSavePayload, buildOrgSavePayload, numberOrNull, compactObject, bookingLinkErrors, bookingIssuesFromResponse } from './save-payload'
+import {
+  buildSavePayload, buildOrgSavePayload, numberOrNull, compactObject, bookingLinkErrors, bookingIssuesFromResponse,
+  buildTrialDonePayload, trialDoneErrors, ORG_PAYLOAD_DROPPED_KEYS,
+} from './save-payload'
+import { DEFAULTS } from '@/lib/agent/settings-contract'
 
 // What GET hands the editor (the resolved settings + the two siblings).
 const shownFor = (studio, org = null) => ({
@@ -253,5 +257,69 @@ describe('un1t_chat_actions_enabled: editor state -> PUT body -> stored blob', (
   it('a saved true survives a re-save untouched (idempotent)', () => {
     const { blob } = saveThroughPut({ ...shownFor(HATCH), un1t_chat_actions_enabled: true }, [])
     expect(saveThroughPut(shownFor(blob), initialOverridden(blob)).blob).toEqual(blob)
+  })
+})
+
+// TRIALDONE.3 — the studio-only trial-finisher block: editor state -> PUT body
+// -> stored blob. Studio-only: the org editor never sends it.
+describe('trial_done: editor state -> PUT body -> stored blob', () => {
+  const HATCH = { enabled: true }
+  const ID_A = '11111111-1111-4111-8111-111111111111'
+  const ID_B = '22222222-2222-4222-8222-222222222222'
+
+  it('the editor shows the default block (off) for a studio that never set it', () => {
+    expect(shownFor(HATCH).trial_done).toEqual(DEFAULTS.trial_done)
+  })
+
+  it('an untouched block is stored whole and off; a second save is idempotent', () => {
+    const { blob } = saveThroughPut(shownFor(HATCH), [])
+    expect(blob.trial_done).toEqual(DEFAULTS.trial_done)
+    expect(saveThroughPut(shownFor(blob), initialOverridden(blob)).blob).toEqual(blob)
+  })
+
+  it('every edited field reaches the stored blob, whatever `overridden` says', () => {
+    const edited = {
+      ...DEFAULTS.trial_done, enabled: true, delay_hours: '5', opener_template: '  my_opener  ', followup_template: 'my_followup',
+      mia_instruction: '  Help them carry on.  ', only_contact_ids_text: `${ID_A}, ${ID_B}\n${ID_A}`,
+    }
+    const { blob } = saveThroughPut({ ...shownFor(HATCH), trial_done: edited }, [])
+    expect(blob.trial_done).toEqual({
+      ...DEFAULTS.trial_done, enabled: true, delay_hours: 5, opener_template: 'my_opener', followup_template: 'my_followup',
+      mia_instruction: 'Help them carry on.', only_contact_ids: [ID_A, ID_B],
+    })
+  })
+
+  it('a cleared field is left out of the body, so the default fills in (never null)', () => {
+    const body = JSON.parse(JSON.stringify(buildTrialDonePayload({ ...DEFAULTS.trial_done, delay_hours: '', opener_template: '  ', mia_instruction: '' })))
+    expect(body).not.toHaveProperty('delay_hours')
+    expect(body).not.toHaveProperty('opener_template')
+    expect(body).not.toHaveProperty('mia_instruction')
+    expect(StudioSettingsSchema.safeParse({ enabled: true, trial_done: body }).success).toBe(true)
+  })
+
+  it('no block in the editor state sends none (an older GET never writes defaults over a stored block)', () => {
+    expect(buildTrialDonePayload(undefined)).toBe(undefined)
+    expect('trial_done' in JSON.parse(JSON.stringify(buildSavePayload({ ...shownFor(HATCH), trial_done: undefined }, [])))).toBe(false)
+  })
+
+  it('the org editor never sends it', () => {
+    expect(ORG_PAYLOAD_DROPPED_KEYS).toContain('trial_done')
+    expect(buildOrgSavePayload({ ...shownFor(HATCH), trial_done: { ...DEFAULTS.trial_done, enabled: true } }, [], 'org1').settings).not.toHaveProperty('trial_done')
+  })
+
+  it('trialDoneErrors names what the PUT would refuse', () => {
+    expect(trialDoneErrors({ trial_done: DEFAULTS.trial_done })).toEqual({})
+    expect(trialDoneErrors({})).toEqual({})
+    const bad = trialDoneErrors({ trial_done: {
+      ...DEFAULTS.trial_done, delay_hours: 0, opener_template: 'Has Caps', followup_template: 'ok_name',
+      mia_instruction: 'Welcome \u2014 hi', only_contact_ids_text: 'nope',
+    } })
+    expect(Object.keys(bad).sort()).toEqual(['delay_hours', 'mia_instruction', 'only_contact_ids', 'opener_template'])
+    expect(trialDoneErrors({ trial_done: { ...DEFAULTS.trial_done, delay_hours: 2.5 } })).toHaveProperty('delay_hours')
+    expect(trialDoneErrors({ trial_done: { ...DEFAULTS.trial_done, delay_hours: 73 } })).toHaveProperty('delay_hours')
+    expect(trialDoneErrors({ trial_done: { ...DEFAULTS.trial_done, delay_hours: '' } })).toEqual({})
+    expect(trialDoneErrors({ trial_done: { ...DEFAULTS.trial_done, mia_instruction: 'x'.repeat(1001) } })).toHaveProperty('mia_instruction')
+    const many = Array.from({ length: 21 }, (_, i) => `${String(i).padStart(8, '0')}-1111-4111-8111-111111111111`).join('\n')
+    expect(trialDoneErrors({ trial_done: { ...DEFAULTS.trial_done, only_contact_ids_text: many } })).toHaveProperty('only_contact_ids')
   })
 })

@@ -895,6 +895,28 @@ describe('pipelineInputs and trialEligibility', () => {
       expect(subCols.some((c) => c.split(', ').includes('remote_created_at'))).toBe(true)
     })
 
+    // TRIALDONE.2 — the trial's expiry and each class's end time.
+    it('reads the trial product\'s expire_credits_in_days and each event\'s ends_at: trial_expires_at and attended_ends', async () => {
+      const w = world({
+        un1t_products: [prod({ expire_credits_in_days: '7' })],
+        un1t_transactions: [ctx({ remote_created_at: '2026-10-01T09:00:00Z' })],
+        un1t_events: [
+          { id: 'e1', location_id: HATCH, un1t_id: 'e1', starts_at: '2026-10-10T18:00:00Z', ends_at: '2026-10-10T18:45:00Z' },
+          { id: 'e0', location_id: HATCH, un1t_id: 'e0', starts_at: '2026-10-03T18:00:00Z', ends_at: null },
+        ],
+      })
+      w.un1t_bookings = [...w.un1t_bookings, { ...w.un1t_bookings[0], id: 'b0', un1t_id: 'b0', event_id: 'e0' }]
+      const { db, log } = makeDb(w)
+      const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      expect(out.data.snapshots.get('c1').trial_expires_at).toBe('2026-10-08T09:00:00.000Z')
+      expect(out.data.evidence.get('c1').trial_expires_at).toBe('2026-10-08T09:00:00.000Z')
+      expect(out.data.evidence.get('c1').attended_ends).toEqual(['2026-10-03T18:00:00Z', '2026-10-10T18:45:00Z'])
+      expect(out.data.snapshots.get('c2').trial_expires_at).toBeNull()
+      const cols = (t) => log.find((q) => q.table === t).cols.split(', ')
+      expect(cols('un1t_products')).toContain('expire_credits_in_days:raw->>expire_credits_in_days')
+      expect(cols('un1t_events')).toContain('ends_at')
+    })
+
     it('counts only done ledger rows as a trial (a sent, unknown or refused row is not on the board)', async () => {
       // 3 credits on the account: with the trial known, they are trial credits (status 'trial')
       const base = {

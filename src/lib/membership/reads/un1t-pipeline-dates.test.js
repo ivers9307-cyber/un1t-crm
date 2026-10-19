@@ -1,7 +1,7 @@
 // HATCHPIPE.5 — the real dates behind a un1t.online board's cards.
 import { describe, it, expect } from 'vitest'
 import { PIPELINE_THRESHOLDS } from '@shared/pipeline-classifier'
-import { un1tStageEnteredAt, un1tFunnelEnteredAt, un1tDealDates } from './un1t-pipeline-dates'
+import { un1tStageEnteredAt, un1tFunnelEnteredAt, un1tDealDates, trialDoneEvidenceAt } from './un1t-pipeline-dates'
 
 const NOW = Date.parse('2026-10-18T12:00:00.000Z')
 const DAY = 86_400_000
@@ -21,6 +21,8 @@ const ev = (over = {}) => ({
   gympass_since: null,
   dismissed_at: null,
   membership_ended_at: null,
+  attended_ends: [],
+  trial_expires_at: null,
   ...over,
 })
 
@@ -71,6 +73,22 @@ describe('un1tStageEnteredAt — funnel stages', () => {
 
   it('trial_done: null with fewer than three attended bookings', () => {
     expect(un1tStageEnteredAt('trial_done', ev({ attended_starts: [ago(20), ago(14)] }), NOW)).toBeNull()
+  })
+
+  it('trial_done with exactly two attended and an expired trial: the expiry (TRIALDONE.2)', () => {
+    const e = ev({ attended_starts: [ago(9), ago(6)], attended_ends: [ago(8.9), ago(5.9)], last_attended_at: ago(6), trial_expires_at: ago(2) })
+    expect(un1tStageEnteredAt('trial_done', e, NOW)).toBe(ago(2))
+    // an expiry still ahead is never a stage date
+    expect(un1tStageEnteredAt('trial_done', { ...e, trial_expires_at: ahead(1) }, NOW)).toBeNull()
+    // one attended is never Trial done, expired or not
+    expect(un1tStageEnteredAt('trial_done', ev({ attended_starts: [ago(9)], attended_ends: [ago(8.9)], trial_expires_at: ago(2) }), NOW)).toBeNull()
+  })
+
+  it('trial_done with two attended, the second class after the expiry: the second class start (TRIALDONE.2 fix)', () => {
+    const e = ev({ attended_starts: [ago(12), ago(4)], attended_ends: [ago(11.9), ago(3.9)], last_attended_at: ago(4), trial_expires_at: ago(5) })
+    expect(un1tStageEnteredAt('trial_done', e, NOW)).toBe(ago(4))
+    // expiry after the second class: the expiry, unchanged
+    expect(un1tStageEnteredAt('trial_done', { ...e, trial_expires_at: ago(2) }, NOW)).toBe(ago(2))
   })
 
   it('orders attended bookings by start time, never by the order they were given', () => {
@@ -212,5 +230,47 @@ describe('un1tDealDates', () => {
 
   it('no evidence → both null', () => {
     expect(un1tDealDates('first_class', null, NOW)).toEqual({ created_at: null, stage_entered_at: null })
+  })
+})
+
+// TRIALDONE.2 — what put the person in Trial done, and when (the outreach trigger).
+describe('trialDoneEvidenceAt', () => {
+  it('three attended: the END of the third attended class', () => {
+    const e = ev({ attended_starts: [ago(10), ago(7), ago(4), ago(1)], attended_ends: [ago(0.9), ago(9.9), ago(3.9), ago(6.9)] })
+    expect(trialDoneEvidenceAt(e)).toEqual({ kind: 'three_attended', at: ago(3.9) })
+    // an expired trial does not change a three-attended answer
+    expect(trialDoneEvidenceAt({ ...e, trial_expires_at: ago(20) })).toEqual({ kind: 'three_attended', at: ago(3.9) })
+  })
+
+  it('exactly two attended with a known expiry: the expiry', () => {
+    const e = ev({ attended_starts: [ago(9), ago(6)], attended_ends: [ago(8.9), ago(5.9)], trial_expires_at: ago(2) })
+    expect(trialDoneEvidenceAt(e)).toEqual({ kind: 'two_attended_expired', at: ago(2) })
+  })
+
+  it('two attended, the second class AFTER the expiry: the end of the second class (never before it)', () => {
+    // granted day 0, expires day 7, second class attended day 8
+    const e = ev({ attended_starts: [ago(12), ago(4)], attended_ends: [ago(11.9), ago(3.9)], trial_expires_at: ago(5) })
+    expect(trialDoneEvidenceAt(e)).toEqual({ kind: 'two_attended_expired', at: ago(3.9) })
+  })
+
+  it('two attended with no readable expiry: null', () => {
+    const e = ev({ attended_ends: [ago(8.9), ago(5.9)] })
+    expect(trialDoneEvidenceAt(e)).toBeNull()
+    expect(trialDoneEvidenceAt({ ...e, trial_expires_at: 'soon' })).toBeNull()
+  })
+
+  it('one attended: null', () => {
+    expect(trialDoneEvidenceAt(ev({ attended_ends: [ago(5.9)], trial_expires_at: ago(2) }))).toBeNull()
+    expect(trialDoneEvidenceAt(ev({ trial_expires_at: ago(2) }))).toBeNull()
+  })
+
+  it('ignores unreadable end times and returns ISO', () => {
+    const e = ev({ attended_ends: ['nope', null, '2026-10-01T10:00:00Z', '2026-10-03T10:00:00Z', '2026-10-05T10:00:00+01:00'] })
+    expect(trialDoneEvidenceAt(e)).toEqual({ kind: 'three_attended', at: '2026-10-05T09:00:00.000Z' })
+  })
+
+  it('no evidence: null', () => {
+    expect(trialDoneEvidenceAt(null)).toBeNull()
+    expect(trialDoneEvidenceAt(undefined)).toBeNull()
   })
 })
