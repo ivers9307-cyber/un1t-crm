@@ -3214,6 +3214,42 @@ registry.registerPath({
   },
 })
 
+// MIAHATCH.6 — the payment links Mia has sent a contact, for the contact page's
+// "Payment link sent" chip. Cookie only. Six columns, never the checkout URL or a
+// token; limited to studios where the caller holds Contacts; a contact the caller
+// cannot see is a 404.
+registry.registerPath({
+  method: 'get',
+  path: '/api/contacts/{id}/mia-purchase-intents',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: "Mia's payment-link intents for a contact (no checkout URL, no token)",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: {
+      description: 'Intents at the viewer\'s studios, newest first',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.array(z.object({
+              id: z.string(),
+              location_id: z.string(),
+              product_title: z.string().nullable(),
+              status: z.enum(['link_sent', 'paid', 'booked', 'book_failed', 'no_class', 'expired', 'refused']),
+              created_at: z.string(),
+              expires_at: z.string(),
+            })),
+          }),
+        },
+      },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found (or not visible to the caller)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Intents could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // REPSET-P5 — admin app-account linking (contacts.user_id ↔ auth user).
 // Master/owner only; staff never self-link their member contact.
 registry.registerPath({

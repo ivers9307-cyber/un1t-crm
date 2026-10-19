@@ -618,4 +618,12 @@ describe('getOpenApiSpec', () => {
     expect(conn.put.responses).toHaveProperty('502')
     expect(spec.paths['/api/locations/{id}/un1t-online/sync']).toHaveProperty('post')
   })
+
+  // MIAHATCH.6 — the chip's read route is documented, cookie only.
+  it('documents the mia-purchase-intents read as cookie-only with a 404 for a hidden contact (MIAHATCH.6)', () => {
+    const op = spec.paths['/api/contacts/{id}/mia-purchase-intents'].get
+    expect(op.security).toContainEqual({ CookieAuth: [] })
+    expect(op.responses).toHaveProperty('404')
+    expect(JSON.stringify(op)).not.toContain('checkout_url')
+  })
 })
