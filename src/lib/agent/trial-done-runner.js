@@ -57,6 +57,17 @@
 //   * an opener whose evidence has no trigger now is timed from the stored
 //     trigger_at, so the row still goes stale.
 //
+// TRIALDONE.8 — the sweep is its own pass, run first for every studio whose
+// trial_done.enabled is true, ahead of and independent of the send-only gates
+// (the sale path, Mia on or in test mode, daytime and quiet hours, a number
+// switched on, the daily cap): it sends nothing, so a buyer's row closes (and
+// Mia's brief stops) at 22:00, at the cap, or with the sale path off. It keeps
+// the un1t.online source, only_contact_ids (malformed = the whole studio
+// skipped) and defer-on-failure: a failed read of the opened rows, the board
+// or the pipeline inputs counts 'sweep_read_failed' and closes nothing. The
+// deals and the pipeline inputs are read at most once per studio per tick and
+// shared with the send pass, whose gates are unchanged.
+//
 // Every skip is a counted reason (results.reasons), carried on the cron
 // heartbeat and on the arm's own row ('trial-done-outreach', mig 757). Never
 // throws for one person or one studio.
@@ -133,7 +144,9 @@ export async function runTrialDoneOutreach(db, { nowMs = Date.now() } = {}) {
     return results
   }
 
-  // Settings first: a studio with the feature (or Mia) off is never read.
+  // Settings first: a studio with the feature off is never read. Mia off or
+  // the sale path off stops only the send pass (TRIALDONE.8: the sweep sends
+  // nothing, so it still runs there).
   const orgCache = new Map()
   const live = []
   for (const location of locations || []) {
@@ -143,13 +156,16 @@ export async function runTrialDoneOutreach(db, { nowMs = Date.now() } = {}) {
     // A partial or older stored block gets the defaults under it.
     const td = { ...DEFAULTS.trial_done, ...(settings.trial_done || {}) }
     if (td.enabled !== true) continue
-    if (!settings.enabled && !settings.test_mode) continue
-    if (!salePathOn(settings, location)) { skip('sale_path_off'); continue }
-    live.push({ location, settings, td })
+    let sends = true
+    if (!settings.enabled && !settings.test_mode) sends = false
+    else if (!salePathOn(settings, location)) { skip('sale_path_off'); sends = false }
+    live.push({ location, settings, td, sends })
   }
   if (live.length === 0) return results
 
-  const zones = await readZones(db, live.map((s) => s.location.id))
+  // Zones only for studios that may send: the sweep needs no clock.
+  const sending = live.filter((s) => s.sends)
+  const zones = sending.length ? await readZones(db, sending.map((s) => s.location.id)) : null
   for (const studio of live) {
     try {
       await runStudio(db, { ...studio, zone: zones?.get(studio.location.id) ?? null, nowMs, results, skip })
@@ -194,7 +210,7 @@ function testContactList(value) {
   return ids.length > 0 ? { ok: true, ids } : { ok: false }
 }
 
-async function runStudio(db, { location, settings, td, zone, nowMs, results, skip }) {
+async function runStudio(db, { location, settings, td, sends, zone, nowMs, results, skip }) {
   const studioId = location.id
   const testList = testContactList(td.only_contact_ids)
   if (!testList.ok) {
@@ -202,43 +218,69 @@ async function runStudio(db, { location, settings, td, zone, nowMs, results, ski
     skip('test_list_invalid')
     return
   }
-  if (!zone) { skip('zone_read_failed'); return }
-  const window = proactiveWindowOpen(nowMs, settings, zone)
-  if (!window.open) { skip(window.reason); return }
-  if (!(await studioOwnsWhatsAppNumber(db, studioId))) { skip('no_number'); return }
 
-  const sentToday = await sendsToday(db, studioId, zone, nowMs)
-  if (sentToday === null) { skip('cap_read_failed'); return }
-  const cap = { sent: sentToday, max: Number(td.daily_cap) }
-  if (cap.sent >= cap.max) { skip('daily_cap'); return }
-
-  const deals = await trialDoneDeals(db, studioId)
-  if (!deals.ok) { skip(deals.reason); return }
-  let candidates = deals.byContact
-  // Test contacts only, when the operator listed any.
-  if (testList.ids) {
-    const keep = new Set(testList.ids)
-    candidates = new Map([...candidates].filter(([contactId]) => keep.has(contactId)))
+  const ctx = {
+    db, location, settings, td, zone, nowMs, nowIso: iso(nowMs), cap: null, results, skip,
+    reads: null, inputs: null, rows: new Map(),
+    // read at most once per studio per tick (the deals and the pipeline
+    // inputs are shared by the two passes), and only when needed
+    once: new Map(),
   }
-  // TRIALDONE.7 — opened rows whose person left the column. A failed read
-  // defers the sweep (nothing closed); the candidates still run.
-  let strays = []
+
+  // TRIALDONE.8 — pass 1, the sweep: before every send-only gate. A throw
+  // here never costs the send pass.
   try {
-    strays = await openedRowsOffColumn(db, studioId, deals.byContact, testList.ids)
+    await sweepPass(ctx, testList.ids)
+  } catch (e) {
+    logError(MODULE, 'sweep failed; the next tick retries (nothing closed by this pass)', { locationId: studioId, err: e })
+    skip('studio_error')
+  }
+
+  // Pass 2, the sends: every gate exactly as before.
+  if (sends) await sendPass(ctx, testList.ids)
+}
+
+// The studio's trial_done deals and its pipeline inputs: once per studio per tick.
+const studioDeals = (ctx) => once(ctx, 'deals', () => trialDoneDeals(ctx.db, ctx.location.id))
+async function studioInputs(ctx) {
+  const inputs = await once(ctx, 'inputs', () => loadInputs(ctx.db, ctx.location.id, ctx.nowMs))
+  if (inputs.ok) { ctx.reads = inputs.reads; ctx.inputs = inputs.data }
+  return inputs
+}
+
+// Read failures (never "not configured") defer the sweep as a counted fault.
+const SWEEP_READ_FAILURES = new Set(['board_read_failed', 'deals_read_failed', 'inputs_unreadable'])
+
+// TRIALDONE.7/.8 — opened rows whose person left the trial_done column, each
+// judged fresh and closed with its reason (sweepRow). A failed read defers the
+// whole sweep ('sweep_read_failed'): nobody is closed on a guess. A studio
+// with no board, no trial_done stage or no un1t.online reads has no column to
+// leave: the sweep waits, and the send pass reports that state as before.
+async function sweepPass(ctx, testIds) {
+  const { db, location, skip } = ctx
+  const studioId = location.id
+  let opened
+  try {
+    opened = await openedRows(db, studioId, testIds)
   } catch (e) {
     logError(MODULE, 'opened rows unreadable; the sweep waits for the next tick (nothing closed)', { locationId: studioId, err: e })
     skip('sweep_read_failed')
+    return
   }
-  if (candidates.size === 0 && strays.length === 0) return
+  if (opened.length === 0) return
 
-  const inputs = await loadInputs(db, studioId, nowMs)
-  if (!inputs.ok) { skip(inputs.reason); return }
+  const deals = await studioDeals(ctx)
+  if (!deals.ok) {
+    if (SWEEP_READ_FAILURES.has(deals.reason)) skip('sweep_read_failed')
+    return
+  }
+  const strays = opened.filter((r) => !deals.byContact.has(r.contact_id))
+  if (strays.length === 0) return
 
-  const ctx = {
-    db, location, settings, td, zone, nowMs, nowIso: iso(nowMs), cap, results, skip,
-    reads: inputs.reads, inputs: inputs.data, rows: new Map(),
-    // read at most once per studio per tick, and only when a send is near
-    once: new Map(),
+  const inputs = await studioInputs(ctx)
+  if (!inputs.ok) {
+    if (SWEEP_READ_FAILURES.has(inputs.reason)) skip('sweep_read_failed')
+    return
   }
   for (const row of strays) {
     try {
@@ -248,7 +290,34 @@ async function runStudio(db, { location, settings, td, zone, nowMs, results, ski
       skip('error')
     }
   }
+}
+
+// The opener and follow-up sends, behind the studio's send gates.
+async function sendPass(ctx, testIds) {
+  const { db, location, settings, td, zone, nowMs, skip } = ctx
+  const studioId = location.id
+  if (!zone) { skip('zone_read_failed'); return }
+  const window = proactiveWindowOpen(nowMs, settings, zone)
+  if (!window.open) { skip(window.reason); return }
+  if (!(await studioOwnsWhatsAppNumber(db, studioId))) { skip('no_number'); return }
+
+  const sentToday = await sendsToday(db, studioId, zone, nowMs)
+  if (sentToday === null) { skip('cap_read_failed'); return }
+  ctx.cap = { sent: sentToday, max: Number(td.daily_cap) }
+  if (ctx.cap.sent >= ctx.cap.max) { skip('daily_cap'); return }
+
+  const deals = await studioDeals(ctx)
+  if (!deals.ok) { skip(deals.reason); return }
+  let candidates = deals.byContact
+  // Test contacts only, when the operator listed any.
+  if (testIds) {
+    const keep = new Set(testIds)
+    candidates = new Map([...candidates].filter(([contactId]) => keep.has(contactId)))
+  }
   if (candidates.size === 0) return
+
+  const inputs = await studioInputs(ctx)
+  if (!inputs.ok) { skip(inputs.reason); return }
 
   try {
     ctx.rows = await outreachRows(db, studioId, [...candidates.keys()])
@@ -379,11 +448,10 @@ async function outreachRows(db, studioId, contactIds) {
   return new Map(rows.map((r) => [r.contact_id, r]))
 }
 
-// TRIALDONE.7 — this studio's OPEN rows whose opener went, for people not on
-// the trial_done column this tick (with only_contact_ids set, its contacts
-// only: nobody outside the test list is touched). Paginated past the
-// 1,000-row cap. Throws on a failed read.
-async function openedRowsOffColumn(db, studioId, onColumn, testIds) {
+// TRIALDONE.7 — this studio's OPEN rows whose opener went (with
+// only_contact_ids set, its contacts only: nobody outside the test list is
+// touched). Paginated past the 1,000-row cap. Throws on a failed read.
+async function openedRows(db, studioId, testIds) {
   const rows = await selectAll((from, to) => db.from('trial_done_outreach')
     .select(OUTREACH_COLS)
     .eq('location_id', studioId)
@@ -392,7 +460,7 @@ async function openedRowsOffColumn(db, studioId, onColumn, testIds) {
     .order('id', { ascending: true })
     .range(from, to), { pageSize: PAGE })
   const keep = testIds ? new Set(testIds) : null
-  return rows.filter((r) => !onColumn.has(r.contact_id) && (!keep || keep.has(r.contact_id)))
+  return keep ? rows.filter((r) => keep.has(r.contact_id)) : rows
 }
 
 // TRIALDONE.7 — one opened row whose person left the column: the same fresh
