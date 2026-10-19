@@ -18,6 +18,7 @@ import { isHandBookedEventId, isManualEventId, isUn1tEventId } from '@/lib/manua
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { logWarn } from '@/lib/log'
 import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
+import { notifyFlowBookingOutcome } from '@/lib/whatsapp-flow/booking-notice'
 
 // TZ.7: the class's start (an instant, from Glofox or the studio's timetable)
 // labelled on the STUDIO's clock, for the approval card and the customer's
@@ -36,6 +37,14 @@ function requestZone(db, request) {
 }
 const MAX_ATTEMPTS = CLASS_BOOKING_MAX_ATTEMPTS // one constant with the queue and the card copy
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// FLOWACK.1 — tell a WhatsApp Flow customer the outcome (a no-op for any row
+// that did not come from the Flow; whatsapp-flow/booking-notice.js decides and
+// owns the copy). Best-effort by construction: a notice never changes, delays
+// past its own send, or fails a booking outcome.
+async function flowNotice(db, request, args) {
+  try { await notifyFlowBookingOutcome(db, request, args) } catch (e) { logWarn('cbp', 'flow outcome notice failed', { requestId: request?.id ?? null, err: e }) }
+}
 
 async function setStatus(db, id, fields) {
   try { await db.from('class_booking_requests').update(fields).eq('id', id) } catch (e) { logWarn('cbp', 'status update failed', { err: e }) }
@@ -188,6 +197,10 @@ export async function routeToReview(db, request, reason, { personContactIds = nu
     // the attempt cap, else mark failed so an operator query surfaces it.
     const next = (request.attempts || 0) + 1 >= MAX_ATTEMPTS ? 'failed' : 'queued'
     await setStatus(db, request.id, { status: next, last_error: `review_unavailable:${reason}` })
+    // FLOWACK.1 — re-queued: the next attempt decides what the customer hears.
+    // Terminal with no card: they are still told the team will confirm (and
+    // booking-notice logs the missing card at error).
+    if (next === 'failed') await flowNotice(db, request, { outcome: 'failed' })
     return { outcome: next === 'failed' ? 'failed' : 'needs_review', detail: `review_unavailable:${reason}` }
   }
   await setStatus(db, request.id, { status: rowStatus, last_error: rowLastError ?? reason, approval_request_id: approvalId })
@@ -204,6 +217,9 @@ export async function routeToReview(db, request, reason, { personContactIds = nu
       summary: [request.class_name, classLabel(request.starts_at, zone), `needs review: ${reason}`].filter(Boolean).join(' · '),
     })
   } catch (e) { logWarn('cbp', 'approval notify failed', { err: e }) }
+  // FLOWACK.1 — a Flow customer hears that the team is confirming, and the card
+  // is linked to their thread so approving or declining it messages them.
+  await flowNotice(db, request, { outcome: 'needs_review', approvalId })
   return { outcome: 'needs_review', detail: reason }
 }
 
@@ -249,6 +265,7 @@ export async function processClassBookingRequest(db, request) {
     }
     if (isHandBookedEventId(request.glofox_event_id)) return routeToReview(db, request, 'manual_booking')
     await setStatus(db, request.id, { status: 'failed', last_error: 'glofox_not_configured' })
+    await flowNotice(db, request, { outcome: 'failed' })
     return { outcome: 'failed', detail: 'glofox_not_configured' }
   }
   const { data: contact } = await db.from('contacts')
@@ -618,10 +635,18 @@ export async function processClassBookingRequest(db, request) {
   // Persist the Glofox booking id so re-runs and the /approvals view can see
   // the real booking (null on the already-booked re-run path).
   await setStatus(db, request.id, { status: 'booked', last_error: null, glofox_booking_id: bookingId })
+  let confirmed = false
+  let classTime = null
   try {
     const zone = await requestZone(db, request)
-    await maybeSendBookingWhatsappConfirm({ db, locationId: request.location_id, contact, purpose: 'class_confirmed', bodyParams: [firstName, request.class_name || 'your class', classLabel(request.starts_at, zone)] })
+    classTime = classLabel(request.starts_at, zone)
+    const confirm = await maybeSendBookingWhatsappConfirm({ db, locationId: request.location_id, contact, purpose: 'class_confirmed', bodyParams: [firstName, request.class_name || 'your class', classTime] })
+    confirmed = confirm?.sent === true
   } catch (e) { logWarn('cbp', 'class confirm failed', { err: e }) }
+  // FLOWACK.1 — the class_confirmed template is the confirmation. Only when it
+  // did not go (no approved template at the studio, a refusal) does a Flow
+  // customer get the in-thread confirmation instead: never both.
+  if (!confirmed) await flowNotice(db, request, { outcome: 'booked', classTime })
   // CTWA attribution: a confirmed booking is the conversion the ad campaign
   // optimises on. No-ops unless the contact carries a ctwa_clid and the
   // location has settings.meta_ads.dataset_id.

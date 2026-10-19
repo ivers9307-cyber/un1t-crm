@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { refreshWindow, parseConsentKeyword, pickInboundContact, markUndeliverableIfPermanent } from '@/lib/whatsapp'
 import { applyWhatsappConsentKeyword, applyMetaUserPreference } from '@/lib/whatsapp-consent'
 import { handleFlowCompletion } from '@/lib/whatsapp-flow/completion.js'
+import { FLOW_SUBMISSION_BODY, sendFlowSubmissionReply } from '@/lib/whatsapp-flow/booking-notice'
 import { resolveWhatsAppNumberByPhoneNumberId, classifyInboundOwner } from '@/lib/whatsapp-config'
 import { routeInboundThread } from '@/lib/whatsapp-inbound-route'
 import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
@@ -467,6 +468,8 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // whatsapp-media bucket (eagerly below, lazily by /api/whatsapp/media).
   let mediaExternalId = null
   let mediaMime = null
+  // FLOWACK.1 — a completed booking Flow, booked below once its marker is stored.
+  let flowInteractive = null
 
   switch (messageType) {
     case 'text':
@@ -499,10 +502,10 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
       break
     case 'interactive':
       if (message.interactive?.type === 'nfm_reply') {
-        // A completed WhatsApp Flow ("Book your first visit"). Book it, then log a marker.
-        try { await handleFlowCompletion(db, { interactive: message.interactive, contact: actingContact, locationId }) }
-        catch (e) { console.error('[wa-webhook] flow completion failed:', e.message) }
-        body = '[Booking submitted via WhatsApp Flow]'
+        // A completed WhatsApp Flow ("Book your first visit"). Stored as this
+        // marker; booked right after the inbound row is written (FLOWACK.1).
+        flowInteractive = message.interactive
+        body = FLOW_SUBMISSION_BODY
       } else {
         body = interactiveReplyBody(message.interactive)
       }
@@ -566,6 +569,30 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   if (inboundInsertError) {
     console.error('[wa-webhook] inbound message insert failed (agent turn skipped):', inboundInsertError.message, messageId)
   }
+
+  // FLOWACK.1 — book the completed Flow now, AFTER its marker row is stored:
+  // the class processor finds the customer's thread by that marker
+  // (whatsapp-flow/booking-notice.js findFlowThread) to send the real outcome,
+  // and it may run within a second of the row being queued. The booking runs
+  // whether or not the marker was stored (a lost marker costs only the
+  // outcome notices). The RESULT is kept: a handled submission is answered
+  // once, honestly, below, and never by Mia, who used to read the marker as a
+  // booking and told the customer they were "all set" while it was failing.
+  let flowCompletion = null
+  if (flowInteractive) {
+    try {
+      flowCompletion = await handleFlowCompletion(db, { interactive: flowInteractive, contact: actingContact, locationId })
+    } catch (e) {
+      logError('wa-webhook', 'flow completion threw', { conversationId, locationId, err: e })
+    }
+    if (flowCompletion?.handled !== true) {
+      // Not booked and not queued (unparseable, unknown sender, a failed
+      // enqueue or consult insert): the submission falls through to Mia and the
+      // staff push like any message, as before, so a person picks it up.
+      logError('wa-webhook', 'flow submission not booked or queued; Mia and staff see it', { conversationId, locationId, contactId: actingContact?.id || null })
+    }
+  }
+  const flowSubmitted = flowCompletion?.handled === true
 
   // WASTUDIOPICK.1 — an unknown sender on a studio-picker number: decide their
   // studio (ad → reply → classifier → tap picker) and move the thread before
@@ -690,7 +717,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // soft-handoff acknowledgement to someone who hasn't said anything. The
   // open-event gets the instant greeting below instead.
   let agentResult = null
-  if (messageType !== 'request_welcome' && !inboundInsertError && !awaitingStudio) {
+  if (messageType !== 'request_welcome' && !inboundInsertError && !awaitingStudio && !flowSubmitted) {
     try {
       agentResult = await maybeAutoReply(db, {
         conversationId,
@@ -716,7 +743,22 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // generic per-message manager push to avoid double-notifying.
   const agentEngaged = agentResult?.handled === true &&
     ['reply', 'handoff', 'soft_handoff'].includes(agentResult.action)
-  if (!agentEngaged) {
+
+  // FLOWACK.1 — a handled Flow submission gets ONE reply instead of a Mia
+  // turn: a class request is acknowledged ("we're booking your spot now"; the
+  // processor sends the outcome), a consultation (booked on submit) is
+  // confirmed. A failed reply never touches the booking; it is logged and the
+  // staff push below still fires so a person sees the thread.
+  let flowReplied = false
+  if (flowSubmitted) {
+    try {
+      const reply = await sendFlowSubmissionReply(db, { conversationId, locationId, completion: flowCompletion })
+      flowReplied = reply?.sent === true
+    } catch (e) {
+      logError('wa-webhook', 'flow submission acknowledgement threw', { conversationId, locationId, err: e })
+    }
+  }
+  if (!agentEngaged && !flowReplied) {
     try {
       const { data: conv } = await db.from('whatsapp_conversations')
         // SELECTCOLS.1 — wa_profile_name is a column on whatsapp_conversations,

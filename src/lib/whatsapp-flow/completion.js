@@ -87,5 +87,6 @@ export async function handleFlowCompletion(db, { interactive, contact, locationI
   try {
     await sendCtwaConversion(db, { locationId, contactId: contact.id, eventName: 'Schedule', contentName: 'Consultation' })
   } catch (e) { console.warn('[wa-flow] ctwa conversion failed:', e?.message) }
-  return { handled: true, kind: 'consult' }
+  // FLOWACK.1 — the slot (studio wall clock), for the webhook's one confirmation.
+  return { handled: true, kind: 'consult', date, startTime }
 }

@@ -596,6 +596,8 @@ export async function PATCH(request, { params }) {
     // above already makes, and it defaults to row.contact_id, so every row
     // written before this existed executes exactly as it did.
     const executingContactId = row.details?.executing_contact_id || row.contact_id
+    // FLOWACK.1 — whether the in-thread confirmation below actually went.
+    let threadConfirmed = false
     const { data: contact } = await db.from('contacts')
       .select('glofox_member_id')
       .eq('id', executingContactId)
@@ -706,7 +708,7 @@ export async function PATCH(request, { params }) {
         if (success && row.conversation_id) {
           try {
             const { sendAgentThreadMessage, buildBookingConfirmationText } = await import('@/lib/agent/notify')
-            await sendAgentThreadMessage(db, {
+            const sent = await sendAgentThreadMessage(db, {
               channel: row.channel,
               conversationId: row.conversation_id,
               text: buildBookingConfirmationText({
@@ -715,6 +717,7 @@ export async function PATCH(request, { params }) {
                 template: await confirmationTemplate('booking'),
               }),
             })
+            threadConfirmed = sent?.sent === true
           } catch (e) {
             console.warn(`[agent-requests] confirmation send error: ${e?.message || e}`)
           }
@@ -723,9 +726,12 @@ export async function PATCH(request, { params }) {
     }
 
     // /start-funnel class bookings: keep the class_booking_requests queue row in
-    // sync (otherwise it's stuck in 'needs_review' forever) and — because these
-    // public leads have no agent conversation thread — send them the public
+    // sync (otherwise it's stuck in 'needs_review' forever) and send the public
     // booking_class_confirmed WhatsApp directly. Best-effort.
+    // FLOWACK.1 — a WhatsApp Flow card carries its thread (routeToReview links
+    // it) and was confirmed in-thread above; the template goes whenever that
+    // did not happen (a website card with no thread, or a 24h window that
+    // closed before staff approved). Never both.
     if (details?.source === 'start_funnel') {
       try {
         const cbrStatus = finalStatus === 'actioned' ? 'booked' : 'failed'
@@ -733,7 +739,7 @@ export async function PATCH(request, { params }) {
           .update({ status: cbrStatus, last_error: finalStatus === 'actioned' ? null : (executed?.message_code || 'approval_book_failed') })
           .eq('approval_request_id', id)
       } catch (e) { console.warn(`[agent-requests] cbr sync error: ${e?.message || e}`) }
-      if (finalStatus === 'actioned' && !row.conversation_id) {
+      if (finalStatus === 'actioned' && !threadConfirmed) {
         try {
           const { data: c } = await db.from('contacts').select('id, first_name, name, phone, wa_phone').eq('id', row.contact_id).maybeSingle()
           if (c) {

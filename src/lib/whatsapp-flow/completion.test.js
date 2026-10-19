@@ -91,7 +91,8 @@ describe('handleFlowCompletion', () => {
 
     const res = await handleFlowCompletion(fakeDb(inserts), { interactive, contact, locationId: 'loc1' })
 
-    expect(res).toEqual({ handled: true, kind: 'consult' })
+    // FLOWACK.1 — the slot rides back for the webhook's confirmation.
+    expect(res).toEqual({ handled: true, kind: 'consult', date: '2026-07-03', startTime: '18:00' })
     expect(createEventBooking).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       event: { id: 'ev1', location_id: 'loc1' }, date: '2026-07-03', startTime: '18:00', endTime: '18:30', source: 'whatsapp_flow',
     }))

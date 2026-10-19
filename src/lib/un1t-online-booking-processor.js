@@ -62,6 +62,10 @@ async function defaultCtwa(...args) {
   const { sendCtwaConversion } = await import('./meta-capi.js')
   return sendCtwaConversion(...args)
 }
+async function defaultFlowNotice(...args) {
+  const { notifyFlowBookingOutcome } = await import('./whatsapp-flow/booking-notice.js')
+  return notifyFlowBookingOutcome(...args)
+}
 async function defaultWebsite(...args) {
   const { sendWebsiteConversion } = await import('./meta-capi.js')
   return sendWebsiteConversion(...args)
@@ -81,6 +85,7 @@ function depsOf(deps = {}) {
     routeToReview: deps.routeToReview ?? defaultRouteToReview,
     sendCtwaConversion: deps.sendCtwaConversion ?? defaultCtwa,
     sendWebsiteConversion: deps.sendWebsiteConversion ?? defaultWebsite,
+    notifyFlowBookingOutcome: deps.notifyFlowBookingOutcome ?? defaultFlowNotice,
     now: deps.now ?? (() => Date.now()),
   }
 }
@@ -331,6 +336,13 @@ async function runFunnel(db, request, ctx, deps, holder) {
     request, contact, account, settings, studio: { ...studio, studioName: studio.studioName || ctx.studioName }, origin: 'funnel', writer,
   }, deps))
   await stampRow(db, request.id, { un1t_steps: steps })
+
+  // FLOWACK.1 — a booking made through the WhatsApp Flow is confirmed on the
+  // customer's thread too (un1t.online sends no WhatsApp; a no-op for a
+  // website row). A card is told by routeToReview. Never changes the outcome.
+  try {
+    await d.notifyFlowBookingOutcome(db, request, { outcome: 'booked' })
+  } catch (err) { logWarn(LOG, 'flow outcome notice failed; the booking stands', { requestId: request.id, err }) }
 
   // 8. Conversions, as the Glofox tail.
   try {
