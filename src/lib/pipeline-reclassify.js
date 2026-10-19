@@ -533,10 +533,17 @@ export async function reclassifyAllContacts(db, args) {
       for (let i = 0; i < moves.length; i += BULK_UPDATE_CHUNK) {
         const chunk = moves.slice(i, i + BULK_UPDATE_CHUNK)
         const dealIds = chunk.map((m) => m.deal_id)
-        const { error: moveErr } = await db
+        // TDSEQ.1 — on the un1t path the move is guarded on status 'open' and
+        // returns the ids it changed: only those start a sequence (a deal
+        // closed between the read and this write must not). The contacts
+        // (Glofox) path's write is unchanged.
+        const moveQuery = db
           .from('deals')
           .update({ stage_id: stageId })
           .in('id', dealIds)
+        const { data: movedRows, error: moveErr } = inputSource === UN1T_INPUT
+          ? await moveQuery.eq('status', 'open').select('id')
+          : await moveQuery
         if (moveErr) {
           stageErrored += chunk.length
           logWarn('pipeline-reclassify', `bulk-move chunk failed for stage ${stageId}`, {
@@ -547,7 +554,10 @@ export async function reclassifyAllContacts(db, args) {
           continue
         }
         stageMoved += chunk.length
-        if (inputSource === UN1T_INPUT) movesLanded.push(...chunk)
+        if (inputSource === UN1T_INPUT) {
+          const changed = new Set((movedRows || []).map((r) => r.id))
+          movesLanded.push(...chunk.filter((m) => changed.has(m.deal_id)))
+        }
         // Movement matrix + samples populated only for chunks that
         // actually landed — failed chunks still show in the error
         // counter but not as movement.
@@ -723,13 +733,17 @@ export async function reclassifyAllContacts(db, args) {
 // TDSEQ.1 — fire triggerSequencesForPipelineStageChange for each landed un1t
 // board move, with the board's studio. Glofox (contacts-input) boards never
 // come here: their moves fire through ensureDealForContact, and a nightly
-// re-run of this pass is not a new event for them. Best-effort: a throw is
+// re-run of this pass is not a new event for them. A move from an unknown
+// stage (from_slug 'unknown') never fires. Best-effort: a throw is
 // logged and the next move still fires. A stage that took more than
 // STAGE_TRIGGER_MASS_MOVE moves this run is held whole (a classifier rule
 // change moving many deals at once is not N people progressing).
 async function fireStageTriggers(moves, locationId) {
   const byStage = new Map()
   for (const m of moves) {
+    // A deal on a stage id this run could not name is stage-id churn, not
+    // someone progressing: no sequence starts from it.
+    if (m.from_slug === 'unknown') continue
     if (!byStage.has(m.to_slug)) byStage.set(m.to_slug, [])
     byStage.get(m.to_slug).push(m)
   }

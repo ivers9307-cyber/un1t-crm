@@ -1197,7 +1197,7 @@ describe('TDSEQ.1 — un1t board moves fire the stage-change trigger at the boar
   })
 
   // Records every call; a deals stage UPDATE answers `moveError` when given.
-  function moveDb(fixtures, { moveError = null } = {}) {
+  function moveDb(fixtures, { moveError = null, closedBeforeWrite = [] } = {}) {
     const calls = []
     function chain(table) {
       const entry = [table]
@@ -1219,8 +1219,10 @@ describe('TDSEQ.1 — un1t board moves fire the stage-change trigger at the boar
         if (op === 'update') {
           const isMove = table === 'deals' && entry.some((x) => x[0] === 'update' && 'stage_id' in (x[1] || {}))
           if (isMove && moveError) return resolve({ data: null, error: moveError })
-          // A leave (status 'lost') answers the ids it closed.
-          const ids = filters.find((f) => f.op === 'in' && f.col === 'id')?.vals || []
+          // An update answers the ids it matched (a deal closed since the read
+          // no longer matches status 'open').
+          const ids = (filters.find((f) => f.op === 'in' && f.col === 'id')?.vals || [])
+            .filter((id) => !closedBeforeWrite.includes(id))
           return resolve({ data: ids.map((id) => ({ id })), error: null })
         }
         const rows = (fixtures[table] || []).filter((row) => filters.every((f) => {
@@ -1278,6 +1280,26 @@ describe('TDSEQ.1 — un1t board moves fire the stage-change trigger at the boar
     const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
     expect(out).toMatchObject({ ok: true, deals_moved: 0, errors: 1 })
     expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+  })
+
+  it('a move from a stage id the run cannot name (from_slug "unknown") fires nothing: stage-id churn, not progress', async () => {
+    const rec = hatchRun([['c-td', trialDoneSnap()]], [deal('d-1', 'c-td', 'h-gone')])
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(out).toMatchObject({ ok: true, deals_moved: 1 })
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+  })
+
+  it('the un1t move is guarded on status open and fires only for the rows it changed (a deal closed between read and write does not fire)', async () => {
+    const rec = hatchRun(
+      [['c-a', trialDoneSnap()], ['c-b', trialDoneSnap()]],
+      [deal('d-a', 'c-a', 'h-second'), deal('d-b', 'c-b', 'h-second')],
+      { closedBeforeWrite: ['d-a'] },
+    )
+    await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    const move = rec.calls.find((e) => e[0] === 'deals' && e.some((x) => x[0] === 'update' && 'stage_id' in (x[1] || {})))
+    expect(move).toEqual(['deals', ['update', { stage_id: 'h-td' }], ['in', 'id', ['d-a', 'd-b']], ['eq', 'status', 'open'], ['select', 'id']])
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledTimes(1)
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledWith('c-b', 'second_class', 'trial_done', { locationId: HATCH })
   })
 
   it('a dry run fires nothing', async () => {
