@@ -1,7 +1,8 @@
 // MIAFLOW.1 — Mia sends the studio's booking Flow instead of a link.
 //
 // At a studio where Mia cannot book classes in chat (un1t.online at Hatch
-// Street, or no booking system) and whose WhatsApp booking Flow is switched on
+// Street outside tool block 3b, or no booking system) and whose WhatsApp
+// booking Flow is switched on
 // (locations.settings.whatsapp_flow: enabled true and a flow_id), a WhatsApp
 // turn with a linked contact is OFFERED send_booking_flow (bookingFlowOffered;
 // auto-reply.js picks the block's Flow variant). Calling it drops the same
@@ -17,7 +18,10 @@
 // thread, the 24h window closed, a Flow already sent on this thread in the
 // last 10 minutes (then the model points back to it), an unreadable read, or
 // a failed send (logged structurally). A Glofox studio (Stillorgan, where Mia
-// books in chat) is never offered the tool, so its request is unchanged.
+// books in chat) is never offered the tool, so its request is unchanged, and
+// neither is block 3b (`un1t_full`, Ruling 24): there a known Hatch member
+// books in chat; leads, unknown senders, members with no un1t.online account
+// and the Mia switch off keep the Flow.
 //
 // The line on the Flow message is operator-editable copy (booking_flow_text,
 // default in default-copy.js); no em or en dashes anywhere a customer reads.
@@ -54,14 +58,16 @@ export { BOOKING_FLOW_PROMPT_SECTION }
 /**
  * Is send_booking_flow offered on this turn? WhatsApp only (a Flow is a
  * WhatsApp message), only where Mia cannot book in chat (`canBook` false: the
- * thread's studio takes no bookings through her tools) and never in the Glofox
- * block, only where the studio's Flow is switched on with an id, and only with
- * a contact on the thread (the token books against it). Pure.
+ * thread's studio takes no bookings through her tools), never in the Glofox
+ * block nor in block 3b (`un1t_full`, Ruling 24: the member books in chat),
+ * only where the studio's Flow is switched on with an id, and only with a
+ * contact on the thread (the token books against it). Pure.
  */
 export function bookingFlowOffered({ channel, canBook, block, flowConfig, contactId } = {}) {
   return channel === 'whatsapp'
     && canBook === false
     && block !== 'glofox'
+    && block !== 'un1t_full'
     && flowConfig?.enabled === true
     && !!String(flowConfig?.flow_id || '').trim()
     && !!contactId

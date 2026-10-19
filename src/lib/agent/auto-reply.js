@@ -161,13 +161,13 @@ const CACHED_BLOCKS = {
 // send_booking_flow last (booking-flow.js), for a WhatsApp turn at a studio
 // whose booking Flow is switched on (bookingFlowOffered). Built once at load,
 // so each variant is a byte-stable cached prefix of its own; the blocks above
-// are untouched, and there is no Glofox variant (Stillorgan is unchanged).
-const DUAL_READ_FLOW_TOOLS = withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }), SEND_BOOKING_FLOW_TOOL])
+// are untouched. There is no Glofox variant (Stillorgan is unchanged) and no
+// `un1t_full` one (Ruling 24: a known Hatch member books in chat there, so a
+// un1t_full turn always sends CACHED_BLOCKS.un1t_full).
 export const CACHED_BOOKING_FLOW_BLOCKS = Object.freeze({
   no_booking: withCacheBreakpoint([...NO_BOOKING_AGENT_TOOLS, SEND_BOOKING_FLOW_TOOL]),
   un1t_read: withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: false }), SEND_BOOKING_FLOW_TOOL]),
-  un1t_read_dual: DUAL_READ_FLOW_TOOLS,
-  un1t_full: DUAL_READ_FLOW_TOOLS,
+  un1t_read_dual: withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }), SEND_BOOKING_FLOW_TOOL]),
 })
 /**
  * The cached tool block for a turn. The live turn sends CACHED_BLOCKS[block]
