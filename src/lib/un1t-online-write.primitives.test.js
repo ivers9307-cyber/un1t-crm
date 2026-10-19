@@ -790,10 +790,13 @@ describe('createCheckoutLink', () => {
   const URL_OUT = 'https://checkout.example.test/session/cs_test_abc123'
   const checkoutRoutes = (over = {}) => ({ 'POST /purchases/checkout': [created({ checkoutUrl: URL_OUT, free: false })], ...over })
 
-  it('createCheckoutLink: signature and return { checkoutUrl, free }', async () => {
+  // MIAFIX.1 (5) — and the ledger row's id, so the purchase intent can name
+  // its un1t_write_events row (un1t_write_id stayed null live).
+  it('createCheckoutLink: signature and return { checkoutUrl, free, ledgerId }', async () => {
     const t = await setup({ routes: checkoutRoutes(), db: { tables: checkoutTables() } })
     const out = await createCheckoutLink(t.db, checkoutArgs(), t.deps)
-    expect(out).toEqual({ checkoutUrl: URL_OUT, free: false })
+    expect(out).toEqual({ checkoutUrl: URL_OUT, free: false, ledgerId: ledger(t.store)[0].id })
+    expect(out.ledgerId).toBeTruthy()
     expect(t.fetchImpl.writes()[0].body).toEqual({
       productId: PRODUCT, successUrl: checkoutArgs().successUrl, cancelUrl: checkoutArgs().cancelUrl, userId: USER,
     })
@@ -802,7 +805,7 @@ describe('createCheckoutLink', () => {
 
   it('free: true is returned as is', async () => {
     const t = await setup({ routes: checkoutRoutes({ 'POST /purchases/checkout': [created({ checkoutUrl: URL_OUT, free: true })] }), db: { tables: checkoutTables() } })
-    await expect(createCheckoutLink(t.db, checkoutArgs(), t.deps)).resolves.toEqual({ checkoutUrl: URL_OUT, free: true })
+    await expect(createCheckoutLink(t.db, checkoutArgs(), t.deps)).resolves.toEqual({ checkoutUrl: URL_OUT, free: true, ledgerId: expect.any(String) })
   })
 
   it('createCheckoutLink refuses a €0 product (free_product_not_via_checkout), a product not active at the studio, and a userId with no un1t_clients row here', async () => {
@@ -852,7 +855,8 @@ describe('createCheckoutLink', () => {
 
   it('createCheckoutLink 5xx retries once with the same key; twice is Un1tWriteUnknown', async () => {
     const a = await setup({ routes: checkoutRoutes({ 'POST /purchases/checkout': [res(503, {}), created({ checkoutUrl: URL_OUT, free: false })] }), db: { tables: checkoutTables() } })
-    await expect(createCheckoutLink(a.db, checkoutArgs(), a.deps)).resolves.toEqual({ checkoutUrl: URL_OUT, free: false })
+    const retried = await createCheckoutLink(a.db, checkoutArgs(), a.deps)
+    expect(retried).toEqual({ checkoutUrl: URL_OUT, free: false, ledgerId: ledger(a.store)[0].id })
     const keys = a.fetchImpl.writes().map((w) => w.headers['idempotency-key'])
     expect(keys).toEqual(['intent-1', 'intent-1'])
 

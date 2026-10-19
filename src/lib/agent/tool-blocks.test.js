@@ -196,6 +196,15 @@ describe('the un1t full block (3b)', () => {
     }
   })
 
+  // MIAFIX.1 (4) — invented offer ids ("10_class_pack") before any list call;
+  // (3, 6) an open link for another product is surfaced and hands off.
+  it('MIAFIX.1: send_purchase_link says its offer_id must come from list_purchase_options in this conversation, never invented', () => {
+    expect(SEND_PURCHASE_LINK_TOOL.description).toMatch(/offer_id MUST be one that list_purchase_options \(or book_class's needs_purchase offers\) returned in this conversation, copied exactly; never invent, guess or build one from a product name/)
+    expect(SEND_PURCHASE_LINK_TOOL.input_schema.properties.offer_id.description).toMatch(/returned by list_purchase_options in this conversation[^.]*never invent one/)
+    expect(SEND_PURCHASE_LINK_TOOL.description).toMatch(/already waiting for a different product, no link is made and the conversation is handed to the team/)
+    expect(LIST_PURCHASE_OPTIONS_TOOL.description).toMatch(/open_link[^.]*never offer to send a link for a different product/)
+  })
+
   it('built once: agentToolsFor returns the SAME array for a WhatsApp turn with writes, one 1h breakpoint on the last tool', () => {
     const turn = { answerable: [hatch], threadProvider: un1t, channel: 'whatsapp', un1tWrites: true }
     expect(agentToolsFor(turn)).toBe(CACHED_UN1T_FULL_TOOLS)

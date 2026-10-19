@@ -234,6 +234,31 @@ describe('formatHistoryForClaude', () => {
     ]
     expect(formatHistoryForClaude(rows)).toEqual([])
   })
+  // MIAFIX.1 — sendAndLog records a button message as "text\n[Options: a | b]"
+  // so staff can read it in the inbox; the model must not learn that form. Its
+  // own history renders the recorded line back as the real sentinel, so an
+  // imitation produces working buttons.
+  it('an outbound row ending in a recorded [Options: ...] line is rendered with the [[OPTIONS]] sentinel', () => {
+    const rows = [
+      { direction: 'inbound', body: 'can I buy a pack?' },
+      { direction: 'outbound', body: 'Want me to send the link?\n[Options: Yes, send link | No]' },
+      { direction: 'inbound', body: 'Yes, send link' },
+    ]
+    const out = formatHistoryForClaude(rows)
+    expect(out[1]).toEqual({ role: 'assistant', content: `Want me to send the link?\n${OPTIONS_PREFIX} Yes, send link | No` })
+    expect(out[1].content).not.toMatch(/\[Options:/)
+  })
+  it('only a trailing recorded line on an outbound row is rewritten; inbound text and mid-text lines are untouched', () => {
+    const rows = [
+      { direction: 'inbound', body: 'what does [Options: A | B] mean?' },
+      { direction: 'outbound', body: 'Reply with one:\n[Options: A | B]\nThanks!' },
+      { direction: 'inbound', body: 'A' },
+    ]
+    const out = formatHistoryForClaude(rows)
+    // (inbound text keeps HARDEN.2's neutralising and is never given a sentinel)
+    expect(out[0].content).not.toContain(OPTIONS_PREFIX)
+    expect(out[1].content).toBe('Reply with one:\n[Options: A | B]\nThanks!')
+  })
   it('placeholders empty / media-only rows', () => {
     const rows = [{ direction: 'inbound', body: '', message_type: 'image' }]
     expect(formatHistoryForClaude(rows)).toEqual([{ role: 'user', content: '[image]' }])
@@ -465,6 +490,43 @@ describe('parseAgentResponse — near-miss sentinel tolerance', () => {
   it('never leaks an unterminated options sentinel into the customer text', () => {
     const r = parseAgentResponse('Pick a time:\n[[OPTIONS 7am | 8am')
     expect(r.text).toBe('Pick a time:')
+    expect(r.options).toEqual(['7am', '8am'])
+  })
+  // MIAFIX.1 — Mia re-read her own recorded button messages ("text\n[Options:
+  // a | b]") and imitated that form, which reached the customer as a plain
+  // bubble with no buttons (MIA TEST, 19 Oct). A trailing "[Options: ...]"
+  // line is read exactly like the sentinel.
+  it('a trailing [Options: a | b] line becomes options and is stripped, like the sentinel', () => {
+    const r = parseAgentResponse('Want me to send the link?\n[Options: Yes, send link | No]')
+    expect(r).toEqual({ action: 'reply', text: 'Want me to send the link?', reason: 'ok', options: ['Yes, send link', 'No'] })
+  })
+  it('the trailing [Options:] line: any case, optional spaces, singular [Option:], same normalisation and cap', () => {
+    for (const line of ['[options: 7am | 8am]', '[ OPTIONS :7am|8am ]', '[Option: 7am | 8am]', '**[Options: 7am | 8am]**', '[Options: 7am | 8am]  ']) {
+      const r = parseAgentResponse(`Pick a time:\n${line}`)
+      expect(r.text, line).toBe('Pick a time:')
+      expect(r.options, line).toEqual(['7am', '8am'])
+    }
+    const eleven = Array.from({ length: 11 }, (_, i) => `opt ${i}`).join(' | ')
+    expect(parseAgentResponse(`Pick:\n[Options: ${eleven}]`).options).toHaveLength(10)
+    const r = parseAgentResponse('Pick:\n[Options: 7am | | 7am | this label is way too long to be a button]')
+    expect(r.options).toEqual(['7am', 'this label is way to'])
+    const dash = parseAgentResponse('Ready?\n[Options: Yes — book me in | Not yet]')
+    expect(dash.options).toEqual(['Yes, book me in', 'Not yet'])
+    const one = parseAgentResponse('Sure.\n[Options: only-one]')
+    expect(one.text).toBe('Sure.')
+    expect(one.options).toBeUndefined()
+  })
+  it('only a TRAILING [Options:] line: one mid-text or inline is left as it is', () => {
+    const mid = parseAgentResponse('Reply with one:\n[Options: A | B]\nThanks!')
+    expect(mid.text).toBe('Reply with one:\n[Options: A | B]\nThanks!')
+    expect(mid.options).toBeUndefined()
+    const inline = parseAgentResponse('You can say [Options: A | B] here')
+    expect(inline.text).toBe('You can say [Options: A | B] here')
+    expect(inline.options).toBeUndefined()
+  })
+  it('the sentinel wins when both are present; the trailing [Options:] line is still stripped', () => {
+    const r = parseAgentResponse(`Pick:\n${OPTIONS_PREFIX} 7am | 8am\n[Options: 9am | 10am]`)
+    expect(r.text).toBe('Pick:')
     expect(r.options).toEqual(['7am', '8am'])
   })
 })

@@ -61,7 +61,9 @@ export const DEFAULT_PURCHASE_LINK_TEXT = "Here's your secure payment link for {
 export const DEFAULT_PURCHASE_LINK_NO_CLASS_TEXT = "Here's your secure payment link for {product}. I'll let you know when it's done."
 export const DEFAULT_TRIAL_USED_TEXT = "It looks like you've had your free trial with us before, so here are the ways to keep training:"
 export const DEFAULT_REFUND_REQUEST_TEXT = "I've passed that to the team, they'll look at it and get back to you."
-export const DEFAULT_PURCHASE_LINK_OPEN_TEXT = "You already have a payment link waiting for {product}. Use that one, or I can ask the team if you'd like something different."
+// MIAFIX.1 — sent as the turn hands the thread to the team (the member asked
+// for a different product while this link is still open), so it asks nothing.
+export const DEFAULT_PURCHASE_LINK_OPEN_TEXT = "You already have a payment link waiting for {product}. I've asked the team to help you switch, they'll be in touch shortly."
 export const DEFAULT_PURCHASE_PAID_BOOKED_TEXT = "Payment received, thank you! You're booked into {class}. See you there."
 export const DEFAULT_PURCHASE_PAID_CLASS_GONE_TEXT = "Payment received, thank you! {class} is no longer available, so I haven't booked it. Reply here and I'll find you another class."
 export const DEFAULT_PURCHASE_PAID_BOOKING_FAILED_TEXT = "Payment received, thank you! I couldn't book {class} just now, so the team will sort it and confirm with you shortly."

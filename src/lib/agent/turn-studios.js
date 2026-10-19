@@ -34,7 +34,7 @@ import { answerableStudios } from './member-studios'
 import { selectToolBlock } from './tool-blocks'
 import { BOOKING_SYSTEM_TOOL_NAMES, providerTakesBookings } from './tool-capability'
 import { parseAgentId } from './studio-ids'
-import { buildStudioFactsBlock, buildTrialUsedClassLine } from './prompt'
+import { buildOtherStudiosBlock, buildStudioFactsBlock, buildTrialUsedClassLine } from './prompt'
 import { classTimeLabel } from './un1t-action-studio'
 import { resolveAgentSettings } from './settings-resolve'
 import { providerFor } from '@/lib/membership/source'
@@ -459,4 +459,56 @@ export async function executorCtxFor(toolName, input, toolCtx, studios) {
   }
   if (turn.block === 'glofox' && GLOFOX_STUDIO_TOOLS.has(toolName)) return glofoxStudioCtx(toolCtx, studios)
   return toolCtx
+}
+
+/**
+ * MIAFIX.1 (8) — the organisation's other ACTIVE studios (not host anchors,
+ * not the thread's), each with its booking link: booking_url from that
+ * studio's resolved Mia settings (`studios.settings`, createActionStudios;
+ * booking_url is a STUDIO_ONLY key). Unresolvable settings list the studio
+ * with no link (Mia then offers the team). Same organisation only. [] with no
+ * organisation; null when the locations read failed (logged): the turn then
+ * goes without the block. Never throws.
+ *
+ * @param {object} db
+ * @param {{ organizationId: string|null, threadLocationId: string }} args
+ * @param {{ settings: (locationId: string) => Promise<object|null> }} studios
+ * @returns {Promise<Array<{ locationId: string, name: string, bookingUrl: string|null }>|null>}
+ */
+export async function readOrgStudioLinks(db, { organizationId, threadLocationId } = {}, studios = null) {
+  if (!organizationId) return []
+  try {
+    const { data, error } = await db.from('locations')
+      .select('id, name')
+      .eq('organization_id', organizationId)
+      .eq('active', true)
+      .eq('is_host_anchor', false)
+    if (error) {
+      logWarn(LOG_MODULE, 'other studios unreadable; turn goes without their links', { locationId: threadLocationId, code: error.code ?? null })
+      return null
+    }
+    const others = (Array.isArray(data) ? data : [])
+      .filter((l) => l?.id && l.id !== threadLocationId && String(l.name || '').trim())
+    const out = []
+    for (const l of others) {
+      const settings = studios ? await studios.settings(l.id) : null
+      const url = String(settings?.booking_url || '').trim()
+      out.push({ locationId: l.id, name: String(l.name).trim(), bookingUrl: /^https?:\/\//i.test(url) ? url : null })
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name))
+  } catch (err) {
+    logWarn(LOG_MODULE, 'other studios read threw; turn goes without their links', { locationId: threadLocationId, errClass: err?.name })
+    return null
+  }
+}
+
+/**
+ * MIAFIX.1 (8) — the prompt block for the studios of readOrgStudioLinks that
+ * this plan cannot answer for (answerable studios carry a facts block
+ * instead). '' when none. Pure.
+ */
+export function otherStudiosBlockFor(orgStudios, plan) {
+  if (!Array.isArray(orgStudios) || !orgStudios.length) return ''
+  const answerable = new Set((plan?.answerable || []).map((s) => s?.locationId).filter(Boolean))
+  return buildOtherStudiosBlock(orgStudios.filter((s) => !answerable.has(s.locationId)))
 }

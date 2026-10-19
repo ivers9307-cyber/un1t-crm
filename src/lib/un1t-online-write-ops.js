@@ -773,7 +773,8 @@ export async function createCheckoutLink(db, args = {}, deps = {}) {
   if (r.verdict === 'done') {
     const free = r.data?.free === true
     if (free) logInfo(LOG_MODULE, 'un1t.online answered the checkout as free', fields({ locationId, op: 'checkout', origin, ledgerId: r.ledgerId, code: 'checkout_free' }))
-    return { checkoutUrl: r.id, free }
+    // MIAFIX.1 — the un1t_write_events row's id, so the caller can link it.
+    return { checkoutUrl: r.id, free, ledgerId: r.ledgerId ?? null }
   }
   if (r.verdict === 'refused') throw new Un1tWriteRefused(r.code, r.message ?? 'un1t.online refused the checkout.', r)
   const err = new Un1tWriteUnknown(r.code ?? 'outcome_unknown', r.message ?? UNKNOWN_CHECKOUT_TEXT)

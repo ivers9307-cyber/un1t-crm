@@ -37,10 +37,10 @@ const STARTS = '2026-10-23T18:30:00Z'
 const CREATED = '2026-10-20T09:00:00Z'
 
 const PRODUCT = {
-  pack10: { id: 'f0000000-0000-4000-8000-000000000010', location_id: HATCH, un1t_id: 'prod-pack-10', title: '10 Class Pack', status: 'active', visibility: 'public', price_cents: 12500, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 10 },
-  monthly: { id: 'f0000000-0000-4000-8000-000000000011', location_id: HATCH, un1t_id: 'prod-monthly', title: 'Monthly Foundation', status: 'active', visibility: 'private', price_cents: 18900, currency: 'eur', billing_interval: 'month', billing_interval_count: 1, credits_per_period: null },
-  old: { id: 'f0000000-0000-4000-8000-000000000012', location_id: HATCH, un1t_id: 'prod-old', title: 'Old Pack', status: 'archived', visibility: 'public', price_cents: 9000, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 5 },
-  free: { id: 'f0000000-0000-4000-8000-000000000013', location_id: HATCH, un1t_id: 'prod-free', title: 'Free Trial', status: 'active', visibility: 'public', price_cents: 0, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 1 },
+  pack10: { id: 'f0000000-0000-4000-8000-000000000010', location_id: HATCH, un1t_id: 'prod-pack-10', title: '10 Class Pack', type: 'one_time', status: 'active', visibility: 'public', price_cents: 12500, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 10 },
+  monthly: { id: 'f0000000-0000-4000-8000-000000000011', location_id: HATCH, un1t_id: 'prod-monthly', title: 'Monthly Foundation', type: 'recurring', status: 'active', visibility: 'private', price_cents: 18900, currency: 'eur', billing_interval: 'month', billing_interval_count: 1, credits_per_period: null },
+  old: { id: 'f0000000-0000-4000-8000-000000000012', location_id: HATCH, un1t_id: 'prod-old', title: 'Old Pack', type: 'one_time', status: 'archived', visibility: 'public', price_cents: 9000, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 5 },
+  free: { id: 'f0000000-0000-4000-8000-000000000013', location_id: HATCH, un1t_id: 'prod-free', title: 'Free Trial', type: 'one_time', status: 'active', visibility: 'public', price_cents: 0, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 1 },
 }
 const OFFERS = [
   { id: 'd0000000-0000-4000-8000-000000000001', location_id: HATCH, un1t_product_row_id: PRODUCT.pack10.id, sort_order: 1, blurb: 'Use within three months' },

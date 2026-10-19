@@ -88,11 +88,11 @@ const STARTS = '2026-10-23T18:30:00Z'
 const LABEL = formatClassTime(Date.parse(STARTS) / 1000, ZONE)
 
 const PRODUCT = {
-  pack10: { id: 'f0000000-0000-4000-8000-000000000010', location_id: HATCH, un1t_id: 'prod-pack-10', title: '10 Class Pack', status: 'active', visibility: 'public', price_cents: 12500, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 10 },
-  monthly: { id: 'f0000000-0000-4000-8000-000000000011', location_id: HATCH, un1t_id: 'prod-monthly', title: 'Monthly Foundation', status: 'active', visibility: 'private', price_cents: 18900, currency: 'eur', billing_interval: 'month', billing_interval_count: 1, credits_per_period: null },
-  old: { id: 'f0000000-0000-4000-8000-000000000012', location_id: HATCH, un1t_id: 'prod-old', title: 'Old Pack', status: 'archived', visibility: 'public', price_cents: 9000, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 5 },
-  free: { id: 'f0000000-0000-4000-8000-000000000013', location_id: HATCH, un1t_id: 'prod-free', title: 'Free Trial', status: 'active', visibility: 'public', price_cents: 0, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 1 },
-  foreign: { id: 'f0000000-0000-4000-8000-000000000014', location_id: OTHER, un1t_id: 'prod-foreign', title: 'Elsewhere', status: 'active', visibility: 'public', price_cents: 5000, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 4 },
+  pack10: { id: 'f0000000-0000-4000-8000-000000000010', location_id: HATCH, un1t_id: 'prod-pack-10', title: '10 Class Pack', type: 'one_time', status: 'active', visibility: 'public', price_cents: 12500, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 10 },
+  monthly: { id: 'f0000000-0000-4000-8000-000000000011', location_id: HATCH, un1t_id: 'prod-monthly', title: 'Monthly Foundation', type: 'recurring', status: 'active', visibility: 'private', price_cents: 18900, currency: 'eur', billing_interval: 'month', billing_interval_count: 1, credits_per_period: null },
+  old: { id: 'f0000000-0000-4000-8000-000000000012', location_id: HATCH, un1t_id: 'prod-old', title: 'Old Pack', type: 'one_time', status: 'archived', visibility: 'public', price_cents: 9000, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 5 },
+  free: { id: 'f0000000-0000-4000-8000-000000000013', location_id: HATCH, un1t_id: 'prod-free', title: 'Free Trial', type: 'one_time', status: 'active', visibility: 'public', price_cents: 0, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 1 },
+  foreign: { id: 'f0000000-0000-4000-8000-000000000014', location_id: OTHER, un1t_id: 'prod-foreign', title: 'Elsewhere', type: 'one_time', status: 'active', visibility: 'public', price_cents: 5000, currency: 'eur', billing_interval: null, billing_interval_count: null, credits_per_period: 4 },
 }
 const OFFER = {
   pack10: { id: 'd0000000-0000-4000-8000-000000000001', location_id: HATCH, un1t_product_row_id: PRODUCT.pack10.id, sort_order: 1, blurb: 'Use within three months' },
@@ -232,6 +232,22 @@ describe('listPurchaseOptions', () => {
     ])
     // archived, free and another studio's product are skipped and counted.
     expect(out.skipped).toBe(3)
+  })
+
+  // MIAFIX.1 (2) — un1t_products stores billing_interval 'month' even for a
+  // one_time pack, and Mia said "10 Class Pack: €220 a month" (MIA TEST).
+  it('the interval wording is for type recurring only: a one_time product with a stored interval is just its price', async () => {
+    const pack = { ...PRODUCT.pack10, price_cents: 22000, billing_interval: 'month', billing_interval_count: 1 }
+    const quarterly = { ...PRODUCT.monthly, price_cents: 50000, billing_interval: 'month', billing_interval_count: 3 }
+    const { db } = fakeDb({ mia_purchase_offers: [OFFER.pack10, OFFER.monthly], un1t_products: [pack, quarterly] })
+    const out = await listPurchaseOptions(db, HATCH)
+    expect(out.offers.map((o) => [o.title, o.price_label])).toEqual([
+      ['Monthly Foundation', '€500 every 3 months'],
+      ['10 Class Pack', '€220'],
+    ])
+    // ...and the link answer quotes the same price.
+    const sent = await sendPurchaseLink(ctxFor(fakeDb({ mia_purchase_offers: [OFFER.pack10], un1t_products: [pack] }).db), { offer_id: OFFER.pack10.id }, hatch(), deps)
+    expect(sent).toMatchObject({ link_sent: true, product: '10 Class Pack', price_label: '€220' })
   })
 
   it('ties on sort_order fall back to the offer id', async () => {
@@ -385,13 +401,30 @@ describe('sendPurchaseLink', () => {
     const { db, data } = fakeDb({ ...offers(), mia_purchase_intents: [live] })
     const out = await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.monthly.id }, hatch(), deps)
     expect(h.checkout).not.toHaveBeenCalled()
+    // MIAFIX.1 (6) — the runner hands the thread to the team in this turn
+    // (open_link_handoff), with the open text as the customer's message.
     expect(out).toEqual({
-      link_sent: false, link_open: true, product: '10 Class Pack',
+      link_sent: false, link_open: true, open_link_handoff: true, product: '10 Class Pack',
       text: DEFAULT_PURCHASE_LINK_OPEN_TEXT.replace('{product}', '10 Class Pack'), intent_id: live.id,
       message: expect.any(String),
     })
+    expect(out.message).toMatch(/handed to the team now/)
+    expect(out.message).not.toMatch(/offer to hand off/)
     expect(data.mia_purchase_intents).toHaveLength(1)
     expect(data.mia_purchase_intents[0].status).toBe('link_sent')
+  })
+
+  it('MIAFIX.1 (6): the same product asked for again resends its link, never a handoff', async () => {
+    const { db } = fakeDb({ ...offers(), mia_purchase_intents: [liveIntent()] })
+    const out = await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id }, hatch(), deps)
+    expect(out).toMatchObject({ link_sent: true, url: urlFor(liveIntent().id) })
+    expect(out).not.toHaveProperty('open_link_handoff')
+    expect(out).not.toHaveProperty('link_open')
+  })
+
+  it('MIAFIX.1 (6): the default open text tells them the team will help, and asks nothing', () => {
+    expect(DEFAULT_PURCHASE_LINK_OPEN_TEXT).toBe("You already have a payment link waiting for {product}. I've asked the team to help you switch, they'll be in touch shortly.")
+    expect(DEFAULT_PURCHASE_LINK_OPEN_TEXT).not.toMatch(/[?—–]|if you'd like/)
   })
 
   it('an operator purchase_link_open_text wins', async () => {
@@ -497,6 +530,40 @@ describe('sendPurchaseLink', () => {
 
   // MIAHATCH.6 (Task 21, Task 19 carry 1) — free: true is settled at once
   // through settlePurchaseIntent: no row stays in the non-terminal 'paid'.
+  // MIAFIX.1 (5) — mia_purchase_intents.un1t_write_id stayed null live although
+  // un1t_write_events held the checkout row (origin_ref = the intent id).
+  describe('MIAFIX.1: the checkout\'s ledger row id is stored on the intent (un1t_write_id)', () => {
+    it('a new intent: un1t_write_id is the ledger id createCheckoutLink returned, with the link', async () => {
+      h.checkout.mockImplementationOnce(async (_db, args) => ({ checkoutUrl: urlFor(args.idempotencyKey), free: false, ledgerId: '70000000-0000-4000-8000-0000000000c1' }))
+      const { db, data } = fakeDb(offers())
+      const out = await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id }, hatch(), deps)
+      expect(out.link_sent).toBe(true)
+      expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'link_sent', checkout_url: out.url, un1t_write_id: '70000000-0000-4000-8000-0000000000c1' })
+    })
+
+    it('a live intent with no stored link asked D again: that call\'s ledger id is stored with the link', async () => {
+      h.checkout.mockImplementationOnce(async (_db, args) => ({ checkoutUrl: urlFor(args.idempotencyKey), free: false, ledgerId: '70000000-0000-4000-8000-0000000000c2' }))
+      const { db, data } = fakeDb({ ...offers(), mia_purchase_intents: [liveIntent({ checkout_url: null })] })
+      await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id }, hatch(), deps)
+      expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'link_sent', un1t_write_id: '70000000-0000-4000-8000-0000000000c2' })
+    })
+
+    it('free: true: the ledger id is stored before the settle', async () => {
+      h.checkout.mockResolvedValueOnce({ checkoutUrl: urlFor('free'), free: true, ledgerId: '70000000-0000-4000-8000-0000000000c3' })
+      const { db, data } = fakeDb(offers())
+      await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id }, hatch(), deps)
+      expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'no_class', un1t_write_id: '70000000-0000-4000-8000-0000000000c3' })
+    })
+
+    it('no ledger id in the answer: nothing is written for it (the link is still stored and sent)', async () => {
+      const { db, data, calls } = fakeDb(offers())
+      const out = await sendPurchaseLink(ctxFor(db), { offer_id: OFFER.pack10.id }, hatch(), deps)
+      expect(out.link_sent).toBe(true)
+      expect(data.mia_purchase_intents[0]).not.toHaveProperty('un1t_write_id')
+      expect(calls.filter((c) => c.table === 'mia_purchase_intents' && c.op === 'update').every((c) => !('un1t_write_id' in c.patch))).toBe(true)
+    })
+  })
+
   it('free: true settles at once through settle: no class -> no_class + purchase_paid_no_class_text, no link sent', async () => {
     h.checkout.mockResolvedValueOnce({ checkoutUrl: urlFor('free'), free: true })
     const { db, data } = fakeDb(offers())
@@ -600,6 +667,37 @@ describe('executePurchaseTool', () => {
     expect(none.message).toMatch(/hand off/i)
     const broken = await executePurchaseTool('list_purchase_options', {}, ctxFor(fakeDb({}, { fail: { mia_purchase_offers: { select: true } } }).db))
     expect(broken).toMatchObject({ error: 'offers_unreadable' })
+  })
+
+  // MIAFIX.1 (3) — Mia offered a link for the 10 Class Pack while another
+  // product's link was open, then had to refuse. The list now says so first.
+  it('list_purchase_options: a member\'s open link is in the result (its product, waiting), with the rule not to offer another', async () => {
+    const live = liveIntent({ expires_at: new Date(Date.now() + 3600_000).toISOString() })
+    const { db } = fakeDb({ mia_purchase_offers: [OFFER.pack10, OFFER.monthly], mia_purchase_intents: [live] })
+    const out = await executePurchaseTool('list_purchase_options', {}, ctxFor(db))
+    expect(out.open_link).toEqual({ product: '10 Class Pack', link_waiting: true })
+    expect(out.offers).toHaveLength(2)
+    expect(out.message).toMatch(/They already have a payment link waiting for 10 Class Pack/)
+    expect(out.message).toMatch(/Never offer to send a link for a different product/)
+    expect(out.message).toMatch(/offer to hand off to the team/)
+    expect(JSON.stringify(out)).not.toContain('pay.example.test')
+    expect(JSON.stringify(out)).not.toMatch(/[—–]/)
+  })
+
+  it('list_purchase_options: no open_link with no live intent, a lapsed one, an unverified member or an unreadable intent (offers still listed)', async () => {
+    const lapsed = liveIntent({ expires_at: new Date(Date.now() - 60_000).toISOString() })
+    const cases = [
+      [fakeDb({ mia_purchase_offers: [OFFER.pack10] }).db, {}],
+      [fakeDb({ mia_purchase_offers: [OFFER.pack10], mia_purchase_intents: [lapsed] }).db, {}],
+      [fakeDb({ mia_purchase_offers: [OFFER.pack10], mia_purchase_intents: [liveIntent({ expires_at: new Date(Date.now() + 3600_000).toISOString() })] }).db, { verifiedContactId: null }],
+      [fakeDb({ mia_purchase_offers: [OFFER.pack10], mia_purchase_intents: [liveIntent()] }, { fail: { mia_purchase_intents: { select: true } } }).db, {}],
+    ]
+    for (const [db, opts] of cases) {
+      const out = await executePurchaseTool('list_purchase_options', {}, ctxFor(db, opts))
+      expect(out).not.toHaveProperty('open_link')
+      expect(out.offers).toHaveLength(1)
+      expect(out.message).not.toMatch(/link waiting/)
+    }
   })
 
   it('send_purchase_link runs at the answerable un1t.online studio', async () => {

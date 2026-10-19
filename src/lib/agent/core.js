@@ -369,6 +369,13 @@ export function formatHistoryForClaude(rows, opts = {}) {
     // HARDEN.2 — inbound text is untrusted: neutralise the markers that carry
     // authority in this protocol before it enters history.
     let text = (role === 'user' ? sanitizeInboundText(r.body) : (r.body || '')).trim()
+    // MIAFIX.1 — a button message is recorded as "text\n[Options: a | b]" for
+    // the inbox; the model reads it back as the real sentinel, so a reply that
+    // copies its own history makes working buttons instead of plain text.
+    if (role === 'assistant') {
+      const recorded = text.match(RECORDED_OPTIONS_RE)
+      if (recorded) text = `${text.slice(0, recorded.index)}\n${OPTIONS_PREFIX} ${recorded[1].trim()}`.trim()
+    }
     if (!text) {
       const t = r.message_type && r.message_type !== 'text' ? r.message_type : 'message'
       text = `[${t}]`
@@ -541,6 +548,15 @@ const SKIP_RE = looseSentinel(SKIP_PREFIX)
 const HANDOFF_OPEN_RE = /\[\[\s*HANDOFF/i
 const OPTIONS_OPEN_RE = /\[\[\s*OPTIONS/i
 
+// MIAFIX.1 — the form sendAndLog RECORDS a button message in (a last line
+// "[Options: a | b]", what staff read in the inbox). Mia re-reads her history
+// and imitated it, which reached the customer as a plain bubble with no
+// buttons (MIA TEST, 19 Oct 2026). A TRAILING line of that form (any case,
+// optional spaces, "[Option:" too, markdown emphasis at the edges) is read
+// like the sentinel; the same form anywhere else is ordinary text. Group 1 is
+// the payload.
+const RECORDED_OPTIONS_RE = /(?:^|\n)[ \t*_`~]*\[\s*options?\s*:([^\]\n]*)\][ \t*_`~]*$/i
+
 /**
  * Does this model output carry the [[SKIP]] sentinel? Matched as leniently as
  * the other two (case + bracket padding + a dropped closing pair), because the
@@ -642,6 +658,14 @@ export function parseAgentResponse(raw) {
     const cut = cutSentinelLine(text, openOptions)
     if (!options) options = normalizeAgentOptions(stripEmDashes(cut.payload))
     text = cut.text
+  }
+  // MIAFIX.1 — a trailing "[Options: a | b]" line (the recorded form, copied
+  // from history) is the sentinel too: stripped whatever its payload, and the
+  // options source only when no sentinel gave one.
+  const recorded = text.match(RECORDED_OPTIONS_RE)
+  if (recorded) {
+    if (!options) options = normalizeAgentOptions(stripEmDashes(recorded[1]))
+    text = text.slice(0, recorded.index).replace(SENTINEL_WRAP, '').trim()
   }
 
   if (!text) return { action: 'handoff', text: '', reason: 'empty_model_response' }

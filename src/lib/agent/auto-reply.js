@@ -67,7 +67,7 @@ import { deriveUn1tReadTools, deriveUn1tFullTools, selectToolBlock, withCacheBre
 import { resolveMemberStudios, otherStudioOnly } from './member-studios'
 import {
   threadTakesBookings, resolveTurnPlan, todayPlan, planKey, turnForPlan, createActionStudios, loadAgentKnowledge,
-  promptOptionsForPlan, executorCtxFor,
+  promptOptionsForPlan, executorCtxFor, readOrgStudioLinks, otherStudiosBlockFor,
 } from './turn-studios'
 import { DEFAULT_BOOKING_CTA_LABEL } from './default-copy'
 import { anthropicMessages } from '@/lib/anthropic'
@@ -1011,6 +1011,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // (promptOptionsForPlan threw) drops the turn to today's block: never the
     // un1t tools with today's prompt. `keepIfKey`: a re-plan whose key (block,
     // named un1t studio, facts studios) is unchanged keeps the system it has.
+    // MIAFIX.1 (8) — the organisation's other studios, read once per turn
+    // (null on a failed read, logged: the turn goes without their links).
+    let orgStudioLinks
     const settleTurn = async ({ keepIfKey } = {}) => {
       let next = await resolveTurnPlan(planArgs(), actionStudios)
       if (keepIfKey !== undefined && planKey(next) === keepIfKey) {
@@ -1027,8 +1030,11 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
         }
       }
       applyPlan(next)
+      if (orgStudioLinks === undefined) orgStudioLinks = await readOrgStudioLinks(db, { organizationId: loc?.organization_id || null, threadLocationId: locationId }, actionStudios)
+      const otherStudiosBlock = otherStudiosBlockFor(orgStudioLinks, next)
       system = buildCachedSystem({
         ...(extra && !next.sameAsToday ? { ...systemOpts, ...extra } : systemOpts),
+        ...(otherStudiosBlock ? { otherStudiosBlock } : {}),
         bookingFlow: toolCtx.bookingFlow?.offered === true,
       })
     }
@@ -1041,6 +1047,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // PERSON-ACCT.7 — set when book_class finds two live accounts and refuses
     // to guess; same deterministic-handoff posture as no_credits.
     let accountConflictHandoff = false
+    // MIAFIX.1 (6) — send_purchase_link found a payment link already open for a
+    // DIFFERENT product: the thread goes to the team in this turn, the customer
+    // reads the tool's operator-editable open text (purchase_link_open_text).
+    let purchaseLinkOpenHandoff = null
     let modelText = ''
     // A stop_reason / tool outcome that must NOT become a customer reply.
     // Set inside the loop, actioned as a soft handoff just after it.
@@ -1202,6 +1212,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
             }
             if (block.name === 'book_class' && result?.account_conflict === true) {
               accountConflictHandoff = true
+            }
+            if (block.name === 'send_purchase_link' && result?.open_link_handoff === true) {
+              purchaseLinkOpenHandoff = { text: typeof result.text === 'string' ? result.text : '' }
             }
             if (block.name === 'verify_identity') {
               // AGENT-VERIFY-HANDOFF.1 — track consecutive failures so a stuck
@@ -1375,6 +1388,18 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
         holdingOverride: (settings?.account_conflict_handoff_text || '').trim() || DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT,
       })
       return { handled: true, action: 'handoff', reason: 'account_conflict' }
+    }
+
+    // MIAFIX.1 (6) — a payment link is already open for another product. Same
+    // deterministic shape as the two above: the model's text is DISCARDED, the
+    // customer reads the open text (operator-editable; the tool rendered it),
+    // and the thread is handed to the team with no further reply from them.
+    if (purchaseLinkOpenHandoff) {
+      await handoff(db, adapter, {
+        ...common, reason: 'purchase_link_open', settings, brand: branding.companyName,
+        holdingOverride: purchaseLinkOpenHandoff.text,
+      })
+      return { handled: true, action: 'handoff', reason: 'purchase_link_open' }
     }
 
     if (shouldHandoffAfterVerifyFail(verifyFails, verifyFailThreshold)) {
