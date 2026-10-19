@@ -705,9 +705,10 @@ const isoOrNull = (ms) => (ms == null ? null : new Date(ms).toISOString())
  *                       snapshot keeps only the newest 10 bookings); the same
  *                       "attended" test as recent_bookings (status
  *                       'attended', readable starts_at)
- *   attended_ends       TRIALDONE.2: every attended booking's END, oldest
- *                       first: the event's ends_at, else its starts_at; one
- *                       with neither is left out
+ *   attended_ends       TRIALDONE.2: the END of each booking in
+ *                       attended_starts (same bookings, so a booking with no
+ *                       readable start is left out), oldest first: the
+ *                       event's ends_at, else its starts_at
  *   member_since        earliest remote_created_at of a fresh subscription
  *                       that holds a membership (the snapshot's member rule)
  *   classpass_since / gympass_since  first aggregator booking of each pile
@@ -723,10 +724,11 @@ export function shapePipelineDateEvidence({
     .filter((b) => lower(b?.status) === 'attended' && msOf(b?.starts_at) != null)
     .map((b) => b.starts_at)
     .sort((a, b) => msOf(a) - msOf(b))
+  // the same bookings as attended_starts (a readable start), so both date
+  // rules count the same classes; the end where the event has one
   const attendedEnds = bookings
-    .filter((b) => lower(b?.status) === 'attended')
+    .filter((b) => lower(b?.status) === 'attended' && msOf(b?.starts_at) != null)
     .map((b) => (msOf(b.ends_at) != null ? b.ends_at : b.starts_at))
-    .filter((v) => msOf(v) != null)
     .sort((a, b) => msOf(a) - msOf(b))
   const aggregator = aggregatorOf(bookings)
   const ended = memberships

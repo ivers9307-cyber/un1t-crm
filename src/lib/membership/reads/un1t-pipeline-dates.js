@@ -49,8 +49,11 @@ const attendedEndsMs = (e) => (Array.isArray(e?.attended_ends) ? e.attended_ends
  *   three_attended        TRIAL_DONE_MIN_ATTENDED (3) or more attended: the END
  *                         of the third attended class (attended_ends)
  *   two_attended_expired  exactly two attended and a readable trial_expires_at:
- *                         the expiry (the un1t board's classify makes them
- *                         trial_done once it has passed)
+ *                         the later of the expiry and the END of the second
+ *                         attended class (the un1t board's classify makes them
+ *                         trial_done once the trial has expired AND they have
+ *                         two classes, so a second class attended after the
+ *                         expiry is when they became Trial done)
  *
  * Null otherwise (0 or 1 attended is never Trial done, nor 2 with no known
  * expiry). Reads no clock: whether `at` has passed is the caller's to judge
@@ -65,7 +68,9 @@ export function trialDoneEvidenceAt(evidence) {
   const min = PIPELINE_THRESHOLDS.TRIAL_DONE_MIN_ATTENDED
   if (ends.length >= min) return { kind: 'three_attended', at: new Date(ends[min - 1]).toISOString() }
   const expires = msOf(evidence.trial_expires_at)
-  if (ends.length === 2 && expires != null) return { kind: 'two_attended_expired', at: new Date(expires).toISOString() }
+  if (ends.length === 2 && expires != null) {
+    return { kind: 'two_attended_expired', at: new Date(Math.max(expires, ends[1])).toISOString() }
+  }
   return null
 }
 
@@ -85,8 +90,9 @@ export function trialDoneEvidenceAt(evidence) {
  *                 TRIAL_DONE_MIN_ATTENDED (3): classify's own trial_done rule
  *                 is "attended >= TRIAL_DONE_MIN_ATTENDED", so the trial was
  *                 done when that class happened, not at the latest one. With
- *                 exactly two attended, the trial's expiry (TRIALDONE.2: the
- *                 un1t board's classify makes 2 attended + an expired trial
+ *                 exactly two attended, the later of the trial's expiry and
+ *                 the second attended class's start (TRIALDONE.2: the un1t
+ *                 board's classify makes 2 attended + an expired trial
  *                 trial_done; trialDoneEvidenceAt).
  *   converted     converted_at: the first sub_initial sale, which is the
  *                 field classify reads for the converted window.
@@ -134,10 +140,17 @@ export function un1tStageEnteredAt(stageSlug, evidence, now = Date.now()) {
     case 'second_class':
       return past(nth(2), now)
     case 'trial_done': {
+      // Intentional: the board dates 3+ from the 3rd class's START (as every
+      // attendance stage here), while trialDoneEvidenceAt (the outreach
+      // trigger) uses the 3rd class's END.
       const third = nth(PIPELINE_THRESHOLDS.TRIAL_DONE_MIN_ATTENDED)
       if (third != null) return past(third, now)
       const trigger = trialDoneEvidenceAt(e)
-      return trigger?.kind === 'two_attended_expired' ? past(msOf(trigger.at), now) : null
+      if (trigger?.kind !== 'two_attended_expired') return null
+      // never before the second class: the later of the expiry and its start
+      const expires = msOf(e.trial_expires_at)
+      const second = nth(2)
+      return past(second != null ? Math.max(expires, second) : expires, now)
     }
     case 'converted':
       return past(msOf(e.converted_at), now)

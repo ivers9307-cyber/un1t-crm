@@ -1139,6 +1139,16 @@ describe('shapePipelineDateEvidence', () => {
     ])
   })
 
+  it('attended_ends lists the same bookings as attended_starts: an end with no readable start is left out', () => {
+    const e = evidence({ bookings: [
+      attended(9, { ends_at: daysAgo(8.9) }),
+      attended(6, { starts_at: null, ends_at: daysAgo(5.9) }),
+      attended(4, { starts_at: 'nope', ends_at: daysAgo(3.9) }),
+    ] })
+    expect(e.attended_starts).toEqual([daysAgo(9)])
+    expect(e.attended_ends).toEqual([daysAgo(8.9)])
+  })
+
   it('trial_expires_at is copied from the snapshot', () => {
     expect(evidence().trial_expires_at).toBeNull()
     const a = args()

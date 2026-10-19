@@ -84,6 +84,13 @@ describe('un1tStageEnteredAt — funnel stages', () => {
     expect(un1tStageEnteredAt('trial_done', ev({ attended_starts: [ago(9)], attended_ends: [ago(8.9)], trial_expires_at: ago(2) }), NOW)).toBeNull()
   })
 
+  it('trial_done with two attended, the second class after the expiry: the second class start (TRIALDONE.2 fix)', () => {
+    const e = ev({ attended_starts: [ago(12), ago(4)], attended_ends: [ago(11.9), ago(3.9)], last_attended_at: ago(4), trial_expires_at: ago(5) })
+    expect(un1tStageEnteredAt('trial_done', e, NOW)).toBe(ago(4))
+    // expiry after the second class: the expiry, unchanged
+    expect(un1tStageEnteredAt('trial_done', { ...e, trial_expires_at: ago(2) }, NOW)).toBe(ago(2))
+  })
+
   it('orders attended bookings by start time, never by the order they were given', () => {
     const shuffled = [ago(2), ago(20), ago(10), ago(14)]
     const e = ev({ attended_starts: shuffled, last_attended_at: ago(2) })
@@ -238,6 +245,12 @@ describe('trialDoneEvidenceAt', () => {
   it('exactly two attended with a known expiry: the expiry', () => {
     const e = ev({ attended_starts: [ago(9), ago(6)], attended_ends: [ago(8.9), ago(5.9)], trial_expires_at: ago(2) })
     expect(trialDoneEvidenceAt(e)).toEqual({ kind: 'two_attended_expired', at: ago(2) })
+  })
+
+  it('two attended, the second class AFTER the expiry: the end of the second class (never before it)', () => {
+    // granted day 0, expires day 7, second class attended day 8
+    const e = ev({ attended_starts: [ago(12), ago(4)], attended_ends: [ago(11.9), ago(3.9)], trial_expires_at: ago(5) })
+    expect(trialDoneEvidenceAt(e)).toEqual({ kind: 'two_attended_expired', at: ago(3.9) })
   })
 
   it('two attended with no readable expiry: null', () => {
