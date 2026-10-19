@@ -3,14 +3,14 @@
 // step 5, 6.5.1, 6.5.2; Review Focus 3). purchase-intents.js (the offers, the
 // links, the trial) imports this module; this one never imports it.
 //
-// Three detectors (the /pay-done page, check_my_purchase, the post-sync
-// watcher) call settlePurchaseIntent, which is safe to call concurrently: the
-// one whose CAS link_sent -> paid returns the row is the winner and does
-// everything (the double-payment card, the class booking through Task 16's
-// execute step, ONE in-thread message, the final status); a loser gets
-// already_settled and does nothing. "Paid" is the entitlement against the
-// snapshot taken when the link was made (paidSinceSnapshot), read live or from
-// the mirror (zero un1t.online calls), or a purchase the mirror dates inside
+// Three detectors (the /pay-done page, check_my_purchase, the 5-minute
+// watcher cron, mirror only) call settlePurchaseIntent, which is safe to call
+// concurrently: the one whose CAS link_sent -> paid returns the row is the
+// winner and does everything (the double-payment card, the class booking
+// through Task 16's execute step, ONE in-thread message, the final status); a
+// loser gets already_settled and does nothing. "Paid" is the entitlement
+// against the snapshot taken when the link was made (paidSinceSnapshot), read
+// live or from the mirror (zero un1t.online calls), or a purchase the mirror dates inside
 // the intent's window; the un1t_transactions row records which product was
 // bought (a different product still counts: un1t.online arbitrates). An
 // expired intent settles nothing and says nothing (Review Focus 3), unless the
@@ -580,7 +580,7 @@ async function closeStuckPaid(db, intent, { baseOutcome, code, confirmation = nu
 }
 
 /**
- * For the post-sync watcher (Task 23): an intent left in 'paid' (a process
+ * For the watcher cron (Task 23): an intent left in 'paid' (a process
  * killed mid-settle) is closed book_failed with ONE paid_booking_failed staff
  * card. Nothing is booked again and nothing is sent. A no-op unless the
  * intent is still 'paid'. Never throws.
@@ -598,12 +598,53 @@ export async function markStuckPaidIntent(db, intentId, { code = 'stuck_paid', n
   return { marked: closed, requestId }
 }
 
+/** The statuses a settle leaves behind ('paid' while the winner is still at work). */
+export const SETTLED_STATUSES = Object.freeze(['paid', 'booked', 'book_failed', 'no_class'])
+
+/**
+ * For the watcher cron (Task 23): the settle winner's double-payment check run
+ * again on a settled intent, mirror only (zero un1t.online calls), so a second
+ * payment the mirror shows only after the settle still reaches the team as ONE
+ * record-only refund_request card (deduped on the intent id while pending).
+ * Once a card is filed it is recorded on the intent's outcome (status-guarded;
+ * left to the winner while the intent is still 'paid'), so a later run asks
+ * nothing again. Nothing is refunded and nothing reaches the member. Never throws.
+ *
+ * @param {object} db service-role client
+ * @param {string} intentId
+ * @returns {Promise<{ filed: boolean }>} filed: a card was filed (or found pending) this time
+ */
+export async function recheckDoublePayment(db, intentId, { now = Date.now() } = {}) {
+  try {
+    const read = await readIntent(db, intentId)
+    const intent = read.intent
+    if (read.error || !intent || !SETTLED_STATUSES.includes(intent.status)) return { filed: false }
+    if (intent.outcome?.double_payment?.approval_id) return { filed: false }
+    const doubled = await fileDoublePayment(db, intent, await purchasesSince(db, intent))
+    if (!doubled?.approval_id) return { filed: false }
+    if (intent.status !== 'paid') {
+      const { data, error } = await db.from(INTENTS)
+        .update({ outcome: { ...(intent.outcome || {}), double_payment: doubled }, updated_at: new Date(now).toISOString() })
+        .eq('id', intent.id)
+        .eq('status', intent.status)
+        .select('id')
+      if (error || !Array.isArray(data) || data.length === 0) {
+        logWarn(LOG_MODULE, 'double payment card not recorded on the intent', { locationId: intent.location_id, op: 'double_payment_note', intentId: intent.id, status: null, code: error?.code ?? null })
+      }
+    }
+    return { filed: true }
+  } catch (err) {
+    logError(LOG_MODULE, 'double payment re-check threw', { op: 'double_payment_recheck', intentId, status: null, errClass: err?.name ?? null })
+    return { filed: false }
+  }
+}
+
 /**
  * The silent expiry sweep: every live intent past expires_at becomes
  * 'expired' (CAS on status and expiry), which frees the member for a new
  * link. Nothing is sent and nothing filed (MIA-EXPIRY-QUIET). Paged under the
  * 1,000-row cap with an explicit order; an expired row leaves the filter, so
- * each page is read from the top. The post-sync watcher (Task 23) settles
+ * each page is read from the top. The watcher cron (Task 23) settles
  * each live intent first.
  *
  * @param {object} db service-role client

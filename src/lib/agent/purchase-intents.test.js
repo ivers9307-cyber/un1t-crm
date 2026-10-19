@@ -70,7 +70,7 @@ import {
   formatPriceLabel, listPurchaseOptions, mintPayDoneToken, hashPayDoneToken, sendPurchaseLink,
   executePurchaseTool, PURCHASE_INTENT_TTL_MS, trialAvailable, offersForBooking,
 } from './purchase-intents'
-import { paidSinceSnapshot, settlePurchaseIntent, checkMyPurchase, expireStaleIntents, markStuckPaidIntent } from './purchase-settle'
+import { paidSinceSnapshot, settlePurchaseIntent, checkMyPurchase, expireStaleIntents, markStuckPaidIntent, recheckDoublePayment } from './purchase-settle'
 import { notifyAgentApprovalRequest } from './approval-notify'
 import { un1tBookClass } from './un1t-booking'
 import { DEFAULT_TRIAL_USED_TEXT } from './default-copy'
@@ -1422,6 +1422,44 @@ describe('settlePurchaseIntent (Task 21)', () => {
         expect(await markStuckPaidIntent(other.db, ID, { now: NOW })).toEqual({ marked: false })
         expect(other.data.agent_membership_requests).toHaveLength(0)
       }
+      expect(h.book).not.toHaveBeenCalled()
+      expect(h.send).not.toHaveBeenCalled()
+    })
+
+    it('recheckDoublePayment (for the watcher): the winner\'s check again, mirror only; recorded once filed; a no-op otherwise', async () => {
+      const two = [tx(), tx({ un1t_id: 'tx-2', remote_created_at: new Date(NOW - 60_000).toISOString() })]
+      const { db, data } = settleDb({ mia_purchase_intents: [paidIntent({ status: 'booked', outcome: { result: 'paid_booked' } })], un1t_transactions: two })
+      expect(await recheckDoublePayment(db, ID, { now: NOW })).toEqual({ filed: true })
+      expect(h.refund).toHaveBeenCalledTimes(1)
+      expect(h.refund.mock.calls[0][1]).toMatchObject({ reason: 'double_payment', originRef: ID, transactionIds: ['tx-1', 'tx-2'] })
+      expect(data.mia_purchase_intents[0]).toMatchObject({ status: 'booked', updated_at: new Date(NOW).toISOString() })
+      expect(data.mia_purchase_intents[0].outcome).toEqual({ result: 'paid_booked', double_payment: { transaction_ids: ['tx-1', 'tx-2'], approval_id: 'appr-double-1' } })
+      // Recorded: never asked again.
+      expect(await recheckDoublePayment(db, ID, { now: NOW })).toEqual({ filed: false })
+      expect(h.refund).toHaveBeenCalledTimes(1)
+
+      // A card that was not filed is not recorded, so the next run tries again.
+      h.refund.mockResolvedValueOnce({ approvalId: null })
+      const failed = settleDb({ mia_purchase_intents: [paidIntent({ status: 'no_class', outcome: {} })], un1t_transactions: two })
+      expect(await recheckDoublePayment(failed.db, ID, { now: NOW })).toEqual({ filed: false })
+      expect(failed.data.mia_purchase_intents[0].outcome).toEqual({})
+      expect(await recheckDoublePayment(failed.db, ID, { now: NOW })).toEqual({ filed: true })
+
+      // Still 'paid': the card is filed, the outcome left to the winner.
+      const paid = settleDb({ mia_purchase_intents: [paidIntent({ status: 'paid', outcome: { source: 'mirror' } })], un1t_transactions: two })
+      expect(await recheckDoublePayment(paid.db, ID, { now: NOW })).toEqual({ filed: true })
+      expect(paid.data.mia_purchase_intents[0].outcome).toEqual({ source: 'mirror' })
+
+      // Never settled, or one purchase only: nothing.
+      h.refund.mockClear()
+      for (const status of ['link_sent', 'expired', 'refused']) {
+        const other = settleDb({ mia_purchase_intents: [paidIntent({ status })], un1t_transactions: two })
+        expect(await recheckDoublePayment(other.db, ID, { now: NOW })).toEqual({ filed: false })
+      }
+      const single = settleDb({ mia_purchase_intents: [paidIntent({ status: 'booked' })], un1t_transactions: [tx()] })
+      expect(await recheckDoublePayment(single.db, ID, { now: NOW })).toEqual({ filed: false })
+      expect(h.refund).not.toHaveBeenCalled()
+      expect(fetchLiveEntitlement).not.toHaveBeenCalled()
       expect(h.book).not.toHaveBeenCalled()
       expect(h.send).not.toHaveBeenCalled()
     })
