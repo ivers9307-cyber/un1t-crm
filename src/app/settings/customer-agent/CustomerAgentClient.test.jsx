@@ -848,7 +848,7 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
 
   // MIAHATCH.5 (Ruling 25) — Mia's switch for booking, cancelling and taking
   // payments in chat at this studio. Off unless ticked; saved with the studio.
-  const SWITCH = 'Mia can book and cancel classes and pass refund requests to the team in chat at this studio'
+  const SWITCH = 'Mia can book and cancel classes, send payment links and pass refund requests to the team in chat at this studio'
 
   it('the Hatch group carries the chat actions switch, unticked by default, no dash in its words', async () => {
     mockFetch([answer({ membership_source_key: 'un1t_online' })])

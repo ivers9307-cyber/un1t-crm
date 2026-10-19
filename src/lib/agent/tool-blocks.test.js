@@ -17,6 +17,7 @@ import { planTurnTools, resolveTurnPlan, turnForPlan } from './turn-studios'
 import { logWarn } from '@/lib/log'
 import { UN1T_ID_PREFIX, tagUn1tId, parseAgentId } from './studio-ids'
 import { TOOL_NOT_AT_THIS_STUDIO, refuseToolForTurn, deriveNoBookingTools } from './tool-capability'
+import { PURCHASE_TOOLS, PURCHASE_TOOL_NAMES, LIST_PURCHASE_OPTIONS_TOOL, SEND_PURCHASE_LINK_TOOL, CHECK_MY_PURCHASE_TOOL } from './purchase-tools'
 import { executeAccountTool } from './account-tools'
 import { executeBookingTool } from './booking-tools'
 import { MEMBERSHIP_SOURCES } from '@/lib/membership/source'
@@ -165,20 +166,42 @@ describe('the un1t read blocks', () => {
 
 // MIAHATCH.5 (Task 15) — block 3b: the dual read block plus request_refund,
 // with book_class and cancel_class_booking re-described for either studio.
+// MIAHATCH.6 (Task 19) — then the three purchase tools.
 describe('the un1t full block (3b)', () => {
   const NEW_IN_FULL = ['book_class', 'cancel_class_booking']
+  const PURCHASE = ['list_purchase_options', 'send_purchase_link', 'check_my_purchase']
 
-  it('is the dual block plus request_refund, in the same order', () => {
-    expect(names(CACHED_UN1T_FULL_TOOLS)).toEqual([...names(CACHED_UN1T_READ_DUAL_TOOLS), 'request_refund'])
+  it('is the dual block plus request_refund and the three purchase tools, in the same order', () => {
+    expect(names(CACHED_UN1T_FULL_TOOLS)).toEqual([...names(CACHED_UN1T_READ_DUAL_TOOLS), 'request_refund', ...PURCHASE])
     expect(names(deriveUn1tFullTools(ALL_AGENT_TOOLS))).toEqual(names(CACHED_UN1T_FULL_TOOLS))
+    expect(new Set(PURCHASE)).toEqual(new Set(UN1T_PURCHASE_TOOL_NAMES))
+    expect(PURCHASE_TOOL_NAMES).toEqual(UN1T_PURCHASE_TOOL_NAMES)
   })
 
-  it('built once: agentToolsFor returns the SAME array for a WhatsApp turn with writes, one 1h breakpoint on request_refund', () => {
+  it('the purchase tools: offer_id required, the class context optional, no dash, nothing about how full a class is or saying paid on their own', () => {
+    expect(SEND_PURCHASE_LINK_TOOL.input_schema.required).toEqual(['offer_id'])
+    expect(Object.keys(SEND_PURCHASE_LINK_TOOL.input_schema.properties).sort()).toEqual(['class_name', 'class_time', 'event_id', 'offer_id', 'starts_at'])
+    expect(LIST_PURCHASE_OPTIONS_TOOL.input_schema).toEqual({ type: 'object', properties: {} })
+    expect(CHECK_MY_PURCHASE_TOOL.input_schema).toEqual({ type: 'object', properties: {} })
+    expect(SEND_PURCHASE_LINK_TOOL.description).toMatch(/restate the product and its price and get a clear yes/i)
+    expect(LIST_PURCHASE_OPTIONS_TOOL.description).toMatch(/never invent, round or change a price/i)
+    for (const t of PURCHASE_TOOLS) {
+      const json = JSON.stringify(t)
+      expect(json, t.name).not.toMatch(/[—–]/)
+      expect(json, t.name).not.toMatch(/limited|spaces|capacity|glofox/i)
+      expect(t.description, t.name).not.toMatch(/you have paid|payment (is|was) (received|complete)/i)
+      // The cached block carries them unchanged (only the last gets the breakpoint).
+      const inBlock = CACHED_UN1T_FULL_TOOLS.find((x) => x.name === t.name)
+      expect({ ...inBlock, cache_control: undefined }).toEqual({ ...t, cache_control: undefined })
+    }
+  })
+
+  it('built once: agentToolsFor returns the SAME array for a WhatsApp turn with writes, one 1h breakpoint on the last tool', () => {
     const turn = { answerable: [hatch], threadProvider: un1t, channel: 'whatsapp', un1tWrites: true }
     expect(agentToolsFor(turn)).toBe(CACHED_UN1T_FULL_TOOLS)
     expect(agentToolsFor({ ...turn, answerable: [hatch, stillorgan] })).toBe(CACHED_UN1T_FULL_TOOLS)
     expect(CACHED_UN1T_FULL_TOOLS.filter((t) => t.cache_control)).toHaveLength(1)
-    expect(CACHED_UN1T_FULL_TOOLS.at(-1)).toMatchObject({ name: 'request_refund', cache_control: { type: 'ephemeral', ttl: '1h' } })
+    expect(CACHED_UN1T_FULL_TOOLS.at(-1)).toMatchObject({ name: 'check_my_purchase', cache_control: { type: 'ephemeral', ttl: '1h' } })
     // Writes off, or Instagram, never reach it.
     expect(agentToolsFor({ ...turn, un1tWrites: false })).toBe(CACHED_UN1T_READ_TOOLS)
     expect(agentToolsFor({ ...turn, channel: 'instagram' })).toBe(CACHED_NO_BOOKING_TOOLS)
@@ -218,7 +241,7 @@ describe('the un1t full block (3b)', () => {
   })
 
   it('every other tool is the dual block\'s own object; the full list is never touched', () => {
-    for (const t of CACHED_UN1T_FULL_TOOLS.slice(0, -1)) {
+    for (const t of CACHED_UN1T_FULL_TOOLS.slice(0, -4)) {
       if (NEW_IN_FULL.includes(t.name)) continue
       const dualTool = deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }).find((x) => x.name === t.name)
       expect(JSON.stringify(t), t.name).toBe(JSON.stringify(dualTool))
@@ -227,7 +250,7 @@ describe('the un1t full block (3b)', () => {
     expect(JSON.stringify(CACHED_NO_BOOKING_TOOLS)).toBe(JSON.stringify(NO_BOOKING_FIXTURE.cached_tools))
   })
 
-  it('extraTools are appended after request_refund (Task 19 adds the purchase tools there)', () => {
+  it('extraTools are appended after request_refund (the purchase tools by default)', () => {
     const extra = [{ name: 'list_purchase_options', description: 'x', input_schema: { type: 'object', properties: {} } }]
     const out = deriveUn1tFullTools(ALL_AGENT_TOOLS, { extraTools: extra })
     expect(names(out).slice(-2)).toEqual(['request_refund', 'list_purchase_options'])
@@ -437,13 +460,15 @@ describe('refuseToolForTurn', () => {
     expect(refuseToolForTurn('get_my_membership', { turn: { ...full, un1tWrites: false } })).toBeNull()
   })
 
-  // MIAHATCH.5 (Task 15) — the purchase tools join un1t_full in Task 19; until
-  // then the block does not offer them, so the executor refuses them there too.
-  it('un1t_full refuses the three purchase tools until they join the block', () => {
+  // MIAHATCH.6 (Task 19) — the purchase tools joined un1t_full: offered and
+  // allowed there on WhatsApp with writes, refused when either is missing.
+  it('un1t_full offers and allows the three purchase tools; Instagram or writes off refuses them', () => {
     const full = { block: 'un1t_full', answerable: [hatch], channel: 'whatsapp', un1tWrites: true }
     for (const name of UN1T_PURCHASE_TOOL_NAMES) {
-      expect(names(CACHED_UN1T_FULL_TOOLS)).not.toContain(name)
-      expect(refuseToolForTurn(name, { turn: full }), name).toEqual(TOOL_NOT_AT_THIS_STUDIO)
+      expect(names(CACHED_UN1T_FULL_TOOLS)).toContain(name)
+      expect(refuseToolForTurn(name, { turn: full }), name).toBeNull()
+      expect(refuseToolForTurn(name, { turn: { ...full, channel: 'instagram' } }), name).toEqual(TOOL_NOT_AT_THIS_STUDIO)
+      expect(refuseToolForTurn(name, { turn: { ...full, un1tWrites: false } }), name).toEqual(TOOL_NOT_AT_THIS_STUDIO)
     }
   })
 

@@ -102,10 +102,10 @@ const NOT_OFFERED_IN_BLOCK = Object.freeze({
   // the un1t.online half reads the past-due seam, the Glofox half is today's.
   un1t_read: new Set(['book_class', 'cancel_class_booking', ...UN1T_ONLY]),
   un1t_read_dual: new Set([...UN1T_ONLY]),
-  // MIAHATCH.5 — block 3b offers the writes (book_class, cancel_class_booking,
-  // request_refund); the purchase tools join it in Task 19 (MIAHATCH.6), so
-  // until then they are not offered and the executor refuses them here too.
-  un1t_full: new Set([...UN1T_PURCHASE_TOOL_NAMES]),
+  // MIAHATCH.5 / MIAHATCH.6 — block 3b offers every tool: the writes
+  // (book_class, cancel_class_booking, request_refund) and the three purchase
+  // tools. They still run only on WhatsApp with un1tWrites (refuseToolForTurn).
+  un1t_full: new Set(),
 })
 
 /**

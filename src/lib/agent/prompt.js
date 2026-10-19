@@ -127,7 +127,8 @@ function glofoxReminderRules(label, app) {
 // studio from chat, says "booked" / "cancelled" only on the tool's word, never
 // promises a refund or a credit back, and sends refund requests to the team
 // through request_refund. Every 'read' line is untouched (the read renders are
-// byte-identical to before). Task 19 adds the upsell rules to 'full'.
+// byte-identical to before). MIAHATCH.6 adds the upsell rules to 'full'
+// (un1tUpsellLines).
 // No em or en dashes in this text.
 // The carve-out for a studio that is not this conversation's: its facts block
 // is the only place (besides the tools) its prices and links may come from.
@@ -139,6 +140,22 @@ const READ_EVENTS_RELAY = "- Use list_upcoming_events when someone asks what's o
 // the booking writes are about; `fallback` is what to do when a write answers
 // that booking from chat is not available right now (writes switched off at
 // call time).
+// MIAHATCH.6 — the upsell rules (spec 6.5), block 3b only: offers come from the
+// tools, restate product and price and get a clear yes before a link, buttons
+// for 3 or fewer offers and a list otherwise, never a price the tools did not
+// give, and never "paid" until a tool says so.
+function un1tUpsellLines({ name, multiStudio }) {
+  const at = multiStudio ? ` at ${name || 'the un1t.online studio'}` : ''
+  return [
+    `## Buying classes or a membership${at}`,
+    `- When book_class says needs_purchase, or a verified member asks to buy classes or a membership${at}, show the offers from that result or from list_purchase_options. Introduce them with the tool's wording. Give each offer's title and price_label exactly as the tool gives them, and its blurb when it helps. Never invent, round or change a price, and never offer anything the tool did not list.`,
+    '- With 3 or fewer offers, offer them as tap choices, one per offer. With more, list them in your message. Never show more offers than the tool gave you.',
+    '- When they pick one, restate the product and its price and get a clear yes before you call send_purchase_link with its offer_id. When they wanted a class, pass that class too (its event_id, class_name, class_time and starts_at as list_upcoming_classes gave them). Never send a link on an ambiguous message.' + (multiStudio ? ` Buying from chat is only for ${name || 'the un1t.online studio'}; for the other studio, hand off.` : ''),
+    '- When send_purchase_link says link_sent, send its wording and end your message with its url, with nothing after it and no tap choices, so it shows as a button. Never change the link. When it says a link is already open, relay its text and offer the team if they want something else. When it says anything else, relay that and never send or invent a link.',
+    '- Never say they have paid, that a payment went through, or that a class is booked after paying, until a tool says so. If they say they have paid, call check_my_purchase and relay what it says: a payment can take a few minutes to show.',
+  ]
+}
+
 function un1tFullLines({ name, url, multiStudio }) {
   const who = name || 'this studio'
   const fallback = url
@@ -164,7 +181,7 @@ function un1tFullLines({ name, url, multiStudio }) {
     listLine,
     '- Use list_my_upcoming_bookings when a verified member asks what they are booked into.',
     ...bookAndCancel,
-  ]).join('\n')
+  ]).concat(['', ...un1tUpsellLines({ name, multiStudio })]).join('\n')
   const where = multiStudio ? `${name || 'the un1t.online studio'} and at the other studio` : who
   const hardRuleOwnActions = '- Never confirm, promise, or claim that a change to someone\'s account, membership or payment has been MADE. You can log a pause, cancellation or refund REQUEST for the team (see below), but always frame it as "requested": the team actions and confirms it, not you. The exception is the handful of actions your OWN tools execute in this conversation: ' +
     `class bookings and class-booking cancellations at ${where}, consultation bookings, free event entries and their cancellations, and wave moves. When one of those tool results says it succeeded, confirm it plainly; when a tool returns anything else (queued for the team, failed, full, not available from chat), relay exactly that and never claim it happened. Never say a refund is done, approved or on its way.`

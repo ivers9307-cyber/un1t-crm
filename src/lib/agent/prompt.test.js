@@ -682,6 +682,32 @@ describe('un1t.online prompt variants', () => {
       expect(named(false, null)).not.toMatch(/Say which studio each answer is for/)
     })
 
+    // MIAHATCH.6 (Task 19) — the upsell rules, in 'full' only.
+    it('carries the upsell rules: restate product and price, a clear yes, buttons for 3 or fewer, never a price or "paid" the tools did not give', () => {
+      for (const multi of [false, true]) {
+        for (const url of [null, 'https://hatch.example.test/book']) {
+          const out = named(multi, url)
+          expect(out).toMatch(/## Buying classes or a membership/)
+          expect(out).toMatch(/restate the product and its price and get a clear yes before you call send_purchase_link/)
+          expect(out).toMatch(/With 3 or fewer offers, offer them as tap choices[^\n]*With more, list them[^\n]*Never show more offers than the tool gave you/)
+          expect(out).toMatch(/Never invent, round or change a price/)
+          expect(out).toMatch(/Never say they have paid[^\n]*until a tool says so/)
+          expect(out).toMatch(/call check_my_purchase/)
+          expect(out).toMatch(/end your message with its url/)
+        }
+      }
+      expect(named(true, null)).toMatch(/## Buying classes or a membership at Hatch Street/)
+      expect(named(true, null)).toMatch(/Buying from chat is only for Hatch Street; for the other studio, hand off\./)
+      expect(named(false, null)).not.toMatch(/for the other studio, hand off\./)
+      for (const multi of [false, true]) {
+        for (const url of [null, 'https://hatch.example.test/book']) {
+          const read = render('read', multi, url)
+          expect(read).not.toMatch(/send_purchase_link|list_purchase_options|check_my_purchase|Buying classes/)
+        }
+      }
+      expect(CUSTOMER_AGENT_BASE_PROMPT).not.toMatch(/send_purchase_link/)
+    })
+
     it('the stable prefix is byte-identical across two turns', () => {
       const o = { businessName: 'B', locationName: 'Hatch', un1tVariant: 'full', un1tStudioName: 'Hatch Street', multiStudio: false, bookings: false, bookingUrl: 'https://hatch.example.test/book', membershipSource: UN1T_SOURCE, knowledge: [{ category: 'faq', title: 'Q', content: 'A' }] }
       const a = buildCachedSystem({ ...o, today: 'Saturday' })

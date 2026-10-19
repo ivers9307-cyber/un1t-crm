@@ -68,6 +68,8 @@ import { renderMiaCopy } from './mia-copy'
 import { parseAgentId } from './studio-ids'
 import { TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
 import { openUn1tMemberReader, fetchLiveUn1tBookings, fetchLiveEntitlement } from './un1t-member-read'
+// MIAHATCH.6 — the studio's offer list (listPurchaseOptions) for needs_purchase.
+import { offersForBooking } from './purchase-intents'
 import { UN1T_BOOKED_STATUS, UN1T_EVENT_SCHEDULED_STATUS, zoneFor } from './un1t-tools'
 
 const LOG_MODULE = 'mia-un1t'
@@ -453,11 +455,6 @@ function executingContactOf(ctx, studio) {
 /** booking_mode at the action studio: 'draft' when its settings are unreadable (never an unsanctioned write). */
 const modeOf = (settings) => (settings ? (settings.booking_mode === 'draft' ? 'draft' : 'auto') : 'draft')
 
-/** PR 5: no offer list yet (Task 19 plugs listPurchaseOptions in here). */
-async function noOffers() {
-  return { offers: [], trial_available: false }
-}
-
 async function purchaseOptions(offersFor, ctx, studio) {
   try {
     const r = await offersFor(ctx, studio)
@@ -539,7 +536,7 @@ export function un1tStudioForBooking(db, studios, bookingId) {
  *   { booked: false, handoff: true, reason: 'booking_rejected'|'un1t_outcome_unknown'|'un1t_book_not_sent'|'writes_off' }
  */
 export async function un1tBookClass(ctx, input, studio, deps = {}) {
-  const { offersFor = noOffers, now = () => Date.now() } = deps
+  const { offersFor = offersForBooking, now = () => Date.now() } = deps
   const db = ctx?.db
   if (!ctx?.verifiedContactId) return { ...NOT_VERIFIED }
   if (!studio || studio.providerKey !== PROVIDER) return { ...TOOL_NOT_AT_THIS_STUDIO }

@@ -283,20 +283,36 @@ async function readKnowledge(db, locationId) {
   }
 }
 
+// MIAHATCH.6 — the offer titles and price labels for a un1t.online studio's
+// facts block, in block 3b only (where Mia can sell them). The list module is
+// loaded lazily: it sits next to the write side, which no other turn imports.
+// An unreadable list is a block without offers.
+async function readOffers(db, studio, withOffers) {
+  if (!withOffers || studio?.providerKey !== 'un1t_online') return []
+  try {
+    const { listPurchaseOptions } = await import('./purchase-intents')
+    const { offers } = await listPurchaseOptions(db, studio.locationId)
+    return offers.map((o) => ({ title: o.title, price_label: o.price_label, blurb: o.blurb }))
+  } catch (err) {
+    logWarn(LOG_MODULE, 'studio offers unreadable; facts block without them', { locationId: studio.locationId, errClass: err?.name })
+    return []
+  }
+}
+
 /** One facts block for an answerable studio that is not the thread's. Never throws. */
-async function factsBlockFor(db, studio, studios) {
-  const [settings, address, knowledge] = await Promise.all([
+async function factsBlockFor(db, studio, studios, { withOffers = false } = {}) {
+  const [settings, address, knowledge, offers] = await Promise.all([
     studios.settings(studio.locationId),
     readAddress(db, studio.locationId),
     readKnowledge(db, studio.locationId),
+    readOffers(db, studio, withOffers),
   ])
   return buildStudioFactsBlock({
     studioName: studio.name,
     address,
     bookingUrl: settings?.booking_url || null,
     membershipUrl: settings?.membership_signup_url || null,
-    // Slice 2 (the purchase tools) fills the offers.
-    offers: [],
+    offers,
     knowledge,
   })
 }
@@ -315,7 +331,8 @@ const sourceView = (key) => {
  */
 export async function promptOptionsForPlan(db, plan, studios) {
   const factsBlocks = []
-  for (const studio of plan.otherStudios) factsBlocks.push(await factsBlockFor(db, studio, studios))
+  const withOffers = plan.block === 'un1t_full'
+  for (const studio of plan.otherStudios) factsBlocks.push(await factsBlockFor(db, studio, studios, { withOffers }))
   if (plan.block.startsWith('un1t_') && plan.un1tStudio) {
     const settings = await studios.settings(plan.un1tStudio.locationId)
     return {
