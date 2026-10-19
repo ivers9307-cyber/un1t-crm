@@ -15,6 +15,10 @@
 //                          (see the function). Anything unreadable, refused
 //                          or thrown is { handled: false }: D sends its
 //                          email, so the person always hears something.
+//   latestTrialUsedClass   the class a hand-off recorded on the thread in the
+//                          last 23h, for the un1t_full turn's prompt
+//                          (turn-studios.js promptOptionsForPlan), so Mia can
+//                          pass it to send_purchase_link.
 //
 // Every Mia module is imported lazily: the funnel processor imports this file,
 // and some of them import the processor (un1t-approval-branch.js).
@@ -22,6 +26,15 @@ import { logWarn } from '@/lib/log'
 
 const LOG_MODULE = 'mia-un1t'
 const NOT_HANDLED = Object.freeze({ handled: false })
+
+/** agent_decisions.reason (and meta.tools[0].name) of a hand-off. */
+export const TRIAL_USED_HANDOFF = 'trial_used_handoff'
+/** How long a hand-off's class still counts: a purchase intent's life, inside the 24h window. */
+export const TRIAL_USED_CLASS_TTL_MS = 23 * 60 * 60_000
+// The class name in the decision row is capped so its JSON stays under
+// compactDecisionMeta's 200-character input clip and parses back.
+const CLASS_NAME_MAX = 60
+const PURCHASE_OPTIONS_READ_ERROR = 'PurchaseOptionsReadError'
 
 // A product title is staff-typed in un1t.online: its em and en dashes become
 // hyphens (Richard's rule for anything a customer reads).
@@ -51,9 +64,13 @@ export async function trialUsedOptionsText(db, locationId) {
     const lines = await sellableOfferLines(db, locationId)
     return lines.length ? lines.join('\n') : null
   } catch (err) {
-    logWarn(LOG_MODULE, 'trial-used offer list unreadable; the email says the default words', {
-      locationId, op: 'trial_used_options', status: null, code: err?.code ?? null, errClass: err?.name ?? null,
-    })
+    // listPurchaseOptions logs its own failed reads; anything else (a thrown
+    // client) is logged here.
+    if (err?.name !== PURCHASE_OPTIONS_READ_ERROR) {
+      logWarn(LOG_MODULE, 'trial-used offer list unreadable; the email says the default words', {
+        locationId, op: 'trial_used_options', status: null, code: err?.code ?? null, errClass: err?.name ?? null,
+      })
+    }
     return null
   }
 }
@@ -122,8 +139,16 @@ export async function trialUsedHandoff(db, { request, contact, locationId } = {}
     const { isAgentOnForSender } = await import('@/lib/agent/member-studios')
     if (!isAgentOnForSender(settings, conv.contacts?.wa_phone || conv.wa_phone)) return NOT_HANDLED
 
-    // 6. Something to sell (an unreadable list throws to the catch below).
-    const lines = await sellableOfferLines(db, locationId)
+    // 6. Something to sell. listPurchaseOptions logs its own failed reads.
+    let lines
+    try {
+      lines = await sellableOfferLines(db, locationId)
+    } catch (err) {
+      if (err?.name !== PURCHASE_OPTIONS_READ_ERROR) {
+        logWarn(LOG_MODULE, 'trial-used hand-off: offer list unreadable; the email goes', { locationId, requestId, status: null, code: err?.code ?? null, errClass: err?.name ?? null })
+      }
+      return NOT_HANDLED
+    }
     if (!lines.length) return NOT_HANDLED
 
     const { renderMiaCopy } = await import('@/lib/agent/mia-copy')
@@ -135,24 +160,80 @@ export async function trialUsedHandoff(db, { request, contact, locationId } = {}
       return NOT_HANDLED
     }
 
-    // The requested class, for the upsell's next turn and the staff trace.
-    // Shaped as compactDecisionMeta's tool trace (meta.tools[].name/input, the
-    // shape booking-tools.js reads earlier turns' listings from). Ids, the
-    // class name and its time only. Best-effort: the message already went.
-    const { recordAgentDecision, compactDecisionMeta } = await import('@/lib/agent/decision-log')
-    await recordAgentDecision(db, {
-      channel: 'whatsapp', conversationId, contactId: contact.id, locationId,
-      decision: 'reply', reason: 'trial_used_handoff',
-      meta: compactDecisionMeta({
-        tools: [{
-          name: 'trial_used_handoff',
-          input: { event_id: request.glofox_event_id ?? null, starts_at: request.starts_at ?? null, class_name: request.class_name ?? null, request_id: requestId },
-        }],
-      }),
-    })
+    // The message went: from here on the answer is handled, whatever happens
+    // to the bookkeeping (D's email would be a second message).
+    await recordHandoffClass(db, { conversationId, contactId: contact.id, locationId, request, requestId })
     return { handled: true }
   } catch (err) {
     logWarn(LOG_MODULE, 'trial-used hand-off failed; the email goes', { locationId, requestId, status: null, code: err?.code ?? null, errClass: err?.name ?? null })
     return NOT_HANDLED
+  }
+}
+
+// The requested class on the conversation's decision log, for Mia's next
+// un1t_full turn (latestTrialUsedClass) and the staff trace. Shaped as
+// compactDecisionMeta's tool trace (meta.tools[].name/input). The event id,
+// its start and the class name only. Never throws: the message already went.
+async function recordHandoffClass(db, { conversationId, contactId, locationId, request, requestId }) {
+  try {
+    const { recordAgentDecision, compactDecisionMeta } = await import('@/lib/agent/decision-log')
+    const className = noDashes(request.class_name).replace(/\s+/g, ' ').trim().slice(0, CLASS_NAME_MAX) || null
+    await recordAgentDecision(db, {
+      channel: 'whatsapp', conversationId, contactId, locationId,
+      decision: 'reply', reason: TRIAL_USED_HANDOFF,
+      meta: compactDecisionMeta({
+        tools: [{
+          name: TRIAL_USED_HANDOFF,
+          input: { event_id: request.glofox_event_id ?? null, starts_at: request.starts_at ?? null, class_name: className },
+        }],
+      }),
+    })
+  } catch (err) {
+    logWarn(LOG_MODULE, 'trial-used hand-off sent but its class was not recorded', { locationId, requestId, conversationId, status: null, code: err?.code ?? null, errClass: err?.name ?? null })
+  }
+}
+
+/**
+ * The class the latest trial-used hand-off on this WhatsApp thread recorded
+ * in the last 23h, when it is still in the future, or null (none, too old,
+ * started, unparseable, or an unreadable log, which is logged). Never throws.
+ *
+ * @param {object} db service-role client
+ * @param {{ conversationId: string, nowMs?: number }} args
+ * @returns {Promise<{ locationId: string, eventId: string, startsAtMs: number, className: string|null } | null>}
+ */
+export async function latestTrialUsedClass(db, { conversationId, nowMs = Date.now() } = {}) {
+  if (!db || !conversationId) return null
+  const sinceMs = nowMs - TRIAL_USED_CLASS_TTL_MS
+  try {
+    const { data, error } = await db.from('agent_decisions')
+      .select('location_id, meta, created_at')
+      .eq('conversation_id', conversationId)
+      .eq('channel', 'whatsapp')
+      .eq('reason', TRIAL_USED_HANDOFF)
+      .gte('created_at', new Date(sinceMs).toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1)
+    if (error) {
+      logWarn(LOG_MODULE, 'trial-used hand-off class unreadable; the turn goes without it', { conversationId, status: null, code: error.code ?? null })
+      return null
+    }
+    const row = Array.isArray(data) ? data[0] : null
+    if (!row?.location_id || !(Date.parse(row.created_at || '') >= sinceMs)) return null
+    const tool = Array.isArray(row.meta?.tools) ? row.meta.tools.find((t) => t?.name === TRIAL_USED_HANDOFF) : null
+    let input
+    try {
+      input = JSON.parse(String(tool?.input ?? ''))
+    } catch {
+      return null
+    }
+    const eventId = typeof input?.event_id === 'string' && input.event_id.startsWith('un1t:') ? input.event_id : null
+    const startsAtMs = Date.parse(input?.starts_at || '')
+    if (!eventId || !Number.isFinite(startsAtMs) || startsAtMs <= nowMs) return null
+    const className = typeof input?.class_name === 'string' && input.class_name.trim() ? input.class_name.trim() : null
+    return { locationId: row.location_id, eventId, startsAtMs, className }
+  } catch (err) {
+    logWarn(LOG_MODULE, 'trial-used hand-off class read threw; the turn goes without it', { conversationId, status: null, code: err?.code ?? null, errClass: err?.name ?? null })
+    return null
   }
 }

@@ -1008,7 +1008,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       let extra = null
       if (!next.sameAsToday) {
         try {
-          extra = await promptOptionsForPlan(db, next, actionStudios)
+          extra = await promptOptionsForPlan(db, next, actionStudios, { conversationId, channel: adapter.name })
         } catch (err) {
           logWarn('mia-un1t', 'turn prompt options failed; using the today block', { block: next.block, errClass: err?.name })
           next = todayPlan(planArgs())

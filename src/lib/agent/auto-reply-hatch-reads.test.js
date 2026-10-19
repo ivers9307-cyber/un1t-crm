@@ -119,6 +119,7 @@ import { formatClassTime } from './dublin-format'
 import { notifyAgentApprovalRequest } from './approval-notify'
 import { DEFAULT_NO_CREDITS_HANDOFF_TEXT } from './core'
 import { DEFAULT_REFUND_REQUEST_TEXT } from './default-copy'
+import { compactDecisionMeta } from './decision-log'
 
 // Fictional ids.
 const ORG = 'b2000000-0000-0000-0000-000000000001'
@@ -190,7 +191,7 @@ const DEFAULT_TABLES = () => ({
 
 // A recording fake db. Rows are filtered by every .eq/.in the caller applies,
 // so a read at the wrong studio comes back empty (and is recorded).
-function turnDb({ threadLocationId: _threadLocationId, conv, freshVerified = null, history = 'what is my membership?', tables = {}, failLocationIds = [], ...locOpts }) {
+function turnDb({ threadLocationId: _threadLocationId, conv, freshVerified = null, history = 'what is my membership?', tables = {}, failLocationIds = [], failReads = [], ...locOpts }) {
   const data = { ...DEFAULT_TABLES(), ...tables, locations: locationRows(locOpts) }
   const reads = []
   const inserts = []
@@ -207,6 +208,7 @@ function turnDb({ threadLocationId: _threadLocationId, conv, freshVerified = nul
       }
       if (state.op === 'update') return { data: [{ id: 'conv-1' }], error: null }
       reads.push({ table, cols: state.cols, filters: state.filters })
+      if (failReads.includes(table)) return { data: null, error: { message: 'fictional read failure', code: 'XX000' } }
       if (table === 'locations' && state.filters.some(([kind, col, val]) => kind === 'eq' && col === 'id' && failLocationIds.includes(val))) {
         return { data: null, error: { message: 'fictional read failure', code: 'XX000' } }
       }
@@ -982,6 +984,59 @@ describe('un1t_full at the turn (MIAHATCH.5)', () => {
     expect(toolResultOf(bodies[2])).toMatchObject({ error: 'not_available_at_this_studio' })
     expect(glofoxCalls()).toBe(0)
     expect(inserts.some((i) => i.table === 'agent_membership_requests')).toBe(false)
+  })
+
+  // MIAHATCH.6 (Task 25 fix round 1) — a trial-used hand-off from the booking
+  // Flow left its class on this thread's decision log; a un1t_full turn names
+  // it in the uncached suffix so send_purchase_link can carry it.
+  const handoffRow = (over = {}) => ({
+    conversation_id: 'conv-1', channel: 'whatsapp', reason: 'trial_used_handoff', location_id: HATCH,
+    created_at: new Date().toISOString(),
+    meta: compactDecisionMeta({ tools: [{ name: 'trial_used_handoff', input: { event_id: 'un1t:ev-1', starts_at: FUTURE, class_name: 'Fictional Hatch HIIT' } }] }),
+    ...over,
+  })
+  const CLASS_LINE = `Booking form: they asked for Fictional Hatch HIIT at ${FUTURE_LABEL} (event_id un1t:ev-1, starts_at ${FUTURE_LABEL})`
+  async function hatchTurn({ rows = [], hatchSettings = SWITCH_ON, failReads = [] } = {}) {
+    resolveMemberStudios.mockResolvedValue(resolution(hatchStudio()))
+    const { fetchFn, bodies } = modelTurns([textTurn('ok')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, inserts } = turnDb({
+      threadLocationId: HATCH, conv: verifiedThread(HATCH_CONTACT), hatchSettings, hatchUn1tOnline: WRITES_ON,
+      tables: { agent_decisions: rows }, failReads,
+    })
+    await runChannelAgent(db, whatsappAdapter(), turnCtx(HATCH))
+    vi.unstubAllGlobals()
+    return { body: bodies[0], block: decisionMeta(inserts).tool_block }
+  }
+
+  it('un1t_full: a fresh hand-off row adds the class line to the uncached suffix; the cached prefix is unchanged', async () => {
+    const plain = await hatchTurn()
+    const withRow = await hatchTurn({ rows: [handoffRow()] })
+    expect(withRow.block).toBe('un1t_full')
+    same(withRow.body.system[0], plain.body.system[0])
+    expect(withRow.body.system[0].text).not.toContain('Booking form:')
+    expect(withRow.body.system[1].cache_control).toBeUndefined()
+    expect(withRow.body.system[1].text).toContain(CLASS_LINE)
+    expect(withRow.body.system[1].text).toContain('pass that event_id, class_name, class_time and starts_at to send_purchase_link')
+    expect(systemText(plain.body)).not.toContain('Booking form:')
+    const line = withRow.body.system[1].text.split('\n').find((l) => l.startsWith('Booking form:'))
+    expect(line).not.toMatch(/[\u2013\u2014]/)
+  })
+
+  it('no class line when the row is stale (over 23h), is another studio\'s, or the read fails; the turn stays un1t_full', async () => {
+    const stale = await hatchTurn({ rows: [handoffRow({ created_at: new Date(Date.now() - 24 * 3600_000).toISOString() })] })
+    expect(systemText(stale.body)).not.toContain('Booking form:')
+    const elsewhere = await hatchTurn({ rows: [handoffRow({ location_id: HATCH_2 })] })
+    expect(systemText(elsewhere.body)).not.toContain('Booking form:')
+    const failed = await hatchTurn({ rows: [handoffRow()], failReads: ['agent_decisions'] })
+    expect(failed.block).toBe('un1t_full')
+    expect(systemText(failed.body)).not.toContain('Booking form:')
+  })
+
+  it('no class line outside un1t_full (the read block)', async () => {
+    const read = await hatchTurn({ rows: [handoffRow()], hatchSettings: HATCH_TEST_SETTINGS })
+    expect(read.block).toBe('un1t_read')
+    expect(systemText(read.body)).not.toContain('Booking form:')
   })
 
   it('both on, dual member on a Stillorgan thread: un1t_full with the dual prompt', async () => {

@@ -541,6 +541,7 @@ function todayWithWeekday(today) {
  * @param {boolean}[opts.multiStudio] MIAHATCH.2: answerable at more than one studio; the prompt says which studio each answer is for (read only with un1tVariant)
  * @param {string[]}[opts.factsBlocks] MIAHATCH.2: buildStudioFactsBlock outputs for answerable studios that are not the thread's; uncached suffix only
  * @param {boolean}[opts.bookingFlow] MIAFLOW.1: the turn offers send_booking_flow (the studio's WhatsApp booking Flow); adds BOOKING_FLOW_PROMPT_SECTION
+ * @param {string} [opts.trialUsedClassLine] MIAHATCH.6: buildTrialUsedClassLine's output (un1t_full turns only); uncached suffix only
  * @returns {{ stable: string, volatile: string }}
  */
 export function buildCustomerSystemPromptParts(opts = {}) {
@@ -635,7 +636,32 @@ export function buildCustomerSystemPromptParts(opts = {}) {
     if (typeof block === 'string' && block.trim()) volatileParts.push(block)
   }
 
+  // MIAHATCH.6 — the class a trial-used hand-off left on this thread (un1t_full
+  // only, promptOptionsForPlan). Per-conversation: uncached suffix only.
+  if (typeof opts.trialUsedClassLine === 'string' && opts.trialUsedClassLine.trim()) volatileParts.push(opts.trialUsedClassLine.trim())
+
   return { stable: stableParts.join('\n\n'), volatile: volatileParts.join('\n\n') }
+}
+
+// One line, model-facing: no line breaks, no em or en dashes.
+const promptValue = (v) => String(v ?? '').replace(/[\u2013\u2014]/g, '-').replace(/\s+/g, ' ').trim()
+
+/**
+ * MIAHATCH.6 — the one prompt line for a trial-used hand-off (the person
+ * asked for a class through the booking Flow, had had the free trial, and
+ * was sent the offers): the class to pass to send_purchase_link, its
+ * starts_at as list_upcoming_classes lists it (the studio-zone label). '' when
+ * the event id or the time is missing. Pure.
+ *
+ * @param {{ className?: string|null, classTime: string, eventId: string }} args
+ * @returns {string}
+ */
+export function buildTrialUsedClassLine({ className = null, classTime, eventId } = {}) {
+  const time = promptValue(classTime)
+  const id = promptValue(eventId)
+  if (!time || !id) return ''
+  const name = promptValue(className) || 'a class'
+  return `Booking form: they asked for ${name} at ${time} (event_id ${id}, starts_at ${time}), had already had the free trial, and were sent the offers. When they choose an offer, pass that event_id, class_name, class_time and starts_at to send_purchase_link. If that class is gone or has started, say so and offer another.`
 }
 
 const oneLine = (v) => String(v ?? '').replace(/\s+/g, ' ').trim()

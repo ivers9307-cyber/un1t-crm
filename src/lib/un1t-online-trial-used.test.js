@@ -22,7 +22,8 @@ vi.mock('@/lib/agent/decision-log', async (importOriginal) => ({ ...(await impor
 import { logWarn } from '@/lib/log'
 import { DEFAULT_TRIAL_USED_TEXT } from '@/lib/agent/default-copy'
 import { FLOW_SUBMISSION_BODY } from '@/lib/whatsapp-flow/booking-notice'
-import { trialUsedHandoff, trialUsedOptionsText } from './un1t-online-trial-used'
+import { compactDecisionMeta } from '@/lib/agent/decision-log'
+import { trialUsedHandoff, trialUsedOptionsText, latestTrialUsedClass, TRIAL_USED_CLASS_TTL_MS } from './un1t-online-trial-used'
 
 // Fictional ids.
 const HATCH = 'a1000000-0000-0000-0000-000000000002'
@@ -86,6 +87,7 @@ function fakeDb(tables = {}, { fail = {}, throwOn = {} } = {}) {
       select: () => b,
       eq: (c, v) => { st.filters.push((r) => r[c] === v); return b },
       in: (c, vs) => { st.filters.push((r) => vs.includes(r[c])); return b },
+      gte: (c, v) => { st.filters.push((r) => r[c] >= v); return b },
       order: (c, { ascending = true } = {}) => { st.orders.push([c, ascending]); return b },
       limit: (n) => { st.limit = n; return b },
       maybeSingle: () => { st.single = true; return b },
@@ -134,6 +136,20 @@ describe('trialUsedOptionsText', () => {
     expect(await trialUsedOptionsText(fakeDb({}, { throwOn: { mia_purchase_offers: true } }).db, HATCH)).toBeNull()
     expect(logWarn).toHaveBeenCalledWith('mia-un1t', expect.any(String), expect.objectContaining({ locationId: HATCH }))
   })
+
+  it('an unreadable list is logged once (by listPurchaseOptions), a thrown client once (here)', async () => {
+    await trialUsedOptionsText(fakeDb({}, { fail: { mia_purchase_offers: true } }).db, HATCH)
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    expect(logWarn.mock.calls[0][2]).toMatchObject({ op: 'purchase_offers' })
+    logWarn.mockClear()
+    await trialUsedOptionsText(fakeDb({}, { throwOn: { mia_purchase_offers: true } }).db, HATCH)
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    expect(logWarn.mock.calls[0][2]).toMatchObject({ op: 'trial_used_options', errClass: 'TypeError' })
+    logWarn.mockClear()
+    expect(await handoff(fakeDb({}, { fail: { un1t_products: true } }).db)).toEqual({ handled: false })
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    expect(logWarn.mock.calls[0][2]).toMatchObject({ op: 'purchase_offer_products' })
+  })
 })
 
 describe('trialUsedHandoff', () => {
@@ -149,7 +165,7 @@ describe('trialUsedHandoff', () => {
     expect(row).toMatchObject({ channel: 'whatsapp', conversationId: CONV, contactId: CONTACT, locationId: HATCH, decision: 'reply', reason: 'trial_used_handoff' })
     const tool = row.meta.tools[0]
     expect(tool.name).toBe('trial_used_handoff')
-    expect(JSON.parse(tool.input)).toEqual({ event_id: EVENT, starts_at: STARTS, class_name: 'Strength', request_id: request().id })
+    expect(JSON.parse(tool.input)).toEqual({ event_id: EVENT, starts_at: STARTS, class_name: 'Strength' })
     expect(JSON.stringify(row)).not.toMatch(/person@example|353870000001/)
   })
 
@@ -247,6 +263,13 @@ describe('trialUsedHandoff', () => {
     expect(await trialUsedHandoff(fakeDb().db)).toEqual({ handled: false })
   })
 
+  it('a sent upsell is handled even when its decision row cannot be written (never a second message by email)', async () => {
+    h.record.mockRejectedValueOnce(new Error('fictional log throw'))
+    expect(await handoff(fakeDb().db)).toEqual({ handled: true })
+    expect(h.send).toHaveBeenCalledTimes(1)
+    expect(logWarn).toHaveBeenCalledWith('mia-un1t', expect.stringMatching(/not recorded/), expect.objectContaining({ conversationId: CONV }))
+  })
+
   it('no em/en dash in the sent text', async () => {
     h.settingsResult = settingsOk({ trial_used_text: 'You have had your trial — here are the options:' })
     const products = [{ ...PRODUCT.pack10, title: 'Class Pack – 10' }, PRODUCT.monthly]
@@ -255,5 +278,51 @@ describe('trialUsedHandoff', () => {
     expect(text).not.toMatch(/[–—]/)
     expect(text).toContain('Class Pack - 10, €125')
     expect(await trialUsedOptionsText(fakeDb({ un1t_products: products }).db, HATCH)).not.toMatch(/[–—]/)
+  })
+})
+
+// MIAHATCH.6 fix round 1 — the hand-off's class read back for the un1t_full
+// turn's prompt.
+describe('latestTrialUsedClass', () => {
+  const NOW = Date.parse('2026-10-20T10:00:00Z')
+  const decisionRow = (over = {}, input = { event_id: EVENT, starts_at: STARTS, class_name: 'Strength' }) => ({
+    conversation_id: CONV, channel: 'whatsapp', reason: 'trial_used_handoff', location_id: HATCH,
+    created_at: '2026-10-20T09:00:00Z',
+    meta: compactDecisionMeta({ tools: [{ name: 'trial_used_handoff', input }] }),
+    ...over,
+  })
+  const read = (rows, opts) => latestTrialUsedClass(fakeDb({ agent_decisions: rows }, opts).db, { conversationId: CONV, nowMs: NOW })
+
+  it('reads the latest fresh hand-off on the thread', async () => {
+    expect(await read([decisionRow()])).toEqual({ locationId: HATCH, eventId: EVENT, startsAtMs: Date.parse(STARTS), className: 'Strength' })
+    // Newest first.
+    const later = decisionRow({ created_at: '2026-10-20T09:30:00Z' }, { event_id: 'un1t:e0000000-0000-4000-8000-000000000002', starts_at: STARTS, class_name: 'Yoga' })
+    expect((await read([decisionRow(), later])).className).toBe('Yoga')
+  })
+
+  it('round-trips what the hand-off writes, a long class name included', async () => {
+    const { db } = fakeDb()
+    await trialUsedHandoff(db, { request: request({ class_name: 'A very long class name '.repeat(8) }), contact, locationId: HATCH })
+    const [, row] = h.record.mock.calls[0]
+    const found = await read([decisionRow({ meta: row.meta })])
+    expect(found).toMatchObject({ eventId: EVENT, startsAtMs: Date.parse(STARTS) })
+    expect(found.className.length).toBeLessThanOrEqual(60)
+  })
+
+  it('nothing when stale (over 23h), started, at another reason or unparseable', async () => {
+    const stale = new Date(NOW - TRIAL_USED_CLASS_TTL_MS - 60_000).toISOString()
+    expect(await read([decisionRow({ created_at: stale })])).toBeNull()
+    expect(await read([decisionRow({}, { event_id: EVENT, starts_at: '2026-10-20T09:30:00Z', class_name: 'Strength' })])).toBeNull()
+    expect(await read([decisionRow({ reason: 'replied' })])).toBeNull()
+    expect(await read([decisionRow({ meta: { tools: [{ name: 'trial_used_handoff', input: '{"event_id":"un1t:e0…' }] } })])).toBeNull()
+    expect(await read([decisionRow({}, { event_id: '64aa00000000000000000001', starts_at: STARTS, class_name: 'Strength' })])).toBeNull()
+    expect(await read([])).toBeNull()
+  })
+
+  it('a failed read is nothing, logged; never throws', async () => {
+    expect(await read([decisionRow()], { fail: { agent_decisions: true } })).toBeNull()
+    expect(await read([decisionRow()], { throwOn: { agent_decisions: true } })).toBeNull()
+    expect(logWarn).toHaveBeenCalledTimes(2)
+    expect(await latestTrialUsedClass(fakeDb().db, {})).toBeNull()
   })
 })

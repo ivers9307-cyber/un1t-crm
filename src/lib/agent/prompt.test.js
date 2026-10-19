@@ -12,6 +12,7 @@ import {
   CUSTOMER_AGENT_BASE_PROMPT,
   renderCustomerAgentBasePrompt,
   buildStudioFactsBlock,
+  buildTrialUsedClassLine,
 } from './prompt'
 
 describe('buildKnowledgeBlock', () => {
@@ -930,5 +931,38 @@ describe('facts blocks in the uncached suffix only', () => {
   it('with no un1t options the prompt is unchanged', () => {
     expect(buildCustomerSystemPrompt({ ...base, un1tVariant: null, multiStudio: false, factsBlocks: [] }))
       .toBe(buildCustomerSystemPrompt(base))
+  })
+})
+
+// MIAHATCH.6 (Task 25 fix round 1) — the class a trial-used hand-off left on
+// the thread, one line in the uncached suffix of a un1t_full turn.
+describe('the trial-used class line', () => {
+  const base = { businessName: 'B', locationName: 'Hatch Street', today: 'Saturday', knowledge: [{ category: 'faq', title: 'Q', content: 'A' }], un1tVariant: 'full', un1tStudioName: 'Hatch Street' }
+  const line = buildTrialUsedClassLine({ className: 'Strength', classTime: 'Thu 23 Oct, 19:30', eventId: 'un1t:e0000000-0000-4000-8000-000000000001' })
+
+  it('names the class, its time and the ids send_purchase_link needs, on one line with no em or en dash', () => {
+    expect(line).toContain('Strength at Thu 23 Oct, 19:30')
+    expect(line).toContain('event_id un1t:e0000000-0000-4000-8000-000000000001, starts_at Thu 23 Oct, 19:30')
+    expect(line).toMatch(/send_purchase_link/)
+    expect(line).toMatch(/gone or has started, say so and offer another/)
+    expect(line).not.toMatch(/[\n\u2013\u2014]/)
+    expect(buildTrialUsedClassLine({ className: 'Lift \u2014 Heavy\nDay', classTime: 'Thu 23 Oct, 19:30', eventId: 'un1t:x' })).toContain('Lift - Heavy Day at')
+    expect(buildTrialUsedClassLine({ classTime: 'Thu 23 Oct, 19:30', eventId: '' })).toBe('')
+    expect(buildTrialUsedClassLine({ classTime: '', eventId: 'un1t:x' })).toBe('')
+  })
+
+  it('goes in the uncached suffix only: stable text and cache_control unchanged', () => {
+    const without = buildCachedSystem(base)
+    const withLine = buildCachedSystem({ ...base, trialUsedClassLine: line })
+    expect(withLine[0]).toEqual(without[0])
+    expect(withLine[0].text).not.toContain('Strength')
+    expect(withLine[1].cache_control).toBeUndefined()
+    expect(withLine[1].text.endsWith(line)).toBe(true)
+    expect(buildCustomerSystemPromptParts({ ...base, trialUsedClassLine: line }).stable).toBe(buildCustomerSystemPromptParts(base).stable)
+  })
+
+  it('absent or blank: the prompt is byte-identical', () => {
+    expect(buildCachedSystem({ ...base, trialUsedClassLine: '' })).toEqual(buildCachedSystem(base))
+    expect(buildCachedSystem({ ...base, trialUsedClassLine: '   ' })).toEqual(buildCachedSystem(base))
   })
 })
