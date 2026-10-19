@@ -37,6 +37,7 @@ import { logError } from '@/lib/log'
 import { MEMBERSHIP_SOURCES } from '@/lib/membership/source'
 import { fakeDb, queriesOf } from '@/lib/time-off.test-helpers'
 import { ESTATE_2026_10_17, STILLORGAN_ID, locationsResolver } from '@/lib/membership/locations-for-source.test-helpers'
+import { mapUn1tBookingToClassBooking } from '@/lib/un1t-online-bookings'
 
 const HATCH_ID = ESTATE_2026_10_17[1].id
 const NOW = Date.parse('2026-10-17T17:00:00Z')
@@ -92,6 +93,30 @@ describe('send-class-booking-reminders — un1t.online hard-off (UN1TBOOK.8, Dec
     expect(readReachableContacts.mock.calls[0][1]).toEqual(['c-cb-still'])
     expect(out).toMatchObject({ ok: true, sent: 1, skipped_un1t_online: 1 })
     expect(stampHeartbeat).toHaveBeenCalledWith('send-class-booking-reminders')
+  })
+
+  it('UN1TBOOK.15-18: every row the projection writes (real mapper, each status, a guest, a CRM write-through) is never pushed, filters ignored and bookings forced true', async () => {
+    h.un1tBookings = true
+    const event = { title: 'HIIT', starts_at: STARTS }
+    const projected = [
+      ['booked', 'c-hatch-1', false, 'sync'],
+      ['attended', 'c-hatch-2', false, 'sync'],
+      ['no_show', 'c-hatch-3', false, 'sync'],
+      ['booked', null, true, 'sync'], // a guest
+      ['booked', 'c-dual', false, 'crm'], // D's write-through, a dual-studio contact
+    ].map(([status, contact_id, has_guest, writtenBy], i) => ({
+      id: `cb-proj-${i}`,
+      ...mapUn1tBookingToClassBooking(
+        { un1t_id: `bk-${i}`, event_id: 'ev-1', status, contact_id, has_guest, source: 'app', credit_charged: true, remote_updated_at: null },
+        { locationId: HATCH_ID, event, memberName: contact_id ? 'A Member' : null, nowIso: new Date(NOW).toISOString(), writtenBy },
+      ),
+    }))
+    expect(projected.every((r) => r.source_platform === 'un1t_online' && r.starts_at === STARTS)).toBe(true)
+    h.db = dbFor([row('cb-still', STILLORGAN_ID, 'glofox', 'c-dual'), ...projected])
+    const out = await (await GET(req())).json()
+    expect(remindedBookings()).toEqual(['cb-still'])
+    expect(readReachableContacts.mock.calls[0][1]).toEqual(['c-dual'])
+    expect(out).toMatchObject({ ok: true, sent: 1, skipped_un1t_online: projected.length })
   })
 
   it('a dual-studio member\'s Hatch booking (a Stillorgan contact with a push token) is never pushed', async () => {
