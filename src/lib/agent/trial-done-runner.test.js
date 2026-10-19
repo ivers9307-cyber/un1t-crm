@@ -520,11 +520,13 @@ describe('runTrialDoneOutreach — the opener', () => {
     expect(m.loadActiveElsewhere).not.toHaveBeenCalled()
   })
 
-  it('a studio with Mia off is never read', async () => {
+  // TRIALDONE.8 — Mia off stops the send pass; only the buyer sweep's one read runs.
+  it('a studio with Mia off reads no candidates (the buyer sweep only)', async () => {
     const location = hatchLocation({ enabled: false, test_mode: false })
     const db = makeDb(baseTables({ location }))
     await runTrialDoneOutreach(db, { nowMs: NOW })
-    expect(tablesRead(db)).toEqual(['locations'])
+    expect(tablesRead(db)).toEqual(['locations', 'trial_done_outreach'])
+    expect(db.log.filter((q) => q.table === 'trial_done_outreach').every((q) => q.op === 'select' && q.filters.some((f) => f[0] === 'not'))).toBe(true)
   })
 
   it('only reads un1t.online studios', async () => {
@@ -1344,7 +1346,8 @@ describe('runTrialDoneOutreach — final review fixes (TRIALDONE.7)', () => {
     expect(res.reasons).toEqual({ sale_path_off: 1 })
     expect(m.sendTemplateMessage).not.toHaveBeenCalled()
     expect(tablesRead(db)).not.toContain('deals')
-    expect(tablesRead(db)).not.toContain('trial_done_outreach')
+    // TRIALDONE.8 — the buyer sweep's read of opened rows is the only outreach read
+    expect(db.log.filter((q) => q.table === 'trial_done_outreach').every((q) => q.op === 'select' && q.filters.some((f) => f[0] === 'not'))).toBe(true)
   })
 
   // Finding 7 — the stored trigger times a row whose evidence has none now.
@@ -1377,5 +1380,121 @@ describe('runTrialDoneOutreach — final review fixes (TRIALDONE.7)', () => {
     expect((await runTrialDoneOutreach(db, { nowMs: NOW - 2 * MIN })).reasons).toEqual({ too_soon: 1 })
     const res = await runTrialDoneOutreach(db, { nowMs: NOW })
     expect(res.openers).toBe(1)
+  })
+})
+
+// TRIALDONE.8 — the buyer sweep runs in its own pass, ahead of every send-only
+// gate (sale path, Mia on, daytime and quiet hours, a number, the daily cap):
+// it sends nothing, so none of them apply to it.
+describe('runTrialDoneOutreach — the buyer sweep runs in its own pass (TRIALDONE.8)', () => {
+  const NIGHT = Date.UTC(2026, 9, 20, 21, 0, 0) // 22:00 Dublin (IST)
+  const brief = (db, nowMs) => trialDoneLineFor(db, {
+    locationId: HATCH, contactId: C1, nowMs, settings: { trial_done: { enabled: true } }, studioName: 'Hatch', zone: 'Europe/Dublin',
+  })
+  // C1 got the opener 10 h before `nowMs`, then bought: the board moved the deal off the column.
+  function buyer(nowMs, { location } = {}) {
+    people = new Map([[C1, trialFinisher(nowMs - 30 * H)]])
+    eligibility.set(C1, ['trial_used', 'membership_history'])
+    const tables = followupTables({ openerAt: nowMs - 10 * H, location })
+    tables.deals[0].status = 'won'
+    return tables
+  }
+  const expectClosedPurchased = (db, nowMs) => {
+    expect(outreach(db, C1)).toMatchObject({ closed_at: iso(nowMs), closed_reason: 'purchased', updated_at: iso(nowMs) })
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(m.sendTextMessage).not.toHaveBeenCalled()
+  }
+
+  it('a buyer is closed out at 22:00 (outside daytime)', async () => {
+    const db = makeDb(buyer(NIGHT))
+    expect(await brief(db, NIGHT)).not.toBeNull()
+    const res = await runTrialDoneOutreach(db, { nowMs: NIGHT })
+    expect(res.reasons).toEqual({ purchased: 1, outside_daytime: 1 })
+    expectClosedPurchased(db, NIGHT)
+    expect(await brief(db, NIGHT)).toBeNull()
+  })
+
+  it('a buyer is closed out when the daily cap is already reached', async () => {
+    const tables = buyer(NOW, { location: hatchLocation({ trial_done: { daily_cap: 1 } }) })
+    tables.activities.push({ id: 'a1', location_id: HATCH, type: 'agent_trial_done', created_at: iso(NOW - 3 * H) })
+    const db = makeDb(tables)
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ purchased: 1, daily_cap: 1 })
+    expectClosedPurchased(db, NOW)
+  })
+
+  it('a buyer is closed out when the sale path is off but trial_done is on', async () => {
+    const db = makeDb(buyer(NOW, { location: hatchLocation({ un1t_chat_actions_enabled: false }) }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ sale_path_off: 1, purchased: 1 })
+    expectClosedPurchased(db, NOW)
+  })
+
+  it.each([
+    ['Mia off', () => hatchLocation({ enabled: false, test_mode: false }), {}],
+    ['operator quiet hours', () => hatchLocation({ quiet_hours: { start: '13:00', end: '15:00' } }), { operator_quiet_hours: 1 }],
+  ])('a buyer is closed out with %s too', async (_label, location, gateReason) => {
+    const db = makeDb(buyer(NOW, { location: location() }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ purchased: 1, ...gateReason })
+    expectClosedPurchased(db, NOW)
+  })
+
+  it('a buyer is closed out when no number is switched on at the studio', async () => {
+    const tables = buyer(NOW)
+    tables.location_whatsapp_numbers = []
+    const db = makeDb(tables)
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.reasons).toEqual({ purchased: 1, no_number: 1 })
+    expectClosedPurchased(db, NOW)
+  })
+
+  it('trial_done off: the sweep never runs', async () => {
+    const db = makeDb(buyer(NOW, { location: hatchLocation({ trial_done: { enabled: false } }) }))
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res).toEqual({ openers: 0, followups: 0, skipped: 0, reasons: {} })
+    expect(tablesRead(db)).toEqual(['locations'])
+    expect(m.membershipReadsFor).not.toHaveBeenCalled()
+    expect(m.trialEligibility).not.toHaveBeenCalled()
+    expect(outreach(db, C1)).toMatchObject({ closed_at: null, closed_reason: null })
+  })
+
+  it('deals read fails: nothing is closed', async () => {
+    const db = makeDb(buyer(NOW), {
+      answer: (q) => (q.table === 'deals' && q.op === 'select' ? { data: null, error: { message: 'timeout' } } : undefined),
+    })
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    // the sweep defers, and the send pass (which reuses the same failed read) skips the studio as before
+    expect(res.reasons).toEqual({ sweep_read_failed: 1, deals_read_failed: 1 })
+    expect(db.log.filter((q) => q.table === 'deals')).toHaveLength(1)
+    expect(outreach(db, C1)).toMatchObject({ closed_at: null, closed_reason: null })
+    expect(m.trialEligibility).not.toHaveBeenCalled()
+    expect(m.sendTemplateMessage).not.toHaveBeenCalled()
+  })
+
+  it('deals read fails at night: the sweep defers (nothing closed) and the arm sees the read failure', async () => {
+    const db = makeDb(buyer(NIGHT), {
+      answer: (q) => (q.table === 'deals' && q.op === 'select' ? { data: null, error: { message: 'timeout' } } : undefined),
+    })
+    const res = await runTrialDoneOutreach(db, { nowMs: NIGHT })
+    expect(res.reasons).toEqual({ sweep_read_failed: 1, outside_daytime: 1 })
+    expect(outreach(db, C1)).toMatchObject({ closed_at: null, closed_reason: null })
+  })
+
+  it('the deals and the pipeline inputs are read once per studio per tick, shared by the sweep and the send pass', async () => {
+    const tables = buyer(NOW)
+    // C2 is a fresh trial finisher still on the column: the send pass's candidate
+    tables.contacts.push(contactRow(C2))
+    tables.contact_location_preferences.push({ contact_id: C2, location_id: HATCH, whatsapp_marketing: true })
+    tables.deals.push({ id: 'deal-2', location_id: HATCH, contact_id: C2, stage_id: 'st-td', pipeline_id: 'pipe-h', status: 'open' })
+    people.set(C2, trialFinisher())
+    const db = makeDb(tables)
+    const res = await runTrialDoneOutreach(db, { nowMs: NOW })
+    expect(res.openers).toBe(1)
+    expect(res.reasons).toEqual({ purchased: 1 })
+    expect(db.log.filter((q) => q.table === 'deals')).toHaveLength(1)
+    expect(db.log.filter((q) => q.table === 'pipelines')).toHaveLength(1)
+    expect(m.pipelineInputs).toHaveBeenCalledTimes(1)
+    expect(outreach(db, C1).closed_reason).toBe('purchased')
   })
 })
