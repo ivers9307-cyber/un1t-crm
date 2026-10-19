@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+vi.mock('./sequences/triggers.js', () => ({ triggerSequencesForContactCreated: vi.fn() }))
 
-import { runUn1tSync, UN1T_LISTS, STALE_RUN_MS } from './un1t-online-sync.js'
+import { runUn1tSync, UN1T_LISTS, STALE_RUN_MS, pickFreshSignups, SIGNUP_MAX_AGE_DAYS } from './un1t-online-sync.js'
 import { logError, logWarn, logInfo } from './log'
 import { Un1tAuthError, Un1tApiError } from './un1t-online.js'
 import { ilikeMatches } from './like-escape.test-helpers.js'
 import { tokenFingerprint } from './un1t-online-token.js'
+import { triggerSequencesForContactCreated } from './sequences/triggers.js'
 
 const ORG = 'org-1'
 const HATCH = 'loc-hatch'
@@ -245,6 +247,45 @@ describe('runUn1tSync', () => {
   it('lists every un1t.online collection', () => {
     expect(UN1T_LISTS).toEqual(['/products', '/events', '/users/clients', '/subscriptions', '/transactions', '/invoices', '/bookings'])
     expect(Object.isFrozen(UN1T_LISTS)).toBe(true)
+  })
+
+  it('fires contact_created AT THIS STUDIO for fresh signups only (SHAREDCONTACT.1)', async () => {
+    const { db, tables } = makeDb(baseSeed({
+      contacts: [{ id: 'c-still', organization_id: ORG, location_id: STILLORGAN, email: 'two@x.ie', un1t_user_id: null, first_name: 'Two', last_name: null, phone: null }],
+    }))
+    const lists = fixtureLists()
+    lists['/users/clients'] = [
+      { id: 'u1', email: 'one@x.ie', first_name: 'One', created_at: '2025-01-01T00:00:00Z' }, // old account: not a new lead
+      { id: 'u2', email: 'two@x.ie', first_name: 'Two', created_at: '2026-10-16T09:00:00Z' }, // Stillorgan member joining Hatch
+      { id: 'u3', email: 'three@x.ie', first_name: 'Three', created_at: '2026-10-15T09:00:00Z' }, // brand new
+    ]
+    const { factory } = makeClient({ self: SELF, lists })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    const u3 = tables.contacts.find((c) => c.un1t_user_id === 'u3')
+    expect(triggerSequencesForContactCreated.mock.calls).toEqual([
+      ['c-still', { locationId: HATCH, sourceRef: 'un1t_online_signup' }],
+      [u3.id, { locationId: HATCH, sourceRef: 'un1t_online_signup' }],
+    ])
+    expect(r.counts.signups).toEqual({ fired: 2, joined: 1, stale: 1, already_here: 0, over_cap: 0 })
+
+    // A second run links them all by un1t_user_id: nothing is new, nothing fires.
+    triggerSequencesForContactCreated.mockClear()
+    const r2 = await runUn1tSync(db, HATCH, opts(factory))
+    expect(triggerSequencesForContactCreated).not.toHaveBeenCalled()
+    expect(r2.counts.signups).toEqual({ fired: 0 })
+  })
+
+  it('a studio whose membership source is not un1t.online fires nothing', async () => {
+    const seed = baseSeed()
+    seed.locations[0].membership_source = 'glofox'
+    const { db } = makeDb(seed)
+    const lists = fixtureLists()
+    lists['/users/clients'] = [{ id: 'u9', email: 'nine@x.ie', created_at: '2026-10-16T09:00:00Z' }]
+    const { factory } = makeClient({ self: SELF, lists })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(triggerSequencesForContactCreated).not.toHaveBeenCalled()
+    expect(r.counts.signups).toEqual({ skipped: 'membership_source' })
   })
 
   it('happy path writes every table and marks the connection connected', async () => {
@@ -1388,5 +1429,43 @@ describe('runUn1tSync — overlap guard and history window', () => {
     expect(r.ok).toBe(true)
     expect(connRow(tables).status).toBe('connected')
     expect(r.counts.history.un1t_events).toEqual({ absent_from_pull: null, oldest_pulled: '2026-10-20T17:30:00Z', error: 'un1t_events read boom' })
+  })
+})
+
+describe('pickFreshSignups (SHAREDCONTACT.1)', () => {
+  const NOW = '2026-10-19T12:00:00.000Z'
+  const HATCH_ID = 'hatch'
+  const day = 86400000
+  const ago = (ms) => new Date(Date.parse(NOW) - ms).toISOString()
+
+  it('keeps recent creations and recent cross-studio attaches', () => {
+    const r = pickFreshSignups([
+      { contactId: 'new', how: 'created', homeLocationId: HATCH_ID, remoteCreatedAt: ago(3600000) },
+      { contactId: 'joined', how: 'attached', homeLocationId: 'stillorgan', remoteCreatedAt: ago(2 * day) },
+    ], { locationId: HATCH_ID, nowIso: NOW })
+    expect(r.fresh.map((n) => n.contactId)).toEqual(['new', 'joined'])
+    expect(r.stale).toBe(0)
+  })
+
+  it('an old upstream account, or one with no date, is not a new lead', () => {
+    const r = pickFreshSignups([
+      { contactId: 'old', how: 'created', homeLocationId: HATCH_ID, remoteCreatedAt: ago((SIGNUP_MAX_AGE_DAYS + 1) * day) },
+      { contactId: 'undated', how: 'attached', homeLocationId: 'stillorgan', remoteCreatedAt: null },
+    ], { locationId: HATCH_ID, nowIso: NOW })
+    expect(r.fresh).toEqual([])
+    expect(r.stale).toBe(2)
+  })
+
+  it('attaching to a contact that already lives here is not new here', () => {
+    const r = pickFreshSignups([
+      { contactId: 'here', how: 'attached', homeLocationId: HATCH_ID, remoteCreatedAt: ago(60000) },
+    ], { locationId: HATCH_ID, nowIso: NOW })
+    expect(r.fresh).toEqual([])
+    expect(r.alreadyHere).toBe(1)
+  })
+
+  it('a contact reached twice fires once', () => {
+    const n = { contactId: 'dup', how: 'created', homeLocationId: HATCH_ID, remoteCreatedAt: ago(60000) }
+    expect(pickFreshSignups([n, { ...n }], { locationId: HATCH_ID, nowIso: NOW }).fresh).toHaveLength(1)
   })
 })

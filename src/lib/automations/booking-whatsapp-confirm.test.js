@@ -55,7 +55,7 @@ describe('maybeSendBookingWhatsappConfirm', () => {
     })
     expect(r).toEqual({ sent: true, messageId: 'wamid.OK' })
     expect(sendTemplateMessage).toHaveBeenCalledWith(
-      '+353871234567', 'booking_consult_confirmed', 'en',
+      '353871234567', 'booking_consult_confirmed', 'en',
       [{ type: 'body', parameters: [{ type: 'text', text: 'Sarah' }, { type: 'text', text: 'Tue 8 Jul, 6:30pm' }] }],
       { locationId: 'a0000000-0000-0000-0000-000000000001' },
     )
@@ -82,7 +82,7 @@ describe('maybeSendBookingWhatsappConfirm', () => {
       expect(r).toEqual({ sent: true, messageId: 'wamid.OK' })
       expect(resolvePurposeTemplate).toHaveBeenCalledWith(expect.anything(), HATCH, 'class_confirmed', {})
       expect(sendTemplateMessage).toHaveBeenCalledWith(
-        '+353871234567', 'hatch_class_ok', 'en-GB', expect.any(Array), { locationId: HATCH, businessAccountId: 'WABA-9' },
+        '353871234567', 'hatch_class_ok', 'en-GB', expect.any(Array), { locationId: HATCH, businessAccountId: 'WABA-9' },
       )
     })
 
@@ -194,5 +194,28 @@ describe('maybeSendBookingWhatsappConfirm — no WhatsApp number at the location
     })
     expect(r).toEqual({ sent: false, reason: 'send_failed' })
     expect(getOrCreateConversation).not.toHaveBeenCalled()
+  })
+})
+
+describe('maybeSendBookingWhatsappConfirm — WAPHONE.1: the contact\'s WhatsApp number', () => {
+  const send = (contact) => maybeSendBookingWhatsappConfirm({
+    db: makeDb(APPROVED), locationId: 'L', contact, templateName: 'booking_consult_confirmed', bodyParams: ['Sarah'],
+  })
+  it('a stored wa_phone (learned from an inbound message) wins over a different phone', async () => {
+    const r = await send({ id: 'c1', phone: '0871234567', wa_phone: '447700900123' })
+    expect(r).toEqual({ sent: true, messageId: 'wamid.OK' })
+    expect(sendTemplateMessage.mock.calls[0][0]).toBe('447700900123')
+  })
+  it('a contact with only a wa_phone still gets the message', async () => {
+    expect(await send({ id: 'c1', phone: null, wa_phone: '353871234567' })).toEqual({ sent: true, messageId: 'wamid.OK' })
+  })
+  it('an international phone written with + maps (a UK mobile from the un1t.online sync)', async () => {
+    await send({ id: 'c1', phone: '+44 7700 900123', wa_phone: null })
+    expect(sendTemplateMessage.mock.calls[0][0]).toBe('447700900123')
+  })
+  it('an Irish landline or a bare 9-digit non-mobile is refused, never sent as +353…', async () => {
+    expect(await send({ id: 'c1', phone: '01 555 1234', wa_phone: null })).toEqual({ sent: false, reason: 'unnormalisable_phone' })
+    expect(await send({ id: 'c1', phone: '123456789', wa_phone: null })).toEqual({ sent: false, reason: 'unnormalisable_phone' })
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
   })
 })
