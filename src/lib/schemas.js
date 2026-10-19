@@ -10,6 +10,7 @@ import { UUID_SHAPE } from './uuid-shape'
 import { isFreshSecret } from './integration-secret-merge'
 import { PURPOSE_KEYS } from './whatsapp-purpose-templates'
 import { CONSENT_COPY_MAX } from './whatsapp-consent-copy'
+import { MIA_OFFER_BLURB_MAX, MIA_OFFERS_MAX } from './agent/mia-offer-limits'
 
 // UUID-shaped string matching what Postgres's uuid type accepts. See
 // src/lib/validate.js for the rationale (Zod 4's .uuid() is RFC-strict
@@ -507,3 +508,19 @@ export const orgWhatsAppEmbeddedSignupSchema = z.object({
   phone_number_id: z.string().regex(/^\d+$/, 'phone_number_id must be a numeric Meta id').optional(),
   home_location_id: uuidLike.optional(),
 })
+
+// MIAHATCH.4 (Task 14) — PUT /api/locations/[id]/mia-offers: the products
+// staff let Mia sell at a un1t.online studio, in the order Mia offers them.
+// The array order IS the sort order. `un1t_product_row_id` is the
+// un1t_products.id (a uuid), not the remote un1t id. A blurb is a one-line
+// pitch (mig 752 CHECK: 140 characters); blank saves as none. A product may
+// appear once (the table's unique key would refuse the second row anyway).
+export const miaOffersPutSchema = z.object({
+  offers: z.array(z.object({
+    un1t_product_row_id: uuidLike,
+    blurb: z.string().trim().max(MIA_OFFER_BLURB_MAX).default(''),
+  })).max(MIA_OFFERS_MAX),
+}).refine(
+  (v) => new Set(v.offers.map((o) => o.un1t_product_row_id)).size === v.offers.length,
+  { message: 'A product can be listed once.', path: ['offers'] },
+)

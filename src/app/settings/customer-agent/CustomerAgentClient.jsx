@@ -17,6 +17,7 @@ import {
 } from '@/lib/agent/settings-overrides'
 import { buildSavePayload, bookingLinkErrors, bookingIssuesFromResponse, BOOKING_CTA_LABEL_MAX } from './save-payload'
 import { HATCH_COPY_FIELDS, HATCH_COPY_GROUP_TITLE } from './hatch-copy-fields'
+import MiaOffersSection from './MiaOffersSection'
 // MIAORG.1 Task 4 — the organisation defaults, for masters and org admins.
 import OrgDefaultsClient from './OrgDefaultsClient'
 
@@ -179,7 +180,10 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   const quietHalf = isHalfQuietWindow(settings?.quiet_hours)
   // MIAORG.1 final review — the Booking link fields, checked as the PUT
   // checks them; an invalid value shows beside its field and holds Save.
-  const showBookingLink = bookings !== true
+  // MIAHATCH.4 (Task 14): a un1t.online studio books through Mia now, but the
+  // link stays as the fallback (and Mia's answer where a class cannot be
+  // booked), so its fields show there whatever `bookings` says.
+  const showBookingLink = bookings !== true || membershipSourceKey === 'un1t_online'
   const bookingErrors = { ...serverFieldErrors, ...bookingLinkErrors(settings) }
   const bookingInvalid = showBookingLink && Object.keys(bookingLinkErrors(settings)).length > 0
 
@@ -859,6 +863,13 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
           </div>
         )}
       </section>
+
+      {/* MIAHATCH.4 (Task 14) — the products Mia can sell at a un1t.online
+          studio. Its own section and Save (rows behind its own route), shown
+          only there; a Glofox studio sells nothing through Mia. */}
+      {membershipSourceKey === 'un1t_online' && location?.id && (
+        <MiaOffersSection locationId={location.id} canEdit={canEdit} />
+      )}
 
       {/* ── Membership cancellation form (CANCEL-FORM.2) ───── */}
       <section className="border border-un1t-border rounded-lg p-5 mt-6">

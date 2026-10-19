@@ -790,6 +790,62 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     expect(within(screen.getByText('Refund request message').parentElement).getByText('Organisation default')).toBeTruthy()
   })
 
+  // MIAHATCH.4 (Task 14) — "What Mia can sell" mounts in the same gate, and the
+  // booking link fields stay for a un1t.online studio even though its source
+  // takes bookings (Mia books there, but a link remains the fallback).
+  function withOffers() {
+    const real = global.fetch
+    global.fetch = vi.fn(async (url, init) => {
+      if (String(url).startsWith('/api/locations/loc1/mia-offers')) {
+        return reply(200, { success: true, data: { offers: [], products: [{ id: 'p1', title: '1 Class Credit', price_cents: 1500, interval: null, private: false }] } })
+      }
+      return real(url, init)
+    })
+  }
+
+  it('a un1t.online studio shows What Mia can sell, reading its own location\'s offers', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    withOffers()
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByText('What Mia can sell')).toBeTruthy()
+    await screen.findByTestId('offer-picker')
+    expect(global.fetch.mock.calls.some(([u]) => String(u) === '/api/locations/loc1/mia-offers')).toBe(true)
+  })
+
+  it('a non-owner sees the offer list without controls', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    withOffers()
+    render(<CustomerAgentClient canEdit={false} />)
+    await waitFor(() => expect(screen.getByText('What Mia can sell')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('No offers yet. Mia will not offer to sell anything.')).toBeTruthy())
+    expect(screen.queryByTestId('offer-picker')).toBeNull()
+  })
+
+  it('a Glofox studio, no source, or an older GET shows no offers section and never fetches it', async () => {
+    for (const key of ['glofox', 'none', undefined]) {
+      mockFetch([answer({ membership_source_key: key })])
+      withOffers()
+      const { unmount } = render(<CustomerAgentClient canEdit />)
+      await ready()
+      expect(screen.queryByText('What Mia can sell'), String(key)).toBeNull()
+      expect(global.fetch.mock.calls.some(([u]) => String(u).includes('mia-offers')), String(key)).toBe(false)
+      unmount()
+    }
+  })
+
+  it('the booking link fields stay visible at a un1t.online studio even when bookings is true', async () => {
+    mockFetch([reply(200, {
+      ...(await answer({ membership_source_key: 'un1t_online' }).json()),
+      bookings: true,
+    })])
+    withOffers()
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByLabelText('Booking link')).toBeTruthy()
+    expect(screen.getByLabelText('Booking button label')).toBeTruthy()
+  })
+
   it('every button in the editor\'s form-like surface is typed', async () => {
     mockFetch([answer({ membership_source_key: 'un1t_online' })])
     const { container } = render(<CustomerAgentClient canEdit />)

@@ -9647,6 +9647,78 @@ registry.registerPath({
   },
 })
 
+// MIAHATCH.4 (Task 14) — what Mia can sell at a un1t.online studio (mig 752).
+const MiaOfferItem = z.object({
+  id: uuidLike,
+  un1t_product_row_id: uuidLike,
+  title: z.string().nullable(),
+  price_cents: z.number().int().nullable(),
+  interval: z.string().nullable(),
+  visibility: z.string().nullable(),
+  private: z.boolean(),
+  blurb: z.string(),
+  sort_order: z.number().int(),
+  inactive: z.boolean(),
+}).openapi('MiaOffer')
+const MiaOfferProduct = z.object({
+  id: uuidLike,
+  title: z.string().nullable(),
+  price_cents: z.number().int(),
+  interval: z.string().nullable(),
+  private: z.boolean(),
+}).openapi('MiaOfferProduct')
+const MiaOffersData = z.object({ offers: z.array(MiaOfferItem), products: z.array(MiaOfferProduct) }).openapi('MiaOffersData')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/mia-offers',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The products Mia can sell at a un1t.online studio, and the products that can be added',
+  description:
+    '`offers` is the studio\'s saved list in order, each flagged `inactive` when its product has gone inactive or free ' +
+    '(Mia skips it) and `private` for a members-only product. `products` is what can be added: active, price above zero, ' +
+    'at this studio, private ones included and flagged. Any member of the studio may read. A location the caller is not ' +
+    'at is 404 (a detail route never confirms an id); a studio that is not on un1t.online is 400.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The offer list and the addable products', content: { 'application/json': { schema: SuccessResponse(MiaOffersData) } } },
+    400: { description: 'The studio is not on un1t.online', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read failed (never an empty list)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/mia-offers',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Replace the products Mia can sell at a un1t.online studio (owner or master)',
+  description:
+    'Body `{ offers: [{ un1t_product_row_id, blurb }] }`; array order is the order Mia offers them, a blurb is at most 140 ' +
+    'characters (blank = none), a product may be listed once, at most 50. Every product must be at this studio, active and ' +
+    'priced above zero, else 400 `{ error: "product_not_sellable", product_id }` and nothing is written; a private product is ' +
+    'allowed. The save updates the rows that stay, inserts the new ones and only then deletes the rest, so a failure part-way ' +
+    'never leaves the studio with no offers. Gate: membership (404), then `canEditMiaSettings` at the target (owner, or master; ' +
+    '403 otherwise), then validation; a studio not on un1t.online is 400. Returns the same data as GET.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      offers: z.array(z.object({ un1t_product_row_id: uuidLike, blurb: z.string().max(140).optional() })).max(50),
+    }).openapi('MiaOffersSave') } } },
+  },
+  responses: {
+    200: { description: 'Saved: the offer list and the addable products', content: { 'application/json': { schema: SuccessResponse(MiaOffersData) } } },
+    400: { description: 'Invalid body, `product_not_sellable`, or the studio is not on un1t.online', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden: owner or master at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A write failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // UN1TSYNC.7 — Hatch Street's un1t.online connection (migs 726, channel_connections
 // platform 'un1t_online'). Owner/master AT the location on every method; the
 // token is write-only and appears in no response.
