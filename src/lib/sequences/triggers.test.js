@@ -229,6 +229,92 @@ describe('triggerSequencesForPipelineStageChange', () => {
     await triggers.triggerSequencesForPipelineStageChange('c1', 'new_lead', 'active_member')
     expect(enrolContacts).not.toHaveBeenCalled()
   })
+
+  it('without a locationId reads the HOME studio\'s sequences and never the locations table', async () => {
+    const db = mockDb({
+      contacts: { single: { id: 'c1', location_id: 'loc-1', organization_id: 'org-1' } },
+      email_sequences: { list: [{ id: 's1', trigger_config: {}, audience_filter: null }] },
+    })
+    createServerClient.mockReturnValue(db)
+    await triggers.triggerSequencesForPipelineStageChange('c1', 'new_lead', 'active_member')
+    const seqBuilder = db.from.mock.results[db.from.mock.calls.findIndex(([t]) => t === 'email_sequences')].value
+    expect(seqBuilder.eq).toHaveBeenCalledWith('location_id', 'loc-1')
+    expect(db.from.mock.calls.map(([t]) => t)).not.toContain('locations')
+    expect(enrolContacts).toHaveBeenCalledTimes(1)
+  })
+
+  // TDSEQ.1 — a move on a studio's own board (Hatch's un1t.online board) starts
+  // THAT studio's sequences, whoever's home the contact is.
+  describe('with { locationId } (the board\'s studio)', () => {
+    it('enrols a shared contact (home Stillorgan, board Hatch) in Hatch\'s sequence', async () => {
+      const db = mockDb({
+        contacts: { single: { id: 'c1', location_id: 'stillorgan', organization_id: 'org-1' } },
+        locations: { maybeSingle: { id: 'hatch', organization_id: 'org-1' } },
+        email_sequences: { list: [
+          { id: 'seq-hatch-td', trigger_config: { to_status: 'trial_done' }, audience_filter: null },
+          { id: 'seq-hatch-other', trigger_config: { to_status: 'converted' }, audience_filter: null },
+        ] },
+      })
+      createServerClient.mockReturnValue(db)
+      await triggers.triggerSequencesForPipelineStageChange('c1', 'second_class', 'trial_done', { locationId: 'hatch' })
+      const seqBuilder = db.from.mock.results[db.from.mock.calls.findIndex(([t]) => t === 'email_sequences')].value
+      expect(seqBuilder.eq).toHaveBeenCalledWith('location_id', 'hatch')
+      expect(seqBuilder.eq).toHaveBeenCalledWith('trigger_type', 'pipeline_stage_change')
+      expect(seqBuilder.eq).toHaveBeenCalledWith('status', 'active')
+      expect(enrolContacts).toHaveBeenCalledTimes(1)
+      expect(enrolContacts).toHaveBeenCalledWith({
+        sequenceId: 'seq-hatch-td',
+        contactIds: ['c1'],
+        sourceType: 'pipeline_stage_change',
+        sourceRef: 'second_class→trial_done',
+      })
+    })
+
+    it('keeps from_status and the audience filter', async () => {
+      contactMatchesSequenceAudience.mockResolvedValueOnce(false)
+      createServerClient.mockReturnValue(mockDb({
+        contacts: { single: { id: 'c1', location_id: 'stillorgan', organization_id: 'org-1' } },
+        locations: { maybeSingle: { id: 'hatch', organization_id: 'org-1' } },
+        email_sequences: { list: [
+          { id: 's-aud', trigger_config: {}, audience_filter: { filters: [{ x: 1 }] } },
+          { id: 's-from', trigger_config: { from_status: 'first_class' }, audience_filter: null },
+          { id: 's-ok', trigger_config: { from_status: 'second_class', to_status: 'trial_done' }, audience_filter: null },
+        ] },
+      }))
+      await triggers.triggerSequencesForPipelineStageChange('c1', 'second_class', 'trial_done', { locationId: 'hatch' })
+      expect(enrolContacts.mock.calls.map(([a]) => a.sequenceId)).toEqual(['s-ok'])
+      expect(contactMatchesSequenceAudience).toHaveBeenCalledWith(expect.anything(), 'c1', { filters: [{ x: 1 }] })
+    })
+
+    it('refuses a studio in another organisation: no sequence read, nothing enrolled, a warning', async () => {
+      const db = mockDb({
+        contacts: { single: { id: 'c1', location_id: 'stillorgan', organization_id: 'org-1' } },
+        locations: { maybeSingle: { id: 'elsewhere', organization_id: 'org-2' } },
+      })
+      createServerClient.mockReturnValue(db)
+      await triggers.triggerSequencesForPipelineStageChange('c1', 'second_class', 'trial_done', { locationId: 'elsewhere' })
+      expect(db.from.mock.calls.map(([t]) => t)).not.toContain('email_sequences')
+      expect(enrolContacts).not.toHaveBeenCalled()
+      expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_change_skipped', { reason: 'cross_organisation', locationId: 'elsewhere' })
+    })
+
+    it('needs no organisation check when the board studio IS the home studio', async () => {
+      const db = mockDb({
+        contacts: { single: { id: 'c1', location_id: 'hatch', organization_id: 'org-1' } },
+        email_sequences: { list: [{ id: 's1', trigger_config: {}, audience_filter: null }] },
+      })
+      createServerClient.mockReturnValue(db)
+      await triggers.triggerSequencesForPipelineStageChange('c1', 'second_class', 'trial_done', { locationId: 'hatch' })
+      expect(db.from.mock.calls.map(([t]) => t)).not.toContain('locations')
+      expect(enrolContacts).toHaveBeenCalledTimes(1)
+    })
+
+    it('never throws if a read fails', async () => {
+      createServerClient.mockReturnValue({ from: () => { throw new Error('boom') } })
+      await expect(triggers.triggerSequencesForPipelineStageChange('c1', 'a', 'b', { locationId: 'hatch' })).resolves.toBeUndefined()
+      expect(logWarn).toHaveBeenCalled()
+    })
+  })
 })
 
 // ── membership_state_change ─────────────────────────────────────

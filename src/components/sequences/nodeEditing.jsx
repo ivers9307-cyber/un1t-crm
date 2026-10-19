@@ -5,7 +5,7 @@
 // form incl. the branch predicate. Field primitives live here too so any future
 // editor reuses the exact same inputs.
 import { ChevronUp, ChevronDown, Trash2, Pencil, AlertTriangle } from 'lucide-react'
-import { describeNode } from '@/lib/sequences/graph'
+import { describeNode, BRANCH_PREDICATE_TYPES } from '@/lib/sequences/graph'
 import { isPhantomTag } from '@/lib/sequences/tag-vocabulary'
 import { styleForType } from './nodeStyles'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
@@ -274,8 +274,26 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
         <>
           <Labeled label="Split the flow when…">
             <Select value={ptype} onChange={v => setPred({ type: v })}
-              options={[['has_tag', 'Contact has a tag'], ['booked_class_at_studio', 'Contact has booked a class here'], ['field_equals', 'Field equals a value'], ['field_in', 'Field is one of…']]} />
+              options={BRANCH_PREDICATE_TYPES.map(t => [t, BRANCH_PREDICATE_LABELS[t] || t])} />
           </Labeled>
+          {ptype === 'in_pipeline_stage_at_studio' && (
+            <>
+              <Labeled label="Stage (comma-separated)" hint="Stage names as the board stores them, e.g. trial_done">
+                <Text value={(p.stages || []).join(', ')} onChange={v => setPred({ stages: v.split(',').map(s => s.trim()).filter(Boolean) })} placeholder="trial_done" />
+              </Labeled>
+              <p className="text-xs text-un1t-subtle">
+                Yes when the contact has an open deal at this studio, on one of its switched-on boards,
+                in one of these stages. Reads this studio&apos;s own board, so it works for people whose
+                home studio is elsewhere.
+              </p>
+            </>
+          )}
+          {ptype === 'whatsapp_reply_since_enrolment' && (
+            <p className="text-xs text-un1t-subtle">
+              Yes when the contact has sent us a WhatsApp message, at any studio in this organisation,
+              since they entered this flow.
+            </p>
+          )}
           {ptype === 'booked_class_at_studio' && (
             <p className="text-xs text-un1t-subtle">
               Yes when the contact has a class booking at this studio from any booking system
@@ -322,6 +340,17 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
     default:
       return <p className="text-xs text-un1t-subtle">No editable settings.</p>
   }
+}
+
+// The branch predicate picker's labels, keyed by BRANCH_PREDICATE_TYPES (the
+// schema owns the list and its order; a type missing here shows its key).
+const BRANCH_PREDICATE_LABELS = {
+  has_tag: 'Contact has a tag',
+  booked_class_at_studio: 'Contact has booked a class here',
+  in_pipeline_stage_at_studio: 'Contact is in a pipeline stage here',
+  whatsapp_reply_since_enrolment: 'Contact replied on WhatsApp since entering this flow',
+  field_equals: 'Field equals a value',
+  field_in: 'Field is one of…',
 }
 
 // --- field primitives -----------------------------------------------------

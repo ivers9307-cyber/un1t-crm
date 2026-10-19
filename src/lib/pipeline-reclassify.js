@@ -26,6 +26,7 @@ import { getBoardModule, PIPELINE_MODES } from '../../shared/pipelines/index.js'
 import { membershipReadsFor, supportsRead } from './membership/reads/index.js'
 import { un1tDealDates } from './membership/reads/un1t-pipeline-dates.js'
 import { loadActiveElsewhere, leavesBoard } from './pipeline-other-studio-members.js'
+import { triggerSequencesForPipelineStageChange } from './sequences/triggers.js'
 
 // HATCHPIPE.2 — a board whose module declares this inputSource is classified
 // from the location's membership read adapter (un1tOnlineReads.pipelineInputs:
@@ -34,6 +35,9 @@ import { loadActiveElsewhere, leavesBoard } from './pipeline-other-studio-member
 const UN1T_INPUT = 'un1t_online'
 // The module a disabled row is dry-run as (includeDisabled, below).
 const DRY_RUN_DISABLED_MODULE = 'acquisition_un1t'
+// TDSEQ.1 — more than this many deals moved into ONE stage in ONE run is a
+// rule change, not people progressing: no sequence starts for that stage.
+const STAGE_TRIGGER_MASS_MOVE = 50
 
 // PIPELINES.3 — the columns a run selects are the UNION of what its enabled
 // derived boards DECLARE, not a hand-maintained list. The list this replaced
@@ -411,6 +415,7 @@ export async function reclassifyAllContacts(db, args) {
   const samples = []
   const movesToApply = [] // [{ deal_id, contact_id, from_slug, to_slug, target_stage_id, contact_name }]
   const createsToApply = [] // [{ contact_id, target_stage_id, target_slug, contact_name }]
+  const movesLanded = [] // TDSEQ.1: un1t path, real runs: the moves whose write landed
   const leavesToApply = [] // PIPEEXCL.1: [{ deal_id, contact_id, from_slug, contact_name }]
   let createsWithheld = 0
   let createsHeld = 0
@@ -542,6 +547,7 @@ export async function reclassifyAllContacts(db, args) {
           continue
         }
         stageMoved += chunk.length
+        if (inputSource === UN1T_INPUT) movesLanded.push(...chunk)
         // Movement matrix + samples populated only for chunks that
         // actually landed — failed chunks still show in the error
         // counter but not as movement.
@@ -685,6 +691,13 @@ export async function reclassifyAllContacts(db, args) {
     samples,
   }, startedAt)
 
+  // TDSEQ.1 — a landed MOVE on a un1t.online board starts the board studio's
+  // pipeline_stage_change sequences (never a create, a leave or a dry run:
+  // movesLanded holds only real moves whose write succeeded). After every
+  // write and the audit close, so a slow or failing enrolment can never fail
+  // or hold up the run.
+  if (movesLanded.length > 0) await fireStageTriggers(movesLanded, locationId)
+
   return {
     ok: true,
     run_id: runId,
@@ -704,6 +717,38 @@ export async function reclassifyAllContacts(db, args) {
     } : {}),
     ...un1tCounts(inputSource, un1tInputs),
     ...(dryRun ? { stage_histogram: stageHistogram } : {}),
+  }
+}
+
+// TDSEQ.1 — fire triggerSequencesForPipelineStageChange for each landed un1t
+// board move, with the board's studio. Glofox (contacts-input) boards never
+// come here: their moves fire through ensureDealForContact, and a nightly
+// re-run of this pass is not a new event for them. Best-effort: a throw is
+// logged and the next move still fires. A stage that took more than
+// STAGE_TRIGGER_MASS_MOVE moves this run is held whole (a classifier rule
+// change moving many deals at once is not N people progressing).
+async function fireStageTriggers(moves, locationId) {
+  const byStage = new Map()
+  for (const m of moves) {
+    if (!byStage.has(m.to_slug)) byStage.set(m.to_slug, [])
+    byStage.get(m.to_slug).push(m)
+  }
+  for (const [toSlug, stageMoves] of byStage) {
+    if (stageMoves.length > STAGE_TRIGGER_MASS_MOVE) {
+      logWarn('pipeline-reclassify', 'stage trigger held: mass move', {
+        locationId, to_slug: toSlug, moves: stageMoves.length, limit: STAGE_TRIGGER_MASS_MOVE,
+      })
+      continue
+    }
+    for (const m of stageMoves) {
+      try {
+        await triggerSequencesForPipelineStageChange(m.contact_id, m.from_slug, m.to_slug, { locationId })
+      } catch (e) {
+        logWarn('pipeline-reclassify', 'stage trigger failed', {
+          locationId, contactId: m.contact_id, to_slug: m.to_slug, err: boundedErr(e?.message || e),
+        })
+      }
+    }
   }
 }
 

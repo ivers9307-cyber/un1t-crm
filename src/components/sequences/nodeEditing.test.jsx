@@ -21,6 +21,7 @@ import {
 } from './nodeEditing.jsx'
 import { URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
 import { WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
+import { BRANCH_PREDICATE_TYPES } from '@/lib/sequences/graph'
 
 afterEach(cleanup)
 
@@ -205,5 +206,55 @@ describe('WhatsApp step editor — dynamic URL button field', () => {
   // One list, not two — the step editor and the unified composer must not drift.
   it('takes its contact fields from the composer list rather than a local copy', () => {
     expect(STEP_CONTACT_FIELDS).toBe(WA_VARIABLE_FIELDS)
+  })
+})
+
+// TDSEQ.1 — the branch predicate picker offers every predicate the schema
+// registers, and the two studio-scoped ones are editable.
+describe('NodeConfig — branch predicate picker', () => {
+  const branchNode = (predicate) => ({ id: 'b1', type: 'branch', config: { predicate } })
+  const renderBranch = (predicate, onPatch = vi.fn()) => {
+    const utils = render(<NodeConfig node={branchNode(predicate)} onPatch={onPatch} templates={[]} />)
+    return { ...utils, onPatch }
+  }
+  const picker = (container) => container.querySelector('select')
+
+  it('offers one option per registered predicate type, in schema order', () => {
+    const { container } = renderBranch({ type: 'has_tag', tag: 'vip' })
+    const values = [...picker(container).querySelectorAll('option')].map((o) => o.value)
+    expect(values).toEqual(BRANCH_PREDICATE_TYPES)
+  })
+
+  it('selecting "in a pipeline stage here" writes that type', () => {
+    const { container, onPatch } = renderBranch({ type: 'has_tag', tag: 'vip' })
+    fireEvent.change(picker(container), { target: { value: 'in_pipeline_stage_at_studio' } })
+    expect(onPatch).toHaveBeenCalledWith({ predicate: expect.objectContaining({ type: 'in_pipeline_stage_at_studio' }) })
+  })
+
+  it('edits the stages as a comma-separated list and writes them as an array', () => {
+    const { getByPlaceholderText, onPatch } = renderBranch({ type: 'in_pipeline_stage_at_studio', stages: ['trial_done'] })
+    const input = getByPlaceholderText('trial_done')
+    expect(input.value).toBe('trial_done')
+    fireEvent.change(input, { target: { value: 'trial_done, second_class ,' } })
+    expect(onPatch).toHaveBeenLastCalledWith({ predicate: { type: 'in_pipeline_stage_at_studio', stages: ['trial_done', 'second_class'] } })
+  })
+
+  it('explains both studio-scoped predicates in plain words', () => {
+    const stage = renderBranch({ type: 'in_pipeline_stage_at_studio', stages: [] })
+    expect(stage.container.textContent).toMatch(/open deal at this studio/i)
+    cleanup()
+    const reply = renderBranch({ type: 'whatsapp_reply_since_enrolment' })
+    expect(reply.container.textContent).toMatch(/WhatsApp message/i)
+    expect(reply.container.textContent).toMatch(/since they entered this flow/i)
+    // No stage input for the reply predicate.
+    expect(reply.container.querySelector('input[placeholder="trial_done"]')).toBeNull()
+  })
+
+  it('uses no em dash in the new copy', () => {
+    const stage = renderBranch({ type: 'in_pipeline_stage_at_studio', stages: [] })
+    expect(stage.container.textContent).not.toContain('—')
+    cleanup()
+    const reply = renderBranch({ type: 'whatsapp_reply_since_enrolment' })
+    expect(reply.container.textContent).not.toContain('—')
   })
 })

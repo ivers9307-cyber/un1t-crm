@@ -2,10 +2,16 @@ import { describe, it, expect } from 'vitest'
 import {
   NODE_TYPES, ACTIVE_NODE_TYPES, RETIRED_NODE_TYPES,
   TRIGGER_TYPES, CHANNEL_NODE_TYPES, CONFIG_NODE_TYPES,
-  TRIGGER_SOURCE_ID, isChannelNode, parseGraphShape,
+  TRIGGER_SOURCE_ID, isChannelNode, parseGraphShape, BRANCH_PREDICATE_TYPES,
 } from './schema.js'
 
 describe('graph schema constants', () => {
+  it('lists every branch predicate the runner evaluates (TDSEQ.1 adds two studio-scoped ones)', () => {
+    expect(BRANCH_PREDICATE_TYPES).toEqual([
+      'has_tag', 'booked_class_at_studio', 'in_pipeline_stage_at_studio', 'whatsapp_reply_since_enrolment',
+      'field_equals', 'field_in',
+    ])
+  })
   it('lists the 11 node types', () => {
     expect(NODE_TYPES).toEqual([
       'email', 'whatsapp', 'sms', 'wait', 'apply_tag', 'update_field',

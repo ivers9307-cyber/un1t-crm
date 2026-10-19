@@ -738,6 +738,14 @@ export async function updateFieldStep(db, { step, contact }) {
 //   - field_in        { field, values } — contact[field] is in the list
 //   - booked_class_at_studio {}         — the contact has booked a class at
 //                                         the sequence's studio (HATCHNUDGE.1)
+//   - in_pipeline_stage_at_studio { stages } — the contact has an open deal
+//                                         at the sequence's studio, on an
+//                                         enabled board, in one of the stage
+//                                         slugs (TDSEQ.1)
+//   - whatsapp_reply_since_enrolment {} — an inbound WhatsApp message from the
+//                                         contact on any of the organisation's
+//                                         threads since the enrolment began
+//                                         (TDSEQ.1; needs enrolled_at)
 //
 // booked_class_at_studio exists because the only "has booked" signal a
 // branch could read before was the glofox_first_booking tag, which the Glofox
@@ -802,11 +810,126 @@ async function hasBookedClassAtStudio(db, { contactId, locationId }) {
   return Boolean(requests && requests.length > 0)
 }
 
-export async function evaluateBranchPredicate(db, { contact, predicate, locationId = null }) {
+// TDSEQ.1 — the studio's open deal in one of `stages`, on an ENABLED board at
+// that studio. contacts.pipeline_stage_slug cannot answer this: it follows the
+// contact's HOME studio's primary board, so a Stillorgan contact on Hatch
+// Street's un1t.online board reads Stillorgan's stage there. Bounded reads
+// (a studio has a handful of boards and stages); every failure throws.
+const STUDIO_LIST_MAX = 999
+
+async function inPipelineStageAtStudio(db, { contactId, locationId, stages }) {
+  const fail = (err) => new Error(`branch in_pipeline_stage_at_studio: ${err.message}`)
+  const { data: boards, error: boardsErr } = await db
+    .from('pipelines')
+    .select('id')
+    .eq('location_id', locationId)
+    .eq('enabled', true)
+    .order('id', { ascending: true })
+    .range(0, STUDIO_LIST_MAX)
+  if (boardsErr) throw fail(boardsErr)
+  const boardIds = (boards || []).map((b) => b.id)
+  if (boardIds.length === 0) return false
+
+  const { data: stageRows, error: stagesErr } = await db
+    .from('pipeline_stages')
+    .select('id')
+    .eq('location_id', locationId)
+    .in('pipeline_id', boardIds)
+    .in('slug', stages)
+    .order('id', { ascending: true })
+    .range(0, STUDIO_LIST_MAX)
+  if (stagesErr) throw fail(stagesErr)
+  const stageIds = (stageRows || []).map((s) => s.id)
+  if (stageIds.length === 0) return false
+
+  const { data: deals, error: dealsErr } = await db
+    .from('deals')
+    .select('id')
+    .eq('contact_id', contactId)
+    .eq('location_id', locationId)
+    .eq('status', 'open')
+    .in('stage_id', stageIds)
+    .limit(1)
+  if (dealsErr) throw fail(dealsErr)
+  return Boolean(deals && deals.length > 0)
+}
+
+// TDSEQ.1 — an INBOUND WhatsApp message from this person after the enrolment
+// started, on any thread of the sequence studio's organisation for this
+// contact or this number (on an organisation-shared number a reply can file at
+// another studio, WAORGNUMBER.1). The number joins the .or() only in its
+// stored digits-only form, so nothing else can reach the filter.
+async function whatsappReplySinceEnrolment(db, { contact, locationId, enrolledAt }) {
+  const fail = (err) => new Error(`branch whatsapp_reply_since_enrolment: ${err.message}`)
+  const { data: studio, error: studioErr } = await db
+    .from('locations')
+    .select('id, organization_id')
+    .eq('id', locationId)
+    .maybeSingle()
+  if (studioErr) throw fail(studioErr)
+  if (!studio) throw new Error('branch whatsapp_reply_since_enrolment: the sequence studio was not found')
+
+  let studios = [locationId]
+  if (studio.organization_id) {
+    const { data: orgStudios, error: orgErr } = await db
+      .from('locations')
+      .select('id')
+      .eq('organization_id', studio.organization_id)
+      .order('id', { ascending: true })
+      .range(0, STUDIO_LIST_MAX)
+    if (orgErr) throw fail(orgErr)
+    studios = [...new Set([...(orgStudios || []).map((l) => l.id), locationId])]
+  }
+
+  const match = [`contact_id.eq.${contact.id}`]
+  if (typeof contact.wa_phone === 'string' && /^\d+$/.test(contact.wa_phone)) {
+    match.push(`wa_phone.eq.${contact.wa_phone}`)
+  }
+  const { data: threads, error: threadsErr } = await db
+    .from('whatsapp_conversations')
+    .select('id')
+    .in('location_id', studios)
+    .or(match.join(','))
+    .order('id', { ascending: true })
+    .range(0, STUDIO_LIST_MAX)
+  if (threadsErr) throw fail(threadsErr)
+  const threadIds = (threads || []).map((t) => t.id)
+  if (threadIds.length === 0) return false
+
+  const { data: inbound, error: inboundErr } = await db
+    .from('whatsapp_messages')
+    .select('id')
+    .in('conversation_id', threadIds)
+    .eq('direction', 'inbound')
+    .gt('created_at', enrolledAt)
+    .limit(1)
+  if (inboundErr) throw fail(inboundErr)
+  return Boolean(inbound && inbound.length > 0)
+}
+
+export async function evaluateBranchPredicate(db, { contact, predicate, locationId = null, enrolledAt = null }) {
   if (!predicate || typeof predicate !== 'object') {
     throw new Error('branch step: config.predicate is required')
   }
   const type = String(predicate.type || '').trim()
+
+  if (type === 'in_pipeline_stage_at_studio') {
+    // Thrown, not guessed, like booked_class_at_studio: the runner retries.
+    if (!locationId) throw new Error('branch in_pipeline_stage_at_studio: the sequence studio is required')
+    const stages = Array.isArray(predicate.stages)
+      ? predicate.stages.map((s) => String(s || '').trim()).filter(Boolean)
+      : []
+    if (stages.length === 0) throw new Error('branch in_pipeline_stage_at_studio: stages must be a non-empty array')
+    return inPipelineStageAtStudio(db, { contactId: contact.id, locationId, stages })
+  }
+
+  if (type === 'whatsapp_reply_since_enrolment') {
+    if (!locationId) throw new Error('branch whatsapp_reply_since_enrolment: the sequence studio is required')
+    if (!enrolledAt || !Number.isFinite(Date.parse(enrolledAt))) {
+      throw new Error('branch whatsapp_reply_since_enrolment: the enrolment time is required')
+    }
+    return whatsappReplySinceEnrolment(db, { contact, locationId, enrolledAt })
+  }
 
   if (type === 'booked_class_at_studio') {
     // Thrown, not guessed: the runner retries a throwing step, and a branch
@@ -858,12 +981,13 @@ export async function evaluateBranchPredicate(db, { contact, predicate, location
  * own step_order). Falls back to sensible defaults when the config
  * doesn't specify a pointer.
  */
-export async function processBranchStep(db, { step, contact, locationId = null }) {
+export async function processBranchStep(db, { step, contact, locationId = null, enrolledAt = null }) {
   const cfg = step.config || {}
   const branchOrder = step.step_order
   const matched = await evaluateBranchPredicate(db, {
     contact,
     locationId,
+    enrolledAt,
     predicate: cfg.predicate,
   })
   const rawTarget = matched ? cfg.then_step_order : cfg.else_step_order

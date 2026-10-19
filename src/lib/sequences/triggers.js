@@ -219,27 +219,54 @@ export async function triggerSequencesForBooking(bookingId) {
  * Best-effort — errors are swallowed so the upstream mutation isn't
  * blocked by a sequence enrol failure.
  *
+ * TDSEQ.1 — `{ locationId }` names the studio whose BOARD moved (the pipeline
+ * reclassifier passes it for a un1t.online board). That studio's
+ * pipeline_stage_change sequences fire, not the contact's home studio's: a
+ * Stillorgan contact on Hatch Street's board moves there, and the stage is a
+ * fact about Hatch. A studio outside the contact's organisation is refused
+ * (`stage_change_skipped`, reason `cross_organisation`), the same door as
+ * triggerSequencesForContactCreated. Without it, the home studio as before.
+ *
  * @param {string} contactId
  * @param {string|null} oldStage  pipeline_stage_slug before the change
  * @param {string|null} newStage  pipeline_stage_slug after the change
+ * @param {{ locationId?: string|null }} [opts]
  */
-export async function triggerSequencesForPipelineStageChange(contactId, oldStage, newStage) {
+export async function triggerSequencesForPipelineStageChange(contactId, oldStage, newStage, { locationId = null } = {}) {
   if (oldStage === newStage) return
   const db = createServerClient()
   try {
-    const { data: contact } = await db
+    const { data: contact, error: contactErr } = await db
       .from('contacts')
-      .select('id, location_id')
+      .select('id, location_id, organization_id')
       .eq('id', contactId)
       .single()
+    if (contactErr && locationId) {
+      logWarn('sequences', 'stage_change_skipped', { reason: 'contact_unreadable', locationId })
+      return
+    }
     if (!contact) return
 
-    const { data: sequences } = await db
+    const studioId = locationId || contact.location_id
+    if (!studioId) return
+    if (studioId !== contact.location_id) {
+      const check = await contactInStudioOrganisation(db, { contact, locationId: studioId })
+      if (!check.ok) {
+        logWarn('sequences', 'stage_change_skipped', { reason: check.reason, locationId: studioId })
+        return
+      }
+    }
+
+    const { data: sequences, error: sequencesErr } = await db
       .from('email_sequences')
       .select('id, trigger_config, audience_filter')
-      .eq('location_id', contact.location_id)
+      .eq('location_id', studioId)
       .eq('trigger_type', 'pipeline_stage_change')
       .eq('status', 'active')
+    if (sequencesErr) {
+      logWarn('sequences', 'stage_change_skipped', { reason: 'sequences_unreadable', locationId: studioId, err: sequencesErr.message })
+      return
+    }
     if (!sequences || sequences.length === 0) return
 
     for (const seq of sequences) {
