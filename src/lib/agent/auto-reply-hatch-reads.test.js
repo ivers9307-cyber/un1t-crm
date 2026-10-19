@@ -90,7 +90,13 @@ vi.mock('@/lib/person-accounts', async (importOriginal) => ({
 vi.mock('./un1t-member-read', async (importOriginal) => ({
   ...(await importOriginal()),
   fetchLiveUn1tBookings: vi.fn(async () => ({ ok: false, reason: 'read_failed' })),
+  openUn1tMemberReader: vi.fn(async () => ({ ok: false, reason: 'not_connected' })),
 }))
+// MIAHATCH.5 Task 16 — D's write primitives are fakes: un1t.online is never called.
+vi.mock('@/lib/un1t-online-write-ops', async () => {
+  const { fakeUn1tWrite } = await import('./un1t-fakes.test-helpers')
+  return fakeUn1tWrite()['@/lib/un1t-online-write-ops']()
+})
 
 import * as glofox from '@/lib/glofox'
 import {
@@ -100,6 +106,12 @@ import {
 import { resolveMemberStudios } from './member-studios'
 import { executeBookingTool } from './booking-tools'
 import { promptOptionsForPlan, planKey, executorCtxFor } from './turn-studios'
+import { book as un1tBook } from '@/lib/un1t-online-write-ops'
+import { openUn1tMemberReader } from './un1t-member-read'
+import { fakeUn1tReader } from './un1t-fakes.test-helpers'
+import { formatClassTime } from './dublin-format'
+import { notifyAgentApprovalRequest } from './approval-notify'
+import { DEFAULT_NO_CREDITS_HANDOFF_TEXT } from './core'
 
 // Fictional ids.
 const ORG = 'b2000000-0000-0000-0000-000000000001'
@@ -210,7 +222,7 @@ function turnDb({ threadLocationId: _threadLocationId, conv, freshVerified = nul
       insert: (row) => { state.op = 'insert'; state.row = row; return builder },
       eq: (col, val) => { state.filters.push(['eq', col, val]); return builder },
       in: (col, vals) => { state.filters.push(['in', col, vals]); return builder },
-      or: () => builder, gte: () => builder, lte: () => builder, is: () => builder,
+      or: () => builder, gte: () => builder, lte: () => builder, is: () => builder, contains: () => builder,
       gt: () => { state.sawGt = true; return builder },
       order: () => builder, limit: () => builder, range: () => builder,
       single: () => { state.single = true; return builder },
@@ -786,10 +798,14 @@ describe('un1t_full at the turn (MIAHATCH.5)', () => {
     expect(decisionMeta(inserts).tool_block).toBe('un1t_read')
   })
 
-  it('both on, Hatch thread: un1t_full tools and prompt; book/cancel keep the slice 1 answer and request_refund its placeholder until Tasks 16-17', async () => {
+  const FUTURE_LABEL = formatClassTime(Date.parse(FUTURE) / 1000, 'Europe/Dublin')
+
+  it('both on, Hatch thread: un1t_full tools and prompt; book_class books through D (Task 16), cancel keeps the slice 1 answer and request_refund its placeholder until Task 17', async () => {
     resolveMemberStudios.mockResolvedValue(resolution(hatchStudio()))
+    un1tBook.mockResolvedValueOnce({ verdict: 'done', sent: true, id: 'bk-new', code: null, message: null, alreadyBooked: false, recovered: null, retryable: false, data: null, ledgerId: 'led-1' })
     const { fetchFn, bodies } = modelTurns([
-      toolTurn('book_class', { event_id: 'un1t:ev-1', class_name: 'Fictional Hatch HIIT' }),
+      toolTurn('book_class', { event_id: 'un1t:ev-1', class_name: 'Fictional Hatch HIIT', starts_at: FUTURE_LABEL }),
+      toolTurn('cancel_class_booking', { booking_id: 'un1t:bk-1' }),
       toolTurn('request_refund', { reason: 'late cancel', booking_id: 'un1t:bk-1' }),
       toolTurn('send_purchase_link', { offer_id: 'o-1' }),
       textTurn('ok'),
@@ -804,12 +820,61 @@ describe('un1t_full at the turn (MIAHATCH.5)', () => {
     expect(stable).toContain('You can book and cancel classes at UN1T Hatch Street in chat for a verified member.')
     expect(stable).toMatch(/call request_refund/)
     expect(stable).not.toMatch(/limited|spaces|capacity/i)
-    expect(toolResultOf(bodies[1])).toMatchObject({ booked: false, chat_booking_unavailable: true })
-    expect(toolResultOf(bodies[2])).toMatchObject({ error: 'not_available_at_this_studio' })
+    expect(toolResultOf(bodies[1])).toEqual({ booked: true, class_name: 'Fictional Hatch HIIT', class_time: FUTURE_LABEL })
+    expect(un1tBook).toHaveBeenCalledTimes(1)
+    expect(un1tBook.mock.calls[0][1]).toEqual({ locationId: HATCH, contactId: HATCH_CONTACT, un1tUserId: 'u-1', eventId: 'ev-1', origin: 'mia', originRef: 'req-1', actor: null })
+    const writeAhead = inserts.find((i) => i.table === 'agent_membership_requests')
+    expect(writeAhead.row).toMatchObject({ location_id: HATCH, kind: 'class_booking', details: { provider: 'un1t_online', event_id: 'ev-1', stage: 'executing' } })
+    expect(toolResultOf(bodies[2])).toMatchObject({ cancelled: false, chat_booking_unavailable: true })
     expect(toolResultOf(bodies[3])).toMatchObject({ error: 'not_available_at_this_studio' })
+    expect(toolResultOf(bodies[4])).toMatchObject({ error: 'not_available_at_this_studio' })
     expect(glofoxCalls()).toBe(0)
-    expect(inserts.some((i) => i.table === 'agent_membership_requests')).toBe(false)
     expect(decisionMeta(inserts).tool_block).toBe('un1t_full')
+  })
+
+  it('both on, Hatch member with nothing to book with: the no_credits card at Hatch and the deterministic handoff', async () => {
+    resolveMemberStudios.mockResolvedValue(resolution(hatchStudio()))
+    openUn1tMemberReader.mockResolvedValueOnce(fakeUn1tReader({ ledger: { balance: 0, is_unlimited: false } }))
+    const { fetchFn, bodies } = modelTurns([
+      toolTurn('book_class', { event_id: 'un1t:ev-1', class_name: 'Fictional Hatch HIIT', starts_at: FUTURE_LABEL }),
+      textTurn('You are booked!'),
+    ])
+    vi.stubGlobal('fetch', fetchFn)
+    const adapter = whatsappAdapter()
+    const { db, inserts } = turnDb({
+      threadLocationId: HATCH, conv: verifiedThread(HATCH_CONTACT), hatchSettings: SWITCH_ON, hatchUn1tOnline: WRITES_ON,
+      tables: { un1t_subscriptions: [] },
+    })
+
+    const result = await runChannelAgent(db, adapter, turnCtx(HATCH))
+
+    expect(toolResultOf(bodies[1])).toMatchObject({ booked: false, no_credits: true })
+    expect(result).toEqual({ handled: true, action: 'handoff', reason: 'no_credits' })
+    expect(un1tBook).not.toHaveBeenCalled()
+    const card = inserts.find((i) => i.table === 'agent_membership_requests')
+    expect(card.row).toMatchObject({ location_id: HATCH, kind: 'class_booking', status: 'pending', details: { provider: 'un1t_online', reason: 'no_credits', event_id: 'ev-1', un1t_user_id: 'u-1' } })
+    expect(notifyAgentApprovalRequest).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: HATCH, kind: 'class_booking' }))
+    // The model's "You are booked!" is discarded for the operator script.
+    expect(adapter.send).toHaveBeenCalledTimes(1)
+    expect(adapter.send.mock.calls[0][1]).toBe(DEFAULT_NO_CREDITS_HANDOFF_TEXT)
+    expect(glofoxCalls()).toBe(0)
+  })
+
+  it('un1t_read_dual: book_class with a un1t: id keeps the slice 1 answer and never reaches D', async () => {
+    resolveMemberStudios.mockResolvedValue(resolution(stillorganStudio(), hatchStudio()))
+    const { fetchFn, bodies } = modelTurns([
+      toolTurn('book_class', { event_id: 'un1t:ev-1', class_name: 'Fictional Hatch HIIT', starts_at: FUTURE_LABEL }),
+      textTurn('ok'),
+    ])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, inserts } = turnDb({ threadLocationId: STILLORGAN, conv: verifiedThread(STILLORGAN_CONTACT), hatchUn1tOnline: WRITES_ON })
+
+    await runChannelAgent(db, whatsappAdapter(), turnCtx(STILLORGAN))
+
+    expect(decisionMeta(inserts).tool_block).toBe('un1t_read_dual')
+    expect(toolResultOf(bodies[1])).toMatchObject({ booked: false, chat_booking_unavailable: true })
+    expect(un1tBook).not.toHaveBeenCalled()
+    expect(inserts.some((i) => i.table === 'agent_membership_requests')).toBe(false)
   })
 
   it('both on, Hatch-only member: a raw Glofox booking id is refused, never run at Hatch', async () => {

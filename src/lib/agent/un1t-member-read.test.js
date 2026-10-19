@@ -5,7 +5,7 @@ vi.mock('@/lib/connection-registry', () => ({ readConnection: vi.fn() }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }))
 
 import { Un1tApiError } from '@/lib/un1t-online'
-import { Un1tBudgetSpent, openUn1tMemberReader, fetchLiveUn1tBookings, UN1T_READ_MAX_PAGES } from './un1t-member-read'
+import { Un1tBudgetSpent, openUn1tMemberReader, fetchLiveUn1tBookings, fetchLiveEntitlement, UN1T_READ_MAX_PAGES } from './un1t-member-read'
 import { fakeUn1tReader, fakeUn1tWrite } from './un1t-fakes.test-helpers'
 import { readConnection } from '@/lib/connection-registry'
 import { checkRateLimit } from '@/lib/rate-limit'
@@ -322,5 +322,77 @@ describe('test helpers', () => {
     expect(new Un1tWriteRefused('C', 'm').code).toBe('C')
     expect(new Un1tWriteUnknown('C', 'm')).toBeInstanceOf(Error)
     expect(Object.keys(w['@/lib/un1t-online-approval']()).sort()).toEqual(['executeUn1tApproval', 'fileRefundCard'])
+  })
+})
+
+// MIAHATCH.5 — the entitlement read book_class pre-flights with.
+describe('fetchLiveEntitlement', () => {
+  const USER = 'u-test-1'
+  // A fake mirror: un1t_subscriptions rows filtered by every .eq/.in.
+  function subsDb(rows, { fail = false } = {}) {
+    const calls = []
+    return {
+      calls,
+      from: (table) => {
+        const filters = []
+        const b = {
+          select: (cols) => { calls.push({ table, cols }); return b },
+          eq: (c, v) => { filters.push((r) => r[c] === v); return b },
+          in: (c, vs) => { filters.push((r) => vs.includes(r[c])); return b },
+          order: () => b,
+          then: (resolve, reject) => Promise.resolve(fail
+            ? { data: null, error: { message: 'fictional', code: 'XX000' } }
+            : { data: rows.filter((r) => filters.every((f) => f(r))), error: null }).then(resolve, reject),
+        }
+        return b
+      },
+    }
+  }
+  const sub = (over = {}) => ({ un1t_id: 's-1', location_id: LOC, un1t_user_id: USER, status: 'active', ...over })
+
+  it('reads GET /credits/ledgers/{userId}/{studioId} through the held reader and the live subscriptions', async () => {
+    const reader = fakeUn1tReader({ ledger: { balance: 3, is_unlimited: false } })
+    const mirror = subsDb([sub(), sub({ un1t_id: 's-2', status: 'canceled' }), sub({ un1t_id: 's-3', location_id: 'other' })])
+    const r = await fetchLiveEntitlement(mirror, { locationId: LOC, un1tUserId: USER }, { reader })
+    expect(r).toEqual({ ok: true, balance: 3, unlimited: false, liveSubscriptionIds: ['s-1'] })
+    expect(reader.calls).toEqual([`/credits/ledgers/${USER}/studio-test-1`])
+    expect(mirror.calls).toEqual([{ table: 'un1t_subscriptions', cols: 'un1t_id' }])
+  })
+
+  it('unlimited with a zero balance is unlimited (Review Focus 2); a ledger with only is_unlimited has a null balance', async () => {
+    const zero = await fetchLiveEntitlement(subsDb([]), { locationId: LOC, un1tUserId: USER }, { reader: fakeUn1tReader({ ledger: { balance: 0, is_unlimited: true } }) })
+    expect(zero).toEqual({ ok: true, balance: 0, unlimited: true, liveSubscriptionIds: [] })
+    const noBalance = await fetchLiveEntitlement(subsDb([]), { locationId: LOC, un1tUserId: USER }, { reader: fakeUn1tReader({ ledger: { is_unlimited: true } }) })
+    expect(noBalance).toEqual({ ok: true, balance: null, unlimited: true, liveSubscriptionIds: [] })
+  })
+
+  it('anything it could not read is ok:false, never zero', async () => {
+    const args = { locationId: LOC, un1tUserId: USER }
+    expect(await fetchLiveEntitlement(subsDb([]), args, { reader: fakeUn1tReader({ ledger: null }) })).toEqual({ ok: false, reason: 'read_failed' })
+    expect(await fetchLiveEntitlement(subsDb([]), args, { reader: fakeUn1tReader({ ledger: { credits: 'lots' } }) })).toEqual({ ok: false, reason: 'read_failed' })
+    expect(await fetchLiveEntitlement(subsDb([]), args, { reader: fakeUn1tReader({ fail: 503 }) })).toEqual({ ok: false, reason: 'read_failed' })
+    expect(await fetchLiveEntitlement(subsDb([]), args, { reader: fakeUn1tReader({ fail: 'budget' }) })).toEqual({ ok: false, reason: 'budget_spent' })
+    expect(await fetchLiveEntitlement(subsDb([]), args, { reader: { ok: false, reason: 'not_connected' } })).toEqual({ ok: false, reason: 'not_connected' })
+    // The ledger read but the mirror did not: a zero balance is not "confirmed nothing".
+    expect(await fetchLiveEntitlement(subsDb([], { fail: true }), args, { reader: fakeUn1tReader({ ledger: { balance: 0, is_unlimited: false } }) })).toEqual({ ok: false, reason: 'read_failed' })
+    expect(await fetchLiveEntitlement(subsDb([]), { locationId: LOC }, {})).toEqual({ ok: false, reason: 'read_failed' })
+    for (const [module, , meta] of logWarn.mock.calls) {
+      expect(module).toBe('mia-un1t')
+      expect(Object.keys(meta ?? {}).filter((k) => /email|phone|name|token|url|path/i.test(k))).toEqual([])
+    }
+  })
+
+  it('opens its own reader when none is held', async () => {
+    readConnection.mockResolvedValue({ conn: null, error: null })
+    expect(await fetchLiveEntitlement(subsDb([]), { locationId: LOC, un1tUserId: USER })).toEqual({ ok: false, reason: 'not_connected' })
+  })
+})
+
+describe('fetchLiveUn1tBookings with a held reader', () => {
+  it('uses the reader it is given and opens no connection', async () => {
+    const reader = fakeUn1tReader({ bookings: [{ id: 'b1', status: 'booked' }] })
+    const r = await fetchLiveUn1tBookings(db, { locationId: LOC, un1tUserId: 'u1' }, { reader })
+    expect(r).toEqual({ ok: true, rows: [{ id: 'b1', status: 'booked' }] })
+    expect(readConnection).not.toHaveBeenCalled()
   })
 })
