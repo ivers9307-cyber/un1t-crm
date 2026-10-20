@@ -53,6 +53,10 @@
       "schedule": "*/15 * * * *"
     },
     {
+      "path": "/api/cron/contact-studios-reconcile",
+      "schedule": "30 3 * * *"
+    },
+    {
       "path": "/api/cron/glofox-attendance-refresh",
       "schedule": "0 4 * * *"
     },
