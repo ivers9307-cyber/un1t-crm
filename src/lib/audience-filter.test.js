@@ -33,6 +33,9 @@ const FROZEN_NOW = new Date('2026-08-19T10:00:00.000Z')
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'], now: FROZEN_NOW }) })
 afterEach(() => { vi.useRealTimers() })
 
+// ORGCONTACTS.4 — every expectation on the stage field names studio_stage_slug:
+// the field keeps its name in filters; the query lands on the stage at the
+// audience studio (AUDIENCE_FIELDS.pipeline_stage_slug.column).
 describe('applyAudienceFilter', () => {
   let q
 
@@ -53,7 +56,7 @@ describe('applyAudienceFilter', () => {
 
   it('applies a select-field eq filter', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' }] })
-    expect(q.calls).toEqual([['eq', 'pipeline_stage_slug', 'active_member']])
+    expect(q.calls).toEqual([['eq', 'studio_stage_slug', 'active_member']])
   })
 
   // PILLAR2 — explicit recipients via { field:'id', op:'in', value:[…] }
@@ -287,7 +290,7 @@ describe('applyAudienceFilter — OR logic (COMMS-AUDIT batch 6)', () => {
       ],
     })
     expect(q.calls).toEqual([
-      ['eq', 'pipeline_stage_slug', 'active_member'],
+      ['eq', 'studio_stage_slug', 'active_member'],
       ['eq', 'email_status', 'active'],
     ])
   })
@@ -301,7 +304,7 @@ describe('applyAudienceFilter — OR logic (COMMS-AUDIT batch 6)', () => {
       ],
     })
     expect(q.calls).toEqual([
-      ['or', 'pipeline_stage_slug.eq.active_member,email_status.eq.active'],
+      ['or', 'studio_stage_slug.eq.active_member,email_status.eq.active'],
     ])
   })
 
@@ -432,7 +435,7 @@ describe('applyAudienceFilter — NULL-inclusive negative operators (COMMSFIX.B.
       ],
     })
     expect(q.calls).toEqual([
-      ['or', 'or(glofox_membership_type.neq.time,glofox_membership_type.is.null),pipeline_stage_slug.eq.member'],
+      ['or', 'or(glofox_membership_type.neq.time,glofox_membership_type.is.null),studio_stage_slug.eq.member'],
     ])
   })
 
@@ -640,7 +643,7 @@ describe('applyAudienceFilter — tag is a virtual field', () => {
       ],
     })
     // Tag clause did NOT call query.eq — only the pipeline_stage_slug one did.
-    expect(q.calls).toEqual([['eq', 'pipeline_stage_slug', 'active_member']])
+    expect(q.calls).toEqual([['eq', 'studio_stage_slug', 'active_member']])
   })
 
   it('still validates the operator allowlist for tag', () => {
@@ -662,7 +665,7 @@ describe('applyAudienceFilter — event_registration is a virtual field', () => 
         { field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' },
       ],
     })
-    expect(q.calls).toEqual([['eq', 'pipeline_stage_slug', 'active_member']])
+    expect(q.calls).toEqual([['eq', 'studio_stage_slug', 'active_member']])
   })
 
   it('still validates the operator allowlist for event_registration', () => {
@@ -1207,7 +1210,7 @@ describe('unset filter rows (P1.1)', () => {
         { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
       ],
     })
-    expect(q.calls).toEqual([['eq', 'pipeline_stage_slug', 'member']])
+    expect(q.calls).toEqual([['eq', 'studio_stage_slug', 'member']])
   })
 
   it('still rejects a NON-empty unknown field (only blank fields are skipped)', () => {
@@ -1289,7 +1292,7 @@ describe('days_since NULL semantics (P1.2)', () => {
     expect(q.calls).toHaveLength(1)
     const [method, cond] = q.calls[0]
     expect(method).toBe('or')
-    expect(cond).toMatch(/^or\(last_attended_at\.lt\.[^,]+,last_attended_at\.is\.null\),pipeline_stage_slug\.eq\.member$/)
+    expect(cond).toMatch(/^or\(last_attended_at\.lt\.[^,]+,last_attended_at\.is\.null\),studio_stage_slug\.eq\.member$/)
   })
 
   // ── PROOF: days_since_lt stayed NULL-EXCLUSIVE ──
@@ -1312,7 +1315,7 @@ describe('days_since NULL semantics (P1.2)', () => {
     })
     expect(q.calls).toHaveLength(1)
     const [, cond] = q.calls[0]
-    expect(cond).toMatch(/^last_attended_at\.gte\.[^,]+,pipeline_stage_slug\.eq\.member$/)
+    expect(cond).toMatch(/^last_attended_at\.gte\.[^,]+,studio_stage_slug\.eq\.member$/)
     expect(cond).not.toContain('is.null')
   })
 
@@ -1478,5 +1481,47 @@ describe('applyAudienceFilter — a fields override', () => {
       .toThrow(InvalidAudienceFilterError)
     expect(() => applyAudienceFilter(makeMockQuery().query, { logic: 'and', filters: [{ field: 'email', op: 'eq', value: 'x' }] }, { fields: { studio_stage_slug: fields.studio_stage_slug } }))
       .toThrow(/Unknown audience field: email/)
+  })
+})
+
+// ORGCONTACTS.4 (decision 3) — the stage audience field reads the stage AT the
+// audience studio: AUDIENCE_FIELDS.pipeline_stage_slug carries
+// `column: 'studio_stage_slug'` (contact_location_audience, mig 766) and every
+// op lands on that column, under AND and OR logic; the filter JSON keeps the
+// field name, so saved audiences need no rewrite.
+describe('applyAudienceFilter — pipeline_stage_slug filters query studio_stage_slug', () => {
+  it('the registry says so', () => {
+    expect(AUDIENCE_FIELDS.pipeline_stage_slug.column).toBe('studio_stage_slug')
+  })
+
+  it('every op, AND logic', () => {
+    const cases = [
+      [{ op: 'eq', value: 'dormant' }, ['eq', 'studio_stage_slug', 'dormant']],
+      [{ op: 'neq', value: 'member' }, ['or', 'studio_stage_slug.neq.member,studio_stage_slug.is.null']],
+      [{ op: 'is_null', value: '' }, ['is', 'studio_stage_slug', null]],
+      [{ op: 'is_not_null', value: '' }, ['not', 'studio_stage_slug', 'is', null]],
+      [{ op: 'not_null', value: '' }, ['not', 'studio_stage_slug', 'is', null]],
+    ]
+    for (const [f, expected] of cases) {
+      const { query, calls } = makeMockQuery()
+      applyAudienceFilter(query, { logic: 'and', filters: [{ field: 'pipeline_stage_slug', ...f }] })
+      expect(calls, f.op).toEqual([expected])
+    }
+  })
+
+  it('OR logic builds the disjunction on the studio column', () => {
+    const { query, calls } = makeMockQuery()
+    applyAudienceFilter(query, { logic: 'or', filters: [
+      { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      { field: 'pipeline_stage_slug', op: 'eq', value: 'pack_member' },
+      { field: 'pipeline_stage_slug', op: 'neq', value: 'dormant' },
+    ] })
+    expect(calls).toEqual([['or', 'studio_stage_slug.eq.member,studio_stage_slug.eq.pack_member,or(studio_stage_slug.neq.dormant,studio_stage_slug.is.null)']])
+  })
+
+  it('a field without `column` still queries its own name', () => {
+    const { query, calls } = makeMockQuery()
+    applyAudienceFilter(query, { logic: 'and', filters: [{ field: 'email_status', op: 'eq', value: 'active' }] })
+    expect(calls).toEqual([['eq', 'email_status', 'active']])
   })
 })

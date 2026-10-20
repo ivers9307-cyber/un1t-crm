@@ -50,7 +50,14 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // Replaces lead_status, which was effectively unmaintained — 99.9%
   // of contacts at Stillorgan had the import default 'active_trial'
   // and no code reliably wrote 'member' or other values back.
-  pipeline_stage_slug:       { type: 'select',  ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
+  //
+  // ORGCONTACTS.4 (decision 3) — the field keeps its name in every saved
+  // filter, but the query lands on `column`: the stage AT the audience studio
+  // (contact_location_audience.studio_stage_slug / studio_contacts.studio_stage_slug,
+  // from contact_studios, migs 765/766), never the contact-wide column, which
+  // follows the primary studio's board. is_null now means "no stage at this
+  // studio" (a person on the list with no relationship row here).
+  pipeline_stage_slug:       { type: 'select',  column: 'studio_stage_slug', ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
   email_status:              { type: 'select',  ops: ['eq', 'neq'] },
   lead_source:               { type: 'select',  ops: ['eq', 'neq'] },
   // GLOFOX2.1.8 — Glofox-side raw membership status. This feeds the
@@ -463,14 +470,17 @@ export function applyAudienceFilter(query, filter, { fields = AUDIENCE_FIELDS } 
     // FILTER-P1.1 — a row with no field chosen yet is inert, not an error.
     if (isUnsetFilterRow(f)) continue
 
-    const { field, op, value } = f
-    const fieldConfig = fields[field]
+    const { field: fieldName, op, value } = f
+    const fieldConfig = fields[fieldName]
     if (!fieldConfig) {
-      throw new InvalidAudienceFilterError(`Unknown audience field: ${field}`)
+      throw new InvalidAudienceFilterError(`Unknown audience field: ${fieldName}`)
     }
     if (!fieldConfig.ops.includes(op)) {
-      throw new InvalidAudienceFilterError(`Operator "${op}" is not allowed on field "${field}"`)
+      throw new InvalidAudienceFilterError(`Operator "${op}" is not allowed on field "${fieldName}"`)
     }
+    // The column the predicate lands on: the field's own name unless the
+    // registry maps it elsewhere (`column`, ORGCONTACTS.4).
+    const field = fieldConfig.column ?? fieldName
 
     // 'tag' / 'event' are virtual fields resolved separately (resolveTag/
     // EventFilters) into AND-combined contacts.id constraints. They cannot

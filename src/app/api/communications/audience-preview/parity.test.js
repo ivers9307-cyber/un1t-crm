@@ -105,9 +105,16 @@ const AUDIENCE = [
   { id: 'z9', audience_location_id: 'loc-OTHER', pipeline_stage_slug: 'member', loc_email_marketing: true, email_status: 'active', email_suppressed_at: null, loc_sms_marketing: true, sms_status: 'active', phone: '+353879999999', wa_phone: '+353879999999', loc_whatsapp_marketing: true, wa_status: 'active', name: 'Z Nine', first_name: 'Z', last_name: 'Nine', email: 'z@example.com' },
 ]
 
+// ORGCONTACTS.4 — the view carries the stage AT the audience studio
+// (studio_stage_slug, mig 766); here every person's studio stage is their
+// contact-wide one, so the three filters keep their meaning.
+for (const r of AUDIENCE) r.studio_stage_slug = r.pipeline_stage_slug
+
 const CONTACTS = AUDIENCE.filter(r => r.audience_location_id !== 'loc-OTHER')
   .map(r => ({ ...r, location_id: 'loc-1' }))
   .concat([{ ...AUDIENCE.at(-1), location_id: 'loc-OTHER' }])
+// The no-channel match set reads studio_contacts at the studio (mig 765).
+const STUDIO_CONTACTS = CONTACTS.map(r => ({ ...r, studio_location_id: r.location_id }))
 
 function reqWith(body) { return { json: async () => body } }
 
@@ -115,6 +122,7 @@ beforeEach(() => {
   createServerClient.mockReturnValue(makeDb({
     contact_location_audience: AUDIENCE,
     contacts: CONTACTS,
+    studio_contacts: STUDIO_CONTACTS,
   }))
 })
 

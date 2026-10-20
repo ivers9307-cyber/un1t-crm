@@ -143,7 +143,7 @@ export async function runEventReminderTriggers() {
           .maybeSingle()
         if (existing) { stats.skipped++; continue }
 
-        const matchesAudience = await contactMatchesSequenceAudience(db, booking.contact_id, seq.audience_filter)
+        const matchesAudience = await contactMatchesSequenceAudience(db, booking.contact_id, seq.audience_filter, { locationId: seq.location_id })
         if (!matchesAudience) continue
 
         // Kept narrower than the per-sequence catch: one contact's enrol
@@ -355,7 +355,7 @@ export async function runAnniversaryTriggers() {
       for (const c of (contacts || [])) {
         if (!c.id) continue
         // Audience filter check (per-contact).
-        const matches = await contactMatchesSequenceAudience(db, c.id, seq.audience_filter)
+        const matches = await contactMatchesSequenceAudience(db, c.id, seq.audience_filter, { locationId: seq.location_id })
         if (!matches) continue
         // Dedup across all statuses on (sequence, contact, anniversary).
         const { data: existing } = await db
@@ -504,7 +504,7 @@ export async function runInactivityTriggers() {
       }
 
       for (const c of candidates) {
-        const matches = await contactMatchesSequenceAudience(db, c.id, seq.audience_filter)
+        const matches = await contactMatchesSequenceAudience(db, c.id, seq.audience_filter, { locationId: seq.location_id })
         if (!matches) continue
         const { data: existing } = await db
           .from('sequence_enrollments')

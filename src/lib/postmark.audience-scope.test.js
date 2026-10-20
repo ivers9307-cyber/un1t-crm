@@ -67,7 +67,7 @@ describe('buildAudienceQuery location pinning', () => {
     const q = buildAudienceQuery(db, filter, 'real-location-uuid')
     const eqCalls = q.calls.filter(([m]) => m === 'eq')
     expect(eqCalls).toContainEqual(['eq', ['audience_location_id', 'real-location-uuid']])
-    expect(eqCalls).toContainEqual(['eq', ['pipeline_stage_slug', 'member']])
+    expect(eqCalls).toContainEqual(['eq', ['studio_stage_slug', 'member']]) // ORGCONTACTS.4: the stage at the audience studio
   })
 })
 
@@ -87,7 +87,7 @@ describe('buildAudienceQueryAsync location pinning', () => {
     const { query } = await buildAudienceQueryAsync(db, filter, 'real-location-uuid')
     const eqCalls = query.calls.filter(([m]) => m === 'eq')
     expect(eqCalls).toContainEqual(['eq', ['audience_location_id', 'real-location-uuid']])
-    expect(eqCalls).toContainEqual(['eq', ['pipeline_stage_slug', 'member']])
+    expect(eqCalls).toContainEqual(['eq', ['studio_stage_slug', 'member']]) // ORGCONTACTS.4: the stage at the audience studio
   })
 })
 

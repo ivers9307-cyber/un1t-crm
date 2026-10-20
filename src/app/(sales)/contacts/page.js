@@ -75,7 +75,8 @@ export default async function ContactsPage(props) {
   // linked person down to ONE row (the group primary) in this lookup list.
   let query = listStudioContactsQuery(db, { locationId, primaryOnly: true })
   query = query.order('created_at', { ascending: false }).limit(200)
-  if (status) query = query.eq('pipeline_stage_slug', status)
+  // ORGCONTACTS.4 — the stage AT this studio (studio_contacts.studio_stage_slug), decision 3.
+  if (status) query = query.eq('studio_stage_slug', status)
   // FUNNEL.1 — the old active_trial chip's ClassPass carve-out is
   // gone: ClassPass PAYG contacts classify into their own 'classpass'
   // stage now, so no lead_source exclusion is needed.

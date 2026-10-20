@@ -76,10 +76,12 @@ describe('buildEligibleAudienceQuery with NO channel is a MATCH set (the sequenc
     })
     const rawDb = { from: vi.fn(() => chain) }
     await buildEligibleAudienceQuery({ db: rawDb, channel: null, filter: FILTER, locationId: 'loc-1' })
-    expect(rawDb.from).toHaveBeenCalledWith('contacts')
-    expect(calls).toContainEqual(['eq', ['location_id', 'loc-1']])
+    // ORGCONTACTS.4 — the match set is the studio's relationships (studio_contacts
+    // at studio_location_id), and the stage lands on the stage AT this studio.
+    expect(rawDb.from).toHaveBeenCalledWith('studio_contacts')
+    expect(calls).toContainEqual(['eq', ['studio_location_id', 'loc-1']])
     // The filter still applies — a match set is filtered, just not gated.
-    expect(calls).toContainEqual(['eq', ['pipeline_stage_slug', 'member']])
+    expect(calls).toContainEqual(['eq', ['studio_stage_slug', 'member']])
     // No channel builder was consulted.
     expect(buildAudienceQueryAsync).not.toHaveBeenCalled()
     expect(buildWhatsAppAudienceAsync).not.toHaveBeenCalled()

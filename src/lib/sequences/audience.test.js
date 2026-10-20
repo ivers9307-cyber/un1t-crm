@@ -58,20 +58,13 @@ function mockDb({ contactRow = { location_id: 'loc-1' }, count = 1, countError =
   }
 
   return {
+    countQuery,
     from: vi.fn((table) => {
-      if (table === 'contacts') {
-        // Return a chain object whose .select branches:
-        //   select('location_id') → contactQuery (.maybeSingle)
-        //   select('id', { count }) → countQuery (.eq returns self,
-        //     awaiting it returns { count })
-        return {
-          select: vi.fn((cols, opts) => {
-            if (opts && opts.count === 'exact') {
-              return countQuery
-            }
-            return contactQuery
-          }),
-        }
+      // ORGCONTACTS.4 — contacts answers the primary-studio lookup (no
+      // locationId given); studio_contacts answers the count at the studio.
+      if (table === 'contacts') return { select: vi.fn(() => contactQuery) }
+      if (table === 'studio_contacts') {
+        return { select: vi.fn((cols, opts) => (opts && opts.count === 'exact' ? countQuery : contactQuery)) }
       }
       throw new Error(`unexpected table: ${table}`)
     }),
@@ -137,6 +130,17 @@ describe('contactMatchesSequenceAudience — DB count outcome', () => {
 
 describe('contactMatchesSequenceAudience — locationId resolution', () => {
   const filter = { logic: 'and', filters: [{ field: 'tag', op: 'eq', value: 'vip' }] }
+
+  it("ORGCONTACTS.4: judged at the SEQUENCE's studio when given one — the studio_contacts row there, no primary-studio lookup", async () => {
+    const db = mockDb({ contactRow: { location_id: 'loc-42' } })
+    applyAudienceFilterAsync.mockImplementation(({ query }) => ({ query }))
+    await contactMatchesSequenceAudience(db, 'c1', filter, { locationId: 'loc-seq' })
+    expect(db.from).not.toHaveBeenCalledWith('contacts')
+    expect(db.from).toHaveBeenCalledWith('studio_contacts')
+    expect(db.countQuery.eq).toHaveBeenCalledWith('id', 'c1')
+    expect(db.countQuery.eq).toHaveBeenCalledWith('studio_location_id', 'loc-seq')
+    expect(applyAudienceFilterAsync).toHaveBeenCalledWith(expect.objectContaining({ locationId: 'loc-seq' }))
+  })
 
   it('passes the contact\'s location_id into applyAudienceFilterAsync', async () => {
     const db = mockDb({ contactRow: { location_id: 'loc-42' } })

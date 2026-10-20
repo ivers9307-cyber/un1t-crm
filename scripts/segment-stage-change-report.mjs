@@ -57,20 +57,22 @@ export function namesStageField(filter) {
   return filter.filters.some((f) => (f && Array.isArray(f.filters) ? namesStageField(f) : f?.field === STAGE_FIELD))
 }
 
-let applyFilter = null
-async function loadApplyAudienceFilter() {
-  if (applyFilter) return applyFilter
+// Two registries, explicit about the column each lands on, whatever the live
+// AUDIENCE_FIELDS.pipeline_stage_slug.column says: "before" is the contact-wide
+// stage, "after" is the stage at the audience studio.
+let registries = null
+async function loadRegistries() {
+  if (registries) return registries
   if (!process.env.VITEST) register('./lib/at-alias-loader.mjs', import.meta.url)
   const mod = await import('../src/lib/audience-filter.js')
-  // The flip (Task 21) makes AUDIENCE_FIELDS.pipeline_stage_slug read the studio
-  // column itself; until then the rewritten filter needs the studio field
-  // whitelisted, so the report evaluates "after" through a shim that accepts it.
-  applyFilter = (query, filter) => mod.applyAudienceFilter(query, filter)
-  if (!mod.AUDIENCE_FIELDS[STUDIO_STAGE_FIELD]) {
-    const fields = { ...mod.AUDIENCE_FIELDS, [STUDIO_STAGE_FIELD]: mod.AUDIENCE_FIELDS[STAGE_FIELD] }
-    applyFilter = (query, filter) => mod.applyAudienceFilter(query, filter, { fields })
+  const stage = mod.AUDIENCE_FIELDS[STAGE_FIELD]
+  const before = { ...mod.AUDIENCE_FIELDS, [STAGE_FIELD]: { ...stage, column: STAGE_FIELD } }
+  const after = { ...mod.AUDIENCE_FIELDS, [STUDIO_STAGE_FIELD]: { ...stage, column: STUDIO_STAGE_FIELD } }
+  registries = {
+    before: (query, filter) => mod.applyAudienceFilter(query, filter, { fields: before }),
+    after: (query, filter) => mod.applyAudienceFilter(query, filter, { fields: after }),
   }
-  return applyFilter
+  return registries
 }
 
 async function readAllIds(build) {
@@ -89,11 +91,11 @@ async function readAllIds(build) {
  * @returns {{ before: string[], after: string[], joined: string[], left: string[], joinedStageNull: string[], leftStageNull: string[] }}
  */
 export async function compareAudience(db, { locationId, filter, consentColumn = 'loc_email_marketing' }) {
-  const apply = await loadApplyAudienceFilter()
+  const apply = await loadRegistries()
   const base = () => db.from('contact_location_audience').select('id').eq('audience_location_id', locationId).eq(consentColumn, true)
-  const run = (f) => readAllIds((from, to) => apply(base(), f).order('id', { ascending: true }).range(from, to))
-  const before = await run(filter)
-  const after = await run(rewriteStageField(filter))
+  const run = (f, on) => readAllIds((from, to) => on(base(), f).order('id', { ascending: true }).range(from, to))
+  const before = await run(filter, apply.before)
+  const after = await run(rewriteStageField(filter), apply.after)
   const b = new Set(before)
   const a = new Set(after)
   const joined = after.filter((id) => !b.has(id))

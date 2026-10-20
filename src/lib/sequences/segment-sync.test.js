@@ -50,7 +50,7 @@ beforeEach(() => {
 // can override any of:
 //   - triggerRows  → list returned by .from('email_sequences')...
 //   - segmentRows  → list returned by .from('contact_segments')...
-//   - currentMembers  → contact_ids returned by .from('contacts')...
+//   - currentMembers  → contact_ids returned by .from('studio_contacts')...
 //   - storedMemberships → contact_ids returned by .from('contact_segment_memberships')...
 // upsert + delete are spied so we can assert what was persisted.
 function buildDb({ triggerRows = [], segmentRows = [], currentMembers = [], storedMemberships = [] } = {}) {
@@ -81,7 +81,7 @@ function buildDb({ triggerRows = [], segmentRows = [], currentMembers = [], stor
             then: (onF) => Promise.resolve({ data: segmentRows, error: null }).then(onF),
           }
         }
-        case 'contacts': {
+        case 'studio_contacts': { // ORGCONTACTS.4: the studio's relationships, not raw contacts
           // computeSegmentMembers iterates with .range() until a short
           // page. Return all members on the first range call, empty
           // on subsequent calls.
