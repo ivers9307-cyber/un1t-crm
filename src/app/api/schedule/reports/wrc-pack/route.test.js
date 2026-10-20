@@ -115,7 +115,7 @@ describe('GET /api/schedule/reports/wrc-pack', () => {
     expect(shifts.headers.get('content-disposition')).toBe('attachment; filename="wrc-shifts-2026-01-01-to-2026-06-30.csv"')
     const text = await shifts.text()
     expect(text.split('\n')[0]).toMatch(/^Date,Weekday,Sunday,/)
-    expect(text).toContain('2026-06-01,Mon,no,Anna Byrne')
+    expect(text).toContain('2026-06-01,Mon,no,,Anna Byrne')   // LIEU.1: a "Public holiday" column follows Sunday
 
     expect((await GET(req('?format=pdf'))).status).toBe(400)
     expect((await GET(req('?format=csv&file=everything'))).status).toBe(400)

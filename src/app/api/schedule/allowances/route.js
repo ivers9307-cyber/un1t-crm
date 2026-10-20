@@ -1,34 +1,17 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, days , MANAGER_ROLES} from '@/lib/schemas'
 import { getEmploymentType, getLeaveEntitlement, getPendingHolidayDays } from '@/lib/time-off-leave'
+import { getLieuBalance } from '@/lib/lieu-credits'
+import { profileScope } from '@/lib/allowance-scope'
 import { ALLOWANCE_YEAR_MIN, ALLOWANCE_YEAR_MAX, parseAllowanceYear } from '@/lib/allowance-year'
 import { staffZoneOfUser } from '@/lib/staff-zone'
 
-// ROSTER-FIX.2 — a profile is in scope when it shares a location with the
-// caller (master = everywhere). Detail-style 404 on miss so a cross-tenant
-// id is indistinguishable from a missing one.
-//
-// SCHEDROLES.1 — sharing a studio is not enough to manage someone's
-// allowance: the caller must be a MANAGER at a studio the profile belongs to
-// (hasRoleAtLocation), not merely hold a manager role at their ACTIVE studio
-// (`user.role`). A head coach at Hatch who is staff at Stillorgan managed
-// every Stillorgan coach's allowance. Answers:
-//   'managed'   — manager at one of the profile's studios (or master)
-//   'member'    — shares a studio, manages none of the shared ones → 403
-//   'foreign'   — no shared studio, or the lookup failed          → 404
-async function profileScope(db, user, profileId) {
-  if (user.profileRole === 'master') return 'managed'
-  const { data, error } = await db.from('profile_locations').select('location_id').eq('profile_id', profileId)
-  if (error) return 'foreign'
-  const mine = new Set(getUserLocationIds(user))
-  const shared = (data || []).map((l) => l.location_id).filter((id) => mine.has(id))
-  if (shared.length === 0) return 'foreign'
-  return shared.some((id) => hasRoleAtLocation(user, id, MANAGER_ROLES)) ? 'managed' : 'member'
-}
+// ROSTER-FIX.2 / SCHEDROLES.1 — profileScope lives in @/lib/allowance-scope
+// since LIEU.1, shared with /api/schedule/allowances/lieu.
 
 const AllowanceUpdateSchema = z.object({
   profile_id: uuidLike,
@@ -104,6 +87,20 @@ export async function GET(request) {
   if (pendingError) console.error('[allowances] pending holiday days unreadable', pendingError.message)
   const pendingField = pendingError ? {} : { pending_days: pendingDays }
 
+  // LIEU.1 — the year's time-in-lieu balance (staff_lieu_credits, mig 761), in
+  // HOURS: credited (Sunday at time and a third, public holidays at base time,
+  // manual credits), taken, and the signed sum. FTE only; a contractor earns
+  // none, so the field is absent for them. Kept beside the day figures, never
+  // folded into `remaining`: lieu is hours, the allowance is days, and the
+  // time-off POST judges days. An unreadable ledger is OMITTED, never 0, like
+  // pending_days.
+  let lieuField = {}
+  if (!notApplicable) {
+    const { lieu, error: lieuError } = await getLieuBalance(db, profileId, year)
+    if (lieuError) console.error('[allowances] lieu balance unreadable', lieuError.message)
+    else lieuField = { lieu }
+  }
+
   if (!data) {
     const { days, error: entError } = await getLeaveEntitlement(db, profileId)
     if (entError) {
@@ -119,6 +116,7 @@ export async function GET(request) {
         carried_over: 0,
         remaining: days,
         ...pendingField,
+        ...lieuField,
         not_applicable: notApplicable,
       }
     })
@@ -130,6 +128,7 @@ export async function GET(request) {
       ...data,
       remaining: data.total_days + data.carried_over - data.used_days,
       ...pendingField,
+      ...lieuField,
       not_applicable: notApplicable,
     }
   })

@@ -740,18 +740,34 @@ function AllowanceSummary({ allowance, compact = false }) {
     { label: 'Carried Over', value: allowance.carried_over, tone: 'text-blue-700' },
     { label: 'Remaining', value: allowance.remaining, tone: 'text-green-700' },
   ]
+  // LIEU.1 — the year's time in lieu (staff_lieu_credits), a separate line in
+  // HOURS: Sunday work banks time and a third, a public holiday worked banks
+  // base time, a manager records what is taken. Absent when the ledger could
+  // not be read (the route omits it), so nothing reads as "0 banked".
+  const lieu = allowance.lieu
   return (
-    // ROSTER-FIX.6b — four allowance cards side by side put a 2xl number
-    // in a ~85px column on a phone. Two up, four from md.
-    <div className={`grid grid-cols-2 md:grid-cols-4 ${compact ? 'gap-2' : 'gap-3 mb-6'}`}>
-      {cards.map((c) => (
-        <div key={c.label} className={`bg-un1t-surface border border-un1t-border rounded-lg ${compact ? 'p-2.5' : 'p-4'}`}>
-          <div className="text-xs text-un1t-subtle uppercase tracking-wider">{c.label}</div>
-          <div className={`${compact ? 'text-base' : 'text-2xl'} font-bold mt-1 ${c.tone}`}>
-            {c.value} <span className="text-sm text-un1t-subtle font-normal">days</span>
+    <div className={compact ? '' : 'mb-6'}>
+      {/* ROSTER-FIX.6b — four allowance cards side by side put a 2xl number
+          in a ~85px column on a phone. Two up, four from md. */}
+      <div className={`grid grid-cols-2 md:grid-cols-4 ${compact ? 'gap-2' : 'gap-3'}`}>
+        {cards.map((c) => (
+          <div key={c.label} className={`bg-un1t-surface border border-un1t-border rounded-lg ${compact ? 'p-2.5' : 'p-4'}`}>
+            <div className="text-xs text-un1t-subtle uppercase tracking-wider">{c.label}</div>
+            <div className={`${compact ? 'text-base' : 'text-2xl'} font-bold mt-1 ${c.tone}`}>
+              {c.value} <span className="text-sm text-un1t-subtle font-normal">days</span>
+            </div>
           </div>
+        ))}
+      </div>
+      {lieu && (
+        <div className={`bg-un1t-surface border border-un1t-border rounded-lg flex flex-wrap items-baseline gap-x-4 gap-y-1 ${compact ? 'p-2.5 mt-2' : 'p-4 mt-3'}`} data-testid="lieu-line">
+          <div className="text-xs text-un1t-subtle uppercase tracking-wider">Lieu {lieu.year}</div>
+          <div className={`${compact ? 'text-base' : 'text-xl'} font-bold text-un1t-text`}>
+            {lieu.balance_hours} <span className="text-sm text-un1t-subtle font-normal">hours banked</span>
+          </div>
+          <div className="text-xs text-un1t-subtle">{lieu.credited_hours}h credited · {lieu.taken_hours}h taken · Sunday work at time and a third, public holidays at base time</div>
         </div>
-      ))}
+      )}
     </div>
   )
 }

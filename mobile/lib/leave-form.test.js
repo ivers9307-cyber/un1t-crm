@@ -111,8 +111,14 @@ describe('leaveBalanceView', () => {
     const requests = [{ type: 'holiday', status: 'pending', start_date: '2026-11-02', total_days: 3 }]
     expect(leaveBalanceView({ ...base, requests })).toEqual({
       year: 2026, total: 20, used: 6, carriedOver: 1, pending: 3, available: 12,
-      requestDays: 4, after: 8, short: false, otherYearDays: 0,
+      requestDays: 4, after: 8, short: false, otherYearDays: 0, lieuHours: null,
     })
+  })
+
+  // LIEU.1 — the route's `lieu` block (hours) rides along; absent = null, never 0.
+  it('carries the lieu balance in hours when the route sent one', () => {
+    expect(leaveBalanceView({ ...base, allowance: { ...base.allowance, lieu: { year: 2026, credited_hours: 10.67, taken_hours: 4, balance_hours: 6.67 } } }).lieuHours).toBe(6.67)
+    expect(leaveBalanceView(base).lieuHours).toBeNull()
   })
 
   it('short when the server\'s count is bigger than what is available', () => {
@@ -146,9 +152,15 @@ describe('leaveBalanceLines — the card\'s words', () => {
       heading: 'Holiday balance 2026',
       available: '12 days available',
       breakdown: '20 allowance + 1 carried over · 6 used · 3 pending',
+      lieu: null,
       request: '8 days left after this request.',
       otherYear: null,
     })
+  })
+  it('LIEU.1 — a separate lieu line in hours, only when the view carries one', () => {
+    expect(leaveBalanceLines({ ...view, lieuHours: 6.67 }, 'holiday').lieu).toBe('Time in lieu: 6.67 hours banked')
+    expect(leaveBalanceLines({ ...view, lieuHours: 1 }, 'holiday').lieu).toBe('Time in lieu: 1 hour banked')
+    expect(leaveBalanceLines({ ...view, lieuHours: 0 }, 'holiday').lieu).toBe('Time in lieu: 0 hours banked')
   })
   it('singulars, and the zero parts of the breakdown are left out', () => {
     expect(leaveBalanceLines({ ...view, carriedOver: 0, pending: 0, available: 1, after: 1, requestDays: 1 }, 'holiday')).toMatchObject({

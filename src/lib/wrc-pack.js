@@ -35,6 +35,13 @@
 // Overtime is weekly (Mon–Sun, mondayOf), FTE only, against
 // contracted_hours_per_week, like payroll.js; a week cut by the range edge is
 // judged on the hours inside the range.
+//
+// LIEU.1 — the time-in-lieu ledger (staff_lieu_credits, mig 761) rides in:
+// per person, the hours credited and taken inside the range and the running
+// balance at `to`; per shift, the public holiday it fell on (the studio's
+// country's calendar) and the lieu hours the ledger holds for it. The shift
+// column is what was RECORDED, not a recount: a shift with no ledger row
+// (not yet swept, or a contractor's) shows blank.
 
 import { fetchScheduledShiftRows, fetchOverlappingTimeOff, timeOffDaysInPeriod } from '@/lib/report-generator'
 import { shiftHours, implicitHourlyRate, mondayOf } from '@/lib/payroll'
@@ -43,6 +50,8 @@ import { roleAtDeletion, isTombstone } from '@/lib/staff-tombstone'
 import { getNonWorkingDates } from '@/lib/time-off-leave'
 import { zoneOfLocation, instantToZonedParts } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
+import { getStaticHolidays } from '@/lib/bank-holidays'
+import { readLieuLedgerForProfiles } from '@/lib/lieu-credits'
 
 export const HANDBOOK_SLUG = 'employee-handbook'
 
@@ -61,12 +70,13 @@ export const WRC_STAFF_CSV_HEADER = Object.freeze([
   'Allowance year', 'Allowance total days', 'Allowance used days', 'Allowance carried over',
   'Signed contract', 'Contract signed at',
   'Handbook version', 'Handbook viewed',
+  'Lieu hours credited', 'Lieu hours taken', 'Lieu hours balance',
 ])
 
 export const WRC_SHIFT_CSV_HEADER = Object.freeze([
-  'Date', 'Weekday', 'Sunday', 'Staff', 'Email', 'Studio', 'Shift',
+  'Date', 'Weekday', 'Sunday', 'Public holiday', 'Staff', 'Email', 'Studio', 'Shift',
   'Rostered start', 'Rostered end', 'Adjusted start', 'Adjusted end', 'Hours',
-  'Arrived at (studio time)', 'Status', 'Cancelled',
+  'Arrived at (studio time)', 'Status', 'Cancelled', 'Lieu hours earned',
 ])
 
 // ─── pure helpers ────────────────────────────────────────────────────────
@@ -126,13 +136,15 @@ export function wrcHourlyRate(profile) {
  * @param {{ version: number|null, viewedProfileIds: Set<string> }|null} args.handbook
  * @param {Record<string, { name: string, zone: string }>} args.locationsById
  * @param {Record<string, Set<string>|null>} args.nonWorkingByLocation  HOLIDAYLEAVE.1 dates per studio (null = unknown)
+ * @param {Array<object>} [args.lieuRows]  staff_lieu_credits rows dated on or before `to` (LIEU.1)
+ * @param {Record<string, Map<string,string>>} [args.holidaysByLocation]  location id → Map(date → public holiday name)
  * @param {string} args.from  YYYY-MM-DD
  * @param {string} args.to    YYYY-MM-DD
  * @param {number} args.year  the allowance year reported
  */
 export function buildWrcPack({
   profiles, memberships, shifts, timeOff, allowances, contracts, handbook,
-  locationsById, nonWorkingByLocation = {}, from, to, year,
+  locationsById, nonWorkingByLocation = {}, lieuRows = [], holidaysByLocation = {}, from, to, year,
 }) {
   const profileById = new Map()
   for (const p of profiles || []) if (p?.id) profileById.set(p.id, p)
@@ -185,6 +197,24 @@ export function buildWrcPack({
 
   const allowanceById = new Map()
   for (const a of allowances || []) if (a?.profile_id && Number(a.year) === Number(year)) allowanceById.set(a.profile_id, a)
+
+  // LIEU.1 — per person: credited and taken inside [from, to], balance at `to`.
+  const lieuById = new Map()             // profile_id → { credited, taken, balance }
+  const lieuByAssignment = new Map()     // shift_assignment_id → hours
+  for (const r of lieuRows || []) {
+    if (!r?.profile_id) continue
+    const h = Number(r.hours)
+    if (!Number.isFinite(h)) continue
+    if (!r.credit_date || r.credit_date > to) continue
+    if (!lieuById.has(r.profile_id)) lieuById.set(r.profile_id, { credited: 0, taken: 0, balance: 0 })
+    const l = lieuById.get(r.profile_id)
+    l.balance += h
+    if (r.credit_date >= from) {
+      if (r.source === 'taken' || h < 0) l.taken += -h
+      else l.credited += h
+    }
+    if (r.shift_assignment_id) lieuByAssignment.set(r.shift_assignment_id, h)
+  }
 
   const contractById = new Map()         // latest signed_at per profile
   for (const c of contracts || []) {
@@ -247,6 +277,9 @@ export function buildWrcPack({
       contract_signed_at: signedAt,
       handbook_version: handbook?.version ?? null,
       handbook_viewed: handbookViewed,
+      lieu_hours_credited: round2(lieuById.get(id)?.credited || 0),
+      lieu_hours_taken: round2(lieuById.get(id)?.taken || 0),
+      lieu_hours_balance: round2(lieuById.get(id)?.balance || 0),
     })
   }
   staff.sort((x, y) => (x.full_name || '').localeCompare(y.full_name || '') || x.profile_id.localeCompare(y.profile_id))
@@ -257,11 +290,14 @@ export function buildWrcPack({
     const rosteredStart = s.block_start_time ?? s.shift_templates?.start_time ?? null
     const rosteredEnd = s.block_end_time ?? s.shift_templates?.end_time ?? null
     const cancelled = s.status === 'cancelled'
+    const lieuEarned = s.assignment_id != null && lieuByAssignment.has(s.assignment_id) ? round2(lieuByAssignment.get(s.assignment_id)) : null
     return {
       assignment_id: s.assignment_id ?? null,
       date: s.shift_date,
       weekday: weekdayOf(s.shift_date),
       sunday: isSunday(s.shift_date),
+      public_holiday: holidaysByLocation[s.location_id]?.get(s.shift_date) || '',
+      lieu_hours_earned: lieuEarned,
       profile_id: s.profile_id,
       full_name: p.full_name || s.profiles?.full_name || '',
       email: p.email || '',
@@ -317,6 +353,7 @@ export function wrcStaffCsv(rows) {
       r.allowance_year, num(r.allowance_total_days), num(r.allowance_used_days), num(r.allowance_carried_over),
       yesNo(r.contract_signed), r.contract_signed_at || '',
       num(r.handbook_version), yesNo(r.handbook_viewed),
+      num(r.lieu_hours_credited), num(r.lieu_hours_taken), num(r.lieu_hours_balance),
     ].join(','))
   }
   return lines.join('\n')
@@ -326,9 +363,9 @@ export function wrcShiftCsv(rows) {
   const lines = [WRC_SHIFT_CSV_HEADER.join(',')]
   for (const r of Array.isArray(rows) ? rows : []) {
     lines.push([
-      r.date || '', r.weekday, yesNo(r.sunday), csvText(r.full_name), csvText(r.email), csvText(r.studio), csvText(r.shift),
+      r.date || '', r.weekday, yesNo(r.sunday), csvText(r.public_holiday), csvText(r.full_name), csvText(r.email), csvText(r.studio), csvText(r.shift),
       r.rostered_start, r.rostered_end, r.adjusted_start, r.adjusted_end, r.hours,
-      r.arrived_local, csvText(r.status), yesNo(r.cancelled),
+      r.arrived_local, csvText(r.status), yesNo(r.cancelled), num(r.lieu_hours_earned),
     ].join(','))
   }
   return lines.join('\n')
@@ -388,16 +425,21 @@ async function readHandbook(db, organizationId) {
  */
 export async function generateWrcPack(db, { organizationId, from, to, year }) {
   const { rows: locations, error: locErr } = await pageAll((a, b) => db.from('locations')
-    .select('id, name, timezone')
+    .select('id, name, timezone, country')
     .eq('organization_id', organizationId)
     .order('id')
     .range(a, b))
   if (locErr) return { pack: null, locations: [], error: `Failed to read the organisation's studios: ${locErr.message}` }
   const locationIds = locations.map((l) => l.id)
   const locationsById = {}
-  for (const l of locations) locationsById[l.id] = { name: l.name, zone: zoneOfLocation(l) }
+  const holidaysByLocation = {}
+  for (const l of locations) {
+    locationsById[l.id] = { name: l.name, zone: zoneOfLocation(l) }
+    // LIEU.1 — the studio's public-holiday calendar (static; 'IE' when unset).
+    holidaysByLocation[l.id] = new Map(getStaticHolidays(from, to, l.country || 'IE').map((h) => [h.date, h.name]))
+  }
   if (locationIds.length === 0) {
-    return { pack: buildWrcPack({ profiles: [], memberships: [], shifts: [], timeOff: [], allowances: [], contracts: [], handbook: null, locationsById, from, to, year }), locations, error: null }
+    return { pack: buildWrcPack({ profiles: [], memberships: [], shifts: [], timeOff: [], allowances: [], contracts: [], handbook: null, locationsById, holidaysByLocation, from, to, year }), locations, error: null }
   }
 
   const { rows: memberships, error: memErr } = await pageAll((a, b) => db.from('profile_locations')
@@ -473,9 +515,14 @@ export async function generateWrcPack(db, { organizationId, from, to, year }) {
   const { handbook, error: hErr } = await readHandbook(db, organizationId)
   if (hErr) return { pack: null, locations, error: hErr }
 
+  // LIEU.1 — every ledger row of these people up to `to` (the running
+  // balance needs the history; the period figures filter in buildWrcPack).
+  const { rows: lieuRows, error: lieuErr } = await readLieuLedgerForProfiles(db, profileIds, { to })
+  if (lieuErr) return { pack: null, locations, error: `Failed to read the lieu ledger: ${lieuErr.message}` }
+
   const pack = buildWrcPack({
     profiles, memberships, shifts, timeOff, allowances, contracts, handbook,
-    locationsById, nonWorkingByLocation, from, to, year,
+    locationsById, nonWorkingByLocation, lieuRows, holidaysByLocation, from, to, year,
   })
   return { pack, locations, error: null }
 }

@@ -6036,6 +6036,98 @@ registry.registerPath({
   },
 })
 
+// LIEU.1 — the time-in-lieu ledger (staff_lieu_credits, mig 761): hours
+// banked for Sunday work (time and a third) and public holidays worked (base
+// time), FTE only, credited nightly by /api/cron/lieu-credits; a manager
+// records lieu taken or a manual credit here.
+const LieuEntryBody = z.object({
+  profile_id: z.string().uuid(),
+  location_id: z.string().uuid(),
+  source: z.enum(['manual', 'taken']).describe("'manual' adds a credit; 'taken' records lieu time taken (stored negative)"),
+  hours: z.number().gt(0).max(500).describe('Always positive on the wire'),
+  credit_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('A real YYYY-MM-DD; its year is the allowance year the entry counts in'),
+  note: z.string().min(1).max(500),
+})
+registry.register('LieuEntryBody', LieuEntryBody)
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/allowances/lieu',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "One person's time-in-lieu ledger and balance for a year (hours)",
+  description: "Query: profile_id (default the caller), year (default the active studio's current year). Returns credited_hours, taken_hours, balance_hours and the year's entries (source sunday_worked | public_holiday_worked | manual | taken, hours, worked_hours, multiplier, holiday_name, note). Own ledger for anyone; another person's only for a manager at one of that person's studios (a profile outside the caller's studios is a 404). GET /api/schedule/allowances also carries the same balance as `lieu`.",
+  responses: {
+    200: { description: 'Balance + entries' },
+    400: { description: 'Malformed year', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — not a manager at any of the profile\'s studios', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Profile not in scope', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/allowances/lieu',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Record lieu time taken, or a manual lieu credit, with a note',
+  description: "Master, owner or manager AT location_id (hasRoleAtLocation + assertLocationAccess); the profile must belong to that studio (404 otherwise). 'taken' is refused with 409 when it exceeds the running balance on credit_date. The automatic Sunday / public-holiday credits are the nightly sweep's record and cannot be written here.",
+  request: { body: { content: { 'application/json': { schema: LieuEntryBody } } } },
+  responses: {
+    201: { description: 'The entry' },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Profile not at that studio', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'More than the banked balance', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'delete',
+  path: '/api/schedule/allowances/lieu',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Remove a manual or taken lieu entry',
+  description: 'Query: id (uuid). Master, owner or manager AT the entry\'s studio; a row outside the caller\'s studios is a 404. An automatic credit (sunday_worked / public_holiday_worked) is 409: add a manual entry with a note instead.',
+  responses: {
+    200: { description: 'Removed' },
+    400: { description: 'id missing or not a uuid', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'An automatic credit cannot be removed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+const PayrollSettingsBody = z.object({
+  sunday_multiplier: z.number().min(1).max(3).nullable().describe('null = back to the default (4/3, time and a third)'),
+})
+registry.register('PayrollSettingsBody', PayrollSettingsBody)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/payroll',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "A studio's Sunday time-in-lieu multiplier",
+  request: { params: z.object({ id: z.string().uuid() }) },
+  description: 'Any member of the studio may read: { sunday_multiplier (effective), default_sunday_multiplier, is_default, min, max, can_edit }. Stored at locations.settings.payroll.sunday_multiplier.',
+  responses: {
+    200: { description: 'The rule' },
+    403: { description: 'Not a member of the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/payroll',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "Set a studio's Sunday time-in-lieu multiplier (owner / master at the studio)",
+  request: { params: z.object({ id: z.string().uuid() }), body: { content: { 'application/json': { schema: PayrollSettingsBody } } } },
+  description: 'Membership first (assertLocationAccess), then master or owner AT the studio. The settings jsonb is merged; null removes the override.',
+  responses: {
+    200: { description: 'The rule after the write' },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // SCHEDULE-SPEND-AGG.1 — the roster's contractor spend panel. Studio totals
 // only; FTECOSTVIS.1 keeps the salary-derived FTE labour total to admins.
 registry.registerPath({
