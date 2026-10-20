@@ -1464,3 +1464,19 @@ describe('applyAudienceFilter — logic is validated, not assumed (FILTER-A.5)',
     expect(applyAudienceFilter(q.query, null)).toBe(q.query)
   })
 })
+
+// ORGCONTACTS.4 — the segment change report evaluates one filter against two
+// registries (the contact-wide stage and the stage at the studio), so the
+// registry is an option; the default is AUDIENCE_FIELDS and nothing else changes.
+describe('applyAudienceFilter — a fields override', () => {
+  it('accepts a registry the caller passes and still refuses a field outside it', () => {
+    const { query, calls } = makeMockQuery()
+    const fields = { ...AUDIENCE_FIELDS, studio_stage_slug: AUDIENCE_FIELDS.pipeline_stage_slug }
+    applyAudienceFilter(query, { logic: 'and', filters: [{ field: 'studio_stage_slug', op: 'eq', value: 'dormant' }] }, { fields })
+    expect(calls).toEqual([['eq', 'studio_stage_slug', 'dormant']])
+    expect(() => applyAudienceFilter(makeMockQuery().query, { logic: 'and', filters: [{ field: 'studio_stage_slug', op: 'eq', value: 'dormant' }] }))
+      .toThrow(InvalidAudienceFilterError)
+    expect(() => applyAudienceFilter(makeMockQuery().query, { logic: 'and', filters: [{ field: 'email', op: 'eq', value: 'x' }] }, { fields: { studio_stage_slug: fields.studio_stage_slug } }))
+      .toThrow(/Unknown audience field: email/)
+  })
+})

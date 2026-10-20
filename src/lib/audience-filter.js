@@ -423,9 +423,13 @@ function toOrCondition(field, op, v, fieldConfig) {
  *
  * @param {object} query  Supabase query builder (already scoped to location + consent)
  * @param {object | null | undefined} filter  { logic, filters: [{ field, op, value }] }
+ * @param {{ fields?: object }} [opts]  `fields`: the registry to validate against
+ *   (default AUDIENCE_FIELDS). ORGCONTACTS.4: the segment change report
+ *   evaluates one filter against two registries (the contact-wide stage and
+ *   the stage at the studio); every send path passes nothing.
  * @returns {object} Modified query
  */
-export function applyAudienceFilter(query, filter) {
+export function applyAudienceFilter(query, filter, { fields = AUDIENCE_FIELDS } = {}) {
   if (filter == null) return query
 
   // FILTER-A.5 / FILTER-FOUND row 4 — `logic` was never validated. The
@@ -460,7 +464,7 @@ export function applyAudienceFilter(query, filter) {
     if (isUnsetFilterRow(f)) continue
 
     const { field, op, value } = f
-    const fieldConfig = AUDIENCE_FIELDS[field]
+    const fieldConfig = fields[field]
     if (!fieldConfig) {
       throw new InvalidAudienceFilterError(`Unknown audience field: ${field}`)
     }

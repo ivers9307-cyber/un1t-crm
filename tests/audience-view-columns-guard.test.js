@@ -30,6 +30,10 @@ const ROOT = path.resolve(import.meta.dirname, '..')
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
 const VIEW = 'contact_location_audience'
 const CLP_COLS = ['audience_location_id', 'loc_email_marketing', 'loc_sms_marketing', 'loc_whatsapp_marketing']
+// mig 766 (ORGCONTACTS.4): view-only columns from contact_studios, the stage /
+// kind / status AT the audience studio (per-studio stage from contact_studios).
+// Not contacts columns: (a) and (b) never ask for them; pinned present here.
+const STUDIO_COLS = ['studio_stage_slug', 'studio_kind', 'studio_status']
 const VIRTUAL_TYPES = new Set(['tag', 'event', 'location_list'])
 
 /**
@@ -67,6 +71,7 @@ describe('contact_location_audience carries every contacts column (AUDIENCEVIEWC
     expect(skippedViews.has(VIEW)).toBe(false)
     expect(schema.has(VIEW)).toBe(true)
     for (const c of CLP_COLS) expect(schema.get(VIEW).has(c)).toBe(true)
+    for (const c of STUDIO_COLS) expect(schema.get(VIEW).has(c), `${c}: mig 766's per-studio column`).toBe(true)
     expect(schema.get('contacts').size).toBeGreaterThan(100)
   })
 

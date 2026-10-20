@@ -324,11 +324,13 @@ function splitOrClauses(str) {
 // One or() clause → predicate. Supports col.ilike.pat / col.eq.val /
 // col.in.(a,b) / col.is.null — the forms the covered routes emit.
 function orClausePredicate(clause, colVal) {
-  const m = clause.match(/^([^.]+(?:\.[^.]+)*?)\.(ilike|eq|in|is)\.(.*)$/)
+  const m = clause.match(/^([^.]+(?:\.[^.]+)*?)\.(ilike|eq|neq|in|is)\.(.*)$/)
   if (!m) return () => false
   const [, col, op, rest] = m
   if (op === 'ilike') { const rx = ilikeToRegExp(rest); return (r) => { const v = colVal(r, col); return v != null && rx.test(String(v)) } }
   if (op === 'eq') return (r) => String(colVal(r, col)) === rest
+  // neq as Postgres evaluates it: a NULL never satisfies it (applyAudienceFilter adds the `is.null` disjunct itself).
+  if (op === 'neq') return (r) => { const v = colVal(r, col); return v != null && String(v) !== rest }
   if (op === 'is') return (r) => (colVal(r, col) ?? null) === (rest === 'null' ? null : rest === 'true')
   if (op === 'in') {
     const vals = rest.replace(/^\(/, '').replace(/\)$/, '').split(',').map((s) => s.trim()).filter(Boolean)
