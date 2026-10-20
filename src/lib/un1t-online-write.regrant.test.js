@@ -24,7 +24,7 @@ const creditsShow = (balance = 3) => ok({ balance, is_unlimited: false })
 const creditsNone = () => ok({ balance: 0, is_unlimited: false })
 const granted = () => res(201, { success: true, data: { id: 'batch-1', amount: 3 } })
 const refused = (code, message = 'Refused') => res(400, { success: false, error: { code, message } })
-// A's answer for Sorcha's case: the trial used, nothing else, and A says re-grant.
+// A's answer for the 20 Oct case: the trial used, nothing else, and A says re-grant.
 const regrantable = () => vi.fn(async () => ({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: true } }))
 
 async function setup({ routes = {}, db: dbOpts = {}, trialEligibility = regrantable(), perms = ALL_PERMS } = {}) {
@@ -68,7 +68,7 @@ describe('grantTrial — the credit re-grant (TRIALREGRANT.1)', () => {
     expect(s.store.un1t_clients[0].crm_written_at).toBeTruthy()
   })
 
-  it("Sorcha's case end to end on A's real read: trial claimed 9 Oct, no bookings, credits 0 → re-granted", async () => {
+  it("the 20 Oct case end to end on A's real read: trial claimed 9 Oct, no bookings, credits 0 → re-granted", async () => {
     const s = await setup({
       trialEligibility: un1tOnlineReads.trialEligibility,
       routes: { [CREDITS]: [creditsNone(), creditsShow()], [GRANT]: [granted()] },

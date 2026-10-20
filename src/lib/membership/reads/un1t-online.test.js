@@ -1256,7 +1256,7 @@ describe('trialEligibility regrant (TRIALREGRANT.1)', () => {
   const trialTx = (over = {}) => ({ id: 'rx1', location_id: R_LOC, un1t_id: 'rx1', un1t_user_id: 'r1', contact_id: 'rc', product_id: 'trial', product_type: 'pack', type: 'one_time', amount_cents: 0, refunded: false, remote_created_at: '2026-10-09T09:00:00Z', ...over })
   const bk = (over = {}) => ({ id: over.un1t_id ?? 'rb1', location_id: R_LOC, un1t_id: 'rb1', un1t_user_id: 'r1', contact_id: 'rc', event_id: 'e1', status: 'cancelled', ...over })
   const regrantRow = (over = {}) => ledger({ op: 'trial_regrant', method: null, target: null, un1t_user_id: 'r1', contact_id: 'rc', stage: 'done', ...over })
-  // Sorcha's shape: the trial bought 9 Oct, no bookings, credits 0.
+  // The 20 Oct case's shape: the trial bought 9 Oct, no bookings, credits 0.
   const claimed = (over = {}) => ({
     un1t_clients: [cl()],
     un1t_subscriptions: [],
