@@ -1,7 +1,10 @@
 // MIAHATCH.6 (Task 21) — Mia never charges and never refunds (spec R1, R2;
-// global constraints): no code sends bypassCredit or forceRefund, calls
-// /credits/grant or any refund endpoint, and POST /purchases/charge (the €0
-// trial) lives only in D's write modules, reached by Mia through grantTrial.
+// global constraints): no code sends bypassCredit or forceRefund, calls a
+// refund endpoint, POST /purchases/charge (the €0 trial) lives only in D's
+// write modules, reached by Mia through grantTrial, and /credits/grant
+// (TRIALREGRANT.1, Richard's decision 20 Oct 2026: the one-off trial credit
+// re-grant) stands only inside regrantTrialCredits in D's ops module (and the
+// transport's ENDPOINTS allowlist), which only grantTrial calls.
 // A refund is a record-only refund_request card (fileRefundCard) that staff
 // act on by hand in un1t.online.
 //
@@ -84,12 +87,22 @@ function enclosingVariables(node) {
   return names
 }
 
-/** Literals whose text matches `re`: [{ line, text }]. */
+/** The function and variable names a node sits inside (innermost first). */
+function enclosingNames(node) {
+  const names = []
+  for (let n = node.parent; n; n = n.parent) {
+    if ((ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isMethodDeclaration(n)) && n.name && ts.isIdentifier(n.name)) names.push(n.name.text)
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name)) names.push(n.name.text)
+  }
+  return names
+}
+
+/** Literals whose text matches `re`: [{ line, text, names }]. */
 export function literalHits(sf, re) {
   const out = []
   const visit = (node) => {
     const text = literalText(node)
-    if (text != null && re.test(text)) out.push({ line: lineOf(sf, node), text })
+    if (text != null && re.test(text)) out.push({ line: lineOf(sf, node), text, names: enclosingNames(node) })
     ts.forEachChild(node, visit)
   }
   visit(sf)
@@ -141,8 +154,14 @@ export function bannedKeyViolations(key, sf) {
     .filter((h) => !(key === BANNED_KEYS_DECLARED_IN.file && h.vars.includes(BANNED_KEYS_DECLARED_IN.name)))
     .map((h) => `${key}:${h.line} (${h.name})`)
 }
+// TRIALREGRANT.1 — /credits/grant only inside D's regrantTrialCredits, and in
+// the transport's ENDPOINTS allowlist.
+const CREDITS_GRANT_ALLOWED = Object.freeze({ [OPS]: 'regrantTrialCredits', [TRANSPORT]: 'ENDPOINTS' })
 export function creditsGrantViolations(key, sf) {
-  return literalHits(sf, CREDITS_GRANT).map((h) => `${key}:${h.line} (/credits/grant)`)
+  const within = Object.hasOwn(CREDITS_GRANT_ALLOWED, key) ? CREDITS_GRANT_ALLOWED[key] : null
+  return literalHits(sf, CREDITS_GRANT)
+    .filter((h) => !(within && h.names.includes(within)))
+    .map((h) => `${key}:${h.line} (/credits/grant)`)
 }
 export function refundPathViolations(key, sf) {
   if (Object.hasOwn(REFUND_PATH_ALLOWED, key)) return []
@@ -215,9 +234,17 @@ describe('the rules, on fixtures', () => {
     expect(refundPathViolations('src/lib/revolut.js', sf)).toEqual([])
   })
 
-  it('/credits/grant anywhere, and /purchases/charge outside D\'s write modules', () => {
+  it('/credits/grant outside D\'s regrantTrialCredits (and the transport allowlist), and /purchases/charge outside D\'s write modules', () => {
     const sf = parse("send('POST', '/credits/grant')\nsend('POST', '/purchases/charge')\nconst u = `/purchases/charge`")
     expect(creditsGrantViolations('src/x.js', sf)).toEqual(['src/x.js:1 (/credits/grant)'])
+    const grant = parse([
+      "async function regrantTrialCredits() { return send('POST', '/credits/grant') }",
+      "async function grantTrial() { return send('POST', '/credits/grant') }",
+      "const ENDPOINTS = [{ path: /^\\/credits\\/grant$/ }]",
+    ].join('\n'))
+    expect(creditsGrantViolations(OPS, grant).map((v) => v.split(' ')[0])).toEqual([`${OPS}:2`, `${OPS}:3`])
+    expect(creditsGrantViolations(TRANSPORT, grant).map((v) => v.split(' ')[0])).toEqual([`${TRANSPORT}:1`, `${TRANSPORT}:2`])
+    expect(creditsGrantViolations('src/lib/agent/x.js', grant)).toHaveLength(3)
     expect(chargeViolations('src/lib/agent/x.js', sf).map((v) => v.split(' ')[0])).toEqual(['src/lib/agent/x.js:2', 'src/lib/agent/x.js:3'])
     expect(chargeViolations(OPS, sf)).toEqual([])
     expect(chargeViolations(TRANSPORT, sf)).toEqual([])
@@ -250,7 +277,7 @@ describe('src/, shared/ and supabase/functions/ (non-test)', { timeout: WHOLE_TR
     expect(bad).toEqual([])
   })
 
-  it('no /credits/grant', () => {
+  it('/credits/grant only inside D\'s regrantTrialCredits (and the transport allowlist)', () => {
     const bad = mentioning(/credits(\/|\\\/)grant/).flatMap((e) => creditsGrantViolations(e.key, e.sf))
     expect(bad).toEqual([])
   })

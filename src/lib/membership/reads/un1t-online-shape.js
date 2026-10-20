@@ -777,3 +777,40 @@ export function shapeTrialEligibility({
   if (txs.some((t) => isPaidPack(t, productsById))) reasons.push('paid_pack')
   return { eligible: reasons.length === 0, reasons }
 }
+
+/**
+ * Any booking that is not cancelled used a trial credit: attended, no-show,
+ * and booked too (an upcoming class holds a credit, and a past BOOKED is
+ * undecided). An unknown status counts as a use. Only a cancel never was.
+ */
+const UNUSED_BOOKING_STATUSES = new Set(['cancelled', 'canceled'])
+const isUsedBooking = (b) => !UNUSED_BOOKING_STATUSES.has(String(b?.status ?? '').trim().toLowerCase())
+
+/**
+ * TRIALREGRANT.1 (Richard, 20 Oct 2026) — did this person CLAIM the free trial,
+ * never use it, and has it run out, so the studio may give them a free class
+ * again as a one-off credit re-grant (D's grantTrial, POST /credits/grant)?
+ * True only when ALL of:
+ *   - the only reason they are not eligible is trial_used (no
+ *     membership_history, no paid_pack);
+ *   - none of their bookings (every account and contact the read resolved)
+ *     is anything but cancelled (attended, no-show or booked all used a credit);
+ *   - they have had no re-grant yet: no trial_regrant ledger row (done, sent
+ *     or unknown) by any of their user ids or contacts;
+ *   - the mirror shows them holding no credits (no account with a balance
+ *     above 0, none unlimited). An unknown balance does not block: the mirror
+ *     is only the OFFER's pre-filter, and grantTrial reads the live balance
+ *     (0 and not unlimited) before it sends anything.
+ * Pure.
+ * @param {{ eligibility: { eligible: boolean, reasons: string[] }, bookings?: object[],
+ *   ledgerRegrants?: object[], clients?: object[] }} args
+ * @returns {boolean}
+ */
+export function shapeTrialRegrant({ eligibility, bookings = [], ledgerRegrants = [], clients = [] } = {}) {
+  const reasons = Array.isArray(eligibility?.reasons) ? eligibility.reasons : []
+  if (eligibility?.eligible !== false || reasons.length !== 1 || reasons[0] !== 'trial_used') return false
+  if (bookings.some(isUsedBooking)) return false
+  if (ledgerRegrants.some(Boolean)) return false
+  const holdsCredits = (c) => c?.credit_unlimited === true || (c?.credit_balance != null && Number(c.credit_balance) > 0)
+  return !clients.some(holdsCredits)
+}

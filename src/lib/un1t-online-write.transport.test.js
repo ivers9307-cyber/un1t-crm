@@ -300,6 +300,12 @@ describe('send: endpoint allowlist', () => {
     const { writer, fetchImpl, rpcCalls } = await setup()
     const bad = [
       ['POST', '/credits/grant', { body: { userId: USER }, policy: 'never', op: 'trial', idempotencyKey: 'k' }],
+      // TRIALREGRANT.1: /credits/grant only as op trial_regrant, its three keys, policy never, with a key.
+      ['POST', '/credits/grant', { body: { userId: USER, amount: 3, expiresInDays: 7, note: 'x' }, policy: 'never', op: 'trial_regrant', idempotencyKey: 'k' }],
+      ['POST', '/credits/grant', { body: { userId: USER, amount: 3, expiresInDays: 7 }, policy: 'never', op: 'trial_regrant' }],
+      ['POST', '/credits/grant', { body: { userId: USER, amount: 3, expiresInDays: 7 }, policy: 'idempotent', op: 'trial_regrant', idempotencyKey: 'k' }],
+      ['POST', '/credits/grant', { body: { userId: USER, amount: 3, expiresInDays: 7, forceRefund: true }, policy: 'never', op: 'trial_regrant', idempotencyKey: 'k' }],
+      ['POST', '/purchases/charge', { body: { userId: USER, productId: PRODUCT }, policy: 'never', op: 'trial_regrant', idempotencyKey: 'k' }],
       ['POST', '/refunds', { body: {}, policy: 'never', op: 'trial', idempotencyKey: 'k' }],
       ['POST', '/purchases/charge-custom', { body: { userId: USER, productId: PRODUCT }, policy: 'never', op: 'trial', idempotencyKey: 'k' }],
       ['POST', '/purchases/payment-sheet', { body: {}, policy: 'never', op: 'trial', idempotencyKey: 'k' }],
@@ -856,7 +862,7 @@ describe('fix round 1', () => {
   it('the op decides the policy: one shared map', () => {
     expect(UN1T_OP_POLICY).toEqual({
       book: 'verify', cancel: 'verify', create_client: 'verify',
-      forgot_password: 'never', trial: 'never', checkout: 'idempotent',
+      forgot_password: 'never', trial: 'never', checkout: 'idempotent', trial_regrant: 'never',
     })
     expect(Object.isFrozen(UN1T_OP_POLICY)).toBe(true)
   })
