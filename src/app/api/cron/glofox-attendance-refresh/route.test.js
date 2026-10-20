@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 // re-read these tests exercise: the first answer is the seam's, the second the
 // run's.
 
-const h = vi.hoisted(() => ({ members: [], prospects: [], prospectQueries: [], contactUpdates: [], runUpdates: [] }))
+const h = vi.hoisted(() => ({ members: [], prospects: [], prospectQueries: [], contactUpdates: [], runUpdates: [], crossover: [], memberScopes: [] }))
 
 const LOC = { id: 'loc-1', name: 'Studio', active: true, membership_source: 'glofox', settings: { glofox: { branch_id: 'b', api_key: 'k', api_token: 't' } } }
 const GOOD = '0000000000000000000000a1'
@@ -21,12 +21,14 @@ const CODE = 'Resource not available, empty result cant be processed'
 
 function result(st) {
   if (st.table === 'locations') return { data: st.single ? LOC : [LOC], error: null }
+  // GLOFOXREADERS.1 — the studio's crossover contacts (none unless a test sets them).
+  if (st.table === 'glofox_crossover_members') return { data: h.crossover || [], error: null }
   if (st.table === 'glofox_sync_runs' && st.op === 'insert') return { data: { id: 'run-1' }, error: null }
   if (st.table === 'glofox_sync_runs' && st.op === 'update') { h.runUpdates.push(st.payload); return { data: null, error: null } }
   if (st.table === 'contacts' && st.op === 'update') { h.contactUpdates.push({ id: st.eqId, patch: st.payload }); return { data: null, error: null } }
   // ATTPROSPECTS.1 — two contact lists: the paying members (.in on status)
   // and the active non-members (.not … in + .or).
-  if (st.table === 'contacts' && st.memberList) return { data: h.members, error: null }
+  if (st.table === 'contacts' && st.memberList) { h.memberScopes.push(st.scope ?? null); return { data: h.members, error: null } }
   if (st.table === 'contacts' && st.prospectList) { h.prospectQueries.push({ notIn: st.notIn, or: st.or }); return { data: h.prospects, error: null } }
   throw new Error(`unexpected ${st.op} on ${st.table}`)
 }
@@ -36,7 +38,12 @@ function builder(table) {
   for (const m of ['select', 'order', 'range', 'filter', 'single']) b[m] = () => b
   b.in = (col) => { if (col === 'glofox_membership_status') st.memberList = true; return b }
   b.not = (col, op, val) => { if (col === 'glofox_membership_status' && op === 'in') { st.prospectList = true; st.notIn = val } return b }
-  b.or = (val) => { st.or = val; return b }
+  b.or = (val) => {
+    // GLOFOXREADERS.1 — the studio/crossover scope is its own or(); keep it apart.
+    if (String(val).startsWith('location_id.eq.')) st.scope = val
+    else st.or = val
+    return b
+  }
   b.eq = (col, val) => { if (col === 'id') st.eqId = val; return b }
   b.maybeSingle = () => { st.single = true; return b }
   b.insert = (p) => { st.op = 'insert'; st.payload = p; return b }
@@ -86,6 +93,8 @@ beforeEach(() => {
   h.prospectQueries = []
   h.contactUpdates = []
   h.runUpdates = []
+  h.crossover = []
+  h.memberScopes = []
   vi.stubGlobal('fetch', vi.fn(async (url) => glofoxAnswer(url)))
 })
 afterEach(() => { vi.unstubAllGlobals() })
@@ -262,5 +271,19 @@ describe('GET /api/cron/glofox-attendance-refresh — active non-members (ATTPRO
     expect(patchFor('c-trial')).toBeUndefined()
     const [, outcome] = stampHeartbeat.mock.calls.at(-1)
     expect(outcome.prospects).toEqual({ eligible: 1, refreshed: 0, fetch_failed: 1, update_failed: 0 })
+  })
+})
+
+// GLOFOXREADERS.1 — Glofox members whose contact lives at a sibling studio.
+describe('GET /api/cron/glofox-attendance-refresh — crossover contacts (GLOFOXREADERS.1)', () => {
+  it('no crossover contacts: the member list keeps its plain studio filter', async () => {
+    await GET(req())
+    expect(h.memberScopes).toEqual([null])
+  })
+
+  it('crossover contacts widen the member list to "lives here, or is linked here"', async () => {
+    h.crossover = [{ contact_id: 'c-hatch-1' }, { contact_id: 'c-hatch-2' }]
+    await GET(req())
+    expect(h.memberScopes).toEqual(['location_id.eq.loc-1,id.in.(c-hatch-1,c-hatch-2)'])
   })
 })

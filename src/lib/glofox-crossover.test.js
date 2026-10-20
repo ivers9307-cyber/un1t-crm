@@ -1,7 +1,10 @@
 // GLOFOXSIBLING.1 — the organisation-wide Glofox contact resolver and the
 // crossover link write.
 import { describe, it, expect } from 'vitest'
-import { findGlofoxCrossoverContact, recordGlofoxCrossover } from './glofox-crossover.js'
+import {
+  findGlofoxCrossoverContact, recordGlofoxCrossover, glofoxCrossoverContactIds, glofoxStudioOrCrossoverFilter,
+  scopeToGlofoxStudio, glofoxLinkLocationsByContact, contactAtGlofoxStudio,
+} from './glofox-crossover.js'
 import { ilikeMatches } from './like-escape.test-helpers.js'
 
 // A small table-aware fake: every query records (table, op, filters, payload)
@@ -153,5 +156,55 @@ describe('recordGlofoxCrossover', () => {
     const db = fakeDb(base(), { upsertReturns: [] })
     const out = await recordGlofoxCrossover(db, { locationId: LOC, glofoxMemberId: 'g1', contactId: 'c-hatch', contactLocationId: 'hatch' })
     expect(out.error).toMatch(/no row/)
+  })
+})
+
+// GLOFOXREADERS.1 — the reader helpers.
+describe('reader helpers', () => {
+  it('glofoxCrossoverContactIds lists the studio\'s linked contacts (deduped); a missing table is none; other errors are errors', async () => {
+    const t = { glofox_crossover_members: [
+      { location_id: LOC, glofox_member_id: 'g1', contact_id: 'c1' },
+      { location_id: LOC, glofox_member_id: 'g2', contact_id: 'c1' },
+      { location_id: 'hatch', glofox_member_id: 'g3', contact_id: 'c3' },
+    ] }
+    // the fake ignores order/range; give it the methods
+    const db = fakeDb(t)
+    const from = db.from
+    db.from = (table) => { const c = from(table); c.order = () => c; c.range = () => c; return c }
+    expect(await glofoxCrossoverContactIds(db, LOC)).toEqual({ ids: ['c1'] })
+    const missing = fakeDb(t, { errors: { 'glofox_crossover_members:select': { code: 'PGRST205', message: 'x' } } })
+    const mf = missing.from; missing.from = (table) => { const c = mf(table); c.order = () => c; c.range = () => c; return c }
+    expect(await glofoxCrossoverContactIds(missing, LOC)).toEqual({ ids: [] })
+    const broken = fakeDb(t, { errors: { 'glofox_crossover_members:select': { message: 'down' } } })
+    const bf = broken.from; broken.from = (table) => { const c = bf(table); c.order = () => c; c.range = () => c; return c }
+    expect((await glofoxCrossoverContactIds(broken, LOC)).error).toMatch(/down/)
+  })
+
+  it('glofoxStudioOrCrossoverFilter / scopeToGlofoxStudio', () => {
+    expect(glofoxStudioOrCrossoverFilter(LOC, [])).toBeNull()
+    expect(glofoxStudioOrCrossoverFilter(LOC, ['a', 'b'])).toBe(`location_id.eq.${LOC},id.in.(a,b)`)
+    const calls = []
+    const q = { eq: (...a) => { calls.push(['eq', ...a]); return q }, or: (...a) => { calls.push(['or', ...a]); return q } }
+    scopeToGlofoxStudio(q, LOC, [])
+    scopeToGlofoxStudio(q, LOC, ['a'])
+    expect(calls).toEqual([['eq', 'location_id', LOC], ['or', `location_id.eq.${LOC},id.in.(a)`]])
+  })
+
+  it('glofoxLinkLocationsByContact maps each contact to the studios it is linked at', async () => {
+    const db = fakeDb({ glofox_crossover_members: [
+      { location_id: LOC, glofox_member_id: 'g1', contact_id: 'c1' },
+      { location_id: 'other', glofox_member_id: 'g9', contact_id: 'c1' },
+      { location_id: LOC, glofox_member_id: 'g2', contact_id: 'c2' },
+    ] })
+    const out = await glofoxLinkLocationsByContact(db, ['c1', 'c2', 'c3'])
+    expect(out.error).toBeUndefined()
+    expect(Object.fromEntries(out.byContact)).toEqual({ c1: [LOC, 'other'], c2: [LOC] })
+  })
+
+  it('contactAtGlofoxStudio: home or linked', () => {
+    expect(contactAtGlofoxStudio({ location_id: LOC }, LOC)).toBe(true)
+    expect(contactAtGlofoxStudio({ location_id: 'hatch', glofox_link_location_ids: [LOC] }, LOC)).toBe(true)
+    expect(contactAtGlofoxStudio({ location_id: 'hatch' }, LOC)).toBe(false)
+    expect(contactAtGlofoxStudio(null, LOC)).toBe(false)
   })
 })

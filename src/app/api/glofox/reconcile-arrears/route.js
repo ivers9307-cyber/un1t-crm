@@ -29,6 +29,7 @@ import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
 import { glofoxCredentialsForLocation, fetchPaymentsReport } from '@/lib/glofox'
 import { computeArrears } from '@/lib/glofox-arrears'
+import { glofoxCrossoverContactIds, scopeToGlofoxStudio } from '@/lib/glofox-crossover'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -61,13 +62,17 @@ async function fetchAllInvoiceIds(db) {
 async function resolveContactIds(db, locationId, glofoxUserIds) {
   const map = new Map()
   const unique = [...new Set(glofoxUserIds.filter(Boolean))]
+  // GLOFOXREADERS.1 — a Glofox member whose contact lives at a sibling studio
+  // (glofox_crossover_members) is this studio's member too. Unreadable is a
+  // failure, never "not linked": the caller would report them unmatched.
+  const crossover = await glofoxCrossoverContactIds(db, locationId)
+  if (crossover.error) throw new Error(`crossover contacts read failed: ${crossover.error}`)
   const CHUNK = 300
   for (let i = 0; i < unique.length; i += CHUNK) {
     const chunk = unique.slice(i, i + CHUNK)
-    const { data, error } = await db
+    const { data, error } = await scopeToGlofoxStudio(db
       .from('contacts')
-      .select('id, glofox_member_id')
-      .eq('location_id', locationId)
+      .select('id, glofox_member_id'), locationId, crossover.ids)
       .in('glofox_member_id', chunk)
     if (error) throw new Error(`contacts read failed: ${error.message}`)
     for (const r of data || []) if (r.glofox_member_id) map.set(r.glofox_member_id, r.id)

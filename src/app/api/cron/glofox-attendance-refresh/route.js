@@ -47,6 +47,7 @@ import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
 import { computeBookingAggregates, mergeBookingAggregates, trimRecentBookings, extractMembershipPlan, extractMembershipState, extractMemberProfile } from '@/lib/glofox-sync'
 import { logWarn } from '@/lib/log'
+import { glofoxCrossoverContactIds, scopeToGlofoxStudio } from '@/lib/glofox-crossover'
 import { dayStrIn, DAY_MS } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
@@ -184,8 +185,19 @@ async function refreshLocation(db, location, startedAt) {
       throw new Error('Glofox credentials missing on this location.')
     }
 
+    // GLOFOXREADERS.1 — Glofox members whose contact lives at a sibling studio
+    // (glofox_crossover_members) are refreshed here too. A failed read keeps
+    // the run going on the studio's own contacts: it is logged, never fatal.
+    const crossover = await glofoxCrossoverContactIds(db, location.id)
+    if (crossover.error) {
+      logWarn('glofox-attendance-refresh', 'crossover contacts unreadable; refreshing studio contacts only', {
+        locationId: location.id, err: crossover.error,
+      })
+    }
+    const crossoverIds = crossover.ids
+
     // ATTPROSPECTS.1 — the active non-members first (see PROSPECT_* above).
-    const prospectRows = await listProspects(db, location.id)
+    const prospectRows = await listProspects(db, location.id, crossoverIds)
     prospects.eligible = prospectRows.length
     for (const p of prospectRows) {
       if (Date.now() - startedAt > TIME_BUDGET_MS) { budgetExhausted = true; break }
@@ -208,13 +220,12 @@ async function refreshLocation(db, location, startedAt) {
     const members = []
     const PAGE = 1000
     for (let from = 0; ; from += PAGE) {
-      const { data: page, error } = await db
+      const { data: page, error } = await scopeToGlofoxStudio(db
         .from('contacts')
         // last_attended_at / last_booked_at are needed so the
         // advance-only merge below can compare against the stored
         // value and never regress it.
-        .select('id, glofox_member_id, last_attended_at, last_booked_at')
-        .eq('location_id', location.id)
+        .select('id, glofox_member_id, last_attended_at, last_booked_at'), location.id, crossoverIds)
         .in('glofox_membership_status', MEMBER_STATUSES)
         .not('glofox_member_id', 'is', null)
         .order('glofox_synced_at', { ascending: true, nullsFirst: true })
@@ -340,17 +351,16 @@ function attendanceUpdate(contact, bookings) {
  * ATTPROSPECTS.1 — the active non-member, non-ClassPass Glofox contacts at one
  * location, stalest glofox_synced_at first, paged past the 1,000-row cap.
  */
-async function listProspects(db, locationId) {
+async function listProspects(db, locationId, crossoverIds = []) {
   // A day string, not an instant: the PostgREST or() grammar reserves '.' and
   // ':', and a day either side does not matter to a 35-day window.
   const since = dayStrIn(new Date(Date.now() - PROSPECT_WINDOW_DAYS * DAY_MS))
   const rows = []
   const PAGE = 1000
   for (let from = 0; ; from += PAGE) {
-    const { data: page, error } = await db
+    const { data: page, error } = await scopeToGlofoxStudio(db
       .from('contacts')
-      .select('id, glofox_member_id, last_attended_at, last_booked_at')
-      .eq('location_id', locationId)
+      .select('id, glofox_member_id, last_attended_at, last_booked_at'), locationId, crossoverIds)
       .not('glofox_member_id', 'is', null)
       .not('glofox_membership_status', 'in', `(${PROSPECT_EXCLUDED_STATUSES.join(',')})`)
       .or([
