@@ -3150,6 +3150,33 @@ registry.registerPath({
   },
 })
 
+// ORGCONTACTS.4 (decision 4) — change a contact's primary studio.
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/primary-studio',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: "Change the contact's primary studio to another studio the person has a relationship with (the primary studio's admins, an organisation admin, or a master)",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ location_id: uuidLike }).openapi('ContactPrimaryStudioBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'The primary studio (moved, or unchanged when it already was the target)', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ location_id: uuidLike }) }) } } },
+    400: { description: 'Validation error, no_relationship (no contact_studios row at the target) or other_organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "Forbidden — the primary studio's admins, an organisation admin, or a master", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The relationship read failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'delete',
   path: '/api/contacts/{id}/link',

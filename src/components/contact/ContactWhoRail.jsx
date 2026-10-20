@@ -22,7 +22,7 @@ function InfoRow({ label, value }) {
   )
 }
 
-export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, studioMemberships = [], contactStudios = [], canReadStudioCards = false, un1tBilling = { studios: [] } }) {
+export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, studioMemberships = [], contactStudios = [], canReadStudioCards = false, canRehome = false, un1tBilling = { studios: [] } }) {
   return (
     <>
       {/* PERSON-LINK.1 — linked accounts (or "not linked" CTA when single). */}
@@ -68,7 +68,7 @@ export default function ContactWhoRail({ contact, person, identityEmails, identi
       </div>
 
       {/* HATCH-MEMBERS.1 — a membership sold outside Glofox (Hatch Street). */}
-      <ContactStudiosCard studios={contactStudios} primaryLocationId={contact?.location_id ?? null} />
+      <ContactStudiosCard studios={contactStudios} primaryLocationId={contact?.location_id ?? null} canRehome={canRehome} contactId={contact?.id ?? null} />
       <StudioMembershipsCard memberships={studioMemberships} />
 
       {/* HATCHPIPE.2 — what un1t.online says this contact owes and has paid. */}

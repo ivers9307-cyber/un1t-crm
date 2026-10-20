@@ -6,10 +6,14 @@
 
 import { RELATIONSHIP_SOURCE_LABELS } from '@/lib/contact-memberships'
 import { formatDate } from './format'
+import ChangePrimaryStudio from './ChangePrimaryStudio'
 
 const KIND_LABEL = { member: 'Member', client: 'Client', lead: 'Lead' }
 
-export default function ContactStudiosCard({ studios, primaryLocationId }) {
+// canRehome (ORGCONTACTS.4, decision 4): the page's gate for "Change primary
+// studio" (the primary studio's admins, an organisation admin, a master);
+// the control also needs another studio to move to.
+export default function ContactStudiosCard({ studios, primaryLocationId, canRehome = false, contactId = null }) {
   if (!Array.isArray(studios) || studios.length === 0) return null
   const ordered = [...studios].sort((a, b) => Number(b.location_id === primaryLocationId) - Number(a.location_id === primaryLocationId))
   return (
@@ -41,6 +45,9 @@ export default function ContactStudiosCard({ studios, primaryLocationId }) {
           )
         })}
       </ul>
+      {canRehome && contactId && studios.length > 1
+        ? <ChangePrimaryStudio contactId={contactId} currentLocationId={primaryLocationId} studios={studios} />
+        : null}
     </div>
   )
 }

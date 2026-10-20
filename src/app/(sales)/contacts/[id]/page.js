@@ -277,7 +277,10 @@ export default async function ContactDetailPage(props) {
   const canConsultations = canLoadContactConsultations(user, contact.location_id)
   // ROLEUI.1 — the action buttons, each the decision of the route it calls,
   // judged at the CONTACT's location (never user.role, the active studio's).
-  const actions = contactActionGates(user, contact)
+  // ORGCONTACTS.4 — Edit widens to the studios the person has a relationship
+  // with (contact_studios); Delete / Change primary studio stay with the
+  // primary studio's admins, an organisation admin or a master.
+  const actions = contactActionGates(user, contact, { relationshipStudioIds: contactStudios.rows.map((r) => r.location_id) })
   // ROLEUI.2 — the buttons that had no gate at all: same rule, same place.
   const work = contactWorkGates(user, contact)
   let consultationsTab = null
@@ -462,6 +465,7 @@ export default async function ContactDetailPage(props) {
             studioMemberships={studioMemberships.rows}
             contactStudios={contactStudios.rows}
             canReadStudioCards={work.canReadStudioCards}
+            canRehome={actions.admin.canRehome}
             un1tBilling={un1tBilling}
           />
         </div>

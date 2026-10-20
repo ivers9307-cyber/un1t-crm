@@ -40,3 +40,21 @@ describe('ContactStudiosCard', () => {
     expect(container.textContent).toContain('Studio')
   })
 })
+
+// ORGCONTACTS.4 (decision 4) — "Change primary studio": only for a caller the
+// delete / rehome gate admits, and only when there is another studio to move to.
+describe('ContactStudiosCard — change primary studio', () => {
+  it('renders the control with the other studios as options when canRehome; not otherwise; not with one studio', () => {
+    const { container } = render(<ContactStudiosCard studios={rows} primaryLocationId="still" canRehome contactId="c-1" />)
+    const select = container.querySelector('select[name="primary_location_id"]')
+    expect(select).not.toBeNull()
+    expect([...select.querySelectorAll('option')].map((o) => o.value)).toEqual(['hatch'])
+    expect(container.textContent).toMatch(/Change primary studio/)
+
+    const { container: noGate } = render(<ContactStudiosCard studios={rows} primaryLocationId="still" contactId="c-1" />)
+    expect(noGate.querySelector('select[name="primary_location_id"]')).toBeNull()
+
+    const { container: one } = render(<ContactStudiosCard studios={[rows[1]]} primaryLocationId="still" canRehome contactId="c-1" />)
+    expect(one.querySelector('select[name="primary_location_id"]')).toBeNull()
+  })
+})
