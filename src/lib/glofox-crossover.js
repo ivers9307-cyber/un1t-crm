@@ -15,7 +15,7 @@
 //     then email). Two candidates, or an email holder already linked to a
 //     different Glofox member, is a conflict for a person to resolve, never a
 //     guess.
-//   - recordGlofoxCrossover: the glofox_crossover_members row (mig 758) that
+//   - recordGlofoxCrossover: the contact_studios row (source glofox) that
 //     makes the contact readable by staff holding Contacts at the studio, and
 //     the studio's marketing-preferences row, as the un1t sync gives Hatch.
 //
@@ -26,7 +26,10 @@ import { ensureStudioPreferences } from './un1t-online-studio-preferences.js'
 import { upsertContactStudio, contactsAtStudio, studiosOfContacts } from './contact-studios.js'
 import { hasBookableMembership } from './person-accounts.js'
 
-export const GLOFOX_CROSSOVER_TABLE = 'glofox_crossover_members'
+// ORGCONTACTS.5 (mig 768): the link table is gone; "linked at this studio" is
+// the contact_studios row with source glofox there, read through the
+// studio_contacts view (a contacts row joined to its relationship rows).
+const LINK_VIEW = 'studio_contacts'
 const MAX_ERROR_LEN = 300
 // PostgREST's "table not in the schema cache" and Postgres' undefined_table.
 const TABLE_MISSING = new Set(['PGRST205', '42P01'])
@@ -61,21 +64,23 @@ export async function findGlofoxCrossoverContact(db, locationId, { glofoxMemberI
     if (!db || !locationId || (!glofoxMemberId && !email)) return { contact: null }
     const cols = [...new Set(['id', 'location_id', 'glofox_member_id', ...String(select).split(',').map((c) => c.trim()).filter(Boolean)])].join(', ')
 
-    // 1. The studio's own link row: the answer a previous sync already gave.
+    // 1. The studio's own relationship row: the answer a previous sync already
+    //    gave (contact_studios with source glofox at this studio, carrying the
+    //    contact's Glofox id, through the studio_contacts view).
     if (glofoxMemberId) {
-      const link = await db.from(GLOFOX_CROSSOVER_TABLE).select('contact_id')
-        .eq('location_id', locationId).eq('glofox_member_id', glofoxMemberId).maybeSingle()
-      // The table not existing yet (code deployed before mig 758) means no
+      const link = await db.from(LINK_VIEW).select(cols)
+        .eq('studio_location_id', locationId).eq('glofox_member_id', glofoxMemberId).eq('studio_source', 'glofox').limit(2)
+      // The view not existing yet (code deployed before mig 765) means no
       // link rows, not an outage: steps 2 and 3 still find the contact.
       // Any other read failure is an error.
       if (link.error && !TABLE_MISSING.has(link.error.code)) {
-        return { contact: null, error: `${GLOFOX_CROSSOVER_TABLE} read: ${message(link.error)}` }
+        return { contact: null, error: `${LINK_VIEW} read: ${message(link.error)}` }
       }
-      if (link.data?.contact_id) {
-        const c = await db.from('contacts').select(cols).eq('id', link.data.contact_id).maybeSingle()
-        if (c.error) return { contact: null, error: `contacts read: ${message(c.error)}` }
-        if (c.data) return { contact: c.data, how: 'link' }
+      const rows = Array.isArray(link.data) ? link.data : []
+      if (rows.length > 1) {
+        return { contact: null, conflict: { reason: 'Two contacts carry this Glofox member id at this studio', contact_ids: rows.map((x) => x.id) } }
       }
+      if (rows[0]) return { contact: rows[0], how: 'link' }
     }
 
     const org = await organisationOfLocation(db, locationId)
@@ -125,15 +130,15 @@ export async function findGlofoxCrossoverContact(db, locationId, { glofoxMemberI
 
 /**
  * Record that a Glofox member of `locationId` is the contact `contactId`, who
- * lives at another studio: the glofox_crossover_members row (readability at
- * the studio, mig 758), the studio's marketing-preferences row
+ * lives at another studio: the contact_studios row at the Glofox studio (mig
+ * 764: kind member when `contactRow`'s Glofox columns say the membership is
+ * bookable, else client; source glofox; first_seen_at from
+ * `contactRow.joined_at`; since mig 768 this row IS the link, the readability
+ * at the studio included) and the studio's marketing-preferences row
  * (insert-if-missing; an existing row, an unsubscribe included, is never
- * touched) and, since ORGCONTACTS.1, the contact_studios row at the Glofox
- * studio (mig 764: kind member when `contactRow`'s Glofox columns say the
- * membership is bookable, else client; source glofox; first_seen_at from
- * `contactRow.joined_at`). A contact who lives AT the studio needs none and is
- * skipped. The relationship write is reported as `contact_studio` and never
- * fails the link.
+ * touched). A contact who lives AT the studio needs none and is skipped. The
+ * relationship write is reported as `contact_studio`; when it fails the link
+ * failed (`linked: false`, `error`) and no preferences row is made.
  *
  * @returns {Promise<{ linked: boolean, preferences_created: number, skipped?: string, error?: string,
  *   contact_studio?: { ok: true } | { ok: false, error: string } }>}
@@ -151,21 +156,15 @@ export async function recordGlofoxCrossover(db, { locationId, glofoxMemberId, co
     }
     if (home === locationId) return { ...out, skipped: 'contact lives at this studio' }
 
-    const now = new Date().toISOString()
-    const { data, error } = await db.from(GLOFOX_CROSSOVER_TABLE)
-      .upsert({ location_id: locationId, glofox_member_id: glofoxMemberId, contact_id: contactId, updated_at: now },
-        { onConflict: 'location_id,glofox_member_id' })
-      .select('id')
-    if (error) return { ...out, error: `${GLOFOX_CROSSOVER_TABLE} write: ${message(error)}` }
-    if (!data || data.length === 0) return { ...out, error: `${GLOFOX_CROSSOVER_TABLE} write returned no row` }
-    out.linked = true
-
+    // The link IS the relationship row (mig 768 dropped the link table).
     const studio = await upsertContactStudio(db, {
       contactId, locationId, source: 'glofox', status: 'active',
       kind: hasBookableMembership(contactRow) ? 'member' : 'client',
       firstSeenAt: contactRow?.joined_at || null,
     })
     out.contact_studio = studio.ok ? { ok: true } : { ok: false, error: studio.error }
+    if (!studio.ok) return { ...out, error: `contact_studios write: ${studio.error}` }
+    out.linked = true
 
     const prefs = await ensureStudioPreferences(db, { locationId, contactIds: [contactId], origin: 'glofox' })
     out.preferences_created = prefs.created || 0

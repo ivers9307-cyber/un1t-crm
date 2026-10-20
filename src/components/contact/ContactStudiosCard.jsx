@@ -4,7 +4,7 @@
 // first / last seen. Rendered next to the Glofox and studio-membership cards
 // so an operator sees why a Stillorgan contact appears on Hatch's list.
 
-import { RELATIONSHIP_SOURCE_LABELS } from '@/lib/contact-memberships'
+import { RELATIONSHIP_SOURCE_LABELS } from '@/lib/contact-studios-display'
 import { formatDate } from './format'
 import ChangePrimaryStudio from './ChangePrimaryStudio'
 

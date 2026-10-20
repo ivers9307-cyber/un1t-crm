@@ -28,7 +28,7 @@ import { aggregatePerson } from '@/lib/person-aggregate'
 import ContactHeaderBand from '@/components/contact/ContactHeaderBand'
 import { latestLinkForContact } from '@/lib/cancellation-form/links'
 import ContactWhoRail from '@/components/contact/ContactWhoRail'
-import { loadContactMemberships, loadContactStudios } from '@/lib/contact-memberships'
+import { loadContactStudios } from '@/lib/contact-studios-display'
 // HATCHPIPE.2 — un1t.online payments + overdue, scoped to the viewer's studios.
 import { loadUn1tBilling, un1tHeaderRisk, mergeArrearsCents } from '@/lib/contact-un1t-billing'
 import ContactNextRail from '@/components/contact/ContactNextRail'
@@ -89,7 +89,7 @@ export default async function ContactDetailPage(props) {
     if (pg?.group?.id) person = await aggregatePerson(db, pg.group.id)
   } catch { person = null }
 
-  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink, primaryPipeline, studioMemberships, un1tBilling, contactStudios] = await Promise.all([
+  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink, primaryPipeline, un1tBilling, contactStudios] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
@@ -117,9 +117,6 @@ export default async function ContactDetailPage(props) {
     // profile, and null falls through to `derived` below — the button stays,
     // exactly as it does today.
     findPrimaryPipeline(db, contact.location_id).catch(() => null),
-    // HATCH-MEMBERS.1 (mig 722) — memberships held outside Glofox. Never
-    // throws; a failed read just hides the card.
-    loadContactMemberships(db, id),
     // HATCHPIPE.2 — un1t.online payments for the studios the VIEWER can see.
     // Never throws; an unreadable studio is dropped, never shown as zero.
     loadUn1tBilling(db, user, id),
@@ -462,7 +459,6 @@ export default async function ContactDetailPage(props) {
             identityPhones={identityPhones}
             canEditPrefs={actions.canEditPrefs}
             canLinkAccounts={work.canLinkAccounts}
-            studioMemberships={studioMemberships.rows}
             contactStudios={contactStudios.rows}
             canReadStudioCards={work.canReadStudioCards}
             canRehome={actions.admin.canRehome}

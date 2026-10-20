@@ -157,6 +157,11 @@ const ACCEPTED_STUDIO_BODIES = Object.values(STUDIO_HELPER_BODIES)
 export const LATEST_MEMBERSHIP_HELPER_MIGRATION = 765
 export const MEMBERSHIP_HELPER_BODY = MEMBERSHIP_HELPER_BODIES[LATEST_MEMBERSHIP_HELPER_MIGRATION]
 const ACCEPTED_HELPER_BODIES = Object.values(MEMBERSHIP_HELPER_BODIES)
+// ORGCONTACTS.5 (mig 768): the membership helper and public.crossover_contact_ids
+// are retired. Their drop in 768 (and any later file) is the planned end; a
+// CREATE of either after 768 is a breaker (the studio helper is the one reader).
+export const RETIRED_AT = 768
+const CROSSOVER_RPC = 'crossover_contact_ids'
 
 function norm(s) {
   let t = s.toLowerCase().replace(/\s+/g, '').replace(/"/g, '').replace(/\)as[a-z_][a-z0-9_]*\)/g, '))')
@@ -315,10 +320,23 @@ export function contactHelperAlterBreakers(sql) {
   return hits
 }
 
-/** Statements in `sql` that would put contacts' SELECT back on membership, or remove the helper. */
-export function contactReadScopeBreakers(sql) {
+/**
+ * Statements in `sql` that would put contacts' SELECT back on membership, or
+ * remove the helper. `migration` (the file's number) decides the retirement
+ * rules: at or after RETIRED_AT a DROP of the membership helper is accepted,
+ * and after it a CREATE of the membership helper or of
+ * public.crossover_contact_ids is a breaker.
+ */
+export function contactReadScopeBreakers(sql, { migration = null } = {}) {
   const code = sqlCode(sql)
   const hits = []
+  const retired = migration != null && migration >= RETIRED_AT
+  if (migration != null && migration > RETIRED_AT) {
+    if (createsFn(MEMBERSHIP_HELPER).test(code)) hits.push(`create function private.${MEMBERSHIP_HELPER} (retired in mig ${RETIRED_AT})`)
+    if (new RegExp(`\\bcreate\\s+(or\\s+replace\\s+)?function\\s+(?:"?public"?\\s*\\.\\s*)?"?${CROSSOVER_RPC}"?\\s*\\(`, 'i').test(code)) {
+      hits.push(`create function public.${CROSSOVER_RPC} (retired in mig ${RETIRED_AT})`)
+    }
+  }
   const policies = /\b(create|alter)\s+policy\s+("?\w+"?)\s+on\s+(?:public\s*\.\s*)?"?contacts"?(?![\w"])([\s\S]*?)(?:;|$)/gi
   for (const m of code.matchAll(policies)) {
     const body = m[3]
@@ -342,6 +360,7 @@ export function contactReadScopeBreakers(sql) {
     if (/\b(disable|no\s+force|force)\s+row\s+level\s+security\b/i.test(m[1])) hits.push(m[0].trim().replace(/\s+/g, ' '))
   }
   for (const name of [HELPER, MEMBERSHIP_HELPER, STUDIO_HELPER]) {
+    if (name === MEMBERSHIP_HELPER && retired) continue // its drop is the retirement (mig 768)
     const drops = new RegExp(`\\bdrop\\s+function\\s+(?:if\\s+exists\\s+)?private\\s*\\.\\s*${name}\\b[^;]*`, 'gi')
     for (const m of code.matchAll(drops)) {
       if (!createsFn(name).test(code.slice(m.index))) hits.push(m[0].trim())
@@ -365,7 +384,7 @@ export function helperDefaultRoles(files = migrationFiles()) {
 describe('(c) later migrations keep contacts_select on the Contacts helper', () => {
   it('no migration after 690 puts it back on membership or drops the helper', () => {
     const offenders = migrationFiles().filter((f) => migNum(f) > CONTACT_READ_SCOPE_MIGRATION)
-      .flatMap((f) => contactReadScopeBreakers(readFileSync(path.join(MIGRATIONS, f), 'utf8')).map((h) => `${f}: ${h}`))
+      .flatMap((f) => contactReadScopeBreakers(readFileSync(path.join(MIGRATIONS, f), 'utf8'), { migration: migNum(f) }).map((h) => `${f}: ${h}`))
     expect(offenders, 'contacts_select must keep reading private.auth_contact_read_location_ids() (CONTACTREADSCOPE.1, mig 690)').toEqual([])
   })
 
@@ -575,6 +594,24 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     expect(contactReadScopeBreakers(def(STUDIO_HELPER_BODY, 'LANGUAGE sql STABLE SECURITY INVOKER'))).toHaveLength(1)
     expect(contactReadScopeBreakers(`DROP FUNCTION private.${STUDIO_HELPER}();`)).toHaveLength(1)
     expect(contactReadScopeBreakers(`ALTER POLICY contacts_select ON public.contacts USING (id = ANY ((SELECT private.${STUDIO_HELPER}())::uuid[]));`)).toHaveLength(1)
+  })
+
+  it('768 (ORGCONTACTS.5) passes: dropping the membership helper is its retirement; after 768 a re-create of it or of crossover_contact_ids is a breaker, and before 768 the drop still is', () => {
+    const f768 = migrationFiles().find((f) => migNum(f) === RETIRED_AT)
+    expect(f768, 'mig 768 missing').toBeTruthy()
+    const sql768 = readFileSync(path.join(MIGRATIONS, f768), 'utf8')
+    expect(contactReadScopeBreakers(sql768, { migration: RETIRED_AT })).toEqual([])
+    expect(sqlCode(sql768)).toMatch(new RegExp(`drop\\s+function\\s+if\\s+exists\\s+private\\.${MEMBERSHIP_HELPER}`, 'i'))
+    expect(contactReadScopeBreakers(`DROP FUNCTION IF EXISTS private.${MEMBERSHIP_HELPER}();`, { migration: RETIRED_AT - 1 })).toHaveLength(1)
+    expect(contactReadScopeBreakers(`DROP FUNCTION IF EXISTS private.${MEMBERSHIP_HELPER}();`)).toHaveLength(1)
+    const recreate = `CREATE OR REPLACE FUNCTION private.${MEMBERSHIP_HELPER}() RETURNS uuid[] LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $function$ SELECT private.${STUDIO_HELPER}() $function$;`
+    expect(contactReadScopeBreakers(recreate, { migration: RETIRED_AT })).toEqual([])
+    expect(contactReadScopeBreakers(recreate, { migration: RETIRED_AT + 1 })).toHaveLength(1)
+    const rpc = `CREATE OR REPLACE FUNCTION public.crossover_contact_ids(loc uuid) RETURNS TABLE (contact_id uuid) LANGUAGE sql STABLE AS $$ SELECT contact_id FROM public.contact_studios WHERE location_id = loc $$;`
+    expect(contactReadScopeBreakers(rpc, { migration: RETIRED_AT + 1 })).toHaveLength(1)
+    expect(contactReadScopeBreakers(rpc, { migration: 765 })).toEqual([])
+    // the studio helper's drop is never accepted
+    expect(contactReadScopeBreakers(`DROP FUNCTION private.${STUDIO_HELPER}();`, { migration: RETIRED_AT })).toHaveLength(1)
   })
 
   it('the latest definition of the studio helper in the migrations is 765\'s', () => {

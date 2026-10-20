@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('./contact-studios.js', () => ({ studiosOfContact: vi.fn() }))
 import { studiosOfContact } from './contact-studios.js'
-import { loadContactStudios } from './contact-memberships.js'
+import { loadContactStudios } from './contact-studios-display.js'
 
 describe('loadContactStudios', () => {
   it('returns every relationship row with its location, primary studio first', async () => {

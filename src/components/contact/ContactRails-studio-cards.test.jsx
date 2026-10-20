@@ -20,7 +20,6 @@ vi.mock('@/components/ContactAppAccountCard', () => stub('app-account'))
 vi.mock('@/components/MemberPasswordOverrideButton', () => stub('password'))
 vi.mock('@/components/LinkedAccountsCard', () => stub('linked-accounts'))
 vi.mock('./GlofoxProfileCard', () => stub('glofox'))
-vi.mock('./StudioMembershipsCard', () => stub('memberships'))
 // Mirrors the real card's one rule: nothing without a studio to show.
 vi.mock('./Un1tPaymentsCard', () => ({ default: ({ studios }) => (studios?.length ? <i data-card="un1t-payments" /> : null) }))
 
@@ -43,7 +42,7 @@ describe('the studio-private read cards follow canReadStudioCards', () => {
     expect(w).not.toContain('data-card="marketing-preferences"')
     // the rest of the page still renders for them
     expect(n).toContain('Open tasks')
-    expect(w).toContain('data-card="memberships"')
+    expect(w).toContain('data-card="glofox"')
   })
 
   it('no flag handed over: hidden (fails closed)', () => {
@@ -63,14 +62,16 @@ describe('the studio-private read cards follow canReadStudioCards', () => {
 
 // HATCHPIPE.2 — the un1t.online payments card.
 describe('Un1tPaymentsCard placement', () => {
-  it('sits between StudioMembershipsCard and GlofoxProfileCard', () => {
+  // ORGCONTACTS.5 retired the memberships card (the Studios card, which renders
+  // nothing without rows, stands where it was).
+  it('sits between the linked-accounts card and GlofoxProfileCard', () => {
     const cards = [...who({ un1tBilling: { studios: [{ locationId: 'x' }] } }).matchAll(/data-card="([^"]+)"/g)].map((m) => m[1])
-    expect(cards).toEqual(['linked-accounts', 'memberships', 'un1t-payments', 'glofox'])
+    expect(cards).toEqual(['linked-accounts', 'un1t-payments', 'glofox'])
   })
 
   it('Glofox-only contact renders exactly as before', () => {
     const cards = (html) => [...html.matchAll(/data-card="([^"]+)"/g)].map((m) => m[1])
-    const BEFORE = ['linked-accounts', 'memberships', 'glofox']
+    const BEFORE = ['linked-accounts', 'glofox']
     expect(cards(who({}))).toEqual(BEFORE)
     expect(cards(who({ un1tBilling: { studios: [] } }))).toEqual(BEFORE)
     expect(cards(who({ un1tBilling: null }))).toEqual(BEFORE)

@@ -18,16 +18,12 @@
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import { asUser, asRole, IDS, abortMessage, policiesOf } from './helpers/member-write-sweep.js'
-import { mig, LOC_A, LOC_B, LOC_C, ORG1, signedOut, bootProd } from './helpers/contacts-resolvers-699-fixture.js'
+import { LOC_A, LOC_B, LOC_C, ORG1, signedOut, bootProd } from './helpers/contacts-resolvers-699-fixture.js'
+import {
+  MIG_251, MIG_699, MIG_731, MIG_732, MIG_758, MIG_762, MIG_764, MIG_765,
+  C_A, C_A2, C_B, C_C1, C_D1, C_C2, C_C3, ORG_ROW, BEFORE2, GLOFOX_ROWS, ENDED_ROW,
+} from './helpers/contact-studios-fixture.js'
 
-const MIG_251 = mig('251_crossover_contact_ids_rpc.sql')
-const MIG_699 = mig('699_org_admins_in_resolvers_uid_resolver_closed.sql')
-const MIG_731 = mig('731_contacts_read_by_studio_membership.sql')
-const MIG_732 = mig('732_contacts_read_by_studio_client.sql')
-const MIG_758 = mig('758_glofox_crossover_members.sql')
-const MIG_762 = mig('762_contacts_read_by_studio_deal.sql')
-const MIG_764 = mig('764_contact_studios.sql')
-const MIG_765 = mig('765_contacts_read_by_contact_studios.sql')
 
 const QUAL_731 = '((location_id = ANY (( SELECT private.auth_contact_read_location_ids() AS auth_contact_read_location_ids)::uuid[])) OR (user_id = ( SELECT auth.uid() AS uid)) OR (id = ANY (( SELECT private.auth_contact_membership_contact_ids() AS auth_contact_membership_contact_ids)::uuid[])))'
 const QUAL_765 = '((location_id = ANY (( SELECT private.auth_contact_read_location_ids() AS auth_contact_read_location_ids)::uuid[])) OR (user_id = ( SELECT auth.uid() AS uid)) OR (id = ANY (( SELECT private.auth_contact_studio_contact_ids() AS auth_contact_studio_contact_ids)::uuid[])))'
@@ -63,78 +59,6 @@ ${section(MIG_758, 'CREATE OR REPLACE FUNCTION public.crossover_contact_ids(loc 
 DROP VIEW public.studio_contacts;
 DROP FUNCTION private.auth_contact_studio_contact_ids();
 COMMIT;
-`
-
-const C_A = IDS.C_MEMBER        // lives at A: a deal at B
-const C_A2 = IDS.C_MEMBER2      // lives at A: a Glofox crossover member at B
-const C_B = IDS.C_B             // lives at B
-const C_C1 = '30000000-0000-0000-0000-0000000000c1'   // lives at C (ORG1, inactive): active member at B
-const C_D1 = '30000000-0000-0000-0000-0000000000d1'   // moved to C below: un1t client at B
-const C_C2 = '30000000-0000-0000-0000-0000000000c2'   // lives at C: a relationship at C only
-const C_C3 = '30000000-0000-0000-0000-0000000000c3'   // lives at C: an ENDED relationship at B
-const ORG_ROW = 'f0000000-0000-0000-0000-000000000001'
-
-// 731 + 732 + 758's fixture (as the 762 test builds it) with the ORG2 contact
-// moved into ORG1 (mig 764 refuses a cross-organisation pair, rightly), plus
-// what mig 764 reads: organisations, the contacts and locations columns, the
-// deal/pipeline columns, un1t_subscriptions, class_bookings, the WhatsApp
-// thread columns and cron_heartbeats.
-const BEFORE2 = `
-  CREATE TABLE IF NOT EXISTS public.organizations (id uuid PRIMARY KEY);
-  INSERT INTO public.organizations VALUES ('${ORG1}'), ('f0000000-0000-0000-0000-000000000002') ON CONFLICT DO NOTHING;
-  ALTER TABLE public.locations ADD COLUMN IF NOT EXISTS is_host_anchor boolean NOT NULL DEFAULT false;
-  ALTER TABLE public.locations ADD COLUMN IF NOT EXISTS membership_source text;
-  ALTER TABLE public.contacts ADD COLUMN organization_id uuid, ADD COLUMN glofox_member_id text, ADD COLUMN glofox_membership_status text,
-    ADD COLUMN glofox_membership_state text, ADD COLUMN created_via_import_id uuid, ADD COLUMN last_attended_at timestamptz,
-    ADD COLUMN created_at timestamptz NOT NULL DEFAULT now();
-  INSERT INTO public.contacts (id, location_id, user_id) VALUES
-    ('${C_C2}', '${LOC_C}', NULL), ('${C_C3}', '${LOC_C}', NULL) ON CONFLICT (id) DO NOTHING;
-  UPDATE public.contacts SET location_id = '${LOC_C}' WHERE id = '${C_D1}';
-  UPDATE public.contacts c SET organization_id = l.organization_id FROM public.locations l WHERE l.id = c.location_id;
-  ALTER TABLE public.deals ADD COLUMN contact_id uuid, ADD COLUMN stage_id uuid, ADD COLUMN status text DEFAULT 'open',
-    ADD COLUMN created_at timestamptz DEFAULT now(), ADD COLUMN updated_at timestamptz DEFAULT now();
-  CREATE TABLE public.pipelines (id uuid PRIMARY KEY, location_id uuid NOT NULL, enabled boolean NOT NULL DEFAULT true, is_primary boolean NOT NULL DEFAULT false);
-  CREATE TABLE public.pipeline_stages (id uuid PRIMARY KEY, pipeline_id uuid NOT NULL, slug text NOT NULL);
-  CREATE TABLE public.contact_memberships (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL, location_id uuid NOT NULL,
-    contact_id uuid NOT NULL, source text NOT NULL, plan_name text NOT NULL DEFAULT 'Plan',
-    status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'ended')),
-    first_seen_at timestamptz NOT NULL DEFAULT now(), last_seen_at timestamptz NOT NULL DEFAULT now(), ended_at timestamptz);
-  ALTER TABLE public.contact_memberships ENABLE ROW LEVEL SECURITY;
-  REVOKE ALL ON public.contact_memberships FROM anon, authenticated;
-  GRANT SELECT, INSERT, UPDATE, DELETE ON public.contact_memberships TO service_role;
-  ${MIG_251}
-  INSERT INTO public.contact_memberships (organization_id, location_id, contact_id, source, status) VALUES
-    ('${ORG1}', '${LOC_B}', '${C_C1}', 'un1t_online_api', 'active'),
-    ('${ORG1}', '${LOC_A}', '${C_D1}', 'un1t_online_export', 'active');
-  INSERT INTO public.deals (location_id, contact_id) VALUES ('${LOC_B}', '${C_A}');
-  CREATE TABLE public.un1t_clients (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), location_id uuid NOT NULL, un1t_user_id text NOT NULL,
-    contact_id uuid REFERENCES public.contacts(id) ON DELETE SET NULL, status text, credit_balance integer, credit_unlimited boolean,
-    remote_created_at timestamptz, synced_at timestamptz NOT NULL DEFAULT now(), UNIQUE (location_id, un1t_user_id));
-  ALTER TABLE public.un1t_clients ENABLE ROW LEVEL SECURITY;
-  REVOKE ALL ON public.un1t_clients FROM anon, authenticated;
-  GRANT SELECT, INSERT, UPDATE, DELETE ON public.un1t_clients TO service_role;
-  INSERT INTO public.un1t_clients (location_id, un1t_user_id, contact_id, status) VALUES ('${LOC_B}', 'u-b-1', '${C_D1}', 'inactive');
-  CREATE TABLE public.un1t_subscriptions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), location_id uuid NOT NULL, un1t_id text NOT NULL,
-    un1t_user_id text, contact_id uuid, status text, UNIQUE (location_id, un1t_id));
-  CREATE TABLE public.contact_location_preferences (contact_id uuid NOT NULL REFERENCES public.contacts(id) ON DELETE CASCADE,
-    location_id uuid NOT NULL, email_marketing boolean NOT NULL DEFAULT true, subscribed_at timestamptz NOT NULL DEFAULT now(),
-    source text NOT NULL, PRIMARY KEY (contact_id, location_id));
-  CREATE TABLE public.class_bookings (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), location_id uuid NOT NULL, contact_id uuid, starts_at timestamptz);
-  ALTER TABLE public.whatsapp_conversations ADD COLUMN contact_id uuid;
-  ALTER TABLE public.whatsapp_messages ADD COLUMN conversation_id uuid, ADD COLUMN direction text, ADD COLUMN created_at timestamptz NOT NULL DEFAULT now();
-  CREATE TABLE public.cron_heartbeats (name text PRIMARY KEY, expected_interval_seconds integer NOT NULL, grace_seconds integer NOT NULL DEFAULT 60,
-    last_ok_at timestamptz, notes text);
-`
-// Rows the Glofox sync would write once 758 exists (B's crossover member).
-const GLOFOX_ROWS = `
-  INSERT INTO public.glofox_crossover_members (location_id, glofox_member_id, contact_id) VALUES ('${LOC_B}', 'gf-b-1', '${C_A2}');
-`
-// After 764's backfill: an ENDED relationship at B for C_C3 (decision 2: still visible).
-const ENDED_ROW = `
-  INSERT INTO public.contact_studios (contact_id, location_id, organization_id, kind, status, source, ended_at)
-  VALUES ('${C_C3}', '${LOC_B}', '${ORG1}', 'lead', 'ended', 'deal', now());
 `
 
 const boot = async (migrate, { withEnded = true } = {}) => {
