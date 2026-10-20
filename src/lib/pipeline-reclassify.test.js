@@ -17,6 +17,7 @@ import { reclassifyAllContacts } from './pipeline-reclassify.js'
 import { membershipReadsFor } from './membership/reads/index.js'
 import { logWarn } from './log.js'
 import { loadActiveElsewhere } from './pipeline-other-studio-members.js'
+import { triggerSequencesForPipelineStageChange } from './sequences/triggers.js'
 
 beforeEach(() => {
   vi.mocked(loadActiveElsewhere).mockReset()
@@ -31,6 +32,8 @@ vi.mock('./membership/reads/index.js', () => ({
   supportsRead: (r, key) => typeof r?.reads?.[key] === 'function',
 }))
 vi.mock('./log.js', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+// TDSEQ.1 — the sequence trigger a un1t board move fires (triggers.test.js covers it).
+vi.mock('./sequences/triggers.js', () => ({ triggerSequencesForPipelineStageChange: vi.fn() }))
 // PIPEEXCL.1 — who is an active member at another studio is its own module
 // (pipeline-other-studio-members.test.js); here it answers "nobody" unless a
 // test says otherwise, so every fixture below keeps describing today's board.
@@ -1163,5 +1166,191 @@ describe('PIPEEXCL.1 — active members at another studio leave Hatch\'s (acquis
       expect(out.deals_created).toBe(1)
       expect(logWarn).not.toHaveBeenCalledWith('pipeline-reclassify', 'other-studio members unavailable', expect.anything())
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// TDSEQ.1 — a MOVE on a un1t.online board starts the board studio's
+// pipeline_stage_change sequences (Hatch's "Trial done" outreach).
+// ---------------------------------------------------------------------------
+describe('TDSEQ.1 — un1t board moves fire the stage-change trigger at the board\'s studio', () => {
+  beforeEach(() => {
+    vi.mocked(membershipReadsFor).mockReset()
+    vi.mocked(logWarn).mockClear()
+    vi.mocked(triggerSequencesForPipelineStageChange).mockReset()
+    vi.mocked(triggerSequencesForPipelineStageChange).mockResolvedValue(undefined)
+  })
+
+  const TD_STAGES = [
+    ...HATCH_STAGES,
+    { id: 'h-second', slug: 'second_class', pipeline_id: 'p-h-acq', location_id: HATCH },
+    { id: 'h-td', slug: 'trial_done', pipeline_id: 'p-h-acq', location_id: HATCH },
+  ]
+  const daysAgo = (d) => new Date(Date.now() - d * 86_400_000).toISOString()
+  // 2 attended + an expired trial = trial_done on the un1t board (TRIALDONE.2).
+  const trialDoneSnap = () => ({
+    glofox_membership_status: 'lead', recent_bookings: [attendedBooking(9), attendedBooking(4)],
+    last_attended_at: daysAgo(4), joined_at: daysAgo(30), trial_expires_at: daysAgo(1),
+  })
+  const firstSnap = () => ({
+    glofox_membership_status: 'lead', recent_bookings: [attendedBooking(4)], last_attended_at: daysAgo(4), joined_at: daysAgo(30),
+  })
+
+  // Records every call; a deals stage UPDATE answers `moveError` when given.
+  function moveDb(fixtures, { moveError = null, closedBeforeWrite = [] } = {}) {
+    const calls = []
+    function chain(table) {
+      const entry = [table]
+      calls.push(entry)
+      let op = 'select'
+      const filters = []
+      const c = {}
+      for (const m of ['select', 'eq', 'in', 'order', 'range', 'single', 'limit', 'update', 'insert']) {
+        c[m] = (...args) => {
+          entry.push([m, ...args])
+          if (m === 'update' || m === 'insert') op = m
+          if (m === 'eq') filters.push({ op: 'eq', col: args[0], val: args[1] })
+          if (m === 'in') filters.push({ op: 'in', col: args[0], vals: args[1] })
+          return c
+        }
+      }
+      c.then = (resolve) => {
+        if (op === 'insert') return resolve({ data: table === 'pipeline_classification_runs' ? { id: 'run-1' } : null, error: null })
+        if (op === 'update') {
+          const isMove = table === 'deals' && entry.some((x) => x[0] === 'update' && 'stage_id' in (x[1] || {}))
+          if (isMove && moveError) return resolve({ data: null, error: moveError })
+          // An update answers the ids it matched (a deal closed since the read
+          // no longer matches status 'open').
+          const ids = (filters.find((f) => f.op === 'in' && f.col === 'id')?.vals || [])
+            .filter((id) => !closedBeforeWrite.includes(id))
+          return resolve({ data: ids.map((id) => ({ id })), error: null })
+        }
+        const rows = (fixtures[table] || []).filter((row) => filters.every((f) => {
+          if (!Object.prototype.hasOwnProperty.call(row, f.col)) return true
+          return f.op === 'in' ? f.vals.includes(row[f.col]) : row[f.col] === f.val
+        }))
+        return resolve({ data: rows, error: null })
+      }
+      return c
+    }
+    return { db: { from: (t) => chain(t) }, calls }
+  }
+  const hatchRun = (people, deals, opts) => {
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: people.map(([id]) => ({ id, name: id, email: null, location_id: 'loc-st' })),
+      snapshots: people,
+      unlinked: 0, skipped: 0,
+    })))
+    return moveDb({ pipelines: HATCH_PIPELINES, pipeline_stages: TD_STAGES, deals }, opts)
+  }
+  const deal = (id, contactId, stageId) => ({ id, contact_id: contactId, stage_id: stageId, pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' })
+
+  it('a move fires once, from the old slug to the new one, with the BOARD\'s studio (a Stillorgan-home contact)', async () => {
+    const rec = hatchRun([['c-td', trialDoneSnap()]], [deal('d-1', 'c-td', 'h-second')])
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(out).toMatchObject({ ok: true, deals_moved: 1 })
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledTimes(1)
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledWith('c-td', 'second_class', 'trial_done', { locationId: HATCH })
+  })
+
+  it('fires after the moves are written (the deal update precedes it)', async () => {
+    const order = []
+    vi.mocked(triggerSequencesForPipelineStageChange).mockImplementation(async () => { order.push('trigger') })
+    const rec = hatchRun([['c-td', trialDoneSnap()]], [deal('d-1', 'c-td', 'h-second')])
+    const origFrom = rec.db.from
+    rec.db.from = (t) => { const b = origFrom(t); const u = b.update; b.update = (...a) => { order.push(`update:${t}`); return u(...a) }; return b }
+    await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(order.indexOf('update:deals')).toBeGreaterThan(-1)
+    expect(order.indexOf('trigger')).toBeGreaterThan(order.indexOf('update:deals'))
+  })
+
+  it('a create, an unchanged deal and a leave fire nothing', async () => {
+    vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(['c-leaver']), studios: [] })
+    const rec = hatchRun(
+      [['c-new', trialDoneSnap()], ['c-same', trialDoneSnap()], ['c-leaver', firstSnap()]],
+      [deal('d-same', 'c-same', 'h-td'), deal('d-leave', 'c-leaver', 'h-new')],
+    )
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(out).toMatchObject({ ok: true, deals_created: 1, deals_unchanged: 1, deals_left_board: 1, deals_moved: 0 })
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+  })
+
+  it('a move whose write failed fires nothing', async () => {
+    const rec = hatchRun([['c-td', trialDoneSnap()]], [deal('d-1', 'c-td', 'h-second')], { moveError: { message: 'nope' } })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(out).toMatchObject({ ok: true, deals_moved: 0, errors: 1 })
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+  })
+
+  it('a move from a stage id the run cannot name (from_slug "unknown") fires nothing: stage-id churn, not progress', async () => {
+    const rec = hatchRun([['c-td', trialDoneSnap()]], [deal('d-1', 'c-td', 'h-gone')])
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(out).toMatchObject({ ok: true, deals_moved: 1 })
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+  })
+
+  it('the un1t move is guarded on status open and fires only for the rows it changed (a deal closed between read and write does not fire)', async () => {
+    const rec = hatchRun(
+      [['c-a', trialDoneSnap()], ['c-b', trialDoneSnap()]],
+      [deal('d-a', 'c-a', 'h-second'), deal('d-b', 'c-b', 'h-second')],
+      { closedBeforeWrite: ['d-a'] },
+    )
+    await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    const move = rec.calls.find((e) => e[0] === 'deals' && e.some((x) => x[0] === 'update' && 'stage_id' in (x[1] || {})))
+    expect(move).toEqual(['deals', ['update', { stage_id: 'h-td' }], ['in', 'id', ['d-a', 'd-b']], ['eq', 'status', 'open'], ['select', 'id']])
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledTimes(1)
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledWith('c-b', 'second_class', 'trial_done', { locationId: HATCH })
+  })
+
+  it('a dry run fires nothing', async () => {
+    const rec = hatchRun([['c-td', trialDoneSnap()]], [deal('d-1', 'c-td', 'h-second')])
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
+    expect(out).toMatchObject({ ok: true, deals_moved: 1 })
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+  })
+
+  it('more than 50 moves into one stage in a run fire none for that stage (a rule change), with a warning; other stages still fire', async () => {
+    const people = []
+    const deals = []
+    for (let i = 0; i < 51; i++) { people.push([`c-${i}`, trialDoneSnap()]); deals.push(deal(`d-${i}`, `c-${i}`, 'h-second')) }
+    people.push(['c-first', firstSnap()]); deals.push(deal('d-first', 'c-first', 'h-new'))
+    const rec = hatchRun(people, deals)
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(out).toMatchObject({ ok: true, deals_moved: 52 })
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledTimes(1)
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledWith('c-first', 'new_lead', 'first_class', { locationId: HATCH })
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'stage trigger held: mass move', expect.objectContaining({ locationId: HATCH, to_slug: 'trial_done', moves: 51 }))
+  })
+
+  it('exactly 50 into one stage still fire', async () => {
+    const people = []
+    const deals = []
+    for (let i = 0; i < 50; i++) { people.push([`c-${i}`, trialDoneSnap()]); deals.push(deal(`d-${i}`, `c-${i}`, 'h-second')) }
+    const rec = hatchRun(people, deals)
+    await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledTimes(50)
+  })
+
+  it('a trigger that throws never fails the run, and the rest still fire', async () => {
+    vi.mocked(triggerSequencesForPipelineStageChange)
+      .mockRejectedValueOnce(new Error('enrol boom'))
+      .mockResolvedValue(undefined)
+    const rec = hatchRun([['c-a', trialDoneSnap()], ['c-b', trialDoneSnap()]], [deal('d-a', 'c-a', 'h-second'), deal('d-b', 'c-b', 'h-second')])
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(out).toMatchObject({ ok: true, deals_moved: 2, errors: 0 })
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledTimes(2)
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'stage trigger failed', expect.objectContaining({ locationId: HATCH, contactId: 'c-a' }))
+  })
+
+  it('a Glofox (contacts-input) board never fires it: that board fires through ensureDealForContact', async () => {
+    const rec = moveDb({
+      pipelines: DEFAULT_PIPELINES,
+      pipeline_stages: STAGES,
+      contacts: [{ id: 'c-1', name: 'A', email: null, glofox_membership_status: 'ex_member', last_attended_at: isoDaysAgo(400), joined_at: isoDaysAgo(800), created_at: isoDaysAgo(800), recent_bookings: [] }],
+      deals: [{ id: 'd-1', contact_id: 'c-1', stage_id: 'stage-member', pipeline_id: 'p-acq', status: 'open' }],
+    })
+    const out = await reclassifyAllContacts(rec.db, { locationId: 'loc-1' })
+    expect(out).toMatchObject({ ok: true, input_source: 'contacts', deals_moved: 1 })
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
   })
 })

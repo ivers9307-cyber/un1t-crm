@@ -1,8 +1,20 @@
 // FLOW-GRAPH.2 — semantic validation of a flow graph. Shared by the
 // builder (inline red flags), the agent (self-correct loop), and publish
 // (the gate). Pure. Returns { ok, errors: [{ code, nodeId?, message }] }.
-import { parseGraphShape, TRIGGER_SOURCE_ID } from './schema.js'
+import { parseGraphShape, TRIGGER_SOURCE_ID, BRANCH_PREDICATE_TYPES } from './schema.js'
 import { urlButtonStepBlock } from '../../whatsapp-template-buttons.js'
+
+// TDSEQ.1 — the runner throws on a predicate it cannot evaluate (and retries
+// it until the enrolment pauses), so such a branch must not publish.
+function branchPredicateError(predicate) {
+  if (!predicate || !predicate.type) return 'branch needs a predicate'
+  if (!BRANCH_PREDICATE_TYPES.includes(predicate.type)) return `branch predicate "${predicate.type}" is not supported`
+  if (predicate.type === 'in_pipeline_stage_at_studio') {
+    const stages = Array.isArray(predicate.stages) ? predicate.stages.filter((s) => String(s ?? '').trim()) : []
+    if (stages.length === 0) return 'branch needs at least one pipeline stage'
+  }
+  return null
+}
 
 function requiredConfigError(node) {
   const c = node.config || {}
@@ -29,7 +41,7 @@ function requiredConfigError(node) {
     case 'webhook':
       return need(typeof c.url === 'string' && /^https:\/\//.test(c.url), 'webhook needs an https url')
     case 'branch':
-      return need(c.predicate && c.predicate.type, 'branch needs a predicate')
+      return branchPredicateError(c.predicate)
     case 'glofox_provision':
       return null // no required config — uses the location's trial settings
     default:

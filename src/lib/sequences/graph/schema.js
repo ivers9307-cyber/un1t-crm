@@ -29,6 +29,14 @@ export const RETIRED_NODE_TYPES = ['move_pipeline_stage', 'sms']
 // may create. Valid-but-retired types are excluded.
 export const ACTIVE_NODE_TYPES = NODE_TYPES.filter((t) => !RETIRED_NODE_TYPES.includes(t))
 
+// The branch predicates evaluateBranchPredicate (steps.js) answers. Order is
+// the builder's picker order. TDSEQ.1 added the two studio-scoped ones:
+// in_pipeline_stage_at_studio { stages } and whatsapp_reply_since_enrolment {}.
+export const BRANCH_PREDICATE_TYPES = [
+  'has_tag', 'booked_class_at_studio', 'in_pipeline_stage_at_studio', 'whatsapp_reply_since_enrolment',
+  'field_equals', 'field_in',
+]
+
 // The engine's trigger vocabulary (triggers.js + cron-triggers.js). Kept as a
 // flat list; trigger-specific config is validated per-type in validate.js.
 export const TRIGGER_TYPES = [

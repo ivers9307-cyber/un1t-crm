@@ -250,4 +250,22 @@ describe('runSequences — branch steps', () => {
 
     expect(processBranchStep).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-1' }))
   })
+
+  it('passes the enrolment time to the branch, so a "since enrolment" predicate can compare against it (TDSEQ.1)', async () => {
+    const steps = [
+      { id: 'st-2', step_order: 2, step_type: 'branch', config: { predicate: { type: 'whatsapp_reply_since_enrolment' }, then_step_order: 5, else_step_order: 3 }, delay_days: 0, delay_hours: 0, delay_minutes: 0 },
+      { id: 'st-5', step_order: 5, step_type: 'apply_tag', config: { tag: 'replied', next_step_order: 'end' }, delay_days: 0, delay_hours: 0, delay_minutes: 0 },
+    ]
+    const enrolled = { ...enrollment, enrolled_at: '2026-10-20T09:00:00.000Z' }
+    const { db } = makeDb(routeFor({ steps, enrollment: enrolled }))
+    createServerClient.mockReturnValue(db)
+    processBranchStep.mockClear()
+    processBranchStep.mockResolvedValue(5)
+
+    await runSequences()
+
+    expect(processBranchStep).toHaveBeenCalledWith(db, expect.objectContaining({
+      locationId: 'loc-1', enrolledAt: '2026-10-20T09:00:00.000Z',
+    }))
+  })
 })

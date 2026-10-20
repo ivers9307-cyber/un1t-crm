@@ -305,6 +305,187 @@ describe('evaluateBranchPredicate', () => {
     })
   })
 
+  // TDSEQ.1 — a studio-scoped recorder: each table answers from a queue (one
+  // result per call, last one repeats) and every chain's ops are kept.
+  function studioDb(results = {}) {
+    const calls = {}
+    return {
+      calls,
+      from: vi.fn((table) => {
+        const ops = []
+        ;(calls[table] ||= []).push(ops)
+        const queue = results[table] || []
+        const idx = calls[table].length - 1
+        const result = queue[Math.min(idx, queue.length - 1)] || { data: [], error: null }
+        const builder = {}
+        for (const m of ['select', 'eq', 'neq', 'in', 'is', 'or', 'gt', 'order', 'range', 'limit']) {
+          builder[m] = vi.fn((...args) => { ops.push([m, ...args]); return builder })
+        }
+        builder.maybeSingle = vi.fn(() => { ops.push(['maybeSingle']); return Promise.resolve(result) })
+        builder.then = (onF, onR) => Promise.resolve(result).then(onF, onR)
+        return builder
+      }),
+    }
+  }
+
+  describe('in_pipeline_stage_at_studio (TDSEQ.1)', () => {
+    const pred = { type: 'in_pipeline_stage_at_studio', stages: ['trial_done'] }
+    const ok = (data) => ({ data, error: null })
+
+    it('is true when the contact has an OPEN deal at the studio on an enabled board in one of the stages', async () => {
+      const db = studioDb({
+        pipelines: [ok([{ id: 'pl-hatch' }])],
+        pipeline_stages: [ok([{ id: 'st-td' }])],
+        deals: [ok([{ id: 'deal-1' }])],
+      })
+      expect(await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(true)
+      const boards = db.calls.pipelines[0]
+      expect(boards).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+      expect(boards).toContainEqual(['eq', 'enabled', true])
+      const stageOps = db.calls.pipeline_stages[0]
+      expect(stageOps).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+      expect(stageOps).toContainEqual(['in', 'pipeline_id', ['pl-hatch']])
+      expect(stageOps).toContainEqual(['in', 'slug', ['trial_done']])
+      const dealOps = db.calls.deals[0]
+      expect(dealOps).toContainEqual(['eq', 'contact_id', 'c1'])
+      expect(dealOps).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+      expect(dealOps).toContainEqual(['eq', 'status', 'open'])
+      expect(dealOps).toContainEqual(['in', 'stage_id', ['st-td']])
+    })
+
+    it('is false when the contact has no open deal in those stages at the studio', async () => {
+      const db = studioDb({
+        pipelines: [ok([{ id: 'pl-hatch' }])],
+        pipeline_stages: [ok([{ id: 'st-td' }])],
+        deals: [ok([])],
+      })
+      expect(await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(false)
+    })
+
+    it('is false (no deal read) when the studio has no enabled board, or no such stage on one', async () => {
+      const noBoards = studioDb({ pipelines: [ok([])] })
+      expect(await steps.evaluateBranchPredicate(noBoards, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(false)
+      expect(noBoards.calls.deals).toBeUndefined()
+      const noStage = studioDb({ pipelines: [ok([{ id: 'pl-hatch' }])], pipeline_stages: [ok([])] })
+      expect(await steps.evaluateBranchPredicate(noStage, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(false)
+      expect(noStage.calls.deals).toBeUndefined()
+    })
+
+    it('never reads contacts.pipeline_stage_slug (the HOME studio\'s board)', async () => {
+      const homeSaysTrialDone = { ...contact, pipeline_stage_slug: 'trial_done' }
+      const db = studioDb({ pipelines: [ok([{ id: 'pl-hatch' }])], pipeline_stages: [ok([{ id: 'st-td' }])], deals: [ok([])] })
+      expect(await steps.evaluateBranchPredicate(db, { contact: homeSaysTrialDone, predicate: pred, locationId: 'loc-hatch' })).toBe(false)
+    })
+
+    it('throws on any failed read (the runner retries) instead of guessing', async () => {
+      const boom = { data: null, error: { message: 'boards-boom' } }
+      await expect(steps.evaluateBranchPredicate(studioDb({ pipelines: [boom] }), { contact, predicate: pred, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/boards-boom/)
+      await expect(steps.evaluateBranchPredicate(studioDb({ pipelines: [ok([{ id: 'p' }])], pipeline_stages: [{ data: null, error: { message: 'stages-boom' } }] }), { contact, predicate: pred, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/stages-boom/)
+      await expect(steps.evaluateBranchPredicate(studioDb({ pipelines: [ok([{ id: 'p' }])], pipeline_stages: [ok([{ id: 's' }])], deals: [{ data: null, error: { message: 'deals-boom' } }] }), { contact, predicate: pred, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/deals-boom/)
+    })
+
+    it('throws without the sequence studio or without stages', async () => {
+      await expect(steps.evaluateBranchPredicate(studioDb(), { contact, predicate: pred }))
+        .rejects.toThrow(/studio/)
+      await expect(steps.evaluateBranchPredicate(studioDb(), { contact, predicate: { type: 'in_pipeline_stage_at_studio', stages: [] }, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/stages/)
+      await expect(steps.evaluateBranchPredicate(studioDb(), { contact, predicate: { type: 'in_pipeline_stage_at_studio' }, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/stages/)
+    })
+  })
+
+  describe('whatsapp_reply_since_enrolment (TDSEQ.1)', () => {
+    const pred = { type: 'whatsapp_reply_since_enrolment' }
+    const waContact = { ...contact, wa_phone: '353871234567' }
+    const enrolledAt = '2026-10-20T09:00:00.000Z'
+    const ok = (data) => ({ data, error: null })
+    const orgDb = (over = {}) => studioDb({
+      locations: [ok({ id: 'loc-hatch', organization_id: 'org-1' }), ok([{ id: 'loc-hatch' }, { id: 'loc-still' }])],
+      whatsapp_conversations: [ok([{ id: 'conv-hatch' }, { id: 'conv-still' }])],
+      whatsapp_messages: [ok([{ id: 'm-1' }])],
+      ...over,
+    })
+
+    it('is true when an INBOUND message landed on any organisation thread after enrolment', async () => {
+      const db = orgDb()
+      expect(await steps.evaluateBranchPredicate(db, { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt })).toBe(true)
+      expect(db.calls.locations[0]).toContainEqual(['eq', 'id', 'loc-hatch'])
+      expect(db.calls.locations[1]).toContainEqual(['eq', 'organization_id', 'org-1'])
+      const threads = db.calls.whatsapp_conversations[0]
+      expect(threads).toContainEqual(['in', 'location_id', ['loc-hatch', 'loc-still']])
+      expect(threads).toContainEqual(['or', 'contact_id.eq.c1,wa_phone.eq.353871234567'])
+      const msgs = db.calls.whatsapp_messages[0]
+      expect(msgs).toContainEqual(['in', 'conversation_id', ['conv-hatch', 'conv-still']])
+      expect(msgs).toContainEqual(['eq', 'direction', 'inbound'])
+      expect(msgs).toContainEqual(['gt', 'created_at', enrolledAt])
+    })
+
+    it('is false when no inbound message arrived since enrolment', async () => {
+      const db = orgDb({ whatsapp_messages: [ok([])] })
+      expect(await steps.evaluateBranchPredicate(db, { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt })).toBe(false)
+    })
+
+    it('is false (no message read) when the contact has no thread in the organisation', async () => {
+      const db = orgDb({ whatsapp_conversations: [ok([])] })
+      expect(await steps.evaluateBranchPredicate(db, { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt })).toBe(false)
+      expect(db.calls.whatsapp_messages).toBeUndefined()
+    })
+
+    it('matches threads on contact_id alone when the contact has no usable wa_phone', async () => {
+      const db = orgDb()
+      await steps.evaluateBranchPredicate(db, { contact: { ...contact, wa_phone: null }, predicate: pred, locationId: 'loc-hatch', enrolledAt })
+      expect(db.calls.whatsapp_conversations[0]).toContainEqual(['or', 'contact_id.eq.c1'])
+      const odd = orgDb()
+      await steps.evaluateBranchPredicate(odd, { contact: { ...contact, wa_phone: '1,location_id.neq.x' }, predicate: pred, locationId: 'loc-hatch', enrolledAt })
+      expect(odd.calls.whatsapp_conversations[0]).toContainEqual(['or', 'contact_id.eq.c1'])
+    })
+
+    it('uses the studio alone when it has no organisation', async () => {
+      const db = orgDb({ locations: [ok({ id: 'loc-hatch', organization_id: null })] })
+      expect(await steps.evaluateBranchPredicate(db, { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt })).toBe(true)
+      expect(db.calls.locations).toHaveLength(1)
+      expect(db.calls.whatsapp_conversations[0]).toContainEqual(['in', 'location_id', ['loc-hatch']])
+    })
+
+    it('throws on any failed read instead of reading it as "no reply"', async () => {
+      const bad = (m) => ({ data: null, error: { message: m } })
+      await expect(steps.evaluateBranchPredicate(orgDb({ locations: [bad('loc-boom')] }), { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt }))
+        .rejects.toThrow(/loc-boom/)
+      await expect(steps.evaluateBranchPredicate(orgDb({ locations: [ok({ id: 'loc-hatch', organization_id: 'org-1' }), bad('org-boom')] }), { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt }))
+        .rejects.toThrow(/org-boom/)
+      await expect(steps.evaluateBranchPredicate(orgDb({ whatsapp_conversations: [bad('conv-boom')] }), { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt }))
+        .rejects.toThrow(/conv-boom/)
+      await expect(steps.evaluateBranchPredicate(orgDb({ whatsapp_messages: [bad('msg-boom')] }), { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt }))
+        .rejects.toThrow(/msg-boom/)
+      await expect(steps.evaluateBranchPredicate(orgDb({ locations: [ok(null)] }), { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt }))
+        .rejects.toThrow(/studio/)
+    })
+
+    it('throws without the studio or the enrolment time', async () => {
+      await expect(steps.evaluateBranchPredicate(orgDb(), { contact: waContact, predicate: pred, enrolledAt }))
+        .rejects.toThrow(/studio/)
+      await expect(steps.evaluateBranchPredicate(orgDb(), { contact: waContact, predicate: pred, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/enrol/)
+      await expect(steps.evaluateBranchPredicate(orgDb(), { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt: 'not-a-date' }))
+        .rejects.toThrow(/enrol/)
+    })
+
+    it('processBranchStep hands the enrolment time through to the predicate', async () => {
+      const db = orgDb()
+      const target = await steps.processBranchStep(db, {
+        step: { step_order: 5, config: { predicate: pred, then_step_order: 9, else_step_order: 6 } },
+        contact: waContact,
+        locationId: 'loc-hatch',
+        enrolledAt,
+      })
+      expect(target).toBe(9)
+      expect(db.calls.whatsapp_messages[0]).toContainEqual(['gt', 'created_at', enrolledAt])
+    })
+  })
+
   describe('field_in', () => {
     it('throws when field is not whitelisted', async () => {
       await expect(steps.evaluateBranchPredicate(mockDb(), {

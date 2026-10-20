@@ -181,4 +181,44 @@ describe('validateGraph — dynamic URL button value (SEQ-URLBUTTON.1)', () => {
     const g = waGraph({ whatsapp_template_id: 'wt-dyn', whatsapp_variables: {} })
     expect(validateGraph(g, { whatsappTemplates: [DYNAMIC] }).ok).toBe(false)
   })
+
+  // TDSEQ.1 — a branch predicate the runner cannot evaluate must not publish.
+  describe('branch predicates', () => {
+    const branchGraph = (predicate) => ({
+      version: 1,
+      trigger: { type: 'pipeline_stage_change', config: { to_status: 'trial_done' } },
+      nodes: [
+        { id: 'b1', type: 'branch', config: { predicate } },
+        { id: 'y', type: 'wait', config: { hours: 2 } },
+        { id: 'n', type: 'apply_tag', config: { tag: 'left' } },
+      ],
+      edges: [{ from: 'trigger', to: 'b1' }, { from: 'b1', to: 'y', label: 'yes' }, { from: 'b1', to: 'n', label: 'no' }],
+    })
+    const messages = (g) => validateGraph(g).errors.map(e => e.message)
+
+    it('accepts in_pipeline_stage_at_studio with stages, and whatsapp_reply_since_enrolment', () => {
+      expect(validateGraph(branchGraph({ type: 'in_pipeline_stage_at_studio', stages: ['trial_done'] }))).toEqual({ ok: true, errors: [] })
+      expect(validateGraph(branchGraph({ type: 'whatsapp_reply_since_enrolment' }))).toEqual({ ok: true, errors: [] })
+    })
+
+    it('refuses in_pipeline_stage_at_studio without a stage', () => {
+      for (const stages of [undefined, [], [''], ['  ']]) {
+        const g = branchGraph({ type: 'in_pipeline_stage_at_studio', stages })
+        expect(codes(g)).toContain('missing_config')
+        expect(messages(g)).toContain('branch needs at least one pipeline stage')
+      }
+    })
+
+    it('refuses a predicate type the runner does not know', () => {
+      const g = branchGraph({ type: 'made_up' })
+      expect(codes(g)).toContain('missing_config')
+      expect(messages(g)).toContain('branch predicate "made_up" is not supported')
+    })
+
+    it('keeps accepting the existing predicates', () => {
+      for (const p of [{ type: 'has_tag', tag: 'vip' }, { type: 'booked_class_at_studio' }, { type: 'field_equals', field: 'label', value: 'x' }, { type: 'field_in', field: 'label', values: ['x'] }]) {
+        expect(validateGraph(branchGraph(p)).ok).toBe(true)
+      }
+    })
+  })
 })
