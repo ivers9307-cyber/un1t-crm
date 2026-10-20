@@ -8,7 +8,8 @@ import { canWriteSegmentsAt } from '@/lib/segment-access'
 import ContactsView from '@/components/ContactsView'
 import { zoneOfLocation } from '@/lib/location-time'
 import ContactsHeaderActions from '@/components/ContactsHeaderActions'
-import { crossoverContactIds, fetchCrossoverContext, fetchListMembershipFlags } from '@/lib/contact-crossovers'
+import { fetchCrossoverContext, fetchListMembershipFlags } from '@/lib/contact-crossovers'
+import { listStudioContactsQuery } from '@/lib/studio-contacts-query'
 import { attachLinkedCounts } from '@/lib/person-links'
 import ContactDuplicatesView from '@/components/ContactDuplicatesView'
 
@@ -64,22 +65,15 @@ export default async function ContactsPage(props) {
   // (zero client round-trips for the common load). When the operator
   // adds an advanced filter row, ContactsView swaps to /api/contacts/search.
   //
-  // PERF.2 — narrowed from select('*') to the explicit field set
-  // ContactsTable + ContactsView actually consume. Cuts the wire size
-  // ~70% for the no-filter load and speeds up the JSON parse on the
-  // client. If a downstream component needs more columns, add them
-  // here AND in the /api/contacts/search route so both paths return
-  // the same shape.
-  // person_group_id drives the "Linked" chip; is_primary_contact (mig 334)
-  // folds a linked person down to ONE row (the group primary) in this lookup
-  // list. The non-primary accounts stay reachable from the profile + via the
-  // "Show linked duplicates" toggle (which re-queries the API without it).
-  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at, location_id, glofox_membership_status, person_group_id'
-  const crossIds = await crossoverContactIds(db, locationId)
-  let query = db.from('contacts').select(CONTACT_LIST_FIELDS).eq('is_primary_contact', true)
-  query = crossIds.length > 0
-    ? query.or(`location_id.eq.${locationId},id.in.(${crossIds.join(',')})`)
-    : query.eq('location_id', locationId)
+  // ORGCONTACTS.2 — the studio's list is public.studio_contacts (mig 765:
+  // contacts joined to their contact_studios rows) filtered on the studio:
+  // every contact with ANY relationship here, the ones whose primary studio
+  // is elsewhere included, in ONE equality filter (no crossover id.in() list,
+  // no 100-id cap). The field set is CONTACT_LIST_FIELDS in
+  // src/lib/studio-contacts-query.js, shared with /api/contacts/search.
+  // person_group_id drives the "Linked" chip; primaryOnly (mig 334) folds a
+  // linked person down to ONE row (the group primary) in this lookup list.
+  let query = listStudioContactsQuery(db, { locationId, primaryOnly: true })
   query = query.order('created_at', { ascending: false }).limit(200)
   if (status) query = query.eq('pipeline_stage_slug', status)
   // FUNNEL.1 — the old active_trial chip's ClassPass carve-out is
