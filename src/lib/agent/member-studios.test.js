@@ -346,9 +346,19 @@ function world(over = {}) {
       { location_id: HATCH, un1t_user_id: 'u-1', status: 'active' },
       { location_id: FOREIGN, un1t_user_id: 'u-1', status: 'active' },
     ],
+    // ORGCONTACTS.3 — the relationship rows (contact_studios) are the candidate source.
+    contact_studios: [
+      studioRow('c-still', STILL, { source: 'glofox' }),
+      studioRow('c-hatch', HATCH, { source: 'un1t_online' }),
+      studioRow('c-stranger', STILL, { source: 'glofox' }),
+    ],
     ...over,
   }
 }
+const studioRow = (contactId, locationId, over = {}) => ({
+  contact_id: contactId, location_id: locationId, kind: 'member', status: 'active', source: 'glofox',
+  stage_slug: null, first_seen_at: '2026-01-01T00:00:00Z', last_seen_at: null, ...over,
+})
 
 const args = (over = {}) => ({ anchorContactId: 'c-still', threadLocationId: STILL, organizationId: ORG, senderPhone: SENDER, ...over })
 
@@ -442,6 +452,7 @@ describe('resolveMemberStudios', () => {
       locations: { locations: true },
       un1t_clients: { un1t_clients: true },
       un1t_subscriptions: { un1t_subscriptions: true },
+      contact_studios: { contact_studios: true },
     }
     for (const [label, spec] of Object.entries(failures)) {
       it(label, async () => {
@@ -493,5 +504,77 @@ describe('classifyMemberStudios — a Hatch contact with a linked Stillorgan Glo
     const studios = classify({ contacts: [unlinked], agentOn: { [STILL]: true } })
     expect(byLoc(studios, STILL)).toMatchObject({ active: false, contactIds: [] })
     expect(byLoc(studios, STILL).glofoxMemberId).toBeUndefined()
+  })
+})
+
+// ORGCONTACTS.3 — candidates come from contact_studios: an ACTIVE member/client
+// row for any group contact at an organisation studio, plus the thread studio.
+// A Glofox id or a un1t.online mirror row alone no longer nominates a studio
+// (they still decide `active`).
+describe('resolveMemberStudios — candidates come from contact_studios (ORGCONTACTS.3)', () => {
+  beforeEach(() => {
+    resolveAgentSettings.mockReset()
+    resolveAgentSettings.mockImplementation(settingsFor({ [STILL]: { enabled: true }, [HATCH]: { enabled: true } }))
+  })
+
+  it('candidates are the studios with an active member/client row for any group contact, plus the thread studio', async () => {
+    // c-still still carries a Glofox id at Stillorgan, but only Hatch has a relationship row.
+    const w = world({ contact_studios: [studioRow('c-hatch', HATCH, { kind: 'client', source: 'un1t_online' })] })
+    const hatchThread = await resolveMemberStudios(makeDb(w), args({ threadLocationId: HATCH }))
+    expect(hatchThread.readFailed).toBe(false)
+    expect(hatchThread.studios.map((s) => s.locationId)).toEqual([HATCH])
+    const stillThread = await resolveMemberStudios(makeDb(w), args({ threadLocationId: STILL }))
+    expect(stillThread.studios.map((s) => s.locationId)).toEqual([STILL, HATCH])
+  })
+
+  it('a lead-only row is not a candidate', async () => {
+    const w = world({ contact_studios: [studioRow('c-still', STILL, { kind: 'lead' }), studioRow('c-hatch', HATCH)] })
+    const out = await resolveMemberStudios(makeDb(w), args({ threadLocationId: HATCH }))
+    expect(out.studios.map((s) => s.locationId)).toEqual([HATCH])
+  })
+
+  it('an ended row is not a candidate either', async () => {
+    const w = world({ contact_studios: [studioRow('c-still', STILL, { status: 'ended' }), studioRow('c-hatch', HATCH)] })
+    const out = await resolveMemberStudios(makeDb(w), args({ threadLocationId: HATCH }))
+    expect(out.studios.map((s) => s.locationId)).toEqual([HATCH])
+  })
+
+  it('two group contacts with rows at one studio yield one MemberStudio with both ids, sorted (Review Focus 2)', async () => {
+    const base = world()
+    const w = world({
+      person_group_members: [{ group_id: 'g-1', contact_id: 'c-still' }, { group_id: 'g-1', contact_id: 'c-still2' }],
+      contacts: [
+        { ...base.contacts[0], id: 'c-still2', glofox_member_id: 'gx-2' },
+        base.contacts[0],
+        base.contacts[2],
+      ],
+      contact_studios: [studioRow('c-still2', STILL), studioRow('c-still', STILL)],
+    })
+    const out = await resolveMemberStudios(makeDb(w), args())
+    expect(out.studios.filter((s) => s.locationId === STILL)).toHaveLength(1)
+    expect(out.studios.map((s) => s.locationId)).toEqual([STILL])
+    expect(out.studios[0]).toMatchObject({ active: true, contactIds: ['c-still', 'c-still2'] })
+  })
+
+  it('a failed contact_studios read is readFailed, never studios: []', async () => {
+    const out = await resolveMemberStudios(makeDb(world(), { errors: { contact_studios: true } }), args())
+    expect(out).toEqual({ studios: [], readFailed: true })
+  })
+
+  it('active is still decided by the live Glofox/un1t checks: an active row with no bookable membership is not active', async () => {
+    const base = world()
+    const w = world({ contacts: [{ ...base.contacts[0], glofox_membership_state: 'paused' }, base.contacts[1], base.contacts[2]] })
+    const out = await resolveMemberStudios(makeDb(w), args())
+    expect(out.studios.find((s) => s.locationId === STILL)).toMatchObject({ active: false, contactIds: ['c-still'], liveRelationship: true })
+  })
+
+  it('a relationship row at a studio counts a group contact there even without a Glofox link list', () => {
+    // classifyMemberStudios: a contact living at Hatch with a member row at Stillorgan is counted at Stillorgan.
+    const contact = { id: 'c-dual', location_id: HATCH, un1t_user_id: null, glofox_member_id: 'gx-9', glofox_membership_status: 'member', glofox_membership_state: 'active', trial_credits_remaining: 0 }
+    const studios = classifyMemberStudios({
+      contacts: [contact], locations: LOCATIONS, agentOnByLocation: { [STILL]: true },
+      studioRowsByContact: new Map([['c-dual', [studioRow('c-dual', STILL)]]]),
+    })
+    expect(byLoc(studios, STILL)).toMatchObject({ active: true, contactIds: ['c-dual'], glofoxMemberId: 'gx-9' })
   })
 })

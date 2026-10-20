@@ -66,17 +66,26 @@ const time = (v) => (v ? Date.parse(v) || 0 : 0)
 // not "no relationship" either: Glofox is where their answers live.
 const LIVE_RELATIONSHIP_STATUSES = Object.freeze([...MEMBER_STATUSES, 'classpass_payg'])
 
-// GLOFOXREADERS.1 — a contact counts at a Glofox studio when it lives there OR
-// a crossover row links its Glofox account there (a Hatch contact holding a
-// Stillorgan account; linkedAccountsForContact sets studio_location_ids).
-function glofoxStudioFor(location, contacts) {
-  const accounts = contacts.filter((c) => contactAtGlofoxStudio(c, location.id) && c.glofox_member_id)
+// ORGCONTACTS.3 — a contact counts at a studio when it lives there OR it has
+// a contact_studios row there (studioRowsByContact, from
+// linkedAccountsForContact), OR — GLOFOXREADERS.1 — its Glofox link list names
+// the studio (studio_location_ids, the same rows filtered to source glofox).
+function contactAtStudio(contact, locationId, studioRowsByContact) {
+  if (!contact || !locationId) return false
+  if (contact.location_id === locationId) return true
+  if (studioRowsByContact?.get?.(contact.id)?.some((r) => r?.location_id === locationId)) return true
+  return contactAtGlofoxStudio(contact, locationId)
+}
+
+function glofoxStudioFor(location, contacts, studioRowsByContact) {
+  const accounts = contacts.filter((c) => contactAtStudio(c, location.id, studioRowsByContact) && c.glofox_member_id)
+  // Deterministic (Review Focus 2): a bookable account first, then by id.
   const ordered = [...accounts].sort((a, b) =>
     Number(hasBookableMembership(b)) - Number(hasBookableMembership(a)) || String(a.id).localeCompare(String(b.id)))
   return {
     active: glofoxStudioActive(accounts),
     // Read off EVERY group contact at the studio, not just those carrying a Glofox id.
-    liveRelationship: contacts.some((c) => contactAtGlofoxStudio(c, location.id) && LIVE_RELATIONSHIP_STATUSES.includes(c.glofox_membership_status)),
+    liveRelationship: contacts.some((c) => contactAtStudio(c, location.id, studioRowsByContact) && LIVE_RELATIONSHIP_STATUSES.includes(c.glofox_membership_status)),
     contactIds: ordered.map((c) => c.id),
     glofoxMemberId: ordered[0]?.glofox_member_id,
   }
@@ -119,15 +128,17 @@ function un1tStudioFor(location, contacts, clients, subscriptions) {
  *
  * contacts: the person group's rows, each with id, location_id,
  * glofox_member_id, the glofox membership columns and un1t_user_id.
+ * studioRowsByContact: Map contact id → contact_studios rows (ORGCONTACTS.3);
+ * a row at the studio counts the contact there.
  * agentOnByLocation: { [locationId]: boolean } from isAgentOnForSender.
  */
-export function classifyMemberStudios({ contacts = [], un1tClients = [], un1tSubscriptions = [], locations = [], agentOnByLocation = {} } = {}) {
+export function classifyMemberStudios({ contacts = [], un1tClients = [], un1tSubscriptions = [], locations = [], agentOnByLocation = {}, studioRowsByContact = new Map() } = {}) {
   return locations.map((location) => {
     const providerKey = providerKeyOf(location.membership_source)
     const base = { locationId: location.id, name: location.name, providerKey }
     const answerable = agentOnByLocation?.[location.id] === true
     if (providerKey === 'glofox') {
-      const g = glofoxStudioFor(location, contacts)
+      const g = glofoxStudioFor(location, contacts, studioRowsByContact)
       // liveRelationship is the one field beyond the documented MemberStudio
       // shape, set on Glofox studios only; otherStudioOnly reads it off the
       // thread studio so a paused/future member or a ClassPass customer keeps
@@ -186,6 +197,9 @@ export function otherStudioOnly(studios, threadLocationId) {
 
 const FAILED = () => ({ studios: [], readFailed: true })
 
+// A relationship that nominates a studio for Mia: a member or a client there.
+const CANDIDATE_KINDS = Object.freeze(['member', 'client'])
+
 async function readChunked(db, table, columns, filterCol, ids, extraIn) {
   const rows = []
   for (const batch of chunkIds(ids)) {
@@ -205,9 +219,10 @@ async function readChunked(db, table, columns, filterCol, ids, extraIn) {
  * un1t_user_ids at this organisation's studios, those studios, and one Mia
  * settings resolve per candidate studio (sharing one orgCache).
  *
- * Candidates = organisation studios where the group has an account (a contact
- * with a glofox_member_id there, or a un1t_clients / un1t_subscriptions row)
- * plus the thread studio.
+ * Candidates (ORGCONTACTS.3) = organisation studios where a group contact has
+ * an ACTIVE member or client contact_studios row (linkedAccountsForContact's
+ * studioRowsByContact) plus the thread studio. A Glofox id or a un1t.online
+ * mirror row alone no longer nominates a studio; they still decide `active`.
  *
  * Any failed read -> { studios: [], readFailed: true }, never a guess.
  */
@@ -253,13 +268,12 @@ export async function resolveMemberStudios(db, { anchorContactId, threadLocation
         'location_id, un1t_user_id, status', 'un1t_user_id', userIds, scope)
     }
 
-    const accountLocationIds = new Set([
-      ...contacts.filter((c) => c.glofox_member_id && c.location_id).map((c) => c.location_id),
-      // GLOFOXREADERS.1 — the Glofox studios a crossover row links them at.
-      ...contacts.filter((c) => c.glofox_member_id).flatMap((c) => c.studio_location_ids || []),
-      ...un1tClients.map((r) => r.location_id),
-      ...un1tSubscriptions.map((r) => r.location_id),
-    ])
+    const studioRowsByContact = group.studioRowsByContact instanceof Map ? group.studioRowsByContact : new Map()
+    const accountLocationIds = new Set(
+      [...studioRowsByContact.values()].flat()
+        .filter((r) => r?.status === 'active' && CANDIDATE_KINDS.includes(r.kind) && r.location_id)
+        .map((r) => r.location_id),
+    )
     if (threadLocationId) accountLocationIds.add(threadLocationId)
     const candidates = orgLocations.filter((l) => accountLocationIds.has(l.id))
 
@@ -271,7 +285,7 @@ export async function resolveMemberStudios(db, { anchorContactId, threadLocation
       agentOnByLocation[candidates[i].id] = isAgentOnForSender(resolved[i].settings, senderPhone)
     }
 
-    const studios = classifyMemberStudios({ contacts, un1tClients, un1tSubscriptions, locations: candidates, agentOnByLocation })
+    const studios = classifyMemberStudios({ contacts, un1tClients, un1tSubscriptions, locations: candidates, agentOnByLocation, studioRowsByContact })
     return { studios, readFailed: false }
   } catch (err) {
     logWarn(LOG_MODULE, 'member studio read failed', { anchorContactId, err })
