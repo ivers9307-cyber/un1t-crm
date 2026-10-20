@@ -94,11 +94,19 @@ describe('GET /api/schedule/reports/wrc-pack', () => {
 
   it('refuses a bad period before any read', async () => {
     getCurrentUser.mockResolvedValue(owner())
-    for (const q of ['?from=2026-02-30&to=2026-03-01', '?from=2026-03-01&to=2026-02-01', '?from=2025-01-01&to=2026-12-31', '?organization_id=nope']) {
+    // WRCPERIOD.1 — the cap is three years (1,096 days), not the reports' 366.
+    for (const q of ['?from=2026-02-30&to=2026-03-01', '?from=2026-03-01&to=2026-02-01', '?from=2023-10-20&to=2026-10-21', '?organization_id=nope']) {
       const res = await GET(req(q))
       expect(res.status, q).toBe(400)
     }
     expect(generateWrcPack).not.toHaveBeenCalled()
+  })
+
+  it('WRCPERIOD.1 — accepts a period over a year and up to three years', async () => {
+    getCurrentUser.mockResolvedValue(owner())
+    expect((await GET(req('?from=2025-06-01&to=2026-10-20'))).status).toBe(200)   // 507 days: the inspection ask
+    expect((await GET(req('?from=2023-10-21&to=2026-10-20'))).status).toBe(200)   // 1,096 days exactly
+    expect(generateWrcPack).toHaveBeenCalledTimes(2)
   })
 
   it('format=csv streams the staff CSV by default, the shifts CSV on file=shifts, as attachments', async () => {

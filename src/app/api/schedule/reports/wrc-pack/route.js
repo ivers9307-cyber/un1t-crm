@@ -16,7 +16,7 @@
 //   organization_id  uuid (default: the active studio's organisation)
 //   from, to         YYYY-MM-DD (default: the 12 months ending today at the
 //                    active studio, inclusive); real dates, to on or after
-//                    from, at most 366 days (reportPeriodError)
+//                    from, at most WRC_PACK_MAX_DAYS (1,096) days (reportPeriodError; WRCPERIOD.1)
 //   format           json (default) | csv
 //   file             staff (default) | shifts — which CSV, when format=csv
 //
@@ -32,6 +32,7 @@ import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { logError } from '@/lib/log'
 import { canDownloadWrcPack } from '@/lib/wrc-pack-access'
 import { generateWrcPack, defaultWrcPeriod, wrcStaffCsv, wrcShiftCsv } from '@/lib/wrc-pack'
+import { WRC_PACK_MAX_DAYS } from '@/lib/wrc-pack-period'
 
 const forbidden = () => NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
 
@@ -65,7 +66,8 @@ export async function GET(request) {
   const defaults = defaultWrcPeriod(today)
   const to = qs(searchParams, 'to') || defaults.to
   const from = qs(searchParams, 'from') || (qs(searchParams, 'to') ? defaultWrcPeriod(to).from : defaults.from)
-  const periodError = reportPeriodError(from, to, { startName: 'from', endName: 'to', what: 'The WRC pack' })
+  // WRCPERIOD.1 — three years, the s.25 record-keeping span, not the reports' 366.
+  const periodError = reportPeriodError(from, to, { startName: 'from', endName: 'to', what: 'The WRC pack', maxDays: WRC_PACK_MAX_DAYS })
   if (periodError) return NextResponse.json({ success: false, error: periodError }, { status: 400 })
   const year = Number(to.slice(0, 4))
 
