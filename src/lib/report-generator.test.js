@@ -68,8 +68,11 @@ describe('fetchScheduledShiftRows', () => {
       locationId: 'loc1', periodStart: '2026-06-01', periodEnd: '2026-06-30',
     })
     expect(out).toEqual([{
+      assignment_id: null,
       shift_date: '2026-06-06',
+      location_id: 'loc1',
       profile_id: 'p1',
+      arrived_at: null,
       start_time_override: '09:00:00',
       end_time_override: null,
       block_start_time: null,

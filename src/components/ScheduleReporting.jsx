@@ -1,11 +1,13 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, FileText, Mail, Repeat, Pause, Pencil, Trash2 } from 'lucide-react'
+import { Clock, Euro, CalendarOff, Users, TrendingUp, Play, Calendar, FileText, Mail, Repeat, Pause, Pencil, Trash2, Download, Scale } from 'lucide-react'
 import { EmptyState, Loading, Modal } from '@/components/ui'
 import { toJsDay, fromJsDay, DAY_NAMES_MONDAY_FIRST } from '@/lib/report-schedule-days'
 import { formatDate } from '@/lib/roster'
 import { canViewReportType, isRateReportType } from '@/lib/report-access'
+import { canDownloadWrcPack } from '@/lib/wrc-pack-access'
+import { defaultWrcPeriod } from '@/lib/wrc-pack-period'
 import {
   EMPTY_CELL, formatEuroCell, formatHoursCell, readStaffCostRow, readStaffHoursTotal, staffCostHasSplit,
 } from '@/lib/report-staff-table'
@@ -78,6 +80,10 @@ export default function ScheduleReporting({ user }) {
   const [error, setError] = useState(null)
 
   const locationId = user.activeLocation?.id
+  // WRCPACK.1 — the inspection pack is per ORGANISATION (every studio), owner
+  // tier only; the route enforces the same rule.
+  const organizationId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
+  const showWrcPack = canDownloadWrcPack(user, organizationId)
   // STAFFCOST.1 — Staff Cost shows pay rates, so its tile is hidden from head
   // coaches. Display only: the API refuses to generate, list or schedule it.
   const reportTypes = REPORT_TYPES.filter(rt => canViewReportType(user, locationId, rt.key))
@@ -415,6 +421,11 @@ export default function ScheduleReporting({ user }) {
             </div>
           )}
         </div>
+      )}
+
+      {/* WRC inspection pack (WRCPACK.1) */}
+      {view === 'generate' && showWrcPack && (
+        <WrcPackCard organizationId={organizationId} />
       )}
 
       {/* Report History */}
@@ -863,5 +874,54 @@ function ScheduleReportModal({ reportType: initialReportType, schedule, allowedR
         )}
       </div>
     </Modal>
+  )
+}
+
+// WRCPACK.1 — two CSV downloads for a Workplace Relations Commission
+// inspection: the per-person summary and the per-shift timesheet, for every
+// studio in the organisation over the period (default: the last 12 months).
+// Plain links to GET /api/schedule/reports/wrc-pack?format=csv, which answers
+// an attachment; the route decides who may have it.
+export function WrcPackCard({ organizationId }) {
+  const defaults = defaultWrcPeriod(formatDate(new Date()))
+  const [from, setFrom] = useState(defaults.from)
+  const [to, setTo] = useState(defaults.to)
+  const href = (file) => {
+    const q = new URLSearchParams({ format: 'csv', file, from, to })
+    if (organizationId) q.set('organization_id', organizationId)
+    return `/api/schedule/reports/wrc-pack?${q.toString()}`
+  }
+  const linkClass = 'inline-flex items-center gap-1.5 px-4 py-2 border border-un1t-border text-sm text-un1t-text hover:bg-un1t-border/30 rounded-md transition-colors'
+  return (
+    <div className="mt-8 bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <Scale size={16} />
+        <h3 className="font-semibold text-sm">WRC inspection pack</h3>
+      </div>
+      <p className="text-xs text-un1t-subtle">
+        Every studio in the organisation, everyone employed in the period (former staff included):
+        a per-person summary (hours, Sundays, overtime against contract, leave taken, allowance,
+        contract and handbook status) and a per-shift timesheet with rostered and adjusted times,
+        arrival stamps and cancellations. Owner access only.
+      </p>
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="block text-xs text-un1t-subtle mb-1" htmlFor="wrc-from">From</label>
+          <input id="wrc-from" type="date" value={from} onChange={e => setFrom(e.target.value)}
+            className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text" />
+        </div>
+        <div>
+          <label className="block text-xs text-un1t-subtle mb-1" htmlFor="wrc-to">To</label>
+          <input id="wrc-to" type="date" value={to} onChange={e => setTo(e.target.value)}
+            className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text" />
+        </div>
+        <a href={href('staff')} download className={linkClass}>
+          <Download size={14} /> Staff summary (CSV)
+        </a>
+        <a href={href('shifts')} download className={linkClass}>
+          <Download size={14} /> Timesheets (CSV)
+        </a>
+      </div>
+    </div>
   )
 }

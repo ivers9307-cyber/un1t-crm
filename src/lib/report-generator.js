@@ -21,8 +21,11 @@ import { readAvailabilityLeave } from '@/lib/availability-leave'
 // comes through the block. ROSTER-FIX.1 — cancelled assignments are dropped:
 // they used to be paid in staff_hours / staff_cost and counted as coverage,
 // which is what the mirror's 1:1-with-assignments behaviour inherited.
+// WRCPACK.1 — the assignment's own id, its arrival stamp (mig 609) and the
+// block's location ride along for the WRC timesheet detail; every existing
+// report ignores them.
 const SHIFT_ROW_SELECT = `
-  profile_id, start_time_override, end_time_override, status,
+  id, profile_id, start_time_override, end_time_override, status, arrived_at,
   profiles:profile_id ( full_name, role, deleted_role, employment_type ),
   shift_blocks!inner ( block_date, start_time, end_time, location_id, shift_templates ( name, start_time, end_time ) )
 `
@@ -86,7 +89,11 @@ const SHIFT_PAGE_SIZE = 1000
 // the estate's busiest month that trade is free.)
 const SHIFT_HARD_LIMIT = 20_000
 
-export async function fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd }) {
+//
+// WRCPACK.1 — `includeCancelled: true` keeps cancelled assignments (status
+// carried on the row) for a caller that must SHOW them, such as the WRC
+// timesheet; the default drops them as every report expects.
+export async function fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd, includeCancelled = false }) {
   const raw = []
   let pageStart = 0
 
@@ -114,9 +121,12 @@ export async function fetchScheduledShiftRows(db, { locationId, periodStart, per
     pageStart += SHIFT_PAGE_SIZE
   }
 
-  const rows = raw.filter(isLiveAssignment).map((r) => ({
+  const rows = (includeCancelled ? raw : raw.filter(isLiveAssignment)).map((r) => ({
+    assignment_id: r.id ?? null,
     shift_date: r.shift_blocks?.block_date,
+    location_id: r.shift_blocks?.location_id ?? null,
     profile_id: r.profile_id,
+    arrived_at: r.arrived_at ?? null,
     start_time_override: r.start_time_override,
     end_time_override: r.end_time_override,
     // REPORTS.2 — the block's own times ride along, so hours resolve
