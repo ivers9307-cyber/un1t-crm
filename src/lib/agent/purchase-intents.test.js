@@ -713,7 +713,7 @@ describe('executePurchaseTool', () => {
   })
 
   it('check_my_purchase: nothing paid yet is neutral (an open intent, or none); never says paid', async () => {
-    const open = await executePurchaseTool('check_my_purchase', {}, ctxFor(fakeDb({ mia_purchase_intents: [liveIntent()] }).db))
+    const open = await executePurchaseTool('check_my_purchase', {}, ctxFor(fakeDb({ mia_purchase_intents: [liveIntent({ expires_at: new Date(Date.now() + 3600_000).toISOString() })] }).db))
     expect(open).toMatchObject({ paid: false, open_intent: true, product: '10 Class Pack' })
     expect(open.message).toMatch(/not showing yet/)
     expect(JSON.stringify(open)).not.toContain('pay.example.test')
