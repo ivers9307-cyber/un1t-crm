@@ -15,8 +15,9 @@
 //      raw contact_memberships subquery, another helper) is a breaker. Also
 //      breakers: a (re)definition of the membership helper whose body is not
 //      exactly 731's, 732's (UN1TDUAL.4, which adds un1t_clients rows
-//      linked to a contact) or 758's (GLOFOXSIBLING.1, which adds
-//      glofox_crossover_members rows); EVERY branch must take its studios from
+//      linked to a contact), 758's (GLOFOXSIBLING.1, which adds
+//      glofox_crossover_members rows) or 762's (ORGCONTACTS.0, which adds
+//      deals rows, any status); EVERY branch must take its studios from
 //      auth_contact_read_location_ids, and the membership branch counts only
 //      active rows), or that is
 //      not SECURITY DEFINER with SET search_path = '' (EVERY CREATE of it is
@@ -106,9 +107,33 @@ export const MEMBERSHIP_HELPER_BODIES = Object.freeze({
         FROM public.glofox_crossover_members gx
        WHERE gx.location_id = ANY ((SELECT private.${HELPER}())::uuid[])
     ) x`),
+  // 762 (ORGCONTACTS.0): plus deals rows (any status: the RPC never filtered
+  // on it either), so a deal-only crossover reads the same on the phone
+  762: norm(`
+  SELECT coalesce(array_agg(DISTINCT x.contact_id), '{}'::uuid[])
+    FROM (
+      SELECT cm.contact_id
+        FROM public.contact_memberships cm
+       WHERE cm.status = 'active'
+         AND cm.location_id = ANY ((SELECT private.${HELPER}())::uuid[])
+      UNION
+      SELECT uc.contact_id
+        FROM public.un1t_clients uc
+       WHERE uc.contact_id IS NOT NULL
+         AND uc.location_id = ANY ((SELECT private.${HELPER}())::uuid[])
+      UNION
+      SELECT gx.contact_id
+        FROM public.glofox_crossover_members gx
+       WHERE gx.location_id = ANY ((SELECT private.${HELPER}())::uuid[])
+      UNION
+      SELECT d.contact_id
+        FROM public.deals d
+       WHERE d.contact_id IS NOT NULL
+         AND d.location_id = ANY ((SELECT private.${HELPER}())::uuid[])
+    ) x`),
 })
 // The body the LATEST migration that creates the helper must carry.
-export const LATEST_MEMBERSHIP_HELPER_MIGRATION = 758
+export const LATEST_MEMBERSHIP_HELPER_MIGRATION = 762
 export const MEMBERSHIP_HELPER_BODY = MEMBERSHIP_HELPER_BODIES[LATEST_MEMBERSHIP_HELPER_MIGRATION]
 const ACCEPTED_HELPER_BODIES = Object.values(MEMBERSHIP_HELPER_BODIES)
 
@@ -232,7 +257,7 @@ function definerAttrProblems(attrs) {
   return why
 }
 
-/** Every CREATE of the membership helper in `code` (comments already blanked) whose body is not exactly 731's, 732's or 758's. */
+/** Every CREATE of the membership helper in `code` (comments already blanked) whose body is not exactly 731's, 732's, 758's or 762's. */
 export function membershipHelperDefBreakers(code) {
   const hits = []
   const creates = new RegExp(`\\bcreate\\s+(?:or\\s+replace\\s+)?function\\s+${fnRef(MEMBERSHIP_HELPER)}`, 'gi')
@@ -241,7 +266,7 @@ export function membershipHelperDefBreakers(code) {
     const why = []
     if (!parts) why.push('no AS body the guard can read')
     else {
-      if (!ACCEPTED_HELPER_BODIES.includes(norm(parts.body))) why.push('body is not mig 731\'s, 732\'s or 758\'s')
+      if (!ACCEPTED_HELPER_BODIES.includes(norm(parts.body))) why.push('body is not mig 731\'s, 732\'s, 758\'s or 762\'s')
       why.push(...definerAttrProblems(parts.attrs))
     }
     if (why.length) hits.push(`create function private.${MEMBERSHIP_HELPER} (${why.join('; ')})`)
@@ -277,7 +302,7 @@ export function contactReadScopeBreakers(sql) {
       hits.push(m[0].trim().replace(/\s+/g, ' '))
     }
   }
-  // the membership helper (re)defined with any body but 731's, 732's or 758's, or not
+  // the membership helper (re)defined with any body but 731's, 732's, 758's or 762's, or not
   // SECURITY DEFINER with SET search_path = '' (every CREATE of it)
   hits.push(...membershipHelperDefBreakers(code))
   // contacts' row level security toggled (any ALTER TABLE action list on contacts)
@@ -502,7 +527,7 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     expect(contactHelperAlterBreakers(readFileSync(path.join(MIGRATIONS, f731), 'utf8'))).toEqual([])
   })
 
-  it('the latest definition of the membership helper in the migrations is 732\'s', () => {
+  it('the latest definition of the membership helper in the migrations is 762\'s', () => {
     const creators = migrationFiles().filter((f) => createsFn(MEMBERSHIP_HELPER).test(sqlCode(readFileSync(path.join(MIGRATIONS, f), 'utf8'))))
     expect(creators.at(-1), 'no migration creates the membership helper').toBeTruthy()
     // every definition passes the body check (contactReadScopeBreakers above runs on every file after 690)
