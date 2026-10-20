@@ -36,7 +36,7 @@
 // contracted_hours_per_week, like payroll.js; a week cut by the range edge is
 // judged on the hours inside the range.
 //
-// LIEU.1 — the time-in-lieu ledger (staff_lieu_credits, mig 760) rides in:
+// LIEU.1 — the time-in-lieu ledger (staff_lieu_credits, mig 761) rides in:
 // per person, the hours credited and taken inside the range and the running
 // balance at `to`; per shift, the public holiday it fell on (the studio's
 // country's calendar) and the lieu hours the ledger holds for it. The shift

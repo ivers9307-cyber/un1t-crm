@@ -87,7 +87,7 @@ export async function GET(request) {
   if (pendingError) console.error('[allowances] pending holiday days unreadable', pendingError.message)
   const pendingField = pendingError ? {} : { pending_days: pendingDays }
 
-  // LIEU.1 — the year's time-in-lieu balance (staff_lieu_credits, mig 760), in
+  // LIEU.1 — the year's time-in-lieu balance (staff_lieu_credits, mig 761), in
   // HOURS: credited (Sunday at time and a third, public holidays at base time,
   // manual credits), taken, and the signed sum. FTE only; a contractor earns
   // none, so the field is absent for them. Kept beside the day figures, never

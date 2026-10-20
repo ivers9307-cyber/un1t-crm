@@ -1,4 +1,4 @@
--- 760 — LIEU.1: time-in-lieu ledger for Sunday and public-holiday work, and
+-- 761 — LIEU.1: time-in-lieu ledger for Sunday and public-holiday work, and
 -- the heartbeat row of the nightly cron that fills it.
 --
 -- ===========================================================================
@@ -108,7 +108,7 @@ REVOKE ALL ON public.staff_lieu_credits FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.staff_lieu_credits TO service_role;
 
 COMMENT ON TABLE public.staff_lieu_credits IS
-  'LIEU.1 (mig 760): time-in-lieu ledger in hours. FTE only. sunday_worked = shift hours × locations.settings.payroll.sunday_multiplier (default 4/3); public_holiday_worked = shift hours × 1 (× the Sunday multiplier when the holiday is a Sunday); manual = a manager''s credit with a note; taken = lieu time taken, negative, with a note. Balance = sum(hours). Written by /api/cron/lieu-credits (src/lib/lieu-credits.js) and /api/schedule/allowances/lieu; read by the allowances route, the Staff Cost report and the WRC pack. RLS on, no policy, no client privilege.';
+  'LIEU.1 (mig 761): time-in-lieu ledger in hours. FTE only. sunday_worked = shift hours × locations.settings.payroll.sunday_multiplier (default 4/3); public_holiday_worked = shift hours × 1 (× the Sunday multiplier when the holiday is a Sunday); manual = a manager''s credit with a note; taken = lieu time taken, negative, with a note. Balance = sum(hours). Written by /api/cron/lieu-credits (src/lib/lieu-credits.js) and /api/schedule/allowances/lieu; read by the allowances route, the Staff Cost report and the WRC pack. RLS on, no policy, no client privilege.';
 COMMENT ON COLUMN public.staff_lieu_credits.shift_assignment_id IS
   'The assignment an automatic credit came from; UNIQUE, so the nightly sweep credits a shift once. NULL on manual and taken rows, and after the assignment is deleted.';
 COMMENT ON COLUMN public.staff_lieu_credits.credit_date IS
@@ -142,17 +142,17 @@ BEGIN
      OR has_any_column_privilege('authenticated', 'public.staff_lieu_credits', 'UPDATE')
      OR has_table_privilege('authenticated', 'public.staff_lieu_credits', 'DELETE')
      OR NOT has_table_privilege('service_role', 'public.staff_lieu_credits', 'INSERT') THEN
-    RAISE EXCEPTION 'mig 760: staff_lieu_credits must have RLS on, no policy, and no client privilege';
+    RAISE EXCEPTION 'mig 761: staff_lieu_credits must have RLS on, no policy, and no client privilege';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'staff_lieu_credits'
                    AND indexname = 'staff_lieu_credits_assignment_unique' AND indexdef ILIKE 'CREATE UNIQUE INDEX%') THEN
-    RAISE EXCEPTION 'mig 760: staff_lieu_credits_assignment_unique is missing or not unique';
+    RAISE EXCEPTION 'mig 761: staff_lieu_credits_assignment_unique is missing or not unique';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM public.cron_heartbeats
                   WHERE name = 'lieu-credits' AND expected_interval_seconds = 86400 AND grace_seconds = 43200) THEN
-    RAISE EXCEPTION 'mig 760: cron_heartbeats row lieu-credits did not end up on 86400 + 43200';
+    RAISE EXCEPTION 'mig 761: cron_heartbeats row lieu-credits did not end up on 86400 + 43200';
   END IF;
-  RAISE NOTICE 'mig 760: staff_lieu_credits created (service role only); heartbeat lieu-credits seeded.';
+  RAISE NOTICE 'mig 761: staff_lieu_credits created (service role only); heartbeat lieu-credits seeded.';
 END $$;
 
 COMMIT;

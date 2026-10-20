@@ -6036,7 +6036,7 @@ registry.registerPath({
   },
 })
 
-// LIEU.1 — the time-in-lieu ledger (staff_lieu_credits, mig 760): hours
+// LIEU.1 — the time-in-lieu ledger (staff_lieu_credits, mig 761): hours
 // banked for Sunday work (time and a third) and public holidays worked (base
 // time), FTE only, credited nightly by /api/cron/lieu-credits; a manager
 // records lieu taken or a manual credit here.

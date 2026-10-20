@@ -1,4 +1,4 @@
-// LIEU.1 — the time-in-lieu ledger (staff_lieu_credits, mig 760) for one
+// LIEU.1 — the time-in-lieu ledger (staff_lieu_credits, mig 761) for one
 // person: read it, record lieu taken or a manual credit, remove a manual
 // entry. Hours, never days. The automatic rows (sunday_worked,
 // public_holiday_worked) are the nightly sweep's record and cannot be written
