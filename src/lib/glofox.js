@@ -1434,6 +1434,11 @@ export async function purchaseGlofoxMembership(creds, userId, membershipId, plan
       // the body is empty today, but set it so Glofox can't ignore a body we
       // later add — the exact class of bug that broke registration.
       headers: { 'Content-Type': 'application/json' },
+      // TRIALSTARTDATE.1 (closed, Richard 20 Oct 2026): no start_date. The
+      // v2.3.0 spec marks it required, but Glofox accepts {} and starts the
+      // membership at once (a live trial bought this way on 17 Oct went
+      // SUCCESS and was booked against). Its format was never verified, so
+      // adding one is a money-path guess: see docs/BACKLOG.md.
       body: JSON.stringify(opts.body || {}),
     })
     let parsed
