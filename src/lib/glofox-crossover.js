@@ -23,6 +23,8 @@
 
 import { escapeLikePattern } from './like-escape.js'
 import { ensureStudioPreferences } from './un1t-online-studio-preferences.js'
+import { upsertContactStudio } from './contact-studios.js'
+import { hasBookableMembership } from './person-accounts.js'
 
 export const GLOFOX_CROSSOVER_TABLE = 'glofox_crossover_members'
 const MAX_ERROR_LEN = 300
@@ -124,13 +126,19 @@ export async function findGlofoxCrossoverContact(db, locationId, { glofoxMemberI
 /**
  * Record that a Glofox member of `locationId` is the contact `contactId`, who
  * lives at another studio: the glofox_crossover_members row (readability at
- * the studio, mig 758) and the studio's marketing-preferences row
+ * the studio, mig 758), the studio's marketing-preferences row
  * (insert-if-missing; an existing row, an unsubscribe included, is never
- * touched). A contact who lives AT the studio needs neither and is skipped.
+ * touched) and, since ORGCONTACTS.1, the contact_studios row at the Glofox
+ * studio (mig 764: kind member when `contactRow`'s Glofox columns say the
+ * membership is bookable, else client; source glofox; first_seen_at from
+ * `contactRow.joined_at`). A contact who lives AT the studio needs none and is
+ * skipped. The relationship write is reported as `contact_studio` and never
+ * fails the link.
  *
- * @returns {Promise<{ linked: boolean, preferences_created: number, skipped?: string, error?: string }>}
+ * @returns {Promise<{ linked: boolean, preferences_created: number, skipped?: string, error?: string,
+ *   contact_studio?: { ok: true } | { ok: false, error: string } }>}
  */
-export async function recordGlofoxCrossover(db, { locationId, glofoxMemberId, contactId, contactLocationId = undefined }) {
+export async function recordGlofoxCrossover(db, { locationId, glofoxMemberId, contactId, contactLocationId = undefined, contactRow = null }) {
   const out = { linked: false, preferences_created: 0 }
   try {
     if (!db || !locationId || !glofoxMemberId || !contactId) return { ...out, skipped: 'missing arguments' }
@@ -151,6 +159,13 @@ export async function recordGlofoxCrossover(db, { locationId, glofoxMemberId, co
     if (error) return { ...out, error: `${GLOFOX_CROSSOVER_TABLE} write: ${message(error)}` }
     if (!data || data.length === 0) return { ...out, error: `${GLOFOX_CROSSOVER_TABLE} write returned no row` }
     out.linked = true
+
+    const studio = await upsertContactStudio(db, {
+      contactId, locationId, source: 'glofox', status: 'active',
+      kind: hasBookableMembership(contactRow) ? 'member' : 'client',
+      firstSeenAt: contactRow?.joined_at || null,
+    })
+    out.contact_studio = studio.ok ? { ok: true } : { ok: false, error: studio.error }
 
     const prefs = await ensureStudioPreferences(db, { locationId, contactIds: [contactId], origin: 'glofox' })
     out.preferences_created = prefs.created || 0
