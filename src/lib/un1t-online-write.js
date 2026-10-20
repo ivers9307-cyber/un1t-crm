@@ -4,8 +4,10 @@
 // and call ONLY this transport, the ledger and the mirror.
 //
 // What the transport guarantees (spec 6.1, global constraints):
-// - It sends the six allowlisted calls and nothing else, with the snapshot
-//   body keys and never bypassCredit / forceRefund / promoCode. Anything else
+// - It sends the seven allowlisted calls and nothing else, with the snapshot
+//   body keys and never bypassCredit / forceRefund / promoCode (the seventh,
+//   POST /credits/grant, is grantTrial's credit re-grant, TRIALREGRANT.1,
+//   Richard's decision 20 Oct 2026). Anything else
 //   is a TypeError before any request: a programming error, nothing sent.
 // - Every write first passes ensureOp: writes switched on, the token's
 //   studio is this location's external_account_id, the op's permissions are
@@ -111,6 +113,7 @@ export const UN1T_OP_POLICY = Object.freeze({
   forgot_password: 'never',
   trial: 'never',
   checkout: 'idempotent',
+  trial_regrant: 'never',
 })
 
 // The policy for `op`; a caller-given one must match. TypeError otherwise.
@@ -161,6 +164,8 @@ const ENDPOINTS = Object.freeze([
     method: 'POST', path: /^\/purchases\/checkout$/, ops: ['checkout', 'trial'],
     keys: ['productId', 'successUrl', 'cancelUrl', 'userId'], needsKey: true,
   },
+  // Inside grantTrial's regrantTrialCredits only (TRIALREGRANT.1): never re-sent.
+  { method: 'POST', path: /^\/credits\/grant$/, ops: ['trial_regrant'], keys: ['userId', 'amount', 'expiresInDays'], needsKey: true },
 ])
 const BANNED_BODY_KEYS = Object.freeze(['bypassCredit', 'forceRefund', 'promoCode'])
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)

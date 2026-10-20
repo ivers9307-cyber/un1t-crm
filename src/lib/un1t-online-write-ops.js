@@ -1,6 +1,7 @@
 // UN1TWRITE.6 — the un1t.online write primitives: book, cancel,
 // createClient, forgotPassword, createCheckoutLink and grantTrial
-// (UN1TWRITE.10). Split out of un1t-online-write.js (the transport), which they
+// (UN1TWRITE.10; with its one-off credit re-grant, regrantTrialCredits,
+// TRIALREGRANT.1). Split out of un1t-online-write.js (the transport), which they
 // call ONLY through createUn1tWriter, plus the ledger and the mirror
 // (un1t-online-mirror-write.js).
 
@@ -828,6 +829,73 @@ async function findOpenTrial(db, { locationId, un1tUserId, productId }) {
   return data ?? null
 }
 
+// ── The trial credit re-grant (TRIALREGRANT.1) ────────────────────────────
+//
+// Richard, 20 Oct 2026: a person who CLAIMED the free trial, never used it
+// (no attended or no-show booking) and whose trial credits have run out may
+// have a free class again. un1t.online sells the trial product only once, so
+// grantTrial adds the credits instead, once ever per person per studio (the
+// ledger's op 'trial_regrant', mig 760). Amount and expiry are fixed here: no
+// setting holds the trial's credits or expiry.
+
+/** Credits a re-grant adds (the trial's own three). */
+export const UN1T_TRIAL_REGRANT_CREDITS = 3
+/** Days until the re-granted credits expire (the trial's own seven). */
+export const UN1T_TRIAL_REGRANT_EXPIRES_IN_DAYS = 7
+/** grantTrial's `method` for a re-grant. */
+export const UN1T_TRIAL_REGRANT_METHOD = 'credit_regrant'
+const REGRANT_STAGES = Object.freeze(['done', 'sent', 'unknown'])
+
+/**
+ * The newest trial_regrant row (done, sent or unknown) for this person at the
+ * studio, by their un1t user OR their contact; null when none. A refused row
+ * granted nothing and does not count. Throws on a database error: an
+ * unreadable history is never "no re-grant".
+ */
+async function findRegrant(db, { locationId, un1tUserId, contactId }) {
+  const read = async (column, value) => {
+    const { data, error } = await db
+      .from('un1t_write_events')
+      .select('id, un1t_user_id, contact_id, stage, created_at')
+      .eq('location_id', locationId)
+      .eq('op', 'trial_regrant')
+      .eq(column, value)
+      .in('stage', REGRANT_STAGES)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error) throw Object.assign(new Error(`un1t_write_events re-grant read failed (${error.code ?? 'no code'})`), { code: error.code ?? null })
+    return data ?? null
+  }
+  const rows = [await read('un1t_user_id', un1tUserId), contactId ? await read('contact_id', contactId) : null].filter(Boolean)
+  rows.sort((a, b) => (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0))
+  return rows[0] ?? null
+}
+
+/**
+ * TRIALREGRANT.1 — POST /credits/grant { userId, amount: 3, expiresInDays: 7 }
+ * for this person, ledgered first (op trial_regrant, key
+ * trial_regrant:<loc>:<un1tUser>, also the idempotency-key header), judged on
+ * the body and never re-sent (policy never). Called ONLY from grantTrial,
+ * after every check (tests/un1t-online-write-guard.test.js): the person's
+ * only ineligibility is trial_used, no attended or no-show booking, no
+ * earlier re-grant, the live balance 0 and not unlimited, and the op's
+ * switch and permissions. Returns the Un1tWriteResult with ledgerId; grantTrial
+ * judges it.
+ */
+async function regrantTrialCredits(db, writer, { locationId, un1tUserId, contactId, origin, originRef, actor }) {
+  const body = { userId: un1tUserId, amount: UN1T_TRIAL_REGRANT_CREDITS, expiresInDays: UN1T_TRIAL_REGRANT_EXPIRES_IN_DAYS }
+  writer.assertAllowed('trial_regrant', 'POST', '/credits/grant', body)
+  const key = ledgerKey.regrant(locationId, un1tUserId)
+  return attemptWrite(db, writer, {
+    attempt: { op: 'trial_regrant', key, contactId, un1tUserId, target: null, origin, originRef, actorUserId: actorIdOf(actor) },
+    policy: 'never',
+    send: (row) => writer.send('POST', '/credits/grant', {
+      body, policy: 'never', idempotencyKey: key, op: 'trial_regrant', origin, ledgerId: row.id, expect: {},
+    }),
+  })
+}
+
 /**
  * UN1TWRITE.10 — give a person the studio's free trial in un1t.online.
  *
@@ -867,15 +935,35 @@ async function findOpenTrial(db, { locationId, un1tUserId, productId }) {
  * Every ledger row carries contactId. grantTrial files no card: the caller
  * files one with needs_staff.reason.
  *
+ * TRIALREGRANT.1 (Richard, 20 Oct 2026) — the credit re-grant. First of all
+ * (before the trial rows), a trial_regrant row already on the ledger for this
+ * person (by user or contact) settles it with nothing sent: a sent one under
+ * UN1T_IN_FLIGHT_MS is retry; otherwise credits showing → granted
+ * (credit_regrant, an open row settled done); none → a done one is
+ * trial_used, an open one un1t_trial_unverified inside
+ * UN1T_TRIAL_DOUBT_WINDOW_MS and trial_used after. Then, wherever grantTrial
+ * would answer trial_used from our own ledger (a done trial, or an old open
+ * one, with no credits) or from A (trial_used its only reason, A's `regrant`
+ * true), it re-grants instead when A says `regrant` (only trial_used, no
+ * attended or no-show booking, no earlier re-grant), the live credits read
+ * shows 0 and not unlimited, and the op's switch and permissions pass:
+ * regrantTrialCredits, then done → granted (credit_regrant; the new balance
+ * mirrored; credits read as none → un1t_trial_unverified); unknown, or a
+ * transport refusal after the send → the credits read decides (granted /
+ * un1t_trial_unverified / retry credits_unreadable, and the retry finds the
+ * row and never sends again); un1t.online's refusal → needs_staff
+ * un1t_trial_failed:<code>. A refusal as trial_used by un1t.online itself
+ * after A said eligible is never re-granted.
+ *
  * Rejects only as the other primitives do (Un1tSettingsReadError, a ledger
  * database error before anything was sent, a TypeError).
  *
  * @param {{ locationId: string, un1tUserId: string, contactId: string|null,
  *   origin: 'funnel'|'approval'|'mia'|'test_account', originRef?: string|null,
  *   actor?: { id: string }|null, skipEligibility?: boolean }} args
- * @returns {Promise<{ outcome: 'granted', method: 'charge'|'free_checkout', ledgerId: string|null }
+ * @returns {Promise<{ outcome: 'granted', method: 'charge'|'free_checkout'|'credit_regrant', ledgerId: string|null }
  *   | { outcome: 'ineligible', reason: 'trial_used'|'membership_history'|'paid_pack' }
- *   | { outcome: 'needs_staff', reason: string, message?: string|null, ledgerId?: string|null }
+ *   | { outcome: 'needs_staff', reason: string, message?: string|null, ledgerId?: string|null, method?: 'credit_regrant' }
  *   | { outcome: 'retry', code: string }>}
  */
 export async function grantTrial(db, args = {}, deps = {}) {
@@ -911,7 +999,8 @@ export async function grantTrial(db, args = {}, deps = {}) {
     const credits = await readTrialCredits(writer, un1tUserId)
     if (!credits) return { outcome: 'retry', code: 'credits_unreadable' }
     if (!credits.shows) {
-      if (noCredits === 'used') return { outcome: 'ineligible', reason: 'trial_used' }
+      // Our own trial, spent: the re-grant decides (TRIALREGRANT.1).
+      if (noCredits === 'used') return regrantOrUsed({ credits })
       return { outcome: 'needs_staff', reason: 'un1t_trial_unverified', ledgerId: ledgerId ?? null }
     }
     if (settle) await settleDone(ledgerId)
@@ -921,6 +1010,68 @@ export async function grantTrial(db, args = {}, deps = {}) {
   }
   const methodOf = (row) => (row.method === 'free_checkout' ? 'free_checkout' : 'charge')
   const ageMs = (row) => now().getTime() - Date.parse(row.created_at)
+  // A refusal from the transport itself (budget, throttle, token) is not
+  // un1t.online's answer about the trial.
+  const transportRefusal = (r) => r.verdict === 'refused' && (r.retryable || Object.values(C).includes(r.code))
+
+  // ── TRIALREGRANT.1 ──
+  const USED = Object.freeze({ outcome: 'ineligible', reason: 'trial_used' })
+  const REGRANT = UN1T_TRIAL_REGRANT_METHOD
+  const regrantMeta = { locationId, op: 'trial_regrant', origin }
+  // A re-grant already on the ledger: nothing is sent again.
+  const resumeRegrant = async (row) => {
+    const age = ageMs(row)
+    if (row.stage === 'sent' && (!Number.isFinite(age) || age < UN1T_IN_FLIGHT_MS)) return { outcome: 'retry', code: C.ATTEMPT_IN_FLIGHT }
+    const credits = await readTrialCredits(writer, un1tUserId)
+    if (!credits) return { outcome: 'retry', code: 'credits_unreadable' }
+    if (credits.shows) {
+      if (row.stage !== 'done') await settleDone(row.id)
+      await mirror({ credits: credits.ledger }, row.id)
+      return { outcome: 'granted', method: REGRANT, ledgerId: row.id }
+    }
+    // A done re-grant whose credits are gone was the one free class again.
+    if (row.stage === 'done') return USED
+    logWarn(LOG_MODULE, 'an earlier trial credit re-grant is in doubt; nothing sent', fields({ ...regrantMeta, ledgerId: row.id, verdict: 'unknown' }))
+    const recent = Number.isFinite(age) && age < UN1T_TRIAL_DOUBT_WINDOW_MS
+    return recent ? { outcome: 'needs_staff', reason: 'un1t_trial_unverified', method: REGRANT, ledgerId: row.id } : USED
+  }
+  // Where the answer would be trial_used: re-grant if the person qualifies.
+  // `elig` (A's answer) and `credits` (a live read) are passed when held.
+  const regrantOrUsed = async ({ elig = null, credits = null } = {}) => {
+    let e = elig
+    if (!e) {
+      try {
+        e = await trialEligibility(db, locationId, { un1tUserId, contactId })
+      } catch {
+        e = null
+      }
+      if (!e?.success) return { outcome: 'retry', code: 'eligibility_unreadable' }
+    }
+    if (e.data?.regrant !== true) return USED
+    const live = credits ?? await readTrialCredits(writer, un1tUserId)
+    if (!live) return { outcome: 'retry', code: 'credits_unreadable' }
+    if (live.shows) return USED
+    const off = await opRefusal(writer, 'trial_regrant')
+    if (off) return { ...fromRefusal(off), ...(off.retryable ? {} : { method: REGRANT }) }
+    const r = await regrantTrialCredits(db, writer, { locationId, un1tUserId, contactId, origin, originRef, actor })
+    if (r.verdict === 'done') {
+      const after = await readTrialCredits(writer, un1tUserId)
+      if (after && !after.shows) {
+        logWarn(LOG_MODULE, 'the re-granted trial credits do not show', fields({ ...regrantMeta, ledgerId: r.ledgerId, code: 'un1t_trial_unverified' }))
+        return { outcome: 'needs_staff', reason: 'un1t_trial_unverified', method: REGRANT, ledgerId: r.ledgerId }
+      }
+      if (after) await mirror({ credits: after.ledger }, r.ledgerId)
+      else logWarn(LOG_MODULE, 'credits unreadable after a done re-grant; the booking judges them', fields({ ...regrantMeta, ledgerId: r.ledgerId, code: 'credits_unreadable' }))
+      logInfo(LOG_MODULE, 'trial credits re-granted', fields({ ...regrantMeta, ledgerId: r.ledgerId, verdict: 'done' }))
+      return { outcome: 'granted', method: REGRANT, ledgerId: r.ledgerId }
+    }
+    if (r.verdict === 'unknown') {
+      if (r.sent === false && !r.ledgerId) return { outcome: 'retry', code: r.code ?? 'outcome_unknown' }
+      return byCredits(REGRANT, r.ledgerId)
+    }
+    if (transportRefusal(r)) return r.sent ? byCredits(REGRANT, r.ledgerId) : fromRefusal(r)
+    return { outcome: 'needs_staff', reason: trialFailed(r.code), message: r.message ?? null, method: REGRANT, ledgerId: r.ledgerId ?? null }
+  }
 
   // The customer site root (the free checkout's return pages), read before
   // anything is sent: an unreadable one rejects with nothing sent.
@@ -931,6 +1082,10 @@ export async function grantTrial(db, args = {}, deps = {}) {
     if (u.protocol === 'https:') root = `${u.origin}/`
   } catch { /* falls through */ }
   if (!root) throw new Un1tSettingsReadError("this studio's customer site could not be read", { code: 'customer_url_unreadable' })
+
+  // 0. A credit re-grant we already made (TRIALREGRANT.1, once ever).
+  const priorRegrant = await findRegrant(db, { locationId, un1tUserId, contactId })
+  if (priorRegrant) return resumeRegrant(priorRegrant)
 
   // 1. What we already did. A trial we granted before stands only while its
   //    credits do: with none left the person has had it (trial_used), so the
@@ -968,6 +1123,8 @@ export async function grantTrial(db, args = {}, deps = {}) {
     if (!elig?.success) return { outcome: 'retry', code: 'eligibility_unreadable' }
     if (elig.data?.eligible !== true) {
       const reason = (elig.data?.reasons ?? []).find((r) => TRIAL_REASONS.has(r)) ?? 'trial_used'
+      // TRIALREGRANT.1: claimed, never used, run out → the credit re-grant.
+      if (reason === 'trial_used' && elig.data?.regrant === true) return regrantOrUsed({ elig })
       return { outcome: 'ineligible', reason }
     }
   }
@@ -991,9 +1148,6 @@ export async function grantTrial(db, args = {}, deps = {}) {
     method, origin, originRef, actorUserId: actorIdOf(actor),
   })
   const isTrialUsed = (r) => classifyRefusal({ code: r.code, message: r.message }) === 'trial_used'
-  // A refusal from the transport itself (budget, throttle, token) is not
-  // un1t.online's answer about the trial.
-  const transportRefusal = (r) => r.verdict === 'refused' && (r.retryable || Object.values(C).includes(r.code))
 
   // 4. The €0 charge.
   const chargeBody = { userId: un1tUserId, productId }

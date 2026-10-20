@@ -90,6 +90,20 @@ describe('processUn1tClassBookingRequest', () => {
     expect(deps.sendWebsiteConversion).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'Schedule', eventId: 'classbooking-q-1' }))
   })
 
+  it('TRIALREGRANT.1: a credit re-grant (claimed the trial, never used, run out) books exactly as after a trial grant', async () => {
+    deps.ensureUn1tAccount.mockImplementation(async () => { order.push('account'); return { kind: 'existing', un1tUserId: 'usr-1', executingContactId: 'c-1' } })
+    deps.grantTrial.mockImplementation(async () => { order.push('trial'); return { outcome: 'granted', method: 'credit_regrant', ledgerId: 'l-rg' } })
+    deps.runSetPasswordStep.mockImplementation(async () => { order.push('set_password'); return { explanation: 'skipped_not_created', forgotPassword: 'skipped_not_created' } })
+    const out = await run()
+    expect(out).toEqual({ outcome: 'booked', detail: 'un1t:bk-9' })
+    expect(order).toEqual(['account', 'trial', 'book', 'set_password', 'confirmation'])
+    expect(deps.book.mock.calls[0][1]).toMatchObject({ locationId: LOC, contactId: 'c-1', un1tUserId: 'usr-1', eventId: EVENT, origin: 'funnel' })
+    expect(lastRow()).toMatchObject({ status: 'booked', glofox_booking_id: 'un1t:bk-9' })
+    expect(lastRow().un1t_steps).toMatchObject({ account: 'existing', trial: 'granted:credit_regrant', book: 'done' })
+    expect(deps.trialUsedHandoff).not.toHaveBeenCalled()
+    expect(deps.sendUn1tTrialUsedEmail).not.toHaveBeenCalled()
+  })
+
   it('existing account by own link, sibling email or API walk books with no create; the step finds no create and the confirmation goes', async () => {
     deps.ensureUn1tAccount.mockImplementation(async () => { order.push('account'); return { kind: 'existing', un1tUserId: 'usr-sib', executingContactId: 'c-sib' } })
     deps.runSetPasswordStep.mockImplementation(async () => { order.push('set_password'); return { explanation: 'skipped_not_created', forgotPassword: 'skipped_not_created' } })

@@ -777,3 +777,36 @@ export function shapeTrialEligibility({
   if (txs.some((t) => isPaidPack(t, productsById))) reasons.push('paid_pack')
   return { eligible: reasons.length === 0, reasons }
 }
+
+/** un1t_bookings statuses that mean the class was used (a cancel never was). */
+const USED_BOOKING_STATUSES = new Set(['attended', 'no_show', 'no-show', 'noshow'])
+const isUsedBooking = (b) => USED_BOOKING_STATUSES.has(String(b?.status ?? '').trim().toLowerCase())
+
+/**
+ * TRIALREGRANT.1 (Richard, 20 Oct 2026) — did this person CLAIM the free trial,
+ * never use it, and has it run out, so the studio may give them a free class
+ * again as a one-off credit re-grant (D's grantTrial, POST /credits/grant)?
+ * True only when ALL of:
+ *   - the only reason they are not eligible is trial_used (no
+ *     membership_history, no paid_pack);
+ *   - none of their bookings (every account and contact the read resolved)
+ *     is attended or a no-show (a cancelled one is not a use);
+ *   - they have had no re-grant yet: no trial_regrant ledger row (done, sent
+ *     or unknown) by any of their user ids or contacts;
+ *   - the mirror shows them holding no credits (no account with a balance
+ *     above 0, none unlimited). An unknown balance does not block: the mirror
+ *     is only the OFFER's pre-filter, and grantTrial reads the live balance
+ *     (0 and not unlimited) before it sends anything.
+ * Pure.
+ * @param {{ eligibility: { eligible: boolean, reasons: string[] }, bookings?: object[],
+ *   ledgerRegrants?: object[], clients?: object[] }} args
+ * @returns {boolean}
+ */
+export function shapeTrialRegrant({ eligibility, bookings = [], ledgerRegrants = [], clients = [] } = {}) {
+  const reasons = Array.isArray(eligibility?.reasons) ? eligibility.reasons : []
+  if (eligibility?.eligible !== false || reasons.length !== 1 || reasons[0] !== 'trial_used') return false
+  if (bookings.some(isUsedBooking)) return false
+  if (ledgerRegrants.some(Boolean)) return false
+  const holdsCredits = (c) => c?.credit_unlimited === true || (c?.credit_balance != null && Number(c.credit_balance) > 0)
+  return !clients.some(holdsCredits)
+}

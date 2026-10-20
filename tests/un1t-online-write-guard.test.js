@@ -3,10 +3,12 @@
 //   1. the SYNC cannot write: no sync-side module reaches the write transport,
 //      its ops, its ledger or its mirror, however many imports deep;
 //   2. the WRITE side cannot misbehave: every call to the writer's send( names
-//      a policy and one of the six allowed endpoints, the endpoints and body
-//      keys the CRM never sends appear nowhere in src/, the write modules hold
-//      no PUT or DELETE verb, and only the ops module reaches the transport's
-//      internals.
+//      a policy and one of the seven allowed endpoints, the endpoints and body
+//      keys the CRM never sends appear nowhere in src/, POST /credits/grant
+//      only inside regrantTrialCredits, called only from grantTrial
+//      (TRIALREGRANT.1, Richard's decision 20 Oct 2026), the write modules
+//      hold no PUT or DELETE verb, and only the ops module reaches the
+//      transport's internals.
 //
 // How things are found: files are parsed with the TypeScript parser and the
 // facts are read off the AST (imports, call expressions, identifiers, string,
@@ -18,9 +20,11 @@
 // (un1t-online-write.transport.test.js) is the proof.
 //
 // "the transport's own allowlist and banned-key list" is the one place the
-// banned names may appear: /purchases/charge inside the ENDPOINTS table and
-// bypassCredit / forceRefund / promoCode inside BANNED_BODY_KEYS. Everything
-// else is a violation, and the pins below fix those two tables as they are.
+// banned names may appear: /purchases/charge and /credits/grant inside the
+// ENDPOINTS table and bypassCredit / forceRefund / promoCode inside
+// BANNED_BODY_KEYS. Everything else is a violation (but /purchases/charge
+// inside grantTrial and /credits/grant inside regrantTrialCredits), and the
+// pins below fix those two tables as they are.
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -247,7 +251,7 @@ export function fenceBreaches(entries, io) {
 // ── 2. Calls to the writer's send( ─────────────────────────────────────────
 const HTTP_VERB = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$/i
 const POLICIES = ['verify', 'never', 'idempotent']
-// The six writes the CRM may make, with `${…}` in a path read as :id.
+// The seven writes the CRM may make, with `${…}` in a path read as :id.
 export const ALLOWED_WRITES = Object.freeze([
   'POST /bookings',
   'PATCH /bookings/:id/cancel',
@@ -255,6 +259,8 @@ export const ALLOWED_WRITES = Object.freeze([
   'POST /auth/forgot-password',
   'POST /purchases/charge',
   'POST /purchases/checkout',
+  // TRIALREGRANT.1: grantTrial's one-off credit re-grant only.
+  'POST /credits/grant',
 ])
 
 // A path argument as a template: a literal as is, `${…}` as :id, null for
@@ -343,7 +349,7 @@ export function sendsWithoutPolicy(label, sf, opPolicy, opts = { writeSide: true
     .map((c) => `${label}:${c.line}`)
 }
 
-/** "line N" of each send( that is not one of the six writes. */
+/** "line N" of each send( that is not one of the seven writes. */
 export function sendsOffAllowlist(label, sf, opts = { writeSide: true }) {
   return writerSendCalls(sf, opts).filter((c) => !isAllowedWrite(c)).map((c) => `${label}:${c.line}`)
 }
@@ -351,8 +357,9 @@ export function sendsOffAllowlist(label, sf, opts = { writeSide: true }) {
 // ── 3. Banned endpoints, keys, verbs, internals ────────────────────────────
 // Nowhere in src/ outside tests. reset-password is the un1t.online one,
 // /users/{id}/reset-password; the CRM's own /reset-password page is not.
+// /credits/grant is fenced on its own (creditsGrantOutsideRegrant): it may
+// stand only inside regrantTrialCredits (TRIALREGRANT.1).
 const BANNED_ENDPOINTS = [
-  { label: '/credits/grant', re: /\/credits\/grant/ },
   { label: '/refunds', re: /\/refunds/ },
   { label: 'charge-custom', re: /charge-custom/ },
   { label: 'payment-sheet', re: /payment-sheet/ },
@@ -372,6 +379,41 @@ export function chargeOutsideGrantTrial(key, sf) {
   return literalHits(sf, /purchases\/charge/)
     .filter((h) => !h.chain.includes('grantTrial') && !(key === TRANSPORT && h.chain.includes('ENDPOINTS')))
     .map((h) => `${key}:${h.line}`)
+}
+
+/**
+ * TRIALREGRANT.1 — "line N" of each /credits/grant outside the ops module's
+ * regrantTrialCredits and outside the transport's ENDPOINTS table.
+ */
+export function creditsGrantOutsideRegrant(key, sf) {
+  return literalHits(sf, /credits\/grant/)
+    .filter((h) => !(key === OPS && h.chain.includes('regrantTrialCredits')) && !(key === TRANSPORT && h.chain.includes('ENDPOINTS')))
+    .map((h) => `${key}:${h.line}`)
+}
+
+/**
+ * TRIALREGRANT.1 — "line N" of each mention of regrantTrialCredits that is
+ * not its own declaration in the ops module or a call inside grantTrial
+ * there. Anywhere else (another file, an export, a call from another
+ * primitive, a reference passed around) is a violation.
+ */
+export function regrantOutsideGrantTrial(key, sf) {
+  const out = []
+  const visit = (node) => {
+    if (ts.isIdentifier(node) && node.text === 'regrantTrialCredits') {
+      const parent = node.parent
+      const isDeclaration = ts.isFunctionDeclaration(parent) && parent.name === node
+        && !(parent.modifiers ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+      const isCallInGrantTrial = ts.isCallExpression(parent) && parent.expression === node && enclosingNames(node).includes('grantTrial')
+      if (!(key === OPS && (isDeclaration || isCallInGrantTrial))) out.push(`${key}:${lineOf(sf, node)}`)
+    } else {
+      const text = literalText(node)
+      if (text != null && text.includes('regrantTrialCredits')) out.push(`${key}:${lineOf(sf, node)}`)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return out
 }
 
 /** "line N" of each banned body key (as a key, a name or inside a string) outside the transport's BANNED_BODY_KEYS. */
@@ -493,7 +535,7 @@ describe('the send( scanner (canaries)', () => {
     expect(sendsWithoutPolicy('x.js', sf, OP_POLICY)).toEqual(['x.js:1', 'x.js:2', 'x.js:3', 'x.js:4', 'x.js:5', 'x.js:6', 'x.js:7', 'x.js:8', 'x.js:9', 'x.js:10', 'x.js:11', 'x.js:13'])
   })
 
-  it('flags a send that is not one of the six writes, a variable verb or path, and a banned verb', () => {
+  it('flags a send that is not one of the seven writes, a variable verb or path, and a banned verb', () => {
     const sf = parse([
       "writer.send('POST', '/bookings', {})",
       "writer.send('PATCH', `/bookings/${id}/cancel`, {})",
@@ -512,8 +554,11 @@ describe('the send( scanner (canaries)', () => {
       "writer.send('POST', base + '/bookings', {})",
       "writer.send('POST', `${base}/bookings`, {})",
       "writer.send('PATCH', '/bookings/1/cancel', {})",
+      "writer.send('PUT', '/credits/grant', {})",
+      "writer.send('POST', '/credits/grant/x', {})",
     ].join('\n'))
-    expect(sendsOffAllowlist('x.js', sf)).toEqual(['x.js:7', 'x.js:8', 'x.js:9', 'x.js:10', 'x.js:11', 'x.js:12', 'x.js:13', 'x.js:14', 'x.js:15', 'x.js:16', 'x.js:17'])
+    // Line 10 (POST /credits/grant) is the seventh allowed write (TRIALREGRANT.1); the op and policy are checked elsewhere.
+    expect(sendsOffAllowlist('x.js', sf)).toEqual(['x.js:7', 'x.js:8', 'x.js:9', 'x.js:11', 'x.js:12', 'x.js:13', 'x.js:14', 'x.js:15', 'x.js:16', 'x.js:17', 'x.js:18', 'x.js:19'])
   })
 
   it('sees a verb-first send in any file, but another send( only in a write-side file', () => {
@@ -553,7 +598,38 @@ describe('the banned-name scanners (canaries)', () => {
       "const ok = '/reset-password'",
       "const ok2 = '/auth/forgot-password'",
     ].join('\n'))
-    expect(bannedEndpointHits('x.js', sf).map((h) => h.split(' ')[0])).toEqual(['x.js:2', 'x.js:3', 'x.js:4', 'x.js:5', 'x.js:6', 'x.js:7', 'x.js:8'])
+    // '/credits/grant' (line 2) has its own fence below (TRIALREGRANT.1).
+    expect(bannedEndpointHits('x.js', sf).map((h) => h.split(' ')[0])).toEqual(['x.js:3', 'x.js:4', 'x.js:5', 'x.js:6', 'x.js:7', 'x.js:8'])
+  })
+
+  it('/credits/grant stands only inside regrantTrialCredits in the ops module (and the transport ENDPOINTS table)', () => {
+    const sf = parse([
+      "const ENDPOINTS = [{ path: /^\\/credits\\/grant$/ }]",
+      "async function regrantTrialCredits() { return writer.send('POST', '/credits/grant', {}) }",
+      "async function grantTrial() { return '/credits/grant' }",
+      "const top = `/credits/grant`",
+      "// '/credits/grant' in a comment",
+      "const regrantTrialCredits2 = () => '/credits/grant'",
+    ].join('\n'))
+    expect(creditsGrantOutsideRegrant('src/x.js', sf)).toEqual(['src/x.js:1', 'src/x.js:2', 'src/x.js:3', 'src/x.js:4', 'src/x.js:6'])
+    expect(creditsGrantOutsideRegrant(OPS, sf)).toEqual([`${OPS}:1`, `${OPS}:3`, `${OPS}:4`, `${OPS}:6`])
+    expect(creditsGrantOutsideRegrant(TRANSPORT, sf)).toEqual([`${TRANSPORT}:2`, `${TRANSPORT}:3`, `${TRANSPORT}:4`, `${TRANSPORT}:6`])
+  })
+
+  it('regrantTrialCredits is declared unexported in the ops module and called only inside grantTrial', () => {
+    const sf = parse([
+      'async function regrantTrialCredits() { return 1 }',
+      'export async function grantTrial() { const go = async () => regrantTrialCredits(); return go() }',
+      'export async function book() { return regrantTrialCredits() }',
+      'export const x = { regrantTrialCredits }',
+      "const name = 'regrantTrialCredits'",
+      'export async function grantTrial2() { return [regrantTrialCredits].map((f) => f()) }',
+    ].join('\n'))
+    expect(regrantOutsideGrantTrial(OPS, sf)).toEqual([`${OPS}:3`, `${OPS}:4`, `${OPS}:5`, `${OPS}:6`])
+    // In any other file every mention is a violation, its declaration and calls too.
+    expect(regrantOutsideGrantTrial('src/lib/agent/x.js', sf)).toEqual(['src/lib/agent/x.js:1', 'src/lib/agent/x.js:2', 'src/lib/agent/x.js:3', 'src/lib/agent/x.js:4', 'src/lib/agent/x.js:5', 'src/lib/agent/x.js:6'])
+    const exported = parse('export async function regrantTrialCredits() { return 1 }')
+    expect(regrantOutsideGrantTrial(OPS, exported)).toEqual([`${OPS}:1`])
   })
 
   it('/purchases/charge stands only inside grantTrial (and the transport ENDPOINTS table)', () => {
@@ -713,9 +789,9 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
   const sendFiles = () => filesMentioning(/\bsend\b/)
   const policyTable = () => frozenTable(parsedFile(allSources().find((e) => e.key === TRANSPORT)), 'UN1T_OP_POLICY')
 
-  it('the policy table is the one the spec fixes: book, cancel, create_client verify; forgot_password, trial never; checkout idempotent', () => {
+  it('the policy table is the one the spec fixes: book, cancel, create_client verify; forgot_password, trial, trial_regrant never; checkout idempotent', () => {
     expect(policyTable()).toEqual({
-      book: 'verify', cancel: 'verify', create_client: 'verify', forgot_password: 'never', trial: 'never', checkout: 'idempotent',
+      book: 'verify', cancel: 'verify', create_client: 'verify', forgot_password: 'never', trial: 'never', checkout: 'idempotent', trial_regrant: 'never',
     })
   })
 
@@ -725,19 +801,22 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(bad).toEqual([])
   })
 
-  it("every send( call's method and path template is one of the six allowed writes", () => {
+  it("every send( call's method and path template is one of the seven allowed writes", () => {
     const bad = sendFiles().flatMap((e) => sendsOffAllowlist(e.key, e.sf, { writeSide: writeSideFile(e) }))
     expect(bad).toEqual([])
   })
 
-  it('the scan really sees the ops module\'s seven sends (an empty result is not a broken scanner)', () => {
+  it('the scan really sees the ops module\'s eight sends (an empty result is not a broken scanner)', () => {
     const ops = sendFiles().find((e) => e.key === OPS)
     expect(ops).toBeTruthy()
     const calls = writerSendCalls(ops.sf, { writeSide: true })
     expect(calls.map((c) => `${c.verb} ${c.path}`).sort()).toEqual([
-      'PATCH /bookings/:id/cancel', 'POST /auth/forgot-password', 'POST /bookings', 'POST /purchases/charge',
+      'PATCH /bookings/:id/cancel', 'POST /auth/forgot-password', 'POST /bookings', 'POST /credits/grant', 'POST /purchases/charge',
       'POST /purchases/checkout', 'POST /purchases/checkout', 'POST /users/clients',
     ])
+    // TRIALREGRANT.1: the credit re-grant is op trial_regrant, never re-sent.
+    const regrant = calls.filter((c) => c.op === 'trial_regrant')
+    expect(regrant.map((c) => `${c.verb} ${c.path} ${c.policy}`)).toEqual(['POST /credits/grant never'])
     expect(calls.every((c) => c.optsReadable && c.op != null && c.policy != null)).toBe(true)
     // UN1TWRITE.10: the trial's charge and free checkout are op trial, never re-sent.
     const trial = calls.filter((c) => c.op === 'trial')
@@ -745,7 +824,7 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(trial.every((c) => c.policy === 'never')).toBe(true)
   })
 
-  it("the transport's own allowlist is pinned: exactly the six writes, and the banned body keys it refuses", () => {
+  it("the transport's own allowlist is pinned: exactly the seven writes, and the banned body keys it refuses", () => {
     const sf = parsedFile(allSources().find((e) => e.key === TRANSPORT))
     const entries = []
     const visit = (node) => {
@@ -781,10 +860,31 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(bad).toEqual([])
   })
 
-  it('/credits/grant, /refunds, charge-custom, payment-sheet, mark-attendance and /users/{id}/reset-password appear nowhere in src/ outside tests', () => {
-    const bad = filesMentioning(/credits\/grant|\/refunds|charge-custom|payment-sheet|mark-attendance|reset-password/)
+  it('/refunds, charge-custom, payment-sheet, mark-attendance and /users/{id}/reset-password appear nowhere in src/ outside tests', () => {
+    const bad = filesMentioning(/\/refunds|charge-custom|payment-sheet|mark-attendance|reset-password/)
       .flatMap((e) => bannedEndpointHits(e.key, e.sf))
     expect(bad).toEqual([])
+  })
+
+  it('TRIALREGRANT.1: /credits/grant appears only inside regrantTrialCredits in the ops module (and the transport allowlist), and it is there', () => {
+    const files = filesMentioning(/credits(\/|\\\/)grant/)
+    expect(files.flatMap((e) => creditsGrantOutsideRegrant(e.key, e.sf))).toEqual([])
+    const ops = allSources().find((e) => e.key === OPS)
+    expect(literalHits(parsedFile(ops), /credits\/grant/).filter((h) => h.chain.includes('regrantTrialCredits')).length).toBeGreaterThan(0)
+  })
+
+  it('TRIALREGRANT.1: regrantTrialCredits is unexported, declared in the ops module and called only from grantTrial', () => {
+    const files = filesMentioning(/regrantTrialCredits/)
+    expect(files.map((e) => e.key)).toContain(OPS)
+    expect(files.flatMap((e) => regrantOutsideGrantTrial(e.key, e.sf))).toEqual([])
+    const ops = parsedFile(allSources().find((e) => e.key === OPS))
+    const calls = []
+    const visit = (node) => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'regrantTrialCredits') calls.push(node)
+      ts.forEachChild(node, visit)
+    }
+    visit(ops)
+    expect(calls.length).toBeGreaterThan(0)
   })
 
   it('no un1t.online module names reset-password at all (a path built by concatenation would slip the pattern above)', () => {

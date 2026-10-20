@@ -14,7 +14,7 @@
 //   pastDue           { success, data: PastDueRow[] } | { success:false, error }
 //   paymentsFor       { success, data: { subscriptions, transactions, invoices, pastDues } } | { success:false, error }
 //   pipelineInputs    { success, data: { contacts, snapshots, evidence, unlinked } } | { success:false, error }
-//   trialEligibility  { success, data: { eligible, reasons } } | { success:false, error }
+//   trialEligibility  { success, data: { eligible, reasons, regrant } } | { success:false, error }
 //
 //   radarMembers / winbackContacts / leadContacts / radarPastDue (UN1TRADAR.1-2,
 //   ./un1t-online-radar.js): the churn / lead radar rows in the scorer's shape;
@@ -39,10 +39,11 @@
 // radar reads (./un1t-online-radar.js) also read `contacts` by id (name, and
 // lead fields), and leadContacts the contacts this studio owns.
 // `pipelineInputs` and `trialEligibility` also read the CRM's own write ledger,
-// `un1t_write_events` (op 'trial' rows, via listLedgerTrials), still filtered by
-// location_id and, in `trialEligibility`, narrowed by the person's user ids and
-// contact ids; `trialEligibility` additionally reads `un1t_clients` to find the
-// person's accounts. Service-role client;
+// `un1t_write_events` (op 'trial' rows, via listLedgerTrials; `trialEligibility`
+// also its 'trial_regrant' rows), still filtered by location_id and, in
+// `trialEligibility`, narrowed by the person's user ids and contact ids;
+// `trialEligibility` additionally reads `un1t_clients` to find the person's
+// accounts and their mirrored credits. Service-role client;
 // reads only, no writes. Every list read is range()+order() paginated.
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { logWarn } from '@/lib/log'
@@ -53,7 +54,7 @@ import {
   shapeCounts, shapeMrr, shapeFlows, shapeRevenue,
   firstSales, engagementRows, cancelsComparable, MEMBER_STATUSES,
   shapePastDue, normaliseUn1tInvoiceStatus, glofoxInterval,
-  shapePipelineSnapshot, shapePipelineDateEvidence, shapeTrialEligibility,
+  shapePipelineSnapshot, shapePipelineDateEvidence, shapeTrialEligibility, shapeTrialRegrant,
 } from './un1t-online-shape'
 import { radarMembers, winbackContacts, leadContacts, radarPastDue, arrears } from './un1t-online-radar'
 import { freshCutoff } from '@/lib/un1t-online-freshness'
@@ -469,6 +470,9 @@ const BOOKING_COLS = 'un1t_user_id, contact_id, event_id, status, source, credit
 // TRIALDONE.2 — ends_at (mig 726) dates "the 3rd class ended" for the outreach.
 const EVENT_COLS = 'un1t_id, starts_at, ends_at'
 const MEMBERSHIP_COLS = 'contact_id, source, status, ended_at'
+// TRIALREGRANT.1 — trialEligibility's re-grant inputs.
+const REGRANT_BOOKING_COLS = 'un1t_id, un1t_user_id, contact_id, status'
+const REGRANT_CLIENT_COLS = 'un1t_user_id, credit_balance, credit_unlimited'
 // Exactly these six, by id: no Glofox column is read (membership and the
 // pipeline are separate per studio; only the contact is shared).
 const PIPE_CONTACT_COLS = 'id, name, email, location_id, pipeline_dismissed_at, last_lead_source_at'
@@ -486,6 +490,8 @@ const listAtStudio = (db, loc, table, cols) => selectAll((from, to) => db
 const LEDGER_ID_CHUNK = 150
 const LEDGER_TRIAL_STAGES = Object.freeze(['done', 'sent', 'unknown'])
 const LEDGER_TRIAL_COLS = 'id, un1t_user_id, contact_id, target, stage, created_at'
+// TRIALREGRANT.1 — the ledger ops listLedgerTrials may read.
+const LEDGER_TRIAL_OPS = Object.freeze(['trial', 'trial_regrant'])
 
 /**
  * The trials the CRM itself granted (or is granting) at a studio, from the
@@ -500,6 +506,8 @@ const LEDGER_TRIAL_COLS = 'id, un1t_user_id, contact_id, target, stage, created_
  * reachable only through the contact the ledger stamped on it. A row with both
  * keys is ONE entry object in both maps (callers de-duplicate by identity).
  *
+ * `op` (default 'trial') is the ledger op: 'trial', or 'trial_regrant' for the
+ * credit re-grants (TRIALREGRANT.1; their target is null, so product_id is too).
  * `stages` (default done, sent, unknown) picks which rows. `un1tUserIds` and
  * `contactIds`, when either is given, narrow to rows matching either list (an
  * empty list matches nothing; with both empty there is no query; a non-array is
@@ -509,8 +517,9 @@ const LEDGER_TRIAL_COLS = 'id, un1t_user_id, contact_id, target, stage, created_
  * Never throws and never answers an empty map for a failed read:
  * `{ ok:false, error }`, and the caller must fail with it.
  */
-export async function listLedgerTrials(db, locationId, { stages = LEDGER_TRIAL_STAGES, un1tUserIds, contactIds } = {}) {
+export async function listLedgerTrials(db, locationId, { op = 'trial', stages = LEDGER_TRIAL_STAGES, un1tUserIds, contactIds } = {}) {
   if (!locationId) return { ok: false, error: 'No location' }
+  if (!LEDGER_TRIAL_OPS.includes(op)) return { ok: false, error: `op must be one of ${LEDGER_TRIAL_OPS.join(', ')}` }
   if (!Array.isArray(stages)) return { ok: false, error: 'stages must be an array' }
   if (un1tUserIds != null && !Array.isArray(un1tUserIds)) return { ok: false, error: 'un1tUserIds must be an array' }
   if (contactIds != null && !Array.isArray(contactIds)) return { ok: false, error: 'contactIds must be an array' }
@@ -525,7 +534,7 @@ export async function listLedgerTrials(db, locationId, { stages = LEDGER_TRIAL_S
     // boundary inside a tie would double-count or skip a row: id breaks the tie.
     const page = (q, from, to) => q
       .eq('location_id', locationId)
-      .eq('op', 'trial')
+      .eq('op', op)
       .in('stage', stages)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -751,6 +760,13 @@ function unionByUn1tId(...lists) {
  * created is not in un1t_clients until the next sync), and, for a contact, its
  * contact_memberships here from the api and export sources, any status. Any
  * failed read is { success:false }: an unreadable history is never eligible.
+ *
+ * TRIALREGRANT.1 — `data.regrant` (always a boolean) says whether a person who
+ * is not eligible ONLY because the trial was used qualifies for the one-off
+ * credit re-grant (see shapeTrialRegrant): it also reads their bookings (any
+ * attended or no-show one is a use), their accounts' mirrored credits and the
+ * ledger's trial_regrant rows (done, sent and unknown, by user id and by
+ * contact id). eligible and reasons are unchanged by it.
  */
 async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) {
   if (!locationId) return { success: false, error: 'No location' }
@@ -804,7 +820,7 @@ async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) 
       ),
     ]).then((lists) => unionByUn1tId(...lists))
 
-    const [transactions, subscriptions, products, memberships, ledger] = await Promise.all([
+    const [transactions, subscriptions, products, memberships, ledger, bookings, clients, regrants] = await Promise.all([
       rowsFor('un1t_transactions', PIPE_TX_COLS),
       rowsFor('un1t_subscriptions', ELIGIBILITY_SUB_COLS),
       listAtStudio(db, locationId, 'un1t_products', PRODUCT_COLS),
@@ -822,14 +838,24 @@ async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) 
       ),
       // Every ledger trial for these people counts, done, sent or unknown alike.
       ledgerTrialsOrThrow(db, locationId, { un1tUserIds: users, contactIds }),
+      // TRIALREGRANT.1: was the trial ever used, do they hold credits, and
+      // have they had the one re-grant already?
+      rowsFor('un1t_bookings', REGRANT_BOOKING_COLS),
+      users.length === 0 ? [] : selectAllByKeys(
+        users,
+        (keys, from, to) => db.from('un1t_clients').select(REGRANT_CLIENT_COLS).eq('location_id', locationId).in('un1t_user_id', keys).order('id', { ascending: true }).range(from, to),
+        { chunkSize: KEY_CHUNK, pageSize: PAGE },
+      ),
+      ledgerTrialsOrThrow(db, locationId, { op: 'trial_regrant', un1tUserIds: users, contactIds }),
     ])
-    return {
-      success: true,
-      data: shapeTrialEligibility({
-        transactions, subscriptions, memberships, productsById: productsMap(products),
-        ledgerTrials: ledgerEntriesFor(ledger, users, contactIds),
-      }),
-    }
+    const eligibility = shapeTrialEligibility({
+      transactions, subscriptions, memberships, productsById: productsMap(products),
+      ledgerTrials: ledgerEntriesFor(ledger, users, contactIds),
+    })
+    const regrant = shapeTrialRegrant({
+      eligibility, bookings, clients, ledgerRegrants: ledgerEntriesFor(regrants, users, contactIds),
+    })
+    return { success: true, data: { ...eligibility, regrant } }
   } catch (e) {
     return { success: false, error: errMessage(e) }
   }
