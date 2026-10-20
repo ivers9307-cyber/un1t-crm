@@ -778,9 +778,13 @@ export function shapeTrialEligibility({
   return { eligible: reasons.length === 0, reasons }
 }
 
-/** un1t_bookings statuses that mean the class was used (a cancel never was). */
-const USED_BOOKING_STATUSES = new Set(['attended', 'no_show', 'no-show', 'noshow'])
-const isUsedBooking = (b) => USED_BOOKING_STATUSES.has(String(b?.status ?? '').trim().toLowerCase())
+/**
+ * Any booking that is not cancelled used a trial credit: attended, no-show,
+ * and booked too (an upcoming class holds a credit, and a past BOOKED is
+ * undecided). An unknown status counts as a use. Only a cancel never was.
+ */
+const UNUSED_BOOKING_STATUSES = new Set(['cancelled', 'canceled'])
+const isUsedBooking = (b) => !UNUSED_BOOKING_STATUSES.has(String(b?.status ?? '').trim().toLowerCase())
 
 /**
  * TRIALREGRANT.1 (Richard, 20 Oct 2026) — did this person CLAIM the free trial,
@@ -790,7 +794,7 @@ const isUsedBooking = (b) => USED_BOOKING_STATUSES.has(String(b?.status ?? '').t
  *   - the only reason they are not eligible is trial_used (no
  *     membership_history, no paid_pack);
  *   - none of their bookings (every account and contact the read resolved)
- *     is attended or a no-show (a cancelled one is not a use);
+ *     is anything but cancelled (attended, no-show or booked all used a credit);
  *   - they have had no re-grant yet: no trial_regrant ledger row (done, sent
  *     or unknown) by any of their user ids or contacts;
  *   - the mirror shows them holding no credits (no account with a balance

@@ -832,7 +832,7 @@ async function findOpenTrial(db, { locationId, un1tUserId, productId }) {
 // ── The trial credit re-grant (TRIALREGRANT.1) ────────────────────────────
 //
 // Richard, 20 Oct 2026: a person who CLAIMED the free trial, never used it
-// (no attended or no-show booking) and whose trial credits have run out may
+// (no booking other than a cancelled one) and whose trial credits have run out may
 // have a free class again. un1t.online sells the trial product only once, so
 // grantTrial adds the credits instead, once ever per person per studio (the
 // ledger's op 'trial_regrant', mig 760). Amount and expiry are fixed here: no
@@ -878,7 +878,7 @@ async function findRegrant(db, { locationId, un1tUserId, contactId }) {
  * trial_regrant:<loc>:<un1tUser>, also the idempotency-key header), judged on
  * the body and never re-sent (policy never). Called ONLY from grantTrial,
  * after every check (tests/un1t-online-write-guard.test.js): the person's
- * only ineligibility is trial_used, no attended or no-show booking, no
+ * only ineligibility is trial_used, no booking other than a cancelled one, no
  * earlier re-grant, the live balance 0 and not unlimited, and the op's
  * switch and permissions. Returns the Un1tWriteResult with ledgerId; grantTrial
  * judges it.

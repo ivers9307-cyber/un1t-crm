@@ -1275,12 +1275,13 @@ describe('trialEligibility regrant (TRIALREGRANT.1)', () => {
     expect(await elig(claimed(), { contactId: 'rc' })).toEqual({ eligible: false, reasons: ['trial_used'], regrant: true })
   })
 
-  it('a cancelled or booked (not yet happened) booking is not a use', async () => {
-    expect((await elig(claimed({ un1t_bookings: [bk(), bk({ un1t_id: 'rb2', status: 'booked' })] }))).regrant).toBe(true)
+  it('a cancelled booking is not a use; a booked one (an upcoming class holds a credit) is', async () => {
+    expect((await elig(claimed({ un1t_bookings: [bk({ status: 'cancelled' }), bk({ un1t_id: 'rb2', status: 'cancelled' })] }))).regrant).toBe(true)
+    expect((await elig(claimed({ un1t_bookings: [bk({ status: 'cancelled' }), bk({ un1t_id: 'rb2', status: 'booked' })] }))).regrant).toBe(false)
   })
 
-  it('an attended or no-show booking on any of their accounts or contacts → no regrant', async () => {
-    for (const status of ['attended', 'ATTENDED', 'no_show', 'NO_SHOW']) {
+  it('an attended, no-show or booked booking on any of their accounts or contacts → no regrant', async () => {
+    for (const status of ['attended', 'ATTENDED', 'no_show', 'NO_SHOW', 'booked']) {
       expect((await elig(claimed({ un1t_bookings: [bk({ status })] }))).regrant, status).toBe(false)
     }
     // On a sibling account of the same contact, and on a row keyed only by the contact.

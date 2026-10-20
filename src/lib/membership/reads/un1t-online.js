@@ -764,7 +764,7 @@ function unionByUn1tId(...lists) {
  * TRIALREGRANT.1 — `data.regrant` (always a boolean) says whether a person who
  * is not eligible ONLY because the trial was used qualifies for the one-off
  * credit re-grant (see shapeTrialRegrant): it also reads their bookings (any
- * attended or no-show one is a use), their accounts' mirrored credits and the
+ * booking other than a cancelled one is a use), their accounts' mirrored credits and the
  * ledger's trial_regrant rows (done, sent and unknown, by user id and by
  * contact id). eligible and reasons are unchanged by it.
  */

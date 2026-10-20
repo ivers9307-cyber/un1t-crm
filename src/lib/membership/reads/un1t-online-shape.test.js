@@ -1224,9 +1224,9 @@ describe('shapeCounts output unchanged after packHolderIds extraction', () => {
 
 describe('shapeTrialRegrant (TRIALREGRANT.1)', () => {
   const used = { eligible: false, reasons: ['trial_used'] }
-  it('only trial_used, no attended or no-show booking, no re-grant, no credits → true', () => {
+  it('only trial_used, only cancelled bookings, no re-grant, no credits → true', () => {
     expect(shapeTrialRegrant({ eligibility: used })).toBe(true)
-    expect(shapeTrialRegrant({ eligibility: used, bookings: [{ status: 'cancelled' }, { status: 'booked' }], clients: [{ credit_balance: 0, credit_unlimited: false }] })).toBe(true)
+    expect(shapeTrialRegrant({ eligibility: used, bookings: [{ status: 'cancelled' }, { status: 'CANCELLED' }], clients: [{ credit_balance: 0, credit_unlimited: false }] })).toBe(true)
   })
   it('any other reason, or eligible, or no answer → false', () => {
     expect(shapeTrialRegrant({ eligibility: { eligible: false, reasons: ['trial_used', 'paid_pack'] } })).toBe(false)
@@ -1234,8 +1234,8 @@ describe('shapeTrialRegrant (TRIALREGRANT.1)', () => {
     expect(shapeTrialRegrant({ eligibility: { eligible: true, reasons: [] } })).toBe(false)
     expect(shapeTrialRegrant()).toBe(false)
   })
-  it('an attended or no-show booking, a re-grant row, or credits → false', () => {
-    for (const status of ['attended', 'ATTENDED', 'no_show', 'NO_SHOW', 'no-show']) expect(shapeTrialRegrant({ eligibility: used, bookings: [{ status }] }), status).toBe(false)
+  it('an attended, no-show, booked or unknown-status booking, a re-grant row, or credits → false', () => {
+    for (const status of ['attended', 'ATTENDED', 'no_show', 'NO_SHOW', 'no-show', 'booked', 'BOOKED', 'waitlisted', '']) expect(shapeTrialRegrant({ eligibility: used, bookings: [{ status }] }), status).toBe(false)
     expect(shapeTrialRegrant({ eligibility: used, ledgerRegrants: [{ at: 'x' }] })).toBe(false)
     expect(shapeTrialRegrant({ eligibility: used, clients: [{ credit_balance: 1 }] })).toBe(false)
     expect(shapeTrialRegrant({ eligibility: used, clients: [{ credit_balance: 0, credit_unlimited: true }] })).toBe(false)
