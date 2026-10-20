@@ -1,9 +1,10 @@
 // SECRETTAILS.1 guard. shelly_connections.key_hint held the last 4 characters
-// of the Shelly auth key. Mig 659 clears it and CHECKs it stays NULL; this
-// keeps the code on the same side: no non-test file under src/, shared/ or
-// mobile/ may name `key_hint` or `keyHint` in code (comments are allowed, so
-// a file can say why the field is gone). A floor, not a proof: a column name
-// built at runtime is invisible here. The DB CHECK is the proof for writes.
+// of the Shelly auth key. Mig 659 cleared it and mig 759 (SECRETTAILS.2)
+// dropped the column; this keeps the code from naming it again: no non-test
+// file under src/, shared/ or mobile/ may name `key_hint` or `keyHint` in code
+// (comments are allowed, so a file can say why the field is gone). A floor,
+// not a proof: a column name built at runtime is invisible here, and
+// check:select-columns now refuses a select that names the dropped column.
 
 import { describe, it, expect } from 'vitest'
 import { readdirSync, statSync } from 'node:fs'
