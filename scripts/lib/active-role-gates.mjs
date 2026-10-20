@@ -80,6 +80,11 @@ export const TARGET_JUDGEMENT_PATTERNS = Object.freeze([
   /\bhasRoleAtLocation\(/g,
   /\bhasPermissionForLocation\(/g,
   /\bguardMasterOrOwner\(/g,
+  // src/lib/contact-edit-gates.js (ORGCONTACTS.4): both judge at the contact
+  // row's location_id (hasRoleAtLocation there, or at one of its contact_studios
+  // studios with hasPermissionForLocation), never user.role.
+  /\bcanEditContact\(/g,
+  /\bcanDeleteOrRehomeContact\(/g,
   /\bhasMobilePermissionForLocation\(/g, // ROLESWEEP.1c — the mobile twin
 ])
 
