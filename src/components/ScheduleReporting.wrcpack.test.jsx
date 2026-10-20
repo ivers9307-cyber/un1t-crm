@@ -41,6 +41,28 @@ describe('ScheduleReporting — WRC inspection pack', () => {
     expect(staff.hasAttribute('download')).toBe(true)
   })
 
+  // WRCPERIOD.1 — a period the route would refuse is refused here first, with
+  // the reason on screen, instead of a download of the JSON error.
+  it('withholds the links and says why when the period is over three years, and offers them for 17 months', async () => {
+    await act(async () => { render(<WrcPackCard organizationId={ORG} />) })
+    const from = document.getElementById('wrc-from')
+    const to = document.getElementById('wrc-to')
+    await act(async () => {
+      fireEvent.change(from, { target: { value: '2025-06-01' } })
+      fireEvent.change(to, { target: { value: '2026-10-20' } })
+    })
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByText('Staff summary (CSV)').closest('a').getAttribute('href')).toContain('from=2025-06-01&to=2026-10-20')
+
+    await act(async () => { fireEvent.change(from, { target: { value: '2023-01-01' } }) })
+    expect(screen.getByRole('alert').textContent).toMatch(/at most three years/)
+    expect(screen.getByText('Staff summary (CSV)').closest('a')).toBeNull()
+    expect(screen.getByText('Timesheets (CSV)').closest('a')).toBeNull()
+
+    await act(async () => { fireEvent.change(to, { target: { value: '2022-12-31' } }) })
+    expect(screen.getByRole('alert').textContent).toMatch(/on or after From/)
+  })
+
   it('a manager and a head coach do not see it', async () => {
     for (const role of ['manager', 'head_coach']) {
       await act(async () => { render(<ScheduleReporting user={user(role)} />) })

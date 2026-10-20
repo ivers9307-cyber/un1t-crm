@@ -7,7 +7,7 @@ import { toJsDay, fromJsDay, DAY_NAMES_MONDAY_FIRST } from '@/lib/report-schedul
 import { formatDate } from '@/lib/roster'
 import { canViewReportType, isRateReportType } from '@/lib/report-access'
 import { canDownloadWrcPack } from '@/lib/wrc-pack-access'
-import { defaultWrcPeriod } from '@/lib/wrc-pack-period'
+import { defaultWrcPeriod, wrcPeriodError } from '@/lib/wrc-pack-period'
 import {
   EMPTY_CELL, formatEuroCell, formatHoursCell, readStaffCostRow, readStaffHoursTotal, staffCostHasSplit,
 } from '@/lib/report-staff-table'
@@ -891,7 +891,13 @@ export function WrcPackCard({ organizationId }) {
     if (organizationId) q.set('organization_id', organizationId)
     return `/api/schedule/reports/wrc-pack?${q.toString()}`
   }
+  // WRCPERIOD.1 — the route's own period rule, judged here first: a period it
+  // would refuse used to become a download of the JSON error ("wrc-pack.json"
+  // in the browser's downloads, with no word on screen). The links are
+  // withheld and the reason shown instead.
+  const periodError = wrcPeriodError(from, to)
   const linkClass = 'inline-flex items-center gap-1.5 px-4 py-2 border border-un1t-border text-sm text-un1t-text hover:bg-un1t-border/30 rounded-md transition-colors'
+  const disabledClass = 'inline-flex items-center gap-1.5 px-4 py-2 border border-un1t-border text-sm text-un1t-subtle rounded-md opacity-60 cursor-not-allowed'
   return (
     <div className="mt-8 bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
       <div className="flex items-center gap-2">
@@ -901,8 +907,9 @@ export function WrcPackCard({ organizationId }) {
       <p className="text-xs text-un1t-subtle">
         Every studio in the organisation, everyone employed in the period (former staff included):
         a per-person summary (hours, Sundays, overtime against contract, leave taken, allowance,
-        contract and handbook status) and a per-shift timesheet with rostered and adjusted times,
-        arrival stamps and cancellations. Owner access only.
+        lieu hours, contract and handbook status) and a per-shift timesheet with rostered and
+        adjusted times, arrival stamps, public holidays, lieu hours and cancellations. Up to three
+        years at a time. Owner access only.
       </p>
       <div className="flex flex-wrap items-end gap-3">
         <div>
@@ -915,13 +922,23 @@ export function WrcPackCard({ organizationId }) {
           <input id="wrc-to" type="date" value={to} onChange={e => setTo(e.target.value)}
             className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text" />
         </div>
-        <a href={href('staff')} download className={linkClass}>
-          <Download size={14} /> Staff summary (CSV)
-        </a>
-        <a href={href('shifts')} download className={linkClass}>
-          <Download size={14} /> Timesheets (CSV)
-        </a>
+        {periodError ? (
+          <>
+            <span className={disabledClass} aria-disabled="true"><Download size={14} /> Staff summary (CSV)</span>
+            <span className={disabledClass} aria-disabled="true"><Download size={14} /> Timesheets (CSV)</span>
+          </>
+        ) : (
+          <>
+            <a href={href('staff')} download className={linkClass}>
+              <Download size={14} /> Staff summary (CSV)
+            </a>
+            <a href={href('shifts')} download className={linkClass}>
+              <Download size={14} /> Timesheets (CSV)
+            </a>
+          </>
+        )}
       </div>
+      {periodError && <p className="text-xs text-red-700" role="alert">{periodError}</p>}
     </div>
   )
 }
