@@ -6,7 +6,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const state = {}
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null) }))
+vi.mock('@/lib/auth', async () => {
+  const { NextResponse } = await import('next/server')
+  return {
+    getCurrentUser: vi.fn(),
+    assertLocationAccess: vi.fn(() => null),
+    // The real rule (src/lib/auth.js): master passes, an org_admin grant on that org passes.
+    assertOrganizationAdmin: (user, orgId) => {
+      if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+      if (user.isMaster) return null
+      if (orgId && (user.orgAdminOrgIds || []).includes(orgId)) return null
+      return NextResponse.json({ success: false, error: 'Master or organization admin role required.' }, { status: 403 })
+    },
+  }
+})
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from(table) {

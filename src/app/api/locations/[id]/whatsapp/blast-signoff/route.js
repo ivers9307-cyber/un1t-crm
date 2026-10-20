@@ -15,7 +15,7 @@
 //   Only `until` and `can_edit` ever leave the route: settings hold credentials.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, assertOrganizationAdmin } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { studioBlastSignoffSchema } from '@/lib/schemas'
@@ -74,9 +74,10 @@ export async function PUT(request, props) {
   const studio = await readStudio(db, locationId)
   if (studio.response) return studio.response
   const { location } = studio
-  if (!isOrgAdmin(user, location.organization_id)) {
-    return fail('Only an organisation admin can set the blast sign-off window at this studio.', 403)
-  }
+  // The window exists to bind managers: master or an organisation admin of
+  // the studio's organisation only (the same rule the GET's can_edit reports).
+  const adminGuard = assertOrganizationAdmin(user, location.organization_id)
+  if (adminGuard) return adminGuard
   // Judged on UTC's calendar: the question is whether the day exists, which
   // no zone changes; the window itself is read on the studio's clock.
   if (until !== null && strictDayStartMsIn(until, 'UTC') == null) {
