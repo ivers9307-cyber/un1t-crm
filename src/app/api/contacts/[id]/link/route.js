@@ -50,7 +50,7 @@ export async function POST(request, props) {
   // Load the primary contact ([id])
   const { data: contact, error: contactErr } = await db
     .from('contacts')
-    .select('id, location_id, name')
+    .select('id, location_id, organization_id, name')
     .eq('id', id)
     .single()
 
@@ -89,7 +89,7 @@ export async function POST(request, props) {
   // Load the other contact
   const { data: otherContact, error: otherErr } = await db
     .from('contacts')
-    .select('id, location_id, name')
+    .select('id, location_id, organization_id, name')
     .eq('id', otherContactId)
     .single()
 
@@ -97,10 +97,13 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
 
-  // Cross-location guard
-  if (otherContact.location_id !== contact.location_id) {
+  // ORGCONTACTS.4 — the fence is the ORGANISATION (a person is one contact per
+  // organisation, mig 712; a group links their accounts across its studios,
+  // mig 767). Two studios of one organisation link; two organisations never do,
+  // and a row with no organisation cannot be proven to be the same one.
+  if (!contact.organization_id || otherContact.organization_id !== contact.organization_id) {
     return NextResponse.json(
-      { success: false, error: 'Cannot link contacts in different locations' },
+      { success: false, error: 'Cannot link contacts in different organisations' },
       { status: 400 }
     )
   }

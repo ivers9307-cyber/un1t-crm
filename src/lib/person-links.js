@@ -59,6 +59,19 @@ export async function createGroup(db, { contactIds, method, confidence, actorId,
   const primary = pickPrimary(rows || [])
   if (!primary) throw new Error('createGroup requires at least one existing contact')
 
+  // ORGCONTACTS.4 (mig 767) — the group follows the ORGANISATION, resolved from
+  // the studio it is created at; location_id is written for one release more
+  // (DEPRECATED, dropped in 768). A studio whose organisation cannot be read
+  // gets no group: a group with no organisation would fence nothing.
+  const { data: location, error: locErr } = await db
+    .from('locations')
+    .select('id, organization_id')
+    .eq('id', locationId)
+    .maybeSingle()
+  if (locErr || !location?.organization_id) {
+    throw new Error(`createGroup could not resolve the studio's organisation: ${locErr?.message || 'location not found or has no organisation'}`)
+  }
+
   // Insert group row. SINGLEERR.1 — `group.id` is dereferenced unguarded two
   // lines down, so a rejected insert used to surface as "Cannot read properties
   // of null" with the real Postgres reason discarded. Fail with the reason.
@@ -66,6 +79,7 @@ export async function createGroup(db, { contactIds, method, confidence, actorId,
     .from('person_groups')
     .insert({
       location_id: locationId,
+      organization_id: location.organization_id,
       primary_contact_id: primary.id,
       created_by: actorId,
       note: note ?? null,
