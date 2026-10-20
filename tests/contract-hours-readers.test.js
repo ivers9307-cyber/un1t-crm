@@ -134,6 +134,7 @@ const REVIEWED = {
   'src/lib/roster-summary-server.js': 'server-only contractor spend aggregates via loadHolderPay; the response is pinned to an exact key list with no per-person pay, and its one salary-derived key (fteImplicitCostEur) is classified so the route withholds it below ADMIN_ROLES (FTECOSTVIS.1)',
   'src/lib/roster-summary.js': 'pure; measures only rows the caller was sent',
   'src/lib/roster-week-cost.js': 'server arithmetic behind week-cost',
+  'src/lib/lieu-credits.js': 'LIEU.1: the nightly lieu sweep reads shift rows only for employment_type and the paid window; it returns counts to the cron and writes hours to staff_lieu_credits (no contracted hours, rate or salary leave it), and its ledger reads serve routes gated by profileScope / ADMIN_ROLES at the studio',
   'src/lib/schemas.js': 'a comment on the column\'s range',
   'src/lib/shift-holder-pay.js': 'server-only pay loader for contractor spend and the publish gate; both callers return aggregates only',
   'src/lib/shift-offer-server.js': 'loadBlockCandidates without withContract (defaults false): no contract read',

@@ -91,6 +91,9 @@ export function leaveBalanceView({ employmentType, allowance, requests, requests
   const charged = type === 'holiday' && days ? days : null
   const inYear = charged ? charged.segments.filter((s) => s.year === year).reduce((n, s) => n + s.days, 0) : null
   const requestDays = type !== 'holiday' ? 0 : inYear
+  // LIEU.1 — the year's time-in-lieu balance in HOURS, when the route carried
+  // it (it is omitted when the ledger could not be read, and for contractors).
+  const lieuHours = Number(allowance.lieu?.balance_hours)
   return {
     year,
     total: Number(allowance.total_days),
@@ -102,6 +105,7 @@ export function leaveBalanceView({ employmentType, allowance, requests, requests
     after: requestDays === null ? null : available - requestDays,
     short: requestDays !== null && requestDays > available,
     otherYearDays: charged ? charged.total - inYear : 0,
+    lieuHours: allowance.lieu && Number.isFinite(lieuHours) ? lieuHours : null,
   }
 }
 
@@ -127,6 +131,10 @@ export function leaveBalanceLines(view, type) {
     heading: `Holiday balance ${view.year}`,
     available: `${view.available} ${plural(view.available, 'day', 'days')} available`,
     breakdown: breakdown.join(' · '),
+    // LIEU.1 — a separate line, hours not days; null when the route did not say.
+    lieu: view.lieuHours === null || view.lieuHours === undefined
+      ? null
+      : `Time in lieu: ${view.lieuHours} ${plural(view.lieuHours, 'hour', 'hours')} banked`,
     request,
     otherYear: o > 0
       ? `${o} of these days ${plural(o, 'falls', 'fall')} in ${view.year + 1} and ${plural(o, 'counts', 'count')} against that year’s allowance. That balance is checked when you submit.`

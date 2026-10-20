@@ -9,6 +9,8 @@ import { reportPeriodError, eachReportDay } from '@/lib/report-period'
 import { countLeaveDays } from '@/lib/time-off-days'
 import { getNonWorkingDates } from '@/lib/time-off-leave'
 import { readAvailabilityLeave } from '@/lib/availability-leave'
+import { getStaticHolidays } from '@/lib/bank-holidays'
+import { lieuCreditForShift, sundayLieuMultiplier, isSundayDate } from '@/lib/lieu-rules'
 
 // RETIRE-SHIFTS-MIRROR.1 — reports now read the Roster v2 source of truth
 // (shift_assignments + shift_blocks) instead of the legacy public.shifts
@@ -300,6 +302,21 @@ export async function generateReport({ report_type, period_start, period_end, lo
       const profileMap = {}
       for (const p of (profiles || [])) profileMap[p.id] = p
 
+      // LIEU.1 — Sunday and public-holiday hours are MARKED, not re-priced:
+      // the premium is time in lieu (lieu-rules.js), so every hour is still
+      // costed at the ordinary and overtime rates below, and the lieu hours
+      // the period banks for each FTE ride beside them. The studio's
+      // country (holiday calendar) and Sunday multiplier are read here; an
+      // unreadable row is logged and the defaults ('IE', 4/3) apply, so a
+      // report never fails for a figure that is context.
+      const { data: locRows, error: locError } = await db.from('locations')
+        .select('id, country, settings')
+        .eq('id', locId)
+      if (locError) logWarn('report-generator', 'location country/settings unreadable; lieu figures use the defaults', { locId, err: locError.message })
+      const locRow = Array.isArray(locRows) ? locRows[0] : locRows
+      const holidaysByDate = new Map(getStaticHolidays(period_start, period_end, locRow?.country || 'IE').map((h) => [h.date, h.name]))
+      const sundayMultiplier = sundayLieuMultiplier(locRow?.settings)
+
       // Group shifts by (profile, week-monday) so overtime is computed per
       // week — overtime is a weekly concept, not a period total.
       const byProfileWeek = new Map() // pid → Map(mondayIso → shifts[])
@@ -332,9 +349,23 @@ export async function generateReport({ report_type, period_start, period_end, lo
           weeks: {},
           regular_hours: 0,
           overtime_hours: 0,
+          sunday_hours: 0,
+          public_holiday_hours: 0,
+          lieu_hours_earned: 0,
           regular_cost: 0,
           overtime_cost: 0,
           total_cost: 0,
+        }
+
+        for (const [, weekShifts] of weekMap) {
+          for (const s of weekShifts) {
+            const h = shiftHours(s)
+            const holidayName = holidaysByDate.get(s.shift_date) || null
+            if (isSundayDate(s.shift_date)) entry.sunday_hours += h
+            if (holidayName) entry.public_holiday_hours += h
+            const credit = lieuCreditForShift({ shift: s, holidayName, sundayMultiplier, employmentType: profile.employment_type })
+            if (credit) entry.lieu_hours_earned += credit.hours
+          }
         }
 
         for (const [mondayIso, weekShifts] of weekMap) {
@@ -357,6 +388,9 @@ export async function generateReport({ report_type, period_start, period_end, lo
 
         entry.regular_hours = Math.round(entry.regular_hours * 10) / 10
         entry.overtime_hours = Math.round(entry.overtime_hours * 10) / 10
+        entry.sunday_hours = Math.round(entry.sunday_hours * 10) / 10
+        entry.public_holiday_hours = Math.round(entry.public_holiday_hours * 10) / 10
+        entry.lieu_hours_earned = Math.round(entry.lieu_hours_earned * 100) / 100
         entry.regular_cost = Math.round(entry.regular_cost * 100) / 100
         entry.overtime_cost = Math.round(entry.overtime_cost * 100) / 100
         entry.total_cost = Math.round(entry.total_cost * 100) / 100
@@ -376,6 +410,10 @@ export async function generateReport({ report_type, period_start, period_end, lo
         total_overtime_cost: Math.round(totalOvertimeCost * 100) / 100,
         total_cost: Math.round((totalRegularCost + totalOvertimeCost) * 100) / 100,
         total_hours: Math.round((totalRegularHours + totalOvertimeHours) * 10) / 10,
+        total_sunday_hours: Math.round(Object.values(staffCosts).reduce((n, e) => n + e.sunday_hours, 0) * 10) / 10,
+        total_public_holiday_hours: Math.round(Object.values(staffCosts).reduce((n, e) => n + e.public_holiday_hours, 0) * 10) / 10,
+        total_lieu_hours_earned: Math.round(Object.values(staffCosts).reduce((n, e) => n + e.lieu_hours_earned, 0) * 100) / 100,
+        sunday_lieu_multiplier: Math.round(sundayMultiplier * 10000) / 10000,
         staff_count: Object.keys(staffCosts).length,
         currency: 'EUR',
       }

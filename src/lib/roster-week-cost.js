@@ -16,7 +16,8 @@
 // Auth is the caller's responsibility (MANAGER_ROLES + location membership);
 // this helper trusts its inputs.
 
-import { computeWeeklyCost } from './payroll'
+import { computeWeeklyCost, shiftHours } from './payroll'
+import { isSundayDate } from './lieu-rules'
 import { blocksToShiftRows } from './roster-summary'
 import { addDays, formatDate, getMonday } from './roster'
 
@@ -47,10 +48,11 @@ function parseLocalDate(iso) {
  *   coaches: Array<{
  *     profile_id: string, full_name: string,
  *     allocated_hours: number, contracted_hours: number, overtime_hours: number,
+ *     sunday_hours: number,
  *     status: 'under' | 'at_contract' | 'overtime',
  *     over_threshold: boolean,
  *   }>,
- *   totals: { coaches: number, allocated_hours: number, overtime_hours: number, over_threshold: number },
+ *   totals: { coaches: number, allocated_hours: number, overtime_hours: number, sunday_hours: number, over_threshold: number },
  * }>}
  */
 export async function computeWeeklyFteHours({ db, locationId, weekStart }) {
@@ -110,10 +112,10 @@ export async function computeWeeklyFteHours({ db, locationId, weekStart }) {
     // that filter here means the endpoint answers the question the screen asks
     // rather than shipping the whole roster's hours to be filtered in a tab.
     if (cost.actual_hours < cost.contracted_hours) {
-      coaches.push(row(s, cost, 'under'))
+      coaches.push(row(s, cost, 'under', own))
       continue
     }
-    coaches.push(row(s, cost, cost.over_threshold ? 'overtime' : 'at_contract'))
+    coaches.push(row(s, cost, cost.over_threshold ? 'overtime' : 'at_contract', own))
   }
 
   // Over-contract first, then the heaviest week — the order a manager scans in.
@@ -130,18 +132,22 @@ export async function computeWeeklyFteHours({ db, locationId, weekStart }) {
       coaches: coaches.length,
       allocated_hours: round1(coaches.reduce((sum, c) => sum + c.allocated_hours, 0)),
       overtime_hours: round1(coaches.reduce((sum, c) => sum + c.overtime_hours, 0)),
+      // LIEU.1 — Sunday hours are marked (they bank time in lieu at the
+      // studio's multiplier); still hours, never money.
+      sunday_hours: round1(coaches.reduce((sum, c) => sum + c.sunday_hours, 0)),
       over_threshold: coaches.filter((c) => c.over_threshold).length,
     },
   }
 }
 
-function row(profile, cost, status) {
+function row(profile, cost, status, own = []) {
   return {
     profile_id: profile.id,
     full_name: profile.full_name,
     allocated_hours: cost.actual_hours,
     contracted_hours: cost.contracted_hours,
     overtime_hours: cost.overtime_hours,
+    sunday_hours: round1(own.filter((s) => isSundayDate(s.shift_date)).reduce((sum, s) => sum + shiftHours(s), 0)),
     status,
     over_threshold: cost.over_threshold,
   }

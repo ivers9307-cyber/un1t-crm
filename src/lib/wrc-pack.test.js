@@ -217,7 +217,39 @@ describe('CSV', () => {
     })
     const lines = wrcShiftCsv(shifts).split('\n')
     expect(lines[0]).toBe(WRC_SHIFT_CSV_HEADER.join(','))
-    expect(lines[1]).toBe('2026-06-07,Sun,yes,Anna Byrne,anna@example.com,Stillorgan,Day,09:00,17:00,09:00,17:00,0,,cancelled,yes')
+    expect(lines[1]).toBe('2026-06-07,Sun,yes,,Anna Byrne,anna@example.com,Stillorgan,Day,09:00,17:00,09:00,17:00,0,,cancelled,yes,')
+  })
+
+  // LIEU.1 — the ledger rides in: per person the period's credited / taken
+  // and the running balance at `to`; per shift the public holiday and the
+  // hours the ledger RECORDED for it (never a recount).
+  it('staff and shift rows carry the lieu ledger and the public holiday', () => {
+    const sunday = shift({ assignment_id: 'as-sun', shift_date: '2026-06-07' })
+    const stPatricks = shift({ assignment_id: 'as-pat', shift_date: '2026-03-17' })
+    const plain = shift({ assignment_id: 'as-plain', shift_date: '2026-06-08' })
+    const lieuRows = [
+      { profile_id: 'p1', source: 'sunday_worked', shift_assignment_id: 'as-sun', credit_date: '2026-06-07', hours: 10.67 },
+      { profile_id: 'p1', source: 'public_holiday_worked', shift_assignment_id: 'as-pat', credit_date: '2026-03-17', hours: 8 },
+      { profile_id: 'p1', source: 'taken', shift_assignment_id: null, credit_date: '2026-07-01', hours: -4 },
+      { profile_id: 'p1', source: 'manual', shift_assignment_id: null, credit_date: '2025-01-10', hours: 2 },   // before `from`: balance only
+      { profile_id: 'p1', source: 'manual', shift_assignment_id: null, credit_date: '2027-01-10', hours: 9 },   // after `to`: ignored
+    ]
+    const holidaysByLocation = { [LOC_A]: new Map([['2026-03-17', "St Patrick's Day"]]) }
+    const { staff, shifts } = buildWrcPack({
+      memberships: [{ profile_id: 'p1', location_id: LOC_A, role: 'staff' }], profiles: [anna], shifts: [sunday, stPatricks, plain],
+      timeOff: [], allowances: [], contracts: [], handbook: null, locationsById, lieuRows, holidaysByLocation, from: FROM, to: TO, year: 2026,
+    })
+    expect(staff[0]).toMatchObject({ lieu_hours_credited: 18.67, lieu_hours_taken: 4, lieu_hours_balance: 16.67 })
+    const byId = Object.fromEntries(shifts.map((s) => [s.assignment_id, s]))
+    expect(byId['as-sun']).toMatchObject({ sunday: true, public_holiday: '', lieu_hours_earned: 10.67 })
+    expect(byId['as-pat']).toMatchObject({ sunday: false, public_holiday: "St Patrick's Day", lieu_hours_earned: 8 })
+    expect(byId['as-plain']).toMatchObject({ public_holiday: '', lieu_hours_earned: null })
+    const csv = wrcStaffCsv(staff).split('\n')
+    expect(csv[0].split(',').slice(-3)).toEqual(['Lieu hours credited', 'Lieu hours taken', 'Lieu hours balance'])
+    expect(csv[1].split(',').slice(-3)).toEqual(['18.67', '4', '16.67'])
+    const shiftCsv = wrcShiftCsv(shifts).split('\n')
+    expect(shiftCsv[0].split(',')[3]).toBe('Public holiday')
+    expect(shiftCsv.find((l) => l.startsWith('2026-03-17'))).toContain("St Patrick's Day")
   })
 })
 
@@ -276,6 +308,7 @@ const DB_TABLES = () => ({
     { id: 'p9', full_name: 'Other Org', email: 'x@y.z', role: 'owner', deleted_role: null, deleted_at: null, active: true, employment_type: 'fte', annual_salary: null, hourly_rate: null, contracted_hours_per_week: 40 },
   ],
   staff_allowances: [{ id: 'al1', profile_id: 'p1', year: 2026, total_days: 20, used_days: 2, carried_over: 0 }],
+  staff_lieu_credits: [{ id: 'lc1', profile_id: 'p1', location_id: LOC_A, source: 'sunday_worked', shift_assignment_id: 'as1', credit_date: '2026-06-07', hours: 10.67 }],
   contracts: [{ id: 'c1', profile_id: 'p1', organization_id: ORG, status: 'signed', signed_at: '2026-01-05T09:00:00Z' }, { id: 'c2', profile_id: 'p3', organization_id: ORG, status: 'issued', signed_at: null }],
   policies: [{ id: 'pol1', organization_id: ORG, slug: 'employee-handbook' }],
   policy_versions: [{ id: 'v1', policy_id: 'pol1', is_current: false, version_number: 1 }, { id: 'v2', policy_id: 'pol1', is_current: true, version_number: 2 }],
@@ -298,6 +331,8 @@ describe('generateWrcPack', () => {
     expect(a.contract_signed).toBe(true)
     expect(a.handbook_version).toBe(2)
     expect(a.handbook_viewed).toBe(false)    // viewed version 1 only
+    expect(a.lieu_hours_credited).toBe(10.67)  // LIEU.1 — from staff_lieu_credits
+    expect(pack.shifts.find((s) => s.assignment_id === 'as1').lieu_hours_earned).toBe(10.67)
     const c = pack.staff[1]
     expect(c.status).toBe('deleted 2026-08-01')
     expect(c.role).toBe('manager')

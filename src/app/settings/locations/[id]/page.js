@@ -34,6 +34,7 @@ import EmailMailboxesCard from '@/components/settings/EmailMailboxesCard'
 import SignatureLinksCard from '@/components/settings/SignatureLinksCard'
 import CommsFrequencyCapCard from '@/components/settings/CommsFrequencyCapCard'
 import GeofenceAttendanceCard from '@/components/settings/GeofenceAttendanceCard'
+import PayrollLieuCard from '@/components/settings/PayrollLieuCard'
 import SendQuietHoursCard from '@/components/settings/SendQuietHoursCard'
 import EmailCopyCard from '@/components/settings/EmailCopyCard'
 import EmailSpamFilterCard from '@/components/settings/EmailSpamFilterCard'
@@ -276,6 +277,9 @@ export default async function EditLocationPage(props) {
               Coordinates + radius + the permission-gate copy staff see
               in the mobile app. */}
           <GeofenceAttendanceCard locationId={location.id} />
+          {/* LIEU.1 — the Sunday time-in-lieu multiplier
+              (locations.settings.payroll.sunday_multiplier, default 4/3). */}
+          <PayrollLieuCard locationId={location.id} />
         </>
       )}
 

@@ -38,7 +38,7 @@ function req(body, url = 'http://x/api/schedule/allowances') {
 }
 
 // links: which locations PID belongs to. existing: current allowance row or null.
-function buildDb({ links = ['loc-1'], existing = null, existingError = null, employmentType = 'fte', entitlement = null, pending = [], pendingError = null }) {
+function buildDb({ links = ['loc-1'], existing = null, existingError = null, employmentType = 'fte', entitlement = null, pending = [], pendingError = null, lieu = [], lieuError = null }) {
   const pendingCalls = []
   const upsertSpy = vi.fn()
   const one = (data) => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data, error: null }) }) })
@@ -66,6 +66,14 @@ function buildDb({ links = ['loc-1'], existing = null, existingError = null, emp
           gte: (...a) => { pendingCalls.push(['gte', ...a]); return chain },
           lte: (...a) => { pendingCalls.push(['lte', ...a]); return chain },
           then: (res, rej) => Promise.resolve({ data: pendingError ? null : pending, error: pendingError }).then(res, rej),
+        }
+        return chain
+      }
+      // LIEU.1 — getLieuBalance: select → eq → gte → lte → order ×2 → range, awaited.
+      if (t === 'staff_lieu_credits') {
+        const chain = {
+          select: () => chain, eq: () => chain, gte: () => chain, lte: () => chain, order: () => chain, range: () => chain,
+          then: (res, rej) => Promise.resolve({ data: lieuError ? null : lieu, error: lieuError }).then(res, rej),
         }
         return chain
       }
@@ -234,6 +242,28 @@ describe('pending_days', () => {
     getCurrentUser.mockResolvedValue(ME)
     createServerClient.mockReturnValue(buildDb({}).db)
     expect((await (await GET(req(null, url))).json()).data.pending_days).toBe(0)
+  })
+
+  // LIEU.1 — the year's time-in-lieu balance rides along in hours, beside the
+  // day figures and never folded into `remaining`.
+  it('LIEU.1 — carries the lieu balance in hours; omitted when unreadable; absent for a contractor', async () => {
+    getCurrentUser.mockResolvedValue(ME)
+    const lieu = [{ source: 'sunday_worked', hours: '10.67', credit_date: '2026-06-07' }, { source: 'taken', hours: '-4', credit_date: '2026-07-01' }]
+    createServerClient.mockReturnValue(buildDb({ existing: { total_days: 20, used_days: 2, carried_over: 0 }, lieu }).db)
+    const json = await (await GET(req(null, url))).json()
+    expect(json.data).toMatchObject({ remaining: 18, lieu: { year: 2026, credited_hours: 10.67, taken_hours: 4, balance_hours: 6.67 } })
+
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    createServerClient.mockReturnValue(buildDb({ lieuError: { message: 'down' } }).db)
+    const unread = await (await GET(req(null, url))).json()
+    expect(unread.success).toBe(true)
+    expect(unread.data).not.toHaveProperty('lieu')
+    errors.mockRestore()
+
+    createServerClient.mockReturnValue(buildDb({ employmentType: 'contractor', lieu }).db)
+    const contractor = await (await GET(req(null, url))).json()
+    expect(contractor.data.not_applicable).toBe(true)
+    expect(contractor.data).not.toHaveProperty('lieu')
   })
 
   it('an unreadable sum is OMITTED, never 0, and the allowance still loads', async () => {

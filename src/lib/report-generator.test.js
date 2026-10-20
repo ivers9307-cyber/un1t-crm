@@ -595,6 +595,42 @@ describe('generateReport — staff_cost', () => {
     expect(res).toEqual({ success: false, error: 'No staff are assigned to this location' })
     expect(db.from).not.toHaveBeenCalledWith('generated_reports')
   })
+
+  // LIEU.1 — Sunday and public-holiday hours are MARKED, and the lieu hours
+  // the period banks are reported beside them; every hour is still costed at
+  // the ordinary / overtime rate (the premium is time in lieu, not pay).
+  it('marks Sunday and public-holiday hours and the lieu hours banked, without re-pricing them', async () => {
+    const { db, captured } = makeReportDb({
+      profile_locations: PL_ROWS,
+      profiles: [PROFILES[0]],
+      locations: [{ id: 'loc1', country: 'IE', settings: { payroll: { sunday_multiplier: 1.5 } } }],
+      shift_assignments: [
+        assignmentRow('p-here', { date: '2026-05-04' }),   // May bank holiday (Mon), 3h
+        assignmentRow('p-here', { date: '2026-05-10' }),   // Sunday, 3h
+        assignmentRow('p-here', { date: '2026-05-06' }),   // Wednesday, 3h
+      ],
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await generateReport({ report_type: 'staff_cost', ...PERIOD })
+    expect(res.success).toBe(true)
+    const entry = captured.inserted.report_data.staff[0]
+    expect(entry).toMatchObject({ regular_hours: 9, overtime_hours: 0, sunday_hours: 3, public_holiday_hours: 3, lieu_hours_earned: 7.5 })
+    // 26000 / 52 / 10 = €50/h × 9h, Sunday priced like any other hour
+    expect(entry.regular_cost).toBe(450)
+    expect(captured.inserted.summary).toMatchObject({ total_sunday_hours: 3, total_public_holiday_hours: 3, total_lieu_hours_earned: 7.5, sunday_lieu_multiplier: 1.5 })
+  })
+
+  it('a contractor banks no lieu hours; an unreadable location row falls back to the defaults', async () => {
+    const con = { ...PROFILES[0], employment_type: 'contractor', hourly_rate: 30, annual_salary: null, contracted_hours_per_week: null }
+    const { db, captured } = makeReportDb({
+      profile_locations: PL_ROWS, profiles: [con],
+      shift_assignments: [assignmentRow('p-here', { date: '2026-05-10' })],
+    })
+    createServerClient.mockReturnValue(db)
+    await generateReport({ report_type: 'staff_cost', ...PERIOD })
+    expect(captured.inserted.report_data.staff[0]).toMatchObject({ sunday_hours: 3, lieu_hours_earned: 0 })
+    expect(captured.inserted.summary.sunday_lieu_multiplier).toBe(1.3333)
+  })
 })
 
 // ─── ROSTER-FIX.5 — a failed shift read is not a 0-hour period ───────────────

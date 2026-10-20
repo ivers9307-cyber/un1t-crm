@@ -91,10 +91,11 @@ describe('computeWeeklyFteHours', () => {
       allocated_hours: 14,
       contracted_hours: 10,
       overtime_hours: 4,
+      sunday_hours: 0,
       status: 'overtime',
       over_threshold: true,
     }])
-    expect(res.totals).toEqual({ coaches: 1, allocated_hours: 14, overtime_hours: 4, over_threshold: 1 })
+    expect(res.totals).toEqual({ coaches: 1, allocated_hours: 14, overtime_hours: 4, sunday_hours: 0, over_threshold: 1 })
   })
 
   // ROSTER-FIX.6c — the key set is the pin, not a grep for the fixture's
@@ -119,11 +120,24 @@ describe('computeWeeklyFteHours', () => {
     expect(Object.keys(res).sort()).toEqual(['coaches', 'totals', 'weekEndIso', 'weekStartIso'])
     expect(Object.keys(res.coaches[0]).sort()).toEqual([
       'allocated_hours', 'contracted_hours', 'full_name', 'over_threshold',
-      'overtime_hours', 'profile_id', 'status',
+      'overtime_hours', 'profile_id', 'status', 'sunday_hours',
     ])
     expect(Object.keys(res.totals).sort()).toEqual([
-      'allocated_hours', 'coaches', 'over_threshold', 'overtime_hours',
+      'allocated_hours', 'coaches', 'over_threshold', 'overtime_hours', 'sunday_hours',
     ])
+  })
+
+  // LIEU.1 — Sunday hours are marked (they bank time in lieu); still hours only.
+  it('marks Sunday hours per coach and in the totals', async () => {
+    const res = await callWith({
+      staff: [SARAH],
+      blocks: [
+        block({ id: 'b1', date: '2026-05-04', start: '09:00:00', end: '15:00:00', coaches: ['sarah'] }),
+        block({ id: 'b2', date: '2026-05-10', start: '09:00:00', end: '14:00:00', coaches: ['sarah'] }),   // Sunday
+      ],
+    })
+    expect(res.coaches[0]).toMatchObject({ allocated_hours: 11, sunday_hours: 5, overtime_hours: 1 })
+    expect(res.totals.sunday_hours).toBe(5)
   })
 
   it('is FTE-only: a contractor never appears, however many hours they work', async () => {

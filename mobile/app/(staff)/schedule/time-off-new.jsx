@@ -308,6 +308,9 @@ function TimeOffForm() {
             <Text className="text-xs uppercase tracking-wider text-un1t-subtle mb-1">{balance.heading}</Text>
             <Text className={`text-base font-semibold ${balance.short ? 'text-red-700' : 'text-un1t-text'}`}>{balance.available}</Text>
             <Text className="text-xs text-un1t-subtle mt-1">{balance.breakdown}</Text>
+            {balance.lieu ? (
+              <Text className="text-xs text-un1t-subtle mt-1">{balance.lieu}</Text>
+            ) : null}
             {balance.request ? (
               <Text className={`text-sm mt-2 ${balance.short ? 'text-red-700' : 'text-un1t-text'}`}>{balance.request}</Text>
             ) : null}
