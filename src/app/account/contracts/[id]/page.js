@@ -16,6 +16,7 @@ import { createServerClient } from '@/lib/supabase'
 import { contractCountersignatureLabel } from '@/lib/contracting-entity'
 import ContractSignForm from '@/components/ContractSignForm'
 import ContractPrintButton from '@/components/ContractPrintButton'
+import ContractPdfGenerateButton from '@/components/ContractPdfGenerateButton'
 import ContractBody from '@/components/ContractBody'
 import { contractZone, contractStamp, contractSignedStamp } from '@/lib/contract-display-time'
 import { viewerZoneOf } from '@/lib/display-zone'
@@ -158,6 +159,12 @@ export default async function AccountContractDetail(props) {
             href={`/api/contracts/${c.id}/pdf`}
             className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
           >Download PDF</a>
+        )}
+        {/* CONTRACTS-PDF.2 — signed before PDFs were stored: say so (the
+            recipient cannot generate it; an administrator can, from the
+            issuer's page). */}
+        {c.status === 'signed' && !c.signed_pdf_path && (
+          <ContractPdfGenerateButton contractId={c.id} canGenerate={false} />
         )}
       </div>
 

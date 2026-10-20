@@ -17,6 +17,7 @@ import ContractPrintButton from '@/components/ContractPrintButton'
 import ContractBody from '@/components/ContractBody'
 import ContractIssueWarningBanner from '@/components/ContractIssueWarningBanner'
 import ContractDraftActions from '@/components/ContractDraftActions'
+import ContractPdfGenerateButton from '@/components/ContractPdfGenerateButton'
 import { contractZone, contractStamp, contractSignedStamp } from '@/lib/contract-display-time'
 import { viewerZoneOf } from '@/lib/display-zone'
 
@@ -85,7 +86,9 @@ export default async function ContractDetailAdmin(props) {
   // /pdf route, which a `contracts`-permission manager is refused by.
   // GATES-3 (c) — Re-issue opens /contracts/issue?from=<id>, whose prefill and
   // POST /api/contracts decide at the contract's org too.
-  const { canRevoke, canResend, canManageDraft, canDownloadPdf, canReissue } = contractDetailActions(user, c)
+  // CONTRACTS-PDF.2 — a signed contract with no stored PDF shows the /pdf
+  // route's 409 message and, for a master / org admin, Generate PDF (the POST).
+  const { canRevoke, canResend, canManageDraft, canDownloadPdf, canReissue, pdfMissing, canGeneratePdf } = contractDetailActions(user, c)
 
   return (
     <div className="p-6 md:p-8 max-w-3xl print:p-0 print:max-w-none">
@@ -179,6 +182,7 @@ export default async function ContractDetailAdmin(props) {
             className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
           >Download PDF</a>
         )}
+        {pdfMissing && <ContractPdfGenerateButton contractId={c.id} canGenerate={canGeneratePdf} />}
         {canResend && <ContractResendButton contractId={c.id} />}
         {canRevoke && (
           <>

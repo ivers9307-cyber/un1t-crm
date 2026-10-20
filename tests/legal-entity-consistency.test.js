@@ -103,7 +103,13 @@ const DOCUMENT_SURFACES = [
   // attached to the confirmation emails, so it is the archived binding
   // artifact. It was outside the LEGALENT.1 sweep entirely and still
   // labelled its countersignature with the BRAND.
-  { file: 'src/app/api/contracts/[id]/sign/route.js', needs: 'contractCountersignatureLabel' },
+  // CONTRACTS-PDF.2 moved the render into src/lib/contract-pdf-store.js,
+  // shared with the backfill POST; the PDF's label rule
+  // (contractPdfCountersignatureLabel) prefers the legacy row's own frozen
+  // employer_name over the retired literal, and the frozen entity over both.
+  { file: 'src/lib/contract-pdf-store.js', needs: 'contractPdfCountersignatureLabel' },
+  { file: 'src/app/api/contracts/[id]/sign/route.js', needs: 'renderAndStoreSignedContractPdf' },
+  { file: 'src/app/api/contracts/[id]/pdf/route.js', needs: 'renderAndStoreSignedContractPdf' },
 ]
 
 const LIVE_SURFACES = [
@@ -164,6 +170,7 @@ describe('contract surfaces resolve the entity, never hard-code one', () => {
 describe('the signed PDF countersigns with the entity, not the brand', () => {
   const PDF = 'src/lib/contract-pdf.js'
   const SIGN = 'src/app/api/contracts/[id]/sign/route.js'
+  const STORE = 'src/lib/contract-pdf-store.js'
 
   it('renderContractPdf takes a contracting entity distinct from the brand', () => {
     const src = read(PDF)
@@ -175,9 +182,18 @@ describe('the signed PDF countersigns with the entity, not the brand', () => {
     expect(src).toContain('label: `For ${entity}`')
   })
 
-  it('the sign route feeds it the same frozen label the pages render', () => {
+  // CONTRACTS-PDF.2 — the sign route and the backfill POST render through
+  // one helper, which reads the FROZEN row (legal_entity_name, else the
+  // body's own employer_name for a pre-LEGALENT.1 row, else the legacy
+  // label: contractPdfCountersignatureLabel). Never the live resolver.
+  it('the sign route feeds the shared store helper the signed row; the helper reads the frozen label', () => {
     const src = read(SIGN)
-    expect(src).toContain('contractingEntity: contractCountersignatureLabel(updated)')
+    expect(src).toContain('renderAndStoreSignedContractPdf({')
+    expect(src).toContain('contract: updated,')
+    expect(src).not.toContain('getContractingEntity')
+    const store = read(STORE)
+    expect(store).toContain('contractingEntity: contractPdfCountersignatureLabel(contract)')
+    expect(store).not.toContain('getContractingEntity')
   })
 
   // A source grep proves the argument is threaded, not that the string

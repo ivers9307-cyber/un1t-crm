@@ -10,7 +10,8 @@
 // The route stamps signed_at + IP + UA + signature_method/value
 // and flips status to 'signed', then (CONTRACTS-PDF.1) renders the
 // dual-signed PDF, stores it at contracts/<id>/signed.pdf, records
-// the path on the row, and attaches it to both confirmation emails.
+// the path on the row (renderAndStoreSignedContractPdf, shared with the
+// CONTRACTS-PDF.2 backfill), and attaches it to both confirmation emails.
 
 import { NextResponse } from 'next/server'
 import { headers } from 'next/headers'
@@ -19,10 +20,8 @@ import { getCurrentUser } from '@/lib/auth'
 import { contractSignSchema } from '@/lib/schemas'
 import { canTransition } from '@/lib/contracts'
 import { sendContractSignedEmails } from '@/lib/contracts-email'
-import { renderContractPdf } from '@/lib/contract-pdf'
-import { getLocationBranding } from '@/lib/location-branding'
+import { renderAndStoreSignedContractPdf } from '@/lib/contract-pdf-store'
 import { displayZoneFor } from '@/lib/display-zone'
-import { contractCountersignatureLabel } from '@/lib/contracting-entity'
 import { logAuditEvent } from '@/lib/audit'
 import { validateBody } from '@/lib/validate'
 
@@ -148,44 +147,21 @@ export async function POST(request, props) {
   // the contract's studio clock. Display only: an unreadable zone prints the
   // platform's (DEFAULT_TZ) rather than costing anyone their copy.
   const zone = await displayZoneFor(db, user, updated.location_id, 'contracts')
-  let pdfBuffer = null
-  try {
-    const branding = await getLocationBranding(db, updated.location_id)
-    pdfBuffer = await renderContractPdf({
-      bodyRendered: updated.body_rendered,
-      issuerSignature: updated.issuer_signature,
-      issuedAt: updated.issued_at,
-      recipientSignature: updated.signature_value,
-      signedAt: updated.signed_at,
-      signedIp: updated.signed_ip,
-      templateName: detail?.template?.name,
-      companyName: branding?.companyName,
-      // LEGALENT.1 — the countersignature label is a legal-entity
-      // claim, not the brand wordmark, and this buffer is both stored
-      // in the private `contracts` bucket and attached to the
-      // confirmation emails below, so it is the archived copy. Read
-      // the contract's OWN frozen entity — the same string the two web
-      // pages and the mobile screen render — so the document and its
-      // PDF can never name two different counterparties. `updated`
-      // comes from the UPDATE's `.select()`, so variables_data is on it.
-      contractingEntity: contractCountersignatureLabel(updated),
-      zone,
-    })
-    const pdfPath = `${updated.id}/signed.pdf`
-    const { error: upErr } = await db.storage
-      .from('contracts')
-      .upload(pdfPath, pdfBuffer, { contentType: 'application/pdf', upsert: true })
-    if (upErr) throw new Error(upErr.message)
-    // Must be awaited — a bare .update() thenable never fires.
-    const { error: pathErr } = await db
-      .from('contracts')
-      .update({ signed_pdf_path: pdfPath })
-      .eq('id', updated.id)
-    if (pathErr) throw new Error(pathErr.message)
-    updated.signed_pdf_path = pdfPath
-  } catch (e) {
-    warnings.push(`Signed PDF could not be generated or stored: ${e?.message || 'unknown error'}`)
-  }
+  // CONTRACTS-PDF.2 — the render-and-store step is shared with the backfill
+  // POST /api/contracts/[id]/pdf (one implementation, so the archived copy
+  // of a contract signed today and one rebuilt later cannot differ). It never
+  // throws: a render failure leaves no buffer, a storage failure keeps the
+  // buffer for the emails below. `updated` comes from the UPDATE's
+  // `.select()`, so variables_data (the frozen countersignature) is on it.
+  const pdf = await renderAndStoreSignedContractPdf({
+    db,
+    contract: updated,
+    templateName: detail?.template?.name,
+    zone,
+  })
+  const pdfBuffer = pdf.pdfBuffer
+  if (pdf.pdfPath) updated.signed_pdf_path = pdf.pdfPath
+  if (pdf.error) warnings.push(`Signed PDF could not be generated or stored: ${pdf.error}`)
 
   const emailResults = await sendContractSignedEmails({
     contract: updated,

@@ -1,7 +1,7 @@
 // C116 GATES-2 — contract decisions judged at the contract's (or template's)
 // organisation, never at the active studio's role.
 import { describe, it, expect } from 'vitest'
-import { canManageContractsInOrg, canManageContractsSomewhere, canDownloadContractPdf, contractDetailActions } from './contract-gates'
+import { canManageContractsInOrg, canManageContractsSomewhere, canDownloadContractPdf, contractDetailActions, isContractPdfMissing, canGenerateContractPdf } from './contract-gates'
 
 const ORG_X = 'org-x'
 const ORG_Y = 'org-y'
@@ -69,7 +69,7 @@ describe('contractDetailActions (/contracts/[id]\'s buttons, each its route\'s r
   })
   it('an owner of ANOTHER org gets none, whatever the active role', () => {
     const ownerXActive = { ...managerXOwnerY, role: 'owner', rolesByLocation: { 'loc-x': 'owner', 'loc-y': 'manager' } }
-    expect(contractDetailActions(ownerXActive, c('issued'))).toEqual({ canResend: false, canRevoke: false, canManageDraft: false, canDownloadPdf: false, canReissue: false })
+    expect(contractDetailActions(ownerXActive, c('issued'))).toEqual({ canResend: false, canRevoke: false, canManageDraft: false, canDownloadPdf: false, canReissue: false, pdfMissing: false, canGeneratePdf: false })
     expect(contractDetailActions(ownerXActive, c('revoked')).canReissue).toBe(false)
   })
   it('status still decides which action applies', () => {
@@ -79,6 +79,20 @@ describe('contractDetailActions (/contracts/[id]\'s buttons, each its route\'s r
     const signed = c('signed', { signed_pdf_path: 'contracts/c1/signed.pdf' })
     expect(contractDetailActions(managerX, { ...signed, organization_id: ORG_X }).canDownloadPdf).toBe(false)
     expect(contractDetailActions(adminX, { ...signed, organization_id: ORG_X }).canDownloadPdf).toBe(true)
+  })
+  // CONTRACTS-PDF.2 — a signed contract with no stored PDF.
+  it('pdfMissing is signed + no path, for everyone who can see the page; Generate PDF follows the POST (org admin or master)', () => {
+    const missing = c('signed', { organization_id: ORG_X })
+    expect(isContractPdfMissing(missing)).toBe(true)
+    expect(isContractPdfMissing(c('issued', { organization_id: ORG_X }))).toBe(false)
+    expect(isContractPdfMissing(c('signed', { signed_pdf_path: 'c1/signed.pdf' }))).toBe(false)
+    expect(contractDetailActions(managerX, missing)).toMatchObject({ pdfMissing: true, canGeneratePdf: false, canDownloadPdf: false })
+    expect(contractDetailActions(adminX, missing)).toMatchObject({ pdfMissing: true, canGeneratePdf: true, canDownloadPdf: false })
+    expect(contractDetailActions(master, missing)).toMatchObject({ pdfMissing: true, canGeneratePdf: true })
+    expect(canGenerateContractPdf(adminX, { ...missing, organization_id: ORG_Y })).toBe(false)
+    expect(canGenerateContractPdf(adminX, c('issued', { organization_id: ORG_X }))).toBe(false)
+    expect(contractDetailActions(adminX, c('signed', { organization_id: ORG_X, signed_pdf_path: 'c1/signed.pdf' })))
+      .toMatchObject({ pdfMissing: false, canGeneratePdf: false, canDownloadPdf: true })
   })
 })
 
