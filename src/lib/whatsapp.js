@@ -2113,28 +2113,50 @@ export function parseConsentKeyword(text) {
 }
 
 /**
- * Pick the contact an inbound message should link to when the sender's
- * phone matches several contact rows. Pure — used by the WhatsApp
- * webhook (COMMS-AUDIT 2026-07-10).
- *
- * Policy: prefer a contact in the RECEIVING number's location (each
- * WhatsApp number belongs to one location; a member of that gym texting
- * its number must land on their record there, not on a same-phone
- * contact at another location). Only when no in-location match exists
- * fall back to a cross-location match — the caller passes the list
- * deterministically ordered (oldest contact first) so the fallback is
- * stable rather than Postgres row order.
+ * ORGCONTACTS.3 — which of the contacts sharing the sender's phone an inbound
+ * message is FROM (several can: a ClassPass placeholder and the real account,
+ * a parent and a child). In order:
+ *   1. the match with an ACTIVE contact_studios row at a candidate studio
+ *      (the studios the receiving number is switched on at, plus its home),
+ *      by latest last_seen_at across its rows at candidates; a tie goes to
+ *      the match whose primary studio is a candidate (primaryFirst), then
+ *      the lower id;
+ *   2. else the match whose primary studio (location_id) is a candidate —
+ *      the COMMS-AUDIT 2026-07-10 rule (a member of that gym texting its
+ *      number lands on their record there);
+ *   3. else the oldest: the caller passes the list ordered oldest first, so
+ *      the fallback is stable rather than Postgres row order.
+ * studiosByContact is Map contact id → rows ({ location_id, status,
+ * last_seen_at }) from studiosOfContacts, or null when the read failed (then
+ * tier 1 is skipped). Pure.
  *
  * @param {Array<{id: string, location_id: string}>|null} matches
- * @param {string|null} preferredLocationId  the receiving number's location
+ * @param {{ candidateLocationIds?: string[], studiosByContact?: Map|null, primaryFirst?: boolean }} opts
  * @returns {object|null}
  */
-export function pickInboundContact(matches, preferredLocationId) {
+export function pickInboundContact(matches, { candidateLocationIds = [], studiosByContact = null, primaryFirst = true } = {}) {
   if (!Array.isArray(matches) || matches.length === 0) return null
-  if (preferredLocationId) {
-    const inLocation = matches.find((m) => m?.location_id === preferredLocationId)
-    if (inLocation) return inLocation
+  const candidates = new Set((candidateLocationIds || []).filter(Boolean))
+  const primaryAtCandidate = (m) => !!m?.location_id && candidates.has(m.location_id)
+  const seen = (v) => (v ? Date.parse(v) || 0 : 0)
+
+  if (studiosByContact instanceof Map && candidates.size) {
+    let best = null
+    for (const m of matches) {
+      const active = (studiosByContact.get(m?.id) || []).filter((r) => r?.status === 'active' && candidates.has(r.location_id))
+      if (!active.length) continue
+      const score = Math.max(...active.map((r) => seen(r.last_seen_at)))
+      const entry = { m, score, primary: primaryFirst && primaryAtCandidate(m) ? 1 : 0, id: String(m.id) }
+      if (!best
+        || entry.score > best.score
+        || (entry.score === best.score && entry.primary > best.primary)
+        || (entry.score === best.score && entry.primary === best.primary && entry.id < best.id)) best = entry
+    }
+    if (best) return best.m
   }
+
+  const inLocation = matches.find(primaryAtCandidate)
+  if (inLocation) return inLocation
   return matches[0]
 }
 
