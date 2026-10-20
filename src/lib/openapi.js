@@ -5259,12 +5259,30 @@ registry.registerPath({
   tags: ['Contracts'],
   security: [{ CookieAuth: [] }],
   summary: 'Download the dual-signed contract PDF (recipient, or an admin of its organisation)',
-  description: "302-redirects to a 60-second Supabase Storage signed URL for contracts/<id>/signed.pdf, written by the sign route. The bucket is private and no public URL is ever produced. Authorization mirrors GET /api/contracts/{id} exactly: recipient, master, or an organisation admin (org_admin grant) of the contract's organization; everyone else gets 404 so ids stay non-enumerable. Also 404 when signed_pdf_path is null (unsigned, or sign-time generation degraded to a warning).",
+  description: "302-redirects to a 60-second Supabase Storage signed URL for contracts/<id>/signed.pdf, written by the sign route. The bucket is private and no public URL is ever produced. Authorization mirrors GET /api/contracts/{id} exactly: recipient, master, or an organisation admin (org_admin grant) of the contract's organization; everyone else gets 404 so ids stay non-enumerable. A SIGNED contract with no stored PDF (signed before CONTRACTS-PDF.1, or sign-time generation degraded to a warning) answers a JSON 409 `code: 'pdf_missing'` (`canGenerate` says whether the caller may POST); an unsigned contract with no PDF is 404.",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     302: { description: 'Redirect to the short-lived signed download URL' },
-    404: { description: 'Not found (incl. cross-tenant ids and contracts with no stored PDF)', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (incl. cross-tenant ids and unsigned contracts with no stored PDF)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: "Signed, but no PDF stored yet (`code: 'pdf_missing'`); generate it with POST", content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Signed-URL mint failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// CONTRACTS-PDF.2 — rebuild the PDF for a contract signed before it was stored
+registry.registerPath({
+  method: 'post',
+  path: '/api/contracts/{id}/pdf',
+  tags: ['Contracts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Generate and store the dual-signed PDF for an already-signed contract (organisation admins only)',
+  description: "Renders the PDF from the signed record (body_rendered, issuer_signature/issued_at, signature_value/signed_at/signed_ip, template name, studio brand and clock) exactly as the sign route does (shared renderAndStoreSignedContractPdf), uploads it to contracts/<id>/signed.pdf and writes signed_pdf_path. For the contracts signed before CONTRACTS-PDF.1. Master or an org_admin of the contract's organization; everyone else (the recipient included) and a foreign id get 404, the GET's posture. 409 `code: 'not_signed'` for any status but signed. Idempotent: a contract that already has a PDF answers 200 with `generated: false` and is never re-rendered.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ id, signed_pdf_path, generated } — generated:false when a PDF was already on file' },
+    404: { description: 'Not found (incl. cross-tenant ids and non-admin callers)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: "Contract is not signed (`code: 'not_signed'`)", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Render or storage failed; nothing recorded', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

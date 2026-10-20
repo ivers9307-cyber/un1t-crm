@@ -219,3 +219,36 @@ export async function getContractingEntity(db, { organizationId = null, location
     organizationName,
   }
 }
+
+/**
+ * CONTRACTS-PDF.2 — the countersignature label for the ARCHIVED PDF.
+ *
+ * Same answer as contractCountersignatureLabel() for every contract issued
+ * since LEGALENT.1 (the frozen `legal_entity_name` wins). The difference is
+ * the legacy case: a contract issued before LEGALENT.1 carries no frozen
+ * entity, but its frozen variable map does name the employer the BODY was
+ * rendered with (`variables_data.employer_name`, e.g. the party clause's
+ * "Champ fitness LTD"). The web pages keep rendering the retired literal
+ * for those rows (an executed document keeps what it said on screen), but
+ * the PDF is the copy that leaves the building (a WRC inspection pack, the
+ * confirmation emails), and a countersignature that names the body's own
+ * employer is the right label for it; the retired literal appears in none
+ * of those bodies. Richard's call, 20 Oct 2026, rebuilding Mark Doyle's
+ * copy for the inspection.
+ *
+ * Order: frozen legal_entity_name -> frozen employer_name -> the legacy
+ * literal. Both the sign route and the backfill POST render through
+ * renderAndStoreSignedContractPdf (src/lib/contract-pdf-store.js), which
+ * reads this helper, so the two copies cannot name different parties.
+ *
+ * @param {object|null} contract a contracts row (needs `variables_data`)
+ * @returns {string} always a non-empty string
+ */
+export function contractPdfCountersignatureLabel(contract) {
+  const vars = contract?.variables_data
+  const frozenEntity = typeof vars?.legal_entity_name === 'string' ? vars.legal_entity_name.trim() : ''
+  if (frozenEntity) return frozenEntity
+  const employer = typeof vars?.employer_name === 'string' ? vars.employer_name.trim() : ''
+  if (employer) return employer
+  return contractCountersignatureLabel(contract)
+}

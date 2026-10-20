@@ -51,13 +51,40 @@ export function canDownloadContractPdf(user, contract) {
 }
 
 /**
+ * CONTRACTS-PDF.2 — what GET /api/contracts/[id]/pdf says (409 `pdf_missing`)
+ * for a signed contract with no stored PDF, and what both detail pages show in
+ * place of the Download PDF link. One string, so the route and the pages agree.
+ */
+export const CONTRACT_PDF_MISSING_MESSAGE =
+  'This contract was signed before PDFs were stored. Its PDF can be generated from the signed record.'
+
+/**
+ * A signed contract whose PDF was never stored (signed before CONTRACTS-PDF.1,
+ * or the sign-time render degraded to a warning). The /pdf GET answers it 409
+ * `pdf_missing`; the POST can rebuild it from the signed record.
+ */
+export function isContractPdfMissing(contract) {
+  return contract?.status === 'signed' && !contract?.signed_pdf_path
+}
+
+/**
+ * POST /api/contracts/[id]/pdf's rule, for the Generate PDF button: the PDF is
+ * missing (above) and the caller manages contracts in the contract's org.
+ */
+export function canGenerateContractPdf(user, contract) {
+  return isContractPdfMissing(contract) && canManageContractsInOrg(user, contract?.organization_id)
+}
+
+/**
  * The /contracts/[id] action buttons, each shown exactly when its route would
  * act: Resend and Revoke (issued/viewed) and Send/Discard (draft) on
  * canManageContractsInOrg at the contract's org; Download PDF on the /pdf
  * route's rule. GATES-3 (c): Re-issue (revoked/declined) opens
  * /contracts/issue?from=<id>, whose prefill (GET /api/contracts/[id]) and
  * submit (POST /api/contracts, judged at the template's org) need the same
- * org, so it follows canManageContractsInOrg too.
+ * org, so it follows canManageContractsInOrg too. CONTRACTS-PDF.2: pdfMissing
+ * shows the /pdf GET's 409 message in place of the link; canGeneratePdf adds
+ * the Generate PDF button (the POST's rule).
  */
 export function contractDetailActions(user, contract) {
   const manages = canManageContractsInOrg(user, contract?.organization_id)
@@ -68,5 +95,7 @@ export function contractDetailActions(user, contract) {
     canManageDraft: manages && status === 'draft',
     canDownloadPdf: canDownloadContractPdf(user, contract),
     canReissue: manages && (status === 'revoked' || status === 'declined'),
+    pdfMissing: isContractPdfMissing(contract),
+    canGeneratePdf: canGenerateContractPdf(user, contract),
   }
 }
