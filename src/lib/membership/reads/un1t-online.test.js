@@ -998,7 +998,7 @@ describe('pipelineInputs and trialEligibility', () => {
 
     it('a new person is eligible', async () => {
       const { db } = makeDb(world())
-      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'nobody', contactId: 'nobody' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'nobody', contactId: 'nobody' })).toEqual({ success: true, data: { eligible: true, reasons: [], regrant: false } })
     })
 
     it('reads the person\'s transactions, subscriptions and the studio\'s FULL products map; a trial product keyed by id → trial_used', async () => {
@@ -1006,7 +1006,7 @@ describe('pipelineInputs and trialEligibility', () => {
       const out = await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })
       // UN1TWRITE.10: the account's contact (c1) is this person too, so its
       // membership rows count (they used to be read only for a contactId call).
-      expect(out).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used', 'membership_history'] } })
+      expect(out).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used', 'membership_history'], regrant: false } })
       for (const q of log) expect(q.filters, q.table).toContainEqual(['eq', 'location_id', HATCH])
       const tx = log.find((q) => q.table === 'un1t_transactions')
       const subs = log.find((q) => q.table === 'un1t_subscriptions')
@@ -1020,13 +1020,13 @@ describe('pipelineInputs and trialEligibility', () => {
     it('a €0 transaction whose product is not in the studio\'s products counts as a trial taken', async () => {
       const w = world({ un1t_transactions: [ctx({ product_id: 'deleted-upstream' })], contact_memberships: [] })
       const { db } = makeDb(w)
-      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: false } })
     })
 
     it('history older than the freshness window still counts (stale subscription row → membership_history)', async () => {
       const w = world({ un1t_transactions: [], un1t_subscriptions: [csub({ un1t_id: 'old', status: 'canceled', synced_at: OLD }), csub({ un1t_user_id: 'u2', contact_id: 'c2', un1t_id: 's2' })] })
       const { db } = makeDb(w)
-      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })).toEqual({ success: true, data: { eligible: false, reasons: ['membership_history'] } })
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })).toEqual({ success: true, data: { eligible: false, reasons: ['membership_history'], regrant: false } })
     })
 
     it('with a contactId: memberships at the studio from api and export sources, any status', async () => {
@@ -1039,9 +1039,9 @@ describe('pipelineInputs and trialEligibility', () => {
         ],
       })
       const { db, log } = makeDb(w)
-      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['membership_history'] } })
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['membership_history'], regrant: false } })
       // Stillorgan's row and a non-un1t source are not this studio's un1t.online history
-      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c2' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c2' })).toEqual({ success: true, data: { eligible: true, reasons: [], regrant: false } })
       const q = log.find((x) => x.table === 'contact_memberships')
       expect(q.filters).toContainEqual(['in', 'source', ['un1t_online_api', 'un1t_online_export']])
       expect(q.filters).toContainEqual(['eq', 'location_id', HATCH])
@@ -1049,7 +1049,7 @@ describe('pipelineInputs and trialEligibility', () => {
 
     it('a contact-only call finds the trial through the contact\'s un1t accounts (contact-only → trial_used)', async () => {
       const { db, log } = makeDb(world({ contact_memberships: [], un1t_subscriptions: [] }))
-      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: false } })
       const clientsQ = log.find((q) => q.table === 'un1t_clients')
       expect(clientsQ.filters).toEqual([['eq', 'location_id', HATCH], ['in', 'contact_id', ['c1']]])
     })
@@ -1060,9 +1060,9 @@ describe('pipelineInputs and trialEligibility', () => {
         un1t_transactions: [ctx({ un1t_user_id: null, contact_id: 'c1' })],
       })
       const { db } = makeDb(w)
-      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: false } })
       // and another contact's userless row does not
-      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c2' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c2' })).toEqual({ success: true, data: { eligible: true, reasons: [], regrant: false } })
     })
 
     it('a contact with two accounts, the trial on the second → not eligible; a subscription on the second → membership_history', async () => {
@@ -1073,11 +1073,11 @@ describe('pipelineInputs and trialEligibility', () => {
         contact_memberships: [],
       })
       const { db } = makeDb(w)
-      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used', 'membership_history'] } })
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used', 'membership_history'], regrant: false } })
       // passing the first account too unions the sets
       expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'a1', contactId: 'c1' })).toMatchObject({ data: { eligible: false } })
       // another person is untouched
-      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c2' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
+      expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c2' })).toEqual({ success: true, data: { eligible: true, reasons: [], regrant: false } })
     })
 
     it('a row found by both user id and contact id is counted once', async () => {
@@ -1091,6 +1091,8 @@ describe('pipelineInputs and trialEligibility', () => {
         ['un1t_transactions', { un1tUserId: 'u1' }], ['un1t_subscriptions', { un1tUserId: 'u1' }],
         ['un1t_products', { un1tUserId: 'u1' }], ['contact_memberships', { contactId: 'c1' }],
         ['un1t_clients', { contactId: 'c1' }], ['un1t_transactions', { contactId: 'c1' }], ['un1t_subscriptions', { contactId: 'c1' }],
+        // TRIALREGRANT.1: the re-grant's bookings read fails the whole read too.
+        ['un1t_bookings', { un1tUserId: 'u1' }], ['un1t_bookings', { contactId: 'c1' }],
       ]) {
         const { db } = makeDb(world(), { fail: [table] })
         const out = await un1tOnlineReads.trialEligibility(db, HATCH, ids)
@@ -1112,7 +1114,7 @@ describe('pipelineInputs and trialEligibility', () => {
         for (const method of ['charge', 'free_checkout']) {
           const w = world({ un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [], un1t_write_events: [ledger({ un1t_user_id: 'u1', stage, method })] })
           const out = await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'u1' })
-          expect(out, `${stage} ${method}`).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+          expect(out, `${stage} ${method}`).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: false } })
         }
       }
     })
@@ -1127,7 +1129,7 @@ describe('pipelineInputs and trialEligibility', () => {
           ledger({ un1t_user_id: 'u1', stage: 'done', location_id: STILLORGAN }),
         ],
       })
-      expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'u1' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
+      expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'u1' })).toEqual({ success: true, data: { eligible: true, reasons: [], regrant: false } })
     })
 
     it('finds the ledger trial through the contact\'s other un1t account', async () => {
@@ -1138,7 +1140,7 @@ describe('pipelineInputs and trialEligibility', () => {
       })
       const { db, log } = makeDb(w)
       expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'a1', contactId: 'c1' }))
-        .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+        .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: false } })
       expect(log.find((q) => q.table === 'un1t_write_events').filters).toContainEqual(['in', 'un1t_user_id', ['a1', 'a2']])
     })
 
@@ -1150,7 +1152,7 @@ describe('pipelineInputs and trialEligibility', () => {
         })
         const { db, log } = makeDb(w)
         expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' }), stage)
-          .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+          .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: false } })
         const q = log.filter((x) => x.table === 'un1t_write_events').map((x) => x.filters.find((f) => f[1] === 'contact_id'))
         expect(q).toContainEqual(['in', 'contact_id', ['c1']])
       }
@@ -1159,7 +1161,7 @@ describe('pipelineInputs and trialEligibility', () => {
         un1t_clients: [], un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
         un1t_write_events: [ledger({ un1t_user_id: 'brand-new-account', contact_id: 'c2', stage: 'done' })],
       })
-      expect(await un1tOnlineReads.trialEligibility(makeDb(other).db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
+      expect(await un1tOnlineReads.trialEligibility(makeDb(other).db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: true, reasons: [], regrant: false } })
     })
 
     it("a un1tUserId-only call also finds a ledger trial keyed by that account's contact (a second, unmirrored account)", async () => {
@@ -1169,7 +1171,7 @@ describe('pipelineInputs and trialEligibility', () => {
         un1t_write_events: [ledger({ un1t_user_id: 'brand-new-account', contact_id: 'c1', stage: 'done' })],
       })
       expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'a1' }))
-        .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+        .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: false } })
     })
 
     it("a un1tUserId-only call widens to the person's sibling accounts: a trial row on a2 with a NULL contact_id still denies a1", async () => {
@@ -1180,7 +1182,7 @@ describe('pipelineInputs and trialEligibility', () => {
           un1t_write_events: [ledger({ un1t_user_id: 'a2', contact_id: null, stage })],
         })
         expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'a1' }), stage)
-          .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'] } })
+          .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: false } })
       }
     })
 
@@ -1193,7 +1195,7 @@ describe('pipelineInputs and trialEligibility', () => {
       })
       const { db, log } = makeDb(w)
       expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'a1' }))
-        .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used', 'membership_history'] } })
+        .toEqual({ success: true, data: { eligible: false, reasons: ['trial_used', 'membership_history'], regrant: false } })
       expect(log.find((q) => q.table === 'un1t_write_events').filters).toContainEqual(['in', 'un1t_user_id', ['a1', 'a2']])
     })
 
@@ -1203,7 +1205,7 @@ describe('pipelineInputs and trialEligibility', () => {
         un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
         un1t_write_events: [ledger({ un1t_user_id: 'z', stage: 'done' })],
       })
-      expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'a1' })).toEqual({ success: true, data: { eligible: true, reasons: [] } })
+      expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'a1' })).toEqual({ success: true, data: { eligible: true, reasons: [], regrant: false } })
     })
 
     it("a failed read of the account's own un1t_clients row (for its contact) → { success:false }, never eligible", async () => {
@@ -1241,6 +1243,95 @@ describe('pipelineInputs and trialEligibility', () => {
       expect(q.filters).toContainEqual(['eq', 'op', 'trial'])
       expect(q.filters).toContainEqual(['in', 'stage', ['done', 'sent', 'unknown']])
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// TRIALREGRANT.1 — trialEligibility's `regrant`: claimed the trial, never used
+// it, holds no credits, and no re-grant yet (Richard, 20 Oct 2026).
+// ---------------------------------------------------------------------------
+describe('trialEligibility regrant (TRIALREGRANT.1)', () => {
+  const R_LOC = HATCH
+  const cl = (over = {}) => ({ id: over.un1t_user_id ?? 'r1', location_id: R_LOC, un1t_user_id: 'r1', contact_id: 'rc', credit_balance: 0, credit_unlimited: false, synced_at: SYNCED, ...over })
+  const trialTx = (over = {}) => ({ id: 'rx1', location_id: R_LOC, un1t_id: 'rx1', un1t_user_id: 'r1', contact_id: 'rc', product_id: 'trial', product_type: 'pack', type: 'one_time', amount_cents: 0, refunded: false, remote_created_at: '2026-10-09T09:00:00Z', ...over })
+  const bk = (over = {}) => ({ id: over.un1t_id ?? 'rb1', location_id: R_LOC, un1t_id: 'rb1', un1t_user_id: 'r1', contact_id: 'rc', event_id: 'e1', status: 'cancelled', ...over })
+  const regrantRow = (over = {}) => ledger({ op: 'trial_regrant', method: null, target: null, un1t_user_id: 'r1', contact_id: 'rc', stage: 'done', ...over })
+  // The 20 Oct case's shape: the trial bought 9 Oct, no bookings, credits 0.
+  const claimed = (over = {}) => ({
+    un1t_clients: [cl()],
+    un1t_subscriptions: [],
+    un1t_transactions: [trialTx()],
+    un1t_products: [{ id: 'p1', location_id: R_LOC, un1t_id: 'trial', type: 'one_time', price_cents: 0, credits_per_period: 3, title: 'The UN1T Trial' }, { id: 'p2', location_id: R_LOC, un1t_id: 'pack5', type: 'one_time', price_cents: 6000, credits_per_period: 5, title: 'Pack' }],
+    un1t_bookings: [],
+    contact_memberships: [],
+    un1t_write_events: [],
+    ...over,
+  })
+  const elig = async (w, ids = { un1tUserId: 'r1', contactId: 'rc' }) => (await un1tOnlineReads.trialEligibility(makeDb(w).db, R_LOC, ids)).data
+
+  it('claimed, never used, no credits, no re-grant yet → regrant true (eligible and reasons unchanged)', async () => {
+    expect(await elig(claimed())).toEqual({ eligible: false, reasons: ['trial_used'], regrant: true })
+    expect(await elig(claimed(), { un1tUserId: 'r1' })).toEqual({ eligible: false, reasons: ['trial_used'], regrant: true })
+    expect(await elig(claimed(), { contactId: 'rc' })).toEqual({ eligible: false, reasons: ['trial_used'], regrant: true })
+  })
+
+  it('a cancelled booking is not a use; a booked one (an upcoming class holds a credit) is', async () => {
+    expect((await elig(claimed({ un1t_bookings: [bk({ status: 'cancelled' }), bk({ un1t_id: 'rb2', status: 'cancelled' })] }))).regrant).toBe(true)
+    expect((await elig(claimed({ un1t_bookings: [bk({ status: 'cancelled' }), bk({ un1t_id: 'rb2', status: 'booked' })] }))).regrant).toBe(false)
+  })
+
+  it('an attended, no-show or booked booking on any of their accounts or contacts → no regrant', async () => {
+    for (const status of ['attended', 'ATTENDED', 'no_show', 'NO_SHOW', 'booked']) {
+      expect((await elig(claimed({ un1t_bookings: [bk({ status })] }))).regrant, status).toBe(false)
+    }
+    // On a sibling account of the same contact, and on a row keyed only by the contact.
+    const sibling = claimed({ un1t_clients: [cl(), cl({ un1t_user_id: 'r2' })], un1t_bookings: [bk({ un1t_user_id: 'r2', status: 'attended' })] })
+    expect((await elig(sibling, { un1tUserId: 'r1' })).regrant).toBe(false)
+    const byContact = claimed({ un1t_bookings: [bk({ un1t_user_id: null, status: 'no_show' })] })
+    expect((await elig(byContact)).regrant).toBe(false)
+    // Another studio's attended booking does not count.
+    const elsewhere = claimed({ un1t_bookings: [bk({ location_id: STILLORGAN, status: 'attended' })] })
+    expect((await elig(elsewhere)).regrant).toBe(true)
+  })
+
+  it('a re-grant already on the ledger (done, sent or unknown; by user or by contact) → no regrant; a refused one does not count', async () => {
+    for (const stage of ['done', 'sent', 'unknown']) {
+      expect((await elig(claimed({ un1t_write_events: [regrantRow({ stage })] }))).regrant, stage).toBe(false)
+      expect((await elig(claimed({ un1t_write_events: [regrantRow({ stage, un1t_user_id: 'r-other-account' })] }))).regrant, `${stage} by contact`).toBe(false)
+    }
+    expect((await elig(claimed({ un1t_write_events: [regrantRow({ stage: 'refused' })] }))).regrant).toBe(true)
+    expect((await elig(claimed({ un1t_write_events: [regrantRow({ location_id: STILLORGAN })] }))).regrant).toBe(true)
+  })
+
+  it('credits in the mirror (a balance or unlimited) → no regrant; an unknown balance does not block', async () => {
+    expect((await elig(claimed({ un1t_clients: [cl({ credit_balance: 2 })] }))).regrant).toBe(false)
+    expect((await elig(claimed({ un1t_clients: [cl({ credit_unlimited: true })] }))).regrant).toBe(false)
+    expect((await elig(claimed({ un1t_clients: [cl({ credit_balance: null, credit_unlimited: null })] }))).regrant).toBe(true)
+  })
+
+  it('membership_history or paid_pack beside trial_used → no regrant; an eligible person → regrant false', async () => {
+    expect(await elig(claimed({ contact_memberships: [{ id: 'm1', location_id: R_LOC, contact_id: 'rc', source: 'un1t_online_api', status: 'ended', ended_at: '2026-09-01T00:00:00Z' }] })))
+      .toEqual({ eligible: false, reasons: ['trial_used', 'membership_history'], regrant: false })
+    expect(await elig(claimed({ un1t_transactions: [trialTx(), trialTx({ un1t_id: 'rx2', product_id: 'pack5', amount_cents: 6000 })] })))
+      .toEqual({ eligible: false, reasons: ['trial_used', 'paid_pack'], regrant: false })
+    expect(await elig(claimed({ un1t_transactions: [] }))).toEqual({ eligible: true, reasons: [], regrant: false })
+  })
+
+  it('reads the re-grant rows and bookings scoped to the studio and the person', async () => {
+    const { db, log } = makeDb(claimed())
+    await un1tOnlineReads.trialEligibility(db, R_LOC, { un1tUserId: 'r1' })
+    const regrants = log.filter((q) => q.table === 'un1t_write_events' && q.filters.some(([k, c, v]) => k === 'eq' && c === 'op' && v === 'trial_regrant'))
+    expect(regrants.length).toBeGreaterThan(0)
+    for (const q of regrants) {
+      expect(q.filters).toContainEqual(['eq', 'location_id', R_LOC])
+      expect(q.filters).toContainEqual(['in', 'stage', ['done', 'sent', 'unknown']])
+    }
+    for (const q of log.filter((x) => x.table === 'un1t_bookings')) expect(q.filters).toContainEqual(['eq', 'location_id', R_LOC])
+  })
+
+  it('a failed re-grant ledger read → { success:false }', async () => {
+    const { db } = makeDb(claimed(), { fail: ['un1t_write_events'] })
+    expect(await un1tOnlineReads.trialEligibility(db, R_LOC, { un1tUserId: 'r1' })).toEqual({ success: false, error: 'un1t_write_events boom' })
   })
 })
 

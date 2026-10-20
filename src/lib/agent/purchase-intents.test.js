@@ -773,6 +773,17 @@ describe('the free trial (Task 20)', () => {
         .toEqual({ available: false, reasons: ['trial_used', 'paid_pack'] })
     })
 
+    it('TRIALREGRANT.1: claimed, never used, run out (A says regrant) → available, with A\'s reasons and regrant: true', async () => {
+      h.elig.mockResolvedValueOnce({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: true } })
+      expect(await trialAvailable(withTrial().db, { locationId: HATCH, un1tUserId: USER, contactId: HATCH_CONTACT }))
+        .toEqual({ available: true, reasons: ['trial_used'], regrant: true })
+      // Only an exact true: anything else stays not available.
+      for (const regrant of [false, 'yes', 1, undefined]) {
+        h.elig.mockResolvedValueOnce({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant } })
+        expect((await trialAvailable(withTrial().db, { locationId: HATCH, un1tUserId: USER, contactId: HATCH_CONTACT })).available, String(regrant)).toBe(false)
+      }
+    })
+
     it('no trial_product_id: not available, no reasons, A is never asked', async () => {
       expect(await trialAvailable(fakeDb({ locations: [NO_TRIAL_LOC] }).db, { locationId: HATCH, un1tUserId: USER, contactId: HATCH_CONTACT }))
         .toEqual({ available: false, reasons: [] })
@@ -1025,6 +1036,23 @@ describe('the free trial (Task 20)', () => {
       const ctx = { ...ctxFor(withTrial().db), conversationId: null }
       await sendPurchaseLink(ctx, { offer_id: 'trial' }, hatch(), deps)
       expect(h.grantTrial.mock.calls[1][1].originRef).toBe(`mia-trial-noconv:${HATCH_CONTACT}`)
+    })
+
+    it('TRIALREGRANT.1: a re-grant case is offered the free class (never the trial-used text), and a credit_regrant grant books', async () => {
+      h.elig.mockResolvedValue({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: true } })
+      h.grantTrial.mockResolvedValue({ outcome: 'granted', method: 'credit_regrant', ledgerId: 'led-regrant-1' })
+      const listed = await executePurchaseTool('list_purchase_options', {}, ctxFor(withTrial().db))
+      expect(listed).toMatchObject({ trial_available: true })
+      expect(JSON.stringify(listed)).not.toContain(DEFAULT_TRIAL_USED_TEXT)
+      const needs = await un1tBookClass(ctxFor(withTrial().db), classInput(), hatch(), deps)
+      expect(needs).toMatchObject({ needs_purchase: true, trial_available: true })
+      const { db, data } = withTrial()
+      const out = await sendPurchaseLink(ctxFor(db), classInput(), hatch(), deps)
+      expect(out).toMatchObject({ trial_granted: true, booked: true })
+      expect(out.trial_used).toBeUndefined()
+      expect(h.grantTrial).toHaveBeenCalledTimes(1)
+      expect(h.book).toHaveBeenCalledTimes(1)
+      expect(data.agent_membership_requests[0].details.trial).toMatchObject({ outcome: 'granted', method: 'credit_regrant', ledger_id: 'led-regrant-1' })
     })
 
     it('grantTrial ineligible: trial_used_text + offers, and never grantTrial again in that turn', async () => {

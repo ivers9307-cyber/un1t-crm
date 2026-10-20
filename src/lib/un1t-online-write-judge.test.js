@@ -19,9 +19,26 @@ const bookingDto = (over = {}) => ({ id: BOOKING, event_id: EVENT, user_id: USER
 const RESULT_KEYS = ['alreadyBooked', 'code', 'id', 'message', 'verdict']
 
 describe('UN1T_WRITE_OPS', () => {
-  it('lists the six ops, frozen', () => {
-    expect(UN1T_WRITE_OPS).toEqual(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout'])
+  it('lists the seven ops (trial_regrant since TRIALREGRANT.1), frozen', () => {
+    expect(UN1T_WRITE_OPS).toEqual(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant'])
     expect(Object.isFrozen(UN1T_WRITE_OPS)).toBe(true)
+  })
+})
+
+describe('judgeUn1tWrite: trial_regrant (TRIALREGRANT.1, POST /credits/grant)', () => {
+  it('done only on a 2xx with success:true; the batch id when one is given', () => {
+    expect(judgeUn1tWrite('trial_regrant', { status: 201, body: { success: true, data: { id: 'batch-1', amount: 3 } } })).toMatchObject({ verdict: 'done', id: 'batch-1' })
+    expect(judgeUn1tWrite('trial_regrant', { status: 200, body: { success: true } })).toMatchObject({ verdict: 'done', id: null })
+  })
+  it('a 2xx without success:true is unknown (the credits read decides)', () => {
+    for (const body of [{ data: { id: 'b' } }, {}, null, 'ok', { success: 'yes' }]) {
+      expect(judgeUn1tWrite('trial_regrant', { status: 201, body }).verdict).toBe('unknown')
+    }
+    expect(judgeUn1tWrite('trial_regrant', { status: 502, body: {} }).verdict).toBe('unknown')
+  })
+  it('success:false or a 4xx is refused with un1t.online\'s code', () => {
+    expect(judgeUn1tWrite('trial_regrant', { status: 200, body: { success: false, error: { code: 'NOPE', message: 'No' } } })).toMatchObject({ verdict: 'refused', code: 'NOPE' })
+    expect(judgeUn1tWrite('trial_regrant', { status: 400, body: { message: ['amount must be an integer'] } })).toMatchObject({ verdict: 'refused', code: 'http_400' })
   })
 })
 
@@ -273,6 +290,7 @@ describe('permissions', () => {
       trial: ['purchases:create', 'products:read', 'credits:read'],
       checkout: ['purchases:create', 'products:read'],
       forgot_password: [],
+      trial_regrant: ['credits:create', 'credits:read'],
     })
     expect(Object.keys(REQUIRED_PERMISSIONS).sort()).toEqual([...UN1T_WRITE_OPS].sort())
     expect(Object.isFrozen(REQUIRED_PERMISSIONS)).toBe(true)

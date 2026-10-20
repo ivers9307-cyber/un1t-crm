@@ -54,6 +54,8 @@ export const ledgerKey = Object.freeze({
   create: (loc, contactId) => `create:${part('loc', loc)}:${part('contactId', contactId)}`,
   trial: (loc, un1tUserId, productId, method) =>
     `trial:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}:${part('productId', productId)}:${part('method', method)}`,
+  // TRIALREGRANT.1 (mig 760): one credit re-grant per person per studio, ever.
+  regrant: (loc, un1tUserId) => `trial_regrant:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}`,
   book: (loc, un1tUserId, eventId) => `book:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}:${part('eventId', eventId)}`,
   cancel: (loc, bookingId) => `cancel:${part('loc', loc)}:${part('bookingId', bookingId)}`,
   // UN1TWRITE.25: one key per reset ATTEMPT (n = 1, 2, 3, ... per person),
@@ -116,6 +118,9 @@ export async function beginAttempt(
       throw new TypeError("beginAttempt: a trial's target must be the product id in its trial key")
     }
   }
+  // A re-grant row names its person (mig 760 regrant_user_check and the
+  // one-regrant index key on it).
+  if (op === 'trial_regrant' && !un1tUserId) throw new TypeError('beginAttempt: a trial_regrant needs un1tUserId')
   const { data, error } = await db
     .from('un1t_write_events')
     .insert({

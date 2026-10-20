@@ -7,7 +7,7 @@ import {
   UN1T_CANCEL_TRACKING_START, glofoxInterval, shapeCounts, shapeMrr, shapeFlows,
   shapeRevenue, firstSales, engagementRows, isTrialProduct, cancelsComparable,
   UN1T_ENDED_SUB_STATUSES, UN1T_LIVE_SUB_STATUSES, UN1T_RETRY_NET_WINDOW_MS, normaliseUn1tInvoiceStatus, shapePastDue,
-  shapePipelineSnapshot, shapeTrialEligibility, splitUn1tCredits, shapePipelineDateEvidence,
+  shapePipelineSnapshot, shapeTrialEligibility, shapeTrialRegrant, splitUn1tCredits, shapePipelineDateEvidence,
   UN1T_AGGREGATOR_GYMPASS_SOURCES, UN1T_AGGREGATOR_MARKER,
 } from './un1t-online-shape'
 
@@ -1219,5 +1219,26 @@ describe('shapeCounts output unchanged after packHolderIds extraction', () => {
   ]
   fixtures.forEach((f, i) => {
     it(`fixture ${i}`, () => expect(shapeCounts(f)).toEqual(expected[i]))
+  })
+})
+
+describe('shapeTrialRegrant (TRIALREGRANT.1)', () => {
+  const used = { eligible: false, reasons: ['trial_used'] }
+  it('only trial_used, only cancelled bookings, no re-grant, no credits → true', () => {
+    expect(shapeTrialRegrant({ eligibility: used })).toBe(true)
+    expect(shapeTrialRegrant({ eligibility: used, bookings: [{ status: 'cancelled' }, { status: 'CANCELLED' }], clients: [{ credit_balance: 0, credit_unlimited: false }] })).toBe(true)
+  })
+  it('any other reason, or eligible, or no answer → false', () => {
+    expect(shapeTrialRegrant({ eligibility: { eligible: false, reasons: ['trial_used', 'paid_pack'] } })).toBe(false)
+    expect(shapeTrialRegrant({ eligibility: { eligible: false, reasons: ['membership_history'] } })).toBe(false)
+    expect(shapeTrialRegrant({ eligibility: { eligible: true, reasons: [] } })).toBe(false)
+    expect(shapeTrialRegrant()).toBe(false)
+  })
+  it('an attended, no-show, booked or unknown-status booking, a re-grant row, or credits → false', () => {
+    for (const status of ['attended', 'ATTENDED', 'no_show', 'NO_SHOW', 'no-show', 'booked', 'BOOKED', 'waitlisted', '']) expect(shapeTrialRegrant({ eligibility: used, bookings: [{ status }] }), status).toBe(false)
+    expect(shapeTrialRegrant({ eligibility: used, ledgerRegrants: [{ at: 'x' }] })).toBe(false)
+    expect(shapeTrialRegrant({ eligibility: used, clients: [{ credit_balance: 1 }] })).toBe(false)
+    expect(shapeTrialRegrant({ eligibility: used, clients: [{ credit_balance: 0, credit_unlimited: true }] })).toBe(false)
+    expect(shapeTrialRegrant({ eligibility: used, clients: [{ credit_balance: null }] })).toBe(true)
   })
 })

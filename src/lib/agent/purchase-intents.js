@@ -230,14 +230,18 @@ export async function listPurchaseOptions(db, locationId) {
 /**
  * May this member be offered the studio's free trial? Fails closed: available
  * only when the studio has a trial_product_id AND A's trialEligibility read
- * succeeded with `eligible === true`. No trial_product_id: not available, no
+ * succeeded with `eligible === true`, or (TRIALREGRANT.1, Richard 20 Oct 2026)
+ * with `regrant === true`: they claimed the trial, never used it and it ran
+ * out, so the free class is offered again and D's grantTrial adds the credits
+ * (it reads the live balance itself before sending anything). `regrant` is
+ * true on that answer only. No trial_product_id: not available, no
  * reasons, A never asked. A read that failed (the studio's settings, the
  * reads seam, or A itself) is `readFailed`: the caller offers no trial and
  * files the un1t_trial_check_failed card.
  *
  * @param {object} db service-role client
  * @param {{ locationId: string, un1tUserId: string, contactId: string|null }} who
- * @returns {Promise<{ available: boolean, reasons: string[], readFailed?: boolean }>}
+ * @returns {Promise<{ available: boolean, reasons: string[], regrant?: true, readFailed?: boolean }>}
  */
 export async function trialAvailable(db, { locationId, un1tUserId, contactId = null } = {}) {
   const failed = (code, errClass = null) => {
@@ -261,6 +265,7 @@ export async function trialAvailable(db, { locationId, un1tUserId, contactId = n
   }
   if (r?.success !== true) return failed('eligibility_unreadable')
   const reasons = Array.isArray(r.data?.reasons) ? r.data.reasons.filter((x) => typeof x === 'string') : []
+  if (r.data?.eligible !== true && r.data?.regrant === true) return { available: true, reasons, regrant: true }
   return { available: r.data?.eligible === true, reasons }
 }
 

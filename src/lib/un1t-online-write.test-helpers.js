@@ -15,7 +15,7 @@ export const CONTACT = '66666666-6666-4666-8666-666666666666'
 export const OTHER_CONTACT = '77777777-7777-4777-8777-777777777777'
 export const ALL_PERMS = [
   'bookings:create', 'bookings:read', 'bookings:update', 'users:create', 'users:read',
-  'purchases:create', 'products:read', 'credits:read',
+  'purchases:create', 'products:read', 'credits:read', 'credits:create',
 ]
 export const ALLOWED_LOG_FIELDS = new Set(['locationId', 'op', 'origin', 'ledgerId', 'status', 'verdict', 'code', 'recovered', 'attempt', 'waitMs'])
 

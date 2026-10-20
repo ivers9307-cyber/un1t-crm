@@ -1,9 +1,10 @@
 // UN1TWRITE.8 — approval cards for un1t.online work. This part: the RECORD-ONLY
 // refund card.
 //
-// The CRM never moves money on un1t.online (no /refunds, no forceRefund, no
-// /credits/grant: the guard in tests/un1t-online-write-guard.test.js bans them
-// across src/). When a refund is owed (a double payment, a member's request, a
+// The CRM never moves money on un1t.online (no /refunds, no forceRefund: the
+// guard in tests/un1t-online-write-guard.test.js bans them across src/;
+// /credits/grant only as grantTrial's one-off trial credit re-grant,
+// TRIALREGRANT.1, never for a refund). When a refund is owed (a double payment, a member's request, a
 // late cancel), fileRefundCard puts a pending `refund_request` card in front
 // of staff, who do the refund by hand in the un1t.online owner console and
 // then approve the card to record that it is done. Approving calls nothing:
