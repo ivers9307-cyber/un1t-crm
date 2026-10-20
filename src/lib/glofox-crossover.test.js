@@ -196,24 +196,20 @@ describe('recordGlofoxCrossover', () => {
 })
 
 // GLOFOXREADERS.1 — the reader helpers.
-describe('reader helpers', () => {
-  it('glofoxCrossoverContactIds lists the studio\'s linked contacts (deduped); a missing table is none; other errors are errors', async () => {
-    const t = { glofox_crossover_members: [
-      { location_id: LOC, glofox_member_id: 'g1', contact_id: 'c1' },
-      { location_id: LOC, glofox_member_id: 'g2', contact_id: 'c1' },
-      { location_id: 'hatch', glofox_member_id: 'g3', contact_id: 'c3' },
-    ] }
-    // the fake ignores order/range; give it the methods
-    const db = fakeDb(t)
+describe('reader helpers (ORGCONTACTS.2: read contact_studios)', () => {
+  // The fake honours eq / in on contact_studios and ignores order / range.
+  const studioDb = (rows, { error = null } = {}) => {
+    const db = fakeDb({ contact_studios: rows }, error ? { errors: { 'contact_studios:select': error } } : {})
     const from = db.from
     db.from = (table) => { const c = from(table); c.order = () => c; c.range = () => c; return c }
+    return db
+  }
+  const row = (contact_id, location_id, over = {}) => ({ contact_id, location_id, kind: 'client', status: 'active', source: 'glofox', ...over })
+
+  it('glofoxCrossoverContactIds lists the contacts with a Glofox relationship at the studio (deduped, any status); a failed read is an error', async () => {
+    const db = studioDb([row('c1', LOC), row('c1', LOC, { status: 'ended' }), row('c2', LOC, { source: 'un1t_online' }), row('c3', 'hatch')])
     expect(await glofoxCrossoverContactIds(db, LOC)).toEqual({ ids: ['c1'] })
-    const missing = fakeDb(t, { errors: { 'glofox_crossover_members:select': { code: 'PGRST205', message: 'x' } } })
-    const mf = missing.from; missing.from = (table) => { const c = mf(table); c.order = () => c; c.range = () => c; return c }
-    expect(await glofoxCrossoverContactIds(missing, LOC)).toEqual({ ids: [] })
-    const broken = fakeDb(t, { errors: { 'glofox_crossover_members:select': { message: 'down' } } })
-    const bf = broken.from; broken.from = (table) => { const c = bf(table); c.order = () => c; c.range = () => c; return c }
-    expect((await glofoxCrossoverContactIds(broken, LOC)).error).toMatch(/down/)
+    expect((await glofoxCrossoverContactIds(studioDb([], { error: { message: 'down' } }), LOC)).error).toMatch(/down/)
   })
 
   it('glofoxStudioOrCrossoverFilter / scopeToGlofoxStudio', () => {
@@ -226,20 +222,17 @@ describe('reader helpers', () => {
     expect(calls).toEqual([['eq', 'location_id', LOC], ['or', `location_id.eq.${LOC},id.in.(a)`]])
   })
 
-  it('glofoxLinkLocationsByContact maps each contact to the studios it is linked at', async () => {
-    const db = fakeDb({ glofox_crossover_members: [
-      { location_id: LOC, glofox_member_id: 'g1', contact_id: 'c1' },
-      { location_id: 'other', glofox_member_id: 'g9', contact_id: 'c1' },
-      { location_id: LOC, glofox_member_id: 'g2', contact_id: 'c2' },
-    ] })
+  it('glofoxLinkLocationsByContact maps each contact to the studios it has a Glofox relationship at (home included)', async () => {
+    const db = studioDb([row('c1', LOC), row('c1', 'other'), row('c2', LOC), row('c2', 'hatch', { source: 'un1t_online' })])
     const out = await glofoxLinkLocationsByContact(db, ['c1', 'c2', 'c3'])
     expect(out.error).toBeUndefined()
     expect(Object.fromEntries(out.byContact)).toEqual({ c1: [LOC, 'other'], c2: [LOC] })
+    expect((await glofoxLinkLocationsByContact(studioDb([], { error: { message: 'down' } }), ['c1'])).error).toMatch(/down/)
   })
 
-  it('contactAtGlofoxStudio: home or linked', () => {
+  it('contactAtGlofoxStudio: home or a studio_location_ids entry', () => {
     expect(contactAtGlofoxStudio({ location_id: LOC }, LOC)).toBe(true)
-    expect(contactAtGlofoxStudio({ location_id: 'hatch', glofox_link_location_ids: [LOC] }, LOC)).toBe(true)
+    expect(contactAtGlofoxStudio({ location_id: 'hatch', studio_location_ids: [LOC] }, LOC)).toBe(true)
     expect(contactAtGlofoxStudio({ location_id: 'hatch' }, LOC)).toBe(false)
     expect(contactAtGlofoxStudio(null, LOC)).toBe(false)
   })

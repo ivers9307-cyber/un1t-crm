@@ -182,14 +182,15 @@ export async function linkedAccountsForContact(db, contactId, { groupId } = {}) 
       contacts = await fetchContactsByIds(db, ids)
     }
 
-    // GLOFOXREADERS.1 — a contact that lives at a sibling studio but holds a
-    // Glofox account linked at the Glofox studio (glofox_crossover_members,
-    // mig 758) carries `glofox_link_location_ids`, so callers can count it at
-    // that studio (electWriteAccount's location guard, member-studios).
+    // ORGCONTACTS.2 — every contact carries `studio_location_ids`: the
+    // studios it has a Glofox relationship at (contact_studios, source glofox,
+    // mig 764; the home Glofox studio and any crossover studio), so callers
+    // can count a sibling-studio contact at the Glofox studio
+    // (electWriteAccount's location guard, member-studios).
     const links = await glofoxLinkLocationsByContact(db, contacts.map((c) => c?.id))
     if (links.error) throw new Error(links.error)
     if (links.byContact.size) {
-      contacts = contacts.map((c) => (links.byContact.has(c?.id) ? { ...c, glofox_link_location_ids: links.byContact.get(c.id) } : c))
+      contacts = contacts.map((c) => (links.byContact.has(c?.id) ? { ...c, studio_location_ids: links.byContact.get(c.id) } : c))
     }
 
     const accounts = dedupeAccounts(contacts, contactId)
@@ -515,7 +516,7 @@ function compareForElection(a, b) {
  *     is always corroborated with itself, so the anchor is never excluded
  *     by its own rule), minus — when `locationId` is passed — rows whose
  *     OWN `location_id` is present AND differs from it, unless a crossover
- *     row links the row's Glofox account at it (`glofox_link_location_ids`,
+ *     row links the row's Glofox account at it (`studio_location_ids`,
  *     GLOFOXREADERS.1: a Hatch contact holding a Stillorgan Glofox account is
  *     not foreign at Stillorgan). Zero candidates → 'none'.
  *

@@ -68,7 +68,7 @@ const LIVE_RELATIONSHIP_STATUSES = Object.freeze([...MEMBER_STATUSES, 'classpass
 
 // GLOFOXREADERS.1 — a contact counts at a Glofox studio when it lives there OR
 // a crossover row links its Glofox account there (a Hatch contact holding a
-// Stillorgan account; linkedAccountsForContact sets glofox_link_location_ids).
+// Stillorgan account; linkedAccountsForContact sets studio_location_ids).
 function glofoxStudioFor(location, contacts) {
   const accounts = contacts.filter((c) => contactAtGlofoxStudio(c, location.id) && c.glofox_member_id)
   const ordered = [...accounts].sort((a, b) =>
@@ -256,7 +256,7 @@ export async function resolveMemberStudios(db, { anchorContactId, threadLocation
     const accountLocationIds = new Set([
       ...contacts.filter((c) => c.glofox_member_id && c.location_id).map((c) => c.location_id),
       // GLOFOXREADERS.1 — the Glofox studios a crossover row links them at.
-      ...contacts.filter((c) => c.glofox_member_id).flatMap((c) => c.glofox_link_location_ids || []),
+      ...contacts.filter((c) => c.glofox_member_id).flatMap((c) => c.studio_location_ids || []),
       ...un1tClients.map((r) => r.location_id),
       ...un1tSubscriptions.map((r) => r.location_id),
     ])
