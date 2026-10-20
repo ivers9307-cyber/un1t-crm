@@ -200,6 +200,14 @@ export function ConnectWhatsAppCard({ organizationId, locations = [], canEdit, o
       <p className="text-xs text-un1t-subtle">
         Already using the WhatsApp Business app on this number? Use “Connect existing number” to link it without moving off your phone.
       </p>
+      {/* ECHOAUTOREPLIES.1 — the app's own greeting/away auto-replies reach
+          the CRM as phone-app echoes, indistinguishable from a reply someone
+          typed, and every echo takes the thread over from Mia
+          (whatsapp-coexistence-ingest.js). Until a real echo is captured and
+          can be filtered, they must be off before linking. */}
+      <p className="text-xs text-amber-700 bg-amber-500/10 border border-amber-200 rounded p-2">
+        Before you connect an existing number, turn off the app&apos;s Greeting message and Away message (WhatsApp Business app → Business tools). The CRM can&apos;t tell them apart from a reply you typed, so each one would stop Mia answering in that chat.
+      </p>
     </div>
   )
 }

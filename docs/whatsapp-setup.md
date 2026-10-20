@@ -358,6 +358,18 @@ code is sent to the number's WhatsApp Business app for the owner to enter
 there. Once linked, the number appears in the list with a **"Coexistence"**
 chip (as opposed to "Cloud API" for a fully-migrated number).
 
+**Before linking: switch off the app's Greeting message and Away message**
+(WhatsApp Business app → Business tools). ECHOAUTOREPLIES.1: everything the
+phone app sends reaches the CRM as an `smb_message_echoes` echo, stored as
+source `app_echo`, and every echo takes the thread over from Mia
+(`ingestCoexistenceMessage` → `manualTakeoverPatch`). An auto-reply has not
+been seen in a real echo yet, so nothing can tell it from a reply a person
+typed: left on, the first greeting in each new chat would pause Mia there.
+The connect card says this at the button. Once a studio has linked, capture
+one real greeting echo; if Meta marks it, filter it in the ingest and lift
+this rule. Edit and delete echoes from the app also take over today (they
+are stored as placeholder rows), which is the same open question.
+
 ### 5.4 History import
 The ~6-month message backfill is **one-shot within 24 hours** of linking —
 Meta doesn't allow re-requesting it later. If it doesn't land in that
