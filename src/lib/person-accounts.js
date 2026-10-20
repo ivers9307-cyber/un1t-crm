@@ -14,6 +14,7 @@
 
 import { normalisePhone9 } from './person-links'
 import { escapeLikePattern } from './like-escape'
+import { glofoxLinkLocationsByContact, contactAtGlofoxStudio } from './glofox-crossover.js'
 
 const CONTACT_COLUMNS =
   'id, name, glofox_member_id, glofox_membership_status, glofox_membership_state, ' +
@@ -179,6 +180,16 @@ export async function linkedAccountsForContact(db, contactId, { groupId } = {}) 
       if (membersErr) throw membersErr
       const ids = [...new Set([contactId, ...((members || []).map((m) => m.contact_id).filter(Boolean))])]
       contacts = await fetchContactsByIds(db, ids)
+    }
+
+    // GLOFOXREADERS.1 — a contact that lives at a sibling studio but holds a
+    // Glofox account linked at the Glofox studio (glofox_crossover_members,
+    // mig 758) carries `glofox_link_location_ids`, so callers can count it at
+    // that studio (electWriteAccount's location guard, member-studios).
+    const links = await glofoxLinkLocationsByContact(db, contacts.map((c) => c?.id))
+    if (links.error) throw new Error(links.error)
+    if (links.byContact.size) {
+      contacts = contacts.map((c) => (links.byContact.has(c?.id) ? { ...c, glofox_link_location_ids: links.byContact.get(c.id) } : c))
     }
 
     const accounts = dedupeAccounts(contacts, contactId)
@@ -503,8 +514,10 @@ function compareForElection(a, b) {
  *     anchorContactId if present, else the first account by id sort — a row
  *     is always corroborated with itself, so the anchor is never excluded
  *     by its own rule), minus — when `locationId` is passed — rows whose
- *     OWN `location_id` is present AND differs from it. Zero candidates →
- *     'none'.
+ *     OWN `location_id` is present AND differs from it, unless a crossover
+ *     row links the row's Glofox account at it (`glofox_link_location_ids`,
+ *     GLOFOXREADERS.1: a Hatch contact holding a Stillorgan Glofox account is
+ *     not foreign at Stillorgan). Zero candidates → 'none'.
  *
  *     The location guard is defensive hardening, not a rule the data
  *     currently exercises: `linkedAccountsForContact` resolves a person's
@@ -546,7 +559,9 @@ export function electWriteAccount({ accounts, anchorContactId, concernsMemberIds
     // Location guard (defensive hardening, see the doc comment above): only
     // ever excludes on a POSITIVE mismatch — a row with no location_id at
     // all is never treated as foreign.
-    if (locationId != null && acct.location_id != null && acct.location_id !== locationId) return false
+    // GLOFOXREADERS.1 — an account linked at locationId by a crossover row
+    // (its contact lives at a sibling studio) is not foreign there.
+    if (locationId != null && acct.location_id != null && !contactAtGlofoxStudio(acct, locationId)) return false
     return corroborated(anchorRow, acct)
   })
 

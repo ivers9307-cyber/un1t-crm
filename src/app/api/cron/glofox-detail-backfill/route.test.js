@@ -18,6 +18,8 @@ const CODE = 'Resource not available, empty result cant be processed'
 
 function result(st) {
   if (st.table === 'locations') return { data: st.single ? LOC : [LOC], error: null }
+  // GLOFOXREADERS.1 — the studio's crossover contacts (none here).
+  if (st.table === 'glofox_crossover_members') return { data: [], error: null }
   if (st.table === 'glofox_sync_runs' && st.op === 'insert') return { data: { id: 'run-1' }, error: null }
   if (st.table === 'glofox_sync_runs' && st.op === 'update') { h.runUpdates.push(st.payload); return { data: null, error: null } }
   if (st.table === 'contacts' && st.head) return { data: null, count: 0, error: null }
