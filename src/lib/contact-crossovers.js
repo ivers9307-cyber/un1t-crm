@@ -14,37 +14,6 @@ import { hasRelationshipAt, contactsAtStudio } from '@/lib/contact-studios'
 // people with their origin context. The list itself reads
 // public.studio_contacts (src/lib/studio-contacts-query.js).
 
-// Cap on the crossover id list the PHONE directory still builds an
-// `id.in.(...)` filter from (/api/mobile/contacts/crossover-ids; PostgREST
-// sends that as a GET URL, so an unbounded list overruns Cloudflare's URI
-// limit → 414). The web list no longer uses this (it reads the view).
-export const CROSSOVER_ID_CAP = 100
-
-// Contact ids with a relationship at this studio whose PRIMARY studio is
-// another one (crossover_contact_ids reads contact_studios since mig 765).
-// Only the phone directory route reads this now; it goes in Phase 5.
-// Best-effort — returns [] on error/missing args (the directory then falls
-// back to owned-only).
-export async function crossoverContactIds(db, locationId) {
-  if (!db || !locationId) return []
-  try {
-    const { data, error } = await db.rpc('crossover_contact_ids', { loc: locationId })
-    if (error || !Array.isArray(data)) return []
-    const ids = data.map((r) => r && r.contact_id).filter(Boolean)
-    if (ids.length > CROSSOVER_ID_CAP) {
-      logWarn('contact-crossovers', 'crossover ids exceed cap; truncating for URL-length safety', {
-        locationId,
-        total: ids.length,
-        cap: CROSSOVER_ID_CAP,
-      })
-      return ids.slice(0, CROSSOVER_ID_CAP)
-    }
-    return ids
-  } catch {
-    return []
-  }
-}
-
 // For the crossover contacts within `contacts` (owned elsewhere than
 // activeLocationId), fetch their home-studio name + active tags. Returns
 // { [contactId]: { homeStudio, tags } }. Best-effort — {} on error / none.
@@ -150,7 +119,7 @@ export function contactStudioIds(user, locIds) {
 
 // Ids per `.in()`. Matches attachLinkedCounts' CHUNK: PostgREST sends the
 // filter as a GET URL, and an unbounded id list overruns Cloudflare's URI
-// limit → 414. This is the same wall CROSSOVER_ID_CAP was built for.
+// limit → 414 (the same wall the phone directory's MOBILE_CROSSOVER_ID_CAP holds).
 const LIST_FLAG_ID_CHUNK = 120
 
 // Rows per page WITHIN a chunk. The 1,000-row select cap applies regardless

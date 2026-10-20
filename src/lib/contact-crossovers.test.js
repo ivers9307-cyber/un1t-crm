@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { crossoverContactIds, fetchCrossoverContext, canViewContact, fetchListMembershipFlags, CROSSOVER_ID_CAP } from './contact-crossovers'
+import { fetchCrossoverContext, canViewContact, fetchListMembershipFlags } from './contact-crossovers'
 
 // Minimal chainable stub of the supabase builder. `result` is what the
 // awaited query resolves to ({ data } or { data, count }).
@@ -23,44 +23,8 @@ function stubFrom(handlers) {
       }
       return builder
     },
-    // Stub of db.rpc(fn, args) → resolves to { data, error } from the
-    // named handler (crossoverContactIds now calls an RPC, not .from()).
-    rpc(fn, args) {
-      return Promise.resolve(handlers[fn] ? handlers[fn](args) : { data: null, error: null })
-    },
   }
 }
-
-describe('crossoverContactIds', () => {
-  it('returns the contact_ids from the crossover_contact_ids RPC', async () => {
-    const db = stubFrom({
-      crossover_contact_ids: () => ({ data: [{ contact_id: 'a' }, { contact_id: 'b' }] }),
-    })
-    expect((await crossoverContactIds(db, 'loc1')).sort()).toEqual(['a', 'b'])
-  })
-  it('returns [] for missing args / empty result / rpc error', async () => {
-    expect(await crossoverContactIds(null, 'loc1')).toEqual([])
-    expect(await crossoverContactIds(stubFrom({ crossover_contact_ids: () => ({ data: [] }) }), 'loc1')).toEqual([])
-    expect(await crossoverContactIds(stubFrom({ crossover_contact_ids: () => ({ data: null, error: { message: 'boom' } }) }), 'loc1')).toEqual([])
-  })
-  it('caps the list at CROSSOVER_ID_CAP so the id.in() URL can never blow up', async () => {
-    const many = Array.from({ length: CROSSOVER_ID_CAP + 50 }, (_, i) => ({ contact_id: `c${i}` }))
-    const db = stubFrom({ crossover_contact_ids: () => ({ data: many }) })
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      expect((await crossoverContactIds(db, 'loc1')).length).toBe(CROSSOVER_ID_CAP)
-      // structured logWarn: the location and the counts, never a contact id
-      expect(warn).toHaveBeenCalledTimes(1)
-      const logged = JSON.stringify(warn.mock.calls[0])
-      expect(logged).toContain('contact-crossovers')
-      expect(logged).toContain('loc1')
-      expect(logged).toContain(String(CROSSOVER_ID_CAP + 50))
-      expect(logged).not.toMatch(/"c\d+"/)
-    } finally {
-      warn.mockRestore()
-    }
-  })
-})
 
 describe('fetchCrossoverContext', () => {
   const active = 'hatch'
