@@ -1,6 +1,7 @@
 -- 759 — SECRETTAILS.2: drop shelly_connections.key_hint.
 --
--- NOT APPLIED YET when this file was written. Proven ahead of apply by
+-- APPLIED to prod (iyvtbjjxdggiadzwwvdj) 20 Oct 2026 ~08:10 UTC, before merge;
+-- advisors (security) clean of anything new. Proven ahead of apply by
 -- tests/migration-658-659-shelly-key-hint.test.js (PGlite, real files).
 --
 -- key_hint held the last 4 characters of the Shelly Cloud auth key (mig 562).
