@@ -42,6 +42,8 @@ vi.mock('@/lib/permissions', () => {
   }
 })
 
+// ORGCONTACTS.4 — the other contact must be one the caller can VIEW (canViewContact), not merely one of the organisation.
+vi.mock('@/lib/contact-crossovers', () => ({ canViewContact: vi.fn(async () => true) }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 
 vi.mock('@/lib/person-links', () => ({
@@ -52,6 +54,7 @@ vi.mock('@/lib/person-links', () => ({
   getPersonGroup: vi.fn(),
 }))
 
+import { canViewContact } from '@/lib/contact-crossovers'
 import { POST, DELETE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -225,6 +228,17 @@ describe('POST /api/contacts/[id]/link — link', () => {
     const res = await POST(postReq({ otherContactId: OTHER_ID_DIFF_LOC }), props)
     expect(res.status).toBe(200)
     expect(createGroup).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactIds: [ID, OTHER_ID_DIFF_LOC] }))
+  })
+
+  it('refuses (404, like a missing contact) an other contact the caller cannot view, even inside the organisation', async () => {
+    createServerClient.mockReturnValue(mockDb({ contact: CONTACT, other: OTHER_LOC }))
+    canViewContact.mockResolvedValueOnce(false)
+    const res = await POST(postReq({ otherContactId: OTHER_ID_DIFF_LOC }), props)
+    expect(res.status).toBe(404)
+    expect((await res.json()).error).toBe('Contact not found')
+    expect(canViewContact).toHaveBeenCalledWith(expect.anything(), OWNER, expect.objectContaining({ id: OTHER_ID_DIFF_LOC }))
+    expect(getPersonGroup).not.toHaveBeenCalled()
+    expect(createGroup).not.toHaveBeenCalled()
   })
 
   it('refuses across organisations with the new message, before any group read', async () => {
