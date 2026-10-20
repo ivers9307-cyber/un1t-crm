@@ -230,7 +230,7 @@ export const PUT = withAuth(
           host,
           auth_key: key,
           auth_key_fingerprint: fp,
-          // No key_hint (SECRETTAILS.1): the UI shows presence only; mig 659 forbids a value.
+          // No key_hint (SECRETTAILS.1): the UI shows presence only; mig 759 dropped the column.
           // A successful re-paste MUST clear the error state: the hub card and
           // the panel banner are driven by `status`, so leaving 'action_needed'
           // behind would tell an owner who just fixed the connection that it

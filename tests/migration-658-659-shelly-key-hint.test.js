@@ -151,3 +151,42 @@ describe('mig 659 — the hint is cleared and can never be stored again', () => 
     expect(await one(`SELECT count(*)::int AS n FROM public.shelly_connections WHERE key_hint IS NOT NULL`)).toEqual({ n: 0 })
   })
 })
+
+// SECRETTAILS.2 — mig 759 drops the column once no rollback target reads it.
+const MIG_759 = readFileSync(path.join(MIG_DIR, '759_shelly_key_hint_drop.sql'), 'utf8')
+
+describe('mig 759 — key_hint is dropped (SECRETTAILS.2)', () => {
+  it('drops the column and its retire CHECK, and keeps the row and its key', async () => {
+    await runSql(MIG_658)
+    await runSql(MIG_659)
+    await runSql(MIG_759)
+    expect(await one(`SELECT count(*)::int AS n FROM information_schema.columns
+                       WHERE table_name = 'shelly_connections' AND column_name = 'key_hint'`)).toEqual({ n: 0 })
+    expect(await one(`SELECT count(*)::int AS n FROM pg_constraint
+                       WHERE conrelid = 'public.shelly_connections'::regclass AND conname LIKE '%key_hint%'`)).toEqual({ n: 0 })
+    expect(await one(`SELECT host, auth_key FROM public.shelly_connections WHERE location_id = '${LOC}'`))
+      .toEqual({ host: 'shelly-1-eu.shelly.cloud', auth_key: KEY })
+  })
+
+  it('the current code still saves (existing row and first connect)', async () => {
+    await runSql(MIG_658)
+    await runSql(MIG_659)
+    await runSql(MIG_759)
+    await expect(db.query(upsert(LOC))).resolves.toBeTruthy()
+    await expect(db.query(upsert(LOC_NEW))).resolves.toBeTruthy()
+  })
+
+  it('a write that still names the column now fails loudly', async () => {
+    await runSql(MIG_658)
+    await runSql(MIG_659)
+    await runSql(MIG_759)
+    await expect(db.query(upsert(LOC, { withHint: 'wxyz' }))).rejects.toThrow(/column "key_hint" .*does not exist/)
+  })
+
+  it('runs twice cleanly', async () => {
+    await runSql(MIG_658)
+    await runSql(MIG_659)
+    await runSql(MIG_759)
+    await expect(runSql(MIG_759)).resolves.toBeTruthy()
+  })
+})

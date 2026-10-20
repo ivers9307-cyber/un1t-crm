@@ -24,7 +24,7 @@ import { createShellyClient } from './client'
 // fingerprint is a sha256 OF the key, so publishing it turns "which account is
 // this?" into an offline check anyone holding a candidate key can run. And no
 // key_hint (SECRETTAILS.1): it was the key's last four characters; mig 659
-// clears it and forbids a value.
+// cleared it and mig 759 (SECRETTAILS.2) dropped the column.
 // `id`, `location_id`, `linked_by`, `created_at` and `updated_at` are dropped
 // deliberately rather than fetched and discarded: no route needs the
 // connection id (every handler keys on the session's location, spec "Tenancy":
