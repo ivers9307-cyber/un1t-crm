@@ -713,10 +713,6 @@ describe('executePurchaseTool', () => {
   })
 
   it('check_my_purchase: nothing paid yet is neutral (an open intent, or none); never says paid', async () => {
-    // check_my_purchase judges liveness on the REAL clock (openLinkOf reads
-    // Date.now()), so the intent must expire relative to it, like the
-    // list_purchase_options cases above: liveIntent()'s fixed NOW + 1h lapsed
-    // at 10:00 UTC on 20 Oct 2026 and this test failed on every branch.
     const open = await executePurchaseTool('check_my_purchase', {}, ctxFor(fakeDb({ mia_purchase_intents: [liveIntent({ expires_at: new Date(Date.now() + 3600_000).toISOString() })] }).db))
     expect(open).toMatchObject({ paid: false, open_intent: true, product: '10 Class Pack' })
     expect(open.message).toMatch(/not showing yet/)
