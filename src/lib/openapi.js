@@ -7040,6 +7040,30 @@ registry.registerPath({
   },
 })
 
+// WRCPACK.1 — the Workplace Relations Commission inspection pack.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/reports/wrc-pack',
+  tags: ['Schedule', 'Reports'],
+  security: [{ CookieAuth: [] }],
+  summary: 'WRC inspection pack for an organisation (owner tier)',
+  description: "For one organisation (every studio) and a period (from/to, default the 12 months ending today at the active studio, inclusive; real dates, to on or after from, at most 366 days), the records a Workplace Relations Commission inspection asks for. format=json (default) answers { organization_id, period, allowance_year, locations, staff, shifts }; format=csv streams one CSV as an attachment: file=staff (default) is one row per person who held a studio membership in the organisation or worked a non-cancelled shift in the period (name, email, status incl. 'deleted <date>' for a permanently deleted profile, employment type, membership roles or the role at deletion, studios, first and last rostered date, contracted hours per week (FTE), hourly rate (a contractor's rate, else salary ÷ 52 ÷ contracted hours), rostered shifts and hours (the paid window: override → block → template, shiftHours), Sunday shifts and hours (block date is a Sunday), weeks over contract and overtime hours above it (Mon–Sun weeks, FTE only), holiday / sick / other leave days taken (approved requests, days charged inside the period; an edge-crossing holiday is recounted on working days minus the studio's non-working dates), the holiday allowance row for the year of `to`, whether a signed contract exists and when, and the current Employee Handbook version with whether a policy view exists for them); file=shifts is one row per shift assignment in the period, cancelled ones included and flagged (date, weekday, Sunday flag, staff, studio, shift name, rostered and adjusted start/end, hours, arrival stamp in studio time, status). Former staff are included on purpose. Every read is paged; a failed read is a 500, never an empty pack. Access: master, an org admin of the organisation, or an owner at one of its studios; a manager or head coach gets 403, and so does an organisation the caller cannot reach.",
+  request: { query: z.object({
+    organization_id: uuidLike.optional(),
+    from: isoDate.optional(),
+    to: isoDate.optional(),
+    format: z.enum(['json', 'csv']).optional(),
+    file: z.enum(['staff', 'shifts']).optional(),
+  }) },
+  responses: {
+    200: { description: 'JSON pack, or a text/csv attachment named wrc-<file>-<from>-to-<to>.csv' },
+    400: { description: 'A bad organization_id, from or to not a real date, to before from, more than 366 days, or an unknown format / file', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not master, an org admin of the organisation or an owner at one of its studios; or an organisation outside the caller\'s memberships', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read failed (never answered as an empty pack)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/schedule/reports/scheduled',

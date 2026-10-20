@@ -127,6 +127,7 @@ const REVIEWED = {
   'src/lib/payroll.js': 'server-side arithmetic',
   'src/lib/profile-compensation.js': 'server reader of the canonical pay table',
   'src/lib/report-generator.js': 'writes staff_cost and utilisation, both admin-only report types',
+  'src/lib/wrc-pack.js': 'the WRC inspection pack (WRCPACK.1): every person\'s contracted hours and rate for the whole organisation, served only by /api/schedule/reports/wrc-pack to canDownloadWrcPack — master, an org admin of the organisation, or an owner at one of its studios',
   'src/lib/roster-grid-data.js': 'reads the column only when showContract',
   'src/lib/roster-grid-model.js': 'pure; the key exists only when the grid route sent it',
   'src/lib/roster-publish.js': 'publish gate: loadHolderPay on the server for the budget check; returns euro totals and advisories, never a person\'s contract',
