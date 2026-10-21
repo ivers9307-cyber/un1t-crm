@@ -75,23 +75,29 @@ export async function generateMetadata(props) {
       .eq('slug', params.slug)
       .maybeSingle()
     if (error || !host) return {}
-    const zone = await getLocationZone(db, host.anchor_location_id || null)
-    const { data: events, error: eventsError } = await db
-      .from('race_events')
-      .select('hero_image_url, host:event_hosts!inner(organization_id)')
-      .eq('host_id', host.id)
-      .eq('host.organization_id', host.organization_id)
-      .eq('active', true)
-      .eq('status', 'published')
-      .gte('race_date', todayIsoIn(zone))
-      .order('race_date')
-      .order('start_time')
-    if (eventsError) return {}
+    const zone = await hostZone(db, host)
+    let events = []
+    try {
+      const { data, error: eventsError } = await db
+        .from('race_events')
+        // Make host tenancy explicit for check:location-scoping, including staff-assigned events at other studios.
+        .select('hero_image_url, host:event_hosts!inner(organization_id)')
+        .eq('host_id', host.id)
+        .eq('host.organization_id', host.organization_id)
+        .eq('active', true)
+        .eq('status', 'published')
+        .gte('race_date', todayIsoIn(zone))
+        .order('race_date')
+        .order('start_time')
+      if (!eventsError) events = data || []
+    } catch (err) {
+      logWarn('host-public-metadata', 'event heroes unreadable; using host branding', { err, hostId: host.id })
+    }
     const orgName = await getOrgBrandName(db, host.organization_id)
     const requestHeaders = await headers()
     const origin = `${requestHeaders.get('x-forwarded-proto') || 'https'}://${requestHeaders.get('host')}`
     const path = new URL(`/h/${encodeURIComponent(params.slug)}`, origin).href
-    return hostPageMetadata({ host, events, orgName, path })
+    return hostPageMetadata({ host, events, orgName, path, page: 'events' })
   } catch {
     return {}
   }

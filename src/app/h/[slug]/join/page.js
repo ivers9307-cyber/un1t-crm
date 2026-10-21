@@ -10,7 +10,8 @@
 //
 // Server component: host by slug via the service client (notFound when the
 // slug is unknown — slugs are public, no enumeration concern). Reads only the
-// host's identity and the list copy (mig 460); no events, no counts.
+// host's identity and the list copy (mig 460); metadata also reads upcoming
+// event heroes for social previews. No counts.
 
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
@@ -21,11 +22,22 @@ import { poppinsBody as poppins } from '@/fonts/poppins'
 import { getOrgBrandName } from '@/lib/location-branding'
 import { hostPageMetadata } from '@/lib/host-public-page'
 import { todayIsoIn } from '@shared/events'
-import { getLocationZone } from '@/lib/location-time'
+import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
+import { logWarn } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
 
 const HOST_COLS = 'id, name, slug, organization_id, list_headline, list_blurb, list_button_label, list_success_message'
+
+// Match the events page's display-only zone fallback for social previews.
+async function hostZone(db, host) {
+  try {
+    return await getLocationZone(db, host.anchor_location_id || null)
+  } catch (err) {
+    logWarn('host-join-page', 'anchor zone unreadable; page shown on the default zone', { err, hostId: host.id })
+    return DEFAULT_TZ
+  }
+}
 
 export async function generateMetadata(props) {
   try {
@@ -37,23 +49,29 @@ export async function generateMetadata(props) {
       .eq('slug', params.slug)
       .maybeSingle()
     if (error || !host) return {}
-    const zone = await getLocationZone(db, host.anchor_location_id || null)
-    const { data: events, error: eventsError } = await db
-      .from('race_events')
-      .select('hero_image_url, host:event_hosts!inner(organization_id)')
-      .eq('host_id', host.id)
-      .eq('host.organization_id', host.organization_id)
-      .eq('active', true)
-      .eq('status', 'published')
-      .gte('race_date', todayIsoIn(zone))
-      .order('race_date')
-      .order('start_time')
-    if (eventsError) return {}
+    const zone = await hostZone(db, host)
+    let events = []
+    try {
+      const { data, error: eventsError } = await db
+        .from('race_events')
+        // Make host tenancy explicit for check:location-scoping, including staff-assigned events at other studios.
+        .select('hero_image_url, host:event_hosts!inner(organization_id)')
+        .eq('host_id', host.id)
+        .eq('host.organization_id', host.organization_id)
+        .eq('active', true)
+        .eq('status', 'published')
+        .gte('race_date', todayIsoIn(zone))
+        .order('race_date')
+        .order('start_time')
+      if (!eventsError) events = data || []
+    } catch (err) {
+      logWarn('host-public-metadata', 'event heroes unreadable; using host branding', { err, hostId: host.id })
+    }
     const orgName = await getOrgBrandName(db, host.organization_id)
     const requestHeaders = await headers()
     const origin = `${requestHeaders.get('x-forwarded-proto') || 'https'}://${requestHeaders.get('host')}`
     const path = new URL(`/h/${encodeURIComponent(params.slug)}/join`, origin).href
-    return hostPageMetadata({ host, events, orgName, path })
+    return hostPageMetadata({ host, events, orgName, path, page: 'join' })
   } catch {
     return {}
   }
