@@ -607,7 +607,7 @@ const TENANT_FLOW_PATHS = [
   '/class-pay/abc', '/h/pride', '/h/pride/join', '/host', '/host/login', '/host-connect/abc',
   '/api/host/x', '/embed/event/x', '/terms',
 ]
-const TENANT_PINNED_OFF = ['/start', '/free-class', '/offers', '/technical']
+const TENANT_PINNED_OFF = ['/start', '/trial', '/free-class', '/offers', '/technical']
 const PLATFORM_TENANT_HOST = 'gym-a.repset.ie'
 
 // The entries the two rewrite-fallback tiers (un1t-marketing + the tenant
