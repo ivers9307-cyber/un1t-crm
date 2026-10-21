@@ -63,6 +63,7 @@ function stubDb(trace, { contacts = [], groupId = 'g-1', groupReadError = null }
         contains: () => b,
         limit: () => b,
         order: () => b,
+        range: () => b, // ORGCONTACTS.2: studiosOfContacts paginates contact_studios (answered empty here)
         insert(row) {
           st.op = 'insert'
           trace.push({ step: 'insert', table, status: row.status, details: row.details })

@@ -101,6 +101,10 @@ const MANIFEST = Object.freeze({
     kind: 'display',
     reason: 'Audit row 10: the campaign outcomes RPC (mig 513, re-created by mig 737 with a case-correct CANCELLED filter) behind the staff /api/campaigns/[id]/outcomes report.',
   },
+  'sql:public.derive_contact_studio': {
+    kind: 'data-writing',
+    reason: 'ORGCONTACTS.2 (mig 764): reads max(starts_at) per contact and studio for contact_studios.last_seen_at. A un1t.online booking is real activity at that studio, so it counts on every platform; nothing about the class, time or platform leaves the function.',
+  },
 })
 
 /** The readers that remind or credit: Decision 1's hard-off lives in these. */

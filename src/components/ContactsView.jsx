@@ -173,10 +173,8 @@ export default function ContactsView({
     filter: filterRowCount > 0 ? filter : undefined,
     search: search || undefined,
     location_id: locationId,
-    // The contacts list shows crossover deal-holders (owned ∪ deal-at-
-    // this-studio); other callers of this route (e.g. the send people-
-    // picker) omit this and stay owned-only.
-    include_crossovers: true,
+    // ORGCONTACTS.2 — the route lists every contact with a relationship at
+    // the studio (the crossover pill reads studio_is_crossover); no opt-in.
     // Fold linked people to one row unless the operator opted to see dupes.
     primary_only: !showDuplicates,
   }), [filterRowCount, filter, search, locationId, showDuplicates])

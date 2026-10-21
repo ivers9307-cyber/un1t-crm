@@ -109,6 +109,9 @@ export const TABLE_EXCLUDE = {
 // counts as file-level evidence.
 // ---------------------------------------------------------------------------
 const SCOPING_HELPERS = [
+  // src/lib/contact-studios.js (ORGCONTACTS.1) — every read of contact_studios
+  // through contactsAtStudio filters on the studio it is asked for.
+  'contactsAtStudio(',
   // src/lib/auth.js — 403/404 guards on the caller's allowed location set.
   'assertLocationAccess(',
   'assertLocationAccessOr404(',

@@ -19,6 +19,7 @@ function fakeDb(tables = {}, { errors = {}, upsertReturns = null } = {}) {
     chain.eq = (col, val) => { q.filters.push(['eq', col, val]); return chain }
     chain.ilike = (col, val) => { q.filters.push(['ilike', col, val]); return chain }
     chain.in = (col, vals) => { q.filters.push(['in', col, vals]); return chain }
+    chain.gt = (col, val) => { q.filters.push(['gt', col, val]); return chain }
     chain.limit = (n) => { q.limit = n; return chain }
     chain.maybeSingle = () => { q.single = true; return chain }
     for (const op of ['insert', 'upsert', 'update']) chain[op] = (payload) => { q.op = op; q.payload = payload; return chain }
@@ -28,6 +29,7 @@ function fakeDb(tables = {}, { errors = {}, upsertReturns = null } = {}) {
       if (err) return resolve({ data: null, error: err })
       if (q.op === 'upsert' && table === 'glofox_crossover_members') return resolve({ data: upsertReturns ?? [{ id: 'gx-1' }], error: null })
       if (q.op === 'upsert' && table === 'contact_location_preferences') return resolve({ data: q.payload.map((r) => ({ contact_id: r.contact_id })), error: null })
+      if (q.op === 'upsert' && table === 'contact_studios') return resolve({ data: [{ contact_id: q.payload.contact_id, location_id: q.payload.location_id, kind: q.payload.kind }], error: null })
       if (q.op !== 'select') return resolve({ data: null, error: null })
       let rows = (tables[table] || []).filter((r) => q.filters.every(([kind, col, val]) =>
         kind === 'eq' ? r[col] === val : kind === 'ilike' ? ilikeMatches(r[col], val) : kind === 'in' ? val.includes(r[col]) : true))
@@ -128,7 +130,7 @@ describe('recordGlofoxCrossover', () => {
   it('links the contact at the studio and gives it the studio preferences row (consent source glofox_sync)', async () => {
     const db = fakeDb({ contacts: base().contacts, contact_location_preferences: [], contact_preferences: [] })
     const out = await recordGlofoxCrossover(db, { locationId: LOC, glofoxMemberId: 'g1', contactId: 'c-hatch' })
-    expect(out).toEqual({ linked: true, preferences_created: 1 })
+    expect(out).toEqual({ linked: true, preferences_created: 1, contact_studio: { ok: true } })
     const link = db.calls.find((c) => c.table === 'glofox_crossover_members' && c.op === 'upsert')
     expect(link.payload).toMatchObject({ location_id: LOC, glofox_member_id: 'g1', contact_id: 'c-hatch' })
     const prefs = db.calls.find((c) => c.table === 'contact_location_preferences' && c.op === 'upsert')
@@ -152,6 +154,40 @@ describe('recordGlofoxCrossover', () => {
     expect(db.calls.some((c) => c.table === 'contact_location_preferences')).toBe(false)
   })
 
+  // ORGCONTACTS.1 — the relationship row (mig 764) beside the link row.
+  it('also writes the contact_studios row at the Glofox studio: client by default, member when the contact row says so', async () => {
+    const db = fakeDb({ contacts: base().contacts, contact_location_preferences: [], contact_preferences: [] })
+    const out = await recordGlofoxCrossover(db, { locationId: LOC, glofoxMemberId: 'g1', contactId: 'c-hatch', contactLocationId: 'hatch' })
+    expect(out.contact_studio).toEqual({ ok: true })
+    const row = db.calls.find((c) => c.table === 'contact_studios' && c.op === 'upsert')
+    expect(row.payload).toMatchObject({ contact_id: 'c-hatch', location_id: LOC, kind: 'client', status: 'active', source: 'glofox', ended_at: null })
+    expect(row.payload).not.toHaveProperty('last_seen_at')
+
+    const member = fakeDb({ contacts: base().contacts, contact_location_preferences: [], contact_preferences: [] })
+    await recordGlofoxCrossover(member, {
+      locationId: LOC, glofoxMemberId: 'g1', contactId: 'c-hatch', contactLocationId: 'hatch',
+      contactRow: { glofox_membership_status: 'member', glofox_membership_state: 'active', joined_at: '2026-02-01T00:00:00.000Z' },
+    })
+    const mrow = member.calls.find((c) => c.table === 'contact_studios' && c.op === 'upsert')
+    expect(mrow.payload.kind).toBe('member')
+    const seen = member.calls.find((c) => c.table === 'contact_studios' && c.op === 'update')
+    expect(seen.payload).toEqual({ first_seen_at: '2026-02-01T00:00:00.000Z' })
+  })
+
+  it('skips the contact_studios row when it skips the link; a failed row write is reported and the link kept', async () => {
+    const here = fakeDb(base())
+    const skipped = await recordGlofoxCrossover(here, { locationId: 'hatch', glofoxMemberId: 'g1', contactId: 'c-hatch' })
+    expect(skipped.contact_studio).toBeUndefined()
+    expect(here.calls.some((c) => c.table === 'contact_studios')).toBe(false)
+
+    const failing = fakeDb({ contacts: base().contacts, contact_location_preferences: [], contact_preferences: [] },
+      { errors: { 'contact_studios:upsert': { message: 'relation does not exist' } } })
+    const out = await recordGlofoxCrossover(failing, { locationId: LOC, glofoxMemberId: 'g1', contactId: 'c-hatch', contactLocationId: 'hatch' })
+    expect(out.linked).toBe(true)
+    expect(out.contact_studio).toMatchObject({ ok: false, error: expect.stringMatching(/relation does not exist/) })
+    expect(out.error).toBeUndefined()
+  })
+
   it('a link write that touched no row is an error', async () => {
     const db = fakeDb(base(), { upsertReturns: [] })
     const out = await recordGlofoxCrossover(db, { locationId: LOC, glofoxMemberId: 'g1', contactId: 'c-hatch', contactLocationId: 'hatch' })
@@ -160,24 +196,20 @@ describe('recordGlofoxCrossover', () => {
 })
 
 // GLOFOXREADERS.1 — the reader helpers.
-describe('reader helpers', () => {
-  it('glofoxCrossoverContactIds lists the studio\'s linked contacts (deduped); a missing table is none; other errors are errors', async () => {
-    const t = { glofox_crossover_members: [
-      { location_id: LOC, glofox_member_id: 'g1', contact_id: 'c1' },
-      { location_id: LOC, glofox_member_id: 'g2', contact_id: 'c1' },
-      { location_id: 'hatch', glofox_member_id: 'g3', contact_id: 'c3' },
-    ] }
-    // the fake ignores order/range; give it the methods
-    const db = fakeDb(t)
+describe('reader helpers (ORGCONTACTS.2: read contact_studios)', () => {
+  // The fake honours eq / in on contact_studios and ignores order / range.
+  const studioDb = (rows, { error = null } = {}) => {
+    const db = fakeDb({ contact_studios: rows }, error ? { errors: { 'contact_studios:select': error } } : {})
     const from = db.from
     db.from = (table) => { const c = from(table); c.order = () => c; c.range = () => c; return c }
+    return db
+  }
+  const row = (contact_id, location_id, over = {}) => ({ contact_id, location_id, kind: 'client', status: 'active', source: 'glofox', ...over })
+
+  it('glofoxCrossoverContactIds lists the contacts with a Glofox relationship at the studio (deduped, any status); a failed read is an error', async () => {
+    const db = studioDb([row('c1', LOC), row('c1', LOC, { status: 'ended' }), row('c2', LOC, { source: 'un1t_online' }), row('c3', 'hatch')])
     expect(await glofoxCrossoverContactIds(db, LOC)).toEqual({ ids: ['c1'] })
-    const missing = fakeDb(t, { errors: { 'glofox_crossover_members:select': { code: 'PGRST205', message: 'x' } } })
-    const mf = missing.from; missing.from = (table) => { const c = mf(table); c.order = () => c; c.range = () => c; return c }
-    expect(await glofoxCrossoverContactIds(missing, LOC)).toEqual({ ids: [] })
-    const broken = fakeDb(t, { errors: { 'glofox_crossover_members:select': { message: 'down' } } })
-    const bf = broken.from; broken.from = (table) => { const c = bf(table); c.order = () => c; c.range = () => c; return c }
-    expect((await glofoxCrossoverContactIds(broken, LOC)).error).toMatch(/down/)
+    expect((await glofoxCrossoverContactIds(studioDb([], { error: { message: 'down' } }), LOC)).error).toMatch(/down/)
   })
 
   it('glofoxStudioOrCrossoverFilter / scopeToGlofoxStudio', () => {
@@ -190,20 +222,17 @@ describe('reader helpers', () => {
     expect(calls).toEqual([['eq', 'location_id', LOC], ['or', `location_id.eq.${LOC},id.in.(a)`]])
   })
 
-  it('glofoxLinkLocationsByContact maps each contact to the studios it is linked at', async () => {
-    const db = fakeDb({ glofox_crossover_members: [
-      { location_id: LOC, glofox_member_id: 'g1', contact_id: 'c1' },
-      { location_id: 'other', glofox_member_id: 'g9', contact_id: 'c1' },
-      { location_id: LOC, glofox_member_id: 'g2', contact_id: 'c2' },
-    ] })
+  it('glofoxLinkLocationsByContact maps each contact to the studios it has a Glofox relationship at (home included)', async () => {
+    const db = studioDb([row('c1', LOC), row('c1', 'other'), row('c2', LOC), row('c2', 'hatch', { source: 'un1t_online' })])
     const out = await glofoxLinkLocationsByContact(db, ['c1', 'c2', 'c3'])
     expect(out.error).toBeUndefined()
     expect(Object.fromEntries(out.byContact)).toEqual({ c1: [LOC, 'other'], c2: [LOC] })
+    expect((await glofoxLinkLocationsByContact(studioDb([], { error: { message: 'down' } }), ['c1'])).error).toMatch(/down/)
   })
 
-  it('contactAtGlofoxStudio: home or linked', () => {
+  it('contactAtGlofoxStudio: home or a studio_location_ids entry', () => {
     expect(contactAtGlofoxStudio({ location_id: LOC }, LOC)).toBe(true)
-    expect(contactAtGlofoxStudio({ location_id: 'hatch', glofox_link_location_ids: [LOC] }, LOC)).toBe(true)
+    expect(contactAtGlofoxStudio({ location_id: 'hatch', studio_location_ids: [LOC] }, LOC)).toBe(true)
     expect(contactAtGlofoxStudio({ location_id: 'hatch' }, LOC)).toBe(false)
     expect(contactAtGlofoxStudio(null, LOC)).toBe(false)
   })

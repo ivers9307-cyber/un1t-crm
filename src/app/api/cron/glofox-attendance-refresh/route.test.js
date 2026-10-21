@@ -21,8 +21,8 @@ const CODE = 'Resource not available, empty result cant be processed'
 
 function result(st) {
   if (st.table === 'locations') return { data: st.single ? LOC : [LOC], error: null }
-  // GLOFOXREADERS.1 — the studio's crossover contacts (none unless a test sets them).
-  if (st.table === 'glofox_crossover_members') return { data: h.crossover || [], error: null }
+  // ORGCONTACTS.2 — the studio's Glofox relationships (contact_studios; none unless a test sets them).
+  if (st.table === 'contact_studios') return { data: (h.crossover || []).map((r) => ({ source: 'glofox', ...r })), error: null }
   if (st.table === 'glofox_sync_runs' && st.op === 'insert') return { data: { id: 'run-1' }, error: null }
   if (st.table === 'glofox_sync_runs' && st.op === 'update') { h.runUpdates.push(st.payload); return { data: null, error: null } }
   if (st.table === 'contacts' && st.op === 'update') { h.contactUpdates.push({ id: st.eqId, patch: st.payload }); return { data: null, error: null } }

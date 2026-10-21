@@ -23,7 +23,7 @@ export function publicShape(row) {
     source: row.source,
     token_type: row.token_type,
     connected_via: row.connected_via,
-    is_default: row.is_default,
+    // ORGCONTACTS.0 (mig 763): no per-number default; a studio's default is its link row.
     is_active: row.is_active,
     access_token_redacted: redactToken(row.access_token),
     history_sync_status: row.signup_meta?.history_sync?.status || null,
