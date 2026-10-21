@@ -33,8 +33,10 @@ const ROW = {
 // answer the contact and the location.
 function makeDb({ contact = { id: 'c1', email: 'ava@example.com', first_name: 'Ava', last_name: 'Byrne', glofox_member_id: null }, updateFails = false } = {}) {
   const updates = []
+  const inserts = []
   const db = {
     from: (table) => ({
+      insert: async (fields) => { inserts.push({ table, fields }); return { data: null, error: null } },
       select: () => ({
         eq: () => ({
           maybeSingle: async () => {
@@ -56,7 +58,7 @@ function makeDb({ contact = { id: 'c1', email: 'ava@example.com', first_name: 'A
       },
     }),
   }
-  return { db, updates }
+  return { db, updates, inserts }
 }
 
 beforeEach(() => {
@@ -145,6 +147,29 @@ describe('processTrialPurchase', () => {
     mocks.member.mockResolvedValueOnce({ status: 'failed', error: 'Search failed: network' })
     await expect(processTrialPurchase(db, ROW)).rejects.toThrow(/search failed/i)
     expect(mocks.purchase).not.toHaveBeenCalled()
+  })
+
+  // PAIDTRIAL.3 — the buyer has paid: a Glofox account that already holds
+  // their mobile under another email must not hold up the grant.
+  it('asks the resolver to CREATE on a phone-only match, grants, and notes the match on the contact', async () => {
+    mocks.member.mockResolvedValueOnce({ status: 'created', glofox_member_id: 'g-new', phone_match: { matches: 1, glofox_member_ids: ['g-old'] } })
+    const { db, updates, inserts } = makeDb()
+    const r = await processTrialPurchase(db, ROW)
+    expect(r.outcome).toBe('granted')
+    expect(mocks.member).toHaveBeenCalledWith(expect.objectContaining({ phoneMatchPolicy: 'create', attachTrial: false, createIfMissing: true }))
+    expect(mocks.purchase).toHaveBeenCalledWith(expect.anything(), 'g-new', 'm1', 'p1')
+    expect(updates.at(-1).fields).toMatchObject({ status: 'granted', glofox_member_id: 'g-new' })
+    const note = inserts.find((i) => i.table === 'notes')
+    expect(note.fields.contact_id).toBe('c1')
+    expect(note.fields.content).toContain('g-old')
+    expect(note.fields.content).toContain('already holds this mobile number')
+  })
+
+  it('a created account with no phone match leaves no note', async () => {
+    mocks.member.mockResolvedValueOnce({ status: 'created', glofox_member_id: 'g-new' })
+    const { db, inserts } = makeDb()
+    expect((await processTrialPurchase(db, ROW)).outcome).toBe('granted')
+    expect(inserts.filter((i) => i.table === 'notes')).toHaveLength(0)
   })
 
   it('unreadable Glofox settings throw (the queue retries); none configured is a review item', async () => {
