@@ -63,6 +63,8 @@ export default async function HostDashboard() {
   // (same derivation the email-domain flow uses) + count mailing-list
   // signups. Any failure degrades to signupUrl=null (card hides).
   let signupUrl = null
+  // HOST-JOIN-PAGE.1 — the standalone form at /h/[slug]/join, for socials.
+  let joinUrl = null
   let signupCount = null
   let signupCopy = null
   try {
@@ -78,6 +80,7 @@ export default async function HostDashboard() {
       // only, as before, so a misconfigured env var can't poison the link.
       const baseUrl = new URL(await resolveCustomerBaseUrl(db, hostRow.anchor_location_id)).origin
       signupUrl = `${baseUrl}/h/${slug}`
+      joinUrl = `${signupUrl}/join`
       const { count } = await db
         .from('host_contacts')
         .select('*', { count: 'exact', head: true })
@@ -98,6 +101,7 @@ export default async function HostDashboard() {
   } catch (e) {
     logWarn('host-dashboard', 'signup card degraded', { err: e })
     signupUrl = null
+    joinUrl = null
   }
   const netByEvent = new Map((revenue?.perEvent || []).map((r) => [r.event_id, r]))
 
@@ -140,9 +144,9 @@ export default async function HostDashboard() {
       {signupUrl && (
         <section className="mt-8">
           <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Grow your list</h2>
-          <HostSignupPageCard url={signupUrl} signupCount={signupCount} copyValues={signupCopy} />
+          <HostSignupPageCard url={signupUrl} joinUrl={joinUrl} signupCount={signupCount} copyValues={signupCopy} />
           <p className="mt-2 text-xs text-white/40">
-            Share this link or QR anywhere — signups land in your Contacts and can be emailed from Emails.
+            Share either link or QR anywhere — the signup form is just the form, for socials; your public page lists your events with the form underneath. Signups land in your Contacts and can be emailed from Emails.
           </p>
         </section>
       )}
