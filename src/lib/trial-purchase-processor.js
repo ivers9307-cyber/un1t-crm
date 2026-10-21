@@ -73,6 +73,19 @@ async function alertStaff(db, row, reason, extra = '') {
   }
 }
 
+// PAIDTRIAL.3 — a system note on the contact: another Glofox account already
+// holds this mobile. Best-effort; the grant never waits on it.
+async function notePhoneMatch(db, row, contact, phoneMatch) {
+  const ids = (phoneMatch.glofox_member_ids || []).join(', ')
+  const content = `Paid trial (${row.product_name}): a new Glofox account was created on ${row.customer_email} because no account had that email, but ${phoneMatch.matches === 1 ? 'an existing Glofox account already holds' : `${phoneMatch.matches} existing Glofox accounts already hold`} this mobile number${ids ? ` (Glofox id ${ids})` : ''}. If it is the same person, merge the accounts in Glofox.`
+  try {
+    const { error } = await db.from('notes').insert({ contact_id: contact.id, content })
+    if (error) logWarn('trial-purchase', 'phone-match note failed', { purchaseId: row.id, err: error })
+  } catch (e) {
+    logWarn('trial-purchase', 'phone-match note threw', { purchaseId: row.id, err: e })
+  }
+}
+
 async function toReview(db, row, reason, { extra = '', grant } = {}) {
   const fields = { status: 'needs_review', last_error: `${reason}${extra ? `: ${extra}` : ''}` }
   if (grant) fields.grant = grant
@@ -107,7 +120,13 @@ export async function processTrialPurchase(db, row, { now = () => new Date().toI
   // 4. the account
   let memberId = contact.glofox_member_id || row.glofox_member_id || null
   if (!memberId) {
-    const res = await findOrCreateGlofoxMember({ db, locationId: row.location_id, contact, source: 'paid_trial', createIfMissing: true, attachTrial: false })
+    // PAIDTRIAL.3 — phoneMatchPolicy 'create': the buyer has PAID, so a
+    // Glofox account that already holds their mobile under another email
+    // does not hold up the grant (the free-trial funnel's rule guards a
+    // second free trial; there is none here). The account is created on the
+    // email they paid with and the match is noted on the contact for a
+    // later merge. Richard's call, 21 Oct 2026.
+    const res = await findOrCreateGlofoxMember({ db, locationId: row.location_id, contact, source: 'paid_trial', createIfMissing: true, attachTrial: false, phoneMatchPolicy: 'create' })
     if (res?.status === 'needs_review') return toReview(db, row, 'account_needs_review', { extra: res.error || '' })
     if (res?.status === 'failed' || !res?.glofox_member_id) {
       // A failed Glofox search is a read: retry it. Anything else is for staff.
@@ -115,6 +134,7 @@ export async function processTrialPurchase(db, row, { now = () => new Date().toI
       return toReview(db, row, 'account_create_failed', { extra: res?.error || '' })
     }
     memberId = String(res.glofox_member_id)
+    if (res.phone_match) await notePhoneMatch(db, row, contact, res.phone_match)
   }
 
   // 5. the grant, write-ahead
