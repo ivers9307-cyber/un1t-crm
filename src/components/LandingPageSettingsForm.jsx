@@ -692,6 +692,7 @@ function BlockEditPanel(props) {
     case 'event':       return <EventEdit       {...props} />
     case 'lead_form':   return <LeadFormEdit    {...props} />
     case 'class_funnel': return <ClassFunnelEdit {...props} />
+    case 'paid_trial':  return <PaidTrialEdit   {...props} />
     case 'pillars':     return <PillarsEdit     {...props} />
     case 'gallery':     return <GalleryEdit     {...props} />
     case 'embed':       return <EmbedEdit       {...props} />
@@ -1068,6 +1069,109 @@ function Un1tFunnelCopyFields({ block, onUpdate }) {
       </Field>
       <Field label="Terms page could not load: message (un1t.online studios)">
         <Textarea value={block.legal_unavailable_message || ''} onChange={(v) => onUpdate({ legal_unavailable_message: v })} maxLength={300} rows={2} placeholder={D.legal_unavailable_message} />
+      </Field>
+    </>
+  )
+}
+
+// PAIDTRIAL.1 — the paid trial product (/trial). Price in euros as a draft
+// string, coerced to cents on write (same reasoning as ClassFunnelEdit). The
+// Glofox product is REQUIRED: the page sells nothing until both ids are set.
+function PaidTrialEdit({ block, onUpdate, locationId }) {
+  const [priceDraft, setPriceDraft] = useState(centsToEuros(block.price_cents))
+  useEffect(() => { setPriceDraft(centsToEuros(block.price_cents)) }, [block.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  const [memberships, setMemberships] = useState([])
+  const [membershipsLoading, setMembershipsLoading] = useState(false)
+  useEffect(() => {
+    if (!locationId) return
+    let alive = true
+    setMembershipsLoading(true)
+    fetch(`/api/locations/${locationId}/glofox-memberships`, { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((j) => { if (alive && j && j.success !== false) setMemberships(j.memberships || j.data || []) })
+      .catch(() => {})
+      .finally(() => { if (alive) setMembershipsLoading(false) })
+    return () => { alive = false }
+  }, [locationId])
+  const planKey = (block.membership_id && block.plan_code) ? `${block.membership_id}:${block.plan_code}` : ''
+  const setPlan = (value) => {
+    const [mid, pc] = value ? value.split(':') : ['', '']
+    onUpdate({ membership_id: mid || '', plan_code: pc || '' })
+  }
+  const planOptions = buildTrialOptions(memberships, planKey)
+  const ticks = Array.isArray(block.ticks) ? block.ticks : []
+  const setTick = (i, v) => {
+    const next = [ticks[0] || '', ticks[1] || '', ticks[2] || '']
+    next[i] = v
+    onUpdate({ ticks: next })
+  }
+  return (
+    <>
+      <Field label="Eyebrow" hint="Small line above the heading on the price panel.">
+        <Input value={block.eyebrow || ''} onChange={(v) => onUpdate({ eyebrow: v })} maxLength={60} placeholder="14 day reset" />
+      </Field>
+      <Field label="Heading">
+        <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="The 14 Day Reset" />
+      </Field>
+      <Field label="Sub-copy">
+        <Textarea value={block.subhead || ''} onChange={(v) => onUpdate({ subhead: v })} maxLength={400} rows={2} />
+      </Field>
+      <Field label="Product name" hint="On the checkout line, the receipt and the confirmation email.">
+        <Input value={block.product_name || ''} onChange={(v) => onUpdate({ product_name: v })} maxLength={80} placeholder="The 14 Day Reset" />
+      </Field>
+      <Field label="Price (€)" hint="What the buyer pays, taken by the studio's payment rail. Glofox never charges for this product.">
+        <Input
+          value={priceDraft}
+          onChange={(v) => { setPriceDraft(v); const c = eurosToCents(v); if (c !== null) onUpdate({ price_cents: c }) }}
+          maxLength={10}
+          placeholder="39"
+        />
+      </Field>
+      <Field label="Trial length (days)">
+        <Input value={String(block.duration_days ?? 14)} onChange={(v) => { const n = parseInt(v, 10); if (Number.isFinite(n)) onUpdate({ duration_days: n }) }} maxLength={3} placeholder="14" />
+      </Field>
+      <Field label="What's included" hint="Three ticks on the price panel. Blank lines are skipped.">
+        <div className="space-y-2">
+          <Input value={ticks[0] || ''} onChange={(v) => setTick(0, v)} maxLength={120} placeholder="Unlimited classes for 14 days" />
+          <Input value={ticks[1] || ''} onChange={(v) => setTick(1, v)} maxLength={120} placeholder="Every session coach-led" />
+          <Input value={ticks[2] || ''} onChange={(v) => setTick(2, v)} maxLength={120} placeholder="Book straight after you pay" />
+        </div>
+      </Field>
+      <Field label="Button label">
+        <Input value={block.cta_label || ''} onChange={(v) => onUpdate({ cta_label: v })} maxLength={40} placeholder="Start my 14 Day Reset" />
+      </Field>
+      <Field label="Consent checkbox text" hint="Beside the opt-in checkbox. Name the channels (email/SMS/WhatsApp).">
+        <Textarea value={block.consent_label || ''} onChange={(v) => onUpdate({ consent_label: v })} maxLength={400} rows={3} />
+      </Field>
+      <Field label="Paid — title" hint="Shown once the plan is on their account.">
+        <Input value={block.done_title || ''} onChange={(v) => onUpdate({ done_title: v })} maxLength={120} placeholder="You're in 🎉" />
+      </Field>
+      <Field label="Paid — message">
+        <Textarea value={block.done_body || ''} onChange={(v) => onUpdate({ done_body: v })} maxLength={400} rows={2} />
+      </Field>
+      <Field
+        label="Glofox product granted after payment"
+        hint="REQUIRED. A €0 plan in Glofox for this trial (the money is taken here, not by Glofox). Until both ids are set the page sells nothing."
+      >
+        {planOptions.length > 0 ? (
+          <select
+            value={planKey}
+            onChange={(e) => setPlan(e.target.value)}
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+          >
+            <option value="">— Not set (page sells nothing) —</option>
+            {planOptions.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        ) : (
+          <Input
+            value={planKey}
+            onChange={(v) => setPlan(v)}
+            maxLength={120}
+            placeholder={membershipsLoading ? 'Loading Glofox products…' : 'membershipId:planCode'}
+          />
+        )}
       </Field>
     </>
   )
