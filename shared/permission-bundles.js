@@ -474,6 +474,9 @@ export const CATEGORY_BUNDLES = Object.freeze({
   contractor_invoices: ['bundle_money'],
   fte_expenses: ['bundle_money'],
   offer_purchases: ['bundle_money'],
+  // PAIDTRIAL.2 — paid trials awaiting a Glofox grant: the same Money
+  // surface and the same approvals_offer_purchases grant as offer_purchases.
+  trial_purchases: ['bundle_money'],
   // JUDGEMENT CALL, confirmed by reading providers/invoices-queue.js:
   // the bookkeeper → Xero sign-off queue is the same Money/Xero domain
   // as `bookkeeper` itself (KEY_BUNDLES above) and invoices_inbox.
