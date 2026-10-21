@@ -1108,16 +1108,16 @@ function PaidTrialEdit({ block, onUpdate, locationId }) {
   return (
     <>
       <Field label="Eyebrow" hint="Small line above the heading on the price panel.">
-        <Input value={block.eyebrow || ''} onChange={(v) => onUpdate({ eyebrow: v })} maxLength={60} placeholder="2 week trial" />
+        <Input value={block.eyebrow || ''} onChange={(v) => onUpdate({ eyebrow: v })} maxLength={60} placeholder="14 day reset" />
       </Field>
       <Field label="Heading">
-        <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="Two weeks of unlimited classes" />
+        <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="The 14 Day Reset" />
       </Field>
       <Field label="Sub-copy">
         <Textarea value={block.subhead || ''} onChange={(v) => onUpdate({ subhead: v })} maxLength={400} rows={2} />
       </Field>
       <Field label="Product name" hint="On the checkout line, the receipt and the confirmation email.">
-        <Input value={block.product_name || ''} onChange={(v) => onUpdate({ product_name: v })} maxLength={80} placeholder="2 Week Trial" />
+        <Input value={block.product_name || ''} onChange={(v) => onUpdate({ product_name: v })} maxLength={80} placeholder="The 14 Day Reset" />
       </Field>
       <Field label="Price (€)" hint="What the buyer pays, taken by the studio's payment rail. Glofox never charges for this product.">
         <Input
@@ -1138,7 +1138,7 @@ function PaidTrialEdit({ block, onUpdate, locationId }) {
         </div>
       </Field>
       <Field label="Button label">
-        <Input value={block.cta_label || ''} onChange={(v) => onUpdate({ cta_label: v })} maxLength={40} placeholder="Start my 2 week trial" />
+        <Input value={block.cta_label || ''} onChange={(v) => onUpdate({ cta_label: v })} maxLength={40} placeholder="Start my 14 Day Reset" />
       </Field>
       <Field label="Consent checkbox text" hint="Beside the opt-in checkbox. Name the channels (email/SMS/WhatsApp).">
         <Textarea value={block.consent_label || ''} onChange={(v) => onUpdate({ consent_label: v })} maxLength={400} rows={3} />

@@ -19,7 +19,7 @@ describe('paidTrialConfigFromBlocks (PAIDTRIAL.1)', () => {
   })
   it('reads the product with the block price, never a client value', () => {
     const c = paidTrialConfigFromBlocks([sellable()], 'stillorgan')
-    expect(c).toMatchObject({ priceCents: 3900, currency: 'EUR', durationDays: 14, membershipId: 'm1', planCode: 'p1', productName: '2 Week Trial' })
+    expect(c).toMatchObject({ priceCents: 3900, currency: 'EUR', durationDays: 14, membershipId: 'm1', planCode: 'p1', productName: 'The 14 Day Reset' })
     expect(c.tag).toBe('stillorgan-trial')
     expect(c.leadSource).toBe('meta_trial')
   })

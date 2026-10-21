@@ -11,7 +11,7 @@ import { resolveLocationPaymentProvider } from './location-payments'
 import { resolveCustomerBaseUrl } from './tenant-host'
 import { getLocationBranding } from './location-branding'
 
-/** "UN1T Stillorgan: 2 Week Trial" on the checkout and the statement. */
+/** "UN1T Stillorgan: The UN1T 14 Day Reset" on the checkout and the statement. */
 export function trialPurchaseDescription(brand, productName) {
   const b = String(brand || '').trim()
   const p = productName || 'trial'

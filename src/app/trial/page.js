@@ -35,8 +35,8 @@ const HERO_IMAGE =
 const CTA_HREF = '#trial'
 
 export const metadata = {
-  title: '2 Week Trial — UN1T Stillorgan',
-  description: 'Two weeks of unlimited coach-led classes at UN1T Stillorgan for €39. Pay once, start this week.',
+  title: 'The UN1T 14 Day Reset — UN1T Stillorgan',
+  description: 'The UN1T 14 Day Reset: two weeks of unlimited coach-led classes at UN1T Stillorgan for €39. Pay once, start this week.',
   robots: { index: false, follow: false },
 }
 
@@ -76,8 +76,8 @@ export default async function TrialPage(props) {
   ])
   const studioName = studio.companyName || chrome.companyName
   // The card needs a block for its copy even when nothing is sellable yet.
-  const cardBlock = block || { heading: '2 week trial', price_cents: 0, currency: 'EUR', duration_days: 14, ticks: [] }
-  const ctaLabel = block?.cta_label || 'Start my 2 week trial'
+  const cardBlock = block || { heading: 'The UN1T 14 Day Reset', price_cents: 0, currency: 'EUR', duration_days: 14, ticks: [] }
+  const ctaLabel = block?.cta_label || 'Start my 14 Day Reset'
 
   return (
     <div className="min-h-screen bg-black text-white antialiased">
