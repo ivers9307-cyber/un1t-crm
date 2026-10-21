@@ -32,6 +32,9 @@ import { sendOpsAlert } from '@/lib/ops-alerts'
 import { sendTrialPurchaseEmail } from '@/lib/trial-purchase-emails'
 import { logError, logWarn } from '@/lib/log'
 
+/** PAIDTRIAL.4 — the body of every paid-trial plan purchase (see the call). */
+export const TRIAL_PURCHASE_BODY = Object.freeze({ payment_method: 'complimentary' })
+
 export const REVIEW_REASONS = Object.freeze({
   unpaid_row: 'The row reached the processor without a settled payment.',
   contact_missing: 'The buyer\'s contact could not be read.',
@@ -149,7 +152,15 @@ export async function processTrialPurchase(db, row, { now = () => new Date().toI
     try { marked = await stamp(db, row.id, { grant: marker, glofox_member_id: memberId }) } catch { marked = false }
     if (!marked) return toReview(db, row, 'grant_unrecorded')
 
-    const res = await purchaseGlofoxMembership(creds, memberId, row.membership_id, row.plan_code)
+    // PAIDTRIAL.4 — the CRM has already taken the money, so the Glofox
+    // purchase is recorded as complimentary: Glofox then raises a receipt
+    // instead of trying to charge a card it does not have. The field and the
+    // value are from Glofox's Purchase Membership spec (payment_method,
+    // lowercase, one of the methods the membership's configuration accepts;
+    // the payment-methods object lists `complimentary`), read 21 Oct 2026.
+    // The plan must accept complimentary in Glofox, or the purchase is
+    // refused the same way a card-less one is (a review card, never a charge).
+    const res = await purchaseGlofoxMembership(creds, memberId, row.membership_id, row.plan_code, { body: TRIAL_PURCHASE_BODY })
     if (res.ok) {
       grant = { ok: true, at: now(), glofox_member_id: memberId, invoice_id: res.invoice_id || null, purchase_status: res.purchase_status || null }
     } else if (res.outcome_unknown) {
