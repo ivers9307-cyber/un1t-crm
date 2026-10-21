@@ -117,22 +117,19 @@ describe('embedded-signup at the organisation', () => {
     expect(writes(state)).toEqual([])
   })
 
-  it('a new number is inserted for the organisation at its home studio; the link is the trigger\'s', async () => {
+  it('a new number is inserted for the organisation at its home studio; the ROUTE switches it on there (ORGCONTACTS.0)', async () => {
     const state = setup()
     const res = await post({ ...DIALOG, home_location_id: HOME })
     expect(res.status).toBe(200)
     const inserts = state.ops.filter((o) => o.op === 'insert')
-    expect(inserts).toHaveLength(1)
-    expect(inserts[0].table).toBe('whatsapp_numbers')
+    expect(inserts.map((o) => o.table)).toEqual(['whatsapp_numbers', 'location_whatsapp_numbers'])
     expect(inserts[0].payload).toMatchObject({
       organization_id: ORG, location_id: HOME, phone_number_id: '100200300', business_account_id: '555',
       connected_via: 'embedded_signup', token_type: 'business', is_active: true,
     })
-    expect(inserts[0].payload.is_default).not.toBe(true)
-    expect(state.ops.some((o) => o.table === 'location_whatsapp_numbers' && o.op === 'insert')).toBe(false)
+    expect(inserts[0].payload).not.toHaveProperty('is_default')
+    expect(inserts[1].payload).toEqual({ location_id: HOME, whatsapp_number_id: state.numbers[0].id, is_default: true, created_by: 'u-admin' })
     expect(state.links).toHaveLength(1)
-    expect(state.links[0]).toMatchObject({ location_id: HOME, is_default: true })
-    expect(state.links[0].created_by).toBe('u-admin')
     const body = await res.json()
     expect(JSON.stringify(body)).not.toContain('SYNTH-BUSINESS')
   })

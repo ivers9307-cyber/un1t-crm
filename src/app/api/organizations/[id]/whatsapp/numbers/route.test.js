@@ -22,10 +22,12 @@ vi.mock('@/lib/auth', () => ({
   }),
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 import { GET, POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 import { fakeOrgNumbersDb } from '@/lib/org-whatsapp-numbers-fake-db.test-helpers'
 import { SECRET_MASK } from '@/lib/secret-keys'
 
@@ -98,29 +100,26 @@ describe('POST /api/organizations/[id]/whatsapp/numbers', () => {
     expect(writes(state)).toEqual([])
   })
 
-  it('org admin adds a number with its home studio switched on as default (the trigger writes the link; the route never does)', async () => {
+  it('org admin adds a number and the ROUTE switches it on at its home studio as default (ORGCONTACTS.0: no trigger does)', async () => {
     const state = setup()
     const res = await call(POST, BODY)
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.success).toBe(true)
 
-    // One insert, into whatsapp_numbers, carrying the organisation and the home studio.
+    // Two inserts: the number (organisation + home studio), then its home link.
     const inserts = state.ops.filter((o) => o.op === 'insert')
-    expect(inserts).toHaveLength(1)
-    expect(inserts[0].table).toBe('whatsapp_numbers')
+    expect(inserts.map((o) => o.table)).toEqual(['whatsapp_numbers', 'location_whatsapp_numbers'])
     expect(inserts[0].payload).toMatchObject({
       organization_id: ORG, location_id: HOME, label: 'Front desk', phone_number_id: '100200300', source: 'cloud_api',
     })
-    // The deprecated per-number default is not driven from here.
-    expect(inserts[0].payload.is_default).not.toBe(true)
+    // whatsapp_numbers.is_default is gone (mig 763): never in the payload.
+    expect(inserts[0].payload).not.toHaveProperty('is_default')
 
-    // The home studio is switched on, as default, by the (simulated) trigger.
+    // The home studio is switched on, as default, by the route, naming who did it.
+    expect(inserts[1].payload).toEqual({ location_id: HOME, whatsapp_number_id: body.number.id, is_default: true, created_by: 'u-admin' })
     expect(state.links).toHaveLength(1)
-    expect(state.links[0]).toMatchObject({ location_id: HOME, whatsapp_number_id: body.number.id, is_default: true })
-    // …and the route only stamped who did it, never inserted a link itself.
-    expect(state.ops.some((o) => o.table === 'location_whatsapp_numbers' && o.op === 'insert')).toBe(false)
-    expect(state.links[0].created_by).toBe('u-admin')
+    expect(body.number).not.toHaveProperty('is_default')
 
     // The token reaches the browser as the mask only.
     expect(body.number.access_token_redacted).toBe(SECRET_MASK)
@@ -133,6 +132,18 @@ describe('POST /api/organizations/[id]/whatsapp/numbers', () => {
     const res = await call(POST, { ...BODY, label: 'Back office', phone_number_id: '100200301' })
     expect(res.status).toBe(200)
     expect(state.links.map((l) => l.is_default)).toEqual([true, false])
+  })
+
+  it('a failed home switch-on is logged and reported; the number itself is kept (the studio tab can switch it on)', async () => {
+    const state = setup({ faults: { 'location_whatsapp_numbers:insert': { message: 'boom', code: '42P01' } } })
+    const res = await call(POST, BODY)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.home_switch_on).toEqual({ ok: false })
+    expect(state.numbers).toHaveLength(1)
+    expect(state.links).toHaveLength(0)
+    expect(logError).toHaveBeenCalledTimes(1)
   })
 
   it('a home studio of another organisation is 400 and nothing is written', async () => {

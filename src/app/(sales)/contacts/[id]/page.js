@@ -28,7 +28,7 @@ import { aggregatePerson } from '@/lib/person-aggregate'
 import ContactHeaderBand from '@/components/contact/ContactHeaderBand'
 import { latestLinkForContact } from '@/lib/cancellation-form/links'
 import ContactWhoRail from '@/components/contact/ContactWhoRail'
-import { loadContactMemberships } from '@/lib/contact-memberships'
+import { loadContactMemberships, loadContactStudios } from '@/lib/contact-memberships'
 // HATCHPIPE.2 — un1t.online payments + overdue, scoped to the viewer's studios.
 import { loadUn1tBilling, un1tHeaderRisk, mergeArrearsCents } from '@/lib/contact-un1t-billing'
 import ContactNextRail from '@/components/contact/ContactNextRail'
@@ -89,7 +89,7 @@ export default async function ContactDetailPage(props) {
     if (pg?.group?.id) person = await aggregatePerson(db, pg.group.id)
   } catch { person = null }
 
-  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink, primaryPipeline, studioMemberships, un1tBilling] = await Promise.all([
+  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink, primaryPipeline, studioMemberships, un1tBilling, contactStudios] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
@@ -123,6 +123,9 @@ export default async function ContactDetailPage(props) {
     // HATCHPIPE.2 — un1t.online payments for the studios the VIEWER can see.
     // Never throws; an unreadable studio is dropped, never shown as zero.
     loadUn1tBilling(db, user, id),
+    // ORGCONTACTS.2 — every studio the person has a relationship with
+    // (contact_studios), the Studios card. Never throws; a failed read hides it.
+    loadContactStudios(db, id, { primaryLocationId: contact.location_id }),
   ])
 
   // GLOFOX-CATALOG — resolve the member's plan description (pricing +
@@ -274,7 +277,10 @@ export default async function ContactDetailPage(props) {
   const canConsultations = canLoadContactConsultations(user, contact.location_id)
   // ROLEUI.1 — the action buttons, each the decision of the route it calls,
   // judged at the CONTACT's location (never user.role, the active studio's).
-  const actions = contactActionGates(user, contact)
+  // ORGCONTACTS.4 — Edit widens to the studios the person has a relationship
+  // with (contact_studios); Delete / Change primary studio stay with the
+  // primary studio's admins, an organisation admin or a master.
+  const actions = contactActionGates(user, contact, { relationshipStudioIds: contactStudios.rows.map((r) => r.location_id) })
   // ROLEUI.2 — the buttons that had no gate at all: same rule, same place.
   const work = contactWorkGates(user, contact)
   let consultationsTab = null
@@ -457,7 +463,9 @@ export default async function ContactDetailPage(props) {
             canEditPrefs={actions.canEditPrefs}
             canLinkAccounts={work.canLinkAccounts}
             studioMemberships={studioMemberships.rows}
+            contactStudios={contactStudios.rows}
             canReadStudioCards={work.canReadStudioCards}
+            canRehome={actions.admin.canRehome}
             un1tBilling={un1tBilling}
           />
         </div>

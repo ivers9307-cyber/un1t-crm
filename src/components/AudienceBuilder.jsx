@@ -61,9 +61,13 @@ export const FIELD_OPTIONS = [
   // classifier-derived (webhook + nightly cron) — operators never write
   // it. It replaced the legacy "Lead Status" filter that was effectively
   // dead (>99% defaulted on import and was never reliably updated).
-  { value: 'pipeline_stage_slug',   label: 'Stage',                 type: 'select',
+  // ORGCONTACTS.4 (decision 3) — the stage AT THIS STUDIO (contact_studios,
+  // read as studio_stage_slug on the audience view): a Stillorgan member who
+  // is a lead at Hatch is a lead in Hatch's audiences. "is empty" = no stage
+  // at this studio (on the list, no relationship here).
+  { value: 'pipeline_stage_slug',   label: 'Pipeline stage (at this studio)', type: 'select',
     group: 'Funnel',
-    hint: 'Where our funnel classifier places them. This is the one to use — Membership Status below is the raw vendor field it reads.',
+    hint: 'Where our funnel classifier places them at this studio. This is the one to use — Membership Status below is the raw vendor field it reads. "Is empty" means no stage here yet.',
     options: ['new_lead', 'first_class', 'second_class', 'trial_done',
               'converted', 'member', 'pack_member', 'classpass', 'cold_lead', 'dormant'],
     valueLabels: STAGE_LABELS },

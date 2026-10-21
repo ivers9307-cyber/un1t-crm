@@ -13,6 +13,7 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { validateBody } from '@/lib/validate'
 import { LeadSchema, normaliseLead, leadConfigFromBlocks, resolveCampaign } from '@/lib/leads'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { stampLeadSource } from '@/lib/lead-source-stamp'
 import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
 import { logWarn } from '@/lib/log'
@@ -79,14 +80,12 @@ export async function POST(request) {
   }
 
   // Stamp lead_source only when the contact has none yet (don't clobber
-  // a richer existing attribution). Best-effort.
+  // a richer existing attribution). FUNNEL.5 — LAST-touch alongside it, so a
+  // contact re-entering through the website records what brought them back;
+  // ORGCONTACTS.4 — only when this studio is the contact's primary (at a
+  // sibling studio the lead_form contact_studios row is the record). Best-effort.
   try {
-    await db.from('contacts').update({ lead_source: leadSource }).eq('id', contactId).is('lead_source', null)
-    // FUNNEL.5 — LAST-touch alongside the first-touch stamp above, so a
-    // contact re-entering through the website records what brought them back.
-    await db.from('contacts')
-      .update({ last_lead_source: leadSource, last_lead_source_at: new Date().toISOString() })
-      .eq('id', contactId)
+    await stampLeadSource(db, { contactId, locationId, leadSource })
   } catch (e) { logWarn('leads', 'lead_source set failed', { err: e }) }
   // VISIT-ORIGIN.1 — first touch, stamp-if-null, best-effort.
   try {

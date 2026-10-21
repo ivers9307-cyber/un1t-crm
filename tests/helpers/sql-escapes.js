@@ -58,6 +58,7 @@ export const CLOSED_TABLES = Object.freeze({
   email_sends: 683, email_templates: 683, sms_broadcasts: 683, sms_broadcast_recipients: 683, agent_message_feedback: 683,
   campaigns: 684, campaign_recipients: 684,
   tv_displays: 685, tv_templates: 685, tv_content: 685,
+  contact_studios: 764, // ORGCONTACTS.1: service role only, written by DEFINER triggers and the syncs
   // 692 MEMBERWRITESWEEP.2/.3 (PR #1914, open when this was written; listed
   // ahead so the drift check holds whichever of the two merges first)
   blocked_times: 692, contact_events: 692, contact_tags: 692, shift_block_removals: 692, staff_allowances: 692,

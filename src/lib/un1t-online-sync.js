@@ -79,6 +79,7 @@ import { projectUn1tOccurrences } from './un1t-online-occurrences.js'
 import { projectUn1tBookings } from './un1t-online-bookings.js'
 import { resolveUn1tContacts } from './un1t-online-contacts.js'
 import { ensureStudioPreferences } from './un1t-online-studio-preferences.js'
+import { upsertContactStudio } from './contact-studios.js'
 import { tokenFingerprint } from './un1t-online-token.js'
 import { readConnection } from './connection-registry.js'
 import { logError, logWarn, logInfo } from './log'
@@ -474,6 +475,21 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
       return failure('db', msg, errorPatch(msg, tokenFields))
     }
 
+    // 7a. ORGCONTACTS.1 — the relationship table (mig 764): a member row for
+    // every live subscriber, a client row for every other client linked to a
+    // contact, and a client row (never an ended one: a lapsed client keeps a
+    // relationship) for a membership this run ended. contact_memberships stays
+    // the authority until Phase 5, so a failed write here is counted and
+    // logged, never the run's status.
+    counts.contact_studios = await writeContactStudios(db, {
+      locationId,
+      clients: mapped.un1t_clients || [],
+      contactIdOf,
+      memberContactIds: membership.memberContactIds || [],
+      endedContactIds: membership.endedContactIds || [],
+      nowIso,
+    })
+
     // 7b. New signups start this studio's contact_created sequences
     // (SHAREDCONTACT.1). Last, so the bookings this run projected are already
     // there for a "booked a class here?" branch. Informational: a failure is
@@ -541,6 +557,9 @@ async function measureHistory(db, { locationId, mapped, nowIso }) {
  */
 async function reconcileMemberships(db, { locationId, organizationId, subscriptions, contactIdOf, resolverErrors, nowIso }) {
   const counts = { active: 0, ended: 0, skipped_no_contact: 0 }
+  // ORGCONTACTS.1 — who this run holds as a member here, and whose
+  // membership it ended (contact ids), for the contact_studios dual-write.
+  const endedContactIds = []
 
   // One plan per contact: the best active subscription.
   const best = new Map()
@@ -580,6 +599,7 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
     if (error) return { counts, error: messageOf(error) }
     counts.active += chunk.length
   }
+  const memberContactIds = [...best.keys()]
 
   // Active rows for this source here, read in full (1,000-row pages).
   const activeRows = []
@@ -599,13 +619,13 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
   }
 
   let toEnd = activeRows.filter((r) => !best.has(r.contact_id))
-  if (toEnd.length === 0) return { counts, error: null }
+  if (toEnd.length === 0) return { counts, error: null, memberContactIds, endedContactIds }
 
   if (subscriptions.length === 0) {
     counts.end_skipped = 'no_subscriptions_pulled'
     counts.would_end = toEnd.length
     logWarn('un1t-online-sync', 'not ending memberships: the pull carried no subscriptions', { locationId, wouldEnd: toEnd.length })
-    return { counts, error: null }
+    return { counts, error: null, memberContactIds, endedContactIds }
   }
 
   // Every client the resolver could not attribute has an unknown
@@ -623,7 +643,7 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
       counts.end_skipped = 'contacts_unresolved'
       counts.would_end = toEnd.length
       logWarn('un1t-online-sync', 'not ending memberships: a client or subscription could not be attributed to a user id', { locationId, wouldEnd: toEnd.length })
-      return { counts, error: null }
+      return { counts, error: null, memberContactIds, endedContactIds }
     }
     const spared = new Set()
     for (const e of resolverErrors) {
@@ -643,7 +663,7 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
         counts.end_skipped = 'contacts_unreadable'
         counts.would_end = toEnd.length
         logWarn('un1t-online-sync', 'not ending memberships: could not read contacts to spare unresolved clients', { locationId, wouldEnd: toEnd.length, err: safeErr(error) })
-        return { counts, error: null }
+        return { counts, error: null, memberContactIds, endedContactIds }
       }
       for (const c of data || []) {
         if (c.un1t_user_id != null && unresolvedUserIds.has(String(c.un1t_user_id))) spared.add(String(c.id))
@@ -655,7 +675,7 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
     if (counts.end_skipped_unresolved > 0) {
       logWarn('un1t-online-sync', 'not ending memberships of clients that failed to resolve', { locationId, spared: counts.end_skipped_unresolved })
     }
-    if (toEnd.length === 0) return { counts, error: null }
+    if (toEnd.length === 0) return { counts, error: null, memberContactIds, endedContactIds }
   }
 
   for (const ids of chunks(toEnd.map((r) => r.id), CHUNK)) {
@@ -670,8 +690,52 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
     if (error) return { counts, error: `ending memberships: ${messageOf(error)}` }
     // Fewer rows than asked = a row changed under us; not an error.
     counts.ended += Array.isArray(data) ? data.length : 0
+    const endedIds = new Set((Array.isArray(data) ? data : []).map((r) => r.id))
+    for (const r of toEnd) if (endedIds.has(r.id)) endedContactIds.push(r.contact_id)
   }
-  return { counts, error: null }
+  return { counts, error: null, memberContactIds, endedContactIds }
+}
+
+/**
+ * Step 7a (ORGCONTACTS.1). One upsertContactStudio per contact this run
+ * knows at the studio: kind member for a live subscriber, client otherwise;
+ * source un1t_online; status active; first_seen_at from the client's
+ * remote_created_at (the helper only ever moves it earlier); never
+ * last_seen_at (a sync is not activity). Returns { member, client, failed }.
+ */
+async function writeContactStudios(db, { locationId, clients, contactIdOf, memberContactIds, endedContactIds, nowIso }) {
+  const counts = { member: 0, client: 0, failed: 0 }
+  const members = new Set(memberContactIds)
+  const seen = new Set()
+  const targets = []
+  for (const c of clients) {
+    const contactId = contactIdOf(c?.un1t_user_id)
+    if (!contactId || seen.has(contactId)) continue
+    seen.add(contactId)
+    targets.push({ contactId, kind: members.has(contactId) ? 'member' : 'client', firstSeenAt: c.remote_created_at || nowIso })
+  }
+  for (const contactId of memberContactIds) {
+    if (seen.has(contactId)) continue
+    seen.add(contactId)
+    targets.push({ contactId, kind: 'member', firstSeenAt: nowIso })
+  }
+  for (const contactId of endedContactIds) {
+    if (!contactId || seen.has(contactId)) continue
+    seen.add(contactId)
+    targets.push({ contactId, kind: 'client', firstSeenAt: nowIso })
+  }
+  for (const t of targets) {
+    const r = await upsertContactStudio(db, {
+      contactId: t.contactId, locationId, kind: t.kind, source: 'un1t_online', status: 'active', firstSeenAt: t.firstSeenAt, nowIso,
+    })
+    if (r.ok) {
+      counts[t.kind] += 1
+    } else {
+      counts.failed += 1
+      logError('un1t-online-sync', 'contact_studios row not written', { locationId, contactId: t.contactId, kind: t.kind, error: r.error })
+    }
+  }
+  return counts
 }
 
 /**

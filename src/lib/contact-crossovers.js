@@ -1,57 +1,18 @@
 import { logError, logWarn } from '@/lib/log'
 import { hasPermissionForLocation, hasMobilePermissionForLocation } from '@/lib/permissions'
+import { hasRelationshipAt, contactsAtStudio } from '@/lib/contact-studios'
 
 // Crossover-contact helpers for the studio contacts list.
 //
-// A "crossover" is a contact OWNED by a different studio that nonetheless
-// has a deal, an ACTIVE contact_memberships row (UN1TDUAL, mig 731) or a
-// un1t_clients row (any un1t status; UN1TDUAL.4, mig 732) at the active
-// studio. contacts.email is globally unique, so a person who's
-// already a contact (e.g. a Stillorgan member) signing up via another
-// studio's public lead form reuses their existing contact + gets a deal at
-// the new studio, a Stillorgan member who also buys a Hatch Street
-// membership keeps their one contact + gains an active membership there,
-// and a Hatch un1t.online client, lapsed or not, is linked to that one
-// contact by the un1t sync.
+// A "crossover" is a contact whose PRIMARY studio is another one but who has
+// a relationship at the active studio: a contact_studios row there (mig 764;
+// ORGCONTACTS.2), any kind, active or ended (decision 2). contacts.email is
+// unique per organisation, so a person who's already a contact (e.g. a
+// Stillorgan member) signing up via another studio's public lead form reuses
+// their existing contact and gains a relationship at the new studio.
 // These helpers let the destination studio's contacts list surface those
-// people with their origin context.
-
-// Cap on the crossover id list. The contacts list query builds an
-// `id.in.(...)` filter from these ids; PostgREST sends that as a GET URL, so
-// an unbounded list overruns Cloudflare's URI limit → 414. Genuine crossovers
-// are a small minority, so this is a safety backstop, not an expected ceiling.
-export const CROSSOVER_ID_CAP = 100
-
-// Contact ids that are GENUINE crossovers at this location: a contact with a
-// deal, an ACTIVE membership or a un1t_clients row here but OWNED by a
-// DIFFERENT studio. Computed by the crossover_contact_ids RPC (mig 251,
-// widened to active memberships by mig 731 and to un1t clients by mig 732)
-// — a server-side join, so the location's (possibly enormous: 8k+
-// at Stillorgan) OWN deal-holder set never travels back as an id.in() URL.
-// The location's own contacts are deliberately excluded: the list query
-// already matches them via location_id = L, so including them in id.in() was
-// pure redundancy AND the source of the 414.
-// Best-effort — returns [] on error/missing args (the list then falls back to
-// owned-only).
-export async function crossoverContactIds(db, locationId) {
-  if (!db || !locationId) return []
-  try {
-    const { data, error } = await db.rpc('crossover_contact_ids', { loc: locationId })
-    if (error || !Array.isArray(data)) return []
-    const ids = data.map((r) => r && r.contact_id).filter(Boolean)
-    if (ids.length > CROSSOVER_ID_CAP) {
-      logWarn('contact-crossovers', 'crossover ids exceed cap; truncating for URL-length safety', {
-        locationId,
-        total: ids.length,
-        cap: CROSSOVER_ID_CAP,
-      })
-      return ids.slice(0, CROSSOVER_ID_CAP)
-    }
-    return ids
-  } catch {
-    return []
-  }
-}
+// people with their origin context. The list itself reads
+// public.studio_contacts (src/lib/studio-contacts-query.js).
 
 // For the crossover contacts within `contacts` (owned elsewhere than
 // activeLocationId), fetch their home-studio name + active tags. Returns
@@ -82,51 +43,39 @@ export async function fetchCrossoverContext(db, contacts, activeLocationId) {
 }
 
 // Authorisation gate for the contact DETAIL view. Returns true when the
-// caller may open this contact: they're master, they OWN it (its location
-// is one of theirs), the contact holds an ACTIVE membership at one of the
-// caller's studios where they hold Contacts (UN1TDUAL.2), one of those
-// studios lists it as a un1t.online client (UN1TDUAL.4), or it's a
-// crossover INTO one of their studios (the contact has a deal there). The
-// membership, client and deal branches are what keep this in step with the
-// list's owned ∪ crossover visibility (crossover_contact_ids returns all
-// three since mig 732) — gating the detail page strictly by ownership would
-// 404 every crossover row an operator can see in the list and click. The
-// owner/master branches are pure (no query); only a genuine crossover
-// candidate pays for the probes.
+// caller may open this contact: they're master, they're a member of its
+// PRIMARY studio, or the contact has ANY contact_studios row (active or
+// ended: decision 2, ORGCONTACTS.2) at one of the caller's studios where
+// they hold Contacts. That is exactly the set RLS admits since mig 765, so
+// the list never shows a row this gate then 404s. The owner/master branches
+// are pure (no query); only a genuine crossover candidate pays for the probe.
 //
-// The membership and client probes mirror RLS (migs 731/732), which admits
-// them only at studios in private.auth_contact_read_location_ids(): where
-// the caller holds Contacts on the web OR the phone. So they probe only
-// those studios (contactStudioIds), judged by the same resolvers mig 690's
-// parity test checks that SQL against. The owned branch and the deal probe
-// keep their older studio-membership rule (unchanged here).
+// The probe asks only about the studios where the caller holds Contacts
+// (contactStudioIds: web OR phone, mig 690's rule), the studios RLS's
+// relationship branch reads. A deal-only crossover needs Contacts at the
+// studio like every other relationship (mig 762 put deals on that rule).
 //
 // Security-critical, so it FAILS CLOSED: a missing user/contact, no
-// location assignments, or a query error all deny. Reads via the
-// service-role client (RLS-bypassing), so this app-layer check IS the
-// boundary.
+// location assignments, Contacts nowhere, or a read error all deny. Reads
+// via the service-role client (RLS-bypassing), so this app-layer check IS
+// the boundary.
 export async function canViewContact(db, user, contact) {
   if (!user || !contact) return false
   if (user.isMaster) return true
   const locIds = (user.locations || []).map((l) => l && l.id).filter(Boolean)
   if (contact.location_id && locIds.includes(contact.location_id)) return true
   if (locIds.length === 0 || !contact.id) return false
-  // The caller's studios where they hold Contacts (web or phone), the set
-  // RLS's membership/client branch reads. Empty → both probes are skipped.
   const contactLocIds = contactStudioIds(user, locIds)
+  if (contactLocIds.length === 0) return false
   try {
-    if (contactLocIds.length > 0) {
-      if (await probeMembershipOrClient(db, contact.id, contactLocIds)) return true
+    const rel = await hasRelationshipAt(db, contact.id, contactLocIds)
+    if (!rel.ok) {
+      logError('contact-crossovers', 'relationship probe failed; refusing', { contactId: contact.id, error: rel.error })
+      return false
     }
-
-    const { data } = await db
-      .from('deals')
-      .select('id')
-      .eq('contact_id', contact.id)
-      .in('location_id', locIds)
-      .limit(1)
-    return Array.isArray(data) && data.length > 0
-  } catch {
+    return rel.at.size > 0
+  } catch (e) {
+    logError('contact-crossovers', 'relationship probe threw; refusing', { contactId: contact.id, message: e?.message || String(e) })
     return false
   }
 }
@@ -138,61 +87,6 @@ export function contactStudioIds(user, locIds) {
       hasPermissionForLocation(user, id, 'contacts') ||
       hasMobilePermissionForLocation(user, id, 'contacts')
   )
-}
-
-/**
- * True when the contact has an ACTIVE membership or a un1t_clients row at one
- * of `locIds`. A read error is logged and treated as "no" for that probe
- * only; it never grants. A thrown read propagates (the caller denies).
- */
-async function probeMembershipOrClient(db, contactId, locIds) {
-  // UN1TDUAL.2 — an ACTIVE membership at one of the caller's Contacts
-  // studios opens the contact even though its row is owned elsewhere (a
-  // Stillorgan member who also holds a Hatch Street membership). Mirrors the
-  // RLS / crossover widening in mig 731. An ended membership grants nothing.
-  // A read error denies only THIS branch (logged, no PII), then falls
-  // through to the deal probe, so a contact_memberships outage cannot hide
-  // a deal crossover. It never grants.
-  const { data: memberships, error: membershipErr } = await db
-    .from('contact_memberships')
-    .select('id')
-    .eq('contact_id', contactId)
-    .eq('status', 'active')
-    .in('location_id', locIds)
-    .limit(1)
-  if (membershipErr) {
-    logError('contact-crossovers', 'membership probe failed; falling through to the client probe', {
-      contactId,
-      code: membershipErr.code,
-      message: membershipErr.message,
-    })
-  } else if (Array.isArray(memberships) && memberships.length > 0) {
-    return true
-  }
-
-  // UN1TDUAL.4 — a contact the studio's un1t.online account lists as a
-  // client (a un1t_clients row at one of the caller's Contacts studios
-  // linked to this contact) opens it too, whatever the un1t status: lapsed
-  // clients still get that studio's marketing. Mirrors mig 732. The live row is
-  // read, so a relink by the un1t sync moves access with it. Same failure
-  // rule as the membership probe: an error is logged (no PII) and falls
-  // through to the deal probe; it never grants.
-  const { data: clients, error: clientErr } = await db
-    .from('un1t_clients')
-    .select('id')
-    .eq('contact_id', contactId)
-    .in('location_id', locIds)
-    .limit(1)
-  if (clientErr) {
-    logError('contact-crossovers', 'un1t client probe failed; falling through to deal probe', {
-      contactId,
-      code: clientErr.code,
-      message: clientErr.message,
-    })
-  } else if (Array.isArray(clients) && clients.length > 0) {
-    return true
-  }
-  return false
 }
 
 // ── LISTFLAG.1 — "this person is also on another studio's list" ──────────
@@ -225,7 +119,7 @@ async function probeMembershipOrClient(db, contactId, locIds) {
 
 // Ids per `.in()`. Matches attachLinkedCounts' CHUNK: PostgREST sends the
 // filter as a GET URL, and an unbounded id list overruns Cloudflare's URI
-// limit → 414. This is the same wall CROSSOVER_ID_CAP was built for.
+// limit → 414 (the same wall the phone directory's MOBILE_CROSSOVER_ID_CAP holds).
 const LIST_FLAG_ID_CHUNK = 120
 
 // Rows per page WITHIN a chunk. The 1,000-row select cap applies regardless
@@ -312,48 +206,41 @@ export async function fetchListMembershipFlags(db, contacts, activeLocationId) {
 
 // UN1TRADAR.3 — the radar write routes (action, refresh-member, quarantine,
 // lead action, cleanup) accept a contact the ACTIVE studio does not own when
-// it is a crossover THERE: an active membership or a un1t_clients row at that
-// one studio (a Stillorgan contact with a Hatch Street membership, acted on
-// from Hatch's radar). Never the caller's other studios. Both fail closed.
+// it has a relationship THERE: any contact_studios row at that one studio
+// (ORGCONTACTS.2; a lapsed one included, decision 2). Never the caller's
+// other studios. Both fail closed.
 
-/** Is `contactId` a membership / un1t-client crossover at `locationId`? Any error → false. */
+/** Does `contactId` have a contact_studios row at `locationId`? Any error → false. */
 export async function isCrossoverAt(db, contactId, locationId) {
   if (!contactId || !locationId) return false
   try {
-    return await probeMembershipOrClient(db, contactId, [locationId])
+    const r = await contactsAtStudio(db, locationId, { contactIds: [contactId] })
+    if (!r.ok) {
+      logError('contact-crossovers', 'crossover probe failed; refusing', { locationId, error: r.error })
+      return false
+    }
+    return r.rows.length > 0
   } catch (e) {
     logError('contact-crossovers', 'crossover probe threw; refusing', { locationId, message: e?.message || String(e) })
     return false
   }
 }
 
-const CROSSOVER_PROBE_CHUNK = 200
-
 /**
- * The subset of `contactIds` that are crossovers at `locationId` (an active
- * membership or a un1t_clients row there). Any read error → an empty Set:
- * the caller then acts on the contacts it owns only.
+ * The subset of `contactIds` with a contact_studios row at `locationId`.
+ * Any read error → an empty Set: the caller then acts on the contacts it
+ * owns only.
  */
 export async function crossoverIdsAt(db, contactIds, locationId) {
   const ids = [...new Set((contactIds || []).filter(Boolean))]
   if (!locationId || ids.length === 0) return new Set()
   try {
-    const out = new Set()
-    for (let i = 0; i < ids.length; i += CROSSOVER_PROBE_CHUNK) {
-      const chunk = ids.slice(i, i + CROSSOVER_PROBE_CHUNK)
-      const [memberships, clients] = await Promise.all([
-        db.from('contact_memberships').select('contact_id').eq('location_id', locationId).eq('status', 'active').in('contact_id', chunk),
-        db.from('un1t_clients').select('contact_id').eq('location_id', locationId).in('contact_id', chunk),
-      ])
-      if (memberships.error || clients.error) {
-        logError('contact-crossovers', 'bulk crossover probe failed; owned contacts only', {
-          locationId, code: (memberships.error || clients.error).code,
-        })
-        return new Set()
-      }
-      for (const r of [...(memberships.data || []), ...(clients.data || [])]) if (r.contact_id) out.add(r.contact_id)
+    const r = await contactsAtStudio(db, locationId, { contactIds: ids })
+    if (!r.ok) {
+      logError('contact-crossovers', 'bulk crossover probe failed; owned contacts only', { locationId, error: r.error })
+      return new Set()
     }
-    return out
+    return new Set(r.rows.map((row) => row.contact_id).filter(Boolean))
   } catch (e) {
     logError('contact-crossovers', 'bulk crossover probe threw; owned contacts only', { locationId, message: e?.message || String(e) })
     return new Set()

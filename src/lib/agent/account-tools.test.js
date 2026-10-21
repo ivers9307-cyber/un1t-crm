@@ -495,6 +495,9 @@ describe('executeAccountTool · request_pause / request_cancellation elect the w
           eq(col, val) { st.filters[col] = val; return b },
           in(col, vals) { st.filters[col] = vals; return b },
           limit() { return b },
+          // ORGCONTACTS.2: studiosOfContacts pages contact_studios (answered empty here)
+          order() { return b },
+          range() { return b },
           insert(row) {
             st.op = 'insert'
             trace.push({
