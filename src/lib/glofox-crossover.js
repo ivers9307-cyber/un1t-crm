@@ -23,6 +23,8 @@
 
 import { escapeLikePattern } from './like-escape.js'
 import { ensureStudioPreferences } from './un1t-online-studio-preferences.js'
+import { upsertContactStudio, contactsAtStudio, studiosOfContacts } from './contact-studios.js'
+import { hasBookableMembership } from './person-accounts.js'
 
 export const GLOFOX_CROSSOVER_TABLE = 'glofox_crossover_members'
 const MAX_ERROR_LEN = 300
@@ -124,13 +126,19 @@ export async function findGlofoxCrossoverContact(db, locationId, { glofoxMemberI
 /**
  * Record that a Glofox member of `locationId` is the contact `contactId`, who
  * lives at another studio: the glofox_crossover_members row (readability at
- * the studio, mig 758) and the studio's marketing-preferences row
+ * the studio, mig 758), the studio's marketing-preferences row
  * (insert-if-missing; an existing row, an unsubscribe included, is never
- * touched). A contact who lives AT the studio needs neither and is skipped.
+ * touched) and, since ORGCONTACTS.1, the contact_studios row at the Glofox
+ * studio (mig 764: kind member when `contactRow`'s Glofox columns say the
+ * membership is bookable, else client; source glofox; first_seen_at from
+ * `contactRow.joined_at`). A contact who lives AT the studio needs none and is
+ * skipped. The relationship write is reported as `contact_studio` and never
+ * fails the link.
  *
- * @returns {Promise<{ linked: boolean, preferences_created: number, skipped?: string, error?: string }>}
+ * @returns {Promise<{ linked: boolean, preferences_created: number, skipped?: string, error?: string,
+ *   contact_studio?: { ok: true } | { ok: false, error: string } }>}
  */
-export async function recordGlofoxCrossover(db, { locationId, glofoxMemberId, contactId, contactLocationId = undefined }) {
+export async function recordGlofoxCrossover(db, { locationId, glofoxMemberId, contactId, contactLocationId = undefined, contactRow = null }) {
   const out = { linked: false, preferences_created: 0 }
   try {
     if (!db || !locationId || !glofoxMemberId || !contactId) return { ...out, skipped: 'missing arguments' }
@@ -152,6 +160,13 @@ export async function recordGlofoxCrossover(db, { locationId, glofoxMemberId, co
     if (!data || data.length === 0) return { ...out, error: `${GLOFOX_CROSSOVER_TABLE} write returned no row` }
     out.linked = true
 
+    const studio = await upsertContactStudio(db, {
+      contactId, locationId, source: 'glofox', status: 'active',
+      kind: hasBookableMembership(contactRow) ? 'member' : 'client',
+      firstSeenAt: contactRow?.joined_at || null,
+    })
+    out.contact_studio = studio.ok ? { ok: true } : { ok: false, error: studio.error }
+
     const prefs = await ensureStudioPreferences(db, { locationId, contactIds: [contactId], origin: 'glofox' })
     out.preferences_created = prefs.created || 0
     if (prefs.error) return { ...out, error: `studio preferences: ${prefs.error.message}` }
@@ -162,41 +177,30 @@ export async function recordGlofoxCrossover(db, { locationId, glofoxMemberId, co
 }
 
 // ─────────────────────────────────────────────────────────────
-// Readers (GLOFOXREADERS.1)
+// Readers (GLOFOXREADERS.1, re-backed on contact_studios by ORGCONTACTS.2)
 // ─────────────────────────────────────────────────────────────
 //
-// A crossover contact keeps its home location_id (Hatch), so every reader that
-// selects `contacts WHERE location_id = <Glofox studio> AND glofox_member_id`
-// skipped it: no attendance refresh, no detail backfill, and Mia not counting
-// it as a member of the Glofox studio. These helpers let a reader widen
-// "lives at the studio" to "lives at the studio, or is linked there".
-
-const READ_PAGE = 1000
-const IN_CHUNK = 150
+// A crossover contact keeps its primary location_id (Hatch), so every reader
+// that selects `contacts WHERE location_id = <Glofox studio> AND
+// glofox_member_id` skipped it: no attendance refresh, no detail backfill, and
+// Mia not counting it as a member of the Glofox studio. These helpers let a
+// reader widen "lives at the studio" to "has a Glofox relationship at the
+// studio": a contact_studios row there with source glofox (mig 764), any
+// status. The names stay until Phase 5's sweep; the data source is the
+// relationship table.
 
 /**
- * The contact ids linked at `locationId` by glofox_crossover_members, paged
- * past the 1,000-row cap. The table not existing yet is an empty list; any
- * other failure is `error` (the caller decides; never read it as "none").
+ * The contact ids with a Glofox relationship at `locationId` (any status),
+ * paged past the 1,000-row cap. Any failure is `error` (the caller decides;
+ * never read it as "none").
  *
  * @returns {Promise<{ ids: string[], error?: string }>}
  */
 export async function glofoxCrossoverContactIds(db, locationId) {
-  const ids = []
   try {
-    for (let from = 0; ; from += READ_PAGE) {
-      const { data, error } = await db.from(GLOFOX_CROSSOVER_TABLE).select('contact_id')
-        .eq('location_id', locationId)
-        .order('contact_id', { ascending: true })
-        .range(from, from + READ_PAGE - 1)
-      if (error) {
-        if (TABLE_MISSING.has(error.code)) return { ids: [] }
-        return { ids: [], error: `${GLOFOX_CROSSOVER_TABLE} read: ${message(error)}` }
-      }
-      ids.push(...(data || []).map((r) => r.contact_id).filter(Boolean))
-      if (!data || data.length < READ_PAGE) break
-    }
-    return { ids: [...new Set(ids)] }
+    const r = await contactsAtStudio(db, locationId)
+    if (!r.ok) return { ids: [], error: `contact_studios read: ${r.error}` }
+    return { ids: [...new Set(r.rows.filter((row) => row.source === 'glofox').map((row) => row.contact_id).filter(Boolean))] }
   } catch (err) {
     return { ids: [], error: message(err) }
   }
@@ -220,28 +224,19 @@ export function scopeToGlofoxStudio(query, locationId, crossoverIds) {
 }
 
 /**
- * For each contact id, the Glofox studios it is linked at by a crossover row
- * (not its home studio). The table not existing yet is an empty map; any other
- * failure is `error`.
+ * For each contact id, the studios it has a Glofox relationship at (source
+ * glofox, any status; the home Glofox studio included). Any failure is `error`.
  *
  * @returns {Promise<{ byContact: Map<string, string[]>, error?: string }>}
  */
 export async function glofoxLinkLocationsByContact(db, contactIds) {
   const byContact = new Map()
-  const ids = [...new Set((contactIds || []).filter(Boolean))]
   try {
-    for (let i = 0; i < ids.length; i += IN_CHUNK) {
-      const { data, error } = await db.from(GLOFOX_CROSSOVER_TABLE).select('contact_id, location_id')
-        .in('contact_id', ids.slice(i, i + IN_CHUNK))
-      if (error) {
-        if (TABLE_MISSING.has(error.code)) return { byContact: new Map() }
-        return { byContact: new Map(), error: `${GLOFOX_CROSSOVER_TABLE} read: ${message(error)}` }
-      }
-      for (const r of data || []) {
-        const list = byContact.get(r.contact_id) || []
-        if (!list.includes(r.location_id)) list.push(r.location_id)
-        byContact.set(r.contact_id, list)
-      }
+    const r = await studiosOfContacts(db, contactIds)
+    if (!r.ok) return { byContact: new Map(), error: `contact_studios read: ${r.error}` }
+    for (const [contactId, rows] of r.byContact) {
+      const list = [...new Set(rows.filter((row) => row.source === 'glofox').map((row) => row.location_id).filter(Boolean))]
+      if (list.length) byContact.set(contactId, list)
     }
     return { byContact }
   } catch (err) {
@@ -249,9 +244,9 @@ export async function glofoxLinkLocationsByContact(db, contactIds) {
   }
 }
 
-/** Does this contact row belong to the Glofox studio: home there, or linked there? Pure. */
+/** Does this contact row belong to the Glofox studio: home there, or a relationship there? Pure. */
 export function contactAtGlofoxStudio(contact, locationId) {
   if (!contact || !locationId) return false
   if (contact.location_id === locationId) return true
-  return Array.isArray(contact.glofox_link_location_ids) && contact.glofox_link_location_ids.includes(locationId)
+  return Array.isArray(contact.studio_location_ids) && contact.studio_location_ids.includes(locationId)
 }

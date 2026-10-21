@@ -34,6 +34,8 @@ describe('publicShape', () => {
     expect(shaped.connected_via).toBe('embedded_signup')
     expect(shaped.history_sync_status).toBe('importing')
     expect(shaped.history_sync_started_at).toBe('2026-07-16T10:00:00.000Z')
+    // ORGCONTACTS.0 (mig 763): the per-number default is gone; the studio's is on the link.
+    expect(shaped).not.toHaveProperty('is_default')
   })
 
   it('defaults history_sync_status to null when there is no signup_meta', () => {

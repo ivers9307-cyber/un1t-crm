@@ -130,7 +130,7 @@ export const ORG_B_KEY = 'unitk_' + 'b'.repeat(40)
 const locRow = (id, orgId, name) => ({ id, organization_id: orgId, name, slug: name.toLowerCase().replace(/ /g, '-'), active: true })
 
 export function makeWorld() {
-  return {
+  const world = {
     organizations: [
       { id: ORG_A, name: 'Org A', slug: 'org-a', active: true },
       { id: ORG_B, name: 'Org B', slug: 'org-b', active: true },
@@ -283,6 +283,20 @@ export function makeWorld() {
       },
     ],
   }
+  // ORGCONTACTS.2 (mig 764/765) — every contact has a contact_studios row at
+  // its own studio, and public.studio_contacts is that join (what the
+  // contacts list and /api/contacts/search read, filtered on studio_location_id).
+  world.contact_studios = world.contacts.map((c) => ({
+    contact_id: c.id, location_id: c.location_id, kind: 'lead', status: 'active', source: 'deal',
+    stage_slug: c.pipeline_stage_slug ?? null, first_seen_at: c.created_at, last_seen_at: null, ended_at: null,
+  }))
+  world.studio_contacts = world.contact_studios.map((r) => ({
+    ...world.contacts.find((c) => c.id === r.contact_id),
+    studio_location_id: r.location_id, studio_kind: r.kind, studio_status: r.status, studio_source: r.source,
+    studio_stage_slug: r.stage_slug, studio_first_seen_at: r.first_seen_at, studio_last_seen_at: r.last_seen_at,
+    studio_is_crossover: false,
+  }))
+  return world
 }
 
 // ─── the in-memory supabase double ───────────────────────────────────

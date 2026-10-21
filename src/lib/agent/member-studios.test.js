@@ -303,6 +303,9 @@ function makeDb(tables, { errors = {} } = {}) {
         select(s) { state.select = s; return b },
         eq(col, val) { state.filters.push({ op: 'eq', col, val }); return b },
         in(col, val) { state.filters.push({ op: 'in', col, val }); return b },
+        // ORGCONTACTS.2 — the contact_studios read pages (studiosOfContacts)
+        order() { return b },
+        range() { return b },
         maybeSingle() { state.maybe = true; return b },
         then(res, rej) { return Promise.resolve(run()).then(res, rej) },
       }
@@ -464,14 +467,14 @@ describe('resolveMemberStudios', () => {
   })
 })
 
-// GLOFOXREADERS.1 — ONE contact living at Hatch holds both the un1t.online
-// client and a Stillorgan Glofox account linked by glofox_crossover_members
-// (linkedAccountsForContact sets glofox_link_location_ids).
+// ORGCONTACTS.2 — ONE contact living at Hatch holds both the un1t.online
+// client and a Stillorgan Glofox account with a contact_studios row there
+// (linkedAccountsForContact sets studio_location_ids).
 describe('classifyMemberStudios — a Hatch contact with a linked Stillorgan Glofox account', () => {
   const dual = (over = {}) => ({
     id: 'c-dual', location_id: HATCH, un1t_user_id: 'u-1', glofox_member_id: 'gx-9',
     glofox_membership_status: 'member', glofox_membership_state: 'active', trial_credits_remaining: 0,
-    glofox_link_location_ids: [STILL], ...over,
+    studio_location_ids: [STILL], ...over,
   })
 
   it('counts at Stillorgan through the link, and at Hatch through un1t.online', () => {
@@ -486,7 +489,7 @@ describe('classifyMemberStudios — a Hatch contact with a linked Stillorgan Glo
   })
 
   it('without the link the Stillorgan account is invisible there, as before', () => {
-    const { glofox_link_location_ids: _drop, ...unlinked } = dual()
+    const { studio_location_ids: _drop, ...unlinked } = dual()
     const studios = classify({ contacts: [unlinked], agentOn: { [STILL]: true } })
     expect(byLoc(studios, STILL)).toMatchObject({ active: false, contactIds: [] })
     expect(byLoc(studios, STILL).glofoxMemberId).toBeUndefined()

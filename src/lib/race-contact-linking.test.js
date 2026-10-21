@@ -544,3 +544,55 @@ describe('pickEmailHolder (W0.6b)', () => {
     expect(pickEmailHolder(rows.slice(0, 2), 'a@x.ie')?.id).toBe('a')
   })
 })
+
+// ORGCONTACTS.1 (plan Task 10) — a sibling-studio contact registering at this
+// studio's event has joined this studio: a contact_studios lead row here
+// (mig 764; src/lib/contact-studios.js). A contact AT this studio needs none
+// (its primary row is the contacts trigger's).
+describe('findOrCreateRaceContact — contact_studios lead row (ORGCONTACTS.1)', () => {
+  function makeOrgDb({ atLocation = null, sibling = null } = {}) {
+    const upserts = []
+    const db = {
+      from(table) {
+        let scope = null   // 'here' (.eq location_id) | 'org' (.in location_id)
+        let single = false
+        let write = null
+        const b = {
+          select() { return b },
+          eq(col) { if (col === 'location_id') scope = 'here'; return b },
+          in(col) { if (col === 'location_id') scope = 'org'; return b },
+          ilike() { return b }, limit() { return b }, gt() { return b }, order() { return b },
+          maybeSingle() { single = true; return b },
+          upsert(p, o) { write = { table, payload: p, onConflict: o?.onConflict }; upserts.push(write); return b },
+          update() { write = { table, op: 'update' }; return b },
+          insert() { return { select: () => ({ single: async () => ({ data: { id: 'new-id' }, error: null }) }) } },
+          then(res, rej) {
+            let out
+            if (write) out = { data: write.payload ? [write.payload] : [], error: null }
+            else if (table === 'locations') out = single ? { data: { organization_id: 'org-1' }, error: null } : { data: [{ id: 'loc-1' }, { id: 'loc-2' }], error: null }
+            else if (table === 'contacts') { const row = scope === 'here' ? atLocation : scope === 'org' ? sibling : null; out = { data: row ? [row] : [], error: null } }
+            else out = { data: [], error: null }
+            return Promise.resolve(out).then(res, rej)
+          },
+        }
+        return b
+      },
+    }
+    return { db, upserts }
+  }
+
+  it("a sibling-studio contact gets a lead row at this studio (source lead_form)", async () => {
+    const { db, upserts } = makeOrgDb({ sibling: { id: 'c-sib', email: 'sam@example.com', created_at: '2026-01-01' } })
+    const id = await findOrCreateRaceContact({ db, ...base })
+    expect(id).toBe('c-sib')
+    const row = upserts.find((u) => u.table === 'contact_studios')
+    expect(row.payload).toMatchObject({ contact_id: 'c-sib', location_id: 'loc-1', kind: 'lead', status: 'active', source: 'lead_form' })
+    expect(row.onConflict).toBe('contact_id,location_id')
+  })
+
+  it('a contact at this studio gets no upsert (the contacts trigger made its row)', async () => {
+    const { db, upserts } = makeOrgDb({ atLocation: { id: 'c-here', email: 'sam@example.com', created_at: '2026-01-01' } })
+    expect(await findOrCreateRaceContact({ db, ...base })).toBe('c-here')
+    expect(upserts).toEqual([])
+  })
+})

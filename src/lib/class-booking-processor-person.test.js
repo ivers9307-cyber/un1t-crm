@@ -166,6 +166,7 @@ function makeDb({
       contains() { return b },
       limit() { return b },
       order() { return b },
+      range() { return b }, // ORGCONTACTS.2: studiosOfContacts paginates contact_studios (answered empty here)
       insert(row) { st.op = 'insert'; inserts.push({ table, row }); return b },
       update(patch) { st.op = 'update'; updates.push({ table, patch }); return b },
       async maybeSingle() { return settle(true) },

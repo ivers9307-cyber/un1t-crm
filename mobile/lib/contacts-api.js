@@ -49,16 +49,17 @@ const CONTACT_DETAIL_SELECT = `${CONTACT_SELECT}, location_id, joined_at,
   glofox_membership_price_cents, glofox_billing_interval, glofox_membership_type,
   glofox_membership_expiry, glofox_synced_at, recent_bookings`
 
-// UN1THARD.8 — the studio's crossovers: contacts owned by another studio who
-// hold an active membership, a un1t.online client row or a deal here (a
-// Stillorgan member with a Hatch Street membership). The web contacts list
-// shows them; the phone directory used to filter on location_id alone and
-// missed them. The ids come from GET /api/mobile/contacts/crossover-ids (the
-// RPC behind them is service-role only); the rows are still read here through
-// RLS, which admits a membership or un1t client crossover to a caller holding
-// Contacts at the studio (migs 731/732) and returns nothing for an id it does
-// not admit. Best-effort: a failed or refused call lists own contacts only,
-// as before. Cached per studio for a minute, because search runs per keystroke.
+// UN1THARD.8 / ORGCONTACTS.2 — the studio's crossovers: contacts whose
+// primary studio is another one but who have a relationship here (a
+// contact_studios row, mig 764: a Stillorgan member with a Hatch Street
+// membership, a lapsed Hatch client, a deal on this board). The web contacts
+// list shows them; the phone directory used to filter on location_id alone
+// and missed them. The ids come from GET /api/mobile/contacts/crossover-ids
+// (it reads the service-role-only studio_contacts view); the rows are still
+// read here through RLS, which admits every relationship to a caller holding
+// Contacts at the studio (mig 765) and returns nothing for an id it does not
+// admit. Best-effort: a failed or refused call lists own contacts only, as
+// before. Cached per studio for a minute, because search runs per keystroke.
 const CROSSOVER_TTL_MS = 60 * 1000
 const crossoverCache = new Map()
 

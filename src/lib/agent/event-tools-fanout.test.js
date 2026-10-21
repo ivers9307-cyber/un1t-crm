@@ -91,6 +91,7 @@ function stubDb(trace, {
         not: () => b,
         order: () => b,
         limit: () => b,
+        range: () => b, // ORGCONTACTS.2: studiosOfContacts paginates contact_studios (answered empty here)
         update(patch) { st.op = 'update'; trace.push({ step: 'update', table, patch }); return b },
         insert(row) { st.op = 'insert'; trace.push({ step: 'insert', table, row }); return b },
         async maybeSingle() { return settle(true) },
