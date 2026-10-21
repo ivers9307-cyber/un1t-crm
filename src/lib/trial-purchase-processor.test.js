@@ -78,7 +78,8 @@ describe('processTrialPurchase', () => {
     const r = await processTrialPurchase(db, ROW, { now: () => 'T' })
     expect(r).toEqual({ outcome: 'granted' })
     expect(mocks.member).not.toHaveBeenCalled()
-    expect(mocks.purchase).toHaveBeenCalledWith({ branchId: 'b1', token: 't' }, 'g-existing', 'm1', 'p1')
+    // PAIDTRIAL.4 — always complimentary: the CRM already holds the money.
+    expect(mocks.purchase).toHaveBeenCalledWith({ branchId: 'b1', token: 't' }, 'g-existing', 'm1', 'p1', { body: { payment_method: 'complimentary' } })
     // write-ahead: the marker lands BEFORE the purchase, the outcome after
     expect(updates[0].fields.grant).toMatchObject({ stage: 'purchasing', glofox_member_id: 'g-existing' })
     expect(updates[1].fields).toMatchObject({ status: 'granted', granted_at: 'T', grant: { ok: true, invoice_id: 'inv1' } })
@@ -91,7 +92,7 @@ describe('processTrialPurchase', () => {
     const r = await processTrialPurchase(db, ROW)
     expect(r.outcome).toBe('granted')
     expect(mocks.member).toHaveBeenCalledWith(expect.objectContaining({ createIfMissing: true, attachTrial: false, source: 'paid_trial' }))
-    expect(mocks.purchase).toHaveBeenCalledWith(expect.anything(), 'g-new', 'm1', 'p1')
+    expect(mocks.purchase).toHaveBeenCalledWith(expect.anything(), 'g-new', 'm1', 'p1', { body: { payment_method: 'complimentary' } })
   })
 
   it('a clear Glofox refusal after the money is taken → needs_review + ops alert, nothing silent', async () => {
@@ -157,7 +158,7 @@ describe('processTrialPurchase', () => {
     const r = await processTrialPurchase(db, ROW)
     expect(r.outcome).toBe('granted')
     expect(mocks.member).toHaveBeenCalledWith(expect.objectContaining({ phoneMatchPolicy: 'create', attachTrial: false, createIfMissing: true }))
-    expect(mocks.purchase).toHaveBeenCalledWith(expect.anything(), 'g-new', 'm1', 'p1')
+    expect(mocks.purchase).toHaveBeenCalledWith(expect.anything(), 'g-new', 'm1', 'p1', { body: { payment_method: 'complimentary' } })
     expect(updates.at(-1).fields).toMatchObject({ status: 'granted', glofox_member_id: 'g-new' })
     const note = inserts.find((i) => i.table === 'notes')
     expect(note.fields.contact_id).toBe('c1')
