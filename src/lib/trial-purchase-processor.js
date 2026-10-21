@@ -99,7 +99,10 @@ export async function processTrialPurchase(db, row, { now = () => new Date().toI
   // 3. credentials
   const creds = await glofoxCredentialsForLocation(db, row.location_id)
   if (creds?.readError) throw new Error('glofox settings unreadable')
-  if (missingGlofoxCredentialsForLocation(creds)) return toReview(db, row, 'glofox_not_configured')
+  // The helper returns the LIST of missing fields: an empty list is still
+  // truthy, which is how the first live purchase (21 Oct 2026) went to
+  // review as glofox_not_configured at a configured studio.
+  if (missingGlofoxCredentialsForLocation(creds).length) return toReview(db, row, 'glofox_not_configured')
 
   // 4. the account
   let memberId = contact.glofox_member_id || row.glofox_member_id || null
