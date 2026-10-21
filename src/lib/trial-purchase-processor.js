@@ -65,7 +65,7 @@ async function alertStaff(db, row, reason, extra = '') {
         `<strong>Product:</strong> ${row.product_name} (${row.membership_id} / ${row.plan_code})<br/>` +
         `<strong>Paid:</strong> ${(row.amount_cents / 100).toFixed(2)} ${row.currency}<br/>` +
         `<strong>Purchase id:</strong> ${row.id}</p>` +
-        `<p>Please grant the plan in Glofox by hand and confirm with the customer.</p>`,
+        `<p>Open the Paid trials tab on the CRM's Approvals page to retry the grant or mark it done once you have put the plan on the account in Glofox.</p>`,
       pushBody: `Paid trial for ${row.customer_name || row.customer_email} needs a manual grant (${reason}).`,
     }, { db })
   } catch (e) {
@@ -99,7 +99,10 @@ export async function processTrialPurchase(db, row, { now = () => new Date().toI
   // 3. credentials
   const creds = await glofoxCredentialsForLocation(db, row.location_id)
   if (creds?.readError) throw new Error('glofox settings unreadable')
-  if (missingGlofoxCredentialsForLocation(creds)) return toReview(db, row, 'glofox_not_configured')
+  // The helper returns the LIST of missing fields: an empty list is still
+  // truthy, which is how the first live purchase (21 Oct 2026) went to
+  // review as glofox_not_configured at a configured studio.
+  if (missingGlofoxCredentialsForLocation(creds).length) return toReview(db, row, 'glofox_not_configured')
 
   // 4. the account
   let memberId = contact.glofox_member_id || row.glofox_member_id || null

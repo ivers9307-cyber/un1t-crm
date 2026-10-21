@@ -487,6 +487,22 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/trial-purchases/{id}/review',
+  tags: ['Approvals'],
+  summary: 'Retry or hand-resolve a paid trial purchase whose Glofox grant failed (PAIDTRIAL.2)',
+  description: "Session auth + the approvals_offer_purchases grant, judged at the purchase's studio; ids outside the caller's studios return 404. Body { action: 'retry' | 'resolve' }. retry puts a needs_review row back in the queue (the write-ahead grant marker is kept, so a purchase Glofox never answered is never bought twice); resolve marks it granted by hand and emails the buyer.",
+  request: { body: { content: { 'application/json': { schema: z.object({ action: z.enum(['retry', 'resolve']) }) } } } },
+  responses: {
+    200: { description: '{ status } (queued or granted), or { already: true }' },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing approvals_offer_purchases', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown or inaccessible purchase', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not paid, or the processor holds the row (queued/processing)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/offer-purchases/{id}/send-confirmation',
   tags: ['Approvals'],
   summary: "Send (or re-send) the buyer's purchase confirmation email",

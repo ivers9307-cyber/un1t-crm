@@ -62,7 +62,7 @@ function makeDb({ contact = { id: 'c1', email: 'ava@example.com', first_name: 'A
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.creds.mockResolvedValue({ branchId: 'b1', token: 't' })
-  mocks.missing.mockReturnValue(false)
+  mocks.missing.mockReturnValue([]) // the real helper returns the list of missing fields
   mocks.purchase.mockResolvedValue({ ok: true, invoice_id: 'inv1', purchase_status: 'SUCCESS' })
   mocks.member.mockResolvedValue({ status: 'created', glofox_member_id: 'g-new' })
   mocks.capi.mockResolvedValue({ sent: true })
@@ -151,7 +151,7 @@ describe('processTrialPurchase', () => {
     const { db } = makeDb()
     mocks.creds.mockResolvedValueOnce({ readError: new Error('x') })
     await expect(processTrialPurchase(db, ROW)).rejects.toThrow(/unreadable/)
-    mocks.missing.mockReturnValueOnce(true)
+    mocks.missing.mockReturnValueOnce(['API Key'])
     expect((await processTrialPurchase(db, ROW)).reason).toBe('glofox_not_configured')
   })
 
