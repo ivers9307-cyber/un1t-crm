@@ -5,7 +5,8 @@
 -- the process-trial-purchases cron as the sweeper (the class-bookings shape).
 --
 -- status: awaiting_payment | queued | processing | granted | needs_review | failed | payment_failed
--- grant: write-ahead marker, { stage: 'purchasing', at } before the Glofox
+-- "grant" (a reserved word, so quoted in DDL; PostgREST quotes it itself):
+--   write-ahead marker, { stage: 'purchasing', at } before the Glofox
 --   purchase and the outcome after it, so a purchase Glofox never answered is
 --   never bought twice (TRIALGRANT.1).
 
@@ -34,7 +35,7 @@ create table if not exists public.trial_purchases (
   connected_account_id text,
   paid_at timestamptz,
   glofox_member_id text,
-  grant jsonb,
+  "grant" jsonb,
   granted_at timestamptz,
   attempts integer not null default 0,
   last_error text,
@@ -62,7 +63,7 @@ alter table public.trial_purchases enable row level security;
 revoke all on public.trial_purchases from anon, authenticated, public;
 
 comment on table public.trial_purchases is 'PAIDTRIAL.1: paid trial purchases from the /trial page. Payment lifecycle then the Glofox plan grant (worker + process-trial-purchases cron). Service-role only.';
-comment on column public.trial_purchases.grant is 'Write-ahead marker for the Glofox purchase: { stage: purchasing, at } before the call, the outcome after. A marker with no outcome is never bought again.';
+comment on column public.trial_purchases."grant" is 'Write-ahead marker for the Glofox purchase: { stage: purchasing, at } before the call, the outcome after. A marker with no outcome is never bought again.';
 
 -- Heartbeat for the sweeper (vercel.json: every 2 minutes). Grace sized so one
 -- missed tick never pages (CLASSSYNCHB.1).
