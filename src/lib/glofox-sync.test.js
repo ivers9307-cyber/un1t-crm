@@ -1513,7 +1513,8 @@ describe('mapGlofoxMember (real Glofox payload — Cathy, comp\'d Credit Member)
 //                                  pass [] to model a location with no board.
 //   GLOFOXSIBLING.1 — the organisation-wide fallback (glofox-crossover.js),
 //   read only when the location-scoped lookups find nothing:
-//   crossoverLinks               — glofox_crossover_members rows ({ contact_id })
+//   crossoverLinks               — the studio's Glofox relationship rows ({ contact_id }), served as
+//                                  studio_contacts rows (mig 768: the link table is gone)
 //   orgRowsByGlofoxId / orgRowsByEmail — contacts across the organisation
 //   contactsById                 — contacts read by id (a link row's contact)
 //   lookupError                  — the location-scoped contact read fails
@@ -1522,7 +1523,7 @@ function fakeDb({
   rowsByGlofoxId = [], rowsByEmail = [], openDeal = null,
   pipelines = [{ id: 'p-acq', mode: 'derived' }],
   crossoverLinks = [], orgRowsByGlofoxId = [], orgRowsByEmail = [], contactsById = {},
-  lookupError = null, writes = [],
+  lookupError = null, writes = [], studioWriteError = null,
 } = {}) {
   function chain(table) {
     let mode = null
@@ -1546,7 +1547,9 @@ function fakeDb({
     c.order = () => c
     c.in = () => c
     c.is = () => c
+    c.gt = () => c
     c.maybeSingle = () => { single = true; return c }
+    c.single = () => { single = true; return c }
     for (const op of ['insert', 'update', 'upsert']) {
       c[op] = (payload) => { writes.push({ table, op, payload }); return c }
     }
@@ -1554,8 +1557,15 @@ function fakeDb({
       let data
       if (table === 'pipelines')                                data = pipelines
       else if (table === 'locations')                           data = [{ organization_id: 'org-1' }]
-      else if (table === 'glofox_crossover_members')            data = writes.length && writes.at(-1).table === table ? [{ id: 'gx-1' }] : crossoverLinks
+      else if (table === 'studio_contacts')                     data = crossoverLinks.map((l) => ({ ...(contactsById[l.contact_id] || { id: l.contact_id, location_id: 'hatch' }), studio_location_id: 'stillorgan', studio_source: 'glofox' }))
       else if (table === 'contact_location_preferences')        data = writes.length && writes.at(-1).table === table ? [{ contact_id: writes.at(-1).payload[0]?.contact_id }] : []
+      // ORGCONTACTS.1 — the relationship row (mig 764): an upsert answers its row, an injected error refuses it
+      else if (table === 'contact_studios') {
+        if (studioWriteError && writes.at(-1)?.table === table) return resolve({ data: null, error: studioWriteError })
+        data = writes.length && writes.at(-1).table === table && writes.at(-1).op === 'upsert' ? [{ contact_id: writes.at(-1).payload.contact_id }] : []
+      }
+      else if (table === 'contacts' && writes.at(-1)?.table === 'contacts' && writes.at(-1)?.op === 'insert' && mode !== 'contact_by_id')
+                                                                data = [{ id: 'c-new', ...writes.at(-1).payload }]
       else if (mode === 'contact_by_id')                        data = contactsById[byId] ? [contactsById[byId]] : []
       else if (table === 'contacts' && scope === 'location' && lookupError) return resolve({ data: null, error: lookupError })
       else if (mode === 'glofox')       data = scope === 'org' ? orgRowsByGlofoxId : rowsByGlofoxId
@@ -2444,7 +2454,7 @@ describe('previewMemberSync / applyMemberSync — sibling-studio contact (GLOFOX
     expect(out.changes.phone).toEqual({ from: null, to: '+447000000000' })
   })
 
-  it('a contact already linked at the studio (link row) is found by it', async () => {
+  it('a contact already linked at the studio (its contact_studios row, source glofox) is found by it', async () => {
     const out = await previewMemberSync(fakeDb({
       crossoverLinks: [{ contact_id: 'c-hatch' }], contactsById: { 'c-hatch': hatch({ glofox_member_id: 'g1' }) },
     }), 'stillorgan', member)
@@ -2495,10 +2505,58 @@ describe('previewMemberSync / applyMemberSync — sibling-studio contact (GLOFOX
     const update = writes.find((w) => w.table === 'contacts' && w.op === 'update')
     expect(update.payload.glofox_member_id).toBe('g1')
     expect(update.payload).not.toHaveProperty('location_id')
-    const link = writes.find((w) => w.table === 'glofox_crossover_members')
-    expect(link).toMatchObject({ op: 'upsert', payload: { location_id: 'stillorgan', glofox_member_id: 'g1', contact_id: 'c-hatch' } })
+    // ORGCONTACTS.5 (mig 768): the link IS the contact_studios row with source glofox.
+    expect(writes.some((w) => w.table === 'glofox_crossover_members')).toBe(false)
+    const link = writes.find((w) => w.table === 'contact_studios')
+    expect(link).toMatchObject({ op: 'upsert', payload: { location_id: 'stillorgan', contact_id: 'c-hatch', source: 'glofox' } })
     const prefs = writes.find((w) => w.table === 'contact_location_preferences')
     expect(prefs.payload[0]).toMatchObject({ contact_id: 'c-hatch', location_id: 'stillorgan', source: 'glofox_sync' })
     expect(out.crossover_link).toMatchObject({ linked: true, preferences_created: 1 })
+  })
+})
+
+// ORGCONTACTS.1 (plan Task 9) — applyMemberSync dual-writes the relationship
+// table (mig 764; src/lib/contact-studios.js): a member row for a bookable
+// member, a client row for any other Glofox account, at the Glofox studio,
+// and at the crossover studio through recordGlofoxCrossover. A failed write
+// is logged and reported on the apply result, never fatal.
+describe('applyMemberSync — contact_studios dual-write (ORGCONTACTS.1)', () => {
+  const lead = { _id: 'g1', email: 'me@x.com', first_name: 'Me', last_name: 'You', phone: '+353871234567', joined_at: '2026-02-01T00:00:00.000Z' }
+  const studioRow = (writes) => writes.find((w) => w.table === 'contact_studios' && w.op === 'upsert')
+
+  it('a bookable member writes a member row at the studio, first_seen_at from joined_at', async () => {
+    const writes = []
+    const out = await applyMemberSync(fakeDb({ writes }), 'stillorgan', { ...lead, membership_status: 'MEMBER', active: true }, { skipBookings: true, skipInteractions: true })
+    expect(out.error).toBeUndefined()
+    expect(out.contact_studio).toEqual({ ok: true })
+    expect(studioRow(writes).payload).toMatchObject({ location_id: 'stillorgan', kind: 'member', status: 'active', source: 'glofox', ended_at: null })
+    expect(studioRow(writes).payload).not.toHaveProperty('last_seen_at')
+    const seen = writes.find((w) => w.table === 'contact_studios' && w.op === 'update')
+    expect(seen.payload).toEqual({ first_seen_at: '2026-02-01T00:00:00.000Z' })
+  })
+
+  it('a Glofox account with no live membership writes a client row', async () => {
+    const writes = []
+    const out = await applyMemberSync(fakeDb({ writes }), 'stillorgan', lead, { skipBookings: true, skipInteractions: true })
+    expect(out.contact_studio).toEqual({ ok: true })
+    expect(studioRow(writes).payload).toMatchObject({ kind: 'client', source: 'glofox' })
+  })
+
+  it('a sibling-studio contact gets the row at the Glofox studio through the crossover link', async () => {
+    const writes = []
+    const hatch = { id: 'c-hatch', location_id: 'hatch', email: 'me@x.com', first_name: 'Me', last_name: 'You', phone: null, glofox_member_id: null }
+    const out = await applyMemberSync(fakeDb({ orgRowsByEmail: [hatch], writes }), 'stillorgan', lead, { skipBookings: true, skipInteractions: true })
+    expect(out.contact_id).toBe('c-hatch')
+    expect(out.crossover_link).toMatchObject({ linked: true, contact_studio: { ok: true } })
+    const rows = writes.filter((w) => w.table === 'contact_studios' && w.op === 'upsert')
+    expect(rows.map((w) => [w.payload.location_id, w.payload.contact_id, w.payload.kind])).toEqual([['stillorgan', 'c-hatch', 'client']])
+  })
+
+  it('a failed contact_studios write is logged and the apply result still succeeds', async () => {
+    const writes = []
+    const out = await applyMemberSync(fakeDb({ writes, studioWriteError: { message: 'relation does not exist' } }), 'stillorgan', lead, { skipBookings: true, skipInteractions: true })
+    expect(out.error).toBeUndefined()
+    expect(out.action).toBe('create')
+    expect(out.contact_studio).toMatchObject({ ok: false, error: expect.stringMatching(/relation does not exist/) })
   })
 })

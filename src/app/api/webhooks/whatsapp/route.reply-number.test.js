@@ -180,6 +180,7 @@ describe('POST /api/webhooks/whatsapp — the inbound router decides the studio 
       waPhone: '353871234567',
       bsuid: null,
       contact: { id: 'contact-9', location_id: 'loc-hatch' },
+      contactStudios: null, // ORGCONTACTS.3: no phone match rows here (the pick is mocked), so the router gets null
       contextMessageId: 'wamid.quoted',
       referral: { ctwa_clid: 'clid-1' },
     })

@@ -11,8 +11,8 @@
 import { notFound, redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermissionForLocation } from '@/lib/permissions'
-import { canWriteContact } from '@/lib/contact-page-gates'
+import { canWriteContact, canOpenContactEditor } from '@/lib/contact-page-gates'
+import { studiosOfContact } from '@/lib/contact-studios'
 import ContactForm from '@/components/ContactForm'
 
 export const dynamic = 'force-dynamic'
@@ -30,16 +30,14 @@ export default async function EditContactPage(props) {
     .single()
   if (!contact) notFound()
 
-  // Location ownership check — staff at a different location
-  // shouldn't be able to edit this contact even if they guess the URL.
-  if (!user.isMaster) {
-    const userLocIds = (user.locations || []).map(l => l.id)
-    if (!userLocIds.includes(contact.location_id)) redirect('/contacts')
-  }
-  // The role the PUT requires, at the contact's location.
-  if (!canWriteContact(user, contact.location_id)) redirect(`/contacts/${contact.id}`)
-  // The page's own feature gate, at the same location.
-  if (!hasPermissionForLocation(user, contact.location_id, 'contacts')) redirect('/')
+  // ORGCONTACTS.4 (decision 4) — the PUT's own decision: a manager at the
+  // contact's primary studio, or a manager with Contacts at a studio the
+  // person has a relationship with (contact_studios); the page's feature gate
+  // (`contacts`) rides inside canOpenContactEditor. Anyone else is sent back.
+  const rel = await studiosOfContact(db, contact.id)
+  const relationshipStudioIds = rel.ok ? rel.rows.map((r) => r.location_id) : []
+  if (!canWriteContact(user, contact.location_id, relationshipStudioIds)) redirect(`/contacts/${contact.id}`)
+  if (!canOpenContactEditor(user, contact.location_id, relationshipStudioIds)) redirect('/')
 
   return (
     <div className="p-8 max-w-2xl">

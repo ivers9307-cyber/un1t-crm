@@ -4,12 +4,14 @@
 // confirmed "yes hatch pipeline"). The orchestrator runs it on acquisition_un1t
 // boards only (pipeline-reclassify.js); the read itself is org-generic.
 //
-// Contacts are per studio and one person can hold a contact at each, linked by
-// a person group (person_group_members). So "active elsewhere" is asked of the
-// PERSON: the active members of every other studio in the organisation, each
-// read through that studio's own membership adapter (Glofox contact columns at
-// Stillorgan, fresh un1t.online subscriptions at Hatch Street), widened to
-// every contact in their person groups.
+// A person is ONE contact per organisation (mig 712), related to each of its
+// studios through contact_studios (mig 764); a person group (person_groups,
+// per organisation since mig 767) only links the extra accounts one person
+// may still hold (a ClassPass placeholder, a pre-712 duplicate). So "active
+// elsewhere" is asked of the PERSON: the active members of every other studio
+// in the organisation, each read through that studio's own membership adapter
+// (Glofox contact columns at Stillorgan, fresh un1t.online subscriptions at
+// Hatch Street), widened to every contact in their person groups.
 //
 // The rule (leavesBoard) keeps today's placement for anyone the board's own
 // classifier already shows as a customer THERE (converted / member /

@@ -20,9 +20,9 @@
 //     'member' = established member). The stage is classifier-derived
 //     from Glofox status, so membership changes flow through here
 //     without app code touching the column.
-//   - OR an active contact_memberships row (HATCH-MEMBERS.1, mig 722):
-//     a membership sold outside Glofox, e.g. Hatch Street's un1t.online
-//     plans, imported from that system's client export.
+//   - OR an ACTIVE contact_studios row of kind member at one of those
+//     studios (ORGCONTACTS.2, mig 764): a membership sold outside Glofox,
+//     e.g. Hatch Street's un1t.online plans.
 //
 // We never leak whether an email exists in contacts when the lookup
 // fails — the route returns { is_member: false } whether the email
@@ -37,6 +37,7 @@
 
 import { escapeLikePattern } from './like-escape'
 import { logWarn } from './log'
+import { contactsAtStudio } from './contact-studios'
 
 const MEMBER_STAGES = ['converted', 'member']
 
@@ -126,20 +127,21 @@ export async function validateMemberByEmail({ db, email, locationId, memberLocat
   // FUNNEL.1 — current members sit in 'converted' (≤60d since joining)
   // or 'member' (established). That stage is classified from Glofox.
   let data = rows.find((r) => MEMBER_STAGES.includes(r.pipeline_stage_slug))
-  // HATCH-MEMBERS.1 (mig 722) — a membership held outside Glofox (Hatch
-  // Street's un1t.online plans) is an active contact_memberships row at one
-  // of the same studios. A failed read here only means "not proven a member
-  // this way", the same as the stage check finding nothing.
+  // ORGCONTACTS.2 (mig 764) — a membership held outside Glofox (Hatch
+  // Street's un1t.online plans) is an ACTIVE contact_studios row of kind
+  // member at one of the same studios. A failed read here only means "not
+  // proven a member this way", the same as the stage check finding nothing.
   if (!data && rows.length > 0) {
-    const { data: held, error: heldErr } = await db
-      .from('contact_memberships')
-      .select('contact_id')
-      .in('contact_id', rows.map((r) => r.id))
-      .in('location_id', locationIds)
-      .eq('status', 'active')
-      .limit(1)
-    if (heldErr) logWarn('member-validation', 'contact_memberships unreadable; stage check only', { error: heldErr.message })
-    const holder = !heldErr && Array.isArray(held) && held[0] ? held[0].contact_id : null
+    let holder = null
+    for (const locationId of locationIds) {
+      const held = await contactsAtStudio(db, locationId, { kinds: ['member'], status: 'active', contactIds: rows.map((r) => r.id) })
+      if (!held.ok) {
+        logWarn('member-validation', 'contact_studios unreadable; stage check only', { error: held.error })
+        break
+      }
+      holder = held.rows[0]?.contact_id ?? null
+      if (holder) break
+    }
     data = holder ? rows.find((r) => r.id === holder) : null
   }
   if (!data) return fail

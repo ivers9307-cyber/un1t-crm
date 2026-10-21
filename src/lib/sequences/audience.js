@@ -44,23 +44,32 @@ import { logWarn } from '@/lib/log'
  *
  * @returns {Promise<{ state: 'match'|'no_match'|'unknown', unexpectedError?: Error }>}
  */
-async function evaluateAudience(db, contactId, filter) {
+async function evaluateAudience(db, contactId, filter, { locationId = null } = {}) {
   if (!filter?.filters?.length) return { state: 'match' }
 
   try {
-    // Look up the contact's location so tag-filter resolution can be
-    // location-scoped (cheaper than scanning contact_tags org-wide
-    // when a sequence has a `tag` filter — see mig 085).
-    const { data: contact } = await db
-      .from('contacts')
-      .select('location_id')
-      .eq('id', contactId)
-      .maybeSingle()
+    // ORGCONTACTS.4 — the audience is judged AT THE SEQUENCE'S STUDIO: the
+    // contact's studio_contacts row there (mig 765) carries the stage at that
+    // studio, which the stage field now reads. Callers pass the sequence's
+    // location_id; without one (older callers) the contact's primary studio
+    // stands in, where every contact has a row. The same studio scopes
+    // tag-filter resolution (cheaper than scanning contact_tags org-wide —
+    // see mig 085).
+    let studioId = locationId
+    if (!studioId) {
+      const { data: contact } = await db
+        .from('contacts')
+        .select('location_id')
+        .eq('id', contactId)
+        .maybeSingle()
+      studioId = contact?.location_id || null
+    }
 
     let query = db
-      .from('contacts')
+      .from('studio_contacts')
       .select('id', { count: 'exact', head: true })
       .eq('id', contactId)
+      .eq('studio_location_id', studioId)
 
     try {
       // Destructure the wrapped { query } return — see resolveTagFilters
@@ -69,7 +78,7 @@ async function evaluateAudience(db, contactId, filter) {
         db,
         query,
         filter,
-        locationId: contact?.location_id || null,
+        locationId: studioId,
       }))
     } catch (e) {
       if (e instanceof InvalidAudienceFilterError) {
@@ -107,10 +116,11 @@ async function evaluateAudience(db, contactId, filter) {
  * @param {object} db                                 Service-role Supabase client.
  * @param {string} contactId                          The contact whose match we're testing.
  * @param {object | null | undefined} filter          { logic, filters: [{ field, op, value }] }
+ * @param {{ locationId?: string|null }} [opts]       the SEQUENCE's studio (ORGCONTACTS.4)
  * @returns {Promise<'match' | 'no_match' | 'unknown'>}
  */
-export async function evaluateSequenceAudience(db, contactId, filter) {
-  const { state } = await evaluateAudience(db, contactId, filter)
+export async function evaluateSequenceAudience(db, contactId, filter, opts = {}) {
+  const { state } = await evaluateAudience(db, contactId, filter, opts)
   return state
 }
 
@@ -123,10 +133,11 @@ export async function evaluateSequenceAudience(db, contactId, filter) {
  * @param {object} db                                 Service-role Supabase client.
  * @param {string} contactId                          The contact whose match we're testing.
  * @param {object | null | undefined} filter          { logic, filters: [{ field, op, value }] }
+ * @param {{ locationId?: string|null }} [opts]       the SEQUENCE's studio (ORGCONTACTS.4)
  * @returns {Promise<boolean>}
  */
-export async function contactMatchesSequenceAudience(db, contactId, filter) {
-  const { state, unexpectedError } = await evaluateAudience(db, contactId, filter)
+export async function contactMatchesSequenceAudience(db, contactId, filter, opts = {}) {
+  const { state, unexpectedError } = await evaluateAudience(db, contactId, filter, opts)
   if (unexpectedError) throw unexpectedError
   return state === 'match'
 }

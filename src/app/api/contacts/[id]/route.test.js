@@ -28,6 +28,8 @@ vi.mock('@/lib/contact-mail-erasure', () => ({
   redactMailForContact: vi.fn(async () => ({ ok: true, failures: [], tickets: 0, messages: 0, attachments: 0 })),
 }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
+// ORGCONTACTS.4 — the PUT reads the person's relationship studios (contact_studios).
+vi.mock('@/lib/contact-studios', () => ({ studiosOfContact: vi.fn(async () => ({ ok: true, rows: [] })) }))
 
 import { PUT, DELETE } from './route.js'
 import { requireApiKeyOrManager, assertRowInOrg } from '@/lib/api-auth'
@@ -35,6 +37,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redactWhatsAppForContact, redactInBodyForContact, getContactImpact } from '@/lib/contact-merge'
 import { redactMailForContact } from '@/lib/contact-mail-erasure'
+import { studiosOfContact } from '@/lib/contact-studios'
+import { person, MASTER } from '../../../../../tests/helpers/role-sweep-callers.js'
 
 function mockDb({ oldRow, updated, oldErr, updateErr } = {}) {
   const updateSingle = vi.fn(() =>
@@ -499,5 +503,98 @@ describe('DELETE /api/contacts/[id] — blocker check runs before any destructiv
     const res = await DELETE(new Request('http://localhost/api/contacts/c1', { method: 'DELETE' }), delProps)
     expect(res.status).toBe(500)
     expect((await res.json()).error).toMatch(/foreign key constraint/)
+  })
+})
+
+// ORGCONTACTS.4 (decision 4) — edit anywhere the person has a relationship:
+// a manager with Contacts at one of the contact's studios may PUT; delete
+// stays with the primary studio's admins, an organisation admin or a master.
+describe('PUT /api/contacts/[id] — a manager at a relationship studio (ORGCONTACTS.4)', () => {
+  const OLD = { tags: [], location_id: 'loc-1', email: null, glofox_member_id: null }
+  const cookie = (user) => requireApiKeyOrManager.mockResolvedValue({ ok: true, orgId: null, user })
+  const managerAt = (loc, contacts = true) => person({ [loc]: { role: 'manager', permissions: { contacts } } }, loc)
+  const rowsAt = (...locs) => ({ ok: true, rows: locs.map((location_id) => ({ location_id, status: 'active' })) })
+
+  it('a manager at a relationship studio with Contacts may edit', async () => {
+    cookie(managerAt('loc-2'))
+    studiosOfContact.mockResolvedValueOnce(rowsAt('loc-1', 'loc-2'))
+    const db = mockDb({ oldRow: OLD })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req(), props)).status).toBe(200)
+    expect(db.update).toHaveBeenCalled()
+    expect(studiosOfContact).toHaveBeenCalledWith(db, 'c1')
+  })
+
+  it('without Contacts there: 404, nothing written', async () => {
+    cookie(managerAt('loc-2', false))
+    studiosOfContact.mockResolvedValueOnce(rowsAt('loc-1', 'loc-2'))
+    const db = mockDb({ oldRow: OLD })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req(), props)).status).toBe(404)
+    expect(db.update).not.toHaveBeenCalled()
+  })
+
+  it('a manager at an unrelated studio: 404; an unreadable rows read keeps today’s primary-only rule', async () => {
+    cookie(managerAt('loc-3'))
+    studiosOfContact.mockResolvedValueOnce(rowsAt('loc-1', 'loc-2'))
+    let db = mockDb({ oldRow: OLD })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req(), props)).status).toBe(404)
+    cookie(managerAt('loc-2'))
+    studiosOfContact.mockResolvedValueOnce({ ok: false, error: 'down' })
+    db = mockDb({ oldRow: OLD })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req(), props)).status).toBe(404)
+    expect(db.update).not.toHaveBeenCalled()
+  })
+
+  it('an API-key caller never reads the relationship studios (its scope is the organisation key)', async () => {
+    requireApiKeyOrManager.mockResolvedValue({ ok: true, orgId: 'org-1', user: null })
+    const db = mockDb({ oldRow: OLD })
+    createServerClient.mockReturnValue(db)
+    expect((await PUT(req(), props)).status).toBe(200)
+    expect(studiosOfContact).not.toHaveBeenCalled()
+  })
+})
+
+describe('DELETE /api/contacts/[id] — the primary studio’s admins, an organisation admin or a master (ORGCONTACTS.4)', () => {
+  const IMPACT_CLEAN = { cascade_on_delete: [], keep_on_delete: [], redact_on_delete: [], block_delete: [], total_rows: 0, partial: false }
+  const ORG = 'f0000000-0000-4000-8000-0000000000f0'
+  const existing = { id: 'c1', location_id: 'loc-1', organization_id: ORG }
+  function deleteDb() {
+    const del = vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) }))
+    return { delete: del, from: vi.fn(() => ({ select: vi.fn(() => ({ eq: vi.fn(() => ({ single: vi.fn(async () => ({ data: existing, error: null })) })) })), delete: del })) }
+  }
+  const delReq = () => new Request('http://localhost/api/contacts/c1', { method: 'DELETE' })
+  const delProps = { params: { id: 'c1' } }
+  beforeEach(() => { getContactImpact.mockResolvedValue(IMPACT_CLEAN) })
+
+  it("the primary studio's manager: allowed", async () => {
+    getCurrentUser.mockResolvedValue(person({ 'loc-1': { role: 'manager' } }, 'loc-1'))
+    const db = deleteDb(); createServerClient.mockReturnValue(db)
+    expect((await DELETE(delReq(), delProps)).status).toBe(200)
+    expect(db.delete).toHaveBeenCalled()
+  })
+
+  it('an organisation admin with no membership anywhere: allowed', async () => {
+    getCurrentUser.mockResolvedValue({ ...person({}, 'loc-x'), locations: [], rolesByLocation: {}, orgAdminOrgIds: [ORG] })
+    const db = deleteDb(); createServerClient.mockReturnValue(db)
+    expect((await DELETE(delReq(), delProps)).status).toBe(200)
+    expect(db.delete).toHaveBeenCalled()
+  })
+
+  it('a master: allowed', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = deleteDb(); createServerClient.mockReturnValue(db)
+    expect((await DELETE(delReq(), delProps)).status).toBe(200)
+  })
+
+  it("a manager at a relationship studio that is not the primary: 403, nothing scrubbed", async () => {
+    getCurrentUser.mockResolvedValue(person({ 'loc-2': { role: 'manager', permissions: { contacts: true } } }, 'loc-2'))
+    const db = deleteDb(); createServerClient.mockReturnValue(db)
+    expect((await DELETE(delReq(), delProps)).status).toBe(403)
+    expect(getContactImpact).not.toHaveBeenCalled()
+    expect(db.delete).not.toHaveBeenCalled()
+    expect(redactWhatsAppForContact).not.toHaveBeenCalled()
   })
 })

@@ -54,19 +54,23 @@ describeGate('GET /api/contacts/[id]/export', {
   forbidden: { status: 403, body: { success: false, error: 'Forbidden' } },
   hidden: NOT_FOUND, cases: CASES,
 }, T)
+// ORGCONTACTS.4 (decision 4) — impact and DELETE share one decision (the
+// primary studio's admins, an organisation admin, a master), so a non-member
+// and a member below the role bar get the same answer: the gate no longer
+// says whether the caller belongs to the studio.
 describeGate('GET /api/contacts/[id]/impact', {
   call: () => impact.GET(bare('GET'), params({ id: CONTACT_ID })),
-  gateReads: CONTACT, forbidden: MANAGER_REQUIRED,
-  hidden: { status: 403, body: { success: false, error: 'Forbidden' } },
+  gateReads: CONTACT, forbidden: MANAGER_REQUIRED, hidden: MANAGER_REQUIRED,
   cases: CASES,
 }, T)
 describeGate('POST /api/contacts/[id]/push-to-glofox', {
   call: () => pushToGlofox.POST(bare('POST'), params({ id: CONTACT_ID })),
   gateReads: CONTACT, forbidden: HC_PLUS, hidden: DIFFERENT_LOCATION, cases: CASES,
 }, T)
+const PRIMARY_ADMINS = { status: 403, body: { success: false, error: 'Head coach, manager, owner, or master at the contact’s primary studio, or an organisation admin, required' } }
 describeGate('DELETE /api/contacts/[id]', {
   call: () => contact.DELETE(bare('DELETE'), params({ id: CONTACT_ID })),
-  gateReads: CONTACT, forbidden: HC_PLUS, hidden: DIFFERENT_LOCATION, cases: CASES,
+  gateReads: CONTACT, forbidden: PRIMARY_ADMINS, hidden: PRIMARY_ADMINS, cases: CASES,
 }, T)
 
 // PUT /api/contacts/[id] is pinned, every row, in tests/role-sweep/api-key-or-manager.test.js

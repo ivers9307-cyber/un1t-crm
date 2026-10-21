@@ -276,3 +276,59 @@ describe('routeInboundThread — never throws', () => {
     expect(r).toMatchObject({ locationId: STILL, by: 'number_home', conversation: null })
   })
 })
+
+// ORGCONTACTS.3 — step 4 reads the person's relationship rows (contact_studios):
+// the candidate studio with an active relationship, by last activity; the
+// home studio is the explicit fallback (spec §3.4).
+describe('routeInboundThread — step 4: the studio with an active relationship (ORGCONTACTS.3)', () => {
+  const row = (locationId, status, lastSeenAt) => ({ location_id: locationId, status, last_seen_at: lastSeenAt })
+  const withRows = (contactStudios, home = STILL) => ({ ...base, contact: { id: 'c1', location_id: home }, contactStudios })
+
+  it('an active row at one candidate wins over the home studio', async () => {
+    const r = await routeInboundThread(makeDb(), withRows([row(HATCH, 'active', ago(DAY))], STILL))
+    expect(r).toMatchObject({ locationId: HATCH, by: 'relationship', conversation: null, switchedOn: true })
+  })
+
+  it('two active rows: later last_seen_at wins', async () => {
+    const later = await routeInboundThread(makeDb(), withRows([row(STILL, 'active', ago(3 * DAY)), row(HATCH, 'active', ago(DAY))], STILL))
+    expect(later).toMatchObject({ locationId: HATCH, by: 'relationship' })
+    const flipped = await routeInboundThread(makeDb(), withRows([row(STILL, 'active', ago(DAY)), row(HATCH, 'active', ago(3 * DAY))], HATCH))
+    expect(flipped).toMatchObject({ locationId: STILL, by: 'relationship' })
+  })
+
+  it('equal last_seen_at: primary studio wins when it is one of them, else lower location_id (Review Focus 3)', async () => {
+    const at = ago(DAY)
+    const primaryWins = await routeInboundThread(makeDb(), withRows([row(HATCH, 'active', at), row(STILL, 'active', at)], STILL))
+    expect(primaryWins).toMatchObject({ locationId: STILL, by: 'relationship' })
+    const primaryElsewhere = await routeInboundThread(makeDb(), withRows([row(STILL, 'active', at), row(HATCH, 'active', at)], OTHER))
+    expect(primaryElsewhere).toMatchObject({ locationId: HATCH, by: 'relationship' })
+  })
+
+  it('ended rows are ignored; none active → home if candidate, else number home', async () => {
+    const home = await routeInboundThread(makeDb(), withRows([row(HATCH, 'ended', ago(DAY))], STILL))
+    expect(home).toMatchObject({ locationId: STILL, by: 'home' })
+    const numberHome = await routeInboundThread(makeDb(), withRows([row(HATCH, 'ended', ago(DAY))], OTHER))
+    expect(numberHome).toMatchObject({ locationId: STILL, by: 'number_home' })
+  })
+
+  it("null contactStudios → today's home rule", async () => {
+    const db = makeDb({ conversations: [thread('conv-hatch', HATCH, { contact_id: 'c1' })] })
+    const r = await routeInboundThread(db, withRows(null, HATCH))
+    expect(r).toMatchObject({ locationId: HATCH, by: 'home' })
+    expect(r.conversation).toMatchObject({ id: 'conv-hatch' })
+  })
+
+  it('a row at a non-candidate studio is ignored', async () => {
+    const r = await routeInboundThread(makeDb(), withRows([row(OTHER, 'active', ago(DAY))], STILL))
+    expect(r).toMatchObject({ locationId: STILL, by: 'home' })
+  })
+
+  it('a recent outbound (step 3) still wins over the relationship row', async () => {
+    const db = makeDb({
+      conversations: [thread('conv-still', STILL, { contact_id: 'c1' })],
+      messages: [outbound('conv-still', ago(HOUR))],
+    })
+    const r = await routeInboundThread(db, withRows([row(HATCH, 'active', ago(DAY))], HATCH))
+    expect(r).toMatchObject({ locationId: STILL, by: 'recent' })
+  })
+})

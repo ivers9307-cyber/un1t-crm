@@ -25,13 +25,13 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { orgWhatsAppNumberCreateSchema } from '@/lib/schemas'
 import { publicShape } from '@/lib/whatsapp-numbers-shape'
-import { requireHomeStudioInOrg, stampHomeLinkCreatedBy, duplicateNumberMessage } from '@/lib/org-whatsapp-numbers'
+import { requireHomeStudioInOrg, switchOnAtHome, duplicateNumberMessage } from '@/lib/org-whatsapp-numbers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 // Everything publicShape reads (the token and signup_meta stay server-side).
-const NUMBER_COLUMNS = 'id, organization_id, location_id, label, phone_number_id, business_account_id, app_id, display_phone, source, token_type, connected_via, is_default, is_active, access_token, signup_meta, created_at, updated_at'
+const NUMBER_COLUMNS = 'id, organization_id, location_id, label, phone_number_id, business_account_id, app_id, display_phone, source, token_type, connected_via, is_active, access_token, signup_meta, created_at, updated_at'
 
 export async function GET(_request, props) {
   const params = await props.params
@@ -89,7 +89,9 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 
-  await stampHomeLinkCreatedBy(db, { numberId: data.id, locationId: data.location_id, userId: user.id })
+  // ORGCONTACTS.0: the route switches the number on at its home studio (mig
+  // 763 dropped the trigger that did). A failure keeps the number and says so.
+  const homeSwitchOn = await switchOnAtHome(db, { numberId: data.id, locationId: data.location_id, userId: user.id })
 
-  return NextResponse.json({ success: true, number: publicShape(data) })
+  return NextResponse.json({ success: true, number: publicShape(data), home_switch_on: homeSwitchOn })
 }

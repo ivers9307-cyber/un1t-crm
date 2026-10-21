@@ -12,13 +12,15 @@
 // (sequence.location_id). What was missing is the door: the enrol route took
 // only home contacts, so Hatch could not enrol the people on its own board.
 //
-// "Joined this studio" means the person holds, AT this studio, a deal on one
-// of its boards or a marketing-preference row. Both are written only by
-// server code when the person signs up there (the un1t.online sync's
-// ensureStudioPreferences, a lead form's consent write, a deal placement), so
-// a studio can never reach a sibling's contact it has no business with.
-// Never across organisations: a contact whose organisation is not the
-// studio's is refused whatever rows exist.
+// "Joined this studio" means the person holds a contact_studios row AT this
+// studio (ORGCONTACTS.2, mig 764: a deal on one of its boards, a
+// marketing-preference row, a provider account or a membership there, any
+// status). Every one of those is written only by server code when the person
+// signs up there, so a studio can never reach a sibling's contact it has no
+// business with. Never across organisations: a contact whose organisation is
+// not the studio's is refused whatever rows exist.
+
+import { contactsAtStudio } from './contact-studios.js'
 
 const CHUNK = 200
 const ERR_MAX = 200
@@ -69,19 +71,10 @@ export async function contactIdsLinkedToStudio(db, { locationId, contactIds }) {
   }
 
   const joined = new Set()
-  const pending = [...sibling]
-  for (const table of ['deals', 'contact_location_preferences']) {
-    if (pending.length === 0) break
-    for (const chunk of chunks(pending.filter((id) => !joined.has(id)), CHUNK)) {
-      if (chunk.length === 0) continue
-      const { data, error } = await db
-        .from(table)
-        .select('contact_id')
-        .eq('location_id', locationId)
-        .in('contact_id', chunk)
-      if (error) return { ok: false, reason: 'links_unreadable', err: bounded(error) }
-      for (const r of data || []) if (r.contact_id) joined.add(r.contact_id)
-    }
+  if (sibling.size > 0) {
+    const rel = await contactsAtStudio(db, locationId, { contactIds: [...sibling] })
+    if (!rel.ok) return { ok: false, reason: 'links_unreadable', err: bounded(rel.error) }
+    for (const r of rel.rows) if (r.contact_id) joined.add(r.contact_id)
   }
 
   const ids = wanted.filter((id) => home.has(id) || joined.has(id))

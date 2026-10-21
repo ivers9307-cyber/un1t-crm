@@ -161,12 +161,20 @@ function makeDb(tables = {}) {
 // createGroup
 // ---------------------------------------------------------------------------
 describe('createGroup', () => {
+  it('refuses to create a group when the studio’s organisation is unreadable (never a group with no organisation)', async () => {
+    const contacts = [{ id: 'c1', glofox_membership_status: 'member', glofox_account_active: true, last_attended_at: null }]
+    const db = makeDb({ contacts, person_groups: [], person_group_members: [], locations: [] })
+    await expect(createGroup(db, { contactIds: ['c1'], method: 'manual', confidence: 'manual', actorId: 'a', locationId: 'loc-x' }))
+      .rejects.toThrow(/organisation/)
+    expect(db._store.person_groups).toHaveLength(0)
+  })
+
   it('inserts a group row with primary_contact_id chosen by pickPrimary, and N member rows', async () => {
     const contacts = [
       { id: 'c1', glofox_membership_status: 'classpass_payg', glofox_account_active: true, last_attended_at: null },
       { id: 'c2', glofox_membership_status: 'member', glofox_account_active: true, last_attended_at: '2026-05-01' },
     ]
-    const db = makeDb({ contacts, person_groups: [], person_group_members: [] })
+    const db = makeDb({ contacts, person_groups: [], person_group_members: [], locations: [{ id: 'loc-1', organization_id: 'org-1' }] })
 
     const { group, members } = await createGroup(db, {
       contactIds: ['c1', 'c2'],
@@ -180,6 +188,8 @@ describe('createGroup', () => {
     // pickPrimary should pick c2 (member beats classpass)
     expect(group.primary_contact_id).toBe('c2')
     expect(group.location_id).toBe('loc-1')
+    // ORGCONTACTS.4 (mig 767): the group follows the organisation, resolved from the studio.
+    expect(group.organization_id).toBe('org-1')
     expect(members).toHaveLength(2)
     expect(members.map(m => m.contact_id).sort()).toEqual(['c1', 'c2'])
     expect(members[0].match_method).toBe('phone')
@@ -410,6 +420,7 @@ describe('linkContactPair', () => {
       ],
       person_groups: [],
       person_group_members: [],
+      locations: [{ id: 'loc-1', organization_id: 'org-1' }], // ORGCONTACTS.4: createGroup resolves the organisation
     })
 
     const { group, members } = await linkContactPair(db, {

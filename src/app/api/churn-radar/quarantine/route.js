@@ -22,6 +22,7 @@ import { radarAvailability, RADAR_UNAVAILABLE } from '@/lib/radar-availability'
 import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { crossoverIdsAt } from '@/lib/contact-crossovers'
+import { markDormantAtStudio } from '@/lib/radar-dormant-studio'
 import { radarReadsFor } from '@/lib/membership/reads/index'
 import { SOURCE_UNREADABLE } from '@/lib/radar-copy'
 
@@ -120,11 +121,20 @@ export async function POST(request) {
       const { error: updErr } = await db
         .from('contacts')
         .update({ pipeline_stage_slug: 'dormant' })
-        .in('id', ownedIds) // owned only: a crossover's row is another studio's
+        .in('id', ownedIds) // owned only: the contact-wide column follows the primary studio
       if (updErr) {
         logWarn('churn-radar', 'quarantine reclassify failed', { err: updErr })
         return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
       }
+    }
+    // ORGCONTACTS.4 (decision 3) — dormancy is per studio: the person's
+    // contact_studios row AT THIS studio takes stage_slug 'dormant', owned and
+    // crossover alike (the row's kind / source / status kept), so this studio's
+    // audiences and list read it. No row here → nothing to mark here. Best
+    // effort: the action log and the contacts column above are the record,
+    // and a lost studio write is logged, never a refusal.
+    if (source === 'glofox' && ids.length > 0) {
+      await markDormantAtStudio(db, { locationId, contactIds: ids, module: 'churn-radar' })
     }
   }
 

@@ -156,7 +156,7 @@ describe('ROLEUI.1 — action gates match the routes they call', () => {
         canToggleExempt: true,
         canEditPrefs: true,
         admin: {
-          canPasswordOverride: true, canEdit: true, canDelete: true, canInvite: true,
+          canPasswordOverride: true, canEdit: true, canDelete: true, canRehome: true, canInvite: true,
           hasUserAccount: true, canEditDevices: true, canLinkAccount: true,
         },
       })
@@ -169,7 +169,7 @@ describe('ROLEUI.1 — action gates match the routes they call', () => {
         canToggleExempt: false,
         canEditPrefs: false,
         admin: {
-          canPasswordOverride: false, canEdit: false, canDelete: false, canInvite: false,
+          canPasswordOverride: false, canEdit: false, canDelete: false, canRehome: false, canInvite: false,
           hasUserAccount: true, canEditDevices: false, canLinkAccount: false,
         },
       })
@@ -190,7 +190,7 @@ describe('ROLEUI.1 — action gates match the routes they call', () => {
         canToggleExempt: true,
         canEditPrefs: false,
         admin: {
-          canPasswordOverride: false, canEdit: true, canDelete: true, canInvite: false,
+          canPasswordOverride: false, canEdit: true, canDelete: true, canRehome: true, canInvite: false,
           hasUserAccount: true, canEditDevices: true, canLinkAccount: false,
         },
       })
@@ -201,5 +201,36 @@ describe('ROLEUI.1 — action gates match the routes they call', () => {
       expect(g.canToggleExempt).toBe(false)
       expect(Object.values(g.admin).some(Boolean)).toBe(false)
     })
+  })
+})
+
+// ORGCONTACTS.4 (decision 4) — the page's Edit / Delete / primary-studio
+// buttons follow the new gates: Edit anywhere the caller is a manager with
+// Contacts at one of the person's studios; Delete and Change primary studio
+// by the primary studio's admins, an organisation admin or a master.
+describe('ORGCONTACTS.4 — edit anywhere with a relationship; delete / rehome by the primary studio or an org admin', () => {
+  const C = { id: 'c0000000-0000-4000-8000-000000000001', location_id: LOC_A, organization_id: 'f0000000-0000-4000-8000-0000000000f0' }
+  const managerB = person({ [LOC_B]: { role: 'manager', permissions: { contacts: true } } }, LOC_B)
+  const managerBNoContacts = person({ [LOC_B]: { role: 'manager', permissions: { contacts: false } } }, LOC_B)
+
+  it('canWriteContact / canOpenContactEditor take the relationship studios: a manager with Contacts at one of them may edit', () => {
+    expect(canWriteContact(managerB, LOC_A)).toBe(false)
+    expect(canWriteContact(managerB, LOC_A, [LOC_A, LOC_B])).toBe(true)
+    expect(canWriteContact(managerBNoContacts, LOC_A, [LOC_A, LOC_B])).toBe(false)
+    expect(canOpenContactEditor(managerB, LOC_A, [LOC_A, LOC_B])).toBe(true)
+    expect(canOpenContactEditor(managerBNoContacts, LOC_A, [LOC_A, LOC_B])).toBe(false)
+  })
+
+  it('contactActionGates: canEdit widens with the relationship studios; canDelete and canRehome do not, but admit an org admin', () => {
+    const gates = contactActionGates(managerB, C, { relationshipStudioIds: [LOC_A, LOC_B] })
+    expect(gates.admin.canEdit).toBe(true)
+    expect(gates.admin.canDelete).toBe(false)
+    expect(gates.admin.canRehome).toBe(false)
+    const orgAdmin = { ...person({}, LOC_B), locations: [], rolesByLocation: {}, orgAdminOrgIds: [C.organization_id] }
+    const adminGates = contactActionGates(orgAdmin, C)
+    expect(adminGates.admin.canDelete).toBe(true)
+    expect(adminGates.admin.canRehome).toBe(true)
+    expect(adminGates.admin.canEdit).toBe(false)
+    expect(contactActionGates(MASTER, C).admin.canRehome).toBe(true)
   })
 })

@@ -12,8 +12,9 @@
 //   POST { location_id, page?: 1, limit?: 100, dry_run?: true }
 // dry_run (the default) reads only: it lists the candidates and conflicts.
 // dry_run:false runs applyMemberSync for the candidates on the page (at most
-// APPLY_CAP), which links each one (glofox_crossover_members + the studio's
-// preferences row) exactly as the webhook and the cron now do.
+// APPLY_CAP), which links each one (the contact_studios row with source glofox
+// + the studio's preferences row; mig 768 dropped the link table) exactly as
+// the webhook and the cron now do.
 // The response carries ids only, never names or emails.
 
 import { NextResponse } from 'next/server'

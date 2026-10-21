@@ -14,9 +14,16 @@
 //                   that Meta did not report failed (the member never got it);
 //                   a tie goes to the higher thread id, so the answer is
 //                   deterministic (ids are random, not time-ordered; Review Focus 4);
-//   5. home       — the member's home studio (contacts.location_id, which the
-//                   caller must pass), if a candidate;
-//   6. number_home — N's home studio.
+//   5. relationship — ORGCONTACTS.3 (spec §3.4): the candidate studio where the
+//                   person has an ACTIVE contact_studios row, by latest
+//                   last_seen_at; a tie goes to their primary studio when it is
+//                   one of them, else the lower location_id (pickStudioByActivity).
+//                   The caller passes the rows (`contactStudios`), or null when
+//                   the read failed or the sender is unknown;
+//   6. home       — the member's home studio (contacts.location_id, which the
+//                   caller must pass), if a candidate: the explicit fallback
+//                   when no relationship row is active at a candidate;
+//   7. number_home — N's home studio.
 //
 // WAORGNUMBER.6 deleted the transitional `numberless_home` step (WAHOMESTUDIO.1):
 // a studio with nothing switched on is never a candidate, so no message files
@@ -27,6 +34,7 @@
 // answerable where a lost one is not. Never throws.
 import { logWarn } from './log'
 import { studiosUsingNumbers } from './whatsapp-config'
+import { pickStudioByActivity } from './contact-studios'
 import { adSignal, replySignal } from './wa-studio-pick/signals'
 
 export const RECENT_OUTBOUND_MS = 7 * 24 * 60 * 60 * 1000
@@ -70,6 +78,16 @@ async function threadAt(db, { waPhone, bsuid, locationId }, known) {
   return rows.find((t) => waPhone && t.wa_phone === waPhone) || rows[0] || null
 }
 
+// Step 5: the candidate studio with an active relationship row, by last
+// activity. Null when the rows are unknown (null) or none is active at a
+// candidate, so the home rule decides. Pure.
+function relationshipStudio(contactStudios, candidates, primaryLocationId) {
+  if (!Array.isArray(contactStudios)) return null
+  const atCandidates = contactStudios.filter((r) => r && candidates.includes(r.location_id))
+  if (!atCandidates.some((r) => r.status === 'active')) return null
+  return pickStudioByActivity(atCandidates, { primaryLocationId })
+}
+
 async function recentThread(db, threads, now) {
   if (!threads.length) return null
   try {
@@ -94,13 +112,13 @@ async function recentThread(db, threads, now) {
 
 /**
  * @returns {Promise<{ locationId: string, conversation: object|null,
- *   by: 'quoted'|'ad'|'recent'|'home'|'number_home',
+ *   by: 'quoted'|'ad'|'recent'|'relationship'|'home'|'number_home',
  *   switchedOn: boolean }>}  `switchedOn`: the number is switched on at the
  *   winning studio (assumed for its home studio when the link read failed),
  *   i.e. whether the caller stamps it on the thread.
  */
 export async function routeInboundThread(db, {
-  numberId, numberHomeLocationId, waPhone, bsuid, contact,
+  numberId, numberHomeLocationId, waPhone, bsuid, contact, contactStudios = null,
   contextMessageId, referral, now = Date.now(),
 }) {
   let linked = null
@@ -134,7 +152,9 @@ export async function routeInboundThread(db, {
     const recent = await recentThread(db, threads, now)
     if (recent) return await win(recent.location_id, 'recent', recent)
 
-    const home = contact?.location_id
+    const home = contact?.location_id || null
+    const related = relationshipStudio(contactStudios, candidates, home)
+    if (related) return await win(related, 'relationship')
     if (home && candidates.includes(home)) return await win(home, 'home')
     return await win(numberHomeLocationId, 'number_home')
   } catch (e) {
