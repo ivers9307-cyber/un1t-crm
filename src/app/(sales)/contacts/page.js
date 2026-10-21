@@ -11,6 +11,7 @@ import ContactsHeaderActions from '@/components/ContactsHeaderActions'
 import { crossoverContactIds, fetchCrossoverContext, fetchListMembershipFlags } from '@/lib/contact-crossovers'
 import { attachLinkedCounts } from '@/lib/person-links'
 import ContactDuplicatesView from '@/components/ContactDuplicatesView'
+import { logError } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
 
@@ -102,7 +103,11 @@ export default async function ContactsPage(props) {
     query = query.or(orClauses.join(','))
   }
 
-  const { data: rawContacts } = await query
+  // VISREFRESH.1 — a failed read is told to the view as an error; before,
+  // the error was discarded and the operator saw "No contacts found."
+  const { data: rawContacts, error: listError } = await query
+  if (listError) logError('contacts-page', 'contacts list read failed', { err: listError, locationId })
+  const initialError = listError ? 'The contact list could not be read. Try again in a moment.' : null
   const contacts = await attachLinkedCounts(db, rawContacts || [])
   const crossoverContext = await fetchCrossoverContext(db, contacts, locationId)
   // LISTFLAG.1 — preference-row membership at OTHER studios. Must be fed to
@@ -141,8 +146,15 @@ export default async function ContactsPage(props) {
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-5">
-        <h2 className="text-2xl font-bold">Contacts</h2>
+      {/* VISREFRESH.1 — one page header: title, a line of context, and the
+          primary action on the right with the quieter ones beside it. */}
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-2xl font-bold text-un1t-text">Contacts</h2>
+          <p className="mt-1 text-sm text-un1t-subtle">
+            Everyone this studio knows: leads, trialists and members, with their stage in the funnel.
+          </p>
+        </div>
         {tab === 'contacts' && (
           <ContactsHeaderActions
             canCreate={canCreate}
@@ -189,6 +201,8 @@ export default async function ContactsPage(props) {
           canMerge={canMerge}
           canDelete={canDelete}
           canSaveSegments={canSaveSegments}
+          initialError={initialError}
+          canCreate={canCreate}
         />
       )}
 

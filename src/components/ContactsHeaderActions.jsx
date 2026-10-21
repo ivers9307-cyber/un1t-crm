@@ -12,6 +12,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { Plus, Upload, History } from 'lucide-react'
+import { Button } from '@/components/ui'
 import ContactImportWizard from './ContactImportWizard'
 
 export default function ContactsHeaderActions({
@@ -22,32 +23,22 @@ export default function ContactsHeaderActions({
 }) {
   const [importOpen, setImportOpen] = useState(false)
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
+      {/* VISREFRESH.1 — secondary actions quiet, one primary on the right. */}
       {canImport && (
         <>
-          <Link
-            href="/contacts/imports"
-            className="inline-flex items-center gap-1.5 border border-un1t-border text-un1t-subtle text-sm font-medium px-3 py-2 rounded-lg hover:text-un1t-text hover:border-un1t-muted transition-colors"
-            title="View past CSV import batches"
-          >
-            <History size={14} /> Imports
-          </Link>
-          <button
-            type="button"
-            onClick={() => setImportOpen(true)}
-            className="inline-flex items-center gap-2 border border-un1t-border text-un1t-subtle text-sm font-medium px-4 py-2 rounded-lg hover:text-un1t-text hover:border-un1t-muted transition-colors"
-          >
-            <Upload size={16} /> Import contacts
-          </button>
+          <Button as={Link} href="/contacts/imports" variant="ghost" icon={History} title="View past CSV import batches">
+            Imports
+          </Button>
+          <Button type="button" variant="secondary" icon={Upload} onClick={() => setImportOpen(true)}>
+            Import contacts
+          </Button>
         </>
       )}
       {canCreate && (
-        <Link
-          href="/contacts/new"
-          className="inline-flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-4 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
-        >
-          <Plus size={16} /> New contact
-        </Link>
+        <Button as={Link} href="/contacts/new" icon={Plus}>
+          New contact
+        </Button>
       )}
       {importOpen && (
         <ContactImportWizard
