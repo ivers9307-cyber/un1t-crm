@@ -85,11 +85,12 @@ export async function fetchCrossoverContext(db, contacts, activeLocationId) {
 // caller may open this contact: they're master, they OWN it (its location
 // is one of theirs), the contact holds an ACTIVE membership at one of the
 // caller's studios where they hold Contacts (UN1TDUAL.2), one of those
-// studios lists it as a un1t.online client (UN1TDUAL.4), or it's a
-// crossover INTO one of their studios (the contact has a deal there). The
-// membership, client and deal branches are what keep this in step with the
+// studios lists it as a un1t.online client (UN1TDUAL.4) or as a Glofox
+// crossover member (GLOFOXSIBLING.1, ORGCONTACTS.0), or it's a crossover
+// INTO one of their studios (the contact has a deal there). The membership,
+// client, Glofox and deal branches are what keep this in step with the
 // list's owned ∪ crossover visibility (crossover_contact_ids returns all
-// three since mig 732) — gating the detail page strictly by ownership would
+// four since mig 758) — gating the detail page strictly by ownership would
 // 404 every crossover row an operator can see in the list and click. The
 // owner/master branches are pure (no query); only a genuine crossover
 // candidate pays for the probes.
@@ -141,8 +142,8 @@ export function contactStudioIds(user, locIds) {
 }
 
 /**
- * True when the contact has an ACTIVE membership or a un1t_clients row at one
- * of `locIds`. A read error is logged and treated as "no" for that probe
+ * True when the contact has an ACTIVE membership, a un1t_clients row or a
+ * glofox_crossover_members row at one of `locIds`. A read error is logged and treated as "no" for that probe
  * only; it never grants. A thrown read propagates (the caller denies).
  */
 async function probeMembershipOrClient(db, contactId, locIds) {
@@ -190,6 +191,27 @@ async function probeMembershipOrClient(db, contactId, locIds) {
       message: clientErr.message,
     })
   } else if (Array.isArray(clients) && clients.length > 0) {
+    return true
+  }
+
+  // ORGCONTACTS.0 — a Glofox member of one of the caller's Contacts studios
+  // whose contact lives at a sibling studio (glofox_crossover_members, mig
+  // 758). RLS and crossover_contact_ids admitted them since 758, so the list
+  // showed a row this gate then 404'd. Same failure rule: an error is logged
+  // (no PII) and falls through to the deal probe; it never grants.
+  const { data: glofoxLinks, error: glofoxErr } = await db
+    .from('glofox_crossover_members')
+    .select('id')
+    .eq('contact_id', contactId)
+    .in('location_id', locIds)
+    .limit(1)
+  if (glofoxErr) {
+    logError('contact-crossovers', 'glofox crossover probe failed; falling through to deal probe', {
+      contactId,
+      code: glofoxErr.code,
+      message: glofoxErr.message,
+    })
+  } else if (Array.isArray(glofoxLinks) && glofoxLinks.length > 0) {
     return true
   }
   return false

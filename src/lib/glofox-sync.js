@@ -14,6 +14,8 @@ import { normaliseGender } from './gender.js'
 import { findOpenDealForPipeline, findPrimaryPipeline } from './deal-lookup.js'
 import { PIPELINE_MODES } from '../../shared/pipelines/index.js'
 import { findGlofoxCrossoverContact, recordGlofoxCrossover } from './glofox-crossover.js'
+import { upsertContactStudio } from './contact-studios.js'
+import { hasBookableMembership } from './person-accounts.js'
 //
 // Source-of-truth contract:
 //   Glofox owns:  glofox_member_id, glofox_membership_status,
@@ -2111,6 +2113,22 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     contactId = preview.existing_id
   }
 
+  // ORGCONTACTS.1 — the relationship row at this studio (contact_studios, mig
+  // 764): member while the Glofox membership is bookable, else client; source
+  // glofox; first_seen_at from joined_at (the helper only moves it earlier),
+  // never last_seen_at (a sync is not activity). For a sibling-studio contact
+  // the crossover link below writes it, with the same columns. Logged and
+  // reported, never fatal: the contact write above already happened.
+  let studioRel = null
+  if (!preview.crossover) {
+    studioRel = await upsertContactStudio(db, {
+      contactId, locationId, source: 'glofox', status: 'active',
+      kind: hasBookableMembership(preview.mapped) ? 'member' : 'client',
+      firstSeenAt: preview.mapped?.joined_at || null,
+    })
+    if (!studioRel.ok) logError('glofox-sync', 'contact_studios row not written', { locationId, contactId, error: studioRel.error })
+  }
+
   // GLOFOXSIBLING.1 — the contact lives at a sibling studio: link it here so
   // staff holding Contacts at this studio can read it (mig 758), with this
   // studio's preferences row. Re-run on every sync (idempotent), so a link
@@ -2123,7 +2141,11 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       glofoxMemberId: preview.mapped.glofox_member_id,
       contactId,
       contactLocationId: preview.crossover.home_location_id,
+      contactRow: preview.mapped,
     })
+    if (crossoverLink.contact_studio && !crossoverLink.contact_studio.ok) {
+      logError('glofox-sync', 'contact_studios row not written', { locationId, contactId, error: crossoverLink.contact_studio.error })
+    }
     if (crossoverLink.error) {
       logError('glofox-sync', 'Glofox crossover link not recorded', {
         locationId, contactId, how: preview.crossover.how, error: crossoverLink.error,
@@ -2397,5 +2419,6 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     stage_change_trigger: stageChangeTriggerResult,
     membership_state_trigger: membershipStateTriggerResult,
     ...(crossoverLink ? { crossover_link: crossoverLink } : {}),
+    ...(studioRel ? { contact_studio: studioRel.ok ? { ok: true } : { ok: false, error: studioRel.error } } : {}),
   }
 }

@@ -473,6 +473,14 @@ export const studioConsentCopySchema = z.object({
   start_ack: consentCopyField,
 })
 
+// ORGCONTACTS.0 (WAORGNUMBER R7, spec §3.3): the studio's blast sign-off
+// window (PUT /api/locations/[id]/whatsapp/blast-signoff). A plain calendar
+// date on the studio's clock ('2026-11-16'); null clears the window. The
+// day's existence (no 30 Feb) is judged in the route with strictDayStartMsIn.
+export const studioBlastSignoffSchema = z.object({
+  until: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a date like 2026-11-16').nullable(),
+})
+
 // N8NECHO.1: the screens are handed SECRET_MASK for a stored token. A mask (or
 // a blank) sent back is "no change", so it is dropped BEFORE validation and the
 // rest of the save applies; only a fresh token is ever written. min(20) below

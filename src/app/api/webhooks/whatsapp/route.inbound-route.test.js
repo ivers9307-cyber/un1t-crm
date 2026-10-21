@@ -43,6 +43,8 @@ vi.mock('@/lib/whatsapp-coexistence', () => ({
   nextHistorySyncState: vi.fn(),
 }))
 vi.mock('@/lib/whatsapp-coexistence-ingest', () => ({ syncContactMatchOnly: vi.fn(), ingestCoexistenceMessage: vi.fn() }))
+// ORGCONTACTS.1 — an inbound message is activity at the routed studio (touchContactStudio).
+vi.mock('@/lib/contact-studios', () => ({ touchContactStudio: vi.fn(async () => ({ ok: true, touched: true })) }))
 
 import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
@@ -53,6 +55,7 @@ import { maybeAutoReply } from '@/lib/agent/auto-reply'
 import { recordCtwaTouch } from '@/lib/meta-capi'
 import { handleFlowCompletion } from '@/lib/whatsapp-flow/completion.js'
 import { fakeWhatsAppDb, link } from '@/lib/whatsapp-numbers-fake-db.test-helpers.js'
+import { touchContactStudio } from '@/lib/contact-studios'
 
 const ORG = 'd0000000-0000-4000-8000-000000000001'
 const STILL = 'loc-still'
@@ -350,5 +353,33 @@ describe('POST /api/webhooks/whatsapp — several contacts share the phone (WAOR
     await run(routedToDoe({ conversations: [hatchThreadOf(null)] }), { text: { body: 'STOP' } })
     expect(state.conversations.find((c) => c.id === 'conv-hatch')).toMatchObject({ contact_id: 'c-ivers' })
     expect(applyWhatsappConsentKeyword).toHaveBeenCalledWith(expect.objectContaining({ contact: expect.objectContaining({ id: 'c-ivers' }), locationId: HATCH }))
+  })
+})
+
+// ORGCONTACTS.1 (plan Task 10) — an inbound message from a known contact is
+// activity at the studio the message was filed at: contact_studios.last_seen_at
+// moves forward there. Fire-and-forget: a failed touch never costs the 200.
+describe('POST /api/webhooks/whatsapp — inbound activity stamps contact_studios (ORGCONTACTS.1)', () => {
+  const HATCH_MEMBER = { id: 'c-1', location_id: HATCH }
+
+  it('a text from a known contact touches last_seen_at at the routed studio, at the message time', async () => {
+    pickInboundContact.mockReturnValue(HATCH_MEMBER)
+    const res = await run(makeState({ conversations: [thread('conv-hatch', HATCH)] }))
+    expect(res.status).toBe(200)
+    expect(inboundRow()).toMatchObject({ conversation_id: 'conv-hatch', location_id: HATCH })
+    expect(touchContactStudio).toHaveBeenCalledTimes(1)
+    expect(touchContactStudio).toHaveBeenCalledWith(expect.anything(), { contactId: 'c-1', locationId: HATCH, at: inboundRow().sent_at })
+  })
+
+  it('an unknown sender touches nothing; a failed touch is logged and the webhook still answers 200', async () => {
+    pickInboundContact.mockReturnValue(null)
+    expect((await run(makeState({ conversations: [thread('conv-still', STILL, { contact_id: null })] }))).status).toBe(200)
+    expect(touchContactStudio).not.toHaveBeenCalled()
+
+    pickInboundContact.mockReturnValue(HATCH_MEMBER)
+    touchContactStudio.mockRejectedValueOnce(new Error('boom'))
+    const res = await run(makeState({ conversations: [thread('conv-hatch', HATCH)] }))
+    expect(res.status).toBe(200)
+    expect(inboundRow()).toBeTruthy()
   })
 })

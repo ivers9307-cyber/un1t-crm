@@ -8,7 +8,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
 import { ownNumberOrRefusal, NUMBER_LOOKUP_FAILED_MESSAGE } from '@/lib/whatsapp-own-number'
-import { templateLocationIdFor, listLocationNumberConfigs } from '@/lib/whatsapp-config'
+import { listLocationNumberConfigs } from '@/lib/whatsapp-config'
 import { planTemplateSync } from '@/lib/whatsapp-template-sync'
 import { NO_WHATSAPP_NUMBER_MESSAGE, NO_LOCATION_MESSAGE } from '@/lib/whatsapp-number-missing'
 import { logError } from '@/lib/log'
@@ -44,9 +44,10 @@ export async function GET(request) {
 
   const { searchParams } = new URL(request.url)
   // The picker inside a thread asks by conversation: it lists the thread's
-  // studio's templates (templateLocationIdFor; WAORGNUMBER.6 removed the
-  // sibling case). Authorised on the CONVERSATION's studio, so staff of that
-  // studio need no access to the active one; cached rows only, never a sync.
+  // studio's templates (ORGCONTACTS.0: read off the conversation row; the
+  // identity seam templateLocationIdFor is gone). Authorised on the
+  // CONVERSATION's studio, so staff of that studio need no access to the
+  // active one; cached rows only, never a sync.
   const conversationId = searchParams.get('conversation_id')
   if (conversationId) {
     const db = createServerClient()
@@ -57,7 +58,7 @@ export async function GET(request) {
     // 404 like the unknown id above: a 403 here would confirm the id exists.
     const convGuard = assertLocationAccessOr404(user, conv.location_id)
     if (convGuard) return convGuard
-    const templateLocationId = await templateLocationIdFor(conv.location_id, conv.id)
+    const templateLocationId = conv.location_id
     // Same select and order as the location mode below: one row shape.
     let q = db.from('whatsapp_templates').select('*').order('created_at', { ascending: false })
       .eq('location_id', templateLocationId)

@@ -94,6 +94,25 @@ export const CLOSED_FUNCTIONS = [
     why: 'a SECURITY DEFINER trigger function (closed since mig 490); 747 re-states the REVOKE after its CREATE OR REPLACE' },
   { fn: 'public.normalize_wa_phone', args: '(text)', closedBy: 753,
     why: 'called only inside the INVOKER contacts trigger, which service_role fires; contacts is read-only for clients' },
+  // ORGCONTACTS.1 (mig 764): contact_studios is service-role only; its two
+  // public functions are called only by the service-role cron / reconcile,
+  // and the six private ones are trigger functions or their shared upsert.
+  { fn: 'private.contact_studios_set_org', args: '()', closedBy: 764,
+    why: 'ORGCONTACTS.1: BEFORE INSERT OR UPDATE trigger on contact_studios setting organization_id from the studio and refusing a cross-organisation pair; a trigger fires without EXECUTE' },
+  { fn: 'private.contact_studios_freeze_keys', args: '()', closedBy: 764,
+    why: 'ORGCONTACTS.1: BEFORE UPDATE trigger on contact_studios refusing a change to contact_id / location_id; a trigger fires without EXECUTE' },
+  { fn: 'public.derive_contact_studio', args: '(uuid, uuid)', closedBy: 764,
+    why: 'ORGCONTACTS.1: INVOKER derivation of one contact_studios row from the source tables, several of them closed; called only by private.contact_studios_upsert and the service-role reconcile' },
+  { fn: 'private.contact_studios_upsert', args: '(uuid, uuid)', closedBy: 764,
+    why: 'ORGCONTACTS.1: INVOKER upsert of one contact_studios row, called only by the DEFINER triggers and the reconcile' },
+  { fn: 'public.reconcile_contact_studios', args: '(uuid)', closedBy: 764,
+    why: 'ORGCONTACTS.1: INVOKER re-derive of every contact_studios row (writes a closed table); called only by the service-role contact-studios-reconcile cron and the mig 764 backfill' },
+  { fn: 'private.contact_studios_from_contact', args: '()', closedBy: 764,
+    why: 'ORGCONTACTS.1: SECURITY DEFINER AFTER INSERT trigger on contacts writing the closed contact_studios row; a trigger fires without EXECUTE' },
+  { fn: 'private.contact_studios_from_deal', args: '()', closedBy: 764,
+    why: 'ORGCONTACTS.1: SECURITY DEFINER AFTER INSERT OR UPDATE OR DELETE trigger on deals writing the closed contact_studios rows; a trigger fires without EXECUTE' },
+  { fn: 'private.contact_studios_from_preferences', args: '()', closedBy: 764,
+    why: 'ORGCONTACTS.1: SECURITY DEFINER AFTER INSERT trigger on contact_location_preferences writing the closed contact_studios row; a trigger fires without EXECUTE' },
 ]
 
 /** The client roles a closed function is closed to. */
