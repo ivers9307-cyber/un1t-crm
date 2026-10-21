@@ -19,12 +19,10 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
-import { Filter, X, Save, Bookmark, Trash2, Search, AlertTriangle, Users, Plus } from 'lucide-react'
+import { Filter, X, Save, Bookmark, Trash2 } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 import ContactsTable from './ContactsTable'
-import { Button, EmptyState, Loading } from '@/components/ui'
 import { hasMoreContacts, CONTACTS_PAGE_SIZE } from '@/lib/contacts-pagination'
-import { contactsListState, stageChipLabel } from '@/lib/contacts-list-state'
 
 // FUNNEL.1 — chip values are the canonical classifier-derived funnel
 // slugs (mig 350): four lead columns, the win column, and the three
@@ -47,12 +45,6 @@ export default function ContactsView({
   // Email at this studio; the page passes the server's canWriteSegmentsAt.
   // Default false so a caller that forgets it offers nothing the API refuses.
   canSaveSegments = false,
-  // VISREFRESH.1 — the server page's initial read can fail; it says so here
-  // instead of handing over an empty list that reads as "no contacts".
-  initialError = null,
-  // VISREFRESH.1 — the genuine-empty state offers New contact only to a
-  // caller the page says may create one.
-  canCreate = false,
 }) {
   const [status, setStatus] = useState(initialStatus)
   const [search, setSearch] = useState(initialSearch)
@@ -74,7 +66,7 @@ export default function ContactsView({
   const [count, setCount] = useState(null)
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
-  const [error, setError] = useState(initialError)
+  const [error, setError] = useState(null)
 
   // Saved segments — list loaded once on mount. State for the small
   // "Save segment" inline form sits next to it so the inline 'X'
@@ -206,10 +198,6 @@ export default function ContactsView({
       const json = await res.json()
       if (!json.success) {
         setError(json.error || 'Search failed')
-        // VISREFRESH.1 — a failed FRESH read shows nothing stale: the server's
-        // unfiltered first page under a search box reads as the search's
-        // answer. A failed "Load more" keeps what is loaded.
-        if (!append) setClientContacts([])
         return
       }
       const incoming = json.contacts || []
@@ -221,7 +209,6 @@ export default function ContactsView({
       setClientContacts(append ? [...(base || []), ...incoming] : incoming)
     } catch (e) {
       setError(e.message || 'Network error')
-      if (!append) setClientContacts([])
     } finally {
       if (append) setLoadingMore(false)
       else setLoading(false)
@@ -300,162 +287,127 @@ export default function ContactsView({
     fetchPage({ offset: base.length, append: true, base })
   }
 
-  // VISREFRESH.1 — one explicit state for the list area, so a failed read,
-  // a search with no matches and a studio with no contacts never look alike.
-  const filtersActive = !!status || !!(search?.trim()) || filterRowCount > 0 || showDuplicates
-  const listState = contactsListState({
-    error,
-    loading,
-    rowCount: visibleContacts.length,
-    filtersActive,
-  })
-
-  function clearAllFilters() {
-    setSearch('')
-    setStatus('')
-    setShowDuplicates(false)
-    clearAdvanced()
-  }
-
-  function retry() {
-    fetchPage({ offset: 0, append: false })
-  }
-
-  // Result summary: the exact total once the API has answered, else what is
-  // loaded (the server's first page is capped, so it never claims a total).
-  const summary = listState === 'rows'
-    ? (count != null
-        ? `Showing ${visibleContacts.length.toLocaleString()} of ${count.toLocaleString()} contacts`
-        : `${visibleContacts.length.toLocaleString()} contact${visibleContacts.length === 1 ? '' : 's'}`)
-    : null
-
-  const chipBase = 'text-xs px-3 py-1.5 rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent'
-  const chipOn = 'border-un1t-text text-un1t-text bg-un1t-border font-medium'
-  const chipOff = 'border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
-
   return (
     <div>
-      {/* VISREFRESH.1 — one toolbar holds every way of narrowing the list:
-          search, the stage chips, the advanced filter and the duplicates
-          toggle. The chips stay URL-driven so links into a stage and the
-          back button keep working. */}
-      <div className="mb-4 rounded-xl border border-un1t-border bg-white p-3 space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <form className="flex-1 min-w-[220px] max-w-md" onSubmit={(e) => e.preventDefault()} role="search">
-            <div className="relative">
-              <Search size={16} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-un1t-muted" />
-              <input
-                type="search"
-                name="q"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search by name, email or phone"
-                aria-label="Search contacts"
-                className="w-full h-10 bg-un1t-surface border border-un1t-border rounded-lg pl-9 pr-3 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted focus-visible:ring-2 focus-visible:ring-un1t-accent"
-              />
-            </div>
-          </form>
+      {/* Status chips — keep the URL-driven UX so links into a status
+          continue to work (and the back button does what you'd expect). */}
+      <div className="flex gap-2 mb-5 flex-wrap items-center">
+        {STATUSES.map(s => (
+          <Link
+            key={s}
+            href={`/contacts${s ? `?status=${s}` : ''}`}
+            onClick={() => setStatus(s)}
+            className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+              status === s
+                ? 'border-un1t-text text-un1t-text bg-un1t-border'
+                : 'border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
+            }`}
+          >
+            {s ? s.replace('_', ' ') : 'All'}
+          </Link>
+        ))}
 
-          <div className="flex items-center gap-2 ml-auto">
-            <Button
-              type="button"
-              variant={filterRowCount > 0 ? 'primary' : 'secondary'}
-              size="sm"
-              icon={Filter}
-              onClick={() => setShowAdvanced(o => !o)}
-              aria-expanded={showAdvanced}
-              title="Filter by any contact field"
-            >
-              Advanced filter
-              {filterRowCount > 0 && (
-                <span className="ml-0.5 rounded-full bg-white/20 px-1.5 py-0.5 text-[11px]" aria-label={`${filterRowCount} active`}>
-                  {filterRowCount}
-                </span>
-              )}
-            </Button>
-            {filterRowCount > 0 && (
-              <Button type="button" variant="ghost" size="sm" icon={X} onClick={clearAdvanced} title="Clear advanced filter">
-                Clear
-              </Button>
-            )}
-          </div>
-        </div>
+        <div className="flex-1" />
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by stage">
-            {STATUSES.map(s => (
-              <Link
-                key={s}
-                href={`/contacts${s ? `?status=${s}` : ''}`}
-                onClick={() => setStatus(s)}
-                aria-current={status === s ? 'true' : undefined}
-                className={`${chipBase} ${status === s ? chipOn : chipOff}`}
-              >
-                {stageChipLabel(s)}
-              </Link>
-            ))}
-          </div>
+        <button
+          onClick={() => setShowAdvanced(o => !o)}
+          className={`text-xs px-3 py-1.5 rounded-md border flex items-center gap-1.5 transition-colors ${
+            filterRowCount > 0
+              ? 'bg-un1t-text text-un1t-bg border-un1t-text'
+              : 'border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
+          }`}
+          title="Filter by any contact field"
+        >
+          <Filter size={12} />
+          Advanced filter
+          {filterRowCount > 0 && (
+            <span className="ml-1 bg-un1t-bg/10 px-1.5 py-0.5 rounded-full text-[10px]">
+              {filterRowCount}
+            </span>
+          )}
+        </button>
 
-          {/* CONTACT-DEDUP — the list shows one profile per person; this
-              reveals the folded linked accounts when an operator needs them. */}
-          <label className="ml-auto flex items-center gap-2 text-xs text-un1t-subtle cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={showDuplicates}
-              onChange={(e) => setShowDuplicates(e.target.checked)}
-              className="accent-un1t-text"
-            />
-            Show linked duplicates
-          </label>
-        </div>
-
-        {/* Saved segments chip strip — visible whenever any segments
-            exist OR the advanced panel is open (so a fresh user can
-            discover the feature). Click to apply; X to delete. */}
-        {(segments.length > 0 || showAdvanced) && (
-          <div className="flex gap-2 flex-wrap items-center border-t border-un1t-border pt-3">
-            {segments.length > 0 && (
-              <span className="text-[11px] uppercase tracking-wider text-un1t-muted font-semibold flex items-center gap-1">
-                <Bookmark size={11} aria-hidden="true" /> Saved
-              </span>
-            )}
-            {segments.map(s => {
-              const isActive = activeSegmentId === s.id
-              return (
-                <span
-                  key={s.id}
-                  className={`group inline-flex items-center gap-1 rounded-full border text-xs transition-colors ${
-                    isActive ? chipOn : chipOff
-                  }`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => applySegment(s)}
-                    className="px-3 py-1.5"
-                    title={s.description || 'Apply this saved segment'}
-                  >
-                    {s.name}
-                  </button>
-                  {canSaveSegments && (
-                    <button
-                      type="button"
-                      onClick={() => deleteSegment(s.id)}
-                      className="pr-2 text-un1t-muted hover:text-stage-lost opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
-                      title="Delete segment"
-                    >
-                      <Trash2 size={11} />
-                    </button>
-                  )}
-                </span>
-              )
-            })}
-          </div>
+        {filterRowCount > 0 && (
+          <button
+            onClick={clearAdvanced}
+            className="text-xs text-un1t-subtle hover:text-red-400 flex items-center gap-1"
+            title="Clear advanced filter"
+          >
+            <X size={12} /> Clear
+          </button>
         )}
       </div>
 
+      {/* Search */}
+      <form className="mb-5" onSubmit={(e) => e.preventDefault()}>
+        <input
+          type="text"
+          name="q"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by name or email..."
+          className="w-full max-w-md bg-un1t-surface border border-un1t-border rounded-md px-4 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+        />
+      </form>
+
+      {/* CONTACT-DEDUP — the list shows one profile per person; this reveals
+          the folded linked accounts when an operator needs them. */}
+      <label className="mb-5 -mt-3 flex items-center gap-2 text-xs text-un1t-subtle cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={showDuplicates}
+          onChange={(e) => setShowDuplicates(e.target.checked)}
+          className="accent-un1t-text"
+        />
+        Show linked duplicates — the list folds each person down to one profile
+      </label>
+
+      {/* Saved segments chip strip — visible whenever any segments
+          exist OR the advanced panel is open (so a fresh user can
+          discover the feature). Click to apply; X to delete. */}
+      {(segments.length > 0 || showAdvanced) && (
+        <div className="mb-3 flex gap-2 flex-wrap items-center">
+          {segments.length > 0 && (
+            <span className="text-[11px] uppercase tracking-wider text-un1t-muted font-semibold flex items-center gap-1">
+              <Bookmark size={11} /> Saved
+            </span>
+          )}
+          {segments.map(s => {
+            const isActive = activeSegmentId === s.id
+            return (
+              <span
+                key={s.id}
+                className={`group inline-flex items-center gap-1 rounded-full border text-xs transition-colors ${
+                  isActive
+                    ? 'border-un1t-text bg-un1t-border text-un1t-text'
+                    : 'border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
+                }`}
+              >
+                <button
+                  onClick={() => applySegment(s)}
+                  className="px-3 py-1.5"
+                  title={s.description || 'Apply this saved segment'}
+                >
+                  {s.name}
+                </button>
+                {canSaveSegments && (
+                  <button
+                    onClick={() => deleteSegment(s.id)}
+                    className="pr-2 text-un1t-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Delete segment"
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                )}
+              </span>
+            )
+          })}
+        </div>
+      )}
+
       {/* Advanced filter panel — only renders when toggled open. */}
       {showAdvanced && (
-        <div className="mb-4 bg-un1t-surface border border-un1t-border rounded-xl p-4 space-y-3">
+        <div className="mb-5 bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
           <AudienceBuilder
             filter={filter}
             onChange={handleFilterChange}
@@ -477,97 +429,64 @@ export default function ContactsView({
                     value={segmentName}
                     onChange={(e) => setSegmentName(e.target.value)}
                     placeholder="Segment name (e.g. Cold leads with low credits)"
-                    aria-label="Segment name"
-                    className="flex-1 h-9 bg-un1t-bg border border-un1t-border rounded-lg px-3 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted focus-visible:ring-2 focus-visible:ring-un1t-accent"
+                    className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                     onKeyDown={(e) => { if (e.key === 'Enter') saveCurrent() }}
                   />
-                  <Button type="button" size="sm" onClick={saveCurrent} loading={savingSegment}>
-                    Save
-                  </Button>
-                  <Button type="button" size="sm" variant="ghost" onClick={() => { setShowSaveForm(false); setSegmentName(''); setSegmentError(null) }}>
+                  <button
+                    onClick={saveCurrent}
+                    disabled={savingSegment}
+                    className="text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-semibold hover:bg-un1t-accent disabled:opacity-50"
+                  >
+                    {savingSegment ? 'Saving…' : 'Save'}
+                  </button>
+                  <button
+                    onClick={() => { setShowSaveForm(false); setSegmentName(''); setSegmentError(null) }}
+                    className="text-xs text-un1t-subtle hover:text-un1t-text"
+                  >
                     Cancel
-                  </Button>
+                  </button>
                 </>
               ) : (
-                <Button type="button" size="sm" variant="ghost" icon={Save} onClick={() => setShowSaveForm(true)}>
-                  Save as segment
-                </Button>
+                <button
+                  onClick={() => setShowSaveForm(true)}
+                  className="text-xs flex items-center gap-1.5 text-un1t-subtle hover:text-un1t-text"
+                >
+                  <Save size={12} /> Save as segment
+                </button>
               )}
             </div>
           )}
 
           {segmentError && (
-            <p className="text-xs text-stage-lost" role="alert">{segmentError}</p>
+            <p className="text-xs text-red-400">{segmentError}</p>
           )}
         </div>
       )}
 
-      {/* Result summary — reads out once the list settles. */}
-      <div className="mb-2 min-h-[1.25rem] text-xs text-un1t-subtle" aria-live="polite">
-        {summary}
-      </div>
-
-      {listState === 'error' && (
-        <div className="rounded-xl border border-un1t-border bg-white" role="alert">
-          <EmptyState
-            icon={<AlertTriangle size={26} />}
-            title="Contacts couldn't be loaded"
-            description={error || 'Something went wrong reading the list.'}
-            action={<Button type="button" variant="secondary" size="sm" onClick={retry}>Try again</Button>}
-            padding="lg"
-          />
+      {error && (
+        <div className="mb-3 p-2 rounded bg-red-500/10 border border-red-500/30 text-xs text-red-700">
+          {error}
         </div>
       )}
 
-      {listState === 'loading' && (
-        <div className="rounded-xl border border-un1t-border bg-white">
-          <Loading label="Loading contacts…" />
-        </div>
+      {loading && (
+        <div className="mb-3 text-xs text-un1t-subtle">Loading…</div>
       )}
 
-      {listState === 'no-matches' && (
-        <div className="rounded-xl border border-un1t-border bg-white">
-          <EmptyState
-            icon={<Search size={26} />}
-            title={search?.trim() ? `No contacts match “${search.trim()}”` : 'No contacts match these filters'}
-            description="Try different words, or clear the filters to see everyone at this studio."
-            action={<Button type="button" variant="secondary" size="sm" onClick={clearAllFilters}>Clear filters</Button>}
-            padding="lg"
-          />
-        </div>
-      )}
+      <ContactsTable contacts={visibleContacts} locationId={locationId} crossoverContext={activeCrossoverContext} listFlags={activeListFlags} canMerge={canMerge} canDelete={canDelete} />
 
-      {listState === 'empty' && (
-        <div className="rounded-xl border border-un1t-border bg-white">
-          <EmptyState
-            icon={<Users size={26} />}
-            title="No contacts yet"
-            description="Leads, trialists and members appear here as they arrive from your booking platform, forms and imports."
-            action={canCreate ? <Button as={Link} href="/contacts/new" size="sm" icon={Plus}>New contact</Button> : null}
-            padding="lg"
-          />
-        </div>
-      )}
-
-      {listState === 'rows' && (
-        <>
-          {/* A failed "Load more" keeps what is loaded and says so below it. */}
-          {error && (
-            <div className="mb-3 rounded-lg border border-stage-lost/30 bg-stage-lost/5 px-3 py-2 text-xs text-stage-lost" role="alert">
-              {error}
-            </div>
-          )}
-          <ContactsTable contacts={visibleContacts} locationId={locationId} crossoverContext={activeCrossoverContext} listFlags={activeListFlags} canMerge={canMerge} canDelete={canDelete} />
-        </>
-      )}
-
-      {listState === 'rows' && hasMore && (
+      {hasMore && (
         <div className="mt-4 flex flex-col items-center gap-2">
-          <Button type="button" variant="secondary" onClick={loadMore} loading={loadingMore}>
-            Load more
-          </Button>
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="px-4 py-2 rounded-md border border-un1t-border text-sm text-un1t-text hover:bg-un1t-border/30 disabled:opacity-50"
+          >
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
           {count !== null && (
-            <span className="text-xs text-un1t-subtle">Showing {rawLoaded.length.toLocaleString()} of {count.toLocaleString()}</span>
+            <span className="text-xs text-un1t-subtle">Showing {rawLoaded.length} of {count}</span>
           )}
         </div>
       )}

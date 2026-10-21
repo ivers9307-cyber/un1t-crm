@@ -15,7 +15,6 @@ import { useState, useMemo } from 'react'
 import Link from 'next/link'
 import { ChevronRight, Mail, X, GitMerge, Trash2 } from 'lucide-react'
 import dynamic from 'next/dynamic'
-import { Button } from '@/components/ui'
 
 // PERF.3 — three modal components that only render when the operator
 // actively picks the matching bulk action. Lazy-loaded so the
@@ -149,38 +148,45 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
 
   return (
     <>
-      {/* Sticky action bar — only renders when ≥1 row is selected.
-          VISREFRESH.1: a labelled toolbar on the shared Button primitive;
-          the destructive action stays last and reads as danger. */}
+      {/* Sticky action bar — only renders when ≥1 row is selected. */}
       {selectedCount > 0 && (
-        <div
-          role="toolbar"
-          aria-label="Bulk actions"
-          className="sticky top-0 z-10 mb-3 -mx-6 px-6 py-2 bg-white border-y border-un1t-border flex flex-wrap items-center gap-2"
-        >
-          <Button type="button" variant="ghost" size="icon" icon={X} onClick={clearSelection} title="Clear selection" aria-label="Clear selection" />
-          <span className="text-sm font-medium text-un1t-text" aria-live="polite">
+        <div className="sticky top-0 z-10 mb-3 -mx-6 px-6 py-2 bg-un1t-surface border-y border-un1t-border flex items-center gap-3">
+          <button onClick={clearSelection} className="text-un1t-subtle hover:text-un1t-text" title="Clear selection">
+            <X size={14} />
+          </button>
+          <span className="text-sm text-un1t-text">
             {selectedCount} selected
           </span>
           <div className="flex-1" />
-          <Button type="button" size="sm" icon={Mail} onClick={() => setPickerOpen(true)}>
-            Add to sequence
-          </Button>
+          <button
+            onClick={() => setPickerOpen(true)}
+            className="text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-semibold hover:bg-un1t-accent flex items-center gap-1.5"
+          >
+            <Mail size={12} /> Add to sequence
+          </button>
           {/* Merge — owner-only. Visible only when exactly 2 rows
               are selected (the merge API takes survivor + loser). */}
           {canMerge && selectedCount === 2 && (
-            <Button type="button" variant="secondary" size="sm" icon={GitMerge} onClick={() => setMergeOpen(true)} title="Merge two contacts into one">
-              Merge
-            </Button>
+            <button
+              onClick={() => setMergeOpen(true)}
+              className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted flex items-center gap-1.5"
+              title="Merge two contacts into one"
+            >
+              <GitMerge size={12} /> Merge
+            </button>
           )}
           {/* Bulk delete — head_coach+ (= MANAGER_ROLES). Same
               cascade rules as the per-contact delete; whatsapp
               history blocks come back as per-row "blocked" entries
               in the response, NOT a hard fail of the whole batch. */}
           {canDelete && (
-            <Button type="button" variant="danger" size="sm" icon={Trash2} onClick={() => setBulkDeleteOpen(true)} title="Delete selected contacts">
-              Delete
-            </Button>
+            <button
+              onClick={() => setBulkDeleteOpen(true)}
+              className="text-xs px-3 py-1.5 rounded-md border border-red-500/40 text-red-700 hover:bg-red-500/10 flex items-center gap-1.5"
+              title="Delete selected contacts"
+            >
+              <Trash2 size={12} /> Delete
+            </button>
           )}
         </div>
       )}
@@ -203,11 +209,11 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
 
       {/* Desktop / tablet: original wide table. Hidden below md so
           phones don't horizontal-scroll a 7-column grid. */}
-      <div className="hidden md:block bg-white border border-un1t-border rounded-xl overflow-hidden">
+      <div className="hidden md:block bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-un1t-border bg-un1t-surface text-left text-xs uppercase tracking-wide text-un1t-muted">
-              <th className="w-10 px-3 py-2.5">
+            <tr className="border-b border-un1t-border text-un1t-subtle text-xs uppercase tracking-wider">
+              <th className="w-10 p-3">
                 <input
                   type="checkbox"
                   checked={allSelected}
@@ -217,13 +223,13 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
                   aria-label={allSelected ? 'Clear selection' : 'Select all'}
                 />
               </th>
-              <th className="px-3 py-2.5 font-medium">Name</th>
-              <th className="px-3 py-2.5 font-medium">Email</th>
-              <th className="px-3 py-2.5 font-medium">Phone</th>
-              <th className="px-3 py-2.5 font-medium">Source</th>
-              <th className="px-3 py-2.5 font-medium">Stage</th>
-              <th className="px-3 py-2.5 font-medium text-right">Credits</th>
-              <th className="w-10"><span className="sr-only">Open</span></th>
+              <th className="text-left p-3">Name</th>
+              <th className="text-left p-3">Email</th>
+              <th className="text-left p-3">Phone</th>
+              <th className="text-left p-3">Source</th>
+              <th className="text-left p-3">Status</th>
+              <th className="text-left p-3">Credits</th>
+              <th className="w-8"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-un1t-border">
@@ -232,10 +238,9 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
               return (
                 <tr
                   key={c.id}
-                  data-selected={isSelected || undefined}
-                  className={`transition-colors ${isSelected ? 'bg-un1t-surface' : 'hover:bg-un1t-surface/60'}`}
+                  className={`transition-colors ${isSelected ? 'bg-un1t-border/30' : 'hover:bg-un1t-border/20'}`}
                 >
-                  <td className="px-3 py-2.5">
+                  <td className="p-3">
                     <input
                       type="checkbox"
                       checked={isSelected}
@@ -244,30 +249,26 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
                       aria-label={`Select ${c.name}`}
                     />
                   </td>
-                  <td className="px-3 py-2.5">
-                    <Link href={`/contacts/${c.id}`} className="font-medium text-un1t-text hover:underline">{c.name}</Link>
+                  <td className="p-3">
+                    <Link href={`/contacts/${c.id}`} className="font-medium hover:underline">{c.name}</Link>
                     <CrossoverMarker ctx={crossoverContext[c.id]} />
                     <ListFlagMarker flags={listFlags[c.id]} />
                     <LinkedMarker contact={c} />
                   </td>
-                  <td className="px-3 py-2.5 text-un1t-subtle">{c.email}</td>
-                  <td className="px-3 py-2.5 text-un1t-subtle whitespace-nowrap">{c.phone}</td>
-                  <td className="px-3 py-2.5">
-                    <span className="text-xs px-1.5 py-0.5 bg-un1t-border text-un1t-subtle rounded">{c.lead_source || '—'}</span>
+                  <td className="p-3 text-un1t-subtle">{c.email}</td>
+                  <td className="p-3 text-un1t-subtle">{c.phone}</td>
+                  <td className="p-3">
+                    <span className="text-xs px-1.5 py-0.5 bg-un1t-border rounded">{c.lead_source || '—'}</span>
                   </td>
-                  <td className="px-3 py-2.5">
+                  <td className="p-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge[c.pipeline_stage_slug] || 'bg-un1t-border text-un1t-subtle'}`}>
                       {formatStage(c.pipeline_stage_slug)}
                     </span>
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-un1t-subtle">{c.trial_credits_remaining ?? '—'}</td>
-                  <td className="px-2 py-2.5">
-                    <Link
-                      href={`/contacts/${c.id}`}
-                      aria-label={`Open ${c.name}`}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-un1t-muted hover:bg-un1t-border/60 hover:text-un1t-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-un1t-accent"
-                    >
-                      <ChevronRight size={16} aria-hidden="true" />
+                  <td className="p-3 text-un1t-subtle">{c.trial_credits_remaining ?? '—'}</td>
+                  <td className="p-3">
+                    <Link href={`/contacts/${c.id}`}>
+                      <ChevronRight size={16} className="text-un1t-muted" />
                     </Link>
                   </td>
                 </tr>
@@ -275,8 +276,6 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
             })}
           </tbody>
         </table>
-        {/* ContactsView renders the empty, no-match and error states itself
-            (VISREFRESH.1); this is the fallback for any other caller. */}
         {contacts.length === 0 && (
           <p className="text-center text-un1t-subtle text-sm py-12">No contacts found.</p>
         )}
@@ -287,7 +286,7 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
           disappears once the table fits horizontally. */}
       <div className="md:hidden space-y-2">
         {contacts.length === 0 ? (
-          <div className="bg-white border border-un1t-border rounded-xl p-8 text-center">
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8 text-center">
             <p className="text-sm text-un1t-subtle">No contacts found.</p>
           </div>
         ) : (
@@ -296,9 +295,8 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
             return (
               <div
                 key={c.id}
-                data-selected={isSelected || undefined}
-                className={`bg-white border rounded-xl overflow-hidden transition-colors ${
-                  isSelected ? 'border-un1t-muted bg-un1t-surface' : 'border-un1t-border'
+                className={`bg-un1t-surface border rounded-lg overflow-hidden transition-colors ${
+                  isSelected ? 'border-un1t-muted bg-un1t-border/30' : 'border-un1t-border'
                 }`}
               >
                 <div className="flex items-stretch">
