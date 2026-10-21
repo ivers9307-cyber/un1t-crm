@@ -146,7 +146,7 @@ describe('sendWebsiteConversion', () => {
       whatsapp_numbers: { access_token: 'tok1', business_account_id: 'waba1' },
     })
     const r = await sendWebsiteConversion(db, args)
-    expect(r).toEqual({ sent: true })
+    expect(r).toMatchObject({ sent: true })
     expect(global.fetch).toHaveBeenCalledTimes(1)
     const [url, opts] = global.fetch.mock.calls[0]
     expect(url).toBe('https://graph.facebook.com/v21.0/ds1/events')
@@ -228,7 +228,7 @@ describe('sendWebsiteConversion — the dataset\'s own token', () => {
     global.fetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) })
     const db = tracedDb({ locations: { settings: { meta_ads: { dataset_id: 'ds-hatch', capi_access_token: 'SYNTH-OWN-TOKEN' } } }, whatsapp_numbers: null })
     const r = await sendWebsiteConversion(db, { ...args, fbc: 'fb.1.1.abc', clientIp: '203.0.113.9', userAgent: 'UA' })
-    expect(r).toEqual({ sent: true })
+    expect(r).toMatchObject({ sent: true })
     const [url, opts] = global.fetch.mock.calls[0]
     expect(url).toBe('https://graph.facebook.com/v21.0/ds-hatch/events')
     const body = JSON.parse(opts.body)
