@@ -148,7 +148,7 @@ export function fbcFromFbclid(fbclid, nowMs = Date.now()) {
  * Returns null when neither email nor phone normalizes — an event Meta
  * can't match is not worth sending.
  */
-export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent, firstName, lastName, externalId, fbp }) {
+export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent, firstName, lastName, externalId, fbp, value, currency, orderId, contentType }) {
   const em = normalizeEmailForMeta(email)
   const ph = normalizePhoneForMeta(phone)
   if (!em && !ph) return null
@@ -182,7 +182,20 @@ export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSou
   }
   if (eventSourceUrl) event.event_source_url = eventSourceUrl
   if (eventId) event.event_id = eventId
-  if (contentName) event.custom_data = { content_name: contentName }
+  // PURCHASEVALUE.1 — the money on a server Purchase: Meta's Sales
+  // optimisation and its ROAS column read value + currency off the event,
+  // and the browser copy (which carries them) only exists when the visitor
+  // accepted cookies. order_id is our purchase id, so a replayed send is one
+  // order to Meta, and content_type says the content_name is a product.
+  const custom = {}
+  if (contentName) custom.content_name = contentName
+  if (Number.isFinite(value) && value >= 0) {
+    custom.value = Math.round(value * 100) / 100
+    custom.currency = typeof currency === 'string' && currency.trim() ? currency.trim().toUpperCase() : 'EUR'
+  }
+  if (typeof orderId === 'string' && orderId.trim()) custom.order_id = orderId.trim()
+  if (typeof contentType === 'string' && contentType.trim()) custom.content_type = contentType.trim()
+  if (Object.keys(custom).length) event.custom_data = custom
   return event
 }
 
@@ -190,14 +203,14 @@ export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSou
  * Fire a website conversion event for a lead/booking. Same gates as the CTWA
  * path: no dataset_id or no number token → clean no-op. Never throws.
  */
-export async function sendWebsiteConversion(db, { locationId, eventName, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent, firstName, lastName, externalId, fbp }) {
+export async function sendWebsiteConversion(db, { locationId, eventName, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent, firstName, lastName, externalId, fbp, value, currency, orderId, contentType }) {
   try {
     if (!locationId) return { sent: false, reason: 'no_location' }
     const event = buildWebsiteEvent({
       eventName,
       eventTime: Math.floor(Date.now() / 1000),
       email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent,
-      firstName, lastName, externalId, fbp,
+      firstName, lastName, externalId, fbp, value, currency, orderId, contentType,
     })
     if (!event) return notSent('no_identifiers', { eventName, locationId, eventId })
 
