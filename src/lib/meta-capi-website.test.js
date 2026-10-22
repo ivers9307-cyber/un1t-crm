@@ -82,6 +82,18 @@ describe('buildWebsiteEvent', () => {
     expect(ev.event_id).toBeUndefined()
     expect(ev.custom_data).toBeUndefined()
   })
+
+  // PURCHASEVALUE.1 — a Purchase carries the money and the order.
+  it('carries value, currency, order_id and content_type when given, and none of them when not', () => {
+    const ev = buildWebsiteEvent({ eventName: 'Purchase', eventTime: 1, email: 'a@b.com', contentName: 'The 14 Day Reset', value: 39, currency: 'eur', orderId: 'tp1', contentType: 'product' })
+    expect(ev.custom_data).toEqual({ content_name: 'The 14 Day Reset', value: 39, currency: 'EUR', order_id: 'tp1', content_type: 'product' })
+    const lead = buildWebsiteEvent({ eventName: 'Lead', eventTime: 1, email: 'a@b.com', contentName: 'The 14 Day Reset' })
+    expect(lead.custom_data).toEqual({ content_name: 'The 14 Day Reset' })
+    const free = buildWebsiteEvent({ eventName: 'Purchase', eventTime: 1, email: 'a@b.com', value: 0 })
+    expect(free.custom_data).toEqual({ value: 0, currency: 'EUR' })
+    const bad = buildWebsiteEvent({ eventName: 'Purchase', eventTime: 1, email: 'a@b.com', value: Number.NaN })
+    expect(bad.custom_data).toBeUndefined()
+  })
 })
 
 // Minimal chainable fake supabase client resolving selects from `state`.

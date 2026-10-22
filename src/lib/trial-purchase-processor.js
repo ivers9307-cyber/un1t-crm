@@ -193,6 +193,10 @@ export async function processTrialPurchase(db, row, { now = () => new Date().toI
       eventSourceUrl: row.attribution?.event_source_url || undefined,
       eventId: `trialpurchase-${row.id}`,
       contentName: row.product_name,
+      // PURCHASEVALUE.1 — what the browser's Purchase already says: the
+      // amount taken, its currency, and our purchase id as the order.
+      value: (row.amount_cents || 0) / 100, currency: row.currency || 'EUR',
+      orderId: row.id, contentType: 'product',
       fbc: row.attribution?.fbc, fbp: row.attribution?.fbp,
     })
   } catch (e) { logWarn('trial-purchase', 'capi purchase failed', { purchaseId: row.id, err: e }) }

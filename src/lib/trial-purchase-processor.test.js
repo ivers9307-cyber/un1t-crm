@@ -166,6 +166,15 @@ describe('processTrialPurchase', () => {
     expect(note.fields.content).toContain('already holds this mobile number')
   })
 
+  // PURCHASEVALUE.1 — the server Purchase says how much was taken.
+  it('the Purchase event to Meta carries the amount, currency and our purchase id as the order', async () => {
+    const { db } = makeDb()
+    expect((await processTrialPurchase(db, ROW)).outcome).toBe('granted')
+    expect(mocks.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      eventName: 'Purchase', value: 39, currency: 'EUR', orderId: 'tp1', contentType: 'product', contentName: '2 Week Trial',
+    }))
+  })
+
   it('a created account with no phone match leaves no note', async () => {
     mocks.member.mockResolvedValueOnce({ status: 'created', glofox_member_id: 'g-new' })
     const { db, inserts } = makeDb()
