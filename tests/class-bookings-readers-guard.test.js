@@ -97,6 +97,10 @@ const MANIFEST = Object.freeze({
     kind: 'display',
     reason: 'Audit row 9: fetchFloor for the staff /dashboard/studio no-show, attended and activation figures.',
   },
+  'src/lib/pipeline-other-studio-members.js': {
+    kind: 'data-writing',
+    reason: "PIPEEXCL.2: loadActiveElsewhere reads contact_id + status of the OTHER studios' bookings in a 60-day / 30-day window (both platforms: a Hatch trialer must leave Stillorgan's board) to decide whether an acquisition deal leaves this board (status lost) or is withheld; it sends nothing and credits nothing, and carries no class, time or platform anywhere.",
+  },
   'sql:public.campaign_outcome_stats': {
     kind: 'display',
     reason: 'Audit row 10: the campaign outcomes RPC (mig 513, re-created by mig 737 with a case-correct CANCELLED filter) behind the staff /api/campaigns/[id]/outcomes report.',

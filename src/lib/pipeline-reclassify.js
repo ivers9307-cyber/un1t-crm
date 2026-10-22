@@ -25,7 +25,7 @@ import { logWarn } from './log.js'
 import { getBoardModule, PIPELINE_MODES } from '../../shared/pipelines/index.js'
 import { membershipReadsFor, supportsRead } from './membership/reads/index.js'
 import { un1tDealDates } from './membership/reads/un1t-pipeline-dates.js'
-import { loadActiveElsewhere, leavesBoard } from './pipeline-other-studio-members.js'
+import { loadActiveElsewhere, leavesBoard, ELSEWHERE_MEMBER, ELSEWHERE_TRAINING } from './pipeline-other-studio-members.js'
 import { triggerSequencesForPipelineStageChange } from './sequences/triggers.js'
 
 // HATCHPIPE.2 — a board whose module declares this inputSource is classified
@@ -377,9 +377,13 @@ export async function reclassifyAllContacts(db, args) {
   //     HERE (leavesBoard), their open deal leaves the board and none is
   //     created for them.
   //
-  //     HATCH ONLY: Richard confirmed the ask is for Hatch's pipeline, so the
-  //     rule runs only on boards whose module is acquisition_un1t. A Glofox
-  //     (contacts-input) board does not read it at all and is unchanged.
+  //     PIPEEXCL.2 (Richard, 22 Oct 2026): the rule runs on EVERY derived
+  //     acquisition board, Glofox and un1t.online, and "active elsewhere" also
+  //     means TRAINING elsewhere (a live class booking at the other studio in
+  //     the window, pipeline-other-studio-members.js). Hatch Street's
+  //     customers and trialers had been Stillorgan's New Leads: their Stillorgan
+  //     contact row (a race entry or a free-trial grant in Stillorgan's Glofox)
+  //     classified as a lead, and PIPEEXCL.1 ran on Hatch's board only.
   //
   //     The classifier itself has never removed a deal: a contact who stops
   //     qualifying for the funnel moves to an off-funnel pile, still on the
@@ -393,7 +397,7 @@ export async function reclassifyAllContacts(db, args) {
   //     nothing and creates nothing (a create could re-open a deal a person
   //     left the board with), logs why, and still makes the stage moves, so
   //     time-based decay keeps working. Manual boards are never read here.
-  const excludeOtherStudio = activePipelines.some((p) => p.module === EXCLUDING_MODULE)
+  const excludeOtherStudio = activePipelines.some((p) => EXCLUDING_MODULES.has(p.module))
   let elsewhere = null
   if (excludeOtherStudio) {
     try {
@@ -403,6 +407,11 @@ export async function reclassifyAllContacts(db, args) {
     }
   }
   const activeElsewhere = elsewhere?.ok ? elsewhere.contactIds : null
+  // PIPEEXCL.2 — why each one leaves; absent (an older answer) reads as member.
+  // And who trains HERE too: a training reason never removes them.
+  const elsewhereReasons = elsewhere?.ok && elsewhere.reasons instanceof Map ? elsewhere.reasons : new Map()
+  const trainingHere = elsewhere?.ok && elsewhere.trainingHere instanceof Set ? elsewhere.trainingHere : new Set()
+  const elsewhereReason = (id) => (elsewhereReasons.get(id) === ELSEWHERE_TRAINING ? ELSEWHERE_TRAINING : ELSEWHERE_MEMBER)
   const exclusionFailed = excludeOtherStudio && !activeElsewhere
 
   // 5. Classify each contact + decide move / leave / create.
@@ -460,13 +469,14 @@ export async function reclassifyAllContacts(db, args) {
     const existing = dealByContact.get(c.id)
 
     // PIPEEXCL.1 — an active member at another studio leaves this board.
-    if (activeElsewhere && leavesBoard(targetSlug, activeElsewhere.has(c.id))) {
+    if (activeElsewhere && leavesBoard(targetSlug, activeElsewhere.has(c.id), { reason: elsewhereReason(c.id), trainsHere: trainingHere.has(c.id) })) {
       if (existing) {
         leavesToApply.push({
           deal_id: existing.id,
           contact_id: c.id,
           from_slug: stageSlugById.get(existing.stage_id) || 'unknown',
           contact_name: c.name || c.email || null,
+          reason: elsewhereReason(c.id),
         })
       } else {
         createsWithheld++
@@ -633,12 +643,10 @@ export async function reclassifyAllContacts(db, args) {
         movementMatrix[m.from_slug] = movementMatrix[m.from_slug] || {}
         movementMatrix[m.from_slug][LEFT_BOARD] = (movementMatrix[m.from_slug][LEFT_BOARD] || 0) + 1
         leftActivities.push({
-          subject: 'Pipeline: left the board (active member at another studio)',
+          ...LEFT_BOARD_ACTIVITY[m.reason] || LEFT_BOARD_ACTIVITY[ELSEWHERE_MEMBER],
           type: 'pipeline',
           contact_id: m.contact_id,
           deal_id: m.deal_id,
-          note: 'Active member at another studio of this organisation, so not a prospect here. '
-            + 'A new deal opens on this board if that membership ends.',
           done: true,
           location_id: locationId,
         })
@@ -939,7 +947,22 @@ export async function restampUn1tDealDates(db, { locationId, dryRun = false, now
 // PIPEEXCL.1 — the movement_matrix column a deal that left the board lands in,
 // and the one board module the rule runs on (Hatch's un1t.online board).
 const LEFT_BOARD = '(left board)'
-const EXCLUDING_MODULE = 'acquisition_un1t'
+// PIPEEXCL.2 — every derived acquisition board, Glofox (Stillorgan) and
+// un1t.online (Hatch Street). PIPEEXCL.1 ran on acquisition_un1t only.
+const EXCLUDING_MODULES = new Set(['acquisition', 'acquisition_un1t'])
+// The contact's timeline says why the deal closed, per reason.
+const LEFT_BOARD_ACTIVITY = Object.freeze({
+  [ELSEWHERE_MEMBER]: {
+    subject: 'Pipeline: left the board (active member at another studio)',
+    note: 'Active member at another studio of this organisation, so not a prospect here. '
+      + 'A new deal opens on this board if that membership ends.',
+  },
+  [ELSEWHERE_TRAINING]: {
+    subject: 'Pipeline: left the board (training at another studio)',
+    note: 'Booked or attended classes at another studio of this organisation recently, so not a prospect here. '
+      + 'A new deal opens on this board if they stop training there, or when they book here.',
+  },
+})
 
 // HATCHPIPE.2 — the input fields a run result carries: always input_source,
 // and on the un1t path the clients pipelineInputs could not place.
