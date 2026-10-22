@@ -30,8 +30,10 @@
 -- rule, not a list of ids: an open deal on a Stillorgan board, for a contact
 -- who lives at another studio and is linked here through
 -- glofox_crossover_members, in a stage that means "nothing happened here"
--- (new_lead, dormant), with no class booking at Stillorgan and none of the
--- Glofox-sync stamps (attendance, conversion, pack). contacts.pipeline_stage_slug
+-- (new_lead, dormant), with none of the Glofox-sync stamps (a booking or an
+-- attendance here, conversion, pack; last_booked_at / last_attended_at are
+-- written only from the studio's Glofox bookings read, never by the un1t.online
+-- sync, so they speak for Stillorgan alone). contacts.pipeline_stage_slug
 -- reads only the contact's OWN studio's boards (mig 594 trigger), so a Hatch
 -- contact's stage is untouched by this.
 
@@ -54,10 +56,7 @@ BEGIN
       AND COALESCE(c.total_attended_7d, 0) = 0
       AND c.converted_at IS NULL
       AND c.pack_customer_at IS NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM public.class_bookings cb
-        WHERE cb.contact_id = d.contact_id AND cb.location_id = d.location_id
-      )
+      AND c.last_booked_at IS NULL
       AND NOT EXISTS (SELECT 1 FROM public.notes n WHERE n.deal_id = d.id)
       AND NOT EXISTS (SELECT 1 FROM public.activities a WHERE a.deal_id = d.id)
   ),
