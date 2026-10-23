@@ -8,14 +8,17 @@
 // and polls the status route, exactly like the offers page.
 //
 // What it tells Meta (no-ops without consent / fbq): the browser Lead at the
-// POST, sharing the server's event id so Meta counts one; the browser
-// Purchase on paid, sharing `trialpurchase-<id>` with the server's CAPI
-// Purchase for the same reason. Funnel steps go out as custom `trial_*`
+// POST, sharing the server's event id so Meta counts one, and (TRIALCHECKOUT.1)
+// an InitiateCheckout at the same moment with the price, sharing
+// `trialcheckout-<lead id>` with the server's copy: the Sales campaign's ad set
+// optimises on it, since Meta's Sales objective cannot optimise on Lead; the
+// browser Purchase on paid, sharing `trialpurchase-<id>` with the server's
+// CAPI Purchase for the same reason. Funnel steps go out as custom `trial_*`
 // events for drop-off diagnostics, never as optimisation events.
 import { useEffect, useRef, useState } from 'react'
 import { trackFunnelStep } from '@/lib/funnel-track'
 import { readVisitOrigin } from '@/lib/visit-origin'
-import { newLeadEventId, pixelUserData, fireBrowserLead } from '@/lib/meta-pixel-lead'
+import { newLeadEventId, pixelUserData, fireBrowserLead, fireBrowserInitiateCheckout, checkoutEventIdFor } from '@/lib/meta-pixel-lead'
 import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { formatTrialPrice, trialTicks } from '@/lib/paid-trial'
@@ -107,6 +110,12 @@ export default function PaidTrialFunnel({ block, publicPath = 'stillorgan', resu
         pixelIds: typeof window !== 'undefined' ? metaPixelIdsForPath(window.location.pathname) : [],
         eventId: leadEventId,
         userData: pixelUserData({ email: form.email, phone: form.phone, firstName: form.first_name, lastName: form.last_name }),
+        contentName: j.data?.product_name,
+      })
+      fireBrowserInitiateCheckout({
+        eventId: checkoutEventIdFor(leadEventId),
+        value: (j.data?.amount_cents ?? block.price_cents ?? 0) / 100,
+        currency: j.data?.currency || block.currency,
         contentName: j.data?.product_name,
       })
       trackFunnelStep('trial_checkout_view')

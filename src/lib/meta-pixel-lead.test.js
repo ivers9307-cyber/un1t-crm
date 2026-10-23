@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { newLeadEventId, pixelUserData, fireBrowserLead } from './meta-pixel-lead.js'
+import { newLeadEventId, pixelUserData, fireBrowserLead, fireBrowserInitiateCheckout, checkoutEventIdFor } from './meta-pixel-lead.js'
 
 describe('BROWSERLEAD.1 — browser Lead helpers', () => {
   it('mints a usable id', () => {
@@ -28,6 +28,26 @@ describe('BROWSERLEAD.1 — browser Lead helpers', () => {
     const fbq = vi.fn()
     fireBrowserLead({ fbq, pixelIds: ['111'], eventId: 'abc-123', userData: {} })
     expect(fbq.mock.calls).toEqual([['track', 'Lead', {}, { eventID: 'abc-123' }]])
+  })
+  // TRIALCHECKOUT.1 — the InitiateCheckout the Sales ad set optimises on.
+  it('derives the checkout event id from the lead id, so browser and server dedupe', () => {
+    expect(checkoutEventIdFor('abc-123')).toBe('trialcheckout-abc-123')
+    expect(checkoutEventIdFor('')).toBeNull()
+    expect(checkoutEventIdFor(undefined)).toBeNull()
+  })
+  it('tracks one InitiateCheckout with the price, upper-cased currency and the shared event id; no init (the Lead did it)', () => {
+    const fbq = vi.fn()
+    const ok = fireBrowserInitiateCheckout({ fbq, eventId: 'trialcheckout-abc-123', value: 39, currency: 'eur', contentName: 'The 14 Day Reset' })
+    expect(ok).toBe(true)
+    expect(fbq.mock.calls).toEqual([['track', 'InitiateCheckout', { value: 39, currency: 'EUR', content_name: 'The 14 Day Reset' }, { eventID: 'trialcheckout-abc-123' }]])
+  })
+  it('InitiateCheckout leaves out what it does not know, and is a quiet no-op without a Pixel or an id', () => {
+    const fbq = vi.fn()
+    fireBrowserInitiateCheckout({ fbq, eventId: 'x', value: NaN })
+    expect(fbq.mock.calls).toEqual([['track', 'InitiateCheckout', {}, { eventID: 'x' }]])
+    expect(fireBrowserInitiateCheckout({ fbq: undefined, eventId: 'x' })).toBe(false)
+    expect(fireBrowserInitiateCheckout({ fbq: vi.fn(), eventId: null })).toBe(false)
+    expect(fireBrowserInitiateCheckout({ fbq: vi.fn(() => { throw new Error('blocked') }), eventId: 'x' })).toBe(false)
   })
   it('is a quiet no-op without a Pixel or without an id, and never throws', () => {
     expect(fireBrowserLead({ fbq: undefined, pixelIds: ['1'], eventId: 'x' })).toBe(false)
