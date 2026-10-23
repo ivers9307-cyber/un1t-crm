@@ -166,19 +166,29 @@ export async function POST(request) {
     return NextResponse.json({ success: false, code: 'checkout_failed', error: 'Could not start checkout. Please try again.' }, { status: 502 })
   }
 
-  // Meta Lead (the studio's own dataset), sharing the browser's event id.
+  // Meta Lead (the studio's own dataset), sharing the browser's event id, and
+  // (TRIALCHECKOUT.1) an InitiateCheckout for the same moment with the price,
+  // under `trialcheckout-<lead id>` like the browser's: the Sales campaign's
+  // ad set optimises on it. Each is its own best-effort send.
   try {
     const { sendWebsiteConversion } = await import('@/lib/meta-capi')
-    await sendWebsiteConversion(db, {
-      locationId, eventName: 'Lead', email, phone: b.phone,
+    const leadEventId = b.lead_event_id || `triallead-${contactId}`
+    const identity = {
+      locationId, email, phone: b.phone,
       eventSourceUrl: product.eventSourceUrl,
-      eventId: b.lead_event_id || `triallead-${contactId}`,
       contentName: product.productName,
       fbc: attribution.fbc, clientIp: ip,
       userAgent: request.headers.get('user-agent') || undefined,
       firstName: b.first_name, lastName: b.last_name, externalId: contactId,
       fbp: b.attribution?.fbp,
-    })
+    }
+    await sendWebsiteConversion(db, { ...identity, eventName: 'Lead', eventId: leadEventId })
+    try {
+      await sendWebsiteConversion(db, {
+        ...identity, eventName: 'InitiateCheckout', eventId: `trialcheckout-${leadEventId}`,
+        value: product.priceCents / 100, currency: product.currency, contentType: 'product',
+      })
+    } catch (e) { logWarn('trialbuy', 'capi initiate checkout failed', { err: e }) }
   } catch (e) { logWarn('trialbuy', 'capi lead failed', { err: e }) }
 
   return NextResponse.json({ success: true, data: {

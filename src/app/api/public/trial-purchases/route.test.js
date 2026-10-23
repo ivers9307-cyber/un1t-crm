@@ -78,6 +78,11 @@ describe('POST /api/public/trial-purchases', () => {
     expect(mocks.consent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: 'c1', source: 'paid_trial' }))
     expect(mocks.deal).toHaveBeenCalled()
     expect(mocks.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'Lead', eventId: 'lead-abcdefgh', locationId: 'loc1' }))
+    // TRIALCHECKOUT.1 — the InitiateCheckout for the same moment, with the price, under the lead-derived id
+    expect(mocks.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      eventName: 'InitiateCheckout', eventId: 'trialcheckout-lead-abcdefgh', locationId: 'loc1', value: 39, currency: 'EUR', contentType: 'product', externalId: 'c1',
+    }))
+    expect(mocks.capi).toHaveBeenCalledTimes(2)
   })
   it('502s when the provider checkout cannot be opened, and a failed lead capture is a 500', async () => {
     mocks.payment.mockRejectedValue(new Error('revolut down'))
