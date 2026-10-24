@@ -86,7 +86,7 @@ export async function GET(request) {
     const plan = await buildScreenPlan(db, row, { nowMs: Date.now() })
     return NextResponse.json(plan, { status: 200 })
   } catch (err) {
-    logError(LOG, 'plan build failed', { device: device.device_name })
+    logError(LOG, 'plan build failed', { device: device.device_name, message: err?.message ?? null })
     return NextResponse.json({ ok: false, error: 'Plan unavailable' }, { status: 500 })
   }
 }

@@ -186,7 +186,9 @@ describe('GET /api/fleet/screen-plan', () => {
     const res = await GET(req('?mode=marketing'))
     expect(res.status).toBe(500)
     expect(await res.json()).toEqual({ ok: false, error: 'Plan unavailable' })
-    expect(logError).toHaveBeenCalledWith('screen-plan', 'plan build failed', { device: 'hatch-tv1' })
+    expect(logError).toHaveBeenCalledWith('screen-plan', 'plan build failed', {
+      device: 'hatch-tv1', message: 'APP_URL is not set',
+    })
   })
 
   it('never logs the bearer token', async () => {

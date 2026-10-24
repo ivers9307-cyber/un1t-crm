@@ -7,10 +7,11 @@ vi.mock('@/lib/location-time', async (importOriginal) => ({
   getLocationZone: vi.fn(),
 }))
 
-import { buildScreenPlan, expectedModesFor, SCREEN_DEVICE_COLUMNS } from './screen-plan.js'
+import { buildScreenPlan, expectedModesFor, assertDisplayAtLocation, SCREEN_DEVICE_COLUMNS } from './screen-plan.js'
 import { getLocationZone, LocationZoneReadError } from '@/lib/location-time'
 import { PLAN_LOOKBACK_MS, PLAN_LOOKAHEAD_MS } from '@/lib/screen-mode'
 import { makeFakeDb, readsOf } from './tv-admin.test-helpers.js'
+import { logWarn } from '@/lib/log'
 
 const LOC = 'a0000000-0000-4000-8000-0000000000a1'
 const LOC_2 = 'a0000000-0000-4000-8000-0000000000a2'
@@ -340,5 +341,26 @@ describe('expectedModesFor', () => {
     const modes = await expectedModesFor(db, [], { nowMs: NOW_IN_CLASS })
     expect(modes.size).toBe(0)
     expect(db.calls).toHaveLength(0)
+  })
+})
+
+describe('assertDisplayAtLocation', () => {
+  it('is ok when an active display at the studio comes back, with one narrowed read', async () => {
+    const db = makeFakeDb(() => ({ data: { id: DISPLAY }, error: null }))
+    expect(await assertDisplayAtLocation(db, DISPLAY, LOC)).toEqual({ ok: true })
+    expect(db.calls).toHaveLength(1)
+    expect(db.calls[0].table).toBe('tv_displays')
+    expect(db.calls[0].filters).toEqual([['eq', 'id', DISPLAY], ['eq', 'location_id', LOC], ['eq', 'active', true]])
+  })
+
+  it('is not ok when no row comes back (missing, inactive or another studio)', async () => {
+    const db = makeFakeDb(() => ({ data: null, error: null }))
+    expect(await assertDisplayAtLocation(db, DISPLAY, LOC_2)).toEqual({ ok: false })
+  })
+
+  it('is not ok, and logs, when the read fails', async () => {
+    const db = makeFakeDb(() => ({ data: null, error: { message: 'boom' } }))
+    expect(await assertDisplayAtLocation(db, DISPLAY, LOC)).toEqual({ ok: false })
+    expect(logWarn).toHaveBeenCalled()
   })
 })

@@ -119,6 +119,28 @@ async function readCastUrl(db, device) {
 }
 
 /**
+ * Is this display one the studio may cast to: found, active and at that
+ * studio? The registration routes ask before linking a box to a display, so a
+ * master cannot point a Hatch screen at another studio's board. A failed read
+ * answers `ok: false` (never a guess), after logging it.
+ * @returns {Promise<{ ok: boolean }>}
+ */
+export async function assertDisplayAtLocation(db, displayId, locationId) {
+  const { data, error } = await db
+    .from('tv_displays')
+    .select('id')
+    .eq('id', displayId)
+    .eq('location_id', locationId)
+    .eq('active', true)
+    .maybeSingle()
+  if (error) {
+    logWarn(LOG, 'tv display unreadable; link refused', { displayId, locationId, error: error.message })
+    return { ok: false }
+  }
+  return { ok: Boolean(data) }
+}
+
+/**
  * Assemble one box's plan.
  *
  * Read order: automation row, then (when enabled and the device is listed) the
