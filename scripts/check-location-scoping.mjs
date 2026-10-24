@@ -398,6 +398,14 @@ export const EXEMPT = {
     cars: 'Signature-verified webhook resolves the car by deposit_revolut_order_id — the provider\'s order id from the verified payload IS the row identity.',
     contacts: 'Buyer-email ilike lookup to link the deposit event to an existing contact; input comes from the signature-verified payload\'s order, only the contact id is used for the event emit.',
   },
+  'src/app/api/webhooks/revolut/donations/route.js': {
+    donations: 'CHARITY.7 signature-verified donations webhook: the re-read is by the row\'s own id, taken from resolveDonationByRef on the provider\'s order id from the verified payload — the provider\'s order id IS the row identity.',
+    race_events: 'CHARITY.7 signature-verified donations webhook: the event row is read by the donation\'s own race_event_id (never by caller input) for the match multiplier and the paid side effects.',
+  },
+  'src/app/api/webhooks/stripe/route.js': {
+    donations: 'CHARITY.7 signature-verified Stripe webhook (constructEvent): the post-mark re-read is by the row\'s own id, taken from resolveDonationByRef on the verified Checkout Session id — the provider\'s session id IS the row identity.',
+    race_events: 'CHARITY.7 signature-verified Stripe webhook: the donation\'s event row is read by the donation\'s own race_event_id (never by caller input) for the match multiplier and the paid side effects.',
+  },
   'src/app/api/webhooks/xero/route.js': {
     cars: 'Signature-verified webhook resolves the car by xero_invoice_id — the provider\'s invoice id IS the row identity (per-location Xero connections mint the ids).',
   },
