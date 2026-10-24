@@ -23,6 +23,7 @@ import { getLocationBranding } from '@/lib/location-branding'
 import ChooserEditorForm from '@/components/ChooserEditorForm'
 import PageSwitcher from '@/components/landing-page/PageSwitcher'
 import { isActiveOrgAdmin } from '@/lib/org-admin'
+import { logWarn } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
 
@@ -120,6 +121,9 @@ export default async function LandingPageSettingsPage(props) {
     // The paid-trial block editor shows the product picker for the studio's rail.
     db.from('locations').select('membership_source').eq('id', selectedId).maybeSingle(),
   ])
+  if (locRes?.error) {
+    logWarn('landing-page-settings', 'membership_source unreadable; editor falls back to Glofox fields', { locationId: selectedId, code: locRes.error.code })
+  }
   const selectedPage = pages.find((p) => p.location_id === selectedId) || null
 
   return (

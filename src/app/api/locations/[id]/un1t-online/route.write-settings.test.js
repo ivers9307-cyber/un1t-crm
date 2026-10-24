@@ -143,9 +143,18 @@ describe('GET adds the write block for masters', () => {
   it('lists the active priced products with price and currency for the paid-trial picker', async () => {
     getCurrentUser.mockResolvedValue(master)
     const j = await (await get()).json()
-    expect(j.data.write.paid_products).toEqual([
+    expect(j.data.paid_products).toEqual([
       { un1t_id: 'p-paid', title: 'Ten pack', price_cents: 9000, currency: 'EUR', type: 'one_time' },
     ])
+  })
+
+  it('an owner gets paid_products but no write block', async () => {
+    getCurrentUser.mockResolvedValue(owner)
+    const j = await (await get()).json()
+    expect(j.data.paid_products).toEqual([
+      { un1t_id: 'p-paid', title: 'Ten pack', price_cents: 9000, currency: 'EUR', type: 'one_time' },
+    ])
+    expect(j.data).not.toHaveProperty('write')
   })
 
   it('an unreadable permission check says so, is not retried for a minute, and never waits', async () => {

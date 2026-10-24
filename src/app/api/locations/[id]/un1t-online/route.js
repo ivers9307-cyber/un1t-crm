@@ -146,6 +146,9 @@ export async function GET(request, props) {
   } catch {
     data.writes_enabled = false
   }
+  // The paid-trial block editor's product picker: product titles and prices
+  // are not sensitive, so any owner or master who can open this gets the list.
+  data.paid_products = await paidProducts(db, g.locationId)
   if (isMaster(g.user)) {
     // Advisory, like the run summary: the connection itself answered.
     try {
@@ -244,9 +247,8 @@ async function writeSection(db, locationId) {
     return { unreadable: true }
   }
   const { rows } = await trialProducts(db, locationId)
-  const paid = await paidProducts(db, locationId)
   const permissions = await permissionLine(db, locationId)
-  return { ...writeFields(loc.settings), trial_products: rows, paid_products: paid, permissions }
+  return { ...writeFields(loc.settings), trial_products: rows, permissions }
 }
 
 // UN1TWRITE.12/24 — what the Writes section shows: booleans and the typed

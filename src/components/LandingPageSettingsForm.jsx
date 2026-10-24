@@ -1097,7 +1097,7 @@ function PaidTrialEdit({ block, onUpdate, locationId, membershipSource }) {
     return () => { alive = false }
   }, [locationId, isUn1tOnline])
   // A un1t.online studio sells one of its mirrored paid products (the GET
-  // answers `write.paid_products` for masters; anyone else keeps the text input).
+  // answers `paid_products`; the text input stays until it arrives).
   const [paidProducts, setPaidProducts] = useState([])
   const [paidProductsLoading, setPaidProductsLoading] = useState(false)
   useEffect(() => {
@@ -1106,7 +1106,7 @@ function PaidTrialEdit({ block, onUpdate, locationId, membershipSource }) {
     setPaidProductsLoading(true)
     fetch(`/api/locations/${locationId}/un1t-online`, { cache: 'no-store' })
       .then((r) => r.ok ? r.json() : null)
-      .then((j) => { if (alive && j && j.success !== false) setPaidProducts(Array.isArray(j.data?.write?.paid_products) ? j.data.write.paid_products : []) })
+      .then((j) => { if (alive && j && j.success !== false) setPaidProducts(Array.isArray(j.data?.paid_products) ? j.data.paid_products : []) })
       .catch(() => {})
       .finally(() => { if (alive) setPaidProductsLoading(false) })
     return () => { alive = false }
