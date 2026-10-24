@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
-import { cancelRaceRegistration } from '@/lib/race-cancel'
+import { cancelRaceRegistration, placedSolosRefusal } from '@/lib/race-cancel'
 
 // AGENT-EVENTS.3 — operator cancellation for a race/event
 // registration (the first cancel primitive these rows have had).
@@ -41,6 +41,11 @@ export async function POST(request, props) {
       error: 'not_active',
       message: 'This entrant has been placed in a team, so their own entry is no longer active and cannot be cancelled.',
     }, { status: 409 })
+  }
+  // FINDTEAM.9 — a team entry that solos were placed into: the same 409 the
+  // registration DELETE answers, so cancelling never strands a placement.
+  if (!result.ok && result.error === 'has_placed_solos') {
+    return NextResponse.json(placedSolosRefusal(result.placedCount, 'cancelled'), { status: 409 })
   }
   if (!result.ok) {
     return NextResponse.json({ success: false, error: result.error }, { status: 500 })

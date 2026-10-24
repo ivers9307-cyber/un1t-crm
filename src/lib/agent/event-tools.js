@@ -614,9 +614,13 @@ export async function executeEventTool(toolName, input, ctx) {
         status: result.ok ? 'actioned' : 'failed',
         details: { ...auditDetails, mode: 'auto', result },
       })
-      return result.ok
-        ? { cancelled: true, event_name: auditDetails.event_name, event_date: auditDetails.event_date }
-        : { cancelled: false, message: 'The cancellation did not go through — relay honestly and offer a handoff.' }
+      if (result.ok) return { cancelled: true, event_name: auditDetails.event_name, event_date: auditDetails.event_date }
+      // FINDTEAM.9 — cancelRaceRegistration refuses a team that solos were
+      // placed into (their rows point at it); inherited here, never worked around.
+      if (result.error === 'has_placed_solos') {
+        return { cancelled: false, reason: 'has_placed_solos', message: 'Other entrants were placed into this team, so it cannot be cancelled from here. Do not cancel it — hand off to the team.' }
+      }
+      return { cancelled: false, message: 'The cancellation did not go through — relay honestly and offer a handoff.' }
     }
     if (decision.action === 'draft') {
       const draftId = await logEventRequest(db, ctx, {

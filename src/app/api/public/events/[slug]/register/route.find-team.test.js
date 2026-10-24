@@ -13,6 +13,10 @@ let ownSolos = []
 let teamReg = null
 let takenNames = new Set()
 let payment = null
+let placedIntoCount = 0
+let placedIntoErr = null
+let teamRegCount = 0
+let regInsertErr = null
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => ({ allowed: true })),
@@ -30,6 +34,11 @@ vi.mock('@/lib/marketing-consent', () => ({ applyFormMarketingConsent: vi.fn() }
 vi.mock('@/lib/contact-tags', () => ({ writeContactTags: vi.fn() }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
+vi.mock('@/lib/member-validation', async (importOriginal) => ({
+  ...(await importOriginal()),
+  validateTeamRoster: vi.fn(async ({ members }) => members.map((m) => ({ name: m.name, email: m.email, is_member: false, member_contact_id: null, status: 'not_found' }))),
+}))
+vi.mock('@/lib/location-branding', () => ({ getLocationOrgBrandName: vi.fn(async () => 'UN1T') }))
 vi.mock('@/lib/event-waitlist', () => ({
   claimWaitlistOnRegistration: vi.fn(async () => ({ claimed: false, reason: 'invalid_token' })),
   claimWaitlistByEmail: vi.fn(async () => ({ claimed: false, reason: 'not_on_list' })),
@@ -43,9 +52,13 @@ const RACE = { id: 'e1', location_id: 'L1', name: 'Hatch Relay', slug: 'hatch-oc
   create_in_glofox: false, host_id: null, waves: [{ id: W1, start_time: '11:00:00', capacity: 10, label: null }] }
 
 const isHeadCount = (q) => q.table === 'race_registrations' && q.ops.some((o) => o[0] === 'select' && o[2]?.head)
+const isPlacedIntoCount = (q) => isHeadCount(q) && eqOf(q, 'placed_into_registration_id') !== undefined
+const isTeamRegCount = (q) => isHeadCount(q) && eqOf(q, 'team_id') !== undefined
 
-function registerDb() {
+function registerDb(override) {
   return fakeDb((q) => {
+    const answered = override?.(q)
+    if (answered) return answered
     if (q.table === 'race_events') return { data: race, error: null }
     if (q.table === 'teams') {
       if (q.action === 'select') return { data: { id: 't1' }, error: null }
@@ -57,7 +70,9 @@ function registerDb() {
     }
     if (q.table === 'race_payments') return { data: payment, error: null }
     if (q.table === 'race_registrations') {
-      if (q.action === 'insert') return { data: { id: 'reg1', registered_at: '2026-10-09T12:00:00Z', wave_id: W1, contact_id: 'c1' }, error: null }
+      if (q.action === 'insert') return regInsertErr ? { data: null, error: regInsertErr } : { data: { id: 'reg1', registered_at: '2026-10-09T12:00:00Z', wave_id: W1, contact_id: 'c1' }, error: null }
+      if (isPlacedIntoCount(q)) return { data: null, count: placedIntoCount, error: placedIntoErr }
+      if (isTeamRegCount(q)) return { data: null, count: teamRegCount, error: null }
       if (q.action === 'select' && eqOf(q, 'looking_for_team') === true) return { data: ownSolos, error: null }
       if (q.action === 'select' && eqOf(q, 'team_id')) return { data: teamReg, error: null }
       if (isHeadCount(q)) return { data: null, count: countInWave, error: null }
@@ -85,8 +100,24 @@ beforeEach(() => {
   teamReg = null
   takenNames = new Set()
   payment = null
+  placedIntoCount = 0
+  placedIntoErr = null
+  teamRegCount = 0
+  regInsertErr = null
   db = registerDb()
 })
+
+// FINDTEAM.9 — the solo's team row is discarded on every refusal after its
+// insert, once a count proves no registration points at it.
+const teamDeletes = () => q('teams', 'delete')
+const expectSoloTeamDiscarded = (teamId = 't-new') => {
+  const dels = teamDeletes()
+  expect(dels).toHaveLength(1)
+  expect(eqOf(dels[0], 'id')).toBe(teamId)
+  const count = db.queries.find(isTeamRegCount)
+  expect(eqOf(count, 'team_id')).toBe(teamId)
+  expect(db.queries.indexOf(count)).toBeLessThan(db.queries.indexOf(dels[0]))
+}
 
 describe('register route: find_team', () => {
   it('accepts a solo with no team_name or team_size and stores a team of one flagged looking_for_team', async () => {
@@ -230,7 +261,7 @@ describe('register route: find_team', () => {
       expect(q('teams', 'insert')).toHaveLength(0)
     })
 
-    it("clears this person's own stale pending row, then books afresh", async () => {
+    it("clears this person's own stale pending row and its team row, then books afresh", async () => {
       ownSolos = [{ id: 'solo1', status: 'pending_payment', active_payment_id: 'p0', team_id: 't-old', team: { name: 'x' } }]
       payment = { id: 'p0', status: 'abandoned' }
       const res = await post(SOLO)
@@ -240,6 +271,18 @@ describe('register route: find_team', () => {
       expect(eqOf(dels[0], 'id')).toBe('solo1')
       expect(eqOf(dels[0], 'contact_id')).toBe('c1')
       expect(q('race_registrations', 'insert')).toHaveLength(1)
+      // FINDTEAM.9 — the stale row's team goes with it, after the registration
+      expect(db.queries.indexOf(dels[0])).toBeLessThan(db.queries.indexOf(teamDeletes()[0]))
+      expectSoloTeamDiscarded('t-old')
+    })
+
+    it("keeps a stale row's team when another registration still points at it (a pre-FINDTEAM.8 shared row)", async () => {
+      ownSolos = [{ id: 'solo1', status: 'pending_payment', active_payment_id: 'p0', team_id: 't-old', team: { name: 'x' } }]
+      payment = { id: 'p0', status: 'abandoned' }
+      teamRegCount = 1
+      expect((await post(SOLO)).status).toBe(200)
+      expect(q('race_registrations', 'delete')).toHaveLength(1)
+      expect(teamDeletes()).toHaveLength(0)
     })
 
     it('a failed person check is a 500, never a booking', async () => {
@@ -267,5 +310,127 @@ describe('register route: find_team', () => {
     expect((await res.json()).code).toBe('already_registered')
     expect(q('race_registrations', 'delete')).toHaveLength(0)
     expect(q('race_registrations', 'insert')).toHaveLength(0)
+  })
+
+  // FINDTEAM.9 — a stale-looking team entry that solos were placed into is as
+  // final as a confirmed one: never stale-deleted by a captain's re-book.
+  describe('captain re-book of a team entry solos were placed into (FINDTEAM.9)', () => {
+    const STALE = { id: 'r9', status: 'cancelled', active_payment_id: null }
+
+    it('is refused 409 already_registered, nothing deleted or inserted', async () => {
+      teamReg = STALE
+      placedIntoCount = 1
+      const res = await post(TEAM)
+      expect(res.status).toBe(409)
+      expect((await res.json()).code).toBe('already_registered')
+      expect(q('race_registrations', 'delete')).toHaveLength(0)
+      expect(q('race_registrations', 'insert')).toHaveLength(0)
+      const count = db.queries.find(isPlacedIntoCount)
+      expect(eqOf(count, 'placed_into_registration_id')).toBe('r9')
+    })
+
+    it('an unreadable placed count is a 500, nothing deleted', async () => {
+      teamReg = STALE
+      placedIntoErr = { message: 'boom' }
+      expect((await post(TEAM)).status).toBe(500)
+      expect(q('race_registrations', 'delete')).toHaveLength(0)
+      expect(q('race_registrations', 'insert')).toHaveLength(0)
+    })
+
+    it('a stale entry nobody was placed into is still cleared and re-booked', async () => {
+      teamReg = STALE
+      expect((await post(TEAM)).status).toBe(200)
+      const dels = q('race_registrations', 'delete')
+      expect(dels).toHaveLength(1)
+      expect(eqOf(dels[0], 'id')).toBe('r9')
+      expect(q('race_registrations', 'insert')).toHaveLength(1)
+      // a real team's row is keyed by name and lives across events: never discarded
+      expect(teamDeletes()).toHaveLength(0)
+    })
+  })
+
+  // FINDTEAM.9 — every refusal after the solo's team insert discards that team
+  // row again, so failed or abandoned attempts never use up the 20 suffixes.
+  describe('solo team rows do not accumulate (FINDTEAM.9)', () => {
+    it('a booked solo keeps its team row', async () => {
+      expect((await post(SOLO)).status).toBe(200)
+      expect(q('teams', 'insert')).toHaveLength(1)
+      expect(teamDeletes()).toHaveLength(0)
+    })
+
+    it('members_only refusal (403) discards the team row', async () => {
+      race = { ...RACE, members_only: true }
+      const res = await post(SOLO)
+      expect(res.status).toBe(403)
+      expect((await res.json()).code).toBe('members_only_unverified')
+      expect(q('teams', 'insert')).toHaveLength(1)
+      expect(q('race_registrations', 'insert')).toHaveLength(0)
+      expectSoloTeamDiscarded()
+    })
+
+    it('invalid promo refusal (400) discards the team row', async () => {
+      const res = await post({ ...SOLO, promo_code: 'NOPE' })
+      expect(res.status).toBe(400)
+      expect((await res.json()).code).toBe('invalid_promo_code')
+      expect(q('race_registrations', 'insert')).toHaveLength(0)
+      expectSoloTeamDiscarded()
+    })
+
+    it('a failed registration insert (500) discards the team row', async () => {
+      regInsertErr = { code: 'XX000', message: 'db down' }
+      expect((await post(SOLO)).status).toBe(500)
+      expectSoloTeamDiscarded()
+    })
+
+    it('a duplicate registration insert (409) discards the team row', async () => {
+      regInsertErr = { code: '23505', message: 'duplicate key value violates unique constraint' }
+      const res = await post(SOLO)
+      expect(res.status).toBe(409)
+      expect((await res.json()).code).toBe('already_registered')
+      expectSoloTeamDiscarded()
+    })
+
+    it('a payment init failure (502) rolls the registration back, then discards the team row', async () => {
+      const { createRacePayment } = await import('@/lib/race-payments')
+      createRacePayment.mockRejectedValueOnce(new Error('provider down'))
+      const res = await post(SOLO)
+      expect(res.status).toBe(502)
+      expect((await res.json()).code).toBe('payment_init_failed')
+      const regDel = q('race_registrations', 'delete')
+      expect(regDel).toHaveLength(1)
+      expect(eqOf(regDel[0], 'id')).toBe('reg1')
+      expectSoloTeamDiscarded()
+      expect(db.queries.indexOf(regDel[0])).toBeLessThan(db.queries.indexOf(teamDeletes()[0]))
+    })
+
+    it('never deletes a team row a registration still points at', async () => {
+      teamRegCount = 1
+      expect((await post({ ...SOLO, promo_code: 'NOPE' })).status).toBe(400)
+      expect(db.queries.filter(isTeamRegCount)).toHaveLength(1)
+      expect(teamDeletes()).toHaveLength(0)
+    })
+
+    it('a failed team delete still answers the refusal (best effort, logged)', async () => {
+      db = registerDb((x) => (x.table === 'teams' && x.action === 'delete' ? { data: null, error: { message: 'locked' } } : undefined))
+      const res = await post({ ...SOLO, promo_code: 'NOPE' })
+      expect(res.status).toBe(400)
+      const { logWarn } = await import('@/lib/log')
+      expect(logWarn).toHaveBeenCalledWith('race-register', 'solo team row not discarded', expect.objectContaining({ teamId: 't-new' }))
+    })
+
+    it('the orphan count stays bounded across repeated failures: every insert is matched by a delete', async () => {
+      for (let i = 0; i < 5; i++) {
+        expect((await post({ ...SOLO, promo_code: 'NOPE' })).status).toBe(400)
+      }
+      expect(q('teams', 'insert')).toHaveLength(5)
+      expect(teamDeletes()).toHaveLength(5)
+      expect(teamDeletes().every((d) => eqOf(d, 'id') === 't-new')).toBe(true)
+      expect(q('teams', 'insert').length - teamDeletes().length).toBe(0)
+      // a later solo with that name still finds the first name free: no suffix needed
+      race = { ...RACE }
+      const res = await post(SOLO)
+      expect(res.status).toBe(200)
+      expect((await res.json()).data.team_name).toBe('Sarah Byrne (looking for a team)')
+    })
   })
 })
