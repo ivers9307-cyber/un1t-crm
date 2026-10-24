@@ -39,4 +39,10 @@ describe('automations registry', () => {
     expect(automationStatus('class_climate', notConn, { connected: 'yes' })).toEqual({ available: false, trialConfigured: false })
     expect(automationStatus('class_climate', connected, {})).toEqual({ available: true, trialConfigured: false })
   })
+
+  it('registers screen_mode and judges it on the connected answer', () => {
+    expect(getAutomation('screen_mode')).toMatchObject({ label: 'Class screens', supportsBackfill: false })
+    expect(automationStatus('screen_mode', null, { connected: true })).toEqual({ available: true, trialConfigured: false })
+    expect(automationStatus('screen_mode', null, { connected: false })).toEqual({ available: false, trialConfigured: false })
+  })
 })

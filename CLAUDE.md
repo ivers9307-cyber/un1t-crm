@@ -196,7 +196,7 @@ Full set in [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md); 
 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | Durable do-not-build decisions + design-doc pointers |
 | [`docs/changelog/entries/`](docs/changelog/entries/README.md) + [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | What shipped. **Each PR adds ONE file `docs/changelog/entries/<PR>.md`** (one row keyed `#<PR>`, added after `gh pr create`); never edit another PR's entry. `docs/CHANGELOG.md` is the frozen history up to #1883 (rows ≤633 keep their legacy serial). `npm run changelog` prints both. |
 
-Feature deep-dives also in `docs/`: `roster-v2.md`, `events.md`, `staff-attendance.md`, `invoices-queue-plan.md`, `whatsapp-setup.md`, `unifi-access-setup.md`, `EMAIL_DELIVERABILITY.md`, `PLATFORM_ROADMAP.md`, and the dated design docs (`*_DESIGN.md`, `*_2026-06.md`).
+Feature deep-dives also in `docs/`: `roster-v2.md`, `events.md`, `staff-attendance.md`, `invoices-queue-plan.md`, `whatsapp-setup.md`, `unifi-access-setup.md`, `EMAIL_DELIVERABILITY.md`, `PLATFORM_ROADMAP.md`, `fleet-screens.md`, and the dated design docs (`*_DESIGN.md`, `*_2026-06.md`).
 
 ## API reference
 
