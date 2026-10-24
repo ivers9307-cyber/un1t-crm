@@ -47,6 +47,7 @@ import { wouldFit } from '@/lib/event-signups'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 import { eventIsPublic, resolveMasterLocationId } from '@/lib/host-events'
 import { claimWaitlistOnRegistration, claimWaitlistByEmail } from '@/lib/event-waitlist'
+import { resolveFindTeamSettings, soloTeamName } from '@/lib/find-team'
 
 export const runtime = 'nodejs'
 
@@ -82,6 +83,10 @@ const RegisterSchema = z.object({
   promo_code: z.string().trim().max(64).optional(),
   // EVENT-WAITLIST.1 — the claim token from a waitlist offer link.
   waitlist_token: z.string().trim().max(1000).optional(),
+  // FINDTEAM.3 — "Find me a team": a solo entrant with no team. Sent WITHOUT
+  // team_name / team_size; the route books a team of one flagged
+  // looking_for_team and staff place them later.
+  find_team: z.boolean().optional(),
 })
 
 export async function POST(request, props) {
@@ -110,7 +115,7 @@ export async function POST(request, props) {
       id, location_id, name, slug, race_date, kind, capacity_mode, allowed_team_sizes,
       registration_opens_at, registration_closes_at, active, status,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
-      members_only, payment_currency, create_in_glofox, host_id,
+      members_only, payment_currency, create_in_glofox, host_id, find_team,
       waves:race_waves ( id, start_time, capacity, label )
     `)
     .eq('slug', params.slug)
@@ -266,25 +271,46 @@ export async function POST(request, props) {
     })
   }
 
-  // Non-lead_gen kinds require a team + wave (schema marks them
-  // optional only so the lead_gen body validates).
-  if (!body.team_name || !body.team_size || !body.wave_id) {
-    return NextResponse.json({ success: false, error: 'Missing registration details.' }, { status: 400 })
+  // FINDTEAM.3 — a solo "find me a team" entry. Refused outright on an event
+  // that is not a race or has not switched it on; otherwise it is a team of one
+  // (named for the captain), whatever team_name / team_size the body carries.
+  const findTeam = body.find_team === true
+  if (findTeam) {
+    if (race.kind !== 'race') {
+      return NextResponse.json({ success: false, error: 'This event does not offer team matching.', code: 'find_team_unavailable' }, { status: 400 })
+    }
+    if (!resolveFindTeamSettings(race).enabled) {
+      return NextResponse.json({ success: false, error: 'Team matching is not available for this event.', code: 'find_team_disabled' }, { status: 400 })
+    }
+    if (Array.isArray(body.members) && body.members.length > 0) {
+      return NextResponse.json({ success: false, error: 'A solo entry cannot name other team members.' }, { status: 400 })
+    }
   }
 
-  // Team size validation.
-  if (Array.isArray(race.allowed_team_sizes) && !race.allowed_team_sizes.includes(body.team_size)) {
+  // Non-lead_gen kinds require a team + wave (schema marks them
+  // optional only so the lead_gen body validates). A find_team solo needs
+  // only the wave: its team of one is derived below.
+  if (!body.wave_id || (!findTeam && (!body.team_name || !body.team_size))) {
+    return NextResponse.json({ success: false, error: 'Missing registration details.' }, { status: 400 })
+  }
+  // The effective team: used everywhere below instead of body.team_*.
+  const teamSize = findTeam ? 1 : body.team_size
+  const teamName = findTeam ? soloTeamName(body.captain_name) : body.team_name.trim()
+
+  // Team size validation. A find_team solo is a team of one regardless of the
+  // sizes the event allows for teams.
+  if (!findTeam && Array.isArray(race.allowed_team_sizes) && !race.allowed_team_sizes.includes(teamSize)) {
     return NextResponse.json({
       success: false,
       error: `Team size must be one of ${race.allowed_team_sizes.join(', ')} for this race.`,
     }, { status: 400 })
   }
-  const expectedMemberCount = body.team_size - 1
+  const expectedMemberCount = teamSize - 1
   const memberCount = Array.isArray(body.members) ? body.members.length : 0
   if (memberCount !== expectedMemberCount) {
     return NextResponse.json({
       success: false,
-      error: `Expected ${expectedMemberCount} member(s) for a team of ${body.team_size} (captain is the registrant).`,
+      error: `Expected ${expectedMemberCount} member(s) for a team of ${teamSize} (captain is the registrant).`,
     }, { status: 400 })
   }
 
@@ -314,20 +340,24 @@ export async function POST(request, props) {
         // Count reserved-but-unpaid spots too, else concurrent paid signups oversell.
         .in('status', LIVE_REGISTRATION_STATUSES)
         .limit(2000)
-      if (!wouldFit(wave.capacity, waveRegs || [], 'people', body.team_size)) {
+      if (!wouldFit(wave.capacity, waveRegs || [], 'people', teamSize)) {
         // PUBCAP.1 — never tell the public how many places are left (Richard's
         // rule: capacity is never surfaced to customers). Say it won't fit,
         // not by how much. Full and "too big for what's left" read alike.
-        const error = `A group of ${body.team_size} won't fit in the ${waveLabel} wave. Pick another wave.`
+        const error = `A group of ${teamSize} won't fit in the ${waveLabel} wave. Pick another wave.`
         return NextResponse.json({ success: false, error, code: 'wave_full' }, { status: 409 })
       }
-    } else {
+    } else if (!findTeam) {
+      // FINDTEAM.3 — a teams-mode wave counts TEAMS: solos still looking for a
+      // team are people, not teams, and a solo itself takes no team slot (so it
+      // skips this check entirely, above).
       const { count } = await db
         .from('race_registrations')
         .select('*', { count: 'exact', head: true })
         .eq('race_event_id', race.id)
         .eq('wave_id', wave.id)
         .eq('status', 'confirmed')
+        .eq('looking_for_team', false)
       if ((count || 0) >= wave.capacity) {
         return NextResponse.json({
           success: false,
@@ -385,7 +415,6 @@ export async function POST(request, props) {
   }
 
   // Find-or-create the team by (location_id, name).
-  const teamName = body.team_name.trim()
   let teamId
   const { data: foundTeam } = await db
     .from('teams')
@@ -396,7 +425,7 @@ export async function POST(request, props) {
   if (foundTeam) {
     teamId = foundTeam.id
     await db.from('teams').update({
-      size: body.team_size,
+      size: teamSize,
       captain_contact_id: captainContactId,
     }).eq('id', teamId)
   } else {
@@ -405,7 +434,7 @@ export async function POST(request, props) {
       .insert({
         location_id: race.location_id,
         name: teamName,
-        size: body.team_size,
+        size: teamSize,
         captain_contact_id: captainContactId,
       })
       .select('id')
@@ -657,6 +686,8 @@ export async function POST(request, props) {
       // HOST-CONSENT.1 — persisted so the attendee sync can grant HOST consent
       // when the registration confirms (immediately for free, on payment for paid).
       marketing_consent: body.marketing_consent !== false,
+      // FINDTEAM.3 — a solo awaiting placement; staff move them into a team.
+      looking_for_team: findTeam,
     })
     .select('id, registered_at, wave_id, contact_id')
     .single()

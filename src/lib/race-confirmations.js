@@ -28,6 +28,7 @@ import { isRaceKind } from '@shared/events'
 import { entryLeadEmail, GAP_PAYMENT_KIND } from './registration-entry'
 import { entryManageUrl } from './entry-manage-tokens'
 import { resolveCustomerBaseUrl } from './tenant-host'
+import { resolveFindTeamSettings } from './find-team'
 
 // The stored calendar day, in words. TZ.9: zone-free (event-day.js), so the
 // studio's own day in every zone; the same text as the old Dublin rendering.
@@ -46,6 +47,13 @@ function fmtMoney(cents, currency = 'EUR') {
 function fmtWaveTime(t) {
   if (!t || typeof t !== 'string') return ''
   return t.slice(0, 5) // "09:30:00" → "09:30"
+}
+
+// FINDTEAM.3 — the "we'll put you with a team" paragraph under the intro; ''
+// when the ctx carries none, so the default output stays byte-identical.
+function findTeamParagraphHtml(text) {
+  const t = typeof text === 'string' ? text.trim() : ''
+  return t ? `<p style="margin:12px 0 0;font-size:14px;line-height:1.6">${escapeHtml(t)}</p>` : ''
 }
 
 /**
@@ -111,10 +119,11 @@ export async function sendRaceConfirmations({ db, paymentId }) {
         venue_name, venue_address,
         accent_hex, hero_image_url,
         confirmation_email_subject, confirmation_email_intro, confirmation_email_template_id,
+        find_team,
         locations:location_id ( id, name, is_host_anchor, organization_id )
       ),
       registration:race_registration_id (
-        id, wave_id,
+        id, wave_id, looking_for_team,
         wave:wave_id ( id, start_time, label ),
         teams:team_id ( id, name, size,
           team_members ( id, name, role, is_member ) )
@@ -233,6 +242,12 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     manageUrl: entryManageUrl(reg?.id || payment.race_registration_id || null, {
       baseUrl: await resolveCustomerBaseUrl(db, race?.location_id || null),
     }),
+    // FINDTEAM.3 — a solo who booked "find me a team" gets one extra paragraph
+    // saying a team is coming. Left off the ctx entirely otherwise, so the
+    // default email is unchanged for everyone else.
+    ...(reg?.looking_for_team
+      ? { findTeamParagraph: resolveFindTeamSettings(race).confirmation_paragraph }
+      : {}),
   }
 
   // Email — only if not already sent.
@@ -395,7 +410,7 @@ export function buildConfirmationDefaults(ctx) {
   return {
     subject: `${ctx.raceName}: you're in!`,
     heading: `You're registered, ${escapeHtml(ctx.captainFirstName || 'team captain')}.`,
-    introHtml: `Team <strong>${escapeHtml(ctx.teamName)}</strong> is locked in for <strong>${escapeHtml(ctx.raceName)}</strong>.`,
+    introHtml: `Team <strong>${escapeHtml(ctx.teamName)}</strong> is locked in for <strong>${escapeHtml(ctx.raceName)}</strong>.${findTeamParagraphHtml(ctx.findTeamParagraph)}`,
     infoRows,
     afterInfoHtml,
     memberQrs,

@@ -12,6 +12,7 @@ import { isHostAnchorLocation, pickAudienceVenueName } from '@/lib/event-comms-l
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { getOrgBrandName } from '@/lib/location-branding'
 import { resolveCharitySettings, computeCharityTotals } from '@/lib/charity-donations'
+import { resolveFindTeamSettings } from '@/lib/find-team'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -43,7 +44,7 @@ export async function GET(request, props) {
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
       members_only, payment_currency,
       hero_image_url, accent_hex, active, status,
-      charity_enabled, charity,
+      charity_enabled, charity, find_team,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       locations:location_id ( id, name, address, timezone, is_host_anchor, organization_id ),
       host:event_hosts!host_id ( name )
@@ -96,6 +97,9 @@ export async function GET(request, props) {
           .eq('race_event_id', data.id)
           .eq('wave_id', w.id)
           .eq('status', 'confirmed')
+          // FINDTEAM.3 — a solo still looking for a team is a person, not a
+          // team: it never fills a teams-mode wave.
+          .eq('looking_for_team', false)
         isFull = (count || 0) >= w.capacity
       }
     }
@@ -131,7 +135,7 @@ export async function GET(request, props) {
   // CHARITY.4 — the raw `charity` settings object (receipt copy, include_entries)
   // and the enabled flag are stripped too; the resolved public block is built
   // below and emitted under `charity` only when the event has it switched on.
-  const { capacity: _omit, host: _host, charity: _charityRaw, charity_enabled: _charityOn, ...racePublic } = data
+  const { capacity: _omit, host: _host, charity: _charityRaw, charity_enabled: _charityOn, find_team: _findTeamRaw, ...racePublic } = data
 
   // EVENT-COPY.1 — NEVER let the ops-only anchor label leave this endpoint.
   //
@@ -160,11 +164,19 @@ export async function GET(request, props) {
 
   const charity = await buildPublicCharity(db, data)
 
+  // FINDTEAM.3 — the resolved "find me a team" option, only for a race that has
+  // it switched on. The raw settings (confirmation/placed copy) stay server-side.
+  const findTeamSettings = data.kind === 'race' ? resolveFindTeamSettings(data) : null
+  const findTeam = findTeamSettings?.enabled
+    ? { enabled: true, label: findTeamSettings.label, blurb: findTeamSettings.blurb }
+    : null
+
   return NextResponse.json({
     success: true,
     data: {
       ...racePublic,
       ...(charity ? { charity } : {}),
+      ...(findTeam ? { find_team: findTeam } : {}),
       locations: publicLocation ? publicLocationSafe : publicLocation,
       venue_name: pickAudienceVenueName({
         venueName: racePublic.venue_name,
