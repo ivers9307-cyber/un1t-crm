@@ -122,6 +122,42 @@ describe('mig 764 — trial_purchases studio choice', () => {
     expect(rows[0].indexdef).toContain(`status = 'awaiting_payment'`)
   })
 
+  it('one un1t.online ref per location: a second un1t_online row with it is refused 23505; Revolut refs are not constrained', async () => {
+    const { rows } = await db.query(`SELECT indexdef FROM pg_indexes WHERE indexname = 'uniq_trial_purchases_un1t_ref'`)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].indexdef).toMatch(/^CREATE UNIQUE INDEX/)
+    expect(rows[0].indexdef).toContain('(location_id, payment_provider_ref)')
+
+    const withRef = (provider, ref) => db.query(
+      `INSERT INTO public.trial_purchases
+         (location_id, customer_email, product_name, amount_cents, payment_provider, payment_provider_ref, status)
+       VALUES ($1, 'r@example.com', 'The UN1T Trial', 3900, $2, $3, 'granted') RETURNING id`, [LOC, provider, ref])
+    await expect(withRef('un1t_online', 'tx-1')).resolves.toBeTruthy()
+    await expect(withRef('un1t_online', 'tx-1')).rejects.toMatchObject({ code: '23505' })
+    await expect(withRef('un1t_online', 'tx-2')).resolves.toBeTruthy()
+    await expect(withRef('revolut', 'ord-1')).resolves.toBeTruthy()
+    await expect(withRef('revolut', 'ord-1')).resolves.toBeTruthy()
+    // A un1t row and a Revolut row may share a ref string: the index is partial on the provider.
+    await expect(withRef('revolut', 'tx-1')).resolves.toBeTruthy()
+    // Open un1t rows with no ref yet are many.
+    await expect(withRef('un1t_online', null)).resolves.toBeTruthy()
+    await expect(withRef('un1t_online', null)).resolves.toBeTruthy()
+  })
+
+  it('aborts when the un1t ref index is not unique', async () => {
+    const probe = new PGlite()
+    try {
+      await probe['exec'](SETUP_SQL)
+      await probe['exec'](MIG_744)
+      await probe['exec'](MIG_762)
+      const broken = MIG_764.replace('CREATE UNIQUE INDEX IF NOT EXISTS uniq_trial_purchases_un1t_ref', 'CREATE INDEX IF NOT EXISTS uniq_trial_purchases_un1t_ref')
+      expect(broken).not.toBe(MIG_764)
+      await expect(probe['exec'](broken)).rejects.toThrow(/uniq_trial_purchases_un1t_ref wrong or missing/)
+    } finally {
+      await probe.close()
+    }
+  })
+
   it("un1t_write_events accepts origin 'web_trial', every mig 744 origin, and still refuses 'cron'", async () => {
     await expect(ledgerRow({ origin: 'web_trial' })).resolves.toBeTruthy()
     for (const origin of ['staff', 'funnel', 'approval', 'mia', 'test_account']) {

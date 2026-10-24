@@ -28,12 +28,18 @@
 // Never throws: every failure is counted in `errors` and logged with ids only.
 // `readFailed` says the sweep could not read its own work list (the cron then
 // skips its heartbeat); a failed side effect is an error, not a read failure.
+// `raceLost`: the settle stamp hit uniq_trial_purchases_un1t_ref (23505), so
+// an overlapping sweep settled another row off the same payment; nothing is
+// sent and the next sweep's used-refs read leaves this row the transaction.
+// `passwordPending`: a settled buyer whose set-password step did not finish
+// (anything but done / skipped_*, or a throw); the verdict is logged and kept
+// on the row as grant.set_password for staff.
 import { sendWebsiteConversion } from '@/lib/meta-capi'
 import { runSetPasswordStep } from '@/lib/un1t-online-account'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { logError, logWarn } from '@/lib/log'
 
-const LOG = 'trial-un1t-settle'
+const LOG = 'trial-purchase-un1t'
 // The ledger origin of the /trial page (UN1T_TRIAL_ORIGIN in trial-purchase-un1t-checkout.js).
 const ORIGIN = 'web_trial'
 
@@ -42,14 +48,16 @@ export const UN1T_TRIAL_EXPIRY_MS = 24 * 60 * 60_000 + 45 * 60_000
 const ROW_COLS = 'id, location_id, contact_id, created_at, un1t_user_id, un1t_product_id, product_name, amount_cents, currency, customer_email, customer_phone, first_name, last_name, attribution'
 const TX_COLS = 'un1t_id, product_id, type, amount_cents, remote_created_at'
 const TX_PAGE = 100
+const UNIQUE_VIOLATION = '23505'
 
 /**
  * @param {object} db service-role client
  * @param {{ now?: () => number, pageSize?: number }} [opts]
- * @returns {Promise<{ settled: number, expired: number, errors: number, readFailed: boolean }>}
+ * @returns {Promise<{ settled: number, expired: number, errors: number, raceLost: number,
+ *   passwordPending: number, readFailed: boolean }>}
  */
 export async function settleUn1tTrialPurchases(db, { now = () => Date.now(), pageSize = 200 } = {}) {
-  const out = { settled: 0, expired: 0, errors: 0, readFailed: false }
+  const out = { settled: 0, expired: 0, errors: 0, raceLost: 0, passwordPending: 0, readFailed: false }
   const nowMs = now()
 
   let rows
@@ -154,16 +162,21 @@ export async function settleUn1tTrialPurchases(db, { now = () => Date.now(), pag
 /** The CAS stamp, then the side effects when it matched. true when this run settled the row. */
 async function settleRow(db, row, tx, nowMs, out) {
   const ids = { purchaseId: row.id, locationId: row.location_id, transaction: tx.un1t_id }
+  const grant = { ok: true, method: 'un1t_checkout', transaction: tx.un1t_id, at: new Date(nowMs).toISOString() }
   let data, error
   try {
     ({ data, error } = await db.from('trial_purchases').update({
       status: 'granted', granted_at: tx.remote_created_at,
       payment_status: 'paid', paid_at: tx.remote_created_at,
-      payment_provider_ref: tx.un1t_id,
-      grant: { ok: true, method: 'un1t_checkout', transaction: tx.un1t_id, at: new Date(nowMs).toISOString() },
+      payment_provider_ref: tx.un1t_id, grant,
     }).eq('id', row.id).eq('status', 'awaiting_payment').select('id'))
   } catch (err) {
     error = err
+  }
+  if (error?.code === UNIQUE_VIOLATION) {
+    out.raceLost++
+    logWarn(LOG, 'another sweep settled a row off this payment; this row left open', { ...ids, code: error.code })
+    return false
   }
   if (error) {
     out.errors++
@@ -196,6 +209,7 @@ async function settleRow(db, row, tx, nowMs, out) {
 
   // The step reads the ledger itself: an account the CRM did not create
   // answers skipped_not_created.
+  let verdict = null
   try {
     if (!row.contact_id) throw Object.assign(new Error('no contact on the row'), { code: 'no_contact' })
     const { settings } = await readUn1tWriteSettings(db, row.location_id)
@@ -203,13 +217,31 @@ async function settleRow(db, row, tx, nowMs, out) {
       .select('id, email, first_name, last_name, name').eq('id', row.contact_id).maybeSingle()
     if (contactErr) throw Object.assign(new Error('contact unreadable'), { code: contactErr.code ?? null })
     if (!contact) throw Object.assign(new Error('contact missing'), { code: 'contact_missing' })
-    await runSetPasswordStep(db, {
+    const res = await runSetPasswordStep(db, {
       locationId: row.location_id, contact, un1tUserId: row.un1t_user_id, request: null,
       settings, origin: ORIGIN, emailArgs: {}, writer: null,
     })
+    verdict = res?.forgotPassword ?? 'unknown'
+    if (verdict !== 'done' && !String(verdict).startsWith('skipped_')) {
+      logWarn(LOG, 'set-password step did not complete', {
+        purchaseId: row.id, locationId: row.location_id, un1tUserId: row.un1t_user_id,
+        forgotPassword: verdict, explanation: res?.explanation ?? null, code: res?.code ?? null,
+      })
+    }
   } catch (err) {
     out.errors++
+    verdict = 'error'
     logWarn(LOG, 'set-password step failed after settling', { ...ids, code: err?.code ?? null, errClass: err?.name })
+  }
+  if (verdict !== 'done' && !String(verdict).startsWith('skipped_')) {
+    out.passwordPending++
+    // Best-effort, for the Approvals card: the row is already granted.
+    try {
+      const { error: noteErr } = await db.from('trial_purchases').update({ grant: { ...grant, set_password: verdict } }).eq('id', row.id)
+      if (noteErr) logWarn(LOG, 'set-password verdict not recorded on the row', { ...ids, code: noteErr.code ?? null })
+    } catch (err) {
+      logWarn(LOG, 'set-password verdict not recorded on the row', { ...ids, errClass: err?.name })
+    }
   }
   return true
 }

@@ -31,9 +31,9 @@ beforeEach(() => {
 
 describe('process-trial-purchases cron: the un1t settle sweep', () => {
   it('counts the sweep in stats and stamps the heartbeat, per-row errors included', async () => {
-    mocks.settle.mockResolvedValue({ settled: 2, expired: 1, errors: 1, readFailed: false })
+    mocks.settle.mockResolvedValue({ settled: 2, expired: 1, errors: 1, raceLost: 1, passwordPending: 1, readFailed: false })
     const body = await (await call()).json()
-    expect(body).toMatchObject({ success: true, un1t_settled: 2, un1t_expired: 1, un1t_errors: 1, un1t_read_failed: 0 })
+    expect(body).toMatchObject({ success: true, un1t_settled: 2, un1t_expired: 1, un1t_errors: 1, un1t_race_lost: 1, un1t_password_pending: 1, un1t_read_failed: 0 })
     expect(mocks.settle).toHaveBeenCalledTimes(1)
     expect(mocks.stamp).toHaveBeenCalledWith('process-trial-purchases', expect.objectContaining({ un1t_settled: 2 }))
   })

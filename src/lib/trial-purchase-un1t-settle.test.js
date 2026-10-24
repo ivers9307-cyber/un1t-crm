@@ -11,11 +11,11 @@
 // changes the row, so a second sweep sees what the first one wrote.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ capi: vi.fn(), setPassword: vi.fn(), settings: vi.fn() }))
+const mocks = vi.hoisted(() => ({ capi: vi.fn(), setPassword: vi.fn(), settings: vi.fn(), warn: vi.fn() }))
 vi.mock('@/lib/meta-capi', () => ({ sendWebsiteConversion: mocks.capi }))
 vi.mock('@/lib/un1t-online-account', () => ({ runSetPasswordStep: mocks.setPassword }))
 vi.mock('@/lib/un1t-online-settings', () => ({ readUn1tWriteSettings: mocks.settings }))
-vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: mocks.warn, logInfo: vi.fn() }))
 
 import { settleUn1tTrialPurchases, UN1T_TRIAL_EXPIRY_MS } from './trial-purchase-un1t-settle'
 
@@ -62,6 +62,7 @@ function makeDb({ rows = [], txs = [], contact = CONTACT, race = new Set(), fail
         if (kind === 'update') {
           updates.push({ table, fields: patch, filters: [...filters] })
           if (fail.update) return { data: null, error: { code: 'XX000' } }
+          if (fail.settleCode && patch.status === 'granted') return { data: null, error: { code: fail.settleCode } }
           const hit = tables[table].filter((r) => {
             if (race.has(r.id)) r.status = 'help_requested' // someone else got there first
             return filters.every((f) => matches(r, f))
@@ -264,21 +265,74 @@ describe('settleUn1tTrialPurchases', () => {
 
   it('an unreadable open-row list is a read failure; a failed side effect is an error, never thrown', async () => {
     const failed = makeDb({ rows: [row()], txs: [tx()], fail: { trial_purchases: true } })
-    expect(await settleUn1tTrialPurchases(failed.db, { now: () => T0 + 10 * MIN })).toEqual({ settled: 0, expired: 0, errors: 1, readFailed: true })
+    expect(await settleUn1tTrialPurchases(failed.db, { now: () => T0 + 10 * MIN })).toEqual({ settled: 0, expired: 0, errors: 1, raceLost: 0, passwordPending: 0, readFailed: true })
 
     mocks.capi.mockRejectedValue(new Error('meta down'))
     mocks.setPassword.mockRejectedValue(new Error('ledger down'))
     const { db, rows } = makeDb({ rows: [row()], txs: [tx()] })
     const r = await settleUn1tTrialPurchases(db, { now: () => T0 + 10 * MIN })
-    expect(r).toEqual({ settled: 1, expired: 0, errors: 2, readFailed: false })
+    expect(r).toEqual({ settled: 1, expired: 0, errors: 2, raceLost: 0, passwordPending: 1, readFailed: false })
     expect(rows[0].status).toBe('granted')
+    expect(rows[0].grant).toMatchObject({ ok: true, transaction: 'tx1', set_password: 'error' })
   })
 
   it('an unreadable transaction list neither settles nor expires the row', async () => {
     const now = T0 + UN1T_TRIAL_EXPIRY_MS + MIN
     const { db, updates } = makeDb({ rows: [row()], txs: [tx()], fail: { un1t_transactions: true } })
     const r = await settleUn1tTrialPurchases(db, { now: () => now })
-    expect(r).toEqual({ settled: 0, expired: 0, errors: 1, readFailed: false })
+    expect(r).toEqual({ settled: 0, expired: 0, errors: 1, raceLost: 0, passwordPending: 0, readFailed: false })
     expect(trialUpdates(updates)).toEqual([])
+  })
+
+  it('a set-password step that did not finish is logged, counted and recorded on the row', async () => {
+    mocks.setPassword.mockResolvedValue({ explanation: 'deferred', forgotPassword: 'retry', code: 'UN1T_BUDGET' })
+    const { db, updates, rows } = makeDb({ rows: [row()], txs: [tx()] })
+    const r = await settleUn1tTrialPurchases(db, { now: () => T0 + 10 * MIN })
+    expect(r).toMatchObject({ settled: 1, errors: 0, passwordPending: 1 })
+    expect(mocks.warn).toHaveBeenCalledWith('trial-purchase-un1t', 'set-password step did not complete', {
+      purchaseId: 'tp1', locationId: 'loc2', un1tUserId: 'u1', forgotPassword: 'retry', explanation: 'deferred', code: 'UN1T_BUDGET',
+    })
+    const [, note] = trialUpdates(updates)
+    expect(note.fields).toEqual({ grant: { ok: true, method: 'un1t_checkout', transaction: 'tx1', at: iso(T0 + 10 * MIN), set_password: 'retry' } })
+    expect(note.filters).toEqual([['eq', 'id', 'tp1']]) // the id only: the row is already granted
+    expect(rows[0].status).toBe('granted')
+    expect(rows[0].grant.set_password).toBe('retry')
+
+    for (const forgotPassword of ['refused', 'in_doubt']) {
+      mocks.setPassword.mockResolvedValue({ explanation: 'sent', forgotPassword })
+      const again = makeDb({ rows: [row()], txs: [tx()] })
+      expect(await settleUn1tTrialPurchases(again.db, { now: () => T0 + 10 * MIN })).toMatchObject({ passwordPending: 1 })
+      expect(again.rows[0].grant.set_password).toBe(forgotPassword)
+    }
+  })
+
+  it('a done or skipped set-password step records nothing more', async () => {
+    for (const forgotPassword of ['done', 'skipped_not_created', 'skipped_already_done', 'skipped_flag']) {
+      mocks.setPassword.mockResolvedValue({ explanation: 'sent', forgotPassword })
+      const { db, updates, rows } = makeDb({ rows: [row()], txs: [tx()] })
+      expect(await settleUn1tTrialPurchases(db, { now: () => T0 + 10 * MIN })).toMatchObject({ settled: 1, passwordPending: 0 })
+      expect(trialUpdates(updates)).toHaveLength(1)
+      expect(rows[0].grant.set_password).toBeUndefined()
+    }
+    expect(mocks.warn).not.toHaveBeenCalledWith('trial-purchase-un1t', 'set-password step did not complete', expect.anything())
+  })
+
+  it('a 23505 on the settle stamp is a lost race: no error, nothing sent, the row left for the next sweep', async () => {
+    const fail = { settleCode: '23505' }
+    const { db, rows } = makeDb({ rows: [row({ id: 'open' })], txs: [tx()], fail })
+    const r = await settleUn1tTrialPurchases(db, { now: () => T0 + 10 * MIN })
+    expect(r).toEqual({ settled: 0, expired: 0, errors: 0, raceLost: 1, passwordPending: 0, readFailed: false })
+    expect(mocks.warn).toHaveBeenCalledWith('trial-purchase-un1t', expect.any(String), expect.objectContaining({ purchaseId: 'open', transaction: 'tx1', code: '23505' }))
+    expect(mocks.capi).not.toHaveBeenCalled()
+    expect(mocks.setPassword).not.toHaveBeenCalled()
+    expect(rows[0].status).toBe('awaiting_payment')
+
+    // The overlapping sweep's row holds the payment: the next sweep leaves it alone.
+    delete fail.settleCode
+    rows.push(row({ id: 'winner', status: 'granted', payment_status: 'paid', payment_provider_ref: 'tx1', granted_at: tx().remote_created_at, created_at: iso(T0 + MIN) }))
+    const next = await settleUn1tTrialPurchases(db, { now: () => T0 + 12 * MIN })
+    expect(next).toMatchObject({ settled: 0, raceLost: 0, errors: 0 })
+    expect(rows[0].status).toBe('awaiting_payment')
+    expect(mocks.capi).not.toHaveBeenCalled()
   })
 })

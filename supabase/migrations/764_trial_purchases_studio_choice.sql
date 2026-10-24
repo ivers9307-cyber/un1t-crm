@@ -21,6 +21,14 @@
 --       is in the list.
 --   (4) idx_trial_purchases_un1t_open: the open un1t.online checkouts, for the
 --       sweeper that expires them.
+--   (4b) uniq_trial_purchases_un1t_ref (TRIALSTUDIO.7): one un1t.online
+--       payment settles at most one row. The settle sweep stamps the
+--       un1t.online transaction id as payment_provider_ref under a status
+--       guard, which protects only its own row: two overlapping sweeps (the
+--       2-minute cron runs up to 300s) could otherwise settle a buyer's two
+--       open rows off one payment. The second stamp now fails 23505 and the
+--       sweep treats it as a lost race. Partial: Revolut/Stripe refs are not
+--       constrained by it (their webhooks look a ref up on their own).
 --   (5) un1t_write_events_origin_check also admits 'web_trial' (the public
 --       /trial page as the origin of a ledger write); every origin mig 744
 --       allowed is kept.
@@ -31,7 +39,8 @@
 --
 -- LOCKS. One transaction, 5s lock_timeout. Both tables are small (trial
 -- purchases: tens of rows; the ledger: a few hundred); the CHECK scans and the
--- index build are instant. The new columns are nullable with no default.
+-- index builds are instant. No un1t_online row has a payment_provider_ref
+-- before this file, so the unique index cannot fail on existing data. The new columns are nullable with no default.
 --
 -- IDEMPOTENT. IF NOT EXISTS on columns and the index, drop-if-exists then add
 -- on each CHECK, DROP NOT NULL is a no-op the second time. The DO block checks
@@ -65,6 +74,11 @@ CREATE INDEX IF NOT EXISTS idx_trial_purchases_un1t_open
   ON public.trial_purchases (created_at)
   WHERE payment_provider = 'un1t_online' AND status = 'awaiting_payment';
 
+-- Two overlapping settle sweeps must not settle two rows off one un1t.online payment.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_trial_purchases_un1t_ref
+  ON public.trial_purchases (location_id, payment_provider_ref)
+  WHERE payment_provider = 'un1t_online' AND payment_provider_ref IS NOT NULL;
+
 ALTER TABLE public.un1t_write_events
   DROP CONSTRAINT IF EXISTS un1t_write_events_origin_check;
 ALTER TABLE public.un1t_write_events
@@ -81,6 +95,7 @@ COMMENT ON COLUMN public.trial_purchases.terms_source IS 'TRIALSTUDIO.1: where t
 COMMENT ON COLUMN public.trial_purchases.terms_version IS 'TRIALSTUDIO.1: the version of the terms text the buyer accepted.';
 COMMENT ON CONSTRAINT trial_purchases_status_check ON public.trial_purchases IS 'TRIALSTUDIO.1 (mig 764): awaiting_payment | queued | processing | granted | needs_review | failed | payment_failed | help_requested | handled | expired.';
 COMMENT ON INDEX public.idx_trial_purchases_un1t_open IS 'TRIALSTUDIO.1 (mig 764): open un1t.online trial checkouts (awaiting_payment), oldest first, for the expiry sweep.';
+COMMENT ON INDEX public.uniq_trial_purchases_un1t_ref IS 'TRIALSTUDIO.7 (mig 764): one un1t.online transaction (payment_provider_ref) settles at most one trial_purchases row per location, even across overlapping settle sweeps.';
 
 -- Repeated from mig 762 so a later default-ACL change cannot reopen the table.
 ALTER TABLE public.trial_purchases ENABLE ROW LEVEL SECURITY;
@@ -121,6 +136,12 @@ BEGIN
   d := (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_trial_purchases_un1t_open');
   IF d IS NULL OR d NOT LIKE '%(created_at) WHERE%' OR d NOT LIKE '%''un1t_online''%' OR d NOT LIKE '%''awaiting_payment''%' THEN
     RAISE EXCEPTION 'mig 764: idx_trial_purchases_un1t_open wrong or missing: %', d;
+  END IF;
+
+  d := (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'uniq_trial_purchases_un1t_ref');
+  IF d IS NULL OR d NOT LIKE 'CREATE UNIQUE INDEX%' OR d NOT LIKE '%(location_id, payment_provider_ref) WHERE%'
+     OR d NOT LIKE '%''un1t_online''%' OR d NOT LIKE '%payment_provider_ref IS NOT NULL%' THEN
+    RAISE EXCEPTION 'mig 764: uniq_trial_purchases_un1t_ref wrong or missing: %', d;
   END IF;
 
   d := pg_get_constraintdef((SELECT oid FROM pg_constraint

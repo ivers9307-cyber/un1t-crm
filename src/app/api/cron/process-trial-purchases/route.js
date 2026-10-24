@@ -5,7 +5,9 @@
 // TRIALSTUDIO.7 — then it settles the Hatch Street (un1t.online) rows off the
 // un1t_transactions mirror and expires the abandoned ones. A sweep that could
 // not read its rows skips the heartbeat (like the reaper); a per-row failure
-// is counted in un1t_errors and does not.
+// is counted in un1t_errors and does not. un1t_race_lost (an overlapping
+// sweep settled off the same payment) and un1t_password_pending (a paid buyer
+// whose set-password step did not finish) are counts, never faults.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
@@ -26,7 +28,7 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
   const db = createServerClient()
-  const stats = { reaped: 0, processed: 0, granted: 0, review: 0, failed: 0, reap_failed: 0, un1t_settled: 0, un1t_expired: 0, un1t_errors: 0, un1t_read_failed: 0 }
+  const stats = { reaped: 0, processed: 0, granted: 0, review: 0, failed: 0, reap_failed: 0, un1t_settled: 0, un1t_expired: 0, un1t_errors: 0, un1t_race_lost: 0, un1t_password_pending: 0, un1t_read_failed: 0 }
   try {
     const staleBefore = new Date(Date.now() - STALE_MS).toISOString()
     try {
@@ -63,6 +65,8 @@ export async function GET(request) {
       stats.un1t_settled = un1t.settled
       stats.un1t_expired = un1t.expired
       stats.un1t_errors = un1t.errors
+      stats.un1t_race_lost = un1t.raceLost
+      stats.un1t_password_pending = un1t.passwordPending
       if (un1t.readFailed) stats.un1t_read_failed = 1
     } catch (e) {
       // The sweeper never throws by contract; a bug here must not crash the run.
