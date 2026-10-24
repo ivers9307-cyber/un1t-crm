@@ -34,6 +34,7 @@ import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media
 import { generateWaveTimes } from '@/lib/wave-generate'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { CHARITY_DEFAULTS, CharitySettingsSchema, formatCents } from '@/lib/charity-donations'
+import { FIND_TEAM_DEFAULTS } from '@/lib/find-team'
 import { useLocationBrand } from './use-location-brand'
 
 const ALL_SIZES = [1, 2, 3, 4, 5, 6, 8]
@@ -336,6 +337,10 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
   const [charityEnabled, setCharityEnabled] = useState(!!race?.charity_enabled)
   const [charityForm, setCharityForm] = useState(() => charityToForm(race?.charity))
   const setCharityField = (key, value) => setCharityForm((f) => ({ ...f, [key]: value }))
+  // FINDTEAM.6 (mig 766) — "Find me a team": race_events.find_team jsonb, the
+  // switch plus its copy. Race kind only.
+  const [findTeamForm, setFindTeamForm] = useState(() => findTeamToForm(race?.find_team))
+  const setFindTeamField = (key, value) => setFindTeamForm((f) => ({ ...f, [key]: value }))
   // The location's saved email templates, for the "Advanced: use a full
   // template" pickers. Fetched from the shared templates list endpoint,
   // scoped to this event's location. A fetch failure just leaves the list
@@ -648,6 +653,8 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       waitlist_email_intro: waitlistIntro.trim() || null,
       charity_enabled: charityEnabled,
       charity: charityResult.charity,
+      // Races only: another kind never touches the column (an unsent key is left as saved).
+      ...(kind === 'race' ? { find_team: findTeamFromForm(findTeamForm) } : {}),
       ...(meta.isLeadGen ? {} : {
         waves: outboundWaves.map((w, i) => ({
           ...(w.id ? { id: w.id } : {}),
@@ -1288,6 +1295,10 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
         values={charityForm}
         onChange={setCharityField}
       />
+
+      {kind === 'race' && (
+        <FindTeamSection values={findTeamForm} onChange={setFindTeamField} />
+      )}
 
       {/* TV-display logos. Race-only — non-race kinds don't have a
           TV display board. Within race, only shown after the event
@@ -1968,6 +1979,96 @@ function CharityDaySection({ enabled, onEnabled, values, onChange }) {
               introPlaceholder="Optional note above the receipt"
               showTemplate={false}
               extraTags={['{{charity}}', '{{amount}}', '{{matched}}', '{{brand}}', '{{first_name}}']}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// FINDTEAM.6 — "Find me a team" copy fields: blank = omitted from the saved
+// object, so FIND_TEAM_DEFAULTS apply (the schema takes no null for text).
+const FIND_TEAM_TEXT_KEYS = ['label', 'blurb', 'confirmation_paragraph', 'placed_subject', 'placed_intro']
+
+/** race_events.find_team (jsonb) -> the form's state: a boolean and strings. */
+function findTeamToForm(saved) {
+  const s = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {}
+  const f = { enabled: s.enabled === true }
+  for (const k of FIND_TEAM_TEXT_KEYS) f[k] = typeof s[k] === 'string' ? s[k] : ''
+  return f
+}
+
+/** The form's state -> `find_team` for the save payload: `enabled` always, text only when non-blank. */
+function findTeamFromForm(f) {
+  const out = { enabled: f.enabled === true }
+  for (const k of FIND_TEAM_TEXT_KEYS) {
+    const v = String(f[k] ?? '').trim()
+    if (v) out[k] = v
+  }
+  return out
+}
+
+// FINDTEAM.6 — the "Find me a team" section: a switch, the choice's copy and
+// the placed email. Presentation only; state lives in RaceEventForm.
+function FindTeamSection({ values, onChange }) {
+  const input = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
+  const labelCls = 'block text-sm text-un1t-subtle mb-1'
+  const enabled = values.enabled
+  return (
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
+        <UserPlus size={14} /> Find me a team
+      </h3>
+
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm text-un1t-text">Let solo entrants ask for a team</div>
+          <div className="text-[11px] text-un1t-subtle">Adds a &apos;Find me a team&apos; choice before the team sizes on the public signup. Solo entrants pay for one place and you place them from the Teams page.</div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Find me a team"
+          onClick={() => onChange('enabled', !enabled)}
+          className={`shrink-0 w-10 h-5 rounded-full ${enabled ? 'bg-emerald-500' : 'bg-un1t-border'}`}
+        >
+          <div className={`w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+        </button>
+      </div>
+
+      {enabled && (
+        <div className="space-y-4 pt-2 border-t border-un1t-border">
+          <p className="text-[11px] text-un1t-subtle">Leave any text blank to use the default shown in grey.</p>
+
+          <div>
+            <label htmlFor="find-team-label" className={labelCls}>Choice label</label>
+            <input id="find-team-label" type="text" value={values.label} onChange={(e) => onChange('label', e.target.value)} placeholder={FIND_TEAM_DEFAULTS.label} className={input} />
+          </div>
+          <div>
+            <label htmlFor="find-team-blurb" className={labelCls}>Short description</label>
+            <textarea id="find-team-blurb" rows={2} value={values.blurb} onChange={(e) => onChange('blurb', e.target.value)} placeholder={FIND_TEAM_DEFAULTS.blurb} className={input} />
+            <p className="text-[11px] text-un1t-muted mt-1">Shown under the choice on the public signup.</p>
+          </div>
+          <div>
+            <label htmlFor="find-team-confirmation" className={labelCls}>Confirmation paragraph</label>
+            <textarea id="find-team-confirmation" rows={2} value={values.confirmation_paragraph} onChange={(e) => onChange('confirmation_paragraph', e.target.value)} placeholder={FIND_TEAM_DEFAULTS.confirmation_paragraph} className={input} />
+            <p className="text-[11px] text-un1t-muted mt-1">Added to the signup confirmation email a solo entrant receives.</p>
+          </div>
+
+          <div className="pt-4 border-t border-un1t-border">
+            <EventEmailFields
+              title="Placed email"
+              description="Emailed to a solo entrant when you place them in a team."
+              subject={values.placed_subject}
+              onSubject={(v) => onChange('placed_subject', v)}
+              subjectPlaceholder={FIND_TEAM_DEFAULTS.placed_subject}
+              intro={values.placed_intro}
+              onIntro={(v) => onChange('placed_intro', v)}
+              introPlaceholder={FIND_TEAM_DEFAULTS.placed_intro}
+              showTemplate={false}
+              extraTags={['{{first_name}}']}
             />
           </div>
         </div>

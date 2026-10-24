@@ -59,6 +59,25 @@ describe('PUT /api/events/[id] — CHARITY.9 charity day', () => {
   })
 })
 
+describe('PUT /api/events/[id] — FINDTEAM.6 find_team', () => {
+  beforeEach(() => { mocks.updates.length = 0 })
+
+  it('writes find_team to race_events', async () => {
+    const find_team = { enabled: true, label: 'Need a team?' }
+    const res = await PUT(putReq({ find_team }), ctx)
+    expect(res.status).toBe(200)
+    expect(mocks.updates[0].find_team).toEqual(find_team)
+  })
+
+  it('400s a non-boolean enabled or an over-long copy before any write', async () => {
+    for (const find_team of [{ enabled: 'yes' }, { label: 'x'.repeat(2001) }]) {
+      const res = await PUT(putReq({ find_team }), ctx)
+      expect(res.status).toBe(400)
+    }
+    expect(mocks.updates).toHaveLength(0)
+  })
+})
+
 // EVENTS-EMAILCFG.1 — per-event email config on the events update schema.
 // Every field is optional (omit = leave untouched) and nullable (null =
 // clear back to the default copy/look). template pointers are uuidLike.
