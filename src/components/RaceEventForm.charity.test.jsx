@@ -105,6 +105,25 @@ describe('RaceEventForm — Charity day', () => {
     expect(calls.some((c) => c.opts?.method === 'PUT')).toBe(false)
   })
 
+  it('blank presets with a low maximum names the default preset and the maximum, and blocks the save', async () => {
+    const calls = stubFetch()
+    const { container } = render(<RaceEventForm race={EVENT} locationId="loc-1" />)
+    fireEvent.change(screen.getByLabelText('Preset amounts (€)'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('Maximum custom amount (€)'), { target: { value: '50' } })
+    fireEvent.submit(container.querySelector('form'))
+    await waitFor(() => expect(container.textContent).toContain('default preset €100.00 is above your maximum €50.00'))
+    expect(calls.some((c) => c.opts?.method === 'PUT')).toBe(false)
+  })
+
+  it('a typed preset below the minimum names it', async () => {
+    const calls = stubFetch()
+    const { container } = render(<RaceEventForm race={EVENT} locationId="loc-1" />)
+    fireEvent.change(screen.getByLabelText('Minimum custom amount (€)'), { target: { value: '20' } })
+    fireEvent.submit(container.querySelector('form'))
+    await waitFor(() => expect(container.textContent).toContain('the preset €10.00 is below your minimum €20.00'))
+    expect(calls.some((c) => c.opts?.method === 'PUT')).toBe(false)
+  })
+
   it('an event with the section off sends charity_enabled false and a settings object', async () => {
     const calls = stubFetch()
     const { container } = render(<RaceEventForm race={{ ...EVENT, charity_enabled: false, charity: null }} locationId="loc-1" />)

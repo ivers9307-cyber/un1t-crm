@@ -33,7 +33,7 @@ import { eventSlug } from '@/lib/event-slug'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 import { generateWaveTimes } from '@/lib/wave-generate'
 import { PLATFORM_NAME } from '@/lib/brand-name'
-import { CHARITY_DEFAULTS, CharitySettingsSchema } from '@/lib/charity-donations'
+import { CHARITY_DEFAULTS, CharitySettingsSchema, formatCents } from '@/lib/charity-donations'
 import { useLocationBrand } from './use-location-brand'
 
 const ALL_SIZES = [1, 2, 3, 4, 5, 6, 8]
@@ -1812,6 +1812,21 @@ function charityFromForm(f) {
   out.custom_allowed = !!f.custom_allowed
   out.show_total = !!f.show_total
   out.include_entries = !!f.include_entries
+
+  // Name the offending amounts (the schema's rule is generic, and with a blank
+  // presets field the offender is a default the operator never typed).
+  const lo = out.min_cents ?? CHARITY_DEFAULTS.min_cents
+  const hi = out.max_cents ?? CHARITY_DEFAULTS.max_cents
+  if (lo > hi) return { error: `Charity day: the minimum ${formatCents(lo)} is above the maximum ${formatCents(hi)}.` }
+  if (out.custom_allowed) {
+    const typed = Array.isArray(out.presets_cents)
+    const which = typed ? 'preset' : 'default preset'
+    const advice = 'Enter your own presets or change the minimum/maximum.'
+    for (const p of typed ? out.presets_cents : CHARITY_DEFAULTS.presets_cents) {
+      if (p > hi) return { error: `Charity day: the ${which} ${formatCents(p)} is above your maximum ${formatCents(hi)}. ${advice}` }
+      if (p < lo) return { error: `Charity day: the ${which} ${formatCents(p)} is below your minimum ${formatCents(lo)}. ${advice}` }
+    }
+  }
 
   const parsed = CharitySettingsSchema.safeParse(out)
   if (!parsed.success) return { error: `Charity day: ${parsed.error.issues[0]?.message || 'check the settings.'}` }
