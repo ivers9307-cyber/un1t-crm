@@ -362,6 +362,9 @@ export const EXEMPT = {
   'src/app/api/public/events/[slug]/waitlist/route.js': {
     race_events: 'EVENT-WAITLIST.1 public waitlist join: race_events row resolved by published slug + active/published flags (the same row the public event page serves); the waitlist row is written at that event\'s own location_id by joinWaitlist. Answers only the new row id.',
   },
+  'src/app/api/public/events/[slug]/donate/route.js': {
+    race_events: 'CHARITY.5 public donation start: race_events row resolved by published slug + active/published flags (the same row the public event page serves); the donations row is inserted under that event\'s own race_event_id/location_id and no other tenant\'s rows are read. Rate-limited per slug and IP.',
+  },
   'src/app/api/public/classes/route.js': {
     landing_page_settings: 'Public landing-page class list: landing_page_settings row resolved by its public_path — the path IS the tenant selector for the public site.',
   },
