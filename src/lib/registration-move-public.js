@@ -80,6 +80,8 @@ export function publicMoveOptions(targets, headcount) {
 const MESSAGES = Object.freeze({
   not_found: 'This link is not valid any more.',
   not_active: 'This entry is no longer active, so its date cannot be changed.',
+  // FINDTEAM.8 (I5) — a solo staff placed into a team runs at the team's time.
+  placed: "You've been placed in a team, so your team's time applies; contact the studio to change it.",
   pending_payment: 'This entry is still waiting for payment. Once it is paid you can change the date here.',
   checked_in: 'This entry has already been checked in, so its date cannot be changed.',
   event_past: 'This event has already happened, so its date cannot be changed.',
@@ -130,6 +132,7 @@ export function entryMoveBlock({ registration, checkinCount = 0, today }) {
   const block = (code) => ({ code, message: customerMoveMessage(code) })
   if (!registration) return block('not_found')
   if (registration.status === 'pending_payment') return block('pending_payment')
+  if (registration.status === 'placed') return block('placed')
   if (registration.status !== 'confirmed') return block('not_active')
   if ((Number(checkinCount) || 0) > 0 || registration.race_started_at || registration.race_finished_at) return block('checked_in')
   const date = registration.race?.race_date ? String(registration.race.race_date).slice(0, 10) : null

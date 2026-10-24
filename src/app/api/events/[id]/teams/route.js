@@ -65,7 +65,8 @@ export async function GET(_request, props) {
     .select(`
       id, status, registered_at, team_composition, wave_id,
       race_started_at, race_finished_at,
-      contact:contact_id ( first_name, last_name, email ),
+      looking_for_team, placed_into_registration_id, placed_at,
+      contact:contact_id ( first_name, last_name, email, phone ),
       teams:team_id (
         id, name, size, captain_contact_id,
         team_members ( id, name, email, role, is_member, member_validation_status )

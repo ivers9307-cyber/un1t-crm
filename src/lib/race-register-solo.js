@@ -69,7 +69,7 @@ export async function registerSoloEventEntry(db, { race, waveId, contact, member
     const mode = race.capacity_mode === 'people' ? 'people' : 'teams'
     // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- wave-capacity gate; a single race wave never holds >1000 registrations
     const { data: waveRegs } = await db.from('race_registrations')
-      .select('status, team:teams ( size )')
+      .select('status, looking_for_team, team:teams ( size )') // FINDTEAM.2: unplaced solos do not fill a teams-mode wave
       .eq('wave_id', wave.id)
       // Count reserved-but-unpaid spots too, else concurrent paid signups oversell.
       .in('status', LIVE_REGISTRATION_STATUSES)

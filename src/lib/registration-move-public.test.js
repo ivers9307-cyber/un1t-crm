@@ -90,6 +90,7 @@ describe('entryMoveBlock', () => {
     ['unpaid', { ...reg, status: 'pending_payment' }, 0, 'pending_payment'],
     ['cancelled', { ...reg, status: 'cancelled' }, 0, 'not_active'],
     ['no-show', { ...reg, status: 'no_show' }, 0, 'not_active'],
+    ['placed', { ...reg, status: 'placed' }, 0, 'placed'],
     ['checked in', reg, 1, 'checked_in'],
     ['raced', { ...reg, race_started_at: '2026-10-18T09:00:00Z' }, 0, 'checked_in'],
     ['past', { ...reg, race: { race_date: '2026-10-08' } }, 0, 'event_past'],
@@ -118,5 +119,13 @@ describe('customer copy', () => {
     expect(Object.values(CUSTOMER_MOVE_STATUS)).not.toContain(403)
     expect(CUSTOMER_MOVE_STATUS.wave_full).toBe(409)
     expect(CUSTOMER_MOVE_STATUS.not_found).toBe(404)
+  })
+})
+
+// FINDTEAM.8 (I5) — a placed solo is told their team's time applies.
+describe('entryMoveBlock — placed', () => {
+  it('gives the placed sentence', () => {
+    const b = entryMoveBlock({ registration: { status: 'placed', race: { race_date: '2026-10-18' } }, checkinCount: 0, today: '2026-10-09' })
+    expect(b).toEqual({ code: 'placed', message: "You've been placed in a team, so your team's time applies; contact the studio to change it." })
   })
 })

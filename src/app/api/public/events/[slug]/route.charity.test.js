@@ -103,6 +103,10 @@ describe('GET /api/public/events/[slug] — charity block', () => {
     expect(c.raised_cents).toBe(16000) // donations 5000+1000 matched = 6000, entries 5000x2 = 10000
     expect(c.donation_count).toBe(2)
     expect(c.team_count).toBe(7)
+    // FINDTEAM.8 (I4) — confirmed team entries only: no solos still looking for a team.
+    const teamCount = db.calls.filter((x) => x.table === 'race_registrations' && x.m === 'eq').map((x) => x.args)
+    expect(teamCount).toContainEqual(['status', 'confirmed'])
+    expect(teamCount).toContainEqual(['looking_for_team', false])
     expect(c).not.toHaveProperty('entries_matched_cents')
     expect(c).not.toHaveProperty('include_entries')
     expect(c).not.toHaveProperty('receipt_subject')

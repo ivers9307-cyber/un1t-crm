@@ -135,7 +135,7 @@ export async function readConfirmedRegistrations(db, raceEventId) {
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
       .from('race_registrations')
-      .select('id, wave_id, status, team:teams ( size )')
+      .select('id, wave_id, status, looking_for_team, team:teams ( size )') // FINDTEAM.2
       .eq('race_event_id', raceEventId)
       .eq('status', 'confirmed')
       .order('id', { ascending: true })
@@ -561,7 +561,7 @@ async function readLiveRegistrations(db, raceEventId) {
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
       .from('race_registrations')
-      .select('id, wave_id, status, contact_id, team:teams ( size ), contact:contact_id ( email )')
+      .select('id, wave_id, status, contact_id, looking_for_team, team:teams ( size ), contact:contact_id ( email )') // FINDTEAM.2
       .eq('race_event_id', raceEventId)
       .in('status', LIVE_REGISTRATION_STATUSES)
       .order('id', { ascending: true })

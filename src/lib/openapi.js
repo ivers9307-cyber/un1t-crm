@@ -782,6 +782,7 @@ registry.registerPath({
             phone: z.string().max(50).optional(),
             team_name: z.string().max(200).optional(),
             waitlist_token: z.string().max(1000).optional().openapi({ description: 'EVENT-WAITLIST.1: the claim token from a waitlist offer link (?wl=); marks that waitlist row claimed once the registration exists. Never changes the answer.' }),
+            find_team: z.boolean().optional().openapi({ description: 'FINDTEAM.3: register one person as a team of one looking for a team; team_size is forced to 1 and team_name is ignored (the team is named "<name> (looking for a team)"); members must be empty (members non-empty -> 400). 400 find_team_unavailable on a non-race kind, 400 find_team_disabled when the event has the option off. A solo takes no team slot in teams capacity mode. FINDTEAM.8: deduped by person, not by team name: this contact already confirmed or placed on the event -> 409 already_registered; their own checkout still live -> the resume answer (payment.resumed); every new solo gets a team row of its own, suffixed " 2", " 3", … on a name clash. A captain re-registering a team whose entry is placed -> 409 already_registered (a placed row is never deleted).' }),
           }).openapi('EventRegisterBody'),
         },
       },
@@ -873,7 +874,7 @@ registry.registerPath({
   path: '/api/public/entry/{token}',
   tags: ['Public'],
   summary: 'The token holder\'s event entry, and whether they may change its date',
-  description: 'Anonymous; the token is the credential. Public entry shape (names only, no emails, phones or check-in codes) plus `can_move`, `move_blocked_reason` (unpaid, cancelled, checked in, past), `date_change_pending` and `date_change_failed` (a paid change was refused; shown until staff move or refund it). A pending date-change payment is refreshed from the provider first. Rate limited: 60 per IP per 5 minutes.',
+  description: 'Anonymous; the token is the credential. Public entry shape (names only, no emails, phones or check-in codes) plus `can_move`, `move_blocked_reason` (unpaid, cancelled, placed in a team, checked in, past), `date_change_pending`, `date_change_failed` (a paid change was refused; shown until staff move or refund it) and `placed_into` (FINDTEAM.8: for a solo staff placed into a team, `{ team_name, wave: { start_time, label } }`; null otherwise). A pending date-change payment is refreshed from the provider first. Rate limited: 60 per IP per 5 minutes.',
   request: { params: z.object({ token: EntryManageToken }) },
   responses: {
     200: { description: 'The entry', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntrySummary') } } },
@@ -1043,6 +1044,126 @@ registry.registerPath({
     404: { description: 'Entry or target event not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'wave_full (resend with force) or conflict (the entry changed mid-move)', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'load_failed or write_failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// FINDTEAM.8 — the cancel, edit and delete routes for a registration, with the
+// refusals the "placed" status added.
+registry.registerPath({
+  method: 'post',
+  path: '/api/registrations/{id}/cancel',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Cancel a race/event registration (staff, manager+ at the event\'s studio)',
+  description: 'Idempotent (a cancelled row answers already_cancelled). Refunds are a human decision. 409 `not_active` for a placed solo\'s row (status `placed`): it holds their payment and placement record.',
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: 'Cancelled', content: { 'application/json': { schema: z.object({ success: z.boolean(), already_cancelled: z.boolean() }).openapi('RegistrationCancelResult') } } },
+    403: { description: 'Not a manager at the event\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_active: the row is a placed solo', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/event-registrations/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Move a registration to another wave of its event, or set its status (staff, races at the event\'s studio)',
+  description: 'The status enum takes pending_payment, confirmed, cancelled, no_show (never `placed`). 409 `not_active` for a placed solo\'s row.',
+  request: {
+    params: z.object({ id: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({
+      wave_id: z.string().uuid().optional(),
+      status: z.enum(['pending_payment', 'confirmed', 'cancelled', 'no_show']).optional(),
+    }).openapi('EventRegistrationUpdate') } } },
+  },
+  responses: {
+    200: { description: 'Applied (or unchanged)' },
+    400: { description: 'A bad body, or a wave not on this event', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_active: the row is a placed solo', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/event-registrations/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Delete a registration (staff, races at the event\'s studio)',
+  description: '409 `not_active` for a placed solo\'s row; 409 `has_placed_solos` (with `placed_count`) for a team entry that solos were placed into: un-place them first (there is no un-place tool yet).',
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: 'Deleted' },
+    404: { description: 'Not found, or a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_active (a placed solo) or has_placed_solos (solos were placed into this team)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The placed-entrants check failed; nothing was deleted', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// FINDTEAM.5 — staff place a "Find me a team" solo into a team, or pair solos
+// into a new one. Both are service-role routes gated on `races` + a manager
+// role at the event's studio; neither reads race_events.find_team.
+registry.registerPath({
+  method: 'post',
+  path: '/api/registrations/{id}/place',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Place a solo looking for a team into an existing team (staff, manager+ with races at the event\'s studio)',
+  description:
+    'Write order: the solo\'s member row is copied onto the target team, the team size and the target entry\'s team composition are set from a fresh read of the team\'s members, ' +
+    'then the solo flips to status `placed` with `placed_into_registration_id`, `placed_at` and `placed_by`. Payments stay on the solo\'s own row. ' +
+    'FINDTEAM.8: when the flip matches no row (placed concurrently), the member row this call added is deleted and size/composition re-set, then 409 already_placed (500 write_failed with stage `rollback` if that clean-up fails). ' +
+    'The placed person is emailed best-effort (the placement stands whatever the email does). ' +
+    'Every refusal carries `error` (the code) and `message` (plain English): 404 not_found / wrong_event (or an id the caller cannot see), ' +
+    '409 not_paid / already_placed / not_solo / target_not_live / no_member_row, 500 load_failed / write_failed (with `stage` once a write has started).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      team_registration_id: uuidLike, // the confirmed team entry, on the same event, that the solo joins
+    }).openapi('PlaceSoloRequest') } } },
+  },
+  responses: {
+    200: { description: 'Placed', content: { 'application/json': { schema: z.object({ success: z.boolean(), data: z.object({ placed: z.boolean() }) }).openapi('PlaceSoloResult') } } },
+    400: { description: 'A bad body', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission or manager role at the event\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'not_found / wrong_event, or a registration at a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_paid, already_placed, not_solo, target_not_live or no_member_row', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed (a partial write is possible: reload and check the teams)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events/{id}/pair-solos',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Pair two or more solos into a new team (staff, manager+ with races at the event\'s studio)',
+  description:
+    'Two to eight ids, all confirmed solos (looking for a team, not yet placed) of this event. The wave is `wave_id`, or the solos\' common wave (400 mixed_waves otherwise; 400 invalid_wave for a wave not on the event). ' +
+    'In teams capacity mode the new team takes a slot, checked with the shared capacity rule: 409 wave_full (with `code` and `spots_left`) unless `force: true`. ' +
+    'A team-name clash retries once with " (2)", then 409 team_name_taken. The first solo becomes captain; the new registration is confirmed in that wave with `team_composition` from the solos\' member flags and the first solo\'s own marketing consent. ' +
+    'Each solo then flips to `placed`, and everyone placed is emailed best-effort. ' +
+    'Every refusal carries `error` (the code) and `message`: 400 too_few / mixed_waves / invalid_wave, 404 not_found (with `ids`), ' +
+    '409 not_paid / already_placed / not_solo / no_member_row / team_name_taken / wave_full, 500 load_failed / write_failed (with `stage`; a partial flip carries `registration_id` and the `ids` still queued).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      registration_ids: z.array(uuidLike).min(2).max(8).openapi({ description: 'The solos to pair; the first becomes captain' }),
+      team_name: z.string().min(1).max(80),
+      wave_id: uuidLike.nullable().optional(), // the new team's wave (default: the solos' common wave)
+      force: z.boolean().optional().openapi({ description: 'Skip the wave_full check (default false)' }),
+    }).openapi('PairSolosRequest') } } },
+  },
+  responses: {
+    200: { description: 'Paired', content: { 'application/json': { schema: z.object({ success: z.boolean(), data: z.object({ registration_id: uuidLike }) }).openapi('PairSolosResult') } } },
+    400: { description: 'A bad body, too_few, mixed_waves or invalid_wave', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission or manager role at the event\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event not found (or at a studio the caller cannot see), or a registration not on it', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A solo in the wrong state, team_name_taken, or wave_full (resend with force)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

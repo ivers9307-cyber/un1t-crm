@@ -93,6 +93,24 @@ describe('GET /api/public/entry/[token]', () => {
     const select = globalThis.__db.queries.find((q) => q.table === 'race_registrations').ops.find((o) => o[0] === 'select')[1]
     expect(select).not.toMatch(/email|phone/)
   })
+  // FINDTEAM.8 (I5) — a placed solo: the team they joined and its wave, names and times only.
+  it('a placed row carries placed_into and the placed move reason', async () => {
+    globalThis.__db = fakeDb({ entry: { data: {
+      ...ENTRY, status: 'placed',
+      teams: { id: 't-solo', name: 'Sarah Byrne (looking for a team)', size: 1, team_members: [{ id: 'm9', name: 'Sarah Byrne', role: 'captain', is_member: false }] },
+      placed_into: { teams: { name: 'The Crushers' }, wave: { start_time: '12:30:00', label: 'Heat B' } },
+    }, error: null } })
+    const { data } = await (await GET(get(), props())).json()
+    expect(data.placed_into).toEqual({ team_name: 'The Crushers', wave: { start_time: '12:30:00', label: 'Heat B' } })
+    expect(data.can_move).toBe(false)
+    expect(data.move_blocked_reason).toBe("You've been placed in a team, so your team's time applies; contact the studio to change it.")
+    const select = globalThis.__db.queries.find((q) => q.table === 'race_registrations').ops.find((o) => o[0] === 'select')[1]
+    expect(select.replace(/\s+/g, ' ')).toContain('placed_into:placed_into_registration_id ( teams:team_id ( name ), wave:wave_id ( start_time, label ) )')
+  })
+  it('a row that is not placed has placed_into null', async () => {
+    const { data } = await (await GET(get(), props())).json()
+    expect(data.placed_into).toBeNull()
+  })
   it('is rate limited on the entry bucket (60 per 5 minutes)', async () => {
     await GET(get(), props())
     expect(checkRateLimit).toHaveBeenCalledWith(expect.anything(), 'entry:1.2.3.4', { max: 60, windowMs: 5 * 60_000 })

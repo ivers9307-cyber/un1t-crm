@@ -8,7 +8,7 @@
 // adjust without context-switching.
 
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban, Download, ArrowRightCircle } from 'lucide-react'
+import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban, Download, ArrowRightCircle, UserPlus, Link2 } from 'lucide-react'
 import MoveEntryDialog from './MoveEntryDialog'
 import EventWaitlistPanel from './EventWaitlistPanel'
 
@@ -19,9 +19,13 @@ import EventWaitlistPanel from './EventWaitlistPanel'
 // `currency` is the event's payment_currency, for the outstanding-gap chip.
 // EVENT-WAITLIST.1 — `canManageWaitlist` (races + MANAGER_ROLES at the event's
 // studio, the waitlist routes' rule) shows the waitlist section. Defaults closed.
+// FINDTEAM.6 — `canPlaceSolos` (MANAGER_ROLES at the event's studio, the rule of
+// POST /api/registrations/[id]/place and POST /api/events/[id]/pair-solos) gates
+// the Place in team / Pair up controls. The "Looking for a team" list itself shows
+// to anyone who can open the page. Defaults closed.
 // W1.L3b — `customerOrigin` is the event's tenant-host origin (the page resolves
 // it with resolveCustomerBaseUrl); the copied payment link is minted on it.
-export default function RaceTeamsManager({ race, canCancelEntries = false, canMoveEntries = false, canManageWaitlist = false, currency = 'EUR', customerOrigin = '' }) {
+export default function RaceTeamsManager({ race, canCancelEntries = false, canMoveEntries = false, canManageWaitlist = false, canPlaceSolos = false, currency = 'EUR', customerOrigin = '' }) {
   const [registrations, setRegistrations] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
@@ -126,11 +130,24 @@ export default function RaceTeamsManager({ race, canCancelEntries = false, canMo
         </div>
       )}
 
+      {/* FINDTEAM.6 — solo entrants waiting for staff to place them. */}
+      <LookingForTeamGroup
+        raceId={race.id}
+        registrations={registrations}
+        waves={waves}
+        canPlace={canPlaceSolos}
+        onChanged={load}
+        onError={setActionError}
+      />
+
       <div className="space-y-3">
         {registrations.map((reg) => (
           <TeamCard
             key={reg.id}
             registration={reg}
+            placedIntoName={reg.placed_into_registration_id
+              ? (registrations.find((r) => r.id === reg.placed_into_registration_id)?.teams?.name || null)
+              : null}
             waves={waves}
             onChanged={load}
             onError={setActionError}
@@ -344,11 +361,290 @@ function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
   )
 }
 
+// ─── Looking for a team (FINDTEAM.6) ─────────────────────────────
+
+const waveTimeText = (w) => (w ? `${w.label ? `${w.label} · ` : ''}${(w.start_time || '').slice(0, 5)}` : '')
+const soloNameOf = (reg) => {
+  const lead = typeof reg?.lead_name === 'string' ? reg.lead_name.trim() : ''
+  if (lead) return lead
+  const c = reg?.contact
+  return [c?.first_name, c?.last_name].filter(Boolean).join(' ').trim() || 'Unnamed entrant'
+}
+const paidText = (reg) => (reg?.payment?.status === 'completed' ? 'Paid' : (reg?.payment?.status || 'No payment').replaceAll('_', ' '))
+
+// Solo entrants (confirmed, looking_for_team) waiting for a team. Anyone who can
+// open the page sees the list; Place in team / Pair up need `canPlace`.
+function LookingForTeamGroup({ raceId, registrations, waves, canPlace, onChanged, onError }) {
+  const solos = registrations.filter((r) => r.status === 'confirmed' && r.looking_for_team)
+  const [ticked, setTicked] = useState([])
+  const [pairing, setPairing] = useState(false)
+  if (solos.length === 0) return null
+
+  // Ticks follow the list: a solo who has just been placed drops out of them.
+  const liveTicked = ticked.filter((id) => solos.some((s) => s.id === id))
+  const tickedSolos = liveTicked.map((id) => solos.find((s) => s.id === id))
+  const waveById = (reg) => waves.find((w) => w.id === reg.wave_id) || reg.wave || null
+  const toggle = (id) => setTicked((t) => (t.includes(id) ? t.filter((x) => x !== id) : [...t, id]))
+
+  return (
+    <section aria-label="Looking for a team" className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <h3 className="text-sm font-semibold text-un1t-text inline-flex items-center gap-2">
+          <UserPlus size={14} /> Looking for a team
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-700">{solos.length}</span>
+        </h3>
+        {canPlace && (
+          <button
+            type="button"
+            onClick={() => setPairing(true)}
+            disabled={liveTicked.length < 2}
+            className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-40 inline-flex items-center gap-1.5"
+            title="Tick two or more solo entrants to make them a new team"
+          >
+            <Users size={12} /> Pair up{liveTicked.length >= 2 ? ` (${liveTicked.length})` : ''}
+          </button>
+        )}
+      </div>
+
+      {canPlace && pairing && tickedSolos.length >= 2 && (
+        <PairUpPanel
+          raceId={raceId}
+          tickedSolos={tickedSolos}
+          waves={waves}
+          onClose={() => setPairing(false)}
+          onPaired={() => { setTicked([]); setPairing(false); onChanged() }}
+          onError={onError}
+        />
+      )}
+
+      <ul className="divide-y divide-un1t-border/50">
+        {solos.map((solo) => (
+          <SoloRow
+            key={solo.id}
+            solo={solo}
+            waveText={waveTimeText(waveById(solo))}
+            registrations={registrations}
+            waves={waves}
+            canPlace={canPlace}
+            ticked={liveTicked.includes(solo.id)}
+            onToggle={() => toggle(solo.id)}
+            onChanged={onChanged}
+            onError={onError}
+          />
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+// One solo: who they are, whether they paid, and (for managers) a team to place
+// them in. Teams offered are the event's confirmed, non-solo entries.
+function SoloRow({ solo, waveText, registrations, waves, canPlace, ticked, onToggle, onChanged, onError }) {
+  const [teamId, setTeamId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const name = soloNameOf(solo)
+  const teams = registrations.filter((r) => r.status === 'confirmed' && !r.looking_for_team)
+  const sameWave = teams.filter((t) => t.wave_id === solo.wave_id)
+  const otherWaves = teams.filter((t) => t.wave_id !== solo.wave_id)
+  const teamName = (t) => t.teams?.name || soloNameOf(t)
+  const timeOf = (t) => (waves.find((w) => w.id === t.wave_id)?.start_time || t.wave?.start_time || '').slice(0, 5)
+
+  async function place() {
+    if (!teamId) return
+    // FINDTEAM.8 (M5) — placing never changes the solo's wave, so a team in
+    // another wave means they run at a time they did not book: ask first.
+    const target = teams.find((t) => t.id === teamId)
+    if (target && target.wave_id !== solo.wave_id) {
+      const ok = window.confirm(`${name} is in the ${timeOf(solo) || 'unassigned'} wave but this team runs at ${timeOf(target) || 'another time'}. Place them anyway?`)
+      if (!ok) return
+    }
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/registrations/${solo.id}/place`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team_registration_id: teamId }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        onError(j.message || j.error || 'Could not place the entrant')
+        return
+      }
+      setTeamId('')
+      onChanged()
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <li className="py-2 flex items-center gap-3 flex-wrap text-sm">
+      {canPlace && (
+        <input
+          type="checkbox"
+          checked={ticked}
+          onChange={onToggle}
+          aria-label={`Select ${name}`}
+        />
+      )}
+      <span className="text-[11px] text-un1t-subtle w-28 shrink-0">{waveText}</span>
+      <span className="font-medium text-un1t-text">{name}</span>
+      <span className="text-xs text-un1t-subtle">{solo.contact?.email}</span>
+      <span className="text-xs text-un1t-subtle">{solo.contact?.phone}</span>
+      <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${solo.payment?.status === 'completed' ? 'bg-emerald-500/10 text-emerald-700' : 'bg-amber-500/10 text-amber-700'}`}>
+        {paidText(solo)}
+      </span>
+      {canPlace && (
+        <span className="ml-auto inline-flex items-center gap-2">
+          <select
+            aria-label={`Place ${name} in a team`}
+            value={teamId}
+            onChange={(e) => setTeamId(e.target.value)}
+            disabled={busy}
+            className="text-[11px] bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text disabled:opacity-40 max-w-[16rem]"
+          >
+            <option value="">Place in team…</option>
+            {sameWave.length > 0 && (
+              <optgroup label="Same wave">
+                {sameWave.map((t) => <option key={t.id} value={t.id}>{teamName(t)}</option>)}
+              </optgroup>
+            )}
+            {otherWaves.length > 0 && (
+              <optgroup label="Other waves">
+                {otherWaves.map((t) => <option key={t.id} value={t.id}>{`${teamName(t)} · ${timeOf(t)}`}</option>)}
+              </optgroup>
+            )}
+          </select>
+          <button
+            type="button"
+            onClick={place}
+            disabled={busy || !teamId}
+            aria-label={`Place ${name}`}
+            className="text-[11px] border border-un1t-border text-un1t-text px-2.5 py-1 rounded-md hover:bg-un1t-bg disabled:opacity-40 inline-flex items-center gap-1"
+          >
+            {busy ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />} Place
+          </button>
+        </span>
+      )}
+    </li>
+  )
+}
+
+// The inline "make these solos a team" panel. The team name defaults to the
+// ticked first names in tick order; a wave is asked for only when the ticked
+// solos are in different waves. A wave_full refusal offers Place anyway.
+function PairUpPanel({ raceId, tickedSolos, waves, onClose, onPaired, onError }) {
+  const defaultName = `Team ${tickedSolos.map((s) => soloNameOf(s).split(/\s+/)[0]).join(' & ')}`
+  const [typedName, setTypedName] = useState(null)
+  const [waveId, setWaveId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [waveFull, setWaveFull] = useState(null)
+  const teamName = typedName ?? defaultName
+  const needsWave = new Set(tickedSolos.map((s) => s.wave_id || '')).size > 1
+
+  async function create(force) {
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/events/${raceId}/pair-solos`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          registration_ids: tickedSolos.map((s) => s.id),
+          team_name: teamName.trim(),
+          ...(needsWave && waveId ? { wave_id: waveId } : {}),
+          ...(force ? { force: true } : {}),
+        }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        if (j.error === 'wave_full' || j.code === 'wave_full') setWaveFull(j.message || 'That wave has no team places left.')
+        else onError(j.message || j.error || 'Could not pair the entrants')
+        return
+      }
+      onPaired()
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const input = 'bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-sm text-un1t-text'
+  return (
+    <div className="border border-un1t-border rounded-md p-3 space-y-2 bg-un1t-bg">
+      <div className="text-xs text-un1t-subtle">
+        New team of {tickedSolos.length}: {tickedSolos.map(soloNameOf).join(', ')}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <label className="text-xs text-un1t-subtle" htmlFor="pair-team-name">Team name</label>
+        <input
+          id="pair-team-name"
+          type="text"
+          value={teamName}
+          maxLength={80}
+          onChange={(e) => { setTypedName(e.target.value); setWaveFull(null) }}
+          className={`${input} w-64`}
+        />
+        {needsWave && (
+          <>
+            <label className="text-xs text-un1t-subtle" htmlFor="pair-team-wave">Wave for the new team</label>
+            <select
+              id="pair-team-wave"
+              value={waveId}
+              required
+              onChange={(e) => { setWaveId(e.target.value); setWaveFull(null) }}
+              className={input}
+            >
+              <option value="">Choose a wave…</option>
+              {waves.map((w) => <option key={w.id} value={w.id}>{waveTimeText(w)}</option>)}
+            </select>
+          </>
+        )}
+      </div>
+      {waveFull && (
+        <div role="alert" className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-sm rounded-md p-2 inline-flex items-center gap-3 flex-wrap">
+          <span>{waveFull}</span>
+          <button
+            type="button"
+            onClick={() => create(true)}
+            disabled={busy}
+            className="text-xs border border-amber-500/40 px-2 py-1 rounded-md hover:bg-amber-500/10 disabled:opacity-40"
+          >
+            Place anyway
+          </button>
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => create(false)}
+          disabled={busy || !teamName.trim() || (needsWave && !waveId)}
+          className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-40 inline-flex items-center gap-1.5"
+        >
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Create team
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={busy}
+          className="text-xs text-un1t-subtle hover:text-un1t-text"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── One-team card ───────────────────────────────────────────────
 
-function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel = false, canMove = false, currency = 'EUR', customerOrigin = '' }) {
+function TeamCard({ registration, placedIntoName = null, waves, onChanged, onError, onNotice, canCancel = false, canMove = false, currency = 'EUR', customerOrigin = '' }) {
   const team = registration.teams
   const wave = registration.wave
+  // FINDTEAM.6 — a placed solo's entry is history: a chip, and no actions.
+  const isPlaced = registration.status === 'placed'
   const members = (team?.team_members || []).slice().sort((a, b) =>
     (a.role === 'captain' ? 0 : 1) - (b.role === 'captain' ? 0 : 1)
   )
@@ -367,7 +663,7 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
         body: JSON.stringify({ wave_id: newWaveId }),
       })
       const j = await r.json()
-      if (!r.ok || j.success === false) onError(j.error || `Move failed`)
+      if (!r.ok || j.success === false) onError(j.message || j.error || `Move failed`)
       else onChanged()
     } catch (e) {
       onError(e.message || 'Network error')
@@ -510,6 +806,11 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
             </span>
           )}
           <StatusPill status={registration.status} />
+          {isPlaced && (
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-700 inline-flex items-center gap-1">
+              <Link2 size={10} /> {placedIntoName ? `Placed → team ${placedIntoName}` : 'Placed'}
+            </span>
+          )}
           {registration.team_composition === 'all_members' && (
             <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 inline-flex items-center gap-1">
               <BadgeCheck size={10} /> Members
@@ -571,69 +872,71 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <select
-            value={registration.wave_id || ''}
-            onChange={(e) => moveWave(e.target.value)}
-            disabled={busy}
-            className="text-[11px] bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text disabled:opacity-40"
-            title="Move to a different wave"
-          >
-            {waves.map((w) => (
-              <option key={w.id} value={w.id}>
-                <Clock size={10} />{' '}
-                {w.label ? `${w.label} · ` : ''}{(w.start_time || '').slice(0, 5)}
-              </option>
-            ))}
-          </select>
-          {registration.status === 'pending_payment' && registration.payment?.id && (
+        {!isPlaced && (
+          <div className="flex items-center gap-2">
+            <select
+              value={registration.wave_id || ''}
+              onChange={(e) => moveWave(e.target.value)}
+              disabled={busy}
+              className="text-[11px] bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text disabled:opacity-40"
+              title="Move to a different wave"
+            >
+              {waves.map((w) => (
+                <option key={w.id} value={w.id}>
+                  <Clock size={10} />{' '}
+                  {w.label ? `${w.label} · ` : ''}{(w.start_time || '').slice(0, 5)}
+                </option>
+              ))}
+            </select>
+            {registration.status === 'pending_payment' && registration.payment?.id && (
+              <button
+                type="button"
+                onClick={copyPaymentLink}
+                disabled={busy}
+                className="text-[11px] text-un1t-accent hover:underline inline-flex items-center gap-1 disabled:opacity-40"
+                title="Copy the payment link to send to the customer"
+              >
+                <Copy size={11} /> {copied ? 'Copied!' : 'Payment link'}
+              </button>
+            )}
+            {/* Confirmed only: an unpaid entry's payment link is priced for this event (EVENT-MOVE.4). */}
+            {canMove && registration.status === 'confirmed' && (
+              <button
+                type="button"
+                onClick={() => setMoving(true)}
+                disabled={busy}
+                className="text-[11px] text-un1t-accent hover:underline inline-flex items-center gap-1 disabled:opacity-40"
+                title="Move this entry to another event"
+              >
+                <ArrowRightCircle size={11} /> Move to event
+              </button>
+            )}
+            {registration.status === 'cancelled' ? (
+              <span className="text-[11px] text-red-700 inline-flex items-center gap-1 font-medium">
+                <Ban size={11} /> Cancelled
+              </span>
+            ) : canCancel && (
+              <button
+                type="button"
+                onClick={cancelRegistration}
+                disabled={busy}
+                className="text-[11px] text-un1t-subtle hover:text-amber-700 inline-flex items-center gap-1"
+                title="Cancel this entry — frees the spot, keeps the registration and payment history (refunds handled in Revolut)"
+              >
+                <Ban size={11} /> Cancel entry
+              </button>
+            )}
             <button
               type="button"
-              onClick={copyPaymentLink}
+              onClick={removeRegistration}
               disabled={busy}
-              className="text-[11px] text-un1t-accent hover:underline inline-flex items-center gap-1 disabled:opacity-40"
-              title="Copy the payment link to send to the customer"
+              className="text-[11px] text-un1t-subtle hover:text-red-700 inline-flex items-center gap-1"
+              title="Remove this team from the race entirely (deletes the registration)"
             >
-              <Copy size={11} /> {copied ? 'Copied!' : 'Payment link'}
+              <Trash2 size={11} /> Remove
             </button>
-          )}
-          {/* Confirmed only: an unpaid entry's payment link is priced for this event (EVENT-MOVE.4). */}
-          {canMove && registration.status === 'confirmed' && (
-            <button
-              type="button"
-              onClick={() => setMoving(true)}
-              disabled={busy}
-              className="text-[11px] text-un1t-accent hover:underline inline-flex items-center gap-1 disabled:opacity-40"
-              title="Move this entry to another event"
-            >
-              <ArrowRightCircle size={11} /> Move to event
-            </button>
-          )}
-          {registration.status === 'cancelled' ? (
-            <span className="text-[11px] text-red-700 inline-flex items-center gap-1 font-medium">
-              <Ban size={11} /> Cancelled
-            </span>
-          ) : canCancel && (
-            <button
-              type="button"
-              onClick={cancelRegistration}
-              disabled={busy}
-              className="text-[11px] text-un1t-subtle hover:text-amber-700 inline-flex items-center gap-1"
-              title="Cancel this entry — frees the spot, keeps the registration and payment history (refunds handled in Revolut)"
-            >
-              <Ban size={11} /> Cancel entry
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={removeRegistration}
-            disabled={busy}
-            className="text-[11px] text-un1t-subtle hover:text-red-700 inline-flex items-center gap-1"
-            title="Remove this team from the race entirely (deletes the registration)"
-          >
-            <Trash2 size={11} /> Remove
-          </button>
-        </div>
+          </div>
+        )}
       </div>
 
       {wave && (
@@ -642,29 +945,31 @@ function TeamCard({ registration, waves, onChanged, onError, onNotice, canCancel
         </div>
       )}
 
-      <div className="mt-3 pt-3 border-t border-un1t-border/50 space-y-1.5">
-        {members.map((m) => (
-          <MemberRow key={m.id} member={m} onChanged={onChanged} onError={onError} />
-        ))}
-        {showAddMember ? (
-          <AddMemberRow
-            teamId={team?.id}
-            onAdded={() => { setShowAddMember(false); onChanged() }}
-            onCancel={() => setShowAddMember(false)}
-            onError={onError}
-          />
-        ) : (
-          <button
-            type="button"
-            onClick={() => setShowAddMember(true)}
-            className="text-[11px] text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
-          >
-            <Plus size={11} /> Add member
-          </button>
-        )}
-      </div>
+      {!isPlaced && (
+        <div className="mt-3 pt-3 border-t border-un1t-border/50 space-y-1.5">
+          {members.map((m) => (
+            <MemberRow key={m.id} member={m} onChanged={onChanged} onError={onError} />
+          ))}
+          {showAddMember ? (
+            <AddMemberRow
+              teamId={team?.id}
+              onAdded={() => { setShowAddMember(false); onChanged() }}
+              onCancel={() => setShowAddMember(false)}
+              onError={onError}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowAddMember(true)}
+              className="text-[11px] text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
+            >
+              <Plus size={11} /> Add member
+            </button>
+          )}
+        </div>
+      )}
 
-      {moving && (
+      {moving && !isPlaced && (
         <MoveEntryDialog
           open
           registration={registration}
@@ -859,6 +1164,7 @@ function StatusPill({ status }) {
     confirmed: 'bg-emerald-500/15 text-emerald-700',
     pending_payment: 'bg-amber-500/15 text-amber-700',
     cancelled: 'bg-gray-500/15 text-gray-600',
+    placed: 'bg-sky-500/15 text-sky-700',
     no_show: 'bg-red-500/15 text-red-700',
   }
   return (

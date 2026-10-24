@@ -47,6 +47,7 @@
 import { linkedAccountsForContact, hasBookableMembership } from '@/lib/person-accounts'
 import { dateLabel, todayIn } from './event-date-label'
 import { DEFAULT_TZ } from '@/lib/location-time'
+import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 import { EVENT_MOVE_TOOLS, executeMoveTool } from './event-move-tools'
 
 export const EVENT_TOOLS = [
@@ -190,6 +191,9 @@ export function waveSpotsLeft(wave, taken) {
  */
 export function classifyEventCancellation({ isOwner, status, eventDate, paidCents, nowMs, zone = DEFAULT_TZ } = {}) {
   if (!isOwner) return { action: null, reason: 'not_yours' }
+  // FINDTEAM.8 (I3) — a placed solo now races with a team; their own row is
+  // history and holds their payment. The team handles it, never Mia.
+  if (status === 'placed') return { action: null, reason: 'placed' }
   if (status === 'cancelled' || status === 'no_show') return { action: null, reason: 'already_cancelled' }
   if (!eventDate || String(eventDate) < todayIn(nowMs, zone)) return { action: null, reason: 'event_past' }
   return (Number(paidCents) || 0) > 0 ? { action: 'draft' } : { action: 'direct' }
@@ -321,7 +325,7 @@ export async function executeEventTool(toolName, input, ctx) {
     const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
     const today = todayIn(Date.now(), zone)
     const { data: events } = await db.from('race_events')
-      .select('id, name, kind, slug, description, race_date, active, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, waves:race_waves(id, start_time, capacity, label)')
+      .select('id, name, kind, slug, description, race_date, active, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, waves:race_waves(id, start_time, capacity, label)')
       .eq('location_id', locationId)
       .eq('active', true)
       .gte('race_date', today)
@@ -333,14 +337,22 @@ export async function executeEventTool(toolName, input, ctx) {
     const waveIds = events.flatMap((e) => (e.waves || []).map((w) => w.id))
     const takenByWave = {}
     if (waveIds.length) {
+      // FINDTEAM.8 (I4) — live entries only (a placed solo is not one), and in
+      // a teams-capacity wave a solo still looking for a team is a person, not
+      // a team, so it takes no slot.
+      const teamsModeWave = new Set(events
+        .filter((e) => e.capacity_mode !== 'people')
+        .flatMap((e) => (e.waves || []).map((w) => w.id)))
       // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- counts only derive the full/limited flags across a race's waves; domain-bounded under 1000
       const { data: regs } = await db.from('race_registrations')
-        .select('wave_id, status')
+        .select('wave_id, status, looking_for_team')
         .in('wave_id', waveIds)
-        .not('status', 'in', '("cancelled","no_show")')
+        .in('status', LIVE_REGISTRATION_STATUSES)
         .limit(2000)
       for (const r of regs || []) {
-        if (r.wave_id) takenByWave[r.wave_id] = (takenByWave[r.wave_id] || 0) + 1
+        if (!r.wave_id) continue
+        if (r.looking_for_team && teamsModeWave.has(r.wave_id)) continue
+        takenByWave[r.wave_id] = (takenByWave[r.wave_id] || 0) + 1
       }
     }
     // W1.L3b — Mia's signup links land on HER ACTIVE LOCATION's tenant host.
@@ -573,7 +585,13 @@ export async function executeEventTool(toolName, input, ctx) {
 
     // cancel_event_registration
     const { registrationPaidCents, cancelRaceRegistration } = await import('@/lib/race-cancel')
-    const paidCents = await registrationPaidCents(db, reg.id)
+    // FINDTEAM.8 (I3) — an unreadable amount is never "free": no cancel, hand off.
+    let paidCents
+    try {
+      paidCents = await registrationPaidCents(db, reg.id)
+    } catch {
+      return { cancelled: false, reason: 'payment_unknown', message: 'Could not check what was paid for this entry — do not cancel it; hand off to the team.' }
+    }
     const decision = classifyEventCancellation({
       isOwner,
       status: reg.status,
@@ -621,6 +639,9 @@ export async function executeEventTool(toolName, input, ctx) {
     }
     if (decision.reason === 'already_cancelled') {
       return { cancelled: true, message: 'It was already cancelled — confirm that warmly.' }
+    }
+    if (decision.reason === 'placed') {
+      return { cancelled: false, reason: 'placed', message: 'This person was placed into a team, so their entry now belongs to that team. Do not cancel it — hand off to the team.' }
     }
     return { cancelled: false, reason: decision.reason, message: 'This event has already taken place — nothing to cancel.' }
   }

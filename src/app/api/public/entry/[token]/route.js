@@ -15,6 +15,10 @@
 //   date_change_failed   a paid date change was refused (the time filled);
 //                        shown while the entry is still where it started and
 //                        the payment stands (a hand move or refund clears it)
+//   placed_into          FINDTEAM.8 (I5): for a solo staff placed into a team
+//                        (status 'placed'), the team they joined and its wave
+//                        ({ team_name, wave: { start_time, label } }); null
+//                        otherwise. Names and times only.
 //
 // A paid date change returns the buyer HERE, often before the payment
 // webhook: the newest date-change payment, if still pending, is refreshed
@@ -91,7 +95,8 @@ export async function GET(request, props) {
       ),
       wave:wave_id ( id, start_time, label ),
       teams:team_id ( id, name, size,
-        team_members ( id, name, role, is_member ) )
+        team_members ( id, name, role, is_member ) ),
+      placed_into:placed_into_registration_id ( teams:team_id ( name ), wave:wave_id ( start_time, label ) )
     `)
     .eq('id', claim.registrationId)
     .maybeSingle()
@@ -135,6 +140,12 @@ export async function GET(request, props) {
       move_blocked_reason: block ? block.message : null,
       date_change_pending: dateChangePending,
       date_change_failed: dateChangeFailed,
+      placed_into: data.status === 'placed' && data.placed_into
+        ? {
+            team_name: data.placed_into.teams?.name || null,
+            wave: data.placed_into.wave ? { start_time: data.placed_into.wave.start_time, label: data.placed_into.wave.label } : null,
+          }
+        : null,
     },
   })
 }
