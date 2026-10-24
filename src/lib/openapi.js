@@ -28,6 +28,7 @@ import {
   studioWhatsAppNumberSwitchSchema,
   studioPurposeTemplateSchema,
   studioConsentCopySchema,
+  studioBlastSignoffSchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 import { PLATFORM_NAME } from './brand-name.js'
@@ -4591,6 +4592,45 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — owner, manager or master at this studio required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'No such number in this studio\'s organisation', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ORGCONTACTS.0 (WAORGNUMBER R7) — the studio's blast sign-off window
+const WaBlastSignoff = z.object({
+  until: z.string().nullable().openapi({ description: "The last day (studio calendar, 'YYYY-MM-DD') broadcasts at this studio need an organisation admin's sign-off; null = no window" }),
+  can_edit: z.boolean(),
+}).openapi('WaBlastSignoff')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/whatsapp/blast-signoff',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "The studio's blast sign-off window",
+  description: "locations.settings.whatsapp_blast_signoff_until as a plain date, or null. can_edit is true for a master or an organisation admin of the studio's organisation.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The window', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaBlastSignoff }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — location not in your assignments', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Studio not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/whatsapp/blast-signoff',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Set or clear the studio's blast sign-off window",
+  description: "Master or an organisation admin of the studio's organisation only (403 otherwise: the window exists to bind managers). until is a calendar day on the studio's clock; null clears the window. Other settings keys are kept.",
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: studioBlastSignoffSchema } } } },
+  responses: {
+    200: { description: 'The window after the change', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaBlastSignoff }) } } },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master or organisation admin required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Studio not found', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

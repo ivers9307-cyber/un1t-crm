@@ -70,7 +70,7 @@ const RESOLVING = {
   ],
   'src/lib/whatsapp-config': [
     'getWhatsAppConfig', 'getLocationWhatsAppNumberConfig', 'getWhatsAppConfigById', 'resolveWhatsAppNumberByPhoneNumberId',
-    'getConversationReplyConfig', 'getConversationNumberConfig', 'templateLocationIdFor',
+    'getConversationReplyConfig', 'getConversationNumberConfig',
     // WAORGNUMBER.1 (R2, R5) — S's switched-on number on one WABA (template sends).
     'getLocationNumberForWaba',
     // WAORGNUMBER.2 (R5) — every number switched on at S (the template sync's WABAs).
@@ -135,9 +135,9 @@ const CALLERS = {
     why: 'WAORGNUMBER.4 (R8): the openers are the number’s, shared by every studio using it, so after the own-number check (no extra resolver call) a studio that is not the number’s home answers 403 unless the caller is an organisation admin (master passes); Meta is not called. route.test.js. chat openers on the location’s own number (C33 WAROLE.1), 409 / 500 before Meta.',
   },
   'src/app/api/whatsapp/templates/route.js': {
-    calls: { createTemplate: 1, getTemplates: 1, ownNumberOrRefusal: 1, templateLocationIdFor: 1, listLocationNumberConfigs: 1 },
+    calls: { createTemplate: 1, getTemplates: 1, ownNumberOrRefusal: 1, listLocationNumberConfigs: 1 },
     decision: 'own-number',
-    why: 'WAORGNUMBER.2 (R5): create goes on the WABA of the studio’s default switched-on number (ownNumberOrRefusal, 409 / 500 before Meta), refuses a name another studio uses on that WABA (409 naming the owner) and stores business_account_id; sync walks the distinct WABAs of the numbers switched on at the studio (listLocationNumberConfigs: none → sync_error, a failed read → sync_error, Meta not called, cache served), reads every page, updates its own rows, skips other studios’ and adopts unowned ones only at the number’s home studio. route.own-number.test.js, route.sync-error.test.js. Before: create: 409 / 500 before Meta (it named no location, so it always used the env WABA). Sync: sync_error, Meta not called, cache served (it copied the env WABA’s templates into a number-less location). route.own-number.test.js. ?conversation_id= serves the thread’s studio’s cached rows (templateLocationIdFor, the thread’s studio since WAORGNUMBER.6), no sync.',
+    why: 'WAORGNUMBER.2 (R5): create goes on the WABA of the studio’s default switched-on number (ownNumberOrRefusal, 409 / 500 before Meta), refuses a name another studio uses on that WABA (409 naming the owner) and stores business_account_id; sync walks the distinct WABAs of the numbers switched on at the studio (listLocationNumberConfigs: none → sync_error, a failed read → sync_error, Meta not called, cache served), reads every page, updates its own rows, skips other studios’ and adopts unowned ones only at the number’s home studio. route.own-number.test.js, route.sync-error.test.js. Before: create: 409 / 500 before Meta (it named no location, so it always used the env WABA). Sync: sync_error, Meta not called, cache served (it copied the env WABA’s templates into a number-less location). route.own-number.test.js. ?conversation_id= serves the thread’s studio’s cached rows (ORGCONTACTS.0: read off the conversation row; templateLocationIdFor, an identity kept only for this count, is deleted), no sync.',
   },
   'src/app/api/whatsapp/templates/[id]/route.js': {
     calls: { deleteTemplate: 1, templateNumberOrRefusal: 1 },
@@ -180,9 +180,9 @@ const CALLERS = {
     why: 'WAORGNUMBER.4 (R7): an unsigned scheduled blast at a studio inside its sign-off window is a refused start like any other (draft, managers pushed with the sign-off copy); an unsigned drip pauses inside sendDripChunk. route.signoff.test.js. scheduled blast or (C138 b) scheduled drip start refusal: row stays draft, managers pushed; drip: paused by sendDripChunk (no error loop); a resumed chunked blast logs per tick (existing path).',
   },
   'src/app/api/whatsapp/conversations/[id]/send/route.js': {
-    calls: { sendTemplateMessage: 1, sendMediaMessage: 1, sendTextMessage: 1, templateLocationIdFor: 1 },
+    calls: { sendTemplateMessage: 1, sendMediaMessage: 1, sendTextMessage: 1 },
     decision: 'refuse-409',
-    why: 'inbox reply: 409, nothing logged (it replied from another studio’s number, so the answer went to that studio). route.test.js. Template rows read from templateLocationIdFor (the thread’s studio since WAORGNUMBER.6); a Flow-button template across studios is a 400.',
+    why: 'inbox reply: 409, nothing logged (it replied from another studio’s number, so the answer went to that studio). route.test.js. Template rows read at the thread’s studio (ORGCONTACTS.0: off the conversation row; the templateLocationIdFor identity seam and its cross-studio Flow refusal are gone).',
   },
   'src/app/api/whatsapp/conversations/[id]/react/route.js': {
     calls: { sendReaction: 1 },
