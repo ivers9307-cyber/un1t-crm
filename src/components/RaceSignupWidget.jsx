@@ -1139,7 +1139,9 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
       {charityOn ? (
         <div className="max-w-6xl mx-auto px-5 pb-28 pt-10">
           <CharityRaisedStrip charity={race.charity} currency={race.payment_currency || 'EUR'} brand={race.organization_name || ''} />
-          <div className="grid gap-6 md:gap-5 md:grid-cols-[1fr_auto_1fr]">
+          {/* CHARITY.13 — items-start so the donate card hugs its content instead of
+              stretching to the taller signup card; the OR rule still spans the row. */}
+          <div className="grid gap-6 md:gap-5 md:grid-cols-[1fr_auto_1fr] md:items-start">
             <Suspense fallback={null}>
               <DonateCardFromUrl
                 slug={slug}
@@ -1152,7 +1154,45 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
             <OrDivider />
             {signupCard}
           </div>
-          <div className="mt-12 max-w-3xl">{eventDetails}</div>
+          {/* CHARITY.13 — the operator's video beside the summary when set. */}
+          {race.charity?.video?.provider ? (
+            <div className="mt-12 grid gap-8 md:grid-cols-2 md:items-start">
+              {eventDetails}
+              <div className={`overflow-hidden rounded-2xl border border-white/10 bg-black ${
+                race.charity.video.provider === 'file'
+                  // CHARITY.15 — an uploaded file keeps its own shape (a phone-shot
+                  // portrait clip or a landscape one) instead of being cropped to
+                  // fill a 16:9 box; capped at 70% of the viewport height and
+                  // centred, so a portrait clip sits beside the summary.
+                  ? 'flex justify-center'
+                  : race.charity.video.provider === 'instagram' ? 'min-h-[600px]' : 'aspect-video'
+              }`}>
+                {race.charity.video.provider === 'file' ? (
+                  // CHARITY.14 — an uploaded file plays in a plain player, tap to
+                  // play, with the hero image as its poster.
+                  <video
+                    src={race.charity.video.src}
+                    poster={race.charity.video.poster || undefined}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    className="block w-auto max-w-full h-auto max-h-[70vh] object-contain"
+                  />
+                ) : (
+                  <iframe
+                    src={race.charity.video.embedUrl}
+                    title={`${race.name} video`}
+                    className="w-full h-full"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                    loading="lazy"
+                  />
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-12 max-w-3xl">{eventDetails}</div>
+          )}
         </div>
       ) : (
       <div className={embedded

@@ -264,7 +264,11 @@ export default async function EventsIndexPage(props) {
                         </span>
                       </td>
                       <td className="p-3 text-right">
-                        <div className="inline-flex items-center gap-3">
+                        {/* CHARITY.13 — the row gained a Donations link; with seven
+                            actions the cell was clipped by the table wrapper's
+                            overflow-hidden and Edit vanished. Wrap instead of clip,
+                            and keep each label on one line. */}
+                        <div className="inline-flex flex-wrap justify-end items-center gap-x-3 gap-y-1 [&>*]:whitespace-nowrap">
                           <a
                             href={publicUrl}
                             target="_blank"

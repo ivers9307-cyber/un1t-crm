@@ -96,3 +96,47 @@ describe('event page — donations on', () => {
     expect(document.body.textContent).not.toContain('raised so far')
   })
 })
+
+describe('event page — donations on, layout polish (CHARITY.13)', () => {
+  it('the cards do not stretch to each other: the grid aligns items to the top', async () => {
+    await renderWith({ charity: CHARITY })
+    const donate = screen.getByRole('button', { name: /^Donate/ })
+    expect(donate.closest('.md\\:items-start')).toBeTruthy()
+  })
+
+  it('a video beside the summary when the operator set one, after both cards', async () => {
+    await renderWith({ charity: { ...CHARITY, video: { provider: 'youtube', embedUrl: 'https://www.youtube.com/embed/abc123' } } })
+    const frame = document.querySelector('iframe[src="https://www.youtube.com/embed/abc123"]')
+    expect(frame).toBeTruthy()
+    expect(follows(registerButton(), frame)).toBe(true)
+    expect(frame.closest('.md\\:grid-cols-2')).toBeTruthy()
+  })
+
+  it('no video, no iframe', async () => {
+    await renderWith({ charity: { ...CHARITY, video: null } })
+    expect(document.querySelector('iframe')).toBeNull()
+  })
+
+  it('an uploaded file plays in a plain player with the hero as its poster (CHARITY.14)', async () => {
+    await renderWith({ charity: { ...CHARITY, video: { provider: 'file', src: 'https://cdn/x.mp4', poster: 'https://cdn/hero.png' } } })
+    const player = document.querySelector('video[src="https://cdn/x.mp4"]')
+    expect(player).toBeTruthy()
+    expect(player.getAttribute('poster')).toBe('https://cdn/hero.png')
+    expect(player.hasAttribute('controls')).toBe(true)
+    expect(document.querySelector('iframe')).toBeNull()
+  })
+
+  it('an uploaded file keeps its own aspect: no 16:9 box, no cropping (CHARITY.15)', async () => {
+    await renderWith({ charity: { ...CHARITY, video: { provider: 'file', src: 'https://cdn/portrait.mp4', poster: null } } })
+    const player = document.querySelector('video[src="https://cdn/portrait.mp4"]')
+    expect(player.closest('.aspect-video')).toBeNull()
+    expect(player.className).toContain('object-contain')
+    expect(player.className).not.toContain('object-cover')
+    expect(player.className).toContain('max-h-[70vh]')
+  })
+
+  it('a linked video still gets the 16:9 frame', async () => {
+    await renderWith({ charity: { ...CHARITY, video: { provider: 'youtube', embedUrl: 'https://www.youtube.com/embed/abc123' } } })
+    expect(document.querySelector('iframe').closest('.aspect-video')).toBeTruthy()
+  })
+})

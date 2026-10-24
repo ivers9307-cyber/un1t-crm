@@ -403,7 +403,7 @@ export function CharityRaisedStrip({ charity, currency = 'EUR', brand = '' }) {
 // screens, horizontal when the cards stack.
 export function OrDivider() {
   return (
-    <div role="separator" aria-label="or" className="flex md:flex-col items-center justify-center gap-3 md:py-6">
+    <div role="separator" aria-label="or" className="flex md:flex-col md:self-stretch items-center justify-center gap-3 md:py-6">
       <div aria-hidden="true" className="flex-1 h-px md:h-auto md:w-px bg-white/10" />
       <div className="w-12 h-12 shrink-0 rounded-full border border-white/15 bg-black grid place-items-center text-[12px] font-semibold tracking-[0.14em] text-white/60">
         OR
