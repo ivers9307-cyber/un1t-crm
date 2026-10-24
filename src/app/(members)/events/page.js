@@ -64,7 +64,7 @@ export default async function EventsIndexPage(props) {
       .from('race_events')
       .select(`
         id, name, slug, race_date, start_time, capacity, capacity_mode, allowed_team_sizes,
-        active, kind, shared, location_id, registration_opens_at, registration_closes_at,
+        active, kind, shared, location_id, charity_enabled, registration_opens_at, registration_closes_at,
         locations:location_id ( id, timezone ),
         host:event_hosts!host_id ( id, name, organization_id ),
         waves:race_waves ( capacity ),
@@ -270,6 +270,15 @@ export default async function EventsIndexPage(props) {
                           >
                             Check in
                           </Link>
+                          {r.charity_enabled && (
+                            <Link
+                              href={`/events/${r.id}/donations`}
+                              className="text-[11px] text-un1t-subtle hover:text-un1t-text"
+                              title="Card donations raised on the event page"
+                            >
+                              Donations
+                            </Link>
+                          )}
                           {/* Race-day control panel is race-only —
                               there's no equivalent for workshop /
                               seminar etc. (no live timing). E7 hides
@@ -376,6 +385,14 @@ export default async function EventsIndexPage(props) {
                     >
                       Check in
                     </Link>
+                    {r.charity_enabled && (
+                      <Link
+                        href={`/events/${r.id}/donations`}
+                        className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle"
+                      >
+                        Donations
+                      </Link>
+                    )}
                     <Link
                       href={`/events/${r.id}/edit`}
                       className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle"
