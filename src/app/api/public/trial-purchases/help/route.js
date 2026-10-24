@@ -46,8 +46,8 @@ export async function POST(request) {
   if (!limit.allowed) return rateLimitResponse(limit, 'Too many requests. Please wait a few minutes.')
 
   const entry = (await loadTrialStudios(db)).find((s) => s.key === studio.key)
-  if (!entry) {
-    logError('trialhelp', 'studio entry missing', { studio: studio.key })
+  if (!entry || entry.unreadable) {
+    logError('trialhelp', 'studio config unreadable', { studio: studio.key })
     return unavailable()
   }
   const config = entry.config

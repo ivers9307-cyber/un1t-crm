@@ -83,12 +83,19 @@ describe('loadTrialStudios', () => {
     expect(none[1]).toMatchObject({ sellable: false, config: null, product: null })
     const inactive = await loadTrialStudios(fakeDb({ pages: rows(), product: { data: { ...PRODUCT, status: 'archived' }, error: null } }).db)
     expect(inactive[1]).toMatchObject({ sellable: false, config: null })
+    // Nothing for sale is not the same as "could not read": no flag on these.
+    expect(none[1].unreadable).toBeUndefined()
+    expect(inactive[1].unreadable).toBeUndefined()
+    const noBlock = await loadTrialStudios(fakeDb({ pages: rows([{ type: 'hero' }]) }).db)
+    expect(noBlock[1].unreadable).toBeUndefined()
   })
   it('a product read error is not sellable and logs ids only', async () => {
     const { db } = fakeDb({ pages: rows(), product: { data: null, error: { message: 'boom secret' } } })
     const out = await loadTrialStudios(db)
     expect(out[1]).toMatchObject({ sellable: false, config: null })
     expect(out[0].sellable).toBe(true)
+    expect(out[1].unreadable).toBe(true)
+    expect(out[0].unreadable).toBeUndefined()
     expect(mocks.logWarn).toHaveBeenCalledTimes(1)
     const [, , meta] = mocks.logWarn.mock.calls[0]
     expect(meta).toMatchObject({ locationId: 'loc-h', un1tId: 'p-1' })
@@ -98,6 +105,7 @@ describe('loadTrialStudios', () => {
     const out = await loadTrialStudios(fakeDb({ pages: null, pagesError: { message: 'down' } }).db)
     expect(out.map((s) => s.sellable)).toEqual([false, false])
     expect(out.every((s) => s.config === null && s.block === null)).toBe(true)
+    expect(out.every((s) => s.unreadable === true)).toBe(true)
     expect(mocks.logWarn).toHaveBeenCalledTimes(1)
   })
 })

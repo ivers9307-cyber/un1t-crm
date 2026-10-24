@@ -115,8 +115,8 @@ describe('POST /api/public/trial-purchases/help', () => {
     expect(mocks.alert).not.toHaveBeenCalled()
   })
 
-  it('503s when the landing row is unreadable (no entry for the studio)', async () => {
-    mocks.studios.mockResolvedValue([])
+  it('503s, not not_configured, when the loader flags the studio unreadable', async () => {
+    mocks.studios.mockResolvedValue([{ ...STUDIOS[0], locationId: null, config: null, sellable: false, unreadable: true }, STUDIOS[1]])
     const r = await POST(req(BODY))
     expect(r.status).toBe(503)
     expect((await r.json()).code).toBe('unavailable')

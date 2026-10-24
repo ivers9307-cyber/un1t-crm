@@ -233,6 +233,29 @@ describe('alertTrialPurchaseStaff', () => {
     expect(mocks.ops.mock.calls[1][0].subject).toBe('Paid trial needs a hand: Ava Byrne (Stillorgan)')
   })
 
+  it('a help_requested body says nobody was charged and asks staff to contact the customer', async () => {
+    const { db } = makeDb()
+    await alertTrialPurchaseStaff(db, { ...ROW, status: 'help_requested' }, 'trial_used', 'glofox_trial_claim')
+    const html = mocks.ops.mock.calls[0][0].htmlBody
+    expect(html).toContain('A customer asked for help on the /trial page and was not charged.')
+    expect(html).toContain('glofox_trial_claim')
+    expect(html).toContain('Ava Byrne')
+    expect(html).toContain('contact the customer, then mark the card handled.')
+    expect(html).not.toContain('was taken')
+    expect(html).not.toContain('retry the grant')
+    expect(html).not.toContain('Paid:')
+    expect(mocks.ops.mock.calls[0][0].pushBody).not.toContain('manual grant')
+  })
+
+  it('a grant-failure body is unchanged', async () => {
+    const { db } = makeDb()
+    await alertTrialPurchaseStaff(db, ROW, 'grant_refused')
+    const html = mocks.ops.mock.calls[0][0].htmlBody
+    expect(html).toContain('A paid trial purchase was taken but the plan was not put on the account automatically.')
+    expect(html).toContain('<strong>Paid:</strong>')
+    expect(html).toContain('retry the grant')
+  })
+
   it('has the five new review reasons', () => {
     for (const k of ['trial_used', 'active_member', 'un1t_account_refused', 'un1t_checkout_refused', 'un1t_outcome_unknown']) {
       expect(REVIEW_REASONS[k]).toBeTruthy()

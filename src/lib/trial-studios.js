@@ -24,13 +24,16 @@ const embedded = (v) => (Array.isArray(v) ? v[0] : v) || null
  * Every studio with its paid_trial block, location and, for a un1t.online
  * block, the mirrored product, plus the resolved config. A read error marks
  * the affected studio(s) not sellable rather than throwing: the page then
- * offers nothing to buy there instead of a guess.
+ * offers nothing to buy there instead of a guess. Those error-path entries
+ * also carry `unreadable: true` (absent otherwise), so a caller can tell "we
+ * could not read" (answer 503) from "nothing is for sale" (a refusal).
  * @returns {Promise<Array<{ key: string, publicPath: string, locationId: string|null,
  *   membershipSource: string|null, block: object|null, product: object|null,
- *   sellable: boolean, config: object|null }>>}
+ *   sellable: boolean, config: object|null, unreadable?: true }>>}
  */
 export async function loadTrialStudios(db) {
   const empty = (s) => ({ key: s.key, publicPath: s.publicPath, locationId: null, membershipSource: null, block: null, product: null, sellable: false, config: null })
+  const unreadableEntry = (s) => ({ ...empty(s), unreadable: true })
 
   const { data: pages, error } = await db
     .from('landing_page_settings')
@@ -38,7 +41,7 @@ export async function loadTrialStudios(db) {
     .in('public_path', TRIAL_STUDIOS.map((s) => s.publicPath))
   if (error) {
     logWarn('trial-studios', 'landing rows unreadable', { paths: TRIAL_STUDIOS.map((s) => s.publicPath) })
-    return TRIAL_STUDIOS.map(empty)
+    return TRIAL_STUDIOS.map(unreadableEntry)
   }
   const byPath = new Map((Array.isArray(pages) ? pages : []).map((p) => [p.public_path, p]))
 
@@ -63,7 +66,7 @@ export async function loadTrialStudios(db) {
         .maybeSingle()
       if (productErr) {
         logWarn('trial-studios', 'un1t product unreadable', { locationId, un1tId })
-        return { ...base, sellable: false, config: null }
+        return { ...base, sellable: false, config: null, unreadable: true }
       }
       product = data || null
     }

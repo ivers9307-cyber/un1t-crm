@@ -70,20 +70,33 @@ export async function alertTrialPurchaseStaff(db, row, reason, extra = '') {
   try {
     const { data: loc } = await db.from('locations').select('organization_id, name').eq('id', row.location_id).maybeSingle()
     if (!loc?.organization_id) return
+    const helpRequest = row.status === 'help_requested'
+    const reasonHtml = `${escapeHtml(REVIEW_REASONS[reason] || reason)}${extra ? ` (${escapeHtml(extra)})` : ''}`
+    const buyerHtml = `${escapeHtml(row.customer_name || '')} &lt;${escapeHtml(row.customer_email)}&gt; ${escapeHtml(row.customer_phone || '')}`
+    const productHtml = `${escapeHtml(row.product_name)} (${escapeHtml(row.membership_id)} / ${escapeHtml(row.plan_code)})`
     await sendOpsAlert({
       organizationId: loc.organization_id,
       locationId: row.location_id,
-      subject: row.status === 'help_requested'
+      subject: helpRequest
         ? `Trial help request: ${row.customer_name || row.customer_email} (${loc.name || 'studio'})`
         : `Paid trial needs a hand: ${row.customer_name || row.customer_email} (${loc.name || 'studio'})`,
-      htmlBody: `<p>A paid trial purchase was taken but the plan was not put on the account automatically.</p>` +
-        `<p><strong>Reason:</strong> ${escapeHtml(REVIEW_REASONS[reason] || reason)}${extra ? ` (${escapeHtml(extra)})` : ''}</p>` +
-        `<p><strong>Buyer:</strong> ${escapeHtml(row.customer_name || '')} &lt;${escapeHtml(row.customer_email)}&gt; ${escapeHtml(row.customer_phone || '')}<br/>` +
-        `<strong>Product:</strong> ${escapeHtml(row.product_name)} (${escapeHtml(row.membership_id)} / ${escapeHtml(row.plan_code)})<br/>` +
-        `<strong>Paid:</strong> ${(row.amount_cents / 100).toFixed(2)} ${escapeHtml(row.currency)}<br/>` +
-        `<strong>Purchase id:</strong> ${escapeHtml(row.id)}</p>` +
-        `<p>Open the Paid trials tab on the CRM's Approvals page to retry the grant or mark it done once you have put the plan on the account in Glofox.</p>`,
-      pushBody: `Paid trial for ${row.customer_name || row.customer_email} needs a manual grant (${reason}).`,
+      htmlBody: helpRequest
+        ? `<p>A customer asked for help on the /trial page and was not charged.</p>` +
+          `<p><strong>Reason:</strong> ${reasonHtml}</p>` +
+          `<p><strong>Buyer:</strong> ${buyerHtml}<br/>` +
+          `<strong>Product:</strong> ${productHtml}<br/>` +
+          `<strong>Purchase id:</strong> ${escapeHtml(row.id)}</p>` +
+          `<p>Open the Paid trials tab on the CRM's Approvals page, contact the customer, then mark the card handled.</p>`
+        : `<p>A paid trial purchase was taken but the plan was not put on the account automatically.</p>` +
+          `<p><strong>Reason:</strong> ${reasonHtml}</p>` +
+          `<p><strong>Buyer:</strong> ${buyerHtml}<br/>` +
+          `<strong>Product:</strong> ${productHtml}<br/>` +
+          `<strong>Paid:</strong> ${(row.amount_cents / 100).toFixed(2)} ${escapeHtml(row.currency)}<br/>` +
+          `<strong>Purchase id:</strong> ${escapeHtml(row.id)}</p>` +
+          `<p>Open the Paid trials tab on the CRM's Approvals page to retry the grant or mark it done once you have put the plan on the account in Glofox.</p>`,
+      pushBody: helpRequest
+        ? `${row.customer_name || row.customer_email} asked for help with a trial (${reason}).`
+        : `Paid trial for ${row.customer_name || row.customer_email} needs a manual grant (${reason}).`,
     }, { db })
   } catch (e) {
     logWarn('trial-purchase', 'ops alert failed', { purchaseId: row.id, err: e })
