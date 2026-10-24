@@ -62,6 +62,11 @@ export const CharitySettingsSchema = z
     if (presets.length === 0 && !custom) {
       ctx.addIssue({ code: 'custom', path: ['presets_cents'], message: 'Offer at least one preset or allow a custom amount' })
     }
+    // With custom amounts on, the server enforces [min, max] on every gift, so a preset
+    // outside it would be a chip the donor can tap and the server then refuses.
+    if (custom && presets.some((p) => p < min || p > max)) {
+      ctx.addIssue({ code: 'custom', path: ['presets_cents'], message: 'Every preset must be between the minimum and maximum amount' })
+    }
   })
 
 /**

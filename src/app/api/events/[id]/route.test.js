@@ -95,3 +95,19 @@ describe('events UpdateSchema — EVENT-WAITLIST.1 waitlist offer email copy', (
     expect(() => UpdateSchema.parse({ waitlist_email_intro: 'y'.repeat(4001) })).toThrow()
   })
 })
+
+describe('events UpdateSchema — CHARITY.9 charity day', () => {
+  it('accepts the switch and a valid settings object', () => {
+    const parsed = UpdateSchema.parse({ charity_enabled: true, charity: { name: 'MS Ireland', presets_cents: [1000, 2500], match_multiplier: 2 } })
+    expect(parsed.charity_enabled).toBe(true)
+    expect(parsed.charity.presets_cents).toEqual([1000, 2500])
+  })
+  it('accepts null to clear the settings and omits cleanly', () => {
+    expect(UpdateSchema.parse({ charity: null }).charity).toBeNull()
+    expect(UpdateSchema.parse({ name: 'x' }).charity).toBeUndefined()
+  })
+  it('rejects min above max and a non-boolean switch', () => {
+    expect(() => UpdateSchema.parse({ charity: { min_cents: 900, max_cents: 100 } })).toThrow()
+    expect(() => UpdateSchema.parse({ charity_enabled: 'yes' })).toThrow()
+  })
+})

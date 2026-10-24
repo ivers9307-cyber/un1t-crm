@@ -96,6 +96,13 @@ describe('CharitySettingsSchema', () => {
     expect(CharitySettingsSchema.safeParse({ goal_cents: null }).success).toBe(true)
     expect(CharitySettingsSchema.safeParse({ goal_cents: 0 }).success).toBe(false)
   })
+  it('requires every preset to sit within [min, max] when custom amounts are allowed', () => {
+    expect(CharitySettingsSchema.safeParse({ presets_cents: [1000, 600000], custom_allowed: true }).success).toBe(false)
+    expect(CharitySettingsSchema.safeParse({ presets_cents: [1000, 5000], max_cents: 4000 }).success).toBe(false)
+    expect(CharitySettingsSchema.safeParse({ presets_cents: [100], min_cents: 500 }).success).toBe(false)
+    expect(CharitySettingsSchema.safeParse({ presets_cents: [1000, 5000], max_cents: 5000 }).success).toBe(true)
+    expect(CharitySettingsSchema.safeParse({ presets_cents: [1000, 600000], custom_allowed: false }).success).toBe(true)
+  })
 })
 
 describe('renderCharityCopy', () => {

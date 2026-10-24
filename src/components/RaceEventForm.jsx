@@ -27,12 +27,13 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail } from 'lucide-react'
+import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail, HeartHandshake } from 'lucide-react'
 import Link from 'next/link'
 import { eventSlug } from '@/lib/event-slug'
 import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
 import { generateWaveTimes } from '@/lib/wave-generate'
 import { PLATFORM_NAME } from '@/lib/brand-name'
+import { CHARITY_DEFAULTS, CharitySettingsSchema } from '@/lib/charity-donations'
 import { useLocationBrand } from './use-location-brand'
 
 const ALL_SIZES = [1, 2, 3, 4, 5, 6, 8]
@@ -329,6 +330,12 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
   // EVENT-WAITLIST.1 (mig 713) — the waitlist "a spot opened up" offer email.
   const [waitlistSubject, setWaitlistSubject] = useState(race?.waitlist_email_subject || '')
   const [waitlistIntro, setWaitlistIntro] = useState(race?.waitlist_email_intro || '')
+  // CHARITY.9 (mig 765) — "Charity day": card donations on the public page.
+  // The switch is race_events.charity_enabled; the rest is the charity jsonb,
+  // held as form strings and converted (euros -> cents) on save.
+  const [charityEnabled, setCharityEnabled] = useState(!!race?.charity_enabled)
+  const [charityForm, setCharityForm] = useState(() => charityToForm(race?.charity))
+  const setCharityField = (key, value) => setCharityForm((f) => ({ ...f, [key]: value }))
   // The location's saved email templates, for the "Advanced: use a full
   // template" pickers. Fetched from the shared templates list endpoint,
   // scoped to this event's location. A fetch failure just leaves the list
@@ -576,6 +583,10 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       return
     }
 
+    // CHARITY.9 — sent on every save, switch on or off, so the settings survive a toggle.
+    const charityResult = charityFromForm(charityForm)
+    if (charityResult.error) { setError(charityResult.error); return }
+
     setSaving(true)
     const payload = {
       ...(isEditing ? {} : { location_id: locationId, kind }),
@@ -630,6 +641,8 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       gap_email_intro: gapIntro.trim() || null,
       waitlist_email_subject: waitlistSubject.trim() || null,
       waitlist_email_intro: waitlistIntro.trim() || null,
+      charity_enabled: charityEnabled,
+      charity: charityResult.charity,
       ...(meta.isLeadGen ? {} : {
         waves: outboundWaves.map((w, i) => ({
           ...(w.id ? { id: w.id } : {}),
@@ -1264,6 +1277,13 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       </div>
       )}
 
+      <CharityDaySection
+        enabled={charityEnabled}
+        onEnabled={setCharityEnabled}
+        values={charityForm}
+        onChange={setCharityField}
+      />
+
       {/* TV-display logos. Race-only — non-race kinds don't have a
           TV display board. Within race, only shown after the event
           exists because the upload route needs an id to namespace
@@ -1718,6 +1738,218 @@ function EventEmailFields({
           <p className="text-[11px] text-un1t-muted mt-1">
             Overrides the intro/body above with a saved email template&apos;s full HTML. The subject line still applies.
           </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// CHARITY.9 — "Charity day" copy fields: blank = omitted from the saved object
+// (the schema rejects null for text), so CHARITY_DEFAULTS apply.
+const CHARITY_TEXT_KEYS = [
+  'name', 'heading', 'blurb', 'match_label', 'consent_label',
+  'thank_you_title', 'thank_you_body', 'thank_you_body_unmatched',
+  'receipt_subject', 'receipt_intro',
+]
+const centsToEuroText = (c) => (Number.isFinite(Number(c)) && c !== null && c !== undefined ? String(Number(c) / 100) : '')
+
+/** race_events.charity (jsonb) -> the form's string state. */
+function charityToForm(saved) {
+  const s = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {}
+  const f = {}
+  for (const k of CHARITY_TEXT_KEYS) f[k] = typeof s[k] === 'string' ? s[k] : ''
+  f.presets = Array.isArray(s.presets_cents) ? s.presets_cents.map(centsToEuroText).join(', ') : ''
+  f.min = centsToEuroText(s.min_cents)
+  f.max = centsToEuroText(s.max_cents)
+  f.goal = centsToEuroText(s.goal_cents)
+  f.match_multiplier = s.match_multiplier != null ? String(s.match_multiplier) : ''
+  f.custom_allowed = s.custom_allowed ?? CHARITY_DEFAULTS.custom_allowed
+  f.show_total = s.show_total ?? CHARITY_DEFAULTS.show_total
+  f.include_entries = s.include_entries ?? CHARITY_DEFAULTS.include_entries
+  return f
+}
+
+/**
+ * The form's string state -> `{ charity }` for the save payload (euros -> cents,
+ * presets in the order typed, blank text omitted), or `{ error }` for the form's
+ * inline error banner.
+ */
+function charityFromForm(f) {
+  const out = {}
+  for (const k of CHARITY_TEXT_KEYS) {
+    const v = f[k].trim()
+    if (v) out[k] = v
+  }
+
+  const parts = f.presets.split(',').map((p) => p.replace(/€/g, '').trim()).filter(Boolean)
+  if (parts.length > 0) {
+    const cents = []
+    for (const p of parts) {
+      const n = Number(p)
+      if (!Number.isFinite(n) || Math.round(n * 100) < 1) {
+        return { error: `Preset amounts must be positive euro amounts separated by commas, like 10, 25, 50 (got "${p}").` }
+      }
+      cents.push(Math.round(n * 100))
+    }
+    out.presets_cents = cents
+  }
+
+  for (const [key, field, label] of [['min_cents', 'min', 'Minimum amount'], ['max_cents', 'max', 'Maximum amount'], ['goal_cents', 'goal', 'Goal']]) {
+    const raw = f[field].trim()
+    if (!raw) continue
+    const n = Number(raw)
+    if (!Number.isFinite(n) || Math.round(n * 100) < 1) return { error: `${label} must be a positive number of euros (or leave it blank).` }
+    out[key] = Math.round(n * 100)
+  }
+
+  const multRaw = f.match_multiplier.trim()
+  if (multRaw) {
+    const m = Number(multRaw)
+    if (!Number.isFinite(m) || m < 1 || m > 5) return { error: 'Match multiplier must be a number between 1 and 5.' }
+    out.match_multiplier = m
+  }
+
+  out.custom_allowed = !!f.custom_allowed
+  out.show_total = !!f.show_total
+  out.include_entries = !!f.include_entries
+
+  const parsed = CharitySettingsSchema.safeParse(out)
+  if (!parsed.success) return { error: `Charity day: ${parsed.error.issues[0]?.message || 'check the settings.'}` }
+  return { charity: out }
+}
+
+// CHARITY.9 — the "Charity day" section: a switch plus every field of the
+// charity settings. Presentation only; state lives in RaceEventForm.
+function CharityDaySection({ enabled, onEnabled, values, onChange }) {
+  const input = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
+  const labelCls = 'block text-sm text-un1t-subtle mb-1'
+  const hintCls = 'text-[11px] text-un1t-muted mt-1'
+  const tagHint = (
+    <>Merge tags: <code>{'{{charity}}'}</code>, <code>{'{{brand}}'}</code>, <code>{'{{first_name}}'}</code>, <code>{'{{amount}}'}</code>, <code>{'{{matched}}'}</code>.</>
+  )
+  const text = (key, label, placeholder, { rows } = {}) => (
+    <div>
+      <label htmlFor={`charity-${key}`} className={labelCls}>{label}</label>
+      {rows ? (
+        <textarea id={`charity-${key}`} rows={rows} value={values[key]} onChange={(e) => onChange(key, e.target.value)} placeholder={placeholder} className={input} />
+      ) : (
+        <input id={`charity-${key}`} type="text" value={values[key]} onChange={(e) => onChange(key, e.target.value)} placeholder={placeholder} className={input} />
+      )}
+    </div>
+  )
+  const check = (key, label) => (
+    <label className="flex items-center gap-2 text-sm text-un1t-text">
+      <input type="checkbox" checked={!!values[key]} onChange={(e) => onChange(key, e.target.checked)} />
+      {label}
+    </label>
+  )
+
+  return (
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
+        <HeartHandshake size={14} /> Charity day
+      </h3>
+
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm text-un1t-text">Take card donations</div>
+          <div className="text-[11px] text-un1t-subtle">Adds a donation panel beside the signup on the public event page. Your settings below are kept when you switch it off.</div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Charity day"
+          onClick={() => onEnabled(!enabled)}
+          className={`shrink-0 w-10 h-5 rounded-full ${enabled ? 'bg-emerald-500' : 'bg-un1t-border'}`}
+        >
+          <div className={`w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+        </button>
+      </div>
+
+      {enabled && (
+        <div className="space-y-4 pt-2 border-t border-un1t-border">
+          <p className="text-[11px] text-un1t-subtle">Leave any text blank to use the default shown in grey.</p>
+
+          {text('name', 'Charity name', 'e.g. MS Ireland')}
+          {text('heading', 'Heading', CHARITY_DEFAULTS.heading)}
+          <div>
+            {text('blurb', 'Blurb', CHARITY_DEFAULTS.blurb, { rows: 2 })}
+            <p className={hintCls}>Merge tags: <code>{'{{charity}}'}</code>, <code>{'{{brand}}'}</code>.</p>
+          </div>
+
+          <div>
+            <label htmlFor="charity-presets" className={labelCls}>Preset amounts (€)</label>
+            <input
+              id="charity-presets"
+              type="text"
+              value={values.presets}
+              onChange={(e) => onChange('presets', e.target.value)}
+              placeholder={CHARITY_DEFAULTS.presets_cents.map((c) => c / 100).join(', ')}
+              className={input}
+            />
+            <p className={hintCls}>Comma-separated euros, shown on the page in the order you type them. Up to 8.</p>
+          </div>
+
+          <div className="space-y-2">
+            {check('custom_allowed', 'Let donors enter another amount')}
+            <div className="grid grid-cols-2 gap-3 max-w-md">
+              <div>
+                <label htmlFor="charity-min" className={labelCls}>Minimum custom amount (€)</label>
+                <input id="charity-min" type="number" min={0} step="0.01" value={values.min} onChange={(e) => onChange('min', e.target.value)} placeholder={String(CHARITY_DEFAULTS.min_cents / 100)} className={input} />
+              </div>
+              <div>
+                <label htmlFor="charity-max" className={labelCls}>Maximum custom amount (€)</label>
+                <input id="charity-max" type="number" min={0} step="0.01" value={values.max} onChange={(e) => onChange('max', e.target.value)} placeholder={String(CHARITY_DEFAULTS.max_cents / 100)} className={input} />
+              </div>
+            </div>
+            <p className={hintCls}>With other amounts on, every preset must sit between the minimum and maximum.</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 max-w-md">
+            <div>
+              <label htmlFor="charity-match_multiplier" className={labelCls}>Match multiplier</label>
+              <input id="charity-match_multiplier" type="number" min={1} max={5} step={0.5} value={values.match_multiplier} onChange={(e) => onChange('match_multiplier', e.target.value)} placeholder={String(CHARITY_DEFAULTS.match_multiplier)} className={input} />
+              <p className={hintCls}>1 = no match. 2 = every euro doubled.</p>
+            </div>
+            <div>
+              <label htmlFor="charity-goal" className={labelCls}>Goal (€)</label>
+              <input id="charity-goal" type="number" min={0} step="0.01" value={values.goal} onChange={(e) => onChange('goal', e.target.value)} placeholder="No goal" className={input} />
+              <p className={hintCls}>Blank = no goal bar.</p>
+            </div>
+          </div>
+          {text('match_label', 'Match label', CHARITY_DEFAULTS.match_label)}
+
+          <div className="space-y-2">
+            {check('show_total', 'Show the running total on the page')}
+            {check('include_entries', 'Count paid event entries toward the total')}
+          </div>
+          {text('consent_label', 'Consent checkbox label', 'No checkbox when blank')}
+
+          <div className="pt-4 border-t border-un1t-border space-y-4">
+            <div>
+              <h4 className="text-sm font-medium text-un1t-text">Thank-you screen</h4>
+              <p className="text-[11px] text-un1t-subtle">Shown after a donation is paid. {tagHint}</p>
+            </div>
+            {text('thank_you_title', 'Thank-you title', CHARITY_DEFAULTS.thank_you_title)}
+            {text('thank_you_body', 'Thank-you body (matched)', CHARITY_DEFAULTS.thank_you_body, { rows: 3 })}
+            {text('thank_you_body_unmatched', 'Thank-you body (no match)', CHARITY_DEFAULTS.thank_you_body_unmatched, { rows: 3 })}
+          </div>
+
+          <div className="pt-4 border-t border-un1t-border">
+            <EventEmailFields
+              title="Donation receipt"
+              description="Emailed to the donor once their donation is paid."
+              subject={values.receipt_subject}
+              onSubject={(v) => onChange('receipt_subject', v)}
+              subjectPlaceholder={CHARITY_DEFAULTS.receipt_subject}
+              intro={values.receipt_intro}
+              onIntro={(v) => onChange('receipt_intro', v)}
+              introPlaceholder="Optional note above the receipt"
+              showTemplate={false}
+              extraTags={['{{charity}}', '{{amount}}', '{{matched}}', '{{brand}}', '{{first_name}}']}
+            />
+          </div>
         </div>
       )}
     </div>
