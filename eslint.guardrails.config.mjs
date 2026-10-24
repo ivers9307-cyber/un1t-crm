@@ -508,6 +508,16 @@ const config = [
       // born clean; every trial_purchases write reads its error.
       'src/lib/trial-studios.js',
       'src/app/api/public/trial-purchases/help/route.js',
+      // SCREENMODE.13 — the Hatch floor screens: born clean. The plan
+      // endpoint stamps the heartbeat on every box fetch, the override route
+      // writes the state a wall obeys, and the screen health pass writes the
+      // grades that alert masters: a write that fails silently in any of them
+      // leaves a screen showing the wrong thing, or a dark one ungraded.
+      'src/app/api/fleet/**',
+      'src/app/api/admin/fleet/**',
+      'src/lib/screen-plan.js',
+      'src/lib/screen-doorbell.js',
+      'src/lib/fleet-screen-health.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
