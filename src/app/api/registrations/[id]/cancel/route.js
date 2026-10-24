@@ -34,6 +34,14 @@ export async function POST(request, props) {
   }
 
   const result = await cancelRaceRegistration(db, params.id)
+  // FINDTEAM.8 (I3) — a placed solo's row is not an active entry to cancel.
+  if (!result.ok && result.error === 'not_active') {
+    return NextResponse.json({
+      success: false,
+      error: 'not_active',
+      message: 'This entrant has been placed in a team, so their own entry is no longer active and cannot be cancelled.',
+    }, { status: 409 })
+  }
   if (!result.ok) {
     return NextResponse.json({ success: false, error: result.error }, { status: 500 })
   }

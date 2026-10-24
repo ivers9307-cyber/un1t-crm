@@ -782,7 +782,7 @@ registry.registerPath({
             phone: z.string().max(50).optional(),
             team_name: z.string().max(200).optional(),
             waitlist_token: z.string().max(1000).optional().openapi({ description: 'EVENT-WAITLIST.1: the claim token from a waitlist offer link (?wl=); marks that waitlist row claimed once the registration exists. Never changes the answer.' }),
-            find_team: z.boolean().optional().openapi({ description: 'FINDTEAM.3: register one person as a team of one looking for a team; team_size is forced to 1, team_name and members must be omitted (members non-empty -> 400). 400 find_team_unavailable on a non-race kind, 400 find_team_disabled when the event has the option off. A solo takes no team slot in teams capacity mode.' }),
+            find_team: z.boolean().optional().openapi({ description: 'FINDTEAM.3: register one person as a team of one looking for a team; team_size is forced to 1 and team_name is ignored (the team is named "<name> (looking for a team)"); members must be empty (members non-empty -> 400). 400 find_team_unavailable on a non-race kind, 400 find_team_disabled when the event has the option off. A solo takes no team slot in teams capacity mode. FINDTEAM.8: deduped by person, not by team name: this contact already confirmed or placed on the event -> 409 already_registered; their own checkout still live -> the resume answer (payment.resumed); every new solo gets a team row of its own, suffixed " 2", " 3", … on a name clash. A captain re-registering a team whose entry is placed -> 409 already_registered (a placed row is never deleted).' }),
           }).openapi('EventRegisterBody'),
         },
       },
@@ -874,7 +874,7 @@ registry.registerPath({
   path: '/api/public/entry/{token}',
   tags: ['Public'],
   summary: 'The token holder\'s event entry, and whether they may change its date',
-  description: 'Anonymous; the token is the credential. Public entry shape (names only, no emails, phones or check-in codes) plus `can_move`, `move_blocked_reason` (unpaid, cancelled, checked in, past), `date_change_pending` and `date_change_failed` (a paid change was refused; shown until staff move or refund it). A pending date-change payment is refreshed from the provider first. Rate limited: 60 per IP per 5 minutes.',
+  description: 'Anonymous; the token is the credential. Public entry shape (names only, no emails, phones or check-in codes) plus `can_move`, `move_blocked_reason` (unpaid, cancelled, placed in a team, checked in, past), `date_change_pending`, `date_change_failed` (a paid change was refused; shown until staff move or refund it) and `placed_into` (FINDTEAM.8: for a solo staff placed into a team, `{ team_name, wave: { start_time, label } }`; null otherwise). A pending date-change payment is refreshed from the provider first. Rate limited: 60 per IP per 5 minutes.',
   request: { params: z.object({ token: EntryManageToken }) },
   responses: {
     200: { description: 'The entry', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntrySummary') } } },
@@ -1047,6 +1047,62 @@ registry.registerPath({
   },
 })
 
+// FINDTEAM.8 — the cancel, edit and delete routes for a registration, with the
+// refusals the "placed" status added.
+registry.registerPath({
+  method: 'post',
+  path: '/api/registrations/{id}/cancel',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Cancel a race/event registration (staff, manager+ at the event\'s studio)',
+  description: 'Idempotent (a cancelled row answers already_cancelled). Refunds are a human decision. 409 `not_active` for a placed solo\'s row (status `placed`): it holds their payment and placement record.',
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: 'Cancelled', content: { 'application/json': { schema: z.object({ success: z.boolean(), already_cancelled: z.boolean() }).openapi('RegistrationCancelResult') } } },
+    403: { description: 'Not a manager at the event\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_active: the row is a placed solo', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/event-registrations/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Move a registration to another wave of its event, or set its status (staff, races at the event\'s studio)',
+  description: 'The status enum takes pending_payment, confirmed, cancelled, no_show (never `placed`). 409 `not_active` for a placed solo\'s row.',
+  request: {
+    params: z.object({ id: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({
+      wave_id: z.string().uuid().optional(),
+      status: z.enum(['pending_payment', 'confirmed', 'cancelled', 'no_show']).optional(),
+    }).openapi('EventRegistrationUpdate') } } },
+  },
+  responses: {
+    200: { description: 'Applied (or unchanged)' },
+    400: { description: 'A bad body, or a wave not on this event', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_active: the row is a placed solo', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/event-registrations/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Delete a registration (staff, races at the event\'s studio)',
+  description: '409 `not_active` for a placed solo\'s row; 409 `has_placed_solos` (with `placed_count`) for a team entry that solos were placed into: un-place them first (there is no un-place tool yet).',
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: 'Deleted' },
+    404: { description: 'Not found, or a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_active (a placed solo) or has_placed_solos (solos were placed into this team)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The placed-entrants check failed; nothing was deleted', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // FINDTEAM.5 — staff place a "Find me a team" solo into a team, or pair solos
 // into a new one. Both are service-role routes gated on `races` + a manager
 // role at the event's studio; neither reads race_events.find_team.
@@ -1057,8 +1113,9 @@ registry.registerPath({
   security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'Place a solo looking for a team into an existing team (staff, manager+ with races at the event\'s studio)',
   description:
-    'Write order: the solo\'s member row is copied onto the target team, the team size goes up by one, the target entry\'s team composition is recomputed, ' +
+    'Write order: the solo\'s member row is copied onto the target team, the team size and the target entry\'s team composition are set from a fresh read of the team\'s members, ' +
     'then the solo flips to status `placed` with `placed_into_registration_id`, `placed_at` and `placed_by`. Payments stay on the solo\'s own row. ' +
+    'FINDTEAM.8: when the flip matches no row (placed concurrently), the member row this call added is deleted and size/composition re-set, then 409 already_placed (500 write_failed with stage `rollback` if that clean-up fails). ' +
     'The placed person is emailed best-effort (the placement stands whatever the email does). ' +
     'Every refusal carries `error` (the code) and `message` (plain English): 404 not_found / wrong_event (or an id the caller cannot see), ' +
     '409 not_paid / already_placed / not_solo / target_not_live / no_member_row, 500 load_failed / write_failed (with `stage` once a write has started).',

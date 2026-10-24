@@ -451,6 +451,13 @@ function SoloRow({ solo, waveText, registrations, waves, canPlace, ticked, onTog
 
   async function place() {
     if (!teamId) return
+    // FINDTEAM.8 (M5) — placing never changes the solo's wave, so a team in
+    // another wave means they run at a time they did not book: ask first.
+    const target = teams.find((t) => t.id === teamId)
+    if (target && target.wave_id !== solo.wave_id) {
+      const ok = window.confirm(`${name} is in the ${timeOf(solo) || 'unassigned'} wave but this team runs at ${timeOf(target) || 'another time'}. Place them anyway?`)
+      if (!ok) return
+    }
     setBusy(true)
     try {
       const r = await fetch(`/api/registrations/${solo.id}/place`, {
@@ -656,7 +663,7 @@ function TeamCard({ registration, placedIntoName = null, waves, onChanged, onErr
         body: JSON.stringify({ wave_id: newWaveId }),
       })
       const j = await r.json()
-      if (!r.ok || j.success === false) onError(j.error || `Move failed`)
+      if (!r.ok || j.success === false) onError(j.message || j.error || `Move failed`)
       else onChanged()
     } catch (e) {
       onError(e.message || 'Network error')

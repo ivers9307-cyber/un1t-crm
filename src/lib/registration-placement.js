@@ -8,11 +8,18 @@
 // payment and the history stay on file.
 //
 // Write order, both paths: the person is added to the team (and, when placing,
-// the team grows and its entry's team_composition is recomputed) BEFORE the solo
+// the team's size and its entry's team_composition are re-set) BEFORE the solo
 // row flips. A crash between the two leaves a visible duplicate (the person on
 // the team AND still in the queue, which staff can see and tidy), never a lost
 // person (flipped to placed and on no team). Every failed write after the first
 // is logged with the stage it died at.
+//
+// FINDTEAM.8 (M1/M2): placing sets the team's size and its entry's
+// team_composition from a FRESH read of the team's members after the insert,
+// never read-then-+1, so two placements into one team at once cannot lose a
+// head. When the guarded flip matches no row (someone placed the solo first),
+// this call deletes the member row IT inserted and re-syncs size and
+// composition, so the race leaves no duplicate behind.
 //
 // Neither path reads race_events.find_team: switching the feature off after a
 // solo registered must not strand them in the queue.
@@ -45,7 +52,7 @@ export const PLACEMENT_ERROR_MESSAGES = Object.freeze({
   not_found: 'That entry could not be found on this event.',
   not_solo: 'That entry is not a solo entrant looking for a team.',
   not_paid: 'That entrant has not paid yet, so they cannot be placed.',
-  already_placed: 'That entrant has already been placed in a team. Reload to see where.',
+  already_placed: 'That entrant has already been placed in a team, possibly by someone else just now. Nothing was added. Reload to see where.',
   wrong_event: 'That team is on a different event.',
   target_not_live: 'That team is not a confirmed team entry, so nobody can join it.',
   no_member_row: 'That entry has no person on it, so there is nobody to place.',
@@ -60,7 +67,7 @@ export const PLACEMENT_ERROR_MESSAGES = Object.freeze({
 
 const MEMBER_COLUMNS = 'id, contact_id, name, email, role, is_member, member_validation_status, member_contact_id, member_validated_at'
 const SOLO_SELECT = `id, race_event_id, team_id, contact_id, status, wave_id, looking_for_team, placed_into_registration_id, marketing_consent, teams:team_id ( id, team_members ( ${MEMBER_COLUMNS} ) )`
-const TARGET_SELECT = 'id, race_event_id, team_id, status, looking_for_team, teams:team_id ( id, size, team_members ( is_member ) )'
+const TARGET_SELECT = 'id, race_event_id, team_id, status, looking_for_team, teams:team_id ( id )'
 const WAVE_LOAD_SELECT = 'id, status, looking_for_team, team:teams!team_id ( size )'
 
 const fail = (error, extra = {}) => ({ ok: false, error, ...extra })
@@ -116,6 +123,36 @@ export function teamCompositionFor(flags) {
   if (n === flags.length) return 'all_members'
   if (n === 0) return 'all_non_members'
   return 'mixed'
+}
+
+/**
+ * FINDTEAM.8 (M1/M2) — set a team's size and its entry's team_composition from
+ * a fresh read of the team's members. Returns the failed stage, or null.
+ * @returns {Promise<null|'team_size'|'team_composition'>}
+ */
+async function syncTeamFromMembers(db, { teamId, registrationId, meta }) {
+  const { data: rows, error: readErr } = await db
+    .from('team_members').select('id, is_member').eq('team_id', teamId).limit(500)
+  if (readErr || !Array.isArray(rows)) {
+    logError(MODULE, 'place: team members re-read failed; team size not set', { err: readErr, teamId, ...meta })
+    return 'team_size'
+  }
+  const { data: sized, error: sizeErr } = await db
+    .from('teams').update({ size: rows.length }).eq('id', teamId).select('id')
+  if (sizeErr || !Array.isArray(sized) || sized.length === 0) {
+    logError(MODULE, 'place: team size update failed', { err: sizeErr, teamId, ...meta })
+    return 'team_size'
+  }
+  const { data: composed, error: compositionErr } = await db
+    .from('race_registrations')
+    .update({ team_composition: teamCompositionFor(rows.map((m) => m?.is_member === true)) })
+    .eq('id', registrationId)
+    .select('id')
+  if (compositionErr || !Array.isArray(composed) || composed.length === 0) {
+    logError(MODULE, 'place: team composition update failed', { err: compositionErr, registrationId, ...meta })
+    return 'team_composition'
+  }
+  return null
 }
 
 /**
@@ -178,41 +215,41 @@ export async function placeSoloIntoTeam(db, { soloRegistrationId, teamRegistrati
   const person = soloPerson(solo)
   if (!person) return fail(PLACEMENT_ERRORS.NO_MEMBER_ROW)
 
-  // 1. The person joins the team.
-  const { error: memberErr } = await db.from('team_members').insert(memberRowFor(target.team_id, solo, person, 'member'))
-  if (memberErr) {
+  // 1. The person joins the team. Its id is kept so a lost race (step 3) can
+  // take back exactly this row.
+  const { data: inserted, error: memberErr } = await db
+    .from('team_members').insert(memberRowFor(target.team_id, solo, person, 'member')).select('id').single()
+  if (memberErr || !inserted?.id) {
     logError(MODULE, 'place: team member insert failed; nothing changed', { err: memberErr, ...meta })
     return fail(PLACEMENT_ERRORS.WRITE_FAILED, { stage: 'member_insert' })
   }
 
-  // 2. The team grows by one.
-  const size = Number.isFinite(target.teams.size) ? target.teams.size : 0
-  const { data: sized, error: sizeErr } = await db
-    .from('teams').update({ size: size + 1 }).eq('id', target.team_id).select('id')
-  if (sizeErr || !Array.isArray(sized) || sized.length === 0) {
-    logError(MODULE, 'place: team size bump failed; the person is on the team (size one short) AND still in the queue', { err: sizeErr, teamId: target.team_id, ...meta })
-    return fail(PLACEMENT_ERRORS.WRITE_FAILED, { stage: 'team_size' })
+  // 2. The team's size and its entry's composition, from a fresh members read.
+  const syncFailed = await syncTeamFromMembers(db, { teamId: target.team_id, registrationId: target.id, meta })
+  if (syncFailed) {
+    logError(MODULE, 'place: the person is on the team AND still in the queue; size or composition may be stale', { stage: syncFailed, ...meta })
+    return fail(PLACEMENT_ERRORS.WRITE_FAILED, { stage: syncFailed })
   }
 
-  // 3. The team entry's composition, recomputed with the new person in it.
-  const flags = [
-    ...(Array.isArray(target.teams.team_members) ? target.teams.team_members : []).map((m) => m?.is_member === true),
-    person.is_member === true,
-  ]
-  const { data: composed, error: compositionErr } = await db
-    .from('race_registrations')
-    .update({ team_composition: teamCompositionFor(flags) })
-    .eq('id', target.id)
-    .select('id')
-  if (compositionErr || !Array.isArray(composed) || composed.length === 0) {
-    logError(MODULE, 'place: team composition update failed; the person is on the team AND still in the queue', { err: compositionErr, targetId: target.id, ...meta })
-    return fail(PLACEMENT_ERRORS.WRITE_FAILED, { stage: 'team_composition' })
-  }
-
-  // 4. The solo row leaves the queue.
+  // 3. The solo row leaves the queue.
   const flip = await flipSolo(db, { soloId: solo.id, intoId: target.id, byProfileId, at, meta })
   if (flip === 'error') return fail(PLACEMENT_ERRORS.WRITE_FAILED, { stage: 'status_flip' })
-  if (flip === 'raced') return fail(PLACEMENT_ERRORS.ALREADY_PLACED)
+  if (flip === 'raced') {
+    // Someone else placed (or changed) the solo first: take back this call's
+    // own member row and re-sync, so the race leaves no duplicate.
+    const { data: removed, error: removeErr } = await db
+      .from('team_members').delete().eq('id', inserted.id).select('id')
+    if (removeErr || !Array.isArray(removed) || removed.length !== 1) {
+      logError(MODULE, 'place: lost the race and could not remove the member row this call added; the person may be on the team twice', { err: removeErr, memberId: inserted.id, ...meta })
+      return fail(PLACEMENT_ERRORS.WRITE_FAILED, { stage: 'rollback' })
+    }
+    const resynced = await syncTeamFromMembers(db, { teamId: target.team_id, registrationId: target.id, meta })
+    if (resynced) {
+      logError(MODULE, 'place: lost the race; member row removed but size or composition not re-synced', { stage: resynced, ...meta })
+      return fail(PLACEMENT_ERRORS.WRITE_FAILED, { stage: 'rollback' })
+    }
+    return fail(PLACEMENT_ERRORS.ALREADY_PLACED)
+  }
   return { ok: true }
 }
 

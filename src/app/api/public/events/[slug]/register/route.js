@@ -9,7 +9,9 @@
 //   3. Validate team_size against allowed_team_sizes
 //   4. Wave validation (mig 083) + per-wave capacity check
 //   5. Find-or-create the captain contact
-//   6. Find-or-create the team by (location_id, name); update size
+//   6. Find-or-create the team by (location_id, name); update size. A
+//      find_team solo is deduped by person instead and always gets a fresh
+//      team row of its own (FINDTEAM.8).
 //   7. Validate every member's email against UN1T members (mig 084)
 //   8. members_only race? — refuse if any non-member detected
 //   9. Compute pricing per head (member_fee × verified + non_member_fee × rest)
@@ -88,6 +90,49 @@ const RegisterSchema = z.object({
   // looking_for_team and staff place them later.
   find_team: z.boolean().optional(),
 })
+
+// FINDTEAM.8 (C1) — how many suffixed names a solo's team row may try.
+const SOLO_TEAM_NAME_TRIES = 20
+
+/**
+ * The true, current state of an existing registration before a re-book
+ * decides what to do with it. For a pending booking the payment is refreshed
+ * from the provider so a DEAD checkout session is never resumed: a Stripe
+ * Checkout Session expires (~24h) and a Revolut order can lapse, after which
+ * our row still reads 'pending' but the buyer's link no longer works. The
+ * refresh flips a lapsed session to abandoned/cancelled (or catches a
+ * just-completed one) inline.
+ * @returns {Promise<{ regStatus: string, livePaymentId: string|null }>}
+ */
+async function resolveRebookState(db, reg) {
+  let regStatus = reg.status
+  let livePaymentId = null
+  if (reg.status === 'pending_payment' && reg.active_payment_id) {
+    const { data: pay } = await db
+      .from('race_payments')
+      .select('id, status, payment_provider, payment_provider_ref, connected_account_id')
+      .eq('id', reg.active_payment_id)
+      .maybeSingle()
+    if (pay) {
+      let refreshed = pay
+      if (pay.status === 'pending') {
+        try {
+          refreshed = (await refreshRacePaymentFromProvider(db, pay)) || pay
+        } catch {
+          // Provider unreachable — trust the DB view (treat as live).
+          refreshed = pay
+        }
+      }
+      if (refreshed.status === 'pending') {
+        livePaymentId = refreshed.id           // session still live → resume it
+      } else if (refreshed.status === 'completed') {
+        regStatus = 'confirmed'                // paid in the meantime
+      }
+      // failed / abandoned / expired → livePaymentId null → re-register
+    }
+  }
+  return { regStatus, livePaymentId }
+}
 
 export async function POST(request, props) {
   const params = await props.params;
@@ -295,7 +340,10 @@ export async function POST(request, props) {
   }
   // The effective team: used everywhere below instead of body.team_*.
   const teamSize = findTeam ? 1 : body.team_size
-  const teamName = findTeam ? soloTeamName(body.captain_name) : body.team_name.trim()
+  // FINDTEAM.8 (C1) — a solo's team name is only a starting point: the solo
+  // gets its OWN team row, suffixed " 2", " 3", … on a name clash, so this is
+  // reassigned to the name actually inserted.
+  let teamName = findTeam ? soloTeamName(body.captain_name) : body.team_name.trim()
 
   // Team size validation. A find_team solo is a team of one regardless of the
   // sizes the event allows for teams.
@@ -414,15 +462,96 @@ export async function POST(request, props) {
     logWarn('event-register', 'marketing consent write error', { err: e })
   }
 
-  // Find-or-create the team by (location_id, name).
+  // FINDTEAM.8 (C1) — a solo is deduped by PERSON, never by team name. Two
+  // strangers with the same name would otherwise land on one synthesised team
+  // row, and the re-book block below would then resume the first one's
+  // checkout or delete their (paid, even placed) registration. So: this
+  // contact's own looking_for_team rows at this event decide (confirmed or
+  // placed → already registered; a live checkout → resume it; a stale
+  // pending row → this person's own, cleared), and the solo then ALWAYS gets
+  // a fresh team row of its own.
   let teamId
-  const { data: foundTeam } = await db
+  if (findTeam) {
+    const { data: ownSolos, error: ownErr } = await db
+      .from('race_registrations')
+      .select('id, status, active_payment_id, team_id, team:teams ( name )')
+      .eq('race_event_id', race.id)
+      .eq('contact_id', captainContactId)
+      .eq('looking_for_team', true)
+      .in('status', ['pending_payment', 'confirmed', 'placed'])
+    if (ownErr) {
+      return NextResponse.json({ success: false, error: 'Could not check your existing entry. Please try again.' }, { status: 500 })
+    }
+    const states = []
+    for (const row of ownSolos || []) {
+      states.push({ row, ...(await resolveRebookState(db, row)) })
+    }
+    const done = states.find((s) => s.regStatus === 'confirmed' || s.regStatus === 'placed')
+    if (done) {
+      return NextResponse.json({
+        success: false,
+        error: `Team "${teamName}" is already registered for ${race.name}.`,
+        code: 'already_registered',
+      }, { status: 409 })
+    }
+    const live = states.find((s) => s.livePaymentId)
+    if (live) {
+      const liveName = live.row.team?.name || teamName
+      return NextResponse.json({
+        success: true,
+        data: {
+          registration_id: live.row.id,
+          team_id: live.row.team_id,
+          team_name: liveName,
+          race: { id: race.id, name: race.name, race_date: race.race_date, slug: race.slug },
+          payment: { id: live.livePaymentId, free: false, status: 'pending', resumed: true },
+        },
+        message: `You've already started booking Team "${liveName}" — complete payment to confirm.`,
+      })
+    }
+    // Every remaining row is this contact's own stale pending entry.
+    for (const { row } of states) {
+      const { error: delErr } = await db
+        .from('race_registrations')
+        .delete()
+        .eq('id', row.id)
+        .eq('contact_id', captainContactId)
+      if (delErr) {
+        return NextResponse.json({ success: false, error: 'Could not clear your earlier unfinished entry. Please try again.' }, { status: 500 })
+      }
+    }
+
+    const baseName = teamName
+    for (let attempt = 1; attempt <= SOLO_TEAM_NAME_TRIES && !teamId; attempt++) {
+      const name = attempt === 1 ? baseName : `${baseName} ${attempt}`
+      const { data: soloTeam, error: soloTeamErr } = await db
+        .from('teams')
+        .insert({ location_id: race.location_id, name, size: 1, captain_contact_id: captainContactId })
+        .select('id')
+        .single()
+      if (soloTeamErr) {
+        if (soloTeamErr.code === '23505') continue
+        return NextResponse.json({ success: false, error: `Could not create team: ${soloTeamErr.message}` }, { status: 500 })
+      }
+      teamId = soloTeam.id
+      teamName = name
+    }
+    if (!teamId) {
+      return NextResponse.json({ success: false, error: 'Could not create your entry. Please try again.' }, { status: 500 })
+    }
+  }
+
+  // Find-or-create the team by (location_id, name). Teams only: a solo got its
+  // own team row above.
+  const { data: foundTeam } = findTeam ? { data: null } : await db
     .from('teams')
     .select('id')
     .eq('location_id', race.location_id)
     .eq('name', teamName)
     .maybeSingle()
-  if (foundTeam) {
+  if (findTeam) {
+    // teamId already set above.
+  } else if (foundTeam) {
     teamId = foundTeam.id
     await db.from('teams').update({
       size: teamSize,
@@ -479,8 +608,9 @@ export async function POST(request, props) {
   //     with no usable payment) → discard the row so the fresh
   //     registration can take the (event, team) slot.
   // Different team name ⇒ a different team ⇒ a fresh booking, so the same
-  // person can book multiple times.
-  {
+  // person can book multiple times. A solo's team row is brand new (above), so
+  // it has no registration to find here.
+  if (!findTeam) {
     const { data: teamReg } = await db
       .from('race_registrations')
       .select('id, status, active_payment_id')
@@ -488,41 +618,12 @@ export async function POST(request, props) {
       .eq('team_id', teamId)
       .maybeSingle()
     if (teamReg) {
-      // Resolve the true, current state before deciding. For a pending
-      // booking we refresh the payment from the provider so we don't
-      // resume a DEAD checkout session: a Stripe Checkout Session expires
-      // (~24h) and a Revolut order can lapse, after which our row still
-      // reads 'pending' but the buyer's link no longer works. The refresh
-      // flips a lapsed session to abandoned/cancelled (or catches a
-      // just-completed one) inline.
-      let regStatus = teamReg.status
-      let livePaymentId = null
-      if (teamReg.status === 'pending_payment' && teamReg.active_payment_id) {
-        const { data: pay } = await db
-          .from('race_payments')
-          .select('id, status, payment_provider, payment_provider_ref, connected_account_id')
-          .eq('id', teamReg.active_payment_id)
-          .maybeSingle()
-        if (pay) {
-          let refreshed = pay
-          if (pay.status === 'pending') {
-            try {
-              refreshed = (await refreshRacePaymentFromProvider(db, pay)) || pay
-            } catch {
-              // Provider unreachable — trust the DB view (treat as live).
-              refreshed = pay
-            }
-          }
-          if (refreshed.status === 'pending') {
-            livePaymentId = refreshed.id           // session still live → resume it
-          } else if (refreshed.status === 'completed') {
-            regStatus = 'confirmed'                // paid in the meantime
-          }
-          // failed / abandoned / expired → livePaymentId null → re-register
-        }
-      }
+      const { regStatus, livePaymentId } = await resolveRebookState(db, teamReg)
 
-      if (regStatus === 'confirmed') {
+      // FINDTEAM.8 (C1) — a placed row is as final as a confirmed one: it
+      // carries the solo's payment and its placement record, so no re-book
+      // ever deletes it.
+      if (regStatus === 'confirmed' || regStatus === 'placed') {
         return NextResponse.json({
           success: false,
           error: `Team "${teamName}" is already registered for ${race.name}.`,

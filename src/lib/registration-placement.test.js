@@ -49,7 +49,11 @@ const targetRow = (over = {}) => ({
   teams: { id: 't-team', size: 3, team_members: [{ is_member: true }, { is_member: true }, { is_member: true }] }, ...over,
 })
 
-function placeDb({ solo = soloRow(), target = targetRow(), soloErr = null, targetErr = null, memberErr = null, sizeRows = [{ id: 't-team' }], sizeErr = null, compositionRows = [{ id: 'r-team' }], compositionErr = null, flipRows = [{ id: 'r-solo' }], flipErr = null } = {}) {
+// FINDTEAM.8 (M1/M2) — team_members holds the target team's rows; the insert
+// appends one (id 'm-new') and a delete by id removes it, so every members
+// re-read sees the table as it stands.
+function placeDb({ solo = soloRow(), target = targetRow(), soloErr = null, targetErr = null, memberErr = null, membersReadErr = null, removeErr = null, sizeRows = [{ id: 't-team' }], sizeErr = null, compositionRows = [{ id: 'r-team' }], compositionErr = null, flipRows = [{ id: 'r-solo' }], flipErr = null } = {}) {
+  const members = (target?.teams?.team_members || []).map((m, i) => ({ id: `m-old-${i}`, ...m }))
   return fakeDb((q) => {
     if (q.table === 'race_registrations' && !q.write) {
       const id = eqOf(q, 'id')
@@ -57,7 +61,19 @@ function placeDb({ solo = soloRow(), target = targetRow(), soloErr = null, targe
       if (id === 'r-team') return { data: targetErr ? null : target, error: targetErr }
       return { data: null, error: null }
     }
-    if (q.table === 'team_members' && q.write === 'insert') return { data: null, error: memberErr }
+    if (q.table === 'team_members' && q.write === 'insert') {
+      if (memberErr) return { data: null, error: memberErr }
+      members.push({ id: 'm-new', is_member: q.payload.is_member })
+      return { data: { id: 'm-new' }, error: null }
+    }
+    if (q.table === 'team_members' && q.write === 'delete') {
+      if (removeErr) return { data: null, error: removeErr }
+      const i = members.findIndex((m) => m.id === eqOf(q, 'id'))
+      if (i === -1) return { data: [], error: null }
+      members.splice(i, 1)
+      return { data: [{ id: eqOf(q, 'id') }], error: null }
+    }
+    if (q.table === 'team_members' && !q.write) return membersReadErr ? { data: null, error: membersReadErr } : { data: members.map((m) => ({ ...m })), error: null }
     if (q.table === 'teams' && q.write === 'update') return { data: sizeErr ? null : sizeRows, error: sizeErr }
     if (q.table === 'race_registrations' && q.write === 'update' && 'team_composition' in q.payload) return { data: compositionErr ? null : compositionRows, error: compositionErr }
     if (q.table === 'race_registrations' && q.write === 'update') return { data: flipErr ? null : flipRows, error: flipErr }
@@ -191,6 +207,55 @@ describe('placeSoloIntoTeam — failed writes', () => {
   it('a flip that matched no row (a concurrent place) is already_placed, logged', async () => {
     expect(await place(placeDb({ flipRows: [] }))).toEqual({ ok: false, error: 'already_placed' })
     expect(logError).toHaveBeenCalled()
+  })
+})
+
+// FINDTEAM.8 (M1/M2) — size and composition come from a fresh members read,
+// and a lost race takes back this call's own member row.
+describe('placeSoloIntoTeam — fresh size, race rollback', () => {
+  it('sets size to the members actually on the team, not the stored size + 1', async () => {
+    // stored size says 1 (stale: a concurrent placement already added rows)
+    const db = placeDb({ target: targetRow({ teams: { id: 't-team', size: 1, team_members: [{ is_member: true }, { is_member: true }, { is_member: true }] } }) })
+    expect(await place(db)).toEqual({ ok: true })
+    const sizeWrite = writes(db).find((q) => q.table === 'teams')
+    expect(sizeWrite.payload).toEqual({ size: 4 })
+    const reads = db.log.filter((q) => q.table === 'team_members' && !q.write)
+    expect(reads).toHaveLength(1)
+    expect(eqOf(reads[0], 'team_id')).toBe('t-team')
+  })
+  it('the member insert reads back its id', async () => {
+    const db = placeDb()
+    await place(db)
+    expect(writes(db)[0].ops.some((o) => o[0] === 'select' && o[1] === 'id')).toBe(true)
+  })
+  it('a lost race deletes exactly the inserted row, re-syncs size and composition, and answers already_placed', async () => {
+    const db = placeDb({
+      solo: soloRow({ teams: { id: 't-solo', team_members: [captain({ is_member: false })] } }),
+      flipRows: [],
+    })
+    expect(await place(db)).toEqual({ ok: false, error: 'already_placed' })
+    const w = writes(db)
+    expect(w.map((q) => `${q.table}.${q.write}`)).toEqual([
+      'team_members.insert', 'teams.update', 'race_registrations.update', 'race_registrations.update',
+      'team_members.delete', 'teams.update', 'race_registrations.update',
+    ])
+    const del = w[4]
+    expect(eqOf(del, 'id')).toBe('m-new')
+    expect(del.ops.filter((o) => o[0] === 'eq')).toHaveLength(1)
+    expect(w[1].payload).toEqual({ size: 4 })
+    expect(w[2].payload).toEqual({ team_composition: 'mixed' })
+    expect(w[5].payload).toEqual({ size: 3 })
+    expect(w[6].payload).toEqual({ team_composition: 'all_members' })
+    expect(logError).toHaveBeenCalled()
+  })
+  it('a rollback that cannot delete its row is write_failed at rollback (logged)', async () => {
+    expect(await place(placeDb({ flipRows: [], removeErr: { message: 'boom' } }))).toEqual({ ok: false, error: 'write_failed', stage: 'rollback' })
+    expect(logError).toHaveBeenCalled()
+  })
+  it('a failed members re-read stops before the flip at team_size', async () => {
+    const db = placeDb({ membersReadErr: { message: 'boom' } })
+    expect(await place(db)).toEqual({ ok: false, error: 'write_failed', stage: 'team_size' })
+    expect(writes(db).map((q) => q.table)).toEqual(['team_members'])
   })
 })
 

@@ -730,7 +730,9 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
 // handed to resolveEventEmail as placed_email_subject / placed_email_intro on
 // a race-like object, so the intro lands in the grey box exactly as every
 // other kind's operator intro does. No template override (no
-// placed_email_template_id) and no QR block: the solo's tickets stand.
+// placed_email_template_id) and no QR block: the solo's own QR still works,
+// and at the door it is redirected to the team they joined (FINDTEAM.8, the
+// check-in routes follow placed_into_registration_id; src/lib/placed-checkin.js).
 
 const PLACED_REGISTRATION_COLUMNS = `
   id, status, contact_id, race_event_id, placed_into_registration_id,

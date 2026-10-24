@@ -141,6 +141,28 @@ describe('EntryManagePage', () => {
     expect(screen.queryByRole('button', { name: /Choose|09:00/ })).toBeNull()
   })
 
+  // FINDTEAM.8 (I5) — a solo staff placed into a team.
+  it('a placed solo sees the label, the team they joined at its time, and why the date cannot change', async () => {
+    const { calls } = stubFetch({
+      [ENTRY_URL]: ok({
+        ...ENTRY,
+        status: 'placed',
+        can_move: false,
+        move_blocked_reason: "You've been placed in a team, so your team's time applies; contact the studio to change it.",
+        team: { id: 't-solo', name: 'Sarah Byrne (looking for a team)', size: 1, team_members: [{ id: 'm9', name: 'Sarah Byrne', role: 'captain', is_member: false }] },
+        placed_into: { team_name: 'The Crushers', wave: { start_time: '12:30:00', label: null } },
+      }),
+    })
+    render(<EntryManagePage token={TOKEN} />)
+    await screen.findByText('Placed in a team')
+    expect(screen.getByText("You've been placed with team The Crushers (12:30 wave).")).toBeTruthy()
+    expect(screen.getByText("You've been placed in a team, so your team's time applies; contact the studio to change it.")).toBeTruthy()
+    expect(screen.queryByText(/looking for a team/)).toBeNull()
+    expect(screen.getByText('12:30')).toBeTruthy()
+    expect(screen.queryByText('11:00')).toBeNull()
+    expect(calls.some((c) => c.url.endsWith('/move-options'))).toBe(false)
+  })
+
   it('a bad link says so', async () => {
     stubFetch({ [ENTRY_URL]: { status: 404, body: { success: false, error: 'not_found', message: 'This link is not valid any more.' } } })
     render(<EntryManagePage token={TOKEN} />)

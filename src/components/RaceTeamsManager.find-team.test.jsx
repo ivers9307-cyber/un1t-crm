@@ -123,6 +123,40 @@ describe('RaceTeamsManager — Looking for a team group', () => {
     expect(within(group()).getByRole('button', { name: 'Place Aoife Byrne' }).disabled).toBe(true)
   })
 
+  // FINDTEAM.8 (M5) — a team in another wave is confirmed first.
+  it('a team in another wave asks first; declining sends nothing', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<RaceTeamsManager race={race} canPlaceSolos />)
+    await screen.findByRole('region', { name: /Looking for a team/ })
+    fireEvent.change(screen.getByLabelText('Place Aoife Byrne in a team'), { target: { value: 'tB' } })
+    fireEvent.click(within(group()).getByRole('button', { name: 'Place Aoife Byrne' }))
+    expect(confirm).toHaveBeenCalledWith('Aoife Byrne is in the 09:00 wave but this team runs at 10:00. Place them anyway?')
+    expect(posts).toHaveLength(0)
+    confirm.mockRestore()
+  })
+
+  it('a team in another wave places once confirmed', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<RaceTeamsManager race={race} canPlaceSolos />)
+    await screen.findByRole('region', { name: /Looking for a team/ })
+    fireEvent.change(screen.getByLabelText('Place Aoife Byrne in a team'), { target: { value: 'tB' } })
+    fireEvent.click(within(group()).getByRole('button', { name: 'Place Aoife Byrne' }))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].body).toEqual({ team_registration_id: 'tB' })
+    confirm.mockRestore()
+  })
+
+  it('a team in the same wave never asks', async () => {
+    const confirm = vi.spyOn(window, 'confirm')
+    render(<RaceTeamsManager race={race} canPlaceSolos />)
+    await screen.findByRole('region', { name: /Looking for a team/ })
+    fireEvent.change(screen.getByLabelText('Place Aoife Byrne in a team'), { target: { value: 'tA' } })
+    fireEvent.click(within(group()).getByRole('button', { name: 'Place Aoife Byrne' }))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(confirm).not.toHaveBeenCalled()
+    confirm.mockRestore()
+  })
+
   it('a refused Place shows the route message', async () => {
     postReply = { ok: false, status: 409, body: { success: false, error: 'already_placed', message: 'That entrant has already been placed in a team. Reload to see where.' } }
     render(<RaceTeamsManager race={race} canPlaceSolos />)

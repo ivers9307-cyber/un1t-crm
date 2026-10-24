@@ -235,11 +235,15 @@ async function buildPublicCharity(db, race) {
           .eq('status', 'completed')
           .range(0, 999)
       : Promise.resolve({ data: [], error: null }),
+    // FINDTEAM.8 (I4) — teams on the donor card: confirmed team entries only.
+    // A solo still looking for a team is not a team, and a placed solo's row
+    // is history (they count inside the team they joined).
     db
       .from('race_registrations')
       .select('*', { count: 'exact', head: true })
       .eq('race_event_id', race.id)
-      .eq('status', 'confirmed'),
+      .eq('status', 'confirmed')
+      .eq('looking_for_team', false),
   ])
 
   const failed = donationsRes.error || entriesRes.error || teamsRes.error
