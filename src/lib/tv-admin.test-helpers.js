@@ -51,6 +51,7 @@ export function makeFakeDb(respond = () => ({ data: null, error: null })) {
         eq(c, v) { call.filters.push(['eq', c, v]); return b },
         in(c, v) { call.filters.push(['in', c, v]); return b },
         is(c, v) { call.filters.push(['is', c, v]); return b },
+        not(c, op, v) { call.filters.push(['not', c, op, v]); return b },
         gte(c, v) { call.filters.push(['gte', c, v]); return b },
         lte(c, v) { call.filters.push(['lte', c, v]); return b },
         order(c, o) { call.order = [c, o]; return b },
