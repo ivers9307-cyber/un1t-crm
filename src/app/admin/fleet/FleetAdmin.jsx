@@ -191,8 +191,13 @@ export default function FleetAdmin({
     try {
       const res = await fetch(`/api/admin/fleet/devices/${deviceName}/token`, { method: 'POST' })
       const json = await res.json()
-      if (json.ok) setToken({ deviceName, value: json.token })
-      else setNotice({ tone: 'error', text: json.error || 'Could not issue a token' })
+      if (json.ok) {
+        // The instructions differ by role: a screen's token is typed into the
+        // box's provisioning screen, a Pi's goes in its agent.env.
+        setToken({ deviceName, value: json.token, role: screens.some((s) => s.device_name === deviceName) ? 'screen' : 'pi' })
+        // hasToken is read server-side, so the row must be re-read to flip it.
+        router.refresh()
+      } else setNotice({ tone: 'error', text: json.error || 'Could not issue a token' })
     } finally {
       setBusy(null)
     }
@@ -469,11 +474,18 @@ export default function FleetAdmin({
       <Modal open={Boolean(token)} onClose={() => setToken(null)} title="Agent token">
         {token && (
           <div className="space-y-3">
-            <p className="text-sm">
-              Copy this into <code>/etc/un1t-pi/agent.env</code> on{' '}
-              <strong>{token.deviceName}</strong> as <code>FLEET_AGENT_TOKEN</code>,
-              then restart the agent. It is shown once and cannot be retrieved again.
-            </p>
+            {token.role === 'screen' ? (
+              <p className="text-sm">
+                Enter this on <strong>{token.deviceName}</strong> at provisioning, on the
+                UN1T Screen setup screen. It is shown once and cannot be retrieved again.
+              </p>
+            ) : (
+              <p className="text-sm">
+                Copy this into <code>/etc/un1t-pi/agent.env</code> on{' '}
+                <strong>{token.deviceName}</strong> as <code>FLEET_AGENT_TOKEN</code>,
+                then restart the agent. It is shown once and cannot be retrieved again.
+              </p>
+            )}
             <pre className="rounded-lg bg-un1t-muted p-3 text-xs break-all whitespace-pre-wrap">
               {token.value}
             </pre>
