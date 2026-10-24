@@ -13,6 +13,8 @@ import { MEMBERSHIP_ACTIVE_STATUSES } from '@/lib/un1t-online-map'
 
 const TRIAL_STATUSES = new Set(['trial', 'no_sale_trial'])
 const TRIAL_PLAN = /trial/i
+// A paid Stillorgan trial the processor has not granted yet (or stopped on).
+const PAID_PENDING_STATUSES = Object.freeze(['queued', 'processing', 'needs_review'])
 
 // One existence read. Resolves { ok: true, found } or { ok: false, reason }.
 // `build` receives the table's query builder (already select()ed and scoped by
@@ -35,7 +37,8 @@ async function exists(db, table, { locationId, contactId, columns = 'id', build 
 
 // Has this contact already had a trial at this Stillorgan location? Signals,
 // in order: the contact's own columns (no read), a live Glofox trial claim, an
-// account created with the trial attached, a granted paid trial.
+// account created with the trial attached, a granted paid trial, a paid trial
+// not granted yet (queued, processing or needs_review).
 export async function stillorganTrialHistory(db, { locationId, contact }) {
   const reasons = []
   const status = contact?.glofox_membership_status
@@ -67,6 +70,16 @@ export async function stillorganTrialHistory(db, { locationId, contact }) {
   })
   if (!paid.ok) return paid
   if (paid.found) reasons.push('paid_trial_granted')
+
+  // A paid trial still on its way to Glofox (paid, not granted yet, or
+  // stopped for a hand) is a trial too: a second purchase would charge them
+  // twice for the buy-once plan.
+  const pending = await exists(db, 'trial_purchases', {
+    locationId, contactId,
+    build: (q) => q.eq('contact_id', contactId).eq('payment_status', 'paid').in('status', PAID_PENDING_STATUSES),
+  })
+  if (!pending.ok) return pending
+  if (pending.found) reasons.push('paid_trial_pending')
 
   return { ok: true, hadTrial: reasons.length > 0, reasons }
 }

@@ -90,16 +90,66 @@ describe('stillorganTrialHistory', () => {
   it('a granted paid trial counts', async () => {
     const { db, calls } = makeDb({ rows: { trial_purchases: [{ id: 'tp1' }] } })
     const r = await stillorganTrialHistory(db, { locationId: LOC, contact: CONTACT })
-    expect(r).toEqual({ ok: true, hadTrial: true, reasons: ['paid_trial_granted'] })
+    // (This fake answers both trial_purchases reads with the row.)
+    expect(r).toMatchObject({ ok: true, hadTrial: true })
+    expect(r.reasons).toContain('paid_trial_granted')
     const ops = calls.find((c) => c.table === 'trial_purchases').ops
     expect(ops).toContainEqual(['eq', 'contact_id', 'c1'])
     expect(ops).toContainEqual(['eq', 'status', 'granted'])
   })
 
+  // Final-review F4 — a first paid trial still on its way: never charge twice.
+  it('a paid trial still queued, processing or in review counts (paid_trial_pending), scoped and limited', async () => {
+    const calls = []
+    const db = {
+      from: (table) => {
+        const log = { table, ops: [] }
+        calls.push(log)
+        const chain = {
+          select: (...a) => { log.ops.push(['select', ...a]); return chain },
+          eq: (...a) => { log.ops.push(['eq', ...a]); return chain },
+          is: (...a) => { log.ops.push(['is', ...a]); return chain },
+          in: (...a) => { log.ops.push(['in', ...a]); return chain },
+          limit: (...a) => { log.ops.push(['limit', ...a]); return chain },
+          // Only the pending read (payment_status = paid) finds a row.
+          then: (resolve, reject) => Promise.resolve({
+            data: table === 'trial_purchases' && log.ops.some((o) => o[0] === 'eq' && o[1] === 'payment_status') ? [{ id: 'tp-pending' }] : [],
+            error: null,
+          }).then(resolve, reject),
+        }
+        return chain
+      },
+    }
+    const r = await stillorganTrialHistory(db, { locationId: LOC, contact: CONTACT })
+    expect(r).toEqual({ ok: true, hadTrial: true, reasons: ['paid_trial_pending'] })
+    const pending = calls.filter((c) => c.table === 'trial_purchases').find((c) => c.ops.some((o) => o[1] === 'payment_status'))
+    expect(pending.ops).toContainEqual(['eq', 'location_id', LOC])
+    expect(pending.ops).toContainEqual(['eq', 'contact_id', 'c1'])
+    expect(pending.ops).toContainEqual(['eq', 'payment_status', 'paid'])
+    expect(pending.ops).toContainEqual(['in', 'status', ['queued', 'processing', 'needs_review']])
+    expect(pending.ops).toContainEqual(['limit', 1])
+  })
+
+  it('a failed pending read is ok:false, never hadTrial', async () => {
+    let n = 0
+    const db = {
+      from: () => {
+        const chain = {
+          select: () => chain, eq: () => chain, is: () => chain, in: () => chain, limit: () => chain,
+          then: (resolve, reject) => Promise.resolve(++n === 3 ? { data: null, error: { message: 'boom' } } : { data: [], error: null }).then(resolve, reject),
+        }
+        return chain
+      },
+    }
+    // No member id, so no claim read: push, granted, then pending (the 3rd).
+    const r = await stillorganTrialHistory(db, { locationId: LOC, contact: { ...CONTACT, glofox_member_id: null } })
+    expect(r).toEqual({ ok: false, reason: 'trial_purchases_unreadable' })
+  })
+
   it('sibling-studio history does not count (every read filters on the Stillorgan location id)', async () => {
     const { db, calls } = makeDb()
     await stillorganTrialHistory(db, { locationId: LOC, contact: CONTACT })
-    expect(calls.map((c) => c.table).sort()).toEqual(['glofox_push_events', 'glofox_trial_claims', 'trial_purchases'])
+    expect(calls.map((c) => c.table).sort()).toEqual(['glofox_push_events', 'glofox_trial_claims', 'trial_purchases', 'trial_purchases'])
     for (const c of calls) expect(c.ops, c.table).toContainEqual(['eq', 'location_id', LOC])
     for (const c of calls) expect(c.ops, c.table).toContainEqual(['limit', 1])
   })
@@ -126,7 +176,7 @@ describe('stillorganTrialHistory', () => {
   it('collects every reason', async () => {
     const { db } = makeDb({ rows: { glofox_trial_claims: [{ id: 'a' }], glofox_push_events: [{ id: 'b' }], trial_purchases: [{ id: 'c' }] } })
     const r = await stillorganTrialHistory(db, { locationId: LOC, contact: { ...CONTACT, glofox_membership_status: 'trial', glofox_membership_plan: '2 Week Trial' } })
-    expect(r.reasons).toEqual(['membership_status=trial', 'membership_plan_trial', 'glofox_trial_claim', 'glofox_push_created', 'paid_trial_granted'])
+    expect(r.reasons).toEqual(['membership_status=trial', 'membership_plan_trial', 'glofox_trial_claim', 'glofox_push_created', 'paid_trial_granted', 'paid_trial_pending'])
   })
 })
 
