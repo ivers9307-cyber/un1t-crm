@@ -12,9 +12,10 @@ import { makeFakeDb, writesOf, jsonRequest, LOC_A, TV_ID, OWNER_A } from '@/lib/
 const MASTER = { id: 'user-m', isMaster: true }
 const ctx = (name = 'hatch-screen1') => ({ params: Promise.resolve({ name }) })
 
-function fakeDb({ display = { id: TV_ID }, updated } = {}) {
+function fakeDb({ display = { id: TV_ID }, updated, current = { tv_display_id: null } } = {}) {
   const db = makeFakeDb((call) => {
     if (call.table === 'tv_displays') return { data: display, error: null }
+    if (call.table === 'fleet_devices' && call.op === 'select') return { data: current, error: null }
     if (call.op === 'update') return { data: updated === undefined ? { device_name: 'hatch-screen1', ...call.payload } : updated, error: null }
     return { data: null, error: null }
   })
@@ -82,5 +83,23 @@ describe('PATCH /api/admin/fleet/devices/[name]', () => {
     fakeDb({ updated: null })
     const res = await patch({ location_id: LOC_A, role: 'kiosk' }, 'nope')
     expect(res.status).toBe(404)
+  })
+
+  it('nulls an existing display link that does not belong to the studio the device moves to', async () => {
+    const db = fakeDb({ display: null, current: { tv_display_id: TV_ID } })
+    const res = await patch({ location_id: LOC_A, role: 'screen' })
+    expect(res.status).toBe(200)
+    const read = db.calls.find((c) => c.table === 'fleet_devices' && c.op === 'select')
+    expect(read.filters).toEqual([['eq', 'device_name', 'hatch-screen1']])
+    const check = db.calls.find((c) => c.table === 'tv_displays')
+    expect(check.filters).toEqual(expect.arrayContaining([['eq', 'id', TV_ID], ['eq', 'location_id', LOC_A]]))
+    expect(writesOf(db)[0].payload.tv_display_id).toBeNull()
+  })
+
+  it('keeps an existing display link that is valid at the studio', async () => {
+    const db = fakeDb({ display: { id: TV_ID }, current: { tv_display_id: TV_ID } })
+    const res = await patch({ location_id: LOC_A, role: 'screen' })
+    expect(res.status).toBe(200)
+    expect(writesOf(db)[0].payload).not.toHaveProperty('tv_display_id')
   })
 })

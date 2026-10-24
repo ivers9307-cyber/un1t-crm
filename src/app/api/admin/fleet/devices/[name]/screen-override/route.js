@@ -11,9 +11,10 @@
 // ring costs a delay, never the saved override.
 //
 // Gates, in order: a session; the device must exist, be a screen and have a
-// studio (anything else is the same 404, so the route does not tell a caller
-// which names are Pis); then master or `fleet_restart` AT THAT DEVICE'S
-// studio (the same key that lets a coach restart a frozen kiosk).
+// studio, and the caller must be master or hold `fleet_restart` AT THAT
+// DEVICE'S studio (the key that lets a coach restart a frozen kiosk). Failing
+// any of those is the same 404, so the route never tells a caller which names
+// are screens, or which studio a screen belongs to.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -57,19 +58,17 @@ export async function POST(request, props) {
     logWarn('fleet-cmd', 'screen override: device unreadable', { device: params.name, err: readError })
     return NextResponse.json({ ok: false, error: 'Could not set override' }, { status: 500 })
   }
-  if (!device || device.role !== 'screen' || !device.location_id) {
-    return NextResponse.json({ ok: false, error: 'Not found' }, { status: 404 })
-  }
-
+  const notFound = () => NextResponse.json({ ok: false, error: 'Not found' }, { status: 404 })
+  if (!device || device.role !== 'screen' || !device.location_id) return notFound()
   if (!(user.isMaster || hasPermissionForLocation(user, device.location_id, 'fleet_restart'))) {
-    return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 403 })
+    return notFound()
   }
 
   const override = 'clear' in body
     ? null
     : { mode: body.mode, until: new Date(Date.now() + body.minutes * 60_000).toISOString() }
 
-  const { error } = await db
+  const { data: updated, error } = await db
     .from('fleet_devices')
     .update({
       override_mode: override ? override.mode : null,
@@ -78,10 +77,15 @@ export async function POST(request, props) {
     })
     .eq('device_name', device.device_name)
     .eq('location_id', device.location_id)
+    .select('device_name')
+    .maybeSingle()
   if (error) {
     logWarn('fleet-cmd', 'failed to set screen override', { device: device.device_name, err: error })
     return NextResponse.json({ ok: false, error: 'Could not set override' }, { status: 500 })
   }
+  // Deleted or moved between the read and the write: nothing was changed, so
+  // there is nothing to log or ring.
+  if (!updated) return notFound()
 
   logInfo('fleet-cmd', 'screen override', {
     device: device.device_name, mode: override ? override.mode : 'clear', by: user.id,

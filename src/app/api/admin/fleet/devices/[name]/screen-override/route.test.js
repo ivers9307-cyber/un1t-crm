@@ -24,10 +24,10 @@ const NO_KEY_AT_A = person({ [LOC_A]: owner({ fleet_restart: false }) }, LOC_A)
 const SCREEN = { device_name: 'hatch-screen1', role: 'screen', location_id: LOC_A }
 const ctx = (name = 'hatch-screen1') => ({ params: Promise.resolve({ name }) })
 
-function fakeDb({ device = SCREEN, updateError = null } = {}) {
+function fakeDb({ device = SCREEN, updateError = null, updated = { device_name: 'hatch-screen1' } } = {}) {
   const db = makeFakeDb((call) => {
     if (call.table === 'fleet_devices' && call.op === 'select') return { data: device, error: null }
-    if (call.op === 'update') return { data: null, error: updateError }
+    if (call.op === 'update') return { data: updateError ? null : updated, error: updateError }
     return { data: null, error: null }
   })
   createServerClient.mockReturnValue(db)
@@ -74,22 +74,31 @@ describe('POST /api/admin/fleet/devices/[name]/screen-override', () => {
     expect(ringScreens).not.toHaveBeenCalled()
   })
 
-  it('403 for a staffer without fleet_restart at that studio, and no write', async () => {
+  it('404, not 403, for a staffer without fleet_restart at that studio: same body as an unknown name, no write, no ring', async () => {
     getCurrentUser.mockResolvedValue(NO_KEY_AT_A)
     const db = fakeDb()
     const res = await post({ mode: 'class_app', minutes: 60 })
-    expect(res.status).toBe(403)
-    expect(await res.json()).toEqual({ ok: false, error: 'Unauthorised' })
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body).toEqual({ ok: false, error: 'Not found' })
     expect(writesOf(db)).toHaveLength(0)
     expect(ringScreens).not.toHaveBeenCalled()
+
+    const missingDb = fakeDb({ device: null })
+    const missing = await post({ mode: 'class_app', minutes: 60 }, 'nope')
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).toEqual(body)
+    expect(writesOf(missingDb)).toHaveLength(0)
   })
 
-  it('403 for a holder of fleet_restart at a different studio only', async () => {
+  it('404 for a holder of fleet_restart at a different studio only, no write, no ring', async () => {
     getCurrentUser.mockResolvedValue(HOLDER_AT_B_ONLY)
     const db = fakeDb()
     const res = await post({ mode: 'class_app', minutes: 60 })
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ ok: false, error: 'Not found' })
     expect(writesOf(db)).toHaveLength(0)
+    expect(ringScreens).not.toHaveBeenCalled()
   })
 
   it('lets a holder of fleet_restart at the studio set an override', async () => {
@@ -144,6 +153,15 @@ describe('POST /api/admin/fleet/devices/[name]/screen-override', () => {
     const res = await post({ mode: 'party', minutes: 30 })
     expect(res.status).toBe(400)
     expect(db.calls).toHaveLength(0)
+  })
+
+  it('404 when the update touched no row (device gone or moved), with no log line and no ring', async () => {
+    fakeDb({ updated: null })
+    const res = await post({ mode: 'class_app', minutes: 30 })
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ ok: false, error: 'Not found' })
+    expect(ringScreens).not.toHaveBeenCalled()
+    expect(logInfo).not.toHaveBeenCalled()
   })
 
   it('500 when the write fails, and the device is not rung', async () => {

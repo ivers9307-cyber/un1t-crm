@@ -59,9 +59,29 @@ export async function PATCH(request, props) {
     }
   }
 
+  // A claim that omits tv_display_id must not leave an existing link pointing
+  // at the studio the device is leaving: re-check the kept link against the
+  // studio it is moving to, and null it when it does not belong there.
+  const patch = { ...validation.data }
+  if (!('tv_display_id' in validation.data)) {
+    const { data: current, error: currentError } = await db
+      .from('fleet_devices')
+      .select('tv_display_id')
+      .eq('device_name', params.name)
+      .maybeSingle()
+    if (currentError) {
+      logWarn('fleet-cmd', 'failed to read device before claim', { device: params.name, err: currentError })
+      return NextResponse.json({ ok: false, error: 'Could not update device' }, { status: 500 })
+    }
+    if (current?.tv_display_id) {
+      const check = await assertDisplayAtLocation(db, current.tv_display_id, validation.data.location_id)
+      if (!check.ok) patch.tv_display_id = null
+    }
+  }
+
   const { data, error } = await db
     .from('fleet_devices')
-    .update({ ...validation.data, updated_at: new Date().toISOString() })
+    .update({ ...patch, updated_at: new Date().toISOString() })
     .eq('device_name', params.name)
     .select('device_name, location_id, role, label, tv_display_id')
     .maybeSingle()
