@@ -247,6 +247,31 @@ describe('alertTrialPurchaseStaff', () => {
     expect(mocks.ops.mock.calls[0][0].pushBody).not.toContain('manual grant')
   })
 
+  it('a Hatch un1t.online refusal says un1t.online could not serve the buyer, not that they asked for help', async () => {
+    const { db } = makeDb()
+    await alertTrialPurchaseStaff(db, { ...ROW, status: 'help_requested' }, 'un1t_checkout_refused', 'purchase_limit_reached')
+    const html = mocks.ops.mock.calls[0][0].htmlBody
+    expect(html).toContain('A customer tried to buy the trial on the /trial page but un1t.online could not give them an account or a checkout; they were not charged.')
+    expect(html).not.toContain('A customer asked for help')
+    expect(html).toContain('purchase_limit_reached')
+    expect(html).toContain('contact the customer, then mark the card handled.')
+    // a buyer-asked help request keeps its wording
+    await alertTrialPurchaseStaff(db, { ...ROW, status: 'help_requested' }, 'active_member')
+    expect(mocks.ops.mock.calls[1][0].htmlBody).toContain('A customer asked for help on the /trial page and was not charged.')
+  })
+
+  it('a un1t.online row names its un1t.online product, never the empty Glofox ids', async () => {
+    const { db } = makeDb()
+    const un1tRow = { ...ROW, status: 'help_requested', product_name: 'The UN1T Trial', membership_id: null, plan_code: null, un1t_product_id: '674d62bf-<x>' }
+    await alertTrialPurchaseStaff(db, un1tRow, 'un1t_account_refused', 'account_ambiguous')
+    const html = mocks.ops.mock.calls[0][0].htmlBody
+    expect(html).toContain('<strong>Product:</strong> (The UN1T Trial, un1t.online product 674d62bf-&lt;x&gt;)<br/>')
+    expect(html).not.toContain('( / )')
+    // a Glofox row keeps its ids
+    await alertTrialPurchaseStaff(db, ROW, 'grant_refused')
+    expect(mocks.ops.mock.calls[1][0].htmlBody).toContain(`${ROW.product_name} (${ROW.membership_id} / ${ROW.plan_code})`)
+  })
+
   it('a grant-failure body is unchanged', async () => {
     const { db } = makeDb()
     await alertTrialPurchaseStaff(db, ROW, 'grant_refused')

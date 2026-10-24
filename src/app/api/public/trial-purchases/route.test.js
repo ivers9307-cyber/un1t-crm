@@ -96,24 +96,26 @@ const filterValue = (filters, col) => filters.find((f) => f[0] === 'eq' && f[1] 
 
 const trialUpdates = () => mocks.updated.mock.calls.filter(([t]) => t === 'trial_purchases').map(([, patch, filters]) => ({ patch, filters }))
 
+async function readFixture(table, filters) {
+  const s = mocks.state
+  if (table === 'landing_page_settings') {
+    if (s.pagesError) return { data: null, error: s.pagesError }
+    const path = filterValue(filters, 'public_path')
+    if (path) return { data: s.pages.find((p) => p.public_path === path) || null, error: null }
+    return { data: s.pages, error: null }
+  }
+  if (table === 'un1t_products') return { data: s.product, error: null }
+  if (table === 'locations') return { data: s.locations[filterValue(filters, 'id')] || null, error: null }
+  if (table === 'contacts') return { data: s.contact, error: null }
+  if (table in s.rows) return { data: s.errors[table] ? null : s.rows[table], error: s.errors[table] || null }
+  throw new Error(`unexpected read of ${table}`)
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.state = freshState()
   mocks.rateLimit.mockResolvedValue({ allowed: true })
-  mocks.read.mockImplementation(async (table, filters) => {
-    const s = mocks.state
-    if (table === 'landing_page_settings') {
-      if (s.pagesError) return { data: null, error: s.pagesError }
-      const path = filterValue(filters, 'public_path')
-      if (path) return { data: s.pages.find((p) => p.public_path === path) || null, error: null }
-      return { data: s.pages, error: null }
-    }
-    if (table === 'un1t_products') return { data: s.product, error: null }
-    if (table === 'locations') return { data: s.locations[filterValue(filters, 'id')] || null, error: null }
-    if (table === 'contacts') return { data: s.contact, error: null }
-    if (table in s.rows) return { data: s.errors[table] ? null : s.rows[table], error: s.errors[table] || null }
-    throw new Error(`unexpected read of ${table}`)
-  })
+  mocks.read.mockImplementation(readFixture)
   mocks.contact.mockResolvedValue('c1')
   mocks.inserted.mockImplementation(async (row) => ({ data: { id: 'tp1', ...row }, error: null }))
   mocks.updated.mockResolvedValue({ error: null })
@@ -200,12 +202,25 @@ describe('POST /api/public/trial-purchases', () => {
     expect(mocks.payment).not.toHaveBeenCalled()
     expect(mocks.ensureAccount).not.toHaveBeenCalled()
     expect(mocks.checkout).not.toHaveBeenCalled()
+    // the captured lead still reaches Meta: Lead only, sharing the browser's id
+    expect(mocks.capi).toHaveBeenCalledTimes(1)
+    expect(mocks.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'Lead', eventId: 'lead-abcdefgh', locationId: 'loc1', externalId: 'c1' }))
+    expect(mocks.capi).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'InitiateCheckout' }))
   })
   it('Stillorgan: 503 on an unreadable history', async () => {
     mocks.state.errors.glofox_trial_claims = { code: '57014' }
     const r = await POST(req(BODY))
     expect(r.status).toBe(503)
     expect((await r.json()).code).toBe('unavailable')
+    expect(mocks.inserted).not.toHaveBeenCalled()
+    expect(mocks.payment).not.toHaveBeenCalled()
+  })
+  it('Stillorgan: 503 when the matched contact cannot be re-read', async () => {
+    mocks.read.mockImplementation(async (table, filters) => (table === 'contacts' ? { data: null, error: { code: '57014' } } : readFixture(table, filters)))
+    const r = await POST(req(BODY))
+    expect(r.status).toBe(503)
+    expect((await r.json()).code).toBe('unavailable')
+    expect(mocks.read.mock.calls.some(([t]) => t === 'glofox_trial_claims')).toBe(false)
     expect(mocks.inserted).not.toHaveBeenCalled()
     expect(mocks.payment).not.toHaveBeenCalled()
   })
@@ -242,10 +257,24 @@ describe('POST /api/public/trial-purchases', () => {
     expect(mocks.contact).not.toHaveBeenCalled()
     expect(mocks.inserted).not.toHaveBeenCalled()
     expect(mocks.ensureAccount).not.toHaveBeenCalled()
-    // the gate is writes_enabled, not funnel_enabled: with writes off, no tick is asked for
-    mocks.state.locations.loc2.settings = {}
-    const off = await POST(req({ ...HATCH_BODY, terms_accepted: undefined }))
-    expect((await off.json()).code).not.toBe('terms_required')
+    // funnel_enabled is not the gate: writes on with the funnel off still asks for the tick
+    mocks.state.locations.loc2.settings = { un1t_online: { writes_enabled: true, funnel_enabled: false } }
+    expect((await (await POST(req({ ...HATCH_BODY, terms_accepted: undefined }))).json()).code).toBe('terms_required')
+  })
+  it('Hatch: writes off is not_configured before the lead capture, with or without the tick', async () => {
+    mocks.state.locations.loc2.settings = { un1t_online: { writes_enabled: false, funnel_enabled: true } }
+    for (const body of [HATCH_BODY, { ...HATCH_BODY, terms_accepted: undefined }]) {
+      const r = await POST(req(body))
+      expect(r.status).toBe(400)
+      expect((await r.json()).code).toBe('not_configured')
+    }
+    expect(mocks.contact).not.toHaveBeenCalled()
+    expect(mocks.deal).not.toHaveBeenCalled()
+    expect(mocks.inserted).not.toHaveBeenCalled()
+    expect(mocks.ensureAccount).not.toHaveBeenCalled()
+    expect(mocks.checkout).not.toHaveBeenCalled()
+    expect(mocks.legal).not.toHaveBeenCalled()
+    expect(mocks.capi).not.toHaveBeenCalled()
   })
   it('Hatch: an active member gets active_member and no un1t.online call', async () => {
     mocks.state.rows.contact_memberships = [{ id: 'cm1' }]
@@ -259,6 +288,18 @@ describe('POST /api/public/trial-purchases', () => {
     expect(mocks.ensureAccount).not.toHaveBeenCalled()
     expect(mocks.checkout).not.toHaveBeenCalled()
     expect(mocks.payment).not.toHaveBeenCalled()
+    expect(mocks.capi).toHaveBeenCalledTimes(1)
+    expect(mocks.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'Lead', eventId: 'lead-abcdefgh', locationId: 'loc2', externalId: 'c1' }))
+    expect(mocks.capi).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'InitiateCheckout' }))
+  })
+  it('Hatch: 503 on an unreadable membership read, no row, no un1t.online call', async () => {
+    mocks.state.errors.un1t_subscriptions = { code: '57014' }
+    const r = await POST(req(HATCH_BODY))
+    expect(r.status).toBe(503)
+    expect((await r.json()).code).toBe('unavailable')
+    expect(mocks.inserted).not.toHaveBeenCalled()
+    expect(mocks.ensureAccount).not.toHaveBeenCalled()
+    expect(mocks.checkout).not.toHaveBeenCalled()
   })
   it('Hatch: account + checkout → redirect_url, row stamped un1t_user_id and un1t_ledger_id, origin web_trial, success URL on /trial with the row id', async () => {
     mocks.inserted.mockImplementation(async (row) => ({ data: { id: 'tp9', ...row }, error: null }))
@@ -309,7 +350,8 @@ describe('POST /api/public/trial-purchases', () => {
     expect(mocks.ensureAccount.mock.invocationCallOrder[0]).toBeLessThan(mocks.checkout.mock.invocationCallOrder[0])
     // Meta: Lead + InitiateCheckout to Hatch's dataset
     expect(mocks.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'Lead', locationId: 'loc2' }))
-    expect(mocks.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'InitiateCheckout', locationId: 'loc2', value: 39 }))
+    expect(mocks.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'InitiateCheckout', eventId: 'trialcheckout-lead-abcdefgh', locationId: 'loc2', value: 39 }))
+    expect(mocks.capi).toHaveBeenCalledTimes(2)
     expect(mocks.alert).not.toHaveBeenCalled()
   })
   it('Hatch: a refused checkout files help_requested and alerts staff', async () => {
@@ -324,6 +366,8 @@ describe('POST /api/public/trial-purchases', () => {
     expect(mocks.alert).toHaveBeenCalledWith(expect.anything(),
       expect.objectContaining({ id: 'tp1', status: 'help_requested', last_error: 'un1t_checkout_refused: purchase_limit_reached' }),
       'un1t_checkout_refused', 'purchase_limit_reached')
+    expect(mocks.capi).toHaveBeenCalledTimes(1)
+    expect(mocks.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'Lead', eventId: 'lead-abcdefgh', locationId: 'loc2', externalId: 'c1' }))
     expect(mocks.capi).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'InitiateCheckout' }))
   })
   it('Hatch: a retry answer marks the row failed and answers 503', async () => {

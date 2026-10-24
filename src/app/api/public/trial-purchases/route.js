@@ -107,11 +107,16 @@ export async function POST(request) {
     return NextResponse.json({ success: false, code: 'payments_unavailable', error: 'Payments are not set up for this studio yet.' }, { status: 400 })
   }
 
+  // Hatch: with un1t.online writes off there is no account or checkout to
+  // make, so nothing is for sale (refused before the lead is captured).
+  const un1tWrites = isHatch && un1tWriteSettingsFrom(location.settings).writesEnabled
+  if (isHatch && !un1tWrites) {
+    return NextResponse.json({ success: false, code: 'not_configured', error: 'The trial is not available right now.' }, { status: 400 })
+  }
   // Hatch: a new un1t.online account needs the buyer's acceptance of the
   // studio's terms and liability waiver, as the /start funnel collects it,
   // gated on writes_enabled (this is not the funnel). The tick's wording rides
   // on the refusal so the page can show it and try again.
-  const un1tWrites = isHatch && un1tWriteSettingsFrom(location.settings).writesEnabled
   if (un1tWrites && b.terms_accepted !== true) {
     const { data: page, error: pageErr } = await db.from('landing_page_settings')
       .select('blocks').eq('public_path', landingPath).eq('location_id', locationId).maybeSingle()
@@ -171,12 +176,48 @@ export async function POST(request) {
   } catch (e) { logWarn('trialbuy', 'consent failed', { err: e }) }
   try { await placeWaitlistEntry(db, { contactId, locationId, title: b.first_name || 'Trial buyer' }) } catch (e) { logWarn('trialbuy', 'deal placement failed', { err: e }) }
 
+  // Meta Lead (the studio's own dataset), sharing the browser's event id, and
+  // (TRIALCHECKOUT.1), once a checkout is open, an InitiateCheckout for the
+  // same moment with the price, under `trialcheckout-<lead id>` like the
+  // browser's: the Sales campaign's ad set optimises on it. A refused buyer
+  // (trial_used, active_member, help_filed) was still captured, so gets the
+  // Lead alone. Each is its own best-effort send.
+  const { fbcFromFbclid } = await import('@/lib/meta-capi')
+  const fbc = fbcFromFbclid(b.attribution?.fbclid) || undefined
+  const sendConversions = async ({ initiateCheckout }) => {
+    try {
+      const { sendWebsiteConversion } = await import('@/lib/meta-capi')
+      const leadEventId = b.lead_event_id || `triallead-${contactId}`
+      const identity = {
+        locationId, email, phone: b.phone,
+        eventSourceUrl: product.eventSourceUrl,
+        contentName: product.productName,
+        fbc, clientIp: ip,
+        userAgent: request.headers.get('user-agent') || undefined,
+        firstName: b.first_name, lastName: b.last_name, externalId: contactId,
+        fbp: b.attribution?.fbp,
+      }
+      await sendWebsiteConversion(db, { ...identity, eventName: 'Lead', eventId: leadEventId })
+      if (!initiateCheckout) return
+      try {
+        await sendWebsiteConversion(db, {
+          ...identity, eventName: 'InitiateCheckout', eventId: `trialcheckout-${leadEventId}`,
+          value: product.priceCents / 100, currency: product.currency, contentType: 'product',
+        })
+      } catch (e) { logWarn('trialbuy', 'capi initiate checkout failed', { err: e }) }
+    } catch (e) { logWarn('trialbuy', 'capi lead failed', { err: e }) }
+  }
+  const refusedWithLead = async (code, error) => {
+    await sendConversions({ initiateCheckout: false })
+    return refused(code, error, product)
+  }
+
   // ── Eligibility, before any row or money ──
   let un1tContact = null
   if (isHatch) {
     const membership = await hatchActiveMembership(db, { locationId, contactId })
     if (!membership.ok) return unavailable()
-    if (membership.active) return refused('active_member', product.activeMemberText, product)
+    if (membership.active) return refusedWithLead('active_member', product.activeMemberText)
     const { data: c, error: cErr } = await db.from('contacts')
       .select('id, email, name, first_name, last_name, phone, un1t_user_id').eq('id', contactId).maybeSingle()
     if (cErr || !c) {
@@ -193,7 +234,7 @@ export async function POST(request) {
     }
     const history = await stillorganTrialHistory(db, { locationId, contact: c })
     if (!history.ok) return unavailable()
-    if (history.hadTrial) return refused('trial_used', product.trialUsedText, product)
+    if (history.hadTrial) return refusedWithLead('trial_used', product.trialUsedText)
   }
 
   // Hatch: the acceptance, with the documents' version at the time of the
@@ -206,10 +247,9 @@ export async function POST(request) {
   }
 
   // ── The purchase row, then the provider payment (Stillorgan) or un1t.online's checkout (Hatch) ──
-  const { fbcFromFbclid } = await import('@/lib/meta-capi')
   const attribution = {
     ...(b.attribution || {}),
-    fbc: fbcFromFbclid(b.attribution?.fbclid) || undefined,
+    fbc,
     event_source_url: product.eventSourceUrl,
   }
   delete attribution.fbclid
@@ -243,7 +283,10 @@ export async function POST(request) {
   if (isHatch) {
     const outcome = await startUn1tTrialCheckout(db, { row, location, contact: un1tContact })
     if (outcome.kind === 'unavailable') return unavailable()
-    if (outcome.kind === 'help_filed') return NextResponse.json({ success: false, code: 'help_filed', error: product.helpSentText })
+    if (outcome.kind === 'help_filed') {
+      await sendConversions({ initiateCheckout: false })
+      return NextResponse.json({ success: false, code: 'help_filed', error: product.helpSentText })
+    }
     redirectUrl = outcome.checkoutUrl
   } else {
     try {
@@ -254,30 +297,7 @@ export async function POST(request) {
     }
   }
 
-  // Meta Lead (the studio's own dataset), sharing the browser's event id, and
-  // (TRIALCHECKOUT.1) an InitiateCheckout for the same moment with the price,
-  // under `trialcheckout-<lead id>` like the browser's: the Sales campaign's
-  // ad set optimises on it. Each is its own best-effort send.
-  try {
-    const { sendWebsiteConversion } = await import('@/lib/meta-capi')
-    const leadEventId = b.lead_event_id || `triallead-${contactId}`
-    const identity = {
-      locationId, email, phone: b.phone,
-      eventSourceUrl: product.eventSourceUrl,
-      contentName: product.productName,
-      fbc: attribution.fbc, clientIp: ip,
-      userAgent: request.headers.get('user-agent') || undefined,
-      firstName: b.first_name, lastName: b.last_name, externalId: contactId,
-      fbp: b.attribution?.fbp,
-    }
-    await sendWebsiteConversion(db, { ...identity, eventName: 'Lead', eventId: leadEventId })
-    try {
-      await sendWebsiteConversion(db, {
-        ...identity, eventName: 'InitiateCheckout', eventId: `trialcheckout-${leadEventId}`,
-        value: product.priceCents / 100, currency: product.currency, contentType: 'product',
-      })
-    } catch (e) { logWarn('trialbuy', 'capi initiate checkout failed', { err: e }) }
-  } catch (e) { logWarn('trialbuy', 'capi lead failed', { err: e }) }
+  await sendConversions({ initiateCheckout: true })
 
   // Hatch: the checkout URL goes to the browser once; it is never stored on the row or logged.
   if (isHatch) {

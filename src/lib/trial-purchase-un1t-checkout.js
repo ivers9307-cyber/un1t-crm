@@ -46,6 +46,10 @@ export async function startUn1tTrialCheckout(db, { row, location, contact }) {
     return error || null
   }
 
+  // For the sweeper (Task 7): if one of these terminal stamps fails after the
+  // un1t_user_id stamp, the row stays awaiting_payment WITH a un1t_user_id and
+  // is settleable, so the sweeper must match each un1t.online purchase to at
+  // most one row (a buyer's retry makes a second row for the same user).
   const failed = async (code) => {
     const err = await stamp({ status: 'failed', last_error: code })
     if (err) logError(LOG, 'un1t trial row not marked failed', { purchaseId, locationId, code, err })

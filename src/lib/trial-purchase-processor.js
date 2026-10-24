@@ -73,7 +73,15 @@ export async function alertTrialPurchaseStaff(db, row, reason, extra = '') {
     const helpRequest = row.status === 'help_requested'
     const reasonHtml = `${escapeHtml(REVIEW_REASONS[reason] || reason)}${extra ? ` (${escapeHtml(extra)})` : ''}`
     const buyerHtml = `${escapeHtml(row.customer_name || '')} &lt;${escapeHtml(row.customer_email)}&gt; ${escapeHtml(row.customer_phone || '')}`
-    const productHtml = `${escapeHtml(row.product_name)} (${escapeHtml(row.membership_id)} / ${escapeHtml(row.plan_code)})`
+    // A un1t.online (Hatch) row has no Glofox ids: name its un1t.online product instead.
+    const un1tRow = row.membership_id == null && row.plan_code == null && row.un1t_product_id
+    const productHtml = un1tRow
+      ? `(${escapeHtml(row.product_name)}, un1t.online product ${escapeHtml(row.un1t_product_id)})`
+      : `${escapeHtml(row.product_name)} (${escapeHtml(row.membership_id)} / ${escapeHtml(row.plan_code)})`
+    // A un1t_* reason is un1t.online refusing the buyer at checkout, not the buyer asking.
+    const helpOpening = typeof reason === 'string' && reason.startsWith('un1t_')
+      ? 'A customer tried to buy the trial on the /trial page but un1t.online could not give them an account or a checkout; they were not charged.'
+      : 'A customer asked for help on the /trial page and was not charged.'
     await sendOpsAlert({
       organizationId: loc.organization_id,
       locationId: row.location_id,
@@ -81,7 +89,7 @@ export async function alertTrialPurchaseStaff(db, row, reason, extra = '') {
         ? `Trial help request: ${row.customer_name || row.customer_email} (${loc.name || 'studio'})`
         : `Paid trial needs a hand: ${row.customer_name || row.customer_email} (${loc.name || 'studio'})`,
       htmlBody: helpRequest
-        ? `<p>A customer asked for help on the /trial page and was not charged.</p>` +
+        ? `<p>${helpOpening}</p>` +
           `<p><strong>Reason:</strong> ${reasonHtml}</p>` +
           `<p><strong>Buyer:</strong> ${buyerHtml}<br/>` +
           `<strong>Product:</strong> ${productHtml}<br/>` +
