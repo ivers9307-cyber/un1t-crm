@@ -380,6 +380,10 @@ export const EXEMPT = {
   'src/app/api/public/trial-purchases/[id]/route.js': {
     trial_purchases: 'PAIDTRIAL.1 public paid-trial status poll: the row is resolved by its own unguessable UUID (the purchaseId handed to the payer in the checkout response); the id IS the capability token, not enumerable. Returns only display-safe checkout fields and the public state, no buyer PII. Mirrors public/class-booking-payments/[id].',
   },
+  'src/app/api/public/donations/[id]/route.js': {
+    donations: 'CHARITY.6 public donation status poll: the row is resolved by its own unguessable UUID (the donationId handed to the donor in the donate response); the id IS the capability token, not enumerable. Returns only display-safe checkout fields and the public state, no donor PII. The race_events row is read by the donation\'s own race_event_id. Mirrors public/trial-purchases/[id].',
+    race_events: 'CHARITY.6 public donation status poll: the event row is read by the donation\'s own race_event_id (never by caller input) for the match multiplier and the paid side effects.',
+  },
   'src/app/api/public/offer-purchases/[id]/route.js': {
     offer_purchases: 'Public paid-purchase status poll (OFFERS.4): the row is resolved by its own unguessable UUID (the purchaseId handed to the payer in the checkout response) — the id IS the capability token, not enumerable. Returns only { paid, state }, no buyer PII. Mirrors public/class-booking-payments/[id].',
   },
