@@ -289,7 +289,9 @@ describe('listMoveTargets', () => {
     })
     const r = await listMoveTargets(db, { registrationId: 'r1', today: '2026-10-08' })
     const spots = Object.fromEntries(r.targets.flatMap((t) => t.waves.map((w) => [w.id, w.spots_left])))
-    expect(spots).toEqual({ w9: 8, w8: 5, w7: 2 }) // pending_payment does not take a spot
+    // ENTRYPOLICY.1 — a pending_payment row with no registered_at holds its
+    // place (never oversell a row we cannot date), so it takes a spot here.
+    expect(spots).toEqual({ w9: 8, w8: 4, w7: 2 })
     const waveQueries = db.calls.filter((c) => c.table === 'race_registrations' && c.ops.some((o) => o[0] === 'in' && o[1] === 'wave_id'))
     expect(waveQueries).toHaveLength(1)
     expect(waveQueries[0].ops.find((o) => o[0] === 'in' && o[1] === 'wave_id')[2].sort()).toEqual(['w7', 'w8', 'w9'])
@@ -704,3 +706,30 @@ describe('checkMove — allowedLocationIds', () => {
     expect(typeof mod.moveLocationIds).toBe('function')
   })
 })
+
+// ENTRYPOLICY.1 — a lapsed unpaid entry frees its place in the target wave;
+// a fresh one holds it; the hold is the TARGET event's.
+describe('listMoveTargets — the unpaid hold on target waves', () => {
+  it('counts a fresh pending row, drops a lapsed one, honours the target event\'s own hold', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-24T12:00:00Z'))
+    try {
+      const fresh = { id: 'f', status: 'pending_payment', wave_id: 'w9', registered_at: '2026-10-24T11:00:00Z', team: { size: 1 } }
+      const lapsed = { id: 'l', status: 'pending_payment', wave_id: 'w9', registered_at: '2026-10-20T11:00:00Z', team: { size: 1 } }
+      const run = async (target, rows) => {
+        const db = fakeDb({
+          race_registrations: (q) => (q.ops.some((o) => o[0] === 'eq' && o[1] === 'id') ? { data: REG } : { data: rows }),
+          race_events: { data: [{ ...target, race_date: '2026-11-07' }] },
+        })
+        const res = await listMoveTargets(db, { registrationId: 'r1', allowedLocationIds: ['L1'], today: '2026-10-24' })
+        return res.targets[0].waves.find((w) => w.id === 'w9').spots_left
+      }
+      expect(await run(TARGET, [fresh])).toBe(9)
+      expect(await run(TARGET, [lapsed])).toBe(10)
+      expect(await run({ ...TARGET, entry_policy: { unpaid_hold_hours: 240 } }, [lapsed])).toBe(9)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+

@@ -178,9 +178,20 @@ export default function EntryManagePage({ token, navigate = (url) => window.loca
         <div className="text-center mb-7">
           <p className="text-[11px] uppercase tracking-[0.2em] text-white/45 font-semibold mb-2">Your entry</p>
           <h1 className="text-3xl font-bold uppercase tracking-tight">{race.name || 'Your event'}</h1>
-          <p className="text-sm text-white/60 mt-2">{STATUS_LABEL[entry.status] || entry.status}</p>
+          <p className="text-sm text-white/60 mt-2">{entry.lapsed ? 'Lapsed (unpaid)' : (STATUS_LABEL[entry.status] || entry.status)}</p>
           {placed && <p className="text-sm text-white/80 mt-2">{placed}</p>}
         </div>
+
+        {entry.lapsed && (
+          // ENTRYPOLICY.1 — an unpaid entry past the event's hold: the
+          // operator's sentence and the way back to the event page.
+          <div role="status" className="mb-5 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30">
+            <p className="text-sm text-amber-200">{entry.lapsed_message || 'Your unpaid entry has lapsed. You can register again if places remain.'}</p>
+            {entry.register_url && (
+              <a href={entry.register_url} className="inline-block mt-3 text-sm font-semibold underline text-white">Register again</a>
+            )}
+          </div>
+        )}
 
         {notice && (
           // A dark page: the light ramp is the readable one here (as on

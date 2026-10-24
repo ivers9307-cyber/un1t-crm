@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { registrationPaidCents, cancelRaceRegistration, moveRegistrationWave, countPlacedInto, placedSolosRefusal } from './race-cancel.js'
 import { fakeDb } from './event-waitlist.test-helpers'
 
@@ -141,3 +141,48 @@ describe('cancelRaceRegistration refuses a team with placed solos (FINDTEAM.9)',
     expect(placedSolosRefusal(2, 'deleted').message).toMatch(/cannot be deleted from here\.$/)
   })
 })
+
+// ENTRYPOLICY.1 — the target wave's load is judged by holdsPlace: a lapsed
+// unpaid entry no longer takes a place, a fresh one and a confirmed one do.
+describe('moveRegistrationWave — the unpaid hold on the target wave', () => {
+  const NOW = Date.parse('2026-10-24T12:00:00Z')
+  const waveDb = (inWave, entry_policy = null) => fakeDb((q) => {
+    if (q.table === 'race_registrations' && q.action === 'select' && q.ops.some((o) => o[0] === 'eq' && o[1] === 'id')) {
+      return { data: { id: 'r1', race_event_id: 'e1', status: 'confirmed', wave_id: 'w1' }, error: null }
+    }
+    if (q.table === 'race_waves') return { data: { id: 'w2', race_event_id: 'e1', capacity: 1, race: { entry_policy } }, error: null }
+    if (q.table === 'race_registrations' && q.action === 'select') return { data: inWave, error: null }
+    return { data: null, error: null }
+  })
+  const at = (h) => new Date(NOW - h * 3600_000).toISOString()
+  it('a lapsed unpaid entry frees the place; a fresh one or a confirmed one fills it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(NOW))
+    try {
+      expect(await moveRegistrationWave(waveDb([{ id: 'x', status: 'pending_payment', registered_at: at(49) }]), 'r1', 'w2')).toEqual({ ok: true })
+      expect(await moveRegistrationWave(waveDb([{ id: 'x', status: 'pending_payment', registered_at: at(1) }]), 'r1', 'w2')).toEqual({ ok: false, error: 'wave_full' })
+      expect(await moveRegistrationWave(waveDb([{ id: 'x', status: 'confirmed', registered_at: at(900) }]), 'r1', 'w2')).toEqual({ ok: false, error: 'wave_full' })
+      // the hold is the event's own
+      expect(await moveRegistrationWave(waveDb([{ id: 'x', status: 'pending_payment', registered_at: at(49) }], { unpaid_hold_hours: 72 }), 'r1', 'w2')).toEqual({ ok: false, error: 'wave_full' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('the wave read carries the event policy and the rows carry registered_at; an unreadable wave refuses', async () => {
+    const db = waveDb([])
+    await moveRegistrationWave(db, 'r1', 'w2')
+    const wave = db.queries.find((x) => x.table === 'race_waves')
+    expect(wave.ops[0][1]).toContain('race:race_event_id ( entry_policy )')
+    const rows = db.queries.find((x) => x.table === 'race_registrations' && x.ops.some((o) => o[0] === 'eq' && o[1] === 'wave_id'))
+    expect(rows.ops[0][1]).toContain('registered_at')
+    const broken = fakeDb((q) => {
+      if (q.table === 'race_registrations' && q.ops.some((o) => o[0] === 'eq' && o[1] === 'id')) return { data: { id: 'r1', race_event_id: 'e1', status: 'confirmed', wave_id: 'w1' }, error: null }
+      if (q.table === 'race_waves') return { data: { id: 'w2', race_event_id: 'e1', capacity: 5, race: null }, error: null }
+      if (q.table === 'race_registrations') return { data: null, error: { message: 'down' } }
+      return { data: null, error: null }
+    })
+    expect((await moveRegistrationWave(broken, 'r1', 'w2')).ok).toBe(false)
+    expect(broken.queries.some((x) => x.action === 'update')).toBe(false)
+  })
+})
+

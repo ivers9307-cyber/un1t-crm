@@ -48,7 +48,8 @@ import { linkedAccountsForContact, hasBookableMembership } from '@/lib/person-ac
 import { dateLabel, todayIn } from './event-date-label'
 import { DEFAULT_TZ } from '@/lib/location-time'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
-import { EVENT_MOVE_TOOLS, executeMoveTool } from './event-move-tools'
+import { EVENT_MOVE_TOOLS, executeMoveTool, policyHandoffResult } from './event-move-tools'
+import { holdsPlace, pendingLapsed, selfServiceBlock } from '@/lib/entry-policy'
 
 export const EVENT_TOOLS = [
   {
@@ -100,7 +101,10 @@ export const EVENT_TOOLS = [
       'class). CRITICAL: restate the exact event and date and get a clear ' +
       'yes before calling. FREE entries cancel immediately. PAID entries are passed to the ' +
       'team to confirm (they also handle any refund question) — tell the customer the team ' +
-      "will confirm shortly and NEVER promise a refund yourself.",
+      "will confirm shortly and NEVER promise a refund yourself. A result with handoff: true " +
+      'means this event does not let the customer cancel themselves (switched off, or too close ' +
+      'to the start): relay its customer_message as written and hand off to the team; never ' +
+      'say it is cancelled or that a request was filed.',
     input_schema: {
       type: 'object',
       properties: {
@@ -119,7 +123,9 @@ export const EVENT_TOOLS = [
       'is verified. Get the wave_id from ' +
       'list_upcoming_events and confirm the new time with them first. Moving to a different ' +
       'EVENT or a different date is NOT this tool, and never a cancel plus a new booking: use ' +
-      'list_event_move_options, then move_event_entry.',
+      'list_event_move_options, then move_event_entry. A result with handoff: true means this ' +
+      'event does not let the customer change their time themselves: relay its customer_message ' +
+      'as written and hand off to the team.',
     input_schema: {
       type: 'object',
       properties: {
@@ -264,7 +270,12 @@ export function shapeEventsForAgent(events, takenByWave, nowMs, baseUrl, zone = 
   return out.slice(0, MAX_EVENTS).map(({ race_date: _omitted, ...rest }) => rest)
 }
 
-/** The customer's live future registrations. Pure. TZ.5 — `zone` as above. */
+/**
+ * The customer's live future registrations. Pure. TZ.5 — `zone` as above.
+ * ENTRYPOLICY.1 — an unpaid entry past the event's hold reads `lapsed`
+ * (never resumed, no longer holding a place; they register again): the rows
+ * must carry `registered_at` and `race_events.entry_policy`.
+ */
 export function shapeMyRegistrationsForAgent(rows, nowMs, zone = DEFAULT_TZ) {
   const today = todayIn(nowMs, zone)
   const out = []
@@ -272,13 +283,15 @@ export function shapeMyRegistrationsForAgent(rows, nowMs, zone = DEFAULT_TZ) {
     if (!r || r.status === 'cancelled' || r.status === 'no_show') continue
     const ev = r.race_events || {}
     if (!ev.race_date || String(ev.race_date) < today) continue
+    const lapsed = pendingLapsed(r, nowMs, ev)
     out.push({
       registration_id: r.id,
       event_name: ev.name || 'Event',
       kind: ev.kind || 'race',
       date: dateLabel(String(ev.race_date)),
       ...(r.race_waves?.start_time ? { wave_time: String(r.race_waves.start_time).slice(0, 5) } : {}),
-      status: r.status,
+      status: lapsed ? 'lapsed' : r.status,
+      ...(lapsed ? { note: 'This unpaid entry was held for a while and has lapsed; it no longer holds a place. They can register again from the event page if places remain.' } : {}),
     })
   }
   return out
@@ -302,7 +315,7 @@ async function fetchRegistrationsForContactIds(db, ids, locationId, today) {
   const rows = []
   for (const batch of chunkIds(ids)) {
     const { data, error } = await db.from('race_registrations')
-      .select('id, status, race_events!inner(name, kind, race_date, location_id), race_waves(start_time)')
+      .select('id, status, registered_at, race_events!inner(name, kind, race_date, location_id, entry_policy), race_waves(start_time)')
       .in('contact_id', batch)
       .eq('race_events.location_id', locationId)
       .gte('race_events.race_date', today)
@@ -325,7 +338,7 @@ export async function executeEventTool(toolName, input, ctx) {
     const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
     const today = todayIn(Date.now(), zone)
     const { data: events } = await db.from('race_events')
-      .select('id, name, kind, slug, description, race_date, active, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, waves:race_waves(id, start_time, capacity, label)')
+      .select('id, name, kind, slug, description, race_date, active, capacity_mode, entry_policy, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, waves:race_waves(id, start_time, capacity, label)')
       .eq('location_id', locationId)
       .eq('active', true)
       .gte('race_date', today)
@@ -343,15 +356,19 @@ export async function executeEventTool(toolName, input, ctx) {
       const teamsModeWave = new Set(events
         .filter((e) => e.capacity_mode !== 'people')
         .flatMap((e) => (e.waves || []).map((w) => w.id)))
+      // ENTRYPOLICY.1 — the hold an unpaid entry has is the EVENT's policy.
+      const eventByWave = new Map(events.flatMap((e) => (e.waves || []).map((w) => [w.id, e])))
+      const nowMs = Date.now()
       // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- counts only derive the full/limited flags across a race's waves; domain-bounded under 1000
       const { data: regs } = await db.from('race_registrations')
-        .select('wave_id, status, looking_for_team')
+        .select('wave_id, status, registered_at, looking_for_team')
         .in('wave_id', waveIds)
         .in('status', LIVE_REGISTRATION_STATUSES)
         .limit(2000)
       for (const r of regs || []) {
         if (!r.wave_id) continue
         if (r.looking_for_team && teamsModeWave.has(r.wave_id)) continue
+        if (!holdsPlace(r, nowMs, eventByWave.get(r.wave_id) || null)) continue
         takenByWave[r.wave_id] = (takenByWave[r.wave_id] || 0) + 1
       }
     }
@@ -383,7 +400,7 @@ export async function executeEventTool(toolName, input, ctx) {
     }
     if (rows == null) {
       const { data } = await db.from('race_registrations')
-        .select('id, status, race_events!inner(name, kind, race_date, location_id), race_waves(start_time)')
+        .select('id, status, registered_at, race_events!inner(name, kind, race_date, location_id, entry_policy), race_waves(start_time)')
         .eq('contact_id', targetContactId)
         .eq('race_events.location_id', locationId)
         .gte('race_events.race_date', today)
@@ -537,11 +554,15 @@ export async function executeEventTool(toolName, input, ctx) {
         : { error: 'no_contact', message: 'No contact linked to this conversation — hand off to the team.' }
     }
     const { data: reg } = await db.from('race_registrations')
-      .select('id, status, contact_id, wave_id, race_events!inner(id, name, race_date, location_id)')
+      .select('id, status, contact_id, wave_id, race_events!inner(id, name, race_date, location_id, entry_policy), race_waves(start_time)')
       .eq('id', String(input?.registration_id || ''))
       .eq('race_events.location_id', locationId)
       .maybeSingle()
     if (!reg) return { error: 'not_found', message: 'That registration was not found — re-check get_my_event_registrations.' }
+    // ENTRYPOLICY.1 — the event's entry policy, judged at the studio's clock
+    // from the entrant's wave start. A refusal is a HAND-OFF with the
+    // operator's copy: never a cancel, never a draft approval request.
+    const policyBlockFor = (action) => selfServiceBlock({ event: reg.race_events, wave: reg.race_waves || null, nowMs: Date.now(), zone, action })
 
     // PERSON-ACCT.4 — ownership must span the whole person group: the
     // registration routinely sits on a SIBLING contact row, not the verified
@@ -564,6 +585,8 @@ export async function executeEventTool(toolName, input, ctx) {
       if (!isOwner) {
         return { error: 'not_yours', message: 'That registration belongs to someone else — hand off to the team.' }
       }
+      const policyBlock = policyBlockFor('reschedule')
+      if (policyBlock) return policyHandoffResult(policyBlock, 'reschedule')
       const { moveRegistrationWave } = await import('@/lib/race-cancel')
       const result = await moveRegistrationWave(db, reg.id, String(input?.new_wave_id || ''))
       await logEventRequest(db, ctx, {
@@ -606,6 +629,12 @@ export async function executeEventTool(toolName, input, ctx) {
       event_name: input?.event_name || reg.race_events.name,
       event_date: input?.event_date || String(reg.race_events.race_date),
       paid_cents: paidCents,
+    }
+    // A live, cancellable entry (free or paid) still meets the event's policy
+    // first: switched off or inside the cutoff is a hand-off, whatever was paid.
+    if (decision.action === 'direct' || decision.action === 'draft') {
+      const policyBlock = policyBlockFor('cancel')
+      if (policyBlock) return policyHandoffResult(policyBlock, 'cancel')
     }
     if (decision.action === 'direct') {
       const result = await cancelRaceRegistration(db, reg.id)
