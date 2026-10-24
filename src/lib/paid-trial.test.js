@@ -70,6 +70,19 @@ describe('paidTrialConfigFromBlocks, un1t.online shape (TRIALSTUDIO.2)', () => {
     const custom = paidTrialConfigFromBlocks([{ ...sellable(), studio_label: ' Stillorgan ', help_cta_label: 'Help' }], 'stillorgan')
     expect(custom).toMatchObject({ studioLabel: 'Stillorgan', helpCtaLabel: 'Help' })
   })
+  it('a stored block that predates the new fields (or blanks them) is served the design copy', () => {
+    const raw = { type: 'paid_trial', price_cents: 3900, membership_id: 'm1', plan_code: 'p1' }
+    const expected = {
+      studioLabel: '',
+      trialUsedText: "It looks like you've already had a trial with us at Stillorgan, so the 14 Day Reset can't be redeemed on this account. If that's not right, or you'd like to talk about your options, tap I need help and the team will be in touch.",
+      activeMemberText: "It looks like you already have an active membership at UN1T Hatch Street, which already covers your classes. If that's not right, tap I need help and the team will be in touch.",
+      helpCtaLabel: 'I need help',
+      helpSentText: 'Thanks. The team will be in touch shortly.',
+    }
+    expect(paidTrialConfigFromBlocks([raw], 'stillorgan')).toMatchObject(expected)
+    const blanked = { ...raw, studio_label: '  ', trial_used_text: '', active_member_text: ' ', help_cta_label: '', help_sent_text: null }
+    expect(paidTrialConfigFromBlocks([blanked], 'stillorgan')).toMatchObject(expected)
+  })
   it('the default block ships the new fields; the active-member copy names the brand when given one', () => {
     expect(newBlockOfType('paid_trial')).toMatchObject({ studio_label: '', un1t_product_id: '', help_cta_label: 'I need help', help_sent_text: 'Thanks. The team will be in touch shortly.' })
     expect(newBlockOfType('paid_trial', { brand: 'UN1T' }).active_member_text).toBe("It looks like you already have an active membership at UN1T Hatch Street, which already covers your classes. If that's not right, tap I need help and the team will be in touch.")
