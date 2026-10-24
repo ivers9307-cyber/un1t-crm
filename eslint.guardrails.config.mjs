@@ -295,6 +295,11 @@ const config = [
       // a committed payment log, never throw.
       'src/lib/race-payments.js',
       'src/lib/race-gap-payment.js',
+      // CHARITY.3 — the donation payment lifecycle and its receipt: the status
+      // write that decides whether a gift was taken, and the stamps that keep
+      // the paid side effects send-once. Born clean, armed on arrival.
+      'src/lib/donation-payments.js',
+      'src/lib/donation-receipt.js',
       // BLOCKEDIT.1 — the shift editor (PUT beside the existing DELETE) and its
       // */5 notice arm. Every write judges its error (and the block UPDATE its
       // rows) from day one. `[[]id]`: files entries are minimatch globs, and a
