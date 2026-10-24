@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const mocks = vi.hoisted(() => ({ logWarn: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: mocks.logWarn, logError: vi.fn(), logInfo: vi.fn() }))
 
-import { TRIAL_STUDIOS, studioByKey, loadTrialStudios } from './trial-studios'
+import { TRIAL_STUDIOS, studioByKey, loadTrialStudios, trialRedirectFor } from './trial-studios'
 
 const STILLORGAN_BLOCK = { type: 'paid_trial', price_cents: 3900, currency: 'EUR', membership_id: 'm1', plan_code: 'p1', product_name: 'The 14 Day Reset' }
 const HATCH_BLOCK = { type: 'paid_trial', un1t_product_id: 'p-1', product_name: 'The UN1T Trial' }
@@ -124,5 +124,23 @@ describe('loadTrialStudios', () => {
     expect(out.every((s) => s.config === null && s.block === null)).toBe(true)
     expect(out.every((s) => s.unreadable === true)).toBe(true)
     expect(mocks.logWarn).toHaveBeenCalledTimes(1)
+  })
+})
+
+// TRIALSTUDIO.11 — /start and /start/<studio> redirect here with the studio preselected.
+describe('trialRedirectFor', () => {
+  it('maps the studio and keeps the query', () => {
+    expect(trialRedirectFor('hatch-street', new URLSearchParams('utm_campaign=x&fbclid=y'))).toBe('/trial?studio=hatch&utm_campaign=x&fbclid=y')
+    expect(trialRedirectFor('stillorgan', new URLSearchParams(''))).toBe('/trial?studio=stillorgan')
+    expect(trialRedirectFor('somewhere', new URLSearchParams('a=1'))).toBe('/trial?a=1')
+  })
+  it('accepts the plain object Next hands a page, repeating a key for an array value', () => {
+    expect(trialRedirectFor('hatch-street', { utm_campaign: 'x', a: ['1', '2'] })).toBe('/trial?studio=hatch&utm_campaign=x&a=1&a=2')
+    expect(trialRedirectFor('stillorgan', {})).toBe('/trial?studio=stillorgan')
+    expect(trialRedirectFor('stillorgan', undefined)).toBe('/trial?studio=stillorgan')
+  })
+  it('drops an incoming studio and puts the mapped one first', () => {
+    expect(trialRedirectFor('hatch-street', new URLSearchParams('utm_campaign=x&studio=stillorgan'))).toBe('/trial?studio=hatch&utm_campaign=x')
+    expect(trialRedirectFor('somewhere', { studio: 'hatch' })).toBe('/trial')
   })
 })

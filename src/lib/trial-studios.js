@@ -84,3 +84,29 @@ export async function loadTrialStudios(db) {
     return { ...base, product, sellable: config !== null, config }
   }))
 }
+
+// TRIALSTUDIO.11 — where /start and /start/<studio> now send people: /trial with
+// the studio preselected and the ad query (utm_*, fbclid, anything) carried
+// over in its original order. `searchParams` is a URLSearchParams or the plain
+// object Next hands a page (an array value repeats its key). An incoming
+// `studio` is dropped so the path's studio wins.
+const TRIAL_STUDIO_BY_PUBLIC_PATH = Object.freeze({ 'hatch-street': 'hatch', stillorgan: 'stillorgan' })
+
+export function trialRedirectFor(publicPath, searchParams) {
+  const incoming = new URLSearchParams()
+  if (searchParams instanceof URLSearchParams) {
+    for (const [k, v] of searchParams) incoming.append(k, v)
+  } else if (searchParams && typeof searchParams === 'object') {
+    for (const [k, v] of Object.entries(searchParams)) {
+      if (Array.isArray(v)) v.forEach((item) => incoming.append(k, item))
+      else if (v !== undefined && v !== null) incoming.append(k, v)
+    }
+  }
+  incoming.delete('studio')
+  const out = new URLSearchParams()
+  const studio = TRIAL_STUDIO_BY_PUBLIC_PATH[publicPath]
+  if (studio) out.set('studio', studio)
+  for (const [k, v] of incoming) out.append(k, v)
+  const qs = out.toString()
+  return qs ? `/trial?${qs}` : '/trial'
+}
