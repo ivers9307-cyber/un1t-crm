@@ -491,6 +491,10 @@ const config = [
       // trial_purchases stamp reads its error (a un1t_user_id that cannot be
       // stamped stops the checkout).
       'src/lib/trial-purchase-un1t-checkout.js',
+      // TRIALSTUDIO.7 — the Hatch Street settle/expiry sweep: born clean; the
+      // settle CAS and the expiry stamp read their error and their matched
+      // rows (side effects only on a match), the reads judge theirs.
+      'src/lib/trial-purchase-un1t-settle.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
