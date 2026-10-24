@@ -447,6 +447,20 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/public/trial-purchases/help',
+  tags: ['Public'],
+  summary: 'Ask for a call instead of buying a trial (TRIALSTUDIO.5, the /trial page "I need help" button)',
+  description: 'Anonymous. Rate-limited to 5 per studio per IP per 15 min. Body: { studio: \'stillorgan\' | \'hatch\', first_name, last_name, email, phone }. Used when the buyer was refused before paying (Stillorgan trial history, Hatch active membership). Matches or creates the contact, re-runs the studio\'s eligibility read for the reasons, files one help_requested trial_purchases row (a Needs a call card; a second press reuses the open one) and alerts staff. No payment is taken. Returns { message, purchaseId }. 400 unknown_studio or not_configured.',
+  responses: {
+    200: { description: 'Help request filed (or the open one reused)' },
+    400: { description: 'Validation failed, unknown_studio or not_configured', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Landing row, contact or eligibility read unavailable', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'get',
   path: '/api/public/trial-purchases/{id}',
   tags: ['Public'],
