@@ -228,6 +228,11 @@ export async function GET(request) {
   for (const device of fleet) {
     const name = deviceNameOf(device)
     if (!name) continue
+    // A screen is graded once, on its plan heartbeat, by runScreenHealth above.
+    // A screen box that is ALSO on the tailnet (mis-roled or mis-tagged) must
+    // not be graded a second time here on reachability: the two passes would
+    // fight over its fleet_device_health row.
+    if (fleetByName.get(name)?.role === 'screen') continue
     const bridgeRow = bridgeByName.get(name) ?? null
     // A location absent from the map (probe skipped or failed) yields
     // undefined -> null, and gradeDevice then never considers `blind`. Failing
@@ -579,7 +584,7 @@ async function notify(db, alerts) {
   const emails = (masters || []).map((m) => m.email).filter(Boolean)
   const html =
     `<p>${lines.map((l) => l.replace(/&/g, '&amp;').replace(/</g, '&lt;')).join('<br/>')}</p>` +
-    `<p><a href="${getAppUrl()}/admin/bridges">Open the bridges admin</a></p>`
+    `<p><a href="${getAppUrl()}/admin/fleet">Open the fleet page</a></p>`
 
   for (const to of emails) {
     try {

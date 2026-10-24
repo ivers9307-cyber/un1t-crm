@@ -18,7 +18,7 @@ export const OVERRIDE_MINUTES = Object.freeze([30, 60, 120, 240])
 export const PACKAGE_NAME_RE = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/
 export const PACKAGE_NAME_MAX = 200
 
-export const PLAN_LOOKBACK_MS = 2 * 3_600_000
+export const PLAN_LOOKBACK_MS = 6 * 3_600_000
 export const PLAN_LOOKAHEAD_MS = 36 * 3_600_000
 export const PLAN_POLL_SECONDS = 600
 export const DEFAULT_CLASS_MS = 3_600_000

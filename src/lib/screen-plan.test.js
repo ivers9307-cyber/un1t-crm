@@ -133,7 +133,17 @@ describe('buildScreenPlan', () => {
     expect(plan.class_app_package).toBe('com.hatch.classes')
     expect(plan.cast_url).toBe('https://crm.test/tv/cast/tok-1?kiosk=1')
     expect(readsOf(db, 'class_occurrences')).toHaveLength(0)
-    expect(getLocationZone).not.toHaveBeenCalled()
+    expect(plan.timezone).toBe('Europe/Dublin')
+    expect(plan.degraded).toBeUndefined()
+  })
+
+  it('a disabled automation with an unreadable zone has timezone null and is not degraded (no windows were due)', async () => {
+    getLocationZone.mockRejectedValue(new LocationZoneReadError([LOC], new Error('x')))
+    const db = makeDb({ location_automations: { data: { ...AUTOMATION, enabled: false }, error: null } })
+    const plan = await buildScreenPlan(db, DEVICE, { nowMs: T })
+    expect(plan.timezone).toBeNull()
+    expect(plan.degraded).toBeUndefined()
+    expect(plan.windows).toEqual([])
   })
 
   it('an absent automation gives no windows, a null package and the default stale mode', async () => {

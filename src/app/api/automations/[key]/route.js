@@ -75,6 +75,13 @@ export async function PUT(request, { params }) {
     if (!names.success) return bad('bad_device_names')
     screenNames = [...new Set(names.data || [])]
 
+    // Server-side enable gate (the card also gates the button): a box acts on
+    // this config, so an automation cannot go live with nothing to launch or
+    // nothing to launch it on. Saving it switched off stays unconstrained.
+    if (body.enabled === true && (typeof pkg !== 'string' || !pkg || !screenNames.length)) {
+      return bad('cannot_enable')
+    }
+
     config = { ...resolveScreenConfig(raw), device_names: screenNames }
   }
 
@@ -114,6 +121,26 @@ export async function PUT(request, { params }) {
     }
   }
 
+  // Boxes removed from the list must hear about it too, or they would sit on
+  // the class app until their next poll. One read of the row being replaced; a
+  // failed read just means no old names (the ring is best effort anyway).
+  let priorNames = []
+  if (screenNames) {
+    const { data: prior, error: priorErr } = await db
+      .from('location_automations')
+      .select('config')
+      .eq('location_id', body.location_id)
+      .eq('automation_key', key)
+      .maybeSingle()
+    if (priorErr) {
+      logWarn('automations', 'screen_mode prior config unreadable; ringing new names only', {
+        locationId: body.location_id, error: priorErr.message,
+      })
+    } else if (Array.isArray(prior?.config?.device_names)) {
+      priorNames = prior.config.device_names.filter((n) => typeof n === 'string' && n)
+    }
+  }
+
   const { data, error } = await db
     .from('location_automations')
     .upsert({
@@ -129,11 +156,11 @@ export async function PUT(request, { params }) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  // Wake the named boxes so they re-fetch their plan now rather than at the next
+  // Wake the named boxes (old and new) so they re-fetch their plan now rather than at the next
   // poll. Best effort: the config is saved, so a failed ring never fails this.
   if (screenNames) {
     try {
-      await ringScreens(config.device_names)
+      await ringScreens([...new Set([...priorNames, ...config.device_names])])
     } catch (err) {
       logWarn('automations', 'screen_mode doorbell failed after save', { err: String(err) })
     }

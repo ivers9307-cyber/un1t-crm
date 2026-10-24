@@ -83,7 +83,20 @@ A class added closer to its start than that is what the override button is for. 
 
 - **CRM or internet down:** the box keeps acting on its cached plan, so a class is never lost to an outage (marketing may not refresh).
 - **No fresh plan for 24 hours:** the box stops trusting its cache and shows the class app (the configured stale-plan mode, default `class_app`). Losing marketing for a day is the lesser harm. It keeps trying to fetch.
-- **No heartbeat for 15 minutes:** the fleet-health cron grades the screen `unreachable` and **alerts masters** (the existing fleet alert recipients). The check runs even when Tailscale is down or unconfigured, because screens are not on the tailnet. Routing a Hatch screen alert to Hatch staff is not built.
+- **No heartbeat for 25 minutes:** the fleet-health cron grades the screen `unreachable` and **alerts masters** (the existing fleet alert recipients). The check runs even when Tailscale is down or unconfigured, because screens are not on the tailnet. Routing a Hatch screen alert to Hatch staff is not built.
 - **Black screen:** the agent is designed never to show one; if it cannot decide it shows the class app.
 
 The Pi actions (restart browser, reboot, screenshot, pull logs) do not exist for screens; the fleet page offers none of them on a screen row.
+
+## 9. Plan contract for the agent
+
+For whoever builds or changes the UN1T Screen app. The box calls `GET /api/fleet/screen-plan` every `poll_seconds` (600) and on each doorbell ring. How it must treat each answer:
+
+| Answer | Meaning | The agent |
+|---|---|---|
+| **200** | A trustworthy plan. | Replace the cached plan and reset the stale clock (the 24-hour rule in section 8). |
+| **503** `{ "error": "plan_unavailable", "degraded": "…" }` | The CRM could not read the automation, the class occurrences or the studio timezone, so it cannot say what is on today. The heartbeat was still recorded. | Keep the cached plan, retry on the next tick, and **do not** reset the stale clock. |
+| **401** | Token rejected, or the CRM could not look the token up. The CRM folds a database error into 401, so 401 never means "this box was de-provisioned". | Keep the cached plan and retry. Never wipe the token or the plan on a 401. |
+| **429** | Rate limited. | Back off to the next tick. |
+
+A 200 may carry `degraded: "display_unreadable"`: the windows are fine, only `cast_url` is null for now. Use the plan; the idle screen shows until the display reads again. Any other status (404, 500) is also "keep the cache and retry".

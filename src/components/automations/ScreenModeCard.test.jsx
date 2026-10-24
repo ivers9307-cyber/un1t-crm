@@ -168,11 +168,31 @@ describe('ScreenModeCard', () => {
     expect(body.enabled).toBe(false)
   })
 
-  it('shows the error the route refused with', async () => {
+  it('turns a route refusal code into a sentence', async () => {
     stubFetch({ put: { status: 400, body: { success: false, error: 'unknown_device' } } })
     show()
     fireEvent.click(screen.getByRole('button', { name: /save settings/i }))
-    expect(await screen.findByText('unknown_device')).toBeTruthy()
+    expect(await screen.findByText('One of the chosen screens is no longer at this studio. Untick it and save again.')).toBeTruthy()
+  })
+
+  it('maps cannot_enable to the enable-gate text, and shows an unmapped code as it came', async () => {
+    stubFetch({ put: { status: 400, body: { success: false, error: 'cannot_enable' } } })
+    show()
+    fireEvent.click(screen.getByRole('button', { name: /save settings/i }))
+    expect(await screen.findByText('Enter the class app package name to enable')).toBeTruthy()
+    cleanup()
+    stubFetch({ put: { status: 500, body: { success: false, error: 'db exploded' } } })
+    show()
+    fireEvent.click(screen.getByRole('button', { name: /save settings/i }))
+    expect(await screen.findByText('db exploded')).toBeTruthy()
+  })
+
+  it('starts with only the screens that still exist at this studio ticked', async () => {
+    const fetchFn = stubFetch()
+    show({ initialConfig: { device_names: ['hatch-screen1', 'rehomed-box'] } })
+    fireEvent.click(screen.getByRole('button', { name: /save settings/i }))
+    await waitFor(() => expect(putCall(fetchFn)).toBeTruthy())
+    expect(JSON.parse(putCall(fetchFn)[1].body).config.device_names).toEqual(['hatch-screen1'])
   })
 
   it('refuses to save an enabled card whose package was cleared, and says why', async () => {

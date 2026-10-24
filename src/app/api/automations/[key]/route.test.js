@@ -197,6 +197,7 @@ describe('PUT /api/automations/screen_mode — config validation', () => {
     { device_name: 'stillorgan-tv1', location_id: LOC_B, role: 'screen' },
   ]
   const KEY = 'screen_mode'
+  const PKG = 'com.franchise.app'
 
   function managerAtA() {
     getCurrentUser.mockResolvedValue({ role: 'manager', id: 'u1', rolesByLocation: { [LOC_A]: 'manager' } })
@@ -204,7 +205,7 @@ describe('PUT /api/automations/screen_mode — config validation', () => {
 
   // ac_devices is deliberately not handled: a screen_mode write that touches it
   // throws "unexpected table", which fails the test.
-  function fakeDb({ fleetError = null } = {}) {
+  function fakeDb({ fleetError = null, prior = null, priorError = null } = {}) {
     const ops = []
     const from = (table) => {
       if (table === 'fleet_devices') {
@@ -227,6 +228,17 @@ describe('PUT /api/automations/screen_mode — config validation', () => {
       }
       if (table === 'location_automations') {
         return {
+          select: (cols) => {
+            const filters = { columns: cols, eq: {} }
+            const q = {
+              eq: (col, val) => { filters.eq[col] = val; return q },
+              maybeSingle: async () => {
+                ops.push({ table, op: 'select', filters })
+                return priorError ? { data: null, error: priorError } : { data: prior, error: null }
+              },
+            }
+            return q
+          },
           upsert: (row, opts) => {
             ops.push({ table, op: 'upsert', row, opts })
             return { select: () => ({ single: async () => ({ data: row, error: null }) }) }
@@ -260,7 +272,7 @@ describe('PUT /api/automations/screen_mode — config validation', () => {
     managerAtA()
     const { ops, client } = fakeDb()
     createServerClient.mockReturnValue(client)
-    const res = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-kiosk'] } })
+    const res = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-kiosk'], class_app_package: PKG } })
     expect(res.status).toBe(400)
     expect((await res.json()).error).toBe('unknown_device')
     expect(upserts(ops)).toHaveLength(0)
@@ -270,7 +282,7 @@ describe('PUT /api/automations/screen_mode — config validation', () => {
     managerAtA()
     const { ops, client } = fakeDb()
     createServerClient.mockReturnValue(client)
-    await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1'] } })
+    await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1'], class_app_package: PKG } })
     const [read] = fleetReads(ops)
     expect(read.filters.columns).toBe('device_name')
     expect(read.filters.eq).toEqual({ location_id: LOC_A, role: 'screen' })
@@ -314,7 +326,7 @@ describe('PUT /api/automations/screen_mode — config validation', () => {
     }
     expect(fleetReads(ops)).toHaveLength(0)
     expect(upserts(ops)).toHaveLength(0)
-    const ok = await put({ location_id: LOC_A, enabled: true, config: { lead_in_min: 1440, lead_out_min: 1440 } })
+    const ok = await put({ location_id: LOC_A, enabled: false, config: { lead_in_min: 1440, lead_out_min: 1440 } })
     expect(ok.status).toBe(200)
     expect(upserts(ops)[0].row.config).toMatchObject({ lead_in_min: 1440, lead_out_min: 1440 })
   })
@@ -341,7 +353,7 @@ describe('PUT /api/automations/screen_mode — config validation', () => {
     managerAtA()
     const { ops, client } = fakeDb({ fleetError: { message: 'boom' } })
     createServerClient.mockReturnValue(client)
-    const res = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1'] } })
+    const res = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1'], class_app_package: PKG } })
     expect(res.status).toBe(500)
     expect((await res.json()).success).toBe(false)
     expect(upserts(ops)).toHaveLength(0)
@@ -378,7 +390,7 @@ describe('PUT /api/automations/screen_mode — config validation', () => {
     managerAtA()
     const { ops, client } = fakeDb()
     createServerClient.mockReturnValue(client)
-    const res = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1', 'hatch-screen1', 'hatch-screen2'] } })
+    const res = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1', 'hatch-screen1', 'hatch-screen2'], class_app_package: PKG } })
     expect(res.status).toBe(200)
     expect(ops.filter((o) => o.table === 'ac_devices')).toHaveLength(0)
     expect(upserts(ops)[0].row.config.device_names).toEqual(['hatch-screen1', 'hatch-screen2'])
@@ -400,11 +412,11 @@ describe('PUT /api/automations/screen_mode — config validation', () => {
     const { client } = fakeDb()
     createServerClient.mockReturnValue(client)
     ringScreens.mockRejectedValueOnce(new Error('realtime down'))
-    const rejected = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1'] } })
+    const rejected = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1'], class_app_package: PKG } })
     expect(rejected.status).toBe(200)
     expect((await rejected.json()).success).toBe(true)
     ringScreens.mockImplementationOnce(() => { throw new Error('sync throw') })
-    const thrown = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1'] } })
+    const thrown = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1'], class_app_package: PKG } })
     expect(thrown.status).toBe(200)
     expect(ringScreens).toHaveBeenCalledTimes(2)
     expect(logWarn).toHaveBeenCalledTimes(2)
@@ -415,11 +427,69 @@ describe('PUT /api/automations/screen_mode — config validation', () => {
     createServerClient.mockReturnValue({
       from: (t) => t === 'fleet_devices'
         ? { select: () => ({ eq: () => ({ eq: () => ({ in: async () => ({ data: [{ device_name: 'hatch-screen1' }], error: null }) }) }) }) }
-        : { upsert: () => ({ select: () => ({ single: async () => ({ data: null, error: { message: 'db down' } }) }) }) },
+        : {
+            select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
+            upsert: () => ({ select: () => ({ single: async () => ({ data: null, error: { message: 'db down' } }) }) }),
+          },
     })
-    const res = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1'] } })
+    const res = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1'], class_app_package: PKG } })
     expect(res.status).toBe(400)
     expect(ringScreens).not.toHaveBeenCalled()
+  })
+
+  it('400 cannot_enable and NO write when enabling without a package name', async () => {
+    managerAtA()
+    const { ops, client } = fakeDb()
+    createServerClient.mockReturnValue(client)
+    const res = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1'] } })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'cannot_enable' })
+    expect(ops).toHaveLength(0)
+    expect(ringScreens).not.toHaveBeenCalled()
+  })
+
+  it('400 cannot_enable and NO write when enabling with no screens chosen', async () => {
+    managerAtA()
+    const { ops, client } = fakeDb()
+    createServerClient.mockReturnValue(client)
+    const res = await put({ location_id: LOC_A, enabled: true, config: { class_app_package: PKG, device_names: [] } })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('cannot_enable')
+    expect(ops).toHaveLength(0)
+  })
+
+  it('saving switched off stays unconstrained: an empty config is stored', async () => {
+    managerAtA()
+    const { ops, client } = fakeDb()
+    createServerClient.mockReturnValue(client)
+    const res = await put({ location_id: LOC_A, enabled: false, config: { device_names: [], class_app_package: null } })
+    expect(res.status).toBe(200)
+    expect(upserts(ops)).toHaveLength(1)
+  })
+
+  it('reads the prior row for this key with the error judged, and rings old and new names once each', async () => {
+    managerAtA()
+    const { ops, client } = fakeDb({ prior: { config: { device_names: ['hatch-screen2', 'hatch-screen1'] } } })
+    createServerClient.mockReturnValue(client)
+    const res = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1'], class_app_package: PKG } })
+    expect(res.status).toBe(200)
+    const read = ops.find((o) => o.table === 'location_automations' && o.op === 'select')
+    expect(read.filters.columns).toBe('config')
+    expect(read.filters.eq).toEqual({ location_id: LOC_A, automation_key: KEY })
+    expect(ringScreens).toHaveBeenCalledTimes(1)
+    expect(ringScreens).toHaveBeenCalledWith(['hatch-screen2', 'hatch-screen1'])
+    // what is stored is only the new list
+    expect(upserts(ops)[0].row.config.device_names).toEqual(['hatch-screen1'])
+  })
+
+  it('a failed prior read is logged and the new names are still rung', async () => {
+    managerAtA()
+    const { client } = fakeDb({ priorError: { message: 'boom' } })
+    createServerClient.mockReturnValue(client)
+    const res = await put({ location_id: LOC_A, enabled: true, config: { device_names: ['hatch-screen1'], class_app_package: PKG } })
+    expect(res.status).toBe(200)
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    expect(ringScreens).toHaveBeenCalledWith(['hatch-screen1'])
   })
 
   it('leaves the climate keys alone: config is stored exactly as sent, no fleet read, no ring', async () => {

@@ -26,7 +26,7 @@ describe('screen-mode: constants', () => {
     expect(REPORTED_MODES).toEqual(['class_app', 'marketing', 'unknown'])
     expect(OVERRIDE_MINUTES).toEqual([30, 60, 120, 240])
     expect(PACKAGE_NAME_MAX).toBe(200)
-    expect(PLAN_LOOKBACK_MS).toBe(2 * 3_600_000)
+    expect(PLAN_LOOKBACK_MS).toBe(6 * 3_600_000)
     expect(PLAN_LOOKAHEAD_MS).toBe(36 * 3_600_000)
     expect(PLAN_POLL_SECONDS).toBe(600)
     expect(DEFAULT_CLASS_MS).toBe(3_600_000)

@@ -30,12 +30,27 @@ import { fmtClassTime } from './ClassClimateCard'
 
 const DESCRIPTION = AUTOMATIONS.find((a) => a.key === SCREEN_MODE_KEY)?.description || ''
 
+// The route's refusal codes, in words an operator can act on. Anything not
+// listed falls through as the raw code (cannot_enable is mapped in the card,
+// where the matching whyNot text lives).
+const ERROR_COPY = {
+  unknown_device: 'One of the chosen screens is no longer at this studio. Untick it and save again.',
+  bad_package_name: "That doesn't look like an Android package name (e.g. com.example.app).",
+  bad_lead: 'Lead-in and lead-out must be 0–1440 minutes.',
+}
+
 export default function ScreenModeCard({ locationId, timezone, screens, hasTimetable, initialEnabled, initialConfig }) {
   const viewerZone = useViewerZone()
   const router = useRouter()
   const cfg0 = initialConfig || {}
   const [enabled, setEnabled] = useState(Boolean(initialEnabled))
-  const [deviceNames, setDeviceNames] = useState(Array.isArray(cfg0.device_names) ? cfg0.device_names : [])
+  // Only screens that still exist at this studio: a box re-homed since the last
+  // save would otherwise stay ticked, invisible, and make the route refuse
+  // every Save with unknown_device.
+  const [deviceNames, setDeviceNames] = useState(() => {
+    const here = new Set((screens || []).map((s) => s.device_name))
+    return Array.isArray(cfg0.device_names) ? cfg0.device_names.filter((n) => here.has(n)) : []
+  })
   const [pkg, setPkg] = useState(typeof cfg0.class_app_package === 'string' ? cfg0.class_app_package : '')
   const [leadIn, setLeadIn] = useState(cfg0.lead_in_min ?? DEFAULT_SCREEN_CONFIG.lead_in_min)
   const [leadOut, setLeadOut] = useState(cfg0.lead_out_min ?? DEFAULT_SCREEN_CONFIG.lead_out_min)
@@ -113,7 +128,10 @@ export default function ScreenModeCard({ locationId, timezone, screens, hasTimet
         body: JSON.stringify({ location_id: locationId, enabled: nextEnabled, config: buildConfig() }),
       })
       const j = await res.json()
-      if (!res.ok || j.success === false) throw new Error(j.error || 'Save failed')
+      if (!res.ok || j.success === false) {
+        const code = j.error || 'Save failed'
+        throw new Error(code === 'cannot_enable' ? whyNot || code : (ERROR_COPY[code] || code))
+      }
       setEnabled(nextEnabled); setSaved(true)
       router.refresh()
     } catch (e) { setError(e.message) } finally { setBusy(false) }

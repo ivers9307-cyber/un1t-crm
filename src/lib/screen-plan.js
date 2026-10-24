@@ -48,20 +48,27 @@ async function readAutomation(db, locationId) {
 }
 
 /**
- * The windows for one studio: zone, then occurrences, then the pure planner.
- * Never throws for a failed read; says which read failed instead.
- * @returns {Promise<{ windows: Array, timezone: string|null, degraded: string|null }>}
+ * The studio's IANA zone. A zone is never guessed: a failed read answers
+ * `timezone: null, error: true` (after logging it). Any other throw is a bug
+ * and propagates.
+ * @returns {Promise<{ timezone: string|null, error: boolean }>}
  */
-async function planStudioWindows(db, locationId, config, nowMs) {
-  let timezone
+async function readZone(db, locationId) {
   try {
-    timezone = await getLocationZone(db, locationId)
+    return { timezone: await getLocationZone(db, locationId), error: false }
   } catch (err) {
     if (!(err instanceof LocationZoneReadError)) throw err
-    logWarn(LOG, 'location timezone unreadable; no windows planned', { locationId, error: err.message })
-    return { windows: [], timezone: null, degraded: 'zone_unreadable' }
+    logWarn(LOG, 'location timezone unreadable', { locationId, error: err.message })
+    return { timezone: null, error: true }
   }
+}
 
+/**
+ * The windows for one studio, given its already-read zone: occurrences, then
+ * the pure planner. Never throws for a failed read; says which read failed.
+ * @returns {Promise<{ windows: Array, degraded: string|null }>}
+ */
+async function planStudioWindows(db, locationId, config, timezone, nowMs) {
   const { data: occurrences, error } = await db
     .from('class_occurrences')
     .select('glofox_event_id, name, starts_at, ends_at')
@@ -72,12 +79,11 @@ async function planStudioWindows(db, locationId, config, nowMs) {
     .order('starts_at', { ascending: true })
   if (error) {
     logWarn(LOG, 'class occurrences unreadable; no windows planned', { locationId, error: error.message })
-    return { windows: [], timezone, degraded: 'occurrences_unreadable' }
+    return { windows: [], degraded: 'occurrences_unreadable' }
   }
 
   return {
     windows: planScreenWindows({ occurrences: occurrences || [], config, zone: timezone }),
-    timezone,
     degraded: null,
   }
 }
@@ -143,8 +149,10 @@ export async function assertDisplayAtLocation(db, displayId, locationId) {
 /**
  * Assemble one box's plan.
  *
- * Read order: automation row, then (when enabled and the device is listed) the
- * studio zone and occurrences, then the display. The display is read even for
+ * Read order: automation row, the studio zone, then (when the automation is
+ * enabled and lists the device) occurrences, then the display. The zone is read
+ * whenever the device has a studio, so `timezone` is filled on a plan with no
+ * windows too; a failed zone read only degrades the plan when windows were due. The display is read even for
  * a disabled automation (marketing still needs the cast URL).
  *
  * @param {object} db service-role client
@@ -169,16 +177,25 @@ export async function buildScreenPlan(db, device, { nowMs = Date.now() } = {}) {
 
   const automation = await readAutomation(db, device.location_id)
   if (automation.error) degrade('automation_unreadable')
+  let config = null
   if (automation.row) {
-    const config = resolveScreenConfig(automation.row.config)
+    config = resolveScreenConfig(automation.row.config)
     classAppPackage = config.class_app_package
     stalePlanMode = config.stale_plan_mode
-    if (automation.row.enabled === true && isListed(config, device)) {
-      const planned = await planStudioWindows(db, device.location_id, config, nowMs)
-      windows = planned.windows
-      timezone = planned.timezone
-      if (planned.degraded) degrade(planned.degraded)
-    }
+  }
+  const windowsDue = Boolean(config) && automation.row.enabled === true && isListed(config, device)
+
+  let zoneFailed = false
+  if (device.location_id) {
+    const zone = await readZone(db, device.location_id)
+    timezone = zone.timezone
+    zoneFailed = zone.error
+    if (zoneFailed && windowsDue) degrade('zone_unreadable')
+  }
+  if (windowsDue && !zoneFailed) {
+    const planned = await planStudioWindows(db, device.location_id, config, timezone, nowMs)
+    windows = planned.windows
+    if (planned.degraded) degrade(planned.degraded)
   }
 
   const display = await readCastUrl(db, device)
@@ -228,8 +245,11 @@ export async function expectedModesFor(db, devices, { nowMs = Date.now() } = {})
     const automation = await readAutomation(db, locationId)
     if (automation.row && automation.row.enabled === true) {
       config = resolveScreenConfig(automation.row.config)
-      const planned = await planStudioWindows(db, locationId, config, nowMs)
-      if (!planned.degraded) windows = planned.windows
+      const zone = await readZone(db, locationId)
+      if (!zone.error) {
+        const planned = await planStudioWindows(db, locationId, config, zone.timezone, nowMs)
+        if (!planned.degraded) windows = planned.windows
+      }
     }
 
     for (const device of studioDevices) {

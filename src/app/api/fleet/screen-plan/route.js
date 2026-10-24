@@ -6,7 +6,8 @@
 // Called by the Android TV box every poll_seconds. Each call is also the box's
 // heartbeat: it stamps last_heartbeat_at plus the mode and app version the box
 // says it is in, which is what the fleet page reads to show "online / in the
-// right mode". The stamp is advisory and never fatal; the plan always goes out.
+// right mode". The stamp is advisory and never fatal. The plan goes out unless
+// it is degraded in a way that makes its windows untrustworthy (503, see below).
 //
 // Order: auth, rate limit, role check, device row, stamp, plan. All six boxes
 // share one IP, so the limiter key is the device, not the address. A device
@@ -25,6 +26,8 @@ export const dynamic = 'force-dynamic'
 
 const LOG = 'screen-plan'
 const MAX_VERSION_LENGTH = 40
+// `degraded` values whose empty windows cannot be told from "no class today".
+const UNTRUSTWORTHY_DEGRADATIONS = ['automation_unreadable', 'occurrences_unreadable', 'zone_unreadable']
 
 export async function GET(request) {
   const db = createServerClient()
@@ -84,6 +87,19 @@ export async function GET(request) {
   // not the box's, so it is a 500 the box retries on its next poll.
   try {
     const plan = await buildScreenPlan(db, row, { nowMs: Date.now() })
+    // A plan whose automation, occurrences or zone could not be read has empty
+    // windows that mean "unknown", not "no class": serving it 200 would make
+    // the box replace a good cached plan with nothing and drop to marketing in
+    // the middle of a class. 503 tells it to keep what it has and retry. (The
+    // heartbeat is already stamped: the box is alive.) A display failure only
+    // costs cast_url, so the windows stay trustworthy and the plan goes out.
+    if (UNTRUSTWORTHY_DEGRADATIONS.includes(plan.degraded)) {
+      logWarn(LOG, 'degraded plan withheld', { device: device.device_name, degraded: plan.degraded })
+      return NextResponse.json(
+        { ok: false, error: 'plan_unavailable', degraded: plan.degraded },
+        { status: 503 },
+      )
+    }
     return NextResponse.json(plan, { status: 200 })
   } catch (err) {
     logError(LOG, 'plan build failed', { device: device.device_name, message: err?.message ?? null })

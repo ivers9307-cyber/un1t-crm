@@ -16,6 +16,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { expectedModesFor } from '@/lib/screen-plan'
+import { logError, logWarn } from '@/lib/log'
 import FleetAdmin from './FleetAdmin'
 
 export const dynamic = 'force-dynamic'
@@ -26,10 +27,23 @@ export default async function FleetPage() {
 
   const db = createServerClient()
 
-  const { data: devices } = await db
+  const { data: devices, error: devicesError } = await db
     .from('fleet_devices')
     .select('device_name, location_id, role, label, api_token_hash, last_render_at, tv_display_id, last_heartbeat_at, reported_mode, reported_version, override_mode, override_until, locations(name), tv_displays(label)')
     .order('device_name', { ascending: true })
+
+  // A failed read is not an empty fleet: say so, rather than showing "no access"
+  // (or, to a master, a page that looks like nothing is registered).
+  if (devicesError) {
+    logError('fleet', 'fleet_devices unreadable on the fleet page', { error: devicesError.message })
+    return (
+      <div className="p-6">
+        <p className="text-sm text-red-700">
+          Couldn&apos;t load the studio devices. Reload to try again.
+        </p>
+      </div>
+    )
+  }
 
   // Scope in app code — this is a service-role read, so RLS does nothing here.
   // A device with no location is master-only: there is no location to check a
@@ -103,11 +117,19 @@ export default async function FleetPage() {
   // ENABLED studio's config does not list answers 'marketing'. One call for
   // all screens (it reads once per studio).
   const nowMs = Date.now()
-  const expected = await expectedModesFor(
-    db,
-    screenDevices.filter((d) => d.location_id),
-    { nowMs },
-  )
+  // The expectation is advisory: any throw (the zone read's bug class, a
+  // missing APP_URL) leaves the page up with dashes rather than taking it down.
+  let expected
+  try {
+    expected = await expectedModesFor(
+      db,
+      screenDevices.filter((d) => d.location_id),
+      { nowMs },
+    )
+  } catch (err) {
+    logWarn('fleet', 'expected screen modes unavailable', { error: err?.message ?? null })
+    expected = new Map()
+  }
 
   const screens = screenDevices.map((d) => {
     // Only an override that is still in force; an expired one is just a stale

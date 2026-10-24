@@ -181,6 +181,25 @@ describe('GET /api/fleet/screen-plan', () => {
     expect(logWarn).toHaveBeenCalledWith('screen-plan', expect.any(String), expect.anything())
   })
 
+  it('503 plan_unavailable when the plan could not read its windows; the heartbeat is still stamped', async () => {
+    buildScreenPlan.mockResolvedValue({ ...PLAN, degraded: 'occurrences_unreadable' })
+    const res = await GET(req('?mode=class_app&version=1.0.3'))
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ ok: false, error: 'plan_unavailable', degraded: 'occurrences_unreadable' })
+    expect(stamps()).toHaveLength(1)
+    expect(logWarn).toHaveBeenCalledWith('screen-plan', expect.any(String), {
+      device: 'hatch-tv1', degraded: 'occurrences_unreadable',
+    })
+  })
+
+  it('a display_unreadable plan is still 200: its windows are trustworthy', async () => {
+    const plan = { ...PLAN, cast_url: null, degraded: 'display_unreadable' }
+    buildScreenPlan.mockResolvedValue(plan)
+    const res = await GET(req('?mode=class_app'))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual(plan)
+  })
+
   it('500 Plan unavailable when the plan cannot be built, logged without the token', async () => {
     buildScreenPlan.mockRejectedValue(new Error('APP_URL is not set'))
     const res = await GET(req('?mode=marketing'))
