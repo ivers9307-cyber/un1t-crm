@@ -4,7 +4,10 @@
 // table, the CSV hand-over, and the record-only "Mark as refunded". An
 // awaiting_payment row of any age is listed as Unconfirmed with a Re-check
 // (the public status route asks the provider and runs the paid side effects),
-// so a manager can reconcile it against the provider dashboard. The server
+// so a manager can reconcile it against the provider dashboard. A paid row
+// whose receipt failed or never went, or that has no linked contact, gets the
+// same Re-check: a staff click always lands after the status route's
+// single-sender minute, so it re-runs the stamp-keyed side effects. The server
 // renders paid_at in the event's zone (paid_at_label), so nothing here does
 // zone maths.
 import { useCallback, useEffect, useState } from 'react'
@@ -21,6 +24,10 @@ const STATUS_CHIP = {
 }
 
 const RECEIPT_LABEL = { sent: 'Sent', suppressed: 'Suppressed', failed: 'Failed' }
+
+// Unconfirmed, or paid with a side effect still outstanding.
+const needsRecheck = (d) => d.status === 'awaiting_payment'
+  || (d.status === 'paid' && (!d.receipt_email_status || d.receipt_email_status === 'failed' || !d.contact_id))
 
 function StatusChip({ status }) {
   const chip = STATUS_CHIP[status] || { label: status, cls: 'bg-un1t-surface text-un1t-subtle' }
@@ -111,18 +118,18 @@ export default function EventDonationsList({ raceId, canMarkRefunded = false }) 
     {
       key: 'actions', header: '', align: 'right',
       render: (d) => {
-        if (d.status === 'awaiting_payment') {
-          return (
-            <Button type="button" variant="ghost" size="sm" loading={recheckingId === d.id} onClick={() => recheck(d)}>
-              Re-check
-            </Button>
-          )
-        }
-        return canMarkRefunded && d.status === 'paid' ? (
+        const recheckButton = needsRecheck(d) ? (
+          <Button type="button" variant="ghost" size="sm" loading={recheckingId === d.id} onClick={() => recheck(d)}>
+            Re-check
+          </Button>
+        ) : null
+        const refundButton = canMarkRefunded && d.status === 'paid' ? (
           <Button type="button" variant="ghost" size="sm" loading={busyId === d.id} onClick={() => markRefunded(d)}>
             Mark as refunded
           </Button>
         ) : null
+        if (!recheckButton && !refundButton) return null
+        return <div className="flex justify-end gap-1">{recheckButton}{refundButton}</div>
       },
     },
   ]

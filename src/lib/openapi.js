@@ -509,7 +509,7 @@ registry.registerPath({
   path: '/api/public/donations/{id}',
   tags: ['Public'],
   summary: 'Status of one donation (checkout and return-page polls)',
-  description: 'Anonymous, display-safe: no donor field (name, email, message) is ever returned. state: pending | paid | failed | refunded. Re-checks the provider while pending (capped at 100 per donation per 5 min). Every observation of a paid row runs the stamp-keyed side effects (contact, tag, consent, timeline note, receipt), so this poll also recovers a donor whose webhook never landed; in the first 60 s after paid_at only the observer that flipped the row runs them. While the payment can still be completed the response carries the checkout block.',
+  description: 'Anonymous, display-safe: no donor field (name, email, message) is ever returned. state: pending | paid | failed | refunded. Re-checks the provider while pending (capped at 100 per donation per 5 min). Every observation of a paid row runs the stamp-keyed side effects (contact, tag, consent, timeline note, receipt), so this poll also recovers a donor whose webhook never landed; in the first 60 s after paid_at only the observer that flipped the row sends the receipt. While the payment can still be completed the response carries the checkout block.',
   responses: {
     200: { description: 'Status returned: { id, state, paid, amount_cents, currency, match_multiplier, checkout }' },
     404: { description: 'Unknown donation', content: { 'application/json': { schema: ErrorResponse } } },

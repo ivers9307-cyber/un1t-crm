@@ -76,6 +76,15 @@ describe('GET /api/public/donations/[id]', () => {
     expect(mocks.sideEffects).toHaveBeenCalledWith(expect.objectContaining({ donation: PAID, observerWon: false }))
   })
 
+  it('logs a failed re-read after the mark and answers from the row it already had', async () => {
+    mocks.donation.mockResolvedValueOnce({ data: PENDING, error: null }).mockResolvedValueOnce({ data: null, error: { message: 'db down' } })
+    const r = await call()
+    expect(r.status).toBe(200)
+    expect(mocks.warn).toHaveBeenCalledWith('donation-poll', 're-read after mark failed', expect.objectContaining({ donationId: 'd1' }))
+    expect((await r.json()).data.state).toBe('pending')
+    expect(mocks.sideEffects).not.toHaveBeenCalled()
+  })
+
   it('answers paid false while pending', async () => {
     mocks.rateLimit.mockResolvedValue({ allowed: false })
     const body = await (await call()).json()

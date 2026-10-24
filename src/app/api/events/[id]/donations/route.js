@@ -110,6 +110,7 @@ export async function GET(request, props) {
       status: d.status,
       message: d.message,
       receipt_email_status: d.receipt_email_status,
+      contact_id: d.contact_id,
       refunded_at: d.refunded_at,
     }
   })

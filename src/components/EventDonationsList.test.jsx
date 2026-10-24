@@ -14,7 +14,7 @@ const PAYLOAD = {
     settings: { name: 'MS Ireland', match_multiplier: 2, include_entries: false },
     totals: { donations_cents: 2500, donations_matched_cents: 5000, entries_cents: 0, entries_matched_cents: 0, raised_cents: 5000, donation_count: 1 },
     donations: [
-      { id: 'd1', paid_at: '2026-07-01T11:30:00Z', paid_at_label: '1 Jul 2026, 12:30', donor_name: 'Ava Byrne', donor_email: 'ava@example.com', amount_cents: 2500, match_multiplier: 2, matched_cents: 5000, currency: 'EUR', status: 'paid', message: 'Go team', receipt_email_status: 'sent', refunded_at: null },
+      { id: 'd1', paid_at: '2026-07-01T11:30:00Z', paid_at_label: '1 Jul 2026, 12:30', donor_name: 'Ava Byrne', donor_email: 'ava@example.com', amount_cents: 2500, match_multiplier: 2, matched_cents: 5000, currency: 'EUR', status: 'paid', message: 'Go team', receipt_email_status: 'sent', refunded_at: null, contact_id: 'c1' },
       { id: 'd2', paid_at: null, paid_at_label: null, donor_name: 'Ben Doyle', donor_email: 'ben@example.com', amount_cents: 1000, match_multiplier: null, matched_cents: 0, currency: 'EUR', status: 'awaiting_payment', message: null, receipt_email_status: null, refunded_at: null },
       { id: 'd3', paid_at: '2026-07-01T10:00:00Z', paid_at_label: '1 Jul 2026, 11:00', donor_name: 'Cara Lee', donor_email: 'cara@example.com', amount_cents: 1500, match_multiplier: 2, matched_cents: 0, currency: 'EUR', status: 'refunded', message: null, receipt_email_status: 'suppressed', refunded_at: '2026-07-02T09:00:00Z' },
       { id: 'd4', paid_at: null, paid_at_label: null, donor_name: 'Dan Kerr', donor_email: 'dan@example.com', amount_cents: 2000, match_multiplier: null, matched_cents: 0, currency: 'EUR', status: 'expired', message: null, receipt_email_status: 'failed', refunded_at: null },
@@ -82,6 +82,29 @@ describe('EventDonationsList', () => {
     const buttons = screen.getAllByText('Re-check')
     expect(buttons).toHaveLength(1)
     expect(row.contains(buttons[0])).toBe(true)
+  })
+
+  it('also offers Re-check on a paid row whose receipt failed or never went, or with no linked contact; not on a settled one', async () => {
+    const paid = PAYLOAD.data.donations[0]
+    const rows = [
+      paid, // receipt sent, contact linked: settled
+      { ...paid, id: 'p2', donor_name: 'Eve Failed', receipt_email_status: 'failed' },
+      { ...paid, id: 'p3', donor_name: 'Finn Unsent', receipt_email_status: null },
+      { ...paid, id: 'p4', donor_name: 'Gia Unlinked', contact_id: null },
+    ]
+    const calls = stubFetch((url) => (url.startsWith('/api/public/') ? json({ success: true, data: { state: 'paid', paid: true } }) : json({ ...PAYLOAD, data: { ...PAYLOAD.data, donations: rows } })))
+    render(<EventDonationsList raceId="ev-1" canMarkRefunded />)
+    await waitFor(() => expect(screen.getByText('Eve Failed')).toBeTruthy())
+    const recheckIn = (name) => Array.from(screen.getByText(name).closest('tr').querySelectorAll('button')).filter((b) => b.textContent === 'Re-check')
+    expect(recheckIn('Ava Byrne')).toHaveLength(0)
+    expect(recheckIn('Eve Failed')).toHaveLength(1)
+    expect(recheckIn('Finn Unsent')).toHaveLength(1)
+    expect(recheckIn('Gia Unlinked')).toHaveLength(1)
+    // Mark as refunded still shows beside it for a manager.
+    expect(screen.getByText('Eve Failed').closest('tr').textContent).toContain('Mark as refunded')
+    fireEvent.click(recheckIn('Eve Failed')[0])
+    await waitFor(() => expect(calls.filter((c) => c.url === '/api/events/ev-1/donations')).toHaveLength(2))
+    expect(calls.filter((c) => c.url === '/api/public/donations/p2')).toHaveLength(1)
   })
 
   it('Re-check asks the public status route (which re-checks the provider) and reloads the list', async () => {

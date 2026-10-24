@@ -65,7 +65,8 @@ export async function GET(request, props) {
           })
           observerWon = marked?.changed === true
           // Re-read: the side effects get the row as stored, never a guess.
-          const { data: fresh } = await readDonation(db, id)
+          const { data: fresh, error: rereadErr } = await readDonation(db, id)
+          if (rereadErr) logWarn('donation-poll', 're-read after mark failed', { err: rereadErr, donationId: id })
           if (fresh) row = fresh
         }
       }

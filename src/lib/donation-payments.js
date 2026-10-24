@@ -18,9 +18,11 @@
 // that try. Each step is therefore keyed on its own stamp on the row
 // (contact_id, receipt_email_sent_at), never on `changed`, and each stamp is
 // written AFTER its effect. The browser poll and the webhook routinely observe
-// the same payment seconds apart, so for the first minute after paid_at only
-// the observer whose mark flipped the row (`observerWon`) runs the steps; any
-// other observer defers, and a later observation retries what is still unset.
+// the same payment seconds apart. The contact leg is compare-and-set safe on
+// its contact_id stamp, so it runs on every observation; the receipt is not
+// (a send cannot be taken back), so for the first minute after paid_at only the
+// observer whose mark flipped the row (`observerWon`) sends it, and any other
+// observer defers it to a later observation (staff Re-check included).
 
 import { paymentsFor } from '@/lib/payments'
 import { resolvePaymentProvider, hostCanTakePayments } from '@/lib/event-hosts'
@@ -34,8 +36,8 @@ import { sendDonationReceipt } from '@/lib/donation-receipt'
 import { logError, logWarn } from '@/lib/log'
 
 const STRIPE_CONNECT = 'stripe_connect'
-// How long after paid_at an observer that did not flip the row leaves the side
-// effects to the one that did.
+// How long after paid_at an observer that did not flip the row leaves the
+// receipt to the one that did.
 const SINGLE_OBSERVER_WINDOW_MS = 60_000
 
 /** Every donations column the routes select. */
@@ -265,11 +267,12 @@ async function linkDonorContact({ db, donation, race, settings, ipAddress, out }
  *
  * `observerWon` is true only when the caller's markDonationPaymentStatus
  * returned `changed: true`. Any other observer (a lost compare-and-set, or a
- * poll that found the row already paid) does nothing while paid_at is under a
- * minute old and answers every step 'deferred': the winner is sending, and a
- * later observation retries anything it left unstamped.
+ * poll that found the row already paid) still runs the contact leg (guarded by
+ * its contact_id stamp) but, while paid_at is under a minute old, leaves the
+ * receipt to the winner and answers receipt 'deferred'; a later observation
+ * sends it if its stamp is still null.
  *
- * @returns {Promise<{ contact: 'linked'|'skipped'|'failed'|'deferred', consent: 'applied'|'skipped'|'failed'|'deferred',
+ * @returns {Promise<{ contact: 'linked'|'skipped'|'failed', consent: 'applied'|'skipped'|'failed',
  *   receipt: 'sent'|'suppressed'|'failed'|'skipped'|'deferred' }>}
  */
 export async function runPaidDonationSideEffects({ db, donation, race, ipAddress = null, observerWon = false, now = () => Date.now() }) {
@@ -279,12 +282,6 @@ export async function runPaidDonationSideEffects({ db, donation, race, ipAddress
   if (donation?.status !== 'paid') {
     logWarn('donation-payments', 'paid side effects refused: the row passed is not paid', { donationId: donation?.id, status: donation?.status })
     return out
-  }
-  if (!observerWon) {
-    const paidMs = Date.parse(donation.paid_at || '')
-    if (Number.isFinite(paidMs) && now() - paidMs < SINGLE_OBSERVER_WINDOW_MS) {
-      return { contact: 'deferred', consent: 'deferred', receipt: 'deferred' }
-    }
   }
   let contactId = donation.contact_id || null
   const hasEmail = !!String(donation.donor_email || '').trim()
@@ -305,7 +302,11 @@ export async function runPaidDonationSideEffects({ db, donation, race, ipAddress
     }
   }
 
-  if (!donation.receipt_email_sent_at && hasEmail) {
+  const paidMs = Date.parse(donation.paid_at || '')
+  const receiptDeferred = !observerWon && Number.isFinite(paidMs) && now() - paidMs < SINGLE_OBSERVER_WINDOW_MS
+  if (!donation.receipt_email_sent_at && hasEmail && receiptDeferred) {
+    out.receipt = 'deferred'
+  } else if (!donation.receipt_email_sent_at && hasEmail) {
     try {
       const r = await sendDonationReceipt({
         db,

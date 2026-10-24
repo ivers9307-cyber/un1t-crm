@@ -53,7 +53,7 @@ const hoursAgo = (h) => new Date(Date.now() - h * 3600 * 1000).toISOString()
 const PAID = {
   id: 'd1', race_event_id: 'ev-1', location_id: 'loc-1', donor_name: 'Ava, "AJ" Byrne', donor_email: 'ava@example.com',
   message: 'Go\nteam', amount_cents: 2500, currency: 'EUR', match_multiplier: 2, status: 'paid',
-  paid_at: '2026-07-01T11:30:00.000Z', created_at: '2026-07-01T11:00:00.000Z', refunded_at: null, receipt_email_status: 'sent',
+  paid_at: '2026-07-01T11:30:00.000Z', created_at: '2026-07-01T11:00:00.000Z', refunded_at: null, receipt_email_status: 'sent', contact_id: 'c1',
 }
 
 beforeEach(() => {
@@ -97,6 +97,8 @@ describe('GET /api/events/[id]/donations', () => {
     const { data } = await res.json()
     expect(data.donations.map((d) => d.id)).toEqual(['d1', 'd2', 'd3', 'd4'])
     expect(data.donations[1].status).toBe('awaiting_payment')
+    // The page offers a Re-check on a paid row with no linked contact.
+    expect(data.donations[0].contact_id).toBe('c1')
     expect(data.totals).toEqual({
       donations_cents: 2500, donations_matched_cents: 5000, entries_cents: 0, entries_matched_cents: 0, raised_cents: 5000, donation_count: 1,
     })

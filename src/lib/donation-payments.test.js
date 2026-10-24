@@ -300,25 +300,32 @@ describe('runPaidDonationSideEffects', () => {
     expect(r).toMatchObject({ contact: 'linked', receipt: 'sent' })
     expect(logError).toHaveBeenCalledWith('donation-payments', expect.stringContaining('note'), expect.anything())
   })
-  describe('single observer inside the first minute (observerWon)', () => {
+  describe('single receipt sender inside the first minute (observerWon)', () => {
     const PAID_AT = '2026-10-24T12:00:00.000Z'
     const fresh = { ...PAID, paid_at: PAID_AT }
     const at = (secs) => () => Date.parse(PAID_AT) + secs * 1000
-    it('a losing observer inside 60 s does nothing: all deferred, no contact, no receipt, no writes', async () => {
+    it('a losing observer inside 60 s still runs the contact leg (stamp-guarded) but defers the receipt', async () => {
       const db = fakeDb()
-      const r = await runPaidDonationSideEffects({ db, donation: fresh, race: RACE, observerWon: false, now: at(30) })
-      expect(r).toEqual({ contact: 'deferred', consent: 'deferred', receipt: 'deferred' })
-      expect(findOrCreateRaceContact).not.toHaveBeenCalled()
+      const r = await runPaidDonationSideEffects({ db, donation: { ...fresh, marketing_opt_in: true }, race: RACE, observerWon: false, now: at(30) })
+      expect(r).toEqual({ contact: 'linked', consent: 'applied', receipt: 'deferred' })
+      expect(findOrCreateRaceContact).toHaveBeenCalledTimes(1)
+      expect(db.writes.find((w) => w.fields.contact_id)).toBeTruthy()
+      expect(emitEvent).toHaveBeenCalledTimes(1)
+      expect(db.inserts.filter((w) => w.table === 'notes')).toHaveLength(1)
       expect(sendTransactionalEmail).not.toHaveBeenCalled()
-      expect(db.writes).toEqual([])
-      expect(db.inserts).toEqual([])
+      expect(db.writes.some((w) => 'receipt_email_status' in w.fields || 'receipt_email_sent_at' in w.fields)).toBe(false)
     })
-    it('the same losing observer at 61 s runs the stamp-keyed steps', async () => {
+    it('the same losing observer at 61 s sends the receipt when its stamp is null', async () => {
       const r = await runPaidDonationSideEffects({ db: fakeDb(), donation: fresh, race: RACE, observerWon: false, now: at(61) })
       expect(r).toMatchObject({ contact: 'linked', receipt: 'sent' })
       expect(sendTransactionalEmail).toHaveBeenCalledTimes(1)
     })
-    it('the winner runs immediately', async () => {
+    it('at 61 s a receipt already stamped is not sent again', async () => {
+      const r = await runPaidDonationSideEffects({ db: fakeDb(), donation: { ...fresh, contact_id: 'c1', receipt_email_sent_at: 'earlier' }, race: RACE, observerWon: false, now: at(61) })
+      expect(r.receipt).toBe('skipped')
+      expect(sendTransactionalEmail).not.toHaveBeenCalled()
+    })
+    it('the winner sends immediately', async () => {
       const r = await runPaidDonationSideEffects({ db: fakeDb(), donation: fresh, race: RACE, observerWon: true, now: at(1) })
       expect(r).toMatchObject({ contact: 'linked', receipt: 'sent' })
       expect(findOrCreateRaceContact).toHaveBeenCalledTimes(1)
