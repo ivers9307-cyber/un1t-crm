@@ -212,6 +212,31 @@ async function trialProducts(db, locationId) {
   return { rows, error: null }
 }
 
+// The paid-trial block's product picker: active products with a price at this
+// studio, by title. A failed read is an empty list, logged.
+async function paidProducts(db, locationId) {
+  const { data, error } = await db
+    .from('un1t_products')
+    .select('un1t_id, title, type, status, price_cents, currency')
+    .eq('location_id', locationId)
+    .eq('status', 'active')
+    .gt('price_cents', 0)
+  if (error) {
+    logError(LOG, 'paid products read failed', { locationId, err: safeErr(error) })
+    return []
+  }
+  return (data || [])
+    .filter((p) => p.status === 'active' && Number(p.price_cents) > 0 && p.un1t_id)
+    .map((p) => ({
+      un1t_id: String(p.un1t_id),
+      title: p.title || String(p.un1t_id),
+      price_cents: Number(p.price_cents),
+      currency: p.currency || 'EUR',
+      type: p.type || null,
+    }))
+    .sort((a, b) => a.title.localeCompare(b.title))
+}
+
 async function writeSection(db, locationId) {
   const { data: loc, error } = await db.from('locations').select('id, settings').eq('id', locationId).maybeSingle()
   if (error || !loc) {
@@ -219,8 +244,9 @@ async function writeSection(db, locationId) {
     return { unreadable: true }
   }
   const { rows } = await trialProducts(db, locationId)
+  const paid = await paidProducts(db, locationId)
   const permissions = await permissionLine(db, locationId)
-  return { ...writeFields(loc.settings), trial_products: rows, permissions }
+  return { ...writeFields(loc.settings), trial_products: rows, paid_products: paid, permissions }
 }
 
 // UN1TWRITE.12/24 — what the Writes section shows: booleans and the typed

@@ -308,7 +308,7 @@ export const BLOCK_TYPES = [
   { type: 'event',       label: 'Event signup', description: 'Embed the full signup form for a chosen event.',        factory: EVENT_DEFAULT },
   { type: 'lead_form',   label: 'Lead form',    description: 'Waitlist / interest capture — name, email, phone + consent.',  factory: LEAD_FORM_DEFAULT },
   { type: 'class_funnel', label: 'Glofox Class Booking Funnel', description: 'Pick a class, enter details, book. Live Glofox classes, or a timetable you type in for a studio without Glofox (staff then book by hand). Optional free-consult upsell.', factory: CLASS_FUNNEL_DEFAULT },
-  { type: 'paid_trial',  label: 'Paid trial product', description: 'A paid trial (e.g. 2 weeks for €39) sold from its own page: price panel, buyer form, embedded checkout, then the Glofox plan is put on their account.', factory: PAID_TRIAL_DEFAULT },
+  { type: 'paid_trial',  label: 'Paid trial product', description: 'A paid trial (e.g. 2 weeks for €39) sold from its own page: price panel, buyer form, embedded checkout, then the Glofox plan, or the un1t.online product, is put on their account.', factory: PAID_TRIAL_DEFAULT },
   { type: 'pillars',     label: 'Pillars',      description: '3 value-prop tiles. Each can have a photo.',           factory: PILLARS_DEFAULT },
   { type: 'gallery',     label: 'Photo gallery',description: 'Grid of photos with optional captions.',                factory: GALLERY_DEFAULT },
   { type: 'embed',       label: 'Video embed',  description: 'YouTube or Instagram video embed.',                    factory: EMBED_DEFAULT },
