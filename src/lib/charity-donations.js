@@ -9,6 +9,10 @@ export const CHARITY_DEFAULTS = Object.freeze({
   // CHARITY.13 — an optional YouTube or Instagram link shown beside the event
   // summary under the two cards. Blank = no video.
   video_url: '',
+  // CHARITY.14 — or a video the operator uploaded to the branding bucket
+  // (public URL under race-video/<event id>/). When both are set the
+  // uploaded file is what the page plays.
+  video_file_url: '',
   heading: "Can't race? Give a rep.",
   blurb: 'Every euro goes to {{charity}}.',
   presets_cents: Object.freeze([1000, 2500, 5000, 10000]),
@@ -33,6 +37,30 @@ export const CHARITY_DEFAULTS = Object.freeze({
 const text = z.string().max(4000)
 const cents = z.number().int().positive()
 
+/**
+ * CHARITY.14 — the only video files the page will play are ones the event
+ * form uploaded to the public branding bucket under race-video/<event id>/,
+ * so an operator (or an API caller) cannot point the page at an arbitrary host.
+ */
+export const EVENT_VIDEO_PUBLIC_PATH = '/storage/v1/object/public/branding/race-video/'
+export function isUploadedEventVideoUrl(url) {
+  if (typeof url !== 'string') return false
+  let u
+  try { u = new URL(url) } catch { return false }
+  return u.protocol === 'https:' && u.pathname.startsWith(EVENT_VIDEO_PUBLIC_PATH) && /\.(mp4|webm|mov)$/i.test(u.pathname)
+}
+
+/**
+ * What the public page plays: the uploaded file when there is one, else the
+ * embeddable form of the link, else null. The raw link never leaves the server.
+ * @returns {{ provider: 'file', src: string, poster: string|null } | { provider: string, embedUrl: string } | null}
+ */
+export function resolveCharityVideo(settings, { posterUrl = null } = {}) {
+  const file = settings?.video_file_url
+  if (file && isUploadedEventVideoUrl(file)) return { provider: 'file', src: file, poster: posterUrl || null }
+  return parseEmbed(settings?.video_url) || null
+}
+
 /** Validates what an operator saves into race_events.charity. Every key optional. */
 export const CharitySettingsSchema = z
   .object({
@@ -55,10 +83,14 @@ export const CharitySettingsSchema = z
     receipt_subject: text.optional(),
     receipt_intro: text.optional(),
     video_url: z.string().trim().max(2000).optional(),
+    video_file_url: z.string().trim().max(2000).optional(),
   })
   .superRefine((s, ctx) => {
     if (s.video_url && !parseEmbed(s.video_url)) {
       ctx.addIssue({ code: 'custom', path: ['video_url'], message: 'Use a YouTube or Instagram link' })
+    }
+    if (s.video_file_url && !isUploadedEventVideoUrl(s.video_file_url)) {
+      ctx.addIssue({ code: 'custom', path: ['video_file_url'], message: 'Upload the video through the event form' })
     }
     const min = s.min_cents ?? CHARITY_DEFAULTS.min_cents
     const max = s.max_cents ?? CHARITY_DEFAULTS.max_cents

@@ -89,7 +89,32 @@ export async function uploadLandingMedia({ file, locationId, kind = 'image', onP
  * transcodes non-MP4/WebM + oversized clips to a 720p MP4 before upload.
  * Returns { success, url?, error? }.
  */
-async function uploadVideoDirect({ file, locationId, onProgress, autoplay = true }) {
+const LANDING_SIGN_ENDPOINT = '/api/landing-page-settings/media/signed-upload'
+
+/**
+ * CHARITY.14 — upload a charity-day video for an EVENT (tap-to-play, so the
+ * bucket ceiling applies). The sign step is the event's own route, which gates
+ * on the event's studio and mints a path under race-video/<event id>/.
+ * Returns { success, url?, error? } like uploadLandingMedia.
+ *
+ * @param {{ file: File, eventId: string, onProgress?: Function }} args
+ */
+export async function uploadEventVideo({ file, eventId, onProgress }) {
+  if (!file || !eventId) return { success: false, error: 'Missing file or event.' }
+  return uploadVideoDirect({
+    file,
+    onProgress,
+    autoplay: false,
+    signEndpoint: `/api/events/${eventId}/video/signed-upload`,
+    signBody: (contentType) => ({ content_type: contentType }),
+  })
+}
+
+async function uploadVideoDirect({
+  file, locationId, onProgress, autoplay = true,
+  signEndpoint = LANDING_SIGN_ENDPOINT,
+  signBody = (contentType) => ({ location_id: locationId, kind: 'video', content_type: contentType }),
+}) {
   if (!(file.type || '').startsWith('video/')) {
     return { success: false, error: 'Unsupported file. Please choose a video (MP4, WebM, or MOV).' }
   }
@@ -125,10 +150,10 @@ async function uploadVideoDirect({ file, locationId, onProgress, autoplay = true
   // 1. Mint a signed upload URL (auth + path decided server-side).
   let r
   try {
-    r = await fetch('/api/landing-page-settings/media/signed-upload', {
+    r = await fetch(signEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ location_id: locationId, kind: 'video', content_type: toUpload.type }),
+      body: JSON.stringify(signBody(toUpload.type)),
     })
   } catch (e) {
     return { success: false, error: `Network error: ${e?.message || e}` }

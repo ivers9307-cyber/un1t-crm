@@ -5,14 +5,13 @@
 // info sidebar. Mirrors the shape of /api/public/events/[slug].
 
 import { NextResponse } from 'next/server'
-import { parseEmbed } from '@/lib/landing-page-embed'
 import { createServerClient } from '@/lib/supabase'
 import { loadForMode } from '@/lib/event-signups'
 import { eventIsPublic } from '@/lib/host-events'
 import { isHostAnchorLocation, pickAudienceVenueName } from '@/lib/event-comms-location'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { getOrgBrandName } from '@/lib/location-branding'
-import { resolveCharitySettings, computeCharityTotals } from '@/lib/charity-donations'
+import { resolveCharitySettings, computeCharityTotals, resolveCharityVideo } from '@/lib/charity-donations'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -205,8 +204,9 @@ async function buildPublicCharity(db, race) {
     thank_you_title: s.thank_you_title,
     thank_you_body: s.thank_you_body,
     thank_you_body_unmatched: s.thank_you_body_unmatched,
-    // CHARITY.13 — the embeddable form only; the raw link stays server-side.
-    video: parseEmbed(s.video_url) || null,
+    // CHARITY.13/14 — the uploaded file (hero image as its poster) or the
+    // embeddable form of the link; the raw link stays server-side.
+    video: resolveCharityVideo(s, { posterUrl: race.hero_image_url || null }),
   }
   if (!s.show_total) return block
 

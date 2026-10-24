@@ -8,6 +8,8 @@ import {
   donationPublicState,
   formatCents,
   showsDonationsLink,
+  isUploadedEventVideoUrl,
+  resolveCharityVideo,
 } from './charity-donations'
 
 describe('computeCharityTotals (CHARITY.2)', () => {
@@ -158,5 +160,29 @@ describe('video_url (CHARITY.13)', () => {
     const r = CharitySettingsSchema.safeParse({ video_url: 'https://example.com/video.mp4' })
     expect(r.success).toBe(false)
     expect(r.error.issues[0].path).toEqual(['video_url'])
+  })
+})
+
+describe('video_file_url (CHARITY.14)', () => {
+  const FILE = 'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/race-video/ev-1/abc.mp4'
+  it('accepts only an upload under race-video/ in the public branding bucket', () => {
+    expect(isUploadedEventVideoUrl(FILE)).toBe(true)
+    expect(isUploadedEventVideoUrl('https://evil.example.com/storage/v1/object/public/branding/race-video/x.mp4'.replace('evil.example.com/storage', 'evil.example.com/not'))).toBe(false)
+    expect(isUploadedEventVideoUrl('https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/landing-page/loc/abc.mp4')).toBe(false)
+    expect(isUploadedEventVideoUrl('http://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/race-video/ev-1/abc.mp4')).toBe(false)
+    expect(isUploadedEventVideoUrl(FILE.replace('.mp4', '.exe'))).toBe(false)
+    expect(CharitySettingsSchema.safeParse({ video_file_url: FILE }).success).toBe(true)
+    expect(CharitySettingsSchema.safeParse({ video_file_url: '' }).success).toBe(true)
+    const r = CharitySettingsSchema.safeParse({ video_file_url: 'https://example.com/a.mp4' })
+    expect(r.success).toBe(false)
+    expect(r.error.issues[0].path).toEqual(['video_file_url'])
+  })
+  it('resolveCharityVideo: the file wins over the link, carries the poster, and the link is the fallback', () => {
+    expect(resolveCharityVideo({ video_file_url: FILE, video_url: 'https://youtu.be/abc' }, { posterUrl: 'https://x/hero.png' }))
+      .toEqual({ provider: 'file', src: FILE, poster: 'https://x/hero.png' })
+    expect(resolveCharityVideo({ video_file_url: '', video_url: 'https://youtu.be/abc' }))
+      .toEqual({ provider: 'youtube', embedUrl: 'https://www.youtube.com/embed/abc' })
+    expect(resolveCharityVideo({ video_file_url: 'https://example.com/a.mp4', video_url: '' })).toBeNull()
+    expect(resolveCharityVideo({})).toBeNull()
   })
 })

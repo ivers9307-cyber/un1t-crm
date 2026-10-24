@@ -1129,18 +1129,31 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
             {signupCard}
           </div>
           {/* CHARITY.13 — the operator's video beside the summary when set. */}
-          {race.charity?.video?.embedUrl ? (
+          {race.charity?.video?.provider ? (
             <div className="mt-12 grid gap-8 md:grid-cols-2 md:items-start">
               {eventDetails}
               <div className={`overflow-hidden rounded-2xl border border-white/10 bg-black ${race.charity.video.provider === 'instagram' ? 'min-h-[600px]' : 'aspect-video'}`}>
-                <iframe
-                  src={race.charity.video.embedUrl}
-                  title={`${race.name} video`}
-                  className="w-full h-full"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                  allowFullScreen
-                  loading="lazy"
-                />
+                {race.charity.video.provider === 'file' ? (
+                  // CHARITY.14 — an uploaded file plays in a plain player, tap to
+                  // play, with the hero image as its poster.
+                  <video
+                    src={race.charity.video.src}
+                    poster={race.charity.video.poster || undefined}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <iframe
+                    src={race.charity.video.embedUrl}
+                    title={`${race.name} video`}
+                    className="w-full h-full"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                    loading="lazy"
+                  />
+                )}
               </div>
             </div>
           ) : (

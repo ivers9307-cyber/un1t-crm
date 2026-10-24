@@ -30,7 +30,7 @@ import { useRouter } from 'next/navigation'
 import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail, HeartHandshake } from 'lucide-react'
 import Link from 'next/link'
 import { eventSlug } from '@/lib/event-slug'
-import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
+import { compressImageForUpload, parseUploadResponse, uploadEventVideo } from '@/lib/landing-media-upload'
 import { generateWaveTimes } from '@/lib/wave-generate'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { CHARITY_DEFAULTS, CharitySettingsSchema, formatCents } from '@/lib/charity-donations'
@@ -1287,6 +1287,7 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
         onEnabled={setCharityEnabled}
         values={charityForm}
         onChange={setCharityField}
+        eventId={isEditing ? race?.id || null : null}
       />
 
       {/* TV-display logos. Race-only — non-race kinds don't have a
@@ -1754,7 +1755,7 @@ function EventEmailFields({
 const CHARITY_TEXT_KEYS = [
   'name', 'heading', 'blurb', 'match_label', 'consent_label',
   'thank_you_title', 'thank_you_body', 'thank_you_body_unmatched',
-  'receipt_subject', 'receipt_intro', 'video_url',
+  'receipt_subject', 'receipt_intro', 'video_url', 'video_file_url',
 ]
 const centsToEuroText = (c) => (Number.isFinite(Number(c)) && c !== null && c !== undefined ? String(Number(c) / 100) : '')
 
@@ -1840,10 +1841,26 @@ function charityFromForm(f) {
 
 // CHARITY.9 — the "Charity day" section: a switch plus every field of the
 // charity settings. Presentation only; state lives in RaceEventForm.
-function CharityDaySection({ enabled, onEnabled, values, onChange }) {
+function CharityDaySection({ enabled, onEnabled, values, onChange, eventId = null }) {
   const input = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
   const labelCls = 'block text-sm text-un1t-subtle mb-1'
   const hintCls = 'text-[11px] text-un1t-muted mt-1'
+  // CHARITY.14 — an uploaded video file (straight to Storage via the event's
+  // signed-upload route; needs a saved event for the storage path).
+  const [videoBusy, setVideoBusy] = useState(false)
+  const [videoPct, setVideoPct] = useState(null)
+  const [videoErr, setVideoErr] = useState(null)
+  async function pickVideo(file) {
+    if (!file || !eventId) return
+    setVideoBusy(true)
+    setVideoErr(null)
+    setVideoPct(0)
+    const r = await uploadEventVideo({ file, eventId, onProgress: (p) => setVideoPct(Number.isFinite(p?.percent) ? Math.round(p.percent) : null) })
+    setVideoBusy(false)
+    setVideoPct(null)
+    if (r?.success && r.url) onChange('video_file_url', r.url)
+    else setVideoErr(r?.error || 'Upload failed. Please try again.')
+  }
   const tagHint = (
     <>Merge tags: <code>{'{{charity}}'}</code>, <code>{'{{brand}}'}</code>, <code>{'{{first_name}}'}</code>, <code>{'{{amount}}'}</code>, <code>{'{{matched}}'}</code>.</>
   )
@@ -1946,6 +1963,31 @@ function CharityDaySection({ enabled, onEnabled, values, onChange }) {
           </div>
           {text('consent_label', 'Consent checkbox label', 'Blank = the default organisation line')}
           {text('video_url', 'Video beside the event summary (YouTube or Instagram link)', 'https://youtu.be/… — blank = no video')}
+          <div>
+            <label htmlFor="charity-video-file" className={labelCls}>Or upload a video file</label>
+            {!eventId ? (
+              <p className={hintCls}>Save the event first — you can upload a video once it exists.</p>
+            ) : values.video_file_url ? (
+              <div className="flex items-center gap-3">
+                <video src={values.video_file_url} controls preload="metadata" className="h-20 rounded-md bg-black" />
+                <button type="button" onClick={() => onChange('video_file_url', '')} className="text-xs text-red-700 hover:underline">
+                  Remove video
+                </button>
+              </div>
+            ) : (
+              <input
+                id="charity-video-file"
+                type="file"
+                accept="video/mp4,video/webm,video/quicktime"
+                disabled={videoBusy}
+                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; pickVideo(f) }}
+                className="block text-sm text-un1t-subtle"
+              />
+            )}
+            {videoBusy && <p className={hintCls}>Uploading{videoPct != null ? ` ${videoPct}%` : '…'}</p>}
+            {videoErr && <p className="text-xs text-red-700 mt-1">{videoErr}</p>}
+            <p className={hintCls}>MP4, WebM or MOV up to 200MB, compressed in the browser where possible. When both a link and a file are set, the file is what plays; the hero image is its poster.</p>
+          </div>
 
           <div className="pt-4 border-t border-un1t-border space-y-4">
             <div>
