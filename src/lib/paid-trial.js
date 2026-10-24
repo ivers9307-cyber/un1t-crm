@@ -14,6 +14,12 @@ const DEFAULT_ACTIVE_MEMBER_TEXT = "It looks like you already have an active mem
 const DEFAULT_HELP_CTA_LABEL = 'I need help'
 const DEFAULT_HELP_SENT_TEXT = 'Thanks. The team will be in touch shortly.'
 
+// TRIALSTUDIO.10 — what a Hatch Street buyer back from un1t.online's checkout
+// reads while the 2-minute cron settles the purchase off the 15-minute
+// mirror: never "it's on your account" before it is. The block's
+// pending_body; this is its default (PAID_TRIAL_DEFAULT uses it too).
+export const PAID_TRIAL_PENDING_BODY = "Thanks, your payment is being confirmed. un1t.online will email your receipt and we'll have your trial on your account shortly."
+
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
 
 /**

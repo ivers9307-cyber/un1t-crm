@@ -1174,6 +1174,11 @@ function PaidTrialEdit({ block, onUpdate, locationId, membershipSource }) {
       <Field label="Paid — message">
         <Textarea value={block.done_body || ''} onChange={(v) => onUpdate({ done_body: v })} maxLength={400} rows={2} />
       </Field>
+      {isUn1tOnline && (
+        <Field label="Being confirmed — message" hint="Shown after un1t.online's checkout until the purchase is confirmed (up to about 15 minutes).">
+          <Textarea value={block.pending_body || ''} onChange={(v) => onUpdate({ pending_body: v })} maxLength={400} rows={2} />
+        </Field>
+      )}
       {!isUn1tOnline && (
         <Field
           label="Glofox product granted after payment"

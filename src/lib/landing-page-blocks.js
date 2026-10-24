@@ -19,6 +19,7 @@
 
 import { z } from 'zod'
 import { classFunnelCtaLabel, classFunnelShownOnLanding } from '@/lib/public-landing'
+import { PAID_TRIAL_PENDING_BODY } from '@/lib/paid-trial'
 
 // Stable id helper — a uuid string. We keep ids in the saved JSON
 // because @dnd-kit needs stable per-item keys for smooth drag
@@ -246,6 +247,8 @@ const PAID_TRIAL_DEFAULT = ({ brand = '' } = {}) => ({
   consent_label:  classFunnelConsentDefault(brand),
   done_title:     "You're in 🎉",
   done_body:      'Your 14 Day Reset is on your account. Check your email for how to book your first class.',
+  // TRIALSTUDIO.10 — a un1t.online (Hatch Street) purchase not settled yet.
+  pending_body:   PAID_TRIAL_PENDING_BODY,
   // TRIALSTUDIO.2 — the studio choice. studio_label '' ⇒ the page shows the
   // studio's own name. un1t_product_id names the un1t.online product a Hatch
   // Street block sells (priced from the mirrored un1t_products row, not here).
