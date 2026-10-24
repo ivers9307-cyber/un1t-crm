@@ -431,18 +431,34 @@ registry.registerPath({
   },
 })
 
+// TRIALSTUDIO.6 — the /trial purchase body (the route's own Zod schema is the authority).
+const TrialPurchaseStart = z.object({
+  studio: z.enum(['stillorgan', 'hatch']),
+  first_name: z.string().min(1).max(120),
+  last_name: z.string().min(1).max(120),
+  email: z.string().email().max(320),
+  phone: z.string().min(1).max(50),
+  consent: z.literal(true),
+  attribution: z.record(z.string(), z.string()).optional(),
+  lead_event_id: z.string().optional(),
+  visit: z.object({ referrer: z.string().optional(), landing_path: z.string().optional() }).optional(),
+  terms_accepted: z.boolean().optional().openapi({ description: 'Hatch only: the un1t.online terms and waiver tick; required (true) when the studio\'s un1t.online writes are on.' }),
+}).openapi('TrialPurchaseStart')
+
 registry.registerPath({
   method: 'post',
   path: '/api/public/trial-purchases',
   tags: ['Public'],
-  summary: 'Start a paid trial purchase (PAIDTRIAL.1, the /trial page)',
-  description: 'Anonymous. Rate-limited to 8 per landing path per IP per 15 min. The studio and the product come from the landing row named by `path` (its paid_trial block); the price is the block\'s, never the body\'s. Captures the lead like the class funnel (contact, lead_source, attribution, consent, deal, Meta Lead), inserts an awaiting_payment trial_purchases row and opens the provider payment. Returns { purchaseId, checkout: { provider, token, url }, amount_cents, currency, product_name }. 400 not_configured when the page sells nothing (no block, no price, or no Glofox product set).',
+  summary: 'Start a paid trial purchase (PAIDTRIAL.1, TRIALSTUDIO.6, the /trial page)',
+  request: { body: { content: { 'application/json': { schema: TrialPurchaseStart } } } },
+  description: 'Anonymous. Rate-limited to 8 per landing path per IP per 15 min. Body: { studio: \'stillorgan\' | \'hatch\' (required), first_name, last_name, email, phone, consent: true, attribution?, lead_event_id?, visit?, terms_accepted?: boolean }. The product comes from the chosen studio\'s paid_trial landing block; the price is the block\'s (Hatch: the mirrored un1t.online product\'s), never the body\'s. Captures the lead like the class funnel (contact, lead_source, attribution, consent, deal, Meta Lead) against the chosen studio. Stillorgan: a buyer with a trial history is refused before any row or payment (200 { success: false, code: \'trial_used\', error, help: { cta_label } }); otherwise inserts an awaiting_payment trial_purchases row and opens the Revolut payment, returning { purchaseId, checkout: { provider, token, url }, amount_cents, currency, product_name }. Hatch: no CRM charge; 400 terms_required (with the terms payload) without terms_accepted when the studio\'s un1t.online writes are on; an active member is refused before any un1t.online call (200 code active_member); otherwise inserts the row, finds or creates the un1t.online account and returns { purchaseId, redirect_url (un1t.online\'s hosted checkout, returned once, never stored), amount_cents, currency, product_name }. A refused or unclear un1t.online answer files the row for a call and answers 200 { success: false, code: \'help_filed\', error }.',
   responses: {
-    200: { description: 'Purchase row created and checkout opened' },
-    400: { description: 'Validation failed, not_configured or payments_unavailable', content: { 'application/json': { schema: ErrorResponse } } },
+    200: { description: 'Checkout opened (Stillorgan checkout / Hatch redirect_url), or a refusal state: trial_used, active_member, help_filed' },
+    400: { description: 'Validation failed (including an unknown studio), not_configured, payments_unavailable or terms_required', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
-    502: { description: 'Provider checkout could not be opened', content: { 'application/json': { schema: ErrorResponse } } },
-    503: { description: 'Landing row or location unreadable', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Lead capture or purchase row insert failed', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Provider checkout could not be opened (Stillorgan)', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'unavailable: studio config, location, contact or eligibility read unreadable, or un1t.online busy (the row is marked failed); try again', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

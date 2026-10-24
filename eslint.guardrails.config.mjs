@@ -487,6 +487,10 @@ const config = [
       // the write-ahead row, its finalise and every mirror read judge their
       // error (a failed write-ahead row sends nothing).
       'src/lib/agent/un1t-booking.js',
+      // TRIALSTUDIO.6 — the /trial page's Hatch Street leg: born clean; every
+      // trial_purchases stamp reads its error (a un1t_user_id that cannot be
+      // stamped stops the checkout).
+      'src/lib/trial-purchase-un1t-checkout.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },
