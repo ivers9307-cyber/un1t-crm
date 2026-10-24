@@ -51,6 +51,16 @@ describe('fleet-health cron — screen pass', () => {
     expect(order).toEqual(['screens', 'tailscale'])
   })
 
+  it('stamps the screen counts on the no-fleet-tag early return too', async () => {
+    tailscaleConfigured.mockReturnValue(true)
+    listTailnetDevices.mockResolvedValue([])
+    const res = await GET(authed())
+    expect((await res.json()).data).toMatchObject({ checked: 0, tagged: 0, screens_checked: 6, screens_alerted: 1 })
+    expect(stampHeartbeat).toHaveBeenCalledWith('fleet-health', expect.objectContaining({
+      tagged: 0, screens_checked: 6, screens_alerted: 1,
+    }))
+  })
+
   it('still reports the screen counts when Tailscale is unreachable, and skips the heartbeat', async () => {
     tailscaleConfigured.mockReturnValue(true)
     listTailnetDevices.mockRejectedValue(new Error('tailscale 503'))

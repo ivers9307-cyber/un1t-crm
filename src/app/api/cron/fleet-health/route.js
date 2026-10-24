@@ -85,14 +85,18 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const now = Date.now()
 
   // SCREENMODE.10 — the Android TV screens, graded on their plan-fetch
   // heartbeat. They are not on the tailnet, so this runs FIRST and
   // unconditionally: an unconfigured or unreachable Tailscale must not blind
   // it. Never throws (see runScreenHealth).
-  const screens = await runScreenHealth(db, { nowMs: now, notify })
+  const screens = await runScreenHealth(db, { nowMs: Date.now(), notify })
   const screenCounts = { screens_checked: screens.checked, screens_alerted: screens.alerted }
+
+  // The Pi pass grades on a clock taken HERE, after the screen pass: a screen
+  // notify can take seconds, and a clock taken before it would grade the Pis
+  // against a moment that is already stale.
+  const now = Date.now()
 
   // Dormant until configured. The heartbeat still stamps, so cron_health
   // does not report this as stale merely for being unconfigured.
@@ -119,8 +123,8 @@ export async function GET(request) {
     // wrong tailnet than six simultaneously destroyed Pis. Say so rather than
     // alerting.
     logWarn('fleet-health', 'no devices carry the fleet tag', { seen: devices.length })
-    await stampHeartbeat('fleet-health', { configured: true, checked: 0, tagged: 0 })
-    return NextResponse.json({ success: true, data: { checked: 0, tagged: 0 } })
+    await stampHeartbeat('fleet-health', { configured: true, checked: 0, tagged: 0, ...screenCounts })
+    return NextResponse.json({ success: true, data: { checked: 0, tagged: 0, ...screenCounts } })
   }
 
   // Bridges keyed by the Tailscale device they run on — see

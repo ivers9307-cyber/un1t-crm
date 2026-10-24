@@ -17,8 +17,11 @@
 //     otherwise be invisible precisely because the feature is working.
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { Button, Card, Modal, Field, EmptyState } from '@/components/ui'
 import { ACTIONS, availableActions } from '@/lib/fleet-commands'
+import ScreensSection from './ScreensSection'
+import { timeAgo } from './time-ago'
 
 // Every value fleet_device_health.state can hold (mig 472 + 531 + 537). An
 // unlisted state falls back to slate below, which reads as "we have no opinion"
@@ -41,17 +44,6 @@ const STATUS_CHIP = {
   expired: 'bg-slate-500/10 text-slate-700',
   pending: 'bg-blue-500/10 text-blue-700',
   claimed: 'bg-blue-500/10 text-blue-700',
-}
-
-function timeAgo(iso) {
-  if (!iso) return null
-  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
-  if (!Number.isFinite(mins)) return null
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins} min ago`
-  const hrs = Math.round(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  return `${Math.round(hrs / 24)}d ago`
 }
 
 // Poll cadences for the actions list.
@@ -81,7 +73,15 @@ const TAILSCALE_MACHINES = 'https://login.tailscale.com/admin/machines'
 const BUSY_POLL_MS = 2000
 const IDLE_POLL_MS = 20000
 
-export default function FleetAdmin({ devices, commands: initialCommands, isMaster }) {
+export default function FleetAdmin({
+  devices,
+  screens = [],
+  locations = [],
+  displays = [],
+  commands: initialCommands,
+  isMaster,
+}) {
+  const router = useRouter()
   const [busy, setBusy] = useState(null)
   const [confirming, setConfirming] = useState(null)
   const [typed, setTyped] = useState('')
@@ -236,6 +236,18 @@ export default function FleetAdmin({ devices, commands: initialCommands, isMaste
             </ul>
           </div>
         </Card>
+      )}
+
+      {(screens.length > 0 || isMaster) && (
+        <ScreensSection
+          screens={screens}
+          locations={locations}
+          displays={displays}
+          isMaster={isMaster}
+          onChanged={() => router.refresh()}
+          onIssueToken={rotateToken}
+          busy={busy}
+        />
       )}
 
       <div className="grid gap-4 md:grid-cols-2">
