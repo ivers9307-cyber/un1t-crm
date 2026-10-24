@@ -12,17 +12,33 @@
 
 import { countsTowardTeamCapacity } from './find-team'
 
+// ENTRYPOLICY.1 — two readings of "taken". The DISPLAY reading (the /events
+// index, the public "Sold out" and is_full) counts confirmed rows only. A
+// CAPACITY GATE (register, Mia's book, the move target fit, the waitlist
+// offer) passes `{ held: true }` and counts rows that HOLD a place: confirmed,
+// plus an unpaid (pending_payment) entry still inside the event's
+// unpaid_hold_hours. The hold itself is judged by holdsPlace in
+// src/lib/entry-policy.js: a gate hands in `holdingPlaces(rows, now, event)`,
+// so a lapsed unpaid entry never reaches these counters. `held` only says
+// "a pending row you gave me counts"; it never judges the age itself.
+/** Does this row count as taken? Confirmed always; pending only under `held`. */
+export function countsAsTaken(reg, { held = false } = {}) {
+  return reg?.status === 'confirmed' || (held === true && reg?.status === 'pending_payment')
+}
+
 /**
- * Count confirmed registrations as both headcount and registration count.
+ * Count registrations as both headcount and registration count: confirmed
+ * rows, plus pending ones under `{ held: true }` (see above).
  * @param {Array<{status?:string, team?:{size?:number}|null}>|null|undefined} registrations
+ * @param {{ held?: boolean }} [opts]
  * @returns {{people:number, signups:number}}
  */
-export function computeSignupCounts(registrations) {
+export function computeSignupCounts(registrations, opts = {}) {
   const regs = Array.isArray(registrations) ? registrations : []
   let people = 0
   let signups = 0
   for (const reg of regs) {
-    if (reg?.status !== 'confirmed') continue
+    if (!countsAsTaken(reg, opts)) continue
     signups += 1
     const size = reg?.team?.size
     // A confirmed registration is always at least one person, even if the
@@ -64,16 +80,18 @@ export function formatSignupSummary(registrations, { isRace = false, capacity = 
 // gate, the public "wave full" check, the agent, and the list display.
 
 /**
- * A wave's current load under a capacity mode. Confirmed-only. In teams mode a
- * solo still looking for a team (FINDTEAM.2) is not a team and does not count;
- * the caller's select must therefore fetch `looking_for_team`.
+ * A wave's current load under a capacity mode. Confirmed-only, or confirmed +
+ * pending under `{ held: true }` (ENTRYPOLICY.1, see countsAsTaken). In teams
+ * mode a solo still looking for a team (FINDTEAM.2) is not a team and does
+ * not count; the caller's select must therefore fetch `looking_for_team`.
  * @param {Array} registrations
  * @param {'teams'|'people'} [mode]
+ * @param {{ held?: boolean }} [opts]
  * @returns {number}
  */
-export function loadForMode(registrations, mode) {
-  if (mode === 'people') return computeSignupCounts(registrations).people
-  return (Array.isArray(registrations) ? registrations : []).filter(countsTowardTeamCapacity).length
+export function loadForMode(registrations, mode, opts = {}) {
+  if (mode === 'people') return computeSignupCounts(registrations, opts).people
+  return (Array.isArray(registrations) ? registrations : []).filter((r) => countsTowardTeamCapacity(r, opts)).length
 }
 
 /**
@@ -81,11 +99,12 @@ export function loadForMode(registrations, mode) {
  * @param {number|null} capacity
  * @param {Array} registrations
  * @param {'teams'|'people'} [mode]
+ * @param {{ held?: boolean }} [opts]
  * @returns {number|null}
  */
-export function spotsLeft(capacity, registrations, mode) {
+export function spotsLeft(capacity, registrations, mode, opts = {}) {
   if (!Number.isFinite(capacity)) return null
-  return Math.max(0, capacity - loadForMode(registrations, mode))
+  return Math.max(0, capacity - loadForMode(registrations, mode, opts))
 }
 
 /**
@@ -93,17 +112,19 @@ export function spotsLeft(capacity, registrations, mode) {
  * wave? In teams mode a registration adds one regardless of size; in people
  * mode the whole group must fit. Uncapped waves always fit.
  * @param {number|null} capacity
- * @param {Array} registrations  existing confirmed registrations in the wave
+ * @param {Array} registrations  existing registrations in the wave (a gate
+ *   hands in holdingPlaces(...) and passes { held: true })
  * @param {'teams'|'people'} mode
  * @param {number} [incomingTeamSize]
+ * @param {{ held?: boolean }} [opts]
  * @returns {boolean}
  */
-export function wouldFit(capacity, registrations, mode, incomingTeamSize = 1) {
+export function wouldFit(capacity, registrations, mode, incomingTeamSize = 1, opts = {}) {
   if (!Number.isFinite(capacity)) return true
   const increment = mode === 'people'
     ? (Number.isFinite(incomingTeamSize) && incomingTeamSize > 0 ? incomingTeamSize : 1)
     : 1
-  return loadForMode(registrations, mode) + increment <= capacity
+  return loadForMode(registrations, mode, opts) + increment <= capacity
 }
 
 /**

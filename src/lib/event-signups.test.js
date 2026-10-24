@@ -203,3 +203,34 @@ describe('sumWaveCapacity', () => {
     expect(sumWaveCapacity(null)).toBeNull()
   })
 })
+
+// ENTRYPOLICY.1 — `held: true` is the capacity gates' reading: a pending row
+// the caller hands in (already judged by holdsPlace) counts as taken. The
+// default stays confirmed-only for displays and the public "Sold out".
+describe('the held reading (ENTRYPOLICY.1)', () => {
+  const pending = { status: 'pending_payment', team: { size: 3 } }
+  const pendingSolo = { status: 'pending_payment', looking_for_team: true }
+  const confirmedTeam = { status: 'confirmed', team: { size: 2 } }
+  it('default: pending never counts', () => {
+    expect(loadForMode([pending, confirmedTeam], 'people')).toBe(2)
+    expect(loadForMode([pending, confirmedTeam], 'teams')).toBe(1)
+    expect(computeSignupCounts([pending, confirmedTeam])).toEqual({ people: 2, signups: 1 })
+  })
+  it('held: a pending row counts in both modes; an unplaced pending solo still takes no team slot', () => {
+    expect(loadForMode([pending, confirmedTeam], 'people', { held: true })).toBe(5)
+    expect(loadForMode([pending, confirmedTeam], 'teams', { held: true })).toBe(2)
+    expect(loadForMode([pendingSolo, confirmedTeam], 'teams', { held: true })).toBe(1)
+    expect(loadForMode([pendingSolo, confirmedTeam], 'people', { held: true })).toBe(3)
+    expect(wouldFit(5, [pending, confirmedTeam], 'people', 1, { held: true })).toBe(false)
+    expect(wouldFit(5, [pending, confirmedTeam], 'people', 1)).toBe(true)
+    expect(spotsLeft(3, [pending, confirmedTeam], 'teams', { held: true })).toBe(1)
+    expect(spotsLeft(3, [pending, confirmedTeam], 'teams')).toBe(2)
+  })
+  it('held never counts cancelled, no_show or placed', () => {
+    for (const status of ['cancelled', 'no_show', 'placed']) {
+      expect(loadForMode([{ status, team: { size: 4 } }], 'people', { held: true })).toBe(0)
+      expect(loadForMode([{ status }], 'teams', { held: true })).toBe(0)
+    }
+  })
+})
+

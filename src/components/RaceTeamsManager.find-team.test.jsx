@@ -271,3 +271,19 @@ describe('RaceTeamsManager — a placed entry', () => {
     expect(screen.getByText('Placed')).toBeTruthy()
   })
 })
+
+// ENTRYPOLICY.1 — the teams route marks an unpaid entry past the event's hold
+// `lapsed`; the page shows it as "Lapsed (unpaid)" and keeps its actions.
+describe('RaceTeamsManager — a lapsed unpaid entry', () => {
+  it('reads "Lapsed (unpaid)" for a lapsed pending row and "pending payment" for a fresh one', async () => {
+    data = [
+      { ...team('tL', 'Team Late', 'w1'), status: 'pending_payment', lapsed: true, payment: { id: 'pl', status: 'pending', checkout_url: 'https://pay.test/l' } },
+      { ...team('tF', 'Team Fresh', 'w1'), status: 'pending_payment', lapsed: false, payment: { id: 'pf', status: 'pending', checkout_url: 'https://pay.test/f' } },
+    ]
+    render(<RaceTeamsManager race={race} canCancelEntries />)
+    await screen.findByText('Team Late')
+    expect(screen.getByText('Lapsed (unpaid)')).toBeTruthy()
+    expect(screen.getAllByText('pending payment')).toHaveLength(1)
+  })
+})
+

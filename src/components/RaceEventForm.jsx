@@ -35,6 +35,7 @@ import { generateWaveTimes } from '@/lib/wave-generate'
 import { PLATFORM_NAME } from '@/lib/brand-name'
 import { CHARITY_DEFAULTS, CharitySettingsSchema, formatCents } from '@/lib/charity-donations'
 import { FIND_TEAM_DEFAULTS } from '@/lib/find-team'
+import { ENTRY_POLICY_DEFAULTS, ENTRY_POLICY_TEXT_KEYS, ENTRY_POLICY_HOURS_MAX } from '@/lib/entry-policy'
 import { useLocationBrand } from './use-location-brand'
 
 const ALL_SIZES = [1, 2, 3, 4, 5, 6, 8]
@@ -341,6 +342,11 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
   // switch plus its copy. Race kind only.
   const [findTeamForm, setFindTeamForm] = useState(() => findTeamToForm(race?.find_team))
   const setFindTeamField = (key, value) => setFindTeamForm((f) => ({ ...f, [key]: value }))
+  // ENTRYPOLICY.1 (mig 767) — the entry policy: race_events.entry_policy
+  // jsonb, the two self-service switches, the cutoff, the unpaid hold and
+  // the refusal copy. Every kind with entries (not lead_gen).
+  const [entryPolicyForm, setEntryPolicyForm] = useState(() => entryPolicyToForm(race?.entry_policy))
+  const setEntryPolicyField = (key, value) => setEntryPolicyForm((f) => ({ ...f, [key]: value }))
   // The location's saved email templates, for the "Advanced: use a full
   // template" pickers. Fetched from the shared templates list endpoint,
   // scoped to this event's location. A fetch failure just leaves the list
@@ -655,6 +661,7 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       charity: charityResult.charity,
       // Races only: another kind never touches the column (an unsent key is left as saved).
       ...(kind === 'race' ? { find_team: findTeamFromForm(findTeamForm) } : {}),
+      ...(kind !== 'lead_gen' ? { entry_policy: entryPolicyFromForm(entryPolicyForm) } : {}),
       ...(meta.isLeadGen ? {} : {
         waves: outboundWaves.map((w, i) => ({
           ...(w.id ? { id: w.id } : {}),
@@ -1299,6 +1306,9 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
 
       {kind === 'race' && (
         <FindTeamSection values={findTeamForm} onChange={setFindTeamField} />
+      )}
+      {kind !== 'lead_gen' && (
+        <EntryPolicySection values={entryPolicyForm} onChange={setEntryPolicyField} />
       )}
 
       {/* TV-display logos. Race-only — non-race kinds don't have a
@@ -2116,6 +2126,143 @@ function FindTeamSection({ values, onChange }) {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ENTRYPOLICY.1 — the entry policy's form state. Switches are booleans
+// (default on); the two hour fields are strings so the operator can clear one
+// back to the default; copy is blank = omitted (defaults apply).
+/** race_events.entry_policy (jsonb) -> the form's state. */
+function entryPolicyToForm(saved) {
+  const s = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {}
+  const f = {
+    self_cancel_enabled: s.self_cancel_enabled !== false,
+    self_reschedule_enabled: s.self_reschedule_enabled !== false,
+    cutoff_hours: Number.isInteger(s.cutoff_hours) ? String(s.cutoff_hours) : '',
+    unpaid_hold_hours: Number.isInteger(s.unpaid_hold_hours) ? String(s.unpaid_hold_hours) : '',
+  }
+  for (const k of ENTRY_POLICY_TEXT_KEYS) f[k] = typeof s[k] === 'string' ? s[k] : ''
+  return f
+}
+
+/** The form's state -> `entry_policy` for the save payload: switches always, hours and text only when set. */
+function entryPolicyFromForm(f) {
+  const out = { self_cancel_enabled: f.self_cancel_enabled !== false, self_reschedule_enabled: f.self_reschedule_enabled !== false }
+  for (const k of ['cutoff_hours', 'unpaid_hold_hours']) {
+    const raw = String(f[k] ?? '').trim()
+    if (raw === '') continue
+    const n = Number(raw)
+    if (Number.isInteger(n)) out[k] = n
+  }
+  for (const k of ENTRY_POLICY_TEXT_KEYS) {
+    const v = String(f[k] ?? '').trim()
+    if (v) out[k] = v
+  }
+  return out
+}
+
+function PolicySwitch({ id, label, hint, checked, onChange }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <div className="text-sm text-un1t-text">{label}</div>
+        {hint && <div className="text-[11px] text-un1t-subtle">{hint}</div>}
+      </div>
+      <button
+        type="button"
+        role="switch"
+        id={id}
+        aria-checked={checked}
+        aria-label={label}
+        onClick={() => onChange(!checked)}
+        className={`shrink-0 w-10 h-5 rounded-full ${checked ? 'bg-emerald-500' : 'bg-un1t-border'}`}
+      >
+        <div className={`w-4 h-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
+      </button>
+    </div>
+  )
+}
+
+// ENTRYPOLICY.1 — the "Entry policy" section: what a customer may do with
+// their own entry (cancel, change the date or time), how long before their
+// start that closes, how long an unpaid entry holds its place, and the three
+// refusal sentences. Presentation only; state lives in RaceEventForm.
+function EntryPolicySection({ values, onChange }) {
+  const input = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
+  const labelCls = 'block text-sm text-un1t-subtle mb-1'
+  return (
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
+        <Clock size={14} /> Entry policy
+      </h3>
+      <p className="text-[11px] text-un1t-subtle">
+        What a customer may do with their own entry from their entry page or with Mia. Staff can always act. Leave a number or text blank to use the default shown in grey.
+      </p>
+
+      <PolicySwitch
+        id="entry-policy-cancel"
+        label="Let customers cancel their own entry"
+        hint="Off: Mia and the entry page hand a cancel request to the team instead."
+        checked={values.self_cancel_enabled}
+        onChange={(v) => onChange('self_cancel_enabled', v)}
+      />
+      <PolicySwitch
+        id="entry-policy-reschedule"
+        label="Let customers change their date or time"
+        hint="Covers the entry page's date change, Mia's time change and Mia's move to another event."
+        checked={values.self_reschedule_enabled}
+        onChange={(v) => onChange('self_reschedule_enabled', v)}
+      />
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label htmlFor="entry-policy-cutoff" className={labelCls}>Self-service closes (hours before start)</label>
+          <input
+            id="entry-policy-cutoff"
+            type="number"
+            min={0}
+            max={ENTRY_POLICY_HOURS_MAX}
+            step={1}
+            value={values.cutoff_hours}
+            onChange={(e) => onChange('cutoff_hours', e.target.value)}
+            placeholder={String(ENTRY_POLICY_DEFAULTS.cutoff_hours)}
+            className={input}
+          />
+          <p className="text-[11px] text-un1t-muted mt-1">Counted back from the entrant&apos;s wave start. 0 = no cutoff.</p>
+        </div>
+        <div>
+          <label htmlFor="entry-policy-hold" className={labelCls}>Unpaid entry holds its place for (hours)</label>
+          <input
+            id="entry-policy-hold"
+            type="number"
+            min={1}
+            max={ENTRY_POLICY_HOURS_MAX}
+            step={1}
+            value={values.unpaid_hold_hours}
+            onChange={(e) => onChange('unpaid_hold_hours', e.target.value)}
+            placeholder={String(ENTRY_POLICY_DEFAULTS.unpaid_hold_hours)}
+            className={input}
+          />
+          <p className="text-[11px] text-un1t-muted mt-1">After this an unpaid entry stops counting toward capacity and is not resumed. Nothing is deleted; a payment that completes later still confirms it.</p>
+        </div>
+      </div>
+
+      <div className="space-y-4 pt-2 border-t border-un1t-border">
+        <p className="text-[11px] text-un1t-subtle">Customer wording. Tags: <code>{'{{hours}}'}</code>, <code>{'{{event_name}}'}</code>.</p>
+        <div>
+          <label htmlFor="entry-policy-cutoff-message" className={labelCls}>Too close to the start</label>
+          <textarea id="entry-policy-cutoff-message" rows={2} value={values.cutoff_message} onChange={(e) => onChange('cutoff_message', e.target.value)} placeholder={ENTRY_POLICY_DEFAULTS.cutoff_message} className={input} />
+        </div>
+        <div>
+          <label htmlFor="entry-policy-disabled-message" className={labelCls}>Self-service switched off</label>
+          <textarea id="entry-policy-disabled-message" rows={2} value={values.disabled_message} onChange={(e) => onChange('disabled_message', e.target.value)} placeholder={ENTRY_POLICY_DEFAULTS.disabled_message} className={input} />
+        </div>
+        <div>
+          <label htmlFor="entry-policy-lapsed-message" className={labelCls}>Unpaid entry lapsed</label>
+          <textarea id="entry-policy-lapsed-message" rows={2} value={values.lapsed_message} onChange={(e) => onChange('lapsed_message', e.target.value)} placeholder={ENTRY_POLICY_DEFAULTS.lapsed_message} className={input} />
+        </div>
+      </div>
     </div>
   )
 }

@@ -88,4 +88,11 @@ describe('countsTowardTeamCapacity', () => {
     expect(countsTowardTeamCapacity({ status: 'pending_payment' })).toBe(false)
     expect(countsTowardTeamCapacity(null)).toBe(false)
   })
+  // ENTRYPOLICY.1 — a capacity gate hands in rows that hold a place and says so.
+  it('under { held: true } a pending team counts, a pending solo and a placed row still do not', () => {
+    expect(countsTowardTeamCapacity({ status: 'pending_payment' }, { held: true })).toBe(true)
+    expect(countsTowardTeamCapacity({ status: 'pending_payment', looking_for_team: true }, { held: true })).toBe(false)
+    expect(countsTowardTeamCapacity({ status: 'placed' }, { held: true })).toBe(false)
+    expect(countsTowardTeamCapacity({ status: 'cancelled' }, { held: true })).toBe(false)
+  })
 })

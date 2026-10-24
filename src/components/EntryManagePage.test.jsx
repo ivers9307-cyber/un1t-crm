@@ -233,3 +233,30 @@ describe('EntryManagePage — review minors', () => {
     }
   })
 })
+
+// ENTRYPOLICY.1 — an unpaid entry past the event's hold.
+describe('EntryManagePage — a lapsed unpaid entry', () => {
+  it('shows the operator sentence, the Lapsed label and a link to register again; no dates fetched', async () => {
+    const { calls } = stubFetch({
+      [ENTRY_URL]: ok({
+        ...ENTRY, status: 'pending_payment', can_move: false,
+        move_blocked_reason: 'This entry is still waiting for payment. Once it is paid you can change the date here.',
+        lapsed: true, lapsed_message: 'Your unpaid entry for Hatch Oct 18 was held for 48 hours and has now lapsed. You can register again if places remain.',
+        register_url: '/event/hatch-oct18-1100',
+      }),
+    })
+    render(<EntryManagePage token={TOKEN} />)
+    await screen.findByText(/has now lapsed/)
+    expect(screen.getByText('Lapsed (unpaid)')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Register again' }).getAttribute('href')).toBe('/event/hatch-oct18-1100')
+    expect(calls.some((c) => c.url.endsWith('/move-options'))).toBe(false)
+  })
+  it('a pending entry inside the hold is still "Awaiting payment" with no lapsed notice', async () => {
+    stubFetch({ [ENTRY_URL]: ok({ ...ENTRY, status: 'pending_payment', can_move: false, move_blocked_reason: 'This entry is still waiting for payment.', lapsed: false, lapsed_message: null, register_url: null }) })
+    render(<EntryManagePage token={TOKEN} />)
+    await screen.findByText('Awaiting payment')
+    expect(screen.queryByText(/lapsed/i)).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Register again' })).toBeNull()
+  })
+})
+

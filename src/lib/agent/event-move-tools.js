@@ -24,6 +24,7 @@ import { dateLabel, todayIn } from './event-date-label'
 import { DEFAULT_TZ } from '@/lib/location-time'
 import { publicMoveOptions } from '@/lib/registration-move-public'
 import { moveLocationIds } from '@/lib/move-locations'
+import { selfServiceBlock } from '@/lib/entry-policy'
 
 export const EVENT_MOVE_TOOLS = [
   // Moving an entry to another event goes through staff approval: list the
@@ -37,7 +38,9 @@ export const EVENT_MOVE_TOOLS = [
       'Identity must be verified first; get the registration_id from get_my_event_registrations. ' +
       'Offer only what this lists, and never say how many places are left. Do not promise the move: ' +
       'it needs staff approval, and only move_event_entry asks for it. A different time on the SAME ' +
-      'event is reschedule_event_wave instead. Never cancel and rebook to change the event.',
+      'event is reschedule_event_wave instead. Never cancel and rebook to change the event. ' +
+      'A result with handoff: true means the event does not allow the customer to change it themselves: ' +
+      'relay its customer_message as written and hand off to the team.',
     input_schema: {
       type: 'object',
       properties: {
@@ -120,6 +123,29 @@ export function shapeMoveOptionsForAgent(targets, { headcount = 1 } = {}) {
 const NOT_FOUND = { error: 'not_found', message: 'That registration was not found. Re-check get_my_event_registrations.' }
 
 /**
+ * ENTRYPOLICY.1 — the tool result for a self-service action the event's
+ * entry policy refuses (the switch is off, or the hours-before cutoff has
+ * passed). A HAND-OFF, never an action and never an approval request: Mia
+ * relays the operator's own sentence (customer_message) and hands off to the
+ * team (Richard, 24 Oct 2026). One shape for cancel, reschedule and move.
+ * @param {{ code: 'disabled'|'cutoff', message: string }} block
+ * @param {'cancel'|'reschedule'|'move'} action
+ */
+export function policyHandoffResult(block, action) {
+  const flag = action === 'cancel' ? 'cancelled' : action === 'reschedule' ? 'rescheduled' : 'requested'
+  const why = block.code === 'disabled'
+    ? 'the studio handles this itself for this event'
+    : 'it is inside the hours-before cutoff for this event'
+  return {
+    [flag]: false,
+    handoff: true,
+    reason: block.code,
+    customer_message: block.message,
+    message: `The customer cannot ${action} this entry themselves: ${why}. Relay customer_message to them as written, then hand off to the team. Do NOT ${action} it and do NOT file a request for approval.`,
+  }
+}
+
+/**
  * The gate (see the file header). Returns { reg } or { refusal } (a tool
  * result for Mia). A registration_id that is not UUID-shaped cannot name a
  * row, so it is not_found before any read.
@@ -135,7 +161,7 @@ async function ownedConfirmedRegistration(db, ctx, registrationId) {
   }
   if (!UUID_SHAPE.test(String(registrationId || ''))) return { refusal: NOT_FOUND }
   const { data: reg, error } = await db.from('race_registrations')
-    .select('id, status, contact_id, wave_id, race_events!inner(id, name, race_date, location_id)')
+    .select('id, status, contact_id, wave_id, race_events!inner(id, name, race_date, location_id, entry_policy), race_waves(start_time)')
     .eq('id', String(registrationId))
     .eq('race_events.location_id', locationId)
     .maybeSingle()
@@ -159,9 +185,16 @@ async function ownedConfirmedRegistration(db, ctx, registrationId) {
   }
   const eventDate = String(reg.race_events?.race_date || '')
   // TZ.5 — the registration's event is read at ctx.locationId, so ctx.zone.
-  if (!eventDate || eventDate < todayIn(Date.now(), ctx.zone || DEFAULT_TZ)) {
+  const nowMs = Date.now()
+  const zone = ctx.zone || DEFAULT_TZ
+  if (!eventDate || eventDate < todayIn(nowMs, zone)) {
     return { refusal: { error: 'not_active', message: 'That event has already happened, so the entry cannot be moved.' } }
   }
+  // ENTRYPOLICY.1 — a move is a reschedule in the policy's eyes: the switch
+  // and the cutoff (from the entrant's wave start) apply. A refusal is a
+  // hand-off with the operator's copy, never a request for approval.
+  const block = selfServiceBlock({ event: reg.race_events, wave: reg.race_waves || null, nowMs, zone, action: 'reschedule' })
+  if (block) return { refusal: policyHandoffResult(block, 'move') }
   return { reg }
 }
 

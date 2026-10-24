@@ -51,6 +51,7 @@ import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 import { eventIsPublic, resolveMasterLocationId } from '@/lib/host-events'
 import { claimWaitlistOnRegistration, claimWaitlistByEmail } from '@/lib/event-waitlist'
 import { resolveFindTeamSettings, soloTeamName } from '@/lib/find-team'
+import { holdingPlaces, pendingLapsed } from '@/lib/entry-policy'
 
 export const runtime = 'nodejs'
 
@@ -103,11 +104,18 @@ const SOLO_TEAM_NAME_TRIES = 20
  * our row still reads 'pending' but the buyer's link no longer works. The
  * refresh flips a lapsed session to abandoned/cancelled (or catches a
  * just-completed one) inline.
+ *
+ * ENTRYPOLICY.1 — a pending entry older than the event's unpaid_hold_hours
+ * is LAPSED (pendingLapsed): the provider is still asked, so a payment that
+ * completed meanwhile confirms it, but a checkout that is merely still open
+ * is never resumed; the row reads as stale and is cleared like a dead one.
  * @returns {Promise<{ regStatus: string, livePaymentId: string|null }>}
  */
-async function resolveRebookState(db, reg) {
+async function resolveRebookState(db, reg, race) {
   let regStatus = reg.status
   let livePaymentId = null
+  const lapsed = pendingLapsed(reg, Date.now(), race || null)
+  if (lapsed) regStatus = 'lapsed'
   if (reg.status === 'pending_payment' && reg.active_payment_id) {
     const { data: pay } = await db
       .from('race_payments')
@@ -125,7 +133,7 @@ async function resolveRebookState(db, reg) {
         }
       }
       if (refreshed.status === 'pending') {
-        livePaymentId = refreshed.id           // session still live → resume it
+        if (!lapsed) livePaymentId = refreshed.id   // session still live → resume it (never a lapsed one)
       } else if (refreshed.status === 'completed') {
         regStatus = 'confirmed'                // paid in the meantime
       }
@@ -196,7 +204,7 @@ export async function POST(request, props) {
       id, location_id, name, slug, race_date, kind, capacity_mode, allowed_team_sizes,
       registration_opens_at, registration_closes_at, active, status,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
-      members_only, payment_currency, create_in_glofox, host_id, find_team,
+      members_only, payment_currency, create_in_glofox, host_id, find_team, entry_policy,
       waves:race_waves ( id, start_time, capacity, label )
     `)
     .eq('slug', params.slug)
@@ -418,13 +426,15 @@ export async function POST(request, props) {
       // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- wave-capacity gate; a single race wave never holds >1000 registrations
       const { data: waveRegs } = await db
         .from('race_registrations')
-        .select('status, team:teams ( size )')
+        .select('status, registered_at, team:teams ( size )')
         .eq('race_event_id', race.id)
         .eq('wave_id', wave.id)
         // Count reserved-but-unpaid spots too, else concurrent paid signups oversell.
         .in('status', LIVE_REGISTRATION_STATUSES)
         .limit(2000)
-      if (!wouldFit(wave.capacity, waveRegs || [], 'people', teamSize)) {
+      // ENTRYPOLICY.1 — an unpaid entry holds its place for the event's
+      // unpaid_hold_hours only (holdsPlace); a lapsed one stops counting.
+      if (!wouldFit(wave.capacity, holdingPlaces(waveRegs || [], Date.now(), race), 'people', teamSize, { held: true })) {
         // PUBCAP.1 — never tell the public how many places are left (Richard's
         // rule: capacity is never surfaced to customers). Say it won't fit,
         // not by how much. Full and "too big for what's left" read alike.
@@ -434,15 +444,19 @@ export async function POST(request, props) {
     } else if (!findTeam) {
       // FINDTEAM.3 — a teams-mode wave counts TEAMS: solos still looking for a
       // team are people, not teams, and a solo itself takes no team slot (so it
-      // skips this check entirely, above).
-      const { count } = await db
+      // skips this check entirely, above). ENTRYPOLICY.1 — a team's unpaid
+      // entry holds its slot for the event's unpaid_hold_hours (holdsPlace),
+      // judged in JS on status + registered_at, as every other gate does.
+      // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- wave-capacity gate; a single race wave never holds >1000 registrations
+      const { data: teamRows } = await db
         .from('race_registrations')
-        .select('*', { count: 'exact', head: true })
+        .select('status, registered_at, looking_for_team')
         .eq('race_event_id', race.id)
         .eq('wave_id', wave.id)
-        .eq('status', 'confirmed')
+        .in('status', LIVE_REGISTRATION_STATUSES)
         .eq('looking_for_team', false)
-      if ((count || 0) >= wave.capacity) {
+        .limit(2000)
+      if (!wouldFit(wave.capacity, holdingPlaces(teamRows || [], Date.now(), race), 'teams', 1, { held: true })) {
         return NextResponse.json({
           success: false,
           error: `The ${waveLabel} wave is full. Pick another.`,
@@ -510,7 +524,7 @@ export async function POST(request, props) {
   if (findTeam) {
     const { data: ownSolos, error: ownErr } = await db
       .from('race_registrations')
-      .select('id, status, active_payment_id, team_id, team:teams ( name )')
+      .select('id, status, active_payment_id, registered_at, team_id, team:teams ( name )')
       .eq('race_event_id', race.id)
       .eq('contact_id', captainContactId)
       .eq('looking_for_team', true)
@@ -520,7 +534,7 @@ export async function POST(request, props) {
     }
     const states = []
     for (const row of ownSolos || []) {
-      states.push({ row, ...(await resolveRebookState(db, row)) })
+      states.push({ row, ...(await resolveRebookState(db, row, race)) })
     }
     const done = states.find((s) => s.regStatus === 'confirmed' || s.regStatus === 'placed')
     if (done) {
@@ -651,12 +665,12 @@ export async function POST(request, props) {
   if (!findTeam) {
     const { data: teamReg } = await db
       .from('race_registrations')
-      .select('id, status, active_payment_id')
+      .select('id, status, active_payment_id, registered_at')
       .eq('race_event_id', race.id)
       .eq('team_id', teamId)
       .maybeSingle()
     if (teamReg) {
-      const { regStatus, livePaymentId } = await resolveRebookState(db, teamReg)
+      const { regStatus, livePaymentId } = await resolveRebookState(db, teamReg, race)
 
       // FINDTEAM.8 (C1) — a placed row is as final as a confirmed one: it
       // carries the solo's payment and its placement record, so no re-book
@@ -699,9 +713,10 @@ export async function POST(request, props) {
           code: 'already_registered',
         }, { status: 409 })
       }
-      // Stale/dead row (lapsed session, cancelled, no_show, abandoned, or
-      // pending with no usable payment): clear it so the flow below inserts
-      // a fresh registration and mints a NEW payment session.
+      // Stale/dead row (lapsed session, cancelled, no_show, abandoned, pending
+      // with no usable payment, or ENTRYPOLICY.1 lapsed: an unpaid entry past
+      // its hold): clear it so the flow below inserts a fresh registration and
+      // mints a NEW payment session.
       const { error: staleErr } = await db.from('race_registrations').delete().eq('id', teamReg.id)
       if (staleErr) {
         return NextResponse.json({ success: false, error: 'Could not clear the earlier unfinished entry. Please try again.' }, { status: 500 })

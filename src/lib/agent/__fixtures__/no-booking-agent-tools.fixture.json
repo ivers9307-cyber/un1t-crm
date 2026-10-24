@@ -209,7 +209,7 @@
     },
     {
       "name": "cancel_event_registration",
-      "description": "Cancel one of the VERIFIED customer's own upcoming event registrations from get_my_event_registrations (identity must be verified first, same as cancelling a class). CRITICAL: restate the exact event and date and get a clear yes before calling. FREE entries cancel immediately. PAID entries are passed to the team to confirm (they also handle any refund question) — tell the customer the team will confirm shortly and NEVER promise a refund yourself.",
+      "description": "Cancel one of the VERIFIED customer's own upcoming event registrations from get_my_event_registrations (identity must be verified first, same as cancelling a class). CRITICAL: restate the exact event and date and get a clear yes before calling. FREE entries cancel immediately. PAID entries are passed to the team to confirm (they also handle any refund question) — tell the customer the team will confirm shortly and NEVER promise a refund yourself. A result with handoff: true means this event does not let the customer cancel themselves (switched off, or too close to the start): relay its customer_message as written and hand off to the team; never say it is cancelled or that a request was filed.",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -233,7 +233,7 @@
     },
     {
       "name": "reschedule_event_wave",
-      "description": "Move the VERIFIED customer's registration to a DIFFERENT START WAVE of the SAME event (e.g. from the 9am wave to the 10:30 wave), capacity permitting, once their identity is verified. Get the wave_id from list_upcoming_events and confirm the new time with them first. Moving to a different EVENT or a different date is NOT this tool, and never a cancel plus a new booking: use list_event_move_options, then move_event_entry.",
+      "description": "Move the VERIFIED customer's registration to a DIFFERENT START WAVE of the SAME event (e.g. from the 9am wave to the 10:30 wave), capacity permitting, once their identity is verified. Get the wave_id from list_upcoming_events and confirm the new time with them first. Moving to a different EVENT or a different date is NOT this tool, and never a cancel plus a new booking: use list_event_move_options, then move_event_entry. A result with handoff: true means this event does not let the customer change their time themselves: relay its customer_message as written and hand off to the team.",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -258,7 +258,7 @@
     },
     {
       "name": "list_event_move_options",
-      "description": "Use when a VERIFIED customer asks to change the date of an event entry they already have, or to move it to a different event (e.g. from the 18 Oct Hyrox sim to the 25 Oct one). Shows the dates and times their entry can move to, with the price difference as a sentence. Identity must be verified first; get the registration_id from get_my_event_registrations. Offer only what this lists, and never say how many places are left. Do not promise the move: it needs staff approval, and only move_event_entry asks for it. A different time on the SAME event is reschedule_event_wave instead. Never cancel and rebook to change the event.",
+      "description": "Use when a VERIFIED customer asks to change the date of an event entry they already have, or to move it to a different event (e.g. from the 18 Oct Hyrox sim to the 25 Oct one). Shows the dates and times their entry can move to, with the price difference as a sentence. Identity must be verified first; get the registration_id from get_my_event_registrations. Offer only what this lists, and never say how many places are left. Do not promise the move: it needs staff approval, and only move_event_entry asks for it. A different time on the SAME event is reschedule_event_wave instead. Never cancel and rebook to change the event. A result with handoff: true means the event does not allow the customer to change it themselves: relay its customer_message as written and hand off to the team.",
       "input_schema": {
         "type": "object",
         "properties": {

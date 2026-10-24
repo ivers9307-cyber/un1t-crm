@@ -172,25 +172,31 @@ describe('register route: find_team', () => {
     expect(q('race_registrations', 'insert')).toHaveLength(0)
   })
 
-  it('a full teams-mode wave still accepts a solo, and the solo never reads the team count', async () => {
-    countInWave = 10
+  // ENTRYPOLICY.1 — the teams-mode gate is a select of the wave's live team
+  // rows judged in JS (holdsPlace + looking_for_team), no longer a head count.
+  const isTeamGate = (x) => x.table === 'race_registrations' && x.action === 'select' && x.ops.some((o) => o[0] === 'eq' && o[1] === 'wave_id') && x.ops.some((o) => o[0] === 'eq' && o[1] === 'looking_for_team' && o[2] === false)
+  const tenTeams = () => Array.from({ length: 10 }, (_, i) => ({ status: 'confirmed', registered_at: '2026-10-01T00:00:00Z', looking_for_team: false, id: `t${i}` }))
+
+  it('a full teams-mode wave still accepts a solo, and the solo never reads the team rows', async () => {
+    waveRegs = tenTeams()
     const res = await post(SOLO)
     expect(res.status).toBe(200)
+    expect(db.queries.some(isTeamGate)).toBe(false)
     expect(db.queries.some(isHeadCount)).toBe(false)
   })
 
-  it('a non-solo registration counts confirmed TEAMS only: the count carries looking_for_team = false', async () => {
+  it('a non-solo registration counts TEAMS only: the gate reads live rows with looking_for_team = false and registered_at', async () => {
     const res = await post(TEAM)
     expect(res.status).toBe(200)
-    const counts = db.queries.filter(isHeadCount)
-    expect(counts).toHaveLength(1)
-    expect(counts[0].ops).toContainEqual(['eq', 'looking_for_team', false])
-    expect(counts[0].ops).toContainEqual(['eq', 'status', 'confirmed'])
+    const gates = db.queries.filter(isTeamGate)
+    expect(gates).toHaveLength(1)
+    expect(gates[0].ops[0][1]).toContain('registered_at')
+    expect(gates[0].ops).toContainEqual(['in', 'status', ['pending_payment', 'confirmed']])
     expect(q('race_registrations', 'insert')[0].payload).toMatchObject({ looking_for_team: false })
   })
 
   it('a full teams-mode wave still refuses a real team', async () => {
-    countInWave = 10
+    waveRegs = tenTeams()
     const res = await post(TEAM)
     expect(res.status).toBe(409)
     expect((await res.json()).code).toBe('wave_full')

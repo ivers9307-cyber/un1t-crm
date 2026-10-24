@@ -30,6 +30,7 @@ import { eventToday } from '@/lib/event-day'
 import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
 import { CharitySettingsSchema } from '@/lib/charity-donations'
 import { FindTeamSettingsSchema } from '@/lib/find-team'
+import { EntryPolicySettingsSchema } from '@/lib/entry-policy'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -120,6 +121,9 @@ export const CreateSchema = z.object({
   charity: CharitySettingsSchema.nullable().optional(),
   // FINDTEAM.6 — "Find me a team" switch + copy (race_events.find_team, mig 766).
   find_team: FindTeamSettingsSchema.nullable().optional(),
+  // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
+  // (race_events.entry_policy, mig 767).
+  entry_policy: EntryPolicySettingsSchema.nullable().optional(),
   // Waves (mig 083) — at least one required for a usable race.
   // Server normalises by start_time ascending; UNIQUE on
   // (race_event_id, start_time) catches duplicates from the DB side.
@@ -415,6 +419,7 @@ export async function POST(request) {
       charity_enabled: body.charity_enabled ?? false,
       charity: body.charity ?? null,
       find_team: body.find_team ?? null,
+      entry_policy: body.entry_policy ?? null,
     })
     .select()
     .single()

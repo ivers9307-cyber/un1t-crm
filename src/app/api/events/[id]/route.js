@@ -13,6 +13,7 @@ import { ADMIN_ROLES, MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { judgeEventOwnerChange } from '@/lib/event-owner'
 import { CharitySettingsSchema } from '@/lib/charity-donations'
 import { FindTeamSettingsSchema } from '@/lib/find-team'
+import { EntryPolicySettingsSchema } from '@/lib/entry-policy'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -90,6 +91,9 @@ export const UpdateSchema = z.object({
   charity: CharitySettingsSchema.nullable().optional(),
   // FINDTEAM.6 — "Find me a team" switch + copy (race_events.find_team, mig 766).
   find_team: FindTeamSettingsSchema.nullable().optional(),
+  // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
+  // (race_events.entry_policy, mig 767).
+  entry_policy: EntryPolicySettingsSchema.nullable().optional(),
   // EVENT-OWNER.1 — the owning studio. Admin at both ends, same org, not a
   // host anchor, not a host event: judged by judgeEventOwnerChange in PUT.
   location_id: uuidLike.optional(),
@@ -121,7 +125,7 @@ async function loadRace(db, id) {
       gap_email_subject, gap_email_intro,
       waitlist_email_subject, waitlist_email_intro,
       confirmation_email_template_id, reminder_email_template_id,
-      sending_location_id, charity_enabled, charity, find_team,
+      sending_location_id, charity_enabled, charity, find_team, entry_policy,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations (
         id, status, race_started_at, race_finished_at, registered_at, wave_id,

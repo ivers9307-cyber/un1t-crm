@@ -56,10 +56,14 @@ export function soloTeamName(fullName) {
 /**
  * Does this registration use up a team slot in a `teams`-capacity wave? A solo
  * still looking for a team is a person, not a team, so it does not; once placed
- * (status 'placed') it joins an existing team's slot.
+ * (status 'placed') it joins an existing team's slot. Confirmed only, or
+ * confirmed + pending_payment under `{ held: true }` (ENTRYPOLICY.1: a
+ * capacity gate hands in the rows that still hold a place).
  * @param {{ status?: string, looking_for_team?: boolean }|null|undefined} reg
+ * @param {{ held?: boolean }} [opts]
  * @returns {boolean}
  */
-export function countsTowardTeamCapacity(reg) {
-  return reg?.status === 'confirmed' && !reg?.looking_for_team
+export function countsTowardTeamCapacity(reg, { held = false } = {}) {
+  const taken = reg?.status === 'confirmed' || (held === true && reg?.status === 'pending_payment')
+  return taken && !reg?.looking_for_team
 }
