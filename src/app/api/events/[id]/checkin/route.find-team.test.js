@@ -101,6 +101,17 @@ describe.each([
     expect(checkins()).toHaveLength(0)
   })
 
+  // FINDTEAM.9 — a placed row whose target was deleted (FK SET NULL) is still a
+  // placed row: refused, never checked in on itself.
+  it('refuses a placed row whose target is gone, and never checks in the solo row', async () => {
+    regs[SOLO] = soloRow({ placed_into_registration_id: null })
+    const res = await call(SOLO, SOLO_M)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('That person is not on this registration')
+    expect(checkins()).toHaveLength(0)
+    expect(db.queries.filter((x) => x.table === 'race_registrations')).toHaveLength(1)
+  })
+
   it('refuses 404 when the target is on another event', async () => {
     regs[TEAM] = { ...regs[TEAM], race_event_id: 'e-other' }
     expect((await call(SOLO, SOLO_M)).status).toBe(404)

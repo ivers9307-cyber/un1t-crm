@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { registrationPaidCents, cancelRaceRegistration, moveRegistrationWave } from './race-cancel.js'
+import { registrationPaidCents, cancelRaceRegistration, moveRegistrationWave, countPlacedInto, placedSolosRefusal } from './race-cancel.js'
 import { fakeDb } from './event-waitlist.test-helpers'
 
 // db.from('race_payments')…limit(n) -> { data: rows }; no placed-into rows.
@@ -83,5 +83,61 @@ describe('cancel / move refuse a placed row (FINDTEAM.8 I3)', () => {
     const db = regDb({ id: 'r1', race_event_id: 'e1', status: 'placed', wave_id: 'w1' })
     expect(await moveRegistrationWave(db, 'r1', 'w2')).toEqual({ ok: false, error: 'not_active' })
     expect(db.queries.some((x) => x.table === 'race_waves' || x.action === 'update')).toBe(false)
+  })
+})
+
+// FINDTEAM.9 — a team entry that solos were placed into cannot be cancelled:
+// their rows point at it. The count runs on the service role inside the lib, so
+// Mia's cancel and the approvals route inherit the refusal.
+describe('cancelRaceRegistration refuses a team with placed solos (FINDTEAM.9)', () => {
+  const cancelDb = ({ reg, placedCount = 0, placedErr = null }) => fakeDb((q) => {
+    if (q.table !== 'race_registrations' || q.action !== 'select') return { data: null, error: null }
+    if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'placed_into_registration_id')) return { data: null, count: placedCount, error: placedErr }
+    return { data: reg, error: null }
+  })
+  const updates = (db) => db.queries.filter((x) => x.action === 'update')
+
+  it('answers has_placed_solos with the count and writes nothing', async () => {
+    const db = cancelDb({ reg: { id: 'team', status: 'confirmed' }, placedCount: 2 })
+    expect(await cancelRaceRegistration(db, 'team')).toEqual({ ok: false, error: 'has_placed_solos', placedCount: 2 })
+    expect(updates(db)).toHaveLength(0)
+    const count = db.queries.find((x) => x.ops.some((o) => o[0] === 'eq' && o[1] === 'placed_into_registration_id'))
+    expect(count.ops[0]).toEqual(['select', 'id', { count: 'exact', head: true }])
+    expect(count.ops).toContainEqual(['eq', 'placed_into_registration_id', 'team'])
+  })
+
+  it('an unreadable count refuses too: an unknown answer never cancels', async () => {
+    const db = cancelDb({ reg: { id: 'team', status: 'confirmed' }, placedErr: { message: 'boom' } })
+    expect(await cancelRaceRegistration(db, 'team')).toEqual({ ok: false, error: 'boom' })
+    expect(updates(db)).toHaveLength(0)
+  })
+
+  it('a team nobody was placed into still cancels', async () => {
+    const db = cancelDb({ reg: { id: 'team', status: 'confirmed' }, placedCount: 0 })
+    expect(await cancelRaceRegistration(db, 'team')).toEqual({ ok: true })
+    expect(updates(db)).toHaveLength(1)
+  })
+
+  it('a cancelled row answers already_cancelled before any count', async () => {
+    const db = cancelDb({ reg: { id: 'team', status: 'cancelled' }, placedCount: 2 })
+    expect(await cancelRaceRegistration(db, 'team')).toEqual({ ok: true, alreadyCancelled: true })
+    expect(db.queries).toHaveLength(1)
+  })
+
+  it('countPlacedInto returns the count, or the error', async () => {
+    expect(await countPlacedInto(cancelDb({ placedCount: 3 }), 'team')).toEqual({ count: 3 })
+    expect(await countPlacedInto(cancelDb({ placedCount: null }), 'team')).toEqual({ count: 0 })
+    expect(await countPlacedInto(cancelDb({ placedErr: { message: 'x' } }), 'team')).toEqual({ error: 'x' })
+  })
+
+  it('placedSolosRefusal is the one 409 body the DELETE and cancel routes share', () => {
+    expect(placedSolosRefusal(1, 'cancelled')).toEqual({
+      success: false,
+      error: 'has_placed_solos',
+      message: '1 placed entrant points at this team; un-place them first. There is no un-place tool in the CRM yet, so this team cannot be cancelled from here.',
+      placed_count: 1,
+    })
+    expect(placedSolosRefusal(2, 'deleted').message).toMatch(/^2 placed entrants point at this team; un-place them first\./)
+    expect(placedSolosRefusal(2, 'deleted').message).toMatch(/cannot be deleted from here\.$/)
   })
 })

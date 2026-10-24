@@ -39,8 +39,41 @@ export async function registrationPaidCents(db, registrationId) {
 }
 
 /**
+ * FINDTEAM.9 — how many solo rows point at this registration through
+ * placed_into_registration_id. A team entry that solos were placed into
+ * carries their placements (and, through registrationPaidCents, their
+ * payments), so cancelling or deleting it would strand them.
+ * @returns {Promise<{ count: number } | { error: string }>}
+ */
+export async function countPlacedInto(db, registrationId) {
+  const { count, error } = await db.from('race_registrations')
+    .select('id', { count: 'exact', head: true })
+    .eq('placed_into_registration_id', registrationId)
+  if (error) return { error: error.message }
+  return { count: count || 0 }
+}
+
+/**
+ * The 409 body every route answers when solos point at the team entry the
+ * caller wants gone: the registration DELETE, the operator cancel. One shape,
+ * so the Teams page and the approvals surface read it the same way.
+ * @param {number} n  placed rows pointing at the team
+ * @param {string} verb  'deleted' | 'cancelled'
+ */
+export function placedSolosRefusal(n, verb) {
+  return {
+    success: false,
+    error: 'has_placed_solos',
+    message: `${n} placed ${n === 1 ? 'entrant points' : 'entrants point'} at this team; un-place them first. There is no un-place tool in the CRM yet, so this team cannot be ${verb} from here.`,
+    placed_count: n,
+  }
+}
+
+/**
  * Cancel a registration. Idempotent: cancelling a cancelled row is ok.
- * @returns { ok, alreadyCancelled?, error? }
+ * @returns { ok, alreadyCancelled?, error?, placedCount? }
+ *   error 'not_active' = a placed solo's own row; 'has_placed_solos' = solos
+ *   were placed into this team (placedCount says how many).
  */
 export async function cancelRaceRegistration(db, registrationId) {
   const { data: reg, error: readErr } = await db.from('race_registrations')
@@ -53,6 +86,13 @@ export async function cancelRaceRegistration(db, registrationId) {
   // FINDTEAM.8 (I3) — a placed solo's row is history (they race with the team
   // they joined, and it carries their payment): never cancelled from here.
   if (reg.status === 'placed') return { ok: false, error: 'not_active' }
+  // FINDTEAM.9 — nor is a team entry that solos were placed into: their rows
+  // point at it and their payments ride on it. Mia's cancel and the approvals
+  // route come through here too, so they inherit the refusal. A failed count
+  // refuses as well: an unknown answer must never cancel.
+  const placed = await countPlacedInto(db, registrationId)
+  if (placed.error) return { ok: false, error: placed.error }
+  if (placed.count > 0) return { ok: false, error: 'has_placed_solos', placedCount: placed.count }
 
   const { error } = await db.from('race_registrations')
     .update({ status: 'cancelled', updated_at: new Date().toISOString() })

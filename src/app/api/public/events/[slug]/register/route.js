@@ -11,7 +11,8 @@
 //   5. Find-or-create the captain contact
 //   6. Find-or-create the team by (location_id, name); update size. A
 //      find_team solo is deduped by person instead and always gets a fresh
-//      team row of its own (FINDTEAM.8).
+//      team row of its own (FINDTEAM.8), which every later refusal discards
+//      again (FINDTEAM.9: discardSoloTeam), so attempts never pile up rows.
 //   7. Validate every member's email against UN1T members (mig 084)
 //   8. members_only race? — refuse if any non-member detected
 //   9. Compute pricing per head (member_fee × verified + non_member_fee × rest)
@@ -132,6 +133,41 @@ async function resolveRebookState(db, reg) {
     }
   }
   return { regStatus, livePaymentId }
+}
+
+/**
+ * FINDTEAM.9 — drop a solo's team row once its registration is gone, or was
+ * never made. A solo's team row exists for exactly one registration (FINDTEAM.8
+ * inserts a fresh one per attempt), so a refused or abandoned attempt would
+ * otherwise leave a "<name> (looking for a team) N" row behind and use up the
+ * SOLO_TEAM_NAME_TRIES suffixes for that name at the studio. Called on every
+ * refusal after the team insert and on the stale-pending clear.
+ *
+ * race_registrations.team_id CASCADES on a team delete (mig 082), so the row
+ * goes only once a count proves no registration points at it: a paid (or
+ * placed, or live-checkout) solo's team always has one and is never touched,
+ * and a pre-FINDTEAM.8 team row two namesakes shared stays while either's
+ * registration does. team_members cascade with the team (mig 081). Best
+ * effort: the request's answer is already decided, so a failure here is
+ * logged, never thrown, and a row that stays behind costs one suffix.
+ */
+async function discardSoloTeam(db, teamId) {
+  if (!teamId) return
+  try {
+    const { count, error: countErr } = await db
+      .from('race_registrations')
+      .select('id', { count: 'exact', head: true })
+      .eq('team_id', teamId)
+    if (countErr) {
+      logWarn('race-register', 'solo team row kept: registration count unreadable', { teamId, err: countErr.message })
+      return
+    }
+    if ((count || 0) > 0) return
+    const { error } = await db.from('teams').delete().eq('id', teamId)
+    if (error) logWarn('race-register', 'solo team row not discarded', { teamId, err: error.message })
+  } catch (e) {
+    logWarn('race-register', 'solo team row not discarded', { teamId, err: e })
+  }
 }
 
 export async function POST(request, props) {
@@ -509,7 +545,8 @@ export async function POST(request, props) {
         message: `You've already started booking Team "${liveName}" — complete payment to confirm.`,
       })
     }
-    // Every remaining row is this contact's own stale pending entry.
+    // Every remaining row is this contact's own stale pending entry. Its team
+    // row goes with it (FINDTEAM.9), once nothing else points at that team.
     for (const { row } of states) {
       const { error: delErr } = await db
         .from('race_registrations')
@@ -519,6 +556,7 @@ export async function POST(request, props) {
       if (delErr) {
         return NextResponse.json({ success: false, error: 'Could not clear your earlier unfinished entry. Please try again.' }, { status: 500 })
       }
+      await discardSoloTeam(db, row.team_id)
     }
 
     const baseName = teamName
@@ -643,10 +681,31 @@ export async function POST(request, props) {
           message: `You've already started booking Team "${teamName}" — complete payment to confirm.`,
         })
       }
+      // FINDTEAM.9 — a team entry that solos were placed into is as final as a
+      // confirmed one whatever its own status reads: their rows point at it and
+      // their payments ride on it, so it is never stale-deleted. An unreadable
+      // count refuses too; a delete on a guess could strand a placement.
+      const { count: placedCount, error: placedErr } = await db
+        .from('race_registrations')
+        .select('id', { count: 'exact', head: true })
+        .eq('placed_into_registration_id', teamReg.id)
+      if (placedErr) {
+        return NextResponse.json({ success: false, error: 'Could not check the existing entry. Please try again.' }, { status: 500 })
+      }
+      if ((placedCount || 0) > 0) {
+        return NextResponse.json({
+          success: false,
+          error: `Team "${teamName}" is already registered for ${race.name}.`,
+          code: 'already_registered',
+        }, { status: 409 })
+      }
       // Stale/dead row (lapsed session, cancelled, no_show, abandoned, or
       // pending with no usable payment): clear it so the flow below inserts
       // a fresh registration and mints a NEW payment session.
-      await db.from('race_registrations').delete().eq('id', teamReg.id)
+      const { error: staleErr } = await db.from('race_registrations').delete().eq('id', teamReg.id)
+      if (staleErr) {
+        return NextResponse.json({ success: false, error: 'Could not clear the earlier unfinished entry. Please try again.' }, { status: 500 })
+      }
     }
   }
 
@@ -690,6 +749,7 @@ export async function POST(request, props) {
       // the two never disagree and a host-anchor location's internal label
       // never shows. Never a literal; a refusal path, so read uncached.
       const brand = await getLocationOrgBrandName(db, race.location_id)
+      if (findTeam) await discardSoloTeam(db, teamId) // FINDTEAM.9
       return NextResponse.json({
         success: false,
         error: brand
@@ -726,6 +786,7 @@ export async function POST(request, props) {
       ? promoCodeError(code, { eventId: race.id, isMemberOrder: (pricing.member_count || 0) > 0 })
       : 'That code isn’t valid.'
     if (err) {
+      if (findTeam) await discardSoloTeam(db, teamId) // FINDTEAM.9
       return NextResponse.json({ success: false, error: err, code: 'invalid_promo_code' }, { status: 400 })
     }
     promoDiscountCents = computeDiscountCents(code, pricing.total_cents)
@@ -794,6 +855,9 @@ export async function POST(request, props) {
     .single()
 
   if (regErr) {
+    // FINDTEAM.9 — the solo's fresh team row (and its member row, by cascade)
+    // has nothing to belong to now.
+    if (findTeam) await discardSoloTeam(db, teamId)
     if (regErr.code === '23505' || /duplicate key|unique/i.test(regErr.message || '')) {
       return NextResponse.json({
         success: false,
@@ -851,8 +915,14 @@ export async function POST(request, props) {
     })
   } catch (e) {
     // Roll back the registration so the team can retry — leaving a
-    // pending_payment row with no payment is operator confusion.
-    await db.from('race_registrations').delete().eq('id', registration.id)
+    // pending_payment row with no payment is operator confusion. A solo's
+    // team row goes with it (FINDTEAM.9), once the registration is gone.
+    const { error: rollbackErr } = await db.from('race_registrations').delete().eq('id', registration.id)
+    if (rollbackErr) {
+      logWarn('race-register', 'registration rollback failed after payment init error', { registrationId: registration.id, err: rollbackErr.message })
+    } else if (findTeam) {
+      await discardSoloTeam(db, teamId)
+    }
     return NextResponse.json({
       success: false,
       error: `Could not start payment: ${e.message || 'unknown error'}`,

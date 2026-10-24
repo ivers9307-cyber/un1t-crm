@@ -782,16 +782,19 @@ registry.registerPath({
             phone: z.string().max(50).optional(),
             team_name: z.string().max(200).optional(),
             waitlist_token: z.string().max(1000).optional().openapi({ description: 'EVENT-WAITLIST.1: the claim token from a waitlist offer link (?wl=); marks that waitlist row claimed once the registration exists. Never changes the answer.' }),
-            find_team: z.boolean().optional().openapi({ description: 'FINDTEAM.3: register one person as a team of one looking for a team; team_size is forced to 1 and team_name is ignored (the team is named "<name> (looking for a team)"); members must be empty (members non-empty -> 400). 400 find_team_unavailable on a non-race kind, 400 find_team_disabled when the event has the option off. A solo takes no team slot in teams capacity mode. FINDTEAM.8: deduped by person, not by team name: this contact already confirmed or placed on the event -> 409 already_registered; their own checkout still live -> the resume answer (payment.resumed); every new solo gets a team row of its own, suffixed " 2", " 3", … on a name clash. A captain re-registering a team whose entry is placed -> 409 already_registered (a placed row is never deleted).' }),
+            find_team: z.boolean().optional().openapi({ description: 'FINDTEAM.3: register one person as a team of one looking for a team; team_size is forced to 1 and team_name is ignored (the team is named "<name> (looking for a team)"); members must be empty (members non-empty -> 400). 400 find_team_unavailable on a non-race kind, 400 find_team_disabled when the event has the option off. A solo takes no team slot in teams capacity mode. FINDTEAM.8: deduped by person, not by team name: this contact already confirmed or placed on the event -> 409 already_registered; their own checkout still live -> the resume answer (payment.resumed); every new solo gets a team row of its own, suffixed " 2", " 3", … on a name clash. A captain re-registering a team whose entry is placed -> 409 already_registered (a placed row is never deleted). FINDTEAM.9: a refused or abandoned solo attempt discards the team row it made (never one a registration still points at), so attempts do not use up the suffixes; a captain re-book never stale-deletes a team entry that solos were placed into (409 already_registered whatever its own status; an unreadable count is a 500).' }),
           }).openapi('EventRegisterBody'),
         },
       },
     },
   },
   responses: {
-    200: { description: 'Registration confirmed' },
+    200: { description: 'Registration confirmed, or an existing live checkout resumed (payment.resumed)' },
     400: { description: 'Validation failed or registration closed', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'members_only_unverified', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Event not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'already_registered (a confirmed or placed entry, or a team entry solos were placed into) or wave_full', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'payment_init_failed: the registration is rolled back (a solo\'s team row with it)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -1055,13 +1058,14 @@ registry.registerPath({
   tags: ['Races'],
   security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: 'Cancel a race/event registration (staff, manager+ at the event\'s studio)',
-  description: 'Idempotent (a cancelled row answers already_cancelled). Refunds are a human decision. 409 `not_active` for a placed solo\'s row (status `placed`): it holds their payment and placement record.',
+  description: 'Idempotent (a cancelled row answers already_cancelled). Refunds are a human decision. 409 `not_active` for a placed solo\'s row (status `placed`): it holds their payment and placement record. FINDTEAM.9: 409 `has_placed_solos` (with `placed_count`, the same body as the registration DELETE) for a team entry that solos were placed into: un-place them first (there is no un-place tool yet). Mia\'s cancel and the approvals route go through the same lib call and inherit both refusals.',
   request: { params: z.object({ id: z.string() }) },
   responses: {
     200: { description: 'Cancelled', content: { 'application/json': { schema: z.object({ success: z.boolean(), already_cancelled: z.boolean() }).openapi('RegistrationCancelResult') } } },
     403: { description: 'Not a manager at the event\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found, or a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'not_active: the row is a placed solo', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_active (a placed solo) or has_placed_solos (solos were placed into this team; `placed_count`)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The cancel, or the placed-entrants check, failed; nothing was cancelled', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

@@ -22,6 +22,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
+import { placedSolosRefusal } from '@/lib/race-cancel'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -129,13 +130,8 @@ export async function DELETE(_request, props) {
     return NextResponse.json({ success: false, error: 'Could not check for placed entrants. Nothing was deleted.' }, { status: 500 })
   }
   if ((placedCount || 0) > 0) {
-    const n = placedCount
-    return NextResponse.json({
-      success: false,
-      error: 'has_placed_solos',
-      message: `${n} placed ${n === 1 ? 'entrant points' : 'entrants point'} at this team; un-place them first. There is no un-place tool in the CRM yet, so this team cannot be deleted from here.`,
-      placed_count: n,
-    }, { status: 409 })
+    // FINDTEAM.9 — the same body the cancel route answers (placedSolosRefusal).
+    return NextResponse.json(placedSolosRefusal(placedCount, 'deleted'), { status: 409 })
   }
 
   const { error } = await db

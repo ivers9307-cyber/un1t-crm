@@ -28,7 +28,7 @@ describe('classifyEventCancellation — placed', () => {
 function cancelDb({ reg, placedInto = [], pays = {} }) {
   return fakeDb((q) => {
     if (q.table === 'race_registrations' && q.action === 'select') {
-      if (eqOf(q, 'placed_into_registration_id')) return { data: placedInto, error: null }
+      if (eqOf(q, 'placed_into_registration_id')) return { data: placedInto, count: placedInto.length, error: null }
       return { data: reg, error: null }
     }
     if (q.table === 'race_payments') {
@@ -60,6 +60,22 @@ describe('cancel_event_registration (FINDTEAM.8 I3)', () => {
     expect(cancels(db)).toHaveLength(0)
     const audit = db.queries.find((x) => x.table === 'agent_membership_requests')
     expect(audit.payload.details).toMatchObject({ paid_cents: 2000, mode: 'draft' })
+  })
+
+  // FINDTEAM.9 — the lib refuses a team solos were placed into; Mia inherits it.
+  it('a free team that FREE solos were placed into is refused by the lib, never cancelled', async () => {
+    const db = cancelDb({
+      reg: { id: 'team', status: 'confirmed', contact_id: 'c-1', wave_id: 'w1', race_events: RACE },
+      placedInto: [{ id: 'solo' }],
+      pays: {},
+    })
+    const res = await executeEventTool('cancel_event_registration', { registration_id: 'team' }, ctx(db))
+    expect(res).toMatchObject({ cancelled: false, reason: 'has_placed_solos' })
+    expect(res.message).toMatch(/hand off/)
+    expect(cancels(db)).toHaveLength(0)
+    const audit = db.queries.find((x) => x.table === 'agent_membership_requests')
+    expect(audit.payload.status).toBe('failed')
+    expect(audit.payload.details.result).toMatchObject({ ok: false, error: 'has_placed_solos', placedCount: 1 })
   })
 
   it('an unreadable payment total is never a direct cancel', async () => {
