@@ -805,7 +805,7 @@ function TeamCard({ registration, placedIntoName = null, waves, onChanged, onErr
               <Users size={10} /> {team.size}-person
             </span>
           )}
-          <StatusPill status={registration.status} />
+          <StatusPill status={registration.status} lapsed={registration.lapsed === true} />
           {isPlaced && (
             <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-700 inline-flex items-center gap-1">
               <Link2 size={10} /> {placedIntoName ? `Placed → team ${placedIntoName}` : 'Placed'}
@@ -1159,13 +1159,23 @@ function AddMemberRow({ teamId, onAdded, onCancel, onError }) {
   )
 }
 
-function StatusPill({ status }) {
+// ENTRYPOLICY.1 — `lapsed`: an unpaid entry past the event's hold (the teams
+// route judges it, holdsPlace). Still pending_payment on the row; shown apart
+// so staff can see it holds no place. Confirm by hand or delete as before.
+function StatusPill({ status, lapsed = false }) {
   const map = {
     confirmed: 'bg-emerald-500/15 text-emerald-700',
     pending_payment: 'bg-amber-500/15 text-amber-700',
     cancelled: 'bg-gray-500/15 text-gray-600',
     placed: 'bg-sky-500/15 text-sky-700',
     no_show: 'bg-red-500/15 text-red-700',
+  }
+  if (status === 'pending_payment' && lapsed) {
+    return (
+      <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-gray-500/15 text-gray-600" title="Unpaid past the event's hold: this entry no longer holds a place. Confirm it by hand or delete it.">
+        Lapsed (unpaid)
+      </span>
+    )
   }
   return (
     <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${map[status] || 'bg-un1t-border/30 text-un1t-subtle'}`}>

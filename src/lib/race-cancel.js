@@ -10,6 +10,8 @@
 // this lib after a human approves them in /approvals, and the refund
 // itself (if any) is processed manually in Revolut Business.
 
+import { holdingPlaces } from './entry-policy'
+
 /**
  * Total paid cents recorded against a registration. Pure-ish read:
  * sums race_payments rows with status 'completed' (the DB CHECK
@@ -117,19 +119,25 @@ export async function moveRegistrationWave(db, registrationId, newWaveId) {
   if (reg.status === 'cancelled' || reg.status === 'no_show' || reg.status === 'placed') return { ok: false, error: 'not_active' }
   if (reg.wave_id === newWaveId) return { ok: true, unchanged: true }
 
+  // ENTRYPOLICY.1 — the event's policy rides the wave read: an unpaid entry
+  // holds its place in the target wave only for unpaid_hold_hours.
   const { data: wave } = await db.from('race_waves')
-    .select('id, race_event_id, capacity')
+    .select('id, race_event_id, capacity, race:race_event_id ( entry_policy )')
     .eq('id', newWaveId)
     .maybeSingle()
   if (!wave) return { ok: false, error: 'not_found' }
   if (wave.race_event_id !== reg.race_event_id) return { ok: false, error: 'wrong_event' }
 
   if (wave.capacity != null) {
-    const { count } = await db.from('race_registrations')
-      .select('id', { count: 'exact', head: true })
+    // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- wave-capacity gate; a single race wave never holds >1000 registrations
+    const { data: inWave, error: waveErr } = await db.from('race_registrations')
+      .select('id, status, registered_at')
       .eq('wave_id', wave.id)
-      .not('status', 'in', '("cancelled","no_show")')
-    if ((count || 0) >= wave.capacity) return { ok: false, error: 'wave_full' }
+      .in('status', ['confirmed', 'pending_payment'])
+      .limit(2000)
+    // An unreadable wave is never "room": refuse rather than oversell.
+    if (waveErr) return { ok: false, error: waveErr.message }
+    if (holdingPlaces(inWave || [], Date.now(), wave.race || null).length >= wave.capacity) return { ok: false, error: 'wave_full' }
   }
 
   const { error } = await db.from('race_registrations')

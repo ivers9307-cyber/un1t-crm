@@ -136,7 +136,9 @@ describe('GET /api/public/entry/[token]', () => {
   it('TZ.9: "already happened" is by the event studio\'s day; an unreadable zone hides the move', async () => {
     // 2026-11-01T03:30Z: Dublin is Sunday 1 Nov; New York is Saturday 31 Oct 23:30.
     vi.setSystemTime(new Date('2026-11-01T03:30:00Z'))
-    const entry = { data: { ...ENTRY, race: { ...ENTRY.race, race_date: '2026-10-31' } }, error: null }
+    // ENTRYPOLICY.1: the race is today at the studio, so the default 48 h
+    // cutoff would block it; this test is about the DAY, so no cutoff here.
+    const entry = { data: { ...ENTRY, race: { ...ENTRY.race, race_date: '2026-10-31', entry_policy: { cutoff_hours: 0 } } }, error: null }
     globalThis.__db = fakeDb({ entry, zoneRow: { data: { id: 'L1', timezone: 'America/New_York' }, error: null } })
     expect((await (await GET(get(), props())).json()).data.can_move).toBe(true)
     // The page payload never carries the zone.
@@ -196,3 +198,42 @@ describe('GET /api/public/entry/[token] — a refused date change', () => {
     expect(text).not.toMatch(/pending_move|wave_full|gp1|cs_1/)
   })
 })
+
+// ENTRYPOLICY.1 — the entry policy on the page: the reschedule switch and the
+// cutoff block the date change in the operator's words; an unpaid entry past
+// the event's hold reads lapsed, with the operator's sentence and the way back.
+describe('GET /api/public/entry/[token] — entry policy', () => {
+  it('a confirmed entry inside the 48 h cutoff cannot move, in the operator\'s words; the policy itself never leaves', async () => {
+    vi.setSystemTime(new Date('2026-10-17T12:00:00Z'))
+    globalThis.__db = fakeDb({ entry: { data: { ...ENTRY, race: { ...ENTRY.race, entry_policy: { cutoff_message: 'Too late for {{event_name}}: ring us.' } } }, error: null } })
+    const { data } = await (await GET(get(), props())).json()
+    expect(data.can_move).toBe(false)
+    expect(data.move_blocked_reason).toBe('Too late for Hatch Oct 18: ring us.')
+    expect(data.lapsed).toBe(false)
+    expect(JSON.stringify(data)).not.toMatch(/entry_policy|cutoff_hours/)
+  })
+  it('date changes switched off: blocked with the disabled copy', async () => {
+    globalThis.__db = fakeDb({ entry: { data: { ...ENTRY, race: { ...ENTRY.race, entry_policy: { self_reschedule_enabled: false } } }, error: null } })
+    const { data } = await (await GET(get(), props())).json()
+    expect(data.can_move).toBe(false)
+    expect(data.move_blocked_reason).toMatch(/handled by the team/)
+  })
+  it('an unpaid entry past the hold is lapsed: the operator sentence and a link to register again', async () => {
+    globalThis.__db = fakeDb({ entry: { data: { ...ENTRY, status: 'pending_payment', registered_at: '2026-10-01T10:00:00Z' }, error: null } })
+    const { data } = await (await GET(get(), props())).json()
+    expect(data.lapsed).toBe(true)
+    expect(data.lapsed_message).toBe('Your unpaid entry for Hatch Oct 18 was held for 48 hours and has now lapsed. You can register again if places remain.')
+    expect(data.register_url).toBe('/event/hatch-oct18-1100')
+    expect(data.status).toBe('pending_payment')
+    expect(data.can_move).toBe(false)
+  })
+  it('an unpaid entry inside the hold is not lapsed (still waiting for payment)', async () => {
+    globalThis.__db = fakeDb({ entry: { data: { ...ENTRY, status: 'pending_payment', registered_at: '2026-10-09T10:00:00Z' }, error: null } })
+    const { data } = await (await GET(get(), props())).json()
+    expect(data.lapsed).toBe(false)
+    expect(data.lapsed_message).toBeNull()
+    expect(data.register_url).toBeNull()
+    expect(data.move_blocked_reason).toMatch(/waiting for payment/)
+  })
+})
+

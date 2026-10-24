@@ -315,6 +315,7 @@ export async function POST(request) {
       charity_enabled: body.charity_enabled ?? false,
       charity: body.charity ?? null,
       find_team: body.find_team ?? null,
+      entry_policy: body.entry_policy ?? null,
     })
     .select()
     .single()

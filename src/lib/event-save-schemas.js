@@ -16,6 +16,7 @@ import { z } from 'zod'
 import { uuidLike } from './schemas.js'
 import { CharitySettingsSchema } from './charity-donations'
 import { FindTeamSettingsSchema } from './find-team'
+import { EntryPolicySettingsSchema } from './entry-policy'
 
 // ----------------------------------------------------------------------------
 // Waves (mig 083). capacity null = unlimited.
@@ -117,6 +118,9 @@ export const EventCreateFields = z.object({
   charity: CharitySettingsSchema.nullable().optional(),
   // FINDTEAM.6 — "Find me a team" switch + copy (race_events.find_team, mig 766).
   find_team: FindTeamSettingsSchema.nullable().optional(),
+  // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
+  // (race_events.entry_policy, mig 767).
+  entry_policy: EntryPolicySettingsSchema.nullable().optional(),
   // Waves (mig 083) — at least one required for a usable race.
   // Server normalises by start_time ascending; UNIQUE on
   // (race_event_id, start_time) catches duplicates from the DB side.
@@ -202,6 +206,9 @@ export const EventUpdateFields = z.object({
   charity: CharitySettingsSchema.nullable().optional(),
   // FINDTEAM.6 — "Find me a team" switch + copy (race_events.find_team, mig 766).
   find_team: FindTeamSettingsSchema.nullable().optional(),
+  // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
+  // (race_events.entry_policy, mig 767).
+  entry_policy: EntryPolicySettingsSchema.nullable().optional(),
   // EVENT-OWNER.1 — the owning studio. Admin at both ends, same org, not a
   // host anchor, not a host event: judged by judgeEventOwnerChange in PUT.
   location_id: uuidLike.optional(),

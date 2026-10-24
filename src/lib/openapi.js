@@ -41,6 +41,7 @@ import {
 import { ROSTER_CHANGE_LOG_MAX_ROWS } from '@/lib/roster-change-format'
 // OPENAPI-EVENTS.1 — the event create/update bodies, the handlers' own objects.
 import { EventCreateFields, EventUpdateFields } from '@/lib/event-save-schemas'
+import { ENTRY_POLICY_DEFAULTS, ENTRY_POLICY_HOURS_MAX } from '@/lib/entry-policy'
 import {
   CampaignCreateSchema as CampaignCreateSessionSchema,
   CampaignContentSchema as CampaignContentSessionSchema,
@@ -784,7 +785,7 @@ registry.registerPath({
             phone: z.string().max(50).optional(),
             team_name: z.string().max(200).optional(),
             waitlist_token: z.string().max(1000).optional().openapi({ description: 'EVENT-WAITLIST.1: the claim token from a waitlist offer link (?wl=); marks that waitlist row claimed once the registration exists. Never changes the answer.' }),
-            find_team: z.boolean().optional().openapi({ description: 'FINDTEAM.3: register one person as a team of one looking for a team; team_size is forced to 1 and team_name is ignored (the team is named "<name> (looking for a team)"); members must be empty (members non-empty -> 400). 400 find_team_unavailable on a non-race kind, 400 find_team_disabled when the event has the option off. A solo takes no team slot in teams capacity mode. FINDTEAM.8: deduped by person, not by team name: this contact already confirmed or placed on the event -> 409 already_registered; their own checkout still live -> the resume answer (payment.resumed); every new solo gets a team row of its own, suffixed " 2", " 3", … on a name clash. A captain re-registering a team whose entry is placed -> 409 already_registered (a placed row is never deleted). FINDTEAM.9: a refused or abandoned solo attempt discards the team row it made (never one a registration still points at), so attempts do not use up the suffixes; a captain re-book never stale-deletes a team entry that solos were placed into (409 already_registered whatever its own status; an unreadable count is a 500).' }),
+            find_team: z.boolean().optional().openapi({ description: 'ENTRYPOLICY.1 (capacity, every mode): a wave\'s load counts confirmed entries and unpaid (pending_payment) ones still inside the event\'s unpaid_hold_hours (default 48 h; race_events.entry_policy); an older unpaid entry holds nothing and is never resumed by a re-book (its checkout is not reused even if still open; the row is cleared and a fresh registration made, as a dead checkout is), while a payment that completed meanwhile still confirms it. FINDTEAM.3: register one person as a team of one looking for a team; team_size is forced to 1 and team_name is ignored (the team is named "<name> (looking for a team)"); members must be empty (members non-empty -> 400). 400 find_team_unavailable on a non-race kind, 400 find_team_disabled when the event has the option off. A solo takes no team slot in teams capacity mode. FINDTEAM.8: deduped by person, not by team name: this contact already confirmed or placed on the event -> 409 already_registered; their own checkout still live -> the resume answer (payment.resumed); every new solo gets a team row of its own, suffixed " 2", " 3", … on a name clash. A captain re-registering a team whose entry is placed -> 409 already_registered (a placed row is never deleted). FINDTEAM.9: a refused or abandoned solo attempt discards the team row it made (never one a registration still points at), so attempts do not use up the suffixes; a captain re-book never stale-deletes a team entry that solos were placed into (409 already_registered whatever its own status; an unreadable count is a 500).' }),
           }).openapi('EventRegisterBody'),
         },
       },
@@ -879,7 +880,7 @@ registry.registerPath({
   path: '/api/public/entry/{token}',
   tags: ['Public'],
   summary: 'The token holder\'s event entry, and whether they may change its date',
-  description: 'Anonymous; the token is the credential. Public entry shape (names only, no emails, phones or check-in codes) plus `can_move`, `move_blocked_reason` (unpaid, cancelled, placed in a team, checked in, past), `date_change_pending`, `date_change_failed` (a paid change was refused; shown until staff move or refund it) and `placed_into` (FINDTEAM.8: for a solo staff placed into a team, `{ team_name, wave: { start_time, label } }`; null otherwise). A pending date-change payment is refreshed from the provider first. Rate limited: 60 per IP per 5 minutes.',
+  description: 'Anonymous; the token is the credential. Public entry shape (names only, no emails, phones or check-in codes) plus `can_move`, `move_blocked_reason` (unpaid, cancelled, placed in a team, checked in, past, or ENTRYPOLICY.1: the event\'s date-change switch is off or the entrant is inside the hours-before cutoff, in the operator\'s own words), `date_change_pending`, `date_change_failed` (a paid change was refused; shown until staff move or refund it), `placed_into` (FINDTEAM.8: for a solo staff placed into a team, `{ team_name, wave: { start_time, label } }`; null otherwise) and ENTRYPOLICY.1 `lapsed` / `lapsed_message` / `register_url` (an unpaid entry past the event\'s unpaid_hold_hours: it no longer holds a place and is never resumed; the row stays). The event\'s `entry_policy` itself is never returned. A pending date-change payment is refreshed from the provider first. Rate limited: 60 per IP per 5 minutes.',
   request: { params: z.object({ token: EntryManageToken }) },
   responses: {
     200: { description: 'The entry', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntrySummary') } } },
@@ -893,7 +894,7 @@ registry.registerPath({
   path: '/api/public/entry/{token}/move-options',
   tags: ['Public'],
   summary: 'Dates and times the token holder may move their entry to',
-  description: 'Anonymous; the token is the credential. Same eligibility as the staff picker (same payee, published, upcoming, the entry size accepted) at a studio of the entry\'s own organisation (fails closed when that cannot be read) but only times with room are listed and NO capacity or count is ever returned. Each option carries `price_difference_cents` and `price_note`. A blocked entry answers `can_move: false`, its reason and no options. Rate limited with the summary: 60 per IP per 5 minutes.',
+  description: 'Anonymous; the token is the credential. Same eligibility as the staff picker (same payee, published, upcoming, the entry size accepted) at a studio of the entry\'s own organisation (fails closed when that cannot be read) but only times with room are listed and NO capacity or count is ever returned; a time\'s room counts confirmed entries and unpaid ones still inside the target event\'s unpaid_hold_hours (ENTRYPOLICY.1). Each option carries `price_difference_cents` and `price_note`. A blocked entry (status, check-in, past, or the event\'s entry policy: date changes off / inside the cutoff) answers `can_move: false`, its reason and no options. Rate limited with the summary: 60 per IP per 5 minutes.',
   request: { params: z.object({ token: EntryManageToken }) },
   responses: {
     200: { description: 'The options', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntryMoveOptions') } } },
@@ -908,7 +909,7 @@ registry.registerPath({
   path: '/api/public/entry/{token}/move',
   tags: ['Public'],
   summary: 'The token holder moves their entry to another date (pays the difference first when dearer)',
-  description: 'Anonymous; the token is the credential. Only a confirmed, unchecked entry on an upcoming event; the same rules as staff, never forced. Equal or cheaper: moved at once as actor `customer`, new tickets emailed, nothing refunded → `{ moved: true, registration, notified }`. Dearer: a price-difference payment carrying the pending move is minted and the move lands when it is paid → `{ moved: false, pay_url }`, where pay_url ends `#back=<this token>` so the checkout can return to the entry page. Targets are fenced to the entry\'s organisation. An immediate move closes any open dearer link on the entry. Every refusal carries `error` and a customer `message`. Rate limited: 10 per IP per 15 minutes.',
+  description: 'Anonymous; the token is the credential. Only a confirmed, unchecked entry on an upcoming event whose entry policy allows a customer date change (ENTRYPOLICY.1: 400 `disabled` when the event\'s switch is off, 400 `cutoff` inside the hours-before cutoff counted back from the entrant\'s wave start, both with the operator\'s own `message`); the same rules as staff, never forced. Equal or cheaper: moved at once as actor `customer`, new tickets emailed, nothing refunded → `{ moved: true, registration, notified }`. Dearer: a price-difference payment carrying the pending move is minted and the move lands when it is paid → `{ moved: false, pay_url }`, where pay_url ends `#back=<this token>` so the checkout can return to the entry page. Targets are fenced to the entry\'s organisation. An immediate move closes any open dearer link on the entry. Every refusal carries `error` and a customer `message`. Rate limited: 10 per IP per 15 minutes.',
   request: {
     params: z.object({ token: EntryManageToken }),
     body: { content: { 'application/json': { schema: z.object({
@@ -1018,7 +1019,8 @@ const EventCreate = EventCreateFields.extend({}).openapi('EventCreate', {
   description:
     'POST /api/events body. Rules the schema adds across fields: every `kind` but lead_gen needs `race_date` and at least one wave; lead_gen (a no-date data-capture form) takes neither. '
     + '`charity` (CHARITY.9) is the charity-day donation settings: name, heading, blurb, presets_cents, custom_allowed, min_cents, max_cents, match_multiplier (1..5), match_label, goal_cents, show_total, include_entries, consent_label, the thank-you and receipt copy, video_url (YouTube or Instagram) or video_file_url (uploaded through the event form); every key optional, a missing key is the default. '
-    + '`find_team` (FINDTEAM.6) is the "Find me a team" switch and copy: enabled, label, blurb, confirmation_paragraph, placed_subject, placed_intro.',
+    + '`find_team` (FINDTEAM.6) is the "Find me a team" switch and copy: enabled, label, blurb, confirmation_paragraph, placed_subject, placed_intro. '
+    + `\`entry_policy\` (ENTRYPOLICY.1) is what a customer may do with their own entry and how long an unpaid entry keeps its place: self_cancel_enabled (default ${ENTRY_POLICY_DEFAULTS.self_cancel_enabled}), self_reschedule_enabled (default ${ENTRY_POLICY_DEFAULTS.self_reschedule_enabled}), cutoff_hours (0..${ENTRY_POLICY_HOURS_MAX}, default ${ENTRY_POLICY_DEFAULTS.cutoff_hours}; hours before the entrant's start, on the studio's clock, that self-service closes; 0 = no cutoff), unpaid_hold_hours (1..${ENTRY_POLICY_HOURS_MAX}, default ${ENTRY_POLICY_DEFAULTS.unpaid_hold_hours}; a pending_payment entry holds its place that long), and the operator copy cutoff_message, disabled_message, lapsed_message ({{hours}} and {{event_name}} are filled in). Every key optional; null or omitted = the defaults.`,
 })
 
 const EventUpdate = EventUpdateFields.extend({}).openapi('EventUpdate', {
@@ -1026,7 +1028,7 @@ const EventUpdate = EventUpdateFields.extend({}).openapi('EventUpdate', {
     'PUT /api/events/{id} body. Every key optional: omitted = left as it is, null clears a nullable column. '
     + 'Rule the schema adds across fields (CHARITY.12): `charity_enabled: true` sent with a `charity` whose name is blank is refused (nothing is written). '
     + '`waves`, when sent, is the whole new wave set (at least one): a row with a known `id` updates that wave, a row without one is inserted, and an existing wave not in the set is deleted (registrations that pointed at it keep their place with no wave). '
-    + '`charity` and `find_team` take the same shapes as on create.',
+    + '`charity`, `find_team` and `entry_policy` take the same shapes as on create.',
 })
 
 const EventListRow = z.object({
@@ -1046,7 +1048,7 @@ const EventListRow = z.object({
 const EventDetail = z.object({}).passthrough().openapi('EventDetail', {
   description:
     'The race_events row as the handler selects it: id, location_id, name, slug, description, race_date, kind, staff_required, registration_opens_at/closes_at, allowed_team_sizes, active, created_at, updated_at, '
-    + 'member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, tv_logos, shared, host_id, hero_image_url, accent_hex, the confirmation/reminder/moved/gap/waitlist email subject and intro copy, the two email template ids, sending_location_id, charity_enabled, charity, find_team, '
+    + 'member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, tv_logos, shared, host_id, hero_image_url, accent_hex, the confirmation/reminder/moved/gap/waitlist email subject and intro copy, the two email template ids, sending_location_id, charity_enabled, charity, find_team, entry_policy, '
     + 'plus `waves` (id, start_time, capacity, label, display_order) and `registrations` (id, status, race_started_at, race_finished_at, registered_at, wave_id, team_composition, active_payment_id, and `teams` with its `team_members`).',
 })
 
@@ -1079,7 +1081,7 @@ registry.registerPath({
     'Session auth → `races` at any studio (403) → body validated (400 with `issues`) → the caller must belong to `location_id` (403 Forbidden) and hold `races` there (403). Any role may create an internal event; sending `host_id` (the payee, paid through Stripe Connect) needs ADMIN_ROLES (master, owner, manager) at that studio (403). '
     + "Referential checks run before the insert, each a 400 carrying the code as `error`: `invalid_host` (host_id must be an event_hosts row in the studio's organisation), `invalid_template` (confirmation_email_template_id / reminder_email_template_id must be email_templates rows at that studio), `invalid_sending_location` (sending_location_id must be a non-anchor studio in the same organisation). "
     + 'The public URL slug is derived from the studio, the date and the earliest wave (studio-oct17-1030, suffixed -2, -3 on a clash) unless `slug` is sent, which answers 409 when another event already uses it (slugs are global: the public /event/[slug] page has no studio filter). '
-    + 'Written when omitted: kind race, capacity_mode teams, staff_required 1, allowed_team_sizes [1, 2, 4] (sorted when sent), active true, payment_currency EUR, charity_enabled false; member_fee_cents is kept only when member_pricing_enabled is true. `charity`, `find_team` are stored as sent (null or omitted = the defaults). '
+    + 'Written when omitted: kind race, capacity_mode teams, staff_required 1, allowed_team_sizes [1, 2, 4] (sorted when sent), active true, payment_currency EUR, charity_enabled false; member_fee_cents is kept only when member_pricing_enabled is true. `charity`, `find_team` and `entry_policy` are stored as sent (null or omitted = the defaults). '
     + 'Waves are inserted sorted by start_time (display_order defaults to that order); two waves on one start time answer 409 `duplicate_wave_time` and the event row is rolled back, so a 409 leaves nothing behind. Answers 201 with the row and its `waves` (an empty array for lead_gen).',
   request: { body: { content: { 'application/json': { schema: EventCreate } } } },
   responses: {

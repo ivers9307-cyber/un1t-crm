@@ -38,6 +38,7 @@ import { findOrCreateRaceContact } from './race-contact-linking'
 import { resolveMasterLocationId } from './host-events'
 import { loadForMode } from './event-signups'
 import { LIVE_REGISTRATION_STATUSES } from './audience-filter'
+import { holdsPlace, holdingPlaces } from './entry-policy'
 import { isWhatsAppNumberMissing } from './whatsapp-number-missing'
 import { locationsWithWhatsApp } from './whatsapp-config'
 import { eventToday, earliestLocalToday, eventDateLong } from './event-day'
@@ -69,7 +70,7 @@ export const WAITLIST_EVENT_COLUMNS = `
   location_id, host_id, sending_location_id,
   registration_opens_at, registration_closes_at,
   venue_name, accent_hex, hero_image_url,
-  waitlist_email_subject, waitlist_email_intro,
+  waitlist_email_subject, waitlist_email_intro, entry_policy,
   locations:location_id ( id, name, is_host_anchor, organization_id, timezone ),
   waves:race_waves ( id, capacity )
 `
@@ -80,29 +81,33 @@ export function normaliseWaitlistEmail(email) {
 
 /**
  * Does any time of this event have room for one more? The public event
- * route's arithmetic (its `is_full` per wave, confirmed-only): a wave with no
- * capacity always has room, and an event with no waves is not full. Pure.
+ * route's arithmetic (its `is_full` per wave): a wave with no capacity always
+ * has room, and an event with no waves is not full. Pure.
  *
- * NOTE the difference from the register route's gate: in people mode that
- * gate also counts pending_payment entries (a checkout in progress HOLDS its
- * place), this does not. So an offer can go out for a place a pending
- * checkout is holding; the register route then refuses the booking
- * (wave_full) and the person stays on the list. Kept confirmed-only so the
- * waitlist and the public page's "Sold out" agree on what full means.
+ * ENTRYPOLICY.1 — which rows take a place is the ONE rule in
+ * src/lib/entry-policy.js (holdsPlace): a confirmed entry, and an unpaid
+ * (pending_payment) entry while it is younger than the event's
+ * unpaid_hold_hours (default 48 h). So this gate now agrees with the register
+ * route's: an offer does not go out for a place a fresh checkout is holding,
+ * and a lapsed checkout frees its place here as it does there (the row
+ * stays). It still differs from the public page's "Sold out", which counts
+ * confirmed entries only; a caller must select `registered_at` and pass the
+ * event row (its entry_policy) for the hold to be judged.
  *
- * @param {{ capacity_mode?: string, waves?: Array<{ id: string, capacity?: number|null }> }} event
- * @param {Array<{ wave_id?: string|null, status?: string, team?: { size?: number }|null }>} registrations
+ * @param {{ capacity_mode?: string, entry_policy?: object|null, waves?: Array<{ id: string, capacity?: number|null }> }} event
+ * @param {Array<{ wave_id?: string|null, status?: string, registered_at?: string|null, team?: { size?: number }|null }>} registrations
+ * @param {number} [nowMs]
  * @returns {boolean}
  */
-export function eventHasRoom(event, registrations) {
+export function eventHasRoom(event, registrations, nowMs = Date.now()) {
   const waves = Array.isArray(event?.waves) ? event.waves : []
   if (waves.length === 0) return true
   const mode = event?.capacity_mode === 'people' ? 'people' : 'teams'
-  const regs = (Array.isArray(registrations) ? registrations : []).filter((r) => r?.status === 'confirmed')
+  const regs = holdingPlaces(registrations, nowMs, event || null)
   return waves.some((w) => {
     if (w?.capacity == null || !Number.isFinite(w.capacity)) return true
     const inWave = regs.filter((r) => r.wave_id === w.id)
-    return loadForMode(inWave, mode) < w.capacity
+    return loadForMode(inWave, mode, { held: true }) < w.capacity
   })
 }
 
@@ -127,7 +132,9 @@ export function isOfferDue(row, now = Date.now()) {
 }
 
 /**
- * The confirmed registrations of one event (wave + team size), range-paginated.
+ * The live registrations of one event (wave, team size, registered_at), for
+ * eventHasRoom: confirmed and pending_payment rows, so the hold an unpaid
+ * entry has on its place can be judged (ENTRYPOLICY.1). Range-paginated.
  * @returns {Promise<{ data: Array|null, error: object|null }>}
  */
 export async function readConfirmedRegistrations(db, raceEventId) {
@@ -135,9 +142,9 @@ export async function readConfirmedRegistrations(db, raceEventId) {
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
       .from('race_registrations')
-      .select('id, wave_id, status, looking_for_team, team:teams ( size )') // FINDTEAM.2
+      .select('id, wave_id, status, registered_at, looking_for_team, team:teams ( size )') // FINDTEAM.2, ENTRYPOLICY.1
       .eq('race_event_id', raceEventId)
-      .eq('status', 'confirmed')
+      .in('status', LIVE_REGISTRATION_STATUSES)
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (error) return { data: null, error }
@@ -539,7 +546,7 @@ async function readUpcomingClaimedRows(db, eventId, floorStr) {
   for (let from = 0; ; from += PAGE) {
     let q = db
       .from('event_waitlist')
-      .select(`${WAITLIST_ROW_COLUMNS}, race:race_events!inner ( race_date ), registration:claimed_registration_id ( id, status, race_event_id )`)
+      .select(`${WAITLIST_ROW_COLUMNS}, race:race_events!inner ( race_date ), registration:claimed_registration_id ( id, status, race_event_id, registered_at )`)
       .eq('status', 'claimed')
       .gte('race.race_date', floorStr)
     if (eventId) q = q.eq('race_event_id', eventId)
@@ -553,15 +560,16 @@ async function readUpcomingClaimedRows(db, eventId, floorStr) {
 
 /**
  * The LIVE registrations (confirmed or pending payment) of one event, with the
- * lead's email: who already holds a place, and (confirmed only, inside
- * eventHasRoom) whether a place is free. Range-paginated.
+ * lead's email: who already holds a place, and (inside eventHasRoom) whether
+ * a place is free. The caller keeps only the rows that still hold a place
+ * (holdingPlaces, ENTRYPOLICY.1). Range-paginated.
  */
 async function readLiveRegistrations(db, raceEventId) {
   const out = []
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
       .from('race_registrations')
-      .select('id, wave_id, status, contact_id, looking_for_team, team:teams ( size ), contact:contact_id ( email )') // FINDTEAM.2
+      .select('id, wave_id, status, registered_at, contact_id, looking_for_team, team:teams ( size ), contact:contact_id ( email )') // FINDTEAM.2, ENTRYPOLICY.1
       .eq('race_event_id', raceEventId)
       .in('status', LIVE_REGISTRATION_STATUSES)
       .order('id', { ascending: true })
@@ -573,11 +581,16 @@ async function readLiveRegistrations(db, raceEventId) {
   return { data: out, error: null }
 }
 
-/** A claim whose registration is gone, no longer live, or moved to another event. */
-export function claimFellThrough(row) {
+/**
+ * A claim whose registration is gone, no longer holds a place (cancelled,
+ * no_show, placed, or ENTRYPOLICY.1: an unpaid entry past the event's hold),
+ * or moved to another event. `event` is the row's race_events row (its
+ * entry_policy); omitted, the default hold applies.
+ */
+export function claimFellThrough(row, nowMs = Date.now(), event = null) {
   const reg = row?.registration
   if (!reg) return true
-  if (!LIVE_REGISTRATION_STATUSES.includes(reg.status)) return true
+  if (!holdsPlace(reg, nowMs, event)) return true
   return reg.race_event_id !== row.race_event_id
 }
 
@@ -671,7 +684,7 @@ export async function runWaitlistOffers(db, { now = Date.now(), todayStr = null,
     // 2. Re-open claims whose booking fell through.
     const active = [...group.active]
     for (const row of group.claimed) {
-      if (!claimFellThrough(row)) continue
+      if (!claimFellThrough(row, now, race)) continue
       let q = db
         .from('event_waitlist')
         .update({ status: 'offered', claimed_registration_id: null })
@@ -693,12 +706,15 @@ export async function runWaitlistOffers(db, { now = Date.now(), todayStr = null,
     }
     if (!active.length) continue
 
-    const { data: liveRegs, error: regsErr } = await readLiveRegistrations(db, raceEventId)
+    const { data: liveRows, error: regsErr } = await readLiveRegistrations(db, raceEventId)
     if (regsErr) {
       counts.failed += 1
       logError('event-waitlist', 'registrations read failed; event skipped this round', { err: regsErr, raceEventId })
       continue
     }
+    // ENTRYPOLICY.1 — a lapsed unpaid entry holds nothing: its person is not
+    // "already booked", and its place is free to offer.
+    const liveRegs = holdingPlaces(liveRows, now, race)
 
     // 3. Already booked (without the link): mark claimed, never offer.
     const byContact = new Map()
@@ -732,7 +748,7 @@ export async function runWaitlistOffers(db, { now = Date.now(), todayStr = null,
       counts.skipped += toOffer.length
       continue
     }
-    if (!eventHasRoom(race, liveRegs)) { counts.no_room += 1; continue }
+    if (!eventHasRoom(race, liveRegs, now)) { counts.no_room += 1; continue }
     counts.events += 1
 
     const due = toOffer.filter((row) => (force ? ACTIVE_WAITLIST_STATUSES.includes(row.status) : isOfferDue(row, now)))
