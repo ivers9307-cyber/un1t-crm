@@ -174,4 +174,53 @@ describe('ScreenModeCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /save settings/i }))
     expect(await screen.findByText('unknown_device')).toBeTruthy()
   })
+
+  it('refuses to save an enabled card whose package was cleared, and says why', async () => {
+    const fetchFn = stubFetch()
+    show({ initialEnabled: true, initialConfig: { class_app_package: 'com.franchise.app', device_names: ['hatch-screen1'] } })
+    fireEvent.change(screen.getByLabelText(/class app package/i), { target: { value: '' } })
+    fetchFn.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: /save settings/i }))
+    expect(await screen.findByText(/Enter the class app package name to enable/)).toBeTruthy()
+    expect(putCall(fetchFn)).toBeUndefined()
+  })
+
+  it('refuses to save an enabled card with every screen unticked', async () => {
+    const fetchFn = stubFetch()
+    show({ initialEnabled: true, initialConfig: { class_app_package: 'com.franchise.app', device_names: ['hatch-screen1'] } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /Studio wall/ }))
+    fetchFn.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: /save settings/i }))
+    expect(await screen.findByText(/Pick at least one screen to enable/)).toBeTruthy()
+    expect(putCall(fetchFn)).toBeUndefined()
+  })
+
+  it('still lets an enabled card with a valid form save', async () => {
+    const fetchFn = stubFetch()
+    show({ initialEnabled: true, initialConfig: { class_app_package: 'com.franchise.app', device_names: ['hatch-screen1'] } })
+    fireEvent.click(screen.getByRole('button', { name: /save settings/i }))
+    await waitFor(() => expect(putCall(fetchFn)).toBeTruthy())
+    expect(JSON.parse(putCall(fetchFn)[1].body).enabled).toBe(true)
+  })
+
+  it('says the schedule could not be loaded, not that there are no classes', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ success: false }) })))
+    show()
+    expect(await screen.findByText(/Couldn't load the schedule\. Reload to try again\./)).toBeTruthy()
+    expect(screen.queryByText(/No class windows in the synced schedule/)).toBeNull()
+  })
+
+  it('says the same when the schedule request throws', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
+    show()
+    expect(await screen.findByText(/Couldn't load the schedule/)).toBeTruthy()
+    expect(screen.queryByText(/No class windows in the synced schedule/)).toBeNull()
+  })
+
+  it('says no windows when the schedule loaded and is empty', async () => {
+    stubFetch({ classes: [] })
+    show()
+    expect(await screen.findByText(/No class windows in the synced schedule/)).toBeTruthy()
+    expect(screen.queryByText(/Couldn't load the schedule/)).toBeNull()
+  })
 })

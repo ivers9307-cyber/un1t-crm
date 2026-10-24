@@ -11,7 +11,7 @@
 // where the timetable comes from), so it gates itself on the data the page
 // reads: screens exist, and a timetable is being synced.
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Monitor, CalendarClock, X } from 'lucide-react'
 import { Field } from '@/components/ui'
@@ -46,15 +46,17 @@ export default function ScreenModeCard({ locationId, timezone, screens, hasTimet
   const [saved, setSaved] = useState(false)
   const [classes, setClasses] = useState([])
   const [schedLoading, setSchedLoading] = useState(false)
+  const [schedError, setSchedError] = useState(false)
 
   const loadSchedule = useCallback(async () => {
     if (!locationId || !hasTimetable) return
-    setSchedLoading(true)
+    setSchedLoading(true); setSchedError(false)
     try {
       const res = await fetch(`/api/automations/${SCREEN_MODE_KEY}/schedule?location_id=${encodeURIComponent(locationId)}`)
       const j = await res.json()
       if (res.ok && j.success !== false) setClasses(j.classes || [])
-    } catch { /* leave as-is */ } finally { setSchedLoading(false) }
+      else setSchedError(true)
+    } catch { setSchedError(true) } finally { setSchedLoading(false) }
   }, [locationId, hasTimetable])
 
   useEffect(() => { loadSchedule() }, [loadSchedule])
@@ -82,20 +84,11 @@ export default function ScreenModeCard({ locationId, timezone, screens, hasTimet
     }
   }
 
-  const windows = useMemo(() => {
-    if (!hasTimetable) return []
-    return planScreenWindows({
-      occurrences: classes,
-      config: resolveScreenConfig({
-        device_names: deviceNames,
-        lead_in_min: Math.max(0, Number(leadIn) || 0),
-        lead_out_min: Math.max(0, Number(leadOut) || 0),
-        class_filter: filterText.split(',').map((s) => s.trim()).filter(Boolean),
-        excluded_slots: excludedSlots,
-      }),
-      zone: timezone,
-    })
-  }, [hasTimetable, classes, deviceNames, leadIn, leadOut, filterText, excludedSlots, timezone])
+  // The preview runs the saved config shape through the same resolver the
+  // server applies, so what is shown cannot drift from what is saved.
+  const windows = hasTimetable
+    ? planScreenWindows({ occurrences: classes, config: resolveScreenConfig(buildConfig()), zone: timezone })
+    : []
 
   function toggleSlot(key) {
     if (!key) return
@@ -109,6 +102,9 @@ export default function ScreenModeCard({ locationId, timezone, screens, hasTimet
   }
 
   async function save(nextEnabled) {
+    // A card that is on must stay enableable: refuse rather than persist
+    // enabled:true with no package, no screen or no timetable behind it.
+    if (nextEnabled && !canEnable) { setError(whyNot); setSaved(false); return }
     setBusy(true); setError(null); setSaved(false)
     try {
       const res = await fetch(`/api/automations/${SCREEN_MODE_KEY}`, {
@@ -252,7 +248,10 @@ export default function ScreenModeCard({ locationId, timezone, screens, hasTimet
               </div>
             )}
 
-            {windows.length === 0 && !schedLoading && (
+            {schedError && (
+              <p className="text-[11px] text-amber-700">Couldn&apos;t load the schedule. Reload to try again.</p>
+            )}
+            {windows.length === 0 && !schedLoading && !schedError && (
               <p className="text-[11px] text-un1t-subtle">No class windows in the synced schedule.</p>
             )}
             {windows.length > 0 && (
