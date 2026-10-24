@@ -212,6 +212,9 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   // Form state
   const [teamName, setTeamName] = useState('')
   const [teamSize, setTeamSize] = useState(1)
+  // FINDTEAM.4 — a solo entrant who wants staff to place them in a team. Never
+  // preselected; picking it forces teamSize 1, picking a size clears it.
+  const [findTeam, setFindTeam] = useState(false)
   const [waveId, setWaveId] = useState('')
   const [members, setMembers] = useState([])
   const [captainName, setCaptainName] = useState('')
@@ -397,6 +400,8 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const kind = race?.kind || 'race'
   const copy = copyFor(kind)
   const isLeadGen = kind === 'lead_gen'
+  // FINDTEAM.4 — offered on races only; the server already omits the block elsewhere.
+  const findTeamEnabled = kind === 'race' && !!race?.find_team?.enabled
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -408,7 +413,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     // Team name required only for races. Non-race kinds synthesise
     // a server-bound team_name from the captain so the team_id FK
     // stays satisfied.
-    if (copy.showTeamName && !teamName.trim()) errors.team_name = 'Team name is required'
+    if (copy.showTeamName && !findTeam && !teamName.trim()) errors.team_name = 'Team name is required'
     if (!copy.isLeadGen && !waveId) errors.wave_id = copy.showWavePicker ? 'Pick a wave' : (race?.waves?.length || 0) > 1 ? 'Pick a time' : 'No time slot available'
     if (!captainName.trim()) errors.captain_name = 'Your name is required'
     if (!validateEmail(captainEmail)) errors.captain_email = 'Valid email required'
@@ -448,16 +453,21 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        team_name: outboundTeamName,
-        team_size: teamSize,
+        // FINDTEAM.4 — a solo entry sends find_team and no team_name, team_size
+        // or members: the server forces size 1 and names the team itself.
+        ...(findTeam
+          ? { find_team: true }
+          : { team_name: outboundTeamName, team_size: teamSize }),
         ...(waveId ? { wave_id: waveId } : {}),
         captain_name: captainName.trim(),
         captain_email: captainEmail.trim().toLowerCase(),
         captain_phone: captainPhone.trim(),
-        members: members.map((m) => ({
-          name: m.name.trim(),
-          email: m.email.trim() || null,
-        })),
+        ...(findTeam ? {} : {
+          members: members.map((m) => ({
+            name: m.name.trim(),
+            email: m.email.trim() || null,
+          })),
+        }),
         source: 'race_signup_widget',
         marketing_consent: marketingConsent,
         ...(promoCode.trim() ? { promo_code: promoCode.trim() } : {}),
@@ -825,7 +835,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
 
           {/* Team name — race-only. Non-race kinds synthesise a
               team_name from the captain + group size on submit. */}
-          {copy.showTeamName && (
+          {copy.showTeamName && !findTeam && (
             <div>
               <label className={labelCls}>Team name *</label>
               <input
@@ -840,17 +850,30 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
             </div>
           )}
 
-          {(race.allowed_team_sizes || []).length > 1 && (
+          {((race.allowed_team_sizes || []).length > 1 || findTeamEnabled) && (
             <div>
               <label className={labelCls}>{copy.sizeLabel}</label>
               <div className="flex flex-wrap gap-2">
+                {findTeamEnabled && (
+                  <button
+                    type="button"
+                    onClick={() => { setFindTeam(true); setTeamSize(1) }}
+                    className={`text-sm px-4 py-2.5 rounded-xl border font-semibold transition-colors ${
+                      findTeam
+                        ? 'border-white bg-white text-black'
+                        : 'border-white/15 bg-white/5 text-white/70 hover:border-white/40'
+                    }`}
+                  >
+                    {race.find_team.label}
+                  </button>
+                )}
                 {[...(race.allowed_team_sizes || [])].sort((a, b) => a - b).map((s) => (
                   <button
                     key={s}
                     type="button"
-                    onClick={() => setTeamSize(s)}
+                    onClick={() => { setTeamSize(s); setFindTeam(false) }}
                     className={`text-sm px-4 py-2.5 rounded-xl border font-semibold transition-colors ${
-                      teamSize === s
+                      !findTeam && teamSize === s
                         ? 'border-white bg-white text-black'
                         : 'border-white/15 bg-white/5 text-white/70 hover:border-white/40'
                     }`}
@@ -861,6 +884,9 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                   </button>
                 ))}
               </div>
+              {findTeam && race.find_team.blurb && (
+                <p className="text-[11px] text-white/60 mt-1.5">{race.find_team.blurb}</p>
+              )}
             </div>
           )}
 
