@@ -216,6 +216,14 @@ const CLASS_FUNNEL_DEFAULT = ({ brand = '' } = {}) => ({
   currency:            'EUR',
 })
 
+// TRIALSTUDIO.2 — the active-member gate copy names the studio's brand like the
+// consent defaults do (W1.S1b: no default carries a literal gym), so the
+// brand-less block reads "at Hatch Street" and a branded one "at UN1T Hatch Street".
+export function paidTrialActiveMemberDefault(brand = '') {
+  const b = typeof brand === 'string' ? brand.trim() : ''
+  return `It looks like you already have an active membership at ${b ? `${b} ` : ''}Hatch Street, which already covers your classes. If that's not right, tap I need help and the team will be in touch.`
+}
+
 // PAIDTRIAL.1 — a paid trial product sold from its own page (/trial): the
 // price panel + buyer form + embedded checkout, then the grant of a Glofox
 // plan onto the buyer's account once the money is in. Every customer-facing
@@ -238,6 +246,15 @@ const PAID_TRIAL_DEFAULT = ({ brand = '' } = {}) => ({
   consent_label:  classFunnelConsentDefault(brand),
   done_title:     "You're in 🎉",
   done_body:      'Your 14 Day Reset is on your account. Check your email for how to book your first class.',
+  // TRIALSTUDIO.2 — the studio choice. studio_label '' ⇒ the page shows the
+  // studio's own name. un1t_product_id names the un1t.online product a Hatch
+  // Street block sells (priced from the mirrored un1t_products row, not here).
+  studio_label:   '',
+  un1t_product_id: '',
+  trial_used_text: "It looks like you've already had a trial with us at Stillorgan, so the 14 Day Reset can't be redeemed on this account. If that's not right, or you'd like to talk about your options, tap I need help and the team will be in touch.",
+  active_member_text: paidTrialActiveMemberDefault(brand),
+  help_cta_label: 'I need help',
+  help_sent_text: 'Thanks. The team will be in touch shortly.',
   membership_id:  '',
   plan_code:      '',
   tag:            '',
