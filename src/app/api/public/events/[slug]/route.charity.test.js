@@ -177,4 +177,17 @@ describe('GET /api/public/events/[slug] — charity block', () => {
     expect(body.data.charity).not.toHaveProperty('team_count')
     expect(logWarn).toHaveBeenCalledWith('public-event', expect.any(String), expect.anything())
   })
+
+  it('exposes the operator video as an embeddable { provider, embedUrl }, never the raw link (CHARITY.13)', async () => {
+    const { body } = await get(
+      makeRace({ charity_enabled: true, charity: { show_total: false, video_url: 'https://youtu.be/abc123' } }),
+    )
+    expect(body.data.charity.video).toEqual({ provider: 'youtube', embedUrl: 'https://www.youtube.com/embed/abc123' })
+    expect(body.data.charity).not.toHaveProperty('video_url')
+  })
+
+  it('video is null when no link is set', async () => {
+    const { body } = await get(makeRace({ charity_enabled: true, charity: { show_total: false } }))
+    expect(body.data.charity.video).toBeNull()
+  })
 })

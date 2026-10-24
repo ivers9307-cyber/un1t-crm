@@ -146,3 +146,17 @@ describe('showsDonationsLink (spec §6)', () => {
     expect(showsDonationsLink({ id: 'e1', charity_enabled: true })).toBe(true)
   })
 })
+
+describe('video_url (CHARITY.13)', () => {
+  it('defaults to blank and accepts a YouTube or Instagram link', () => {
+    expect(CHARITY_DEFAULTS.video_url).toBe('')
+    expect(CharitySettingsSchema.safeParse({ video_url: 'https://youtu.be/abc123' }).success).toBe(true)
+    expect(CharitySettingsSchema.safeParse({ video_url: 'https://www.instagram.com/reel/XyZ/' }).success).toBe(true)
+    expect(CharitySettingsSchema.safeParse({ video_url: '' }).success).toBe(true)
+  })
+  it('rejects a link no provider can embed', () => {
+    const r = CharitySettingsSchema.safeParse({ video_url: 'https://example.com/video.mp4' })
+    expect(r.success).toBe(false)
+    expect(r.error.issues[0].path).toEqual(['video_url'])
+  })
+})

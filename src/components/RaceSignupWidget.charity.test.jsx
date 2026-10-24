@@ -96,3 +96,24 @@ describe('event page — donations on', () => {
     expect(document.body.textContent).not.toContain('raised so far')
   })
 })
+
+describe('event page — donations on, layout polish (CHARITY.13)', () => {
+  it('the cards do not stretch to each other: the grid aligns items to the top', async () => {
+    await renderWith({ charity: CHARITY })
+    const donate = screen.getByRole('button', { name: /^Donate/ })
+    expect(donate.closest('.md\\:items-start')).toBeTruthy()
+  })
+
+  it('a video beside the summary when the operator set one, after both cards', async () => {
+    await renderWith({ charity: { ...CHARITY, video: { provider: 'youtube', embedUrl: 'https://www.youtube.com/embed/abc123' } } })
+    const frame = document.querySelector('iframe[src="https://www.youtube.com/embed/abc123"]')
+    expect(frame).toBeTruthy()
+    expect(follows(registerButton(), frame)).toBe(true)
+    expect(frame.closest('.md\\:grid-cols-2')).toBeTruthy()
+  })
+
+  it('no video, no iframe', async () => {
+    await renderWith({ charity: { ...CHARITY, video: null } })
+    expect(document.querySelector('iframe')).toBeNull()
+  })
+})

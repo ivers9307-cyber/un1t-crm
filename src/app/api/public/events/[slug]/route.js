@@ -5,6 +5,7 @@
 // info sidebar. Mirrors the shape of /api/public/events/[slug].
 
 import { NextResponse } from 'next/server'
+import { parseEmbed } from '@/lib/landing-page-embed'
 import { createServerClient } from '@/lib/supabase'
 import { loadForMode } from '@/lib/event-signups'
 import { eventIsPublic } from '@/lib/host-events'
@@ -204,6 +205,8 @@ async function buildPublicCharity(db, race) {
     thank_you_title: s.thank_you_title,
     thank_you_body: s.thank_you_body,
     thank_you_body_unmatched: s.thank_you_body_unmatched,
+    // CHARITY.13 — the embeddable form only; the raw link stays server-side.
+    video: parseEmbed(s.video_url) || null,
   }
   if (!s.show_total) return block
 
