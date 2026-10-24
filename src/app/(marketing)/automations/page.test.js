@@ -18,6 +18,9 @@ vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.f
 vi.mock('@/lib/sequence-access', () => ({ canCloneSequenceAt: vi.fn(() => false) }))
 vi.mock('@/components/automations/ClassClimateCard', () => ({ default: (p) => <div>{`climate:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
 vi.mock('@/components/automations/BathroomClimateCard', () => ({ default: (p) => <div>{`bathroom:${p.glofoxConnected}:${p.glofoxUnknown ? 'unknown' : 'known'}`}</div> }))
+vi.mock('@/components/automations/ScreenModeCard', () => ({
+  default: (p) => <div data-testid="screens-card">{`screens:${p.screens.map((s) => s.device_name).join(',')}:timetable=${p.hasTimetable}:enabled=${Boolean(p.initialEnabled)}:loc=${p.locationId}:pkg=${p.initialConfig?.class_app_package ?? ''}`}</div>,
+}))
 
 // W1.M3a — readGlofoxAutomationStatus carries the membership state the gate
 // renders from. The PROFILESPREAD cases below are a CONFIGURED source (Stillorgan).
@@ -37,7 +40,7 @@ import { canCloneSequenceAt } from '@/lib/sequence-access'
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
 // A db whose every chain resolves to { data: [] } (location_automations, ac_devices).
 const emptyDb = () => {
-  const chain = { select: () => chain, eq: () => chain, order: () => chain, then: (r) => r({ data: [], error: null }) }
+  const chain = { select: () => chain, eq: () => chain, is: () => chain, gte: () => chain, limit: () => chain, order: () => chain, then: (r) => r({ data: [], error: null }) }
   return { from: () => chain }
 }
 
@@ -84,7 +87,7 @@ describe('/automations — Glofox presence (PROFILESPREAD.1)', () => {
 
   it('the Glofox read and the location_automations read run together, not one after the other', async () => {
     const order = []
-    const chain = { select: () => chain, eq: () => chain, order: () => chain, then: (r) => r({ data: [], error: null }) }
+    const chain = { select: () => chain, eq: () => chain, is: () => chain, gte: () => chain, limit: () => chain, order: () => chain, then: (r) => r({ data: [], error: null }) }
     createServerClient.mockReturnValue({ from: (t) => { order.push(`from:${t}`); return chain } })
     readGlofoxAutomationStatus.mockImplementation(async () => {
       await Promise.resolve()
@@ -136,6 +139,118 @@ describe('/automations — membership source gate (W1.M3a)', () => {
     expect(html).toContain('href="/automations/sonos"')
     expect(html).toContain('href="/automations/shelly"')
     expect(seen.flows).not.toBeNull()
+  })
+})
+
+// SCREENMODE.12 — the class screens card renders OUTSIDE the membership-source
+// gate (Hatch's source declares no schedule capability, so every gated card is
+// hidden there) and gates itself on the screens + timetable reads.
+describe('/automations — class screens card (SCREENMODE.12)', () => {
+  const NONE = { source: 'none', state: 'none', label: 'No membership source', capabilities: {} }
+  const UN1T = { source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { ...CAPS, schedule: false } }
+  const SCREENS = [{ device_name: 'hatch-screen1', label: 'Studio wall' }, { device_name: 'hatch-screen2', label: null }]
+
+  // results: { table: { data, error } }. Records every chain call per table.
+  function screensDb(results) {
+    const calls = []
+    const from = (table) => {
+      const rec = { table, select: null, eq: [], is: [], gte: [], limit: null, order: null }
+      calls.push(rec)
+      const chain = {
+        select: (c) => { rec.select = c; return chain },
+        eq: (...a) => { rec.eq.push(a); return chain },
+        is: (...a) => { rec.is.push(a); return chain },
+        gte: (...a) => { rec.gte.push(a); return chain },
+        limit: (n) => { rec.limit = n; return chain },
+        order: (...a) => { rec.order = a; return chain },
+        then: (r, j) => Promise.resolve(results[table] || { data: [], error: null }).then(r, j),
+      }
+      return chain
+    }
+    return { db: { from }, calls }
+  }
+
+  beforeEach(() => {
+    hasPermission.mockImplementation((_u, k) => k === 'automations')
+  })
+
+  it('renders for a studio whose source has no schedule capability, outside the gate, with the stored config', async () => {
+    readGlofoxAutomationStatus.mockResolvedValue({ known: true, connected: false, membership: UN1T, statuses: ALL_KNOWN })
+    const { db } = screensDb({
+      fleet_devices: { data: SCREENS, error: null },
+      class_occurrences: { data: [{ id: 'o1' }], error: null },
+      location_automations: { data: [{ automation_key: 'screen_mode', enabled: true, config: { class_app_package: 'com.franchise.app' } }], error: null },
+    })
+    createServerClient.mockReturnValue(db)
+    const html = renderToStaticMarkup(await AutomationsPage())
+    expect(html).toContain('screens:hatch-screen1,hatch-screen2:timetable=true:enabled=true:loc=' + LOC + ':pkg=com.franchise.app')
+  })
+
+  it('renders even when there is no membership source at all', async () => {
+    readGlofoxAutomationStatus.mockResolvedValue({ known: true, connected: false, membership: NONE, statuses: ALL_KNOWN })
+    const { db } = screensDb({ fleet_devices: { data: SCREENS, error: null }, class_occurrences: { data: [], error: null } })
+    createServerClient.mockReturnValue(db)
+    const html = renderToStaticMarkup(await AutomationsPage())
+    expect(html).toContain('No membership source connected')
+    expect(html).toContain('data-testid="screens-card"')
+    expect(html).toContain('timetable=false')
+  })
+
+  it('reads the studio\'s screens and its upcoming, uncancelled timetable at the active location', async () => {
+    const { db, calls } = screensDb({ fleet_devices: { data: SCREENS, error: null } })
+    createServerClient.mockReturnValue(db)
+    await AutomationsPage()
+    const fleet = calls.find((c) => c.table === 'fleet_devices')
+    expect(fleet.select).toBe('device_name, label')
+    expect(fleet.eq).toEqual([['location_id', LOC], ['role', 'screen']])
+    expect(fleet.order).toEqual(['device_name'])
+    const occ = calls.find((c) => c.table === 'class_occurrences')
+    expect(occ.select).toBe('id')
+    expect(occ.eq).toEqual([['location_id', LOC]])
+    expect(occ.is).toEqual([['cancelled_at', null]])
+    expect(occ.gte[0][0]).toBe('starts_at')
+    expect(Number.isNaN(Date.parse(occ.gte[0][1]))).toBe(false)
+    expect(occ.limit).toBe(1)
+  })
+
+  it('renders no card when the studio has no screens', async () => {
+    const { db } = screensDb({ fleet_devices: { data: [], error: null }, class_occurrences: { data: [{ id: 'o1' }], error: null } })
+    createServerClient.mockReturnValue(db)
+    const html = renderToStaticMarkup(await AutomationsPage())
+    expect(html).not.toContain('screens-card')
+  })
+
+  it('renders no card, and logs, when the screens read fails', async () => {
+    const { db } = screensDb({ fleet_devices: { data: null, error: { code: '57014' } }, class_occurrences: { data: [{ id: 'o1' }], error: null } })
+    createServerClient.mockReturnValue(db)
+    const html = renderToStaticMarkup(await AutomationsPage())
+    expect(html).not.toContain('screens-card')
+    expect(logError).toHaveBeenCalledWith('automations', expect.stringMatching(/screens read failed/), { code: '57014', locationId: LOC })
+  })
+
+  it('treats a failed timetable read as no timetable, and logs', async () => {
+    const { db } = screensDb({ fleet_devices: { data: SCREENS, error: null }, class_occurrences: { data: null, error: { code: '57014' } } })
+    createServerClient.mockReturnValue(db)
+    const html = renderToStaticMarkup(await AutomationsPage())
+    expect(html).toContain('timetable=false')
+    expect(logError).toHaveBeenCalledWith('automations', expect.stringMatching(/timetable read failed/), { code: '57014', locationId: LOC })
+  })
+
+  it('renders nothing without the automations permission', async () => {
+    hasPermission.mockImplementation((_u, k) => k === 'email')
+    const { db, calls } = screensDb({ fleet_devices: { data: SCREENS, error: null } })
+    createServerClient.mockReturnValue(db)
+    const html = renderToStaticMarkup(await AutomationsPage())
+    expect(html).not.toContain('screens-card')
+    expect(calls.find((c) => c.table === 'fleet_devices')).toBeUndefined()
+  })
+
+  it('screen_mode is not a generic toggle card', async () => {
+    const { db } = screensDb({ fleet_devices: { data: SCREENS, error: null } })
+    createServerClient.mockReturnValue(db)
+    const html = renderToStaticMarkup(await AutomationsPage())
+    expect(html).toContain('glofox_lead_provisioning:')
+    expect(html).not.toContain('screen_mode:')
   })
 })
 
