@@ -10,6 +10,8 @@
 // Pure (no DB, no network) so they unit-test under the Node env. The IO
 // (the registrations embed incl. team size) lives in src/app/events/page.js.
 
+import { countsTowardTeamCapacity } from './find-team'
+
 /**
  * Count confirmed registrations as both headcount and registration count.
  * @param {Array<{status?:string, team?:{size?:number}|null}>|null|undefined} registrations
@@ -62,14 +64,16 @@ export function formatSignupSummary(registrations, { isRace = false, capacity = 
 // gate, the public "wave full" check, the agent, and the list display.
 
 /**
- * A wave's current load under a capacity mode. Confirmed-only.
+ * A wave's current load under a capacity mode. Confirmed-only. In teams mode a
+ * solo still looking for a team (FINDTEAM.2) is not a team and does not count;
+ * the caller's select must therefore fetch `looking_for_team`.
  * @param {Array} registrations
  * @param {'teams'|'people'} [mode]
  * @returns {number}
  */
 export function loadForMode(registrations, mode) {
-  const { people, signups } = computeSignupCounts(registrations)
-  return mode === 'people' ? people : signups
+  if (mode === 'people') return computeSignupCounts(registrations).people
+  return (Array.isArray(registrations) ? registrations : []).filter(countsTowardTeamCapacity).length
 }
 
 /**

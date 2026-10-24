@@ -169,7 +169,7 @@ async function loadWaveRegistrations(db, waveIds) {
   for (let from = 0; ; from += WAVE_PAGE) {
     const { data, error } = await db
       .from('race_registrations')
-      .select('id, status, wave_id, team:teams!team_id ( size )')
+      .select('id, status, wave_id, looking_for_team, team:teams!team_id ( size )') // FINDTEAM.2
       .in('wave_id', ids)
       .in('status', ['confirmed', 'pending_payment'])
       .order('id')

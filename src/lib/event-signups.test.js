@@ -131,6 +131,28 @@ describe('loadForMode', () => {
   })
 })
 
+describe('loadForMode with unplaced solos (FINDTEAM.2)', () => {
+  const solo = { status: 'confirmed', looking_for_team: true }
+  const team = { status: 'confirmed' }
+
+  it('teams mode does not count a solo looking for a team', () => {
+    expect(loadForMode([solo, team], 'teams')).toBe(1)
+  })
+
+  it('people mode still counts the solo as a person', () => {
+    expect(loadForMode([solo, team], 'people')).toBe(2)
+  })
+
+  it('computeSignupCounts is headcount: the solo is a person and a signup', () => {
+    expect(computeSignupCounts([solo, team])).toEqual({ people: 2, signups: 2 })
+  })
+
+  it('wouldFit in teams mode ignores unplaced solos', () => {
+    expect(wouldFit(2, [solo, team], 'teams')).toBe(true) // 1 + 1 <= 2
+    expect(wouldFit(1, [solo, team], 'teams')).toBe(false)
+  })
+})
+
 describe('spotsLeft', () => {
   it('returns null for an uncapped wave', () => {
     expect(spotsLeft(null, [confirmed(2)], 'people')).toBeNull()
