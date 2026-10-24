@@ -3,6 +3,9 @@
 // Display-safe fields only. While the payment is pending it re-checks the
 // provider (rate-capped per purchase) so the UI can advance before the webhook
 // lands; a settled payment releases the row and nudges the worker.
+// TRIALSTUDIO.7 — a Hatch Street (un1t_online) row is never re-checked here
+// (canRecheck names the CRM's own providers): the process-trial-purchases
+// cron settles it off the un1t.online mirror, and it has no CRM checkout.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { paymentsFor } from '@/lib/payments'
@@ -49,7 +52,9 @@ export async function GET(_request, props) {
     state: trialPurchasePublicState(row),
     purchase_status: row.status,
     payment_status: row.payment_status,
-    checkout: { provider: row.payment_provider, token: row.payment_checkout_token, url: row.payment_checkout_url },
+    checkout: row.payment_provider === 'un1t_online'
+      ? null
+      : { provider: row.payment_provider, token: row.payment_checkout_token, url: row.payment_checkout_url },
     amount_cents: row.amount_cents, currency: row.currency, product_name: row.product_name, duration_days: row.duration_days,
   } })
 }

@@ -74,6 +74,7 @@ function makeDb(seed = {}, { failures = {}, onWrite = null } = {}) {
     locations: [{ id: LOC_A, name: 'Hatch', membership_source: 'none' }],
     channel_connections: [],
     un1t_sync_runs: [],
+    un1t_products: [],
     ...seed,
   }
   const writes = []
@@ -85,7 +86,7 @@ function makeDb(seed = {}, { failures = {}, onWrite = null } = {}) {
     let orderBy = null
     let max = Infinity
     const match = () => (tables[table] || []).filter((row) => filters.every(([op, col, val]) => (
-      op === 'eq' ? row[col] === val : val.includes(row[col])
+      op === 'eq' ? row[col] === val : op === 'gt' ? row[col] > val : val.includes(row[col])
     )))
     const run = () => {
       if (!(table in tables)) throw new Error(`unexpected table ${table}`)
@@ -113,6 +114,7 @@ function makeDb(seed = {}, { failures = {}, onWrite = null } = {}) {
     const b = {
       select: () => b,
       eq: (c, v) => { filters.push(['eq', c, v]); return b },
+      gt: (c, v) => { filters.push(['gt', c, v]); return b },
       in: (c, v) => { filters.push(['in', c, v]); return b },
       order: (c) => { orderBy = c; return b },
       limit: (n) => { max = n; return b },

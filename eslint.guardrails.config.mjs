@@ -487,6 +487,22 @@ const config = [
       // the write-ahead row, its finalise and every mirror read judge their
       // error (a failed write-ahead row sends nothing).
       'src/lib/agent/un1t-booking.js',
+      // TRIALSTUDIO — the /trial page's trial-history eligibility check:
+      // born clean; every read judges its error (a failed read is a 503,
+      // never a refusal).
+      'src/lib/trial-eligibility.js',
+      // TRIALSTUDIO.6 — the /trial page's Hatch Street leg: born clean; every
+      // trial_purchases stamp reads its error (a un1t_user_id that cannot be
+      // stamped stops the checkout).
+      'src/lib/trial-purchase-un1t-checkout.js',
+      // TRIALSTUDIO.7 — the Hatch Street settle/expiry sweep: born clean; the
+      // settle CAS and the expiry stamp read their error and their matched
+      // rows (side effects only on a match), the reads judge theirs.
+      'src/lib/trial-purchase-un1t-settle.js',
+      // TRIALSTUDIO — the /trial studio list and the "I need help" route:
+      // born clean; every trial_purchases write reads its error.
+      'src/lib/trial-studios.js',
+      'src/app/api/public/trial-purchases/help/route.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

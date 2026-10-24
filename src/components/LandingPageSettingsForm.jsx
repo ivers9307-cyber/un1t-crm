@@ -48,6 +48,7 @@ import { DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE, DEFAULT_CLASS_FUNNEL_CTA_LABEL }
 import { parseManualTimetable, DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
 import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
 import { DEFAULT_FUNNEL_TERMS_COPY, DEFAULT_FUNNEL_EMAIL_COPY } from '@/lib/un1t-online-funnel-copy'
+import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -57,7 +58,7 @@ const MESSAGE_NAMESPACE = 'lp-editor'
 // W1.S1b — `brand` is the studio's resolved brand ({ companyName, shortName },
 // getLocationBranding on the server page): new blocks' consent defaults, the
 // logo hints and the embed snippet's title name it, never a literal gym.
-export default function LandingPageSettingsForm({ locationId, initialSettings, availableBookingTypes, publicPath = null, availableEvents = [], brand = null }) {
+export default function LandingPageSettingsForm({ locationId, membershipSource = null, initialSettings, availableBookingTypes, publicPath = null, availableEvents = [], brand = null }) {
   const brandName = (brand?.companyName || '').trim()
   const wordmarkText = (brand?.shortName || '').trim() || brandName
   // LP multi-page: the preview iframe + "View live" links point at the
@@ -468,6 +469,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
                   uploadErr={uploadErr}
                   progress={progress}
                   locationId={locationId}
+                  membershipSource={membershipSource}
                   publicPath={publicPath}
                 />
               </div>
@@ -582,7 +584,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
 function SortableBlockCard({
   block, expanded, onToggleExpand, onRemove, onUpdate,
   availableBookingTypes, availableEvents, uploadMedia, uploading, uploadErr, progress,
-  locationId, publicPath, brandName,
+  locationId, membershipSource, publicPath, brandName,
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id })
   const style = {
@@ -643,6 +645,7 @@ function SortableBlockCard({
             uploadErr={uploadErr}
             progress={progress}
             locationId={locationId}
+            membershipSource={membershipSource}
             publicPath={publicPath}
           />
         </div>
@@ -1077,13 +1080,15 @@ function Un1tFunnelCopyFields({ block, onUpdate }) {
 // PAIDTRIAL.1 — the paid trial product (/trial). Price in euros as a draft
 // string, coerced to cents on write (same reasoning as ClassFunnelEdit). The
 // Glofox product is REQUIRED: the page sells nothing until both ids are set.
-function PaidTrialEdit({ block, onUpdate, locationId }) {
+// Exported for its test (PaidTrialEdit.test.jsx).
+export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource }) {
+  const isUn1tOnline = membershipSource === 'un1t_online'
   const [priceDraft, setPriceDraft] = useState(centsToEuros(block.price_cents))
   useEffect(() => { setPriceDraft(centsToEuros(block.price_cents)) }, [block.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const [memberships, setMemberships] = useState([])
   const [membershipsLoading, setMembershipsLoading] = useState(false)
   useEffect(() => {
-    if (!locationId) return
+    if (!locationId || isUn1tOnline) return
     let alive = true
     setMembershipsLoading(true)
     fetch(`/api/locations/${locationId}/glofox-memberships`, { cache: 'no-store' })
@@ -1092,7 +1097,24 @@ function PaidTrialEdit({ block, onUpdate, locationId }) {
       .catch(() => {})
       .finally(() => { if (alive) setMembershipsLoading(false) })
     return () => { alive = false }
-  }, [locationId])
+  }, [locationId, isUn1tOnline])
+  // A un1t.online studio sells one of its mirrored paid products (the GET
+  // answers `paid_products`; the text input stays until it arrives).
+  const [paidProducts, setPaidProducts] = useState([])
+  const [paidProductsLoading, setPaidProductsLoading] = useState(false)
+  useEffect(() => {
+    if (!locationId || !isUn1tOnline) return
+    let alive = true
+    setPaidProductsLoading(true)
+    fetch(`/api/locations/${locationId}/un1t-online`, { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((j) => { if (alive && j && j.success !== false) setPaidProducts(Array.isArray(j.data?.paid_products) ? j.data.paid_products : []) })
+      .catch(() => {})
+      .finally(() => { if (alive) setPaidProductsLoading(false) })
+    return () => { alive = false }
+  }, [locationId, isUn1tOnline])
+  const productId = block.un1t_product_id || ''
+  const productKnown = paidProducts.some((p) => p.un1t_id === productId)
   const planKey = (block.membership_id && block.plan_code) ? `${block.membership_id}:${block.plan_code}` : ''
   const setPlan = (value) => {
     const [mid, pc] = value ? value.split(':') : ['', '']
@@ -1107,9 +1129,14 @@ function PaidTrialEdit({ block, onUpdate, locationId }) {
   }
   return (
     <>
+      <Field label="Studio label on /trial" hint="The name on this studio's choice card. Blank shows the studio's own name.">
+        <Input value={block.studio_label || ''} onChange={(v) => onUpdate({ studio_label: v })} maxLength={60} />
+      </Field>
       <Field label="Eyebrow" hint="Small line above the heading on the price panel.">
         <Input value={block.eyebrow || ''} onChange={(v) => onUpdate({ eyebrow: v })} maxLength={60} placeholder="14 day reset" />
       </Field>
+      {/* A new block starts on Stillorgan's words (the factory does not know the studio). */}
+      <p className="text-[11px] text-un1t-muted">Check the heading, button and paid messages name this studio&apos;s product.</p>
       <Field label="Heading">
         <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="The 14 Day Reset" />
       </Field>
@@ -1119,14 +1146,16 @@ function PaidTrialEdit({ block, onUpdate, locationId }) {
       <Field label="Product name" hint="On the checkout line, the receipt and the confirmation email.">
         <Input value={block.product_name || ''} onChange={(v) => onUpdate({ product_name: v })} maxLength={80} placeholder="The 14 Day Reset" />
       </Field>
-      <Field label="Price (€)" hint="What the buyer pays, taken by the studio's payment rail. Glofox never charges for this product.">
-        <Input
-          value={priceDraft}
-          onChange={(v) => { setPriceDraft(v); const c = eurosToCents(v); if (c !== null) onUpdate({ price_cents: c }) }}
-          maxLength={10}
-          placeholder="39"
-        />
-      </Field>
+      {!isUn1tOnline && (
+        <Field label="Price (€)" hint="What the buyer pays, taken by the studio's payment rail. Glofox never charges for this product.">
+          <Input
+            value={priceDraft}
+            onChange={(v) => { setPriceDraft(v); const c = eurosToCents(v); if (c !== null) onUpdate({ price_cents: c }) }}
+            maxLength={10}
+            placeholder="39"
+          />
+        </Field>
+      )}
       <Field label="Trial length (days)">
         <Input value={String(block.duration_days ?? 14)} onChange={(v) => { const n = parseInt(v, 10); if (Number.isFinite(n)) onUpdate({ duration_days: n }) }} maxLength={3} placeholder="14" />
       </Field>
@@ -1149,30 +1178,99 @@ function PaidTrialEdit({ block, onUpdate, locationId }) {
       <Field label="Paid — message">
         <Textarea value={block.done_body || ''} onChange={(v) => onUpdate({ done_body: v })} maxLength={400} rows={2} />
       </Field>
-      <Field
-        label="Glofox product granted after payment"
-        hint="REQUIRED. A €0 plan in Glofox for this trial (the money is taken here, not by Glofox). Until both ids are set the page sells nothing."
-      >
-        {planOptions.length > 0 ? (
-          <select
-            value={planKey}
-            onChange={(e) => setPlan(e.target.value)}
-            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
-          >
-            <option value="">— Not set (page sells nothing) —</option>
-            {planOptions.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        ) : (
-          <Input
-            value={planKey}
-            onChange={(v) => setPlan(v)}
-            maxLength={120}
-            placeholder={membershipsLoading ? 'Loading Glofox products…' : 'membershipId:planCode'}
-          />
-        )}
+      {isUn1tOnline && (
+        <Field label="Being confirmed — message" hint="Shown after un1t.online's checkout until the purchase is confirmed (up to about 15 minutes).">
+          <Textarea value={block.pending_body || ''} onChange={(v) => onUpdate({ pending_body: v })} maxLength={400} rows={2} />
+        </Field>
+      )}
+      {!isUn1tOnline && (
+        <Field
+          label="Glofox product granted after payment"
+          hint="REQUIRED. A €0 plan in Glofox for this trial (the money is taken here, not by Glofox). Until both ids are set the page sells nothing."
+        >
+          {planOptions.length > 0 ? (
+            <select
+              value={planKey}
+              onChange={(e) => setPlan(e.target.value)}
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+            >
+              <option value="">— Not set (page sells nothing) —</option>
+              {planOptions.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          ) : (
+            <Input
+              value={planKey}
+              onChange={(v) => setPlan(v)}
+              maxLength={120}
+              placeholder={membershipsLoading ? 'Loading Glofox products…' : 'membershipId:planCode'}
+            />
+          )}
+        </Field>
+      )}
+      {isUn1tOnline && (
+        <Field
+          label="un1t.online product"
+          hint="The product in un1t.online. The price shown on /trial is the product's live price."
+        >
+          {paidProducts.length > 0 ? (
+            <select
+              value={productId}
+              onChange={(e) => onUpdate({ un1t_product_id: e.target.value })}
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+            >
+              <option value="">— Not set (page sells nothing) —</option>
+              {productId && !productKnown && <option value={productId}>{productId}</option>}
+              {paidProducts.map((p) => (
+                <option key={p.un1t_id} value={p.un1t_id}>{`${p.title} · €${centsToEuros(p.price_cents)}`}</option>
+              ))}
+            </select>
+          ) : (
+            <Input
+              value={productId}
+              onChange={(v) => onUpdate({ un1t_product_id: v.trim() })}
+              maxLength={64}
+              placeholder={paidProductsLoading ? 'Loading un1t.online products…' : 'un1t.online product id'}
+            />
+          )}
+        </Field>
+      )}
+      <Field label="Already had a trial — message" hint="Shown when the buyer's email has had a trial at this studio.">
+        <Textarea value={block.trial_used_text || ''} onChange={(v) => onUpdate({ trial_used_text: v })} maxLength={500} rows={3} />
       </Field>
+      <Field label="Already a member — message" hint="Shown when the buyer is already an active member.">
+        <Textarea value={block.active_member_text || ''} onChange={(v) => onUpdate({ active_member_text: v })} maxLength={500} rows={3} />
+      </Field>
+      <Field label="Help button label">
+        <Input value={block.help_cta_label || ''} onChange={(v) => onUpdate({ help_cta_label: v })} maxLength={40} placeholder="I need help" />
+      </Field>
+      <Field label="Help sent — message" hint="Shown after the buyer taps the help button.">
+        <Textarea value={block.help_sent_text || ''} onChange={(v) => onUpdate({ help_sent_text: v })} maxLength={400} rows={2} />
+      </Field>
+      {isUn1tOnline && (
+        <>
+          <Field
+            label="New account email — subject"
+            hint="Sent once the purchase is confirmed to a buyer whose un1t.online account we made, before un1t.online's set-password code. Blank uses the default."
+          >
+            <Input
+              value={block.account_email_subject || ''}
+              onChange={(v) => onUpdate({ account_email_subject: v })}
+              maxLength={200}
+              placeholder={PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject}
+            />
+          </Field>
+          <Field label="New account email — message" hint="Placeholders: {first_name}, {product_name}, {studio_name}.">
+            <Textarea
+              value={block.account_email_body || ''}
+              onChange={(v) => onUpdate({ account_email_body: v })}
+              maxLength={1000}
+              rows={4}
+            />
+          </Field>
+        </>
+      )}
     </>
   )
 }

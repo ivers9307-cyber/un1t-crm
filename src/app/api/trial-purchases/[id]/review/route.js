@@ -10,6 +10,9 @@
 //   { action: 'resolve' } staff put the plan on the account by hand in
 //                         Glofox: the row is granted (manual), the buyer gets
 //                         the confirmation email.
+//   { action: 'handled' } a help_requested row (nobody paid; the buyer asked
+//                         for a call): staff rang them, the row is closed.
+//                         No email.
 //
 // Gated on approvals_offer_purchases (the same people who fulfil paid sale
 // offers), judged at the purchase's studio. Detail-route semantics: an id
@@ -27,8 +30,9 @@ import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
-const bodySchema = z.object({ action: z.enum(['retry', 'resolve']) })
+const bodySchema = z.object({ action: z.enum(['retry', 'resolve', 'handled']) })
 
+// retry/resolve act on a paid row the grant stalled on; handled acts on a help row.
 const REVIEWABLE = new Set(['needs_review', 'failed'])
 
 export async function POST(request, props) {
@@ -54,6 +58,23 @@ export async function POST(request, props) {
   if (guard) return guard
   if (!hasPermissionForLocation(user, row.location_id, 'approvals_offer_purchases')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
+  if (action === 'handled') {
+    if (row.status === 'handled') {
+      return NextResponse.json({ success: true, data: { already: true, status: 'handled' } })
+    }
+    if (row.status !== 'help_requested') {
+      return NextResponse.json({ success: false, error: 'in_progress', status: row.status }, { status: 409 })
+    }
+    const { data: upd, error } = await db
+      .from('trial_purchases')
+      .update({ status: 'handled', last_error: null })
+      .eq('id', id)
+      .eq('status', 'help_requested')
+      .select('id')
+    if (error) return NextResponse.json({ success: false, error: 'write_failed' }, { status: 500 })
+    if (!upd || upd.length === 0) return NextResponse.json({ success: false, error: 'in_progress' }, { status: 409 })
+    return NextResponse.json({ success: true, data: { status: 'handled' } })
   }
   if (row.payment_status !== 'paid') {
     return NextResponse.json({ success: false, error: 'not_paid' }, { status: 409 })

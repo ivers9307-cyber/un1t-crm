@@ -31,12 +31,16 @@ let settings
 let settingsReadError
 let writes
 const products = [
-  { un1t_id: 'p-paid', title: 'Ten pack', type: 'one_time', status: 'active', price_cents: 9000 },
+  { un1t_id: 'p-paid', title: 'Ten pack', type: 'one_time', status: 'active', price_cents: 9000, currency: 'EUR' },
   { un1t_id: TRIAL, title: 'Trial', type: 'one_time', status: 'active', price_cents: 0 },
   { un1t_id: 'p-old', title: 'Old trial', type: 'one_time', status: 'archived', price_cents: 0 },
   { un1t_id: 'p-sub', title: 'Free sub', type: 'subscription', status: 'active', price_cents: 0 },
   { un1t_id: 'p-a', title: 'A first', type: 'one_time', status: 'active', price_cents: 0 },
+  // Recurring and priced: never on the paid-trial picker (F3).
+  { un1t_id: 'p-monthly', title: 'Monthly', type: 'subscription', status: 'active', price_cents: 12000, currency: 'EUR' },
 ]
+let productQueries
+let productsThrow
 function makeDb() {
   return {
     from(table) {
@@ -50,7 +54,9 @@ function makeDb() {
           return { data: { id: LOC, settings }, error: null }
         }
         if (table === 'un1t_products') {
-          const rows = products.map((p) => ({ location_id: LOC, ...p })).filter((p) => f.every(([c, v]) => p[c] === v))
+          productQueries.push([...f])
+          if (productsThrow && f.some(([, , op]) => op === 'gt')) throw new Error('mirror down')
+          const rows = products.map((p) => ({ location_id: LOC, ...p })).filter((p) => f.every(([c, v, op]) => (op === 'gt' ? p[c] > v : p[c] === v)))
           return { data: rows, error: null }
         }
         if (table === 'un1t_sync_runs') return { data: [], error: null }
@@ -59,6 +65,7 @@ function makeDb() {
       const b = {
         select: () => b, order: () => b, limit: () => b,
         eq: (c, v) => { f.push([c, v]); return b },
+        gt: (c, v) => { f.push([c, v, 'gt']); return b },
         update: (p) => { mode = 'update'; payload = p; return b },
         single: async () => run(), maybeSingle: async () => run(),
         then: (ok, no) => Promise.resolve(run()).then(ok, no),
@@ -77,6 +84,8 @@ beforeEach(() => {
   settings = { glofox: { branch_id: 'keep' }, un1t_online: { hidden_class_keywords: 'elite' } }
   settingsReadError = null
   writes = []
+  productQueries = []
+  productsThrow = false
   createServerClient.mockReturnValue(makeDb())
   permissionReport.mockResolvedValue({ missing: [], studioMatches: true })
 })
@@ -137,6 +146,39 @@ describe('GET adds the write block for masters', () => {
       trial_products: [{ un1t_id: 'p-a', title: 'A first' }, { un1t_id: TRIAL, title: 'Trial' }],
       permissions: { all_present: false, missing: ['purchases:create', 'credits:read'] },
     })
+  })
+
+  it('lists the active priced products with price and currency for the paid-trial picker', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    const j = await (await get()).json()
+    expect(j.data.paid_products).toEqual([
+      { un1t_id: 'p-paid', title: 'Ten pack', price_cents: 9000, currency: 'EUR', type: 'one_time' },
+    ])
+  })
+
+  it('the paid-trial picker reads one-off products only, in the query, never a recurring one', async () => {
+    getCurrentUser.mockResolvedValue(owner)
+    const j = await (await get()).json()
+    expect(j.data.paid_products.map((p) => p.un1t_id)).not.toContain('p-monthly')
+    const paidQuery = productQueries.find((q) => q.some(([, , op]) => op === 'gt'))
+    expect(paidQuery).toEqual(expect.arrayContaining([['location_id', LOC], ['status', 'active'], ['type', 'one_time'], ['price_cents', 0, 'gt']]))
+  })
+
+  it('a thrown paid-products read is an empty list, not a failed GET', async () => {
+    getCurrentUser.mockResolvedValue(owner)
+    productsThrow = true
+    const res = await get()
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.paid_products).toEqual([])
+  })
+
+  it('an owner gets paid_products but no write block', async () => {
+    getCurrentUser.mockResolvedValue(owner)
+    const j = await (await get()).json()
+    expect(j.data.paid_products).toEqual([
+      { un1t_id: 'p-paid', title: 'Ten pack', price_cents: 9000, currency: 'EUR', type: 'one_time' },
+    ])
+    expect(j.data).not.toHaveProperty('write')
   })
 
   it('an unreadable permission check says so, is not retried for a minute, and never waits', async () => {
