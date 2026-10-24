@@ -124,6 +124,30 @@ describe('RaceEventForm — Charity day', () => {
     expect(calls.some((c) => c.opts?.method === 'PUT')).toBe(false)
   })
 
+  it('switched on with a blank charity name shows an error and blocks the save', async () => {
+    const calls = stubFetch()
+    const { container } = render(<RaceEventForm race={EVENT} locationId="loc-1" />)
+    fireEvent.change(screen.getByLabelText('Charity name'), { target: { value: '  ' } })
+    fireEvent.submit(container.querySelector('form'))
+    await waitFor(() => expect(container.textContent).toContain('enter the charity name'))
+    expect(calls.some((c) => c.opts?.method === 'PUT')).toBe(false)
+  })
+
+  it('a blank charity name saves while the section is off', async () => {
+    const calls = stubFetch()
+    const { container } = render(<RaceEventForm race={{ ...EVENT, charity_enabled: false, charity: { ...EVENT.charity, name: '' } }} locationId="loc-1" />)
+    const body = await submitAndGetBody(container, calls)
+    expect(body.charity_enabled).toBe(false)
+  })
+
+  it('the consent label placeholder says the default organisation line is used when blank', () => {
+    stubFetch()
+    render(<RaceEventForm race={EVENT} locationId="loc-1" />)
+    const placeholder = screen.getByLabelText('Consent checkbox label').getAttribute('placeholder')
+    expect(placeholder).not.toMatch(/no checkbox/i)
+    expect(placeholder).toMatch(/default/i)
+  })
+
   it('an event with the section off sends charity_enabled false and a settings object', async () => {
     const calls = stubFetch()
     const { container } = render(<RaceEventForm race={{ ...EVENT, charity_enabled: false, charity: null }} locationId="loc-1" />)

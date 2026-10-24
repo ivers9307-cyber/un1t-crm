@@ -89,6 +89,8 @@ export async function POST(request) {
 
   let race
   let fresh
+  // True only when this delivery's mark flipped the row (see runPaidDonationSideEffects).
+  let observerWon = false
   try {
     const donation = await resolveDonationByRef(db, orderId)
     if (!donation) {
@@ -115,11 +117,12 @@ export async function POST(request) {
     if (!race) return await defer()
 
     const providerState = String(order.state || '').toLowerCase()
-    await markDonationPaymentStatus({
+    const marked = await markDonationPaymentStatus({
       db, donation, providerState,
       providerAmount: Number.isFinite(order.amount) ? order.amount : null,
       multiplier: resolveCharitySettings(race).match_multiplier,
     })
+    observerWon = marked?.changed === true
 
     // Re-read: the side effects get the row as stored, never a guess.
     const { data, error: readErr } = await db.from('donations').select(DONATION_COLS).eq('id', donation.id).maybeSingle()
@@ -137,7 +140,7 @@ export async function POST(request) {
   if (fresh.status === 'paid') {
     // A contact/receipt failure must never 500 the webhook.
     try {
-      await runPaidDonationSideEffects({ db, donation: fresh, race, ipAddress: null })
+      await runPaidDonationSideEffects({ db, donation: fresh, race, ipAddress: null, observerWon })
     } catch (e) {
       logWarn('donation-webhook', `paid side-effects failed for ${fresh.id}`, { err: e })
     }

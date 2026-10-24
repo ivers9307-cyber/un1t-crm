@@ -586,6 +586,11 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
     // CHARITY.9 — sent on every save, switch on or off, so the settings survive a toggle.
     const charityResult = charityFromForm(charityForm)
     if (charityResult.error) { setError(charityResult.error); return }
+    // A blank name would read "Every euro goes to ." on the public page.
+    if (charityEnabled && !String(charityForm.name || '').trim()) {
+      setError('Charity day: enter the charity name. It is shown on the public page and the receipt.')
+      return
+    }
 
     setSaving(true)
     const payload = {
@@ -1939,7 +1944,7 @@ function CharityDaySection({ enabled, onEnabled, values, onChange }) {
             {check('show_total', 'Show the running total on the page')}
             {check('include_entries', 'Count paid event entries toward the total')}
           </div>
-          {text('consent_label', 'Consent checkbox label', 'No checkbox when blank')}
+          {text('consent_label', 'Consent checkbox label', 'Blank = the default organisation line')}
 
           <div className="pt-4 border-t border-un1t-border space-y-4">
             <div>

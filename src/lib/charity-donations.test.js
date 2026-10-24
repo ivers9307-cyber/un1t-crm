@@ -7,6 +7,7 @@ import {
   computeCharityTotals,
   donationPublicState,
   formatCents,
+  showsDonationsLink,
 } from './charity-donations'
 
 describe('computeCharityTotals (CHARITY.2)', () => {
@@ -130,5 +131,18 @@ describe('formatCents', () => {
   it('formats euro amounts', () => {
     expect(formatCents(2500, 'EUR')).toBe('€25.00')
     expect(formatCents(0, 'EUR')).toBe('€0.00')
+  })
+})
+
+describe('showsDonationsLink (spec §6)', () => {
+  it('shows when the section is on, or when any donation exists for the event', () => {
+    const withDonations = new Set(['e2'])
+    expect(showsDonationsLink({ id: 'e1', charity_enabled: true }, withDonations)).toBe(true)
+    expect(showsDonationsLink({ id: 'e2', charity_enabled: false }, withDonations)).toBe(true)
+    expect(showsDonationsLink({ id: 'e3', charity_enabled: false }, withDonations)).toBe(false)
+  })
+  it('a missing set means none', () => {
+    expect(showsDonationsLink({ id: 'e1', charity_enabled: false })).toBe(false)
+    expect(showsDonationsLink({ id: 'e1', charity_enabled: true })).toBe(true)
   })
 })

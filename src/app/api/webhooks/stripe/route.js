@@ -52,7 +52,7 @@ async function settleDonationCompleted(db, session) {
     logWarn('stripe-webhook', 'donation event row unreadable', { donationId: donation.id, err: raceErr })
     return
   }
-  await markDonationPaymentStatus({
+  const marked = await markDonationPaymentStatus({
     db,
     donation,
     providerState: 'completed',
@@ -66,7 +66,8 @@ async function settleDonationCompleted(db, session) {
   }
   if (fresh.status === 'paid') {
     try {
-      await runPaidDonationSideEffects({ db, donation: fresh, race, ipAddress: null })
+      // observerWon: only the delivery that flipped the row sends in the first minute.
+      await runPaidDonationSideEffects({ db, donation: fresh, race, ipAddress: null, observerWon: marked?.changed === true })
     } catch (e) {
       logWarn('stripe-webhook', 'donation paid side effects failed', { err: e, donationId: donation.id })
     }

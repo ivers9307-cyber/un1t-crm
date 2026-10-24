@@ -37,7 +37,7 @@ const RACE = {
   id: 'ev1', slug: 'hyrox', name: 'Hyrox', kind: 'race', location_id: 'loc1', active: true, status: 'published',
   payment_currency: 'EUR', charity_enabled: true, charity: null, host_id: null, host: null,
 }
-const BODY = { amount_cents: 2500, name: 'Ava Byrne', email: ' Ava@Example.com ', message: 'Go team', marketing_opt_in: true, attribution: { utm_campaign: 'c1' } }
+const BODY = { amount_cents: 2500, name: 'Ava Byrne', email: ' Ava@Example.com ', message: 'Go team', marketing_opt_in: true, attribution: { referrer: 'https://WWW.Instagram.com/p/abc?igsh=secret', landing_path: '/event/hyrox?utm_source=ig' } }
 const req = (body) => new Request('http://x/api/public/events/hyrox/donate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 const call = (body) => POST(req(body), { params: Promise.resolve({ slug: 'hyrox' }) })
 
@@ -130,7 +130,8 @@ describe('POST /api/public/events/[slug]/donate', () => {
     expect(row).toEqual({
       race_event_id: 'ev1', location_id: 'loc1', donor_name: 'Ava Byrne', donor_email: 'Ava@Example.com',
       message: 'Go team', amount_cents: 2500, currency: 'EUR', status: 'awaiting_payment',
-      marketing_opt_in: true, attribution: { utm_campaign: 'c1' },
+      // Sanitised the same way as the other public forms: query strings dropped, host lower-cased.
+      marketing_opt_in: true, attribution: { referrer: 'https://www.instagram.com/p/abc', landing_path: '/event/hyrox' },
     })
     expect('contact_id' in row).toBe(false)
     expect(mocks.base).toHaveBeenCalledWith(expect.anything(), 'loc1')
@@ -146,6 +147,17 @@ describe('POST /api/public/events/[slug]/donate', () => {
     expect(mocks.inserted.mock.calls[0][0]).toMatchObject({ message: null, marketing_opt_in: false, attribution: null, currency: 'EUR' })
   })
 
+  it('400s an over-long attribution before any database read', async () => {
+    expect((await call({ ...BODY, attribution: { referrer: `https://x.ie/${'a'.repeat(2000)}` } })).status).toBe(400)
+    expect((await call({ ...BODY, attribution: { landing_path: `/${'a'.repeat(500)}` } })).status).toBe(400)
+    expect(mocks.event).not.toHaveBeenCalled()
+  })
+
+  it('stores only the known attribution keys, and null when nothing survives sanitising', async () => {
+    await call({ ...BODY, attribution: { referrer: 'javascript:alert(1)', landing_path: 'not-a-path', utm_campaign: 'c1', blob: { big: 'x' } } })
+    expect(mocks.inserted.mock.calls[0][0].attribution).toBeNull()
+  })
+
   it('500s unavailable when the insert fails', async () => {
     mocks.inserted.mockResolvedValue({ data: null, error: { message: 'db' } })
     const r = await call(BODY)
@@ -154,11 +166,12 @@ describe('POST /api/public/events/[slug]/donate', () => {
     expect(mocks.payment).not.toHaveBeenCalled()
   })
 
-  it('400s payments_unavailable without failing the row when the host cannot take payments', async () => {
+  it('400s payments_unavailable and marks the just-inserted row failed, so it never lingers as unconfirmed', async () => {
     mocks.payment.mockRejectedValue(Object.assign(new Error('payments_unavailable'), { code: 'payments_unavailable' }))
     const r = await call(BODY)
     expect(r.status).toBe(400)
     expect((await r.json()).code).toBe('payments_unavailable')
+    expect(mocks.updated).toHaveBeenCalledWith({ status: 'failed' }, 'id', 'd1')
   })
 
   it('502s checkout_failed and marks the row failed when the provider order fails', async () => {

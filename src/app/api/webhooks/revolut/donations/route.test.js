@@ -150,6 +150,7 @@ describe('POST /api/webhooks/revolut/donations', () => {
     const arg = runPaidDonationSideEffects.mock.calls[0][0]
     expect(arg.donation).toBe(paidDonation)
     expect(arg.race).toBe(raceRow)
+    expect(arg.observerWon).toBe(true)
     expect(markDonationPaymentStatus.mock.invocationCallOrder[0]).toBeLessThan(runPaidDonationSideEffects.mock.invocationCallOrder[0])
     expect(json.state).toBe('paid')
   })
@@ -158,6 +159,7 @@ describe('POST /api/webhooks/revolut/donations', () => {
     markDonationPaymentStatus.mockResolvedValueOnce({ status: 'paid', changed: false })
     const json = await (await POST(makeRequest({ event: 'ORDER_PAYMENT_AUTHORISED', order_id: 'ord_1' }))).json()
     expect(runPaidDonationSideEffects).toHaveBeenCalledTimes(1)
+    expect(runPaidDonationSideEffects.mock.calls[0][0].observerWon).toBe(false)
     expect(json.state).toBe('paid')
   })
   it('a failed payment marks failed without side effects', async () => {

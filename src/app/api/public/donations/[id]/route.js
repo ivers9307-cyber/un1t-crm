@@ -5,7 +5,9 @@
 // it re-checks the provider (rate-capped per donation) so the UI can advance
 // before the webhook lands. Every observation of a paid row runs the
 // stamp-keyed side effects (contact, consent, receipt): the stamps make that
-// idempotent, and it is what recovers a donor whose webhook never landed.
+// idempotent, and it is what recovers a donor whose webhook never landed. In
+// the first minute after paid_at only the observer that flipped the row runs
+// them (observerWon), so the poll and the webhook do not both send a receipt.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { paymentsFor } from '@/lib/payments'
@@ -43,20 +45,25 @@ export async function GET(request, props) {
     && (row.payment_provider === 'revolut' || row.payment_provider === 'stripe_connect')
     && !!row.payment_provider_ref
   const recheckAllowed = canRecheck
-    ? (await checkRateLimit(db, `dpoll:${id}`, { max: 20, windowMs: 5 * 60_000 })).allowed
+    // The embedded checkout polls every 3 s while the donor types: 100 per 5
+    // minutes covers the whole window, so a slow 3DS payment is still seen.
+    ? (await checkRateLimit(db, `dpoll:${id}`, { max: 100, windowMs: 5 * 60_000 })).allowed
     : false
   let race = null
+  // True only when THIS poll's mark flipped the row (see runPaidDonationSideEffects).
+  let observerWon = false
   if (recheckAllowed) {
     try {
       const norm = await paymentsFor(row.payment_provider).getPayment(row.payment_provider_ref, { connectedAccountId: row.connected_account_id || null })
       if (norm) {
         race = await readEvent(db, row)
         if (race) {
-          await markDonationPaymentStatus({
+          const marked = await markDonationPaymentStatus({
             db, donation: row, providerState: norm.state,
             providerAmount: Number.isFinite(norm.amountCents) ? norm.amountCents : null,
             multiplier: resolveCharitySettings(race).match_multiplier,
           })
+          observerWon = marked?.changed === true
           // Re-read: the side effects get the row as stored, never a guess.
           const { data: fresh } = await readDonation(db, id)
           if (fresh) row = fresh
@@ -68,7 +75,7 @@ export async function GET(request, props) {
   if (row.status === 'paid') {
     try {
       race = race || await readEvent(db, row)
-      if (race) await runPaidDonationSideEffects({ db, donation: row, race, ipAddress: getClientIp(request) })
+      if (race) await runPaidDonationSideEffects({ db, donation: row, race, ipAddress: getClientIp(request), observerWon })
     } catch (e) { logWarn('donation-poll', 'paid side effects failed', { err: e, donationId: id }) }
   }
 
@@ -76,6 +83,7 @@ export async function GET(request, props) {
   return NextResponse.json({ success: true, data: {
     id: row.id,
     state: donationPublicState(row),
+    paid: row.status === 'paid',
     amount_cents: row.amount_cents,
     currency: row.currency,
     match_multiplier: row.match_multiplier,

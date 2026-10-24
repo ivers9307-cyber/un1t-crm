@@ -11,7 +11,9 @@
 // and contact side effects, and a provider's in-page success callback alone
 // does not mark the row paid. A return from a redirect checkout
 // (?donation=<id>) mounts straight into `confirming` and polls the same way;
-// `&cancelled=1` reopens the form instead.
+// `&cancelled=1` reopens the form instead. Once that poll settles (paid or
+// failed) the `donation` and `cancelled` params are stripped from the URL, so a
+// reload or a shared link does not show the outcome to everyone.
 //
 // Also exports the page furniture that only exists with donations on: the
 // raised-so-far strip and the OR divider between the two cards.
@@ -26,6 +28,10 @@ const NAME_KEY = (id) => `un1t_donation_first_name:${id}`
 // ~2 minutes of polling, as the paid trial does.
 const POLL_MS = 3000
 const POLL_BUDGET = 40
+// The donate route's attribution bounds: a long referrer is cut rather than
+// refused, so it can never block a gift (the server sanitises what remains).
+const MAX_REFERRER = 2000
+const MAX_LANDING_PATH = 500
 
 // Same recipes as the signup card in RaceSignupWidget.
 const inputCls = (invalid) =>
@@ -46,6 +52,18 @@ function parseOther(text) {
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : null
 }
 
+// Drop the redirect-return params once the outcome is shown; everything else
+// (other params, the hash) stays.
+function stripDonationParams() {
+  try {
+    const url = new URL(window.location.href)
+    if (!url.searchParams.has('donation') && !url.searchParams.has('cancelled')) return
+    url.searchParams.delete('donation')
+    url.searchParams.delete('cancelled')
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
+  } catch { /* history unavailable: the URL just keeps the params */ }
+}
+
 function readStoredName(id) {
   try { return window.sessionStorage.getItem(NAME_KEY(id)) || '' } catch { return '' }
 }
@@ -55,7 +73,8 @@ function storeName(id, firstName) {
 
 export default function DonateCard({ slug, charity, currency = 'EUR', brand = '', resumeDonationId = null, resumeCancelled = false, onRaised }) {
   const resuming = !!resumeDonationId && !resumeCancelled
-  const presets = [...(Array.isArray(charity?.presets_cents) ? charity.presets_cents : [])].sort((a, b) => a - b)
+  // The operator's order, as the event form promises.
+  const presets = Array.isArray(charity?.presets_cents) ? charity.presets_cents : []
   const customAllowed = !!charity?.custom_allowed
   const minCents = Number(charity?.min_cents) || 0
   const maxCents = Number(charity?.max_cents) || Infinity
@@ -126,7 +145,12 @@ export default function DonateCard({ slug, charity, currency = 'EUR', brand = ''
         marketing_opt_in: consent,
       }
       const attribution = readVisitOrigin()
-      if (attribution) body.attribution = attribution
+      if (attribution) {
+        body.attribution = {
+          referrer: attribution.referrer.slice(0, MAX_REFERRER),
+          landing_path: attribution.landing_path.slice(0, MAX_LANDING_PATH),
+        }
+      }
       const r = await fetch(`/api/public/events/${slug}/donate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -173,12 +197,14 @@ export default function DonateCard({ slug, charity, currency = 'EUR', brand = ''
         const d = j?.data
         if (stopped) return
         if (d?.state === 'paid') {
+          stripDonationParams()
           setPaid({ amount_cents: d.amount_cents, currency: d.currency, match_multiplier: d.match_multiplier })
           setStep('done')
           if (!raisedRef.current) { raisedRef.current = true; onRaised?.() }
           return
         }
         if (d?.state === 'failed') {
+          stripDonationParams()
           setStep('form')
           setError('That payment did not go through. Nothing was charged; please try again.')
           return

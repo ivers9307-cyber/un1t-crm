@@ -16,6 +16,7 @@ import { eventIsPublic } from '@/lib/host-events'
 import { resolveCharitySettings } from '@/lib/charity-donations'
 import { createDonationPayment, DONATION_COLS } from '@/lib/donation-payments'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
+import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { logError, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -26,7 +27,11 @@ const Schema = z.object({
   email: z.string().trim().email().max(254),
   message: z.string().trim().max(280).optional(),
   marketing_opt_in: z.boolean().optional(),
-  attribution: z.record(z.string(), z.unknown()).optional(),
+  // What readVisitOrigin() sends; bounded here and sanitised before it is stored.
+  attribution: z.object({
+    referrer: z.string().max(2000).optional(),
+    landing_path: z.string().max(500).optional(),
+  }).optional(),
 })
 
 const fail = (status, code, error) => NextResponse.json({ success: false, code, error }, { status })
@@ -77,7 +82,7 @@ export async function POST(request, props) {
     currency: race.payment_currency || 'EUR',
     status: 'awaiting_payment',
     marketing_opt_in: !!b.marketing_opt_in,
-    attribution: b.attribution || null,
+    attribution: sanitiseVisitOrigin(b.attribution),
   }).select(DONATION_COLS).single()
   if (insErr || !row) {
     logError('donate', 'donation insert failed', { err: insErr, raceId: race.id })
@@ -89,12 +94,12 @@ export async function POST(request, props) {
     const returnUrl = `${await resolveCustomerBaseUrl(db, race.location_id)}/event/${slug}?donation=${row.id}`
     payment = await createDonationPayment({ db, donation: row, race, host: race.host || null, returnUrl })
   } catch (err) {
-    if (err?.code === 'payments_unavailable') {
-      return fail(400, 'payments_unavailable', 'Donations are not available for this event right now.')
-    }
-    logError('donate', 'payment create failed', { err, donationId: row.id })
+    const unavailable = err?.code === 'payments_unavailable'
+    if (!unavailable) logError('donate', 'payment create failed', { err, donationId: row.id })
+    // No checkout was handed out: the row must never linger as unconfirmed.
     const { error: failErr } = await db.from('donations').update({ status: 'failed' }).eq('id', row.id)
     if (failErr) logWarn('donate', 'could not mark donation failed', { err: failErr, donationId: row.id })
+    if (unavailable) return fail(400, 'payments_unavailable', 'Donations are not available for this event right now.')
     return fail(502, 'checkout_failed', 'Could not start checkout. Please try again.')
   }
 

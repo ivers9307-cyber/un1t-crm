@@ -44,6 +44,19 @@ describe('PUT /api/events/[id] — CHARITY.9 charity day', () => {
     expect(mocks.updates[0].charity_enabled).toBe(true)
     expect(mocks.updates[0].charity).toEqual(charity)
   })
+
+  it('400s switching donations on with a blank charity name, before any write', async () => {
+    for (const charity of [{ presets_cents: [1000] }, { name: '   ' }, null]) {
+      const res = await PUT(putReq({ charity_enabled: true, charity }), ctx)
+      expect(res.status).toBe(400)
+    }
+    expect(mocks.updates).toHaveLength(0)
+  })
+
+  it('a blank name is fine while the section is off (settings kept for later)', async () => {
+    const res = await PUT(putReq({ charity_enabled: false, charity: { name: '' } }), ctx)
+    expect(res.status).toBe(200)
+  })
 })
 
 // EVENTS-EMAILCFG.1 — per-event email config on the events update schema.

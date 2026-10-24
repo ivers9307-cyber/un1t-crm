@@ -1,7 +1,10 @@
 'use client'
 
 // CHARITY.10 — staff view of an event's card donations: totals tiles, the
-// table, the CSV hand-over, and the record-only "Mark as refunded". The server
+// table, the CSV hand-over, and the record-only "Mark as refunded". An
+// awaiting_payment row of any age is listed as Unconfirmed with a Re-check
+// (the public status route asks the provider and runs the paid side effects),
+// so a manager can reconcile it against the provider dashboard. The server
 // renders paid_at in the event's zone (paid_at_label), so nothing here does
 // zone maths.
 import { useCallback, useEffect, useState } from 'react'
@@ -14,8 +17,10 @@ const STATUS_CHIP = {
   refunded: { label: 'Refunded', cls: 'bg-amber-500/10 text-amber-700' },
   failed: { label: 'Failed', cls: 'bg-red-500/10 text-red-700' },
   expired: { label: 'Expired', cls: 'bg-red-500/10 text-red-700' },
-  awaiting_payment: { label: 'Awaiting payment', cls: 'bg-sky-500/10 text-sky-700' },
+  awaiting_payment: { label: 'Unconfirmed', cls: 'bg-sky-500/10 text-sky-700' },
 }
+
+const RECEIPT_LABEL = { sent: 'Sent', suppressed: 'Suppressed', failed: 'Failed' }
 
 function StatusChip({ status }) {
   const chip = STATUS_CHIP[status] || { label: status, cls: 'bg-un1t-surface text-un1t-subtle' }
@@ -36,6 +41,7 @@ export default function EventDonationsList({ raceId, canMarkRefunded = false }) 
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [busyId, setBusyId] = useState(null)
+  const [recheckingId, setRecheckingId] = useState(null)
 
   const load = useCallback(async () => {
     try {
@@ -66,6 +72,21 @@ export default function EventDonationsList({ raceId, canMarkRefunded = false }) 
     }
   }
 
+  // The public status route re-checks the provider for a pending row and runs
+  // the paid side effects when it has settled; then the list is reloaded.
+  async function recheck(d) {
+    setRecheckingId(d.id)
+    try {
+      const res = await fetch(`/api/public/donations/${d.id}`)
+      if (!res.ok) setError('Could not re-check this payment')
+      else await load()
+    } catch {
+      setError('Could not re-check this payment')
+    } finally {
+      setRecheckingId(null)
+    }
+  }
+
   const currency = data?.currency || 'EUR'
   const totals = data?.totals
   const mult = data?.settings?.match_multiplier || 1
@@ -85,14 +106,24 @@ export default function EventDonationsList({ raceId, canMarkRefunded = false }) 
     { key: 'amount', header: 'Amount', align: 'right', render: (d) => formatCents(d.amount_cents, d.currency || currency) },
     { key: 'matched', header: matchLabel, align: 'right', render: (d) => (d.status === 'paid' ? formatCents(d.matched_cents, d.currency || currency) : '—') },
     { key: 'status', header: 'Status', render: (d) => <StatusChip status={d.status} /> },
+    { key: 'receipt', header: 'Receipt', render: (d) => <span data-col="receipt">{RECEIPT_LABEL[d.receipt_email_status] || '—'}</span> },
     { key: 'message', header: 'Message', render: (d) => <span className="text-un1t-subtle">{d.message || ''}</span> },
     {
       key: 'actions', header: '', align: 'right',
-      render: (d) => (canMarkRefunded && d.status === 'paid' ? (
-        <Button variant="ghost" size="sm" loading={busyId === d.id} onClick={() => markRefunded(d)}>
-          Mark as refunded
-        </Button>
-      ) : null),
+      render: (d) => {
+        if (d.status === 'awaiting_payment') {
+          return (
+            <Button type="button" variant="ghost" size="sm" loading={recheckingId === d.id} onClick={() => recheck(d)}>
+              Re-check
+            </Button>
+          )
+        }
+        return canMarkRefunded && d.status === 'paid' ? (
+          <Button type="button" variant="ghost" size="sm" loading={busyId === d.id} onClick={() => markRefunded(d)}>
+            Mark as refunded
+          </Button>
+        ) : null
+      },
     },
   ]
 

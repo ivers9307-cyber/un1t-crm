@@ -94,6 +94,15 @@ describe('DonateCard — the form', () => {
     }
   })
 
+  it('keeps the operator\'s preset order (no sorting) and preselects the second preset', () => {
+    stubFetch()
+    renderCard({ charity: { ...CHARITY, presets_cents: [5000, 1000, 2500] } })
+    const chips = screen.getAllByRole('button').filter((b) => b.hasAttribute('aria-pressed') && b.textContent !== 'Other')
+    expect(chips.map((b) => b.textContent)).toEqual(['€50', '€10', '€25'])
+    expect(screen.getByRole('button', { name: '€10' }).getAttribute('aria-pressed')).toBe('true')
+    expect(donateButton().textContent).toContain('Donate €10.00')
+  })
+
   it('picking a chip sets the button label', () => {
     stubFetch()
     renderCard()
@@ -167,6 +176,18 @@ describe('DonateCard — the form', () => {
       attribution: { referrer: 'https://www.google.com/', landing_path: '/event/charity-day' },
     })
     expect(screen.getByRole('button', { name: /Stub pay d-1/ }).getAttribute('data-status-path')).toBe('/api/public/donations')
+  })
+
+  it('caps the visit origin to the route\'s bounds so a long referrer never blocks a gift', async () => {
+    window.sessionStorage.setItem('un1t_visit_origin', JSON.stringify({ referrer: `https://x.ie/${'a'.repeat(3000)}`, landing_path: `/${'b'.repeat(900)}` }))
+    const fetchFn = stubFetch()
+    renderCard()
+    fillDetails()
+    fireEvent.click(donateButton())
+    await waitFor(() => expect(donateCalls(fetchFn)).toHaveLength(1))
+    const { attribution } = JSON.parse(donateCalls(fetchFn)[0][1].body)
+    expect(attribution.referrer).toHaveLength(2000)
+    expect(attribution.landing_path).toHaveLength(500)
   })
 
   it('shows the server error when the POST is refused', async () => {
@@ -250,6 +271,37 @@ describe('DonateCard — return from a redirect checkout', () => {
     expect(pollCalls(fetchFn).length).toBe(n)
     fireEvent.click(screen.getByRole('button', { name: 'Start a new donation' }))
     expect(donateButton()).toBeTruthy()
+  })
+
+  it('strips donation and cancelled from the URL once the poll settles paid, keeping other params', async () => {
+    window.history.replaceState(null, '', '/event/charity-day?donation=d-9&ref=ig#donate')
+    stubFetch({ polls: [poll('paid', { id: 'd-9' })] })
+    renderCard({ resumeDonationId: 'd-9' })
+    await advance(5_000)
+    expect(screen.getByText('Your €25.00 becomes €50.00 for MS Ireland.')).toBeTruthy()
+    expect(window.location.pathname).toBe('/event/charity-day')
+    expect(window.location.search).toBe('?ref=ig')
+    expect(window.location.hash).toBe('#donate')
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('strips donation and cancelled from the URL once the poll settles failed', async () => {
+    window.history.replaceState(null, '', '/event/charity-day?donation=d-9&cancelled=0')
+    stubFetch({ polls: [poll('failed', { id: 'd-9' })] })
+    renderCard({ resumeDonationId: 'd-9' })
+    await advance(5_000)
+    expect(document.body.textContent).toContain('did not go through')
+    expect(window.location.search).toBe('')
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('leaves the URL alone while the poll is still pending', async () => {
+    window.history.replaceState(null, '', '/event/charity-day?donation=d-9')
+    stubFetch({ polls: [poll('pending', { id: 'd-9' })] })
+    renderCard({ resumeDonationId: 'd-9' })
+    await advance(5_000)
+    expect(window.location.search).toBe('?donation=d-9')
+    window.history.replaceState(null, '', '/')
   })
 
   it('resumeCancelled reopens the form', () => {

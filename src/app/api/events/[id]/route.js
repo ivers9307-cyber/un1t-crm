@@ -93,6 +93,13 @@ export const UpdateSchema = z.object({
   // When provided, replaces the wave set entirely (diff-and-apply).
   // Omitting leaves waves untouched. At least one wave required if set.
   waves: z.array(WaveInputSchema).min(1).max(50).optional(),
+}).superRefine((b, ctx) => {
+  // CHARITY.12 — switching donations on with settings that have no charity
+  // name would render "Every euro goes to ." publicly. Judged when the
+  // settings come with the switch (the form always sends both).
+  if (b.charity_enabled === true && b.charity !== undefined && !String(b.charity?.name || '').trim()) {
+    ctx.addIssue({ code: 'custom', path: ['charity', 'name'], message: 'Enter the charity name to take donations.' })
+  }
 })
 
 async function loadRace(db, id) {

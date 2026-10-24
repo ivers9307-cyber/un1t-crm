@@ -509,9 +509,9 @@ registry.registerPath({
   path: '/api/public/donations/{id}',
   tags: ['Public'],
   summary: 'Status of one donation (checkout and return-page polls)',
-  description: 'Anonymous, display-safe: no donor field (name, email, message) is ever returned. state: pending | paid | failed | refunded. Re-checks the provider while pending (capped at 20 per donation per 5 min). Every observation of a paid row runs the stamp-keyed side effects (contact, tag, consent, receipt), so this poll also recovers a donor whose webhook never landed. While the payment can still be completed the response carries the checkout block.',
+  description: 'Anonymous, display-safe: no donor field (name, email, message) is ever returned. state: pending | paid | failed | refunded. Re-checks the provider while pending (capped at 100 per donation per 5 min). Every observation of a paid row runs the stamp-keyed side effects (contact, tag, consent, timeline note, receipt), so this poll also recovers a donor whose webhook never landed; in the first 60 s after paid_at only the observer that flipped the row runs them. While the payment can still be completed the response carries the checkout block.',
   responses: {
-    200: { description: 'Status returned: { id, state, amount_cents, currency, match_multiplier, checkout }' },
+    200: { description: 'Status returned: { id, state, paid, amount_cents, currency, match_multiplier, checkout }' },
     404: { description: 'Unknown donation', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -1189,7 +1189,7 @@ registry.registerPath({
   tags: ['Events'],
   security: [{ CookieAuth: [] }, { BearerAuth: [] }],
   summary: "An event's card donations, totals and charity settings (staff, races at the event's studio; CHARITY.10)",
-  description: 'Session auth + the races permission at the event\'s location; an event at a studio the caller cannot see is a 404. Rows newest first (awaiting_payment rows older than 2 hours, abandoned checkouts, are left out), each with paid_at_label rendered in the event location\'s zone and matched_cents (amount x the multiplier snapshotted at paid; 0 until paid). Returns { donations, totals, currency, settings: { name, match_multiplier, include_entries } }. `?format=csv` streams the hand-over file for the charity: paid_at, name, email, amount, matched, status, message (UTF-8 with BOM).',
+  description: 'Session auth + the races permission at the event\'s location; an event at a studio the caller cannot see is a 404. Rows newest first (every row, awaiting_payment included however old: staff reconcile them), each with paid_at_label rendered in the event location\'s zone and matched_cents (amount x the multiplier snapshotted at paid; 0 until paid). Returns { donations, totals, currency, settings: { name, match_multiplier, include_entries } }. `?format=csv` streams the hand-over file for the charity: paid_at, name, email, amount, matched, status, message (UTF-8 with BOM).',
   request: { params: z.object({ id: uuidLike }), query: z.object({ format: z.enum(['csv']).optional() }) },
   responses: {
     200: { description: '{ donations, totals, currency, settings }, or text/csv with ?format=csv', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventDonations') } } },

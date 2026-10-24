@@ -17,7 +17,10 @@
 // to get another try and a webhook redelivery or the donor's status poll is
 // that try. Each step is therefore keyed on its own stamp on the row
 // (contact_id, receipt_email_sent_at), never on `changed`, and each stamp is
-// written AFTER its effect.
+// written AFTER its effect. The browser poll and the webhook routinely observe
+// the same payment seconds apart, so for the first minute after paid_at only
+// the observer whose mark flipped the row (`observerWon`) runs the steps; any
+// other observer defers, and a later observation retries what is still unset.
 
 import { paymentsFor } from '@/lib/payments'
 import { resolvePaymentProvider, hostCanTakePayments } from '@/lib/event-hosts'
@@ -26,11 +29,14 @@ import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { writeContactTag } from '@/lib/contact-tags'
 import { applyFormMarketingConsent } from '@/lib/marketing-consent'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
-import { resolveCharitySettings } from '@/lib/charity-donations'
+import { resolveCharitySettings, formatCents } from '@/lib/charity-donations'
 import { sendDonationReceipt } from '@/lib/donation-receipt'
 import { logError, logWarn } from '@/lib/log'
 
 const STRIPE_CONNECT = 'stripe_connect'
+// How long after paid_at an observer that did not flip the row leaves the side
+// effects to the one that did.
+const SINGLE_OBSERVER_WINDOW_MS = 60_000
 
 /** Every donations column the routes select. */
 export const DONATION_COLS = [
@@ -164,13 +170,22 @@ export async function markDonationRefunded({ db, donationId, byProfileId = null,
   return { changed: Array.isArray(data) && data.length > 0 }
 }
 
+// "Donated €25.00 to MS Ireland (Hatch 5K)" on the contact's timeline.
+function donationNoteText(donation, race, settings) {
+  const charity = String(settings?.name || '').trim()
+  const eventName = String(race?.name || '').trim()
+  return `Donated ${formatCents(donation.amount_cents, donation.currency)}${charity ? ` to ${charity}` : ''}${eventName ? ` (${eventName})` : ''}`
+}
+
 // The contact leg. Link (or create) the contact, tag it, record marketing
-// consent, then stamp contact_id, then emit the timeline event. Everything
+// consent, then stamp contact_id, then emit the timeline event and write the
+// timeline note (the contact timeline reads `notes`, not contact_events). Everything
 // before the stamp is idempotent, so a failure anywhere before it leaves the
 // stamp unwritten and the next observation redoes the lot. The event is
-// emitted only by the observer whose stamp write changed exactly one row, so
-// two concurrent observers cannot both emit it; the cost is that a process
-// dying between the stamp and the emit loses the event (it is never retried).
+// emitted (and the note written) only by the observer whose stamp write
+// changed exactly one row, so two concurrent observers cannot both emit it; the
+// cost is that a process dying between the stamp and the emit loses the event
+// and the note (they are never retried).
 async function linkDonorContact({ db, donation, race, settings, ipAddress, out }) {
   let contactId = null
   let wonStamp = false
@@ -228,6 +243,14 @@ async function linkDonorContact({ db, donation, race, settings, ipAddress, out }
   } catch (e) {
     logError('donation-payments', 'donation.paid timeline event failed', { err: e, donationId: donation.id })
   }
+  try {
+    const { error } = await db.from('notes').insert({
+      contact_id: contactId, location_id: race.location_id, content: donationNoteText(donation, race, settings),
+    })
+    if (error) logError('donation-payments', 'donation timeline note not written', { err: error, donationId: donation.id })
+  } catch (e) {
+    logError('donation-payments', 'donation timeline note threw', { err: e, donationId: donation.id })
+  }
   return contactId
 }
 
@@ -240,16 +263,28 @@ async function linkDonorContact({ db, donation, race, settings, ipAddress, out }
  * the race_events row including charity, charity_enabled, location_id, name,
  * host_id and sending_location_id. Nothing is re-read.
  *
- * @returns {Promise<{ contact: 'linked'|'skipped'|'failed', consent: 'applied'|'skipped'|'failed',
- *   receipt: 'sent'|'suppressed'|'failed'|'skipped' }>}
+ * `observerWon` is true only when the caller's markDonationPaymentStatus
+ * returned `changed: true`. Any other observer (a lost compare-and-set, or a
+ * poll that found the row already paid) does nothing while paid_at is under a
+ * minute old and answers every step 'deferred': the winner is sending, and a
+ * later observation retries anything it left unstamped.
+ *
+ * @returns {Promise<{ contact: 'linked'|'skipped'|'failed'|'deferred', consent: 'applied'|'skipped'|'failed'|'deferred',
+ *   receipt: 'sent'|'suppressed'|'failed'|'skipped'|'deferred' }>}
  */
-export async function runPaidDonationSideEffects({ db, donation, race, ipAddress = null }) {
+export async function runPaidDonationSideEffects({ db, donation, race, ipAddress = null, observerWon = false, now = () => Date.now() }) {
   const out = { contact: 'skipped', consent: 'skipped', receipt: 'skipped' }
   // A stale row has no multiplier snapshot: refuse rather than send a receipt
   // that understates a matched gift.
   if (donation?.status !== 'paid') {
     logWarn('donation-payments', 'paid side effects refused: the row passed is not paid', { donationId: donation?.id, status: donation?.status })
     return out
+  }
+  if (!observerWon) {
+    const paidMs = Date.parse(donation.paid_at || '')
+    if (Number.isFinite(paidMs) && now() - paidMs < SINGLE_OBSERVER_WINDOW_MS) {
+      return { contact: 'deferred', consent: 'deferred', receipt: 'deferred' }
+    }
   }
   let contactId = donation.contact_id || null
   const hasEmail = !!String(donation.donor_email || '').trim()

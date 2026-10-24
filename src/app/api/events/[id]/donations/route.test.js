@@ -91,11 +91,12 @@ describe('GET /api/events/[id]/donations', () => {
     expect(res.status).toBe(404)
   })
 
-  it('returns rows, totals and settings; drops stale awaiting_payment rows', async () => {
+  it('returns rows, totals and settings; keeps every awaiting_payment row, however old (staff reconcile them)', async () => {
     const res = await GET(req(), ctx)
     expect(res.status).toBe(200)
     const { data } = await res.json()
-    expect(data.donations.map((d) => d.id)).toEqual(['d1', 'd3', 'd4'])
+    expect(data.donations.map((d) => d.id)).toEqual(['d1', 'd2', 'd3', 'd4'])
+    expect(data.donations[1].status).toBe('awaiting_payment')
     expect(data.totals).toEqual({
       donations_cents: 2500, donations_matched_cents: 5000, entries_cents: 0, entries_matched_cents: 0, raised_cents: 5000, donation_count: 1,
     })
@@ -106,6 +107,7 @@ describe('GET /api/events/[id]/donations', () => {
     expect(paid.matched_cents).toBe(5000)
     expect(data.donations[1].matched_cents).toBe(0)
     expect(data.donations[2].matched_cents).toBe(0)
+    expect(data.donations[3].matched_cents).toBe(0)
   })
 
   it('renders paid_at in the event location zone, beside the raw instant', async () => {

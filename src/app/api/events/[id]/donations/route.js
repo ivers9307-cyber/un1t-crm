@@ -20,7 +20,6 @@ import { logWarn } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const STALE_AWAITING_MS = 2 * 60 * 60 * 1000
 // UTF-8 BOM so Excel renders accented names correctly.
 const BOM = '﻿'
 const WHEN_FORMAT = { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }
@@ -65,13 +64,10 @@ export async function GET(request, props) {
     .range(0, 999)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  // An awaiting_payment row older than 2 hours is an abandoned checkout.
-  const cutoff = Date.now() - STALE_AWAITING_MS
-  const donations = (rows || []).filter((d) => {
-    if (d.status !== 'awaiting_payment') return true
-    const created = Date.parse(d.created_at)
-    return !Number.isFinite(created) || created >= cutoff
-  })
+  // Every row, awaiting_payment included however old: with no sweep, an
+  // unconfirmed row is exactly what a manager reconciles against the provider
+  // dashboard (the page labels it Unconfirmed and offers a re-check).
+  const donations = rows || []
 
   let entries = []
   if (settings.include_entries) {

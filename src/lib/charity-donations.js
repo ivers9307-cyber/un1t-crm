@@ -153,3 +153,13 @@ export function donationPublicState(row) {
 export function formatCents(cents, currency = 'EUR') {
   return new Intl.NumberFormat('en-IE', { style: 'currency', currency: currency || 'EUR' }).format((Number(cents) || 0) / 100)
 }
+
+/**
+ * Whether the staff events list links to an event's donations page: the
+ * section is on, OR the event has any donation (spec §6), so switching the
+ * section off never hides money already taken. `idsWithDonations` is a Set of
+ * race_event ids.
+ */
+export function showsDonationsLink(race, idsWithDonations) {
+  return !!race?.charity_enabled || !!idsWithDonations?.has?.(race?.id)
+}

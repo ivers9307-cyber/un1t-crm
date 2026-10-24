@@ -60,12 +60,26 @@ describe('GET /api/public/donations/[id]', () => {
     mocks.donation.mockResolvedValueOnce({ data: PENDING, error: null }).mockResolvedValueOnce({ data: PAID, error: null })
     const r = await call()
     const body = await r.json()
-    expect(mocks.rateLimit).toHaveBeenCalledWith(expect.anything(), 'dpoll:d1', { max: 20, windowMs: 5 * 60_000 })
+    // The checkout polls every 3 s: 100 per 5 minutes covers the whole window.
+    expect(mocks.rateLimit).toHaveBeenCalledWith(expect.anything(), 'dpoll:d1', { max: 100, windowMs: 5 * 60_000 })
     expect(mocks.getPayment).toHaveBeenCalledWith('ord1', { connectedAccountId: null })
     expect(mocks.mark).toHaveBeenCalledWith(expect.objectContaining({ donation: PENDING, providerState: 'completed', providerAmount: 2500, multiplier: 2 }))
     expect(mocks.sideEffects).toHaveBeenCalledTimes(1)
-    expect(mocks.sideEffects).toHaveBeenCalledWith(expect.objectContaining({ donation: PAID, race: EVENT, ipAddress: '1.2.3.4' }))
-    expect(body.data).toEqual({ id: 'd1', state: 'paid', amount_cents: 2500, currency: 'EUR', match_multiplier: 2, checkout: null })
+    expect(mocks.sideEffects).toHaveBeenCalledWith(expect.objectContaining({ donation: PAID, race: EVENT, ipAddress: '1.2.3.4', observerWon: true }))
+    expect(body.data).toEqual({ id: 'd1', state: 'paid', paid: true, amount_cents: 2500, currency: 'EUR', match_multiplier: 2, checkout: null })
+  })
+
+  it('a re-check that lost the mark to the webhook passes observerWon false', async () => {
+    mocks.donation.mockResolvedValueOnce({ data: PENDING, error: null }).mockResolvedValueOnce({ data: PAID, error: null })
+    mocks.mark.mockResolvedValue({ status: 'paid', changed: false })
+    await call()
+    expect(mocks.sideEffects).toHaveBeenCalledWith(expect.objectContaining({ donation: PAID, observerWon: false }))
+  })
+
+  it('answers paid false while pending', async () => {
+    mocks.rateLimit.mockResolvedValue({ allowed: false })
+    const body = await (await call()).json()
+    expect(body.data.paid).toBe(false)
   })
 
   it('runs the side effects on an already-paid row without asking the provider, and still when the event has switched charity off', async () => {
@@ -75,7 +89,8 @@ describe('GET /api/public/donations/[id]', () => {
     expect((await r.json()).data.state).toBe('paid')
     expect(mocks.getPayment).not.toHaveBeenCalled()
     expect(mocks.mark).not.toHaveBeenCalled()
-    expect(mocks.sideEffects).toHaveBeenCalledWith(expect.objectContaining({ donation: PAID, race: expect.objectContaining({ charity_enabled: false }) }))
+    // No mark happened on this poll, so it is not the winning observer.
+    expect(mocks.sideEffects).toHaveBeenCalledWith(expect.objectContaining({ donation: PAID, observerWon: false, race: expect.objectContaining({ charity_enabled: false }) }))
   })
 
   it('still marks paid when the event has switched charity off', async () => {

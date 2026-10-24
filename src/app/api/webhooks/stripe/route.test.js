@@ -112,7 +112,7 @@ describe('POST /api/webhooks/stripe — un1t_donation (CHARITY.7)', () => {
     expect(res.status).toBe(200)
     expect(resolveDonationByRef).toHaveBeenCalledWith(expect.anything(), 'cs_9')
     expect(markDonationPaymentStatus).toHaveBeenCalledWith(expect.objectContaining({ donation: DON, providerState: 'completed', providerAmount: 2500, multiplier: 2 }))
-    expect(runPaidDonationSideEffects).toHaveBeenCalledWith(expect.objectContaining({ donation: PAID, race: RACE }))
+    expect(runPaidDonationSideEffects).toHaveBeenCalledWith(expect.objectContaining({ donation: PAID, race: RACE, observerWon: true }))
     expect(resolveRacePaymentByProviderRef).not.toHaveBeenCalled()
   })
   it('a replayed completion on an already-paid row still runs the (stamp-keyed) side effects', async () => {
@@ -121,6 +121,7 @@ describe('POST /api/webhooks/stripe — un1t_donation (CHARITY.7)', () => {
     markDonationPaymentStatus.mockResolvedValue({ status: 'paid', changed: false })
     await POST(req())
     expect(runPaidDonationSideEffects).toHaveBeenCalledTimes(1)
+    expect(runPaidDonationSideEffects).toHaveBeenCalledWith(expect.objectContaining({ observerWon: false }))
   })
   it('an unknown donation session answers 200 and does nothing', async () => {
     verifyStripeWebhook.mockReturnValue(donationEvent('checkout.session.completed'))

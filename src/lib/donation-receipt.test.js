@@ -118,6 +118,15 @@ describe('sendDonationReceipt', () => {
     expect(args.race.donation_receipt_email_intro).toBe('Hi Sarah, €25.00 is €50.00.')
     expect(args.brandLocationId).toBe('L-comms')
   })
+  it('the match line reads the row\'s multiplier snapshot, never the event\'s current one', async () => {
+    const race = { ...RACE, charity: { ...RACE.charity, match_multiplier: 3 } }
+    await sendDonationReceipt({ db: fakeDb(), donation: { ...DONATION, match_multiplier: 2 }, race })
+    const args = resolveEventEmail.mock.calls[0][0]
+    expect(args.race.donation_receipt_email_intro).toBe('Hi Sarah, €25.00 is €50.00.')
+    const defaults = flat(args.defaults)
+    expect(defaults).toContain('€50.00')
+    expect(defaults).not.toContain('€75.00')
+  })
   it('a suppressed gate sends nothing and stamps both columns suppressed', async () => {
     checkTransactionalConsent.mockResolvedValueOnce({ allowed: false, reason: 'bounced' })
     const db = fakeDb()

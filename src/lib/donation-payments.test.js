@@ -42,20 +42,28 @@ const {
 // A hand-rolled supabase double. Each from(table) call is one chain; the
 // chain resolves { data, error } when awaited or when .select() / .maybeSingle()
 // ends it. `opts.updateError` fails every update; `opts.updateRows` is what a
-// conditional update reports as matched; `opts.row` is what a read returns.
+// conditional update reports as matched; `opts.row` is what a read returns;
+// `opts.insertError` fails every insert (recorded in `inserts`).
 function fakeDb(opts = {}) {
   const writes = []
   const reads = []
+  const inserts = []
   return {
     writes,
     reads,
+    inserts,
     from(table) {
       const w = { table, filters: [] }
       let isUpdate = false
-      const result = () => (isUpdate
-        ? { data: opts.updateError ? null : (opts.updateRows ?? [{ id: 'd1' }]), error: opts.updateError || null }
-        : { data: opts.row ?? null, error: opts.readError || null })
+      let isInsert = false
+      const result = () => {
+        if (isInsert) return { data: null, error: opts.insertError || null }
+        return isUpdate
+          ? { data: opts.updateError ? null : (opts.updateRows ?? [{ id: 'd1' }]), error: opts.updateError || null }
+          : { data: opts.row ?? null, error: opts.readError || null }
+      }
       const b = {
+        insert: (row) => { isInsert = true; w.row = row; inserts.push(w); return b },
         update: (fields) => { isUpdate = true; w.fields = fields; writes.push(w); return b },
         select: (cols) => { if (!isUpdate) { w.cols = cols; reads.push(w) } return isUpdate ? Promise.resolve(result()) : b },
         eq: (col, val) => { w.filters.push(['eq', col, val]); return b },
@@ -252,7 +260,8 @@ describe('markDonationRefunded', () => {
 })
 
 describe('runPaidDonationSideEffects', () => {
-  const PAID = { ...DONATION, status: 'paid', match_multiplier: 2, paid_at: 'T' }
+  // Paid long ago: outside the single-observer window, so every observer runs.
+  const PAID = { ...DONATION, status: 'paid', match_multiplier: 2, paid_at: '2026-01-01T00:00:00.000Z' }
 
   it('no contact yet: links, tags donor, stamps contact_id, emits the timeline event', async () => {
     const db = fakeDb()
@@ -269,6 +278,52 @@ describe('runPaidDonationSideEffects', () => {
       metadata: { amount_cents: 2500, currency: 'EUR', charity: 'MS Ireland', event_name: 'Hatch 5K' },
     })
     expect(r.contact).toBe('linked')
+  })
+  it('winning the contact stamp writes one timeline note: amount, charity and event name', async () => {
+    const db = fakeDb()
+    await runPaidDonationSideEffects({ db, donation: PAID, race: RACE })
+    const notes = db.inserts.filter((w) => w.table === 'notes')
+    expect(notes).toHaveLength(1)
+    expect(notes[0].row).toEqual({ contact_id: 'c-new', location_id: 'L1', content: 'Donated €25.00 to MS Ireland (Hatch 5K)' })
+  })
+  it('no timeline note when another observer won the contact stamp, or the contact was already linked', async () => {
+    const lost = fakeDb({ updateRows: [] })
+    await runPaidDonationSideEffects({ db: lost, donation: PAID, race: RACE })
+    expect(lost.inserts.filter((w) => w.table === 'notes')).toHaveLength(0)
+    const linked = fakeDb()
+    await runPaidDonationSideEffects({ db: linked, donation: { ...PAID, contact_id: 'c1' }, race: RACE })
+    expect(linked.inserts.filter((w) => w.table === 'notes')).toHaveLength(0)
+  })
+  it('a failed timeline note is logged, never thrown; the receipt still goes', async () => {
+    const db = fakeDb({ insertError: { message: 'notes down' } })
+    const r = await runPaidDonationSideEffects({ db, donation: PAID, race: RACE })
+    expect(r).toMatchObject({ contact: 'linked', receipt: 'sent' })
+    expect(logError).toHaveBeenCalledWith('donation-payments', expect.stringContaining('note'), expect.anything())
+  })
+  describe('single observer inside the first minute (observerWon)', () => {
+    const PAID_AT = '2026-10-24T12:00:00.000Z'
+    const fresh = { ...PAID, paid_at: PAID_AT }
+    const at = (secs) => () => Date.parse(PAID_AT) + secs * 1000
+    it('a losing observer inside 60 s does nothing: all deferred, no contact, no receipt, no writes', async () => {
+      const db = fakeDb()
+      const r = await runPaidDonationSideEffects({ db, donation: fresh, race: RACE, observerWon: false, now: at(30) })
+      expect(r).toEqual({ contact: 'deferred', consent: 'deferred', receipt: 'deferred' })
+      expect(findOrCreateRaceContact).not.toHaveBeenCalled()
+      expect(sendTransactionalEmail).not.toHaveBeenCalled()
+      expect(db.writes).toEqual([])
+      expect(db.inserts).toEqual([])
+    })
+    it('the same losing observer at 61 s runs the stamp-keyed steps', async () => {
+      const r = await runPaidDonationSideEffects({ db: fakeDb(), donation: fresh, race: RACE, observerWon: false, now: at(61) })
+      expect(r).toMatchObject({ contact: 'linked', receipt: 'sent' })
+      expect(sendTransactionalEmail).toHaveBeenCalledTimes(1)
+    })
+    it('the winner runs immediately', async () => {
+      const r = await runPaidDonationSideEffects({ db: fakeDb(), donation: fresh, race: RACE, observerWon: true, now: at(1) })
+      expect(r).toMatchObject({ contact: 'linked', receipt: 'sent' })
+      expect(findOrCreateRaceContact).toHaveBeenCalledTimes(1)
+      expect(sendTransactionalEmail).toHaveBeenCalledTimes(1)
+    })
   })
   it('consent is applied only when marketing_opt_in', async () => {
     await runPaidDonationSideEffects({ db: fakeDb(), donation: PAID, race: RACE, ipAddress: '1.2.3.4' })
