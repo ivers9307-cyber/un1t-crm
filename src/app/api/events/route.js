@@ -17,129 +17,25 @@
 // stays the same — non-race kinds always submit exactly one synthetic wave.
 
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { ADMIN_ROLES, uuidLike } from '@/lib/schemas'
+import { ADMIN_ROLES } from '@/lib/schemas'
 import { eventSlug, uniqueEventSlug } from '@/lib/event-slug'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
 import { isRaceKind, orderEventsForBrowse } from '@shared/events'
 import { eventToday } from '@/lib/event-day'
 import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
-import { CharitySettingsSchema } from '@/lib/charity-donations'
-import { FindTeamSettingsSchema } from '@/lib/find-team'
-import { EntryPolicySettingsSchema } from '@/lib/entry-policy'
+import { EventCreateSchema } from '@/lib/event-save-schemas'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 
-// Wave shape used in both create + update. capacity null = unlimited.
-const WaveInputSchema = z.object({
-  start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Use HH:MM'),
-  capacity: z.number().int().positive().max(10000).nullable().optional(),
-  label: z.string().max(60).nullable().optional(),
-  display_order: z.number().int().nonnegative().optional(),
-})
-
-export const CreateSchema = z.object({
-  location_id: uuidLike,
-  // Mig 122: discriminator. Defaults to 'race' so existing operator
-  // muscle memory (where every event is a race) keeps working without
-  // the form having to send the field.
-  kind: z.enum(['race', 'workshop', 'seminar', 'open_day', 'masterclass', 'lead_gen']).optional(),
-  // EVENTS-CAPACITY-MODE.1 (mig 280): does per-wave capacity count teams
-  // (registrations, legacy default) or people (sum of team sizes)?
-  capacity_mode: z.enum(['teams', 'people']).optional(),
-  // Mig 125: staffing requirement for the studio overview demand
-  // classifier. 0-50 (matches DB CHECK). Default 1 (matches DB DEFAULT).
-  // Form pre-fills per kind (race=4, workshop=1, etc.) but operator
-  // can override.
-  staff_required: z.number().int().min(0).max(50).optional(),
-  name: z.string().trim().min(1).max(200),
-  slug: z.string().trim().min(1).max(120).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'lowercase kebab-case').optional(),
-  description: z.string().max(4000).nullable().optional(),
-  // race_date is required for every kind EXCEPT lead_gen (a no-date
-  // data-capture form). Enforced per-kind in the superRefine below.
-  race_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD').nullable().optional(),
-  registration_opens_at: z.string().datetime().nullable().optional(),
-  registration_closes_at: z.string().datetime().nullable().optional(),
-  allowed_team_sizes: z.array(z.number().int().positive().max(50)).min(1).max(20).optional(),
-  active: z.boolean().optional(),
-  // Member pricing (mig 084).
-  member_pricing_enabled: z.boolean().optional(),
-  members_only: z.boolean().optional(),
-  // EVENTS-LOC.2: when true, this event shows in every location's list.
-  shared: z.boolean().optional(),
-  // EVENTS-HOST.4: nullable FK -> event_hosts. NULL = internal UN1T event
-  // (settled via Revolut, the default); set = that host is paid directly
-  // via Stripe Connect with UN1T's per-ticket booking fee. Org-validated
-  // against the event's location below before it's persisted.
-  host_id: uuidLike.nullable().optional(),
-  member_fee_cents: z.number().int().nonnegative().nullable().optional(),
-  non_member_fee_cents: z.number().int().nonnegative().nullable().optional(),
-  payment_currency: z.string().length(3).optional(),
-  // Mig 092: up to 3 sponsor/branding logo URLs for the TV display.
-  // Schema CHECK caps the array at 6 to leave headroom; UI caps at 3.
-  // Each entry must be an http(s) URL (no data: blobs).
-  tv_logos: z.array(z.string().url().max(2000)).max(6).optional(),
-  // Public-page hero image + accent colour. Hero is normally uploaded
-  // after the event is saved (needs an id to namespace the storage
-  // path), so these are typically set on the follow-up PUT — but the
-  // create schema accepts them too. accent_hex is a 6-digit hex.
-  hero_image_url: z.string().url().max(2000).nullable().optional(),
-  accent_hex: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
-  // EVENTS-EMAILCFG.1 (mig 385) — per-event styling of the signup
-  // confirmation + pre-event reminder emails. subject/intro drop into the
-  // shared branded shell (merge-tagged); *_template_id overrides the shell
-  // with a full email_templates row. All nullable → NULL = default copy/look
-  // (behaviour-preserving). template_ids are org/location-validated below.
-  confirmation_email_subject: z.string().max(4000).nullable().optional(),
-  confirmation_email_intro: z.string().max(4000).nullable().optional(),
-  reminder_email_subject: z.string().max(4000).nullable().optional(),
-  reminder_email_intro: z.string().max(4000).nullable().optional(),
-  // EVENT-MOVE.1 (mig 708) — copy for the "your entry has moved" email.
-  moved_email_subject: z.string().max(4000).nullable().optional(),
-  moved_email_intro: z.string().max(4000).nullable().optional(),
-  // EVENT-MOVE.5 (mig 710) — copy for the two price-difference emails (the
-  // payment link and the receipt share it).
-  gap_email_subject: z.string().max(4000).nullable().optional(),
-  gap_email_intro: z.string().max(4000).nullable().optional(),
-  // EVENT-WAITLIST.1 (mig 713) — copy for the waitlist "a spot opened up"
-  // offer email ({{claim_url}} available).
-  waitlist_email_subject: z.string().max(4000).nullable().optional(),
-  waitlist_email_intro: z.string().max(4000).nullable().optional(),
-  confirmation_email_template_id: uuidLike.nullable().optional(),
-  reminder_email_template_id: uuidLike.nullable().optional(),
-  // EVENT-COMMS-LOC (mig 553) — the real UN1T location this event's SMS + email
-  // send from. In-org non-anchor validated below.
-  sending_location_id: uuidLike.nullable().optional(),
-  // CHARITY.9 (mig 765) — "Charity day" card donations on the public page.
-  charity_enabled: z.boolean().optional(),
-  charity: CharitySettingsSchema.nullable().optional(),
-  // FINDTEAM.6 — "Find me a team" switch + copy (race_events.find_team, mig 766).
-  find_team: FindTeamSettingsSchema.nullable().optional(),
-  // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
-  // (race_events.entry_policy, mig 767).
-  entry_policy: EntryPolicySettingsSchema.nullable().optional(),
-  // Waves (mig 083) — at least one required for a usable race.
-  // Server normalises by start_time ascending; UNIQUE on
-  // (race_event_id, start_time) catches duplicates from the DB side.
-  waves: z.array(WaveInputSchema).max(50).optional(),
-}).superRefine((val, ctx) => {
-  // Every kind except lead_gen needs a date AND at least one wave.
-  // lead_gen is a pure data-capture form: no date, no waves.
-  const kind = val.kind ?? 'race'
-  if (kind === 'lead_gen') return
-  if (!val.race_date) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['race_date'], message: 'Date is required.' })
-  }
-  if (!val.waves || val.waves.length < 1) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['waves'], message: 'Add at least one wave.' })
-  }
-})
+// The body schema lives in src/lib/event-save-schemas.js (OPENAPI-EVENTS.1),
+// where the OpenAPI spec reads the same object; re-exported under its old name.
+export const CreateSchema = EventCreateSchema
 
 export async function GET(request) {
   const user = await getCurrentUser()

@@ -39,6 +39,9 @@ import {
   QualificationTypeCreateSchema, QualificationTypePatchSchema, TemplateQualificationsPutSchema,
 } from '@/lib/qualifications-schemas'
 import { ROSTER_CHANGE_LOG_MAX_ROWS } from '@/lib/roster-change-format'
+// OPENAPI-EVENTS.1 — the event create/update bodies, the handlers' own objects.
+import { EventCreateFields, EventUpdateFields } from '@/lib/event-save-schemas'
+import { ENTRY_POLICY_DEFAULTS, ENTRY_POLICY_HOURS_MAX } from '@/lib/entry-policy'
 import {
   CampaignCreateSchema as CampaignCreateSessionSchema,
   CampaignContentSchema as CampaignContentSessionSchema,
@@ -998,6 +1001,157 @@ registry.registerPath({
     409: bookingManageErr('Cancelled, too late, the type cannot be booked online, the slot is taken, or changed meanwhile'),
     429: bookingManageErr('Rate limited'),
     500: bookingManageErr('A read or write failed; nothing changed'),
+  },
+})
+
+// ============================================================================
+// OPENAPI-EVENTS.1 — the event itself: list, create, read, update, retire.
+// The create and update bodies are the handlers' own Zod objects, imported
+// from src/lib/event-save-schemas.js (the two route files re-export them as
+// CreateSchema / UpdateSchema), so a field added there reaches the spec with
+// no change here. Only the cross-field rules (superRefine) and what the
+// handler does AFTER validation are written out, in the descriptions.
+// `.extend({})` for the same reason as the Shelly block: the raw exports are
+// built before extendZodWithOpenApi runs, so they carry no `.openapi`.
+// ============================================================================
+
+const EventCreate = EventCreateFields.extend({}).openapi('EventCreate', {
+  description:
+    'POST /api/events body. Rules the schema adds across fields: every `kind` but lead_gen needs `race_date` and at least one wave; lead_gen (a no-date data-capture form) takes neither. '
+    + '`charity` (CHARITY.9) is the charity-day donation settings: name, heading, blurb, presets_cents, custom_allowed, min_cents, max_cents, match_multiplier (1..5), match_label, goal_cents, show_total, include_entries, consent_label, the thank-you and receipt copy, video_url (YouTube or Instagram) or video_file_url (uploaded through the event form); every key optional, a missing key is the default. '
+    + '`find_team` (FINDTEAM.6) is the "Find me a team" switch and copy: enabled, label, blurb, confirmation_paragraph, placed_subject, placed_intro. '
+    + `\`entry_policy\` (ENTRYPOLICY.1) is what a customer may do with their own entry and how long an unpaid entry keeps its place: self_cancel_enabled (default ${ENTRY_POLICY_DEFAULTS.self_cancel_enabled}), self_reschedule_enabled (default ${ENTRY_POLICY_DEFAULTS.self_reschedule_enabled}), cutoff_hours (0..${ENTRY_POLICY_HOURS_MAX}, default ${ENTRY_POLICY_DEFAULTS.cutoff_hours}; hours before the entrant's start, on the studio's clock, that self-service closes; 0 = no cutoff), unpaid_hold_hours (1..${ENTRY_POLICY_HOURS_MAX}, default ${ENTRY_POLICY_DEFAULTS.unpaid_hold_hours}; a pending_payment entry holds its place that long), and the operator copy cutoff_message, disabled_message, lapsed_message ({{hours}} and {{event_name}} are filled in). Every key optional; null or omitted = the defaults.`,
+})
+
+const EventUpdate = EventUpdateFields.extend({}).openapi('EventUpdate', {
+  description:
+    'PUT /api/events/{id} body. Every key optional: omitted = left as it is, null clears a nullable column. '
+    + 'Rule the schema adds across fields (CHARITY.12): `charity_enabled: true` sent with a `charity` whose name is blank is refused (nothing is written). '
+    + '`waves`, when sent, is the whole new wave set (at least one): a row with a known `id` updates that wave, a row without one is inserted, and an existing wave not in the set is deleted (registrations that pointed at it keep their place with no wave). '
+    + '`charity`, `find_team` and `entry_policy` take the same shapes as on create.',
+})
+
+const EventListRow = z.object({
+  id: uuidLike,
+  name: z.string(),
+  slug: z.string(),
+  kind: z.string().openapi({ description: 'race | workshop | seminar | open_day | masterclass | lead_gen' }),
+  race_date: z.string().nullable(),
+  start_time: z.string().nullable(),
+  active: z.boolean(),
+  shared: z.boolean(),
+  hosted_by: z.string().nullable().openapi({ description: "The payment host's name, or null for an internal event" }),
+  signup_summary: z.string().openapi({ description: 'Rendered server-side from the confirmed registrations and the capacity (teams or people)' }),
+  is_upcoming: z.boolean().openapi({ description: "Judged on the event's own studio day (TZ.9), so the client does no date maths" }),
+}).openapi('EventListRow')
+
+const EventDetail = z.object({}).passthrough().openapi('EventDetail', {
+  description:
+    'The race_events row as the handler selects it: id, location_id, name, slug, description, race_date, kind, staff_required, registration_opens_at/closes_at, allowed_team_sizes, active, created_at, updated_at, '
+    + 'member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, tv_logos, shared, host_id, hero_image_url, accent_hex, the confirmation/reminder/moved/gap/waitlist email subject and intro copy, the two email template ids, sending_location_id, charity_enabled, charity, find_team, entry_policy, '
+    + 'plus `waves` (id, start_time, capacity, label, display_order) and `registrations` (id, status, race_started_at, race_finished_at, registered_at, wave_id, team_composition, active_payment_id, and `teams` with its `team_members`).',
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/events',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Every event at a studio, shaped for the events browse list (staff with races at that studio)",
+  description:
+    'Session auth, then the `races` permission at any studio (403). `?location_id` (default: the active studio) must be a studio the caller belongs to (403), with `races` resolved AT that studio (403): no manager role is needed, this is the front-of-house list (door staff on the phone), unlike GET /api/races. '
+    + "Lists that studio's own events plus any sibling studio's event flagged `shared` (same organisation). For ADMIN_ROLES (master, owner, manager) at the active studio with `races` there, the organisation's HOST events are added too: they live on a per-host anchor location no staff member belongs to, so the active studio is the only judgement for them. "
+    + 'Rows come upcoming first (nearest date first), then past (most recent first), each stamped `is_upcoming` and a rendered `signup_summary`. No studio to list (no `location_id` and no active studio) answers an empty list.',
+  request: { query: z.object({ location_id: uuidLike.optional() }) },
+  responses: {
+    200: { description: 'The ordered rows', content: { 'application/json': { schema: SuccessResponse(z.array(EventListRow)) } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission at that studio, or a studio the caller does not belong to', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Create an event with its waves (staff with races at body.location_id; a payment host needs manager access)',
+  description:
+    'Session auth → `races` at any studio (403) → body validated (400 with `issues`) → the caller must belong to `location_id` (403 Forbidden) and hold `races` there (403). Any role may create an internal event; sending `host_id` (the payee, paid through Stripe Connect) needs ADMIN_ROLES (master, owner, manager) at that studio (403). '
+    + "Referential checks run before the insert, each a 400 carrying the code as `error`: `invalid_host` (host_id must be an event_hosts row in the studio's organisation), `invalid_template` (confirmation_email_template_id / reminder_email_template_id must be email_templates rows at that studio), `invalid_sending_location` (sending_location_id must be a non-anchor studio in the same organisation). "
+    + 'The public URL slug is derived from the studio, the date and the earliest wave (studio-oct17-1030, suffixed -2, -3 on a clash) unless `slug` is sent, which answers 409 when another event already uses it (slugs are global: the public /event/[slug] page has no studio filter). '
+    + 'Written when omitted: kind race, capacity_mode teams, staff_required 1, allowed_team_sizes [1, 2, 4] (sorted when sent), active true, payment_currency EUR, charity_enabled false; member_fee_cents is kept only when member_pricing_enabled is true. `charity`, `find_team` and `entry_policy` are stored as sent (null or omitted = the defaults). '
+    + 'Waves are inserted sorted by start_time (display_order defaults to that order); two waves on one start time answer 409 `duplicate_wave_time` and the event row is rolled back, so a 409 leaves nothing behind. Answers 201 with the row and its `waves` (an empty array for lead_gen).',
+  request: { body: { content: { 'application/json': { schema: EventCreate } } } },
+  responses: {
+    201: { description: 'Created: the race_events row with `waves`', content: { 'application/json': { schema: SuccessResponse(EventDetail) } } },
+    400: { description: 'Validation failed (`issues`), invalid_host, invalid_template, invalid_sending_location, or the insert failed (the database message)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission at the studio, a studio the caller does not belong to, or a payment host set without manager access', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The slug is already used by another event (duplicate_slug), or two waves share a start time (duplicate_wave_time; nothing created)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/events/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "One event with its waves and registrations (staff with races at the event's studio)",
+  description:
+    "Session auth, then `races` at any studio (403). The event must be at a studio the caller belongs to, with `races` resolved at the event's studio (403); an event the caller cannot see is a 404, never a 403, so ids cannot be enumerated. "
+    + "One exception (HOST-EDIT.1): a HOST event lives on the host's anchor location, so ADMIN_ROLES (master, owner, manager) at the active studio whose organisation owns the host may read it, with `races` judged at the active studio.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The event', content: { 'application/json': { schema: SuccessResponse(EventDetail) } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or at a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/events/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Update an event and, when sent, replace its waves (staff with races at the event's studio; payee and studio changes need manager access)",
+  description:
+    'Session auth → `races` at any studio (403) → body validated (400 with `issues`) → the same visibility rule as GET: 404 for an event at a studio the caller cannot see, with `races` judged at the event\'s studio (403), and the HOST-EDIT.1 exception for org admins on a host event. '
+    + "Two gates sit on top of `races`: changing `host_id` (assigning, switching or clearing the payee: it routes ticket money) needs ADMIN_ROLES (master, owner, manager) at the event's studio (403; an unchanged host_id passes); `location_id` (EVENT-OWNER.1, moving the event to another studio) is judged by judgeEventOwnerChange: ADMIN_ROLES at both studios with races on at the target (403), the same organisation (400 invalid_location), never a host's event (400) and never onto a host anchor, and a move drops a stored email template pointer the body did not replace, since templates are per studio. "
+    + 'Referential 400s as on create (`invalid_host`, `invalid_template`, `invalid_sending_location`), judged against the target studio when moving. '
+    + 'Scalars are patched as one update (a failed write is a 400 with the database message); then `waves`, when sent, is diffed and applied: update by id, insert the rest, delete the waves left out (their registrations keep their place with wave_id null); two waves on one start time answer 409 `duplicate_wave_time`. Answers the event re-read as GET returns it.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: EventUpdate } } },
+  },
+  responses: {
+    200: { description: 'The updated event, re-read with its waves and registrations', content: { 'application/json': { schema: SuccessResponse(EventDetail) } } },
+    400: { description: 'Validation failed (`issues`), invalid_host, invalid_template, invalid_sending_location, invalid_location, a move of a host\'s event, or a failed write (the database message)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission at the event's studio, a payee change without manager access, or a move without manager access at both studios", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, at a studio the caller cannot see, or (on a move) a target studio that does not exist', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Two waves share a start time (duplicate_wave_time)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'On a move, the studios could not be read; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/events/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Retire an event: active=false, registrations kept (staff, manager+ with races at the event's studio)",
+  description:
+    'Soft delete: sets `active` false so the registrations stay as history; no row is removed. Session auth, then MANAGER_ROLES (master, owner, manager, head_coach) and `races` at any studio (403), then membership of the event\'s studio (an event the caller cannot see is a 404) and the same role and permission resolved AT that studio (403). No host-event exception on this method. Answers `{ success: true }` with no data.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Retired', content: { 'application/json': { schema: z.object({ success: z.literal(true) }).openapi('EventRetired') } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "Manager role or races permission missing at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or at a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Write failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

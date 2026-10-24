@@ -4,110 +4,20 @@
 // at the race's location.
 
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { ADMIN_ROLES, MANAGER_ROLES, uuidLike } from '@/lib/schemas'
+import { ADMIN_ROLES, MANAGER_ROLES } from '@/lib/schemas'
 import { judgeEventOwnerChange } from '@/lib/event-owner'
-import { CharitySettingsSchema } from '@/lib/charity-donations'
-import { FindTeamSettingsSchema } from '@/lib/find-team'
-import { EntryPolicySettingsSchema } from '@/lib/entry-policy'
+import { EventUpdateSchema } from '@/lib/event-save-schemas'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const WaveInputSchema = z.object({
-  // id present = update existing wave; absent = create. (Mig 083)
-  // The diff-and-apply path matches by id where present, by start_time
-  // for unidentified rows that happen to align with existing waves.
-  id: z.string().uuid().optional(),
-  start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Use HH:MM'),
-  capacity: z.number().int().positive().max(10000).nullable().optional(),
-  label: z.string().max(60).nullable().optional(),
-  display_order: z.number().int().nonnegative().optional(),
-})
-
-export const UpdateSchema = z.object({
-  name: z.string().trim().min(1).max(200).optional(),
-  description: z.string().max(4000).nullable().optional(),
-  race_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  registration_opens_at: z.string().datetime().nullable().optional(),
-  registration_closes_at: z.string().datetime().nullable().optional(),
-  allowed_team_sizes: z.array(z.number().int().positive().max(50)).min(1).max(20).optional(),
-  // Mig 125: staffing requirement edit. Same range as create. UpdateSchema
-  // accepts kind-NULL keep semantics — only patches when explicitly set.
-  staff_required: z.number().int().min(0).max(50).optional(),
-  active: z.boolean().optional(),
-  // EVENTS-CAPACITY-MODE.1 (mig 280): cap by teams or people. Scalar —
-  // flows through the generic `updates` patch in PUT below.
-  capacity_mode: z.enum(['teams', 'people']).optional(),
-  // Member pricing (mig 084).
-  member_pricing_enabled: z.boolean().optional(),
-  members_only: z.boolean().optional(),
-  // EVENTS-LOC.2: shared = show this event in every location's list.
-  shared: z.boolean().optional(),
-  // EVENTS-HOST.4: reassign the payee. NULL = internal UN1T (Revolut);
-  // set = pay that host directly via Stripe. Org-validated in PUT below.
-  host_id: uuidLike.nullable().optional(),
-  member_fee_cents: z.number().int().nonnegative().nullable().optional(),
-  non_member_fee_cents: z.number().int().nonnegative().nullable().optional(),
-  payment_currency: z.string().length(3).optional(),
-  // Mig 092: TV-display logos (max 3 in UI, schema allows 6).
-  tv_logos: z.array(z.string().url().max(2000)).max(6).optional(),
-  // Public-page hero image + accent colour. hero_image_url is set by
-  // the caller after POST /api/events/[id]/hero returns the bytes URL;
-  // accent_hex is a 6-digit hex (#RRGGBB). Both nullable to clear.
-  hero_image_url: z.string().url().max(2000).nullable().optional(),
-  accent_hex: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
-  // EVENTS-EMAILCFG.1 (mig 385) — per-event confirmation/reminder email
-  // styling. Scalars flow through the generic `updates` patch below; NULL
-  // clears back to the default copy/look, omit = leave untouched. The
-  // *_template_id fields are location-validated in PUT before persisting.
-  confirmation_email_subject: z.string().max(4000).nullable().optional(),
-  confirmation_email_intro: z.string().max(4000).nullable().optional(),
-  reminder_email_subject: z.string().max(4000).nullable().optional(),
-  reminder_email_intro: z.string().max(4000).nullable().optional(),
-  // EVENT-MOVE.1 (mig 708) — copy for the "your entry has moved" email.
-  moved_email_subject: z.string().max(4000).nullable().optional(),
-  moved_email_intro: z.string().max(4000).nullable().optional(),
-  // EVENT-MOVE.5 (mig 710) — copy for the two price-difference emails (the
-  // payment link and the receipt share it).
-  gap_email_subject: z.string().max(4000).nullable().optional(),
-  gap_email_intro: z.string().max(4000).nullable().optional(),
-  // EVENT-WAITLIST.1 (mig 713) — copy for the waitlist "a spot opened up"
-  // offer email ({{claim_url}} available).
-  waitlist_email_subject: z.string().max(4000).nullable().optional(),
-  waitlist_email_intro: z.string().max(4000).nullable().optional(),
-  confirmation_email_template_id: uuidLike.nullable().optional(),
-  reminder_email_template_id: uuidLike.nullable().optional(),
-  // EVENT-COMMS-LOC (mig 553) — flows through the generic scalar patch; in-org
-  // non-anchor validated in PUT.
-  sending_location_id: uuidLike.nullable().optional(),
-  // CHARITY.9 (mig 765) — "Charity day" card donations on the public page.
-  // Flows through the generic `updates` spread in PUT below.
-  charity_enabled: z.boolean().optional(),
-  charity: CharitySettingsSchema.nullable().optional(),
-  // FINDTEAM.6 — "Find me a team" switch + copy (race_events.find_team, mig 766).
-  find_team: FindTeamSettingsSchema.nullable().optional(),
-  // ENTRYPOLICY.1 — self-service switches, cutoff, unpaid hold + refusal copy
-  // (race_events.entry_policy, mig 767).
-  entry_policy: EntryPolicySettingsSchema.nullable().optional(),
-  // EVENT-OWNER.1 — the owning studio. Admin at both ends, same org, not a
-  // host anchor, not a host event: judged by judgeEventOwnerChange in PUT.
-  location_id: uuidLike.optional(),
-  // When provided, replaces the wave set entirely (diff-and-apply).
-  // Omitting leaves waves untouched. At least one wave required if set.
-  waves: z.array(WaveInputSchema).min(1).max(50).optional(),
-}).superRefine((b, ctx) => {
-  // CHARITY.12 — switching donations on with settings that have no charity
-  // name would render "Every euro goes to ." publicly. Judged when the
-  // settings come with the switch (the form always sends both).
-  if (b.charity_enabled === true && b.charity !== undefined && !String(b.charity?.name || '').trim()) {
-    ctx.addIssue({ code: 'custom', path: ['charity', 'name'], message: 'Enter the charity name to take donations.' })
-  }
-})
+// The body schema lives in src/lib/event-save-schemas.js (OPENAPI-EVENTS.1),
+// where the OpenAPI spec reads the same object; re-exported under its old name.
+export const UpdateSchema = EventUpdateSchema
 
 async function loadRace(db, id) {
   return db
