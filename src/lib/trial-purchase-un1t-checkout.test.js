@@ -6,12 +6,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Un1tWriteRefused, Un1tWriteUnknown } from '@/lib/un1t-online-write'
 import { Un1tSettingsReadError } from '@/lib/un1t-online-settings'
 
-const mocks = vi.hoisted(() => ({ ensureAccount: vi.fn(), checkout: vi.fn(), alert: vi.fn(), updated: vi.fn() }))
+const mocks = vi.hoisted(() => ({ ensureAccount: vi.fn(), checkout: vi.fn(), alert: vi.fn(), updated: vi.fn(), logError: vi.fn(), logWarn: vi.fn() }))
 vi.mock('@/lib/un1t-online-account', () => ({ ensureUn1tAccount: mocks.ensureAccount }))
 vi.mock('@/lib/un1t-online-write-ops', () => ({ createCheckoutLink: mocks.checkout }))
 vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: async () => 'https://www.un1tdublin.com' }))
 vi.mock('@/lib/trial-purchase-processor', () => ({ alertTrialPurchaseStaff: mocks.alert }))
-vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logError: mocks.logError, logWarn: mocks.logWarn, logInfo: vi.fn() }))
 
 import { startUn1tTrialCheckout } from './trial-purchase-un1t-checkout'
 
@@ -89,5 +89,44 @@ describe('startUn1tTrialCheckout', () => {
     expect(patches()).toEqual([{ un1t_user_id: 'u-1' }, { un1t_ledger_id: 'led-1' }])
     for (const [, , filters] of mocks.updated.mock.calls) expect(filters).toEqual([['id', 'tp1'], ['location_id', 'loc2']])
     expect(mocks.alert).not.toHaveBeenCalled()
+  })
+
+  // Final review — uniq_trial_purchases_open_help (mig 764) also guards this
+  // stamp: a buyer who already has an open help card at Hatch.
+  it('a help stamp refused 23505 (a card already open) closes the row failed, sends no second alert, still help_filed', async () => {
+    mocks.checkout.mockRejectedValue(new Un1tWriteRefused('UN1T_ALREADY_PURCHASED', 'limit', { retryable: false }))
+    mocks.updated
+      .mockResolvedValueOnce({ error: null }) // un1t_user_id
+      .mockResolvedValueOnce({ error: { code: '23505', details: 'Key (location_id, contact_id)=(loc2, c1) already exists.' } })
+      .mockResolvedValueOnce({ error: null })
+    expect(await startUn1tTrialCheckout(db, ARGS)).toEqual({ kind: 'help_filed' })
+    expect(patches()).toEqual([
+      { un1t_user_id: 'u-1' },
+      { status: 'help_requested', last_error: 'un1t_checkout_refused: UN1T_ALREADY_PURCHASED' },
+      { status: 'failed', last_error: 'help_card_already_open' },
+    ])
+    for (const [, , filters] of mocks.updated.mock.calls) expect(filters).toEqual([['id', 'tp1'], ['location_id', 'loc2']])
+    expect(mocks.alert).not.toHaveBeenCalled()
+  })
+  it('logs ids and codes only, never the raw error', async () => {
+    const pgErr = { code: '57014', message: 'canceling statement', details: 'Failing row contains (ava@example.com, 0851234567)' }
+    mocks.updated.mockResolvedValueOnce({ error: pgErr }).mockResolvedValueOnce({ error: pgErr })
+    expect(await startUn1tTrialCheckout(db, ARGS)).toEqual({ kind: 'unavailable' })
+    expect(mocks.logError).toHaveBeenCalledWith('trialbuy', 'un1t user id not stamped; no checkout', { purchaseId: 'tp1', locationId: 'loc2', code: '57014' })
+    expect(mocks.logError).toHaveBeenCalledWith('trialbuy', 'un1t trial row not marked failed', { purchaseId: 'tp1', locationId: 'loc2', lastError: 'un1t_user_unstamped', code: '57014' })
+
+    vi.clearAllMocks()
+    mocks.updated.mockResolvedValue({ error: null })
+    mocks.ensureAccount.mockRejectedValueOnce(Object.assign(new Error('read failed for ava@example.com'), { code: 'XX000' }))
+    await startUn1tTrialCheckout(db, ARGS)
+    mocks.checkout.mockRejectedValueOnce(new Error('boom ava@example.com'))
+    mocks.alert.mockRejectedValueOnce(new Error('mail down for ava@example.com'))
+    await startUn1tTrialCheckout(db, ARGS)
+    mocks.updated.mockResolvedValueOnce({ error: null }).mockResolvedValueOnce({ error: pgErr })
+    await startUn1tTrialCheckout(db, ARGS)
+    const logged = JSON.stringify([...mocks.logError.mock.calls, ...mocks.logWarn.mock.calls])
+    expect(mocks.logError.mock.calls.length + mocks.logWarn.mock.calls.length).toBeGreaterThanOrEqual(4)
+    expect(logged).not.toContain('ava@example.com')
+    expect(logged).not.toContain('Failing row')
   })
 })

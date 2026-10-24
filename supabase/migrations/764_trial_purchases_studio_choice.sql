@@ -35,6 +35,9 @@
 --       presses of "I need help" can interleave; the second insert now fails
 --       23505 and the route answers with the open row (no second card, no
 --       second alert). A handled row does not block a new request.
+--       Second writer: the Hatch checkout (trial-purchase-un1t-checkout.js)
+--       stamps a refused row help_requested; a 23505 there closes that row
+--       'failed' (help_card_already_open) with no second alert.
 --   (5) un1t_write_events_origin_check also admits 'web_trial' (the public
 --       /trial page as the origin of a ledger write); every origin mig 744
 --       allowed is kept.
@@ -108,7 +111,7 @@ COMMENT ON COLUMN public.trial_purchases.terms_source IS 'TRIALSTUDIO.1: where t
 COMMENT ON COLUMN public.trial_purchases.terms_version IS 'TRIALSTUDIO.1: the version of the terms text the buyer accepted.';
 COMMENT ON CONSTRAINT trial_purchases_status_check ON public.trial_purchases IS 'TRIALSTUDIO.1 (mig 764): awaiting_payment | queued | processing | granted | needs_review | failed | payment_failed | help_requested | handled | expired.';
 COMMENT ON INDEX public.idx_trial_purchases_un1t_open IS 'TRIALSTUDIO.1 (mig 764): open un1t.online trial checkouts (awaiting_payment), oldest first, for the expiry sweep.';
-COMMENT ON INDEX public.uniq_trial_purchases_open_help IS 'Final review F6 (mig 764): one open help request (status help_requested) per contact per location; a second insert from a double press fails 23505 and the help route answers with the open row. A handled row does not block a new one.';
+COMMENT ON INDEX public.uniq_trial_purchases_open_help IS 'Final review F6 (mig 764): one open help request (status help_requested) per contact per location; a second insert from a double press fails 23505 and the help route answers with the open row; the Hatch checkout''s help stamp failing 23505 closes its row failed (help_card_already_open), no second alert. A handled row does not block a new one.';
 COMMENT ON INDEX public.uniq_trial_purchases_un1t_ref IS 'TRIALSTUDIO.7 (mig 764): one un1t.online transaction (payment_provider_ref) settles at most one trial_purchases row per location, even across overlapping settle sweeps.';
 
 -- Repeated from mig 762 so a later default-ACL change cannot reopen the table.

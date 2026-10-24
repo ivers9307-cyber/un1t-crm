@@ -46,6 +46,7 @@ import { sendWebsiteConversion } from '@/lib/meta-capi'
 import { runSetPasswordStep } from '@/lib/un1t-online-account'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { readPaidTrialAccountEmailCopy } from '@/lib/trial-studios'
+import { sendUn1tAccountEmail } from '@/lib/un1t-online-funnel-emails'
 import { logError, logWarn } from '@/lib/log'
 
 const LOG = 'trial-purchase-un1t'
@@ -236,7 +237,9 @@ async function settleRow(db, row, tx, nowMs, out) {
     const res = await runSetPasswordStep(db, {
       locationId: row.location_id, contact, un1tUserId: row.un1t_user_id, request: null,
       settings, origin: ORIGIN, emailArgs: { kind: 'trial_purchase', productName: row.product_name, copy }, writer: null,
-    })
+    // The step takes its sender only from deps (no default): without it the
+    // explanation email throws inside the step and is never sent.
+    }, { sendUn1tAccountEmail })
     verdict = res?.forgotPassword ?? 'unknown'
     if (verdict !== 'done' && !String(verdict).startsWith('skipped_')) {
       logWarn(LOG, 'set-password step did not complete', {

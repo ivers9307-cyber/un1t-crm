@@ -11,8 +11,9 @@
 // changes the row, so a second sweep sees what the first one wrote.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ capi: vi.fn(), setPassword: vi.fn(), settings: vi.fn(), warn: vi.fn(), emailCopy: vi.fn() }))
+const mocks = vi.hoisted(() => ({ capi: vi.fn(), setPassword: vi.fn(), settings: vi.fn(), warn: vi.fn(), emailCopy: vi.fn(), sendAccountEmail: vi.fn() }))
 vi.mock('@/lib/trial-studios', () => ({ readPaidTrialAccountEmailCopy: mocks.emailCopy }))
+vi.mock('@/lib/un1t-online-funnel-emails', () => ({ sendUn1tAccountEmail: mocks.sendAccountEmail }))
 vi.mock('@/lib/meta-capi', () => ({ sendWebsiteConversion: mocks.capi }))
 vi.mock('@/lib/un1t-online-account', () => ({ runSetPasswordStep: mocks.setPassword }))
 vi.mock('@/lib/un1t-online-settings', () => ({ readUn1tWriteSettings: mocks.settings }))
@@ -146,7 +147,9 @@ describe('settleUn1tTrialPurchases', () => {
       settings: SETTINGS, origin: 'web_trial',
       // The trial buyer's explanation email: the studio's paid_trial copy and the product.
       emailArgs: { kind: 'trial_purchase', productName: 'The UN1T Trial', copy: EMAIL_COPY }, writer: null,
-    })
+    }, { sendUn1tAccountEmail: mocks.sendAccountEmail })
+    // The step has no default sender: the sweeper must hand it the real one.
+    expect(mocks.setPassword.mock.calls[0][2].sendUn1tAccountEmail).toBe(mocks.sendAccountEmail)
     expect(mocks.emailCopy).toHaveBeenCalledWith(db, 'loc2')
     expect(rows[0].status).toBe('granted')
 

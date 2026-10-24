@@ -17,8 +17,13 @@
 //     sent) → row `failed` with the code; the caller answers 503;
 //   - a refusal or an unclear answer → row `help_requested` with
 //     `un1t_account_refused: <reason>` / `un1t_checkout_refused: <code>` /
-//     `un1t_outcome_unknown: <code>`, and the staff alert.
-// Logs carry ids and codes only.
+//     `un1t_outcome_unknown: <code>`, and the staff alert;
+//   - that help stamp refused 23505 by uniq_trial_purchases_open_help (mig
+//     764: the buyer already has an open help card at this studio) → row
+//     `failed` with `help_card_already_open`, NO second alert (the open card
+//     is staff's already), and still help_filed for the buyer.
+// Logs carry ids and codes only, never the raw error (a PostgREST error's
+// details can name the row's email and phone).
 import { ensureUn1tAccount } from '@/lib/un1t-online-account'
 import { createCheckoutLink } from '@/lib/un1t-online-write-ops'
 import { Un1tWriteRefused, Un1tWriteUnknown } from '@/lib/un1t-online-write'
@@ -52,19 +57,27 @@ export async function startUn1tTrialCheckout(db, { row, location, contact }) {
   // most one row (a buyer's retry makes a second row for the same user).
   const failed = async (code) => {
     const err = await stamp({ status: 'failed', last_error: code })
-    if (err) logError(LOG, 'un1t trial row not marked failed', { purchaseId, locationId, code, err })
+    if (err) logError(LOG, 'un1t trial row not marked failed', { purchaseId, locationId, lastError: code, code: err.code ?? null })
     return { kind: 'unavailable' }
   }
 
   const help = async (reason, detail, extra = {}) => {
     const last_error = `${reason}: ${detail}`
     const err = await stamp({ status: 'help_requested', last_error, ...extra })
+    // An open help card for this buyer here already (uniq_trial_purchases_open_help):
+    // close this row out and leave the alert to that card.
+    if (err?.code === '23505') {
+      const closeErr = await stamp({ status: 'failed', last_error: 'help_card_already_open', ...extra })
+      if (closeErr) logError(LOG, 'un1t trial row not closed beside the open help card', { purchaseId, locationId, code: closeErr.code ?? null })
+      else logWarn(LOG, 'help card already open for this buyer; no second alert', { purchaseId, locationId, lastError: last_error })
+      return { kind: 'help_filed' }
+    }
     // The alert still goes: staff hear about the buyer even if the card is missing.
-    if (err) logError(LOG, 'un1t trial row not filed for help', { purchaseId, locationId, code: detail, err })
+    if (err) logError(LOG, 'un1t trial row not filed for help', { purchaseId, locationId, lastError: last_error, code: err.code ?? null })
     try {
       await alertTrialPurchaseStaff(db, { ...row, ...extra, status: 'help_requested', last_error }, reason, detail)
     } catch (e) {
-      logWarn(LOG, 'staff alert failed', { purchaseId, err: e })
+      logWarn(LOG, 'staff alert failed', { purchaseId, locationId, code: e?.code ?? null, errClass: e?.name })
     }
     return { kind: 'help_filed' }
   }
@@ -82,7 +95,7 @@ export async function startUn1tTrialCheckout(db, { row, location, contact }) {
       return err.result?.retryable ? failed(err.code) : help('un1t_account_refused', err.code)
     }
     // A mirror or API read that failed before anything was written: try again.
-    logError(LOG, 'un1t account step threw', { purchaseId, locationId, err })
+    logError(LOG, 'un1t account step threw', { purchaseId, locationId, code: err?.code ?? null, errClass: err?.name })
     return failed('un1t_account_unreadable')
   }
   if (account.kind === 'retry') return failed(account.code)
@@ -90,7 +103,7 @@ export async function startUn1tTrialCheckout(db, { row, location, contact }) {
 
   const userErr = await stamp({ un1t_user_id: account.un1tUserId })
   if (userErr) {
-    logError(LOG, 'un1t user id not stamped; no checkout', { purchaseId, locationId, err: userErr })
+    logError(LOG, 'un1t user id not stamped; no checkout', { purchaseId, locationId, code: userErr.code ?? null })
     return failed('un1t_user_unstamped')
   }
 
@@ -113,7 +126,7 @@ export async function startUn1tTrialCheckout(db, { row, location, contact }) {
     if (err instanceof Un1tWriteUnknown) {
       return help('un1t_outcome_unknown', err.code || 'outcome_unknown', err.ledgerId ? { un1t_ledger_id: err.ledgerId } : {})
     }
-    logError(LOG, 'un1t checkout threw', { purchaseId, locationId, err })
+    logError(LOG, 'un1t checkout threw', { purchaseId, locationId, code: err?.code ?? null, errClass: err?.name })
     return help('un1t_outcome_unknown', 'checkout_error')
   }
 
@@ -125,7 +138,7 @@ export async function startUn1tTrialCheckout(db, { row, location, contact }) {
   if (checkout.ledgerId) {
     const ledgerErr = await stamp(ledger)
     // The sweeper settles on un1t_user_id; a missing ledger link is logged, not fatal.
-    if (ledgerErr) logWarn(LOG, 'un1t ledger id not stamped', { purchaseId, locationId, ledgerId: checkout.ledgerId, err: ledgerErr })
+    if (ledgerErr) logWarn(LOG, 'un1t ledger id not stamped', { purchaseId, locationId, ledgerId: checkout.ledgerId, code: ledgerErr.code ?? null })
   }
   return { kind: 'redirect', checkoutUrl: checkout.checkoutUrl }
 }
