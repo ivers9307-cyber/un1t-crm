@@ -11,6 +11,8 @@ import { eventIsPublic } from '@/lib/host-events'
 import { isHostAnchorLocation, pickAudienceVenueName } from '@/lib/event-comms-location'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { getOrgBrandName } from '@/lib/location-branding'
+import { resolveCharitySettings, computeCharityTotals } from '@/lib/charity-donations'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 // Force-dynamic so wave / fee edits in the operator UI show up
@@ -41,6 +43,7 @@ export async function GET(request, props) {
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
       members_only, payment_currency,
       hero_image_url, accent_hex, active, status,
+      charity_enabled, charity,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       locations:location_id ( id, name, address, timezone, is_host_anchor, organization_id ),
       host:event_hosts!host_id ( name )
@@ -125,7 +128,10 @@ export async function GET(request, props) {
   // too (defensive; the field is supposed to be deprecated but it
   // could still be on existing rows).
    
-  const { capacity: _omit, host: _host, ...racePublic } = data
+  // CHARITY.4 — the raw `charity` settings object (receipt copy, include_entries)
+  // and the enabled flag are stripped too; the resolved public block is built
+  // below and emitted under `charity` only when the event has it switched on.
+  const { capacity: _omit, host: _host, charity: _charityRaw, charity_enabled: _charityOn, ...racePublic } = data
 
   // EVENT-COPY.1 — NEVER let the ops-only anchor label leave this endpoint.
   //
@@ -152,10 +158,13 @@ export async function GET(request, props) {
   const { organization_id: _orgId, ...publicLocationSafe } = publicLocation || {}
   const organizationName = await getOrgBrandName(db, publicLocation?.organization_id || null)
 
+  const charity = await buildPublicCharity(db, data)
+
   return NextResponse.json({
     success: true,
     data: {
       ...racePublic,
+      ...(charity ? { charity } : {}),
       locations: publicLocation ? publicLocationSafe : publicLocation,
       venue_name: pickAudienceVenueName({
         venueName: racePublic.venue_name,
@@ -167,4 +176,77 @@ export async function GET(request, props) {
       organization_name: organizationName,
     },
   })
+}
+
+// CHARITY.4 — the donor-facing charity block, or null when the event has not
+// switched donations on (the key is then absent from the response, not
+// `{ enabled: false }`). Fields are picked one by one so operator-only settings
+// (receipt copy, include_entries) never leave the server. The running total is
+// best-effort: a failed read logs and drops the totals keys, never the page.
+async function buildPublicCharity(db, race) {
+  const s = resolveCharitySettings(race)
+  if (!s.enabled) return null
+
+  const block = {
+    enabled: true,
+    name: s.name,
+    heading: s.heading,
+    blurb: s.blurb,
+    presets_cents: [...s.presets_cents],
+    custom_allowed: s.custom_allowed,
+    min_cents: s.min_cents,
+    max_cents: s.max_cents,
+    match_multiplier: s.match_multiplier,
+    match_label: s.match_label,
+    goal_cents: s.goal_cents,
+    show_total: s.show_total,
+    consent_label: s.consent_label,
+    thank_you_title: s.thank_you_title,
+    thank_you_body: s.thank_you_body,
+    thank_you_body_unmatched: s.thank_you_body_unmatched,
+  }
+  if (!s.show_total) return block
+
+  const [donationsRes, entriesRes, teamsRes] = await Promise.all([
+    db
+      .from('donations')
+      .select('amount_cents, match_multiplier, status')
+      .eq('race_event_id', race.id)
+      .eq('location_id', race.location_id)
+      .eq('status', 'paid')
+      .range(0, 999),
+    s.include_entries
+      ? db
+          .from('race_payments')
+          .select('amount_cents, status')
+          .eq('race_event_id', race.id)
+          .eq('status', 'completed')
+          .range(0, 999)
+      : Promise.resolve({ data: [], error: null }),
+    db
+      .from('race_registrations')
+      .select('*', { count: 'exact', head: true })
+      .eq('race_event_id', race.id)
+      .eq('status', 'confirmed'),
+  ])
+
+  const failed = donationsRes.error || entriesRes.error || teamsRes.error
+  if (failed) {
+    logWarn('public-event', 'charity totals read failed; serving the block without totals', {
+      eventId: race.id,
+      err: failed,
+    })
+    return block
+  }
+
+  const totals = computeCharityTotals({
+    donations: donationsRes.data || [],
+    entries: entriesRes.data || [],
+    multiplier: s.match_multiplier,
+    includeEntries: !!s.include_entries,
+  })
+  block.raised_cents = totals.raised_cents
+  block.donation_count = totals.donation_count
+  block.team_count = teamsRes.count || 0
+  return block
 }
