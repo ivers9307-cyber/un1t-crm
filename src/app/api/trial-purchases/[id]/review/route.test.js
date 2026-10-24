@@ -114,6 +114,36 @@ describe('POST /api/trial-purchases/[id]/review (PAIDTRIAL.2)', () => {
     expect(mocks.publish).not.toHaveBeenCalled()
   })
 
+  it("handled closes a help_requested row and sends no email", async () => {
+    mocks.row = { id: 'tp1', status: 'help_requested', payment_status: null, location_id: 'loc1', customer_email: 'r@x.com' }
+    const r = await POST(req({ action: 'handled' }), props)
+    expect(r.status).toBe(200)
+    expect((await r.json()).data).toEqual({ status: 'handled' })
+    expect(mocks.updates).toEqual([{ status: 'handled', last_error: null }])
+    expect(mocks.email).not.toHaveBeenCalled()
+    expect(mocks.publish).not.toHaveBeenCalled()
+  })
+
+  it("handled on a needs_review row is 409 in_progress; retry on a help row is 409", async () => {
+    let r = await POST(req({ action: 'handled' }), props)
+    expect(r.status).toBe(409)
+    expect((await r.json()).error).toBe('in_progress')
+    mocks.row = { id: 'tp1', status: 'help_requested', payment_status: null, location_id: 'loc1' }
+    expect((await POST(req({ action: 'retry' }), props)).status).toBe(409)
+    expect((await POST(req({ action: 'resolve' }), props)).status).toBe(409)
+    expect(mocks.updates).toHaveLength(0)
+  })
+
+  it('handled on a row that is already handled is a no-op 200; losing the race is 409', async () => {
+    mocks.row = { id: 'tp1', status: 'handled', payment_status: null, location_id: 'loc1' }
+    const r = await POST(req({ action: 'handled' }), props)
+    expect(r.status).toBe(200)
+    expect((await r.json()).data).toEqual({ already: true, status: 'handled' })
+    mocks.row = { id: 'tp1', status: 'help_requested', payment_status: null, location_id: 'loc1' }
+    mocks.updateResult = { data: [], error: null }
+    expect((await POST(req({ action: 'handled' }), props)).status).toBe(409)
+  })
+
   it('resolve still succeeds when the email is skipped or throws', async () => {
     mocks.email.mockResolvedValueOnce({ status: 'skipped', reason: 'no_email_address' })
     let r = await POST(req({ action: 'resolve' }), props)

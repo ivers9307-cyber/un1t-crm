@@ -519,15 +519,15 @@ registry.registerPath({
   method: 'post',
   path: '/api/trial-purchases/{id}/review',
   tags: ['Approvals'],
-  summary: 'Retry or hand-resolve a paid trial purchase whose Glofox grant failed (PAIDTRIAL.2)',
-  description: "Session auth + the approvals_offer_purchases grant, judged at the purchase's studio; ids outside the caller's studios return 404. Body { action: 'retry' | 'resolve' }. retry puts a needs_review row back in the queue (the write-ahead grant marker is kept, so a purchase Glofox never answered is never bought twice); resolve marks it granted by hand and emails the buyer.",
-  request: { body: { content: { 'application/json': { schema: z.object({ action: z.enum(['retry', 'resolve']) }) } } } },
+  summary: 'Retry or hand-resolve a paid trial purchase whose Glofox grant failed, or close a Needs-a-call help request (PAIDTRIAL.2, TRIALSTUDIO.8)',
+  description: "Session auth + the approvals_offer_purchases grant, judged at the purchase's studio; ids outside the caller's studios return 404. Body { action: 'retry' | 'resolve' | 'handled' }. handled closes a help_requested row (nobody paid; the buyer asked for a call) with no email. retry puts a needs_review row back in the queue (the write-ahead grant marker is kept, so a purchase Glofox never answered is never bought twice); resolve marks it granted by hand and emails the buyer.",
+  request: { body: { content: { 'application/json': { schema: z.object({ action: z.enum(['retry', 'resolve', 'handled']) }) } } } },
   responses: {
     200: { description: '{ status } (queued or granted), or { already: true }' },
     401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing approvals_offer_purchases', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Unknown or inaccessible purchase', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'Not paid, or the processor holds the row (queued/processing)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not paid (retry/resolve), or the row is not in a state this action applies to (queued/processing; handled on anything but help_requested)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
