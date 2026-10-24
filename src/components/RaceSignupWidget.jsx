@@ -1132,7 +1132,15 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           {race.charity?.video?.provider ? (
             <div className="mt-12 grid gap-8 md:grid-cols-2 md:items-start">
               {eventDetails}
-              <div className={`overflow-hidden rounded-2xl border border-white/10 bg-black ${race.charity.video.provider === 'instagram' ? 'min-h-[600px]' : 'aspect-video'}`}>
+              <div className={`overflow-hidden rounded-2xl border border-white/10 bg-black ${
+                race.charity.video.provider === 'file'
+                  // CHARITY.15 — an uploaded file keeps its own shape (a phone-shot
+                  // portrait clip or a landscape one) instead of being cropped to
+                  // fill a 16:9 box; capped at 70% of the viewport height and
+                  // centred, so a portrait clip sits beside the summary.
+                  ? 'flex justify-center'
+                  : race.charity.video.provider === 'instagram' ? 'min-h-[600px]' : 'aspect-video'
+              }`}>
                 {race.charity.video.provider === 'file' ? (
                   // CHARITY.14 — an uploaded file plays in a plain player, tap to
                   // play, with the hero image as its poster.
@@ -1142,7 +1150,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                     controls
                     playsInline
                     preload="metadata"
-                    className="w-full h-full object-cover"
+                    className="block w-auto max-w-full h-auto max-h-[70vh] object-contain"
                   />
                 ) : (
                   <iframe

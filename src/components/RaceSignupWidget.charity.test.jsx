@@ -125,4 +125,18 @@ describe('event page — donations on, layout polish (CHARITY.13)', () => {
     expect(player.hasAttribute('controls')).toBe(true)
     expect(document.querySelector('iframe')).toBeNull()
   })
+
+  it('an uploaded file keeps its own aspect: no 16:9 box, no cropping (CHARITY.15)', async () => {
+    await renderWith({ charity: { ...CHARITY, video: { provider: 'file', src: 'https://cdn/portrait.mp4', poster: null } } })
+    const player = document.querySelector('video[src="https://cdn/portrait.mp4"]')
+    expect(player.closest('.aspect-video')).toBeNull()
+    expect(player.className).toContain('object-contain')
+    expect(player.className).not.toContain('object-cover')
+    expect(player.className).toContain('max-h-[70vh]')
+  })
+
+  it('a linked video still gets the 16:9 frame', async () => {
+    await renderWith({ charity: { ...CHARITY, video: { provider: 'youtube', embedUrl: 'https://www.youtube.com/embed/abc123' } } })
+    expect(document.querySelector('iframe').closest('.aspect-video')).toBeTruthy()
+  })
 })
