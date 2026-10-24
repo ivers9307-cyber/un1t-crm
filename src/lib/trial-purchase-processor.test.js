@@ -20,7 +20,7 @@ vi.mock('@/lib/ops-alerts', () => ({ sendOpsAlert: mocks.ops }))
 vi.mock('@/lib/trial-purchase-emails', () => ({ sendTrialPurchaseEmail: mocks.email }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 
-import { processTrialPurchase } from './trial-purchase-processor'
+import { processTrialPurchase, alertTrialPurchaseStaff, REVIEW_REASONS } from './trial-purchase-processor'
 
 const ROW = {
   id: 'tp1', location_id: 'loc1', contact_id: 'c1', status: 'processing', payment_status: 'paid',
@@ -195,5 +195,48 @@ describe('processTrialPurchase', () => {
     mocks.capi.mockRejectedValue(new Error('meta down'))
     const { db } = makeDb()
     expect((await processTrialPurchase(db, ROW)).outcome).toBe('granted')
+  })
+})
+
+describe('alertTrialPurchaseStaff', () => {
+  it('the staff alert escapes the buyer name', async () => {
+    const { db } = makeDb()
+    mocks.purchase.mockResolvedValue({ ok: false, error: 'NO' })
+    await processTrialPurchase(db, { ...ROW, customer_name: '<img src=x onerror=alert(1)>' })
+    const html = mocks.ops.mock.calls[0][0].htmlBody
+    expect(html).not.toContain('<img')
+    expect(html).toContain('&lt;img')
+  })
+
+  it('escapes every buyer-typed or Glofox-supplied field, and leaves the push body plain text', async () => {
+    const { db } = makeDb()
+    const evil = '<script>x</script>'
+    await alertTrialPurchaseStaff(db, {
+      ...ROW, customer_name: 'A & B', customer_email: `a${evil}@x.com`, customer_phone: evil,
+      product_name: evil, membership_id: evil, plan_code: evil,
+    }, 'unknown_reason<i>', `<b>glofox</b>`)
+    const call = mocks.ops.mock.calls[0][0]
+    expect(call.htmlBody).not.toContain('<script>')
+    expect(call.htmlBody).not.toContain('<i>')
+    expect(call.htmlBody).not.toContain('<b>glofox')
+    expect(call.htmlBody).toContain('A &amp; B')
+    expect(call.htmlBody).toContain('&lt;b&gt;glofox&lt;/b&gt;')
+    expect(call.pushBody).toContain('A & B')
+    expect(call.pushBody).not.toContain('&amp;')
+  })
+
+  it('a help_requested row gets the help-request subject; any other row keeps the paid-trial subject', async () => {
+    const { db } = makeDb()
+    await alertTrialPurchaseStaff(db, { ...ROW, status: 'help_requested' }, 'trial_used')
+    expect(mocks.ops.mock.calls[0][0].subject).toBe('Trial help request: Ava Byrne (Stillorgan)')
+    await alertTrialPurchaseStaff(db, ROW, 'grant_refused')
+    expect(mocks.ops.mock.calls[1][0].subject).toBe('Paid trial needs a hand: Ava Byrne (Stillorgan)')
+  })
+
+  it('has the five new review reasons', () => {
+    for (const k of ['trial_used', 'active_member', 'un1t_account_refused', 'un1t_checkout_refused', 'un1t_outcome_unknown']) {
+      expect(REVIEW_REASONS[k]).toBeTruthy()
+    }
+    expect(REVIEW_REASONS.trial_used).toBe('The buyer already had a trial here and asked for help.')
   })
 })

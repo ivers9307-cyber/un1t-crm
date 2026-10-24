@@ -10,6 +10,7 @@ import { sendTransactionalEmail } from './postmark'
 import { getLocationBranding } from './location-branding'
 import { applyTokens } from './offer-purchase-emails'
 import { formatTrialPrice } from './paid-trial'
+import { escapeHtml } from './html-escape'
 
 export const TRIAL_PURCHASE_EMAIL_TEMPLATES = Object.freeze({ granted: 'trial-purchase-granted' })
 
@@ -17,9 +18,17 @@ function wrapBody(bodyHtml) {
   return `<div style="font-family:-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;">${bodyHtml}</div>`
 }
 
-export function defaultTrialCopy(kind, tokens) {
+// Token values include what an anonymous buyer typed (their name), so every
+// one is escaped before it goes into HTML. The subject is plain text and
+// takes the raw value.
+function escapeTokens(tokens) {
+  return Object.fromEntries(Object.entries(tokens).map(([k, v]) => [k, escapeHtml(v ?? '')]))
+}
+
+export function defaultTrialCopy(kind, rawTokens) {
+  const tokens = escapeTokens(rawTokens)
   return {
-    subject: `You're all set: ${tokens.product_name}`,
+    subject: `You're all set: ${rawTokens.product_name}`,
     htmlBody: wrapBody(
       `<p>Hi ${tokens.first_name},</p>` +
       `<p>Thanks for buying the <strong>${tokens.product_name}</strong>. We have your payment of ${tokens.amount}, and the trial is now on your account.</p>` +
@@ -75,7 +84,8 @@ export async function sendTrialPurchaseEmail(db, { purchase, kind = 'granted' } 
   await sendTransactionalEmail({
     to,
     subject: applyTokens(base.subject, tokens),
-    htmlBody: applyTokens(base.htmlBody, tokens),
+    // The operator's template is trusted HTML; the token values are not.
+    htmlBody: applyTokens(base.htmlBody, escapeTokens(tokens)),
     contactId: purchase.contact_id || null,
     locationId: purchase.location_id,
     tag: `trial-purchase-${kind}`,

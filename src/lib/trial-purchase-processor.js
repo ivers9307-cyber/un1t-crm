@@ -31,6 +31,7 @@ import { sendWebsiteConversion } from '@/lib/meta-capi'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { sendTrialPurchaseEmail } from '@/lib/trial-purchase-emails'
 import { logError, logWarn } from '@/lib/log'
+import { escapeHtml } from '@/lib/html-escape'
 
 /** PAIDTRIAL.4 — the body of every paid-trial plan purchase (see the call). */
 export const TRIAL_PURCHASE_BODY = Object.freeze({ payment_method: 'complimentary' })
@@ -44,6 +45,11 @@ export const REVIEW_REASONS = Object.freeze({
   grant_refused: 'Glofox refused the plan purchase.',
   grant_unverified: 'Glofox gave no clear answer to the plan purchase; it may have gone through. Check the member\'s invoices before granting by hand.',
   grant_unrecorded: 'The grant marker could not be written, so nothing was bought.',
+  trial_used: 'The buyer already had a trial here and asked for help.',
+  active_member: 'The buyer already holds an active membership and asked for help.',
+  un1t_account_refused: 'un1t.online would not give this buyer an account.',
+  un1t_checkout_refused: 'un1t.online refused the checkout.',
+  un1t_outcome_unknown: 'un1t.online gave no clear answer.',
 })
 
 async function stamp(db, id, fields, { expectStatus = 'processing' } = {}) {
@@ -54,20 +60,28 @@ async function stamp(db, id, fields, { expectStatus = 'processing' } = {}) {
   return (data || []).length > 0
 }
 
-async function alertStaff(db, row, reason, extra = '') {
+/**
+ * Email/push the studio's ops contacts about a trial purchase row. Every value
+ * interpolated into the HTML is escaped: the buyer details come from the
+ * anonymous /trial page and `extra` carries Glofox's own words. A row whose
+ * status is `help_requested` gets the help-request subject.
+ */
+export async function alertTrialPurchaseStaff(db, row, reason, extra = '') {
   try {
     const { data: loc } = await db.from('locations').select('organization_id, name').eq('id', row.location_id).maybeSingle()
     if (!loc?.organization_id) return
     await sendOpsAlert({
       organizationId: loc.organization_id,
       locationId: row.location_id,
-      subject: `Paid trial needs a hand: ${row.customer_name || row.customer_email} (${loc.name || 'studio'})`,
+      subject: row.status === 'help_requested'
+        ? `Trial help request: ${row.customer_name || row.customer_email} (${loc.name || 'studio'})`
+        : `Paid trial needs a hand: ${row.customer_name || row.customer_email} (${loc.name || 'studio'})`,
       htmlBody: `<p>A paid trial purchase was taken but the plan was not put on the account automatically.</p>` +
-        `<p><strong>Reason:</strong> ${REVIEW_REASONS[reason] || reason}${extra ? ` (${extra})` : ''}</p>` +
-        `<p><strong>Buyer:</strong> ${row.customer_name || ''} &lt;${row.customer_email}&gt; ${row.customer_phone || ''}<br/>` +
-        `<strong>Product:</strong> ${row.product_name} (${row.membership_id} / ${row.plan_code})<br/>` +
-        `<strong>Paid:</strong> ${(row.amount_cents / 100).toFixed(2)} ${row.currency}<br/>` +
-        `<strong>Purchase id:</strong> ${row.id}</p>` +
+        `<p><strong>Reason:</strong> ${escapeHtml(REVIEW_REASONS[reason] || reason)}${extra ? ` (${escapeHtml(extra)})` : ''}</p>` +
+        `<p><strong>Buyer:</strong> ${escapeHtml(row.customer_name || '')} &lt;${escapeHtml(row.customer_email)}&gt; ${escapeHtml(row.customer_phone || '')}<br/>` +
+        `<strong>Product:</strong> ${escapeHtml(row.product_name)} (${escapeHtml(row.membership_id)} / ${escapeHtml(row.plan_code)})<br/>` +
+        `<strong>Paid:</strong> ${(row.amount_cents / 100).toFixed(2)} ${escapeHtml(row.currency)}<br/>` +
+        `<strong>Purchase id:</strong> ${escapeHtml(row.id)}</p>` +
         `<p>Open the Paid trials tab on the CRM's Approvals page to retry the grant or mark it done once you have put the plan on the account in Glofox.</p>`,
       pushBody: `Paid trial for ${row.customer_name || row.customer_email} needs a manual grant (${reason}).`,
     }, { db })
@@ -94,7 +108,7 @@ async function toReview(db, row, reason, { extra = '', grant } = {}) {
   if (grant) fields.grant = grant
   try { await stamp(db, row.id, fields) } catch (e) { logWarn('trial-purchase', 'review stamp failed', { purchaseId: row.id, err: e }) }
   logError('trial-purchase', 'plan not granted; staff alerted', { purchaseId: row.id, reason })
-  await alertStaff(db, row, reason, extra)
+  await alertTrialPurchaseStaff(db, row, reason, extra)
   return { outcome: 'needs_review', reason }
 }
 
