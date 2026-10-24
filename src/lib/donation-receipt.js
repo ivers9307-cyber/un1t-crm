@@ -49,7 +49,7 @@ function escapeHtml(s) {
 export function buildDonationReceiptDefaults(ctx) {
   const who = escapeHtml(ctx.firstName || 'there')
   const charity = escapeHtml(ctx.charity || 'the charity')
-  const brand = escapeHtml(ctx.brand || 'We')
+  const brand = escapeHtml(ctx.brand || '')
   const matched = Number(ctx.multiplier) > 1
   const amount = escapeHtml(ctx.amountLabel)
   const row = (label, value) => `    <tr><td style="padding:8px 0;color:#666;width:120px">${label}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(value)}</td></tr>`
@@ -63,9 +63,15 @@ export function buildDonationReceiptDefaults(ctx) {
   const matchLine = matched
     ? `Your <strong>${amount}</strong> becomes <strong>${escapeHtml(ctx.matchedLabel)}</strong> for ${charity}. `
     : `Thank you for your <strong>${amount}</strong> donation to ${charity}. `
-  const passOn = matched
-    ? `${brand} passes every donation, matched, to ${charity} after the event.`
-    : `${brand} passes every donation to ${charity} after the event.`
+  // With no configured brand there is no subject for "passes", so the
+  // sentence takes the passive form rather than a made-up one.
+  const passOn = brand
+    ? (matched
+      ? `${brand} passes every donation, matched, to ${charity} after the event.`
+      : `${brand} passes every donation to ${charity} after the event.`)
+    : (matched
+      ? `Every donation, matched, is passed to ${charity} after the event.`
+      : `Every donation is passed to ${charity} after the event.`)
   const introHtml = `${matchLine}${passOn}`
 
   return {
@@ -91,7 +97,7 @@ async function stampReceipt(db, donation, fields, { onlyIfUnsent }) {
     })
     return false
   }
-  if (onlyIfUnsent && Array.isArray(data) && data.length === 0) {
+  if (onlyIfUnsent && 'receipt_email_sent_at' in fields && Array.isArray(data) && data.length === 0) {
     logError('donation-receipt', 'a concurrent observation had already stamped this receipt; the donor received a DUPLICATE', { donationId: donation.id })
   }
   return true
@@ -169,7 +175,7 @@ export async function sendDonationReceipt({ db, donation, race, contact = null, 
       await sendTransactionalEmail({ to, subject, htmlBody, contactId, locationId, tag: 'donation-receipt' })
     } catch (e) {
       logError('donation-receipt', 'donation receipt failed to send', { err: e, donationId: donation.id })
-      await stampReceipt(db, donation, { receipt_email_status: 'failed' }, { onlyIfUnsent: false })
+      await stampReceipt(db, donation, { receipt_email_status: 'failed' }, { onlyIfUnsent: true })
       return { status: 'failed', reason: e?.message || 'failed' }
     }
     await stampReceipt(db, donation, { receipt_email_sent_at: now(), receipt_email_status: 'sent' }, { onlyIfUnsent: true })

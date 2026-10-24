@@ -70,6 +70,13 @@ describe('buildDonationReceiptDefaults', () => {
     expect(html).toContain('UN1T Stillorgan passes every donation to MS Ireland after the event.')
     expect(html).toContain('This is not a charity tax receipt.')
   })
+  it('no configured brand: the pass-on sentence stays grammatical', () => {
+    const matched = flat(buildDonationReceiptDefaults({ ...CTX, brand: '' }))
+    expect(matched).toContain('Every donation, matched, is passed to MS Ireland after the event.')
+    expect(matched).not.toMatch(/\bWe\b/)
+    const plain = flat(buildDonationReceiptDefaults({ ...CTX, brand: '', multiplier: 1 }))
+    expect(plain).toContain('Every donation is passed to MS Ireland after the event.')
+  })
   it('keeps the required statements out of the footer an operator intro replaces', () => {
     const d = buildDonationReceiptDefaults(CTX)
     expect(d.footerHtml).not.toContain('tax receipt')
@@ -127,6 +134,7 @@ describe('sendDonationReceipt', () => {
     expect(r.status).toBe('failed')
     expect(db.writes).toHaveLength(1)
     expect(db.writes[0].fields).toEqual({ receipt_email_status: 'failed' })
+    expect(db.writes[0].is).toEqual(['receipt_email_sent_at', null])
   })
   it('no donor email: skipped, nothing sent or written', async () => {
     const db = fakeDb()

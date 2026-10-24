@@ -33,6 +33,7 @@ const { writeContactTag } = await import('@/lib/contact-tags')
 const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
 const { emitEvent } = await import('@/lib/contact-events')
 const { sendTransactionalEmail } = await import('@/lib/postmark')
+const { logError, logWarn } = await import('@/lib/log')
 const {
   DONATION_COLS, createDonationPayment, resolveDonationByRef, markDonationPaymentStatus,
   markDonationRefunded, runPaidDonationSideEffects,
@@ -180,12 +181,32 @@ describe('markDonationPaymentStatus', () => {
     expect(r).toEqual({ status: 'refunded', changed: false })
     expect(db.writes).toHaveLength(0)
   })
-  it('failed and expired rows never change, whatever the provider says', async () => {
-    for (const status of ['failed', 'expired']) {
+  it('completed after a failure report still marks paid, guarded on the old status, and logs it', async () => {
+    for (const from of ['failed', 'expired']) {
+      vi.clearAllMocks()
       const db = fakeDb()
-      const r = await mark(db, { ...DONATION, status }, 'completed')
-      expect(r).toEqual({ status, changed: false })
-      expect(db.writes).toHaveLength(0)
+      const r = await mark(db, { ...DONATION, status: from }, 'completed')
+      expect(r).toEqual({ status: 'paid', changed: true })
+      expect(db.writes[0].fields).toEqual({ status: 'paid', paid_at: 'T', match_multiplier: 2 })
+      expect(db.writes[0].filters).toEqual(expect.arrayContaining([['eq', 'id', 'd1'], ['eq', 'status', from]]))
+      expect(logError).toHaveBeenCalledWith('donation-payments', 'completed after a terminal failure report; marked paid', { donationId: 'd1', from })
+    }
+  })
+  it('a failure report never moves a failed or expired row', async () => {
+    for (const status of ['failed', 'expired']) {
+      for (const state of ['failed', 'cancelled', 'expired', 'authorised']) {
+        const db = fakeDb()
+        const r = await mark(db, { ...DONATION, status }, state)
+        expect(r).toEqual({ status, changed: false })
+        expect(db.writes).toHaveLength(0)
+      }
+    }
+  })
+  it('a non-positive provider amount is never written (the column is > 0)', async () => {
+    for (const amt of [0, -5, NaN]) {
+      const db = fakeDb()
+      await mark(db, DONATION, 'completed', { providerAmount: amt })
+      expect(db.writes[0].fields).not.toHaveProperty('amount_cents')
     }
   })
   it('failed → failed; cancelled and expired → expired', async () => {
@@ -267,6 +288,21 @@ describe('runPaidDonationSideEffects', () => {
     expect(emitEvent).not.toHaveBeenCalled()
     expect(r.contact).toBe('skipped')
   })
+  it('a contact_id stamp that changed 0 rows (another observer won) does not emit', async () => {
+    const db = fakeDb({ updateRows: [] })
+    const r = await runPaidDonationSideEffects({ db, donation: PAID, race: RACE })
+    expect(r.contact).toBe('linked')
+    expect(emitEvent).not.toHaveBeenCalled()
+  })
+  it('refuses a row that is not paid: all skipped, warned, nothing sent or written', async () => {
+    const db = fakeDb()
+    const r = await runPaidDonationSideEffects({ db, donation: { ...PAID, status: 'awaiting_payment' }, race: RACE })
+    expect(r).toEqual({ contact: 'skipped', consent: 'skipped', receipt: 'skipped' })
+    expect(logWarn).toHaveBeenCalled()
+    expect(findOrCreateRaceContact).not.toHaveBeenCalled()
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
+    expect(db.writes).toEqual([])
+  })
   it('a failed contact_id stamp skips the event and reports failed (a retry redoes the idempotent steps)', async () => {
     const db = fakeDb({ updateError: new Error('write failed') })
     const r = await runPaidDonationSideEffects({ db, donation: PAID, race: RACE })
@@ -306,6 +342,7 @@ describe('runPaidDonationSideEffects', () => {
     const stamps = db.writes.filter((w) => 'receipt_email_status' in w.fields)
     expect(stamps).toHaveLength(1)
     expect(stamps[0].fields).toEqual({ receipt_email_status: 'failed' })
+    expect(stamps[0].filters).toContainEqual(['is', 'receipt_email_sent_at', null])
     expect(db.writes.some((w) => 'receipt_email_sent_at' in w.fields)).toBe(false)
   })
   it('no donor email: contact and receipt both skipped, nothing throws', async () => {

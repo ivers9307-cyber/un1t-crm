@@ -28,7 +28,7 @@ import { applyFormMarketingConsent } from '@/lib/marketing-consent'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { resolveCharitySettings } from '@/lib/charity-donations'
 import { sendDonationReceipt } from '@/lib/donation-receipt'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 
 const STRIPE_CONNECT = 'stripe_connect'
 
@@ -41,7 +41,10 @@ export const DONATION_COLS = [
   'marketing_opt_in', 'attribution', 'created_at', 'updated_at',
 ].join(', ')
 
-const SETTLED = new Set(['paid', 'refunded', 'failed', 'expired'])
+// paid and refunded never move. failed and expired never move on another
+// failure report, but a `completed` report may still follow one (see below).
+const IMMOVABLE = new Set(['paid', 'refunded'])
+const TERMINAL_FAILURE = new Set(['failed', 'expired'])
 
 /** "UN1T Stillorgan: Donation to MS Ireland" on the checkout and the statement. */
 export function donationDescription(brand, charityName) {
@@ -112,7 +115,7 @@ export async function resolveDonationByRef(db, providerRef) {
  * a later change to the event never rewrites history.
  */
 export async function markDonationPaymentStatus({ db, donation, providerState, providerAmount, multiplier, now = () => new Date().toISOString() }) {
-  if (SETTLED.has(donation?.status)) return { status: donation.status, changed: false }
+  if (IMMOVABLE.has(donation?.status)) return { status: donation.status, changed: false }
   const state = String(providerState || '').toLowerCase()
 
   let target = null
@@ -120,7 +123,9 @@ export async function markDonationPaymentStatus({ db, donation, providerState, p
   if (state === 'completed') {
     target = 'paid'
     updates = { status: 'paid', paid_at: now(), match_multiplier: Number(multiplier) >= 1 ? Number(multiplier) : 1 }
-    if (Number.isFinite(providerAmount) && providerAmount !== donation.amount_cents) updates.amount_cents = providerAmount
+    if (Number.isFinite(providerAmount) && providerAmount > 0 && providerAmount !== donation.amount_cents) updates.amount_cents = providerAmount
+  } else if (TERMINAL_FAILURE.has(donation?.status)) {
+    return { status: donation.status, changed: false }
   } else if (state === 'failed' || state === 'cancelled' || state === 'expired') {
     target = state === 'failed' ? 'failed' : 'expired'
     updates = { status: target }
@@ -140,6 +145,11 @@ export async function markDonationPaymentStatus({ db, donation, providerState, p
     if (readErr) throw readErr
     return { status: current?.status || donation.status, changed: false }
   }
+  if (target === 'paid' && TERMINAL_FAILURE.has(donation.status)) {
+    // The provider reported a failure and later a completion: money was taken,
+    // so the donor gets their record, receipt and place in the totals.
+    logError('donation-payments', 'completed after a terminal failure report; marked paid', { donationId: donation.id, from: donation.status })
+  }
   return { status: target, changed: true }
 }
 
@@ -157,10 +167,13 @@ export async function markDonationRefunded({ db, donationId, byProfileId = null,
 // The contact leg. Link (or create) the contact, tag it, record marketing
 // consent, then stamp contact_id, then emit the timeline event. Everything
 // before the stamp is idempotent, so a failure anywhere before it leaves the
-// stamp unwritten and the next observation redoes the lot; the event comes
-// after the stamp so a retry can never emit it twice.
+// stamp unwritten and the next observation redoes the lot. The event is
+// emitted only by the observer whose stamp write changed exactly one row, so
+// two concurrent observers cannot both emit it; the cost is that a process
+// dying between the stamp and the emit loses the event (it is never retried).
 async function linkDonorContact({ db, donation, race, settings, ipAddress, out }) {
   let contactId = null
+  let wonStamp = false
   try {
     contactId = await findOrCreateRaceContact({
       db, locationId: race.location_id, email: donation.donor_email, name: donation.donor_name || null,
@@ -185,11 +198,13 @@ async function linkDonorContact({ db, donation, race, settings, ipAddress, out }
       out.consent = consent?.skipped ? 'skipped' : 'applied'
     }
 
-    const { error } = await db.from('donations')
+    const { data: stamped, error } = await db.from('donations')
       .update({ contact_id: contactId })
       .eq('id', donation.id)
       .is('contact_id', null)
+      .select('id')
     if (error) throw error
+    wonStamp = Array.isArray(stamped) && stamped.length === 1
   } catch (e) {
     out.contact = 'failed'
     logError('donation-payments', 'donor contact step failed; the next observation of this paid donation retries it', { err: e, donationId: donation.id })
@@ -197,6 +212,8 @@ async function linkDonorContact({ db, donation, race, settings, ipAddress, out }
   }
 
   out.contact = 'linked'
+  // Another observer stamped first and owns the event.
+  if (!wonStamp) return contactId
   try {
     await emitEvent({
       db,
@@ -228,6 +245,12 @@ async function linkDonorContact({ db, donation, race, settings, ipAddress, out }
  */
 export async function runPaidDonationSideEffects({ db, donation, race, ipAddress = null }) {
   const out = { contact: 'skipped', consent: 'skipped', receipt: 'skipped' }
+  // A stale row has no multiplier snapshot: refuse rather than send a receipt
+  // that understates a matched gift.
+  if (donation?.status !== 'paid') {
+    logWarn('donation-payments', 'paid side effects refused: the row passed is not paid', { donationId: donation?.id, status: donation?.status })
+    return out
+  }
   let contactId = donation.contact_id || null
   const hasEmail = !!String(donation.donor_email || '').trim()
   let settings = null
@@ -259,7 +282,7 @@ export async function runPaidDonationSideEffects({ db, donation, race, ipAddress
     } catch (e) {
       out.receipt = 'failed'
       logError('donation-payments', 'donation receipt crashed', { err: e, donationId: donation.id })
-      const { error } = await db.from('donations').update({ receipt_email_status: 'failed' }).eq('id', donation.id)
+      const { error } = await db.from('donations').update({ receipt_email_status: 'failed' }).eq('id', donation.id).is('receipt_email_sent_at', null)
       if (error) logError('donation-payments', 'receipt failure status not written', { err: error, donationId: donation.id })
     }
   }
