@@ -2,9 +2,13 @@
 // Settings resolution, copy defaults and totals. No IO, no React/Next/Supabase.
 
 import { z } from 'zod'
+import { parseEmbed } from './landing-page-embed'
 
 export const CHARITY_DEFAULTS = Object.freeze({
   name: '',
+  // CHARITY.13 — an optional YouTube or Instagram link shown beside the event
+  // summary under the two cards. Blank = no video.
+  video_url: '',
   heading: "Can't race? Give a rep.",
   blurb: 'Every euro goes to {{charity}}.',
   presets_cents: Object.freeze([1000, 2500, 5000, 10000]),
@@ -50,8 +54,12 @@ export const CharitySettingsSchema = z
     thank_you_body_unmatched: text.optional(),
     receipt_subject: text.optional(),
     receipt_intro: text.optional(),
+    video_url: z.string().trim().max(2000).optional(),
   })
   .superRefine((s, ctx) => {
+    if (s.video_url && !parseEmbed(s.video_url)) {
+      ctx.addIssue({ code: 'custom', path: ['video_url'], message: 'Use a YouTube or Instagram link' })
+    }
     const min = s.min_cents ?? CHARITY_DEFAULTS.min_cents
     const max = s.max_cents ?? CHARITY_DEFAULTS.max_cents
     if (min > max) {

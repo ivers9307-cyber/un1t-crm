@@ -1754,7 +1754,7 @@ function EventEmailFields({
 const CHARITY_TEXT_KEYS = [
   'name', 'heading', 'blurb', 'match_label', 'consent_label',
   'thank_you_title', 'thank_you_body', 'thank_you_body_unmatched',
-  'receipt_subject', 'receipt_intro',
+  'receipt_subject', 'receipt_intro', 'video_url',
 ]
 const centsToEuroText = (c) => (Number.isFinite(Number(c)) && c !== null && c !== undefined ? String(Number(c) / 100) : '')
 
@@ -1945,6 +1945,7 @@ function CharityDaySection({ enabled, onEnabled, values, onChange }) {
             {check('include_entries', 'Count paid event entries toward the total')}
           </div>
           {text('consent_label', 'Consent checkbox label', 'Blank = the default organisation line')}
+          {text('video_url', 'Video beside the event summary (YouTube or Instagram link)', 'https://youtu.be/… — blank = no video')}
 
           <div className="pt-4 border-t border-un1t-border space-y-4">
             <div>
