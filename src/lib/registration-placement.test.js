@@ -41,15 +41,15 @@ const captain = (over = {}) => ({
 })
 const soloRow = (over = {}) => ({
   id: 'r-solo', race_event_id: 'e1', team_id: 't-solo', contact_id: 'c-solo', status: 'confirmed', wave_id: 'w1',
-  looking_for_team: true, placed_into_registration_id: null,
+  looking_for_team: true, placed_into_registration_id: null, marketing_consent: true,
   teams: { id: 't-solo', team_members: [captain()] }, ...over,
 })
 const targetRow = (over = {}) => ({
   id: 'r-team', race_event_id: 'e1', team_id: 't-team', status: 'confirmed', looking_for_team: false,
-  teams: { id: 't-team', size: 3 }, ...over,
+  teams: { id: 't-team', size: 3, team_members: [{ is_member: true }, { is_member: true }, { is_member: true }] }, ...over,
 })
 
-function placeDb({ solo = soloRow(), target = targetRow(), soloErr = null, targetErr = null, memberErr = null, sizeRows = [{ id: 't-team' }], sizeErr = null, flipRows = [{ id: 'r-solo' }], flipErr = null } = {}) {
+function placeDb({ solo = soloRow(), target = targetRow(), soloErr = null, targetErr = null, memberErr = null, sizeRows = [{ id: 't-team' }], sizeErr = null, compositionRows = [{ id: 'r-team' }], compositionErr = null, flipRows = [{ id: 'r-solo' }], flipErr = null } = {}) {
   return fakeDb((q) => {
     if (q.table === 'race_registrations' && !q.write) {
       const id = eqOf(q, 'id')
@@ -59,6 +59,7 @@ function placeDb({ solo = soloRow(), target = targetRow(), soloErr = null, targe
     }
     if (q.table === 'team_members' && q.write === 'insert') return { data: null, error: memberErr }
     if (q.table === 'teams' && q.write === 'update') return { data: sizeErr ? null : sizeRows, error: sizeErr }
+    if (q.table === 'race_registrations' && q.write === 'update' && 'team_composition' in q.payload) return { data: compositionErr ? null : compositionRows, error: compositionErr }
     if (q.table === 'race_registrations' && q.write === 'update') return { data: flipErr ? null : flipRows, error: flipErr }
     return { data: null, error: null }
   })
@@ -74,23 +75,44 @@ describe('PLACEMENT_ERRORS', () => {
 })
 
 describe('placeSoloIntoTeam — happy path', () => {
-  it('copies the solo onto the target team as a member, bumps size, then flips the solo to placed', async () => {
+  it('copies the solo onto the target team as a member, bumps size, recomputes composition, then flips the solo to placed', async () => {
     const db = placeDb()
     expect(await place(db)).toEqual({ ok: true })
     const w = writes(db)
-    expect(w.map((q) => `${q.table}.${q.write}`)).toEqual(['team_members.insert', 'teams.update', 'race_registrations.update'])
+    expect(w.map((q) => `${q.table}.${q.write}`)).toEqual(['team_members.insert', 'teams.update', 'race_registrations.update', 'race_registrations.update'])
     expect(w[0].payload).toEqual({
       team_id: 't-team', contact_id: 'c-solo', name: 'Sarah Byrne', email: 'sarah@x.ie', role: 'member',
       is_member: true, member_validation_status: 'verified', member_contact_id: 'c-solo', member_validated_at: '2026-10-20T09:00:00Z',
     })
     expect(w[1].payload).toEqual({ size: 4 })
     expect(eqOf(w[1], 'id')).toBe('t-team')
-    expect(w[2].payload).toEqual({ status: 'placed', placed_into_registration_id: 'r-team', placed_at: AT, placed_by: 'p-staff' })
+    expect(w[2].payload).toEqual({ team_composition: 'all_members' })
+    expect(eqOf(w[2], 'id')).toBe('r-team')
+    expect(w[2].ops.some((o) => o[0] === 'select')).toBe(true)
+    expect(w[3].payload).toEqual({ status: 'placed', placed_into_registration_id: 'r-team', placed_at: AT, placed_by: 'p-staff' })
+  })
+  it('a non-member placed into an all_members team makes it mixed', async () => {
+    const db = placeDb({ solo: soloRow({ teams: { id: 't-solo', team_members: [captain({ is_member: false, member_validation_status: 'not_applicable' })] } }) })
+    await place(db)
+    expect(writes(db)[2].payload).toEqual({ team_composition: 'mixed' })
+  })
+  it('a member placed into an all_members team leaves it all_members', async () => {
+    const db = placeDb()
+    await place(db)
+    expect(writes(db)[2].payload).toEqual({ team_composition: 'all_members' })
+  })
+  it('a non-member placed into an all_non_members team keeps it all_non_members', async () => {
+    const db = placeDb({
+      solo: soloRow({ teams: { id: 't-solo', team_members: [captain({ is_member: false })] } }),
+      target: targetRow({ teams: { id: 't-team', size: 2, team_members: [{ is_member: false }, { is_member: false }] } }),
+    })
+    await place(db)
+    expect(writes(db)[2].payload).toEqual({ team_composition: 'all_non_members' })
   })
   it('guards the flip on confirmed + looking_for_team and reads the rows back', async () => {
     const db = placeDb()
     await place(db)
-    const flip = writes(db)[2]
+    const flip = writes(db)[3]
     expect(eqOf(flip, 'id')).toBe('r-solo')
     expect(eqOf(flip, 'status')).toBe('confirmed')
     expect(eqOf(flip, 'looking_for_team')).toBe(true)
@@ -152,6 +174,15 @@ describe('placeSoloIntoTeam — failed writes', () => {
   })
   it('a size bump that touched no row is a failure too', async () => {
     expect(await place(placeDb({ sizeRows: [] }))).toEqual({ ok: false, error: 'write_failed', stage: 'team_size' })
+  })
+  it('a failed composition update stops before the flip (logged)', async () => {
+    const db = placeDb({ compositionErr: { message: 'boom' } })
+    expect(await place(db)).toEqual({ ok: false, error: 'write_failed', stage: 'team_composition' })
+    expect(writes(db).map((q) => q.table)).toEqual(['team_members', 'teams', 'race_registrations'])
+    expect(logError).toHaveBeenCalled()
+  })
+  it('a composition update that touched no row is a failure too', async () => {
+    expect(await place(placeDb({ compositionRows: [] }))).toEqual({ ok: false, error: 'write_failed', stage: 'team_composition' })
   })
   it('a failed flip is write_failed at status_flip', async () => {
     expect(await place(placeDb({ flipErr: { message: 'boom' } }))).toEqual({ ok: false, error: 'write_failed', stage: 'status_flip' })
@@ -215,7 +246,7 @@ describe('pairSolos — happy path', () => {
     ])
     expect(w[2].payload).toEqual({
       race_event_id: 'e1', team_id: 't-new', contact_id: 'c1', status: 'confirmed', wave_id: 'w1',
-      team_composition: 'all_members', marketing_consent: true, looking_for_team: false,
+      team_composition: 'all_members', marketing_consent: true, looking_for_team: false, // marketing_consent: carried from solo 1's own row (true here)
     })
     expect(w[3].payload).toEqual({ status: 'placed', placed_into_registration_id: 'r-new', placed_at: AT, placed_by: 'p-staff' })
     expect([eqOf(w[3], 'id'), eqOf(w[4], 'id')]).toEqual(['r1', 'r2'])
@@ -231,6 +262,16 @@ describe('pairSolos — happy path', () => {
     expect(w[0].payload.captain_contact_id).toBe('c2')
     expect(w[1].payload.map((m) => [m.name, m.role])).toEqual([['Solo 2', 'captain'], ['Solo 1', 'member']])
     expect(w[0].payload.size).toBe(2)
+  })
+  it.each([[false, false], [null, null], [undefined, null]])('carries the first solo\'s marketing_consent (%s → %s), never a literal true', async (first, want) => {
+    const db = pairDb({ solos: [solo(1, { row: { marketing_consent: first } }), solo(2, { row: { marketing_consent: true } })] })
+    await pair(db)
+    expect(writes(db).find((q) => q.table === 'race_registrations' && q.write === 'insert').payload.marketing_consent).toBe(want)
+  })
+  it('reads marketing_consent on the solos', async () => {
+    const db = pairDb()
+    await pair(db)
+    expect(selectOf(db.log.find((q) => q.table === 'race_registrations' && q.ops.some((o) => o[0] === 'in')))).toMatch(/marketing_consent/)
   })
   it('never reads race_events.find_team', async () => {
     const db = pairDb()

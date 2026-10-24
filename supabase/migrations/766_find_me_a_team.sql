@@ -42,7 +42,7 @@ create index if not exists idx_race_registrations_looking
   on public.race_registrations (race_event_id)
   where looking_for_team and status = 'confirmed';
 
-comment on column public.race_registrations.looking_for_team is 'FINDTEAM.1: a solo entrant who asked staff to find them a team. Cleared when they are placed.';
+comment on column public.race_registrations.looking_for_team is 'FINDTEAM.1: a solo entrant who asked staff to find them a team. Stays set once they are placed (they came in as a solo); status = ''placed'' and placed_into_registration_id record the placement.';
 comment on column public.race_registrations.placed_into_registration_id is 'FINDTEAM.1: the team registration this solo entrant was placed into; null until placed (or if that registration is deleted).';
 comment on column public.race_registrations.placed_at is 'FINDTEAM.1: when staff placed this entrant into a team.';
 comment on column public.race_registrations.placed_by is 'FINDTEAM.1: the staff member who placed this entrant into a team.';

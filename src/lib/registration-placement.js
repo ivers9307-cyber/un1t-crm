@@ -7,7 +7,8 @@
 // with placed_into_registration_id pointing at the team's registration, so the
 // payment and the history stay on file.
 //
-// Write order, both paths: the person is added to the team BEFORE the solo
+// Write order, both paths: the person is added to the team (and, when placing,
+// the team grows and its entry's team_composition is recomputed) BEFORE the solo
 // row flips. A crash between the two leaves a visible duplicate (the person on
 // the team AND still in the queue, which staff can see and tidy), never a lost
 // person (flipped to placed and on no team). Every failed write after the first
@@ -58,8 +59,8 @@ export const PLACEMENT_ERROR_MESSAGES = Object.freeze({
 })
 
 const MEMBER_COLUMNS = 'id, contact_id, name, email, role, is_member, member_validation_status, member_contact_id, member_validated_at'
-const SOLO_SELECT = `id, race_event_id, team_id, contact_id, status, wave_id, looking_for_team, placed_into_registration_id, teams:team_id ( id, team_members ( ${MEMBER_COLUMNS} ) )`
-const TARGET_SELECT = 'id, race_event_id, team_id, status, looking_for_team, teams:team_id ( id, size )'
+const SOLO_SELECT = `id, race_event_id, team_id, contact_id, status, wave_id, looking_for_team, placed_into_registration_id, marketing_consent, teams:team_id ( id, team_members ( ${MEMBER_COLUMNS} ) )`
+const TARGET_SELECT = 'id, race_event_id, team_id, status, looking_for_team, teams:team_id ( id, size, team_members ( is_member ) )'
 const WAVE_LOAD_SELECT = 'id, status, looking_for_team, team:teams!team_id ( size )'
 
 const fail = (error, extra = {}) => ({ ok: false, error, ...extra })
@@ -193,7 +194,22 @@ export async function placeSoloIntoTeam(db, { soloRegistrationId, teamRegistrati
     return fail(PLACEMENT_ERRORS.WRITE_FAILED, { stage: 'team_size' })
   }
 
-  // 3. The solo row leaves the queue.
+  // 3. The team entry's composition, recomputed with the new person in it.
+  const flags = [
+    ...(Array.isArray(target.teams.team_members) ? target.teams.team_members : []).map((m) => m?.is_member === true),
+    person.is_member === true,
+  ]
+  const { data: composed, error: compositionErr } = await db
+    .from('race_registrations')
+    .update({ team_composition: teamCompositionFor(flags) })
+    .eq('id', target.id)
+    .select('id')
+  if (compositionErr || !Array.isArray(composed) || composed.length === 0) {
+    logError(MODULE, 'place: team composition update failed; the person is on the team AND still in the queue', { err: compositionErr, targetId: target.id, ...meta })
+    return fail(PLACEMENT_ERRORS.WRITE_FAILED, { stage: 'team_composition' })
+  }
+
+  // 4. The solo row leaves the queue.
   const flip = await flipSolo(db, { soloId: solo.id, intoId: target.id, byProfileId, at, meta })
   if (flip === 'error') return fail(PLACEMENT_ERRORS.WRITE_FAILED, { stage: 'status_flip' })
   if (flip === 'raced') return fail(PLACEMENT_ERRORS.ALREADY_PLACED)
@@ -314,7 +330,10 @@ export async function pairSolos(db, { raceEventId, registrationIds, teamName, wa
       status: 'confirmed',
       wave_id: wave?.id ?? null,
       team_composition: teamCompositionFor(people.map((p) => p.is_member === true)),
-      marketing_consent: true,
+      // The first solo's own answer to the register form's checkbox (mig 588).
+      // host-contact-list grants HOST marketing consent off this column, so it
+      // is carried, never invented: null grants nothing.
+      marketing_consent: solos[0].marketing_consent ?? null,
       looking_for_team: false,
     })
     .select('id')
