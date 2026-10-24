@@ -22,6 +22,18 @@ export const PAID_TRIAL_PENDING_BODY = "Thanks, your payment is being confirmed.
 
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
 
+// Final-review F2 — the explanation email a Hatch Street (un1t.online) buyer
+// gets when the CRM created their un1t.online account at checkout: the
+// set-password step's first email, before un1t.online's own reset code. The
+// block's account_email_subject / account_email_body; these are their
+// defaults (PAID_TRIAL_DEFAULT uses them too). Tokens: {first_name},
+// {product_name}, {studio_name}. Never the class funnel's "booked in" copy:
+// nothing is booked.
+export const PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT = Object.freeze({
+  account_email_subject: 'Your trial is on your un1t.online account',
+  account_email_body: 'Hi {first_name}, thanks for buying {product_name} at {studio_name}. It is on your un1t.online account. A code to set your password is on its way in a separate email from un1t.online; once you are in, book your classes in the app. Reply to this email if anything looks off.',
+})
+
 /**
  * The buyer-facing words a paid_trial block owns, each blank or missing field
  * on its default (a stored block can predate the field). Pure. Used by
@@ -42,6 +54,22 @@ export function paidTrialCopyFromBlock(b) {
 }
 
 /**
+ * The trial buyer's account email copy off a paid_trial block (or the block
+ * list), each blank or missing field on its default. Pure.
+ * @returns {{ subject: string, body: string }}
+ */
+export function paidTrialAccountEmailCopy(blockOrBlocks) {
+  const b = Array.isArray(blockOrBlocks)
+    ? blockOrBlocks.find((x) => x && typeof x === 'object' && x.type === 'paid_trial')
+    : blockOrBlocks
+  const block = b && typeof b === 'object' ? b : {}
+  return {
+    subject: str(block.account_email_subject) || PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject,
+    body: str(block.account_email_body) || PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_body,
+  }
+}
+
+/**
  * The product the page sells, read off a studio's landing blocks. `null` when
  * the row has no paid_trial block or the block is not sellable: the page shows
  * nothing to buy and the POST refuses with `not_configured`, never a guess at
@@ -50,7 +78,8 @@ export function paidTrialCopyFromBlock(b) {
  *
  * Two shapes. A block with `un1t_product_id` sells that un1t.online product
  * (provider 'un1t_online'): sellable only when `product` is that id, active,
- * and priced above zero, and the price and currency come from it. Any other
+ * a one-off (`type 'one_time'`, never a recurring product) and priced above
+ * zero, and the price and currency come from it. Any other
  * block is the Glofox shape (provider 'glofox'): the typed price and both
  * Glofox ids, exactly as before; `product` is ignored.
  * @returns {null | {
@@ -80,7 +109,9 @@ export function paidTrialConfigFromBlocks(blocks, landingPath, { product = null 
 
   const un1tProductId = str(b.un1t_product_id)
   if (un1tProductId) {
-    if (!product || product.un1t_id !== un1tProductId || product.status !== 'active') return null
+    // A one-off only: the card says "charged once; nothing renews", so a
+    // recurring product (a subscription) is never for sale here.
+    if (!product || product.un1t_id !== un1tProductId || product.status !== 'active' || product.type !== 'one_time') return null
     const rawCents = Number(product.price_cents)
     const cents = Number.isFinite(rawCents) ? Math.floor(rawCents) : 0
     if (cents <= 0) return null

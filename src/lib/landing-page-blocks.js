@@ -19,7 +19,7 @@
 
 import { z } from 'zod'
 import { classFunnelCtaLabel, classFunnelShownOnLanding } from '@/lib/public-landing'
-import { PAID_TRIAL_PENDING_BODY } from '@/lib/paid-trial'
+import { PAID_TRIAL_PENDING_BODY, PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
 
 // Stable id helper — a uuid string. We keep ids in the saved JSON
 // because @dnd-kit needs stable per-item keys for smooth drag
@@ -258,6 +258,10 @@ const PAID_TRIAL_DEFAULT = ({ brand = '' } = {}) => ({
   active_member_text: paidTrialActiveMemberDefault(brand),
   help_cta_label: 'I need help',
   help_sent_text: 'Thanks. The team will be in touch shortly.',
+  // Final-review F2 — a un1t.online studio only: the email a buyer whose
+  // un1t.online account the CRM created gets once the purchase settles.
+  account_email_subject: PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject,
+  account_email_body:    PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_body,
   membership_id:  '',
   plan_code:      '',
   tag:            '',

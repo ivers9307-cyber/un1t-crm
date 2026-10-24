@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { paidTrialConfigFromBlocks, paidTrialCopyFromBlock, PAID_TRIAL_PENDING_BODY, formatTrialPrice, trialTicks, trialPurchasePublicState } from './paid-trial'
+import { paidTrialConfigFromBlocks, paidTrialCopyFromBlock, PAID_TRIAL_PENDING_BODY, PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT, paidTrialAccountEmailCopy, formatTrialPrice, trialTicks, trialPurchasePublicState } from './paid-trial'
 import { newBlockOfType } from './landing-page-blocks'
 
 const sellable = () => ({ ...newBlockOfType('paid_trial'), membership_id: 'm1', plan_code: 'p1' })
@@ -44,17 +44,24 @@ describe('paidTrialConfigFromBlocks, un1t.online shape (TRIALSTUDIO.2)', () => {
   const blocks = [{ type: 'paid_trial', un1t_product_id: 'p-1', product_name: 'The UN1T Trial', duration_days: 14 }]
   it('a un1t block is sellable only with a mirrored active product above €0', () => {
     expect(paidTrialConfigFromBlocks(blocks, 'hatch-street')).toBeNull()
-    const cfg = paidTrialConfigFromBlocks(blocks, 'hatch-street', { product: { un1t_id: 'p-1', status: 'active', price_cents: 3900, currency: 'eur' } })
+    const cfg = paidTrialConfigFromBlocks(blocks, 'hatch-street', { product: { un1t_id: 'p-1', status: 'active', type: 'one_time', price_cents: 3900, currency: 'eur' } })
     expect(cfg).toMatchObject({ provider: 'un1t_online', un1tProductId: 'p-1', priceCents: 3900, currency: 'EUR', membershipId: null, planCode: null, productName: 'The UN1T Trial', tag: 'hatch-street-trial' })
     expect(cfg.block).toBe(blocks[0])
-    expect(paidTrialConfigFromBlocks(blocks, 'hatch-street', { product: { un1t_id: 'p-1', status: 'active', price_cents: 0 } })).toBeNull()
+    expect(paidTrialConfigFromBlocks(blocks, 'hatch-street', { product: { un1t_id: 'p-1', status: 'active', type: 'one_time', price_cents: 0 } })).toBeNull()
   })
   it('refuses a product that is inactive, for another id, or missing a price', () => {
-    const ok = { un1t_id: 'p-1', status: 'active', price_cents: 3900 }
+    const ok = { un1t_id: 'p-1', status: 'active', type: 'one_time', price_cents: 3900 }
     expect(paidTrialConfigFromBlocks(blocks, 'hatch-street', { product: { ...ok, status: 'archived' } })).toBeNull()
     expect(paidTrialConfigFromBlocks(blocks, 'hatch-street', { product: { ...ok, un1t_id: 'p-2' } })).toBeNull()
     expect(paidTrialConfigFromBlocks(blocks, 'hatch-street', { product: { ...ok, price_cents: null } })).toBeNull()
     expect(paidTrialConfigFromBlocks(blocks, 'hatch-street', { product: ok }).currency).toBe('EUR')
+  })
+  it('refuses a recurring product: only a one-off is sold as "charged once"', () => {
+    const ok = { un1t_id: 'p-1', status: 'active', type: 'one_time', price_cents: 3900 }
+    expect(paidTrialConfigFromBlocks(blocks, 'hatch-street', { product: ok })).not.toBeNull()
+    for (const type of ['recurring', 'subscription', 'ONE_TIME', '', null, undefined]) {
+      expect(paidTrialConfigFromBlocks(blocks, 'hatch-street', { product: { ...ok, type } }), String(type)).toBeNull()
+    }
   })
   it('a Glofox block ignores the product argument and keeps its typed price', () => {
     const cfg = paidTrialConfigFromBlocks([sellable()], 'stillorgan', { product: { un1t_id: 'p-1', status: 'active', price_cents: 100, currency: 'gbp' } })
@@ -127,5 +134,29 @@ describe('trialPurchasePublicState', () => {
     expect(trialPurchasePublicState({ status: 'handled' })).toBe('help')
     expect(trialPurchasePublicState({ status: 'awaiting_payment', payment_provider: 'un1t_online' })).toBe('pending')
     expect(trialPurchasePublicState({ status: 'awaiting_payment', payment_provider: 'un1t_online', payment_status: 'expired' })).toBe('pending')
+  })
+})
+
+// Final-review F2 — the Hatch buyer's account email copy off the block.
+describe('paidTrialAccountEmailCopy', () => {
+  it('reads the block (or the block list), each blank field on its default', () => {
+    const d = { subject: PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject, body: PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_body }
+    expect(paidTrialAccountEmailCopy(null)).toEqual(d)
+    expect(paidTrialAccountEmailCopy([{ type: 'hero' }])).toEqual(d)
+    expect(paidTrialAccountEmailCopy({ type: 'paid_trial', account_email_subject: ' S ', account_email_body: '' })).toEqual({ subject: 'S', body: d.body })
+    expect(paidTrialAccountEmailCopy([{ type: 'hero' }, { type: 'paid_trial', account_email_body: 'B' }])).toEqual({ subject: d.subject, body: 'B' })
+  })
+  it('a new paid_trial block carries both fields on their defaults', () => {
+    const b = newBlockOfType('paid_trial')
+    expect(b.account_email_subject).toBe(PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject)
+    expect(b.account_email_body).toBe(PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_body)
+  })
+  it('the defaults name the product and the studio, never a class booking, and carry no em-dash', () => {
+    expect(PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject).toBe('Your trial is on your un1t.online account')
+    expect(PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_body).toContain('{product_name}')
+    expect(PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_body).toContain('{studio_name}')
+    for (const v of Object.values(PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT)) {
+      expect(v).not.toMatch(/booked in|\{class_name\}|\{class_time\}|[—–]/)
+    }
   })
 })

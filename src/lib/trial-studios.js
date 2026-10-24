@@ -4,7 +4,7 @@
 // the one place that reads both, so the page and the routes agree on which
 // studios are sellable.
 
-import { paidTrialConfigFromBlocks } from '@/lib/paid-trial'
+import { paidTrialConfigFromBlocks, paidTrialAccountEmailCopy } from '@/lib/paid-trial'
 import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { logWarn } from '@/lib/log'
 
@@ -70,7 +70,7 @@ export async function loadTrialStudios(db) {
     if (un1tId && locationId) {
       const { data, error: productErr } = await db
         .from('un1t_products')
-        .select('un1t_id, status, price_cents, currency, title')
+        .select('un1t_id, status, type, price_cents, currency, title')
         .eq('location_id', locationId)
         .eq('un1t_id', un1tId)
         .maybeSingle()
@@ -83,6 +83,30 @@ export async function loadTrialStudios(db) {
     const config = paidTrialConfigFromBlocks(blocks, studio.publicPath, { product })
     return { ...base, product, sellable: config !== null, config }
   }))
+}
+
+/**
+ * Final-review F2 — the account explanation email copy of the studio at
+ * `locationId` (its paid_trial block's account_email_subject / _body), for
+ * the Hatch Street settle sweep. Never throws: an unreadable row, or a studio
+ * with no block, answers the defaults (logged with ids only), which are the
+ * trial buyer's words, never the class funnel's.
+ * @returns {Promise<{ subject: string, body: string }>}
+ */
+export async function readPaidTrialAccountEmailCopy(db, locationId) {
+  try {
+    const { data, error } = await db
+      .from('landing_page_settings')
+      .select('public_path, blocks')
+      .eq('location_id', locationId)
+      .in('public_path', TRIAL_STUDIOS.map((s) => s.publicPath))
+    if (error) throw Object.assign(new Error('landing row unreadable'), { code: error.code ?? null })
+    const blocks = (Array.isArray(data) ? data : []).flatMap((p) => (Array.isArray(p?.blocks) ? p.blocks : []))
+    return paidTrialAccountEmailCopy(blocks)
+  } catch (err) {
+    logWarn('trial-studios', 'paid_trial email copy unreadable; the defaults are used', { locationId, code: err?.code ?? null })
+    return paidTrialAccountEmailCopy(null)
+  }
 }
 
 // TRIALSTUDIO.11 — where /start and /start/<studio> now send people: /trial with

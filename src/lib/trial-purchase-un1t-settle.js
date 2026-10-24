@@ -6,7 +6,11 @@
 //
 // Matching (the purchasesSince rule of agent/purchase-settle.js, copied): a
 // transaction of the row's un1t.online user at the row's location, dated at or
-// after the row, with an amount above zero, not a renewal.
+// after the row, with an amount above zero, not a renewal, AND for the row's
+// product: its product_id is the row's un1t_product_id. A transaction with no
+// product_id (the mirror recorded none; prod's Hatch transactions all carry
+// one) may settle a row as the fallback; a transaction for a DIFFERENT known
+// product never does (a class pack bought the same day is not the trial).
 //
 // ONE PURCHASE SETTLES AT MOST ONE ROW. A buyer who cancelled the checkout and
 // tried again has two open rows for one un1t.online user (see the comment
@@ -16,7 +20,8 @@
 //     again (one read per sweep);
 //   - within a sweep a transaction is used once (tracked in memory);
 //   - a user's rows are paired with their transactions product match first,
-//     then the NEWEST row; the row left over stays open and later expires.
+//     then (a product-less transaction only) the NEWEST row; the row left
+//     over stays open and later expires.
 // The settle stamp is a CAS on status 'awaiting_payment': the Purchase and
 // the set-password step run only when it matched, so a raced row, or a re-run
 // after a crash between the stamp and the side effects, never sends twice.
@@ -31,12 +36,16 @@
 // `raceLost`: the settle stamp hit uniq_trial_purchases_un1t_ref (23505), so
 // an overlapping sweep settled another row off the same payment; nothing is
 // sent and the next sweep's used-refs read leaves this row the transaction.
+// The set-password step's explanation email is the trial buyer's own
+// (kind 'trial_purchase', the studio's paid_trial account_email_* copy and
+// the row's product name), never the class funnel's booking copy.
 // `passwordPending`: a settled buyer whose set-password step did not finish
 // (anything but done / skipped_*, or a throw); the verdict is logged and kept
 // on the row as grant.set_password for staff.
 import { sendWebsiteConversion } from '@/lib/meta-capi'
 import { runSetPasswordStep } from '@/lib/un1t-online-account'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
+import { readPaidTrialAccountEmailCopy } from '@/lib/trial-studios'
 import { logError, logWarn } from '@/lib/log'
 
 const LOG = 'trial-purchase-un1t'
@@ -126,9 +135,13 @@ export async function settleUn1tTrialPurchases(db, { now = () => Date.now(), pag
     }
 
     const newestFirst = [...group].reverse()
+    // Pass 1: the row's own product. Pass 2 (fallback): a transaction with no
+    // product_id at all; a known different product is never a match.
     const take = (r, productOnly) => txs.find((t) => !used.has(`${locationId}:${t.un1t_id}`)
       && Date.parse(t.remote_created_at) >= Date.parse(r.created_at)
-      && (!productOnly || (r.un1t_product_id && t.product_id === r.un1t_product_id)))
+      && (productOnly
+        ? (r.un1t_product_id && t.product_id === r.un1t_product_id)
+        : t.product_id == null))
     for (const productOnly of [true, false]) {
       for (const r of newestFirst) {
         if (settledIds.has(r.id)) continue
@@ -217,9 +230,12 @@ async function settleRow(db, row, tx, nowMs, out) {
       .select('id, email, first_name, last_name, name').eq('id', row.contact_id).maybeSingle()
     if (contactErr) throw Object.assign(new Error('contact unreadable'), { code: contactErr.code ?? null })
     if (!contact) throw Object.assign(new Error('contact missing'), { code: 'contact_missing' })
+    // The explanation email is the trial buyer's (the studio's paid_trial
+    // copy, product name), never the class funnel's "you are booked in".
+    const copy = await readPaidTrialAccountEmailCopy(db, row.location_id)
     const res = await runSetPasswordStep(db, {
       locationId: row.location_id, contact, un1tUserId: row.un1t_user_id, request: null,
-      settings, origin: ORIGIN, emailArgs: {}, writer: null,
+      settings, origin: ORIGIN, emailArgs: { kind: 'trial_purchase', productName: row.product_name, copy }, writer: null,
     })
     verdict = res?.forgotPassword ?? 'unknown'
     if (verdict !== 'done' && !String(verdict).startsWith('skipped_')) {

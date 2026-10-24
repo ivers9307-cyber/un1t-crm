@@ -48,6 +48,7 @@ import { DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE, DEFAULT_CLASS_FUNNEL_CTA_LABEL }
 import { parseManualTimetable, DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
 import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
 import { DEFAULT_FUNNEL_TERMS_COPY, DEFAULT_FUNNEL_EMAIL_COPY } from '@/lib/un1t-online-funnel-copy'
+import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -1079,7 +1080,8 @@ function Un1tFunnelCopyFields({ block, onUpdate }) {
 // PAIDTRIAL.1 — the paid trial product (/trial). Price in euros as a draft
 // string, coerced to cents on write (same reasoning as ClassFunnelEdit). The
 // Glofox product is REQUIRED: the page sells nothing until both ids are set.
-function PaidTrialEdit({ block, onUpdate, locationId, membershipSource }) {
+// Exported for its test (PaidTrialEdit.test.jsx).
+export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource }) {
   const isUn1tOnline = membershipSource === 'un1t_online'
   const [priceDraft, setPriceDraft] = useState(centsToEuros(block.price_cents))
   useEffect(() => { setPriceDraft(centsToEuros(block.price_cents)) }, [block.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1133,6 +1135,8 @@ function PaidTrialEdit({ block, onUpdate, locationId, membershipSource }) {
       <Field label="Eyebrow" hint="Small line above the heading on the price panel.">
         <Input value={block.eyebrow || ''} onChange={(v) => onUpdate({ eyebrow: v })} maxLength={60} placeholder="14 day reset" />
       </Field>
+      {/* A new block starts on Stillorgan's words (the factory does not know the studio). */}
+      <p className="text-[11px] text-un1t-muted">Check the heading, button and paid messages name this studio&apos;s product.</p>
       <Field label="Heading">
         <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="The 14 Day Reset" />
       </Field>
@@ -1244,6 +1248,29 @@ function PaidTrialEdit({ block, onUpdate, locationId, membershipSource }) {
       <Field label="Help sent — message" hint="Shown after the buyer taps the help button.">
         <Textarea value={block.help_sent_text || ''} onChange={(v) => onUpdate({ help_sent_text: v })} maxLength={400} rows={2} />
       </Field>
+      {isUn1tOnline && (
+        <>
+          <Field
+            label="New account email — subject"
+            hint="Sent once the purchase is confirmed to a buyer whose un1t.online account we made, before un1t.online's set-password code. Blank uses the default."
+          >
+            <Input
+              value={block.account_email_subject || ''}
+              onChange={(v) => onUpdate({ account_email_subject: v })}
+              maxLength={200}
+              placeholder={PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject}
+            />
+          </Field>
+          <Field label="New account email — message" hint="Placeholders: {first_name}, {product_name}, {studio_name}.">
+            <Textarea
+              value={block.account_email_body || ''}
+              onChange={(v) => onUpdate({ account_email_body: v })}
+              maxLength={1000}
+              rows={4}
+            />
+          </Field>
+        </>
+      )}
     </>
   )
 }

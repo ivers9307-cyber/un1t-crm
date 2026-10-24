@@ -11,7 +11,8 @@
 // changes the row, so a second sweep sees what the first one wrote.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ capi: vi.fn(), setPassword: vi.fn(), settings: vi.fn(), warn: vi.fn() }))
+const mocks = vi.hoisted(() => ({ capi: vi.fn(), setPassword: vi.fn(), settings: vi.fn(), warn: vi.fn(), emailCopy: vi.fn() }))
+vi.mock('@/lib/trial-studios', () => ({ readPaidTrialAccountEmailCopy: mocks.emailCopy }))
 vi.mock('@/lib/meta-capi', () => ({ sendWebsiteConversion: mocks.capi }))
 vi.mock('@/lib/un1t-online-account', () => ({ runSetPasswordStep: mocks.setPassword }))
 vi.mock('@/lib/un1t-online-settings', () => ({ readUn1tWriteSettings: mocks.settings }))
@@ -24,6 +25,7 @@ const iso = (ms) => new Date(ms).toISOString()
 const MIN = 60_000
 const CONTACT = { id: 'c1', email: 'ava@example.com', first_name: 'Ava', last_name: 'Byrne', name: 'Ava Byrne' }
 const SETTINGS = { writesEnabled: true, sendsWelcome: false, welcomeSetsLogin: false }
+const EMAIL_COPY = { subject: 'Studio subject {product_name}', body: 'Studio body {product_name}' }
 
 const row = (over = {}) => ({
   id: 'tp1', location_id: 'loc2', contact_id: 'c1', status: 'awaiting_payment', payment_provider: 'un1t_online',
@@ -107,6 +109,7 @@ beforeEach(() => {
   mocks.capi.mockResolvedValue({ sent: true })
   mocks.setPassword.mockResolvedValue({ explanation: 'sent', forgotPassword: 'done' })
   mocks.settings.mockResolvedValue({ membershipSource: 'un1t_online', settings: SETTINGS })
+  mocks.emailCopy.mockResolvedValue(EMAIL_COPY)
 })
 
 describe('settleUn1tTrialPurchases', () => {
@@ -140,8 +143,11 @@ describe('settleUn1tTrialPurchases', () => {
     expect(mocks.setPassword).toHaveBeenCalledTimes(1)
     expect(mocks.setPassword).toHaveBeenCalledWith(db, {
       locationId: 'loc2', contact: CONTACT, un1tUserId: 'u1', request: null,
-      settings: SETTINGS, origin: 'web_trial', emailArgs: {}, writer: null,
+      settings: SETTINGS, origin: 'web_trial',
+      // The trial buyer's explanation email: the studio's paid_trial copy and the product.
+      emailArgs: { kind: 'trial_purchase', productName: 'The UN1T Trial', copy: EMAIL_COPY }, writer: null,
     })
+    expect(mocks.emailCopy).toHaveBeenCalledWith(db, 'loc2')
     expect(rows[0].status).toBe('granted')
 
     // The next sweep (or a re-run after a crash) finds nothing open: no second Purchase.
@@ -158,6 +164,26 @@ describe('settleUn1tTrialPurchases', () => {
     expect(trialUpdates(updates)).toEqual([])
     expect(mocks.capi).not.toHaveBeenCalled()
     expect(mocks.setPassword).not.toHaveBeenCalled()
+  })
+
+  it('a transaction for a different known product never settles, whatever its date', async () => {
+    const { db, updates, rows } = makeDb({ rows: [row()], txs: [tx({ un1t_id: 'txPack', product_id: 'prodPack' })] })
+    const r = await settleUn1tTrialPurchases(db, { now: () => T0 + 10 * MIN })
+    expect(r).toMatchObject({ settled: 0, expired: 0, errors: 0 })
+    expect(trialUpdates(updates)).toEqual([])
+    expect(rows[0].status).toBe('awaiting_payment')
+    expect(mocks.capi).not.toHaveBeenCalled()
+    expect(mocks.setPassword).not.toHaveBeenCalled()
+    // A row with no product of its own is not settled by another product either.
+    const bare = makeDb({ rows: [row({ un1t_product_id: null })], txs: [tx({ un1t_id: 'txPack', product_id: 'prodPack' })] })
+    expect(await settleUn1tTrialPurchases(bare.db, { now: () => T0 + 10 * MIN })).toMatchObject({ settled: 0 })
+  })
+
+  it('a transaction with no product_id is the fallback match', async () => {
+    const { db, rows } = makeDb({ rows: [row()], txs: [tx({ un1t_id: 'txNull', product_id: null })] })
+    const r = await settleUn1tTrialPurchases(db, { now: () => T0 + 10 * MIN })
+    expect(r).toMatchObject({ settled: 1, errors: 0 })
+    expect(rows[0]).toMatchObject({ status: 'granted', payment_provider_ref: 'txNull' })
   })
 
   it('a sub_renewal or €0 transaction does not settle', async () => {

@@ -83,7 +83,7 @@ const freshState = () => ({
     { location_id: 'loc2', public_path: 'hatch-street', blocks: HATCH_BLOCKS, locations: { membership_source: 'un1t_online' } },
   ],
   pagesError: null,
-  product: { un1t_id: HATCH_PRODUCT_ID, status: 'active', price_cents: 3900, currency: 'eur', title: 'The UN1T Trial' },
+  product: { un1t_id: HATCH_PRODUCT_ID, status: 'active', type: 'one_time', price_cents: 3900, currency: 'eur', title: 'The UN1T Trial' },
   locations: {
     loc1: { id: 'loc1', name: 'Stillorgan', organization_id: 'org1', settings: {} },
     loc2: { id: 'loc2', name: 'UN1T Hatch Street', organization_id: 'org1', settings: { un1t_online: { writes_enabled: true } } },
