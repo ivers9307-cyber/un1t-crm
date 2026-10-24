@@ -40,8 +40,8 @@ export default async function AutomationsPage() {
   const db = createServerClient()
 
   // Curated toggle cards (only when the user has the automations perm).
-  // class_climate + bathroom_climate are rendered by their own cards (they
-  // need config), so they're filtered out of the generic toggle list.
+  // class_climate, bathroom_climate + screen_mode are rendered by their own
+  // cards (they need config), so they're filtered out of the generic toggle list.
   let cards = []
   let climate = null
   let bathroom = null
@@ -64,7 +64,7 @@ export default async function AutomationsPage() {
     const byKey = Object.fromEntries((rows || []).map((r) => [r.automation_key, r]))
 
     cards = AUTOMATIONS
-      .filter((a) => a.key !== 'class_climate' && a.key !== 'bathroom_climate')
+      .filter((a) => a.key !== 'class_climate' && a.key !== 'bathroom_climate' && a.key !== 'screen_mode')
       .map((a) => ({
         key: a.key, label: a.label, description: a.description,
         supportsBackfill: a.supportsBackfill, reviewBase: a.reviewBase,
