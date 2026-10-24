@@ -11,6 +11,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { ADMIN_ROLES, MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { judgeEventOwnerChange } from '@/lib/event-owner'
+import { CharitySettingsSchema } from '@/lib/charity-donations'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -82,12 +83,23 @@ export const UpdateSchema = z.object({
   // EVENT-COMMS-LOC (mig 553) — flows through the generic scalar patch; in-org
   // non-anchor validated in PUT.
   sending_location_id: uuidLike.nullable().optional(),
+  // CHARITY.9 (mig 765) — "Charity day" card donations on the public page.
+  // Flows through the generic `updates` spread in PUT below.
+  charity_enabled: z.boolean().optional(),
+  charity: CharitySettingsSchema.nullable().optional(),
   // EVENT-OWNER.1 — the owning studio. Admin at both ends, same org, not a
   // host anchor, not a host event: judged by judgeEventOwnerChange in PUT.
   location_id: uuidLike.optional(),
   // When provided, replaces the wave set entirely (diff-and-apply).
   // Omitting leaves waves untouched. At least one wave required if set.
   waves: z.array(WaveInputSchema).min(1).max(50).optional(),
+}).superRefine((b, ctx) => {
+  // CHARITY.12 — switching donations on with settings that have no charity
+  // name would render "Every euro goes to ." publicly. Judged when the
+  // settings come with the switch (the form always sends both).
+  if (b.charity_enabled === true && b.charity !== undefined && !String(b.charity?.name || '').trim()) {
+    ctx.addIssue({ code: 'custom', path: ['charity', 'name'], message: 'Enter the charity name to take donations.' })
+  }
 })
 
 async function loadRace(db, id) {
@@ -106,7 +118,7 @@ async function loadRace(db, id) {
       gap_email_subject, gap_email_intro,
       waitlist_email_subject, waitlist_email_intro,
       confirmation_email_template_id, reminder_email_template_id,
-      sending_location_id,
+      sending_location_id, charity_enabled, charity,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations (
         id, status, race_started_at, race_finished_at, registered_at, wave_id,

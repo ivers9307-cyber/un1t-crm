@@ -1,5 +1,63 @@
-import { describe, it, expect } from 'vitest'
-import { UpdateSchema } from './route'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+const mocks = vi.hoisted(() => ({ updates: [] }))
+vi.mock('@/lib/auth', () => ({
+  getCurrentUser: vi.fn(async () => ({ id: 'u1', role: 'admin', activeLocation: { id: 'loc-1' } })),
+  assertLocationAccessOr404: vi.fn(() => null),
+  hasRoleAtLocation: vi.fn(() => true),
+  hasRoleAtAnyLocation: vi.fn(() => true),
+}))
+vi.mock('@/lib/permissions', () => ({
+  hasPermissionAtAnyLocation: vi.fn(() => true),
+  hasPermissionForLocation: vi.fn(() => true),
+}))
+vi.mock('@/lib/supabase', () => ({
+  createServerClient: () => ({
+    from: (table) => {
+      if (table !== 'race_events') throw new Error(`unexpected table ${table}`)
+      // select/eq/single chain resolving to the existing row; update() records its payload.
+      const chain = { select: () => chain, eq: () => chain, single: () => chain, then: (r) => r({ data: { id: 'ev-1', location_id: 'loc-1', host_id: null }, error: null }) }
+      return { ...chain, update: (payload) => { mocks.updates.push(payload); return { eq: async () => ({ error: null }) } } }
+    },
+  }),
+}))
+
+import { UpdateSchema, PUT } from './route'
+
+const putReq = (body) => new Request('http://x/api/events/ev-1', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+const ctx = { params: Promise.resolve({ id: 'ev-1' }) }
+
+describe('PUT /api/events/[id] — CHARITY.9 charity day', () => {
+  beforeEach(() => { mocks.updates.length = 0 })
+
+  it('400s invalid charity settings before any write', async () => {
+    const res = await PUT(putReq({ charity: { min_cents: 900, max_cents: 100 } }), ctx)
+    expect(res.status).toBe(400)
+    expect(mocks.updates).toHaveLength(0)
+  })
+
+  it('writes charity_enabled and charity to race_events', async () => {
+    const charity = { name: 'MS Ireland', presets_cents: [1000, 2500], match_multiplier: 2 }
+    const res = await PUT(putReq({ charity_enabled: true, charity }), ctx)
+    expect(res.status).toBe(200)
+    expect(mocks.updates).toHaveLength(1)
+    expect(mocks.updates[0].charity_enabled).toBe(true)
+    expect(mocks.updates[0].charity).toEqual(charity)
+  })
+
+  it('400s switching donations on with a blank charity name, before any write', async () => {
+    for (const charity of [{ presets_cents: [1000] }, { name: '   ' }, null]) {
+      const res = await PUT(putReq({ charity_enabled: true, charity }), ctx)
+      expect(res.status).toBe(400)
+    }
+    expect(mocks.updates).toHaveLength(0)
+  })
+
+  it('a blank name is fine while the section is off (settings kept for later)', async () => {
+    const res = await PUT(putReq({ charity_enabled: false, charity: { name: '' } }), ctx)
+    expect(res.status).toBe(200)
+  })
+})
 
 // EVENTS-EMAILCFG.1 — per-event email config on the events update schema.
 // Every field is optional (omit = leave untouched) and nullable (null =
@@ -93,5 +151,21 @@ describe('events UpdateSchema — EVENT-WAITLIST.1 waitlist offer email copy', (
     expect(UpdateSchema.parse({ waitlist_email_intro: 'Book here: {{claim_url}}' }).waitlist_email_intro).toContain('claim_url')
     expect(UpdateSchema.parse({ waitlist_email_intro: null }).waitlist_email_intro).toBeNull()
     expect(() => UpdateSchema.parse({ waitlist_email_intro: 'y'.repeat(4001) })).toThrow()
+  })
+})
+
+describe('events UpdateSchema — CHARITY.9 charity day', () => {
+  it('accepts the switch and a valid settings object', () => {
+    const parsed = UpdateSchema.parse({ charity_enabled: true, charity: { name: 'MS Ireland', presets_cents: [1000, 2500], match_multiplier: 2 } })
+    expect(parsed.charity_enabled).toBe(true)
+    expect(parsed.charity.presets_cents).toEqual([1000, 2500])
+  })
+  it('accepts null to clear the settings and omits cleanly', () => {
+    expect(UpdateSchema.parse({ charity: null }).charity).toBeNull()
+    expect(UpdateSchema.parse({ name: 'x' }).charity).toBeUndefined()
+  })
+  it('rejects min above max and a non-boolean switch', () => {
+    expect(() => UpdateSchema.parse({ charity: { min_cents: 900, max_cents: 100 } })).toThrow()
+    expect(() => UpdateSchema.parse({ charity_enabled: 'yes' })).toThrow()
   })
 })

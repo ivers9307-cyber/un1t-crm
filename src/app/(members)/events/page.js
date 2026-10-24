@@ -16,6 +16,8 @@ import { ADMIN_ROLES } from '@/lib/schemas'
 import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse } from '@shared/events'
 import { eventToday } from '@/lib/event-day'
 import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
+import { showsDonationsLink } from '@/lib/charity-donations'
+import { logWarn } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
 
@@ -64,7 +66,7 @@ export default async function EventsIndexPage(props) {
       .from('race_events')
       .select(`
         id, name, slug, race_date, start_time, capacity, capacity_mode, allowed_team_sizes,
-        active, kind, shared, location_id, registration_opens_at, registration_closes_at,
+        active, kind, shared, location_id, charity_enabled, registration_opens_at, registration_closes_at,
         locations:location_id ( id, timezone ),
         host:event_hosts!host_id ( id, name, organization_id ),
         waves:race_waves ( capacity ),
@@ -103,6 +105,21 @@ export default async function EventsIndexPage(props) {
   const { upcoming, past } = orderEventsForBrowse(races, (e) => eventToday(e))
 
   const visible = tab === 'past' ? past : upcoming
+  // CHARITY.12 — the Donations link also shows for an event whose section is
+  // off but that already took donations (spec §6). One read for the listed
+  // events; a failed read is treated as none.
+  const donationEventIds = new Set()
+  const visibleIds = visible.map((r) => r.id)
+  if (visibleIds.length > 0) {
+    const { data: donated, error: donatedErr } = await db
+      .from('donations')
+      .select('race_event_id')
+      .in('race_event_id', visibleIds)
+      .range(0, 999)
+    if (donatedErr) logWarn('events-list', 'donations read failed; Donations links follow the switch only', { err: donatedErr })
+    else for (const d of donated || []) donationEventIds.add(d.race_event_id)
+  }
+
   const tabs = [
     { id: 'upcoming', label: 'Upcoming', count: upcoming.length, href: '/events' },
     { id: 'past',     label: 'Past',     count: past.length,     href: '/events?tab=past' },
@@ -270,6 +287,15 @@ export default async function EventsIndexPage(props) {
                           >
                             Check in
                           </Link>
+                          {showsDonationsLink(r, donationEventIds) && (
+                            <Link
+                              href={`/events/${r.id}/donations`}
+                              className="text-[11px] text-un1t-subtle hover:text-un1t-text"
+                              title="Card donations raised on the event page"
+                            >
+                              Donations
+                            </Link>
+                          )}
                           {/* Race-day control panel is race-only —
                               there's no equivalent for workshop /
                               seminar etc. (no live timing). E7 hides
@@ -376,6 +402,14 @@ export default async function EventsIndexPage(props) {
                     >
                       Check in
                     </Link>
+                    {showsDonationsLink(r, donationEventIds) && (
+                      <Link
+                        href={`/events/${r.id}/donations`}
+                        className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle"
+                      >
+                        Donations
+                      </Link>
+                    )}
                     <Link
                       href={`/events/${r.id}/edit`}
                       className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle"

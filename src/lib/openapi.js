@@ -489,6 +489,34 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/public/events/{slug}/donate',
+  tags: ['Public'],
+  summary: 'Start a card donation on a public event page (CHARITY.5)',
+  description: 'Anonymous. Rate-limited to 10 per slug per IP per 15 min. Body { amount_cents, name, email, message?, marketing_opt_in?, attribution? }. The event comes from the slug (published and active; registration state is irrelevant, so a closed or full event still takes a gift). The amount is the donor\'s but bounded by the event\'s own charity settings: min/max, or its preset list when custom amounts are off. Inserts an awaiting_payment donations row (contact left null until the paid side effects link it) and opens the provider payment. Returns { donation: { id, amount_cents, currency, checkout: { provider, token, url, connectedAccountId } } }. 400 invalid_amount (outside the event\'s bounds), not_enabled (the Charity day switch is off) or payments_unavailable; 502 checkout_failed (the row is marked failed); 500 unavailable (the insert failed).',
+  responses: {
+    200: { description: 'Donation row created and checkout opened' },
+    400: { description: 'Validation failed, invalid_amount, not_enabled or payments_unavailable', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown or unpublished event', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'unavailable: the donation row could not be created', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'checkout_failed: the provider checkout could not be opened', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/donations/{id}',
+  tags: ['Public'],
+  summary: 'Status of one donation (checkout and return-page polls)',
+  description: 'Anonymous, display-safe: no donor field (name, email, message) is ever returned. state: pending | paid | failed | refunded. Re-checks the provider while pending (capped at 100 per donation per 5 min). Every observation of a paid row runs the stamp-keyed side effects (contact, tag, consent, timeline note, receipt), so this poll also recovers a donor whose webhook never landed; in the first 60 s after paid_at only the observer that flipped the row sends the receipt. While the payment can still be completed the response carries the checkout block.',
+  responses: {
+    200: { description: 'Status returned: { id, state, paid, amount_cents, currency, match_multiplier, checkout }' },
+    404: { description: 'Unknown donation', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'get',
   path: '/api/public/offer-purchases/{id}',
   tags: ['Public'],
@@ -1157,6 +1185,40 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/events/{id}/donations',
+  tags: ['Events'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "An event's card donations, totals and charity settings (staff, races at the event's studio; CHARITY.10)",
+  description: 'Session auth + the races permission at the event\'s location; an event at a studio the caller cannot see is a 404. Rows newest first (every row, awaiting_payment included however old: staff reconcile them), each with paid_at_label rendered in the event location\'s zone and matched_cents (amount x the multiplier snapshotted at paid; 0 until paid). Returns { donations, totals, currency, settings: { name, match_multiplier, include_entries } }. `?format=csv` streams the hand-over file for the charity: paid_at, name, email, amount, matched, status, message (UTF-8 with BOM).',
+  request: { params: z.object({ id: uuidLike }), query: z.object({ format: z.enum(['csv']).optional() }) },
+  responses: {
+    200: { description: '{ donations, totals, currency, settings }, or text/csv with ?format=csv', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventDonations') } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events/{id}/donations/{donationId}/refunded',
+  tags: ['Events'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Record that a donation was refunded in the provider dashboard (staff, manager+ with races at the event's studio)",
+  description: 'Record-only: moves no money. Flips a paid donation to refunded and stamps refunded_at and refunded_by. Revolut never reports a refund, so this is how one is recorded; Stripe refunds arrive on charge.refunded. 404 when the donation is not on this event; 409 not_paid when the row is not paid (including a lost race with another refund click).',
+  request: { params: z.object({ id: uuidLike, donationId: uuidLike }) },
+  responses: {
+    200: { description: '{ changed }', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    403: { description: "No races permission or manager role at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event or donation not found, or the donation is on another event', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_paid: only a paid donation can be marked as refunded', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Write failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/events/{id}/waitlist',
   tags: ['Races'],
   security: [{ CookieAuth: [] }, { BearerAuth: [] }],
@@ -1788,6 +1850,32 @@ registry.registerPath({
   request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('RevolutRacePaymentEvent') } } } },
   responses: {
     200: { description: 'Accepted' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/revolut/donations',
+  tags: ['Webhooks (Inbound)'],
+  security: [],
+  summary: 'Revolut donations webhook verification',
+  description: 'Configuration ping (200).',
+  responses: {
+    200: { description: 'OK' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/revolut/donations',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Revolut event-page donation payment events (CHARITY.7)',
+  description: 'Revolut Merchant → CRM. Separate webhook endpoint for card donations; register it in the Revolut dashboard. Verified with REVOLUT_DONATION_WEBHOOK_SECRET, falling back to REVOLUT_WEBHOOK_SECRET. Deduped per event:order. The order is re-read from Revolut and the donation marked, then the stamp-keyed paid side effects run on every observation of a paid row. Answers 200 for anything unrecognised (unknown order, empty body). Deferred paths (a provider read, an event read, a mark or re-read that throws) release the dedupe claim and answer 200 { deferred } so a dashboard resend is processed; the route never 500s after the claim.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('RevolutDonationEvent') } } } },
+  responses: {
+    200: { description: 'Accepted (processed, deduped, deferred or skipped)' },
     401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

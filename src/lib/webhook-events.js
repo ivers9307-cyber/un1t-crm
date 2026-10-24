@@ -38,6 +38,8 @@ export const WEBHOOK_PROVIDERS = Object.freeze({
   REVOLUT_CLASS_BOOKING: 'revolut_class_booking',
   // OFFERS.5: signed Revolut receiver for weekend-sale offer purchases.
   REVOLUT_OFFER: 'revolut_offer',
+  // CHARITY.7: signed Revolut receiver for event-page card donations.
+  REVOLUT_DONATION: 'revolut_donation',
   WHATSAPP: 'whatsapp',
   // Instagram DM webhooks (messages field, incl. is_echo reflections).
   // Was missing — the IG webhook route passed `undefined` here, so IG

@@ -28,6 +28,7 @@ import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
 import { isRaceKind, orderEventsForBrowse } from '@shared/events'
 import { eventToday } from '@/lib/event-day'
 import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
+import { CharitySettingsSchema } from '@/lib/charity-donations'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -113,6 +114,9 @@ export const CreateSchema = z.object({
   // EVENT-COMMS-LOC (mig 553) — the real UN1T location this event's SMS + email
   // send from. In-org non-anchor validated below.
   sending_location_id: uuidLike.nullable().optional(),
+  // CHARITY.9 (mig 765) — "Charity day" card donations on the public page.
+  charity_enabled: z.boolean().optional(),
+  charity: CharitySettingsSchema.nullable().optional(),
   // Waves (mig 083) — at least one required for a usable race.
   // Server normalises by start_time ascending; UNIQUE on
   // (race_event_id, start_time) catches duplicates from the DB side.
@@ -405,6 +409,8 @@ export async function POST(request) {
       confirmation_email_template_id: body.confirmation_email_template_id ?? null,
       reminder_email_template_id: body.reminder_email_template_id ?? null,
       sending_location_id: body.sending_location_id ?? null,
+      charity_enabled: body.charity_enabled ?? false,
+      charity: body.charity ?? null,
     })
     .select()
     .single()
