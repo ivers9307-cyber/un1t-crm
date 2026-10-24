@@ -10,9 +10,15 @@
 // stamp-keyed side effects run (contact, consent, receipt) — on every
 // observation, fresh or not: the dedupe key differs per Revolut event name, so
 // a second delivery lands here on an already-paid row, and the stamps are what
-// make the effects idempotent. Returns 200 on anything unrecognised or
-// unreadable so Revolut doesn't auto-disable the hook; the status poll
-// (/api/public/donations/[id]) recovers a donor whose webhook never completed.
+// make the effects idempotent.
+//
+// Never 500s after the dedupe claim. Revolut does not redeliver after a 2xx;
+// the 200 only stops it auto-disabling the hook. So every deferred path (a
+// provider read, an event-row read, a mark or re-read that throws) RELEASES the
+// claim and answers 200 { deferred }: that is what lets an ops-triggered resend
+// from the Revolut dashboard be processed rather than answered 'deduped'. The
+// status poll (/api/public/donations/[id]) also recovers a donor whose webhook
+// never completed.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
@@ -23,8 +29,8 @@ import {
   runPaidDonationSideEffects,
 } from '@/lib/donation-payments'
 import { resolveCharitySettings } from '@/lib/charity-donations'
-import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
-import { logWarn } from '@/lib/log'
+import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
+import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -65,52 +71,67 @@ export async function POST(request) {
   if (!orderId || !event) return NextResponse.json({ success: true })
 
   const db = createServerClient()
+  const eventId = `${event}:${orderId}`
 
   const dedup = await recordWebhookEvent({
     db, provider: WEBHOOK_PROVIDERS.REVOLUT_DONATION,
-    eventId: `${event}:${orderId}`,
+    eventId,
   })
   if (dedup.seen) {
     return NextResponse.json({ success: true, deduped: true })
   }
 
-  const donation = await resolveDonationByRef(db, orderId)
-  if (!donation) {
-    // Misrouted webhook from another Revolut flow, or a stale id — 200 so
-    // Revolut moves on.
-    logWarn('donation-webhook', `no donations row for order ${orderId}`, { event })
-    return NextResponse.json({ success: true, skipped: 'unknown_order' })
-  }
-
-  // Refresh authoritative state from Revolut (payload state can be stale
-  // during retries).
-  let order
-  try {
-    order = await getOrder(orderId)
-  } catch (e) {
-    logWarn('donation-webhook', `getOrder failed for ${orderId}`, { err: e })
+  // Give the claim back and answer 200 (see the header comment).
+  const defer = async () => {
+    await releaseWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.REVOLUT_DONATION, eventId })
     return NextResponse.json({ success: true, deferred: true })
   }
-  if (!order) return NextResponse.json({ success: true, skipped: 'order_missing' })
 
-  // The event row supplies the match multiplier snapshotted onto a paid row
-  // and the side effects' charity settings. Without it nothing is written;
-  // 200 so the provider redelivers.
-  const race = await readEvent(db, donation)
-  if (!race) return NextResponse.json({ success: true, deferred: true })
+  let race
+  let fresh
+  try {
+    const donation = await resolveDonationByRef(db, orderId)
+    if (!donation) {
+      // Misrouted webhook from another Revolut flow, or a stale id — 200 so
+      // Revolut moves on.
+      logWarn('donation-webhook', `no donations row for order ${orderId}`, { event })
+      return NextResponse.json({ success: true, skipped: 'unknown_order' })
+    }
 
-  const providerState = String(order.state || '').toLowerCase()
-  const { status } = await markDonationPaymentStatus({
-    db, donation, providerState,
-    providerAmount: Number.isFinite(order.amount) ? order.amount : null,
-    multiplier: resolveCharitySettings(race).match_multiplier,
-  })
+    // Refresh authoritative state from Revolut (payload state can be stale
+    // during retries).
+    let order
+    try {
+      order = await getOrder(orderId)
+    } catch (e) {
+      logWarn('donation-webhook', `getOrder failed for ${orderId}`, { err: e })
+      return await defer()
+    }
+    if (!order) return NextResponse.json({ success: true, skipped: 'order_missing' })
 
-  // Re-read: the side effects get the row as stored, never a guess.
-  const { data: fresh, error: readErr } = await db.from('donations').select(DONATION_COLS).eq('id', donation.id).maybeSingle()
-  if (readErr || !fresh) {
-    logWarn('donation-webhook', 're-read after mark failed', { donationId: donation.id, err: readErr })
-    return NextResponse.json({ success: true, state: status })
+    // The event row supplies the match multiplier snapshotted onto a paid row
+    // and the side effects' charity settings. Without it nothing is written.
+    race = await readEvent(db, donation)
+    if (!race) return await defer()
+
+    const providerState = String(order.state || '').toLowerCase()
+    await markDonationPaymentStatus({
+      db, donation, providerState,
+      providerAmount: Number.isFinite(order.amount) ? order.amount : null,
+      multiplier: resolveCharitySettings(race).match_multiplier,
+    })
+
+    // Re-read: the side effects get the row as stored, never a guess.
+    const { data, error: readErr } = await db.from('donations').select(DONATION_COLS).eq('id', donation.id).maybeSingle()
+    if (readErr || !data) {
+      logWarn('donation-webhook', 're-read after mark failed', { donationId: donation.id, err: readErr })
+      return await defer()
+    }
+    fresh = data
+  } catch (e) {
+    // A read or write error must never 500 after the dedupe claim.
+    logError('donation-webhook', `handler failed for order ${orderId}`, { err: e, event })
+    return await defer()
   }
 
   if (fresh.status === 'paid') {
@@ -118,7 +139,7 @@ export async function POST(request) {
     try {
       await runPaidDonationSideEffects({ db, donation: fresh, race, ipAddress: null })
     } catch (e) {
-      logWarn('donation-webhook', `paid side-effects failed for ${donation.id}`, { err: e })
+      logWarn('donation-webhook', `paid side-effects failed for ${fresh.id}`, { err: e })
     }
   }
 

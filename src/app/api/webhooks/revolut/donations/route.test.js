@@ -8,8 +8,10 @@ vi.mock('@/lib/revolut', () => ({
 }))
 
 const recordWebhookEvent = vi.fn(async () => ({ seen: false }))
+const releaseWebhookEvent = vi.fn(async () => {})
 vi.mock('@/lib/webhook-events', () => ({
   recordWebhookEvent: (...a) => recordWebhookEvent(...a),
+  releaseWebhookEvent: (...a) => releaseWebhookEvent(...a),
   WEBHOOK_PROVIDERS: { REVOLUT_DONATION: 'revolut_donation' },
 }))
 
@@ -30,7 +32,8 @@ vi.mock('@/lib/charity-donations', () => ({
 }))
 
 const logWarn = vi.fn()
-vi.mock('@/lib/log', () => ({ logWarn: (...a) => logWarn(...a), logError: vi.fn() }))
+const logError = vi.fn()
+vi.mock('@/lib/log', () => ({ logWarn: (...a) => logWarn(...a), logError: (...a) => logError(...a) }))
 
 const raceRow = { id: 'ev1', name: 'Race', charity: { match_multiplier: 2 } }
 let eventResult
@@ -56,6 +59,13 @@ function makeRequest(payload) {
   })
 }
 const completed = { event: 'ORDER_COMPLETED', order_id: 'ord_1' }
+
+// The release must name exactly what the record call claimed.
+function expectReleasedWhatWasClaimed() {
+  expect(releaseWebhookEvent).toHaveBeenCalledTimes(1)
+  const claimed = recordWebhookEvent.mock.calls[0][0]
+  expect(releaseWebhookEvent).toHaveBeenCalledWith(expect.objectContaining({ provider: claimed.provider, eventId: claimed.eventId }))
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -106,6 +116,29 @@ describe('POST /api/webhooks/revolut/donations', () => {
     const json = await (await POST(makeRequest(completed))).json()
     expect(json.deferred).toBe(true)
     expect(markDonationPaymentStatus).not.toHaveBeenCalled()
+    expectReleasedWhatWasClaimed()
+  })
+  it('resolveDonationByRef throwing releases the claim and defers with 200 (never 500)', async () => {
+    resolveDonationByRef.mockRejectedValueOnce(new Error('read failed'))
+    const res = await POST(makeRequest(completed))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, deferred: true })
+    expectReleasedWhatWasClaimed()
+    expect(logError).toHaveBeenCalled()
+    expect(runPaidDonationSideEffects).not.toHaveBeenCalled()
+  })
+  it('markDonationPaymentStatus throwing releases the claim and defers with 200 (never 500)', async () => {
+    markDonationPaymentStatus.mockRejectedValueOnce(new Error('update failed'))
+    const res = await POST(makeRequest(completed))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, deferred: true })
+    expectReleasedWhatWasClaimed()
+    expect(logError).toHaveBeenCalled()
+    expect(runPaidDonationSideEffects).not.toHaveBeenCalled()
+  })
+  it('a successful run does not release the claim', async () => {
+    await POST(makeRequest(completed))
+    expect(releaseWebhookEvent).not.toHaveBeenCalled()
   })
   it('ORDER_COMPLETED marks paid with the event multiplier, re-reads, then runs side effects on the re-read row', async () => {
     const json = await (await POST(makeRequest(completed))).json()
@@ -142,13 +175,15 @@ describe('POST /api/webhooks/revolut/donations', () => {
     expect(markDonationPaymentStatus).not.toHaveBeenCalled()
     expect(runPaidDonationSideEffects).not.toHaveBeenCalled()
     expect(logWarn).toHaveBeenCalled()
+    expectReleasedWhatWasClaimed()
   })
-  it('a re-read that fails skips the side effects and still answers 200', async () => {
+  it('a re-read that fails skips the side effects, releases the claim and still answers 200', async () => {
     rereadResult = { data: null, error: { message: 'db down' } }
     const res = await POST(makeRequest(completed))
     expect(res.status).toBe(200)
     expect(runPaidDonationSideEffects).not.toHaveBeenCalled()
     expect(logWarn).toHaveBeenCalled()
+    expectReleasedWhatWasClaimed()
   })
   it('a side-effect failure still answers 200', async () => {
     runPaidDonationSideEffects.mockRejectedValueOnce(new Error('boom'))
