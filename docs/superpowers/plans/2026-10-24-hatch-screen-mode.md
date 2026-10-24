@@ -34,16 +34,16 @@
 
 ---
 
-### Task 1: Migration 765 — the `screen` role and its columns
+### Task 1: Migration 768 — the `screen` role and its columns
 
 **Files:**
-- Create: `supabase/migrations/765_fleet_screens.sql`
-- Test: `tests/migration-765-fleet-screens.test.js`
+- Create: `supabase/migrations/768_fleet_screens.sql`
+- Test: `tests/migration-768-fleet-screens.test.js`
 
 **Interfaces:**
 - Produces: `fleet_devices.role` CHECK `('kiosk','bridge','screen')`; new nullable columns `tv_display_id uuid REFERENCES public.tv_displays(id) ON DELETE SET NULL`, `last_heartbeat_at timestamptz`, `reported_mode text CHECK (reported_mode IN ('class_app','marketing','unknown'))`, `reported_version text`, `override_mode text CHECK (override_mode IN ('class_app','marketing'))`, `override_until timestamptz`; index `fleet_devices_screen_idx ON fleet_devices (location_id) WHERE role = 'screen'`.
 
-- [ ] **Step 1: Write the failing test** (PGlite; template `tests/migration-760-un1t-trial-regrant.test.js`: create reduced `locations`, `tv_displays` (mig 160 columns `id, location_id, label, token, active`) and `fleet_devices` (mig 474 columns) in `beforeAll`, then run the real 765 file)
+- [ ] **Step 1: Write the failing test** (PGlite; template `tests/migration-760-un1t-trial-regrant.test.js`: create reduced `locations`, `tv_displays` (mig 160 columns `id, location_id, label, token, active`) and `fleet_devices` (mig 474 columns) in `beforeAll`, then run the real 768 file)
 
 ```js
 it("role accepts 'screen' and still refuses a made-up role", async () => {
@@ -65,21 +65,21 @@ it('the file is re-runnable', async () => { await db.exec(SQL) })
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `npx vitest run tests/migration-765-fleet-screens.test.js`
+Run: `npx vitest run tests/migration-768-fleet-screens.test.js`
 Expected: FAIL (file not found / CHECK still refuses `screen`).
 
 - [ ] **Step 3: Write the migration.** One transaction, `SET lock_timeout = '5s'`, re-runnable (`DROP CONSTRAINT IF EXISTS fleet_devices_role_check` then `ADD CONSTRAINT`, `ADD COLUMN IF NOT EXISTS` ×6, `CREATE INDEX IF NOT EXISTS`), a `COMMENT` on each new column saying it is set only for `role = 'screen'`, and a closing `DO $$` self-check that reads `pg_constraint` for the three CHECKs. No grants (mig 474's deny-all policies stand).
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `npx vitest run tests/migration-765-fleet-screens.test.js`
+Run: `npx vitest run tests/migration-768-fleet-screens.test.js`
 Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add supabase/migrations/765_fleet_screens.sql tests/migration-765-fleet-screens.test.js
-git commit -m "SCREENMODE.1 — mig 765: fleet_devices gains the screen role, display link, heartbeat and override columns"
+git add supabase/migrations/768_fleet_screens.sql tests/migration-768-fleet-screens.test.js
+git commit -m "SCREENMODE.1 — mig 768: fleet_devices gains the screen role, display link, heartbeat and override columns"
 ```
 
 ---
@@ -257,7 +257,7 @@ it('expectedModesFor answers per device from one read per studio', ...)
 
 - [ ] **Step 2: Run to verify failure** — `npx vitest run src/lib/screen-plan.test.js` → FAIL.
 - [ ] **Step 3: Implement** with the rules above. `server_now` and `generated_at` are both `new Date(nowMs).toISOString()`.
-- [ ] **Step 4: Run to verify pass**, then `npm run check:select-columns` (the six new columns resolve from mig 765).
+- [ ] **Step 4: Run to verify pass**, then `npm run check:select-columns` (the six new columns resolve from mig 768).
 - [ ] **Step 5: Commit** — `git commit -am "SCREENMODE.5 — buildScreenPlan and expectedModesFor"`
 
 ---
@@ -509,8 +509,8 @@ it('saves the config shape the route expects', async () => { /* PUT body.config 
 
 - [ ] **Step 1: Write `docs/fleet-screens.md`** (CRM side only; the box's own provisioning lives with the agent repo): register a screen on `/admin/fleet` (name convention `hatch-screenN`, label where it hangs, link to the "Hatch screens" display), mint its token (shown once; it goes into the box at provisioning, never into chat or a file in this repo), enable **Class screens** on `/automations` at Hatch with the package name and the screens ticked, what the fleet page's chips mean, what an override does and how long it lasts, what alerts fire and to whom (masters), and the two latency numbers (content push: seconds via the doorbell; a class added in un1t.online: up to ~25 min).
 - [ ] **Step 2: Run the full CI mirror** from CLAUDE.md "Build, test & ship" plus `npm run build`. Expected: all green.
-- [ ] **Step 3: Apply mig 765 to prod** with the Supabase MCP `apply_migration` (project `iyvtbjjxdggiadzwwvdj`), then `get_advisors` type `security`. Expected: no new ERROR-level finding.
-- [ ] **Step 4: Push, open the PR** (`gh pr create --base main --fill`), add `docs/changelog/entries/<PR>.md` with one row `| #<PR> | SCREENMODE.1 — Hatch floor screens: class app during class, marketing otherwise (mig 765) | 2026-10-… . … |`, commit and push.
+- [ ] **Step 3: Apply mig 768 to prod** with the Supabase MCP `apply_migration` (project `iyvtbjjxdggiadzwwvdj`), then `get_advisors` type `security`. Expected: no new ERROR-level finding.
+- [ ] **Step 4: Push, open the PR** (`gh pr create --base main --fill`), add `docs/changelog/entries/<PR>.md` with one row `| #<PR> | SCREENMODE.1 — Hatch floor screens: class app during class, marketing otherwise (mig 768) | 2026-10-… . … |`, commit and push.
 
 ---
 

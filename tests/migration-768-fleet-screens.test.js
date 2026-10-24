@@ -1,17 +1,17 @@
-// SCREENMODE.1 — behavioural test for migration 765 (the 'screen' role on
+// SCREENMODE.1 — behavioural test for migration 768 (the 'screen' role on
 // fleet_devices and the columns that carry a screen's display link, last
 // heartbeat, reported mode and manual override).
 //
-// PGlite (PostgreSQL 17): the tables mig 765 touches, reduced to what it
+// PGlite (PostgreSQL 17): the tables mig 768 touches, reduced to what it
 // needs (locations; tv_displays as mig 160 made it; fleet_devices as mig 474
-// made it), then the real 765 file. Fictional ids only: the repo is public.
+// made it), then the real 768 file. Fictional ids only: the repo is public.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
 
-const SQL = readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations/765_fleet_screens.sql'), 'utf8')
+const SQL = readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations/768_fleet_screens.sql'), 'utf8')
 
 const LOC = 'a0000000-0000-0000-0000-00000000000a'
 const TV = 'b0000000-0000-0000-0000-00000000000b'
@@ -50,7 +50,7 @@ beforeAll(async () => {
 }, 60_000)
 afterAll(() => db?.close())
 
-describe('mig 765 — the screen role on fleet_devices', () => {
+describe('mig 768 — the screen role on fleet_devices', () => {
   it("role accepts 'screen' and still refuses a made-up role", async () => {
     await db.query(`INSERT INTO public.fleet_devices (device_name, location_id, role) VALUES ('hatch-screen1', '${LOC}', 'screen')`)
     await expect(db.query(`INSERT INTO public.fleet_devices (device_name, role) VALUES ('x', 'toaster')`)).rejects.toMatchObject({ code: '23514' })

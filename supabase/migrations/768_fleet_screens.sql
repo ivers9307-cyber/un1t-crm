@@ -94,49 +94,49 @@ BEGIN
   d := pg_get_constraintdef((SELECT oid FROM pg_constraint
         WHERE conrelid = 'public.fleet_devices'::regclass AND conname = 'fleet_devices_role_check'));
   IF d IS NULL THEN
-    RAISE EXCEPTION 'mig 765: fleet_devices_role_check missing';
+    RAISE EXCEPTION 'mig 768: fleet_devices_role_check missing';
   END IF;
   FOREACH k IN ARRAY ARRAY['kiosk', 'bridge', 'screen'] LOOP
     IF d NOT LIKE '%''' || k || '''%' THEN
-      RAISE EXCEPTION 'mig 765: fleet_devices_role_check does not admit %: %', k, d;
+      RAISE EXCEPTION 'mig 768: fleet_devices_role_check does not admit %: %', k, d;
     END IF;
   END LOOP;
 
   d := pg_get_constraintdef((SELECT oid FROM pg_constraint
         WHERE conrelid = 'public.fleet_devices'::regclass AND conname = 'fleet_devices_reported_mode_check'));
   IF d IS NULL THEN
-    RAISE EXCEPTION 'mig 765: fleet_devices_reported_mode_check missing';
+    RAISE EXCEPTION 'mig 768: fleet_devices_reported_mode_check missing';
   END IF;
   FOREACH k IN ARRAY ARRAY['class_app', 'marketing', 'unknown'] LOOP
     IF d NOT LIKE '%''' || k || '''%' THEN
-      RAISE EXCEPTION 'mig 765: fleet_devices_reported_mode_check does not admit %: %', k, d;
+      RAISE EXCEPTION 'mig 768: fleet_devices_reported_mode_check does not admit %: %', k, d;
     END IF;
   END LOOP;
 
   d := pg_get_constraintdef((SELECT oid FROM pg_constraint
         WHERE conrelid = 'public.fleet_devices'::regclass AND conname = 'fleet_devices_override_mode_check'));
   IF d IS NULL THEN
-    RAISE EXCEPTION 'mig 765: fleet_devices_override_mode_check missing';
+    RAISE EXCEPTION 'mig 768: fleet_devices_override_mode_check missing';
   END IF;
   FOREACH k IN ARRAY ARRAY['class_app', 'marketing'] LOOP
     IF d NOT LIKE '%''' || k || '''%' THEN
-      RAISE EXCEPTION 'mig 765: fleet_devices_override_mode_check does not admit %: %', k, d;
+      RAISE EXCEPTION 'mig 768: fleet_devices_override_mode_check does not admit %: %', k, d;
     END IF;
   END LOOP;
   IF d LIKE '%''unknown''%' THEN
-    RAISE EXCEPTION 'mig 765: fleet_devices_override_mode_check admits unknown, which is a report, never a force: %', d;
+    RAISE EXCEPTION 'mig 768: fleet_devices_override_mode_check admits unknown, which is a report, never a force: %', d;
   END IF;
 
   -- The display link clears, never cascades or blocks.
   IF NOT EXISTS (SELECT 1 FROM pg_constraint
                   WHERE conrelid = 'public.fleet_devices'::regclass AND contype = 'f'
                     AND confrelid = 'public.tv_displays'::regclass AND confdeltype = 'n') THEN
-    RAISE EXCEPTION 'mig 765: fleet_devices.tv_display_id is not a foreign key to tv_displays ON DELETE SET NULL';
+    RAISE EXCEPTION 'mig 768: fleet_devices.tv_display_id is not a foreign key to tv_displays ON DELETE SET NULL';
   END IF;
 
   d := (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'fleet_devices_screen_idx');
   IF d IS NULL OR d NOT LIKE '%(location_id) WHERE%' OR d NOT LIKE '%''screen''%' THEN
-    RAISE EXCEPTION 'mig 765: fleet_devices_screen_idx wrong or missing: %', d;
+    RAISE EXCEPTION 'mig 768: fleet_devices_screen_idx wrong or missing: %', d;
   END IF;
 END $$;
 
