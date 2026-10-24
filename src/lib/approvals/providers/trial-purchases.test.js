@@ -7,6 +7,7 @@ function dbReturning(rows, count = rows.length) {
     select: vi.fn(function (cols, opts) { calls.push(['select', cols, opts]); return chain }),
     eq: vi.fn(function (c, v) { calls.push(['eq', c, v]); return chain }),
     in: vi.fn(function (c, v) { calls.push(['in', c, v]); return chain }),
+    or: vi.fn(function (f) { calls.push(['or', f]); return chain }),
     order: vi.fn(function (c, o) { calls.push(['order', c, o]); return chain }),
     limit: vi.fn(() => chain),
     then: (res) => res(Promise.resolve({ data: rows, count, error: null })),
@@ -35,7 +36,9 @@ describe('trialPurchasesProvider (PAIDTRIAL.2)', () => {
     expect(res.count).toBe(1)
     expect(res.items[0]).toMatchObject({ id: 'tp1', title: 'Richard I', meta: 'Stillorgan', amount: 39, currency: 'EUR' })
     expect(res.items[0].subtitle).toContain('14 Day Reset')
-    expect(calls).toContainEqual(['in', 'status', ['needs_review', 'help_requested']])
+    // Every help request; a needs_review row only when paid (final review M3).
+    expect(calls).toContainEqual(['or', 'status.eq.help_requested,and(status.eq.needs_review,payment_status.eq.paid)'])
+    expect(calls.some((c) => c[0] === 'in' && c[1] === 'status')).toBe(false)
     expect(calls.some((c) => c[0] === 'eq' && c[1] === 'payment_status')).toBe(false)
     expect(calls).toContainEqual(['eq', 'location_id', 'loc1'])
     expect(calls).toContainEqual(['order', 'created_at', { ascending: false }])
@@ -66,6 +69,19 @@ describe('trialPurchasesProvider (PAIDTRIAL.2)', () => {
     expect(toItem({ ...ROW, status: 'help_requested', last_error: null }).reasons).toEqual([])
   })
 
+  // Final review M4 — a help row whose re-run found nothing says so.
+  it('a help row with none_found reads "found no trial history" / "no active membership", never "already had"', () => {
+    const t = { ...ROW, status: 'help_requested', last_error: 'trial_used: none_found' }
+    expect(reviewWhy(t)).toBe('The buyer asked for help on the trial page; the CRM found no trial history.')
+    expect(toItem(t).why).toBe('The buyer asked for help on the trial page; the CRM found no trial history.')
+    const m = { ...ROW, status: 'help_requested', last_error: 'active_member: none_found' }
+    expect(reviewWhy(m)).toBe('The buyer asked for help on the trial page; the CRM found no active membership.')
+    expect(toItem(m).why).toBe('The buyer asked for help on the trial page; the CRM found no active membership.')
+    // A real reason keeps its sentence.
+    expect(toItem({ ...t, last_error: 'trial_used: none_found, glofox_trial_claim' }).why).toBe('The buyer already had a trial here and asked for help.')
+    expect(toItem({ ...t, last_error: 'un1t_checkout_refused: none_found' }).why).toBe('un1t.online refused the checkout.')
+  })
+
   it('no active studio → nothing, no query', async () => {
     const { db } = dbReturning([ROW])
     expect(await trialPurchasesProvider.fetchPending(db, {})).toEqual({ count: 0, items: [] })
@@ -76,7 +92,9 @@ describe('trialPurchasesProvider (PAIDTRIAL.2)', () => {
   it('counts both kinds', async () => {
     const { db, calls } = dbReturning([], 3)
     expect(await trialPurchasesProvider.countPending(db, { activeLocation: { id: 'loc1' } })).toBe(3)
-    expect(calls).toContainEqual(['in', 'status', ['needs_review', 'help_requested']])
+    // Every help request; a needs_review row only when paid (final review M3).
+    expect(calls).toContainEqual(['or', 'status.eq.help_requested,and(status.eq.needs_review,payment_status.eq.paid)'])
+    expect(calls.some((c) => c[0] === 'in' && c[1] === 'status')).toBe(false)
     expect(calls.some((c) => c[0] === 'eq' && c[1] === 'payment_status')).toBe(false)
     expect(calls).toContainEqual(['eq', 'location_id', 'loc1'])
   })

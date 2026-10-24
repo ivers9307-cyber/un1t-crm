@@ -6,14 +6,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   rateLimit: vi.fn(), contact: vi.fn(), studios: vi.fn(), history: vi.fn(), hatch: vi.fn(), alert: vi.fn(),
-  contactRow: vi.fn(), openRow: vi.fn(), inserted: vi.fn(),
+  contactRow: vi.fn(), openRow: vi.fn(), inserted: vi.fn(), logError: vi.fn(),
 }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: mocks.rateLimit, getClientIp: () => '1.2.3.4', rateLimitResponse: () => new Response('rate', { status: 429 }) }))
 vi.mock('@/lib/race-contact-linking', () => ({ findOrCreateRaceContact: mocks.contact }))
 vi.mock('@/lib/trial-studios', async (orig) => ({ ...(await orig()), loadTrialStudios: mocks.studios }))
 vi.mock('@/lib/trial-eligibility', async (orig) => ({ ...(await orig()), stillorganTrialHistory: mocks.history, hatchActiveMembership: mocks.hatch }))
 vi.mock('@/lib/trial-purchase-processor', () => ({ alertTrialPurchaseStaff: mocks.alert }))
-vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logError: mocks.logError, logWarn: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from: (table) => {
@@ -78,7 +78,7 @@ describe('POST /api/public/trial-purchases/help', () => {
     expect(inserted).toMatchObject({
       location_id: 'loc1', contact_id: 'c1', landing_path: 'stillorgan', customer_name: 'Ava Byrne', first_name: 'Ava', last_name: 'Byrne',
       customer_email: 'ava@example.com', customer_phone: '0851234567', product_name: '2 Week Trial', amount_cents: 3900, currency: 'EUR', duration_days: 14,
-      status: 'help_requested', payment_provider: 'glofox', membership_id: 'm1', plan_code: 'p1', un1t_product_id: null,
+      status: 'help_requested', payment_provider: null, membership_id: 'm1', plan_code: 'p1', un1t_product_id: null,
       last_error: 'trial_used: membership_status=trial, glofox_trial_claim',
     })
     expect(inserted.last_error.startsWith('trial_used:')).toBe(true)
@@ -112,6 +112,38 @@ describe('POST /api/public/trial-purchases/help', () => {
     expect(r.status).toBe(200)
     expect((await r.json()).data).toEqual({ message: 'Thanks, we will call you.', purchaseId: 'tp0' })
     expect(mocks.inserted).not.toHaveBeenCalled()
+    expect(mocks.alert).not.toHaveBeenCalled()
+  })
+
+  // Final review F6 — two presses that both read "no open row": the unique
+  // index refuses the second insert and the route answers with the open row.
+  it('a 23505 on the insert (a raced double press) answers with the open row, no alert', async () => {
+    mocks.openRow
+      .mockResolvedValueOnce({ data: [], error: null })
+      .mockResolvedValueOnce({ data: [{ id: 'tpRaced' }], error: null })
+    mocks.inserted.mockResolvedValue({ data: null, error: { code: '23505', details: 'Key (location_id, contact_id)=(loc1, c1) already exists.' } })
+    const r = await POST(req(BODY))
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ success: true, data: { message: 'Thanks, we will call you.', purchaseId: 'tpRaced' } })
+    expect(mocks.openRow).toHaveBeenCalledTimes(2)
+    expect(mocks.alert).not.toHaveBeenCalled()
+  })
+
+  it('a 23505 whose open row cannot be re-read is a 500, no alert', async () => {
+    mocks.openRow
+      .mockResolvedValueOnce({ data: [], error: null })
+      .mockResolvedValueOnce({ data: null, error: { code: '57014' } })
+    mocks.inserted.mockResolvedValue({ data: null, error: { code: '23505' } })
+    expect((await POST(req(BODY))).status).toBe(500)
+    expect(mocks.alert).not.toHaveBeenCalled()
+  })
+
+  // Final review M5 — the insert failure is logged with ids and the code only.
+  it('a failed insert is a 500 logged with ids and the code, never the error details', async () => {
+    mocks.inserted.mockResolvedValue({ data: null, error: { code: '23502', details: 'Failing row contains (ava@example.com, 0851234567)' } })
+    expect((await POST(req(BODY))).status).toBe(500)
+    expect(mocks.logError).toHaveBeenCalledWith('trialhelp', 'help row insert failed', { code: '23502', contactId: 'c1', locationId: 'loc1' })
+    expect(JSON.stringify(mocks.logError.mock.calls)).not.toContain('ava@example.com')
     expect(mocks.alert).not.toHaveBeenCalled()
   })
 

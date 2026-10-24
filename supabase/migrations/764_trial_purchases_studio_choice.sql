@@ -29,6 +29,12 @@
 --       open rows off one payment. The second stamp now fails 23505 and the
 --       sweep treats it as a lost race. Partial: Revolut/Stripe refs are not
 --       constrained by it (their webhooks look a ref up on their own).
+--   (4c) uniq_trial_purchases_open_help (final review F6): at most one open
+--       help request (status 'help_requested') per contact at a location.
+--       The help route reads for an open row and then inserts, which two
+--       presses of "I need help" can interleave; the second insert now fails
+--       23505 and the route answers with the open row (no second card, no
+--       second alert). A handled row does not block a new request.
 --   (5) un1t_write_events_origin_check also admits 'web_trial' (the public
 --       /trial page as the origin of a ledger write); every origin mig 744
 --       allowed is kept.
@@ -40,7 +46,9 @@
 -- LOCKS. One transaction, 5s lock_timeout. Both tables are small (trial
 -- purchases: tens of rows; the ledger: a few hundred); the CHECK scans and the
 -- index builds are instant. No un1t_online row has a payment_provider_ref
--- before this file, so the unique index cannot fail on existing data. The new columns are nullable with no default.
+-- before this file, so the unique index cannot fail on existing data; no
+-- 'help_requested' row exists before this file either (its CHECK admits the
+-- status first). The new columns are nullable with no default.
 --
 -- IDEMPOTENT. IF NOT EXISTS on columns and the index, drop-if-exists then add
 -- on each CHECK, DROP NOT NULL is a no-op the second time. The DO block checks
@@ -79,6 +87,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_trial_purchases_un1t_ref
   ON public.trial_purchases (location_id, payment_provider_ref)
   WHERE payment_provider = 'un1t_online' AND payment_provider_ref IS NOT NULL;
 
+-- Two presses of "I need help" must not file two cards for one person.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_trial_purchases_open_help
+  ON public.trial_purchases (location_id, contact_id)
+  WHERE status = 'help_requested';
+
 ALTER TABLE public.un1t_write_events
   DROP CONSTRAINT IF EXISTS un1t_write_events_origin_check;
 ALTER TABLE public.un1t_write_events
@@ -95,6 +108,7 @@ COMMENT ON COLUMN public.trial_purchases.terms_source IS 'TRIALSTUDIO.1: where t
 COMMENT ON COLUMN public.trial_purchases.terms_version IS 'TRIALSTUDIO.1: the version of the terms text the buyer accepted.';
 COMMENT ON CONSTRAINT trial_purchases_status_check ON public.trial_purchases IS 'TRIALSTUDIO.1 (mig 764): awaiting_payment | queued | processing | granted | needs_review | failed | payment_failed | help_requested | handled | expired.';
 COMMENT ON INDEX public.idx_trial_purchases_un1t_open IS 'TRIALSTUDIO.1 (mig 764): open un1t.online trial checkouts (awaiting_payment), oldest first, for the expiry sweep.';
+COMMENT ON INDEX public.uniq_trial_purchases_open_help IS 'Final review F6 (mig 764): one open help request (status help_requested) per contact per location; a second insert from a double press fails 23505 and the help route answers with the open row. A handled row does not block a new one.';
 COMMENT ON INDEX public.uniq_trial_purchases_un1t_ref IS 'TRIALSTUDIO.7 (mig 764): one un1t.online transaction (payment_provider_ref) settles at most one trial_purchases row per location, even across overlapping settle sweeps.';
 
 -- Repeated from mig 762 so a later default-ACL change cannot reopen the table.
@@ -142,6 +156,12 @@ BEGIN
   IF d IS NULL OR d NOT LIKE 'CREATE UNIQUE INDEX%' OR d NOT LIKE '%(location_id, payment_provider_ref) WHERE%'
      OR d NOT LIKE '%''un1t_online''%' OR d NOT LIKE '%payment_provider_ref IS NOT NULL%' THEN
     RAISE EXCEPTION 'mig 764: uniq_trial_purchases_un1t_ref wrong or missing: %', d;
+  END IF;
+
+  d := (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'uniq_trial_purchases_open_help');
+  IF d IS NULL OR d NOT LIKE 'CREATE UNIQUE INDEX%' OR d NOT LIKE '%(location_id, contact_id) WHERE%'
+     OR d NOT LIKE '%''help_requested''%' THEN
+    RAISE EXCEPTION 'mig 764: uniq_trial_purchases_open_help wrong or missing: %', d;
   END IF;
 
   d := pg_get_constraintdef((SELECT oid FROM pg_constraint

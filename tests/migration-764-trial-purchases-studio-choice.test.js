@@ -144,6 +144,43 @@ describe('mig 764 — trial_purchases studio choice', () => {
     await expect(withRef('un1t_online', null)).resolves.toBeTruthy()
   })
 
+  // Final review F6 — a double press of "I need help" files one card.
+  it('one open help row per contact per location: a second is refused 23505; a handled row does not block a new one', async () => {
+    const { rows } = await db.query(`SELECT indexdef FROM pg_indexes WHERE indexname = 'uniq_trial_purchases_open_help'`)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].indexdef).toMatch(/^CREATE UNIQUE INDEX/)
+    expect(rows[0].indexdef).toContain('(location_id, contact_id)')
+    expect(rows[0].indexdef).toContain(`status = 'help_requested'`)
+
+    const OTHER = 'c0000000-0000-0000-0000-0000000000cc'
+    await db.query(`INSERT INTO public.contacts VALUES ($1) ON CONFLICT DO NOTHING`, [OTHER])
+    const help = (contact, status = 'help_requested') => db.query(
+      `INSERT INTO public.trial_purchases
+         (location_id, contact_id, customer_email, product_name, amount_cents, status)
+       VALUES ($1, $2, 'h@example.com', 'The UN1T Trial', 3900, $3) RETURNING id`, [LOC, contact, status])
+    const first = await help(OTHER)
+    await expect(help(OTHER)).rejects.toMatchObject({ code: '23505' })
+    // Staff mark it handled: the person may ask again.
+    await db.query(`UPDATE public.trial_purchases SET status = 'handled' WHERE id = $1`, [first.rows[0].id])
+    await expect(help(OTHER)).resolves.toBeTruthy()
+    await expect(help(OTHER, 'handled')).resolves.toBeTruthy()
+    await expect(help(OTHER)).rejects.toMatchObject({ code: '23505' })
+  })
+
+  it('aborts when the open-help index is not unique', async () => {
+    const probe = new PGlite()
+    try {
+      await probe['exec'](SETUP_SQL)
+      await probe['exec'](MIG_744)
+      await probe['exec'](MIG_762)
+      const broken = MIG_764.replace('CREATE UNIQUE INDEX IF NOT EXISTS uniq_trial_purchases_open_help', 'CREATE INDEX IF NOT EXISTS uniq_trial_purchases_open_help')
+      expect(broken).not.toBe(MIG_764)
+      await expect(probe['exec'](broken)).rejects.toThrow(/uniq_trial_purchases_open_help wrong or missing/)
+    } finally {
+      await probe.close()
+    }
+  })
+
   it('aborts when the un1t ref index is not unique', async () => {
     const probe = new PGlite()
     try {

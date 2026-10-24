@@ -4,7 +4,10 @@
 // this instead. It files ONE trial_purchases row with status `help_requested`
 // (a "Needs a call" card on the Approvals page) and alerts staff. No money is
 // taken. A second press while a help row is open reuses it: no second card,
-// no second alert. No auth; rate-limited per studio and IP.
+// no second alert. Two presses that interleave (both read "no open row") are
+// settled by uniq_trial_purchases_open_help (mig 764): the second insert fails
+// 23505 and is answered with the open row, also without an alert. No auth;
+// rate-limited per studio and IP.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -91,10 +94,11 @@ export async function POST(request) {
 
   const sent = (purchaseId) => NextResponse.json({ success: true, data: { message: config.helpSentText, purchaseId } })
 
-  const { data: open, error: openErr } = await db.from('trial_purchases')
+  const readOpen = () => db.from('trial_purchases')
     .select('id').eq('location_id', locationId).eq('contact_id', contactId).eq('status', 'help_requested').limit(1)
+  const { data: open, error: openErr } = await readOpen()
   if (openErr) {
-    logError('trialhelp', 'open help row unreadable', { err: openErr, contactId, locationId })
+    logError('trialhelp', 'open help row unreadable', { code: openErr.code ?? null, contactId, locationId })
     return unavailable()
   }
   if (open?.[0]?.id) return sent(open[0].id)
@@ -116,13 +120,25 @@ export async function POST(request) {
     currency: config.currency,
     duration_days: config.durationDays,
     status: 'help_requested',
-    payment_provider: config.provider,
+    // Glofox grants, it does not take payments: a Stillorgan help row has no
+    // payment provider. A Hatch one names un1t.online, which would sell it.
+    payment_provider: config.provider === 'un1t_online' ? 'un1t_online' : null,
     payment_status: null,
     last_error: reasonsText(reasons, reason),
   }).select('*').single()
+  const insertFailed = () => NextResponse.json({ success: false, code: 'unavailable', error: 'Could not send your request. Please try again.' }, { status: 500 })
+  // A double press that raced the read above: the other press filed the card.
+  // Answer with its row, as the reuse path does (no second alert).
+  if (insErr?.code === '23505') {
+    const { data: again, error: againErr } = await readOpen()
+    if (!againErr && again?.[0]?.id) return sent(again[0].id)
+    logError('trialhelp', 'help row raced but the open row is unreadable', { code: againErr?.code ?? null, contactId, locationId })
+    return insertFailed()
+  }
   if (insErr || !row) {
-    logError('trialhelp', 'help row insert failed', { err: insErr, contactId, locationId })
-    return NextResponse.json({ success: false, code: 'unavailable', error: 'Could not send your request. Please try again.' }, { status: 500 })
+    // Ids and the code only: a PostgREST error's details can name the row (email, phone).
+    logError('trialhelp', 'help row insert failed', { code: insErr?.code ?? null, contactId, locationId })
+    return insertFailed()
   }
 
   try {

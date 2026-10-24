@@ -433,7 +433,7 @@ registry.registerPath({
 
 // TRIALSTUDIO.6 — the /trial purchase body (the route's own Zod schema is the authority).
 const TrialPurchaseStart = z.object({
-  studio: z.enum(['stillorgan', 'hatch']),
+  studio: z.enum(['stillorgan', 'hatch']).default('stillorgan').openapi({ description: 'The studio. Absent means stillorgan (a page loaded before the studio choice).' }),
   first_name: z.string().min(1).max(120),
   last_name: z.string().min(1).max(120),
   email: z.string().email().max(320),

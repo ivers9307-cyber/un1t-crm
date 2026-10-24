@@ -39,7 +39,9 @@ import { logWarn, logError } from '@/lib/log'
 export const runtime = 'nodejs'
 
 const Schema = z.object({
-  studio: z.enum(['stillorgan', 'hatch']),
+  // A page loaded before the studio choice shipped posts no studio: it was
+  // the Stillorgan page, so that is the default (never a 400 for paid traffic).
+  studio: z.enum(['stillorgan', 'hatch']).default('stillorgan'),
   first_name: z.string().trim().min(1).max(120),
   last_name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(320),
@@ -274,7 +276,8 @@ export async function POST(request) {
     ...(isHatch ? { payment_provider: 'un1t_online', un1t_product_id: product.un1tProductId, ...termsRecord } : {}),
   }).select('*').single()
   if (insErr || !row) {
-    logError('trialbuy', 'purchase insert failed', { err: insErr, contactId })
+    // Ids and the code only: a PostgREST error's details can name the row (email, phone).
+    logError('trialbuy', 'purchase insert failed', { code: insErr?.code ?? null, contactId })
     return NextResponse.json({ success: false, code: 'unavailable', error: 'Could not start your purchase. Please try again.' }, { status: 500 })
   }
 

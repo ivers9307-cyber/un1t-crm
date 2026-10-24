@@ -138,15 +138,33 @@ describe('POST /api/public/trial-purchases', () => {
     expect(mocks.read).not.toHaveBeenCalled()
   })
   it('400s an unknown studio', async () => {
-    for (const studio of ['HATCH', 'dundrum', undefined]) {
+    for (const studio of ['HATCH', 'dundrum', '', null]) {
       const r = await POST(req({ ...BODY, studio }))
       expect(r.status).toBe(400)
     }
-    const legacy = await POST(req({ ...BODY, studio: undefined, path: 'stillorgan' }))
-    expect(legacy.status).toBe(400)
     expect(mocks.rateLimit).not.toHaveBeenCalled()
     expect(mocks.read).not.toHaveBeenCalled()
     expect(mocks.contact).not.toHaveBeenCalled()
+  })
+  // Final review M1 — a page loaded before the studio choice shipped posts no
+  // studio; it was the Stillorgan page, so it buys at Stillorgan, never a 400.
+  it('a body with no studio (an old page) is a Stillorgan purchase', async () => {
+    const { studio: _omit, ...legacyBody } = BODY
+    const r = await POST(req({ ...legacyBody, path: 'stillorgan' }))
+    expect(r.status).toBe(200)
+    expect(mocks.rateLimit).toHaveBeenCalledWith(expect.anything(), 'trialbuy:stillorgan:1.2.3.4', { max: 8, windowMs: 15 * 60_000 })
+    expect(mocks.inserted.mock.calls[0][0]).toMatchObject({ location_id: 'loc1', landing_path: 'stillorgan', membership_id: 'm1' })
+    expect(mocks.payment).toHaveBeenCalled()
+    expect(mocks.checkout).not.toHaveBeenCalled()
+  })
+  // Final review M5 — the insert failure is logged with ids and the code only.
+  it('a failed insert is a 500 logged with ids and the code, never the error details', async () => {
+    const { logError } = await import('@/lib/log')
+    mocks.inserted.mockImplementation(async () => ({ data: null, error: { code: '23502', message: 'null value', details: 'Failing row contains (ava@example.com, 0851234567)' } }))
+    const r = await POST(req(BODY))
+    expect(r.status).toBe(500)
+    expect(logError).toHaveBeenCalledWith('trialbuy', 'purchase insert failed', { code: '23502', contactId: 'c1' })
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('ava@example.com')
   })
   it('refuses with not_configured when the page sells nothing (no Glofox product)', async () => {
     mocks.state.pages[0].blocks = [{ ...SELLABLE[0], plan_code: '' }]
