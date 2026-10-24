@@ -116,4 +116,13 @@ describe('event page — donations on, layout polish (CHARITY.13)', () => {
     await renderWith({ charity: { ...CHARITY, video: null } })
     expect(document.querySelector('iframe')).toBeNull()
   })
+
+  it('an uploaded file plays in a plain player with the hero as its poster (CHARITY.14)', async () => {
+    await renderWith({ charity: { ...CHARITY, video: { provider: 'file', src: 'https://cdn/x.mp4', poster: 'https://cdn/hero.png' } } })
+    const player = document.querySelector('video[src="https://cdn/x.mp4"]')
+    expect(player).toBeTruthy()
+    expect(player.getAttribute('poster')).toBe('https://cdn/hero.png')
+    expect(player.hasAttribute('controls')).toBe(true)
+    expect(document.querySelector('iframe')).toBeNull()
+  })
 })

@@ -190,4 +190,13 @@ describe('GET /api/public/events/[slug] — charity block', () => {
     const { body } = await get(makeRace({ charity_enabled: true, charity: { show_total: false } }))
     expect(body.data.charity.video).toBeNull()
   })
+
+  it('an uploaded file wins over the link and carries the hero image as its poster (CHARITY.14)', async () => {
+    const FILE = 'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/race-video/ev-1/abc.mp4'
+    const { body } = await get(
+      makeRace({ charity_enabled: true, hero_image_url: 'https://x/hero.png', charity: { show_total: false, video_url: 'https://youtu.be/abc123', video_file_url: FILE } }),
+    )
+    expect(body.data.charity.video).toEqual({ provider: 'file', src: FILE, poster: 'https://x/hero.png' })
+    expect(body.data.charity).not.toHaveProperty('video_file_url')
+  })
 })

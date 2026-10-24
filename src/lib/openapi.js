@@ -1218,6 +1218,22 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/events/{id}/video/signed-upload',
+  tags: ['Events'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Mint a signed Storage upload for the charity-day video (staff with races at the event's studio)",
+  description: 'CHARITY.14. Body { content_type: video/mp4 | video/webm | video/quicktime }. Returns { path, token, url }: the browser PUTs the bytes straight to the public branding bucket under race-video/<event id>/ (bypassing the ~4.5MB function body cap; the bucket enforces its 200MB limit), then saves `url` as charity.video_file_url on the event. 400 for any other type; 404 for an unknown event or one at a studio the caller lacks.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ path, token, url }', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    400: { description: 'Unsupported video type, or Storage refused to mint the URL', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event not found or at another studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'get',
   path: '/api/events/{id}/waitlist',
   tags: ['Races'],
