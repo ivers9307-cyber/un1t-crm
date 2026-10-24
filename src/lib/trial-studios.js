@@ -5,6 +5,7 @@
 // studios are sellable.
 
 import { paidTrialConfigFromBlocks } from '@/lib/paid-trial'
+import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { logWarn } from '@/lib/log'
 
 export const TRIAL_STUDIOS = Object.freeze([
@@ -27,6 +28,9 @@ const embedded = (v) => (Array.isArray(v) ? v[0] : v) || null
  * offers nothing to buy there instead of a guess. Those error-path entries
  * also carry `unreadable: true` (absent otherwise), so a caller can tell "we
  * could not read" (answer 503) from "nothing is for sale" (a refusal).
+ * A un1t.online studio whose `settings.un1t_online.writes_enabled` is off is
+ * not sellable (TRIALSTUDIO.10): the page says "not available online" while
+ * the switch is off, as the POST's not_configured does.
  * @returns {Promise<Array<{ key: string, publicPath: string, locationId: string|null,
  *   membershipSource: string|null, block: object|null, product: object|null,
  *   sellable: boolean, config: object|null, unreadable?: true }>>}
@@ -37,7 +41,7 @@ export async function loadTrialStudios(db) {
 
   const { data: pages, error } = await db
     .from('landing_page_settings')
-    .select('location_id, public_path, blocks, locations:location_id ( membership_source )')
+    .select('location_id, public_path, blocks, locations:location_id ( membership_source, settings )')
     .in('public_path', TRIAL_STUDIOS.map((s) => s.publicPath))
   if (error) {
     logWarn('trial-studios', 'landing rows unreadable', { paths: TRIAL_STUDIOS.map((s) => s.publicPath) })
@@ -49,11 +53,17 @@ export async function loadTrialStudios(db) {
     const page = byPath.get(studio.publicPath)
     if (!page) return empty(studio)
     const locationId = page.location_id || null
-    const membershipSource = embedded(page.locations)?.membership_source || null
+    const loc = embedded(page.locations)
+    const membershipSource = loc?.membership_source || null
+    // Only the switch leaves this function, never the settings object.
+    const writesEnabled = un1tWriteSettingsFrom(loc?.settings).writesEnabled
     const blocks = Array.isArray(page.blocks) ? page.blocks : []
     const block = blocks.find((x) => x && typeof x === 'object' && x.type === 'paid_trial') || null
     const base = { key: studio.key, publicPath: studio.publicPath, locationId, membershipSource, block, product: null }
     if (!block) return { ...base, sellable: false, config: null }
+    // A un1t.online studio with its writes off has no account or checkout to
+    // make: nothing is for sale (the POST answers not_configured), not unreadable.
+    if (membershipSource === 'un1t_online' && !writesEnabled) return { ...base, sellable: false, config: null }
 
     const un1tId = typeof block.un1t_product_id === 'string' ? block.un1t_product_id.trim() : ''
     let product = null

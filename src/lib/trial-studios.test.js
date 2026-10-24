@@ -28,7 +28,7 @@ function fakeDb({ pages, pagesError = null, product = { data: PRODUCT, error: nu
 }
 const rows = (hatchBlocks = [HATCH_BLOCK]) => [
   { location_id: 'loc-s', public_path: 'stillorgan', blocks: [STILLORGAN_BLOCK], locations: { membership_source: 'glofox' } },
-  { location_id: 'loc-h', public_path: 'hatch-street', blocks: hatchBlocks, locations: { membership_source: 'un1t_online' } },
+  { location_id: 'loc-h', public_path: 'hatch-street', blocks: hatchBlocks, locations: { membership_source: 'un1t_online', settings: { un1t_online: { writes_enabled: true } } } },
 ]
 
 beforeEach(() => vi.clearAllMocks())
@@ -54,7 +54,7 @@ describe('loadTrialStudios', () => {
     const out = await loadTrialStudios(db)
     expect(calls.landing).toHaveLength(1)
     expect(calls.landing[0].vals).toEqual(['stillorgan', 'hatch-street'])
-    expect(calls.landing[0].cols).toContain('locations:location_id ( membership_source )')
+    expect(calls.landing[0].cols).toContain('locations:location_id ( membership_source, settings )')
     expect(calls.products).toEqual([['location_id', 'loc-h'], ['un1t_id', 'p-1']])
     expect(out.map((s) => s.key)).toEqual(['stillorgan', 'hatch'])
     expect(out[0]).toMatchObject({ publicPath: 'stillorgan', locationId: 'loc-s', membershipSource: 'glofox', sellable: true, product: null })
@@ -65,9 +65,26 @@ describe('loadTrialStudios', () => {
   })
   it('accepts the locations embed as a one-element array', async () => {
     const pages = rows()
-    pages[1].locations = [{ membership_source: 'un1t_online' }]
+    pages[1].locations = [{ membership_source: 'un1t_online', settings: { un1t_online: { writes_enabled: true } } }]
     const out = await loadTrialStudios(fakeDb({ pages }).db)
     expect(out[1].membershipSource).toBe('un1t_online')
+  })
+  it('a un1t.online studio with its writes off is not sellable (not unreadable), and its settings never leave the loader', async () => {
+    for (const settings of [{ un1t_online: { writes_enabled: false } }, {}, null]) {
+      const pages = rows()
+      pages[1].locations = { membership_source: 'un1t_online', settings }
+      const { db, calls } = fakeDb({ pages })
+      const out = await loadTrialStudios(db)
+      expect(out[1]).toMatchObject({ key: 'hatch', locationId: 'loc-h', membershipSource: 'un1t_online', block: HATCH_BLOCK, sellable: false, config: null })
+      expect(out[1]).not.toHaveProperty('unreadable')
+      expect(calls.products).toEqual([])
+      expect(out[0].sellable).toBe(true)
+    }
+    const out = await loadTrialStudios(fakeDb({ pages: rows() }).db)
+    for (const s of out) {
+      expect(s).not.toHaveProperty('settings')
+      expect(JSON.stringify(s)).not.toContain('writes_enabled')
+    }
   })
   it('a missing Hatch row or block is not sellable', async () => {
     const noRow = await loadTrialStudios(fakeDb({ pages: [rows()[0]] }).db)

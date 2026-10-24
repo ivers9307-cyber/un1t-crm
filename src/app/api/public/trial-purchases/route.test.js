@@ -102,7 +102,10 @@ async function readFixture(table, filters) {
     if (s.pagesError) return { data: null, error: s.pagesError }
     const path = filterValue(filters, 'public_path')
     if (path) return { data: s.pages.find((p) => p.public_path === path) || null, error: null }
-    return { data: s.pages, error: null }
+    // loadTrialStudios embeds the location's settings (TRIALSTUDIO.10: a
+    // un1t.online studio with its writes off is not for sale): the same
+    // object the route's own locations read sees.
+    return { data: s.pages.map((p) => ({ ...p, locations: p.locations && { ...p.locations, settings: s.locations[p.location_id]?.settings } })), error: null }
   }
   if (table === 'un1t_products') return { data: s.product, error: null }
   if (table === 'locations') return { data: s.locations[filterValue(filters, 'id')] || null, error: null }

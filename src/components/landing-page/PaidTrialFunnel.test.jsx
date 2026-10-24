@@ -6,7 +6,7 @@
 // un1t.online's own checkout; a cancelled Hatch checkout comes back to the
 // form; an unsellable studio cannot be chosen.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 
 vi.mock('@/lib/funnel-track', () => ({ trackFunnelStep: vi.fn() }))
 vi.mock('@/lib/meta-pixel-lead', () => ({
@@ -45,22 +45,31 @@ const HATCH_TERMS = {
 
 let posts
 let answers
+let pollState
+let fetchMock
 beforeEach(() => {
   posts = []
   answers = {}
+  pollState = 'pending'
   vi.mocked(fireBrowserLead).mockClear()
   vi.mocked(fireBrowserInitiateCheckout).mockClear()
-  global.fetch = vi.fn(async (url, init) => {
+  fetchMock = vi.fn(async (url, init) => {
     const u = String(url)
     if (init?.method === 'POST') {
       posts.push({ url: u, body: JSON.parse(init.body) })
-      const a = answers[u] || { status: 500, body: { success: false, error: 'unexpected' } }
+      const queued = answers[u]
+      const a = (Array.isArray(queued) ? queued.shift() : queued) || { status: 500, body: { success: false, error: 'unexpected' } }
       return { ok: a.status < 400, status: a.status, json: async () => a.body }
     }
-    return { ok: true, status: 200, json: async () => ({ success: true, data: { state: 'pending' } }) }
+    return { ok: true, status: 200, json: async () => ({ success: true, data: { state: pollState, amount_cents: 3900, currency: 'EUR', product_name: 'The UN1T Trial' } }) }
   })
+  vi.stubGlobal('fetch', fetchMock)
 })
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals() })
+
+const PURCHASE_ID = '11111111-1111-1111-1111-111111111111'
+// The fake clock moves inside act() (CLAUDE.md): React renders on the act queue.
+const advance = async (ms) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
 
 function fillDetails() {
   fireEvent.change(screen.getByPlaceholderText('First name'), { target: { value: 'Sam' } })
@@ -159,15 +168,16 @@ describe('TRIALSTUDIO.10 — PaidTrialFunnel', () => {
   })
 
   it('cancelled return shows the form with Hatch preselected and no error', async () => {
-    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} initialStudio="hatch" resumePurchaseId="11111111-1111-1111-1111-111111111111" cancelled hatchTerms={HATCH_TERMS} />)
+    vi.useFakeTimers()
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} initialStudio="hatch" resumePurchaseId={PURCHASE_ID} cancelled hatchTerms={HATCH_TERMS} />)
     expect(screen.getByPlaceholderText('First name')).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'The UN1T Trial' })).toBeTruthy()
     expect(screen.getByRole('checkbox', { name: /I accept Hatch Street's/ })).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.queryByText(/Confirming/)).toBeNull()
     // A cancelled checkout is not polled.
-    await new Promise((r) => setTimeout(r, 400))
-    expect(global.fetch).not.toHaveBeenCalled()
+    await advance(5000)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('an unsellable studio tile is disabled', () => {
@@ -180,5 +190,118 @@ describe('TRIALSTUDIO.10 — PaidTrialFunnel', () => {
     fireEvent.click(hatch)
     expect(screen.queryByPlaceholderText('First name')).toBeNull()
     expect(screen.getByRole('button', { name: /Stillorgan Village/ }).disabled).toBe(false)
+  })
+  it('Hatch return: pending through the poll budget shows pending_body, then a granted poll shows done_title and fires one Purchase', async () => {
+    vi.useFakeTimers()
+    const fbq = vi.fn()
+    vi.stubGlobal('fbq', fbq)
+    const hatch = { ...HATCH, block: { ...HATCH.block, done_title: 'Welcome to Hatch', pending_body: 'Hang tight, un1t.online will email your receipt.' } }
+    render(<PaidTrialFunnel studios={[STILLORGAN, hatch]} initialStudio="hatch" resumePurchaseId={PURCHASE_ID} />)
+    expect(screen.getByText('Confirming your payment')).toBeTruthy()
+    expect(screen.getByText('Hang tight, un1t.online will email your receipt.')).toBeTruthy()
+
+    // 40 polls: the first at 300ms, then every 3s.
+    await advance(300 + 39 * 3000)
+    expect(fetchMock).toHaveBeenCalledTimes(40)
+    expect(fetchMock).toHaveBeenLastCalledWith(`/api/public/trial-purchases/${PURCHASE_ID}`, { cache: 'no-store' })
+    expect(screen.getByText('Almost there')).toBeTruthy()
+    expect(screen.getByText('Hang tight, un1t.online will email your receipt.')).toBeTruthy()
+    expect(screen.queryByText('Confirming your payment')).toBeNull()
+    expect(fbq).not.toHaveBeenCalled()
+
+    // The done screen keeps listening; the cron settles the row.
+    pollState = 'granted'
+    await advance(3000)
+    expect(screen.getByText('Welcome to Hatch')).toBeTruthy()
+    await advance(30000)
+    expect(fbq).toHaveBeenCalledTimes(1)
+    expect(fbq).toHaveBeenCalledWith('track', 'Purchase', { value: 39, currency: 'EUR', content_name: 'The UN1T Trial' }, { eventID: `trialpurchase-${PURCHASE_ID}` })
+  })
+
+  it('Stillorgan paid poll in confirming fires the Purchase once, and a later granted poll does not fire it again', async () => {
+    vi.useFakeTimers()
+    const fbq = vi.fn()
+    vi.stubGlobal('fbq', fbq)
+    pollState = 'paid'
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} resumePurchaseId={PURCHASE_ID} />)
+    expect(screen.getByText('One moment while we check with the bank.')).toBeTruthy()
+    await advance(300)
+    expect(screen.getByText('Payment received')).toBeTruthy()
+    await advance(3000) // still paid on the done screen
+    pollState = 'granted'
+    await advance(3000)
+    expect(screen.getByText("You're in")).toBeTruthy()
+    await advance(9000)
+    expect(fbq).toHaveBeenCalledTimes(1)
+    expect(fbq).toHaveBeenCalledWith('track', 'Purchase', expect.objectContaining({ value: 39 }), { eventID: `trialpurchase-${PURCHASE_ID}` })
+  })
+
+  it('a poll answering expired goes back to the form with the reason', async () => {
+    vi.useFakeTimers()
+    pollState = 'expired'
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} initialStudio="hatch" resumePurchaseId={PURCHASE_ID} hatchTerms={HATCH_TERMS} />)
+    await advance(300)
+    expect(screen.getByPlaceholderText('First name')).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toBe('That checkout expired. Nothing was charged; please start again.')
+    await advance(9000)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('help_filed goes straight to the thanks with the Lead alone', async () => {
+    answers['/api/public/trial-purchases'] = { status: 200, body: { success: false, code: 'help_filed', error: 'Thanks, the team at UN1T Hatch Street will be in touch to set up your trial.' } }
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} initialStudio="hatch" hatchTerms={HATCH_TERMS} />)
+    fillDetails()
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept Hatch Street's/ }))
+    fireEvent.click(submitButton())
+    expect(await screen.findByText('Thanks, the team at UN1T Hatch Street will be in touch to set up your trial.')).toBeTruthy()
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.queryByPlaceholderText('First name')).toBeNull()
+    expect(fireBrowserLead).toHaveBeenCalledTimes(1)
+    expect(fireBrowserLead).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'lead-id-123' }))
+    expect(fireBrowserInitiateCheckout).not.toHaveBeenCalled()
+    expect(posts).toHaveLength(1)
+  })
+
+  it('a terms_required answer with no page terms shows the tick from the answer and the resubmit sends terms_accepted', async () => {
+    answers['/api/public/trial-purchases'] = [
+      { status: 400, body: { success: false, code: 'terms_required', error: 'Please tick to accept the terms and waiver.', terms: HATCH_TERMS } },
+      { status: 200, body: { success: false, code: 'active_member', error: 'You already have an active membership.', help: { cta_label: 'I need help' } } },
+    ]
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} initialStudio="hatch" hatchTerms={null} />)
+    expect(screen.queryByRole('checkbox', { name: /I accept/ })).toBeNull()
+    fillDetails()
+    fireEvent.click(submitButton())
+    expect(await screen.findByText('Please tick to accept the terms and waiver.')).toBeTruthy()
+    expect(posts[0].body).not.toHaveProperty('terms_accepted')
+    expect(screen.getByRole('link', { name: 'liability waiver' }).getAttribute('href')).toBe('/legal/un1t/hatch-street/waiver')
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept Hatch Street's/ }))
+    fireEvent.click(submitButton())
+    await waitFor(() => expect(posts).toHaveLength(2))
+    expect(posts[1].body).toMatchObject({ studio: 'hatch', terms_accepted: true })
+    expect(await screen.findByText('You already have an active membership.')).toBeTruthy()
+  })
+
+  it('a refusal without its message falls back to the block\'s words', async () => {
+    answers['/api/public/trial-purchases'] = { status: 200, body: { success: false, code: 'trial_used', help: {} } }
+    const still = { ...STILLORGAN, block: { ...STILLORGAN.block, trial_used_text: 'You have had a trial here.', help_cta_label: 'Talk to us' } }
+    render(<PaidTrialFunnel studios={[still, HATCH]} initialStudio="stillorgan" />)
+    fillDetails()
+    fireEvent.click(submitButton())
+    expect(await screen.findByText('You have had a trial here.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Talk to us' })).toBeTruthy()
+  })
+
+  it('coming Back from un1t.online (a back-forward cache restore) gives the button back', async () => {
+    vi.stubGlobal('location', { ...window.location, search: '', pathname: '/trial', assign: vi.fn() })
+    answers['/api/public/trial-purchases'] = { status: 200, body: { success: true, data: { purchaseId: 'p-1', redirect_url: 'https://checkout.un1t.online/c/abc', amount_cents: 3900, currency: 'EUR', product_name: 'The UN1T Trial' } } }
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} initialStudio="hatch" hatchTerms={HATCH_TERMS} />)
+    fillDetails()
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept Hatch Street's/ }))
+    fireEvent.click(submitButton())
+    expect(await screen.findByRole('button', { name: 'One moment…' })).toBeTruthy()
+    const ev = new Event('pageshow')
+    Object.defineProperty(ev, 'persisted', { value: true })
+    act(() => { window.dispatchEvent(ev) })
+    expect(screen.getByRole('button', { name: 'Start my trial · €39' }).disabled).toBe(false)
   })
 })

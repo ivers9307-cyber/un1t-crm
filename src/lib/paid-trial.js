@@ -23,6 +23,25 @@ export const PAID_TRIAL_PENDING_BODY = "Thanks, your payment is being confirmed.
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
 
 /**
+ * The buyer-facing words a paid_trial block owns, each blank or missing field
+ * on its default (a stored block can predate the field). Pure. Used by
+ * paidTrialConfigFromBlocks and by the /trial page, which hands the card these
+ * resolved words even for a studio that is not for sale (a return still reads
+ * them), so the card never renders an empty message.
+ */
+export function paidTrialCopyFromBlock(b) {
+  const block = b && typeof b === 'object' ? b : {}
+  return {
+    studioLabel: str(block.studio_label) || '',
+    trialUsedText: str(block.trial_used_text) || DEFAULT_TRIAL_USED_TEXT,
+    activeMemberText: str(block.active_member_text) || DEFAULT_ACTIVE_MEMBER_TEXT,
+    helpCtaLabel: str(block.help_cta_label) || DEFAULT_HELP_CTA_LABEL,
+    helpSentText: str(block.help_sent_text) || DEFAULT_HELP_SENT_TEXT,
+    pendingBody: str(block.pending_body) || PAID_TRIAL_PENDING_BODY,
+  }
+}
+
+/**
  * The product the page sells, read off a studio's landing blocks. `null` when
  * the row has no paid_trial block or the block is not sellable: the page shows
  * nothing to buy and the POST refuses with `not_configured`, never a guess at
@@ -40,7 +59,7 @@ const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
  *   membershipId: string|null, planCode: string|null, un1tProductId: string|null,
  *   tag: string, leadSource: string, eventSourceUrl: string,
  *   studioLabel: string, trialUsedText: string, activeMemberText: string,
- *   helpCtaLabel: string, helpSentText: string, block: object }}
+ *   helpCtaLabel: string, helpSentText: string, pendingBody: string, block: object }}
  */
 export function paidTrialConfigFromBlocks(blocks, landingPath, { product = null } = {}) {
   const path = resolveLandingPath(landingPath)
@@ -55,11 +74,7 @@ export function paidTrialConfigFromBlocks(blocks, landingPath, { product = null 
     tag: str(b.tag) || `${path}-trial`,
     leadSource: str(b.lead_source) || PAID_TRIAL_LEAD_SOURCE,
     eventSourceUrl: str(b.event_source_url) || `https://www.un1tdublin.com/trial`,
-    studioLabel: str(b.studio_label) || '',
-    trialUsedText: str(b.trial_used_text) || DEFAULT_TRIAL_USED_TEXT,
-    activeMemberText: str(b.active_member_text) || DEFAULT_ACTIVE_MEMBER_TEXT,
-    helpCtaLabel: str(b.help_cta_label) || DEFAULT_HELP_CTA_LABEL,
-    helpSentText: str(b.help_sent_text) || DEFAULT_HELP_SENT_TEXT,
+    ...paidTrialCopyFromBlock(b),
     block: b,
   }
 

@@ -111,6 +111,14 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
     trackFunnelStep('trial_view')
   }, [])
 
+  // Back from un1t.online's checkout restores this page from the back-forward
+  // cache with the button still on "One moment…": give it back.
+  useEffect(() => {
+    const onShow = (e) => { if (e.persisted) setSubmitting(false) }
+    window.addEventListener('pageshow', onShow)
+    return () => window.removeEventListener('pageshow', onShow)
+  }, [])
+
   function buildAttribution() {
     const p = attributionRef.current || {}
     const hasSignal = p.meta_ad_id || p.utm_campaign || p.utm_content || p.utm_term || p.fbclid
@@ -180,10 +188,13 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
         trackFunnelStep('trial_refused', { studio: studioKey, code: j.code })
         if (j.code === 'help_filed') {
           trackFunnelStep('trial_help_sent', { studio: studioKey })
-          setHelpMessage(j.error || block.help_sent_text || '')
+          setHelpMessage(j.error || block.help_sent_text)
           setStep('help_sent'); return
         }
-        setRefusal({ message: j.error || '', ctaLabel: j.help?.cta_label || block.help_cta_label || '' })
+        setRefusal({
+          message: j.error || (j.code === 'trial_used' ? block.trial_used_text : block.active_member_text),
+          ctaLabel: j.help?.cta_label || block.help_cta_label,
+        })
         setStep('refused'); return
       }
       if (!r.ok || j.success === false || !j.data) {
@@ -229,7 +240,7 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) { setError(j.error || 'Something went wrong. Please try again.'); return }
       trackFunnelStep('trial_help_sent', { studio: studioKey })
-      setHelpMessage(j.data?.message || block.help_sent_text || '')
+      setHelpMessage(j.data?.message || block.help_sent_text)
       setStep('help_sent')
     } catch {
       setError('Network error. Please try again.')
@@ -272,7 +283,7 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
         }
         if (d.state === 'failed') { restart('That payment did not go through. Nothing was charged; please try again.'); return }
         if (d.state === 'expired') { restart('That checkout expired. Nothing was charged; please start again.'); return }
-        if (d.state === 'help') { setHelpMessage(block.help_sent_text || ''); setStep('help_sent'); return }
+        if (d.state === 'help') { setHelpMessage(block.help_sent_text); setStep('help_sent'); return }
         if (d.state === 'paid' && step === 'confirming') {
           firePurchaseOnce({ purchaseId: id, amountCents: d.amount_cents, currency: d.currency, contentName: d.product_name })
           setDone({ state: 'paid' }); setStep('done'); return

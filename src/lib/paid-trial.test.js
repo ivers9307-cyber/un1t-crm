@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { paidTrialConfigFromBlocks, formatTrialPrice, trialTicks, trialPurchasePublicState } from './paid-trial'
+import { paidTrialConfigFromBlocks, paidTrialCopyFromBlock, PAID_TRIAL_PENDING_BODY, formatTrialPrice, trialTicks, trialPurchasePublicState } from './paid-trial'
 import { newBlockOfType } from './landing-page-blocks'
 
 const sellable = () => ({ ...newBlockOfType('paid_trial'), membership_id: 'm1', plan_code: 'p1' })
@@ -78,10 +78,19 @@ describe('paidTrialConfigFromBlocks, un1t.online shape (TRIALSTUDIO.2)', () => {
       activeMemberText: "It looks like you already have an active membership at UN1T Hatch Street, which already covers your classes. If that's not right, tap I need help and the team will be in touch.",
       helpCtaLabel: 'I need help',
       helpSentText: 'Thanks. The team will be in touch shortly.',
+      pendingBody: "Thanks, your payment is being confirmed. un1t.online will email your receipt and we'll have your trial on your account shortly.",
     }
     expect(paidTrialConfigFromBlocks([raw], 'stillorgan')).toMatchObject(expected)
-    const blanked = { ...raw, studio_label: '  ', trial_used_text: '', active_member_text: ' ', help_cta_label: '', help_sent_text: null }
+    const blanked = { ...raw, studio_label: '  ', trial_used_text: '', active_member_text: ' ', help_cta_label: '', help_sent_text: null, pending_body: ' ' }
     expect(paidTrialConfigFromBlocks([blanked], 'stillorgan')).toMatchObject(expected)
+    // The same words for a block that is not for sale, or no block at all.
+    expect(paidTrialCopyFromBlock({ type: 'paid_trial' })).toEqual(expected)
+    expect(paidTrialCopyFromBlock(null)).toEqual(expected)
+  })
+  it('pendingBody is the block\'s own when set', () => {
+    const config = paidTrialConfigFromBlocks([{ ...sellable(), pending_body: ' Hang tight. ' }], 'stillorgan')
+    expect(config.pendingBody).toBe('Hang tight.')
+    expect(PAID_TRIAL_PENDING_BODY).toMatch(/un1t\.online will email your receipt/)
   })
   it('the default block ships the new fields; the active-member copy names the brand when given one', () => {
     expect(newBlockOfType('paid_trial')).toMatchObject({ studio_label: '', un1t_product_id: '', help_cta_label: 'I need help', help_sent_text: 'Thanks. The team will be in touch shortly.' })

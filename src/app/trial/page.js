@@ -21,6 +21,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import { loadTrialStudios } from '@/lib/trial-studios'
+import { paidTrialCopyFromBlock } from '@/lib/paid-trial'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import RevealManager from '@/components/landing-page/RevealManager'
@@ -45,7 +46,7 @@ const CTA_HREF = '#trial'
 // the un1t.online product id, the location or the tag.
 const CLIENT_BLOCK_FIELDS = [
   'eyebrow', 'heading', 'subhead', 'product_name', 'ticks', 'cta_label', 'consent_label',
-  'done_title', 'done_body', 'pending_body', 'help_cta_label', 'help_sent_text',
+  'done_title', 'done_body',
 ]
 
 export async function generateMetadata() {
@@ -76,9 +77,19 @@ async function loadContent(db) {
   }
 }
 
+// The refusal, help and being-confirmed words are the resolved ones (each
+// missing or blank field on its default, as the POST and the help route
+// serve them), so a stored block that predates them never renders an empty
+// message; resolved even for a studio not for sale, since a return reads them.
 function clientBlock(block) {
   const out = {}
   for (const k of CLIENT_BLOCK_FIELDS) if (block && block[k] !== undefined) out[k] = block[k]
+  const copy = paidTrialCopyFromBlock(block)
+  out.trial_used_text = copy.trialUsedText
+  out.active_member_text = copy.activeMemberText
+  out.help_cta_label = copy.helpCtaLabel
+  out.help_sent_text = copy.helpSentText
+  out.pending_body = copy.pendingBody
   return out
 }
 
