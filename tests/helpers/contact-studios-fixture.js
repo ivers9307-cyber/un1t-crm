@@ -48,6 +48,10 @@ export const BEFORE2 = `
     ('${C_C2}', '${LOC_C}', NULL), ('${C_C3}', '${LOC_C}', NULL) ON CONFLICT (id) DO NOTHING;
   UPDATE public.contacts SET location_id = '${LOC_C}' WHERE id = '${C_D1}';
   UPDATE public.contacts c SET organization_id = l.organization_id FROM public.locations l WHERE l.id = c.location_id;
+  -- B is the organisation's Glofox studio (Stillorgan); C_A2, who lives at A, holds a Glofox
+  -- account there (the id the Glofox sync writes on the contact; mig 768 reads it).
+  UPDATE public.locations SET membership_source = 'glofox' WHERE id = '${LOC_B}';
+  UPDATE public.contacts SET glofox_member_id = 'gf-b-1' WHERE id = '${C_A2}';
   ALTER TABLE public.deals ADD COLUMN contact_id uuid, ADD COLUMN stage_id uuid, ADD COLUMN status text DEFAULT 'open',
     ADD COLUMN created_at timestamptz DEFAULT now(), ADD COLUMN updated_at timestamptz DEFAULT now();
   CREATE TABLE public.pipelines (id uuid PRIMARY KEY, location_id uuid NOT NULL, enabled boolean NOT NULL DEFAULT true, is_primary boolean NOT NULL DEFAULT false);
@@ -78,7 +82,7 @@ export const BEFORE2 = `
   CREATE TABLE public.contact_location_preferences (contact_id uuid NOT NULL REFERENCES public.contacts(id) ON DELETE CASCADE,
     location_id uuid NOT NULL, email_marketing boolean NOT NULL DEFAULT true, subscribed_at timestamptz NOT NULL DEFAULT now(),
     source text NOT NULL, PRIMARY KEY (contact_id, location_id));
-  CREATE TABLE public.class_bookings (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), location_id uuid NOT NULL, contact_id uuid, starts_at timestamptz);
+  CREATE TABLE public.class_bookings (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), location_id uuid NOT NULL, contact_id uuid, starts_at timestamptz, status text);
   ALTER TABLE public.whatsapp_conversations ADD COLUMN contact_id uuid;
   ALTER TABLE public.whatsapp_messages ADD COLUMN conversation_id uuid, ADD COLUMN direction text, ADD COLUMN created_at timestamptz NOT NULL DEFAULT now();
   CREATE TABLE public.cron_heartbeats (name text PRIMARY KEY, expected_interval_seconds integer NOT NULL, grace_seconds integer NOT NULL DEFAULT 60,

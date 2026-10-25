@@ -127,7 +127,11 @@ BEGIN
   END IF;
 END $$;
 
--- 1. derive_contact_studio without the link-table branches (mig 764's text otherwise).
+-- 1. derive_contact_studio without the link-table branches (mig 764's text
+--    otherwise, with two rules changed by the final review: the proof of a
+--    Glofox account is the Glofox id the contact carries at a Glofox studio of
+--    its organisation, never the row's own source (C1); and a class booking
+--    counts as activity only once it has happened and was not cancelled (I2)).
 CREATE OR REPLACE FUNCTION public.derive_contact_studio(p_contact_id uuid, p_location_id uuid)
 RETURNS TABLE (kind text, status text, source text, stage_slug text, first_seen_at timestamptz, last_seen_at timestamptz)
 LANGUAGE sql
@@ -138,26 +142,29 @@ AS $function$
   WITH c AS (
     SELECT id, location_id, glofox_member_id, glofox_membership_status, glofox_membership_state,
            created_at, last_attended_at, created_via_import_id,
-           -- the Glofox columns describe an account at a GLOFOX studio: the
-           -- contact's own studio when that studio runs on Glofox, else only
-           -- where a crossover row links the account
-           (location_id = p_location_id AND glofox_member_id IS NOT NULL
-             AND EXISTS (SELECT 1 FROM public.locations l WHERE l.id = p_location_id AND l.membership_source = 'glofox')) AS glofox_home_here
+           -- the Glofox columns describe an account at a GLOFOX studio of the
+           -- contact's organisation (one per organisation today: Stillorgan),
+           -- whether that studio is the contact's own or a sibling's. The proof
+           -- is the Glofox id the contact carries, never the contact_studios
+           -- row's own source: a public form at this studio rewrote that source
+           -- once (lead_form) and the reconcile then forgot the account for
+           -- good (final review C1). A second Glofox studio in one organisation
+           -- needs a per-studio id column before this rule can tell them apart.
+           (glofox_member_id IS NOT NULL
+             AND EXISTS (SELECT 1 FROM public.locations l
+                          WHERE l.id = p_location_id AND l.membership_source = 'glofox'
+                            AND l.organization_id = (SELECT h.organization_id FROM public.locations h WHERE h.id = contacts.location_id))) AS glofox_account_here
       FROM public.contacts WHERE id = p_contact_id
   ),
   f AS (
     SELECT
       -- the primary studio
       (SELECT location_id = p_location_id FROM c) AS primary_here,
-      -- a Glofox account here: the contact's own at a Glofox home studio, or
-      -- (mig 768) the contact_studios row this studio holds with source glofox
-      -- (recordGlofoxCrossover writes it; mig 764's backfill made one from
-      -- every link-table row before the table went)
-      ((SELECT glofox_home_here FROM c)
-        OR EXISTS (SELECT 1 FROM public.contact_studios cs WHERE cs.contact_id = p_contact_id AND cs.location_id = p_location_id AND cs.source = 'glofox')) AS glofox_account,
+      -- a Glofox account here (mig 768): the Glofox id the contact carries, at
+      -- a Glofox studio of its organisation (see c.glofox_account_here)
+      (SELECT glofox_account_here FROM c) AS glofox_account,
       -- a LIVE Glofox membership here (hasBookableMembership: member / credit_member, state active or unset)
-      (((SELECT glofox_home_here FROM c)
-         OR EXISTS (SELECT 1 FROM public.contact_studios cs WHERE cs.contact_id = p_contact_id AND cs.location_id = p_location_id AND cs.source = 'glofox'))
+      ((SELECT glofox_account_here FROM c)
         AND (SELECT glofox_membership_status IN ('member', 'credit_member') AND coalesce(glofox_membership_state, 'active') = 'active' FROM c)) AS glofox_member,
       EXISTS (SELECT 1 FROM public.contact_memberships cm
                WHERE cm.contact_id = p_contact_id AND cm.location_id = p_location_id AND cm.status = 'active') AS membership_row,
@@ -221,7 +228,14 @@ AS $function$
       ) AS first_seen_at,
       GREATEST(
         (SELECT max(d.updated_at) FROM public.deals d WHERE d.contact_id = p_contact_id AND d.location_id = p_location_id),
-        (SELECT max(b.starts_at) FROM public.class_bookings b WHERE b.contact_id = p_contact_id AND b.location_id = p_location_id),
+        -- a class that HAPPENED (final review I2): a booking for next week is
+        -- not activity (it outranked every message in the WhatsApp router and
+        -- blocked the forward-only stamp until the class date), and a
+        -- cancelled one never was (NOT_TRAINING_STATUSES, pipeline-other-studio-members.js)
+        (SELECT max(b.starts_at) FROM public.class_bookings b
+          WHERE b.contact_id = p_contact_id AND b.location_id = p_location_id
+            AND b.starts_at <= now()
+            AND upper(coalesce(b.status, '')) NOT IN ('CANCELLED', 'LATE_CANCELLED')),
         (SELECT max(m.created_at) FROM public.whatsapp_messages m
            JOIN public.whatsapp_conversations w ON w.id = m.conversation_id
           WHERE w.contact_id = p_contact_id AND w.location_id = p_location_id),
@@ -293,11 +307,35 @@ ALTER TABLE public.person_groups ALTER COLUMN location_id DROP NOT NULL;
 COMMENT ON COLUMN public.person_groups.location_id IS
   'DEPRECATED (mig 767): groups follow the organisation; nullable since mig 768; dropped, with the 767 fill trigger, once createGroup stops writing it';
 
+-- 3b. Rows whose last activity lies in the FUTURE (mig 764's derive counted a
+--     booked class as activity; 17 rows on 25 Oct 2026): clear the stamp and
+--     re-derive each pair, so the stamp is what happened, not what is booked.
+--     contact_studios_upsert keeps GREATEST(existing, derived), so a stale
+--     future value could never come down on its own.
+DO $$
+DECLARE
+  r record;
+  v_n int := 0;
+BEGIN
+  FOR r IN SELECT contact_id, location_id FROM public.contact_studios WHERE last_seen_at > now() LOOP
+    UPDATE public.contact_studios SET last_seen_at = NULL WHERE contact_id = r.contact_id AND location_id = r.location_id;
+    PERFORM private.contact_studios_upsert(r.contact_id, r.location_id);
+    v_n := v_n + 1;
+  END LOOP;
+  RAISE NOTICE 'mig 768: % rows with a future last_seen_at re-derived', v_n;
+END $$;
+
 -- 4. Self-check: the catalog, never this file.
 DO $$
 DECLARE
   v_qual text;
 BEGIN
+  IF EXISTS (SELECT 1 FROM public.contact_studios WHERE last_seen_at > now()) THEN
+    RAISE EXCEPTION 'mig 768: a contact_studios row still has a future last_seen_at';
+  END IF;
+  IF (SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure('public.derive_contact_studio(uuid, uuid)')) ILIKE '%cs.source%' THEN
+    RAISE EXCEPTION 'mig 768: derive_contact_studio still reads the row''s own source as proof of a Glofox account';
+  END IF;
   IF to_regclass('public.glofox_crossover_members') IS NOT NULL THEN
     RAISE EXCEPTION 'mig 768: glofox_crossover_members still exists';
   END IF;

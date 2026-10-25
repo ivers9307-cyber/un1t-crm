@@ -42,6 +42,9 @@ beforeAll(async () => {
   await signedOut(db); await db['exec'](MIG_765)
   await db['exec'](PERSON_GROUPS_270)
   await signedOut(db); await db['exec'](MIG_767)
+  // I2 (final review): prod held 17 rows whose last activity lay in the FUTURE (a
+  // booked class counted as activity); 768 repairs them. Seed one.
+  await db['exec'](`UPDATE public.contact_studios SET last_seen_at = now() + interval '30 days' WHERE contact_id = '${C_C3}' AND location_id = '${LOC_B}'`)
   await signedOut(db); await db['exec'](MIG_768)
 }, 120_000)
 afterAll(() => db?.close())
@@ -97,5 +100,43 @@ describe('the reconcile with the tables that remain', () => {
     expect(rows.find((x) => x.contact_id === C_A2)).toMatchObject({ source: 'glofox', status: 'active' })
     expect(rows.find((x) => x.contact_id === C_C3)).toMatchObject({ status: 'ended' })
     expect(rows.find((x) => x.contact_id === C_A)).toMatchObject({ source: 'deal', status: 'active', kind: 'lead' })
+  })
+
+  // C1 (final review): a public form at B used to rewrite C_A2's row to lead /
+  // lead_form, and 768's first cut read the row's OWN source as the proof of
+  // the Glofox account, so the reconcile then made the downgrade permanent.
+  // The proof is the Glofox id the contact carries, at the organisation's
+  // Glofox studio.
+  it('a crossover row a form downgraded to lead / lead_form is restored by the reconcile from the Glofox id the contact carries', async () => {
+    await db.query(`UPDATE public.contact_studios SET kind = 'lead', source = 'lead_form' WHERE contact_id = $1 AND location_id = $2`, [C_A2, LOC_B])
+    await db.query(`SELECT * FROM public.reconcile_contact_studios($1)`, [LOC_B])
+    const { rows: [r] } = await db.query(`SELECT kind, status, source FROM public.contact_studios WHERE contact_id = $1 AND location_id = $2`, [C_A2, LOC_B])
+    expect(r).toEqual({ kind: 'client', status: 'active', source: 'glofox' })
+  })
+
+  it('a Glofox id gives no account at a studio that is not the organisation\'s Glofox studio', async () => {
+    const { rows: [r] } = await db.query(`SELECT kind, source FROM public.derive_contact_studio($1, $2)`, [C_A2, LOC_C])
+    expect(r.kind).toBeNull() // no relationship at C: the derive answers kind NULL
+    expect(r.source).not.toBe('glofox')
+  })
+
+  // I2 (final review): last activity is something that HAPPENED. A class booked
+  // for next week is not activity (it outranked every message in the WhatsApp
+  // router and blocked the forward-only stamp until the class date), and a
+  // cancelled booking never was.
+  it('last activity counts a past attended or booked class, never a future or cancelled booking', async () => {
+    const seen = async () => (await db.query(`SELECT last_seen_at FROM public.derive_contact_studio($1, $2)`, [C_A2, LOC_B])).rows[0].last_seen_at
+    expect(await seen()).toBeNull()
+    await db.query(`INSERT INTO public.class_bookings (location_id, contact_id, starts_at, status) VALUES ($1, $2, now() + interval '7 days', 'BOOKED'), ($1, $2, now() - interval '1 day', 'CANCELLED'), ($1, $2, now() - interval '2 days', 'LATE_CANCELLED')`, [LOC_B, C_A2])
+    expect(await seen()).toBeNull()
+    await db.query(`INSERT INTO public.class_bookings (location_id, contact_id, starts_at, status) VALUES ($1, $2, now() - interval '2 hours', 'ATTENDED')`, [LOC_B, C_A2])
+    const at = new Date(await seen()).getTime()
+    expect(Date.now() - at).toBeGreaterThan(1.9 * 3600 * 1000)
+    expect(Date.now() - at).toBeLessThan(2.1 * 3600 * 1000)
+  })
+
+  it('768 repaired every row whose last activity lay in the future', async () => {
+    const { rows: [r] } = await db.query(`SELECT count(*)::int AS n FROM public.contact_studios WHERE last_seen_at > now()`)
+    expect(r.n).toBe(0)
   })
 })
