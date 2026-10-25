@@ -81,6 +81,15 @@ export function _resetCrossoverCache() {
   crossoverCache.clear()
 }
 
+// ORGCONTACTS.5 (final review I4) — the directory search is served by the
+// CRM: GET /api/mobile/contacts/search reads public.studio_contacts at the
+// active studio on the service role, so every relationship is listed with no
+// id cap (decision 2 put the crossover count past the 100 ids a GET URL could
+// carry: ≥102 at Stillorgan, ~230 at Hatch Street). The RLS read below, with
+// the capped crossover ids, is the FALLBACK when the route fails or refuses:
+// a bad deploy degrades to the old directory, never to an empty one.
+export const MOBILE_CONTACT_SEARCH_PATH = '/api/mobile/contacts/search'
+
 /**
  * Search contacts at a location by name / phone / email. Empty query
  * returns the most-recent contacts (a cheap default before the operator
@@ -89,6 +98,14 @@ export function _resetCrossoverCache() {
  */
 export async function searchContacts({ locationId, query = '', limit = 40 }) {
   if (!locationId) return { success: false, error: 'locationId required' }
+  const term = (query || '').trim()
+  const served = await api(`${MOBILE_CONTACT_SEARCH_PATH}?q=${encodeURIComponent(term)}&limit=${encodeURIComponent(String(limit))}`, { locationId })
+  if (served?.success && Array.isArray(served.data?.contacts)) return { success: true, data: served.data.contacts }
+  return searchContactsThroughRls({ locationId, term, limit })
+}
+
+/** The pre-ORGCONTACTS.5 directory read: own contacts OR the capped crossover ids, through RLS. */
+async function searchContactsThroughRls({ locationId, term, limit }) {
   const crossIds = await crossoverIdsFor(locationId)
   // CONTACT-DEDUP (mig 334) — the directory shows one profile per linked
   // person (the group primary); the folded accounts are reachable from it.
@@ -96,7 +113,6 @@ export async function searchContacts({ locationId, query = '', limit = 40 }) {
   q = crossIds.length > 0
     ? q.or(`location_id.eq.${locationId},id.in.(${crossIds.join(',')})`)
     : q.eq('location_id', locationId)
-  const term = (query || '').trim()
   if (term) {
     // Commas + % are PostgREST .or()/ilike control chars — strip them so
     // a search term can't break the filter or smuggle a wildcard.

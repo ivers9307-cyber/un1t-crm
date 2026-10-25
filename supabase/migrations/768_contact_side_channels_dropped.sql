@@ -13,10 +13,12 @@
 --     the lists read the studio_contacts view since #2169.
 --   * derive_contact_studio() and reconcile_contact_studios() are re-created
 --     WITHOUT the link-table branches / union source: "a
---     Glofox account here" is the contact's own at a Glofox home studio, or the
---     contact_studios row this studio holds with source glofox. The reconcile
---     keeps every such row: its derivation reads the row it maintains, as the
---     link row used to stand for it. contact_memberships STAYS (the un1t
+--     Glofox account here" is the Glofox id the contact carries, at a Glofox
+--     studio of its organisation (its own or a sibling's; one Glofox studio per
+--     organisation today), never the contact_studios row's own source (final
+--     review C1). A class booking counts as activity only once it happened and
+--     was not cancelled, and every stored future stamp is re-derived (I2).
+--     contact_memberships STAYS (the un1t
 --     adapter's churn, growth and win-back reads and the sync's step 7 still
 --     use its ended_at / plan_name; contact_studios carries neither — a dated
 --     backlog item, docs/BACKLOG.md).

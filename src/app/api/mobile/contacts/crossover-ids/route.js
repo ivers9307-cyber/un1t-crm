@@ -1,5 +1,9 @@
 // GET /api/mobile/contacts/crossover-ids
 //
+// ORGCONTACTS.5 (final review I4): the FALLBACK. The phone directory searches
+// through /api/mobile/contacts/search (no id cap) and asks for these ids only
+// when that route fails or refuses.
+//
 // UN1THARD.8 / ORGCONTACTS.2 — the phone directory's crossover ids: the
 // contacts with a relationship at the active studio whose PRIMARY studio is
 // elsewhere (public.studio_contacts, mig 765: contacts joined to their

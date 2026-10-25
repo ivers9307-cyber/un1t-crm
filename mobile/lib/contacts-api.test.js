@@ -12,7 +12,7 @@ vi.mock('./pipeline-api', () => ({ listActivitiesForContact: vi.fn(), listNotesF
 
 import { api } from './api'
 import { supabase } from './supabase'
-import { searchContacts, crossoverIdsFor, _resetCrossoverCache } from './contacts-api'
+import { searchContacts, crossoverIdsFor, _resetCrossoverCache, MOBILE_CONTACT_SEARCH_PATH } from './contacts-api'
 
 const HATCH = 'a0000000-0000-0000-0000-000000000002'
 const C1 = '11111111-1111-1111-1111-111111111111'
@@ -34,9 +34,41 @@ beforeEach(() => {
   supabase.from.mockImplementation(() => queryDouble())
 })
 
-describe('searchContacts — crossovers (UN1THARD.8)', () => {
+// ORGCONTACTS.5 (final review I4) — the directory search is served by
+// GET /api/mobile/contacts/search (public.studio_contacts at the studio, no
+// id cap); the RLS read with the capped crossover ids is the fallback when the
+// route fails or refuses.
+describe('searchContacts — the server search (ORGCONTACTS.5)', () => {
+  it('returns the route\'s rows and reads nothing itself; the term and limit travel in the query, the studio in the header', async () => {
+    api.mockResolvedValue({ success: true, data: { contacts: [{ id: C1 }, { id: C2 }] } })
+    const r = await searchContacts({ locationId: HATCH, query: 'ann o', limit: 25 })
+    expect(r).toEqual({ success: true, data: [{ id: C1 }, { id: C2 }] })
+    expect(api).toHaveBeenCalledTimes(1)
+    expect(api).toHaveBeenCalledWith(`${MOBILE_CONTACT_SEARCH_PATH}?q=ann%20o&limit=25`, { locationId: HATCH })
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('falls back to its own RLS read (own contacts + the capped crossover ids) when the route fails or refuses', async () => {
+    for (const answer of [{ success: false, transport: true, error: 'Network error' }, { success: false, error: 'Forbidden' }, { success: true, data: {} }]) {
+      _resetCrossoverCache()
+      api.mockImplementation(async (path) => (path.startsWith(MOBILE_CONTACT_SEARCH_PATH) ? answer : { success: true, data: { ids: [C2] } }))
+      const r = await searchContacts({ locationId: HATCH, query: 'ann' })
+      expect(r).toEqual({ success: true, data: [{ id: C1 }] })
+      expect(calls).toContainEqual(['or', `location_id.eq.${HATCH},id.in.(${C2})`])
+    }
+  })
+})
+
+describe('searchContacts — the RLS fallback and its crossover ids (UN1THARD.8)', () => {
+  beforeEach(() => {
+    // the server search refuses in every case below; `api` answers the ids route
+    api.mockImplementation(async (path) => (path.startsWith(MOBILE_CONTACT_SEARCH_PATH) ? { success: false, error: 'Forbidden' } : apiIds()))
+  })
+  let apiIds = () => ({ success: true, data: { ids: [] } })
+  const idsAnswer = (v) => { apiIds = () => v }
+
   it('lists own contacts OR the crossover ids, at the studio the ids were asked for', async () => {
-    api.mockResolvedValue({ success: true, data: { ids: [C1, C2] } })
+    idsAnswer({ success: true, data: { ids: [C1, C2] } })
     const r = await searchContacts({ locationId: HATCH })
     expect(r).toEqual({ success: true, data: [{ id: C1 }] })
     expect(api).toHaveBeenCalledWith('/api/mobile/contacts/crossover-ids', { locationId: HATCH })
@@ -46,7 +78,7 @@ describe('searchContacts — crossovers (UN1THARD.8)', () => {
   })
 
   it('keeps the search term as its own filter alongside the crossover one', async () => {
-    api.mockResolvedValue({ success: true, data: { ids: [C1] } })
+    idsAnswer({ success: true, data: { ids: [C1] } })
     await searchContacts({ locationId: HATCH, query: 'ann' })
     const ors = calls.filter((c) => c[0] === 'or').map((c) => c[1])
     expect(ors).toEqual([`location_id.eq.${HATCH},id.in.(${C1})`, expect.stringContaining('name.ilike.%ann%')])
@@ -59,7 +91,7 @@ describe('searchContacts — crossovers (UN1THARD.8)', () => {
       { success: false, error: 'Forbidden' },
     ]) {
       _resetCrossoverCache()
-      api.mockResolvedValue(answer)
+      idsAnswer(answer)
       const r = await searchContacts({ locationId: HATCH })
       expect(r.success).toBe(true)
       expect(calls).toContainEqual(['eq', 'location_id', HATCH])
@@ -68,7 +100,7 @@ describe('searchContacts — crossovers (UN1THARD.8)', () => {
   })
 
   it('drops anything that is not an id before it reaches the filter', async () => {
-    api.mockResolvedValue({ success: true, data: { ids: [C1, 'x),location_id.neq.(y', 42, null] } })
+    idsAnswer({ success: true, data: { ids: [C1, 'x),location_id.neq.(y', 42, null] } })
     expect(await crossoverIdsFor(HATCH)).toEqual([C1])
   })
 
