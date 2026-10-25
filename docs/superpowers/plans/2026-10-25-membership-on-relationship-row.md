@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Branch off `origin/main` after #2197-ish (the ORGCONTACTS.6 PR) merges; one PR; `ORGCONTACTS.7` ticket prefix; `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` on every commit.
+- Branch off `origin/main` after the ORGCONTACTS.6 PR (minors + mig 769) merges; one PR; `ORGCONTACTS.7` ticket prefix; `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` on every commit.
 - Columns, exactly: `membership_plan text`, `membership_status text CHECK (membership_status IN ('active','ended'))`, `membership_since timestamptz`, `membership_ended_at timestamptz`; CHECK `membership_status IS NULL OR ((membership_status = 'ended') = (membership_ended_at IS NOT NULL))` and CHECK `membership_status IS NOT NULL OR (membership_plan IS NULL AND membership_since IS NULL AND membership_ended_at IS NULL)`.
 - Only `src/lib/un1t-online-sync.js` calls `setMembershipFacts`; `upsertContactStudio`, `touchContactStudio` and `private.contact_studios_upsert` never name a membership column.
 - Mig 770 is applied to prod (project `iyvtbjjxdggiadzwwvdj`, via `apply_migration` with Richard's approval) BEFORE the PR merges; mig 771 AFTER the deploy and after one `un1t-online-sync` run (`un1t_sync_runs` newer than the deploy).
