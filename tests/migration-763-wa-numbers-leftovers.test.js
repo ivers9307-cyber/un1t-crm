@@ -114,8 +114,9 @@ describe('763 WhatsApp number leftovers', () => {
     await expect(db.exec(`INSERT INTO whatsapp_numbers (id, organization_id, location_id, label) VALUES ('${NUM2}', '${ORG}', '${HATCH}', 'main')`))
       .rejects.toThrow(/whatsapp_numbers_organization_label_unique/)
     await db.exec(`INSERT INTO whatsapp_numbers (id, organization_id, location_id, label) VALUES ('${NUM3}', '${ORG2}', '${OTHER}', 'main')`)
+    // mig 176's UNIQUE (phone_number_id) stays beside it: the label is the only other uniqueness
     expect(await rows(db, `SELECT conname FROM pg_constraint WHERE conrelid = 'public.whatsapp_numbers'::regclass AND contype = 'u' ORDER BY 1`))
-      .toEqual([{ conname: 'whatsapp_numbers_organization_label_unique' }])
+      .toEqual([{ conname: 'whatsapp_numbers_organization_label_unique' }, { conname: 'whatsapp_numbers_phone_number_id_key' }])
   })
 
   it('the organisation-change guard still refuses a move that strands a link', async () => {
@@ -152,7 +153,8 @@ describe('763 WhatsApp number leftovers', () => {
     const db = await boot()
     await db.exec(MIG_763)
     expect((await triggers(db)).map((t) => t.tgname)).toEqual(['trg_whatsapp_numbers_org_change_guard'])
-    expect(await rows(db, `SELECT conname FROM pg_constraint WHERE conrelid = 'public.whatsapp_numbers'::regclass AND contype = 'u'`)).toHaveLength(1)
+    expect(await rows(db, `SELECT conname FROM pg_constraint WHERE conrelid = 'public.whatsapp_numbers'::regclass AND contype = 'u' ORDER BY 1`))
+      .toEqual([{ conname: 'whatsapp_numbers_organization_label_unique' }, { conname: 'whatsapp_numbers_phone_number_id_key' }])
   })
 
   it('the file ends with the self-check and COMMIT, never names the old constraint by a guessed name, and carries no placeholder', () => {
