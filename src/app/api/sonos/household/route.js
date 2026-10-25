@@ -5,7 +5,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { getSonosConfig, withFreshToken, sonosGetGroups, sonosGetFavorites } from '@/lib/sonos/client'
+import { getSonosConfig, withFreshToken, sonosGetGroups, sonosGetFavorites, isHouseholdGone } from '@/lib/sonos/client'
 import { mapGroups } from '@/lib/sonos/groups'
 
 export const runtime = 'nodejs'
@@ -32,6 +32,12 @@ export async function GET() {
     sonosGetFavorites(tok.token, tok.householdId),
   ])
   if (!groupsRes.ok) {
+    // 410/404: the stored household no longer exists on Sonos's side. The
+    // grant is fine, so answer the not-connected shape: the page then offers
+    // Reconnect, whose callback replaces the household id.
+    if (isHouseholdGone(groupsRes.statusCode)) {
+      return NextResponse.json({ success: true, connected: false, reason: 'household_gone', statusCode: groupsRes.statusCode })
+    }
     return NextResponse.json({ success: true, connected: true, reachable: false, statusCode: groupsRes.statusCode })
   }
 

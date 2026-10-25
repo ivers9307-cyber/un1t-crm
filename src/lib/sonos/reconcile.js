@@ -2,7 +2,7 @@
 // testable with fakes (house pattern: zoom/reconcile.orchestrator.test.js).
 
 import { logWarn } from '@/lib/log'
-import { getSonosConfig, withFreshToken, sonosGetGroups, sonosSetGroupVolume, sonosLoadFavorite, sonosPause } from './client'
+import { getSonosConfig, withFreshToken, isHouseholdGone, sonosGetGroups, sonosSetGroupVolume, sonosLoadFavorite, sonosPause } from './client'
 import { applyOpen } from './apply'
 import { mapGroups, resolveGroupIds, planAction } from './groups'
 // dayStrIn(instant, zone), NOT todayStrIn(zone) with its default clock — an
@@ -87,6 +87,7 @@ export async function runSonosReconcile(db, deps = {}) {
   let tokenFailures = 0
   let zoneUnreadable = 0
   let sonosDown = false
+  let householdGone = 0
 
   for (const [locationId, rows] of byLocation) {
     const zone = zones.get(locationId)
@@ -106,6 +107,14 @@ export async function runSonosReconcile(db, deps = {}) {
 
     const res = await getGroups(tok.token, tok.householdId)
     if (!res.ok) {
+      // 410/404 = the stored household no longer exists on Sonos's side (a
+      // reset or re-setup). Not an outage: it needs a human to re-link, and
+      // retrying changes nothing. No DB writes this tick.
+      if (isHouseholdGone(res.statusCode)) {
+        householdGone++
+        logWarn(MODULE, 'household gone — re-link needed', { locationId, statusCode: res.statusCode })
+        continue
+      }
       // 401 = revoked/rotated grant; 0 = network. Either way: no DB writes
       // this tick. last_state staleness is the alert, not a thrown error.
       sonosDown = true
@@ -185,6 +194,7 @@ export async function runSonosReconcile(db, deps = {}) {
   return {
     ok: true, applied, failed, tokenFailures,
     ...(zoneUnreadable ? { zoneUnreadable } : {}),
+    ...(householdGone ? { householdGone } : {}),
     ...(sonosDown ? { sonosDown: true } : {}),
   }
 }
