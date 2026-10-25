@@ -50,7 +50,7 @@ describe('ContactStudiosCard — membership facts', () => {
     const { container } = render(<ContactStudiosCard studios={[active, ended, rows[1]]} primaryLocationId="still" />)
     const items = [...container.querySelectorAll('li')].map((li) => li.textContent)
     expect(items.find((t) => t.includes('UN1T Hatch Street'))).toContain('Founding Membership — Unlimited · member since 1 Feb 2026')
-    expect(items.find((t) => t.includes('UN1T Other'))).toContain('Monthly · membership ended 1 Sep 2026')
+    expect(items.find((t) => t.includes('UN1T Other'))).toContain('Monthly · membership ended 1 Sept 2026')
     expect(items.find((t) => t.includes('UN1T Stillorgan'))).not.toMatch(/member since|membership ended/)
   })
 })
