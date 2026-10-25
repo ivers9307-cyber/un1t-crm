@@ -13,17 +13,24 @@
 // reads is_stale, so a night that did nothing must read as stale.
 //
 // Schedule: vercel.json, 03:30 PLATFORM_TZ (after the 03:00 Glofox sync).
+//
+// ORGCONTACTS.8 — the run time is measured: `duration_ms` rides on the
+// heartbeat's last_outcome and the response, so cron_heartbeats shows how long
+// last night's reconcile took, and a run past SLOW_RUN_MS (half of
+// maxDuration) logs a warning while there is still headroom, before the table
+// grows into Vercel's limit and the function is killed with no stamp.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logError, logInfo } from '@/lib/log'
+import { logError, logInfo, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 export const CRON_NAME = 'contact-studios-reconcile'
+export const SLOW_RUN_MS = (maxDuration * 1000) / 2
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -32,9 +39,11 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
+  const startedAt = Date.now()
   const { data, error } = await db.rpc('reconcile_contact_studios', { p_location_id: null })
+  const durationMs = Date.now() - startedAt
   if (error) {
-    logError(CRON_NAME, 'reconcile_contact_studios failed; no heartbeat', { code: error.code ?? null, message: error.message })
+    logError(CRON_NAME, 'reconcile_contact_studios failed; no heartbeat', { code: error.code ?? null, message: error.message, duration_ms: durationMs })
     return NextResponse.json({ success: false, error: error.message || 'reconcile failed' }, { status: 500 })
   }
   const row = Array.isArray(data) ? data[0] : data
@@ -44,6 +53,10 @@ export async function GET(request) {
     ended: Number(row?.ended ?? 0),
     unchanged: Number(row?.unchanged ?? 0),
     skipped_no_primary: Number(row?.skipped_no_primary ?? 0),
+    duration_ms: durationMs,
+  }
+  if (durationMs > SLOW_RUN_MS) {
+    logWarn(CRON_NAME, 'contact_studios reconcile is past half its time limit', { duration_ms: durationMs, limit_ms: maxDuration * 1000 })
   }
   logInfo(CRON_NAME, 'contact_studios reconciled', counts)
   await stampHeartbeat(CRON_NAME, counts)
