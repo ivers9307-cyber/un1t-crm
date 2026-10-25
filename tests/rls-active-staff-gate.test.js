@@ -77,7 +77,8 @@ const FUNCTIONS = {
   'private.auth_is_master': { class: 'predicate' },
   'private.auth_is_in_location': { class: 'predicate' },
   'private.auth_contact_read_location_ids': { class: 'predicate' }, // mig 690: studios where the caller holds Contacts; reads profiles with the predicate
-  'private.auth_contact_membership_contact_ids': { class: 'delegates', to: ['private.auth_contact_read_location_ids'] }, // mig 731: active members of the studios the Contacts resolver returns; mig 732: plus their un1t.online clients
+  'private.auth_contact_studio_contact_ids': { class: 'delegates', to: ['private.auth_contact_read_location_ids'] }, // mig 765 (ORGCONTACTS.2): contacts with ANY contact_studios row at a studio the Contacts resolver returns
+  'private.auth_contact_membership_contact_ids': { class: 'delegates', to: ['private.auth_contact_studio_contact_ids'] }, // mig 731/732: active members + un1t.online clients; since mig 765 a one-line delegate to the studio helper (DEPRECATED, dropped in 768)
   'private.auth_is_owner_at': { class: 'predicate' },
   'private.auth_is_admin_at': { class: 'predicate' },
   'private.auth_is_manager_at': { class: 'predicate' },
@@ -327,6 +328,19 @@ describe('RLSACTIVE.1 — staff helpers require an active profile', () => {
     expect(missing).toEqual([])
   })
 
+  // A delegate may call another delegate (mig 765: the deprecated membership
+  // helper hands off to the studio helper, which calls the Contacts
+  // resolver), so a target counts when it resolves to predicate helpers
+  // through delegates only; a cycle or a member/neutral helper does not.
+  const resolvesToPredicates = (name, seen = new Set()) => {
+    const c = FUNCTIONS[name]
+    if (!c || seen.has(name)) return false
+    if (c.class === 'predicate') return true
+    if (c.class !== 'delegates') return false
+    seen.add(name)
+    return c.to.every((t) => resolvesToPredicates(t, seen))
+  }
+
   it('every `delegates` helper still calls only-gated helpers', () => {
     const bad = []
     for (const [k, c] of Object.entries(FUNCTIONS)) {
@@ -334,7 +348,7 @@ describe('RLSACTIVE.1 — staff helpers require an active profile', () => {
       const body = fns.get(k)?.body || ''
       for (const to of c.to) {
         if (!body.includes(`${to}(`)) bad.push(`${k} no longer calls ${to}`)
-        if (FUNCTIONS[to]?.class !== 'predicate') bad.push(`${k} delegates to ${to}, which is not a predicate helper`)
+        if (!resolvesToPredicates(to)) bad.push(`${k} delegates to ${to}, which does not resolve to a predicate helper`)
       }
       if (readsProfileTable(body) && !functionGated(body)) bad.push(`${k} reads a profile table itself without the predicate`)
     }

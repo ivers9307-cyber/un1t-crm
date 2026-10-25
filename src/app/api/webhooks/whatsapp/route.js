@@ -4,9 +4,9 @@ import { refreshWindow, parseConsentKeyword, pickInboundContact, markUndeliverab
 import { applyWhatsappConsentKeyword, applyMetaUserPreference } from '@/lib/whatsapp-consent'
 import { handleFlowCompletion, publishFlowClassBooking } from '@/lib/whatsapp-flow/completion.js'
 import { FLOW_SUBMISSION_BODY, FLOW_UNPROCESSED_BODY, sendFlowSubmissionReply } from '@/lib/whatsapp-flow/booking-notice'
-import { resolveWhatsAppNumberByPhoneNumberId, classifyInboundOwner } from '@/lib/whatsapp-config'
+import { resolveWhatsAppNumberByPhoneNumberId, classifyInboundOwner, studiosUsingNumbers } from '@/lib/whatsapp-config'
 import { routeInboundThread } from '@/lib/whatsapp-inbound-route'
-import { touchContactStudio } from '@/lib/contact-studios'
+import { touchContactStudio, studiosOfContacts } from '@/lib/contact-studios'
 import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -288,17 +288,19 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   const phoneWithout = senderPhone.startsWith('+') ? senderPhone.slice(1) : senderPhone
 
   // COMMS-AUDIT 2026-07-10 — the phone can match contacts at SEVERAL
-  // locations (multi-gym members, shared numbers). Prefer the contact in
-  // the receiving number's location (resolved above); only fall back to a
-  // match at a SIBLING location when none exists in-location, with an
-  // explicit order (oldest contact first) so the fallback is deterministic
-  // instead of Postgres row order. The matched contact's location still
-  // decides the conversation's location below — this just stops a random
-  // other-location contact hijacking a thread that belongs here.
+  // locations (multi-gym members, shared numbers), ordered oldest first so
+  // the last fallback is deterministic instead of Postgres row order.
   //
   // W0.2 — ORG-scoped: a match may come from the receiving number's
-  // organisation only (its own location first, siblings second — the
-  // pickInboundContact preference is unchanged). Never another tenant's row.
+  // organisation only. Never another tenant's row.
+  //
+  // ORGCONTACTS.3 — the matches' contact_studios rows are read ONCE here:
+  // pickInboundContact prefers the person with an active relationship at a
+  // candidate studio (the studios this number is switched on at, plus its
+  // home), then the one whose primary studio is a candidate, then the oldest;
+  // the chosen contact's rows then feed the router's step 4. A failed rows
+  // read passes null to both (today's rules), never a refusal: Meta must get
+  // its 200.
   const orgLocIds = await orgLocationIdsFor(db, defaultLocationId)
   let contact = null
   const { data: existingContacts } = await db.from('contacts')
@@ -309,7 +311,20 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     .order('id', { ascending: true })
     .limit(20)
 
-  contact = pickInboundContact(existingContacts, defaultLocationId)
+  let studiosByContact = null
+  let candidateLocationIds = [defaultLocationId].filter(Boolean)
+  if (existingContacts?.length) {
+    try {
+      const linked = receivingNumberId ? await studiosUsingNumbers(db, [receivingNumberId]) : []
+      candidateLocationIds = [...new Set([...linked, defaultLocationId].filter(Boolean))]
+    } catch (err) {
+      logError('wa-webhook', 'studios using the number unreadable; picking the contact by its home studio', { receivingNumberId, err: err?.message || String(err) })
+    }
+    const rows = await studiosOfContacts(db, existingContacts.map((c) => c.id))
+    if (rows.ok) studiosByContact = rows.byContact
+    else logError('wa-webhook', 'contact_studios unreadable; picking and routing without relationship rows', { error: rows.error })
+  }
+  contact = pickInboundContact(existingContacts, { candidateLocationIds, studiosByContact })
   if (contact) {
     // BAREWRITE.4 — every write in this handler is LOGGED, not surfaced and not
     // failed on. That is the correct handling for this file specifically: Meta
@@ -340,8 +355,9 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // number may be switched on at several studios of its organisation, so the
   // reply goes with whoever spoke last: the quoted message's thread, a
   // click-to-WhatsApp ad's studio, the thread with the latest outbound in 7
-  // days, the contact's home studio, else the number's home studio (spec R4;
-  // src/lib/whatsapp-inbound-route.js). It only ever picks a studio the
+  // days, the studio where the person has an active relationship by last
+  // activity (ORGCONTACTS.3, the rows read above), the contact's home studio,
+  // else the number's home studio (spec R4; src/lib/whatsapp-inbound-route.js). It only ever picks a studio the
   // number is switched on at, or the number's home (WAORGNUMBER.6 removed the
   // number-less home studio). Never throws; a failed read falls through to the
   // next rule. Everything below (consent keywords, Mia, the greeting, the push,
@@ -352,6 +368,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     waPhone: senderPhone,
     bsuid: extractInboundBsuid(contacts, senderPhone),
     contact,
+    contactStudios: contact && studiosByContact ? (studiosByContact.get(contact.id) || []) : null,
     contextMessageId: message.context?.id || null,
     referral: message.referral || null,
   })

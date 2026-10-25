@@ -483,7 +483,7 @@ export async function runSequences({ now = new Date() } = {}) {
       // step for a filter that matches everyone.
       if (sequence.audience_filter?.filters?.length) {
         const audienceState = await evaluateSequenceAudience(
-          db, enrollment.contact_id, sequence.audience_filter,
+          db, enrollment.contact_id, sequence.audience_filter, { locationId: sequence.location_id },
         )
         if (audienceState === 'no_match') {
           await db.from('sequence_enrollments').update({

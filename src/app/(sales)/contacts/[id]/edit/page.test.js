@@ -23,6 +23,9 @@ vi.mock('next/navigation', () => ({
   }),
 }))
 vi.mock('@/components/ContactForm', () => ({ default: () => null }))
+// ORGCONTACTS.4 — the page reads the person's relationship studios (contact_studios).
+vi.mock('@/lib/contact-studios', () => ({ studiosOfContact: vi.fn(async () => ({ ok: true, rows: [] })) }))
+import { studiosOfContact } from '@/lib/contact-studios'
 
 import EditContactPage from './page.js'
 import { getCurrentUser } from '@/lib/auth'
@@ -69,10 +72,24 @@ describe('/contacts/[id]/edit', () => {
     await expect(EditContactPage(props())).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 
-  it('sends a caller who does not belong to the contact\'s studio to the list', async () => {
+  it('sends a caller with no role at any of the contact\'s studios back to the contact (ORGCONTACTS.4: the page decides as the PUT does, which answers 404 there)', async () => {
     getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'owner' } }, LOC_A))
     createServerClient.mockReturnValue(mockDb(contactAt(LOC_B)))
-    await expect(EditContactPage(props())).rejects.toThrow(/^NEXT_REDIRECT:\/contacts$/)
+    await expect(EditContactPage(props())).rejects.toThrow(/^NEXT_REDIRECT:\/contacts\/c0000000/)
+  })
+
+  it('opens for a manager with Contacts at a studio the person has a relationship with (ORGCONTACTS.4, decision 4)', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'manager', permissions: { contacts: true } } }, LOC_A))
+    studiosOfContact.mockResolvedValueOnce({ ok: true, rows: [{ location_id: LOC_B, status: 'active' }, { location_id: LOC_A, status: 'active' }] })
+    createServerClient.mockReturnValue(mockDb(contactAt(LOC_B)))
+    await expect(EditContactPage(props())).resolves.toBeTruthy()
+  })
+
+  it('without Contacts at that studio, back to the contact', async () => {
+    getCurrentUser.mockResolvedValue(person({ [LOC_A]: { role: 'manager', permissions: { contacts: false } } }, LOC_A))
+    studiosOfContact.mockResolvedValueOnce({ ok: true, rows: [{ location_id: LOC_B, status: 'active' }, { location_id: LOC_A, status: 'active' }] })
+    createServerClient.mockReturnValue(mockDb(contactAt(LOC_B)))
+    await expect(EditContactPage(props())).rejects.toThrow(/^NEXT_REDIRECT:\/contacts\/c0000000/)
   })
 
   it('opens for a master', async () => {

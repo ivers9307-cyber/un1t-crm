@@ -30,6 +30,10 @@ const ROOT = path.resolve(import.meta.dirname, '..')
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
 const VIEW = 'contact_location_audience'
 const CLP_COLS = ['audience_location_id', 'loc_email_marketing', 'loc_sms_marketing', 'loc_whatsapp_marketing']
+// mig 766 (ORGCONTACTS.4): view-only columns from contact_studios, the stage /
+// kind / status AT the audience studio (per-studio stage from contact_studios).
+// Not contacts columns: (a) and (b) never ask for them; pinned present here.
+const STUDIO_COLS = ['studio_stage_slug', 'studio_kind', 'studio_status']
 const VIRTUAL_TYPES = new Set(['tag', 'event', 'location_list'])
 
 /**
@@ -50,12 +54,16 @@ export function missingFromView(schema, excluded = AUDIENCE_VIEW_EXCLUDED) {
   return [...contacts].filter((c) => !view.has(c) && !Object.hasOwn(excluded, c))
 }
 
-/** AUDIENCE_FIELDS keys that must be real view columns but are not. */
+/**
+ * AUDIENCE_FIELDS keys that must be real view columns but are not. A field
+ * with `column` (ORGCONTACTS.4: pipeline_stage_slug reads studio_stage_slug)
+ * is judged on that column, the one the query lands on.
+ */
 export function audienceFieldsMissing(schema, fields = AUDIENCE_FIELDS) {
   const view = schema.get(VIEW) || new Set()
   return Object.entries(fields)
     .filter(([, cfg]) => !VIRTUAL_TYPES.has(cfg.type))
-    .map(([k]) => k)
+    .map(([k, cfg]) => cfg.column ?? k)
     .filter((k) => !view.has(k))
 }
 
@@ -67,6 +75,7 @@ describe('contact_location_audience carries every contacts column (AUDIENCEVIEWC
     expect(skippedViews.has(VIEW)).toBe(false)
     expect(schema.has(VIEW)).toBe(true)
     for (const c of CLP_COLS) expect(schema.get(VIEW).has(c)).toBe(true)
+    for (const c of STUDIO_COLS) expect(schema.get(VIEW).has(c), `${c}: mig 766's per-studio column`).toBe(true)
     expect(schema.get('contacts').size).toBeGreaterThan(100)
   })
 
@@ -117,10 +126,18 @@ describe('the detector bites', () => {
     expect(missingFromView(s, {})).toEqual([])
   })
 
-  it('an audience field the view lacks is reported; virtual fields are not', () => {
+  it('an audience field the view lacks is reported; virtual fields are not; a field with `column` is judged on its column', () => {
     const s = base()
     expect(audienceFieldsMissing(s, {
       email: { type: 'text' }, last_email_open_at: { type: 'date' }, tag: { type: 'tag' }, location_list: { type: 'location_list' },
-    })).toEqual(['last_email_open_at'])
+      stage: { type: 'select', column: 'studio_stage' },
+    })).toEqual(['last_email_open_at', 'studio_stage'])
+    expect(audienceFieldsMissing(s, { stage: { type: 'select', column: 'email' } })).toEqual([])
+  })
+
+  it('(b′) the live stage field reads a column the view has', () => {
+    const { schema: live } = collectSchema(MIGRATIONS)
+    expect(AUDIENCE_FIELDS.pipeline_stage_slug.column).toBe('studio_stage_slug')
+    expect(live.get(VIEW).has('studio_stage_slug')).toBe(true)
   })
 })

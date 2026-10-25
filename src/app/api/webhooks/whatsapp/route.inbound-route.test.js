@@ -44,7 +44,13 @@ vi.mock('@/lib/whatsapp-coexistence', () => ({
 }))
 vi.mock('@/lib/whatsapp-coexistence-ingest', () => ({ syncContactMatchOnly: vi.fn(), ingestCoexistenceMessage: vi.fn() }))
 // ORGCONTACTS.1 — an inbound message is activity at the routed studio (touchContactStudio).
-vi.mock('@/lib/contact-studios', () => ({ touchContactStudio: vi.fn(async () => ({ ok: true, touched: true })) }))
+// ORGCONTACTS.3 — the phone matches' relationship rows feed pickInboundContact and the router.
+// The real pickStudioByActivity stays (the router's step 4 is under test).
+vi.mock('@/lib/contact-studios', async (importOriginal) => ({
+  ...(await importOriginal()),
+  touchContactStudio: vi.fn(async () => ({ ok: true, touched: true })),
+  studiosOfContacts: vi.fn(async () => ({ ok: true, byContact: new Map() })),
+}))
 
 import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
@@ -55,7 +61,7 @@ import { maybeAutoReply } from '@/lib/agent/auto-reply'
 import { recordCtwaTouch } from '@/lib/meta-capi'
 import { handleFlowCompletion } from '@/lib/whatsapp-flow/completion.js'
 import { fakeWhatsAppDb, link } from '@/lib/whatsapp-numbers-fake-db.test-helpers.js'
-import { touchContactStudio } from '@/lib/contact-studios'
+import { touchContactStudio, studiosOfContacts } from '@/lib/contact-studios'
 
 const ORG = 'd0000000-0000-4000-8000-000000000001'
 const STILL = 'loc-still'
@@ -381,5 +387,48 @@ describe('POST /api/webhooks/whatsapp — inbound activity stamps contact_studio
     const res = await run(makeState({ conversations: [thread('conv-hatch', HATCH)] }))
     expect(res.status).toBe(200)
     expect(inboundRow()).toBeTruthy()
+  })
+})
+
+// ORGCONTACTS.3 — the webhook reads the phone matches' contact_studios rows once,
+// hands them to pickInboundContact (with the number's candidate studios) and the
+// chosen contact's rows to the router (step 4: an active relationship).
+describe('POST /api/webhooks/whatsapp — the relationship rows reach the picker and the router (ORGCONTACTS.3)', () => {
+  const STILL_HOME = { id: 'c-1', location_id: STILL }
+  const twoThreads = () => makeState({
+    contacts: [{ ...STILL_HOME, wa_phone: PHONE, phone: null }],
+    conversations: [thread('conv-still', STILL), thread('conv-hatch', HATCH)],
+  })
+
+  it("passes the chosen contact's studio rows to the router: an active Hatch row files a Stillorgan-home contact at Hatch", async () => {
+    pickInboundContact.mockReturnValue(STILL_HOME)
+    const byContact = new Map([['c-1', [{ location_id: HATCH, status: 'active', last_seen_at: ago(DAY) }]]])
+    studiosOfContacts.mockResolvedValueOnce({ ok: true, byContact })
+    const res = await run(twoThreads())
+    expect(res.status).toBe(200)
+    expect(studiosOfContacts).toHaveBeenCalledWith(expect.anything(), ['c-1'])
+    expect(pickInboundContact).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ id: 'c-1' })]),
+      expect.objectContaining({ candidateLocationIds: expect.arrayContaining([STILL, HATCH]), studiosByContact: byContact }),
+    )
+    expect(inboundRow()).toMatchObject({ conversation_id: 'conv-hatch', location_id: HATCH })
+    expect(maybeAutoReply).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ conversationId: 'conv-hatch', locationId: HATCH }))
+  })
+
+  it('a failed studios read passes null to both and routing still 200s on the home rule', async () => {
+    pickInboundContact.mockReturnValue(STILL_HOME)
+    studiosOfContacts.mockResolvedValueOnce({ ok: false, error: 'contact_studios down' })
+    const res = await run(twoThreads())
+    expect(res.status).toBe(200)
+    expect(pickInboundContact).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ studiosByContact: null }))
+    expect(inboundRow()).toMatchObject({ conversation_id: 'conv-still', location_id: STILL })
+  })
+
+  it('an unknown sender reads no rows and routes to the number home as before', async () => {
+    pickInboundContact.mockReturnValue(null)
+    const res = await run(makeState({ conversations: [] }))
+    expect(res.status).toBe(200)
+    expect(studiosOfContacts).not.toHaveBeenCalled()
+    expect(inboundRow()).toMatchObject({ location_id: STILL })
   })
 })

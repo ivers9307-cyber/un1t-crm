@@ -127,12 +127,19 @@ BEGIN
      OR to_regprocedure('private.whatsapp_numbers_org_change_guard()') IS NULL THEN
     RAISE EXCEPTION 'mig 763: the compatibility functions are still there, or the org-change guard is gone';
   END IF;
-  IF (SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.whatsapp_numbers'::regclass AND contype = 'u') <> 1
+  -- Exactly one unique constraint NAMES label, and it is the organisation one.
+  -- Mig 176's UNIQUE (phone_number_id) (Meta's id) stays and is not counted:
+  -- the first apply on 25 Oct 2026 counted every unique constraint, found two,
+  -- and rolled the whole file back.
+  IF (SELECT count(*) FROM pg_constraint c
+       WHERE c.conrelid = 'public.whatsapp_numbers'::regclass AND c.contype = 'u'
+         AND EXISTS (SELECT 1 FROM pg_attribute a
+                      WHERE a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey) AND a.attname = 'label')) <> 1
      OR NOT EXISTS (SELECT 1 FROM pg_constraint c
                      WHERE c.conrelid = 'public.whatsapp_numbers'::regclass AND c.conname = 'whatsapp_numbers_organization_label_unique'
                        AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
                               FROM pg_attribute a WHERE a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)) = ARRAY['label', 'organization_id']) THEN
-    RAISE EXCEPTION 'mig 763: whatsapp_numbers must carry exactly one unique constraint, on (organization_id, label)';
+    RAISE EXCEPTION 'mig 763: whatsapp_numbers must carry exactly one unique constraint on label, whatsapp_numbers_organization_label_unique (organization_id, label)';
   END IF;
   IF EXISTS (SELECT 1 FROM m763_link_acl a, pg_class c
               WHERE c.oid = 'public.location_whatsapp_numbers'::regclass AND c.relacl::text IS DISTINCT FROM a.acl) THEN

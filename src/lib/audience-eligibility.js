@@ -13,10 +13,15 @@
 //
 //   email    -> buildAudienceQueryAsync   (postmark.js; campaign-sender.js sends through it)
 //   whatsapp -> buildWhatsAppAudienceAsync(whatsapp.js; fetchAllWhatsAppAudience pages through it)
-//   (none)   -> raw contacts at the location — the MATCH set, not a send set.
-//              This is the sequence case: since SEQEXIT.1 a sequence audience
-//              is a continuing condition, so there is no "will receive" to
-//              compute and no channel gate to apply.
+//   (none)   -> the contacts with a relationship at the studio — the MATCH set,
+//              not a send set (public.studio_contacts at studio_location_id,
+//              mig 765: one row per contact here, carrying the stage AT this
+//              studio, ORGCONTACTS.4). This is the sequence case: since
+//              SEQEXIT.1 a sequence audience is a continuing condition, so
+//              there is no "will receive" to compute and no channel gate to
+//              apply. It used to be raw contacts at location_id (the primary
+//              studio only); decision 3 makes a Stillorgan member who enquired
+//              at Hatch a Hatch lead in Hatch's sequences.
 //
 // Every branch returns the wrapped `{ query }` (never a bare builder): the
 // PostgREST builders are thenables, so returning them unwrapped risks the
@@ -52,9 +57,11 @@ export async function buildEligibleAudienceQuery({
   if (channel) {
     throw new Error(`Unknown audience channel: ${channel}`)
   }
-  // Channel-agnostic MATCH set. Mirrors the count route's no-channel branch
-  // exactly (raw contacts at the location, no deliverability gate) so the
-  // sequence preview and the sequence count cannot drift apart.
-  const query = db.from('contacts').select(columns, selectOpts).eq('location_id', locationId)
+  // Channel-agnostic MATCH set: every contact with a relationship at the
+  // studio (studio_contacts, no deliverability gate). The count route's
+  // no-channel branch calls this same function, so the sequence preview and
+  // the sequence count cannot drift apart. The stage field lands on
+  // studio_stage_slug, which the raw contacts table does not have.
+  const query = db.from('studio_contacts').select(columns, selectOpts).eq('studio_location_id', locationId)
   return applyAudienceFilterAsync({ db, query, filter, locationId })
 }

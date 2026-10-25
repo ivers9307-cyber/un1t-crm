@@ -42,6 +42,8 @@ vi.mock('@/lib/permissions', () => {
   }
 })
 
+// ORGCONTACTS.4 — the other contact must be one the caller can VIEW (canViewContact), not merely one of the organisation.
+vi.mock('@/lib/contact-crossovers', () => ({ canViewContact: vi.fn(async () => true) }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 
 vi.mock('@/lib/person-links', () => ({
@@ -52,6 +54,7 @@ vi.mock('@/lib/person-links', () => ({
   getPersonGroup: vi.fn(),
 }))
 
+import { canViewContact } from '@/lib/contact-crossovers'
 import { POST, DELETE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -65,9 +68,12 @@ const ID = 'a0000000-0000-0000-0000-000000000001'
 const OTHER_ID = 'b0000000-0000-0000-0000-000000000002'
 const OTHER_ID_DIFF_LOC = 'c0000000-0000-0000-0000-000000000003'
 
-const CONTACT = { id: ID, location_id: 'loc-A', name: 'Alice' }
-const OTHER = { id: OTHER_ID, location_id: 'loc-A' }
-const OTHER_LOC = { id: OTHER_ID_DIFF_LOC, location_id: 'loc-B' }
+// ORGCONTACTS.4 — a person group links one organisation's contacts across its
+// studios; the fence is the organisation, not the studio.
+const CONTACT = { id: ID, location_id: 'loc-A', organization_id: 'org-A', name: 'Alice' }
+const OTHER = { id: OTHER_ID, location_id: 'loc-A', organization_id: 'org-A' }
+const OTHER_LOC = { id: OTHER_ID_DIFF_LOC, location_id: 'loc-B', organization_id: 'org-A' }
+const OTHER_ORG = { id: OTHER_ID_DIFF_LOC, location_id: 'loc-Z', organization_id: 'org-Z' }
 
 function mockDb({ contact = CONTACT, other = OTHER } = {}) {
   return {
@@ -216,13 +222,34 @@ describe('POST /api/contacts/[id]/link — link', () => {
     expect(json.error).toMatch(/unlink one first/i)
   })
 
-  it('otherContact in a different location → 400 cross-location error', async () => {
+  it('links two contacts of one organisation at different studios (ORGCONTACTS.4)', async () => {
     createServerClient.mockReturnValue(mockDb({ contact: CONTACT, other: OTHER_LOC }))
+
+    const res = await POST(postReq({ otherContactId: OTHER_ID_DIFF_LOC }), props)
+    expect(res.status).toBe(200)
+    expect(createGroup).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactIds: [ID, OTHER_ID_DIFF_LOC] }))
+  })
+
+  it('refuses (404, like a missing contact) an other contact the caller cannot view, even inside the organisation', async () => {
+    createServerClient.mockReturnValue(mockDb({ contact: CONTACT, other: OTHER_LOC }))
+    canViewContact.mockResolvedValueOnce(false)
+    const res = await POST(postReq({ otherContactId: OTHER_ID_DIFF_LOC }), props)
+    expect(res.status).toBe(404)
+    expect((await res.json()).error).toBe('Contact not found')
+    expect(canViewContact).toHaveBeenCalledWith(expect.anything(), OWNER, expect.objectContaining({ id: OTHER_ID_DIFF_LOC }))
+    expect(getPersonGroup).not.toHaveBeenCalled()
+    expect(createGroup).not.toHaveBeenCalled()
+  })
+
+  it('refuses across organisations with the new message, before any group read', async () => {
+    createServerClient.mockReturnValue(mockDb({ contact: CONTACT, other: OTHER_ORG }))
 
     const res = await POST(postReq({ otherContactId: OTHER_ID_DIFF_LOC }), props)
     expect(res.status).toBe(400)
     const json = await res.json()
-    expect(json.error).toMatch(/different locations/i)
+    expect(json.error).toBe('Cannot link contacts in different organisations')
+    expect(getPersonGroup).not.toHaveBeenCalled()
+    expect(createGroup).not.toHaveBeenCalled()
   })
 
   it('contact [id] not found → 404', async () => {

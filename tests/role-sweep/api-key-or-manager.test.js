@@ -60,9 +60,13 @@ afterEach(() => vi.unstubAllEnvs())
 // ── PUT /api/contacts/[id]: the contact's location (detail route → 404) ────
 const CONTACT_ROW = (loc) => [{ data: { tags: [], location_id: loc, email: 'member.one@example.com', email_status: 'active', glofox_member_id: null }, error: null }]
 const PUT_NOT_FOUND = { status: 404, body: { success: false, error: 'not_found' } }
-describeGate('PUT /api/contacts/[id] (MANAGER_ROLES at the contact)', {
+// ORGCONTACTS.4 — the gate also reads the contact's relationship studios
+// (contact_studios, empty here): a manager with Contacts at one of them may
+// edit; with none, only the primary rule applies, as before.
+const STUDIO_ROWS = { data: [], error: null }
+describeGate('PUT /api/contacts/[id] (MANAGER_ROLES at the contact, or at a relationship studio with Contacts)', {
   call: () => contact.PUT(json('PUT', { label: 'VIP' }), idParams(CONTACT_ID)),
-  gateReads: CONTACT_ROW,
+  gateReads: (loc) => [...CONTACT_ROW(loc), STUDIO_ROWS],
   forbidden: PUT_NOT_FOUND, hidden: PUT_NOT_FOUND, unauth: UNAUTHORIZED,
   cases: CASES,
 }, T)

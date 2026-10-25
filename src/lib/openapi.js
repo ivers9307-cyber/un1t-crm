@@ -3327,13 +3327,30 @@ registry.registerPath({
   path: '/api/mobile/contacts/crossover-ids',
   tags: ['Mobile'],
   security: [{ CookieAuth: [] }],
-  summary: 'Crossover contact ids for the phone directory',
-  description: 'The active studio\'s crossover contact ids (owned by another studio, with an active membership, a un1t.online client row or a deal here), capped at 100. Ids only: the phone reads the rows through RLS. Gated on the mobile `contacts` permission at the active studio (x-active-location). An empty list on a failed lookup.',
+  summary: 'Crossover contact ids for the phone directory (fallback)',
+  description: 'The active studio\'s crossover contact ids (a contact_studios row here whose primary studio is elsewhere), capped at 100. Ids only: the phone reads the rows through RLS. Since ORGCONTACTS.5 the phone directory searches through /api/mobile/contacts/search and uses this list only when that route fails. Gated on the mobile `contacts` permission at the active studio (x-active-location). An empty list on a failed lookup.',
   responses: {
     200: { description: 'Crossover ids', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ ids: z.array(z.string()) }) }).openapi('MobileCrossoverIdsResponse') } } },
     400: { description: 'No active location', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'No mobile contacts permission', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/mobile/contacts/search',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Phone directory search at the active studio',
+  description: 'ORGCONTACTS.5 — the phone directory\'s search over public.studio_contacts at the active studio (x-active-location): every contact with a relationship here, one row per linked person, no id cap. `q` (each whitespace token must match name, email, first or last name; a token with 4+ digits also matches phone / wa_phone) and `limit` (default 40, max 100). Newest first with no term, by name with one. Gated on the mobile `contacts` permission. A failed read is a 500 and the phone falls back to its own RLS read.',
+  request: { query: z.object({ q: z.string().optional(), limit: z.coerce.number().int().min(1).max(100).optional() }) },
+  responses: {
+    200: { description: 'Directory rows', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ contacts: z.array(z.object({}).passthrough()) }) }).openapi('MobileContactSearchResponse') } } },
+    400: { description: 'No active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No mobile contacts permission', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The read failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3603,6 +3620,33 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — contact_linking permission required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ORGCONTACTS.4 (decision 4) — change a contact's primary studio.
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/primary-studio',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: "Change the contact's primary studio to another studio the person has a relationship with (the primary studio's admins, an organisation admin, or a master)",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ location_id: uuidLike }).openapi('ContactPrimaryStudioBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'The primary studio (moved, or unchanged when it already was the target)', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ location_id: uuidLike }) }) } } },
+    400: { description: 'Validation error, no_relationship (no contact_studios row at the target) or other_organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "Forbidden — the primary studio's admins, an organisation admin, or a master", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The relationship read failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
