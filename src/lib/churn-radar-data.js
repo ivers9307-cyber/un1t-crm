@@ -288,8 +288,14 @@ async function applyPersonRollup(db, locationId, rows) {
   if (!hasGroups) return rows
 
   try {
-    // 1. Load ALL person_groups for this location (paginated, location-scoped).
-    //    Avoids the giant .in(groupIds) URL-overflow with ~895 groups.
+    // 1. Load ALL person_groups of this studio's ORGANISATION (paginated).
+    //    Groups follow the organisation (mig 767; mig 769 dropped their
+    //    location_id), and the org's ~940 groups page in three reads, so no
+    //    giant .in(groupIds) URL. A studio with no readable organisation
+    //    throws like any other failed read here.
+    const { data: studio, error: locErr } = await db.from('locations').select('organization_id').eq('id', locationId).maybeSingle()
+    if (locErr) throw new Error(locErr.message)
+    if (!studio?.organization_id) throw new Error('studio has no organisation')
     const primaryByGroup = new Map()
     let pgStart = 0
     while (true) {
@@ -297,7 +303,7 @@ async function applyPersonRollup(db, locationId, rows) {
       const { data: page, error: pgErr } = await db
         .from('person_groups')
         .select('id, primary_contact_id')
-        .eq('location_id', locationId)
+        .eq('organization_id', studio.organization_id)
         .order('id', { ascending: true })
         .range(pgStart, pgEnd)
       if (pgErr) throw new Error(pgErr.message)
