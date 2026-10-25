@@ -60,7 +60,8 @@ export const BEFORE2 = `
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL, location_id uuid NOT NULL,
     contact_id uuid NOT NULL, source text NOT NULL, plan_name text NOT NULL DEFAULT 'Plan',
     status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'ended')),
-    first_seen_at timestamptz NOT NULL DEFAULT now(), last_seen_at timestamptz NOT NULL DEFAULT now(), ended_at timestamptz);
+    first_seen_at timestamptz NOT NULL DEFAULT now(), last_seen_at timestamptz NOT NULL DEFAULT now(), ended_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
   ALTER TABLE public.contact_memberships ENABLE ROW LEVEL SECURITY;
   REVOKE ALL ON public.contact_memberships FROM anon, authenticated;
   GRANT SELECT, INSERT, UPDATE, DELETE ON public.contact_memberships TO service_role;
@@ -116,4 +117,20 @@ export const PERSON_GROUPS_270 = `
   ALTER TABLE public.person_group_members ENABLE ROW LEVEL SECURITY;
   REVOKE ALL ON public.person_groups, public.person_group_members FROM anon, authenticated, PUBLIC;
   INSERT INTO public.person_groups (location_id, primary_contact_id) VALUES ('${LOC_A}', '${C_A}');
+`
+
+// ORGCONTACTS.7 (mig 770): the un1t.online membership facts the backfill reads.
+// C_C1's api row at B gets a real plan and since; C_D1 gets an ACTIVE api row at
+// A beside its export row (as prod: the 20 export rows are artefacts whose
+// contacts all hold an active api row); C_C3 gets an ENDED api membership at B
+// (its relationship there is already ended, decision 2); C_C1 gets an export
+// ARTEFACT at B (ended the day the API sync took over, 16 Oct 2026) that the
+// backfill must skip.
+export const MEMBERSHIP_FACT_SEEDS = `
+  UPDATE public.contact_memberships SET plan_name = 'Founding Membership — Unlimited', first_seen_at = '2026-02-01T00:00:00Z'
+   WHERE contact_id = '${C_C1}' AND location_id = '${LOC_B}' AND source = 'un1t_online_api';
+  INSERT INTO public.contact_memberships (organization_id, location_id, contact_id, source, plan_name, status, first_seen_at, ended_at) VALUES
+    ('${ORG1}', '${LOC_A}', '${C_D1}', 'un1t_online_api', 'Monthly', 'active', '2026-03-01T00:00:00Z', NULL),
+    ('${ORG1}', '${LOC_B}', '${C_C3}', 'un1t_online_api', 'Old plan', 'ended', '2026-01-01T00:00:00Z', '2026-09-01T00:00:00Z'),
+    ('${ORG1}', '${LOC_B}', '${C_C1}', 'un1t_online_export', 'Founding Membership — Unlimited', 'ended', '2026-01-01T00:00:00Z', '2026-10-16T00:00:00Z');
 `

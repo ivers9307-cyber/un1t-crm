@@ -23,11 +23,13 @@ import { mig, LOC_A, LOC_B, LOC_C, ORG1, signedOut, bootProd } from './helpers/c
 import {
   MIG_699, MIG_731, MIG_732, MIG_758, MIG_762, MIG_764, MIG_765,
   QUAL_765, STUDIO_HELPER, OLD_HELPER, CROSS_RPC, MD5_765_STUDIO, md5Of,
-  C_A, C_A2, C_B, C_C1, C_D1, C_C2, C_C3, BEFORE2, GLOFOX_ROWS, ENDED_ROW, PERSON_GROUPS_270,
+  C_A, C_A2, C_B, C_C1, C_D1, C_C2, C_C3, BEFORE2, GLOFOX_ROWS, ENDED_ROW, PERSON_GROUPS_270, MEMBERSHIP_FACT_SEEDS,
 } from './helpers/contact-studios-fixture.js'
 
 const MIG_767 = mig('767_person_groups_organization.sql')
 const MIG_768 = mig('768_contact_side_channels_dropped.sql')
+const MIG_770 = mig('770_contact_studios_membership_facts.sql')
+const MIG_771 = mig('771_contact_memberships_dropped.sql')
 const PRE = [MIG_699, MIG_731, MIG_732, MIG_758, MIG_762, MIG_764]
 
 let db
@@ -46,6 +48,10 @@ beforeAll(async () => {
   // booked class counted as activity); 768 repairs them. Seed one.
   await db['exec'](`UPDATE public.contact_studios SET last_seen_at = now() + interval '30 days' WHERE contact_id = '${C_C3}' AND location_id = '${LOC_B}'`)
   await signedOut(db); await db['exec'](MIG_768)
+  // ORGCONTACTS.7: the membership facts move onto the row (770) and the table goes (771).
+  await db['exec'](MEMBERSHIP_FACT_SEEDS)
+  await signedOut(db); await db['exec'](MIG_770)
+  await signedOut(db); await db['exec'](MIG_771)
 }, 120_000)
 afterAll(() => db?.close())
 
@@ -138,5 +144,25 @@ describe('the reconcile with the tables that remain', () => {
   it('768 repaired every row whose last activity lay in the future', async () => {
     const { rows: [r] } = await db.query(`SELECT count(*)::int AS n FROM public.contact_studios WHERE last_seen_at > now()`)
     expect(r.n).toBe(0)
+  })
+})
+
+// ORGCONTACTS.7 (migs 770, 771): the membership facts are sync-owned columns the
+// reconcile never clears, derive reads the active one as the membership, and the
+// table that used to hold them is gone.
+describe('the membership facts on the row (770, 771)', () => {
+  it('contact_memberships is gone; C_C1 at B is a member through membership_status; the reconcile keeps every fact', async () => {
+    expect((await db.query(`SELECT to_regclass('public.contact_memberships') IS NULL AS gone`)).rows[0].gone).toBe(true)
+    await db.query(`SELECT * FROM public.reconcile_contact_studios(NULL)`)
+    const { rows: [r] } = await db.query(`SELECT kind, status, membership_plan, membership_status, membership_since, membership_ended_at FROM public.contact_studios WHERE contact_id = $1 AND location_id = $2`, [C_C1, LOC_B])
+    expect(r).toEqual({ kind: 'member', status: 'active', membership_plan: 'Founding Membership — Unlimited', membership_status: 'active', membership_since: new Date('2026-02-01T00:00:00Z'), membership_ended_at: null })
+  })
+  it('ending the membership (as the sync does) demotes a lapsed client to kind client on the next reconcile, the relationship staying active', async () => {
+    // a lapsed member keeps an ACTIVE client row because un1t.online still lists them as a client
+    await db.query(`INSERT INTO public.un1t_clients (location_id, un1t_user_id, contact_id, status) VALUES ($1, 'u-b-c1', $2, 'inactive')`, [LOC_B, C_C1])
+    await db.query(`UPDATE public.contact_studios SET membership_status = 'ended', membership_ended_at = now() WHERE contact_id = $1 AND location_id = $2`, [C_C1, LOC_B])
+    await db.query(`SELECT * FROM public.reconcile_contact_studios($1)`, [LOC_B])
+    const { rows: [r] } = await db.query(`SELECT kind, status, membership_status FROM public.contact_studios WHERE contact_id = $1 AND location_id = $2`, [C_C1, LOC_B])
+    expect(r).toEqual({ kind: 'client', status: 'active', membership_status: 'ended' })
   })
 })

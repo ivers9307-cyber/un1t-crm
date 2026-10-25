@@ -5,8 +5,8 @@
 
 import { describe, it, expect } from 'vitest'
 import {
-  KINDS, STATUSES, SOURCES, IN_CHUNK,
-  upsertContactStudio, touchContactStudio, contactsAtStudio, studiosOfContact, studiosOfContacts,
+  KINDS, STATUSES, SOURCES, IN_CHUNK, MEMBERSHIP_FACT_COLUMNS,
+  upsertContactStudio, touchContactStudio, setMembershipFacts, contactsAtStudio, studiosOfContact, studiosOfContacts,
   hasRelationshipAt, primaryStudioOf, pickStudioByActivity,
 } from './contact-studios.js'
 
@@ -144,6 +144,57 @@ describe('upsertContactStudio', () => {
     expect(await upsertContactStudio(fakeDb({ contact_studios: () => ({ data: [], error: null }) }), { contactId: CT, locationId: A, kind: 'lead', source: 'deal' })).toMatchObject({ ok: false })
     expect(await upsertContactStudio(fakeDb({ contact_studios: () => { throw new Error('network') } }), { contactId: CT, locationId: A, kind: 'lead', source: 'deal' })).toEqual({ ok: false, error: 'network' })
   })
+})
+
+// ORGCONTACTS.7 (mig 770) — the un1t sync's one write of the membership facts.
+describe('setMembershipFacts', () => {
+  const rowsBack = { data: [{ contact_id: CT }], error: null }
+  it('active: one update of plan / status / ended_at null, then a guarded membership_since stamp only where null', async () => {
+    const db = fakeDb({ contact_studios: () => rowsBack })
+    const r = await setMembershipFacts(db, { contactId: CT, locationId: A, plan: 'Founding Membership — Unlimited', status: 'active', nowIso: NOW })
+    expect(r).toEqual({ ok: true, updated: true })
+    expect(db.ops.map((o) => o.op)).toEqual(['update', 'update'])
+    expect(db.ops[0].payload).toEqual({ membership_plan: 'Founding Membership — Unlimited', membership_status: 'active', membership_ended_at: null, updated_at: NOW })
+    expect(filter(db.ops[0], 'eq', 'contact_id')).toBe(CT)
+    expect(filter(db.ops[0], 'eq', 'location_id')).toBe(A)
+    expect(db.ops[0].select).toBe('contact_id')
+    expect(db.ops[1].payload).toEqual({ membership_since: NOW })
+    expect(filter(db.ops[1], 'is', 'membership_since')).toBeNull()
+    expect(filter(db.ops[1], 'eq', 'contact_id')).toBe(CT)
+  })
+  it('ended: one update with membership_ended_at = endedAt ?? nowIso, guarded on the row still being active (never moves an earlier end date), no plan change, no since stamp', async () => {
+    let db = fakeDb({ contact_studios: () => rowsBack })
+    expect(await setMembershipFacts(db, { contactId: CT, locationId: A, status: 'ended', endedAt: '2026-09-01T00:00:00.000Z', nowIso: NOW })).toEqual({ ok: true, updated: true })
+    expect(db.ops.map((o) => o.op)).toEqual(['update'])
+    expect(db.ops[0].payload).toEqual({ membership_status: 'ended', membership_ended_at: '2026-09-01T00:00:00.000Z', updated_at: NOW })
+    expect(filter(db.ops[0], 'eq', 'membership_status')).toBe('active') // an already-ended row is untouched: updated:false
+    db = fakeDb({ contact_studios: () => rowsBack })
+    await setMembershipFacts(db, { contactId: CT, locationId: A, status: 'ended', nowIso: NOW })
+    expect(db.ops[0].payload.membership_ended_at).toBe(NOW)
+  })
+  it('a zero-row update is { ok: true, updated: false } with no second write; a failed write is { ok: false }; a bad status or missing id writes nothing', async () => {
+    let db = fakeDb({ contact_studios: () => ({ data: [], error: null }) })
+    expect(await setMembershipFacts(db, { contactId: CT, locationId: A, plan: 'x', status: 'active', nowIso: NOW })).toEqual({ ok: true, updated: false })
+    expect(db.ops.map((o) => o.op)).toEqual(['update'])
+    db = fakeDb({ contact_studios: () => ERR })
+    expect(await setMembershipFacts(db, { contactId: CT, locationId: A, plan: 'x', status: 'active' })).toEqual({ ok: false, error: expect.stringContaining('boom') })
+    db = fakeDb()
+    expect(await setMembershipFacts(db, { contactId: CT, locationId: A, status: 'paused' })).toMatchObject({ ok: false })
+    expect(await setMembershipFacts(db, { contactId: null, locationId: A, status: 'active' })).toMatchObject({ ok: false })
+    expect(db.ops).toEqual([])
+  })
+  it('never names kind, status, source, stage_slug, first_seen_at or last_seen_at', async () => {
+    const db = fakeDb({ contact_studios: () => rowsBack })
+    await setMembershipFacts(db, { contactId: CT, locationId: A, plan: 'x', status: 'active', nowIso: NOW })
+    for (const op of db.ops) for (const k of Object.keys(op.payload)) expect(['membership_plan', 'membership_status', 'membership_since', 'membership_ended_at', 'updated_at']).toContain(k)
+  })
+})
+
+it('ROW_COLUMNS carries the four membership columns (every studiosOfContact reader sees the plan); MEMBERSHIP_FACT_COLUMNS names them', async () => {
+  expect(MEMBERSHIP_FACT_COLUMNS).toBe('membership_plan, membership_status, membership_since, membership_ended_at')
+  const db = fakeDb({ contact_studios: () => ({ data: [], error: null }) })
+  await studiosOfContact(db, CT)
+  for (const col of MEMBERSHIP_FACT_COLUMNS.split(', ')) expect(db.ops[0].select).toContain(col)
 })
 
 describe('touchContactStudio', () => {

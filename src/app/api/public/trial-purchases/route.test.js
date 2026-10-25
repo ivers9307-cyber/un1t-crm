@@ -89,7 +89,7 @@ const freshState = () => ({
     loc2: { id: 'loc2', name: 'UN1T Hatch Street', organization_id: 'org1', settings: { un1t_online: { writes_enabled: true } } },
   },
   contact: { id: 'c1', email: 'ava@example.com', name: 'Ava Byrne', first_name: 'Ava', last_name: 'Byrne', phone: '0851234567', un1t_user_id: null, glofox_member_id: 'g1', glofox_membership_status: 'active', glofox_membership_plan: 'Monthly' },
-  rows: { glofox_trial_claims: [], glofox_push_events: [], trial_purchases: [], un1t_subscriptions: [], contact_memberships: [] },
+  rows: { glofox_trial_claims: [], glofox_push_events: [], trial_purchases: [], un1t_subscriptions: [], contact_studios: [] },
   errors: {},
 })
 const filterValue = (filters, col) => filters.find((f) => f[0] === 'eq' && f[1] === col)?.[2]
@@ -298,12 +298,12 @@ describe('POST /api/public/trial-purchases', () => {
     expect(mocks.capi).not.toHaveBeenCalled()
   })
   it('Hatch: an active member gets active_member and no un1t.online call', async () => {
-    mocks.state.rows.contact_memberships = [{ id: 'cm1' }]
+    mocks.state.rows.contact_studios = [{ id: 'cm1' }]
     const r = await POST(req(HATCH_BODY))
     expect(r.status).toBe(200)
     expect(await r.json()).toEqual({ success: false, code: 'active_member', error: 'You are already a member.', help: { cta_label: 'Help me' } })
     expect(mocks.contact).toHaveBeenCalledWith(expect.objectContaining({ locationId: 'loc2' }))
-    const read = mocks.read.mock.calls.find(([t]) => t === 'contact_memberships')
+    const read = mocks.read.mock.calls.find(([t]) => t === 'contact_studios')
     expect(filterValue(read[1], 'location_id')).toBe('loc2')
     expect(mocks.inserted).not.toHaveBeenCalled()
     expect(mocks.ensureAccount).not.toHaveBeenCalled()
