@@ -433,6 +433,33 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/public/trial-purchases',
+  tags: ['Public'],
+  summary: 'Start a paid trial purchase (PAIDTRIAL.1, the /trial page)',
+  description: 'Anonymous. Rate-limited to 8 per landing path per IP per 15 min. The studio and the product come from the landing row named by `path` (its paid_trial block); the price is the block\'s, never the body\'s. Captures the lead like the class funnel (contact, lead_source, attribution, consent, deal, Meta Lead), inserts an awaiting_payment trial_purchases row and opens the provider payment. Returns { purchaseId, checkout: { provider, token, url }, amount_cents, currency, product_name }. 400 not_configured when the page sells nothing (no block, no price, or no Glofox product set).',
+  responses: {
+    200: { description: 'Purchase row created and checkout opened' },
+    400: { description: 'Validation failed, not_configured or payments_unavailable', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Provider checkout could not be opened', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Landing row or location unreadable', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/trial-purchases/{id}',
+  tags: ['Public'],
+  summary: 'Status of one paid trial purchase (checkout and confirming polls)',
+  description: 'Anonymous, display-safe. state: pending | paid (money in, grant in flight) | granted (the Glofox plan is on the account) | failed. Re-checks the provider while pending (capped at 20 per purchase per 5 min); a settled payment releases the row and nudges the trial-purchases worker.',
+  responses: {
+    200: { description: 'Status returned' },
+    404: { description: 'Unknown purchase', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'get',
   path: '/api/public/offer-purchases/{id}',
   tags: ['Public'],
@@ -456,6 +483,22 @@ registry.registerPath({
     403: { description: 'Missing approvals_offer_purchases', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Unknown or inaccessible purchase', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Purchase is not paid', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/trial-purchases/{id}/review',
+  tags: ['Approvals'],
+  summary: 'Retry or hand-resolve a paid trial purchase whose Glofox grant failed (PAIDTRIAL.2)',
+  description: "Session auth + the approvals_offer_purchases grant, judged at the purchase's studio; ids outside the caller's studios return 404. Body { action: 'retry' | 'resolve' }. retry puts a needs_review row back in the queue (the write-ahead grant marker is kept, so a purchase Glofox never answered is never bought twice); resolve marks it granted by hand and emails the buyer.",
+  request: { body: { content: { 'application/json': { schema: z.object({ action: z.enum(['retry', 'resolve']) }) } } } },
+  responses: {
+    200: { description: '{ status } (queued or granted), or { already: true }' },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing approvals_offer_purchases', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown or inaccessible purchase', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not paid, or the processor holds the row (queued/processing)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

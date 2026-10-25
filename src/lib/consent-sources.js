@@ -83,6 +83,7 @@ export const CONSENT_SOURCE_CATEGORY = Object.freeze({
   booking_form:                   VOLUNTARY,
   waitlist_form:                  VOLUNTARY,
   start_class:                    VOLUNTARY,
+  paid_trial:                     VOLUNTARY, // PAIDTRIAL.1 — the /trial purchase form's consent tick
   host_mailing_list:              VOLUNTARY,
   mailing_list:                   VOLUNTARY,
   whatsapp_flow:                  VOLUNTARY,

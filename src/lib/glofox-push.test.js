@@ -419,6 +419,23 @@ describe('findOrCreateGlofoxMember — phone dup-check before a mint', () => {
     expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
   })
 
+  // PAIDTRIAL.3 — a PAID product has no free trial to double up, so its
+  // caller may ask for the account anyway; the match comes back as data.
+  it("phoneMatchPolicy 'create': mints on the new email despite the phone match, never links, and reports the match", async () => {
+    searchGlofoxMember.mockResolvedValueOnce({ found: true, member: { _id: 'gx-phone', email: 'old-address@b.com' }, allMatches: [{ _id: 'gx-phone' }], error: null })
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    const db = makeFakeDb()
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'paid_trial', contact: returner,
+      createIfMissing: true, attachTrial: false, phoneMatchPolicy: 'create',
+    })
+    expect(out.status).toBe('created')
+    expect(out.glofox_member_id).toBe('gx-new')
+    expect(out.phone_match).toEqual({ matches: 1, glofox_member_ids: ['gx-phone'] })
+    expect(registerGlofoxMember).toHaveBeenCalledWith(VALID_CREDS, expect.objectContaining({ email: 'new-address@b.com' }))
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
   it('mints as before when no Glofox account holds the mobile', async () => {
     searchGlofoxMember.mockResolvedValueOnce({ found: false, member: null, error: null })
     registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })

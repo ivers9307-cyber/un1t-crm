@@ -79,6 +79,10 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath, c
     case 'class_funnel': return (localOnEdit || classFunnelShownOnLanding(block))
       ? <ClassFunnelBlock block={block} onEdit={localOnEdit} publicPath={publicPath} locationName={locationName} />
       : null
+    // PAIDTRIAL.1 — the paid trial product has its own page (/trial); on a
+    // landing page it renders only in the editor, as a stub, so its copy and
+    // price stay editable there.
+    case 'paid_trial':  return localOnEdit ? <PaidTrialBlock block={block} onEdit={localOnEdit} /> : null
     case 'embed':       return <EmbedBlock       block={block} onEdit={localOnEdit} />
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
@@ -451,6 +455,23 @@ export function ClassFunnelBlock({ block, onEdit, publicPath, locationName = '' 
             consultDoneBody={block.consult_done_body}
           />
         )}
+      </div>
+    </section>
+  )
+}
+
+// PAIDTRIAL.1 — editor stub for the paid trial block. The live card is
+// PaidTrialFunnel, rendered by src/app/trial/page.js.
+export function PaidTrialBlock({ block }) {
+  const price = Number(block.price_cents) > 0 ? `€${(Number(block.price_cents) / 100).toFixed(Number(block.price_cents) % 100 ? 2 : 0)}` : 'no price'
+  const ready = Boolean(block.membership_id && block.plan_code)
+  return (
+    <section className="relative bg-black text-white border-t border-white/10 py-20 px-5 flex items-center justify-center">
+      <div className="w-full max-w-lg rounded-3xl border border-white/12 bg-black/45 px-6 py-8 text-center">
+        <div className="font-display font-extrabold uppercase text-2xl mb-2">{block.heading || 'Paid trial'}</div>
+        <p className="text-white/60 text-sm">
+          Sold at /trial for {price}. {ready ? 'Glofox product set.' : 'No Glofox product set yet: the page sells nothing until it is.'} Edit the copy, the price and the product in the panel.
+        </p>
       </div>
     </section>
   )

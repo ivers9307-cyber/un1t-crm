@@ -22,6 +22,14 @@ import { getLocationWhatsAppNumberConfig } from './whatsapp-config'
 // an organisation number sends a studio's events with the one token. A failed
 // lookup is "no number", logged, as the old unchecked whatsapp_numbers read
 // was: attribution must never break a webhook or a booking.
+// CAPILOG.1 — every reason a website event was NOT sent is one warn line;
+// before this the gates returned in silence and a dataset with no server
+// events could not be explained from the logs.
+function notSent(reason, ctx) {
+  console.warn('[meta-capi] website event not sent:', reason, ctx)
+  return { sent: false, reason }
+}
+
 async function studioNumber(locationId) {
   try {
     return await getLocationWhatsAppNumberConfig(locationId)
@@ -140,7 +148,7 @@ export function fbcFromFbclid(fbclid, nowMs = Date.now()) {
  * Returns null when neither email nor phone normalizes — an event Meta
  * can't match is not worth sending.
  */
-export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent, firstName, lastName, externalId, fbp }) {
+export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent, firstName, lastName, externalId, fbp, value, currency, orderId, contentType }) {
   const em = normalizeEmailForMeta(email)
   const ph = normalizePhoneForMeta(phone)
   if (!em && !ph) return null
@@ -174,7 +182,20 @@ export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSou
   }
   if (eventSourceUrl) event.event_source_url = eventSourceUrl
   if (eventId) event.event_id = eventId
-  if (contentName) event.custom_data = { content_name: contentName }
+  // PURCHASEVALUE.1 — the money on a server Purchase: Meta's Sales
+  // optimisation and its ROAS column read value + currency off the event,
+  // and the browser copy (which carries them) only exists when the visitor
+  // accepted cookies. order_id is our purchase id, so a replayed send is one
+  // order to Meta, and content_type says the content_name is a product.
+  const custom = {}
+  if (contentName) custom.content_name = contentName
+  if (Number.isFinite(value) && value >= 0) {
+    custom.value = Math.round(value * 100) / 100
+    custom.currency = typeof currency === 'string' && currency.trim() ? currency.trim().toUpperCase() : 'EUR'
+  }
+  if (typeof orderId === 'string' && orderId.trim()) custom.order_id = orderId.trim()
+  if (typeof contentType === 'string' && contentType.trim()) custom.content_type = contentType.trim()
+  if (Object.keys(custom).length) event.custom_data = custom
   return event
 }
 
@@ -182,31 +203,34 @@ export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSou
  * Fire a website conversion event for a lead/booking. Same gates as the CTWA
  * path: no dataset_id or no number token → clean no-op. Never throws.
  */
-export async function sendWebsiteConversion(db, { locationId, eventName, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent, firstName, lastName, externalId, fbp }) {
+export async function sendWebsiteConversion(db, { locationId, eventName, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent, firstName, lastName, externalId, fbp, value, currency, orderId, contentType }) {
   try {
     if (!locationId) return { sent: false, reason: 'no_location' }
     const event = buildWebsiteEvent({
       eventName,
       eventTime: Math.floor(Date.now() / 1000),
       email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent,
-      firstName, lastName, externalId, fbp,
+      firstName, lastName, externalId, fbp, value, currency, orderId, contentType,
     })
-    if (!event) return { sent: false, reason: 'no_identifiers' }
+    if (!event) return notSent('no_identifiers', { eventName, locationId, eventId })
 
-    const { data: loc } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
+    const { data: loc, error: locErr } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
+    if (locErr) return notSent('settings_unreadable', { eventName, locationId, eventId, err: locErr.message })
     const datasetId = loc?.settings?.meta_ads?.dataset_id
-    if (!datasetId) return { sent: false, reason: 'no_dataset' }
+    if (!datasetId) return notSent('no_dataset', { eventName, locationId, eventId })
 
     // METADATASET.1 — the dataset's own token when the location stores one
     // (a studio whose dataset sits in a different Meta business from any
     // WhatsApp account, or that has no WhatsApp number at all). Otherwise
     // the WhatsApp number token, as before.
     let accessToken = websiteEventToken(loc?.settings, null)
+    let tokenSource = accessToken ? 'dataset' : null
     if (!accessToken) {
       const num = await studioNumber(locationId)
       accessToken = websiteEventToken(null, num?.token)
+      if (accessToken) tokenSource = 'whatsapp_number'
     }
-    if (!accessToken) return { sent: false, reason: 'no_token' }
+    if (!accessToken) return notSent('no_token', { eventName, locationId, datasetId, eventId })
 
     const res = await fetch(`https://graph.facebook.com/v21.0/${datasetId}/events`, {
       method: 'POST',
@@ -215,10 +239,15 @@ export async function sendWebsiteConversion(db, { locationId, eventName, email, 
     })
     const json = await res.json().catch(() => ({}))
     if (!res.ok || json.error) {
-      console.error('[meta-capi] website event send failed:', json.error?.message || `HTTP ${res.status}`)
+      console.error('[meta-capi] website event send failed:', json.error?.message || `HTTP ${res.status}`, { eventName, datasetId, eventId })
       return { sent: false, reason: 'api_error' }
     }
-    return { sent: true }
+    // CAPILOG.1 — one line per accepted send, so "did Meta get it" is
+    // answerable from the runtime log rather than from Events Manager alone
+    // (the Stillorgan dataset showed no server event after a live Lead on
+    // 21 Oct 2026 and nothing here said why).
+    console.log('[meta-capi] website event sent', { eventName, datasetId, eventId, tokenSource, events_received: json.events_received ?? null })
+    return { sent: true, events_received: json.events_received ?? null }
   } catch (e) {
     console.error('[meta-capi] website conversion failed:', e?.message)
     return { sent: false, reason: 'exception' }

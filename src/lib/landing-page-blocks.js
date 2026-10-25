@@ -216,6 +216,35 @@ const CLASS_FUNNEL_DEFAULT = ({ brand = '' } = {}) => ({
   currency:            'EUR',
 })
 
+// PAIDTRIAL.1 — a paid trial product sold from its own page (/trial): the
+// price panel + buyer form + embedded checkout, then the grant of a Glofox
+// plan onto the buyer's account once the money is in. Every customer-facing
+// string, the price, the duration and the Glofox product are operator fields.
+// membership_id + plan_code name the €0 Glofox plan bought after payment (the
+// CRM takes the money; Glofox never charges). BOTH must be set for the page
+// to take a purchase: paidTrialConfigFromBlocks (src/lib/paid-trial.js).
+const PAID_TRIAL_DEFAULT = ({ brand = '' } = {}) => ({
+  id:             newBlockId(),
+  type:           'paid_trial',
+  eyebrow:        '14 day reset',
+  heading:        'The 14 Day Reset',
+  subhead:        'Coach-led 45-minute sessions, as many as you want, for 14 days. Pay once, start this week.',
+  product_name:   'The 14 Day Reset',
+  price_cents:    3900,
+  currency:       'EUR',
+  duration_days:  14,
+  ticks:          ['Unlimited classes for 14 days', 'Every session coach-led', 'Book straight after you pay'],
+  cta_label:      'Start my 14 Day Reset',
+  consent_label:  classFunnelConsentDefault(brand),
+  done_title:     "You're in 🎉",
+  done_body:      'Your 14 Day Reset is on your account. Check your email for how to book your first class.',
+  membership_id:  '',
+  plan_code:      '',
+  tag:            '',
+  lead_source:    '',
+  event_source_url: '',
+})
+
 const STATS_DEFAULT = () => ({
   id:    newBlockId(),
   type:  'stats',
@@ -262,6 +291,7 @@ export const BLOCK_TYPES = [
   { type: 'event',       label: 'Event signup', description: 'Embed the full signup form for a chosen event.',        factory: EVENT_DEFAULT },
   { type: 'lead_form',   label: 'Lead form',    description: 'Waitlist / interest capture — name, email, phone + consent.',  factory: LEAD_FORM_DEFAULT },
   { type: 'class_funnel', label: 'Glofox Class Booking Funnel', description: 'Pick a class, enter details, book. Live Glofox classes, or a timetable you type in for a studio without Glofox (staff then book by hand). Optional free-consult upsell.', factory: CLASS_FUNNEL_DEFAULT },
+  { type: 'paid_trial',  label: 'Paid trial product', description: 'A paid trial (e.g. 2 weeks for €39) sold from its own page: price panel, buyer form, embedded checkout, then the Glofox plan is put on their account.', factory: PAID_TRIAL_DEFAULT },
   { type: 'pillars',     label: 'Pillars',      description: '3 value-prop tiles. Each can have a photo.',           factory: PILLARS_DEFAULT },
   { type: 'gallery',     label: 'Photo gallery',description: 'Grid of photos with optional captions.',                factory: GALLERY_DEFAULT },
   { type: 'embed',       label: 'Video embed',  description: 'YouTube or Instagram video embed.',                    factory: EMBED_DEFAULT },
