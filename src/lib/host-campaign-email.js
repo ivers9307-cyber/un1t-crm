@@ -95,6 +95,12 @@ const PAGE = 1000 // the supabase-js 1k select cap — always .range()-paginate
 // leaving its text visible. A select outside a form is inert junk in email, so
 // the tags go and their option text stays.
 //
+// frameset/frame joined in round 7 (October 2026), for the same reason as
+// select: a full-document body whose first content is `<frameset>` makes the
+// whole document a frameset document, and the parser then IGNORES every body
+// element after it, so the injected footer table and its unsubscribe anchor
+// vanished from the DOM on the full-document path. Frames do nothing in email.
+//
 // Removing the TAGS while keeping their inner text costs a host nothing
 // legitimate in email HTML. `script` and `style` are NOT in this set: each has
 // its own rule in tokenizePass (delete with content / lift and scrub the
@@ -102,7 +108,7 @@ const PAGE = 1000 // the supabase-js 1k select cap — always .range()-paginate
 const STRIP_TAGS = new Set([
   'iframe', 'object', 'embed', 'form', 'link', 'meta', 'base', 'svg', 'math',
   'plaintext', 'textarea', 'title', 'noframes', 'noscript', 'noembed', 'xmp', 'template',
-  'select', 'option', 'optgroup',
+  'select', 'option', 'optgroup', 'frameset', 'frame',
 ])
 
 // HOST-EMAILS.2 — the viewport meta is always re-emitted in this fixed

@@ -38,7 +38,7 @@ const PARSED_HOST = { name: 'Acme Events', sender_name: 'Acme Team' }
 const BANNED_ELEMENTS = new Set([
   'script', 'iframe', 'object', 'embed', 'form', 'base', 'link', 'svg', 'math',
   'select', 'option', 'optgroup', 'textarea', 'title', 'noscript', 'noframes',
-  'noembed', 'meta', 'plaintext', 'xmp', 'template',
+  'noembed', 'meta', 'plaintext', 'xmp', 'template', 'frameset', 'frame',
 ])
 // An unsubscribe anchor inside one of these is TEXT, not a link.
 const INERT_ANCESTORS = new Set([
@@ -173,9 +173,20 @@ function invariantProblems(tree, unsub = PARSED_UNSUB) {
   return problems
 }
 
-/** Render one host body BOTH ways: shell-wrapped, and as a full document. */
+/**
+ * Render one host body every way it can arrive: shell-wrapped, as a full
+ * document after some content, and as a BARE full document (round 7: a
+ * frameset document only takes the footer with it when nothing precedes the
+ * frameset, so the after-content document could never show it).
+ */
 function renderBothPaths(bodyHtml, unsub = PARSED_UNSUB) {
   return {
+    bare: renderHostCampaignHtml({
+      host: PARSED_HOST,
+      subject: 'Subject <b>',
+      bodyHtml: `<!DOCTYPE html><html>${bodyHtml}</html>`,
+      unsubscribeUrl: unsub,
+    }),
     shell: renderHostCampaignHtml({ host: PARSED_HOST, subject: 'Subject <b>', bodyHtml, unsubscribeUrl: unsub }),
     doc: renderHostCampaignHtml({
       host: PARSED_HOST,
@@ -2329,6 +2340,9 @@ describe('sanitizeCampaignHtml — round-7 edge table', () => {
     '<noscript><p title="</noscript><b onclick=a>x</b>">', '<template><b onclick=a>x</b></template>',
     '<table><td background="javascript:alert(1)">x</td></table>', '<video poster="javascript:alert(1)"></video>',
     '<button formaction="javascript:alert(1)">x</button>', '<body onload=alert(1)>', '</body><b onclick=a>x</b>',
+    // A frameset document drops every body element after it, footer included.
+    '<head></head><frameset><frame src="https://x/"></frameset>', '<frameset>', '<frameset></frameset><body></body>',
+    '<head></head><FRAMESET cols="*"></FRAMESET>', '<frame>',
   ]
   it.each(cases)('%j holds the invariant', (body) => {
     expectSafeBothPaths(body, { jsdom: true })
@@ -2415,6 +2429,7 @@ describe('sanitizeCampaignHtml — seeded mini-fuzz over the parsed invariant', 
     'background:url(//t/x)', 'background:url(https://t/x)', "image-set('https://t/x' 1x)", "src('//t/f')",
     'behavior:url(x.htc)', '-moz-binding:url(x)', 'url(https://t/x', '<p style="background:url(https://t/x)">',
     '<p style="background:u&#114;l(https://t/x)">', '<p style="x:&#101;xpression(1)">', '<style>a{background:url(//t/x)}</style>',
+    '<head>', '</head>', '<frameset>', '</frameset>', '<frame src="https://t/">', '<html>', '</html>',
   ]
 
   // The full harness is this same loop, longer: run it by hand with
