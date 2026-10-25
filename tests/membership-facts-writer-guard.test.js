@@ -10,10 +10,12 @@
 // script or an edge function is a writer too), and the migration check reads
 // every statement that writes contact_studios: UPDATE, INSERT (its column list
 // or its ON CONFLICT … DO UPDATE) and MERGE, schema-qualified or not, quoted or
-// not, with SQL comments stripped first.
+// not, with SQL comments blanked first by the shared quote-aware sqlCode
+// (GUARDSTRIP.1: never a regex stripper).
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const SKIP_DIRS = new Set(['node_modules', 'ios', 'android', 'dist', 'web-build', '.next'])
@@ -55,11 +57,6 @@ function contactStudiosWriteChains(text) {
   return out
 }
 
-/** SQL with -- line comments and /* block *\/ comments removed (string literals are not special-cased: a floor). */
-function stripSqlComments(sql) {
-  return sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ')
-}
-
 /**
  * The statements in `sql` that write a membership column on contact_studios:
  * an UPDATE / INSERT INTO / MERGE INTO contact_studios (public.-qualified or
@@ -68,7 +65,7 @@ function stripSqlComments(sql) {
  */
 function membershipColumnWrites(sql) {
   const target = /\b(?:UPDATE|INSERT\s+INTO|MERGE\s+INTO)\s+(?:"?public"?\s*\.\s*)?"?contact_studios"?(?![\w"])/i
-  return stripSqlComments(sql).split(';').map((st) => st.trim()).filter((st) => target.test(st) && FACT_COL.test(st))
+  return sqlCode(sql).split(';').map((st) => st.trim()).filter((st) => target.test(st) && FACT_COL.test(st))
 }
 
 describe('the migration detector catches every write shape', () => {
