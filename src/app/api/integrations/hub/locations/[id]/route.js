@@ -2,8 +2,8 @@
 // hub's Manage drawer reads this when it opens, then hosts the location's full
 // per-provider tab (the ones that lived only on /settings/locations/[id]).
 //
-// READ ONLY. It returns exactly what /settings/locations/[id]/page.js
-// assembled for LocationIntegrations (src/lib/integrations-hub-location.js):
+// READ ONLY. It returns exactly what /settings/locations/[id]/page.js used
+// to assemble for its retired Integrations tab (src/lib/integrations-hub-location.js):
 // the shaped location row (toClientLocation: no credential value crosses),
 // the Xero connection, the BCA sample car, the membership-source state, the
 // un1t.online presence flag and the viewer's role flags. Writes stay on the

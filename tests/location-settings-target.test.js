@@ -9,8 +9,11 @@
 // role-at-target.test.js) could see it: the mismatch was between a page's URL
 // and the route its component called.
 //
-// Rule: start at src/app/settings/locations/[id]/page.js and follow every
-// component import (the `@/components/…` alias, and relative imports that land
+// Rule: start at src/app/settings/locations/[id]/page.js AND at
+// src/components/settings/IntegrationsHubDrawer.jsx (INTEGONE.1: the
+// per-location integration tabs moved off that page into the Integrations
+// hub's Manage drawer, which acts on the location it was opened for, the same
+// way), and follow every component import (the `@/components/…` alias, and relative imports that land
 // under src/components). In every file reached, a fetch() of an /api path must
 // be `/api/locations/${…}/…` (the target is in the path), or its path must be
 // in REVIEWED with the reason it names the location another way (query or
@@ -31,6 +34,9 @@ import { stripComments } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const PAGE = 'src/app/settings/locations/[id]/page.js'
+// INTEGONE.1 — the drawer that hosts every per-location integration tab.
+const DRAWER = 'src/components/settings/IntegrationsHubDrawer.jsx'
+const ROOTS = [PAGE, DRAWER]
 const IMPORT_RE = /\bfrom\s+['"](@\/components\/[^'"]+|\.{1,2}\/[^'"]+)['"]/g
 const FETCH_RE = /\bfetch\(\s*(?:([`'"])((?:(?!\1)[\s\S])*?)\1|([A-Za-z_$][\w$.]*))/g
 
@@ -57,6 +63,7 @@ const REVIEWED = {
 const REVIEWED_DYNAMIC = {
   'src/components/customer-agent/ConnectionsSection.jsx :: url': 'url is `/api/locations/${locationId}/channels[/${igConn.id}]`, built on the lines above the fetch.',
   'src/components/settings/EmailMailboxesCard.jsx :: url': 'fetch(url) inside send(); every send() call passes `/api/locations/${locationId}/email/…`.',
+  'src/components/settings/IntegrationsHubDrawer.jsx :: hubLocationContextUrl': 'hubLocationContextUrl(locationId) is `/api/integrations/hub/locations/${locationId}`, the drawer\'s own location in the path.',
 }
 
 // ACDEVLOC.1 owns these and its Task 7 deletes them. Never add to this list.
@@ -74,8 +81,8 @@ function resolveImport(spec, fromFile) {
 }
 
 function reachableFiles() {
-  const seen = new Set([PAGE])
-  const queue = [PAGE]
+  const seen = new Set(ROOTS)
+  const queue = [...ROOTS]
   while (queue.length) {
     const file = queue.shift()
     const src = stripComments(fs.readFileSync(path.join(ROOT, file), 'utf8'))
@@ -84,6 +91,7 @@ function reachableFiles() {
       if (hit && !seen.has(hit)) { seen.add(hit); queue.push(hit) }
     }
   }
+  // The page is not a component; the drawer is, and is scanned like one.
   seen.delete(PAGE)
   return [...seen].sort()
 }
@@ -124,15 +132,16 @@ describe('the scan', () => {
     expect(fetchTargets("// fetch('/api/studio-management/ac/devices')")).toEqual([])
   })
 
-  it('reaches the integrations tabs through LocationIntegrations (a wrong root finds nothing)', () => {
+  it('reaches the integrations tabs through the hub drawer (a wrong root finds nothing)', () => {
     const files = reachableFiles()
     expect(files.length).toBeGreaterThan(30) // 43 on 28 Sep 2026
-    expect(files).toContain('src/components/settings/LocationIntegrations.jsx')
+    expect(files).toContain(DRAWER)
     expect(files).toContain('src/components/settings/integrations/AcDevicesIntegrationTab.jsx')
+    expect(files).toContain('src/components/LocationForm.jsx')
   })
 })
 
-describe('/settings/locations/[id] components call only APIs that name the location', () => {
+describe('/settings/locations/[id] and hub-drawer components call only APIs that name the location', () => {
   const found = findings()
   const isReviewed = (f) => {
     const [, rest] = f.split(' :: ')

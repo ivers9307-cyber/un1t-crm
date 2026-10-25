@@ -1,7 +1,9 @@
 'use client'
 
 // Per-location BCA Submit configuration editor.
-// Master-only. Lives at /settings/locations/[id]/bca.
+// Master-only. Rendered by BcaIntegrationTab, hosted in the Integrations
+// hub's Manage drawer (/settings/integrations-hub?manage=bca&location=<id>,
+// INTEGONE.1).
 //
 // Edits: send-from address, send-to address, subject template, body
 // template, the 10 doc slot labels. Slugs (doc_01..doc_10) are stable

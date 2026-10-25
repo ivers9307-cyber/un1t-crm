@@ -32,6 +32,8 @@ vi.mock('./IntegrationsHubDrawer', () => ({
 }))
 
 import IntegrationsHub, { canOpenFromUrl } from './IntegrationsHub'
+import { membershipSettingsHref } from '@/lib/membership/state-for-page'
+import { legacyIntegrationsTabRedirect } from '@/lib/integrations-hub-links'
 
 const A = { id: 'loc-a', name: 'Stillorgan' }
 const B = { id: 'loc-b', name: 'Hatch Street' }
@@ -93,6 +95,35 @@ describe('IntegrationsHub — ?manage= opens a drawer (INTEGONE.1)', () => {
     expect(screen.getByTestId('drawer').dataset.card).toBe('membership-source')
     fireEvent.click(screen.getByRole('button', { name: 'close drawer' }))
     expect(nav.replace).not.toHaveBeenCalled()
+  })
+})
+
+// INTEGONE.1 stage 2 — the URLs the retired per-location tab's producers now
+// emit really open the drawer they name (this replaced the page test that
+// pinned membershipSettingsHref landing on the old tab's Membership source card).
+describe('IntegrationsHub — the repointed producers land on their drawer', () => {
+  const openFrom = (href) => {
+    const u = new URL(href, 'http://localhost')
+    expect(u.pathname).toBe('/settings/integrations-hub')
+    nav.params = u.searchParams.toString()
+    render(<IntegrationsHub data={BASE} />)
+    return screen.queryByTestId('drawer')
+  }
+
+  it('the membership-source gate link opens the Membership source drawer', () => {
+    const d = openFrom(membershipSettingsHref('loc-a'))
+    expect(d.dataset.card).toBe('membership-source')
+    expect(d.dataset.location).toBe('loc-a')
+  })
+
+  it('an old ?section=integrations&tab=payments&stripe=return URL opens Payments and keeps stripe=return', () => {
+    const href = legacyIntegrationsTabRedirect('loc-b', { section: 'integrations', tab: 'payments', stripe: 'return' })
+    expect(new URL(href, 'http://localhost').searchParams.get('stripe')).toBe('return')
+    expect(openFrom(href).dataset.card).toBe('payments')
+  })
+
+  it('a bare ?section=integrations opens nothing', () => {
+    expect(openFrom(legacyIntegrationsTabRedirect('loc-a', { section: 'integrations' }))).toBeNull()
   })
 })
 

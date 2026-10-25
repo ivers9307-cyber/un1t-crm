@@ -52,8 +52,9 @@ export async function GET(req) {
   // the round-trip belongs to.
   //
   // Optional post-connect redirect (`return_to`): the hub's inline Connect
-  // button passes `?return_to=/settings/integrations-hub` so the callback
-  // returns the browser to the hub instead of the per-location Xero tab.
+  // button passes `?return_to=/settings/integrations-hub` (the Manage drawer's
+  // Xero card passes the drawer's own hub URL) so the callback returns the
+  // browser there instead of its default (the hub's Xero drawer, INTEGONE.1).
   // It is carried INSIDE the signed `state` (base64url, appended after a
   // "."), so it is bound to the same value stored in the httpOnly cookie —
   // a tampered return_to fails the callback's cookie==state check before it

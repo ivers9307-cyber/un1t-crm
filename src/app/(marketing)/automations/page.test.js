@@ -113,7 +113,7 @@ describe('/automations — membership source gate (W1.M3a)', () => {
     const html = renderToStaticMarkup(await AutomationsPage())
     expect(html).toContain('No membership source connected')
     expect(html).toContain('no class schedule to run on')
-    expect(html).toContain(`href="/settings/locations/${LOC}?section=integrations&amp;tab=glofox"`)
+    expect(html).toContain(`href="/settings/integrations-hub?manage=membership-source&amp;location=${LOC}"`)
     expect(html).not.toContain('data-testid="view"')
     expect(html).not.toContain('climate:')
     expect(html).not.toContain('bathroom:')

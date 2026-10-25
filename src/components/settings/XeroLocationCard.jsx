@@ -1,7 +1,8 @@
 'use client'
 
-// The Xero connection card on the per-location Integrations tab
-// (/settings/locations/[id]?tab=xero). Shows the current
+// The Xero connection card, hosted in the Integrations hub's Manage drawer
+// (/settings/integrations-hub?manage=xero&location=<id>, INTEGONE.1; it was
+// on the retired per-location Integrations tab). Shows the current
 // connection state and offers a Connect / Disconnect / Reconnect
 // action depending on the row's state. Also captures the per-org
 // Xero "Email to Bills" address so the document → draft bill

@@ -1,31 +1,34 @@
 // Xero integration tab. Wraps the existing XeroLocationCard which
 // already handles the OAuth start + status display + reconnect /
-// disconnect. This tab (/settings/locations/[id]?tab=xero) is the
+// disconnect. Hosted in the Integrations hub's Manage drawer
+// (/settings/integrations-hub?manage=xero&location=<id>, INTEGONE.1), the
 // only Xero settings surface — the old cross-location overview at
-// /settings/integrations was retired (INTEG-A4).
+// /settings/integrations was retired (INTEG-A4), and the per-location
+// Integrations tab (/settings/locations/[id]?tab=xero) redirects there.
 //
 // RSC-AUDIT.2: no own state / events / browser APIs — every
-// interactive bit lives in XeroLocationCard. Parent
-// LocationIntegrations is a Client Component, so this gets
+// interactive bit lives in XeroLocationCard. Its host,
+// IntegrationsHubDrawer, is a Client Component, so this gets
 // implicit-client-bundled with the same end result and one less
 // directive cluttering the file.
 
 import XeroLocationCard from '@/components/settings/XeroLocationCard'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
 import XeroCallbackNotice from '@/components/settings/XeroCallbackNotice'
+import { hubManageHref } from '@/lib/integrations-hub-links'
 
-// CHANNELREAD.1 — `readFailed`: the page's xero_connections read failed.
+// CHANNELREAD.1 — `readFailed`: the xero_connections read failed.
 // Rendering XeroLocationCard with connection=null would say "Not connected."
 // and offer Connect Xero (an OAuth REBIND of this location) over a live
-// connection. The data is server-rendered, so Try again re-opens this tab.
-// XeroCallbackNotice: this tab is where GET /api/xero/callback lands by
-// default, so the connect's outcome (a code in the URL) is shown here.
+// connection. Try again re-reads: the drawer passes `onRetry` (it re-reads its
+// own context); without one, the note links to this drawer's hub URL, which
+// re-opens it from a fresh page load.
 //
-// INTEGONE.1 — hosted in the Integrations hub's Manage drawer too. There the
-// hub page already renders XeroCallbackNotice (showCallbackNotice=false, so
-// the outcome is not shown twice), the drawer re-reads its own context on
-// Try again (onRetry instead of the page href), and Connect bounces back to
-// the hub with this drawer open (returnTo).
+// INTEGONE.1 — hosted in the Integrations hub's Manage drawer. GET
+// /api/xero/callback lands on the hub (with this drawer open) by default, and
+// the hub page renders XeroCallbackNotice itself, so the drawer passes
+// showCallbackNotice=false and the outcome is not shown twice. Connect
+// bounces back to the hub with this drawer open (returnTo).
 export default function XeroIntegrationTab({ location, connection, readFailed = false, showCallbackNotice = true, onRetry = null, returnTo = null }) {
   return (
     <div className="space-y-3">
@@ -38,7 +41,7 @@ export default function XeroIntegrationTab({ location, connection, readFailed = 
       {readFailed ? (
         onRetry
           ? <ReadFailedNote what="this location's Xero connection" onRetry={onRetry} />
-          : <ReadFailedNote what="this location's Xero connection" href={`/settings/locations/${location.id}?tab=xero`} />
+          : <ReadFailedNote what="this location's Xero connection" href={hubManageHref(location.id, 'xero')} />
       ) : (
         <XeroLocationCard location={location} connection={connection || null} returnTo={returnTo} />
       )}

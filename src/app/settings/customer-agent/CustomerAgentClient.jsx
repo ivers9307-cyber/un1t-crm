@@ -7,6 +7,7 @@ import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-for
 import { defaultHoldingMessage, defaultWelcomeGreeting, DEFAULT_BOOKING_CTA_LABEL, DEFAULT_FLOW_BOOKING_ACK_TEXT, DEFAULT_FLOW_BOOKING_HOLDING_TEXT, DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT } from '@/lib/agent/default-copy'
 import { productName } from '@/lib/brand-name'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
+import { hubManageHref } from '@/lib/integrations-hub-links'
 import { zoneCity } from '@/lib/record-time'
 import { Button } from '@/components/ui'
 // MIAORG.1 Task 3 — which fields this studio sets itself (zod-free, shared
@@ -451,17 +452,18 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
         <span className="text-un1t-muted">— replies, escalations, what customers asked</span>
       </Link>
 
-      {/* IG-HOME.1 — channel connections moved to the Integrations tab
-          strip; this pointer keeps the old path discoverable. */}
+      {/* IG-HOME.1 — channel connections moved to the integrations (the
+          Integrations hub since INTEGONE.1); this pointer keeps the old path
+          discoverable, opening the hub's Instagram drawer for this studio. */}
       {location?.id && (
         <Link
-          href={`/settings/locations/${location.id}?tab=instagram`}
+          href={hubManageHref(location.id, 'instagram')}
           className="flex items-center justify-between border border-un1t-border rounded-lg px-4 py-3 mb-6 hover:border-un1t-subtle transition-colors"
         >
           <div>
             <div className="text-sm font-medium text-un1t-text">Channel connections</div>
             <div className="text-xs text-un1t-muted">
-              WhatsApp and Instagram are managed under Settings → Locations → {location.name} → Integrations.
+              WhatsApp and Instagram for {location.name} are managed under Settings → Integrations.
             </div>
           </div>
           <span className="text-xs text-un1t-text underline">Manage</span>

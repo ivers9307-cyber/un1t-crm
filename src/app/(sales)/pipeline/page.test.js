@@ -66,7 +66,7 @@ describe('/pipeline — membership source note (W1.M3a)', () => {
     expect(html).toMatch(NOTE)
     expect(html).toContain('board:new_lead')
     expect(html.indexOf('Stages that depend')).toBeLessThan(html.indexOf('board:new_lead'))
-    expect(html).toContain(`href="/settings/locations/${LOC}?section=integrations&amp;tab=glofox"`)
+    expect(html).toContain(`href="/settings/integrations-hub?manage=membership-source&amp;location=${LOC}"`)
   })
 
   it('none, MANUAL board: no note (nothing is classifier-driven there)', async () => {

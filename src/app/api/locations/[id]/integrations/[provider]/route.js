@@ -105,7 +105,8 @@ const PROVIDERS = {
       api_key: optStr(4000),
       api_token: optStr(4000),
       webhook_secret: optStr(4000),
-      // SECFIX.3b — the /settings/locations/[id] Glofox tab saves through this
+      // SECFIX.3b — the Glofox tab (hosted in the Integrations hub's Manage
+      // drawer since INTEGONE.1) saves through this
       // route now (it used to write locations.settings from the browser), so
       // its non-secret fields ride here too. Absent = untouched.
       trial_membership_id: optStr(200),

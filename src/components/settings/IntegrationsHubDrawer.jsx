@@ -4,8 +4,9 @@
 //
 // The hub is the ONLY integrations surface. This drawer hosts the FULL
 // per-provider tab each card manages, the same components the per-location
-// Integrations tab (/settings/locations/[id], LocationIntegrations.jsx) used,
-// unchanged, so nothing here links back out for "the rest of" an integration.
+// Integrations tab on /settings/locations/[id] used (that tab is retired, and
+// its URLs redirect here), unchanged, so nothing here links back out for "the
+// rest of" an integration.
 // The thin credential forms (IntegrationCredForm + PROVIDER_SPECS), the
 // compact Xero / WhatsApp panels and the "Advanced settings" footer link are
 // gone: they were a second, partial copy of those tabs.
@@ -242,8 +243,8 @@ export default function IntegrationsHubDrawer({ cardKey, locationId, locationNam
   )
 }
 
-// The hosted component per card, with exactly the props the old page's
-// LocationIntegrations gave it (roles from the server's `viewer` flags).
+// The hosted component per card, with exactly the props the retired
+// per-location Integrations tab gave it (roles from the server's `viewer` flags).
 function HostedTab({ cardKey, context, onChanged, onRetry }) {
   const { location, xeroConnection, xeroReadFailed, sampleBcaCar, membershipSource, hasUn1tOnlineConnection } = context
   const viewer = context.viewer || {}

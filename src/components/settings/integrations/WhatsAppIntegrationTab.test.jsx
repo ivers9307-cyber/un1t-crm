@@ -121,7 +121,8 @@ describe("WhatsAppIntegrationTab — the organisation's numbers at this studio (
 })
 
 // WAROLE.1 — the two editors whose routes are now master/owner at the
-// location follow `canEdit`, which LocationIntegrations computes with the same
+// location follow `canEdit`, which the hub drawer takes from the server's
+// `ownsWhatsAppHere` flag (src/lib/integrations-hub-location.js), the same
 // rule. Without it: no Save, no Add/Edit/Delete, inputs read-only, and no
 // write is ever attempted. (A pin: the cards already honoured canEdit.)
 describe('WhatsAppIntegrationTab — chat openers and card sets follow canEdit (WAROLE.1)', () => {

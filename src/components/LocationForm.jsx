@@ -12,8 +12,9 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   const router = useRouter()
   const isEditing = !!location
   // SETTINGS.1 — Integration configs (UniFi, Sensibo, Glofox) used
-  // to live in this form. They moved into <LocationIntegrations>
-  // tabs on the same page; callerRole is no longer read here.
+  // to live in this form. They moved into per-provider integration tabs,
+  // hosted in the Integrations hub's Manage drawer since INTEGONE.1;
+  // callerRole is no longer read here.
   // mig 034's DB-side trigger remains the security backstop for any
   // settings.unifi write made from those tabs.
   void callerRole
@@ -76,10 +77,10 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   // Email tab on this page (<EmailMailboxesCard>). The column stays on disk,
   // read-only, per the deprecated-column convention.
 
-  // SETTINGS.1 — Glofox / UniFi / Sensibo / AC are now their own
-  // tabs under <LocationIntegrations> below this form. Their state
-  // + save logic lives in the per-tab components; LocationForm
-  // covers only the per-location identity + budget fields.
+  // SETTINGS.1 — Glofox / UniFi / Sensibo / AC are their own
+  // integration tabs (hosted in the Integrations hub's Manage drawer since
+  // INTEGONE.1). Their state + save logic lives in the per-tab components;
+  // LocationForm covers only the per-location identity + budget fields.
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)

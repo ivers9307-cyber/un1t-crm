@@ -39,7 +39,7 @@ const UNKNOWN_STATE = Object.freeze({ source: null, state: 'unknown', label: 'No
 
 function ManageLine({ canManage, settingsHref, verb }) {
   if (canManage && settingsHref) {
-    return <>{verb} <Link href={settingsHref} className="underline">Location settings → Integrations</Link>.</>
+    return <>{verb} <Link href={settingsHref} className="underline">Settings → Integrations</Link>.</>
   }
   return <>Ask an owner to connect a membership source.</>
 }

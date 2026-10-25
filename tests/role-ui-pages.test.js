@@ -34,7 +34,11 @@ const PAGES = [
   'src/app/cars/[id]/page.js',
   'src/app/communications/(marketing-era)/sent/[channel]/[id]/page.js',
   'src/app/settings/staff/[id]/page.js',
-  'src/components/settings/LocationIntegrations.jsx',
+  // INTEGONE.1 — the per-location integration tabs' role answers moved from
+  // the retired LocationIntegrations.jsx to the hub drawer's server-side
+  // viewer flags (judged at the drawer's location).
+  'src/lib/integrations-hub-location.js',
+  'src/components/settings/IntegrationsHubDrawer.jsx',
 ]
 
 describe('ROLEUI.1 — no active-studio gate on the contact and booking-type pages', () => {

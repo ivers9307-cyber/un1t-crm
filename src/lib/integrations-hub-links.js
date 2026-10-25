@@ -17,3 +17,33 @@ export function hubManageHref(locationId, cardKey) {
 
 /** Legacy per-location tab key → hub card key (every other key is the same). */
 export const HUB_CARD_FOR_TAB_KEY = Object.freeze({ 'ac-devices': 'climate' })
+
+/**
+ * INTEGONE.1 — where a URL of the retired per-location Integrations tab
+ * (/settings/locations/<id>?section=integrations[&tab=<key>]) now lands: the
+ * hub with that provider's Manage drawer open when the URL named one (the
+ * legacy key mapped through HUB_CARD_FOR_TAB_KEY), else the bare hub (a
+ * `location` alone opens nothing). Every other query param is carried across,
+ * so the Stripe Connect return (`stripe=return`) and the Xero callback's
+ * outcome codes (`xero_connected`, `xero_error`, …) reach the hub page that
+ * reads them; a `manage`/`location` already on the URL is replaced, never
+ * doubled. Pure.
+ *
+ * @param {string} locationId
+ * @param {Record<string, string|string[]|undefined>} [searchParams]  a Next page's resolved searchParams
+ */
+export function legacyIntegrationsTabRedirect(locationId, searchParams = {}) {
+  const rawTab = Array.isArray(searchParams.tab) ? searchParams.tab[0] : searchParams.tab
+  const base = rawTab
+    ? hubManageHref(locationId, HUB_CARD_FOR_TAB_KEY[rawTab] ?? rawTab)
+    : `${HUB_PATH}?${new URLSearchParams({ location: locationId }).toString()}`
+  const rest = new URLSearchParams()
+  for (const [k, v] of Object.entries(searchParams || {})) {
+    if (k === 'section' || k === 'tab' || k === 'manage' || k === 'location') continue
+    for (const one of Array.isArray(v) ? v : [v]) {
+      if (one !== undefined && one !== null) rest.append(k, String(one))
+    }
+  }
+  const tail = rest.toString()
+  return tail ? `${base}&${tail}` : base
+}

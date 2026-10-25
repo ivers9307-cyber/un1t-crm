@@ -98,7 +98,7 @@ describe('/dashboard/studio — per-column membership gate (W1.M3a)', () => {
     expect(stillorgan).toContain('MRR')
     expect(hatch).toContain('No membership source connected')
     expect(hatch).not.toContain('MRR')
-    expect(hatch).toContain(`href="/settings/locations/${LOC2}?section=integrations&amp;tab=glofox"`)
+    expect(hatch).toContain(`href="/settings/integrations-hub?manage=membership-source&amp;location=${LOC2}"`)
     expect(kpis.fetchMrr).toHaveBeenCalledTimes(1)
     expect(kpis.fetchMrr).toHaveBeenCalledWith(expect.anything(), LOC)
   })

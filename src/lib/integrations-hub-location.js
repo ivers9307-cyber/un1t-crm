@@ -2,9 +2,9 @@
 // drawer (GET /api/integrations/hub/locations/[id]).
 //
 // The hub drawer hosts the FULL per-provider tabs that used to live only on
-// /settings/locations/[id] (LocationIntegrations.jsx). Those tabs need exactly
-// what that page assembled for them, so this module assembles the same thing
-// with the same reads, copied verbatim from the page:
+// /settings/locations/[id]'s Integrations tab (retired, INTEGONE.1). Those
+// tabs need exactly what that page assembled for them, so this module
+// assembles the same thing with the same reads, moved here from the page:
 //
 //   location                toClientLocation(select('*') row): AC keys become
 //                           has_* flags, every other credential is masked,
@@ -20,7 +20,7 @@
 //   hasUn1tOnlineConnection an ACTIVE un1t_online channel_connections row
 //                           exists (head count; a failed count reads true,
 //                           as on the page: the tab is owner/master anyway)
-//   viewer                  the role expressions LocationIntegrations.jsx
+//   viewer                  the role expressions the retired tab
 //                           computed in the browser, computed here so the
 //                           drawer never reasons about roles.
 //

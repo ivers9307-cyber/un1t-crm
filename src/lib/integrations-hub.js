@@ -542,8 +542,8 @@ const REGISTRY_PLATFORMS = ['glofox', 'unifi', 'sensibo', 'thinq', 'bca', 'insta
 // ── Shelly plugs (SHELLY-UI.7) ────────────────────────────────────────
 //
 // The hub card deep-links to /automations/shelly — the ACTIVE-LOCATION
-// page — rather than to a per-location tab, because by decision there is
-// no LocationIntegrations Shelly tab: managing another studio's plugs
+// page — rather than to a per-location Manage drawer, because by decision
+// there is no per-location Shelly settings view: managing another studio's plugs
 // means switching location first. So every row carries the same href;
 // the location name on the row is what tells the operator which studio
 // the numbers describe. (Obligation 16: the card reads only non-secret

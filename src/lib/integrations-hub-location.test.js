@@ -1,5 +1,6 @@
 // INTEGONE.1 — the hub drawer's per-location context. The viewer flags are the
-// five role expressions LocationIntegrations.jsx computed in the browser; the
+// five role expressions the retired per-location Integrations tab computed in
+// the browser; the
 // hosted tabs take them as props, so a drift here changes who can edit what.
 
 import { describe, it, expect, vi } from 'vitest'
@@ -20,6 +21,15 @@ describe('hubViewerFlags', () => {
       isMaster: false, isOwnerOrMaster: true, ownsWhatsAppHere: true, canSwitchWhatsApp: true, canManageNumbers: false,
     })
     expect(hubViewerFlags({ ...user, orgAdminOrgIds: ['org-1'] }, LOC).canManageNumbers).toBe(true)
+  })
+
+  // PAGEGATES.1 / WAROLE.1 (ported from the retired tab's tests) — judged AT
+  // this location, never on `user.role` (the ACTIVE studio's role).
+  it('owner here whose active studio is one where they manage: owner flags all true', () => {
+    const user = { role: 'manager', profileRole: 'staff', rolesByLocation: { 'loc-1': 'owner', 'loc-2': 'manager' }, activeLocation: { id: 'loc-2' }, orgAdminOrgIds: [] }
+    expect(hubViewerFlags(user, LOC)).toEqual({
+      isMaster: false, isOwnerOrMaster: true, ownsWhatsAppHere: true, canSwitchWhatsApp: true, canManageNumbers: false,
+    })
   })
 
   it('a manager here may switch WhatsApp numbers but owns nothing', () => {

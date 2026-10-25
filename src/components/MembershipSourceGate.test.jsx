@@ -10,7 +10,7 @@ import MembershipSourceGate from './MembershipSourceGate.jsx'
 
 afterEach(cleanup)
 
-const HREF = '/settings/locations/a0000000-0000-4000-8000-00000000000a?section=integrations&tab=glofox'
+const HREF = '/settings/integrations-hub?manage=membership-source&location=a0000000-0000-4000-8000-00000000000a'
 const GLOFOX_CAPS = { memberships: true, bookings: true, credits: true, invoices: true, schedule: true }
 const NONE_CAPS = { memberships: false, bookings: false, credits: false, invoices: false, schedule: false }
 const configured = { source: 'glofox', state: 'configured', label: 'Glofox', capabilities: GLOFOX_CAPS }
@@ -30,12 +30,12 @@ describe('MembershipSourceGate', () => {
     expect(document.querySelector('[data-membership-state]')).toBeNull()
   })
 
-  it('none → "No membership source connected", the owner gets a link to Location settings → Integrations', () => {
+  it('none → "No membership source connected", the owner gets a link to Settings → Integrations', () => {
     render(<MembershipSourceGate state={none} capability="memberships" settingsHref={HREF} canManage><p>the radar</p></MembershipSourceGate>)
     expect(screen.queryByText('the radar')).toBeNull()
     expect(screen.getByText(NONE_COPY)).toBeTruthy()
     expect(screen.getByText(/no membership data to show/)).toBeTruthy()
-    const link = screen.getByRole('link', { name: /Location settings → Integrations/ })
+    const link = screen.getByRole('link', { name: /Settings → Integrations/ })
     expect(link.getAttribute('href')).toBe(HREF)
     expect(screen.queryByText(/Ask an owner/)).toBeNull()
     expect(document.querySelector('[data-membership-state]').getAttribute('data-membership-state')).toBe('none')
@@ -58,7 +58,7 @@ describe('MembershipSourceGate', () => {
     expect(screen.queryByText('x')).toBeNull()
     expect(screen.getByText('Glofox is selected but not fully configured')).toBeTruthy()
     expect(screen.getByText(/Missing: API Key, Branch ID\./)).toBeTruthy()
-    expect(screen.getByRole('link', { name: /Location settings → Integrations/ }).getAttribute('href')).toBe(HREF)
+    expect(screen.getByRole('link', { name: /Settings → Integrations/ }).getAttribute('href')).toBe(HREF)
     expect(screen.queryByText(NONE_COPY)).toBeNull()
     expect(document.querySelector('[data-membership-state]').getAttribute('data-membership-state')).toBe('unconfigured')
   })

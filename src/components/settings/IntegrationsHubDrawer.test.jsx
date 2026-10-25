@@ -2,10 +2,10 @@
 //
 // INTEGONE.1 — the hub's Manage drawer hosts each card's FULL per-location
 // tab. It reads its context from GET /api/integrations/hub/locations/[id] and
-// hands every hosted component exactly the props LocationIntegrations gave it,
-// with the role answers taken from the server's `viewer` flags. A failed read
-// renders no tab (only Try again), and there is no link back out to the old
-// per-location tab. The hosted components are stubbed: each has its own tests.
+// hands every hosted component exactly the props the retired per-location
+// Integrations tab gave it, with the role answers taken from the server's
+// `viewer` flags. A failed read renders no tab (only Try again), and there is
+// no link back out to the old per-location page. The hosted components are stubbed: each has its own tests.
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
@@ -116,6 +116,20 @@ describe('IntegrationsHubDrawer — hosting (INTEGONE.1)', () => {
     expect(screen.queryByTestId('hosted-whatsapp')).toBeNull()
   })
 
+  it('whatsapp switched off at the location: a master still gets the tab (first-time setup, WA-MULTI.1)', async () => {
+    respond(ok(CONTEXT({ location: { ...LOCATION, features: { whatsapp: false } }, viewer: MASTER })))
+    open('whatsapp')
+    await screen.findByTestId('hosted-whatsapp')
+    expect(seen.whatsapp).toMatchObject({ canEdit: true, canManageNumbers: true, canSwitch: true })
+  })
+
+  it('whatsapp: a viewer who does not own WhatsApp here gets no tab (WAROLE.1)', async () => {
+    respond(ok(CONTEXT({ viewer: { ...OWNER, ownsWhatsAppHere: false } })))
+    open('whatsapp')
+    expect(await screen.findByText('WhatsApp is switched off for this location.')).toBeTruthy()
+    expect(screen.queryByTestId('hosted-whatsapp')).toBeNull()
+  })
+
   it('bca: the sample car, and canEdit for masters only', async () => {
     respond(ok(CONTEXT()))
     open('bca')
@@ -164,6 +178,11 @@ describe('IntegrationsHubDrawer — hosting (INTEGONE.1)', () => {
     expect(seen['un1t-online']).toEqual({ location: LOCATION, canEdit: true })
     cleanup()
     respond(ok(CONTEXT({ location: { ...LOCATION, membership_source: 'none' } })))
+    open('un1t-online')
+    await screen.findByTestId('hosted-un1t-online')
+    cleanup()
+    // A studio already on un1t.online (ported from the retired tab's tests).
+    respond(ok(CONTEXT({ location: { ...LOCATION, membership_source: 'un1t_online' } })))
     open('un1t-online')
     await screen.findByTestId('hosted-un1t-online')
   })
