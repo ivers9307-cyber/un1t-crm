@@ -52,7 +52,7 @@ import {
   CalendarDays, Tag, Store, Trophy, Cable,
   Users, UserPlus, UserCog,
   AtSign, Bell, Bot,
-  Plug, Activity, Globe, Phone,
+  Plug, Globe,
   CreditCard, Gauge,
   Download, KeyRound,
   ShieldCheck, Eye, Fingerprint, Lock,
@@ -129,7 +129,7 @@ export const SETTINGS_TREE = [
       // above) is master-only chrome (AppShell engages it only for
       // `user.isMaster` — see platform-nav.js's header comment), and the
       // ONLY other pointer at the page was integration-health's
-      // remediation link, which renders solely when that integration's
+      // (since INTEGONE.3, the hub's Health view) remediation link, which renders solely when that integration's
       // status is warn/down — not a persistent path. An owner with
       // nothing currently broken had literally no way to discover the
       // page. The `webhook-dead-letter` row in the Integrations group
@@ -258,24 +258,9 @@ export const SETTINGS_TREE = [
         id: 'integrations-hub',
         label: 'Integrations hub',
         href: '/settings/integrations-hub',
-        description: 'Every tool your gym connects to — Glofox, Xero, WhatsApp, Instagram, Meta Ads — with health at a glance across your locations. Connect, test, and disconnect from one place.',
+        description: 'Every tool your gym connects to — Glofox, Xero, WhatsApp, Instagram, Meta Ads — with health at a glance across your locations. Connect, test, and disconnect from one place. Also holds integration health, the organisation\'s WhatsApp numbers and the Zoom phone directory.',
         icon: Plug,
         // Mirrors the page's own gate exactly (owner+/master).
-        gate: { roles: ['owner', 'master'] },
-      },
-      {
-        id: 'integration-health',
-        label: 'Integration health',
-        href: '/settings/integration-health',
-        description: 'One pane showing whether anything is silently broken — scheduled jobs, the WhatsApp number, and webhook processing, each with a red/amber/green status.',
-        icon: Activity,
-        // NARROWER than the page's own gate (hasPermission 'settings' —
-        // any settings-permission holder can open the URL directly).
-        // Carried forward from the old page.js grid, which wrapped this
-        // whole Integrations section in `(role === 'owner' || role ===
-        // 'master')`. Deliberate: integration health is an
-        // owner-operational surface by product intent, matching its
-        // siblings in this group.
         gate: { roles: ['owner', 'master'] },
       },
       {
@@ -285,22 +270,8 @@ export const SETTINGS_TREE = [
         description: 'The member-facing status page — edit the wording for each service and state. Members see a plain-language operational / degraded status, never internal detail.',
         icon: Globe,
         // NARROWER than the page's own gate (hasPermission 'settings') —
-        // same carried-forward product decision as integration-health above.
-        gate: { roles: ['owner', 'master'] },
-      },
-      {
-        id: 'zoom-contacts',
-        label: 'Zoom phone directory',
-        href: '/settings/integrations/zoom-contacts',
-        description: 'The nightly Zoom Phone contact sync — desired-state preview, run history, and rejected-contact diagnostics. Ships dark until the ZOOM_* secrets are set.',
-        icon: Phone,
-        // The orphan — SETTINGS.2g Task 3 finally links it. VERIFIED the
-        // page's own gate: any authenticated user can open the URL (it
-        // renders an org-scoped empty shell for non-members of the synced
-        // org); write access needs 'integrations_zoom_manage' in that org.
-        // This row is gated narrower — owner/master, matching every other
-        // row in this group — per the Task 3 spec's explicit instruction
-        // ("leave visible to owner/master").
+        // the carried-forward product decision for the Integrations group
+        // (integration health, now a hub view, was gated the same way).
         gate: { roles: ['owner', 'master'] },
       },
       {

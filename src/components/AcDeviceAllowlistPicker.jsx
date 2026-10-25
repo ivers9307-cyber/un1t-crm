@@ -89,7 +89,7 @@ export default function AcDeviceAllowlistPicker({ locationId, locationName, valu
             <div className="max-h-64 overflow-y-auto">
               {devices.length === 0 && (
                 <div className="text-xs text-un1t-subtle px-2 py-1.5">
-                  No AC devices configured at this location. Add devices under Settings → Locations → AC Devices first.
+                  No AC devices configured at this location. Add devices under Settings → Integrations → Climate devices first.
                 </div>
               )}
               {devices.map((d) => {

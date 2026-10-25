@@ -135,7 +135,7 @@ export default function AcControlPanel() {
           <div>
             No AC units are set up for you at this location yet. A master
             adds devices under{' '}
-            <strong className="text-un1t-text">Settings → Locations → AC Devices</strong>{' '}
+            <strong className="text-un1t-text">Settings → Integrations → Climate devices</strong>{' '}
             and ticks the ones you should be able to control on your{' '}
             <strong className="text-un1t-text">staff record</strong>.
           </div>

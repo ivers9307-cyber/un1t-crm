@@ -215,7 +215,7 @@ export default async function PipelinePage(props) {
         <p role="note" className="text-sm bg-amber-500/10 text-amber-700 border border-amber-500/30 rounded-md px-3 py-2 mb-4">
           No membership source is connected at this studio. Stages that depend on memberships and credits will not move without a membership source; leads still enter and go dormant.{' '}
           {canManageSource
-            ? <>Choose one in <Link href={membershipSettingsHref(locationId)} className="underline">Location settings → Integrations</Link>.</>
+            ? <>Choose one in <Link href={membershipSettingsHref(locationId)} className="underline">Settings → Integrations</Link>.</>
             : 'Ask an owner to connect one.'}
         </p>
       )}

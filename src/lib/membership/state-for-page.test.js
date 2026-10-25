@@ -106,8 +106,8 @@ describe('membershipStateForPage (W1.M3a)', () => {
 })
 
 describe('membershipSettingsHref / canManageMembershipSource', () => {
-  it('links to the location\'s Integrations tab (where W1.M2 puts the Membership source card)', () => {
-    expect(membershipSettingsHref(LOC)).toBe(`/settings/locations/${LOC}?section=integrations&tab=glofox`)
+  it('links to the Integrations hub\'s Membership source drawer for the location (INTEGONE.1)', () => {
+    expect(membershipSettingsHref(LOC)).toBe(`/settings/integrations-hub?manage=membership-source&location=${LOC}`)
   })
 
   it('mirrors guardMasterOrOwner: master anywhere, owner AT the location, nobody else', () => {

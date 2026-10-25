@@ -20,6 +20,7 @@
 
 import { readConnection } from '@/lib/connection-registry'
 import { gradeXeroConnection } from '@/lib/integrations-hub'
+import { hubViewHref } from '@/lib/integrations-hub-links'
 // MAILBOX-UNREACHABLE.1 — the structural "can this address receive at all"
 // verdict. Node-only (it resolves MX), which is fine here: every caller of
 // getIntegrationHealth is a server page or an /api route.
@@ -601,7 +602,7 @@ export async function getIntegrationHealth(db, locationId) {
             : s.status === 'down'
               ? 'Open the sync page and preview a run to see the current error.'
               : undefined,
-          href: '/settings/integrations/zoom-contacts',
+          href: hubViewHref('zoom'),
         })
       }
     }
@@ -610,7 +611,7 @@ export async function getIntegrationHealth(db, locationId) {
     // than silently dropping the row (an omitted row is indistinguishable
     // from "not applicable to this org" — exactly the ambiguity this pane
     // exists to remove).
-    rows.push({ key: 'zoom-contacts', name: 'Zoom phone directory', status: 'unknown', detail: 'Unavailable', href: '/settings/integrations/zoom-contacts' })
+    rows.push({ key: 'zoom-contacts', name: 'Zoom phone directory', status: 'unknown', detail: 'Unavailable', href: hubViewHref('zoom') })
   }
 
   // Attach a runbook (remedy + fix link) to every degraded/down row so the pane

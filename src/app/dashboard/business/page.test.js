@@ -86,7 +86,7 @@ describe('/dashboard/business — membership trend gate (W1.M3a)', () => {
     expect(computeMembershipCounts).not.toHaveBeenCalled()
     expect(fetchMembershipFlows).not.toHaveBeenCalled()
     expect(html).toContain('No membership source connected')
-    expect(html).toContain(`href="/settings/locations/${LOC}?section=integrations&amp;tab=glofox"`)
+    expect(html).toContain(`href="/settings/integrations-hub?manage=membership-source&amp;location=${LOC}"`)
     expect(html).not.toContain('membership-panel')
   })
 
@@ -138,7 +138,7 @@ describe('/dashboard/business — KPI row gate (W1.M3a review)', () => {
     const html = await renderBlock('KpiBriefingBlock')
     expect(html).toContain('2 pending approvals')
     expect(html).toContain('No membership source connected')
-    expect(html).toContain(`href="/settings/locations/${LOC}?section=integrations&amp;tab=glofox"`)
+    expect(html).toContain(`href="/settings/integrations-hub?manage=membership-source&amp;location=${LOC}"`)
     for (const label of ['Revenue MTD', 'Members', 'Churn risk', 'In arrears']) expect(html).not.toContain(`>${label}<`)
   })
 

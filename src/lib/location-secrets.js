@@ -5,8 +5,8 @@
 // as JSON, must carry their PRESENCE (several screens ask "is Glofox
 // configured?") but never their VALUE. Each non-empty one is replaced by
 // LOCATION_SECRET_MASK:
-//   * the key stays, so truthiness checks (LocationIntegrations statuses)
-//     still hold;
+//   * the key stays, so truthiness checks (the integration tabs' "is it
+//     configured?" statuses) still hold;
 //   * the mask starts with '••', which isFreshSecret()
 //     (src/lib/integration-secret-merge.js) rejects, so a mask echoed back to
 //     PUT /api/locations/[id]/integrations/[provider] keeps the stored value.

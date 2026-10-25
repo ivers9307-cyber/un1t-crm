@@ -18,6 +18,7 @@ import { pullAccounts } from '@/lib/xero/accounts-sync'
 import { pullTaxRates } from '@/lib/xero/tax-rates-sync'
 import { pullContacts } from '@/lib/xero/contacts-sync'
 import { safeReturnTo, decodeReturnTo } from '@/lib/xero/return-to'
+import { hubManageHref } from '@/lib/integrations-hub-links'
 import { chooseTenantToBind } from '@/lib/xero/tenant-binding'
 import { logError, logWarn } from '@/lib/log'
 import { XERO_CALLBACK_PARAMS as P, XERO_CALLBACK_ERRORS as E } from '@/lib/xero/callback-notice'
@@ -25,10 +26,10 @@ import { XERO_CALLBACK_PARAMS as P, XERO_CALLBACK_ERRORS as E } from '@/lib/xero
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// Redirect target after OAuth. Default: the per-location settings page with
-// the Xero tab selected (`?tab=xero` is read by LocationIntegrations); falls
-// back to /settings when the flow never yielded a trustworthy location id
-// (missing or mismatched state).
+// Redirect target after OAuth. Default: the Integrations hub with that
+// location's Xero drawer open (`?manage=xero&location=<id>`, INTEGONE.1; the
+// per-location Integrations tab is gone); falls back to /settings when the
+// flow never yielded a trustworthy location id (missing or mismatched state).
 //
 // `returnTo` (carried through the SIGNED state) OVERRIDES the default when
 // present — but ONLY after passing the open-redirect guard again
@@ -47,7 +48,7 @@ function settingsUrl(req, locationId, params = {}, returnTo = null) {
   const u = validated
     ? new URL(validated, req.url)
     : locationId
-      ? new URL(`/settings/locations/${locationId}?tab=xero`, req.url)
+      ? new URL(hubManageHref(locationId, 'xero'), req.url)
       : new URL('/settings', req.url)
   for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v)
   return u

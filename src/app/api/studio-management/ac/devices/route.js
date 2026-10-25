@@ -8,8 +8,9 @@
 //   (AcControlPanel) and the phone read this.
 //
 // ACDEVLOC.1 — the POST (add a device) that lived here is gone. It acted on
-// the caller's ACTIVE studio, while its only caller, the settings tab, is on
-// /settings/locations/<id>. Adding a unit is now
+// the caller's ACTIVE studio, while its only caller, the settings tab, acts
+// on one location (then /settings/locations/<id>; the Integrations hub's
+// Manage drawer since INTEGONE.1). Adding a unit is now
 // POST /api/locations/[id]/ac-devices.
 //
 // Auth: studio_management permission.

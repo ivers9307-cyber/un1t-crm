@@ -1,15 +1,16 @@
 // /settings/locations/[id] — per-location edit page.
 //
-// SETTINGS.7 — the page is now a single tabbed surface. Previously every
+// SETTINGS.7 — the page is a single tabbed surface. Previously every
 // section (Details / Features / Branding / Deposits / Schedule /
-// Notifications) stacked into one long scroll, with only the
-// Integrations sub-area tabbed. Now a top-level tab strip (?section=)
-// shows one section at a time, consistent with the Integrations tab
-// (which keeps its own ?tab= sub-strip — the two params compose).
+// Notifications) stacked into one long scroll. Now a top-level tab strip
+// (?section=) shows one section at a time.
 //
-// SETTINGS.1 reorganized the page: every credential-bearing integration
-// (Xero / Glofox / UniFi / Sensibo / BCA Submit / WhatsApp)
-// lives in the Integrations tab. The Details tab (LocationForm) owns
+// SETTINGS.1 moved every credential-bearing integration (Xero / Glofox /
+// UniFi / Sensibo / BCA Submit / WhatsApp …) into an Integrations tab here.
+// INTEGONE.1 retired that tab: each integration is now managed in the
+// Integrations hub's Manage drawer (/settings/integrations-hub?manage=<card>
+// &location=<id>), and every old URL of the tab (?section=integrations,
+// ?tab=<provider>) redirects there. The Details tab (LocationForm) owns
 // location identity + contractor budget.
 
 import { createServerClient } from '@/lib/supabase'
@@ -21,6 +22,7 @@ import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { canEditLocationFeatures } from '@/lib/staff-access'
 import { logError } from '@/lib/log'
 import { toClientLocation } from '@/lib/location-client-shape'
+import { HUB_PATH, legacyIntegrationsTabRedirect } from '@/lib/integrations-hub-links'
 import LocationForm from '@/components/LocationForm'
 import LocationFeatures from '@/components/LocationFeatures'
 import RolePermissions from '@/components/RolePermissions'
@@ -28,7 +30,6 @@ import CarDepositSettings from '@/components/CarDepositSettings'
 import BrandingSettings from '@/components/BrandingSettings'
 import OrgBrandingSettings from '@/components/OrgBrandingSettings'
 import { isOrgAdmin } from '@/lib/org-admin'
-import LocationIntegrations from '@/components/settings/LocationIntegrations'
 import NotificationConfigCard from '@/components/settings/NotificationConfigCard'
 import EmailMailboxesCard from '@/components/settings/EmailMailboxesCard'
 import SignatureLinksCard from '@/components/settings/SignatureLinksCard'
@@ -39,7 +40,6 @@ import SendQuietHoursCard from '@/components/settings/SendQuietHoursCard'
 import EmailCopyCard from '@/components/settings/EmailCopyCard'
 import EmailSpamFilterCard from '@/components/settings/EmailSpamFilterCard'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
-import { membershipSourceState } from '@/lib/membership/source'
 
 export const dynamic = 'force-dynamic'
 
@@ -83,6 +83,13 @@ export default async function EditLocationPage(props) {
   // here and the id is no secret from them — only the edit rights are.
   if (guardMasterOrOwner(user, params.id)) redirect('/')
 
+  // INTEGONE.1 — the Integrations tab is gone; its URLs open the hub. After
+  // both gates (a stranger still gets the 404, a non-owner the bounce) and
+  // before any read, since nothing on this page is needed to answer it.
+  if (searchParams.section === 'integrations' || searchParams.tab) {
+    redirect(legacyIntegrationsTabRedirect(params.id, searchParams))
+  }
+
   const db = createServerClient()
   const { data: locationRow, error: locationErr } = await db.from('locations').select('*').eq('id', params.id).single()
 
@@ -102,16 +109,18 @@ export default async function EditLocationPage(props) {
 
   // ACDEVLOC.1 — every component below is a CLIENT component, so whatever
   // `location` holds is serialised into this page's HTML. This PROP no longer
-  // carries the Sensibo key or ThinQ PAT: the AC tab gets has_sensibo_key /
-  // has_thinq_pat and saves through the masked
-  // PUT /api/locations/[id]/integrations/ac.
+  // carries the Sensibo key or ThinQ PAT, only has_sensibo_key /
+  // has_thinq_pat (the AC settings, hosted in the Integrations hub's Manage
+  // drawer since INTEGONE.1, save through the masked
+  // PUT /api/locations/[id]/integrations/ac).
   //
   // The `user` prop no longer carries them either (SECFIX.3a):
   // getCurrentUser() loads only USER_LOCATION_COLUMNS: the client identity,
   // no `settings` and no credential column (SECFIX.3a, PROFILESPREAD.1).
   // SECFIX.3b: this `location` prop masks every other credential too (the
-  // Glofox and UniFi ones in `settings`), keeping presence only. Those tabs
-  // start their secret inputs blank and save through the masked
+  // Glofox and UniFi ones in `settings`), keeping presence only. Their
+  // settings (in the hub drawer) start their secret inputs blank and save
+  // through the masked
   // PUT /api/locations/[id]/integrations/[provider]. bca_config (no
   // credential) crosses as stored; see src/lib/location-client-shape.js.
   const location = toClientLocation(locationRow)
@@ -120,60 +129,18 @@ export default async function EditLocationPage(props) {
   // line in LocationForm and the org-level branding defaults above the
   // per-location ones (mig 317). It used to be every active organisation
   // in the estate, of which this route renders exactly one: the location
-  // is fetched first now so the read can be keyed, which costs no extra
-  // round-trip (it just moves into the batch below). maybeSingle, not
-  // single: a location with no org, or one pointing at an inactive org,
-  // is a legitimate "no org line", not an error.
+  // is fetched first so the read can be keyed. maybeSingle, not single: a
+  // location with no org, or one pointing at an inactive org, is a
+  // legitimate "no org line", not an error.
   //
-  // Pull the Xero connection row (if any) and a sample car for the BCA
-  // template preview. Both feed into LocationIntegrations.
-  // W1.M2 — the membership-source STATE for the Integrations card and the
-  // Glofox tab's dot (none | configured | unconfigured | unknown), resolved
-  // by the seam here because a client component cannot ask it.
-  const [{ data: org }, { data: xeroConnection, error: xeroErr }, { data: sampleBcaCar }, membershipSource, un1tConn] = await Promise.all([
-    location.organization_id
-      ? db.from('organizations').select('*').eq('id', location.organization_id).maybeSingle()
-      : Promise.resolve({ data: null }),
-    db.from('xero_connections')
-      .select(`
-        location_id, tenant_id, tenant_name, tenant_type,
-        connected_at, last_refreshed_at, expires_at, scopes,
-        bills_email_address,
-        accounts_last_synced_at, contacts_last_synced_at,
-        tax_rates_last_synced_at,
-        accounts_sync_error, contacts_sync_error, tax_rates_sync_error,
-        car_sales_account_code
-      `)
-      .eq('location_id', location.id)
-      .maybeSingle(),
-    location.features?.bca_submit === true
-      ? db.from('cars')
-          .select('uk_reg, irish_reg, vin, make, model, vehicle_year, buyer_name, buyer_email, xero_invoice_number')
-          .eq('location_id', location.id)
-          .in('status', ['pending', 'completed'])
-          .order('updated_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-      : Promise.resolve({ data: null }),
-    membershipSourceState(db, location.id),
-    // UN1TSYNC.7 — does this studio hold an ACTIVE un1t.online token? Keeps its
-    // tab (and so Disconnect) reachable after the membership source moves off
-    // un1t_online. A head count: the row, and its token, never leave the server.
-    db.from('channel_connections')
-      .select('id', { count: 'exact', head: true })
-      .eq('location_id', location.id)
-      .eq('platform', 'un1t_online')
-      .eq('is_active', true),
-  ])
-
-  // CHANNELREAD.1 — a failed xero_connections read is not "not connected":
-  // the Xero tab would offer Connect (an OAuth rebind) over a live
-  // connection. The tab renders "Could not load" instead.
-  if (xeroErr) logError('location-settings', 'xero_connections read failed', { locationId: location.id, err: xeroErr.message })
-  // A failed count shows the tab (harmless: the tab itself is owner/master and
-  // reads its own status); only a clean zero hides it.
-  if (un1tConn?.error) logError('location-settings', 'un1t_online connection count failed', { locationId: location.id, code: un1tConn.error.code ?? null })
-  const hasUn1tOnlineConnection = !!un1tConn?.error || (un1tConn?.count || 0) > 0
+  // INTEGONE.1 — the Xero connection, BCA sample car, membership-source state
+  // and un1t.online count this page used to read for its Integrations tab are
+  // read by the hub drawer's own route now
+  // (GET /api/integrations/hub/locations/[id], src/lib/integrations-hub-location.js).
+  const { data: org, error: orgErr } = location.organization_id
+    ? await db.from('organizations').select('*').eq('id', location.organization_id).maybeSingle()
+    : { data: null, error: null }
+  if (orgErr) logError('location-settings', 'organization read failed', { locationId: location.id, err: orgErr.message })
 
   // Build the visible tab list. Features is master-only (per the mig 092
   // audit it's a master knob); Deposits only shows when car_processing is
@@ -206,41 +173,23 @@ export default async function EditLocationPage(props) {
     ...(showDeposits ? [{ key: 'deposits', label: 'Deposits' }] : []),
     { key: 'schedule', label: 'Schedule' },
     { key: 'notifications', label: 'Notifications' },
-    { key: 'integrations', label: 'Integrations' },
   ]
   const validKeys = new Set(tabs.map((t) => t.key))
-  // Resolve the active section. If a `?tab=` is present (an Integrations
-  // sub-tab deep-link, e.g. the documented /settings/locations/<id>?tab=xero)
-  // but no `?section=`, default to the Integrations tab so the deep-link
-  // still lands where it used to.
+  // The active section (an Integrations URL already redirected to the hub
+  // above, INTEGONE.1).
   const requestedSection = searchParams.section
-  const active = validKeys.has(requestedSection)
-    ? requestedSection
-    : (searchParams.tab ? 'integrations' : 'details')
-
-  // INTEG-B4 — the Integrations hub (/settings/integrations-hub) is now
-  // the primary integrations surface for owner+/master. Hand the GENERIC
-  // per-location Integrations landing over to it: the bare Integrations
-  // tab with NO provider selected (?section=integrations and no ?tab=)
-  // redirects. A provider-specific deep-link — ?tab=<providerKey>, incl.
-  // ?section=integrations&tab=xero — is the hub's OWN connect/disconnect
-  // target and the only management surface, so it MUST keep rendering the
-  // Edit-Location Integrations tab exactly as before and never redirects.
-  // The gate above already guarantees master-or-owner AT THIS location, so
-  // this only ever fires for the hub's audience — it does NOT re-check the
-  // ACTIVE-location role, which was the stale half of that guarantee.
-  if (active === 'integrations' && !searchParams.tab) {
-    redirect('/settings/integrations-hub')
-  }
+  const active = validKeys.has(requestedSection) ? requestedSection : 'details'
 
   return (
     <div className="p-8 max-w-3xl">
       <h2 className="text-2xl font-bold mb-1">Edit Location</h2>
-      <p className="text-sm text-un1t-subtle mb-6">Update {location.name} details and integrations</p>
+      <p className="text-sm text-un1t-subtle mb-6">
+        Update {location.name} details. Integrations are managed in{' '}
+        <Link href={HUB_PATH} className="underline">Settings → Integrations</Link>.
+      </p>
 
       {/* Section tab strip (?section=). Server-rendered Links so each
-          section is a shareable URL; switching sections drops any stale
-          ?tab= from the query (a bare ?section= replaces the query). */}
+          section is a shareable URL (a bare ?section= replaces the query). */}
       <div className="flex border-b border-un1t-border overflow-x-auto mb-6">
         {tabs.map((t) => (
           <Link
@@ -261,8 +210,8 @@ export default async function EditLocationPage(props) {
         <>
           <LocationForm location={location} organizations={org ? [org] : []} showEmailTab={showEmail} />
           {/* FREQ-CAP.1 — cross-channel marketing frequency cap. Lives on
-              Details (not Integrations — it carries no credentials and
-              spans email + WhatsApp, so no single integration tab fits). */}
+              Details (not with the integrations — it carries no credentials
+              and spans email + WhatsApp, so no single integration fits). */}
           <CommsFrequencyCapCard locationId={location.id} />
           {/* GAPS-P4 — send-time quiet hours (mig 514). Sits next to the
               frequency cap for the same reason: it is comms config that
@@ -401,20 +350,6 @@ export default async function EditLocationPage(props) {
         </section>
       )}
 
-      {/* Tabbed Integrations — Xero / Glofox / UniFi / Sensibo /
-          BCA / WhatsApp. Keeps its own ?tab= sub-strip; each tab is
-          visible only when its feature is on at this location. */}
-      {active === 'integrations' && (
-        <LocationIntegrations
-          location={location}
-          xeroConnection={xeroConnection || null}
-          xeroReadFailed={Boolean(xeroErr)}
-          user={user}
-          sampleBcaCar={sampleBcaCar || null}
-          membershipSource={membershipSource}
-          hasUn1tOnlineConnection={hasUn1tOnlineConnection}
-        />
-      )}
     </div>
   )
 }

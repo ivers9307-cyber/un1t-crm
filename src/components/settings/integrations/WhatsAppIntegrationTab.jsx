@@ -3,10 +3,10 @@
 // WA-MULTI.1 — WhatsApp tab for one studio.
 //
 // WAORGNUMBER.1: a number belongs to the ORGANISATION and is added, edited and
-// removed on the organisation's page (/settings/whatsapp-numbers, organisation
-// admins). This tab lists the organisation's numbers with a per-studio on/off
-// switch and a default radio (StudioWhatsAppNumbers) and links to that page;
-// the studio-level controls (chat openers, studio picker, card sets) stay.
+// removed in the hub's "WhatsApp numbers" drawer (organisation admins). This
+// tab lists the organisation's numbers with a per-studio on/off switch and a
+// default radio (StudioWhatsAppNumbers) and links to that drawer; the
+// studio-level controls (chat openers, studio picker, card sets) stay.
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
@@ -17,7 +17,7 @@ import {
 import { createBrowserClient } from '@/lib/supabase'
 import { validateTemplateMedia } from '@/lib/template-media'
 import { normalizeUrlish } from '@/lib/urlish'
-import { ORG_NUMBERS_PAGE } from '@/lib/org-whatsapp-numbers-page'
+import { orgNumbersHref } from '@/lib/org-whatsapp-numbers-page'
 import { Row } from './WhatsAppFieldRow'
 import StudioWhatsAppNumbers from '@/components/settings/whatsapp/StudioWhatsAppNumbers'
 import BlastSignoffCard from '@/components/settings/whatsapp/BlastSignoffCard'
@@ -39,7 +39,7 @@ export default function WhatsAppIntegrationTab({ location, canEdit, canManageNum
           {canManageNumbers ? (
             <>
               Add, edit or remove numbers on{' '}
-              <Link href={ORG_NUMBERS_PAGE} className="text-blue-700 hover:underline">WhatsApp numbers</Link>.
+              <Link href={orgNumbersHref(location.organization_id)} className="text-blue-700 hover:underline">WhatsApp numbers</Link>.
             </>
           ) : (
             'An organisation admin adds, edits and removes numbers.'

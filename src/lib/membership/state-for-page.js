@@ -22,6 +22,7 @@
 import { logError } from '@/lib/log'
 import { membershipSourceState, MEMBERSHIP_SOURCES } from './source'
 import { READS_BY_SOURCE } from './reads/registry'
+import { hubManageHref } from '@/lib/integrations-hub-links'
 
 export const MEMBERSHIP_STATE_TTL_MS = 60_000
 
@@ -82,13 +83,14 @@ export function resetMembershipStateCache(locationId) {
 }
 
 /**
- * Where the per-location "Membership source" setting lives (W1.M2 puts its
- * card on the location's Integrations tab, above the Glofox tab). One
- * constant, so a move is a one-line change. The gate links to it only for
- * a real location (the no_location state draws no link).
+ * Where the per-location "Membership source" setting lives: the Integrations
+ * hub's Membership source drawer for that location (INTEGONE.1; W1.M2 had put
+ * its card on the location's Integrations tab, which is retired). One
+ * function, so a move is a one-line change. The gate links to it only for a
+ * real location (the no_location state draws no link).
  */
 export function membershipSettingsHref(locationId) {
-  return `/settings/locations/${locationId}?section=integrations&tab=glofox`
+  return hubManageHref(locationId, 'membership-source')
 }
 
 /**

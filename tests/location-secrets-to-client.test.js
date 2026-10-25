@@ -32,6 +32,10 @@ export const STAR_READS = {
   'src/app/api/staff/[id]/permanent/route.js': { count: 1, disposition: 'server-only', why: 'master-only; the embed feeds the UniFi revoke; the response is the tombstone RPC result' },
   'src/app/settings/page.js': { count: 1, disposition: 'server-only', why: 'server-rendered list (name, address, slug, active); no client component receives the rows' },
   'src/app/settings/locations/[id]/page.js': { count: 1, disposition: 'redacted' },
+  // INTEGONE.1 — the hub drawer's context (GET /api/integrations/hub/locations/[id]):
+  // the same read the page above makes for its Integrations tab, shaped by
+  // toClientLocation before it is returned as JSON to the session.
+  'src/lib/integrations-hub-location.js': { count: 1, disposition: 'redacted' },
 }
 
 const PATTERNS = [

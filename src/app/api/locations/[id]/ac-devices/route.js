@@ -12,7 +12,8 @@
 //
 // ACDEVLOC.1 — the settings tab used to list and add through
 // /api/studio-management/ac/devices, which acts on the caller's ACTIVE studio,
-// while the tab lives on /settings/locations/<id>: a master on Hatch's tab
+// while the tab acted on one location (then /settings/locations/<id>, now the
+// Integrations hub's Manage drawer, INTEGONE.1): a master on Hatch's tab
 // with Stillorgan active saw, and added to, Stillorgan. Every decision here is
 // made at params.id: membership first (404 for a location the caller does not
 // belong to, so the id is not confirmed), then the role at that location.

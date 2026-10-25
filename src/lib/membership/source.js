@@ -73,6 +73,17 @@ export async function resolveMembershipSource(db, locationId) {
 export async function membershipSourceState(db, locationId) {
   const { key, error } = await readSourceKey(db, locationId)
   if (error) return { source: null, state: 'unknown', readError: MEMBERSHIP_SOURCE_UNREADABLE }
+  return membershipSourceStateForKey(db, locationId, key)
+}
+
+/**
+ * membershipSourceState for a caller that already READ the location's
+ * membership_source column (the Integrations hub selects it with the row, so
+ * a second read per location would only re-ask the question). Same answers;
+ * `key` must be the column's value as read (null/'none' = no source). A caller
+ * that did not select the column calls membershipSourceState instead.
+ */
+export async function membershipSourceStateForKey(db, locationId, key) {
   if (!key || key === 'none') return { source: 'none', state: 'none' }
   const provider = providerFor(key)
   // A value the CHECK admits but no module serves yet: the row keeps its

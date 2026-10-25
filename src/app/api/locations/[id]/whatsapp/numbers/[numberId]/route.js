@@ -3,7 +3,7 @@
 // RETIRED (WAORGNUMBER.1): a number belongs to the organisation, so it is
 // edited and removed there — PATCH / DELETE
 // /api/organizations/[id]/whatsapp/numbers/[numberId]. Both answer 410 with a
-// pointer to /settings/whatsapp-numbers (after the signed-out check and the
+// pointer to the hub's WhatsApp numbers drawer (ORG_NUMBERS_PAGE) (after the signed-out check and the
 // path-studio access check every route in this folder makes).
 
 import { NextResponse } from 'next/server'

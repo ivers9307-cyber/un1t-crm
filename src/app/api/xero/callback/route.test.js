@@ -157,7 +157,7 @@ describe('GET /api/xero/callback — a failed taken-orgs read binds nothing', ()
     })
     const res = await callback(LOC_A)
     expect(res.status).toBe(307)
-    expect(res.headers.get('location')).toBe(`http://localhost/settings/locations/${LOC_A}?tab=xero&xero_error=taken_read_failed`)
+    expect(res.headers.get('location')).toBe(`http://localhost/settings/integrations-hub?manage=xero&location=${LOC_A}&xero_error=taken_read_failed`)
     expect(upsert).not.toHaveBeenCalled()
   })
 })
@@ -175,7 +175,8 @@ describe('GET /api/xero/callback — outcome codes', () => {
     })
     return upsert
   }
-  const at = (params) => `http://localhost/settings/locations/${LOC_A}?tab=xero&${params}`
+  // INTEGONE.1 — the default landing is the hub's Xero drawer for the location.
+  const at = (params) => `http://localhost/settings/integrations-hub?manage=xero&location=${LOC_A}&${params}`
 
   beforeEach(() => {
     getCurrentUser.mockResolvedValue(person({ [LOC_A]: 'owner' }, LOC_A))

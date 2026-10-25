@@ -63,7 +63,7 @@ const ORG_B = 'c0000000-0000-0000-0000-000000000003'
 
 // Records every table touched AND every filter, so "never reached the
 // database" and "read only ITS OWN org" are assertions, not assumptions.
-function makeDb({ errors = {}, location = null, locationError = null, un1tConn = null } = {}) {
+function makeDb({ errors = {}, location = null, locationError = null } = {}) {
   const touched = []
   const filters = []
   const from = (table) => {
@@ -78,10 +78,6 @@ function makeDb({ errors = {}, location = null, locationError = null, un1tConn =
           ? (location || { id: LOC_B, organization_id: ORG_B, name: 'Someone else', features: {} })
           : null,
       })
-    // UN1TSYNC.7 — the page head-counts the studio's active un1t.online row.
-    if (table === 'channel_connections') {
-      c.then = (res, rej) => Promise.resolve(un1tConn || { count: 0, error: null }).then(res, rej)
-    }
     c.maybeSingle = () => Promise.resolve(errors[table]
       ? { data: null, error: errors[table] }
       : { data: table === 'organizations' ? { id: ORG_B, name: 'Another Org' } : null })
@@ -195,9 +191,7 @@ describe('/settings/locations/[id] — gates judge the location in the URL', () 
   })
 })
 
-// CHANNELREAD.1 — the xero_connections read discarded its error, so a blip
-// rendered "Not connected." + Connect Xero over a live connection (and
-// Connect starts an OAuth rebind). The page now tells the tab.
+// Walks the server-rendered element tree for a component by name.
 function findElement(node, name) {
   if (!node || typeof node !== 'object') return null
   if (Array.isArray(node)) {
@@ -234,24 +228,76 @@ describe('/settings/locations/[id] — a failed location read', () => {
   })
 })
 
-describe('/settings/locations/[id] — a failed Xero read (CHANNELREAD.1)', () => {
+// INTEGONE.1 — the per-location Integrations tab is retired: every hosted tab
+// lives in the Integrations hub's Manage drawer. Every URL of the old tab
+// (?section=integrations, ?tab=<provider>, both of which are still produced by
+// old bookmarks, emails and any Stripe / Xero redirect minted before the
+// change) lands on the hub with that provider's drawer open, carrying the
+// rest of the query (the Stripe return and the Xero callback codes are read
+// on the hub page). Only AFTER both gates, and before any read.
+const HUB = '/settings/integrations-hub'
+describe('/settings/locations/[id] — old Integrations-tab URLs redirect into the hub (INTEGONE.1)', () => {
   const owner = () => user({ role: 'owner', rolesByLocation: { [LOC_B]: 'owner' }, locations: [{ id: LOC_B }] })
-  const xeroTab = () => EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve({ tab: 'xero' }) })
-
-  it('passes xeroReadFailed to the integrations tabs', async () => {
+  const visit = (searchParams) => EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve(searchParams) })
+  let db
+  beforeEach(() => {
+    vi.clearAllMocks()
+    db = makeDb()
+    createServerClient.mockReturnValue(db)
     getCurrentUser.mockResolvedValue(owner())
-    createServerClient.mockReturnValue(makeDb({ errors: { xero_connections: { message: 'boom' } } }))
-    const el = findElement(await xeroTab(), 'LocationIntegrations')
-    expect(el).toBeTruthy()
-    expect(el.props.xeroReadFailed).toBe(true)
-    expect(el.props.xeroConnection).toBeNull()
   })
 
-  it('pin: a good read (no row) is not a failure', async () => {
-    getCurrentUser.mockResolvedValue(owner())
-    createServerClient.mockReturnValue(makeDb())
-    const el = findElement(await xeroTab(), 'LocationIntegrations')
-    expect(el.props.xeroReadFailed).toBe(false)
+  const cases = [
+    [{ tab: 'xero' }, `${HUB}?manage=xero&location=${LOC_B}`],
+    [{ section: 'integrations', tab: 'glofox' }, `${HUB}?manage=glofox&location=${LOC_B}`],
+    // the one renamed key
+    [{ section: 'integrations', tab: 'ac-devices' }, `${HUB}?manage=climate&location=${LOC_B}`],
+    // the bare Integrations section: the hub with nothing open
+    [{ section: 'integrations' }, `${HUB}?location=${LOC_B}`],
+    // the Stripe Connect return (what returnUrls minted before the change carry)
+    [{ section: 'integrations', tab: 'payments', stripe: 'return' }, `${HUB}?manage=payments&location=${LOC_B}&stripe=return`],
+    // the Xero callback's outcome codes (XeroCallbackNotice renders on the hub)
+    [{ tab: 'xero', xero_connected: '1', xero_orgs: '2' }, `${HUB}?manage=xero&location=${LOC_B}&xero_connected=1&xero_orgs=2`],
+    [{ tab: 'xero', xero_error: 'declined' }, `${HUB}?manage=xero&location=${LOC_B}&xero_error=declined`],
+    // a manage/location already on the URL is replaced, never doubled
+    [{ tab: 'xero', manage: 'bca', location: 'someone-else' }, `${HUB}?manage=xero&location=${LOC_B}`],
+  ]
+  for (const [query, target] of cases) {
+    it(`${new URLSearchParams(query).toString()} → ${target.slice(HUB.length)}`, async () => {
+      await expect(visit(query)).rejects.toThrow(`NEXT_REDIRECT:${target}`)
+      expect(notFound).not.toHaveBeenCalled()
+      // Nothing on this page is needed to answer it.
+      expect(db.touched).toEqual([])
+    })
+  }
+
+  it('a stranger asking for an old tab URL still gets the 404, never a redirect that confirms the id', async () => {
+    getCurrentUser.mockResolvedValue(user({ role: 'owner', rolesByLocation: { [LOC_A]: 'owner' }, locations: [{ id: LOC_A }] }))
+    await expect(visit({ tab: 'xero' })).rejects.toThrow('NEXT_NOT_FOUND')
+    expect(redirect).not.toHaveBeenCalled()
+  })
+
+  it('a member who is not owner here is bounced home, not into the hub', async () => {
+    getCurrentUser.mockResolvedValue(user({
+      role: 'owner', rolesByLocation: { [LOC_A]: 'owner', [LOC_B]: 'staff' }, locations: [{ id: LOC_A }, { id: LOC_B }],
+    }))
+    await expect(visit({ section: 'integrations', tab: 'xero' })).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
+  })
+
+  it('the section strip offers no Integrations tab, and the page reads nothing an integration needed', async () => {
+    const tree = await visit({})
+    const hrefs = []
+    const walk = (n) => {
+      if (!n || typeof n !== 'object') return
+      if (Array.isArray(n)) { n.forEach(walk); return }
+      if (typeof n.props?.href === 'string') hrefs.push(n.props.href)
+      walk(n.props?.children)
+    }
+    walk(tree)
+    expect(hrefs).toContain('?section=details')
+    expect(hrefs.some((h) => h.includes('section=integrations'))).toBe(false)
+    expect(hrefs).toContain(HUB)
+    expect(db.touched.sort()).toEqual(['locations', 'organizations'])
   })
 })
 
@@ -265,28 +311,20 @@ describe('/settings/locations/[id] — a failed Xero read (CHANNELREAD.1)', () =
 // redacts it at its source, getCurrentUser().
 describe('/settings/locations/[id] — the location prop carries no AC credentials (ACDEVLOC.1)', () => {
   const owner = () => user({ role: 'owner', rolesByLocation: { [LOC_B]: 'owner' }, locations: [{ id: LOC_B }] })
-  const xeroTab = () => EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve({ tab: 'xero' }) })
   const ROW = {
     id: LOC_B, organization_id: ORG_B, name: 'Someone else', features: {},
     sensibo_api_key: 'sk-synthetic-not-real', thinq_pat: 'pat-synthetic-not-real', thinq_client_id: 'cid-1',
   }
 
-  it('hands the integrations tabs has_* flags, not the key or the PAT', async () => {
-    getCurrentUser.mockResolvedValue(owner())
-    createServerClient.mockReturnValue(makeDb({ location: ROW }))
-    const el = findElement(await xeroTab(), 'LocationIntegrations')
-    expect(el.props.location.has_sensibo_key).toBe(true)
-    expect(el.props.location.has_thinq_pat).toBe(true)
-    expect(el.props.location.thinq_client_id).toBe('cid-1')
-    expect(JSON.stringify(el.props.location)).not.toContain('synthetic-not-real')
-  })
-
-  it('the Details tab (LocationForm) gets the same redacted row', async () => {
+  it('the Details tab (LocationForm) gets a redacted row: has_* flags, never the key or the PAT', async () => {
     getCurrentUser.mockResolvedValue(owner())
     createServerClient.mockReturnValue(makeDb({ location: ROW }))
     const tree = await EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve({}) })
     const el = findElement(tree, 'LocationForm')
     expect(el).toBeTruthy()
+    expect(el.props.location.has_sensibo_key).toBe(true)
+    expect(el.props.location.has_thinq_pat).toBe(true)
+    expect(el.props.location.thinq_client_id).toBe('cid-1')
     expect(JSON.stringify(el.props.location)).not.toContain('synthetic-not-real')
   })
 
@@ -308,7 +346,8 @@ describe('/settings/locations/[id] — the location prop carries no AC credentia
     }
     getCurrentUser.mockResolvedValue(owner())
     createServerClient.mockReturnValue(makeDb({ location: SECRET_ROW }))
-    for (const [searchParams, component] of [[{ tab: 'glofox' }, 'LocationIntegrations'], [{}, 'LocationForm']]) {
+    // (The hub drawer's copy of this row is pinned by its own route test.)
+    for (const [searchParams, component] of [[{}, 'LocationForm']]) {
       const tree = await EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve(searchParams) })
       const loc = findElement(tree, component).props.location
       expect(JSON.stringify(loc), component).not.toContain('synthetic-not-real')
@@ -361,13 +400,12 @@ describe('/settings/locations/[id] — the location prop carries no AC credentia
     createServerClient.mockReturnValue(makeDb({ location: SECRET_ROW }))
 
     try {
-      const tree = await EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve({ tab: 'glofox' }) })
-      const passedUser = findElement(tree, 'LocationIntegrations').props.user
+      const tree = await EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve({ section: 'branding' }) })
+      const passedUser = findElement(tree, 'BrandingSettings').props.user
       expect(passedUser.id).toBe(profile.id)
       expect(JSON.stringify(passedUser)).not.toContain('synthetic-not-real')
       // PROFILESPREAD.1 — no location on it carries settings or a credential
       // column at all (the pick drops them even from this raw embed).
-      // LocationIntegrations reads presence off its own `location` prop.
       expect(passedUser.activeLocation).not.toHaveProperty('settings')
       expect(passedUser.locations[0]).not.toHaveProperty('settings')
       expect(passedUser.locations[0]).not.toHaveProperty('sensibo_api_key')
@@ -375,63 +413,5 @@ describe('/settings/locations/[id] — the location prop carries no AC credentia
       sessionUser = null
       getCurrentUser.mockReset()
     }
-  })
-})
-
-// W1.M3a — the gate on every Glofox-only surface links a 'none' studio's
-// owner to membershipSettingsHref(). That URL must land on THIS page's
-// Integrations section with the Membership source card (W1.M2), and never
-// on the bare-Integrations redirect to the hub, which has no such card.
-describe('/settings/locations/[id] — membershipSettingsHref lands on the Membership source card', () => {
-  const owner = () => user({ role: 'owner', rolesByLocation: { [LOC_B]: 'owner' }, locations: [{ id: LOC_B }] })
-
-  it("a 'none' studio: the href's query renders LocationIntegrations with the resolved state, no redirect", async () => {
-    const { membershipSettingsHref } = await import('@/lib/membership/state-for-page')
-    const href = new URL(membershipSettingsHref(LOC_B), 'http://localhost')
-    expect(href.pathname).toBe(`/settings/locations/${LOC_B}`)
-    getCurrentUser.mockResolvedValue(owner())
-    createServerClient.mockReturnValue(makeDb({
-      location: { id: LOC_B, organization_id: ORG_B, name: 'Someone else', features: {}, settings: {}, membership_source: 'none' },
-    }))
-    const tree = await EditLocationPage({
-      params: Promise.resolve({ id: LOC_B }),
-      searchParams: Promise.resolve(Object.fromEntries(href.searchParams)),
-    })
-    expect(redirect).not.toHaveBeenCalled()
-    const el = findElement(tree, 'LocationIntegrations')
-    expect(el).toBeTruthy()
-    expect(el.props.membershipSource).toMatchObject({ source: 'none', state: 'none' })
-  })
-})
-
-// UN1TSYNC.7 — the un1t.online tab must stay reachable (so Disconnect works)
-// whenever the studio holds an ACTIVE token, whatever its membership source.
-describe('/settings/locations/[id] — hasUn1tOnlineConnection', () => {
-  const owner = () => user({ role: 'owner', rolesByLocation: { [LOC_B]: 'owner' }, locations: [{ id: LOC_B }] })
-  const render = async (un1tConn) => {
-    getCurrentUser.mockResolvedValue(owner())
-    const db = makeDb({
-      location: { id: LOC_B, organization_id: ORG_B, name: 'S', features: {}, settings: {}, membership_source: 'glofox' },
-      un1tConn,
-    })
-    createServerClient.mockReturnValue(db)
-    const tree = await EditLocationPage({ params: Promise.resolve({ id: LOC_B }), searchParams: Promise.resolve({ tab: 'integrations' }) })
-    return { el: findElement(tree, 'LocationIntegrations'), db }
-  }
-
-  it('is true for a studio with an active un1t.online row (count only, scoped to the studio)', async () => {
-    const { el, db } = await render({ count: 1, error: null })
-    expect(el.props.hasUn1tOnlineConnection).toBe(true)
-    expect(db.filters).toContainEqual({ table: 'channel_connections', col: 'location_id', val: LOC_B })
-    expect(db.filters).toContainEqual({ table: 'channel_connections', col: 'platform', val: 'un1t_online' })
-    expect(db.filters).toContainEqual({ table: 'channel_connections', col: 'is_active', val: true })
-  })
-
-  it('is false for a clean zero', async () => {
-    expect((await render({ count: 0, error: null })).el.props.hasUn1tOnlineConnection).toBe(false)
-  })
-
-  it('fails open to true when the count could not be read', async () => {
-    expect((await render({ count: null, error: { code: 'XX000' } })).el.props.hasUn1tOnlineConnection).toBe(true)
   })
 })

@@ -1,5 +1,6 @@
 // ACDEVLOC.1 — the `locations` row as /settings/locations/[id] passes it in
-// its `location` PROP.
+// its `location` PROP (and as GET /api/integrations/hub/locations/[id] hands
+// it to the Integrations hub's Manage drawer, INTEGONE.1).
 //
 // That page reads the row with select('*') through the service role and hands
 // it to client components, which serialises every column into the HTML. The
@@ -19,9 +20,8 @@
 // (so redactLocationSecrets masks it whole), but it holds no credential (the
 // send-from / send-to / cc addresses, subject and body templates and the
 // document-slot labels; audited in the integrations route's BCA
-// descriptor), and this page needs it: BcaIntegrationTab prefills its form
-// from it and LocationIntegrations reads bca_config.send_from for the status
-// dot. Masked, the tab would show the defaults and a Save would overwrite the
+// descriptor), and the BCA tab needs it: BcaIntegrationTab prefills its form
+// from it and reads bca_config.send_from for its status. Masked, the tab would show the defaults and a Save would overwrite the
 // stored config with them. So it crosses with its fields intact, but walked by
 // the same secret-key rule: a secret-named key added inside it later (an
 // smtp_password, say) is masked, while today's keys (send_from, send_to, cc,

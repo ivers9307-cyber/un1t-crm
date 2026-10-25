@@ -25,7 +25,7 @@
 // POST /api/locations/[id]/whatsapp/numbers
 //   RETIRED (WAORGNUMBER.1): numbers are added at the organisation now —
 //   POST /api/organizations/[id]/whatsapp/numbers. Answers 410 with a
-//   pointer to /settings/whatsapp-numbers.
+//   pointer to the hub's WhatsApp numbers drawer (ORG_NUMBERS_PAGE).
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'

@@ -33,7 +33,7 @@ import { createOnboardingLink } from '@/lib/payments/stripe-connect'
 
 const LOC_A = 'a0000000-0000-0000-0000-000000000001'
 const LOC_B = 'b0000000-0000-0000-0000-000000000002'
-const SETTINGS_B = `https://crm.test/settings/locations/${LOC_B}?section=integrations&tab=payments`
+const SETTINGS_B = `https://crm.test/settings/integrations-hub?manage=payments&location=${LOC_B}`
 
 const at = (over) => ({ id: 'u', isMaster: false, activeLocation: { id: LOC_A }, ...over })
 const MANAGER_A_STAFF_B = at({

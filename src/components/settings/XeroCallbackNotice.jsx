@@ -4,10 +4,11 @@
 // (`?xero_error=<code>` / `?xero_connected=1[&xero_orgs=N]`), then removes
 // those params from the URL so a reload does not show it again.
 //
-// Mounted on every page the callback can land on: the Xero tab
-// (/settings/locations/[id]?tab=xero, the default), the Integrations hub
-// (the hub's Connect passes return_to=/settings/integrations-hub) and
-// /settings (the fallback when the state was unusable).
+// Mounted on every page the callback can land on: the Integrations hub (the
+// default, /settings/integrations-hub?manage=xero&location=<id>, with the
+// location's Xero drawer open; the Xero tab is hosted in the hub's Manage
+// drawer since INTEGONE.1, and Connect from it or the hub passes a hub
+// return_to) and /settings (the fallback when the state was unusable).
 //
 // The copy comes from src/lib/xero/callback-notice.js by CODE; nothing from
 // the URL is rendered. The notice is captured on first render, so cleaning

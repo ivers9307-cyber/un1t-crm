@@ -153,7 +153,7 @@ export const NATIONAL_LENGTHS = Object.freeze({
  * hold zero rows in prod, so they are left out rather than guessed at. Getting
  * that wrong in this direction is the CHEAP failure and is now self-announcing:
  * an omitted country's number is rejected before enqueue, appears in the
- * rejects report on /settings/integrations/zoom-contacts under "Country code
+ * rejects report on the Zoom view of the Integrations hub (/settings/integrations-hub?view=zoom) under "Country code
  * followed by a national 0", and adding its code here is the whole fix. The
  * expensive direction is the opposite one, so widen this set on evidence and
  * never narrow it.

@@ -7,7 +7,10 @@ import {
   gradeShellyConnection,
   SHELLY_HREF,
   agentSignal,
-  locationTabHref,
+  hubManageHref,
+  HUB_CARD_FOR_TAB_KEY,
+  gradePayments,
+  gradeMembershipSource,
   gradeTenantEmail,
   emailDomainHref,
   buildAttention,
@@ -167,9 +170,40 @@ describe('agentSignal', () => {
   })
 })
 
-describe('locationTabHref', () => {
-  it('deep-links into the existing per-location integrations tab', () => {
-    expect(locationTabHref('loc-1', 'glofox')).toBe('/settings/locations/loc-1?tab=glofox')
+describe('hubManageHref (INTEGONE.1)', () => {
+  it('opens the card\'s Manage drawer on the hub, never the old per-location tab', () => {
+    expect(hubManageHref('loc-1', 'glofox')).toBe('/settings/integrations-hub?manage=glofox&location=loc-1')
+    expect(hubManageHref('loc-1', 'un1t-online')).toBe('/settings/integrations-hub?manage=un1t-online&location=loc-1')
+  })
+
+  it('maps the old ac-devices tab key to the climate card', () => {
+    expect(HUB_CARD_FOR_TAB_KEY['ac-devices']).toBe('climate')
+    expect(HUB_CARD_FOR_TAB_KEY.xero).toBeUndefined()
+  })
+})
+
+describe('gradePayments (INTEGONE.1) — the old tab dot', () => {
+  it('Revolut (the default, platform merchant) is connected with no setup', () => {
+    expect(gradePayments({})).toEqual({ provider: 'revolut', hasStripeAccount: false, status: 'connected' })
+    expect(gradePayments(null)).toEqual({ provider: 'revolut', hasStripeAccount: false, status: 'connected' })
+    expect(gradePayments({ payments: { provider: 'revolut' } }).status).toBe('connected')
+  })
+
+  it('Stripe Connect is connected only with a connected account id, which is never surfaced', () => {
+    expect(gradePayments({ payments: { provider: 'stripe_connect' } })).toEqual({ provider: 'stripe_connect', hasStripeAccount: false, status: 'not_connected' })
+    const g = gradePayments({ payments: { provider: 'stripe_connect', stripe_connected_account_id: 'acct_123' } })
+    expect(g).toEqual({ provider: 'stripe_connect', hasStripeAccount: true, status: 'connected' })
+    expect(JSON.stringify(g)).not.toContain('acct_123')
+  })
+})
+
+describe('gradeMembershipSource (INTEGONE.1)', () => {
+  it('maps the seam\'s states onto card statuses; anything unreadable is unknown, never none', () => {
+    expect(gradeMembershipSource({ source: 'glofox', state: 'configured' })).toBe('connected')
+    expect(gradeMembershipSource({ source: 'glofox', state: 'unconfigured', missing: ['api_key'] })).toBe('action_needed')
+    expect(gradeMembershipSource({ source: 'none', state: 'none' })).toBe('not_connected')
+    expect(gradeMembershipSource({ source: null, state: 'unknown' })).toBe(HUB_UNKNOWN)
+    expect(gradeMembershipSource(null)).toBe(HUB_UNKNOWN)
   })
 })
 
@@ -1020,17 +1054,17 @@ describe('assembleIntegrationsHub — un1t.online card', () => {
     token_expires_at: '2026-07-29T00:00:00Z', last_error: null, last_ok_at: '2026-07-19T11:45:00Z',
   }
 
-  it('builds one row per location from the registry, linking to the un1t-online tab', async () => {
+  it('builds one row per location from the registry, linking to its hub Manage drawer', async () => {
     const db = tableDb({ channel_connections: { data: [UN1T_ROW], error: null } })
     const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
     expect(data.un1t_online).toEqual([
       {
         locationId: LOC_A.id, status: 'not_connected', studioTitle: null, tokenExpiresAt: null,
-        lastOkAt: null, lastError: null, href: locationTabHref(LOC_A.id, 'un1t-online'), offerConnect: false,
+        lastOkAt: null, lastError: null, href: hubManageHref(LOC_A.id, 'un1t-online'), offerConnect: false,
       },
       {
         locationId: LOC_B.id, status: 'connected', studioTitle: 'Hatch Street', tokenExpiresAt: '2026-07-29T00:00:00Z',
-        lastOkAt: '2026-07-19T11:45:00Z', lastError: null, href: `/settings/locations/${LOC_B.id}?tab=un1t-online`,
+        lastOkAt: '2026-07-19T11:45:00Z', lastError: null, href: `/settings/integrations-hub?manage=un1t-online&location=${LOC_B.id}`,
         offerConnect: false,
       },
     ])
@@ -1084,7 +1118,7 @@ describe('assembleIntegrationsHub — un1t.online card', () => {
     const a = data.attention.find((x) => x.cardKey === 'un1t_online')
     expect(a).toMatchObject({
       label: 'un1t.online', locationId: LOC_B.id, severity: 'warning',
-      message: 'Access token expires in 10 days.', href: locationTabHref(LOC_B.id, 'un1t-online'),
+      message: 'Access token expires in 10 days.', href: hubManageHref(LOC_B.id, 'un1t-online'),
     })
   })
 
@@ -1143,5 +1177,66 @@ describe('assembleIntegrationsHub — AI agent row from resolved settings (MIAOR
       { locationId: 'loc-s', mode: 'live', agentName: STILLORGAN_BLOB.agent_name },
       { locationId: 'loc-h', mode: 'off', agentName: null },
     ])
+  })
+})
+
+// ── Membership source + Payments cards (INTEGONE.1) ──
+describe('assembleIntegrationsHub — Membership source and Payments rows', () => {
+  it('one membership-source row per location, from the column on the row (no second read for none)', async () => {
+    const db = tableDb()
+    const data = await assembleIntegrationsHub(db, [
+      { ...LOC_A, membership_source: 'none' },
+      { ...LOC_B, membership_source: null },
+    ], { now: NOW })
+    expect(data.membershipSource).toEqual([
+      { locationId: LOC_A.id, status: 'not_connected', source: 'none', state: 'none', missing: [], href: hubManageHref(LOC_A.id, 'membership-source') },
+      { locationId: LOC_B.id, status: 'not_connected', source: 'none', state: 'none', missing: [], href: hubManageHref(LOC_B.id, 'membership-source') },
+    ])
+    // The column came with the row: no per-location re-read of locations.
+    expect(db.inCalls.locations).toBeUndefined()
+  })
+
+  it('an un1t.online source with no stored token is unconfigured (action needed), never none', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [{ ...LOC_B, membership_source: 'un1t_online' }], { now: NOW })
+    expect(data.membershipSource[0]).toMatchObject({ source: 'un1t_online', state: 'unconfigured', status: 'action_needed', missing: ['api_token', 'studio'] })
+  })
+
+  it('a provider read that fails is unknown for that location', async () => {
+    const data = await assembleIntegrationsHub(
+      tableDb({ channel_connections: { error: { message: 'db exploded' } } }),
+      [{ ...LOC_B, membership_source: 'un1t_online' }], { now: NOW },
+    )
+    expect(data.membershipSource[0]).toMatchObject({ source: 'un1t_online', state: 'unknown', status: HUB_UNKNOWN })
+  })
+
+  it('a value no provider serves yet keeps its identity as unconfigured (action needed)', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [{ ...LOC_B, membership_source: 'un1t' }], { now: NOW })
+    expect(data.membershipSource[0]).toMatchObject({ source: 'un1t', state: 'unconfigured', status: 'action_needed', missing: ['provider'] })
+  })
+
+  it('a caller that did not select membership_source gets the seam\'s own read', async () => {
+    const db = tableDb()
+    const data = await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+    // tableDb's maybeSingle answers no row: the seam reads that as no source.
+    expect(data.membershipSource[0]).toMatchObject({ source: 'none', status: 'not_connected' })
+  })
+
+  it('payments rows grade settings.payments and carry no account id', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [
+      { ...LOC_A, settings: {} },
+      { ...LOC_B, settings: { payments: { provider: 'stripe_connect', stripe_connected_account_id: 'acct_SECRETISH' } } },
+    ], { now: NOW })
+    expect(data.payments).toEqual([
+      { locationId: LOC_A.id, provider: 'revolut', hasStripeAccount: false, status: 'connected', href: hubManageHref(LOC_A.id, 'payments') },
+      { locationId: LOC_B.id, provider: 'stripe_connect', hasStripeAccount: true, status: 'connected', href: hubManageHref(LOC_B.id, 'payments') },
+    ])
+    expect(JSON.stringify(data)).not.toContain('acct_SECRETISH')
+  })
+
+  it('neither card adds an attention row', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [
+      { ...LOC_B, membership_source: 'un1t', settings: { payments: { provider: 'stripe_connect' } } },
+    ], { now: NOW })
+    expect(data.attention.filter((a) => a.cardKey === 'payments' || a.cardKey === 'membership-source')).toEqual([])
   })
 })

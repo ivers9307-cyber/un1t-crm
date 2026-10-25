@@ -80,12 +80,12 @@ Per-location OAuth 2.0 connection stored in the `xero_connections` table (migrat
 
 OAuth routes:
 - `GET /api/xero/connect?location_id=…` — kick off OAuth (sets CSRF cookie, redirects)
-- `GET /api/xero/callback` — exchange code, persist tokens, redirect to `/settings/locations/<id>?tab=xero`
+- `GET /api/xero/callback` — exchange code, persist tokens, redirect to the Integrations hub with that location's Xero drawer open, `/settings/integrations-hub?manage=xero&location=<id>` (or a validated `return_to`), plus the `xero_connected` / `xero_error` outcome codes
 - `POST /api/xero/disconnect` — remove the connection row
 - `GET /api/xero/status?location_id=…` — safe subset of the connection row (no tokens) for client UIs
 - `GET /api/xero/debug` — dev-only diagnostic; shows presence/length of the Xero client id and secret (never a character) + the exact authorize URL
 
-Settings UI lives on the per-location Integrations tab — Settings → Locations → \<name\> → Integrations → Xero, i.e. `/settings/locations/<id>?tab=xero` (`XeroIntegrationTab.jsx` wrapping `XeroLocationCard.jsx`). The old standalone `/settings/integrations` page was retired (INTEG-A4).
+Settings UI lives in the Integrations hub — Settings → Integrations → Xero → Manage (pick the location), i.e. `/settings/integrations-hub?manage=xero&location=<id>`, a drawer hosting `XeroIntegrationTab.jsx` wrapping `XeroLocationCard.jsx`. The old standalone `/settings/integrations` page was retired (INTEG-A4), and the per-location Integrations tab (`/settings/locations/<id>?tab=xero`) was retired by INTEGONE.1: its URLs redirect to the hub drawer.
 
 ### Xero OAuth scopes — granular reference
 
@@ -120,7 +120,7 @@ Non-Accounting APIs are unaffected by the granular split: `payroll.*`, `files`, 
 
 **Do not include the OIDC scopes** (`openid`, `profile`, `email`) unless we actually start consuming the id_token for Xero-side identity. Including them on apps that haven't explicitly opted into OIDC also throws the same "Invalid scope" error. The user is already authenticated via Supabase — the access_token is all we need.
 
-When adding a new Xero feature, append the relevant granular scope to `XERO_SCOPES` in `src/lib/xero/client.js`. Existing connected locations need to click "Reconnect" to receive the additional scope on their token (scopes are additive). The integration card on the per-location Integrations tab (`/settings/locations/<id>?tab=xero`) shows the current scope grant in `connection.scopes`.
+When adding a new Xero feature, append the relevant granular scope to `XERO_SCOPES` in `src/lib/xero/client.js`. Existing connected locations need to click "Reconnect" to receive the additional scope on their token (scopes are additive). The Xero card in the Integrations hub's Manage drawer (`/settings/integrations-hub?manage=xero&location=<id>`) shows the current scope grant in `connection.scopes`.
 
 ### Xero invoice push (v2) + bills auto-forward
 

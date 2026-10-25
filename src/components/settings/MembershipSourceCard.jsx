@@ -2,19 +2,21 @@
 
 // W1.M2 — the per-location "Membership source" card.
 //
-// Settings → Locations → <name> → Integrations, ABOVE the tab strip: which
-// system is the source of truth for memberships at this studio
+// Settings → Integrations → Membership source → Manage (the Integrations
+// hub's drawer, INTEGONE.1; it sat above the retired per-location
+// Integrations tab's strip before): which system is the source of truth
+// for memberships at this studio
 // (locations.membership_source, mig 717). The choices are every value the
 // CHECK admits; one with no registered provider yet (un1t) is listed but
 // DISABLED, and the route refuses it too (the registry decides, see
 // src/lib/membership/source.js).
 //
-// The current STATE arrives as a prop, resolved server-side by the page
-// (membershipSourceState): a client component cannot ask the seam itself
+// The current STATE arrives as a prop, resolved server-side by the drawer's
+// context route (membershipSourceState, src/lib/integrations-hub-location.js): a client component cannot ask the seam itself
 // without dragging @/lib/glofox into the browser bundle. Saving goes
 // through PUT /api/locations/[id]/membership-source (owner here or master;
-// the same guard the page's `canEdit` mirrors), then router.refresh() so
-// the Glofox tab's dot and every gated page re-read the row.
+// the same guard the drawer's `canEdit` mirrors), then router.refresh() so
+// the hub's cards and every gated page re-read the row.
 //
 // Switching to "none" never deletes a credential: the route says
 // `warning: 'glofox_credentials_kept'` and the card repeats it.

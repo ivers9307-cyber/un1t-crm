@@ -46,6 +46,8 @@
 // table holds at most a handful of rows per location).
 
 import { logWarn } from '@/lib/log'
+import { hubManageHref } from '@/lib/integrations-hub-links'
+import { membershipSourceState, membershipSourceStateForKey } from '@/lib/membership/source'
 import { resolveAgentSettingsForLocation } from '@/lib/agent/settings-resolve'
 import { registryRowFromLegacy } from '@/lib/connection-registry'
 import { EXPIRY_SOON_DAYS } from '@/lib/connection-health'
@@ -182,9 +184,45 @@ export function agentSignal(customerAgent) {
   return 'off'
 }
 
-/** Deep link to the existing per-location integrations tab. Pure. */
-export function locationTabHref(locationId, tabKey) {
-  return `/settings/locations/${locationId}?tab=${tabKey}`
+// INTEGONE.1 — every row's href opens that card's Manage drawer on the hub
+// (/settings/integrations-hub?manage=<cardKey>&location=<id>), never the old
+// per-location Integrations tab: the drawer hosts that tab now. The builder
+// lives in a pure module so the client hub can import it too.
+export { hubManageHref, HUB_CARD_FOR_TAB_KEY } from '@/lib/integrations-hub-links'
+
+/**
+ * INTEGONE.1 — the Payments card row's grade, exactly as the old tab's dot:
+ * the class-funnel rail is Revolut unless Stripe Connect is chosen, and
+ * Revolut needs no setup (the platform is the merchant), so it is connected;
+ * Stripe is connected only once a connected account id is stored. The
+ * account id itself is not surfaced, only its presence. Pure.
+ */
+export function gradePayments(settings) {
+  const p = settings && typeof settings === 'object' && settings.payments && typeof settings.payments === 'object'
+    ? settings.payments
+    : {}
+  const provider = p.provider === 'stripe_connect' ? 'stripe_connect' : 'revolut'
+  const hasStripeAccount = !!p.stripe_connected_account_id
+  const status = provider === 'stripe_connect' ? (hasStripeAccount ? 'connected' : 'not_connected') : 'connected'
+  return { provider, hasStripeAccount, status }
+}
+
+/**
+ * INTEGONE.1 — the Membership source card row's grade, from
+ * membershipSourceState's answer:
+ *   configured   → connected
+ *   unconfigured → action_needed (a source is chosen, a credential is missing)
+ *   none         → not_connected (lead CRM only)
+ *   unknown      → unknown (a read failed; never "none")
+ * Pure.
+ */
+export function gradeMembershipSource(state) {
+  switch (state?.state) {
+    case 'configured': return 'connected'
+    case 'unconfigured': return 'action_needed'
+    case 'none': return 'not_connected'
+    default: return HUB_UNKNOWN
+  }
 }
 
 /**
@@ -504,8 +542,8 @@ const REGISTRY_PLATFORMS = ['glofox', 'unifi', 'sensibo', 'thinq', 'bca', 'insta
 // ── Shelly plugs (SHELLY-UI.7) ────────────────────────────────────────
 //
 // The hub card deep-links to /automations/shelly — the ACTIVE-LOCATION
-// page — rather than to a per-location tab, because by decision there is
-// no LocationIntegrations Shelly tab: managing another studio's plugs
+// page — rather than to a per-location Manage drawer, because by decision
+// there is no per-location Shelly settings view: managing another studio's plugs
 // means switching location first. So every row carries the same href;
 // the location name on the row is what tells the operator which studio
 // the numbers describe. (Obligation 16: the card reads only non-secret
@@ -914,7 +952,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
 
   // ── Glofox — per-location rows (registry first, legacy fallback) ──
   const glofox = regErr
-    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'glofox') }))
+    ? locs.map((loc) => unknownRow(loc.id, { href: hubManageHref(loc.id, 'glofox') }))
     : locs.map((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'glofox')
     const legacy = registryRowFromLegacy('glofox', loc) // presence only — secrets stay here
@@ -934,7 +972,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
       lastOkAt: reg?.last_ok_at ?? null,
       lastError: reg?.last_error ?? null,
       source: reg ? 'registry' : 'legacy',
-      href: locationTabHref(loc.id, 'glofox'),
+      href: hubManageHref(loc.id, 'glofox'),
     }
     attentionInputs.push({
       cardKey: 'glofox', locationId: loc.id, locationName: nameById[loc.id],
@@ -950,7 +988,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
   // the registry row or its config: token_id / token_name / permissions stay
   // server-side). Only the non-secret studio title is surfaced.
   const un1tOnline = regErr
-    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'un1t-online') }))
+    ? locs.map((loc) => unknownRow(loc.id, { href: hubManageHref(loc.id, 'un1t-online') }))
     : locs.map((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'un1t_online')
     const status = reg ? reg.status : 'not_connected'
@@ -961,7 +999,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
       tokenExpiresAt: reg?.token_expires_at ?? null,
       lastOkAt: reg?.last_ok_at ?? null,
       lastError: reg?.last_error ?? null,
-      href: locationTabHref(loc.id, 'un1t-online'),
+      href: hubManageHref(loc.id, 'un1t-online'),
       // UN1THUB.1 — the hub is the only way in before a first connect (the bare
       // Integrations tab redirects here), so a studio that may connect is offered
       // it: no registry row, and a membership source of 'none' or 'un1t_online'
@@ -977,9 +1015,47 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
     return row
   })
 
+  // ── Membership source (INTEGONE.1) — one row per location ──
+  // THE seam answers (src/lib/membership/source.js), never a sniff of
+  // settings.glofox or the registry here. The column came with the location
+  // row, so the per-location question is asked with it; a caller that did not
+  // select membership_source (undefined) gets the seam's own read. A throw is
+  // 'unknown' for that location only, never 'none' and never a failed hub.
+  // No attention row: the Glofox / un1t.online cards already nag about the
+  // connection health this state is made of.
+  const membershipSource = await Promise.all(locs.map(async (loc) => {
+    let ms
+    try {
+      ms = loc.membership_source === undefined
+        ? await membershipSourceState(db, loc.id)
+        : await membershipSourceStateForKey(db, loc.id, loc.membership_source)
+    } catch (err) {
+      logWarn('integrations-hub', 'membership source state threw — row graded unknown', {
+        locationId: loc.id, error: err?.message || String(err),
+      })
+      ms = { source: null, state: 'unknown' }
+    }
+    return {
+      locationId: loc.id,
+      status: gradeMembershipSource(ms),
+      source: ms?.source ?? null,
+      state: ms?.state ?? 'unknown',
+      missing: Array.isArray(ms?.missing) ? ms.missing : [],
+      href: hubManageHref(loc.id, 'membership-source'),
+    }
+  }))
+
+  // ── Payments (INTEGONE.1) — the class-funnel rail, off the location row ──
+  // Graded from settings.payments alone (the old tab's dot); no extra read.
+  const payments = locs.map((loc) => ({
+    locationId: loc.id,
+    ...gradePayments(loc.settings),
+    href: hubManageHref(loc.id, 'payments'),
+  }))
+
   // ── WhatsApp — per-location numbers + optional tier budget meter ──
   const whatsapp = waErr
-    ? locs.map((loc) => unknownRow(loc.id, { numbers: [], budget: null, href: locationTabHref(loc.id, 'whatsapp') }))
+    ? locs.map((loc) => unknownRow(loc.id, { numbers: [], budget: null, href: hubManageHref(loc.id, 'whatsapp') }))
     : await Promise.all(locs.map(async (loc) => {
     const numbers = waRows.filter((n) => n.location_id === loc.id).map((n) => {
       const grade = gradeWhatsappNumber(n)
@@ -998,7 +1074,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
       }
     })
     const status = worstStatus(numbers.map((n) => n.status))
-    const href = locationTabHref(loc.id, 'whatsapp')
+    const href = hubManageHref(loc.id, 'whatsapp')
 
     // Daily tier budget (WA-BUDGET) — only when a default active number
     // carries a gated tier; UNLIMITED/unknown tiers have no meter.
@@ -1023,11 +1099,11 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
 
   // ── Instagram — registry rows (health cron maintains status) ──
   const instagram = regErr
-    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'instagram') }))
+    ? locs.map((loc) => unknownRow(loc.id, { href: hubManageHref(loc.id, 'instagram') }))
     : locs.flatMap((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'instagram')
     if (!reg) return []
-    const href = locationTabHref(loc.id, 'instagram')
+    const href = hubManageHref(loc.id, 'instagram')
     attentionInputs.push({
       cardKey: 'instagram', locationId: loc.id, locationName: nameById[loc.id],
       status: reg.status, message: reg.last_error,
@@ -1048,11 +1124,11 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
 
   // ── Xero — per-location OAuth binding (mirrors XeroIntegrationTab) ──
   const xero = xeroErr
-    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'xero') }))
+    ? locs.map((loc) => unknownRow(loc.id, { href: hubManageHref(loc.id, 'xero') }))
     : locs.flatMap((loc) => {
     const row = xeroRows.find((x) => x.location_id === loc.id) || null
     const grade = gradeXeroConnection(row)
-    const href = locationTabHref(loc.id, 'xero')
+    const href = hubManageHref(loc.id, 'xero')
     if (!row && grade.status === 'not_connected') return [] // never connected — no card row
     attentionInputs.push({
       cardKey: 'xero', locationId: loc.id, locationName: nameById[loc.id],
@@ -1073,11 +1149,11 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
 
   // ── Ad accounts — presence only (per /api/settings/ads semantics) ──
   const ads = adsErr
-    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'ads') }))
+    ? locs.map((loc) => unknownRow(loc.id, { href: hubManageHref(loc.id, 'ads') }))
     : locs.flatMap((loc) => {
     return adRows.filter((a) => a.location_id === loc.id && a.provider === 'meta').map((a) => {
       const status = a.is_active && a.has_access_token ? 'connected' : 'not_connected'
-      const href = locationTabHref(loc.id, 'ads')
+      const href = hubManageHref(loc.id, 'ads')
       attentionInputs.push({
         cardKey: 'ads', locationId: loc.id, locationName: nameById[loc.id],
         status, message: null, partialSetup: status === 'not_connected', href,
@@ -1237,13 +1313,13 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
 
   // ── Hidden tier: UniFi / Climate / BCA from the registry ──
   const unifi = regErr
-    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'unifi') }))
+    ? locs.map((loc) => unknownRow(loc.id, { href: hubManageHref(loc.id, 'unifi') }))
     : locs.flatMap((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'unifi')
     const legacy = registryRowFromLegacy('unifi', loc)
     if (!reg && !legacy) return []
     const status = reg ? reg.status : 'connected'
-    const href = locationTabHref(loc.id, 'unifi')
+    const href = hubManageHref(loc.id, 'unifi')
     const u = plainSlice(loc.settings?.unifi) // non-secret prefill + token presence
     attentionInputs.push({
       cardKey: 'unifi', locationId: loc.id, locationName: nameById[loc.id],
@@ -1264,7 +1340,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
   })
 
   const climate = regErr
-    ? locs.map((loc) => unknownRow(loc.id, { vendors: [], href: locationTabHref(loc.id, 'ac-devices') }))
+    ? locs.map((loc) => unknownRow(loc.id, { vendors: [], href: hubManageHref(loc.id, 'climate') }))
     : locs.flatMap((loc) => {
     const vendors = []
     const sensiboReg = pickRegistry(regRows, loc.id, 'sensibo')
@@ -1279,7 +1355,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
     }
     if (!vendors.length) return []
     const status = worstStatus(vendors.map((v) => v.status))
-    const href = locationTabHref(loc.id, 'ac-devices')
+    const href = hubManageHref(loc.id, 'climate')
     attentionInputs.push({
       cardKey: 'climate', locationId: loc.id, locationName: nameById[loc.id],
       status, message: vendors.find((v) => v.lastError)?.lastError ?? null, partialSetup: false, href,
@@ -1301,13 +1377,13 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
   })
 
   const bca = regErr
-    ? locs.map((loc) => unknownRow(loc.id, { href: locationTabHref(loc.id, 'bca') }))
+    ? locs.map((loc) => unknownRow(loc.id, { href: hubManageHref(loc.id, 'bca') }))
     : locs.flatMap((loc) => {
     const reg = pickRegistry(regRows, loc.id, 'bca')
     const legacy = registryRowFromLegacy('bca', loc)
     if (!reg && !legacy) return []
     const status = reg ? reg.status : 'connected'
-    const href = locationTabHref(loc.id, 'bca')
+    const href = hubManageHref(loc.id, 'bca')
     const c = plainSlice(loc.bca_config) // bca_config has NO secrets (email + templates)
     attentionInputs.push({
       cardKey: 'bca', locationId: loc.id, locationName: nameById[loc.id],
@@ -1348,6 +1424,8 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date(),
     locations: locs.map((l) => ({ id: l.id, name: l.name })),
     glofox,
     un1t_online: un1tOnline,
+    membershipSource,
+    payments,
     whatsapp,
     instagram,
     xero,

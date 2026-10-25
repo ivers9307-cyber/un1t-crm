@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
+import { hubManageHref, HUB_PATH } from '@/lib/integrations-hub-links'
 
 // RADAR-AGENT.0b / IG-HOME.1 — per-location channel connections.
-// Home is now the per-location Integrations tab strip (Settings →
-// Locations → <name> → Integrations → Instagram), rendered with
-// `embedded` so only the Instagram card shows. The full standalone
+// Home is the Integrations hub's Instagram drawer (Settings → Integrations →
+// Instagram → Manage, INTEGONE.1; the per-location Integrations tab strip
+// before), rendered with `embedded` so only the Instagram card shows. The full standalone
 // section (heading + WhatsApp pointer card) remains for any other
 // callers. Secrets come back masked from the API and are only
 // overwritten when re-typed; docs/instagram-setup.md is the runbook.
@@ -248,13 +249,13 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
         connects its own accounts.
       </p>
 
-      {/* WhatsApp — managed under the per-location Integrations tab */}
+      {/* WhatsApp — managed in the Integrations hub's WhatsApp drawer (INTEGONE.1) */}
       <div className="flex items-center justify-between border border-un1t-border rounded-md px-4 py-3 mb-4">
         <div>
           <div className="text-sm font-medium text-un1t-text">WhatsApp</div>
-          <div className="text-xs text-un1t-muted">Managed under Settings → Locations → this location → Integrations → WhatsApp.</div>
+          <div className="text-xs text-un1t-muted">Managed under Settings → Integrations → WhatsApp.</div>
         </div>
-        <a href={locationId ? `/settings/locations/${locationId}?tab=whatsapp` : '/settings'} className="text-xs text-un1t-text underline">Manage</a>
+        <a href={locationId ? hubManageHref(locationId, 'whatsapp') : HUB_PATH} className="text-xs text-un1t-text underline">Manage</a>
       </div>
 
       {instagramCard}

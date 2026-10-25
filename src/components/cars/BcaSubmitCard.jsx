@@ -22,6 +22,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import { hubManageHref } from '@/lib/integrations-hub-links'
 import {
   FileText, Upload, X, Check, AlertCircle, Send, Loader2, Eye,
   Download, ChevronDown, ChevronRight, Mail, MousePointerClick,
@@ -242,8 +243,8 @@ export default function BcaSubmitCard({ car }) {
 
       <p className="text-[11px] text-un1t-muted mt-3">
         Slot labels + recipient address are configured at{' '}
-        <a href={`/settings/locations/${car.location_id}/bca`} className="underline hover:text-un1t-subtle">
-          Settings → BCA Submit
+        <a href={hubManageHref(car.location_id, 'bca')} className="underline hover:text-un1t-subtle">
+          Settings → Integrations → BCA Submit
         </a>
         .
       </p>

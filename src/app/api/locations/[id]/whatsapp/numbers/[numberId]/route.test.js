@@ -19,7 +19,7 @@ const url = `http://x/api/locations/${LOC}/whatsapp/numbers/${NUM}`
 const MOVED = {
   success: false,
   error: 'WhatsApp numbers are managed at the organisation now.',
-  moved_to: '/settings/whatsapp-numbers',
+  moved_to: '/settings/integrations-hub?manage=whatsapp-numbers',
 }
 
 beforeEach(() => { vi.clearAllMocks(); getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner' }) })

@@ -40,7 +40,7 @@ describe('/dashboard/churn-radar — membership source gate (W1.M3a)', () => {
     const html = renderToStaticMarkup(await Page())
     expect(html).not.toContain('the radar')
     expect(html).toContain('No membership source connected')
-    expect(html).toContain(`href="/settings/locations/${LOC}?section=integrations&amp;tab=glofox"`)
+    expect(html).toContain(`href="/settings/integrations-hub?manage=membership-source&amp;location=${LOC}"`)
   })
 
   it('none, a head coach: "Ask an owner", no link', async () => {
@@ -48,7 +48,7 @@ describe('/dashboard/churn-radar — membership source gate (W1.M3a)', () => {
     membershipStateForPage.mockResolvedValue({ source: 'none', state: 'none', label: 'No membership source', capabilities: {} })
     const html = renderToStaticMarkup(await Page())
     expect(html).toContain('Ask an owner to connect a membership source')
-    expect(html).not.toContain('href="/settings/locations/')
+    expect(html).not.toContain('href="/settings/integrations-hub')
   })
 
   it('unknown: the retry copy, never the none copy', async () => {

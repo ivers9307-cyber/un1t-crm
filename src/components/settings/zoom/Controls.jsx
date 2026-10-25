@@ -4,7 +4,7 @@
 //
 // Posts to POST /api/integrations/zoom-contacts/run, which enforces its own
 // permission gate — this component only DECIDES WHAT TO OFFER, it is not the
-// security boundary. `canManage` is computed server-side in page.js with the
+// security boundary. `canManage` is computed server-side in ZoomContactsPanel.jsx with the
 // exact same check the route runs (hasPermissionInOrganization), so a viewer
 // who would get a 403 never sees a button that produces one.
 //

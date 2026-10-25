@@ -32,7 +32,7 @@ describe('POST /api/locations/[id]/whatsapp/embedded-signup (retired)', () => {
     expect(await res.json()).toEqual({
       success: false,
       error: 'WhatsApp numbers are managed at the organisation now.',
-      moved_to: '/settings/whatsapp-numbers',
+      moved_to: '/settings/integrations-hub?manage=whatsapp-numbers',
     })
     expect(exchangeCodeForBusinessToken).not.toHaveBeenCalled()
   })

@@ -49,7 +49,7 @@ describe('/dashboard/engagement — membership source gate (W1.M3a)', () => {
     const html = renderToStaticMarkup(await Page())
     expect(loadEngagementChurn).not.toHaveBeenCalled()
     expect(html).toContain('No membership source connected')
-    expect(html).toContain(`href="/settings/locations/${LOC}?section=integrations&amp;tab=glofox"`)
+    expect(html).toContain(`href="/settings/integrations-hub?manage=membership-source&amp;location=${LOC}"`)
     expect(html).not.toContain('report:')
     expect(html).not.toContain('No engagement data yet')
   })

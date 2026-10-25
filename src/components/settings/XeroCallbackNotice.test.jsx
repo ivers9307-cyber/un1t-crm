@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 
-const nav = vi.hoisted(() => ({ search: '', pathname: '/settings/locations/loc-1', replace: vi.fn() }))
+const nav = vi.hoisted(() => ({ search: '', pathname: '/settings/integrations-hub', replace: vi.fn() }))
 vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
   usePathname: () => nav.pathname,
@@ -16,27 +16,27 @@ import XeroCallbackNotice from './XeroCallbackNotice.jsx'
 
 beforeEach(() => {
   nav.replace.mockReset()
-  nav.pathname = '/settings/locations/loc-1'
+  nav.pathname = '/settings/integrations-hub'
 })
 afterEach(() => cleanup())
 
 describe('XeroCallbackNotice', () => {
   it('renders nothing and leaves the URL alone with no callback params', () => {
-    nav.search = 'tab=xero'
+    nav.search = 'manage=xero&location=loc-1'
     const { container } = render(<XeroCallbackNotice />)
     expect(container.textContent).toBe('')
     expect(nav.replace).not.toHaveBeenCalled()
   })
 
-  it('success → a short confirmation, then the params are cleaned (tab kept)', () => {
-    nav.search = 'tab=xero&xero_connected=1'
+  it('success → a short confirmation, then the params are cleaned (the drawer params kept)', () => {
+    nav.search = 'manage=xero&location=loc-1&xero_connected=1'
     render(<XeroCallbackNotice />)
     expect(screen.getByRole('status').textContent).toContain('Xero connected.')
-    expect(nav.replace).toHaveBeenCalledWith('/settings/locations/loc-1?tab=xero', { scroll: false })
+    expect(nav.replace).toHaveBeenCalledWith('/settings/integrations-hub?manage=xero&location=loc-1', { scroll: false })
   })
 
   it('success on a several-org login → the check-this-org warning', () => {
-    nav.search = 'tab=xero&xero_connected=1&xero_orgs=2'
+    nav.search = 'manage=xero&location=loc-1&xero_connected=1&xero_orgs=2'
     render(<XeroCallbackNotice />)
     expect(screen.getByRole('status').textContent).toContain('This login gives access to 2 organisations and one was picked for this location, so check it is the right one.')
   })
@@ -53,10 +53,10 @@ describe('XeroCallbackNotice', () => {
     ['save_failed', 'The Xero connection could not be saved'],
     ['xero_error', 'something went wrong talking to Xero'],
   ])('error %s → its plain copy as an alert', (code, text) => {
-    nav.search = `tab=xero&xero_error=${code}`
+    nav.search = `manage=xero&location=loc-1&xero_error=${code}`
     render(<XeroCallbackNotice />)
     expect(screen.getByRole('alert').textContent).toContain(text)
-    expect(nav.replace).toHaveBeenCalledWith('/settings/locations/loc-1?tab=xero', { scroll: false })
+    expect(nav.replace).toHaveBeenCalledWith('/settings/integrations-hub?manage=xero&location=loc-1', { scroll: false })
   })
 
   it('an unknown code → "Xero did not connect", and the raw value is never rendered (as text or HTML)', () => {
