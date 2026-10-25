@@ -187,7 +187,8 @@ describe('createGroup', () => {
 
     // pickPrimary should pick c2 (member beats classpass)
     expect(group.primary_contact_id).toBe('c2')
-    expect(group.location_id).toBe('loc-1')
+    // mig 769: the group carries no location_id any more (the organisation is the fence).
+    expect(group).not.toHaveProperty('location_id')
     // ORGCONTACTS.4 (mig 767): the group follows the organisation, resolved from the studio.
     expect(group.organization_id).toBe('org-1')
     expect(members).toHaveLength(2)

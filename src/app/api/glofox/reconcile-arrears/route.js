@@ -63,7 +63,7 @@ async function resolveContactIds(db, locationId, glofoxUserIds) {
   const map = new Map()
   const unique = [...new Set(glofoxUserIds.filter(Boolean))]
   // GLOFOXREADERS.1 — a Glofox member whose contact lives at a sibling studio
-  // (glofox_crossover_members) is this studio's member too. Unreadable is a
+  // (a contact_studios row with source glofox, mig 768) is this studio's member too. Unreadable is a
   // failure, never "not linked": the caller would report them unmatched.
   const crossover = await glofoxCrossoverContactIds(db, locationId)
   if (crossover.error) throw new Error(`crossover contacts read failed: ${crossover.error}`)

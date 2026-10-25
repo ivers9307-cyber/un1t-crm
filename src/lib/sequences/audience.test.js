@@ -154,14 +154,12 @@ describe('contactMatchesSequenceAudience — locationId resolution', () => {
     )
   })
 
-  it('passes locationId: null when the contact lookup returns no row', async () => {
+  it("is 'unknown' (never 'does not match') when the contact lookup returns no row and no studio was named (M9)", async () => {
     const db = mockDb({ contactRow: null })
-    // GLOFOX/audience-thenable fix — mock now returns the wrapped { query }
-    // shape that the production helper produces (defeats the await/thenable
-    // auto-unwrap of bare Supabase builders).
+    applyAudienceFilterAsync.mockClear()
     applyAudienceFilterAsync.mockImplementation(({ query }) => ({ query }))
-    await contactMatchesSequenceAudience(db, 'c1', filter)
-    expect(applyAudienceFilterAsync).toHaveBeenCalledWith(
+    expect(await evaluateSequenceAudience(db, 'c1', filter)).toBe('unknown')
+    expect(applyAudienceFilterAsync).not.toHaveBeenCalledWith(
       expect.objectContaining({ locationId: null })
     )
   })
@@ -296,5 +294,20 @@ describe('contactMatchesSequenceAudience — enrolment contract is unchanged', (
     applyAudienceFilterAsync.mockImplementation(({ query }) => ({ query }))
     expect(await contactMatchesSequenceAudience(mockDb({ count: 1 }), 'c1', filter)).toBe(true)
     expect(await contactMatchesSequenceAudience(mockDb({ count: 0 }), 'c1', filter)).toBe(false)
+  })
+})
+
+// M9 (ORGCONTACTS final review): a contact with no primary studio and no
+// sequence studio given has nowhere to be judged. The old code asked
+// studio_contacts for studio_location_id = null, which matches nothing and
+// read as "does not match" (an exit). It is 'unknown', with a warning.
+describe('evaluateSequenceAudience — no studio to judge at', () => {
+  it("a contact with a NULL location_id and no locationId is 'unknown' with a warning, and studio_contacts is never asked", async () => {
+    const db = mockDb({ contactRow: { location_id: null } })
+    const out = await evaluateSequenceAudience(db, 'c-1', { logic: 'and', filters: [{ field: 'tag', op: 'eq', value: 'x' }] })
+    expect(out).toBe('unknown')
+    expect(logWarn).toHaveBeenCalledWith('sequences', expect.stringMatching(/no studio/i), expect.objectContaining({ contactId: 'c-1' }))
+    expect(db.from.mock.calls.map((c) => c[0])).not.toContain('studio_contacts')
+    expect(applyAudienceFilterAsync).not.toHaveBeenCalled()
   })
 })

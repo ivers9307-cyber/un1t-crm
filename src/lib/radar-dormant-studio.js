@@ -1,7 +1,7 @@
 // ORGCONTACTS.4 (decision 3) — the radars' "archive" / "stale" decision, per
-// studio: the person's contact_studios row AT the radar's studio takes
+// studio: the person's ACTIVE contact_studios row AT the radar's studio takes
 // stage_slug 'dormant' (its kind / source / status kept), for owned and
-// crossover contacts alike. The contact-wide column (contacts.pipeline_stage_slug)
+// crossover contacts alike; an ended row is left as it is. The contact-wide column (contacts.pipeline_stage_slug)
 // is the route's own write and stays owned-only: it follows the primary
 // studio's board. A person with no relationship row here is not marked here.
 //
@@ -27,12 +27,15 @@ export async function markDormantAtStudio(db, { locationId, contactIds, module =
   }
   let marked = 0
   let failed = 0
-  for (const r of rows.rows) {
+  // M5 (final review): an ENDED relationship has no stage to mark, and
+  // re-upserting it with status 'ended' would stamp ended_at = now again.
+  const active = rows.rows.filter((r) => r.status === 'active')
+  for (const r of active) {
     const w = await upsertContactStudio(db, {
       contactId: r.contact_id, locationId, kind: r.kind, status: r.status, source: r.source, stageSlug: 'dormant',
     })
     if (w.ok) marked += 1
     else { failed += 1; logWarn(module, 'studio dormant write failed', { locationId, contactId: r.contact_id, error: w.error }) }
   }
-  return { marked, skipped: ids.length - rows.rows.length, failed }
+  return { marked, skipped: ids.length - active.length, failed }
 }

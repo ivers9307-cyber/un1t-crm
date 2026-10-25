@@ -488,7 +488,8 @@ describe('Overdue vs Unpaid charges — by charge type (ARREARS-TYPE.1)', () => 
 //   - contacts loaded via .eq('location_id') for member sweep (key: 'contacts')
 //   - contacts loaded via .eq('location_id') + .not('person_group_id', 'is', null)
 //     for the cross-status activity path (key: 'contacts:grouped')
-//   - person_groups loaded via .eq('location_id') (key: 'person_groups:location')
+//   - locations read for the studio's organisation (key: 'locations'), then
+//     person_groups via .eq('organization_id') (key: 'person_groups:organization', mig 769)
 //   - contacts loaded via .in('id', ...) for the overdue path (key: 'contacts:id')
 
 function makeDbPersonAware(tables) {
@@ -516,10 +517,10 @@ function makeDbPersonAware(tables) {
             // .not('person_group_id', ...) on contacts = cross-status grouped load
             key = `${table}:grouped`
           } else {
-            // person_groups with .eq('location_id') goes to 'person_groups:location'
-            // for disambiguation from any other person_groups query
-            if (table === 'person_groups' && state.eqFilters.location_id) {
-              key = 'person_groups:location'
+            // person_groups with .eq('organization_id') goes to 'person_groups:organization'
+            // (mig 769: groups follow the organisation; the studio's org is read from locations)
+            if (table === 'person_groups' && state.eqFilters.organization_id) {
+              key = 'person_groups:organization'
             } else {
               key = table
             }
@@ -613,7 +614,8 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
       // fetchMembers returns the dormant member (only member-status contacts)
       contacts: [markMember],
       // applyPersonRollup — person_groups location-scoped load
-      'person_groups:location': [{ id: GROUP_ID, primary_contact_id: 'c-mark-member', location_id: LOC }],
+      locations: [{ id: LOC, organization_id: 'org-1' }],
+      'person_groups:organization': [{ id: GROUP_ID, primary_contact_id: 'c-mark-member', organization_id: 'org-1' }],
       // applyPersonRollup — cross-status grouped contacts (location-scoped, not null person_group_id)
       'contacts:grouped': [markMember, markClasspass],
       // Other tables used by loadRadar
@@ -641,7 +643,8 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
 
     const db = makeDbPersonAware({
       contacts: [memberA, memberB],
-      'person_groups:location': [{ id: GROUP_ID, primary_contact_id: 'c-dedup-a', location_id: LOC }],
+      locations: [{ id: LOC, organization_id: 'org-1' }],
+      'person_groups:organization': [{ id: GROUP_ID, primary_contact_id: 'c-dedup-a', organization_id: 'org-1' }],
       // Both members in the cross-status fetch; combined = 0+0 = 0 attended 30d,
       // last_attended stays 30 days ago → at-risk as one person, not two.
       'contacts:grouped': [memberA, memberB],
@@ -671,7 +674,8 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
       contacts: [ungroupedMember],
       // person_groups + cross-status contacts should not be called (fast path: no grouped rows)
       // but we leave them empty just in case to avoid false errors
-      'person_groups:location': [],
+      locations: [{ id: LOC, organization_id: 'org-1' }],
+      'person_groups:organization': [],
       'contacts:grouped': [],
       churn_radar_actions: [],
       glofox_invoices: [],
@@ -693,7 +697,8 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
     const db = makeDbPersonAware({
       contacts: [markMember],
       // Simulate person_groups throwing an error
-      'person_groups:location': () => { throw new Error('DB exploded') },
+      locations: [{ id: LOC, organization_id: 'org-1' }],
+      'person_groups:organization': () => { throw new Error('DB exploded') },
       'contacts:grouped': [],
       churn_radar_actions: [],
       glofox_invoices: [],

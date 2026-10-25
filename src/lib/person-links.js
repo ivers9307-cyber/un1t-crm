@@ -60,9 +60,9 @@ export async function createGroup(db, { contactIds, method, confidence, actorId,
   if (!primary) throw new Error('createGroup requires at least one existing contact')
 
   // ORGCONTACTS.4 (mig 767) — the group follows the ORGANISATION, resolved from
-  // the studio it is created at; location_id is written for one release more
-  // (DEPRECATED, dropped in 768). A studio whose organisation cannot be read
-  // gets no group: a group with no organisation would fence nothing.
+  // the studio it is created at. location_id is no longer written (mig 769
+  // drops the column and the 767 fill trigger). A studio whose organisation
+  // cannot be read gets no group: a group with no organisation would fence nothing.
   const { data: location, error: locErr } = await db
     .from('locations')
     .select('id, organization_id')
@@ -78,7 +78,6 @@ export async function createGroup(db, { contactIds, method, confidence, actorId,
   const { data: group, error: groupErr } = await db
     .from('person_groups')
     .insert({
-      location_id: locationId,
       organization_id: location.organization_id,
       primary_contact_id: primary.id,
       created_by: actorId,

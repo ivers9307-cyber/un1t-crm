@@ -2041,7 +2041,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     deal_action: dealAction,
     interactions_to_sync: interactions ? interactions.length : 0,
     // GLOFOXSIBLING.1 — the contact lives at a sibling studio; apply links it
-    // here (glofox_crossover_members + this studio's preferences row).
+    // here (its contact_studios row with source glofox, mig 768, + this studio's preferences row).
     ...(crossover ? { crossover: { how: crossover.how, home_location_id: crossover.row.location_id ?? null } } : {}),
   }
 }
