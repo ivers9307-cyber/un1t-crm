@@ -111,7 +111,7 @@ export const CLOSED_FUNCTIONS = [
     why: 'ORGCONTACTS.1: SECURITY DEFINER AFTER INSERT trigger on contacts writing the closed contact_studios row; a trigger fires without EXECUTE' },
   // ORGCONTACTS.4 (mig 767): person groups follow the organisation.
   { fn: 'private.person_groups_set_org', args: '()', closedBy: 767,
-    why: 'ORGCONTACTS.4: BEFORE INSERT trigger on person_groups filling organization_id from the studio and refusing a cross-organisation row (dropped with location_id in 768); a trigger fires without EXECUTE' },
+    why: 'ORGCONTACTS.4: BEFORE INSERT trigger on person_groups filling organization_id from the studio and refusing a cross-organisation row (dropped with location_id in mig 769); a trigger fires without EXECUTE' },
   { fn: 'private.contact_studios_from_deal', args: '()', closedBy: 764,
     why: 'ORGCONTACTS.1: SECURITY DEFINER AFTER INSERT OR UPDATE OR DELETE trigger on deals writing the closed contact_studios rows; a trigger fires without EXECUTE' },
   { fn: 'private.contact_studios_from_preferences', args: '()', closedBy: 764,

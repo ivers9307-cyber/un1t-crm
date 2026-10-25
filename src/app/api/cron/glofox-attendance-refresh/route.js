@@ -186,7 +186,7 @@ async function refreshLocation(db, location, startedAt) {
     }
 
     // GLOFOXREADERS.1 — Glofox members whose contact lives at a sibling studio
-    // (glofox_crossover_members) are refreshed here too. A failed read keeps
+    // (a contact_studios row with source glofox, mig 768) are refreshed here too. A failed read keeps
     // the run going on the studio's own contacts: it is logged, never fatal.
     const crossover = await glofoxCrossoverContactIds(db, location.id)
     if (crossover.error) {

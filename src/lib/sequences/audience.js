@@ -64,6 +64,13 @@ async function evaluateAudience(db, contactId, filter, { locationId = null } = {
         .maybeSingle()
       studioId = contact?.location_id || null
     }
+    if (!studioId) {
+      // M9 (ORGCONTACTS final review): nowhere to judge. A filter on
+      // studio_location_id = null matches nothing and would read as "does not
+      // match" (an exit), so this is 'unknown', with an operator signal.
+      logWarn('sequences', 'no studio to judge the audience at (contact has no primary studio and the caller named none)', { contactId })
+      return { state: 'unknown' }
+    }
 
     let query = db
       .from('studio_contacts')

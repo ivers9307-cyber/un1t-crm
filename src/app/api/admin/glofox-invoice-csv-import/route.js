@@ -139,7 +139,7 @@ export async function POST(request) {
 
   // Build email + glofox_member_id lookups for the location once.
   // GLOFOXREADERS.1 — the studio's own contacts plus its Glofox members whose
-  // contact lives at a sibling studio (glofox_crossover_members), paged past
+  // contact lives at a sibling studio (a contact_studios row with source glofox, mig 768), paged past
   // the 1,000-row cap (a studio holds thousands; the single read used to see
   // the first 1,000 only), and a failed read is a 500, never "no matches".
   const crossover = await glofoxCrossoverContactIds(db, locationId)
