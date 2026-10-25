@@ -1,3 +1,6 @@
+// Richard, 24 Oct 2026: the free-class campaign is finished; /trial sells the paid trial at both studios.
+// This page now redirects to /trial with the studio preselected and the ad query kept.
+// To bring it back, delete the redirect(...) line in the default export.
 // /start — public Meta-ad landing page (Stillorgan). A full landing page that
 // mirrors the welcome-page layout: a hero (Ken Burns push-in + bottom-weighted
 // scrim + film grain, lp-* classes from globals.css) with the ClassFunnel
@@ -13,6 +16,8 @@
 // (un1t-marketing) + proxy.js + AppShell. noindex: a paid funnel shouldn't
 // compete in organic search.
 
+import { redirect } from 'next/navigation'
+import { trialRedirectFor } from '@/lib/trial-studios'
 import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
@@ -67,7 +72,9 @@ async function loadContentBlocks() {
   }
 }
 
-export default async function StartPage() {
+export default async function StartPage(props) {
+  const sp = await props.searchParams
+  redirect(trialRedirectFor('stillorgan', sp))
   // W1.S1b — this page is UN1T Group's own (Appendix A `keep`): its footer and
   // wordmark come from UN1T Group's configured chrome (resolveOrgChrome,
   // cached), so the shared footer component carries no gym literal of its own.

@@ -18,6 +18,9 @@ import {
   PENDING_STUCK_AFTER_MS,
   PENDING_BACKLOG_MIN,
   BRIDGE_BUFFER_CAP,
+  SCREEN_OFFLINE_AFTER_MS,
+  gradeScreen,
+  rollbackUndeliveredAlerts,
 } from './fleet-health.js'
 
 // Tailscale's List Devices response shape. `lastSeen` is present ONLY when
@@ -920,5 +923,66 @@ describe('undeliveredDetail', () => {
 
   it('groups the count so a four-figure backlog is readable at a glance', () => {
     expect(undeliveredDetail(base, NOW)).toMatch(/4,096 samples/)
+  })
+})
+
+describe('gradeScreen — an Android screen graded on its plan-fetch heartbeat', () => {
+  const screen = (last_heartbeat_at) => ({ device_name: 'hatch-screen1', last_heartbeat_at })
+
+  it('follows the poll: two 10-minute polls plus 5 minutes of slack', () => {
+    expect(SCREEN_OFFLINE_AFTER_MS).toBe(25 * 60_000)
+  })
+
+  it('never reported is not an outage', () => {
+    expect(gradeScreen(screen(null), NOW)).toEqual({
+      name: 'hatch-screen1', state: 'ok', detail: 'never reported', since: null, connected: false,
+    })
+  })
+
+  it('an unparseable heartbeat is treated as never reported', () => {
+    expect(gradeScreen(screen('not-a-date'), NOW)).toMatchObject({ state: 'ok', detail: 'never reported', connected: false })
+  })
+
+  it('a 30-minute silence grades unreachable; 20 and 10 minutes grade ok', () => {
+    expect(gradeScreen(screen(ago(30 * 60_000)), NOW)).toEqual({
+      name: 'hatch-screen1', state: 'unreachable', detail: 'no heartbeat for 30 min', since: ago(30 * 60_000), connected: false,
+    })
+    expect(gradeScreen(screen(ago(20 * 60_000)), NOW)).toEqual({
+      name: 'hatch-screen1', state: 'ok', detail: '', since: null, connected: true,
+    })
+    expect(gradeScreen(screen(ago(10 * 60_000)), NOW)).toEqual({
+      name: 'hatch-screen1', state: 'ok', detail: '', since: null, connected: true,
+    })
+  })
+
+  it('the boundary is inclusive: exactly 25 minutes is unreachable, one ms less is ok', () => {
+    expect(gradeScreen(screen(ago(SCREEN_OFFLINE_AFTER_MS)), NOW).state).toBe('unreachable')
+    expect(gradeScreen(screen(ago(SCREEN_OFFLINE_AFTER_MS - 1)), NOW).state).toBe('ok')
+  })
+})
+
+describe('rollbackUndeliveredAlerts — re-arm after a notice nobody received', () => {
+  it('a failed DOWN notice nulls alerted_at so the next tick alerts again', () => {
+    const alerts = [{ name: 'a', alert: 'down', row: { device_name: 'a', alerted_at: ago(0) } }]
+    rollbackUndeliveredAlerts(alerts, new Map())
+    expect(alerts[0].row.alerted_at).toBeNull()
+  })
+
+  it('a failed DOWN notice nulls even when a prior stamp existed (down -> different down)', () => {
+    const alerts = [{ name: 'a', alert: 'down', row: { device_name: 'a', alerted_at: ago(0) } }]
+    rollbackUndeliveredAlerts(alerts, new Map([['a', { alerted_at: ago(60_000) }]]))
+    expect(alerts[0].row.alerted_at).toBeNull()
+  })
+
+  it('a failed RECOVERY notice restores the prior outage stamp', () => {
+    const alerts = [{ name: 'a', alert: 'recovered', row: { device_name: 'a', alerted_at: null } }]
+    rollbackUndeliveredAlerts(alerts, new Map([['a', { alerted_at: ago(3_600_000) }]]))
+    expect(alerts[0].row.alerted_at).toBe(ago(3_600_000))
+  })
+
+  it('a recovery with no prior row falls back to null', () => {
+    const alerts = [{ name: 'a', alert: 'recovered', row: { alerted_at: 'x' } }]
+    rollbackUndeliveredAlerts(alerts, new Map())
+    expect(alerts[0].row.alerted_at).toBeNull()
   })
 })

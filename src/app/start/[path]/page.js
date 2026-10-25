@@ -1,3 +1,6 @@
+// Richard, 24 Oct 2026: the free-class campaign is finished; /trial sells the paid trial at both studios.
+// This page now redirects to /trial with the studio preselected and the ad query kept.
+// To bring it back, delete the redirect(...) line in the default export.
 // /start/[path] — a studio's dedicated class-booking page, the paid-ad twin
 // of /start (which stays Stillorgan's, unchanged). MANUALFUNNEL.1.
 //
@@ -18,7 +21,8 @@
 // AppShell by segment). noindex, like /start: a paid funnel should not
 // compete with the studio's main page in organic search.
 
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
+import { trialRedirectFor } from '@/lib/trial-studios'
 import { headers } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
@@ -78,6 +82,8 @@ export async function generateMetadata(props) {
 
 export default async function StudioStartPage(props) {
   const params = await props.params
+  const sp = await props.searchParams
+  redirect(trialRedirectFor(resolveLandingPath(params.path), sp))
   const page = await loadByPath(params.path)
   if (!page) notFound()
   const { row, path, blocks, funnel } = page

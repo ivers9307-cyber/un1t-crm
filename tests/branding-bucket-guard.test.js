@@ -91,6 +91,10 @@ const WRITERS = {
   'src/app/api/chooser-settings/tile-image/route.js': 'getCurrentUser',
   'src/app/api/events/[id]/hero/route.js': 'getCurrentUser',
   'src/app/api/events/[id]/logo/route.js': 'getCurrentUser',
+  // CHARITY.14 — signed upload for the charity-day video; gates on `races`
+  // at the event's studio, 404 off-studio, and only mints a path under
+  // race-video/<event id>/.
+  'src/app/api/events/[id]/video/signed-upload/route.js': 'getCurrentUser',
   'src/app/api/host/events/[id]/hero/route.js': 'getCurrentHost',
   'src/app/api/me/signature-photo/route.js': 'getCurrentUser',
   'src/app/api/staff/[id]/permanent/route.js': 'getCurrentUser',

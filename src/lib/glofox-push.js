@@ -62,6 +62,14 @@ function getLocationTrialConfig(location) {
  *                                         When false, search-and-link only.
  * @param {boolean} args.attachTrial      When true (and we created), purchase the trial membership.
  *                                         Operator-chosen via LocationForm.
+ * @param {'review'|'create'} args.phoneMatchPolicy  What a phone-only match means when the
+ *                                         email finds nothing (step 2.5). 'review' (default): stop
+ *                                         and ask staff, the free-trial funnel's rule (a second
+ *                                         account is a second free trial). 'create' (PAIDTRIAL.3):
+ *                                         create the account on the buyer's email anyway and
+ *                                         report the match as `phone_match` for the caller to
+ *                                         record; never a link (a shared number may be a partner).
+ *                                         Right for a product the person has PAID for.
  *
  * Returns { status, glofox_member_id, passcode, error, push_event_id }.
  *   status: 'linked' | 'created' | 'skipped' | 'needs_review' | 'failed'
@@ -71,6 +79,7 @@ export async function findOrCreateGlofoxMember({
   createIfMissing = false,
   attachTrial = false,
   trialOverride = null,
+  phoneMatchPolicy = 'review',
 }) {
   if (!db || !locationId || !contact?.id || !contact?.email) {
     return { status: 'failed', error: 'missing args (db, locationId, contact.id, contact.email)' }
@@ -165,6 +174,7 @@ export async function findOrCreateGlofoxMember({
   // phone-only match books person B's class on person A's account. Staff
   // decide from the Review tab. A search failure halts like the email
   // search's does: never create-on-failure.
+  let phoneMatch = null
   if (toMobileE164(contact.phone || '')) {
     const byPhone = await searchGlofoxMember(creds, { phone: contact.phone })
     if (byPhone.error && !byPhone.found) {
@@ -174,7 +184,16 @@ export async function findOrCreateGlofoxMember({
       })
       return { status: 'failed', error: byPhone.error, push_event_id: ev?.id }
     }
-    if (byPhone.found) {
+    if (byPhone.found && phoneMatchPolicy === 'create') {
+      // PAIDTRIAL.3 — the caller sells a PAID product: there is no free trial
+      // to double up, and Glofox identity is the email, so the buyer gets an
+      // account under the email they paid with. Glofox itself allows one
+      // mobile on several accounts. The match travels back as `phone_match`
+      // so the caller can leave a note for a later merge; it is still never
+      // a link.
+      const ids = (byPhone.allMatches || [byPhone.member]).map((m) => String(m?._id || m?.id || '')).filter(Boolean)
+      phoneMatch = { matches: byPhone.allMatches?.length || 1, glofox_member_ids: ids }
+    } else if (byPhone.found) {
       const matches = byPhone.allMatches?.length || 1
       const ev = await audit(db, {
         contact_id: contact.id, location_id: locationId, source,
@@ -349,6 +368,9 @@ export async function findOrCreateGlofoxMember({
     // GLOFOXPOSTRETRY.1 — the purchase got no clear answer (a 5xx or no
     // reply): the trial may be on the account. Set only then.
     ...(trialOutcomeUnknown ? { trial_outcome_unknown: true } : {}),
+    // PAIDTRIAL.3 — set only under phoneMatchPolicy 'create' when another
+    // Glofox account already held this mobile: { matches, glofox_member_ids }.
+    ...(phoneMatch ? { phone_match: phoneMatch } : {}),
     sync_result: syncResult,
   }
 }

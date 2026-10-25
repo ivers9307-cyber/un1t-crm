@@ -2,7 +2,7 @@
 
 // TV.1 — fullscreen display client for UC Cast Pro.
 //
-// Polls /api/public/tv/[token]/content every 3s. Re-renders only
+// Polls /api/public/tv/[token]/content every 6s (60s with ?kiosk=1). Re-renders only
 // when content.pushed_at changes (so a steady-state poll is cheap).
 // Renders one of:
 //   - <img>          for source_type 'storage' or 'url'
@@ -21,12 +21,12 @@ import TemplateCanvas from '@/components/TemplateCanvas'
 import HyroxBoard from '@/components/HyroxBoard'
 import { tvFontFamily } from '@/components/tv-font'
 import { boardZone, idleBoardClock } from '@/lib/tv-board-time'
+import { castPollMs } from '@/lib/tv-cast-poll'
 
 // Content-push display (near-static); runs all day — keep the poll relaxed
-// to limit Vercel Fluid-compute cost.
-const POLL_MS = 6000
+// to limit Vercel Fluid-compute cost (castPollMs: 6s, or 60s in kiosk mode).
 
-export default function TVDisplay({ token, initial }) {
+export default function TVDisplay({ token, initial, kiosk }) {
   // `data` is the server-rendered snapshot. It never changes in
   // place — when the poll sees a new push the page hard-reloads
   // (see below), so the only state that moves here is the clock.
@@ -39,6 +39,7 @@ export default function TVDisplay({ token, initial }) {
   const lastRotationRef = useRef(initial?.display?.rotation ?? 0)
 
   useEffect(() => {
+    const pollMs = castPollMs(Boolean(kiosk))
     let cancelled = false
     const tick = async () => {
       try {
@@ -67,9 +68,9 @@ export default function TVDisplay({ token, initial }) {
         // network blip — retry next tick
       }
     }
-    const handle = setInterval(tick, POLL_MS)
+    const handle = setInterval(tick, pollMs)
     return () => { cancelled = true; clearInterval(handle) }
-  }, [token])
+  }, [token, kiosk])
 
   useEffect(() => {
     setNow(new Date())
