@@ -342,6 +342,15 @@ describe('GET /api/host/emails/[id]/recipients — HOST-EMAILS.2', () => {
     expect((await failRes.json()).data.campaign.non_openers_count).toBeNull()
   })
 
+  it('non_openers_count is null for a sent UTILITY campaign (no open tracking) and the resolver is never called', async () => {
+    resolveHostRecipients.mockResolvedValue([{ contact_id: 'c1' }])
+    const { db } = makeDb(routeFor({ pages: [[]], campaign: { ...DEFAULT_CAMPAIGN, email_type: 'utility' } }))
+    createServerClient.mockReturnValue(db)
+    const res = await GET(makeRequest(), props)
+    expect((await res.json()).data.campaign.non_openers_count).toBeNull()
+    expect(resolveHostRecipients).not.toHaveBeenCalledWith(db, HOST_ID, expect.objectContaining({ nonOpenersOf: CAMPAIGN_ID }))
+  })
+
   it('non_openers_count is null for a non-sent campaign and the resolver is never called', async () => {
     const { db } = makeDb(routeFor({ pages: [[]], campaign: { ...DEFAULT_CAMPAIGN, status: 'draft' } }))
     createServerClient.mockReturnValue(db)

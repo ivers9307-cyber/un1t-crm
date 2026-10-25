@@ -34,6 +34,24 @@ export async function assertAudienceEventOwned(db, hostId, audienceEventId) {
   return data ? null : 'Event not found'
 }
 
+/**
+ * HOST-EMAILS.2 — why this campaign cannot be a reminder's parent, as host
+ * copy, or null when it can. One rule for the reminder-draft route, the
+ * PATCH that names a parent, the send-time resolver and the report's count:
+ *   - only a SENT email has recipients who could have not opened it;
+ *   - a UTILITY email rides the transactional stream with open and click
+ *     tracking OFF (postmark.js resolveTracking), so nobody on it ever
+ *     reads as having opened, and a "reminder to non-openers" would go to
+ *     everyone it reached.
+ * @param {{ status?: string, email_type?: string }|null} parent
+ * @returns {string|null}
+ */
+export function reminderParentProblem(parent) {
+  if (!parent || parent.status !== 'sent') return 'Only a sent email can have a reminder.'
+  if (parent.email_type === 'utility') return "Opens aren't tracked on utility emails, so there's no way to tell who didn't open it."
+  return null
+}
+
 /** HOST-EMAILS.2 — subject for a copied/reminder draft, capped at the column's 200. */
 export function copySubject(subject, prefix = 'Copy of ') {
   return (prefix + (subject || '')).slice(0, 200)

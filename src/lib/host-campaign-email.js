@@ -21,6 +21,7 @@
 
 import { isEmailable } from './host-contact-list'
 import { scrubCss } from './email-html'
+import { reminderParentProblem } from './host-campaign-draft'
 
 const PAGE = 1000 // the supabase-js 1k select cap — always .range()-paginate
 
@@ -1168,7 +1169,7 @@ You&#39;re receiving this because you attended an event or joined the mailing li
  *   excluded.
  * @returns {Promise<Array<{contact_id: string, email: string}>>}
  */
-export async function resolveHostRecipients(db, hostId, { audienceEventId = null, emailType = 'marketing', mailingListOnly = false, nonOpenersOf = null } = {}) {
+export async function resolveHostRecipients(db, hostId, { audienceEventId = null, emailType = 'marketing', mailingListOnly = false, nonOpenersOf = null, nonOpeners = false } = {}) {
   // HOST-EMAIL.4 — per-event audience. Resolved from CONFIRMED registrations
   // at send time (host_contacts.source_event_id only records the FIRST event
   // that added a contact, so it cannot answer "who attended event X").
@@ -1201,11 +1202,20 @@ export async function resolveHostRecipients(db, hostId, { audienceEventId = null
   // but never opened nor clicked (and not bounced/complained/unsubscribed),
   // re-gated below by the normal emailability rules at SEND time. The parent
   // must be this host's: a foreign id resolves nobody, loudly.
+  //
+  // FAIL CLOSED: a reminder whose parent is gone (audience_campaign_id is ON
+  // DELETE SET NULL) or cannot be a parent (reminderParentProblem: not sent,
+  // or a utility email with no open tracking) throws, so the send refuses.
+  // It never falls through to the unrestricted list below, which would mail
+  // every host contact a "Reminder:".
+  if (nonOpeners && !nonOpenersOf) throw new Error('host campaign: reminder has no parent campaign')
   if (nonOpenersOf) {
     const { data: parent, error: parentErr } = await db
-      .from('host_campaigns').select('id').eq('id', nonOpenersOf).eq('host_id', hostId).maybeSingle()
+      .from('host_campaigns').select('id, status, email_type').eq('id', nonOpenersOf).eq('host_id', hostId).maybeSingle()
     if (parentErr) throw new Error(`host campaign: parent campaign read failed: ${parentErr.message}`)
     if (!parent) throw new Error('host campaign: parent campaign not found for this host')
+    const problem = reminderParentProblem(parent)
+    if (problem) throw new Error(`host campaign: parent cannot have a reminder: ${problem}`)
     allowedContactIds = new Set()
     for (let from = 0; ; from += PAGE) {
       const { data, error } = await db

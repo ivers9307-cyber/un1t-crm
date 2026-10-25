@@ -3,7 +3,7 @@
 // files may only export HTTP handlers.
 
 import { describe, it, expect } from 'vitest'
-import { copySubject, HOST_CAMPAIGN_LIST_COLUMNS, assertAudienceEventOwned } from './host-campaign-draft.js'
+import { copySubject, HOST_CAMPAIGN_LIST_COLUMNS, assertAudienceEventOwned, reminderParentProblem } from './host-campaign-draft.js'
 
 describe('copySubject', () => {
   it('prefixes with "Copy of " by default', () => {
@@ -64,5 +64,20 @@ describe('assertAudienceEventOwned', () => {
   it('short-circuits to null with no audienceEventId, never touching the db', async () => {
     const db = { from: () => { throw new Error('should not be called') } }
     expect(await assertAudienceEventOwned(db, 'host-1', null)).toBeNull()
+  })
+})
+
+describe('reminderParentProblem', () => {
+  it('a sent marketing email can have a reminder', () => {
+    expect(reminderParentProblem({ status: 'sent', email_type: 'marketing' })).toBeNull()
+  })
+  it('anything not sent cannot', () => {
+    for (const status of ['draft', 'scheduled', 'sending', 'failed']) {
+      expect(reminderParentProblem({ status, email_type: 'marketing' })).toBe('Only a sent email can have a reminder.')
+    }
+    expect(reminderParentProblem(null)).toBe('Only a sent email can have a reminder.')
+  })
+  it('a utility email cannot: it is not open-tracked', () => {
+    expect(reminderParentProblem({ status: 'sent', email_type: 'utility' })).toMatch(/utility emails/)
   })
 })

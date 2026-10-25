@@ -1,14 +1,14 @@
 // POST /api/host/emails/[id]/reminder-draft — HOST-EMAILS.2. A new draft
 // "Reminder: <subject>" whose audience is the parent's delivered-but-never-
 // opened-or-clicked contacts (audience_kind 'non_openers', resolved at send
-// time by resolveHostRecipients). The parent must be a SENT campaign — a
-// reminder for a draft or scheduled email makes no sense (nobody has seen
-// it yet to not-open it).
+// time by resolveHostRecipients). The parent must be a SENT MARKETING
+// campaign (reminderParentProblem): a draft has no recipients yet, and a
+// utility email is not open-tracked, so its "non-openers" are everyone.
 
 import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
-import { HOST_CAMPAIGN_LIST_COLUMNS, copySubject } from '@/lib/host-campaign-draft'
+import { HOST_CAMPAIGN_LIST_COLUMNS, copySubject, reminderParentProblem } from '@/lib/host-campaign-draft'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -28,9 +28,8 @@ export async function POST(_request, props) {
     .maybeSingle()
   if (readErr) return NextResponse.json({ success: false, error: readErr.message }, { status: 500 })
   if (!parent) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  if (parent.status !== 'sent') {
-    return NextResponse.json({ success: false, error: 'Only a sent email can have a reminder.' }, { status: 409 })
-  }
+  const problem = reminderParentProblem(parent)
+  if (problem) return NextResponse.json({ success: false, error: problem }, { status: 409 })
 
   const { data: row, error: insertErr } = await db
     .from('host_campaigns')

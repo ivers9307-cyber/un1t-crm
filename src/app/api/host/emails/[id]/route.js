@@ -15,7 +15,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
-import { designJsonTooBig, assertAudienceEventOwned } from '@/lib/host-campaign-draft'
+import { designJsonTooBig, assertAudienceEventOwned, reminderParentProblem } from '@/lib/host-campaign-draft'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -80,7 +80,8 @@ export async function PATCH(request, props) {
 
   // HOST-EMAILS.2 — 'non_openers' points this draft at a parent campaign
   // (resolved at send time by resolveHostRecipients). The parent must be
-  // named and owned by this host.
+  // named, owned by this host, and a sent marketing email
+  // (reminderParentProblem), the same rule the reminder-draft route applies.
   let audienceCampaignId = null
   if (kind === 'non_openers') {
     audienceCampaignId = parsed.data.audience_campaign_id || null
@@ -89,12 +90,14 @@ export async function PATCH(request, props) {
     }
     const { data: parent, error: parentErr } = await db
       .from('host_campaigns')
-      .select('id')
+      .select('id, status, email_type')
       .eq('id', audienceCampaignId)
       .eq('host_id', session.host.id)
       .maybeSingle()
     if (parentErr) return NextResponse.json({ success: false, error: parentErr.message }, { status: 500 })
     if (!parent) return NextResponse.json({ success: false, error: 'Parent email not found.' }, { status: 404 })
+    const problem = reminderParentProblem(parent)
+    if (problem) return NextResponse.json({ success: false, error: problem }, { status: 409 })
   }
 
   // CAS on draft — a concurrent send flipped it → 0 rows → 409.

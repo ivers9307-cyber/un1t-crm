@@ -184,6 +184,7 @@ describe('launchHostCampaign — non_openers audience', () => {
       mailingListOnly: false,
       emailType: 'marketing',
       nonOpenersOf: 'p0000000-0000-0000-0000-0000000000p1',
+      nonOpeners: true,
     })
   })
 })
@@ -263,7 +264,7 @@ describe('launchHostCampaign — happy path', () => {
     await launch(db)
     const read = statements.find((s) => s.table === 'host_campaigns')
     expect(hasEq(read, 'host_id', HOST_ID)).toBe(true)
-    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, { audienceEventId: 'ev1', mailingListOnly: false, emailType: 'utility', nonOpenersOf: null })
+    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, { audienceEventId: 'ev1', mailingListOnly: false, emailType: 'utility', nonOpenersOf: null, nonOpeners: false })
   })
 })
 
@@ -591,7 +592,7 @@ describe('resolveMissedRecipients', () => {
       campaign: { id: CAMPAIGN_ID, email_type: 'utility', audience_kind: 'event', audience_event_id: 'ev-1' },
     })
     expect(r).toEqual({ missed: [{ contact_id: 'c2', email: 'b@x.ie' }, { contact_id: 'c9', email: 'z@x.ie' }], totalRows: 4 })
-    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, { audienceEventId: 'ev-1', mailingListOnly: false, emailType: 'utility', nonOpenersOf: null })
+    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, { audienceEventId: 'ev-1', mailingListOnly: false, emailType: 'utility', nonOpenersOf: null, nonOpeners: false })
   })
 
   it('throws (never returns a partial list) when the rows read errors', async () => {

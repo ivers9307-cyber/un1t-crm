@@ -153,6 +153,8 @@ export function resolverOptionsFor(campaign) {
     mailingListOnly: campaign.audience_kind === 'mailing_list',
     emailType: campaign.email_type === 'utility' ? 'utility' : 'marketing',
     nonOpenersOf: campaign.audience_kind === 'non_openers' ? campaign.audience_campaign_id || null : null,
+    // A non_openers row with no parent must refuse, never resolve the whole list.
+    nonOpeners: campaign.audience_kind === 'non_openers',
   }
 }
 

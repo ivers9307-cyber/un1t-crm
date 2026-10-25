@@ -191,7 +191,7 @@ describe('PATCH /api/host/emails/[id]', () => {
 
     it('writes audience_kind + audience_campaign_id when the parent is owned by this host', async () => {
       const { db, statements } = makeDb((state) => {
-        if (state.table === 'host_campaigns' && op(state, 'select')) return { data: { id: PARENT_ID }, error: null }
+        if (state.table === 'host_campaigns' && op(state, 'select')) return { data: { id: PARENT_ID, status: 'sent', email_type: 'marketing' }, error: null }
         if (state.table === 'host_campaigns' && op(state, 'update')) return { data: [{ id: CAMPAIGN_ID }], error: null }
         return {}
       })
@@ -220,6 +220,24 @@ describe('PATCH /api/host/emails/[id]', () => {
       )
       expect(res.status).toBe(404)
       expect((await res.json()).error).toBe('Parent email not found.')
+    })
+
+    it.each([
+      ['a draft parent', { status: 'draft', email_type: 'marketing' }, 'Only a sent email can have a reminder.'],
+      ['a utility parent', { status: 'sent', email_type: 'utility' }, /utility emails/],
+    ])('409s for %s, and writes nothing', async (_label, parentFields, message) => {
+      const { db, statements } = makeDb((state) => {
+        if (state.table === 'host_campaigns' && op(state, 'select')) return { data: { id: PARENT_ID, ...parentFields }, error: null }
+        return {}
+      })
+      createServerClient.mockReturnValue(db)
+      const res = await PATCH(
+        req('PATCH', { subject: 'Reminder', body: '<p>x</p>', audience_kind: 'non_openers', audience_campaign_id: PARENT_ID }),
+        props,
+      )
+      expect(res.status).toBe(409)
+      expect((await res.json()).error).toMatch(message)
+      expect(statements.some((s) => op(s, 'update'))).toBe(false)
     })
 
     it('500s with the db message when the parent read errors', async () => {

@@ -128,6 +128,15 @@ describe('POST /api/host/emails/[id]/reminder-draft', () => {
     expect((await res.json()).error).toBe('Only a sent email can have a reminder.')
   })
 
+  it('409s for a UTILITY parent: it is not open-tracked, so every recipient would read as a non-opener', async () => {
+    const { db, statements } = makeDb(routeFor({ parent: { ...PARENT, email_type: 'utility' } }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req(), props)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/utility emails/)
+    expect(statements.some((s) => op(s, 'insert'))).toBe(false)
+  })
+
   it('500s on a read error', async () => {
     const { db } = makeDb(routeFor({ readErr: { message: 'kaboom' } }))
     createServerClient.mockReturnValue(db)

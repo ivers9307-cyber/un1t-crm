@@ -188,6 +188,7 @@ describe('POST /api/host/emails/[id]/send — audience_kind → resolveHostRecip
       mailingListOnly: true,
       emailType: 'marketing',
       nonOpenersOf: null,
+      nonOpeners: false,
     })
   })
 
@@ -203,6 +204,7 @@ describe('POST /api/host/emails/[id]/send — audience_kind → resolveHostRecip
       mailingListOnly: false,
       emailType: 'marketing',
       nonOpenersOf: null,
+      nonOpeners: false,
     })
   })
 
@@ -221,6 +223,7 @@ describe('POST /api/host/emails/[id]/send — audience_kind → resolveHostRecip
       mailingListOnly: false,
       emailType: 'marketing',
       nonOpenersOf: null,
+      nonOpeners: false,
     })
   })
 
@@ -236,6 +239,7 @@ describe('POST /api/host/emails/[id]/send — audience_kind → resolveHostRecip
       mailingListOnly: false,
       emailType: 'marketing',
       nonOpenersOf: null,
+      nonOpeners: false,
     })
   })
 })

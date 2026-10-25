@@ -25,6 +25,7 @@ import { loadHostCampaignStats, ZERO_STATS } from '@/lib/host-campaign-stats'
 import { deriveOutcome, outcomeAt, failureCopy } from '@/lib/host-campaign-outcome'
 import { resolveMissedRecipients, hostSendBlockReason } from '@/lib/host-campaign-launch'
 import { resolveHostRecipients } from '@/lib/host-campaign-email'
+import { reminderParentProblem } from '@/lib/host-campaign-draft'
 import { logError } from '@/lib/log'
 import { displayZoneFor } from '@/lib/display-zone'
 
@@ -98,9 +99,12 @@ export async function GET(_request, props) {
 
   // HOST-EMAILS.2 — how many a "Send a reminder" draft would reach right
   // now: delivered-but-never-opened-or-clicked on THIS campaign, from the
-  // same resolver a reminder draft's send uses. Null (never 0) on failure.
+  // same resolver a reminder draft's send uses. Null (never 0) on failure,
+  // and null for any campaign that cannot have a reminder
+  // (reminderParentProblem: not sent, or a utility email, which is not
+  // open-tracked), so the report hides the button.
   let nonOpenersCount = null
-  if (campaign.status === 'sent') {
+  if (!reminderParentProblem(campaign)) {
     try {
       const nonOpeners = await resolveHostRecipients(db, session.host.id, {
         nonOpenersOf: campaign.id,

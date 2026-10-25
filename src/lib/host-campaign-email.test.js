@@ -791,7 +791,7 @@ describe('resolveHostRecipients — nonOpenersOf', () => {
 
   const hasEq = (state, col, val) => state.ops.some((o) => o.method === 'eq' && o.args[0] === col && o.args[1] === val)
 
-  function routeFor({ parent = { id: PARENT } } = {}) {
+  function routeFor({ parent = { id: PARENT, status: 'sent', email_type: 'marketing' } } = {}) {
     return (state) => {
       if (state.table === 'host_campaigns') return { data: parent, error: null }
       if (state.table === 'host_email_suppressions') return { data: [], error: null }
@@ -831,9 +831,25 @@ describe('resolveHostRecipients — nonOpenersOf', () => {
     await expect(resolveHostRecipients(db, HOST_ID, { nonOpenersOf: PARENT })).rejects.toThrow(/parent campaign/)
   })
 
+  // Fail closed: a reminder never falls through to the unrestricted list.
+  it('throws, reading no contacts, for a non_openers audience whose parent is gone', async () => {
+    const { db, statements } = makeDb(routeFor())
+    await expect(resolveHostRecipients(db, HOST_ID, { nonOpeners: true, nonOpenersOf: null })).rejects.toThrow(/no parent/)
+    expect(statements.some((s) => s.table === 'host_contacts')).toBe(false)
+  })
+
+  it.each([
+    ['a utility parent', { id: PARENT, status: 'sent', email_type: 'utility' }],
+    ['a parent that was never sent', { id: PARENT, status: 'draft', email_type: 'marketing' }],
+  ])('throws, reading no contacts, for %s', async (_label, parent) => {
+    const { db, statements } = makeDb(routeFor({ parent }))
+    await expect(resolveHostRecipients(db, HOST_ID, { nonOpeners: true, nonOpenersOf: PARENT })).rejects.toThrow(/cannot have a reminder/)
+    expect(statements.some((s) => s.table === 'host_contacts')).toBe(false)
+  })
+
   it('an empty non-openers set short-circuits — [] with no host_contacts or host_email_suppressions statements', async () => {
     const { db, statements } = makeDb((state) => {
-      if (state.table === 'host_campaigns') return { data: { id: PARENT }, error: null }
+      if (state.table === 'host_campaigns') return { data: { id: PARENT, status: 'sent', email_type: 'marketing' }, error: null }
       if (state.table === 'host_campaign_sends') return { data: [], error: null }
       return {}
     })
@@ -855,7 +871,7 @@ describe('resolveHostRecipients — nonOpenersOf', () => {
       contact: { id, email: `${id}@x.ie`, email_marketing: true, email_status: 'active', email_suppressed_at: null },
     }))
     const { db, statements } = makeDb((state) => {
-      if (state.table === 'host_campaigns') return { data: { id: PARENT }, error: null }
+      if (state.table === 'host_campaigns') return { data: { id: PARENT, status: 'sent', email_type: 'marketing' }, error: null }
       if (state.table === 'host_email_suppressions') return { data: [], error: null }
       if (state.table === 'host_contacts') return { data: hostContacts, error: null }
       if (state.table === 'host_campaign_sends') {
