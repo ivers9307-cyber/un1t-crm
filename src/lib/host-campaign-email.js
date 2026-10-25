@@ -953,8 +953,8 @@ export function sanitizeCampaignHtml(html) {
     viewportPlaceholder,
     styles: [],
     viewportSeen: false,
-    blockCounter: { cssChars: 0 },
-    inlineCounter: { cssChars: 0 },
+    blockCounter: { blocked: 0, cssChars: 0 },
+    inlineCounter: { blocked: 0, cssChars: 0 },
   }
 
   // 1. The OUTER fixed point: strip (which is also where <style> bodies are
@@ -972,7 +972,7 @@ export function sanitizeCampaignHtml(html) {
   let converged = false
   for (let i = 0; i < MAX_OUTER_PASSES; i++) {
     const before = out
-    ctx.inlineCounter = { cssChars: 0 }
+    ctx.inlineCounter = { blocked: 0, cssChars: 0 }
     out = stripActiveContent(out, ctx)
     out = dropStrandedPlaceholders(out, anyPlaceholder)
     if (out === before) { converged = true; break }

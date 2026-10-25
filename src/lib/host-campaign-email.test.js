@@ -53,7 +53,36 @@ function decodeForCheck(value) {
   return String(value)
     .replace(/&#x([0-9a-f]+);?/gi, (_, h) => { const c = parseInt(h, 16); return Number.isFinite(c) && c <= 0x10ffff ? String.fromCodePoint(c) : '' })
     .replace(/&#(\d+);?/g, (_, d) => { const c = parseInt(d, 10); return Number.isFinite(c) && c <= 0x10ffff ? String.fromCodePoint(c) : '' })
-    .replace(/&(colon|tab|newline|amp|quot|apos);?/gi, (_, n) => ({ colon: ':', tab: '\t', newline: '\n', amp: '&', quot: '"', apos: "'" }[n.toLowerCase()]))
+    .replace(/&(colon|tab|newline|amp|quot|apos|lt|gt|sol|nbsp);?/gi, (_, n) => ({ colon: ':', tab: '\t', newline: '\n', amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', sol: '/', nbsp: '\u00a0' }[n.toLowerCase()]))
+}
+
+// CSS as the CSS parser sees it, for the check below: comments removed and
+// escapes undone (`\\65 xpression(` is `expression(`, `u\\72 l(` is `url(`),
+// lowercased, whitespace dropped. Deliberately cruder than a CSS tokenizer:
+// it can only see MORE keywords than a browser would, never fewer.
+function cssForCheck(css) {
+  return String(css)
+    .replace(/\/\*[\s\S]*?(\*\/|$)/g, '')
+    .replace(/\\([0-9a-f]{1,6})\s?/gi, (_, h) => { const c = parseInt(h, 16); return c > 0 && c <= 0x10ffff ? String.fromCodePoint(c) : '' })
+    .replace(/\\(.)/g, '$1')
+    .toLowerCase()
+    .replace(/\s+/g, '')
+}
+const BLOCKED_CSS_PREFIX = 'x-un1t-blocked:'
+/** Live CSS: an executing keyword, @import, or a network reference that scrubCss did not park. */
+function cssProblems(css) {
+  const v = cssForCheck(css)
+  const found = []
+  for (const kw of ['expression(', 'behavior:', 'behaviour:', '-moz-binding', 'javascript:', 'vbscript:', '@import']) {
+    if (v.includes(kw)) found.push(kw)
+  }
+  // Every http(s):// or protocol-relative // reference must sit behind the
+  // unresolvable parking scheme. `//` straight after a scheme colon is part of
+  // that scheme; any other `//` inside url( or a quoted string fetches.
+  const unparked = v.replace(new RegExp(`${BLOCKED_CSS_PREFIX}(https?:)?//`, 'g'), '')
+  if (/https?:\/\//.test(unparked)) found.push('remote http(s) reference')
+  if (/(url\(|['"])\/\//.test(unparked)) found.push('protocol-relative reference')
+  return found
 }
 
 function metaAllowed(attrs) {
@@ -123,9 +152,7 @@ function invariantProblems(tree, unsub = PARSED_UNSUB) {
           if (m && !OK_SCHEMES.has(m[1].toLowerCase())) problems.push(`bad scheme ${n}=${a.value}`)
         }
         if (n === 'style') {
-          const v = decodeForCheck(a.value).toLowerCase()
-          if (v.includes('expression(') || v.includes('javascript:') || v.includes('@import')) problems.push(`live css ${a.value.slice(0, 90)}`)
-          if (/url\(\s*['"]?https?:/i.test(v)) problems.push(`remote css url ${a.value.slice(0, 90)}`)
+          for (const p of cssProblems(decodeForCheck(a.value))) problems.push(`live css (${p}) ${a.value.slice(0, 90)}`)
         }
       }
       if (t === 'a' && node.attrs.some((a) => a.name.toLowerCase() === 'href' && a.value === unsub)) {
@@ -135,6 +162,7 @@ function invariantProblems(tree, unsub = PARSED_UNSUB) {
       if (t === 'style') {
         const body = (node.children || []).map((c) => c.text || '').join('')
         if (/[<>]/.test(body)) problems.push(`angle bracket in style body ${body.slice(0, 90)}`)
+        for (const p of cssProblems(body)) problems.push(`live css in style body (${p}) ${body.slice(0, 90)}`)
       }
     }
     const next = node.tag ? [...stack, node.tag] : stack
@@ -2272,6 +2300,85 @@ describe('markupTagSpans — parse5 boundary oracle', () => {
   })
 })
 
+// ROUND 7 (Oct 2026, after the merge with main): the parser-state, entity,
+// duplicate-attribute and worst-case-time shapes the earlier rounds did not
+// enumerate. Each must hold the full invariant on both render paths, judged
+// by parse5 AND jsdom.
+describe('sanitizeCampaignHtml — round-7 edge table', () => {
+  const NUL = String.fromCharCode(0)
+  const cases = [
+    '<![CDATA[<a href="javascript:alert(1)">x</a>]]>',
+    '<?xml version="1.0"?><b onclick=a>x</b>',
+    '<math><mi><a href="javascript:alert(1)">x</a></mi></math>',
+    '<svg><a xlink:href="javascript:alert(1)">x</a></svg>',
+    '<image src="javascript:alert(1)">', '<isindex action="javascript:alert(1)">',
+    '</br onclick=a>', '</p onclick=a>', '<b' + NUL + 'onclick=a>x</b>', '<b on' + NUL + 'click=a>x</b>',
+    '<a href="java' + NUL + 'script:alert(1)">x</a>', '<a\rhref="javascript:alert(1)">x</a>',
+    '<a href="java&#x0A;script:alert(1)">x</a>', '<a href="java&Tab;script:alert(1)">x</a>',
+    '<a href="javascript&colon;alert(1)">x</a>', '<a href="javascript&COLON;alert(1)">x</a>',
+    '<a href="&#0;javascript:alert(1)">x</a>', '<a href="&#x110000;javascript:alert(1)">x</a>',
+    '<a href="https://ok.example/" href="javascript:alert(1)">x</a>',
+    '<a href="javascript:alert(1)" href="https://ok.example/">x</a>',
+    '<a HREF=javascript:alert(1)>x</a>', '<a href = "javascript:alert(1)">x</a>',
+    '<b o\nnclick=a>x</b>', '<b ONCLICK=a>x</b>', '<b on=a>x</b>',
+    '<p style="background:u&#114;l(https://t/x)">x</p>', '<p style="x:&#101;xpression(1)">x</p>',
+    '<style>a{background:u\\72 l(https://t/x)}</style>', '<style>@\\69mport url(https://t/a);</style>',
+    '<style>a{b:c}</style  ><b onclick=a>x</b>', '<style>a{b:c}<\/style><b onclick=a>x</b></style>',
+    '<!--[if mso]><b onclick=a>x</b><![endif]-->', '<!--[if mso]>', '<!--[if mso]><style>', '<![endif]',
+    '<!-- x --!><b onclick=a>x</b>', '<!---><b onclick=a>x</b>', '<!--><a href="javascript:alert(1)">x</a>',
+    '<noscript><p title="</noscript><b onclick=a>x</b>">', '<template><b onclick=a>x</b></template>',
+    '<table><td background="javascript:alert(1)">x</td></table>', '<video poster="javascript:alert(1)"></video>',
+    '<button formaction="javascript:alert(1)">x</button>', '<body onload=alert(1)>', '</body><b onclick=a>x</b>',
+  ]
+  it.each(cases)('%j holds the invariant', (body) => {
+    expectSafeBothPaths(body, { jsdom: true })
+  })
+
+  // Worst-case shapes at the 300,000-character API cap. The bound is loose on
+  // purpose (see the round-5 timing tests): it catches an accidental
+  // quadratic, not jitter.
+  const CAP = 300_000
+  const runs = {
+    'open angles': '<'.repeat(CAP),
+    'tag openers': '<a '.repeat(CAP / 3),
+    'quotes in a tag': '<a title="' + '"'.repeat(CAP - 10),
+    'comment openers': '<!--'.repeat(CAP / 4),
+    'conditional openers': '<!--[if mso]>'.repeat(Math.floor(CAP / 13)),
+    'style openers': '<style>'.repeat(Math.floor(CAP / 7)),
+    'style attributes': '<p style="'.repeat(Math.floor(CAP / 10)),
+    'url openers in a style': '<p style="' + 'url('.repeat(Math.floor(CAP / 4) - 3),
+    'placeholder prefixes': '@@UN1T_'.repeat(Math.floor(CAP / 7)),
+    'entities in a url': '<a href="' + '&#106;'.repeat(Math.floor(CAP / 6) - 2) + '">',
+  }
+  it.each(Object.entries(runs))('%s: under 2s and still safe', (_, body) => {
+    const t0 = performance.now()
+    const rendered = renderBothPaths(body)
+    expect(performance.now() - t0).toBeLessThan(2000)
+    for (const html of Object.values(rendered)) expect(invariantProblems(parse5Tree(html))).toEqual([])
+  })
+})
+
+// The oracle has to be able to FAIL: an unsanitised document carrying each
+// live CSS shape is flagged, on a style attribute and in a style body alike.
+describe('the CSS oracle itself', () => {
+  const live = [
+    'x:\\65 xpression(alert(1))', 'background:u\\72 l(https://t/x)', '@imp/**/ort url(https://t/a)',
+    'background:url(//t/x)', "background:image-set('https://t/x' 1x)", 'behavior:url(x.htc)', '-moz-binding:url(x)',
+  ]
+  it.each(live)('flags %s', (css) => {
+    expect(cssProblems(css)).not.toEqual([])
+    const doc = `<html><head><style>${css}</style></head><body><p style="${css.replace(/"/g, '&quot;')}">x</p><a href="${PARSED_UNSUB}">u</a></body></html>`
+    const problems = invariantProblems(parse5Tree(doc))
+    expect(problems.some((p) => p.startsWith('live css in style body'))).toBe(true)
+    expect(problems.some((p) => p.startsWith('live css ('))).toBe(true)
+  })
+  it('passes parked and inert CSS', () => {
+    expect(cssProblems('background:url(x-un1t-blocked:https://t/x);color:red')).toEqual([])
+    expect(cssProblems("background:url('x-un1t-blocked://t/x')")).toEqual([])
+    expect(cssProblems('a > b { margin: 0 }')).toEqual([])
+  })
+})
+
 // ---------------------------------------------------------------------------
 // A SEEDED MINI-FUZZ, running the SAME parsed-document invariant the round-6
 // harness runs over 100,000 bodies. Two thousand bodies from a fixed seed is
@@ -2303,15 +2410,27 @@ describe('sanitizeCampaignHtml — seeded mini-fuzz over the parsed invariant', 
     '<img alt="a<b>c">', '<img src=x <script>', '<a href=alert(1)="<!--[if mso]>',
     '<img src=x =' + SQ + '"<!--[if mso]><!--</body>', '<s=', '=' + SQ, '<x=' + SQ, '=' + SQ + '>', '<a="', '</>',
     '<!--</body>-->', '</body>', '<body>',
+    // CSS the oracle now checks in style bodies and attributes alike.
+    '\\65 xpression(alert(1))', 'u\\72 l(https://t/x)', '/**/', '@imp/**/ort url(https://t/a);', '@import "https://t/a";',
+    'background:url(//t/x)', 'background:url(https://t/x)', "image-set('https://t/x' 1x)", "src('//t/f')",
+    'behavior:url(x.htc)', '-moz-binding:url(x)', 'url(https://t/x', '<p style="background:url(https://t/x)">',
+    '<p style="background:u&#114;l(https://t/x)">', '<p style="x:&#101;xpression(1)">', '<style>a{background:url(//t/x)}</style>',
   ]
 
-  it('2,000 random bodies, both render paths, all clean', () => {
-    let seed = 20260907 // FIXED: a failure here is reproducible by re-running.
+  // The full harness is this same loop, longer: run it by hand with
+  //   HOST_SANITIZER_FUZZ_N=100000 HOST_SANITIZER_FUZZ_SEED=<n> npx vitest run src/lib/host-campaign-email.test.js -t mini-fuzz
+  // (a long run also draws longer bodies, and skips the CI timing bound).
+  const FUZZ_N = Number(process.env.HOST_SANITIZER_FUZZ_N) || 2000
+  const FUZZ_SEED = Number(process.env.HOST_SANITIZER_FUZZ_SEED) || 20260907
+  const MAX_ATOMS = FUZZ_N > 2000 ? 16 : 8
+
+  it(`${FUZZ_N.toLocaleString('en-IE')} random bodies, both render paths, all clean`, () => {
+    let seed = FUZZ_SEED // FIXED by default: a failure here is reproducible by re-running.
     const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff }
     const failures = []
     const started = performance.now()
-    for (let i = 0; i < 2000; i++) {
-      const k = 1 + Math.floor(rnd() * 8)
+    for (let i = 0; i < FUZZ_N; i++) {
+      const k = 1 + Math.floor(rnd() * MAX_ATOMS)
       let body = ''
       for (let j = 0; j < k; j++) body += ATOMS[Math.floor(rnd() * ATOMS.length)]
       const once = sanitizeCampaignHtml(body)
@@ -2333,6 +2452,6 @@ describe('sanitizeCampaignHtml — seeded mini-fuzz over the parsed invariant', 
     // about 0.6s on a 2024 laptop, and this asserts 6s. What it has to catch
     // is an accidental quadratic that makes this suite unrunnable, not CI
     // jitter — a flaky timing test gets deleted rather than fixed.
-    expect(performance.now() - started).toBeLessThan(6000)
-  })
+    if (FUZZ_N === 2000) expect(performance.now() - started).toBeLessThan(6000)
+  }, FUZZ_N > 2000 ? 3_600_000 : undefined)
 })

@@ -333,7 +333,7 @@ function stripCssComments(css) {
 
 /**
  * HOST-EMAILS.2 — exported for the host campaign sanitizer, which keeps
- * <style> blocks. `counter` is `{ cssChars: 0 }` per document (the total
+ * <style> blocks. `counter` is `{ blocked: 0, cssChars: 0 }` per document (the total
  * budget below is per document). Output never contains `<` or `>`.
  */
 export function scrubCss(css, counter) {
