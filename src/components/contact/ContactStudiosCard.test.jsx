@@ -53,6 +53,21 @@ describe('ContactStudiosCard — membership facts', () => {
     expect(items.find((t) => t.includes('UN1T Other'))).toContain('Monthly · membership ended 1 Sept 2026')
     expect(items.find((t) => t.includes('UN1T Stillorgan'))).not.toMatch(/member since|membership ended/)
   })
+
+  // ORGCONTACTS.8 — a stamp that failed to record never renders as "null".
+  it('a missing since / ended date shows the status without a date, never "null"', () => {
+    const noSince = { ...rows[0], location_id: 'hatch', status: 'active', kind: 'member', membership_plan: 'Monthly', membership_status: 'active', membership_since: null, membership_ended_at: null }
+    const noEnd = { ...rows[0], location_id: 'other', location: { id: 'other', name: 'UN1T Other' }, kind: 'client', status: 'active', membership_plan: 'Monthly', membership_status: 'ended', membership_since: null, membership_ended_at: 'not-a-date' }
+    const noFirstSeen = { ...rows[1], first_seen_at: null, last_seen_at: null }
+    const { container } = render(<ContactStudiosCard studios={[noSince, noEnd, noFirstSeen]} primaryLocationId="still" />)
+    const items = [...container.querySelectorAll('li')].map((li) => li.textContent)
+    expect(items.find((t) => t.includes('UN1T Hatch Street'))).toContain('Monthly · active')
+    expect(items.find((t) => t.includes('UN1T Other'))).toContain('Monthly · ended')
+    for (const t of items) {
+      expect(t).not.toMatch(/null|undefined|Invalid Date/)
+      expect(t).not.toMatch(/since\s*$|since ·/)
+    }
+  })
 })
 
 // ORGCONTACTS.4 (decision 4) — "Change primary studio": only for a caller the
