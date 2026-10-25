@@ -41,7 +41,11 @@ export const IN_CHUNK = 150
 
 const TABLE = 'contact_studios'
 const PAGE = 1000
-const ROW_COLUMNS = 'contact_id, location_id, kind, status, source, stage_slug, first_seen_at, last_seen_at'
+// ORGCONTACTS.7 (mig 770): the un1t.online membership facts, written only by
+// setMembershipFacts (the un1t sync is its one caller; tests/membership-facts-writer-guard.test.js).
+export const MEMBERSHIP_FACT_COLUMNS = 'membership_plan, membership_status, membership_since, membership_ended_at'
+const ROW_COLUMNS = `contact_id, location_id, kind, status, source, stage_slug, first_seen_at, last_seen_at, ${MEMBERSHIP_FACT_COLUMNS}`
+const MEMBERSHIP_STATUSES = Object.freeze(['active', 'ended'])
 const LOCATION_COLUMNS = 'id, name, active, is_host_anchor, organization_id, membership_source'
 const ERR_MAX = 300
 
@@ -125,6 +129,53 @@ export async function upsertContactStudio(db, {
       if (seenErr) return fail(`contact_studios first_seen_at: ${message(seenErr)}`)
     }
     return { ok: true, row }
+  } catch (e) {
+    return fail(message(e))
+  }
+}
+
+/**
+ * ORGCONTACTS.7 (mig 770) — the un1t.online membership facts on the
+ * relationship row. The un1t sync is the ONLY caller (the guard test pins the
+ * call), and it calls this AFTER writeContactStudios, so the row exists: a
+ * zero-row update is { ok: true, updated: false } for the caller to count and
+ * log, never a write of a new row. ONE update of plan / status / ended_at;
+ * when the membership is active and the update touched the row, a SECOND
+ * guarded update stamps membership_since only where it is null (the
+ * first_seen_at pattern: stamped once, never moved). Never names kind, status,
+ * source, stage_slug, first_seen_at or last_seen_at: those are the
+ * relationship's, derived nightly; these columns are sync-owned facts the
+ * reconcile never touches (contact_studios_upsert never names them).
+ *
+ * @returns {Promise<{ ok: true, updated: boolean } | { ok: false, error: string }>}
+ */
+export async function setMembershipFacts(db, {
+  contactId, locationId, plan = null, status, endedAt = null, nowIso = new Date().toISOString(),
+} = {}) {
+  if (!db || !contactId || !locationId) return fail('contact_studios: contactId and locationId are required')
+  if (!MEMBERSHIP_STATUSES.includes(status)) return fail(`contact_studios: membership status must be one of ${MEMBERSHIP_STATUSES.join(', ')}`)
+  try {
+    const payload = status === 'active'
+      ? { membership_plan: plan, membership_status: 'active', membership_ended_at: null, updated_at: nowIso }
+      : { membership_status: 'ended', membership_ended_at: endedAt ?? nowIso, updated_at: nowIso }
+    const { data, error } = await db
+      .from(TABLE)
+      .update(payload)
+      .eq('contact_id', contactId)
+      .eq('location_id', locationId)
+      .select('contact_id')
+    if (error) return fail(`contact_studios membership facts: ${message(error)}`)
+    const updated = Array.isArray(data) && data.length > 0
+    if (status === 'active' && updated) {
+      const { error: sinceErr } = await db
+        .from(TABLE)
+        .update({ membership_since: nowIso })
+        .eq('contact_id', contactId)
+        .eq('location_id', locationId)
+        .is('membership_since', null)
+      if (sinceErr) return fail(`contact_studios membership_since: ${message(sinceErr)}`)
+    }
+    return { ok: true, updated }
   } catch (e) {
     return fail(message(e))
   }
