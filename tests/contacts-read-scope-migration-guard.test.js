@@ -597,7 +597,7 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
   })
 
   it('768 (ORGCONTACTS.5) passes: dropping the membership helper is its retirement; after 768 a re-create of it or of crossover_contact_ids is a breaker, and before 768 the drop still is', () => {
-    const f768 = migrationFiles().find((f) => migNum(f) === RETIRED_AT)
+    const f768 = migrationFiles().find((f) => migNum(f) === RETIRED_AT && /contact_side_channels_dropped/.test(f)) // main's 768_fleet_screens shares the number
     expect(f768, 'mig 768 missing').toBeTruthy()
     const sql768 = readFileSync(path.join(MIGRATIONS, f768), 'utf8')
     expect(contactReadScopeBreakers(sql768, { migration: RETIRED_AT })).toEqual([])
