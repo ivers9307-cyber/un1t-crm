@@ -12,6 +12,14 @@ import ChangePrimaryStudio from './ChangePrimaryStudio'
 
 const KIND_LABEL = { member: 'Member', client: 'Client', lead: 'Lead' }
 
+// ORGCONTACTS.8 — " · <label> <date>", or nothing when the date is missing or
+// unreadable (formatDate answers null), so a stamp that failed to record never
+// renders as "member since null" or a dangling "since".
+function datePhrase(label, iso) {
+  const d = formatDate(iso)
+  return d ? ` · ${label} ${d}` : ''
+}
+
 // canRehome (ORGCONTACTS.4, decision 4): the page's gate for "Change primary
 // studio" (the primary studio's admins, an organisation admin, a master);
 // the control also needs another studio to move to.
@@ -40,15 +48,16 @@ export default function ContactStudiosCard({ studios, primaryLocationId, canReho
                 </span>
               </div>
               <div className="text-[11px] text-un1t-subtle">
-                {RELATIONSHIP_SOURCE_LABELS[s.source] || s.source} · since {formatDate(s.first_seen_at)}
-                {s.last_seen_at ? ` · last seen ${formatDate(s.last_seen_at)}` : ''}
+                {RELATIONSHIP_SOURCE_LABELS[s.source] || s.source}
+                {datePhrase('since', s.first_seen_at)}
+                {datePhrase('last seen', s.last_seen_at)}
               </div>
               {s.membership_status
                 ? <div className="text-[11px] text-un1t-subtle">
                     {s.membership_plan || 'Membership'}
                     {s.membership_status === 'active'
-                      ? ` · member since ${formatDate(s.membership_since)}`
-                      : ` · membership ended ${formatDate(s.membership_ended_at)}`}
+                      ? (datePhrase('member since', s.membership_since) || ' · active')
+                      : (datePhrase('membership ended', s.membership_ended_at) || ' · ended')}
                   </div>
                 : null}
             </li>

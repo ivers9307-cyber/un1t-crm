@@ -38,13 +38,17 @@
 //      location only; the operator export's rows are never touched): a
 //      contact with an active subscription is upserted active; an active row
 //      whose contact no longer has one is ENDED, never deleted.
+//   7a. Write the relationship rows (contact_studios, mig 764): member, client.
+//   7b. Write the membership facts onto those rows (mig 770; the sync is the
+//      one writer of membership_plan / _status / _since / _ended_at).
+//   7c. Start this studio's contact_created sequences for new signups.
 //   8. Record the outcome on the connection; 9. close the run row.
 //
 // NEVER DELETES. Nothing in a run issues a delete: a row absent from a pull
 // stays, and a membership absent from a pull is ended.
 //
 // Two guards on step 7, because an ended membership is customer-facing (event
-// member pricing reads contact_memberships) and a wrongly ended one charges a
+// member pricing reads the active member rows on contact_studios) and a wrongly ended one charges a
 // member the non-member fee:
 //   - A client that FAILED to resolve (a contacts read or write error) has a
 //     subscription that cannot be attributed, so "its contact has no
@@ -94,7 +98,6 @@ export const UN1T_LISTS = Object.freeze([
   '/bookings',
 ])
 
-const MEMBERSHIP_SOURCE = 'un1t_online_api'
 const PLATFORM = 'un1t_online'
 const CHUNK = 200
 const PAGE = 1000
@@ -463,11 +466,9 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
     // 7. Memberships.
     const membership = await reconcileMemberships(db, {
       locationId,
-      organizationId,
       subscriptions: mapped.un1t_subscriptions,
       contactIdOf,
       resolverErrors: resolved.errors || [],
-      nowIso,
     })
     counts.memberships = membership.counts
     if (membership.error) {
@@ -506,7 +507,7 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
       })),
     }
 
-    // 7b. New signups start this studio's contact_created sequences
+    // 7c. New signups start this studio's contact_created sequences
     // (SHAREDCONTACT.1). Last, so the bookings this run projected are already
     // there for a "booked a class here?" branch. Informational: a failure is
     // logged by the trigger and never changes the run's status.
@@ -567,11 +568,12 @@ async function measureHistory(db, { locationId, mapped, nowIso }) {
 }
 
 /**
- * Step 7. Returns { counts, error } where error is a message or null.
- * first_seen_at is never in the upsert payload, so its column default sets it
- * on insert only and a re-activation keeps the original date.
+ * Step 7. Decides who is a member here and whose membership ends; it writes
+ * nothing (7a writes the relationship rows, 7b the membership facts). Returns
+ * { counts, error, memberContactIds, endedContactIds, plan, activePlanByContact },
+ * error a message or null.
  */
-async function reconcileMemberships(db, { locationId, organizationId, subscriptions, contactIdOf, resolverErrors, nowIso }) {
+async function reconcileMemberships(db, { locationId, subscriptions, contactIdOf, resolverErrors }) {
   const counts = { active: 0, ended: 0, skipped_no_contact: 0 }
   // ORGCONTACTS.1 — who this run holds as a member here, and whose
   // membership it ended (contact ids), for the contact_studios dual-write.

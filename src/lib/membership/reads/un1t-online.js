@@ -708,8 +708,8 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
  * Active = a FRESH subscription here in MEMBER_STATUSES (active, past_due: the
  * statuses membershipCounts counts; trialing, paused and ended are not). The
  * subscription's person is its un1t user's contact (a fresh un1t_clients row
- * here), else its own contact_id. contact_memberships' api rows are the sync's
- * mirror of these subscriptions, so they are not read twice.
+ * here), else its own contact_id. The membership facts on contact_studios are
+ * the sync's mirror of these subscriptions, so they are not read twice.
  * { success, data: { contactIds } } | { success:false, error }.
  */
 async function activeMemberContactIds(db, locationId) {
@@ -757,7 +757,7 @@ function unionByUn1tId(...lists) {
  * the studio's full products map, the CRM's own trial rows in `un1t_write_events`
  * (done, sent and unknown, by user id and by contact id; an account the CRM just
  * created is not in un1t_clients until the next sync), and, for a contact, its
- * contact_memberships here from the api and export sources, any status. Any
+ * membership facts on its contact_studios row here, any status. Any
  * failed read is { success:false }: an unreadable history is never eligible.
  *
  * TRIALREGRANT.1 — `data.regrant` (always a boolean) says whether a person who

@@ -6,9 +6,16 @@
 // CALL and the column names in app code; the SQL side (770's backfill, 771's
 // parity pass, contact_studios_upsert, the triggers) is pinned by the PGlite
 // migration tests. Source-text level over the chain text: a floor, not proof.
+// ORGCONTACTS.8 — it also scans scripts/ and supabase/functions/ (a one-off
+// script or an edge function is a writer too), and the migration check reads
+// every statement that writes contact_studios: UPDATE, INSERT (its column list
+// or its ON CONFLICT … DO UPDATE) and MERGE, schema-qualified or not, quoted or
+// not, with SQL comments blanked first by the shared quote-aware sqlCode
+// (GUARDSTRIP.1: never a regex stripper).
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const SKIP_DIRS = new Set(['node_modules', 'ios', 'android', 'dist', 'web-build', '.next'])
@@ -22,7 +29,8 @@ function sourceFiles(dir, out = []) {
   return out
 }
 const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
-const FILES = ['src', 'shared', 'mobile'].flatMap((d) => (fs.existsSync(path.join(ROOT, d)) ? sourceFiles(path.join(ROOT, d)) : []))
+const SCANNED_DIRS = ['src', 'shared', 'mobile', 'scripts', 'supabase/functions']
+const FILES = SCANNED_DIRS.flatMap((d) => (fs.existsSync(path.join(ROOT, d)) ? sourceFiles(path.join(ROOT, d)) : []))
   .map((file) => ({ key: rel(file), text: fs.readFileSync(file, 'utf8') }))
 const MODULE = 'src/lib/contact-studios.js'
 // the four fact columns, never locations.membership_source
@@ -49,7 +57,48 @@ function contactStudiosWriteChains(text) {
   return out
 }
 
+/**
+ * The statements in `sql` that write a membership column on contact_studios:
+ * an UPDATE / INSERT INTO / MERGE INTO contact_studios (public.-qualified or
+ * not, quoted or not) whose statement text names one of the four columns.
+ * Split on ';', so a function body's statements are judged one by one.
+ */
+function membershipColumnWrites(sql) {
+  const target = /\b(?:UPDATE|INSERT\s+INTO|MERGE\s+INTO)\s+(?:"?public"?\s*\.\s*)?"?contact_studios"?(?![\w"])/i
+  return sqlCode(sql).split(';').map((st) => st.trim()).filter((st) => target.test(st) && FACT_COL.test(st))
+}
+
+describe('the migration detector catches every write shape', () => {
+  const hit = (sql) => membershipColumnWrites(sql).length > 0
+  it('flags qualified, unqualified and quoted UPDATEs', () => {
+    expect(hit("UPDATE public.contact_studios SET membership_status = 'ended' WHERE contact_id = x;")).toBe(true)
+    expect(hit("update contact_studios set membership_since = now();")).toBe(true)
+    expect(hit('UPDATE "public"."contact_studios" SET "membership_plan" = NULL;')).toBe(true)
+    expect(hit('UPDATE contact_studios cs SET membership_ended_at = now() FROM x WHERE cs.contact_id = x.id;')).toBe(true)
+  })
+  it('flags an INSERT naming a column, and an ON CONFLICT … DO UPDATE that sets one', () => {
+    expect(hit('INSERT INTO contact_studios (contact_id, location_id, membership_plan) VALUES (a, b, c);')).toBe(true)
+    expect(hit('INSERT INTO public.contact_studios (contact_id, location_id) SELECT a, b FROM t ON CONFLICT (contact_id, location_id) DO UPDATE SET membership_status = EXCLUDED.membership_status;')).toBe(true)
+    expect(hit('MERGE INTO contact_studios cs USING t ON cs.contact_id = t.id WHEN MATCHED THEN UPDATE SET membership_since = t.s;')).toBe(true)
+  })
+  it('flags a write inside a function body', () => {
+    expect(hit("CREATE OR REPLACE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $$ BEGIN PERFORM 1; UPDATE contact_studios SET membership_status = 'active'; END $$;")).toBe(true)
+  })
+  it('ignores reads, other tables, other columns and comments', () => {
+    expect(hit('SELECT membership_status FROM contact_studios;')).toBe(false)
+    expect(hit("UPDATE contact_studios SET last_seen_at = now();")).toBe(false)
+    expect(hit("UPDATE contact_studios_archive SET membership_status = 'x';")).toBe(false)
+    expect(hit("UPDATE locations SET membership_source = 'un1t_online';")).toBe(false)
+    expect(hit("-- UPDATE contact_studios SET membership_status = 'x';\n/* INSERT INTO contact_studios (membership_plan) */ SELECT 1;")).toBe(false)
+  })
+})
+
 describe('the membership facts have one writer', () => {
+  it('scans every directory that can hold a writer', () => {
+    const scanned = new Set(FILES.map((f) => f.key.split('/')[0] === 'supabase' ? 'supabase/functions' : f.key.split('/')[0]))
+    for (const d of SCANNED_DIRS) if (fs.existsSync(path.join(ROOT, d))) expect(scanned.has(d)).toBe(true)
+  })
+
   it('setMembershipFacts is called from the un1t sync and nowhere else', () => {
     const callers = FILES.filter((f) => f.key !== MODULE && /\bsetMembershipFacts\s*\(/.test(f.text)).map((f) => f.key)
     expect(callers).toEqual([SYNC])
@@ -79,7 +128,16 @@ describe('the membership facts have one writer', () => {
     const dir = path.join(ROOT, 'supabase', 'migrations')
     const offenders = fs.readdirSync(dir)
       .filter((f) => f.endsWith('.sql') && parseInt(f, 10) >= 770 && !/^77[01]_/.test(f))
-      .filter((f) => /UPDATE\s+public\.contact_studios[\s\S]{0,400}membership_(plan|status|since|ended_at)\b/i.test(fs.readFileSync(path.join(dir, f), 'utf8')))
+      .filter((f) => membershipColumnWrites(fs.readFileSync(path.join(dir, f), 'utf8')).length > 0)
     expect(offenders).toEqual([])
+  })
+
+  it('the detector sees 770 and 771 themselves (so the exemption above is doing work)', () => {
+    const dir = path.join(ROOT, 'supabase', 'migrations')
+    for (const prefix of ['770_', '771_']) {
+      const f = fs.readdirSync(dir).find((n) => n.startsWith(prefix) && n.endsWith('.sql'))
+      expect(f, `${prefix} migration`).toBeTruthy()
+      expect(membershipColumnWrites(fs.readFileSync(path.join(dir, f), 'utf8')).length).toBeGreaterThan(0)
+    }
   })
 })

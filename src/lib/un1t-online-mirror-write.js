@@ -12,7 +12,7 @@
 // - A failed mirror write NEVER changes the write's verdict: it is logError
 //   with ids (contract log fields only) and { ok: false }; the next sync
 //   repairs the row. Nothing here throws for a database or read failure.
-// - Never contact_memberships (the sync owns it), never a row with nothing to
+// - Never the membership facts on contact_studios (the sync owns them), never a row with nothing to
 //   say: a booking row needs an id and a status, or it would write NULL over
 //   the sync's columns.
 // - book / cancel: un1t_bookings through mapBooking (cancel re-reads
