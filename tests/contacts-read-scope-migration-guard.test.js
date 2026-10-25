@@ -559,7 +559,7 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
   })
 
   it('765 (ORGCONTACTS.2) passes: the studio helper, the delegate and the one-branch policy are accepted; a studio helper with another body or without the Contacts resolver is a breaker', () => {
-    const f765 = migrationFiles().find((f) => migNum(f) === 765)
+    const f765 = migrationFiles().find((f) => migNum(f) === 765 && /contacts_read_by_contact_studios/.test(f)) // main's 765_charity_donations shares the number
     expect(f765, 'mig 765 missing').toBeTruthy()
     const sql765 = readFileSync(path.join(MIGRATIONS, f765), 'utf8')
     expect(contactReadScopeBreakers(sql765)).toEqual([])
