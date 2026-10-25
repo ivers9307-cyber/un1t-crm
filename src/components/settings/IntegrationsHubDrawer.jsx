@@ -23,7 +23,8 @@
 //              gets overwritten (CHANNELREAD.1)
 //   404      → not available to this viewer (owner here or master only)
 //   ready    → the hosted tab, with the props the old page gave it
-// Ads and Instagram need no context: they host as they did in Phase 1.
+// Ads and Instagram need no context: they host as they did in Phase 1. Nor does
+// the organisation's WhatsApp numbers (INTEGONE.3).
 //
 // REFRESH. A hosted tab that saves either calls onChanged (Ads, Instagram,
 // WhatsApp) or router.refresh() (the rest, as on the old page). Both reach
@@ -53,6 +54,7 @@ import UnifiIntegrationTab from './integrations/UnifiIntegrationTab'
 import AcDevicesIntegrationTab from './integrations/AcDevicesIntegrationTab'
 import BcaIntegrationTab from './integrations/BcaIntegrationTab'
 import MembershipSourceCard from './MembershipSourceCard'
+import OrgWhatsAppNumbers from './whatsapp/OrgWhatsAppNumbers'
 import { hubManageHref } from '@/lib/integrations-hub-links'
 
 export const DRAWER_TITLES = {
@@ -61,6 +63,7 @@ export const DRAWER_TITLES = {
   'un1t-online': 'un1t.online',
   payments: 'Payments',
   whatsapp: 'WhatsApp',
+  'whatsapp-numbers': 'WhatsApp numbers',
   instagram: 'Instagram',
   xero: 'Xero',
   ads: 'Meta Ads',
@@ -69,8 +72,10 @@ export const DRAWER_TITLES = {
   bca: 'BCA Submit',
 }
 
-// Cards whose hosted component needs no server context.
-const NO_CONTEXT = new Set(['ads', 'instagram'])
+// Cards whose hosted component needs no server context. `whatsapp-numbers`
+// (INTEGONE.3) is organisation-level: the hub hands the drawer the organisation
+// it administers (`organization`), and OrgWhatsAppNumbers reads its own list.
+const NO_CONTEXT = new Set(['ads', 'instagram', 'whatsapp-numbers'])
 
 export const hubLocationContextUrl = (locationId) =>
   `/api/integrations/hub/locations/${encodeURIComponent(locationId)}`
@@ -78,7 +83,7 @@ export const hubLocationContextUrl = (locationId) =>
 const FOCUSABLE =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
 
-export default function IntegrationsHubDrawer({ cardKey, locationId, locationName, refreshKey = 0, onClose, onChanged }) {
+export default function IntegrationsHubDrawer({ cardKey, locationId, locationName, organization = null, refreshKey = 0, onClose, onChanged }) {
   const panelRef = useRef(null)
   const titleId = useId()
   const [entered, setEntered] = useState(false)
@@ -196,7 +201,9 @@ export default function IntegrationsHubDrawer({ cardKey, locationId, locationNam
         <div className="flex items-start justify-between gap-3 border-b border-un1t-border px-5 py-3">
           <div className="min-w-0">
             <h2 id={titleId} className="text-sm font-semibold text-un1t-text">Manage {title}</h2>
-            {locationName && <p className="text-xs text-un1t-subtle mt-0.5 truncate">{locationName}</p>}
+            {(organization?.name || locationName) && (
+              <p className="text-xs text-un1t-subtle mt-0.5 truncate">{organization?.name || locationName}</p>
+            )}
           </div>
           <button
             type="button"
@@ -214,6 +221,14 @@ export default function IntegrationsHubDrawer({ cardKey, locationId, locationNam
           )}
           {cardKey === 'instagram' && (
             <ConnectionsSection locationId={locationId} locationName={locationName} embedded onChanged={onChanged} />
+          )}
+
+          {cardKey === 'whatsapp-numbers' && organization && (
+            <OrgWhatsAppNumbers
+              organizationId={organization.id}
+              organizationName={organization.name || null}
+              locations={organization.locations || []}
+            />
           )}
 
           {needsContext && ctx.status === 'loading' && (

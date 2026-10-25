@@ -14,8 +14,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import WhatsAppIntegrationTab from './WhatsAppIntegrationTab.jsx'
+import { ORG_NUMBERS_PAGE } from '@/lib/org-whatsapp-numbers-page'
 
-const LOC = { id: 'a0000000-0000-4000-8000-000000000001', name: 'Test Studio', settings: {} }
+const LOC = { id: 'a0000000-0000-4000-8000-000000000001', name: 'Test Studio', settings: {}, organization_id: 'org-1' }
 const reply = (status, body) => ({ ok: status < 400, status, json: async () => body })
 
 function mockFetch(numbersAnswer) {
@@ -91,7 +92,7 @@ describe("WhatsAppIntegrationTab — the organisation's numbers at this studio (
     mockFetch(reply(200, { success: true, data: { numbers: [] } }))
     const { rerender } = render(<WhatsAppIntegrationTab location={LOC} canEdit canManageNumbers />)
     const link = await screen.findByRole('link', { name: 'WhatsApp numbers' })
-    expect(link.getAttribute('href')).toBe('/settings/whatsapp-numbers')
+    expect(link.getAttribute('href')).toBe(`${ORG_NUMBERS_PAGE}&org=org-1`)
     rerender(<WhatsAppIntegrationTab location={LOC} canEdit />)
     expect(screen.queryByRole('link', { name: 'WhatsApp numbers' })).toBeNull()
     expect(screen.getByText(/An organisation admin adds, edits and removes numbers/)).toBeTruthy()

@@ -47,3 +47,18 @@ export function legacyIntegrationsTabRedirect(locationId, searchParams = {}) {
   const tail = rest.toString()
   return tail ? `${base}&${tail}` : base
 }
+
+/** The hub views besides the cards overview (INTEGONE.3). */
+export const HUB_VIEWS = Object.freeze(['overview', 'health', 'zoom'])
+
+/**
+ * The hub URL of a view: `?view=health[&location=<id>]` or `?view=zoom`. The
+ * overview is the bare hub. `location` is only meaningful to the health view
+ * (the studio whose signals it grades). Pure.
+ */
+export function hubViewHref(view, locationId) {
+  if (!view || view === 'overview') return HUB_PATH
+  const q = new URLSearchParams({ view })
+  if (view === 'health' && locationId) q.set('location', locationId)
+  return `${HUB_PATH}?${q.toString()}`
+}

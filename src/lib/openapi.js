@@ -4927,11 +4927,11 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'RETIRED: Embedded Signup now runs at the organisation',
-  description: "WAORGNUMBER.1: a number belongs to the organisation, so connecting one is POST /api/organizations/{id}/whatsapp/embedded-signup. This route answers 410 { success:false, error, moved_to:'/settings/whatsapp-numbers' } to a signed-in caller.",
+  description: "WAORGNUMBER.1: a number belongs to the organisation, so connecting one is POST /api/organizations/{id}/whatsapp/embedded-signup. This route answers 410 { success:false, error, moved_to:'/settings/integrations-hub?manage=whatsapp-numbers' } to a signed-in caller.",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    410: { description: 'Moved to the organisation (moved_to: /settings/whatsapp-numbers)', content: { 'application/json': { schema: ErrorResponse } } },
+    410: { description: 'Moved to the organisation (moved_to: /settings/integrations-hub?manage=whatsapp-numbers)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -10199,7 +10199,7 @@ registry.registerPath({
   },
 })
 
-// ZOOMOPS.1 — Zoom contact sync operator surface: /settings/integrations/zoom-contacts
+// ZOOMOPS.1 — Zoom contact sync operator surface: the hub's Zoom view, /settings/integrations-hub?view=zoom
 registry.registerPath({
   method: 'post',
   path: '/api/integrations/zoom-contacts/run',

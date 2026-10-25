@@ -17,26 +17,28 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: nav.replace, push: vi.fn(), refresh: vi.fn() }),
 }))
 vi.mock('next/link', () => ({
-  default: ({ href, children, className }) => <a href={typeof href === 'string' ? href : ''} className={className}>{children}</a>,
+  default: ({ href, children, className, ...rest }) => <a href={typeof href === 'string' ? href : ''} className={className} {...rest}>{children}</a>,
 }))
 const drawer = vi.hoisted(() => ({ props: null }))
 vi.mock('./IntegrationsHubDrawer', () => ({
   default: (props) => {
     drawer.props = props
     return (
-      <div data-testid="drawer" data-card={props.cardKey} data-location={props.locationId}>
+      <div data-testid="drawer" data-card={props.cardKey} data-location={props.locationId} data-org={props.organization?.id}>
         <button type="button" onClick={props.onClose}>close drawer</button>
       </div>
     )
   },
 }))
 
-import IntegrationsHub, { canOpenFromUrl } from './IntegrationsHub'
+import IntegrationsHub, { canOpenFromUrl, pickManagedOrg } from './IntegrationsHub'
 import { membershipSettingsHref } from '@/lib/membership/state-for-page'
 import { legacyIntegrationsTabRedirect } from '@/lib/integrations-hub-links'
 
 const A = { id: 'loc-a', name: 'Stillorgan' }
 const B = { id: 'loc-b', name: 'Hatch Street' }
+const ORG1 = { id: 'org-1', name: 'UN1T Group', locations: [A, B] }
+const ORG2 = { id: 'org-2', name: 'CCF Autos', locations: [] }
 const BASE = {
   generatedAt: '2026-10-25T09:00:00Z',
   expirySoonDays: 10,
@@ -192,5 +194,94 @@ describe('IntegrationsHub — Membership source and Payments cards', () => {
     fireEvent.click(buttons[buttons.length - 1])
     expect(screen.getByTestId('drawer').dataset.card).toBe('payments')
     expect(screen.getByTestId('drawer').dataset.location).toBe('loc-b')
+  })
+})
+
+// INTEGONE.3 — the organisation numbers drawer: ?manage=whatsapp-numbers[&org=<id>].
+describe('IntegrationsHub — organisation WhatsApp numbers (INTEGONE.3)', () => {
+  it('?manage=whatsapp-numbers&org=<id> opens it for a managed organisation', () => {
+    nav.params = 'manage=whatsapp-numbers&org=org-2'
+    render(<IntegrationsHub data={BASE} managedOrgs={[ORG1, ORG2]} />)
+    const d = screen.getByTestId('drawer')
+    expect(d.dataset.card).toBe('whatsapp-numbers')
+    expect(d.dataset.org).toBe('org-2')
+    expect(drawer.props.organization).toEqual(ORG2)
+  })
+
+  it('without org it opens the only managed organisation, or the first of several', () => {
+    nav.params = 'manage=whatsapp-numbers'
+    render(<IntegrationsHub data={BASE} managedOrgs={[ORG1]} />)
+    expect(screen.getByTestId('drawer').dataset.org).toBe('org-1')
+    cleanup()
+    render(<IntegrationsHub data={BASE} managedOrgs={[ORG2, ORG1]} />)
+    expect(screen.getByTestId('drawer').dataset.org).toBe('org-2')
+  })
+
+  it('is ignored for an organisation the viewer does not administer, and when they administer none', () => {
+    nav.params = 'manage=whatsapp-numbers&org=org-9'
+    render(<IntegrationsHub data={BASE} managedOrgs={[ORG1]} />)
+    expect(screen.queryByTestId('drawer')).toBeNull()
+    cleanup()
+    nav.params = 'manage=whatsapp-numbers'
+    render(<IntegrationsHub data={BASE} managedOrgs={[]} />)
+    expect(screen.queryByTestId('drawer')).toBeNull()
+  })
+
+  it('closing clears manage and org and keeps every other param', () => {
+    nav.params = 'manage=whatsapp-numbers&org=org-1&xero_connected=1'
+    render(<IntegrationsHub data={BASE} managedOrgs={[ORG1]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'close drawer' }))
+    expect(screen.queryByTestId('drawer')).toBeNull()
+    expect(nav.replace).toHaveBeenCalledWith('/settings/integrations-hub?xero_connected=1', { scroll: false })
+  })
+
+  it('the WhatsApp card carries one Organisation numbers button per managed organisation (named only when there are several)', () => {
+    const data = { ...BASE, whatsapp: [{ locationId: A.id, status: 'connected', numbers: [], budget: null }] }
+    render(<IntegrationsHub data={data} managedOrgs={[ORG1]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Organisation numbers' }))
+    expect(screen.getByTestId('drawer').dataset.org).toBe('org-1')
+    cleanup()
+    render(<IntegrationsHub data={data} managedOrgs={[ORG1, ORG2]} />)
+    expect(screen.getByRole('button', { name: 'Organisation numbers · UN1T Group' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Organisation numbers · CCF Autos' })).toBeTruthy()
+    cleanup()
+    render(<IntegrationsHub data={data} managedOrgs={[]} />)
+    expect(screen.queryByRole('button', { name: /Organisation numbers/ })).toBeNull()
+  })
+
+  it('pickManagedOrg: named wins, none named takes the first, a stranger is null', () => {
+    expect(pickManagedOrg([ORG1, ORG2], 'org-2')).toBe(ORG2)
+    expect(pickManagedOrg([ORG1, ORG2], null)).toBe(ORG1)
+    expect(pickManagedOrg([ORG1], 'org-x')).toBeNull()
+    expect(pickManagedOrg([], null)).toBeNull()
+  })
+})
+
+// INTEGONE.3 — the view switcher and the non-overview shell.
+describe('IntegrationsHub — view switcher (INTEGONE.3)', () => {
+  it('the overview shows Overview and Health (Zoom only when showZoom), the active view marked', () => {
+    const { container } = render(<IntegrationsHub data={BASE} />)
+    const nav1 = container.querySelector('nav[aria-label="Integrations views"]')
+    const links = Array.from(nav1.querySelectorAll('a')).map((a) => [a.textContent, a.getAttribute('href'), a.getAttribute('aria-current')])
+    expect(links).toEqual([
+      ['Overview', '/settings/integrations-hub', 'page'],
+      ['Health', '/settings/integrations-hub?view=health', null],
+    ])
+    cleanup()
+    const r2 = render(<IntegrationsHub data={BASE} showZoom />)
+    const hrefs = Array.from(r2.container.querySelectorAll('nav[aria-label="Integrations views"] a')).map((a) => a.getAttribute('href'))
+    expect(hrefs).toContain('/settings/integrations-hub?view=zoom')
+  })
+
+  it('a view renders the header, the switcher and the panel INSTEAD of the cards', () => {
+    const { container } = render(
+      <IntegrationsHub data={BASE} view="health" showZoom viewPanel={<p data-testid="panel">PANEL</p>} />,
+    )
+    expect(screen.getByTestId('panel')).toBeTruthy()
+    expect(container.textContent).toContain('Integrations')
+    expect(container.textContent).not.toContain('Status model')
+    expect(container.textContent).not.toContain('Membership source')
+    expect(container.querySelector('a[aria-current="page"]').textContent).toBe('Health')
+    expect(container.querySelector('[aria-label="Location scope"]')).toBeNull()
   })
 })

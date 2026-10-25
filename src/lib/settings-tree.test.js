@@ -235,3 +235,20 @@ describe('visibleSettingsTree()', () => {
     expect(totalIn(out)).toBe(totalIn(SETTINGS_TREE))
   })
 })
+
+describe('INTEGONE.3 — the hub is the only integrations row for health, numbers and Zoom', () => {
+  it('has no integration-health or zoom-contacts row, and the hub row says what it now holds', () => {
+    expect(ALL_ROWS.find((r) => r.id === 'integration-health')).toBeUndefined()
+    expect(ALL_ROWS.find((r) => r.id === 'zoom-contacts')).toBeUndefined()
+    expect(ALL_ROWS.some((r) => /integration-health|zoom-contacts|whatsapp-numbers/.test(r.href || ''))).toBe(false)
+    const hub = ALL_ROWS.find((r) => r.id === 'integrations-hub')
+    expect(hub.description).toMatch(/integration health/i)
+    expect(hub.description).toMatch(/WhatsApp numbers/)
+    expect(hub.description).toMatch(/Zoom phone directory/)
+  })
+
+  it('keeps the status page and the dead letters in the Integrations group', () => {
+    const ids = ALL_ROWS.filter((r) => r.groupId === 'integrations').map((r) => r.id)
+    expect(ids).toEqual(['integrations-hub', 'status-page', 'webhook-dead-letter'])
+  })
+})

@@ -54,6 +54,7 @@ import { Instagram as InstagramIcon } from '@/components/icons/InstagramIcon'
 import { buttonClasses } from '@/components/ui'
 import IntegrationsHubDrawer from './IntegrationsHubDrawer'
 import XeroCallbackNotice from './XeroCallbackNotice'
+import { HUB_PATH, hubViewHref } from '@/lib/integrations-hub-links'
 import { SECRET_MASK } from '@/lib/secret-keys'
 
 // ── status chips — the light-theme contrast recipe (bg-*-500/10 + text-*-700,
@@ -362,7 +363,7 @@ function BillingStripRow({ row, locationName, showLocation, canManageBilling = f
   )
 }
 
-function HubCard({ icon: Icon, title, locTag, provider, chip, dashed, muted, children }) {
+function HubCard({ icon: Icon, title, locTag, provider, chip, action, dashed, muted, children }) {
   return (
     <div className={`rounded-xl border p-4 flex flex-col gap-3 transition-colors ${
       dashed
@@ -388,6 +389,7 @@ function HubCard({ icon: Icon, title, locTag, provider, chip, dashed, muted, chi
           </h3>
           {provider && <p className="text-xs text-un1t-muted mt-0.5">{provider}</p>}
         </div>
+        {action}
         {chip}
       </div>
       {children}
@@ -475,6 +477,21 @@ export function canOpenFromUrl(data, isMaster, cardKey, locationId) {
   }
 }
 
+/**
+ * INTEGONE.3 — the organisation `?manage=whatsapp-numbers[&org=<id>]` opens
+ * the numbers drawer for: the named one when the viewer administers it, else
+ * (no `org` given) their only managed organisation, or the first of several.
+ * A named organisation they do not administer opens nothing. Pure.
+ *
+ * @param {Array<{id: string}>} managedOrgs
+ * @param {string|null} orgId
+ */
+export function pickManagedOrg(managedOrgs, orgId) {
+  const list = managedOrgs || []
+  if (orgId) return list.find((o) => o.id === orgId) || null
+  return list[0] || null
+}
+
 const DOT = {
   error: 'bg-red-600',
   warning: 'bg-amber-600',
@@ -483,7 +500,22 @@ const DOT = {
 
 // canManageBilling — C18 ORGROLE.1: "Manage plan" opens /settings/billing,
 // which is for organisation admins only; the page passes isActiveOrgAdmin.
-export default function IntegrationsHub({ data: initialData, isMaster = false, canManageBilling = false }) {
+//
+// INTEGONE.3 — `view` ('overview' | 'health' | 'zoom'): any other view renders
+// this header and the view switcher around `viewPanel` (a server-rendered node
+// the page supplies) INSTEAD of the cards. `showZoom` shows the Zoom tab (the
+// page mirrors the panel's own organisation gate). `managedOrgs` are the
+// organisations the viewer administers, each { id, name, locations }: the
+// WhatsApp card offers an "Organisation numbers" button for each.
+export default function IntegrationsHub({
+  data: initialData,
+  isMaster = false,
+  canManageBilling = false,
+  view = 'overview',
+  viewPanel = null,
+  showZoom = false,
+  managedOrgs = [],
+}) {
   const [scope, setScope] = useState('all')
   // The hub payload is held in state so a save inside the Manage drawer can
   // re-grade in place: after connect/disconnect the drawer's onChanged fires
@@ -492,7 +524,8 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
   // strip without a full navigation. Last-good is kept on a failed refetch.
   const [data, setData] = useState(initialData)
   // The per-card Manage drawer. Keyed by (cardKey, locationId) — Ads/IG are
-  // per-location, so the drawer always targets one location's connection.
+  // per-location, so the drawer always targets one location's connection —
+  // except `whatsapp-numbers`, which is organisation-level: { cardKey, orgId }.
   const [managing, setManaging] = useState(null)
 
   // INTEGONE.1 — a hosted tab that saves with router.refresh() re-renders this
@@ -516,8 +549,18 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
   const pathname = usePathname()
   const manageParam = searchParams?.get('manage') || null
   const locationParam = searchParams?.get('location') || null
+  const orgParam = searchParams?.get('org') || null
   const handledParams = useRef(null)
   useEffect(() => {
+    // INTEGONE.3 — the organisation numbers drawer takes `org`, not `location`.
+    if (manageParam === 'whatsapp-numbers') {
+      const org = pickManagedOrg(managedOrgs, orgParam)
+      const numbersKey = `whatsapp-numbers|${org ? org.id : `none:${orgParam || ''}`}`
+      if (numbersKey === handledParams.current) return
+      handledParams.current = numbersKey
+      if (org) setManaging({ cardKey: 'whatsapp-numbers', orgId: org.id })
+      return
+    }
     const key = manageParam && locationParam ? `${manageParam}|${locationParam}` : null
     if (key === handledParams.current) return
     handledParams.current = key
@@ -525,9 +568,9 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
     if (canOpenFromUrl(data, isMaster, manageParam, locationParam)) {
       setManaging({ cardKey: manageParam, locationId: locationParam })
     }
-  }, [manageParam, locationParam, data, isMaster])
+  }, [manageParam, locationParam, orgParam, data, isMaster, managedOrgs])
 
-  // Closing clears the drawer's params (any others, such as the Xero callback
+  // Closing clears the drawer's params (manage, location, org; any others, such as the Xero callback
   // codes, are left alone). Held in refs so onClose keeps one identity while
   // the drawer is open: the drawer's focus trap re-arms when it changes.
   const navRef = useRef({ searchParams, router, pathname })
@@ -535,10 +578,11 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
   const closeDrawer = useCallback(() => {
     setManaging(null)
     const { searchParams: sp, router: r, pathname: path } = navRef.current
-    if (!sp || !(sp.get('manage') || sp.get('location'))) return
+    if (!sp || !(sp.get('manage') || sp.get('location') || sp.get('org'))) return
     const next = new URLSearchParams(sp.toString())
     next.delete('manage')
     next.delete('location')
+    next.delete('org')
     const qs = next.toString()
     r?.replace(qs ? `${path}?${qs}` : (path || '/settings/integrations-hub'), { scroll: false })
   }, [])
@@ -611,18 +655,61 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
   // one site's name under "All locations" (HUBREAD.1), so it counts.
   const connTag = (arr, fallback) => (arr.length && !isUnread(arr) ? nameById[arr[0].locationId] : fallback)
 
+  // ── Header + view switcher (INTEGONE.3) ── shared by every view.
+  // Server-rendered-style Links (a view is a shareable URL), underlined like
+  // the section strip on /settings/locations/[id].
+  const viewTabs = [
+    { key: 'overview', label: 'Overview', href: HUB_PATH },
+    { key: 'health', label: 'Health', href: hubViewHref('health') },
+    ...(showZoom ? [{ key: 'zoom', label: 'Zoom directory', href: hubViewHref('zoom') }] : []),
+  ]
+  const header = (
+    <>
+      <div className="text-xs text-un1t-muted mb-1">Settings <span className="text-un1t-subtle font-medium">/ Integrations</span></div>
+      <div className="mb-3">
+        <h2 className="text-2xl font-bold">Integrations</h2>
+        <p className="text-sm text-un1t-subtle mt-0.5 max-w-xl">
+          Connect the tools your gym runs on. Connections belong to a location, so each site can run its own accounts.
+        </p>
+      </div>
+      <nav aria-label="Integrations views" className="flex border-b border-un1t-border overflow-x-auto mb-4">
+        {viewTabs.map((t) => (
+          <Link
+            key={t.key}
+            href={t.href}
+            aria-current={view === t.key ? 'page' : undefined}
+            className={`flex-shrink-0 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              view === t.key
+                ? 'border-un1t-text text-un1t-text'
+                : 'border-transparent text-un1t-subtle hover:text-un1t-text'
+            }`}
+          >
+            {t.label}
+          </Link>
+        ))}
+      </nav>
+    </>
+  )
+
+  if (view !== 'overview') {
+    return (
+      <div className="p-8 max-w-6xl">
+        {header}
+        {viewPanel}
+      </div>
+    )
+  }
+
+  // The organisation-numbers buttons the WhatsApp card header carries: the
+  // organisations the viewer administers, narrowed to the scoped location.
+  const numberOrgs = (managedOrgs || []).filter((o) => scope === 'all' || (o.locations || []).some((l) => l.id === scope))
+
   return (
     <RetryContext.Provider value={{ retry: retryHub, ...retryState }}>
     <div className="p-8 max-w-6xl">
       {/* ── Header ── */}
-      <div className="text-xs text-un1t-muted mb-1">Settings <span className="text-un1t-subtle font-medium">/ Integrations</span></div>
-      <div className="flex flex-wrap items-end justify-between gap-4 mb-2">
-        <div>
-          <h2 className="text-2xl font-bold">Integrations</h2>
-          <p className="text-sm text-un1t-subtle mt-0.5 max-w-xl">
-            Connect the tools your gym runs on. Connections belong to a location, so each site can run its own accounts.
-          </p>
-        </div>
+      {header}
+      <div className="flex flex-wrap items-end justify-end gap-4 mb-2">
         <div className="flex items-center gap-2">
           <span className="text-[10px] uppercase tracking-wider text-un1t-muted">Location</span>
           <div className="inline-flex gap-0.5 rounded-lg border border-un1t-border bg-white p-0.5" role="group" aria-label="Location scope">
@@ -850,6 +937,20 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
           locTag={scopeTag(whatsapp)}
           provider="Meta Cloud API · Embedded Signup"
           chip={<StatusChip status={worstOf(whatsapp.map((r) => r.status))} />}
+          action={numberOrgs.length > 0 ? (
+            <span className="inline-flex flex-wrap items-center gap-1.5">
+              {numberOrgs.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => setManaging({ cardKey: 'whatsapp-numbers', orgId: o.id })}
+                  className={linkBtn()}
+                >
+                  {managedOrgs.length > 1 && o.name ? `Organisation numbers · ${o.name}` : 'Organisation numbers'}
+                </button>
+              ))}
+            </span>
+          ) : null}
         >
           {isUnread(whatsapp) ? (
             <UnreadableNote what="WhatsApp" />
@@ -1345,6 +1446,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
         WhatsApp numbers, the climate device table and the BCA document slots. Secrets stay
         write-only (leave a field blank to keep it). Email delivery, billing and Shelly plugs
         open the page that owns them. The plan &amp; wallet strip itself is read-only.
+        Integration health and the Zoom phone directory are the tabs above.
       </p>
 
       {/* Per-card Manage drawer (INTEGONE.1): hosts the location's full tab
@@ -1353,10 +1455,11 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
           so a different card or location mounts a fresh drawer. */}
       {managing && (
         <IntegrationsHubDrawer
-          key={`${managing.cardKey}|${managing.locationId}`}
+          key={`${managing.cardKey}|${managing.locationId || managing.orgId}`}
           cardKey={managing.cardKey}
           locationId={managing.locationId}
           locationName={nameById[managing.locationId] || null}
+          organization={managing.orgId ? (managedOrgs || []).find((o) => o.id === managing.orgId) || null : null}
           refreshKey={refreshKey}
           onClose={closeDrawer}
           onChanged={refetchHub}

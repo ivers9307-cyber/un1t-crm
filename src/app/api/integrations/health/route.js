@@ -1,5 +1,6 @@
 // GET /api/integrations/health — consolidated integration status rows
-// (FEAT-INTEG-HEALTH.1). Backs the /settings/integration-health pane and is
+// (FEAT-INTEG-HEALTH.1). Backs the hub's Health view (/settings/integrations-hub?view=health, which now
+// renders server-side from the same aggregator) and is
 // available for a future client refresh / external monitor. Session-guarded,
 // settings permission; the aggregator scopes per-location tables by the active
 // location.

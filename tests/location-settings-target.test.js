@@ -56,6 +56,7 @@ const REVIEWED = {
   '/api/whatsapp/templates/upload-media/sign': 'The carousel image uploader passes location_id in the body.',
   '/api/whatsapp/templates/upload-media': 'The carousel image uploader passes location_id in the body.',
   '/api/xero/disconnect': 'XeroLocationCard passes location_id in the body.',
+  '/api/organizations/${organizationId}/whatsapp/embedded-signup': 'INTEGONE.3: the hub drawer\'s organisation-level numbers tab (OrgWhatsAppNumbers); the organisation is in the path and the route asserts organisation admin on it. It acts on no studio.',
   '/api/xero/select-tenant': 'XeroLocationCard passes location_id (query on GET, body on POST).',
 }
 
@@ -63,6 +64,8 @@ const REVIEWED = {
 const REVIEWED_DYNAMIC = {
   'src/components/customer-agent/ConnectionsSection.jsx :: url': 'url is `/api/locations/${locationId}/channels[/${igConn.id}]`, built on the lines above the fetch.',
   'src/components/settings/EmailMailboxesCard.jsx :: url': 'fetch(url) inside send(); every send() call passes `/api/locations/${locationId}/email/…`.',
+  'src/components/settings/whatsapp/OrgWhatsAppNumbers.jsx :: ${base}/numbers': 'INTEGONE.3: base is `/api/organizations/${organizationId}/whatsapp`, the organisation in the path (organisation admin; no studio is acted on).',
+  'src/components/settings/whatsapp/OrgWhatsAppNumbers.jsx :: ${base}/numbers/${number.id}': 'INTEGONE.3: same base, one number of that organisation by id.',
   'src/components/settings/IntegrationsHubDrawer.jsx :: hubLocationContextUrl': 'hubLocationContextUrl(locationId) is `/api/integrations/hub/locations/${locationId}`, the drawer\'s own location in the path.',
 }
 

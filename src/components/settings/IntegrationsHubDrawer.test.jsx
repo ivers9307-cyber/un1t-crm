@@ -30,6 +30,7 @@ vi.mock('./integrations/BcaIntegrationTab', () => stub('bca'))
 vi.mock('./integrations/AdsIntegrationTab', () => stub('ads'))
 vi.mock('./MembershipSourceCard', () => stub('membership-source'))
 vi.mock('@/components/customer-agent/ConnectionsSection', () => stub('instagram'))
+vi.mock('./whatsapp/OrgWhatsAppNumbers', () => stub('whatsapp-numbers'))
 
 import IntegrationsHubDrawer from './IntegrationsHubDrawer.jsx'
 
@@ -271,5 +272,34 @@ describe('IntegrationsHubDrawer — refresh and accessibility', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(onClose).toHaveBeenCalledTimes(2)
     await screen.findByTestId('hosted-glofox')
+  })
+})
+
+// INTEGONE.3 — the organisation's WhatsApp numbers: org-level, so no location
+// context is read; the hub hands the drawer the organisation it administers.
+describe('IntegrationsHubDrawer — whatsapp-numbers (INTEGONE.3)', () => {
+  const ORG = { id: 'org-1', name: 'UN1T Group', locations: [{ id: LOC, name: 'Stillorgan' }] }
+
+  it('makes no context fetch and mounts OrgWhatsAppNumbers with the organisation', () => {
+    global.fetch = vi.fn()
+    render(<IntegrationsHubDrawer cardKey="whatsapp-numbers" organization={ORG} onClose={() => {}} onChanged={() => {}} />)
+    expect(global.fetch).not.toHaveBeenCalled()
+    expect(screen.getByTestId('hosted-whatsapp-numbers')).toBeTruthy()
+    expect(seen['whatsapp-numbers']).toEqual({
+      organizationId: 'org-1',
+      organizationName: 'UN1T Group',
+      locations: [{ id: LOC, name: 'Stillorgan' }],
+    })
+    // No loading spinner, and the header names the tab and the organisation.
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByRole('dialog').textContent).toMatch(/Manage WhatsApp numbers/)
+    expect(screen.getByRole('dialog').textContent).toMatch(/UN1T Group/)
+  })
+
+  it('mounts nothing for an organisation the viewer does not administer', () => {
+    global.fetch = vi.fn()
+    render(<IntegrationsHubDrawer cardKey="whatsapp-numbers" organization={null} onClose={() => {}} onChanged={() => {}} />)
+    expect(screen.queryByTestId('hosted-whatsapp-numbers')).toBeNull()
+    expect(global.fetch).not.toHaveBeenCalled()
   })
 })

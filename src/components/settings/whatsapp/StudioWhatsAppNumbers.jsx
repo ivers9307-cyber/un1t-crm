@@ -2,8 +2,8 @@
 
 // WAORGNUMBER.1 (Task 6, R8) — one studio's view of the ORGANISATION's WhatsApp
 // numbers: each has a switch ("on at this studio") and, once on, a default
-// radio. Numbers are added, edited and removed on the organisation's page
-// (/settings/whatsapp-numbers); this only decides which of them THIS studio
+// radio. Numbers are added, edited and removed in the hub's WhatsApp numbers
+// drawer (the organisation level); this only decides which of them THIS studio
 // uses. Shared by the studio's WhatsApp tab and the Integrations Hub drawer.
 //
 //   GET/PUT /api/locations/[id]/whatsapp/numbers  (owner / manager / master at the studio)

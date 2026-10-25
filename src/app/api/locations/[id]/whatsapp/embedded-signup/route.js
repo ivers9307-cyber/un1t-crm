@@ -7,7 +7,7 @@
 //        instead of throwing.
 // POST → RETIRED (WAORGNUMBER.1): Embedded Signup runs at the organisation
 //        now — POST /api/organizations/[id]/whatsapp/embedded-signup. Answers
-//        410 with a pointer to /settings/whatsapp-numbers.
+//        410 with a pointer to the hub's WhatsApp numbers drawer (ORG_NUMBERS_PAGE).
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
