@@ -15,6 +15,16 @@ import { CreateSchema, GET } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 
+describe('events CreateSchema — CHARITY.9 charity day', () => {
+  const base = { location_id: '00000000-0000-0000-0000-000000000001', name: 'Charity Day', race_date: '2026-08-01', waves: [{ start_time: '09:00' }] }
+  it('accepts the switch and settings, and validates them', () => {
+    const parsed = CreateSchema.parse({ ...base, charity_enabled: true, charity: { name: 'MS Ireland', presets_cents: [1000] } })
+    expect(parsed.charity_enabled).toBe(true)
+    expect(parsed.charity.name).toBe('MS Ireland')
+    expect(() => CreateSchema.parse({ ...base, charity: { min_cents: 900, max_cents: 100 } })).toThrow()
+  })
+})
+
 // EVENTS-EMAILCFG.1 — per-event email config on the events create schema.
 // The confirmation/reminder subject + intro copy and the two full-template
 // pointers are all optional + nullable. Behaviour-preserving: an event

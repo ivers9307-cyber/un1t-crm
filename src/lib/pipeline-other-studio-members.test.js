@@ -8,6 +8,7 @@ vi.mock('./log.js', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn
 import { radarReadsFor } from './membership/reads/index.js'
 import {
   loadActiveElsewhere, leavesBoard, OWN_STUDIO_MEMBER_SLUGS,
+  TRAINING_WINDOW_DAYS, TRAINING_LOOKAHEAD_DAYS, ELSEWHERE_MEMBER, ELSEWHERE_TRAINING,
 } from './pipeline-other-studio-members.js'
 
 const ORG = 'org-1'
@@ -27,6 +28,8 @@ function makeDb(seed = {}, { fail = [] } = {}) {
         if (k === 'eq') return r[c] === v
         if (k === 'neq') return r[c] !== v
         if (k === 'in') return v.includes(r[c])
+        if (k === 'gte') return r[c] >= v
+        if (k === 'lte') return r[c] <= v
         return true
       }))
       if (s.range) rows = rows.slice(s.range[0], s.range[1] + 1)
@@ -37,6 +40,8 @@ function makeDb(seed = {}, { fail = [] } = {}) {
       eq(c, v) { s.filters.push(['eq', c, v]); return api },
       neq(c, v) { s.filters.push(['neq', c, v]); return api },
       in(c, v) { s.filters.push(['in', c, v]); return api },
+      gte(c, v) { s.filters.push(['gte', c, v]); return api },
+      lte(c, v) { s.filters.push(['lte', c, v]); return api },
       order() { return api },
       range(a, b) { s.range = [a, b]; return api },
       then(res, rej) { return Promise.resolve().then(run).then(res, rej) },
@@ -69,6 +74,20 @@ const answers = (contactIds) => ({ activeMemberContactIds: vi.fn().mockResolvedV
 
 beforeEach(() => { vi.mocked(radarReadsFor).mockReset() })
 
+describe('leavesBoard (pure) — PIPEEXCL.2 reasons', () => {
+  it('training elsewhere leaves a prospect stage, unless they train here too', () => {
+    expect(leavesBoard('new_lead', true, { reason: ELSEWHERE_TRAINING })).toBe(true)
+    expect(leavesBoard('dormant', true, { reason: ELSEWHERE_TRAINING, trainsHere: false })).toBe(true)
+    expect(leavesBoard('new_lead', true, { reason: ELSEWHERE_TRAINING, trainsHere: true })).toBe(false)
+    expect(leavesBoard('trial_done', true, { reason: ELSEWHERE_TRAINING, trainsHere: true })).toBe(false)
+  })
+  it('a membership elsewhere leaves even when they train here; a customer stage here always keeps', () => {
+    expect(leavesBoard('first_class', true, { reason: ELSEWHERE_MEMBER, trainsHere: true })).toBe(true)
+    expect(leavesBoard('member', true, { reason: ELSEWHERE_MEMBER, trainsHere: true })).toBe(false)
+    expect(leavesBoard('pack_member', true, { reason: ELSEWHERE_TRAINING })).toBe(false)
+  })
+})
+
 describe('leavesBoard (pure)', () => {
   it('an active member elsewhere leaves a prospect stage', () => {
     for (const slug of ['new_lead', 'first_class', 'second_class', 'trial_done', 'dormant', 'cold_lead', 'classpass', 'gympass']) {
@@ -99,7 +118,8 @@ describe('loadActiveElsewhere', () => {
     expect([...out.contactIds].sort()).toEqual(['c-still-1', 'c-still-2'])
     expect(vi.mocked(radarReadsFor).mock.calls.map((c) => c[1]).sort()).toEqual([STILL, TEST])
     expect(still.activeMemberContactIds).toHaveBeenCalledWith(db, STILL)
-    expect(out.studios).toEqual([{ locationId: STILL, members: 2 }])
+    expect(out.studios).toEqual([{ locationId: STILL, members: 2, training: 0 }])
+    expect(out.reasons.get('c-still-1')).toBe(ELSEWHERE_MEMBER)
   })
 
   it('Stillorgan board: reads Hatch (un1t.online) the same way', async () => {
@@ -137,6 +157,115 @@ describe('loadActiveElsewhere', () => {
     expect(out.ok).toBe(true)
     expect(out.contactIds.size).toBe(0)
     expect(out.studios.map((s) => s.locationId)).toEqual([STILL])
+  })
+
+  // PIPEEXCL.2 — training at another studio (a live class booking there)
+  // counts too, from either platform's class_bookings rows.
+  describe('PIPEEXCL.2 — training at another studio', () => {
+    const NOW = Date.parse('2026-10-22T12:00:00Z')
+    const daysFromNow = (d) => new Date(NOW + d * 86_400_000).toISOString()
+    const booking = (id, contact_id, days, status = 'ATTENDED', location_id = HATCH) => ({ id, location_id, contact_id, status, starts_at: daysFromNow(days) })
+
+    it('a Stillorgan board: a Hatch trialer (attended 10 days ago) and a Hatch booker (class in 5 days) are active elsewhere, reason training', async () => {
+      seam()
+      const { db } = makeDb({
+        locations: LOCATIONS,
+        person_group_members: [],
+        class_bookings: [
+          booking('b1', 'c-trialer', -10, 'ATTENDED'),
+          booking('b2', 'c-booker', 5, 'BOOKED'),
+          booking('b3', 'c-noshow', -3, 'NO_SHOW'),
+          booking('b4', 'c-waiting', 2, 'WAITING'),
+        ],
+      })
+      const out = await loadActiveElsewhere(db, STILL, { now: NOW })
+      expect(out.ok).toBe(true)
+      expect([...out.contactIds].sort()).toEqual(['c-booker', 'c-noshow', 'c-trialer', 'c-waiting'])
+      for (const id of out.contactIds) expect(out.reasons.get(id)).toBe(ELSEWHERE_TRAINING)
+      expect(out.studios).toEqual([{ locationId: HATCH, members: 0, training: 4 }])
+      expect(out.trainingHere.size).toBe(0)
+    })
+
+    it('who trains HERE is answered too (Shara: a class at each studio stays on both boards)', async () => {
+      seam()
+      const { db } = makeDb({
+        locations: LOCATIONS,
+        person_group_members: [],
+        class_bookings: [booking('b1', 'c-shara', -5, 'ATTENDED', HATCH), booking('b2', 'c-shara', -12, 'BOOKED', STILL), booking('b3', 'c-gone', -40, 'CANCELLED', STILL)],
+      })
+      const out = await loadActiveElsewhere(db, STILL, { now: NOW })
+      expect([...out.contactIds]).toEqual(['c-shara'])
+      expect([...out.trainingHere]).toEqual(['c-shara'])
+      expect(leavesBoard('dormant', true, { reason: out.reasons.get('c-shara'), trainsHere: out.trainingHere.has('c-shara') })).toBe(false)
+    })
+
+    it('a cancelled booking, one older than the window and one past the lookahead do not count', async () => {
+      seam()
+      const { db } = makeDb({
+        locations: LOCATIONS,
+        person_group_members: [],
+        class_bookings: [
+          booking('b1', 'c-cancelled', -2, 'CANCELLED'),
+          booking('b2', 'c-late', -1, 'LATE_CANCELLED'),
+          booking('b3', 'c-old', -(TRAINING_WINDOW_DAYS + 1), 'ATTENDED'),
+          booking('b4', 'c-far', TRAINING_LOOKAHEAD_DAYS + 1, 'BOOKED'),
+          booking('b5', 'c-edge', -TRAINING_WINDOW_DAYS, 'ATTENDED'),
+        ],
+      })
+      const out = await loadActiveElsewhere(db, STILL, { now: NOW })
+      expect([...out.contactIds]).toEqual(['c-edge'])
+    })
+
+    it('the booking reads are scoped per studio (this one, then each other) and to the window', async () => {
+      seam()
+      const { db, log } = makeDb({ locations: LOCATIONS, person_group_members: [], class_bookings: [booking('b1', 'c-here', -1, 'ATTENDED', STILL)] })
+      const out = await loadActiveElsewhere(db, STILL, { now: NOW })
+      expect(out.contactIds.size).toBe(0)
+      expect([...out.trainingHere]).toEqual(['c-here'])
+      const reads = log.filter((l) => l.table === 'class_bookings')
+      expect(reads.map((r) => r.filters[0])).toEqual([['eq', 'location_id', STILL], ['eq', 'location_id', HATCH], ['eq', 'location_id', TEST]])
+      for (const read of reads) {
+        expect(read.cols).toBe('contact_id, status')
+        expect(read.filters.slice(1)).toEqual([
+          ['gte', 'starts_at', daysFromNow(-TRAINING_WINDOW_DAYS)],
+          ['lte', 'starts_at', daysFromNow(TRAINING_LOOKAHEAD_DAYS)],
+        ])
+      }
+    })
+
+    it('a membership outranks a booking as the reason', async () => {
+      seam({ hatch: answers(['c-both']) })
+      const { db } = makeDb({ locations: LOCATIONS, person_group_members: [], class_bookings: [booking('b1', 'c-both', -1)] })
+      const out = await loadActiveElsewhere(db, STILL, { now: NOW })
+      expect([...out.contactIds]).toEqual(['c-both'])
+      expect(out.reasons.get('c-both')).toBe(ELSEWHERE_MEMBER)
+      expect(out.studios).toEqual([{ locationId: HATCH, members: 1, training: 1 }])
+    })
+
+    it('a person-group sibling of a trainer is training elsewhere too, and a member sibling outranks it', async () => {
+      seam({ hatch: answers(['c-member']) })
+      const { db } = makeDb({
+        locations: LOCATIONS,
+        class_bookings: [booking('b1', 'c-trainer', -1)],
+        person_group_members: [
+          { id: 'm1', group_id: 'g1', contact_id: 'c-trainer' },
+          { id: 'm2', group_id: 'g1', contact_id: 'c-trainer-twin' },
+          { id: 'm3', group_id: 'g2', contact_id: 'c-member' },
+          { id: 'm4', group_id: 'g2', contact_id: 'c-member-twin' },
+        ],
+      })
+      const out = await loadActiveElsewhere(db, STILL, { now: NOW })
+      expect([...out.contactIds].sort()).toEqual(['c-member', 'c-member-twin', 'c-trainer', 'c-trainer-twin'])
+      expect(out.reasons.get('c-trainer-twin')).toBe(ELSEWHERE_TRAINING)
+      expect(out.reasons.get('c-member-twin')).toBe(ELSEWHERE_MEMBER)
+    })
+
+    it('the bookings read failing is never "nobody trains there"', async () => {
+      seam()
+      const { db } = makeDb({ locations: LOCATIONS }, { fail: ['class_bookings'] })
+      const out = await loadActiveElsewhere(db, STILL, { now: NOW })
+      expect(out).toMatchObject({ ok: false, reason: 'bookings_unreadable', studioId: STILL })
+    })
   })
 
   it('a location with no organisation has no other studios: ok, nobody', async () => {

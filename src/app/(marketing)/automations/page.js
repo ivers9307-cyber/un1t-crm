@@ -16,6 +16,7 @@ import AutomationsView from '@/components/automations/AutomationsView'
 import AutomationsFlowList from '@/components/automations/AutomationsFlowList'
 import ClassClimateCard from '@/components/automations/ClassClimateCard'
 import BathroomClimateCard from '@/components/automations/BathroomClimateCard'
+import ScreenModeCard from '@/components/automations/ScreenModeCard'
 
 export const dynamic = 'force-dynamic'
 
@@ -40,13 +41,19 @@ export default async function AutomationsPage() {
   const db = createServerClient()
 
   // Curated toggle cards (only when the user has the automations perm).
-  // class_climate + bathroom_climate are rendered by their own cards (they
-  // need config), so they're filtered out of the generic toggle list.
+  // class_climate, bathroom_climate + screen_mode are rendered by their own
+  // cards (they need config), so they're filtered out of the generic toggle list.
   let cards = []
   let climate = null
   let bathroom = null
   let climateDevices = []
   let glofox = null
+  // SCREENMODE.12 — the class-screens card sits OUTSIDE the membership-source
+  // gate (Hatch's source, un1t.online, declares no schedule capability, so
+  // every gated card is hidden there), so it gates itself on what is read here.
+  let screens = []
+  let hasTimetable = false
+  let screenMode = null
   if (canCurated) {
     // PROFILESPREAD.1 — Glofox presence read by id (the user object no
     // longer carries settings). Booleans only reach the client; a failed
@@ -64,7 +71,7 @@ export default async function AutomationsPage() {
     const byKey = Object.fromEntries((rows || []).map((r) => [r.automation_key, r]))
 
     cards = AUTOMATIONS
-      .filter((a) => a.key !== 'class_climate' && a.key !== 'bathroom_climate')
+      .filter((a) => a.key !== 'class_climate' && a.key !== 'bathroom_climate' && a.key !== 'screen_mode')
       .map((a) => ({
         key: a.key, label: a.label, description: a.description,
         supportsBackfill: a.supportsBackfill, reviewBase: a.reviewBase,
@@ -82,6 +89,38 @@ export default async function AutomationsPage() {
     climate = { enabled: Boolean(row?.enabled), config: row?.config || {} }
     const bathroomRow = byKey['bathroom_climate']
     bathroom = { enabled: Boolean(bathroomRow?.enabled), config: bathroomRow?.config || {} }
+
+    const screenLocationId = location?.id || NO_LOCATION
+    const [screensRes, timetableRes] = await Promise.all([
+      db
+        .from('fleet_devices')
+        .select('device_name, label')
+        .eq('location_id', screenLocationId)
+        .eq('role', 'screen')
+        .order('device_name'),
+      db
+        .from('class_occurrences')
+        .select('id')
+        .eq('location_id', screenLocationId)
+        .is('cancelled_at', null)
+        .gte('starts_at', new Date().toISOString())
+        .limit(1),
+    ])
+    if (screensRes.error) {
+      // No card rather than a card that offers screens we could not list.
+      logError('automations', 'screens read failed; the class screens card is not shown', { code: screensRes.error.code || null, locationId: screenLocationId })
+    } else {
+      screens = screensRes.data || []
+    }
+    if (timetableRes.error) {
+      // Treated as "no timetable": the card then cannot be enabled, which is
+      // the safe side of an unreadable answer.
+      logError('automations', 'timetable read failed; treated as no timetable', { code: timetableRes.error.code || null, locationId: screenLocationId })
+    } else {
+      hasTimetable = (timetableRes.data || []).length > 0
+    }
+    const screenRow = byKey['screen_mode']
+    screenMode = { enabled: Boolean(screenRow?.enabled), config: screenRow?.config || {} }
   }
 
   // Custom flows (only when the user has email/whatsapp).
@@ -170,6 +209,19 @@ export default async function AutomationsPage() {
             />
           </div>
         </MembershipSourceGate>
+      )}
+      {/* SCREENMODE.12 — outside the gate on purpose; see the reads above. */}
+      {canCurated && screens.length > 0 && (
+        <div className="space-y-4">
+          <ScreenModeCard
+            locationId={location?.id || null}
+            timezone={zoneOfLocation(location)}
+            screens={screens}
+            hasTimetable={hasTimetable}
+            initialEnabled={screenMode?.enabled}
+            initialConfig={screenMode?.config}
+          />
+        </div>
       )}
       {canDevices && (
         <div className="space-y-4">

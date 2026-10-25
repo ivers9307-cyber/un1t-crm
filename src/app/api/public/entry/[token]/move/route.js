@@ -10,7 +10,10 @@
 // is ignored: a customer never forces a full time and never names a price.
 //
 // The same rules staff use (checkMove / moveRegistration), plus: only a
-// confirmed entry on an event that has not happened yet. Then:
+// confirmed entry on an event that has not happened yet, and only while the
+// event's entry policy allows a customer date change (the reschedule switch
+// and the hours-before cutoff; ENTRYPOLICY.1: refused with the operator's own
+// copy, codes `disabled` / `cutoff`). Then:
 //   - equal or cheaper target: moved at once, recorded as actor 'customer'
 //     (mig 712), the new tickets emailed. Nothing is refunded.
 //     → { moved: true, registration, notified }
@@ -41,7 +44,7 @@ import { readRegistrationForMove, checkMove, moveRegistration, moveLocationIds }
 import { entryLeadName } from '@/lib/registration-entry'
 import { entryMoveBlock, customerMoveMessage, CUSTOMER_MOVE_STATUS } from '@/lib/registration-move-public'
 import { createGapPayment, closeCustomerGapLinks } from '@/lib/race-gap-payment'
-import { eventToday } from '@/lib/event-day'
+import { eventToday, eventZone } from '@/lib/event-day'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 export const runtime = 'nodejs'
@@ -95,8 +98,10 @@ export async function POST(request, props) {
   // Unpaid, cancelled, past: refused before any rule runs. A check-in is
   // the rules' own checked_in below (they read it fresh).
   // TZ.9: "past" by the entry's own event's studio day.
-  const block = entryMoveBlock({ registration: reg, checkinCount: 0, today: eventToday(reg.race) })
-  if (block) return refusal(block.code)
+  const nowMs = Date.now()
+  const block = entryMoveBlock({ registration: reg, checkinCount: 0, today: eventToday(reg.race, nowMs), nowMs, zone: eventZone(reg.race) })
+  // The block's own sentence: for the entry policy it is the operator's copy.
+  if (block) return NextResponse.json({ success: false, error: block.code, message: block.message }, { status: CUSTOMER_MOVE_STATUS[block.code] || 400 })
 
   const allowedLocationIds = await entryOrganisationLocations(db, reg)
   if (!allowedLocationIds) return refusal('load_failed')

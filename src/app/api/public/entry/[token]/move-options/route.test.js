@@ -92,7 +92,9 @@ describe('GET /api/public/entry/[token]/move-options', () => {
   it('TZ.9: "past" is by the event studio\'s day, not Dublin\'s', async () => {
     // 2026-11-01T03:30Z: Dublin is Sunday 1 Nov; New York is Saturday 31 Oct 23:30.
     vi.setSystemTime(new Date('2026-11-01T03:30:00Z'))
-    const on = (timezone) => ({ ...REG, race: { ...REG.race, race_date: '2026-10-31', locations: { ...REG.race.locations, timezone } } })
+    // ENTRYPOLICY.1: a race today is inside the default 48 h cutoff; this test
+    // is about the DAY, so the event carries no cutoff.
+    const on = (timezone) => ({ ...REG, race: { ...REG.race, race_date: '2026-10-31', entry_policy: { cutoff_hours: 0 }, locations: { ...REG.race.locations, timezone } } })
     readRegistrationForMove.mockResolvedValue({ registration: on('America/New_York'), error: null })
     expect((await (await GET(get(), props())).json()).data.can_move).toBe(true)
     readRegistrationForMove.mockResolvedValue({ registration: on('Europe/Dublin'), error: null })
@@ -113,3 +115,18 @@ describe('GET /api/public/entry/[token]/move-options — the organisation fence 
     expect(listMoveTargets).not.toHaveBeenCalled()
   })
 })
+
+// ENTRYPOLICY.1 — the policy block answers can_move false with the operator
+// copy and no options, and never looks the options up.
+describe('GET /api/public/entry/[token]/move-options — the entry policy', () => {
+  it('inside the default cutoff on the eve of the race', async () => {
+    vi.setSystemTime(new Date('2026-10-17T12:00:00Z'))
+    readRegistrationForMove.mockResolvedValue({ registration: { ...REG, wave: { start_time: '11:00:00' } }, error: null })
+    const body = await (await GET(get(), props())).json()
+    expect(body.data.can_move).toBe(false)
+    expect(body.data.move_blocked_reason).toMatch(/48 hours before the start time/)
+    expect(body.data.options).toEqual([])
+    expect(listMoveTargets).not.toHaveBeenCalled()
+  })
+})
+

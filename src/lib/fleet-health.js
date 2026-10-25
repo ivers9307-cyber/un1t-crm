@@ -13,6 +13,7 @@
 import { deriveBridgeStatus } from '@/lib/bridge-samples'
 import { isOvernight } from '@/lib/live-poll'
 import { timeLabelIn, PLATFORM_TZ, DEFAULT_TZ } from '@/lib/location-time'
+import { PLAN_POLL_SECONDS } from '@/lib/screen-mode'
 
 // Devices are identified as fleet members by this Tailscale ACL tag, set at
 // provisioning time by un1t-pi (`tailscale up --advertise-tags=tag:un1t-pi`).
@@ -772,4 +773,67 @@ export function decideAlert(graded, prior, nowMs = Date.now()) {
 
   // Still down, already told them.
   return { alert: null, row }
+}
+
+/**
+ * Re-arm alerts that reached nobody. Mutates each `a.row.alerted_at` in place,
+ * ready for the caller to persist.
+ *
+ * Re-arming differs by direction, and getting it wrong loses the alert.
+ * A failed DOWN notice needs alerted_at null, because the next tick sees
+ * an unchanged state and only re-alerts when nothing has been sent.
+ * A failed RECOVERY notice needs the OLD outage stamp back, because a
+ * recovery is announced only when a previous alert is on record —
+ * nulling it would make the device look like it had never been down.
+ *
+ * @param {Array<{ name: string, alert: 'down'|'recovered', row: { alerted_at: string|null } }>} alerts
+ * @param {Map<string, { alerted_at?: string|null }>} priorByName
+ */
+export function rollbackUndeliveredAlerts(alerts, priorByName) {
+  for (const a of alerts) {
+    a.row.alerted_at = a.alert === 'recovered'
+      ? (priorByName.get(a.name)?.alerted_at ?? null)
+      : null
+  }
+}
+
+// Android TV screens (fleet_devices.role = 'screen') are not on the tailnet, so
+// Tailscale never sees them. Their pulse is last_heartbeat_at, stamped each time
+// a box fetches its plan, and the box polls every PLAN_POLL_SECONDS (10 min).
+// The threshold is therefore two polls plus 5 minutes of slack (25 min): one
+// missed poll (a network blip, a slow response) must not page masters, and the
+// Pis' 15 minutes would do exactly that for a device that only speaks every 10.
+export const SCREEN_OFFLINE_AFTER_MS = 2 * PLAN_POLL_SECONDS * 1000 + 5 * 60_000
+
+/**
+ * Grade a screen on its plan-fetch heartbeat alone.
+ *
+ * A screen that has NEVER reported grades `ok` (not connected): a box that has
+ * been claimed but not yet switched on is not an outage, and paging for it
+ * would be the cry-wolf the offline patience exists to avoid. An unparseable
+ * stamp is treated the same way — an unknown must not end in an alert.
+ *
+ * Returns the shape decideAlert expects.
+ *
+ * @param {{ device_name: string, last_heartbeat_at: string|null }} fleetRow
+ * @param {number} nowMs
+ * @returns {{ name: string, state: 'ok'|'unreachable', detail: string, since: string|null, connected: boolean }}
+ */
+export function gradeScreen(fleetRow, nowMs = Date.now()) {
+  const name = fleetRow.device_name
+  const beatMs = fleetRow.last_heartbeat_at ? Date.parse(fleetRow.last_heartbeat_at) : NaN
+  if (!Number.isFinite(beatMs)) {
+    return { name, state: 'ok', detail: 'never reported', since: null, connected: false }
+  }
+  const age = nowMs - beatMs
+  if (age < SCREEN_OFFLINE_AFTER_MS) {
+    return { name, state: 'ok', detail: '', since: null, connected: true }
+  }
+  return {
+    name,
+    state: 'unreachable',
+    detail: `no heartbeat for ${Math.round(age / 60000)} min`,
+    since: fleetRow.last_heartbeat_at,
+    connected: false,
+  }
 }

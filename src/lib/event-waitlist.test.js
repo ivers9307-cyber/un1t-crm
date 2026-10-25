@@ -33,7 +33,7 @@ const { WhatsAppNumberMissingError } = await import('./whatsapp-number-missing')
 const { resolveCustomerBaseUrl } = await import('./tenant-host')
 const {
   eventHasRoom, isOfferDue, registrationWindowOpen, joinWaitlist, runWaitlistOffers,
-  claimWaitlistOnRegistration, claimWaitlistByEmail, sendWaitlistOffer, buildWaitlistJoinedEmail,
+  claimWaitlistOnRegistration, claimWaitlistByEmail, sendWaitlistOffer, buildWaitlistJoinedEmail, claimFellThrough,
 } = await import('./event-waitlist.js')
 const { signWaitlistClaimToken, verifyWaitlistClaimToken } = await import('./event-waitlist-tokens.js')
 
@@ -69,8 +69,20 @@ describe('eventHasRoom (the public route arithmetic, confirmed-only)', () => {
     expect(eventHasRoom({ ...RACE, waves: [{ id: 'w1', capacity: 1 }, { id: 'w3', capacity: null }] }, [confirmed('w1')])).toBe(true)
     expect(eventHasRoom({ ...RACE, waves: [] }, [])).toBe(true)
   })
-  it('counts only confirmed entries', () => {
-    expect(eventHasRoom(RACE, [confirmed('w1'), { wave_id: 'w2', status: 'pending_payment', team: { size: 1 } }])).toBe(true)
+  // ENTRYPOLICY.1 — an unpaid entry holds its place for the event's
+  // unpaid_hold_hours (default 48 h) and then stops counting; the row stays.
+  it('a fresh unpaid entry holds its place; a lapsed one does not; a confirmed one always does', () => {
+    const fresh = { wave_id: 'w2', status: 'pending_payment', registered_at: new Date(NOW - HOUR).toISOString(), team: { size: 1 } }
+    const lapsed = { wave_id: 'w2', status: 'pending_payment', registered_at: new Date(NOW - 49 * HOUR).toISOString(), team: { size: 1 } }
+    expect(eventHasRoom(RACE, [confirmed('w1'), fresh], NOW)).toBe(false)
+    expect(eventHasRoom(RACE, [confirmed('w1'), lapsed], NOW)).toBe(true)
+    expect(eventHasRoom({ ...RACE, entry_policy: { unpaid_hold_hours: 72 } }, [confirmed('w1'), lapsed], NOW)).toBe(false)
+    expect(eventHasRoom(RACE, [confirmed('w1'), { ...confirmed('w2'), registered_at: '2020-01-01T00:00:00Z' }], NOW)).toBe(false)
+  })
+  it('cancelled, no_show and placed rows never take a place', () => {
+    for (const status of ['cancelled', 'no_show', 'placed']) {
+      expect(eventHasRoom(RACE, [confirmed('w1'), { wave_id: 'w2', status, registered_at: new Date(NOW).toISOString(), team: { size: 1 } }], NOW)).toBe(true)
+    }
   })
   it('people mode counts heads: room for one more person', () => {
     const ev = { ...RACE, capacity_mode: 'people', waves: [{ id: 'w1', capacity: 4 }] }
@@ -549,3 +561,24 @@ describe('claimWaitlistOnRegistration', () => {
     expect(r).toMatchObject({ claimed: false, reason: 'write_failed' })
   })
 })
+
+// ENTRYPOLICY.1 — a claim on a lapsed unpaid entry has fallen through: the
+// person goes back on the list and the place is offered again.
+describe('claimFellThrough — the unpaid hold', () => {
+  const claim = (registration) => ({ id: 'wl9', race_event_id: 'e1', claimed_registration_id: 'r9', registration })
+  it('a fresh pending booking still stands; a lapsed one fell through; the hold is the event\'s', () => {
+    const fresh = { id: 'r9', status: 'pending_payment', race_event_id: 'e1', registered_at: new Date(NOW - HOUR).toISOString() }
+    const lapsed = { id: 'r9', status: 'pending_payment', race_event_id: 'e1', registered_at: new Date(NOW - 49 * HOUR).toISOString() }
+    expect(claimFellThrough(claim(fresh), NOW, RACE)).toBe(false)
+    expect(claimFellThrough(claim(lapsed), NOW, RACE)).toBe(true)
+    expect(claimFellThrough(claim(lapsed), NOW, { ...RACE, entry_policy: { unpaid_hold_hours: 72 } })).toBe(false)
+  })
+  it('gone, cancelled, placed or moved still fall through; confirmed stands', () => {
+    expect(claimFellThrough(claim(null), NOW, RACE)).toBe(true)
+    expect(claimFellThrough(claim({ id: 'r9', status: 'cancelled', race_event_id: 'e1' }), NOW, RACE)).toBe(true)
+    expect(claimFellThrough(claim({ id: 'r9', status: 'placed', race_event_id: 'e1' }), NOW, RACE)).toBe(true)
+    expect(claimFellThrough(claim({ id: 'r9', status: 'confirmed', race_event_id: 'e2' }), NOW, RACE)).toBe(true)
+    expect(claimFellThrough(claim({ id: 'r9', status: 'confirmed', race_event_id: 'e1' }), NOW, RACE)).toBe(false)
+  })
+})
+

@@ -90,6 +90,7 @@ describe('entryMoveBlock', () => {
     ['unpaid', { ...reg, status: 'pending_payment' }, 0, 'pending_payment'],
     ['cancelled', { ...reg, status: 'cancelled' }, 0, 'not_active'],
     ['no-show', { ...reg, status: 'no_show' }, 0, 'not_active'],
+    ['placed', { ...reg, status: 'placed' }, 0, 'placed'],
     ['checked in', reg, 1, 'checked_in'],
     ['raced', { ...reg, race_started_at: '2026-10-18T09:00:00Z' }, 0, 'checked_in'],
     ['past', { ...reg, race: { race_date: '2026-10-08' } }, 0, 'event_past'],
@@ -120,3 +121,49 @@ describe('customer copy', () => {
     expect(CUSTOMER_MOVE_STATUS.not_found).toBe(404)
   })
 })
+
+// FINDTEAM.8 (I5) — a placed solo is told their team's time applies.
+describe('entryMoveBlock — placed', () => {
+  it('gives the placed sentence', () => {
+    const b = entryMoveBlock({ registration: { status: 'placed', race: { race_date: '2026-10-18' } }, checkinCount: 0, today: '2026-10-09' })
+    expect(b).toEqual({ code: 'placed', message: "You've been placed in a team, so your team's time applies; contact the studio to change it." })
+  })
+})
+
+// ENTRYPOLICY.1 — the event's entry policy is judged only when the caller
+// hands in the clock (nowMs, zone): the reschedule switch and the cutoff from
+// the entrant's wave start, in the operator's own words.
+describe('entryMoveBlock — the entry policy', () => {
+  const reg = {
+    status: 'confirmed', race_started_at: null, race_finished_at: null,
+    race: { name: 'Hyrox Sim', race_date: '2026-10-18', entry_policy: null },
+    wave: { start_time: '09:00:00' },
+  }
+  const today = '2026-10-09'
+  it('null without a clock (staff paths), null well before the cutoff', () => {
+    expect(entryMoveBlock({ registration: reg, checkinCount: 0, today })).toBeNull()
+    expect(entryMoveBlock({ registration: reg, checkinCount: 0, today, nowMs: Date.parse('2026-10-09T12:00:00Z'), zone: 'Europe/Dublin' })).toBeNull()
+  })
+  it('inside the default 48 h cutoff (wave 09:00 IST = 08:00Z): cutoff with the operator copy', () => {
+    const b = entryMoveBlock({ registration: reg, checkinCount: 0, today: '2026-10-16', nowMs: Date.parse('2026-10-16T08:00:00Z'), zone: 'Europe/Dublin' })
+    expect(b.code).toBe('cutoff')
+    expect(b.message).toMatch(/48 hours before the start time/)
+    expect(entryMoveBlock({ registration: reg, checkinCount: 0, today: '2026-10-16', nowMs: Date.parse('2026-10-16T07:59:00Z'), zone: 'Europe/Dublin' })).toBeNull()
+  })
+  it('date changes switched off: disabled, whatever the clock', () => {
+    const off = { ...reg, race: { ...reg.race, entry_policy: { self_reschedule_enabled: false, disabled_message: 'Ring the desk about {{event_name}}.' } } }
+    expect(entryMoveBlock({ registration: off, checkinCount: 0, today, nowMs: Date.parse('2026-09-01T00:00:00Z'), zone: 'Europe/Dublin' }))
+      .toEqual({ code: 'disabled', message: 'Ring the desk about Hyrox Sim.' })
+  })
+  it('the status, check-in and past-day blocks still come first', () => {
+    const off = { ...reg, status: 'pending_payment', race: { ...reg.race, entry_policy: { self_reschedule_enabled: false } } }
+    expect(entryMoveBlock({ registration: off, checkinCount: 0, today, nowMs: 0, zone: 'Europe/Dublin' }).code).toBe('pending_payment')
+  })
+  it('the fallback copy for the two codes is plain and the status is 400', () => {
+    for (const code of ['disabled', 'cutoff']) {
+      expect(customerMoveMessage(code)).toMatch(/\.$/)
+      expect(CUSTOMER_MOVE_STATUS[code]).toBeUndefined()
+    }
+  })
+})
+

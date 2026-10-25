@@ -82,6 +82,18 @@ describe('buildWebsiteEvent', () => {
     expect(ev.event_id).toBeUndefined()
     expect(ev.custom_data).toBeUndefined()
   })
+
+  // PURCHASEVALUE.1 — a Purchase carries the money and the order.
+  it('carries value, currency, order_id and content_type when given, and none of them when not', () => {
+    const ev = buildWebsiteEvent({ eventName: 'Purchase', eventTime: 1, email: 'a@b.com', contentName: 'The 14 Day Reset', value: 39, currency: 'eur', orderId: 'tp1', contentType: 'product' })
+    expect(ev.custom_data).toEqual({ content_name: 'The 14 Day Reset', value: 39, currency: 'EUR', order_id: 'tp1', content_type: 'product' })
+    const lead = buildWebsiteEvent({ eventName: 'Lead', eventTime: 1, email: 'a@b.com', contentName: 'The 14 Day Reset' })
+    expect(lead.custom_data).toEqual({ content_name: 'The 14 Day Reset' })
+    const free = buildWebsiteEvent({ eventName: 'Purchase', eventTime: 1, email: 'a@b.com', value: 0 })
+    expect(free.custom_data).toEqual({ value: 0, currency: 'EUR' })
+    const bad = buildWebsiteEvent({ eventName: 'Purchase', eventTime: 1, email: 'a@b.com', value: Number.NaN })
+    expect(bad.custom_data).toBeUndefined()
+  })
 })
 
 // Minimal chainable fake supabase client resolving selects from `state`.
@@ -146,7 +158,7 @@ describe('sendWebsiteConversion', () => {
       whatsapp_numbers: { access_token: 'tok1', business_account_id: 'waba1' },
     })
     const r = await sendWebsiteConversion(db, args)
-    expect(r).toEqual({ sent: true })
+    expect(r).toMatchObject({ sent: true })
     expect(global.fetch).toHaveBeenCalledTimes(1)
     const [url, opts] = global.fetch.mock.calls[0]
     expect(url).toBe('https://graph.facebook.com/v21.0/ds1/events')
@@ -228,7 +240,7 @@ describe('sendWebsiteConversion — the dataset\'s own token', () => {
     global.fetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) })
     const db = tracedDb({ locations: { settings: { meta_ads: { dataset_id: 'ds-hatch', capi_access_token: 'SYNTH-OWN-TOKEN' } } }, whatsapp_numbers: null })
     const r = await sendWebsiteConversion(db, { ...args, fbc: 'fb.1.1.abc', clientIp: '203.0.113.9', userAgent: 'UA' })
-    expect(r).toEqual({ sent: true })
+    expect(r).toMatchObject({ sent: true })
     const [url, opts] = global.fetch.mock.calls[0]
     expect(url).toBe('https://graph.facebook.com/v21.0/ds-hatch/events')
     const body = JSON.parse(opts.body)

@@ -17,6 +17,7 @@ import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { RefreshCw, ChevronRight } from 'lucide-react'
 import AgentRequestDecideCard from '@/components/AgentRequestDecideCard'
+import TrialPurchaseReviewCard from '@/components/TrialPurchaseReviewCard'
 
 function formatDateTime(s) {
   if (!s) return '—'
@@ -173,6 +174,21 @@ function ProviderList({ provider, loading, onItemDecided }) {
         )}
         {provider.items.map((it) => (
           <AgentRequestDecideCard
+            key={it.id}
+            item={it}
+            onDecided={() => onItemDecided?.(provider.key)}
+          />
+        ))}
+      </div>
+    )
+  }
+  // PAIDTRIAL.2 — paid trials whose Glofox grant needs a hand are resolved in
+  // place (retry the processor, or mark granted after doing it in Glofox).
+  if (provider.key === 'trial_purchases') {
+    return (
+      <div className="space-y-3">
+        {provider.items.map((it) => (
+          <TrialPurchaseReviewCard
             key={it.id}
             item={it}
             onDecided={() => onItemDecided?.(provider.key)}

@@ -196,7 +196,12 @@ describe('GET /api/events/[id]/teams — lead_name (EVENT-MOVE.5)', () => {
     const json = await (await GET(req(), props)).json()
     expect(json.data[0].lead_name).toBe('Cap')
     const regRead = globalThis.__calls.find((c) => c.table === 'race_registrations')
-    expect(regRead.ops.find((o) => o[0] === 'select')[1]).toMatch(/contact:contact_id \( first_name, last_name, email \)/)
+    const select = regRead.ops.find((o) => o[0] === 'select')[1]
+    // FINDTEAM.6 — the phone joins the contact embed for the "Looking for a team" group.
+    expect(select).toMatch(/contact:contact_id \( first_name, last_name, email, phone \)/)
+    // ...and the three find-team columns the group and the Placed chip read.
+    const cols = select.split(',').map((c) => c.trim())
+    for (const c of ['looking_for_team', 'placed_into_registration_id', 'placed_at']) expect(cols).toContain(c)
   })
 })
 

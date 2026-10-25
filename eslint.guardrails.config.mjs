@@ -295,6 +295,11 @@ const config = [
       // a committed payment log, never throw.
       'src/lib/race-payments.js',
       'src/lib/race-gap-payment.js',
+      // CHARITY.3 — the donation payment lifecycle and its receipt: the status
+      // write that decides whether a gift was taken, and the stamps that keep
+      // the paid side effects send-once. Born clean, armed on arrival.
+      'src/lib/donation-payments.js',
+      'src/lib/donation-receipt.js',
       // BLOCKEDIT.1 — the shift editor (PUT beside the existing DELETE) and its
       // */5 notice arm. Every write judges its error (and the block UPDATE its
       // rows) from day one. `[[]id]`: files entries are minimatch globs, and a
@@ -487,6 +492,32 @@ const config = [
       // the write-ahead row, its finalise and every mirror read judge their
       // error (a failed write-ahead row sends nothing).
       'src/lib/agent/un1t-booking.js',
+      // TRIALSTUDIO — the /trial page's trial-history eligibility check:
+      // born clean; every read judges its error (a failed read is a 503,
+      // never a refusal).
+      'src/lib/trial-eligibility.js',
+      // TRIALSTUDIO.6 — the /trial page's Hatch Street leg: born clean; every
+      // trial_purchases stamp reads its error (a un1t_user_id that cannot be
+      // stamped stops the checkout).
+      'src/lib/trial-purchase-un1t-checkout.js',
+      // TRIALSTUDIO.7 — the Hatch Street settle/expiry sweep: born clean; the
+      // settle CAS and the expiry stamp read their error and their matched
+      // rows (side effects only on a match), the reads judge theirs.
+      'src/lib/trial-purchase-un1t-settle.js',
+      // TRIALSTUDIO — the /trial studio list and the "I need help" route:
+      // born clean; every trial_purchases write reads its error.
+      'src/lib/trial-studios.js',
+      'src/app/api/public/trial-purchases/help/route.js',
+      // SCREENMODE.13 — the Hatch floor screens: born clean. The plan
+      // endpoint stamps the heartbeat on every box fetch, the override route
+      // writes the state a wall obeys, and the screen health pass writes the
+      // grades that alert masters: a write that fails silently in any of them
+      // leaves a screen showing the wrong thing, or a dark one ungraded.
+      'src/app/api/fleet/**',
+      'src/app/api/admin/fleet/**',
+      'src/lib/screen-plan.js',
+      'src/lib/screen-doorbell.js',
+      'src/lib/fleet-screen-health.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

@@ -1,5 +1,7 @@
-// GET /api/host/signup-qr — printable QR PNG for the host's public
-// mailing-list signup page /h/[slug] (HOST-GROWTH.3). Host session only;
+// GET /api/host/signup-qr — printable QR PNG for the host's public page
+// /h/[slug] (HOST-GROWTH.3), or with ?page=join for the standalone signup
+// form /h/[slug]/join (HOST-JOIN-PAGE.1; any other value is the public
+// page). Host session only;
 // ensures the slug exists first via ensureHostSlug (same lazy derivation
 // the email-domain flow uses).
 //
@@ -20,7 +22,7 @@ import { logError } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
+export async function GET(request) {
   const session = await getCurrentHost()
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
@@ -46,7 +48,8 @@ export async function GET() {
   let publicUrl
   try {
     const baseUrl = new URL(await resolveCustomerBaseUrl(db, hostRow.anchor_location_id)).origin
-    publicUrl = `${baseUrl}/h/${slug}`
+    const page = new URL(request.url).searchParams.get('page')
+    publicUrl = page === 'join' ? `${baseUrl}/h/${slug}/join` : `${baseUrl}/h/${slug}`
   } catch (e) {
     return NextResponse.json({
       success: false,
@@ -75,7 +78,7 @@ export async function GET() {
     headers: {
       'Content-Type': 'image/png',
       'Content-Length': String(png.length),
-      'Content-Disposition': `attachment; filename="signup-qr-${slug}.png"`,
+      'Content-Disposition': `attachment; filename="${publicUrl.endsWith('/join') ? 'signup-form-qr' : 'signup-qr'}-${slug}.png"`,
       'Cache-Control': 'private, no-store',
     },
   })

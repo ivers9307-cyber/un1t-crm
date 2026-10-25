@@ -69,6 +69,9 @@ export default async function RaceTeamsPage(props) {
         canCancelEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
         canMoveEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
         canManageWaitlist={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
+        // FINDTEAM.6 — Place in team / Pair up call POST /api/registrations/[id]/place
+        // and POST /api/events/[id]/pair-solos: manager+ at the event's studio.
+        canPlaceSolos={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
         currency={race.payment_currency || 'EUR'}
         customerOrigin={customerOrigin}
       />

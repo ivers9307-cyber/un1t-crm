@@ -19,7 +19,9 @@ function getStripe(pubKey, connectedAccountId) {
 }
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ''
 
-export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, onPaid, onCancel }) {
+// PAIDTRIAL.1 — `statusPath` lets another paid flow (the /trial purchase)
+// reuse this widget with its own status route; the default is unchanged.
+export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, onPaid, onCancel, statusPath = '/api/public/class-booking-payments' }) {
   const targetRef = useRef(null)
   const instanceRef = useRef(null)
   const paidRef = useRef(false)
@@ -85,7 +87,7 @@ export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, o
     const tick = async () => {
       if (stopped || paidRef.current) return
       try {
-        const r = await fetch(`/api/public/class-booking-payments/${paymentId}`, { cache: 'no-store' })
+        const r = await fetch(`${statusPath}/${paymentId}`, { cache: 'no-store' })
         const j = await r.json().catch(() => ({}))
         if (!stopped && j?.data?.paid) { markPaid(); return }
       } catch { /* keep polling */ }
@@ -94,7 +96,7 @@ export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, o
     const t = setTimeout(tick, 3000)
     return () => { stopped = true; clearTimeout(t) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paymentId])
+  }, [paymentId, statusPath])
 
   return (
     <div>
