@@ -41,6 +41,20 @@ describe('ContactStudiosCard', () => {
   })
 })
 
+// ORGCONTACTS.7 (mig 770) — the un1t.online membership facts on the row: plan,
+// member since, membership ended. A row with none recorded shows neither phrase.
+describe('ContactStudiosCard — membership facts', () => {
+  it('an active membership shows the plan and member since; an ended one its end; none shows neither', () => {
+    const active = { ...rows[0], location_id: 'hatch', status: 'active', kind: 'member', membership_plan: 'Founding Membership — Unlimited', membership_status: 'active', membership_since: '2026-02-01T00:00:00Z', membership_ended_at: null }
+    const ended = { ...rows[0], location_id: 'other', location: { id: 'other', name: 'UN1T Other' }, kind: 'client', status: 'active', membership_plan: 'Monthly', membership_status: 'ended', membership_since: '2026-03-01T00:00:00Z', membership_ended_at: '2026-09-01T00:00:00Z' }
+    const { container } = render(<ContactStudiosCard studios={[active, ended, rows[1]]} primaryLocationId="still" />)
+    const items = [...container.querySelectorAll('li')].map((li) => li.textContent)
+    expect(items.find((t) => t.includes('UN1T Hatch Street'))).toContain('Founding Membership — Unlimited · member since 1 Feb 2026')
+    expect(items.find((t) => t.includes('UN1T Other'))).toContain('Monthly · membership ended 1 Sep 2026')
+    expect(items.find((t) => t.includes('UN1T Stillorgan'))).not.toMatch(/member since|membership ended/)
+  })
+})
+
 // ORGCONTACTS.4 (decision 4) — "Change primary studio": only for a caller the
 // delete / rehome gate admits, and only when there is another studio to move to.
 describe('ContactStudiosCard — change primary studio', () => {

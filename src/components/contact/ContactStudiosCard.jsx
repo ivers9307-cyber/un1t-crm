@@ -1,8 +1,10 @@
 // ORGCONTACTS.2 — the studios this person has a relationship with
 // (contact_studios, mig 764; spec 2026-10-20 §2.1): the primary studio
 // first, each with its kind (member > client > lead), status, source and
-// first / last seen. Rendered next to the Glofox and studio-membership cards
-// so an operator sees why a Stillorgan contact appears on Hatch's list.
+// first / last seen, and (ORGCONTACTS.7, mig 770) the un1t.online membership
+// facts the row carries: plan, member since, membership ended. Rendered next
+// to the Glofox card so an operator sees why a Stillorgan contact appears on
+// Hatch's list.
 
 import { RELATIONSHIP_SOURCE_LABELS } from '@/lib/contact-studios-display'
 import { formatDate } from './format'
@@ -41,6 +43,14 @@ export default function ContactStudiosCard({ studios, primaryLocationId, canReho
                 {RELATIONSHIP_SOURCE_LABELS[s.source] || s.source} · since {formatDate(s.first_seen_at)}
                 {s.last_seen_at ? ` · last seen ${formatDate(s.last_seen_at)}` : ''}
               </div>
+              {s.membership_status
+                ? <div className="text-[11px] text-un1t-subtle">
+                    {s.membership_plan || 'Membership'}
+                    {s.membership_status === 'active'
+                      ? ` · member since ${formatDate(s.membership_since)}`
+                      : ` · membership ended ${formatDate(s.membership_ended_at)}`}
+                  </div>
+                : null}
             </li>
           )
         })}
