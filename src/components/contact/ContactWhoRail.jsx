@@ -8,7 +8,7 @@ import { Mail, Phone } from 'lucide-react'
 import LinkedAccountsCard from '@/components/LinkedAccountsCard'
 import ContactMarketingPreferencesCard from '@/components/ContactMarketingPreferencesCard'
 import GlofoxProfileCard from './GlofoxProfileCard'
-import StudioMembershipsCard from './StudioMembershipsCard'
+import ContactStudiosCard from './ContactStudiosCard'
 import Un1tPaymentsCard from './Un1tPaymentsCard'
 import { visitOriginLabel } from '@/lib/visit-origin'
 
@@ -21,7 +21,7 @@ function InfoRow({ label, value }) {
   )
 }
 
-export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, studioMemberships = [], canReadStudioCards = false, un1tBilling = { studios: [] } }) {
+export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, contactStudios = [], canReadStudioCards = false, canRehome = false, un1tBilling = { studios: [] } }) {
   return (
     <>
       {/* PERSON-LINK.1 — linked accounts (or "not linked" CTA when single). */}
@@ -66,8 +66,9 @@ export default function ContactWhoRail({ contact, person, identityEmails, identi
         <InfoRow label="Created" value={new Date(contact.created_at).toLocaleDateString('en-IE')} />
       </div>
 
-      {/* HATCH-MEMBERS.1 — a membership sold outside Glofox (Hatch Street). */}
-      <StudioMembershipsCard memberships={studioMemberships} />
+      {/* ORGCONTACTS.2 — every studio the person has a relationship with (the
+          memberships card it replaced went with ORGCONTACTS.5). */}
+      <ContactStudiosCard studios={contactStudios} primaryLocationId={contact?.location_id ?? null} canRehome={canRehome} contactId={contact?.id ?? null} />
 
       {/* HATCHPIPE.2 — what un1t.online says this contact owes and has paid. */}
       <Un1tPaymentsCard studios={un1tBilling?.studios} />

@@ -49,16 +49,17 @@ const CONTACT_DETAIL_SELECT = `${CONTACT_SELECT}, location_id, joined_at,
   glofox_membership_price_cents, glofox_billing_interval, glofox_membership_type,
   glofox_membership_expiry, glofox_synced_at, recent_bookings`
 
-// UN1THARD.8 — the studio's crossovers: contacts owned by another studio who
-// hold an active membership, a un1t.online client row or a deal here (a
-// Stillorgan member with a Hatch Street membership). The web contacts list
-// shows them; the phone directory used to filter on location_id alone and
-// missed them. The ids come from GET /api/mobile/contacts/crossover-ids (the
-// RPC behind them is service-role only); the rows are still read here through
-// RLS, which admits a membership or un1t client crossover to a caller holding
-// Contacts at the studio (migs 731/732) and returns nothing for an id it does
-// not admit. Best-effort: a failed or refused call lists own contacts only,
-// as before. Cached per studio for a minute, because search runs per keystroke.
+// UN1THARD.8 / ORGCONTACTS.2 — the studio's crossovers: contacts whose
+// primary studio is another one but who have a relationship here (a
+// contact_studios row, mig 764: a Stillorgan member with a Hatch Street
+// membership, a lapsed Hatch client, a deal on this board). The web contacts
+// list shows them; the phone directory used to filter on location_id alone
+// and missed them. The ids come from GET /api/mobile/contacts/crossover-ids
+// (it reads the service-role-only studio_contacts view); the rows are still
+// read here through RLS, which admits every relationship to a caller holding
+// Contacts at the studio (mig 765) and returns nothing for an id it does not
+// admit. Best-effort: a failed or refused call lists own contacts only, as
+// before. Cached per studio for a minute, because search runs per keystroke.
 const CROSSOVER_TTL_MS = 60 * 1000
 const crossoverCache = new Map()
 
@@ -80,6 +81,15 @@ export function _resetCrossoverCache() {
   crossoverCache.clear()
 }
 
+// ORGCONTACTS.5 (final review I4) — the directory search is served by the
+// CRM: GET /api/mobile/contacts/search reads public.studio_contacts at the
+// active studio on the service role, so every relationship is listed with no
+// id cap (decision 2 put the crossover count past the 100 ids a GET URL could
+// carry: ≥102 at Stillorgan, ~230 at Hatch Street). The RLS read below, with
+// the capped crossover ids, is the FALLBACK when the route fails or refuses:
+// a bad deploy degrades to the old directory, never to an empty one.
+export const MOBILE_CONTACT_SEARCH_PATH = '/api/mobile/contacts/search'
+
 /**
  * Search contacts at a location by name / phone / email. Empty query
  * returns the most-recent contacts (a cheap default before the operator
@@ -88,6 +98,14 @@ export function _resetCrossoverCache() {
  */
 export async function searchContacts({ locationId, query = '', limit = 40 }) {
   if (!locationId) return { success: false, error: 'locationId required' }
+  const term = (query || '').trim()
+  const served = await api(`${MOBILE_CONTACT_SEARCH_PATH}?q=${encodeURIComponent(term)}&limit=${encodeURIComponent(String(limit))}`, { locationId })
+  if (served?.success && Array.isArray(served.data?.contacts)) return { success: true, data: served.data.contacts }
+  return searchContactsThroughRls({ locationId, term, limit })
+}
+
+/** The pre-ORGCONTACTS.5 directory read: own contacts OR the capped crossover ids, through RLS. */
+async function searchContactsThroughRls({ locationId, term, limit }) {
   const crossIds = await crossoverIdsFor(locationId)
   // CONTACT-DEDUP (mig 334) — the directory shows one profile per linked
   // person (the group primary); the folded accounts are reachable from it.
@@ -95,7 +113,6 @@ export async function searchContacts({ locationId, query = '', limit = 40 }) {
   q = crossIds.length > 0
     ? q.or(`location_id.eq.${locationId},id.in.(${crossIds.join(',')})`)
     : q.eq('location_id', locationId)
-  const term = (query || '').trim()
   if (term) {
     // Commas + % are PostgREST .or()/ilike control chars — strip them so
     // a search term can't break the filter or smuggle a wildcard.

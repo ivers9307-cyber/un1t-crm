@@ -173,10 +173,8 @@ export default function ContactsView({
     filter: filterRowCount > 0 ? filter : undefined,
     search: search || undefined,
     location_id: locationId,
-    // The contacts list shows crossover deal-holders (owned ∪ deal-at-
-    // this-studio); other callers of this route (e.g. the send people-
-    // picker) omit this and stay owned-only.
-    include_crossovers: true,
+    // ORGCONTACTS.2 — the route lists every contact with a relationship at
+    // the studio (the crossover pill reads studio_is_crossover); no opt-in.
     // Fold linked people to one row unless the operator opted to see dupes.
     primary_only: !showDuplicates,
   }), [filterRowCount, filter, search, locationId, showDuplicates])
@@ -238,7 +236,9 @@ export default function ContactsView({
   // 'classpass' stage, so they never share a chip with trialists.
   const visibleContacts = useMemo(() => {
     let rows = clientContacts !== null ? clientContacts : initialContacts
-    if (status) rows = rows.filter(c => c.pipeline_stage_slug === status)
+    // ORGCONTACTS.4 (decision 3): the stage AT this studio, the column the
+    // server page filtered on (studio_contacts.studio_stage_slug).
+    if (status) rows = rows.filter(c => c.studio_stage_slug === status)
     // SEARCH.1: when apiActive, the API has already done a wider
     // search (name + email + first_name + last_name + phone, multi-
     // token). Re-applying a name/email-only filter client-side would

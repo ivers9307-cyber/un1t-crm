@@ -199,7 +199,7 @@ async function backfillLocation(db, location, startedAt) {
     // whole tick; the next tick's page is the next slice because every
     // attempt below moves its contact's due date.
     // GLOFOXREADERS.1 — the studio's Glofox members whose contact lives at a
-    // sibling studio (glofox_crossover_members) are due here too; readOne's
+    // sibling studio (a contact_studios row with source glofox, mig 768) are due here too; readOne's
     // applyMemberSync already resolves them. A failed read is logged and the
     // tick runs on the studio's own contacts.
     const crossover = await glofoxCrossoverContactIds(db, location.id)

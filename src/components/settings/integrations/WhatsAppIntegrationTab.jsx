@@ -20,6 +20,7 @@ import { normalizeUrlish } from '@/lib/urlish'
 import { orgNumbersHref } from '@/lib/org-whatsapp-numbers-page'
 import { Row } from './WhatsAppFieldRow'
 import StudioWhatsAppNumbers from '@/components/settings/whatsapp/StudioWhatsAppNumbers'
+import BlastSignoffCard from '@/components/settings/whatsapp/BlastSignoffCard'
 import PurposeTemplatesCard from '@/components/settings/whatsapp/PurposeTemplatesCard'
 import ConsentCopyCard from '@/components/settings/whatsapp/ConsentCopyCard'
 
@@ -47,6 +48,8 @@ export default function WhatsAppIntegrationTab({ location, canEdit, canManageNum
       </div>
 
       <StudioWhatsAppNumbers locationId={location.id} canSwitch={canSwitch} canManageNumbers={canManageNumbers} onChanged={onChanged} />
+
+      <BlastSignoffCard locationId={location.id} />
 
       <PurposeTemplatesCard locationId={location.id} canEdit={canEdit} />
 

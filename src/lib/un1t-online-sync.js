@@ -34,7 +34,7 @@
 //      non-zero `absent_from_pull` on bookings or events means un1t.online's
 //      list is a rolling window (or deleted rows): the mirror is then the only
 //      full history, which is why it never prunes. Informational only.
-//   7. Reconcile contact_memberships (source 'un1t_online_api' at this
+//   7. Decide the memberships (ORGCONTACTS.7: the facts live on contact_studios; this
 //      location only; the operator export's rows are never touched): a
 //      contact with an active subscription is upserted active; an active row
 //      whose contact no longer has one is ENDED, never deleted.
@@ -79,6 +79,7 @@ import { projectUn1tOccurrences } from './un1t-online-occurrences.js'
 import { projectUn1tBookings } from './un1t-online-bookings.js'
 import { resolveUn1tContacts } from './un1t-online-contacts.js'
 import { ensureStudioPreferences } from './un1t-online-studio-preferences.js'
+import { upsertContactStudio, setMembershipFacts } from './contact-studios.js'
 import { tokenFingerprint } from './un1t-online-token.js'
 import { readConnection } from './connection-registry.js'
 import { logError, logWarn, logInfo } from './log'
@@ -470,8 +471,39 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
     })
     counts.memberships = membership.counts
     if (membership.error) {
-      const msg = `un1t.online sync failed writing contact_memberships: ${membership.error}`
+      const msg = `un1t.online sync failed reading membership facts: ${membership.error}`
       return failure('db', msg, errorPatch(msg, tokenFields))
+    }
+
+    // 7a. ORGCONTACTS.1 — the relationship table (mig 764): a member row for
+    // every live subscriber, a client row for every other client linked to a
+    // contact, and a client row (never an ended one: a lapsed client keeps a
+    // relationship) for a membership this run ended. A failed write here is
+    // counted and logged, never the run's status.
+    counts.contact_studios = await writeContactStudios(db, {
+      locationId,
+      clients: mapped.un1t_clients || [],
+      contactIdOf,
+      memberContactIds: membership.memberContactIds || [],
+      endedContactIds: membership.endedContactIds || [],
+      nowIso,
+    })
+
+    // 7b. ORGCONTACTS.7 (mig 770) — the membership facts (plan, active or
+    // ended, since, ended_at) onto the rows 7a just wrote: activations, then
+    // endings. The sync is the ONLY writer of those columns. A row 7a could not
+    // write is counted (rows_missing) and logged; a failed facts write too;
+    // neither is the run's failure (the next run repairs).
+    counts.memberships = {
+      ...counts.memberships,
+      ...(await writeMembershipFacts(db, {
+        locationId,
+        memberContactIds: membership.memberContactIds || [],
+        plan: membership.plan || new Map(),
+        activePlanByContact: membership.activePlanByContact || new Map(),
+        endedContactIds: membership.endedContactIds || [],
+        nowIso,
+      })),
     }
 
     // 7b. New signups start this studio's contact_created sequences
@@ -541,6 +573,10 @@ async function measureHistory(db, { locationId, mapped, nowIso }) {
  */
 async function reconcileMemberships(db, { locationId, organizationId, subscriptions, contactIdOf, resolverErrors, nowIso }) {
   const counts = { active: 0, ended: 0, skipped_no_contact: 0 }
+  // ORGCONTACTS.1 — who this run holds as a member here, and whose
+  // membership it ended (contact ids), for the contact_studios dual-write.
+  const endedContactIds = []
+  const plan = new Map()
 
   // One plan per contact: the best active subscription.
   const best = new Map()
@@ -562,50 +598,41 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
     best.set(contactId, prev ? preferSubscription(prev, sub) : sub)
   }
 
-  const payload = [...best.entries()].map(([contactId, sub]) => ({
-    organization_id: organizationId,
-    location_id: locationId,
-    contact_id: contactId,
-    source: MEMBERSHIP_SOURCE,
-    plan_name: (sub.product_title && sub.product_title.trim()) || 'Membership',
-    status: 'active',
-    ended_at: null,
-    last_seen_at: nowIso,
-    updated_at: nowIso,
-  }))
-  for (const chunk of chunks(payload, CHUNK)) {
-    const { error } = await db
-      .from('contact_memberships')
-      .upsert(chunk, { onConflict: 'contact_id,location_id,source' })
-    if (error) return { counts, error: messageOf(error) }
-    counts.active += chunk.length
-  }
+  // ORGCONTACTS.7 (mig 770): the facts are written onto the relationship row
+  // by writeMembershipFacts, AFTER writeContactStudios has made the row. Here
+  // only the plan per member is decided.
+  for (const [contactId, sub] of best.entries()) plan.set(contactId, (sub.product_title && sub.product_title.trim()) || 'Membership')
+  counts.active = best.size
+  const memberContactIds = [...best.keys()]
 
-  // Active rows for this source here, read in full (1,000-row pages).
+  // The relationship rows carrying an ACTIVE membership here, read in full
+  // (1,000-row pages). Filtered on THIS studio: another studio's membership is
+  // never read as ours nor ended by us.
   const activeRows = []
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
-      .from('contact_memberships')
-      .select('id, contact_id')
+      .from('contact_studios')
+      .select('contact_id, membership_plan')
       .eq('location_id', locationId)
-      .eq('source', MEMBERSHIP_SOURCE)
-      .eq('status', 'active')
-      .order('id')
+      .eq('membership_status', 'active')
+      .order('contact_id')
       .range(from, from + PAGE - 1)
-    if (error) return { counts, error: `reading active memberships: ${messageOf(error)}` }
+    if (error) return { counts, error: `reading membership facts: ${messageOf(error)}` }
     const rows = Array.isArray(data) ? data : []
     activeRows.push(...rows)
     if (rows.length < PAGE) break
   }
 
+  // what each live member's row already says, so an unchanged member gets no write (7b)
+  const activePlanByContact = new Map(activeRows.map((r) => [r.contact_id, r.membership_plan ?? null]))
   let toEnd = activeRows.filter((r) => !best.has(r.contact_id))
-  if (toEnd.length === 0) return { counts, error: null }
+  if (toEnd.length === 0) return { counts, error: null, memberContactIds, endedContactIds, plan, activePlanByContact }
 
   if (subscriptions.length === 0) {
     counts.end_skipped = 'no_subscriptions_pulled'
     counts.would_end = toEnd.length
     logWarn('un1t-online-sync', 'not ending memberships: the pull carried no subscriptions', { locationId, wouldEnd: toEnd.length })
-    return { counts, error: null }
+    return { counts, error: null, memberContactIds, endedContactIds, plan, activePlanByContact }
   }
 
   // Every client the resolver could not attribute has an unknown
@@ -623,7 +650,7 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
       counts.end_skipped = 'contacts_unresolved'
       counts.would_end = toEnd.length
       logWarn('un1t-online-sync', 'not ending memberships: a client or subscription could not be attributed to a user id', { locationId, wouldEnd: toEnd.length })
-      return { counts, error: null }
+      return { counts, error: null, memberContactIds, endedContactIds, plan, activePlanByContact }
     }
     const spared = new Set()
     for (const e of resolverErrors) {
@@ -643,7 +670,7 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
         counts.end_skipped = 'contacts_unreadable'
         counts.would_end = toEnd.length
         logWarn('un1t-online-sync', 'not ending memberships: could not read contacts to spare unresolved clients', { locationId, wouldEnd: toEnd.length, err: safeErr(error) })
-        return { counts, error: null }
+        return { counts, error: null, memberContactIds, endedContactIds, plan, activePlanByContact }
       }
       for (const c of data || []) {
         if (c.un1t_user_id != null && unresolvedUserIds.has(String(c.un1t_user_id))) spared.add(String(c.id))
@@ -655,23 +682,93 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
     if (counts.end_skipped_unresolved > 0) {
       logWarn('un1t-online-sync', 'not ending memberships of clients that failed to resolve', { locationId, spared: counts.end_skipped_unresolved })
     }
-    if (toEnd.length === 0) return { counts, error: null }
+    if (toEnd.length === 0) return { counts, error: null, memberContactIds, endedContactIds, plan, activePlanByContact }
   }
 
-  for (const ids of chunks(toEnd.map((r) => r.id), CHUNK)) {
-    const { data, error } = await db
-      .from('contact_memberships')
-      .update({ status: 'ended', ended_at: nowIso, updated_at: nowIso })
-      .in('id', ids)
-      .eq('location_id', locationId)
-      .eq('source', MEMBERSHIP_SOURCE)
-      .eq('status', 'active')
-      .select('id')
-    if (error) return { counts, error: `ending memberships: ${messageOf(error)}` }
-    // Fewer rows than asked = a row changed under us; not an error.
-    counts.ended += Array.isArray(data) ? data.length : 0
+  // The endings are written by writeMembershipFacts (after the relationship
+  // write); here the decision is final.
+  endedContactIds.push(...toEnd.map((r) => r.contact_id))
+  return { counts, error: null, memberContactIds, endedContactIds, plan, activePlanByContact }
+}
+
+/**
+ * Step 7a (ORGCONTACTS.1). One upsertContactStudio per contact this run
+ * knows at the studio: kind member for a live subscriber, client otherwise;
+ * source un1t_online; status active; first_seen_at from the client's
+ * remote_created_at (the helper only ever moves it earlier); never
+ * last_seen_at (a sync is not activity). Returns { member, client, failed }.
+ */
+async function writeContactStudios(db, { locationId, clients, contactIdOf, memberContactIds, endedContactIds, nowIso }) {
+  const counts = { member: 0, client: 0, failed: 0 }
+  const members = new Set(memberContactIds)
+  const seen = new Set()
+  const targets = []
+  for (const c of clients) {
+    const contactId = contactIdOf(c?.un1t_user_id)
+    if (!contactId || seen.has(contactId)) continue
+    seen.add(contactId)
+    targets.push({ contactId, kind: members.has(contactId) ? 'member' : 'client', firstSeenAt: c.remote_created_at || nowIso })
   }
-  return { counts, error: null }
+  for (const contactId of memberContactIds) {
+    if (seen.has(contactId)) continue
+    seen.add(contactId)
+    targets.push({ contactId, kind: 'member', firstSeenAt: nowIso })
+  }
+  for (const contactId of endedContactIds) {
+    if (!contactId || seen.has(contactId)) continue
+    seen.add(contactId)
+    targets.push({ contactId, kind: 'client', firstSeenAt: nowIso })
+  }
+  for (const t of targets) {
+    const r = await upsertContactStudio(db, {
+      contactId: t.contactId, locationId, kind: t.kind, source: 'un1t_online', status: 'active', firstSeenAt: t.firstSeenAt, nowIso,
+    })
+    if (r.ok) {
+      counts[t.kind] += 1
+    } else {
+      counts.failed += 1
+      logError('un1t-online-sync', 'contact_studios row not written', { locationId, contactId: t.contactId, kind: t.kind, error: r.error })
+    }
+  }
+  return counts
+}
+
+/**
+ * Step 7b (ORGCONTACTS.7, mig 770). The membership facts onto the relationship
+ * rows: setMembershipFacts({ status: 'active', plan }) per live subscriber,
+ * then ({ status: 'ended' }) per membership this run ended. Each is one
+ * studio-scoped update (plus the guarded membership_since stamp on an
+ * activation). Returns { activated, unchanged, ended, already_ended, rows_missing, failed }: unchanged = a live member whose row already says active with this plan (no write), already_ended = an ending that found the row no longer active (its date stands), rows_missing
+ * = updates that touched no row (7a could not write it), failed = a failed
+ * write; both logged, never thrown. `active` (live subscribers) stays reconcileMemberships'.
+ */
+async function writeMembershipFacts(db, { locationId, memberContactIds, plan, activePlanByContact = new Map(), endedContactIds, nowIso }) {
+  // `active` stays reconcileMemberships' count of live subscribers; `activated` is the facts actually written.
+  const out = { activated: 0, unchanged: 0, ended: 0, already_ended: 0, rows_missing: 0, failed: 0 }
+  const writes = []
+  for (const contactId of memberContactIds) {
+    const want = plan.get(contactId) ?? 'Membership'
+    // already active with this plan: nothing to write (no updated_at bump, no since stamp)
+    if (activePlanByContact.has(contactId) && activePlanByContact.get(contactId) === want) { out.unchanged += 1; continue }
+    writes.push({ contactId, status: 'active', plan: want })
+  }
+  for (const contactId of endedContactIds) writes.push({ contactId, status: 'ended' })
+  for (const w of writes) {
+    const r = await setMembershipFacts(db, { contactId: w.contactId, locationId, plan: w.plan ?? null, status: w.status, nowIso })
+    if (!r.ok) {
+      out.failed += 1
+      logError('un1t-online-sync', 'membership facts not written', { locationId, contactId: w.contactId, status: w.status, error: r.error })
+    } else if (!r.updated && w.status === 'ended') {
+      // the row was no longer active when the ending landed (a run that overlapped, or a hand edit): its end date stands
+      out.already_ended += 1
+    } else if (!r.updated) {
+      out.rows_missing += 1
+      logError('un1t-online-sync', 'membership facts: no relationship row to carry them', { locationId, contactId: w.contactId, status: w.status })
+    } else {
+      out[w.status === 'active' ? 'activated' : 'ended'] += 1
+    }
+  }
+  return out
 }
 
 /**

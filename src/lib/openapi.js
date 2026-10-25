@@ -28,6 +28,7 @@ import {
   studioWhatsAppNumberSwitchSchema,
   studioPurposeTemplateSchema,
   studioConsentCopySchema,
+  studioBlastSignoffSchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 import { PLATFORM_NAME } from './brand-name.js'
@@ -3326,13 +3327,30 @@ registry.registerPath({
   path: '/api/mobile/contacts/crossover-ids',
   tags: ['Mobile'],
   security: [{ CookieAuth: [] }],
-  summary: 'Crossover contact ids for the phone directory',
-  description: 'The active studio\'s crossover contact ids (owned by another studio, with an active membership, a un1t.online client row or a deal here), capped at 100. Ids only: the phone reads the rows through RLS. Gated on the mobile `contacts` permission at the active studio (x-active-location). An empty list on a failed lookup.',
+  summary: 'Crossover contact ids for the phone directory (fallback)',
+  description: 'The active studio\'s crossover contact ids (a contact_studios row here whose primary studio is elsewhere), capped at 100. Ids only: the phone reads the rows through RLS. Since ORGCONTACTS.5 the phone directory searches through /api/mobile/contacts/search and uses this list only when that route fails. Gated on the mobile `contacts` permission at the active studio (x-active-location). An empty list on a failed lookup.',
   responses: {
     200: { description: 'Crossover ids', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ ids: z.array(z.string()) }) }).openapi('MobileCrossoverIdsResponse') } } },
     400: { description: 'No active location', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'No mobile contacts permission', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/mobile/contacts/search',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Phone directory search at the active studio',
+  description: 'ORGCONTACTS.5 — the phone directory\'s search over public.studio_contacts at the active studio (x-active-location): every contact with a relationship here, one row per linked person, no id cap. `q` (each whitespace token must match name, email, first or last name; a token with 4+ digits also matches phone / wa_phone) and `limit` (default 40, max 100). Newest first with no term, by name with one. Gated on the mobile `contacts` permission. A failed read is a 500 and the phone falls back to its own RLS read.',
+  request: { query: z.object({ q: z.string().optional(), limit: z.coerce.number().int().min(1).max(100).optional() }) },
+  responses: {
+    200: { description: 'Directory rows', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ contacts: z.array(z.object({}).passthrough()) }) }).openapi('MobileContactSearchResponse') } } },
+    400: { description: 'No active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No mobile contacts permission', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The read failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3602,6 +3620,33 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — contact_linking permission required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ORGCONTACTS.4 (decision 4) — change a contact's primary studio.
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/primary-studio',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: "Change the contact's primary studio to another studio the person has a relationship with (the primary studio's admins, an organisation admin, or a master)",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ location_id: uuidLike }).openapi('ContactPrimaryStudioBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'The primary studio (moved, or unchanged when it already was the target)', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ location_id: uuidLike }) }) } } },
+    400: { description: 'Validation error, no_relationship (no contact_studios row at the target) or other_organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "Forbidden — the primary studio's admins, an organisation admin, or a master", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The relationship read failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4977,6 +5022,45 @@ registry.registerPath({
   },
 })
 
+// ORGCONTACTS.0 (WAORGNUMBER R7) — the studio's blast sign-off window
+const WaBlastSignoff = z.object({
+  until: z.string().nullable().openapi({ description: "The last day (studio calendar, 'YYYY-MM-DD') broadcasts at this studio need an organisation admin's sign-off; null = no window" }),
+  can_edit: z.boolean(),
+}).openapi('WaBlastSignoff')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/whatsapp/blast-signoff',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "The studio's blast sign-off window",
+  description: "locations.settings.whatsapp_blast_signoff_until as a plain date, or null. can_edit is true for a master or an organisation admin of the studio's organisation.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The window', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaBlastSignoff }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — location not in your assignments', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Studio not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/whatsapp/blast-signoff',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Set or clear the studio's blast sign-off window",
+  description: "Master or an organisation admin of the studio's organisation only (403 otherwise: the window exists to bind managers). until is a calendar day on the studio's clock; null clears the window. Other settings keys are kept.",
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: studioBlastSignoffSchema } } } },
+  responses: {
+    200: { description: 'The window after the change', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaBlastSignoff }) } } },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master or organisation admin required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Studio not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // WAORGNUMBER.2 (R5) — the templates a studio's automatic WhatsApp messages use
 const WaPurposeTemplates = z.object({
   selected: z.object({
@@ -5524,7 +5608,7 @@ registry.registerPath({
   tags: ['Glofox'],
   security: [{ CookieAuth: [] }],
   summary: 'Find (and optionally link) Glofox members whose contact lives at a sibling studio',
-  description: 'GLOFOXSIBLING.1 — master only. Reads one page of the studio\'s Glofox members and lists those with no contact at the studio whose one contact lives at another studio of the same organisation (contacts are unique per email per organisation, mig 712, so the old sync could not create them). dry_run (default true) only reads; dry_run:false runs the member sync for up to 25 of the page\'s candidates, which links each one (glofox_crossover_members, mig 758, plus the studio\'s preferences row). Ids only in the response.',
+  description: 'GLOFOXSIBLING.1 — master only. Reads one page of the studio\'s Glofox members and lists those with no contact at the studio whose one contact lives at another studio of the same organisation (contacts are unique per email per organisation, mig 712, so the old sync could not create them). dry_run (default true) only reads; dry_run:false runs the member sync for up to 25 of the page\'s candidates, which links each one (a contact_studios row with source glofox since mig 768, plus the studio\'s preferences row). Ids only in the response.',
   request: {
     body: { content: { 'application/json': { schema: z.object({
       location_id: uuidLike,

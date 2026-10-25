@@ -12,6 +12,7 @@ import { hasPermissionForLocation, hasMobilePermissionForLocation } from './perm
 import { hasRoleAtLocation } from './role-at-location'
 import { canWriteActivitiesAt } from './activity-write-gate'
 import { ADMIN_ROLES, MANAGER_ROLES } from './schemas'
+import { canEditContact, canDeleteOrRehomeContact } from './contact-edit-gates'
 
 /**
  * May the page load this contact's consultations, coaching goals,
@@ -84,18 +85,36 @@ function memberWithRole(user, locationId, roles) {
  * @param {string|null} locationId
  * @returns {boolean}
  */
-export function canWriteContact(user, locationId) {
-  return memberWithRole(user, locationId, MANAGER_ROLES)
+export function canWriteContact(user, locationId, relationshipStudioIds = []) {
+  // ORGCONTACTS.4 — edit anywhere the person has a relationship (decision 4):
+  // the primary rule as before, or MANAGER_ROLES + Contacts at one of the
+  // contact's relationship studios (src/lib/contact-edit-gates.js).
+  return canEditContact({ user, contact: { location_id: locationId }, relationshipStudioIds })
 }
 
 /**
  * The Edit link and the /contacts/[id]/edit page: the PUT's decision plus the
- * `contacts` permission, both at the contact's location. The page has always
- * required `contacts` on top of the role (a feature gate the PUT does not
- * repeat); judging both here keeps the link and the page in step.
+ * `contacts` permission at the studio that admits the caller (the contact's
+ * location, or — ORGCONTACTS.4 — a relationship studio where they are a
+ * manager with Contacts, which canEditContact already requires). The page has
+ * always required `contacts` on top of the role; judging both here keeps the
+ * link and the page in step.
  */
-export function canOpenContactEditor(user, locationId) {
-  return canWriteContact(user, locationId) && hasPermissionForLocation(user, locationId, 'contacts')
+export function canOpenContactEditor(user, locationId, relationshipStudioIds = []) {
+  if (!canWriteContact(user, locationId, relationshipStudioIds)) return false
+  if (Boolean(user?.isMaster) || memberWithRole(user, locationId, MANAGER_ROLES)) {
+    return hasPermissionForLocation(user, locationId, 'contacts')
+  }
+  return true // admitted through a relationship studio, where Contacts was required
+}
+
+/**
+ * DELETE /api/contacts/[id], GET …/impact and POST …/primary-studio
+ * (ORGCONTACTS.4, decision 4): the primary studio's admins, an organisation
+ * admin of the contact's organisation, or a master.
+ */
+export function canRehomeContact(user, contact) {
+  return canDeleteOrRehomeContact({ user, contact })
 }
 
 /** PATCH /api/contacts/[id]/marketing-preferences: master, or ADMIN_ROLES at the contact. */
@@ -135,15 +154,18 @@ export function canOverrideMemberPassword(user, contact) {
  * @param {object|null} user     getCurrentUser() result
  * @param {object|null} contact  the contacts row (location_id, email, user_id)
  */
-export function contactActionGates(user, contact) {
+export function contactActionGates(user, contact, { relationshipStudioIds = [] } = {}) {
   const loc = contact?.location_id || null
   return {
-    canToggleExempt: canWriteContact(user, loc),
+    canToggleExempt: canWriteContact(user, loc, relationshipStudioIds),
     canEditPrefs: canEditMarketingPreferences(user, loc),
     admin: {
       canPasswordOverride: canOverrideMemberPassword(user, contact),
-      canEdit: canOpenContactEditor(user, loc),
-      canDelete: canWriteContact(user, loc),
+      // ORGCONTACTS.4 — Edit widens to the relationship studios; Delete and
+      // Change primary studio stay with the primary's admins / an org admin.
+      canEdit: canOpenContactEditor(user, loc, relationshipStudioIds),
+      canDelete: canRehomeContact(user, contact),
+      canRehome: canRehomeContact(user, contact),
       canInvite: canInviteToApp(user, contact),
       hasUserAccount: Boolean(contact?.user_id),
       canEditDevices: canEditContactDevices(user, loc),

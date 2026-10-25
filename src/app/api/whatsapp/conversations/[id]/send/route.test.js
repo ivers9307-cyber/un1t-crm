@@ -58,10 +58,6 @@ vi.mock('@/lib/whatsapp', () => ({
 
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
-// WAHOMESTUDIO.1 (R5) — which studio's templates a thread sends. The real
-// resolver is pinned in src/lib/whatsapp-reply-number.test.js.
-vi.mock('@/lib/whatsapp-config', () => ({ templateLocationIdFor: vi.fn() }))
-
 // NOTE: @/lib/validate (real Zod SendMessageSchema) and @/lib/agent/core
 // (pure manualTakeoverPatch) are deliberately NOT mocked.
 
@@ -70,7 +66,6 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen, headerComponentFor } from '@/lib/whatsapp'
 import { logError } from '@/lib/log'
-import { templateLocationIdFor } from '@/lib/whatsapp-config'
 import { SEND_BLOCK_TEXT } from '@shared/wa-template-send'
 
 // ─── IDs ─────────────────────────────────────────────────────────────────────
@@ -212,8 +207,6 @@ beforeEach(() => {
   vi.clearAllMocks()
   getCurrentUser.mockResolvedValue(USER)
   isWindowOpen.mockReturnValue(true)
-  // Default: the thread's own studio owns its templates (the pre-R5 behaviour).
-  templateLocationIdFor.mockImplementation(async (locationId) => locationId)
   sendTextMessage.mockResolvedValue({ messageId: 'wamid.TEST' })
   sendTemplateMessage.mockResolvedValue({ messageId: 'wamid.TPL' })
 })
@@ -537,66 +530,39 @@ describe('the reply goes from the thread number (C86)', () => {
   })
 })
 
-// WAHOMESTUDIO.1 (R5) — a thread at a number-less studio replies through a
-// same-organisation sibling's number; its templates are the number owner's.
-describe('templates come from the studio that owns the thread number (WAHOMESTUDIO.1)', () => {
-  const SIBLING_ID = 'f0000000-0000-0000-0000-000000000006'
+// ORGCONTACTS.0 — templates are the thread studio's, read off the conversation
+// row. The resolver seam (an identity since WAORGNUMBER.6) is gone, and with it
+// the cross-studio Flow refusal it fed.
+describe("templates are the thread studio's (ORGCONTACTS.0)", () => {
+  const OTHER_ID = 'f0000000-0000-0000-0000-000000000006'
 
-  it('reads the template from the number owner, resolved once from the conversation', async () => {
-    templateLocationIdFor.mockResolvedValue(SIBLING_ID)
+  it("reads the template at the thread's studio only", async () => {
     const templateEq = []
     createServerClient.mockReturnValue(makeDb({
-      templateRows: [{ ...TPL_PLAIN, location_id: SIBLING_ID, status: 'APPROVED', created_at: '2026-09-01T00:00:00Z' }],
+      templateRows: [{ ...TPL_PLAIN, location_id: LOC_ID, status: 'APPROVED', created_at: '2026-09-01T00:00:00Z' }],
       templateEq,
     }))
-
     const res = await POST(templateReq(TPL_PLAIN, [bodyParams('ALPHA')]), props)
     expect(res.status).toBe(200)
-    expect(templateLocationIdFor).toHaveBeenCalledTimes(1)
-    expect(templateLocationIdFor).toHaveBeenCalledWith(LOC_ID, CONV_ID)
-    expect(templateEq).toContainEqual(['location_id', SIBLING_ID])
-    expect(templateEq).not.toContainEqual(['location_id', LOC_ID])
+    expect(templateEq).toContainEqual(['location_id', LOC_ID])
+    expect(templateEq).not.toContainEqual(['location_id', OTHER_ID])
     expect(sendTemplateMessage).toHaveBeenCalledTimes(1)
   })
 
-  it('a template only the thread studio has (not the number owner) is refused: nothing sent', async () => {
-    templateLocationIdFor.mockResolvedValue(SIBLING_ID)
+  it('a template only another studio has is refused: nothing sent', async () => {
     createServerClient.mockReturnValue(makeDb({
-      templateRows: [{ ...TPL_PLAIN, location_id: LOC_ID, status: 'APPROVED', created_at: '2026-09-01T00:00:00Z' }],
+      templateRows: [{ ...TPL_PLAIN, location_id: OTHER_ID, status: 'APPROVED', created_at: '2026-09-01T00:00:00Z' }],
     }))
-
     const res = await POST(templateReq(TPL_PLAIN, [bodyParams('ALPHA')]), props)
     expect(res.status).toBe(400)
     expect((await res.json()).error).toMatch(/not in this studio's approved list/)
     expect(sendTemplateMessage).not.toHaveBeenCalled()
   })
 
-  it('a FLOW-button template is refused from a thread whose template studio is another studio', async () => {
-    templateLocationIdFor.mockResolvedValue(SIBLING_ID)
-    const insertSpy = captureInsert()
-    createServerClient.mockReturnValue(makeDb({
-      templateRows: [{ ...TPL_FLOW, location_id: SIBLING_ID, status: 'APPROVED', created_at: '2026-09-01T00:00:00Z' }],
-      insertSpy,
-    }))
-
-    const res = await POST(templateReq(TPL_FLOW, [bodyParams('ALPHA')]), props)
-    expect(res.status).toBe(400)
-    expect((await res.json()).error).toBe('Booking Flow templates can’t be sent from this studio’s threads yet.')
-    expect(sendTemplateMessage).not.toHaveBeenCalled()
-    expect(insertSpy).not.toHaveBeenCalled()
-  })
-
-  it('a FLOW-button template still sends from a thread whose template studio is its own', async () => {
+  it("a FLOW-button template sends from its own studio's thread", async () => {
     createServerClient.mockReturnValue(makeDb({ template: { data: TPL_FLOW, error: null } }))
     const res = await POST(templateReq(TPL_FLOW, [bodyParams('ALPHA')]), props)
     expect(res.status).toBe(200)
     expect(sendTemplateMessage).toHaveBeenCalledTimes(1)
-  })
-
-  it('text and media sends never resolve a template studio', async () => {
-    sendMediaMessage.mockResolvedValue({ messageId: 'wamid.MEDIA' })
-    createServerClient.mockReturnValue(makeDb())
-    expect((await POST(postReq({ type: 'text', text: 'hello' }), props)).status).toBe(200)
-    expect(templateLocationIdFor).not.toHaveBeenCalled()
   })
 })

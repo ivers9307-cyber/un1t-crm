@@ -7,11 +7,11 @@
 //   from(t).update(patch).eq(c, v)…[.select().single()] → updates every match
 //   from(t).delete().eq(c, v)…                       → deletes every match
 //
-// It also stands in for mig 743's AFTER INSERT trigger: a number inserted into
-// whatsapp_numbers gets a link row at its home studio (default only when that
-// studio has no default link yet), so a route that relies on the trigger can be
-// tested without writing the link itself. Every write is recorded on state.ops
-// as { table, op, payload, where: [[col, value], …] }.
+// Since ORGCONTACTS.0 (mig 763 dropped mig 743's AFTER INSERT trigger) a number
+// inserted into whatsapp_numbers gets NO link row from the database: the route
+// writes the home switch-on itself (switchOnAtHome), and a test proves it did.
+// Every write is recorded on state.ops as { table, op, payload, where: [[col,
+// value], …] }.
 //
 // state = { locations, numbers, links?, ops?, faults? }; faults['<table>:<op>']
 // is the { message, code } the call answers with instead of running.
@@ -44,10 +44,6 @@ export function fakeOrgNumbersDb(state) {
       if (q.op === 'insert') {
         const row = { id: `n-fake-${++seq}`, created_at: '2026-10-18T00:00:00.000Z', updated_at: '2026-10-18T00:00:00.000Z', is_active: true, is_default: false, ...q.payload }
         rowsOf(table).push(row)
-        if (table === 'whatsapp_numbers') {
-          const hasDefault = state.links.some((l) => l.location_id === row.location_id && l.is_default)
-          state.links.push({ location_id: row.location_id, whatsapp_number_id: row.id, is_default: !hasDefault, created_by: null })
-        }
         out = [row]
       } else if (q.op === 'update') {
         out = matches()

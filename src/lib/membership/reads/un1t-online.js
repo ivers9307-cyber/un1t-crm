@@ -45,6 +45,7 @@
 // `trialEligibility` additionally reads `un1t_clients` to find the person's
 // accounts and their mirrored credits. Service-role client;
 // reads only, no writes. Every list read is range()+order() paginated.
+import { MEMBERSHIP_FACT_READ_COLS, membershipRowsFromStudioRows } from '../membership-facts.js'
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { logWarn } from '@/lib/log'
 import { dayStrIn, dateKeyIn, monthStartMsIn, dayRangeMsIn, DEFAULT_TZ } from '@/lib/location-time'
@@ -60,8 +61,6 @@ import { radarMembers, winbackContacts, leadContacts, radarPastDue, arrears } fr
 import { freshCutoff } from '@/lib/un1t-online-freshness'
 
 const PAGE = 1000
-const API_SOURCE = 'un1t_online_api'
-const EXPORT_SOURCE = 'un1t_online_export'
 
 // ---------------------------------------------------------------------------
 // Paginated list readers. All throw on a failed page (selectAll); the
@@ -122,14 +121,16 @@ const listSubInitialTransactions = (db, loc) => selectAll((from, to) => db
   .order('id', { ascending: true })
   .range(from, to), { pageSize: PAGE })
 
-const listEndedMemberships = (db, loc) => selectAll((from, to) => db
-  .from('contact_memberships')
-  .select('ended_at')
+// ORGCONTACTS.7 (mig 770): the membership facts live on the relationship row;
+// an ended membership at this studio is a contact_studios row with
+// membership_status = 'ended' (the columns carry only what the un1t sync wrote).
+const listEndedMemberships = async (db, loc) => membershipRowsFromStudioRows(await selectAll((from, to) => db
+  .from('contact_studios')
+  .select(MEMBERSHIP_FACT_READ_COLS)
   .eq('location_id', loc)
-  .eq('source', API_SOURCE)
-  .eq('status', 'ended')
-  .order('id', { ascending: true })
-  .range(from, to), { pageSize: PAGE })
+  .eq('membership_status', 'ended')
+  .order('contact_id', { ascending: true })
+  .range(from, to), { pageSize: PAGE }))
 
 const listClientsAttendance = (db, loc) => selectAll((from, to) => db
   .from('un1t_clients')
@@ -256,13 +257,12 @@ async function growth(db, locationId, now = new Date()) {
 
   const countEnded = (fromIso, toIso) => {
     let q = db
-      .from('contact_memberships')
-      .select('id', { count: 'exact', head: true })
+      .from('contact_studios')
+      .select('contact_id', { count: 'exact', head: true })
       .eq('location_id', locationId)
-      .eq('source', API_SOURCE)
-      .eq('status', 'ended')
-      .gte('ended_at', fromIso)
-    if (toIso) q = q.lt('ended_at', toIso)
+      .eq('membership_status', 'ended')
+      .gte('membership_ended_at', fromIso)
+    if (toIso) q = q.lt('membership_ended_at', toIso)
     return q
   }
 
@@ -469,7 +469,6 @@ const PRODUCT_COLS = 'un1t_id, type, price_cents, credits_per_period, title, exp
 const BOOKING_COLS = 'un1t_user_id, contact_id, event_id, status, source, credit_charged, external_member_ref, remote_created_at'
 // TRIALDONE.2 — ends_at (mig 726) dates "the 3rd class ended" for the outreach.
 const EVENT_COLS = 'un1t_id, starts_at, ends_at'
-const MEMBERSHIP_COLS = 'contact_id, source, status, ended_at'
 // TRIALREGRANT.1 — trialEligibility's re-grant inputs.
 const REGRANT_BOOKING_COLS = 'un1t_id, un1t_user_id, contact_id, status'
 const REGRANT_CLIENT_COLS = 'un1t_user_id, credit_balance, credit_unlimited'
@@ -635,12 +634,12 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
       listAtStudio(db, locationId, 'un1t_bookings', BOOKING_COLS),
       listAtStudio(db, locationId, 'un1t_events', EVENT_COLS),
       selectAll((from, to) => db
-        .from('contact_memberships')
-        .select(MEMBERSHIP_COLS)
+        .from('contact_studios')
+        .select(MEMBERSHIP_FACT_READ_COLS)
         .eq('location_id', locationId)
-        .eq('source', API_SOURCE)
-        .order('id', { ascending: true })
-        .range(from, to), { pageSize: PAGE }),
+        .in('membership_status', ['active', 'ended'])
+        .order('contact_id', { ascending: true })
+        .range(from, to), { pageSize: PAGE }).then(membershipRowsFromStudioRows),
       selectAllByKeys(
         cleanIds(linked.map((c) => c.contact_id)),
         (keys, from, to) => db.from('contacts').select(PIPE_CONTACT_COLS).in('id', keys).order('id', { ascending: true }).range(from, to),
@@ -827,15 +826,15 @@ async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) 
       contactIds.length === 0 ? [] : selectAllByKeys(
         contactIds,
         (keys, from, to) => db
-          .from('contact_memberships')
-          .select(MEMBERSHIP_COLS)
+          .from('contact_studios')
+          .select(MEMBERSHIP_FACT_READ_COLS)
           .eq('location_id', locationId)
           .in('contact_id', keys)
-          .in('source', [API_SOURCE, EXPORT_SOURCE])
-          .order('id', { ascending: true })
+          .in('membership_status', ['active', 'ended'])
+          .order('contact_id', { ascending: true })
           .range(from, to),
         { chunkSize: KEY_CHUNK, pageSize: PAGE },
-      ),
+      ).then(membershipRowsFromStudioRows),
       // Every ledger trial for these people counts, done, sent or unknown alike.
       ledgerTrialsOrThrow(db, locationId, { un1tUserIds: users, contactIds }),
       // TRIALREGRANT.1: was the trial ever used, do they hold credits, and

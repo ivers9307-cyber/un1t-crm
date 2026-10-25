@@ -15,7 +15,6 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/wa-template-access', () => ({ canManageWaTemplatesAt: vi.fn(() => true) }))
 vi.mock('@/lib/whatsapp', () => ({ createTemplate: vi.fn(), getTemplates: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/whatsapp-config', () => ({ templateLocationIdFor: vi.fn() }))
 vi.mock('@/lib/whatsapp-own-number', () => ({ ownNumberOrRefusal: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
@@ -23,7 +22,6 @@ import { GET } from './route.js'
 import { getCurrentUser, assertLocationAccess, assertLocationAccessOr404 } from '@/lib/auth'
 import { getTemplates as getMetaTemplates } from '@/lib/whatsapp'
 import { createServerClient } from '@/lib/supabase'
-import { templateLocationIdFor } from '@/lib/whatsapp-config'
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 
 const HATCH = 'a0000000-0000-4000-8000-000000000002'
@@ -66,21 +64,18 @@ beforeEach(() => {
 })
 
 describe('GET /api/whatsapp/templates?conversation_id= (WAHOMESTUDIO.1)', () => {
-  it("serves the number owner's APPROVED templates for a conversation, authorised on the conversation's studio", async () => {
+  it("serves the thread studio's APPROVED templates for a conversation, authorised on the conversation's studio (ORGCONTACTS.0: no resolver seam)", async () => {
     const db = makeDb()
     createServerClient.mockReturnValue(db)
-    templateLocationIdFor.mockResolvedValue(STILL)
 
     const res = await GET(req(`conversation_id=${CONV}&status=APPROVED`))
     const body = await res.json()
 
     expect(res.status).toBe(200)
     expect(assertLocationAccessOr404).toHaveBeenCalledWith(expect.anything(), HATCH)
-    expect(templateLocationIdFor).toHaveBeenCalledTimes(1)
-    expect(templateLocationIdFor).toHaveBeenCalledWith(HATCH, CONV)
-    expect(body).toMatchObject({ success: true, templates: ROWS, template_location_id: STILL })
+    expect(body).toMatchObject({ success: true, templates: ROWS, template_location_id: HATCH })
     const ops = db.reads.templates[0].ops
-    expect(ops).toContainEqual(['eq', 'location_id', STILL])
+    expect(ops).toContainEqual(['eq', 'location_id', HATCH])
     expect(ops).toContainEqual(['eq', 'status', 'APPROVED'])
     // Same row shape and order as the location mode.
     expect(ops).toContainEqual(['select', '*'])
@@ -90,7 +85,6 @@ describe('GET /api/whatsapp/templates?conversation_id= (WAHOMESTUDIO.1)', () => 
   it('without ?status= it lists every status', async () => {
     const db = makeDb()
     createServerClient.mockReturnValue(db)
-    templateLocationIdFor.mockResolvedValue(HATCH)
     await GET(req(`conversation_id=${CONV}`))
     expect(db.reads.templates[0].ops.some(([op, col]) => op === 'eq' && col === 'status')).toBe(false)
   })
@@ -101,12 +95,10 @@ describe('GET /api/whatsapp/templates?conversation_id= (WAHOMESTUDIO.1)', () => 
     expect(res.status).toBe(404)
     expect(ownNumberOrRefusal).not.toHaveBeenCalled()
     expect(getMetaTemplates).not.toHaveBeenCalled()
-    expect(templateLocationIdFor).not.toHaveBeenCalled()
   })
 
   it('never syncs from Meta, even for a known conversation with ?sync=true', async () => {
     createServerClient.mockReturnValue(makeDb())
-    templateLocationIdFor.mockResolvedValue(STILL)
     const res = await GET(req(`conversation_id=${CONV}&sync=true`))
     expect(res.status).toBe(200)
     expect(ownNumberOrRefusal).not.toHaveBeenCalled()
@@ -126,7 +118,6 @@ describe('GET /api/whatsapp/templates?conversation_id= (WAHOMESTUDIO.1)', () => 
     expect(assertLocationAccessOr404).toHaveBeenCalledWith(expect.anything(), HATCH)
     expect(assertLocationAccess).not.toHaveBeenCalled()
     expect(db.reads.templates).toHaveLength(0)
-    expect(templateLocationIdFor).not.toHaveBeenCalled()
   })
 
   it('a failed conversation read is a 500, not a 404', async () => {
@@ -137,7 +128,6 @@ describe('GET /api/whatsapp/templates?conversation_id= (WAHOMESTUDIO.1)', () => 
 
   it('a failed template read is a 500', async () => {
     createServerClient.mockReturnValue(makeDb({ tplError: { message: 'read failed' } }))
-    templateLocationIdFor.mockResolvedValue(STILL)
     const res = await GET(req(`conversation_id=${CONV}`))
     expect(res.status).toBe(500)
     expect((await res.json()).success).toBe(false)

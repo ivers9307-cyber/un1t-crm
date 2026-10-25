@@ -95,9 +95,10 @@ export async function hatchActiveMembership(db, { locationId, contactId }) {
   if (!sub.ok) return sub
   if (sub.found) reasons.push(`un1t_subscription=${sub.row?.status ?? 'active'}`)
 
-  const membership = await exists(db, 'contact_memberships', {
-    locationId, contactId,
-    build: (q) => q.eq('contact_id', contactId).eq('status', 'active').is('ended_at', null),
+  // ORGCONTACTS.7 (mig 770): an active un1t.online membership is a fact on the relationship row here
+  const membership = await exists(db, 'contact_studios', {
+    locationId, contactId, columns: 'contact_id',
+    build: (q) => q.eq('contact_id', contactId).eq('membership_status', 'active'),
   })
   if (!membership.ok) return membership
   if (membership.found) reasons.push('contact_membership_active')

@@ -115,10 +115,13 @@ export async function POST(request) {
       })
     }
 
-    // No channel — the original channel-agnostic raw-contacts count (kept
-    // for callers that want filter reach, not deliverability).
+    // No channel — the channel-agnostic MATCH count (filter reach, not
+    // deliverability): the contacts with a relationship at the studio
+    // (studio_contacts, mig 765), the same set audience-eligibility.js
+    // builds for the sequence preview and enrolment. ORGCONTACTS.4: the stage
+    // field lands on studio_stage_slug, which the raw contacts table lacks.
     // Count on the FIRST .select() (postgrest-js only reads head/count there).
-    const baseQuery = db.from('contacts').select('id', { count: 'exact', head: true }).eq('location_id', location_id)
+    const baseQuery = db.from('studio_contacts').select('id', { count: 'exact', head: true }).eq('studio_location_id', location_id)
     // Async path resolves virtual fields (event_registration + tag) into the
     // contacts.id constraint before counting — the sync filter silently skips them.
     const { query } = await applyAudienceFilterAsync({

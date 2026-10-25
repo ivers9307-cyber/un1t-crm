@@ -92,11 +92,14 @@ function seed(extra = {}) {
       { id: 't5', location_id: HATCH, un1t_id: 't5', un1t_user_id: 'x', product_id: 'm', product_type: 'subscription', type: 'sub_initial', amount_cents: 18900, refunded: false, remote_created_at: '2026-09-14T09:00:00Z' },
       { id: 't6', location_id: STILLORGAN, un1t_id: 't6', un1t_user_id: 'o', product_id: 'm', product_type: 'subscription', type: 'sub_initial', amount_cents: 99999, refunded: false, remote_created_at: '2026-10-04T09:00:00Z' },
     ],
-    contact_memberships: [
-      { location_id: HATCH, source: 'un1t_online_api', status: 'ended', ended_at: '2026-10-16T08:00:00Z' },
-      { location_id: HATCH, source: 'un1t_online_api', status: 'ended', ended_at: '2026-09-30T08:00:00Z' },
-      { location_id: HATCH, source: 'un1t_online_export', status: 'ended', ended_at: '2026-10-16T08:00:00Z' },
-      { location_id: STILLORGAN, source: 'un1t_online_api', status: 'ended', ended_at: '2026-10-16T08:00:00Z' },
+    // ORGCONTACTS.7 (mig 770): the membership facts live on contact_studios; a row at
+    // another studio, or with no membership recorded, never counts as a cancellation here.
+    contact_studios: [
+      { location_id: HATCH, contact_id: 'c-end-1', membership_plan: 'Unlimited', membership_status: 'ended', membership_since: '2026-01-01T00:00:00Z', membership_ended_at: '2026-10-16T08:00:00Z' },
+      { location_id: HATCH, contact_id: 'c-end-2', membership_plan: 'Unlimited', membership_status: 'ended', membership_since: '2026-01-01T00:00:00Z', membership_ended_at: '2026-09-30T08:00:00Z' },
+      { location_id: HATCH, contact_id: 'c-live', membership_plan: 'Unlimited', membership_status: 'active', membership_since: '2026-01-01T00:00:00Z', membership_ended_at: null },
+      { location_id: HATCH, contact_id: 'c-none', membership_plan: null, membership_status: null, membership_since: null, membership_ended_at: null },
+      { location_id: STILLORGAN, contact_id: 'c-other', membership_plan: 'Unlimited', membership_status: 'ended', membership_since: '2026-01-01T00:00:00Z', membership_ended_at: '2026-10-16T08:00:00Z' },
     ],
     ...extra,
   }
@@ -346,14 +349,14 @@ describe('failure contract (same as the Glofox function each mirrors)', () => {
       await expect(un1tOnlineReads.membershipCounts(makeDb(seed(), { fail: [table] }).db, HATCH)).rejects.toThrow(/boom/)
     }
     await expect(un1tOnlineReads.membershipFlows(makeDb(seed(), { fail: ['un1t_transactions'] }).db, HATCH, 3, NOW.getTime(), { zone: 'Europe/Dublin' })).rejects.toThrow(/boom/)
-    await expect(un1tOnlineReads.membershipFlows(makeDb(seed(), { fail: ['contact_memberships'] }).db, HATCH, 3, NOW.getTime(), { zone: 'Europe/Dublin' })).rejects.toThrow(/boom/)
+    await expect(un1tOnlineReads.membershipFlows(makeDb(seed(), { fail: ['contact_studios'] }).db, HATCH, 3, NOW.getTime(), { zone: 'Europe/Dublin' })).rejects.toThrow(/boom/)
   })
 
   it('mrr, growth, engagement and revenueMtd RETURN { success:false, error }', async () => {
     const cases = [
       ['mrr', 'un1t_subscriptions'],
       ['growth', 'un1t_transactions'],
-      ['growth', 'contact_memberships'],
+      ['growth', 'contact_studios'],
       ['engagement', 'un1t_clients'],
       ['engagement', 'un1t_subscriptions'],
       ['revenueMtd', 'un1t_transactions'],
@@ -721,7 +724,7 @@ describe('pipelineInputs and trialEligibility', () => {
     un1t_products: [prod(), prod({ un1t_id: 'pack5', type: 'one_time', price_cents: 6000, credits_per_period: 5 }), prod({ location_id: STILLORGAN, un1t_id: 'other' })],
     un1t_events: [{ id: 'e1', location_id: HATCH, un1t_id: 'e1', starts_at: '2026-10-10T18:00:00Z' }],
     un1t_bookings: [{ id: 'b1', location_id: HATCH, un1t_id: 'b1', un1t_user_id: 'u1', contact_id: 'c1', event_id: 'e1', status: 'attended', source: 'direct', credit_charged: true, external_member_ref: null, remote_created_at: '2026-10-09T10:00:00Z' }],
-    contact_memberships: [{ id: 'm1', location_id: HATCH, contact_id: 'c1', source: 'un1t_online_api', status: 'ended', ended_at: '2026-09-01T00:00:00Z' }],
+    contact_studios: [{ id: 'cs1', location_id: HATCH, contact_id: 'c1', membership_plan: 'Monthly', membership_status: 'ended', membership_since: '2026-01-01T00:00:00Z', membership_ended_at: '2026-09-01T00:00:00Z' }],
     contacts: [contact(), contact({ id: 'c2', name: 'Test Two', email: 'two@example.test' }), contact({ id: 'c9', location_id: STILLORGAN })],
     ...over,
   })
@@ -763,7 +766,7 @@ describe('pipelineInputs and trialEligibility', () => {
       const { db, log } = makeDb(world())
       await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
       const tables = new Set(log.map((q) => q.table))
-      expect([...tables].sort()).toEqual(['contact_memberships', 'contacts', 'un1t_bookings', 'un1t_clients', 'un1t_events', 'un1t_products', 'un1t_subscriptions', 'un1t_transactions', 'un1t_write_events'])
+      expect([...tables].sort()).toEqual(['contact_studios', 'contacts', 'un1t_bookings', 'un1t_clients', 'un1t_events', 'un1t_products', 'un1t_subscriptions', 'un1t_transactions', 'un1t_write_events'])
       for (const q of log.filter((x) => x.table !== 'contacts')) {
         expect(q.filters, q.table).toContainEqual(['eq', 'location_id', HATCH])
       }
@@ -774,13 +777,15 @@ describe('pipelineInputs and trialEligibility', () => {
         expect(q.filters.map((f) => [f[0], f[1]])).toEqual([['in', 'id']])
         expect(q.cols).not.toMatch(/glofox/)
       }
-      expect(log.some((q) => q.table === 'contact_memberships' && q.filters.some((f) => f[1] === 'source' && f[2] === 'un1t_online_api'))).toBe(true)
+      // the facts read: the relationship rows at the studio, the fact columns (no source filter: the columns carry only what the un1t sync wrote)
+      expect(log.some((q) => q.table === 'contact_studios' && /membership_status/.test(q.cols || ''))).toBe(true)
+      expect(log.some((q) => q.table === 'contact_memberships')).toBe(false)
     })
 
     it('a dual-studio contact (contacts.location_id = Stillorgan) is in the population; their Stillorgan dismissal is not lent', async () => {
       const w = world({
         un1t_clients: [client({ contact_id: 'cd' })],
-        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_memberships: [],
+        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_studios: [],
         contacts: [contact({ id: 'cd', location_id: STILLORGAN, pipeline_dismissed_at: '2026-10-01T00:00:00Z', last_lead_source_at: '2026-10-02T00:00:00Z' })],
       })
       const { db } = makeDb(w)
@@ -812,7 +817,7 @@ describe('pipelineInputs and trialEligibility', () => {
           { id: 'b1', location_id: HATCH, un1t_id: 'b1', un1t_user_id: 'a1', contact_id: null, event_id: 'e1', status: 'attended', source: 'direct', credit_charged: false, external_member_ref: null, remote_created_at: '2026-10-09T10:00:00Z' },
           { id: 'b2', location_id: HATCH, un1t_id: 'b2', un1t_user_id: 'a2', contact_id: null, event_id: 'e1', status: 'booked', source: 'direct', credit_charged: false, external_member_ref: null, remote_created_at: '2026-10-09T11:00:00Z' },
         ],
-        contact_memberships: [], contacts: [contact()],
+        contact_studios: [], contacts: [contact()],
       })
       const { db } = makeDb(w)
       const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
@@ -855,7 +860,7 @@ describe('pipelineInputs and trialEligibility', () => {
     })
 
     it('any failed read → { success:false }', async () => {
-      for (const table of ['un1t_clients', 'un1t_subscriptions', 'un1t_transactions', 'un1t_products', 'un1t_bookings', 'un1t_events', 'contact_memberships', 'contacts']) {
+      for (const table of ['un1t_clients', 'un1t_subscriptions', 'un1t_transactions', 'un1t_products', 'un1t_bookings', 'un1t_events', 'contact_studios', 'contacts']) {
         const { db } = makeDb(world(), { fail: [table] })
         expect(await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() }), table).toEqual({ success: false, error: `${table} boom` })
       }
@@ -920,7 +925,7 @@ describe('pipelineInputs and trialEligibility', () => {
     it('counts only done ledger rows as a trial (a sent, unknown or refused row is not on the board)', async () => {
       // 3 credits on the account: with the trial known, they are trial credits (status 'trial')
       const base = {
-        un1t_transactions: [], contact_memberships: [], un1t_bookings: [],
+        un1t_transactions: [], contact_studios: [], un1t_bookings: [],
         un1t_clients: [client({ credit_balance: 3 }), client({ un1t_user_id: 'u2', contact_id: 'c2' })],
       }
       const trialOf = (stage) => ledger({ un1t_user_id: 'u1', stage, method: 'free_checkout' })
@@ -944,7 +949,7 @@ describe('pipelineInputs and trialEligibility', () => {
     it('a done ledger trial reaches the person through ANY of their linked accounts', async () => {
       const w = world({
         un1t_clients: [client({ un1t_user_id: 'a1', contact_id: 'c1', credit_balance: 1 }), client({ un1t_user_id: 'a2', contact_id: 'c1', credit_balance: 2 })],
-        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_memberships: [],
+        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_studios: [],
         un1t_write_events: [ledger({ un1t_user_id: 'a2', stage: 'done', method: 'charge' })],
       })
       const out = await un1tOnlineReads.pipelineInputs(makeDb(w).db, HATCH, { now: NOW.getTime() })
@@ -954,7 +959,7 @@ describe('pipelineInputs and trialEligibility', () => {
     it("a done ledger trial keyed by contact_id (the account not yet mirrored into un1t_clients) is the contact's trial; a sent one is not", async () => {
       const w = (stage) => world({
         un1t_clients: [client({ credit_balance: 3 })],
-        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_memberships: [],
+        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_studios: [],
         un1t_write_events: [ledger({ un1t_user_id: 'brand-new-account', contact_id: 'c1', stage })],
       })
       const done = await un1tOnlineReads.pipelineInputs(makeDb(w('done')).db, HATCH, { now: NOW.getTime() })
@@ -966,7 +971,7 @@ describe('pipelineInputs and trialEligibility', () => {
     it('a done ledger row reaching a person by both user id and contact id is counted once', async () => {
       const w = world({
         un1t_clients: [client({ credit_balance: 3 })],
-        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_memberships: [],
+        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_studios: [],
         un1t_write_events: [ledger({ un1t_user_id: 'u1', contact_id: 'c1', stage: 'done' })],
       })
       const out = await un1tOnlineReads.pipelineInputs(makeDb(w).db, HATCH, { now: NOW.getTime() })
@@ -988,11 +993,11 @@ describe('pipelineInputs and trialEligibility', () => {
 
   describe('trialEligibility', () => {
     it('UN1TWRITE.10: a user-id-only call reads the transactions and memberships of the account\'s contact too', async () => {
-      const w = world({ un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [], un1t_write_events: [] })
+      const w = world({ un1t_transactions: [], un1t_subscriptions: [], contact_studios: [], un1t_write_events: [] })
       const { db, log } = makeDb(w)
       await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })
       const byContact = log.filter((q) => q.filters.some(([k, c]) => k === 'in' && c === 'contact_id'))
-      expect(byContact.map((q) => q.table).sort()).toEqual(expect.arrayContaining(['contact_memberships', 'un1t_subscriptions', 'un1t_transactions']))
+      expect(byContact.map((q) => q.table).sort()).toEqual(expect.arrayContaining(['contact_studios', 'un1t_subscriptions', 'un1t_transactions']))
       for (const q of byContact) expect(q.filters).toContainEqual(['in', 'contact_id', ['c1']])
     })
 
@@ -1014,11 +1019,11 @@ describe('pipelineInputs and trialEligibility', () => {
       expect(subs.filters).toContainEqual(['in', 'un1t_user_id', ['u1']])
       // the products read is the whole studio's, not narrowed to this person's transactions
       expect(log.find((q) => q.table === 'un1t_products').filters).toEqual([['eq', 'location_id', HATCH]])
-      expect(log.find((q) => q.table === 'contact_memberships').filters).toContainEqual(['in', 'contact_id', ['c1']])
+      expect(log.find((q) => q.table === 'contact_studios').filters).toContainEqual(['in', 'contact_id', ['c1']])
     })
 
     it('a €0 transaction whose product is not in the studio\'s products counts as a trial taken', async () => {
-      const w = world({ un1t_transactions: [ctx({ product_id: 'deleted-upstream' })], contact_memberships: [] })
+      const w = world({ un1t_transactions: [ctx({ product_id: 'deleted-upstream' })], contact_studios: [] })
       const { db } = makeDb(w)
       expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: false } })
     })
@@ -1029,26 +1034,26 @@ describe('pipelineInputs and trialEligibility', () => {
       expect(await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })).toEqual({ success: true, data: { eligible: false, reasons: ['membership_history'], regrant: false } })
     })
 
-    it('with a contactId: memberships at the studio from api and export sources, any status', async () => {
+    it('with a contactId: the membership facts on the relationship rows at THIS studio, any status (ORGCONTACTS.7)', async () => {
       const w = world({
         un1t_transactions: [], un1t_subscriptions: [],
-        contact_memberships: [
-          { id: 'm1', location_id: HATCH, contact_id: 'c1', source: 'un1t_online_export', status: 'active', ended_at: null },
-          { id: 'm2', location_id: STILLORGAN, contact_id: 'c2', source: 'un1t_online_api', status: 'ended', ended_at: '2026-09-01T00:00:00Z' },
-          { id: 'm3', location_id: HATCH, contact_id: 'c2', source: 'glofox', status: 'ended', ended_at: '2026-09-01T00:00:00Z' },
+        contact_studios: [
+          { id: 'cs1', location_id: HATCH, contact_id: 'c1', membership_plan: 'Founding', membership_status: 'active', membership_since: '2026-01-01T00:00:00Z', membership_ended_at: null },
+          { id: 'cs2', location_id: STILLORGAN, contact_id: 'c2', membership_plan: 'Monthly', membership_status: 'ended', membership_since: '2026-01-01T00:00:00Z', membership_ended_at: '2026-09-01T00:00:00Z' },
+          { id: 'cs3', location_id: HATCH, contact_id: 'c2', membership_plan: null, membership_status: null, membership_since: null, membership_ended_at: null },
         ],
       })
       const { db, log } = makeDb(w)
       expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['membership_history'], regrant: false } })
-      // Stillorgan's row and a non-un1t source are not this studio's un1t.online history
+      // Stillorgan's row and a relationship with no membership recorded are not this studio's un1t.online history
       expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c2' })).toEqual({ success: true, data: { eligible: true, reasons: [], regrant: false } })
-      const q = log.find((x) => x.table === 'contact_memberships')
-      expect(q.filters).toContainEqual(['in', 'source', ['un1t_online_api', 'un1t_online_export']])
+      const q = log.find((x) => x.table === 'contact_studios')
+      expect(q.filters).toContainEqual(['in', 'membership_status', ['active', 'ended']])
       expect(q.filters).toContainEqual(['eq', 'location_id', HATCH])
     })
 
     it('a contact-only call finds the trial through the contact\'s un1t accounts (contact-only → trial_used)', async () => {
-      const { db, log } = makeDb(world({ contact_memberships: [], un1t_subscriptions: [] }))
+      const { db, log } = makeDb(world({ contact_studios: [], un1t_subscriptions: [] }))
       expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: false } })
       const clientsQ = log.find((q) => q.table === 'un1t_clients')
       expect(clientsQ.filters).toEqual([['eq', 'location_id', HATCH], ['in', 'contact_id', ['c1']]])
@@ -1056,7 +1061,7 @@ describe('pipelineInputs and trialEligibility', () => {
 
     it('a trial row with a null un1t_user_id but a matching contact_id denies', async () => {
       const w = world({
-        un1t_clients: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_clients: [], un1t_subscriptions: [], contact_studios: [],
         un1t_transactions: [ctx({ un1t_user_id: null, contact_id: 'c1' })],
       })
       const { db } = makeDb(w)
@@ -1070,7 +1075,7 @@ describe('pipelineInputs and trialEligibility', () => {
         un1t_clients: [client({ un1t_user_id: 'a1', contact_id: 'c1' }), client({ un1t_user_id: 'a2', contact_id: 'c1' }), client({ un1t_user_id: 'z', contact_id: 'c2' })],
         un1t_transactions: [ctx({ un1t_user_id: 'a2', contact_id: null })],
         un1t_subscriptions: [csub({ un1t_user_id: 'a2', contact_id: null, status: 'canceled' })],
-        contact_memberships: [],
+        contact_studios: [],
       })
       const { db } = makeDb(w)
       expect(await un1tOnlineReads.trialEligibility(db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used', 'membership_history'], regrant: false } })
@@ -1081,7 +1086,7 @@ describe('pipelineInputs and trialEligibility', () => {
     })
 
     it('a row found by both user id and contact id is counted once', async () => {
-      const w = world({ un1t_subscriptions: [], contact_memberships: [], un1t_transactions: [ctx(), ctx({ un1t_id: 'x2', product_id: 'pack5', amount_cents: 6000, product_type: 'pack' })] })
+      const w = world({ un1t_subscriptions: [], contact_studios: [], un1t_transactions: [ctx(), ctx({ un1t_id: 'x2', product_id: 'pack5', amount_cents: 6000, product_type: 'pack' })] })
       const { db } = makeDb(w)
       expect((await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1', contactId: 'c1' })).data.reasons).toEqual(['trial_used', 'paid_pack'])
     })
@@ -1089,7 +1094,7 @@ describe('pipelineInputs and trialEligibility', () => {
     it('a failed read → { success:false }, never eligible', async () => {
       for (const [table, ids] of [
         ['un1t_transactions', { un1tUserId: 'u1' }], ['un1t_subscriptions', { un1tUserId: 'u1' }],
-        ['un1t_products', { un1tUserId: 'u1' }], ['contact_memberships', { contactId: 'c1' }],
+        ['un1t_products', { un1tUserId: 'u1' }], ['contact_studios', { contactId: 'c1' }],
         ['un1t_clients', { contactId: 'c1' }], ['un1t_transactions', { contactId: 'c1' }], ['un1t_subscriptions', { contactId: 'c1' }],
         // TRIALREGRANT.1: the re-grant's bookings read fails the whole read too.
         ['un1t_bookings', { un1tUserId: 'u1' }], ['un1t_bookings', { contactId: 'c1' }],
@@ -1112,7 +1117,7 @@ describe('pipelineInputs and trialEligibility', () => {
     it('counts a sent or unknown ledger row as trial_used (a trial in flight or in doubt is used)', async () => {
       for (const stage of ['sent', 'unknown', 'done']) {
         for (const method of ['charge', 'free_checkout']) {
-          const w = world({ un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [], un1t_write_events: [ledger({ un1t_user_id: 'u1', stage, method })] })
+          const w = world({ un1t_transactions: [], un1t_subscriptions: [], contact_studios: [], un1t_write_events: [ledger({ un1t_user_id: 'u1', stage, method })] })
           const out = await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'u1' })
           expect(out, `${stage} ${method}`).toEqual({ success: true, data: { eligible: false, reasons: ['trial_used'], regrant: false } })
         }
@@ -1121,7 +1126,7 @@ describe('pipelineInputs and trialEligibility', () => {
 
     it('a refused ledger row, another op, another person and another studio do not deny', async () => {
       const w = world({
-        un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_transactions: [], un1t_subscriptions: [], contact_studios: [],
         un1t_write_events: [
           ledger({ un1t_user_id: 'u1', stage: 'refused' }),
           ledger({ un1t_user_id: 'u1', op: 'book', method: null, target: 'event-1', stage: 'done' }),
@@ -1135,7 +1140,7 @@ describe('pipelineInputs and trialEligibility', () => {
     it('finds the ledger trial through the contact\'s other un1t account', async () => {
       const w = world({
         un1t_clients: [client({ un1t_user_id: 'a1', contact_id: 'c1' }), client({ un1t_user_id: 'a2', contact_id: 'c1' })],
-        un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_transactions: [], un1t_subscriptions: [], contact_studios: [],
         un1t_write_events: [ledger({ un1t_user_id: 'a2', stage: 'unknown' })],
       })
       const { db, log } = makeDb(w)
@@ -1147,7 +1152,7 @@ describe('pipelineInputs and trialEligibility', () => {
     it('a CRM-created account not yet mirrored into un1t_clients: a ledger trial keyed by contact_id denies a contactId-only call', async () => {
       for (const stage of ['done', 'sent', 'unknown']) {
         const w = world({
-          un1t_clients: [], un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+          un1t_clients: [], un1t_transactions: [], un1t_subscriptions: [], contact_studios: [],
           un1t_write_events: [ledger({ un1t_user_id: 'brand-new-account', contact_id: 'c1', stage })],
         })
         const { db, log } = makeDb(w)
@@ -1158,7 +1163,7 @@ describe('pipelineInputs and trialEligibility', () => {
       }
       // another contact's unmirrored account does not deny
       const other = world({
-        un1t_clients: [], un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_clients: [], un1t_transactions: [], un1t_subscriptions: [], contact_studios: [],
         un1t_write_events: [ledger({ un1t_user_id: 'brand-new-account', contact_id: 'c2', stage: 'done' })],
       })
       expect(await un1tOnlineReads.trialEligibility(makeDb(other).db, HATCH, { contactId: 'c1' })).toEqual({ success: true, data: { eligible: true, reasons: [], regrant: false } })
@@ -1167,7 +1172,7 @@ describe('pipelineInputs and trialEligibility', () => {
     it("a un1tUserId-only call also finds a ledger trial keyed by that account's contact (a second, unmirrored account)", async () => {
       const w = world({
         un1t_clients: [client({ un1t_user_id: 'a1', contact_id: 'c1' })],
-        un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_transactions: [], un1t_subscriptions: [], contact_studios: [],
         un1t_write_events: [ledger({ un1t_user_id: 'brand-new-account', contact_id: 'c1', stage: 'done' })],
       })
       expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'a1' }))
@@ -1178,7 +1183,7 @@ describe('pipelineInputs and trialEligibility', () => {
       const siblings = [client({ un1t_user_id: 'a1', contact_id: 'c1' }), client({ un1t_user_id: 'a2', contact_id: 'c1' })]
       for (const stage of ['done', 'sent', 'unknown']) {
         const w = world({
-          un1t_clients: siblings, un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+          un1t_clients: siblings, un1t_transactions: [], un1t_subscriptions: [], contact_studios: [],
           un1t_write_events: [ledger({ un1t_user_id: 'a2', contact_id: null, stage })],
         })
         expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'a1' }), stage)
@@ -1189,7 +1194,7 @@ describe('pipelineInputs and trialEligibility', () => {
     it("a un1tUserId-only call reads the sibling account's transactions and subscriptions too", async () => {
       const siblings = [client({ un1t_user_id: 'a1', contact_id: 'c1' }), client({ un1t_user_id: 'a2', contact_id: 'c1' })]
       const w = world({
-        un1t_clients: siblings, contact_memberships: [], un1t_write_events: [],
+        un1t_clients: siblings, contact_studios: [], un1t_write_events: [],
         un1t_transactions: [ctx({ un1t_user_id: 'a2', contact_id: null })],
         un1t_subscriptions: [csub({ un1t_user_id: 'a2', contact_id: null, status: 'canceled' })],
       })
@@ -1202,7 +1207,7 @@ describe('pipelineInputs and trialEligibility', () => {
     it("a un1tUserId-only call does not widen to another person's accounts", async () => {
       const w = world({
         un1t_clients: [client({ un1t_user_id: 'a1', contact_id: 'c1' }), client({ un1t_user_id: 'z', contact_id: 'c2' })],
-        un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_transactions: [], un1t_subscriptions: [], contact_studios: [],
         un1t_write_events: [ledger({ un1t_user_id: 'z', stage: 'done' })],
       })
       expect(await un1tOnlineReads.trialEligibility(makeDb(w).db, HATCH, { un1tUserId: 'a1' })).toEqual({ success: true, data: { eligible: true, reasons: [], regrant: false } })
@@ -1216,7 +1221,7 @@ describe('pipelineInputs and trialEligibility', () => {
     it('a row found by both user id and contact id is one trial (de-duplicated by ledger row)', async () => {
       const w = world({
         un1t_clients: [client({ un1t_user_id: 'a1', contact_id: 'c1' })],
-        un1t_transactions: [], un1t_subscriptions: [], contact_memberships: [],
+        un1t_transactions: [], un1t_subscriptions: [], contact_studios: [],
         un1t_write_events: [ledger({ un1t_user_id: 'a1', contact_id: 'c1', stage: 'done' })],
       })
       const { db } = makeDb(w)
@@ -1263,7 +1268,7 @@ describe('trialEligibility regrant (TRIALREGRANT.1)', () => {
     un1t_transactions: [trialTx()],
     un1t_products: [{ id: 'p1', location_id: R_LOC, un1t_id: 'trial', type: 'one_time', price_cents: 0, credits_per_period: 3, title: 'The UN1T Trial' }, { id: 'p2', location_id: R_LOC, un1t_id: 'pack5', type: 'one_time', price_cents: 6000, credits_per_period: 5, title: 'Pack' }],
     un1t_bookings: [],
-    contact_memberships: [],
+    contact_studios: [],
     un1t_write_events: [],
     ...over,
   })
@@ -1310,7 +1315,7 @@ describe('trialEligibility regrant (TRIALREGRANT.1)', () => {
   })
 
   it('membership_history or paid_pack beside trial_used → no regrant; an eligible person → regrant false', async () => {
-    expect(await elig(claimed({ contact_memberships: [{ id: 'm1', location_id: R_LOC, contact_id: 'rc', source: 'un1t_online_api', status: 'ended', ended_at: '2026-09-01T00:00:00Z' }] })))
+    expect(await elig(claimed({ contact_studios: [{ id: 'cs1', location_id: R_LOC, contact_id: 'rc', membership_plan: 'Monthly', membership_status: 'ended', membership_since: '2026-01-01T00:00:00Z', membership_ended_at: '2026-09-01T00:00:00Z' }] })))
       .toEqual({ eligible: false, reasons: ['trial_used', 'membership_history'], regrant: false })
     expect(await elig(claimed({ un1t_transactions: [trialTx(), trialTx({ un1t_id: 'rx2', product_id: 'pack5', amount_cents: 6000 })] })))
       .toEqual({ eligible: false, reasons: ['trial_used', 'paid_pack'], regrant: false })

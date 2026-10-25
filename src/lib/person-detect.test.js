@@ -254,7 +254,7 @@ function makeDb(tables = {}) {
       order() { return b },
       range(from, to) { state._range = [from, to]; return b },
       single() { state.single = true; return b },
-      maybeSingle() { return b },
+      maybeSingle() { state.single = true; return b }, // one row or null, as PostgREST answers
       then(resolve_fn, reject_fn) {
         let value
         try { value = resolve() } catch (e) {
@@ -506,7 +506,8 @@ describe('runDetection — commit=true', () => {
     const db = makeDb({
       contacts: [member1, member2, cp],
       person_link_suggestions: [],
-      person_groups: [{ id: 'g1', primary_contact_id: 'member1', location_id: 'loc-1' }],
+      locations: [{ id: 'loc-1', organization_id: 'org-1' }],
+      person_groups: [{ id: 'g1', primary_contact_id: 'member1', organization_id: 'org-1' }],
     })
 
     const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: 'u1' })
@@ -603,7 +604,8 @@ describe('supersedeRedundantPending — commit=true', () => {
           status: 'pending',
         },
       ],
-      person_groups: [{ id: 'g1', primary_contact_id: 'c1', location_id: 'loc-1' }],
+      locations: [{ id: 'loc-1', organization_id: 'org-1' }],
+      person_groups: [{ id: 'g1', primary_contact_id: 'c1', organization_id: 'org-1' }],
     })
 
     const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: 'u1' })
@@ -633,9 +635,10 @@ describe('supersedeRedundantPending — commit=true', () => {
           status: 'pending',
         },
       ],
+      locations: [{ id: 'loc-1', organization_id: 'org-1' }],
       person_groups: [
-        { id: 'g1', primary_contact_id: 'c1', location_id: 'loc-1' },
-        { id: 'g2', primary_contact_id: 'c2', location_id: 'loc-1' },
+        { id: 'g1', primary_contact_id: 'c1', organization_id: 'org-1' },
+        { id: 'g2', primary_contact_id: 'c2', organization_id: 'org-1' },
       ],
     })
 
@@ -661,7 +664,8 @@ describe('supersedeRedundantPending — commit=true', () => {
           status: 'pending',
         },
       ],
-      person_groups: [{ id: 'g1', primary_contact_id: 'c1', location_id: 'loc-1' }],
+      locations: [{ id: 'loc-1', organization_id: 'org-1' }],
+      person_groups: [{ id: 'g1', primary_contact_id: 'c1', organization_id: 'org-1' }],
     })
 
     const result = await runDetection(db, { locationId: 'loc-1', commit: false, actorId: 'u1' })

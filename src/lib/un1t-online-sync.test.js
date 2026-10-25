@@ -59,10 +59,6 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
       const loc = rowsOf('locations').find((l) => l.id === out.location_id)
       out.organization_id = loc ? loc.organization_id : null
     }
-    if (t === 'contact_memberships') {
-      if (out.first_seen_at === undefined) out.first_seen_at = 'DB_DEFAULT_NOW'
-      if (out.created_at === undefined) out.created_at = 'DB_DEFAULT_NOW'
-    }
     return out
   }
 
@@ -154,6 +150,11 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
 const writes = (log) => log.filter((e) => e.op !== 'select')
 const writtenTables = (log) => [...new Set(writes(log).map((e) => e.table))].sort()
 const upserts = (log, table) => log.filter((e) => e.op === 'upsert' && (!table || e.table === table))
+// ORGCONTACTS.7 (mig 770): the membership facts live on contact_studios, written by the sync alone.
+const factsWrites = (log) => log.filter((e) => e.table === 'contact_studios' && e.op === 'update' && e.payload && ('membership_status' in e.payload || 'membership_since' in e.payload))
+const factsRow = (tables, contactId) => (tables.contact_studios || []).find((r) => r.contact_id === contactId && r.location_id === HATCH) || null
+const activeFacts = (tables) => (tables.contact_studios || []).filter((r) => r.membership_status === 'active')
+const factsSeed = (contactId, over = {}) => ({ contact_id: contactId, location_id: HATCH, organization_id: ORG, kind: 'member', status: 'active', source: 'un1t_online', first_seen_at: '2026-09-01T00:00:00.000Z', membership_plan: 'Unlimited', membership_status: 'active', membership_since: '2026-09-01T00:00:00.000Z', membership_ended_at: null, ...over })
 
 // ---------------------------------------------------------------------------
 // A fake un1t.online client.
@@ -232,7 +233,6 @@ function baseSeed(extra = {}) {
       },
     ],
     contacts: [],
-    contact_memberships: [],
     ...extra,
   }
 }
@@ -324,7 +324,10 @@ describe('runUn1tSync', () => {
       ['un1t_invoices', 'location_id,un1t_id'],
       ['un1t_bookings', 'location_id,un1t_id'],
       ['class_bookings', 'location_id,glofox_booking_id'],
-      ['contact_memberships', 'contact_id,location_id,source'],
+      // ORGCONTACTS.1 — one relationship row per linked client (u1 member, u2 and u3 clients)
+      ['contact_studios', 'contact_id,location_id'],
+      ['contact_studios', 'contact_id,location_id'],
+      ['contact_studios', 'contact_id,location_id'],
     ])
 
     // contact_id filled from the resolver.
@@ -336,25 +339,20 @@ describe('runUn1tSync', () => {
     expect(tables.un1t_invoices[0].contact_id).toBe(c1.id)
     expect(r.counts.contacts.created).toBe(3)
 
-    // Membership: only the active subscription.
-    const memUpsert = upserts(log, 'contact_memberships')[0]
-    expect(memUpsert.payload).toEqual([
-      {
-        organization_id: ORG,
-        location_id: HATCH,
-        contact_id: c1.id,
-        source: 'un1t_online_api',
-        plan_name: 'Unlimited',
-        status: 'active',
-        ended_at: null,
-        last_seen_at: NOW_ISO,
-        updated_at: NOW_ISO,
-      },
+    // Membership (ORGCONTACTS.7): the facts land on c1's relationship row, AFTER
+    // the relationship upserts, and only there: the sync never touches contact_memberships.
+    expect(log.some((e) => e.table === 'contact_memberships')).toBe(false)
+    const facts = factsWrites(log)
+    expect(facts.map((e) => e.payload)).toEqual([
+      { membership_plan: 'Unlimited', membership_status: 'active', membership_ended_at: null, updated_at: NOW_ISO },
+      { membership_since: NOW_ISO },
     ])
-    // first_seen_at is never in the payload, so the insert default sets it once.
-    expect(memUpsert.payload[0]).not.toHaveProperty('first_seen_at')
-    expect(tables.contact_memberships).toHaveLength(1)
-    expect(r.counts.memberships).toMatchObject({ active: 1, ended: 0 })
+    for (const e of facts) expect(e.filters).toEqual(expect.arrayContaining([['eq', 'contact_id', c1.id], ['eq', 'location_id', HATCH]]))
+    expect(facts[1].filters).toEqual(expect.arrayContaining([['is', 'membership_since', null]]))
+    expect(log.indexOf(facts[0])).toBeGreaterThan(log.indexOf(upserts(log, 'contact_studios').at(-1)))
+    expect(factsRow(tables, c1.id)).toMatchObject({ kind: 'member', membership_status: 'active', membership_plan: 'Unlimited', membership_since: NOW_ISO, membership_ended_at: null })
+    expect(activeFacts(tables)).toHaveLength(1)
+    expect(r.counts.memberships).toMatchObject({ active: 1, ended: 0, rows_missing: 0, failed: 0 })
 
     // Connection.
     const conn = connRow(tables)
@@ -549,7 +547,7 @@ describe('runUn1tSync', () => {
 
     expect(r).toMatchObject({ ok: false, reason: 'db' })
     expect(upserts(log).map((e) => e.table)).toEqual(['un1t_products'])
-    expect(log.some((e) => e.table === 'contact_memberships' && e.op !== 'select')).toBe(false)
+    expect(log.some((e) => e.table === 'contact_studios' && e.op !== 'select')).toBe(false)
     const conn = connRow(tables)
     expect(conn.status).toBe('error')
     expect(conn.last_error).toContain('un1t_products')
@@ -639,7 +637,7 @@ describe('runUn1tSync', () => {
       expect(runRow(tables).counts.class_occurrences.error).toBeTruthy()
       // The rest of the run carried on: later tables and memberships still wrote.
       expect(tables.un1t_bookings).toHaveLength(2)
-      expect(tables.contact_memberships).toHaveLength(1)
+      expect(activeFacts(tables)).toHaveLength(1)
       expect(logWarn).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('class_occurrences'), expect.objectContaining({ err: { code: null, message: 'class_occurrences upsert boom' } }))
       // The bookings projection is independent of the occurrences one.
       expect(tables.class_bookings).toHaveLength(2)
@@ -667,7 +665,7 @@ describe('runUn1tSync', () => {
       expect(runRow(tables).status).toBe('ok')
       expect(runRow(tables).counts.class_occurrences).toEqual({ skipped: 'membership_source' })
       expect(connRow(tables).status).toBe('connected')
-      expect(tables.contact_memberships).toHaveLength(1)
+      expect(activeFacts(tables)).toHaveLength(1)
     })
   })
 
@@ -734,7 +732,7 @@ describe('runUn1tSync', () => {
       expect(connRow(tables).status).toBe('connected')
       expect(connRow(tables).last_error).toBeNull()
       expect(tables.un1t_bookings).toHaveLength(2)
-      expect(tables.contact_memberships).toHaveLength(1)
+      expect(activeFacts(tables)).toHaveLength(1)
       expect(r.counts.memberships).toMatchObject({ active: 1 })
       expect(logWarn).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('class_bookings'), expect.objectContaining({ err: { code: null, message: 'class_bookings upsert boom' } }))
     })
@@ -785,16 +783,10 @@ describe('runUn1tSync', () => {
     expect(r.counts.tables.un1t_events).toBe(450)
   })
 
-  it('a subscription gone from the pull ends its membership', async () => {
+  it('a subscription gone from the pull ends its membership on the relationship row (since kept, ended_at stamped), filtered on this studio', async () => {
     const seed = baseSeed({
       contacts: [{ id: 'c-gone', organization_id: ORG, location_id: HATCH, email: 'gone@x.ie', un1t_user_id: 'u-gone' }],
-      contact_memberships: [
-        {
-          id: 'm-gone', organization_id: ORG, location_id: HATCH, contact_id: 'c-gone', source: 'un1t_online_api',
-          plan_name: 'Unlimited', status: 'active', ended_at: null, first_seen_at: '2026-09-01T00:00:00.000Z',
-          last_seen_at: '2026-10-15T00:00:00.000Z',
-        },
-      ],
+      contact_studios: [factsSeed('c-gone')],
     })
     const { db, tables, log } = makeDb(seed)
     const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
@@ -802,60 +794,42 @@ describe('runUn1tSync', () => {
     const r = await runUn1tSync(db, HATCH, opts(factory))
 
     expect(r.ok).toBe(true)
-    const row = tables.contact_memberships.find((m) => m.id === 'm-gone')
-    expect(row.status).toBe('ended')
-    expect(row.ended_at).toBe(NOW_ISO)
-    expect(row.first_seen_at).toBe('2026-09-01T00:00:00.000Z')
-    const endUpdate = log.find((e) => e.table === 'contact_memberships' && e.op === 'update')
-    expect(endUpdate.payload).toMatchObject({ status: 'ended', ended_at: NOW_ISO })
-    expect(endUpdate.filters).toEqual(expect.arrayContaining([['eq', 'status', 'active']]))
+    expect(factsRow(tables, 'c-gone')).toMatchObject({ membership_status: 'ended', membership_ended_at: NOW_ISO, membership_since: '2026-09-01T00:00:00.000Z', membership_plan: 'Unlimited', status: 'active', kind: 'client' })
+    const endUpdate = factsWrites(log).find((e) => e.payload.membership_status === 'ended')
+    expect(endUpdate.payload).toEqual({ membership_status: 'ended', membership_ended_at: NOW_ISO, updated_at: NOW_ISO })
+    expect(endUpdate.filters).toEqual(expect.arrayContaining([['eq', 'contact_id', 'c-gone'], ['eq', 'location_id', HATCH]]))
     expect(r.counts.memberships.ended).toBe(1)
     expect(log.some((e) => e.op === 'delete')).toBe(false)
   })
 
-  it('a cancelled subscription ends the membership; a reactivated one re-activates the same row', async () => {
-    const { db, tables, log } = makeDb(baseSeed())
+  it('a cancelled subscription ends the membership; a reactivated one re-activates the same row with its since kept (Review Focus 1)', async () => {
+    const { db, tables } = makeDb(baseSeed())
     const lists = fixtureLists()
 
-    // Run 1: s1 active → one active row.
+    // Run 1: s1 active → the relationship row carries an active membership, since = run 1.
     await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists }).factory, new Date('2026-10-16T10:00:00.000Z')))
-    expect(tables.contact_memberships).toHaveLength(1)
-    const rowId = tables.contact_memberships[0].id
-    expect(tables.contact_memberships[0].status).toBe('active')
+    const c1 = tables.contacts.find((c) => c.un1t_user_id === 'u1')
+    expect(activeFacts(tables)).toHaveLength(1)
+    expect(factsRow(tables, c1.id)).toMatchObject({ membership_status: 'active', membership_since: '2026-10-16T10:00:00.000Z', membership_ended_at: null })
 
-    // Run 2: s1 cancelled → ended.
+    // Run 2: s1 cancelled → ended, since untouched.
     const cancelled = fixtureLists()
     cancelled['/subscriptions'][0].status = 'canceled'
     await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: cancelled }).factory, new Date('2026-10-17T10:00:00.000Z')))
-    expect(tables.contact_memberships).toHaveLength(1)
-    expect(tables.contact_memberships[0]).toMatchObject({ id: rowId, status: 'ended', ended_at: '2026-10-17T10:00:00.000Z' })
+    expect(factsRow(tables, c1.id)).toMatchObject({ membership_status: 'ended', membership_ended_at: '2026-10-17T10:00:00.000Z', membership_since: '2026-10-16T10:00:00.000Z' })
 
-    // Run 3: s1 active again → the same row, active, ended_at cleared.
+    // Run 3: s1 active again → the same row, active, ended_at cleared, since still run 1's.
     const back = fixtureLists()
     await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: back }).factory, new Date('2026-10-18T10:00:00.000Z')))
-    expect(tables.contact_memberships).toHaveLength(1)
-    expect(tables.contact_memberships[0]).toMatchObject({
-      id: rowId,
-      status: 'active',
-      ended_at: null,
-      last_seen_at: '2026-10-18T10:00:00.000Z',
-      first_seen_at: 'DB_DEFAULT_NOW',
-    })
-    const lastUpsert = upserts(log, 'contact_memberships').at(-1)
-    expect(lastUpsert.options.onConflict).toBe('contact_id,location_id,source')
-    expect(lastUpsert.payload[0]).toMatchObject({ status: 'active', ended_at: null })
-    expect(log.some((e) => e.op === 'delete')).toBe(false)
+    expect(factsRow(tables, c1.id)).toMatchObject({ membership_status: 'active', membership_ended_at: null, membership_since: '2026-10-16T10:00:00.000Z', membership_plan: 'Unlimited' })
+    expect((tables.contact_studios || []).filter((r) => r.contact_id === c1.id)).toHaveLength(1)
   })
 
-  it('export-source membership rows are untouched', async () => {
+  it('the sync never reads or writes contact_memberships, and every membership facts read and write is scoped to this studio (Review Focus 4)', async () => {
     const seed = baseSeed({
-      contacts: [{ id: 'c-exp', organization_id: ORG, location_id: HATCH, email: 'exp@x.ie', un1t_user_id: null }],
-      contact_memberships: [
-        {
-          id: 'm-exp', organization_id: ORG, location_id: HATCH, contact_id: 'c-exp', source: 'un1t_online_export',
-          plan_name: 'Founding', status: 'active', ended_at: null, first_seen_at: 'x', last_seen_at: 'x',
-        },
-      ],
+      contacts: [{ id: 'c-else', organization_id: ORG, location_id: 'loc-stillorgan', email: 'else@x.ie', un1t_user_id: 'u-else' }],
+      // an active membership at ANOTHER studio must be neither read as this studio's nor ended by it
+      contact_studios: [factsSeed('c-else', { location_id: 'loc-stillorgan' })],
     })
     const { db, tables, log } = makeDb(seed)
     const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
@@ -863,11 +837,54 @@ describe('runUn1tSync', () => {
     const r = await runUn1tSync(db, HATCH, opts(factory))
 
     expect(r.ok).toBe(true)
-    expect(tables.contact_memberships.find((m) => m.id === 'm-exp')).toMatchObject({ status: 'active', ended_at: null, plan_name: 'Founding' })
-    // Every membership read and write is scoped to the api source.
-    for (const e of log.filter((x) => x.table === 'contact_memberships' && x.op !== 'upsert')) {
-      expect(e.filters).toEqual(expect.arrayContaining([['eq', 'source', 'un1t_online_api'], ['eq', 'location_id', HATCH]]))
+    expect(log.some((e) => e.table === 'contact_memberships')).toBe(false)
+    const other = tables.contact_studios.find((x) => x.contact_id === 'c-else')
+    expect(other).toMatchObject({ membership_status: 'active', membership_ended_at: null, location_id: 'loc-stillorgan' })
+    for (const e of log.filter((x) => x.table === 'contact_studios' && (x.op === 'update' || (x.op === 'select' && x.filters.some((f) => f[1] === 'membership_status'))))) {
+      expect(e.filters).toEqual(expect.arrayContaining([['eq', 'location_id', HATCH]]))
     }
+    expect(r.counts.memberships.ended).toBe(0)
+  })
+
+  it('a member whose relationship row could not be written is counted in rows_missing and logged; the run stays ok (Review Focus 3)', async () => {
+    const { db, tables, log } = makeDb(baseSeed(), { failUpsert: ['contact_studios'] })
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    expect(r.counts.memberships).toMatchObject({ active: 1, rows_missing: 1, failed: 0 })
+    expect(activeFacts(tables)).toHaveLength(0)
+    expect(logError).toHaveBeenCalledWith('un1t-online-sync', expect.stringMatching(/no relationship row/), expect.objectContaining({ locationId: HATCH }))
+    expect(factsWrites(log)).toHaveLength(1) // the one update that touched nothing; no since stamp
+  })
+
+  it('an unchanged active member gets NO facts write on the next run (counted unchanged); a plan change is written (final review I3)', async () => {
+    const { db, tables, log } = makeDb(baseSeed())
+    const lists = fixtureLists()
+    await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists }).factory, new Date('2026-10-16T10:00:00.000Z')))
+    const c1 = tables.contacts.find((c) => c.un1t_user_id === 'u1')
+    const before = log.length
+    const r2 = await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: fixtureLists() }).factory, new Date('2026-10-16T10:15:00.000Z')))
+    expect(factsWrites(log.slice(before))).toEqual([])
+    expect(r2.counts.memberships).toMatchObject({ active: 1, activated: 0, unchanged: 1, ended: 0 })
+    expect(factsRow(tables, c1.id)).toMatchObject({ membership_status: 'active', membership_since: '2026-10-16T10:00:00.000Z' })
+    const renamed = fixtureLists()
+    renamed['/subscriptions'][0].product = { title: 'Unlimited Plus' }
+    const b2 = log.length
+    const r3 = await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: renamed }).factory, new Date('2026-10-16T10:30:00.000Z')))
+    expect(factsWrites(log.slice(b2)).map((e) => e.payload)).toEqual([{ membership_plan: 'Unlimited Plus', membership_status: 'active', membership_ended_at: null, updated_at: '2026-10-16T10:30:00.000Z' }, { membership_since: '2026-10-16T10:30:00.000Z' }])
+    expect(r3.counts.memberships).toMatchObject({ activated: 1, unchanged: 0 })
+    expect(factsRow(tables, c1.id)).toMatchObject({ membership_plan: 'Unlimited Plus', membership_since: '2026-10-16T10:00:00.000Z' })
+  })
+
+  it('an ending is guarded on the row still being active: the update filters membership_status = active (final review I2)', async () => {
+    const seed = baseSeed({
+      contacts: [{ id: 'c-gone', organization_id: ORG, location_id: HATCH, email: 'gone@x.ie', un1t_user_id: 'u-gone' }],
+      contact_studios: [factsSeed('c-gone')],
+    })
+    const { db, log } = makeDb(seed)
+    await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: fixtureLists() }).factory))
+    const endUpdate = factsWrites(log).find((e) => e.payload.membership_status === 'ended')
+    expect(endUpdate.filters).toEqual(expect.arrayContaining([['eq', 'membership_status', 'active'], ['eq', 'contact_id', 'c-gone'], ['eq', 'location_id', HATCH]]))
   })
 
   it('an active subscription whose user has no contact is skipped and counted', async () => {
@@ -878,7 +895,7 @@ describe('runUn1tSync', () => {
     const r = await runUn1tSync(db, HATCH, opts(factory))
     expect(r.ok).toBe(true)
     expect(r.counts.memberships.skipped_no_contact).toBe(1)
-    expect(tables.contact_memberships).toHaveLength(1)
+    expect(activeFacts(tables)).toHaveLength(1)
     expect(tables.un1t_subscriptions.find((s) => s.un1t_id === 's9').contact_id).toBeNull()
   })
 
@@ -917,10 +934,7 @@ describe('runUn1tSync', () => {
           { id: 'c-ghost', organization_id: ORG, location_id: HATCH, email: 'ghost@x.ie', un1t_user_id: 'u-ghost', first_name: 'Ghost', last_name: 'G', phone: '+353870000009' },
           { id: 'c-gone', organization_id: ORG, location_id: HATCH, email: 'gone@x.ie', un1t_user_id: 'u-gone', first_name: 'Gone', last_name: 'G', phone: '+353870000008' },
         ],
-        contact_memberships: [
-          { id: 'm-ghost', organization_id: ORG, location_id: HATCH, contact_id: 'c-ghost', source: 'un1t_online_api', plan_name: 'Unlimited', status: 'active', ended_at: null },
-          { id: 'm-gone', organization_id: ORG, location_id: HATCH, contact_id: 'c-gone', source: 'un1t_online_api', plan_name: 'Unlimited', status: 'active', ended_at: null },
-        ],
+        contact_studios: [factsSeed('c-ghost'), factsSeed('c-gone')],
       })
 
     it("does not end that user's contact's existing active membership, but still ends an unrelated one", async () => {
@@ -930,8 +944,8 @@ describe('runUn1tSync', () => {
       const { factory } = makeClient({ self: SELF, lists })
       const r = await runUn1tSync(db, HATCH, opts(factory))
       expect(r.ok).toBe(true)
-      expect(tables.contact_memberships.find((m) => m.id === 'm-ghost')).toMatchObject({ status: 'active', ended_at: null })
-      expect(tables.contact_memberships.find((m) => m.id === 'm-gone')).toMatchObject({ status: 'ended', ended_at: NOW_ISO })
+      expect(factsRow(tables, 'c-ghost')).toMatchObject({ membership_status: 'active', membership_ended_at: null })
+      expect(factsRow(tables, 'c-gone')).toMatchObject({ membership_status: 'ended', membership_ended_at: NOW_ISO })
       expect(r.counts.memberships.end_skipped_unresolved).toBe(1)
     })
 
@@ -942,8 +956,8 @@ describe('runUn1tSync', () => {
       const { factory } = makeClient({ self: SELF, lists })
       const r = await runUn1tSync(db, HATCH, opts(factory))
       expect(r.ok).toBe(true)
-      expect(tables.contact_memberships.find((m) => m.id === 'm-gone').status).toBe('active')
-      expect(tables.contact_memberships.find((m) => m.id === 'm-ghost').status).toBe('active')
+      expect(factsRow(tables, 'c-gone').membership_status).toBe('active')
+      expect(factsRow(tables, 'c-ghost').membership_status).toBe('active')
       expect(r.counts.memberships).toMatchObject({ end_skipped: 'contacts_unresolved', ended: 0 })
       expect(r.counts.memberships.would_end).toBeGreaterThan(0)
     })
@@ -955,14 +969,12 @@ describe('runUn1tSync', () => {
     const { db, tables } = makeDb(baseSeed())
     const { factory } = makeClient({ self: SELF, lists })
     await runUn1tSync(db, HATCH, opts(factory))
-    expect(tables.contact_memberships[0].plan_name).toBe('Membership')
+    expect(activeFacts(tables)[0].membership_plan).toBe('Membership')
   })
 
   it('a failed contacts read leaves every membership active this run (unknown is not cancelled)', async () => {
     const seed = baseSeed({
-      contact_memberships: [
-        { id: 'm-old', organization_id: ORG, location_id: HATCH, contact_id: 'c-old', source: 'un1t_online_api', plan_name: 'X', status: 'active', ended_at: null },
-      ],
+      contact_studios: [factsSeed('c-old', { membership_plan: 'X' })],
     })
     // Every contacts read fails → every client fails to resolve, and the read
     // that would pick out their contacts fails too.
@@ -970,7 +982,7 @@ describe('runUn1tSync', () => {
     const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
     const r = await runUn1tSync(db, HATCH, opts(factory))
     expect(r.ok).toBe(true)
-    expect(tables.contact_memberships.find((m) => m.id === 'm-old').status).toBe('active')
+    expect(factsRow(tables, 'c-old').membership_status).toBe('active')
     expect(r.counts.memberships.end_skipped).toBe('contacts_unreadable')
     expect(r.counts.contacts.failed).toBe(3)
   })
@@ -985,10 +997,7 @@ describe('runUn1tSync', () => {
           { id: 'c-fail', organization_id: ORG, location_id: HATCH, email: 'one@x.ie', un1t_user_id: 'u1', first_name: null, last_name: 'One', phone: '+353870000001' },
           { id: 'c-other', organization_id: ORG, location_id: HATCH, email: 'two@x.ie', un1t_user_id: 'u2', first_name: 'Two', last_name: 'Two', phone: '+353870000002' },
         ],
-        contact_memberships: [
-          { id: 'm-fail', organization_id: ORG, location_id: HATCH, contact_id: 'c-fail', source: 'un1t_online_api', plan_name: 'Unlimited', status: 'active', ended_at: null },
-          { id: 'm-other', organization_id: ORG, location_id: HATCH, contact_id: 'c-other', source: 'un1t_online_api', plan_name: 'Unlimited', status: 'active', ended_at: null },
-        ],
+        contact_studios: [factsSeed('c-fail'), factsSeed('c-other')],
       })
 
     it("still ends a DIFFERENT contact's cancelled membership", async () => {
@@ -997,7 +1006,7 @@ describe('runUn1tSync', () => {
       const r = await runUn1tSync(db, HATCH, opts(factory))
       expect(r.ok).toBe(true)
       expect(r.counts.contacts.failed).toBe(1)
-      expect(tables.contact_memberships.find((m) => m.id === 'm-other')).toMatchObject({ status: 'ended', ended_at: NOW_ISO })
+      expect(factsRow(tables, 'c-other')).toMatchObject({ membership_status: 'ended', membership_ended_at: NOW_ISO })
       expect(r.counts.memberships.ended).toBe(1)
       expect(r.counts.memberships.end_skipped).toBeUndefined()
     })
@@ -1006,7 +1015,7 @@ describe('runUn1tSync', () => {
       const { db, tables } = makeDb(seed(), { failUpdateIds: ['c-fail'] })
       const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
       const r = await runUn1tSync(db, HATCH, opts(factory))
-      expect(tables.contact_memberships.find((m) => m.id === 'm-fail')).toMatchObject({ status: 'active', ended_at: null })
+      expect(factsRow(tables, 'c-fail')).toMatchObject({ membership_status: 'active', membership_ended_at: null })
       expect(r.counts.memberships.end_skipped_unresolved).toBe(1)
       // Its active subscription could not be attributed this run.
       expect(r.counts.memberships.skipped_no_contact).toBe(1)
@@ -1017,38 +1026,38 @@ describe('runUn1tSync', () => {
       for (const day of ['2026-10-16', '2026-10-17']) {
         await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: fixtureLists() }).factory, new Date(`${day}T10:00:00.000Z`)))
       }
-      expect(tables.contact_memberships.find((m) => m.id === 'm-fail').status).toBe('active')
-      expect(tables.contact_memberships.find((m) => m.id === 'm-other').status).toBe('ended')
+      expect(factsRow(tables, 'c-fail').membership_status).toBe('active')
+      expect(factsRow(tables, 'c-other').membership_status).toBe('ended')
     })
   })
 
   it('does not end every membership on an empty subscription pull', async () => {
-    const seed = baseSeed({
-      contact_memberships: [
-        { id: 'm-old', organization_id: ORG, location_id: HATCH, contact_id: 'c-old', source: 'un1t_online_api', plan_name: 'X', status: 'active', ended_at: null },
-      ],
-    })
+    const seed = baseSeed({ contact_studios: [factsSeed('c-old', { membership_plan: 'X' })] })
     const lists = fixtureLists()
     lists['/subscriptions'] = []
     const { db, tables } = makeDb(seed)
     const { factory } = makeClient({ self: SELF, lists })
     const r = await runUn1tSync(db, HATCH, opts(factory))
     expect(r.ok).toBe(true)
-    expect(tables.contact_memberships.find((m) => m.id === 'm-old').status).toBe('active')
+    expect(factsRow(tables, 'c-old').membership_status).toBe('active')
     expect(r.counts.memberships.end_skipped).toBe('no_subscriptions_pulled')
   })
 
-  it('a failed membership end is db', async () => {
-    const seed = baseSeed({
-      contact_memberships: [
-        { id: 'm-old', organization_id: ORG, location_id: HATCH, contact_id: 'c-old', source: 'un1t_online_api', plan_name: 'X', status: 'active', ended_at: null },
-      ],
-    })
-    const { db, tables } = makeDb(seed, { failUpdate: ['contact_memberships'] })
-    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
-    const r = await runUn1tSync(db, HATCH, opts(factory))
+  it('a failed membership facts READ is db (unknown is not cancelled); a failed facts WRITE is counted and logged, never the run\'s failure', async () => {
+    let seed = baseSeed({ contact_studios: [factsSeed('c-old', { membership_plan: 'X' })] })
+    let { db, tables } = makeDb(seed, { failSelect: ['contact_studios'] })
+    let r = await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: fixtureLists() }).factory))
     expect(r).toMatchObject({ ok: false, reason: 'db' })
-    expect(connRow(tables).last_error).toContain('contact_memberships')
+    expect(connRow(tables).last_error).toContain('membership facts')
+    expect(factsRow(tables, 'c-old').membership_status).toBe('active')
+
+    seed = baseSeed({ contact_studios: [factsSeed('c-old', { membership_plan: 'X' })] })
+    ;({ db, tables } = makeDb(seed, { failUpdate: ['contact_studios'] }))
+    r = await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: fixtureLists() }).factory))
+    expect(r.ok).toBe(true)
+    expect(r.counts.memberships.failed).toBeGreaterThan(0)
+    expect(logError).toHaveBeenCalledWith('un1t-online-sync', 'membership facts not written', expect.objectContaining({ locationId: HATCH }))
+    expect(factsRow(tables, 'c-old').membership_status).toBe('active')
   })
 
   it('a failed connection or run-row bookkeeping write does not change the result', async () => {
@@ -1216,17 +1225,13 @@ describe('runUn1tSync', () => {
   it('a resolver error with no un1t_user_id ends nothing this run (fail closed)', async () => {
     const lists = fixtureLists()
     lists['/users/clients'] = [...lists['/users/clients'], { email: 'noid@x.ie', first_name: 'No Id' }]
-    const seed = baseSeed({
-      contact_memberships: [
-        { id: 'm-old', organization_id: ORG, location_id: HATCH, contact_id: 'c-old', source: 'un1t_online_api', plan_name: 'X', status: 'active', ended_at: null },
-      ],
-    })
+    const seed = baseSeed({ contact_studios: [factsSeed('c-old', { membership_plan: 'X' })] })
     const { db, tables } = makeDb(seed)
     const { factory } = makeClient({ self: SELF, lists })
     const r = await runUn1tSync(db, HATCH, opts(factory))
     expect(r.ok).toBe(true)
     expect(r.counts.contacts.failed).toBe(1)
-    expect(tables.contact_memberships.find((m) => m.id === 'm-old').status).toBe('active')
+    expect(factsRow(tables, 'c-old').membership_status).toBe('active')
     expect(r.counts.memberships).toMatchObject({ end_skipped: 'contacts_unresolved', would_end: 1, ended: 0 })
   })
 
@@ -1238,10 +1243,7 @@ describe('runUn1tSync', () => {
         { id: 'c-att', organization_id: ORG, location_id: STILLORGAN, email: 'one@x.ie', un1t_user_id: null, first_name: 'One', last_name: 'One', phone: '+353870000001' },
         { id: 'c-other', organization_id: ORG, location_id: HATCH, email: 'two@x.ie', un1t_user_id: 'u2', first_name: 'Two', last_name: 'Two', phone: '+353870000002' },
       ],
-      contact_memberships: [
-        { id: 'm-att', organization_id: ORG, location_id: HATCH, contact_id: 'c-att', source: 'un1t_online_api', plan_name: 'Unlimited', status: 'active', ended_at: null },
-        { id: 'm-other', organization_id: ORG, location_id: HATCH, contact_id: 'c-other', source: 'un1t_online_api', plan_name: 'Unlimited', status: 'active', ended_at: null },
-      ],
+      contact_studios: [factsSeed('c-att'), factsSeed('c-other')],
     })
     const { db, tables } = makeDb(seed, { failUpdateIds: ['c-att'] })
     const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
@@ -1249,17 +1251,13 @@ describe('runUn1tSync', () => {
     expect(r.ok).toBe(true)
     expect(r.counts.contact_errors).toEqual([expect.objectContaining({ un1t_user_id: 'u1', contact_id: 'c-att' })])
     expect(tables.contacts.find((c) => c.id === 'c-att').un1t_user_id).toBeNull()
-    expect(tables.contact_memberships.find((m) => m.id === 'm-att')).toMatchObject({ status: 'active', ended_at: null })
-    expect(tables.contact_memberships.find((m) => m.id === 'm-other').status).toBe('ended')
+    expect(factsRow(tables, 'c-att')).toMatchObject({ membership_status: 'active', membership_ended_at: null })
+    expect(factsRow(tables, 'c-other').membership_status).toBe('ended')
     expect(r.counts.memberships.end_skipped_unresolved).toBe(1)
   })
 
   it('never issues a delete anywhere in a run', async () => {
-    const seed = baseSeed({
-      contact_memberships: [
-        { id: 'm-old', organization_id: ORG, location_id: HATCH, contact_id: 'c-old', source: 'un1t_online_api', plan_name: 'X', status: 'active', ended_at: null },
-      ],
-    })
+    const seed = baseSeed({ contact_studios: [factsSeed('c-old', { membership_plan: 'X' })] })
     const { db, log } = makeDb(seed)
     const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
     await runUn1tSync(db, HATCH, opts(factory))
@@ -1467,5 +1465,65 @@ describe('pickFreshSignups (SHAREDCONTACT.1)', () => {
   it('a contact reached twice fires once', () => {
     const n = { contactId: 'dup', how: 'created', homeLocationId: HATCH_ID, remoteCreatedAt: ago(60000) }
     expect(pickFreshSignups([n, { ...n }], { locationId: HATCH_ID, nowIso: NOW }).fresh).toHaveLength(1)
+  })
+})
+
+// ORGCONTACTS.1 (plan Task 8) — the sync dual-writes contact_studios (mig 764;
+// src/lib/contact-studios.js): a member row for every live subscriber, a
+// client row for every other client linked to a contact, and a client row
+// (never an ended one) for a membership this run ends. Since ORGCONTACTS.7
+// (mig 770) the membership facts ride the same rows, written right after; a
+// failed contact_studios write is counted and logged, never the run's status.
+describe('contact_studios dual-write (ORGCONTACTS.1)', () => {
+  const studioRows = (log) => log.filter((e) => e.table === 'contact_studios')
+
+  it('writes a member row for the live subscriber and client rows for the other linked clients', async () => {
+    const { db, tables, log } = makeDb(baseSeed())
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    const byUser = (u) => tables.contacts.find((c) => c.un1t_user_id === u).id
+    const rows = tables.contact_studios
+    expect(rows.find((x) => x.contact_id === byUser('u1'))).toMatchObject({ location_id: HATCH, kind: 'member', status: 'active', source: 'un1t_online', ended_at: null })
+    expect(rows.find((x) => x.contact_id === byUser('u2'))).toMatchObject({ location_id: HATCH, kind: 'client', status: 'active', source: 'un1t_online' })
+    expect(rows.find((x) => x.contact_id === byUser('u3'))).toMatchObject({ kind: 'client' })
+    expect(rows).toHaveLength(3)
+    expect(r.counts.contact_studios).toEqual({ member: 1, client: 2, failed: 0 })
+    // the upsert conflicts on the relationship key and carries no activity stamp
+    for (const w of upserts(log, 'contact_studios')) {
+      expect(w.options.onConflict).toBe('contact_id,location_id')
+      expect(w.payload).not.toHaveProperty('last_seen_at')
+      expect(w.payload).not.toHaveProperty('first_seen_at')
+    }
+    // first_seen_at rides a guarded update that can only move it EARLIER (the
+    // other contact_studios updates are the membership facts, ORGCONTACTS.7)
+    const seen = log.filter((e) => e.table === 'contact_studios' && e.op === 'update' && 'first_seen_at' in e.payload)
+    expect(seen.length).toBe(3)
+    expect(seen[0].filters).toEqual(expect.arrayContaining([['gt', 'first_seen_at', NOW_ISO]]))
+  })
+
+  it('a membership this run ends becomes a client row, never an ended one', async () => {
+    const seed = baseSeed({
+      contacts: [{ id: 'c-gone', organization_id: ORG, location_id: HATCH, email: 'gone@x.ie', un1t_user_id: 'u-gone' }],
+      contact_studios: [factsSeed('c-gone', { last_seen_at: '2026-10-15T00:00:00.000Z' })],
+    })
+    const { db, tables } = makeDb(seed)
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    const gone = tables.contact_studios.find((x) => x.contact_id === 'c-gone')
+    expect(gone).toMatchObject({ membership_status: 'ended', membership_ended_at: NOW_ISO })
+    expect(gone).toMatchObject({ kind: 'client', status: 'active', ended_at: null, last_seen_at: '2026-10-15T00:00:00.000Z' })
+    expect(r.counts.contact_studios).toEqual({ member: 1, client: 3, failed: 0 })
+  })
+
+  it('a failed contact_studios write is counted and logged; the run still succeeds and the facts are counted missing', async () => {
+    const { db, tables } = makeDb(baseSeed(), { failUpsert: ['contact_studios'] })
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    expect(r.counts.memberships).toMatchObject({ active: 1, rows_missing: 1 })
+    expect(r.counts.contact_studios).toEqual({ member: 0, client: 0, failed: 3 })
+    expect(logError).toHaveBeenCalledWith('un1t-online-sync', expect.stringMatching(/contact_studios/), expect.objectContaining({ locationId: HATCH }))
   })
 })

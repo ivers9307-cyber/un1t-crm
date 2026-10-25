@@ -6,6 +6,9 @@ import { validateBody } from '@/lib/validate'
 import { email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { triggerSequencesForTagsAdded } from '@/lib/sequences'
 import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { canEditContact, canDeleteOrRehomeContact } from '@/lib/contact-edit-gates'
+import { studiosOfContact } from '@/lib/contact-studios'
+import { isOrgAdminSomewhere } from '@/lib/org-admin'
 import { redactWhatsAppForContact, redactInBodyForContact, getContactImpact } from '@/lib/contact-merge'
 import { redactMailForContact } from '@/lib/contact-mail-erasure'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
@@ -97,18 +100,18 @@ export async function PUT(request, props) {
   // contact at any location/org by id. Mirrors the DELETE handler's
   // guard below; 404 (not 403) so a cross-tenant probe can't confirm
   // an id exists — same convention as assertRowInOrg.
-  if (auth.user && auth.user.role !== 'master') {
-    const userLocIds = (auth.user.locations || []).map((l) => l.id)
-    if (!oldRow || !userLocIds.includes(oldRow.location_id)) {
+  // ROLESWEEP.1c/.2 — requireApiKeyOrManager's cookie branch only says
+  // "Manager+ somewhere" (src/lib/api-auth.js); THIS is the decision.
+  // ORGCONTACTS.4 (decision 4): MANAGER_ROLES at the contact's primary studio
+  // as before, or MANAGER_ROLES + Contacts at a studio the person has a
+  // relationship with (contact_studios; an unreadable read keeps the primary
+  // rule). Answered as the route answers a non-member (404 not_found).
+  if (auth.user) {
+    const rel = await studiosOfContact(db, id)
+    const relationshipStudioIds = rel.ok ? rel.rows.map((r) => r.location_id) : []
+    if (!canEditContact({ user: auth.user, contact: oldRow, relationshipStudioIds })) {
       return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
     }
-  }
-  // ROLESWEEP.1c/.2 — requireApiKeyOrManager's cookie branch only says
-  // "Manager+ somewhere" (src/lib/api-auth.js); THIS is the decision:
-  // MANAGER_ROLES at the contact's location, answered as the route answers a
-  // non-member (404 not_found).
-  if (auth.user && oldRow && !hasRoleAtLocation(auth.user, oldRow.location_id, MANAGER_ROLES)) {
-    return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
   }
 
   // Only forward keys actually present (Zod with .optional() leaves undefined keys out).
@@ -252,26 +255,24 @@ export async function DELETE(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  // ROLESWEEP.1c — coarse pre-check; the role is judged at the contact's location below.
-  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
+  // ROLESWEEP.1c — coarse pre-check; the decision is made at the contact below.
+  // ORGCONTACTS.4: an organisation admin may hold no studio role at all.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES) && !isOrgAdminSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Head coach, manager, owner, or master required' }, { status: 403 })
   }
 
   const db = createServerClient()
   const { data: existing } = await db.from('contacts')
-    .select('id, location_id')
+    .select('id, location_id, organization_id')
     .eq('id', params.id)
     .single()
   if (!existing) return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
-  if (user.role !== 'master') {
-    const userLocIds = (user.locations || []).map(l => l.id)
-    if (!userLocIds.includes(existing.location_id)) {
-      return NextResponse.json({ success: false, error: 'Contact is at a different location' }, { status: 403 })
-    }
-  }
-  // ROLESWEEP.1c — MANAGER_ROLES at the contact's location.
-  if (!hasRoleAtLocation(user, existing.location_id, MANAGER_ROLES)) {
-    return NextResponse.json({ success: false, error: 'Head coach, manager, owner, or master required' }, { status: 403 })
+  // ORGCONTACTS.4 (decision 4) — the primary studio's admins (MANAGER_ROLES
+  // there), an organisation admin of the contact's organisation, or a master.
+  // A manager at a studio the person merely has a relationship with may edit
+  // (PUT) but not delete.
+  if (!canDeleteOrRehomeContact({ user, contact: existing })) {
+    return NextResponse.json({ success: false, error: 'Head coach, manager, owner, or master at the contact’s primary studio, or an organisation admin, required' }, { status: 403 })
   }
 
   // DELBLOCK.1 — the blocker check. Runs AFTER the auth + location guards

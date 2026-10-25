@@ -138,7 +138,8 @@ const LOCATIONS = [
 ]
 
 function fakeDb({ contacts = [], locations = LOCATIONS, memberships = [], errors = {} } = {}) {
-  const tables = { contacts, locations, contact_memberships: memberships }
+  // ORGCONTACTS.2 — `memberships` are contact_studios rows ({ contact_id, location_id, kind, status })
+  const tables = { contacts, locations, contact_studios: memberships }
   const db = {
     from: vi.fn((table) => {
       let rows = [...(tables[table] || [])]
@@ -148,6 +149,8 @@ function fakeDb({ contacts = [], locations = LOCATIONS, memberships = [], errors
         eq(col, val) { rows = rows.filter((r) => r[col] === val); return q },
         in(col, vals) { rows = rows.filter((r) => vals.includes(r[col])); return q },
         ilike(col, val) { rows = rows.filter((r) => ilikeMatches(val, r[col])); return q },
+        order() { return q },
+        range(from, to) { rows = rows.slice(from, to + 1); return q },
         limit: async (n) => {
           const r = result()
           return r.error ? r : { data: rows.slice(0, n), error: null }
@@ -378,9 +381,9 @@ describe('validateTeamRoster — organisation scope', () => {
 // board, so their stage never says 'member'. An active contact_memberships
 // row is the signal.
 
-describe('validateMemberByEmail — contact_memberships', () => {
+describe('validateMemberByEmail — contact_studios member rows (ORGCONTACTS.2)', () => {
   const hatchLead = { id: 'c-h', location_id: 'loc-2', email: 'h@example.com', first_name: 'Hana', pipeline_stage_slug: 'waitlist_new_enquiry' }
-  const active = { contact_id: 'c-h', location_id: 'loc-2', status: 'active' }
+  const active = { contact_id: 'c-h', location_id: 'loc-2', kind: 'member', status: 'active' }
 
   it('an active Hatch membership verifies on a Hatch event and a Stillorgan event', async () => {
     for (const locationId of ['loc-2', 'loc-1']) {
@@ -390,9 +393,11 @@ describe('validateMemberByEmail — contact_memberships', () => {
     }
   })
 
-  it('an ended membership does not', async () => {
+  it('an ended membership does not; nor does a client or lead relationship', async () => {
     const db = fakeDb({ contacts: [hatchLead], memberships: [{ ...active, status: 'ended' }] })
     expect((await validateMemberByEmail({ db, email: 'h@example.com', locationId: 'loc-2' })).is_member).toBe(false)
+    const client = fakeDb({ contacts: [hatchLead], memberships: [{ ...active, kind: 'client' }] })
+    expect((await validateMemberByEmail({ db: client, email: 'h@example.com', locationId: 'loc-2' })).is_member).toBe(false)
   })
 
   it('a membership at another organisation\'s studio does not', async () => {
@@ -401,19 +406,19 @@ describe('validateMemberByEmail — contact_memberships', () => {
   })
 
   it('an unreadable memberships table falls back to the stage check, never throws', async () => {
-    const db = fakeDb({ contacts: [hatchLead], memberships: [active], errors: { contact_memberships: { message: 'down' } } })
+    const db = fakeDb({ contacts: [hatchLead], memberships: [active], errors: { contact_studios: { message: 'down' } } })
     expect((await validateMemberByEmail({ db, email: 'h@example.com', locationId: 'loc-2' })).is_member).toBe(false)
   })
 
   it('a stage member never needs the memberships read', async () => {
     const db = fakeDb({ contacts: [{ ...hatchLead, pipeline_stage_slug: 'member' }] })
     expect((await validateMemberByEmail({ db, email: 'h@example.com', locationId: 'loc-2' })).is_member).toBe(true)
-    expect(db.from.mock.calls.some(([t]) => t === 'contact_memberships')).toBe(false)
+    expect(db.from.mock.calls.some(([t]) => t === 'contact_studios')).toBe(false)
   })
 
   it('no contact found means no memberships read', async () => {
     const db = fakeDb({ contacts: [], memberships: [active] })
     expect((await validateMemberByEmail({ db, email: 'h@example.com', locationId: 'loc-2' })).is_member).toBe(false)
-    expect(db.from.mock.calls.some(([t]) => t === 'contact_memberships')).toBe(false)
+    expect(db.from.mock.calls.some(([t]) => t === 'contact_studios')).toBe(false)
   })
 })

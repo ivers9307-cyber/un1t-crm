@@ -109,6 +109,20 @@ export const TABLE_EXCLUDE = {
 // counts as file-level evidence.
 // ---------------------------------------------------------------------------
 const SCOPING_HELPERS = [
+  // src/lib/contact-studios.js (ORGCONTACTS.1) — every read of contact_studios
+  // through contactsAtStudio filters on the studio it is asked for.
+  'contactsAtStudio(',
+  // src/lib/contact-edit-gates.js (ORGCONTACTS.4) — decisions on a contact row
+  // fetched by pk: canEditContact admits a master, MANAGER_ROLES at the row's
+  // location_id, or MANAGER_ROLES + Contacts at one of its contact_studios
+  // studios; canDeleteOrRehomeContact admits a master, MANAGER_ROLES at the
+  // row's location_id, or an organisation admin of its organization_id.
+  // Verified in src/app/api/contacts/[id]/route.js, …/impact/route.js and
+  // …/primary-studio/route.js; the page gates (contact-page-gates.js) delegate.
+  'canEditContact(',
+  'canDeleteOrRehomeContact(',
+  'canWriteContact(',
+  'canOpenContactEditor(',
   // src/lib/auth.js — 403/404 guards on the caller's allowed location set.
   'assertLocationAccess(',
   'assertLocationAccessOr404(',

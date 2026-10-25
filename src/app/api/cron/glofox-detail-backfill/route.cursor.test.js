@@ -24,7 +24,7 @@ const STATUSES = ['member', 'credit_member', 'trial', 'classpass_payg', 'no_sale
 function result(st) {
   if (st.table === 'locations') return { data: st.single ? LOC : [LOC], error: null }
   // GLOFOXREADERS.1 — the studio's crossover contacts.
-  if (st.table === 'glofox_crossover_members') return h.crossoverErr ? { data: null, error: h.crossoverErr } : { data: h.crossover, error: null }
+  if (st.table === 'contact_studios') return h.crossoverErr ? { data: null, error: h.crossoverErr } : { data: h.crossover.map((r) => ({ source: 'glofox', ...r })), error: null }
   if (st.table === 'glofox_sync_runs' && st.op === 'insert') { h.runInserts.push(st.payload); return { data: { id: 'run-1' }, error: null } }
   if (st.table === 'glofox_sync_runs' && st.op === 'update') { h.runUpdates.push(st.payload); return { data: null, error: null } }
   if (st.table === 'contacts' && st.op === 'update') {

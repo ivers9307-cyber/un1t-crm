@@ -14,6 +14,8 @@ function fakeDb(tables) {
         select: () => b,
         eq: (col, v) => { filters.push((r) => r[col] === v); return b },
         in: (col, vs) => { filters.push((r) => vs.includes(r[col])); return b },
+        order: () => b,
+        range: () => b,
         maybeSingle: () => {
           const t = tables[table]
           if (t?.error) return Promise.resolve({ data: null, error: t.error })
@@ -43,14 +45,12 @@ const base = {
     { id: 's-none', location_id: STILL, organization_id: 'org-1' },
     { id: 'x-org', location_id: 'other', organization_id: 'org-2' },
   ],
-  deals: [
-    { contact_id: 's-deal', location_id: HATCH },
-    { contact_id: 's-none', location_id: STILL }, // a deal at its HOME studio only
-    { contact_id: 'x-org', location_id: HATCH }, // stray row across organisations
-  ],
-  contact_location_preferences: [
-    { contact_id: 's-pref', location_id: HATCH },
-    { contact_id: 's-none', location_id: STILL },
+  // ORGCONTACTS.2 — "joined this studio" is a contact_studios row there, any kind or status.
+  contact_studios: [
+    { contact_id: 's-deal', location_id: HATCH, kind: 'lead', status: 'active' },
+    { contact_id: 's-pref', location_id: HATCH, kind: 'lead', status: 'ended' },
+    { contact_id: 's-none', location_id: STILL, kind: 'lead', status: 'active' }, // its HOME studio only
+    { contact_id: 'x-org', location_id: HATCH, kind: 'lead', status: 'active' }, // stray row across organisations
   ],
 }
 
@@ -74,7 +74,7 @@ describe('contactIdsLinkedToStudio (SHAREDCONTACT.1)', () => {
   })
 
   it('reports a failed read instead of answering "nobody"', async () => {
-    const r = await contactIdsLinkedToStudio(fakeDb({ ...base, deals: { error: { message: 'boom' } } }), {
+    const r = await contactIdsLinkedToStudio(fakeDb({ ...base, contact_studios: { error: { message: 'boom' } } }), {
       locationId: HATCH, contactIds: ['s-deal'],
     })
     expect(r).toMatchObject({ ok: false, reason: 'links_unreadable' })

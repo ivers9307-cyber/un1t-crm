@@ -22,7 +22,7 @@ function makeDb({
   groupListError = null,
   groupMembersOverride = null,
   contactsError = null,
-  // GLOFOXREADERS.1 — glofox_crossover_members rows ({ contact_id, location_id })
+  // ORGCONTACTS.2 — contact_studios rows ({ contact_id, location_id, source })
   crossoverLinks = [],
   crossoverError = null,
 } = {}) {
@@ -39,15 +39,17 @@ function makeDb({
     contactsSelectCols,
     crossoverReads,
     from(table) {
-      if (table === 'glofox_crossover_members') {
+      if (table === 'contact_studios') {
         const state = {}
         const builder = {
           select() { return builder },
-          in(col, vals) { state.inVals = vals; return builder },
+          in(col, vals) { if (col === 'contact_id') state.inVals = vals; return builder },
+          order() { return builder },
+          range() { return builder },
           then(resolve) {
             crossoverReads.push([...(state.inVals || [])])
             if (crossoverError) { resolve({ data: null, error: crossoverError }); return }
-            resolve({ data: crossoverLinks.filter((r) => (state.inVals || []).includes(r.contact_id)), error: null })
+            resolve({ data: crossoverLinks.filter((r) => (state.inVals || []).includes(r.contact_id)).map((r) => ({ source: 'glofox', kind: 'client', status: 'active', ...r })), error: null })
           },
         }
         return builder
@@ -917,6 +919,9 @@ function makeSearchDb({ rows = [], groupMembers = [], phoneError = null, emailEr
         select(cols) { st.cols = cols || ''; selectCols.push({ table, cols: cols || '' }); return b },
         eq(col, val) { st.filters[col] = val; return b },
         in(col, vals) { st.filters[col] = vals; return b },
+        // ORGCONTACTS.2 — the contact_studios read pages (studiosOfContacts)
+        order() { return b },
+        range() { return b },
         or(expr) { st.or = expr; queries.push({ kind: 'or', expr }); return b },
         ilike(col, val) { st.ilike = val; queries.push({ kind: 'ilike', col, val }); return b },
         limit(n) { st.limit = n; return b },
@@ -1133,9 +1138,9 @@ describe('personRowsForContact reports provenance', () => {
   })
 })
 
-// GLOFOXREADERS.1 — a contact living at a sibling studio whose Glofox account
-// is linked at the Glofox studio by glofox_crossover_members.
-describe('crossover-linked accounts (GLOFOXREADERS.1)', () => {
+// ORGCONTACTS.2 — a contact living at a sibling studio whose Glofox account
+// has a contact_studios row at the Glofox studio.
+describe('crossover-linked accounts (ORGCONTACTS.2)', () => {
   const STILL = 'loc-stillorgan'
   const HATCH = 'loc-hatch'
 
@@ -1146,7 +1151,7 @@ describe('crossover-linked accounts (GLOFOXREADERS.1)', () => {
     })
     const res = await linkedAccountsForContact(db, 'c-hatch')
     expect(res.readFailed).toBeUndefined()
-    expect(res.accounts).toEqual([{ id: 'c-hatch', location_id: HATCH, glofox_member_id: 'gf-1', glofox_link_location_ids: [STILL] }])
+    expect(res.accounts).toEqual([{ id: 'c-hatch', location_id: HATCH, glofox_member_id: 'gf-1', studio_location_ids: [STILL] }])
     expect(db.crossoverReads).toEqual([['c-hatch']])
   })
 
@@ -1162,18 +1167,11 @@ describe('crossover-linked accounts (GLOFOXREADERS.1)', () => {
     expect(res.readFailed).toBe(true)
   })
 
-  it('the link table not existing yet is "not linked"', async () => {
-    const db = makeDb({ contacts: [{ id: 'c1', location_id: HATCH, glofox_member_id: 'gf-1' }], crossoverError: { code: 'PGRST205', message: 'missing' } })
-    const res = await linkedAccountsForContact(db, 'c1')
-    expect(res.readFailed).toBeUndefined()
-    expect(res.accounts).toHaveLength(1)
-  })
-
   it('electWriteAccount: a Hatch contact linked at Stillorgan is not foreign at Stillorgan', () => {
-    const acct = { id: 'c-hatch', location_id: HATCH, glofox_member_id: 'gf-1', glofox_membership_status: 'member', glofox_link_location_ids: [STILL] }
+    const acct = { id: 'c-hatch', location_id: HATCH, glofox_member_id: 'gf-1', glofox_membership_status: 'member', studio_location_ids: [STILL] }
     expect(electWriteAccount({ accounts: [acct], anchorContactId: 'c-hatch', locationId: STILL })).toMatchObject({ outcome: 'elected', account: { id: 'c-hatch' } })
-    // without the link it is foreign, as before
-    const { glofox_link_location_ids: _drop, ...unlinked } = acct
+    // without the relationship it is foreign, as before
+    const { studio_location_ids: _drop, ...unlinked } = acct
     expect(electWriteAccount({ accounts: [unlinked], anchorContactId: 'c-hatch', locationId: STILL }).outcome).toBe('none')
   })
 })

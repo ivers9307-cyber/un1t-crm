@@ -168,8 +168,27 @@ Notes:
   studio; to fix a broken token, PATCH the row's token instead.
 - `WHATSAPP_WEBHOOK_VERIFY_TOKEN` and `WHATSAPP_APP_SECRET` are **env-only**
   (webhook-level, not per-number) — set them in Vercel regardless.
-- Inbound routing: the webhook maps Meta's `phone_number_id` → owning location
-  via the `whatsapp_numbers` unique index.
+- Inbound routing: the webhook maps Meta's `phone_number_id` → the number's
+  row via the `whatsapp_numbers` unique index, then the THREAD's studio by
+  WAORGNUMBER R4: the quoted message's thread, a click-to-WhatsApp ad's
+  studio, the thread with the latest outbound in 7 days, the candidate studio
+  where the person has an active `contact_studios` relationship (latest
+  activity; tie → their primary), else their home studio, else the number's
+  home studio.
+- **Organisation numbers (WAORGNUMBER.1, mig 743):** a number belongs to an
+  organisation (org admins add it at **Settings → WhatsApp numbers**,
+  `/settings/whatsapp-numbers`) and is switched on per studio. The number's
+  **home studio** holds its duties: unknown senders and anything no candidate
+  studio claims file there; its organisation fences where the number may be
+  switched on (a DB trigger refuses another organisation's studio); templates
+  are per studio and a template send picks the number by the template's WABA.
+- **Sign-off until (ORGCONTACTS.0, decision 6):** each studio's WhatsApp
+  settings card carries a "Sign-off until" date
+  (`locations.settings.whatsapp_blast_signoff_until`; `GET`/`PUT
+  /api/locations/[id]/whatsapp/blast-signoff`, editable by a master or an
+  organisation admin). While the date is in the future, broadcasts at that
+  studio go out only once an organisation admin has signed them off
+  (`/api/whatsapp/broadcasts/[id]/sign-off`). Clear the date to end the window.
 
 ### 2.3 Now complete Meta step 1.7 (webhook verification).
 

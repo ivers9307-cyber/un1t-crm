@@ -14,7 +14,8 @@
 
 import { normalisePhone9 } from './person-links'
 import { escapeLikePattern } from './like-escape'
-import { glofoxLinkLocationsByContact, contactAtGlofoxStudio } from './glofox-crossover.js'
+import { contactAtGlofoxStudio } from './glofox-crossover.js'
+import { studiosOfContacts } from './contact-studios'
 
 const CONTACT_COLUMNS =
   'id, name, glofox_member_id, glofox_membership_status, glofox_membership_state, ' +
@@ -182,18 +183,23 @@ export async function linkedAccountsForContact(db, contactId, { groupId } = {}) 
       contacts = await fetchContactsByIds(db, ids)
     }
 
-    // GLOFOXREADERS.1 — a contact that lives at a sibling studio but holds a
-    // Glofox account linked at the Glofox studio (glofox_crossover_members,
-    // mig 758) carries `glofox_link_location_ids`, so callers can count it at
-    // that studio (electWriteAccount's location guard, member-studios).
-    const links = await glofoxLinkLocationsByContact(db, contacts.map((c) => c?.id))
-    if (links.error) throw new Error(links.error)
-    if (links.byContact.size) {
-      contacts = contacts.map((c) => (links.byContact.has(c?.id) ? { ...c, glofox_link_location_ids: links.byContact.get(c.id) } : c))
-    }
+    // ORGCONTACTS.2/.3 — one contact_studios read for the group (mig 764).
+    // Every contact carries `studio_location_ids`: the studios it has a
+    // Glofox relationship at (source glofox; the home Glofox studio and any
+    // crossover studio), so callers can count a sibling-studio contact at the
+    // Glofox studio (electWriteAccount's location guard). The full rows go
+    // back as `studioRowsByContact` (Map contact id → rows) for
+    // resolveMemberStudios, whose candidates are the active member/client rows.
+    const studioRows = await studiosOfContacts(db, contacts.map((c) => c?.id))
+    if (!studioRows.ok) throw new Error(`contact_studios read: ${studioRows.error}`)
+    const studioRowsByContact = studioRows.byContact
+    contacts = contacts.map((c) => {
+      const glofoxAt = [...new Set((studioRowsByContact.get(c?.id) || []).filter((r) => r.source === 'glofox').map((r) => r.location_id).filter(Boolean))]
+      return glofoxAt.length ? { ...c, studio_location_ids: glofoxAt } : c
+    })
 
     const accounts = dedupeAccounts(contacts, contactId)
-    return { anchorContactId: contactId, contacts, accounts }
+    return { anchorContactId: contactId, contacts, accounts, studioRowsByContact }
   } catch (err) {
     console.error('[person-accounts] linkedAccountsForContact failed:', err?.message || err)
     return { anchorContactId: contactId, contacts: [], accounts: [], readFailed: true }
@@ -515,7 +521,7 @@ function compareForElection(a, b) {
  *     is always corroborated with itself, so the anchor is never excluded
  *     by its own rule), minus — when `locationId` is passed — rows whose
  *     OWN `location_id` is present AND differs from it, unless a crossover
- *     row links the row's Glofox account at it (`glofox_link_location_ids`,
+ *     row links the row's Glofox account at it (`studio_location_ids`,
  *     GLOFOXREADERS.1: a Hatch contact holding a Stillorgan Glofox account is
  *     not foreign at Stillorgan). Zero candidates → 'none'.
  *

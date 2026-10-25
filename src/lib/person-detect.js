@@ -83,12 +83,17 @@ async function loadPrimaryByGroup(db, locationId) {
   const map = new Map()
   let pageStart = 0
   try {
+    // Groups follow the organisation (mig 767; mig 769 dropped their
+    // location_id): read the studio's organisation, then page its groups.
+    const { data: studio, error: locErr } = await db.from('locations').select('organization_id').eq('id', locationId).maybeSingle()
+    if (locErr) throw locErr
+    if (!studio?.organization_id) throw new Error('studio has no organisation')
     while (true) {
       const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
       const { data: page, error } = await db
         .from('person_groups')
         .select('id, primary_contact_id')
-        .eq('location_id', locationId)
+        .eq('organization_id', studio.organization_id)
         .order('id', { ascending: true })
         .range(pageStart, pageEnd)
       if (error) throw error

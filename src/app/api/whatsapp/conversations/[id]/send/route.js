@@ -10,7 +10,6 @@ import { logError } from '@/lib/log'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { flowButtonIndex, flowButtonComponentFor } from '@/lib/whatsapp-template-buttons'
 import { flowTokenFor } from '@/lib/whatsapp-flow/config'
-import { templateLocationIdFor } from '@/lib/whatsapp-config'
 import { templateSendBlock, SEND_BLOCK_TEXT, renderSentTemplateBody } from '@shared/wa-template-send'
 
 const SendMessageSchema = z.object({
@@ -35,7 +34,6 @@ const TEXT = Object.freeze({
   templateMissing: "That template is not in this studio's approved list in that language, so nothing was sent. Reopen the template list and pick it again.",
   flowNeedsContact: 'Not sent. This template has a booking Flow button, which books against a contact: add the sender as a contact first.',
   notLogged: 'Sent to the customer, but it could not be saved to this thread. Do not send it again.',
-  flowOtherStudio: 'Booking Flow templates can’t be sent from this studio’s threads yet.',
   threadNotUpdated: 'Sent to the customer, but the conversation could not be updated, so it may not move to the top of the list and Mia may still reply in this thread.',
 })
 const blockedText = (block) => `This template can't be sent from the inbox. ${SEND_BLOCK_TEXT[block]}`
@@ -103,9 +101,9 @@ export async function POST(request, props) {
     }
     const language = body.template_language || 'en'
 
-    // Templates are per studio (WAORGNUMBER.2): the thread's studio's
-    // (templateLocationIdFor; WAORGNUMBER.6 removed the sibling case).
-    const templateLocationId = await templateLocationIdFor(conversation.location_id, conversation.id)
+    // Templates are per studio (WAORGNUMBER.2): the thread's studio's, read
+    // off the conversation row (ORGCONTACTS.0 deleted the identity seam).
+    const templateLocationId = conversation.location_id
 
     // WATPLSEND.1 — read the row BEFORE sending, and judge the read. It decides
     // the media header (WA-TMPL-SEND.1), the Flow button, what is refused, and
@@ -161,12 +159,6 @@ export async function POST(request, props) {
     if (!clientHasHeader) {
       const headerComponent = headerComponentFor(tplRow.components, tplRow.header_media_url)
       if (headerComponent) components = [headerComponent, ...components]
-    }
-
-    // A Flow books at the studio its token names, and a Flow belongs to the
-    // number owner's WABA: not sendable across studios in Phase 1 (spec §4).
-    if (templateLocationId !== conversation.location_id && flowButtonIndex(tplRow.components) >= 0) {
-      return NextResponse.json({ success: false, error: TEXT.flowOtherStudio }, { status: 400 })
     }
 
     // WATPLSEND.1 — a FLOW button needs its per-send token (Meta 131009 without

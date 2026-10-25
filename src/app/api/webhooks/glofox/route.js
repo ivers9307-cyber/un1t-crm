@@ -277,7 +277,7 @@ export async function POST(request) {
     // 6a. GLOFOXSIBLING.1 — nothing at this studio: the member's one contact
     // may live at a sibling studio of the same organisation (one contact per
     // email per org, mig 712). Found that way, it is the same person; the
-    // member-sync step below links it here (glofox_crossover_members).
+    // member-sync step below links it here (its contact_studios row with source glofox, mig 768).
     let crossoverHow = null
     if (!contact) {
       const x = await findGlofoxCrossoverContact(db, creds.locationId, {

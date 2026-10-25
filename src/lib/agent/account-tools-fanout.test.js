@@ -54,6 +54,7 @@ function stubDb(trace, { contacts = [], groupId = 'g-1', groupReadError = null }
         in(col, vals) { st.filters[col] = vals; return b },
         limit: () => b,
         order: () => b,
+        range: () => b, // ORGCONTACTS.2: studiosOfContacts paginates contact_studios (answered empty here)
         async maybeSingle() { return settle(true) },
         async single() { return settle(true) },
         then(resolve, reject) { return Promise.resolve(settle(false)).then(resolve, reject) },
