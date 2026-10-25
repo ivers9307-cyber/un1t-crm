@@ -214,7 +214,11 @@ export async function POST(request) {
     .sort((a, b) => (ROLE_PRECEDENCE[a] || 99) - (ROLE_PRECEDENCE[b] || 99))[0]
   const profileRole = body.is_master ? 'master' : (highestRole || 'staff')
 
-  const updates = { role: profileRole }
+  // PINSCOPE.1 (mig 772) — the trigger now mints the profile INACTIVE, with
+  // role 'staff' and no location, whatever the auth metadata says; this
+  // update is what turns it into a working account. The metadata is
+  // caller-written on a public sign-up, so it never decides access.
+  const updates = { role: profileRole, active: true }
   if (body.permissions) updates.permissions = body.permissions
   if (body.employment_type) updates.employment_type = body.employment_type
   // SECURITY.1 (mig 152) — comp fields dual-write: profiles columns
