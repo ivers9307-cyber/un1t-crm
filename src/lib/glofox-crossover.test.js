@@ -19,6 +19,7 @@ function fakeDb(tables = {}, { errors = {}, upsertReturns = null } = {}) {
     chain.eq = (col, val) => { q.filters.push(['eq', col, val]); return chain }
     chain.ilike = (col, val) => { q.filters.push(['ilike', col, val]); return chain }
     chain.in = (col, vals) => { q.filters.push(['in', col, vals]); return chain }
+    chain.gt = (col, val) => { q.filters.push(['gt', col, val]); return chain }
     chain.limit = (n) => { q.limit = n; return chain }
     chain.maybeSingle = () => { q.single = true; return chain }
     for (const op of ['insert', 'upsert', 'update']) chain[op] = (payload) => { q.op = op; q.payload = payload; return chain }
@@ -28,6 +29,7 @@ function fakeDb(tables = {}, { errors = {}, upsertReturns = null } = {}) {
       if (err) return resolve({ data: null, error: err })
       if (q.op === 'upsert' && table === 'glofox_crossover_members') return resolve({ data: upsertReturns ?? [{ id: 'gx-1' }], error: null })
       if (q.op === 'upsert' && table === 'contact_location_preferences') return resolve({ data: q.payload.map((r) => ({ contact_id: r.contact_id })), error: null })
+      if (q.op === 'upsert' && table === 'contact_studios') return resolve({ data: [{ contact_id: q.payload.contact_id, location_id: q.payload.location_id, kind: q.payload.kind }], error: null })
       if (q.op !== 'select') return resolve({ data: null, error: null })
       let rows = (tables[table] || []).filter((r) => q.filters.every(([kind, col, val]) =>
         kind === 'eq' ? r[col] === val : kind === 'ilike' ? ilikeMatches(r[col], val) : kind === 'in' ? val.includes(r[col]) : true))
@@ -128,7 +130,7 @@ describe('recordGlofoxCrossover', () => {
   it('links the contact at the studio and gives it the studio preferences row (consent source glofox_sync)', async () => {
     const db = fakeDb({ contacts: base().contacts, contact_location_preferences: [], contact_preferences: [] })
     const out = await recordGlofoxCrossover(db, { locationId: LOC, glofoxMemberId: 'g1', contactId: 'c-hatch' })
-    expect(out).toEqual({ linked: true, preferences_created: 1 })
+    expect(out).toEqual({ linked: true, preferences_created: 1, contact_studio: { ok: true } })
     const link = db.calls.find((c) => c.table === 'glofox_crossover_members' && c.op === 'upsert')
     expect(link.payload).toMatchObject({ location_id: LOC, glofox_member_id: 'g1', contact_id: 'c-hatch' })
     const prefs = db.calls.find((c) => c.table === 'contact_location_preferences' && c.op === 'upsert')
@@ -150,6 +152,40 @@ describe('recordGlofoxCrossover', () => {
     expect(out.linked).toBe(false)
     expect(out.error).toMatch(/relation does not exist/)
     expect(db.calls.some((c) => c.table === 'contact_location_preferences')).toBe(false)
+  })
+
+  // ORGCONTACTS.1 — the relationship row (mig 764) beside the link row.
+  it('also writes the contact_studios row at the Glofox studio: client by default, member when the contact row says so', async () => {
+    const db = fakeDb({ contacts: base().contacts, contact_location_preferences: [], contact_preferences: [] })
+    const out = await recordGlofoxCrossover(db, { locationId: LOC, glofoxMemberId: 'g1', contactId: 'c-hatch', contactLocationId: 'hatch' })
+    expect(out.contact_studio).toEqual({ ok: true })
+    const row = db.calls.find((c) => c.table === 'contact_studios' && c.op === 'upsert')
+    expect(row.payload).toMatchObject({ contact_id: 'c-hatch', location_id: LOC, kind: 'client', status: 'active', source: 'glofox', ended_at: null })
+    expect(row.payload).not.toHaveProperty('last_seen_at')
+
+    const member = fakeDb({ contacts: base().contacts, contact_location_preferences: [], contact_preferences: [] })
+    await recordGlofoxCrossover(member, {
+      locationId: LOC, glofoxMemberId: 'g1', contactId: 'c-hatch', contactLocationId: 'hatch',
+      contactRow: { glofox_membership_status: 'member', glofox_membership_state: 'active', joined_at: '2026-02-01T00:00:00.000Z' },
+    })
+    const mrow = member.calls.find((c) => c.table === 'contact_studios' && c.op === 'upsert')
+    expect(mrow.payload.kind).toBe('member')
+    const seen = member.calls.find((c) => c.table === 'contact_studios' && c.op === 'update')
+    expect(seen.payload).toEqual({ first_seen_at: '2026-02-01T00:00:00.000Z' })
+  })
+
+  it('skips the contact_studios row when it skips the link; a failed row write is reported and the link kept', async () => {
+    const here = fakeDb(base())
+    const skipped = await recordGlofoxCrossover(here, { locationId: 'hatch', glofoxMemberId: 'g1', contactId: 'c-hatch' })
+    expect(skipped.contact_studio).toBeUndefined()
+    expect(here.calls.some((c) => c.table === 'contact_studios')).toBe(false)
+
+    const failing = fakeDb({ contacts: base().contacts, contact_location_preferences: [], contact_preferences: [] },
+      { errors: { 'contact_studios:upsert': { message: 'relation does not exist' } } })
+    const out = await recordGlofoxCrossover(failing, { locationId: LOC, glofoxMemberId: 'g1', contactId: 'c-hatch', contactLocationId: 'hatch' })
+    expect(out.linked).toBe(true)
+    expect(out.contact_studio).toMatchObject({ ok: false, error: expect.stringMatching(/relation does not exist/) })
+    expect(out.error).toBeUndefined()
   })
 
   it('a link write that touched no row is an error', async () => {

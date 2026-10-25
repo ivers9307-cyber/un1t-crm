@@ -25,6 +25,7 @@
 import { logWarn } from './log'
 import { splitName } from './name-utils'
 import { escapeLikePattern } from './like-escape'
+import { upsertContactStudio } from './contact-studios.js'
 
 // W0.6b — contacts_email_org_unique (mig 712) is case-SENSITIVE on `email`,
 // so one organisation can legitimately hold `Sam@Example.com` and
@@ -140,6 +141,15 @@ async function findContactInOrg(db, locationId, normalisedEmail) {
 // `restrictToOrg` is accepted and deliberately not read: the org-scoped lookup
 // is the default (W0.6). Call sites keep passing it so they read as the
 // public-form rule they implement.
+// ORGCONTACTS.1 — a sibling studio's contact registering here has joined
+// this studio: its contact_studios lead row (mig 764). A contact created or
+// found AT this studio needs none (the contacts trigger made its primary row).
+// Best-effort bookkeeping: logged, never the signup's failure.
+async function recordJoinedHere(db, contactId, locationId) {
+  const rel = await upsertContactStudio(db, { contactId, locationId, kind: 'lead', source: 'lead_form', status: 'active' })
+  if (!rel.ok) logWarn('race-contact-linking', 'contact_studios lead row not written', { locationId, contactId, error: rel.error })
+}
+
 export async function findOrCreateRaceContact({ db, locationId, email, name = null, phone = null, restrictToLocation = false, insertFields = {} }) {
   if (!email || typeof email !== 'string') return null
   const normalised = email.toLowerCase().trim()
@@ -175,7 +185,10 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
       // staff: contacts_email_org_unique (mig 712) is per organisation, so
       // a match outside it is another tenant's person, never this one.
       const sibling = await findContactInOrg(db, locationId, normalised)
-      if (sibling) return sibling
+      if (sibling) {
+        await recordJoinedHere(db, sibling, locationId)
+        return sibling
+      }
     }
 
     // Create. CLASSIFY.2: no lead_status / pipeline_stage_slug set
@@ -211,7 +224,10 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
       // otherwise fail closed rather than link across organisations.
       if (error.code === '23505') {
         const raced = await findContactInOrg(db, locationId, normalised)
-        if (raced) return raced
+        if (raced) {
+          await recordJoinedHere(db, raced, locationId)
+          return raced
+        }
         logWarn('race-contact-linking', `email exists outside this org, refusing to link: ${normalised}`, { locationId })
         return null
       }

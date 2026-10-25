@@ -6,6 +6,7 @@ import { handleFlowCompletion, publishFlowClassBooking } from '@/lib/whatsapp-fl
 import { FLOW_SUBMISSION_BODY, FLOW_UNPROCESSED_BODY, sendFlowSubmissionReply } from '@/lib/whatsapp-flow/booking-notice'
 import { resolveWhatsAppNumberByPhoneNumberId, classifyInboundOwner } from '@/lib/whatsapp-config'
 import { routeInboundThread } from '@/lib/whatsapp-inbound-route'
+import { touchContactStudio } from '@/lib/contact-studios'
 import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -594,6 +595,19 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // staff push still fires, so a human picks the thread up.
   if (inboundInsertError) {
     console.error('[wa-webhook] inbound message insert failed (agent turn skipped):', inboundInsertError.message, messageId)
+  }
+
+  // ORGCONTACTS.1 — a message from a known contact is activity at the studio
+  // it was filed at: contact_studios.last_seen_at moves forward there (mig
+  // 764; the routing of a later reply reads it). Fire-and-forget: its own
+  // try/catch, logged, never the 200.
+  if (actingContact?.id && !inboundInsertError) {
+    try {
+      const touched = await touchContactStudio(db, { contactId: actingContact.id, locationId, at: timestamp.toISOString() })
+      if (!touched.ok) console.error('[wa-webhook] contact_studios activity stamp failed:', touched.error)
+    } catch (e) {
+      console.error('[wa-webhook] contact_studios activity stamp threw:', e?.message || String(e))
+    }
   }
 
   // FLOWACK.1 — a handled Flow submission gets ONE reply instead of a Mia
