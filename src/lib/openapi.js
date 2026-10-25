@@ -40,6 +40,9 @@ import {
   QualificationTypeCreateSchema, QualificationTypePatchSchema, TemplateQualificationsPutSchema,
 } from '@/lib/qualifications-schemas'
 import { ROSTER_CHANGE_LOG_MAX_ROWS } from '@/lib/roster-change-format'
+// OPENAPI-EVENTS.1 — the event create/update bodies, the handlers' own objects.
+import { EventCreateFields, EventUpdateFields } from '@/lib/event-save-schemas'
+import { ENTRY_POLICY_DEFAULTS, ENTRY_POLICY_HOURS_MAX } from '@/lib/entry-policy'
 import {
   CampaignCreateSchema as CampaignCreateSessionSchema,
   CampaignContentSchema as CampaignContentSessionSchema,
@@ -432,6 +435,91 @@ registry.registerPath({
   },
 })
 
+// TRIALSTUDIO.6 — the /trial purchase body (the route's own Zod schema is the authority).
+const TrialPurchaseStart = z.object({
+  studio: z.enum(['stillorgan', 'hatch']).default('stillorgan').openapi({ description: 'The studio. Absent means stillorgan (a page loaded before the studio choice).' }),
+  first_name: z.string().min(1).max(120),
+  last_name: z.string().min(1).max(120),
+  email: z.string().email().max(320),
+  phone: z.string().min(1).max(50),
+  consent: z.literal(true),
+  attribution: z.record(z.string(), z.string()).optional(),
+  lead_event_id: z.string().optional(),
+  visit: z.object({ referrer: z.string().optional(), landing_path: z.string().optional() }).optional(),
+  terms_accepted: z.boolean().optional().openapi({ description: 'Hatch only: the un1t.online terms and waiver tick; required (true) when the studio\'s un1t.online writes are on.' }),
+}).openapi('TrialPurchaseStart')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/trial-purchases',
+  tags: ['Public'],
+  summary: 'Start a paid trial purchase (PAIDTRIAL.1, TRIALSTUDIO.6, the /trial page)',
+  request: { body: { content: { 'application/json': { schema: TrialPurchaseStart } } } },
+  description: 'Anonymous. Rate-limited to 8 per landing path per IP per 15 min. Body: { studio: \'stillorgan\' | \'hatch\' (required), first_name, last_name, email, phone, consent: true, attribution?, lead_event_id?, visit?, terms_accepted?: boolean }. The product comes from the chosen studio\'s paid_trial landing block; the price is the block\'s (Hatch: the mirrored un1t.online product\'s), never the body\'s. Captures the lead like the class funnel (contact, lead_source, attribution, consent, deal, Meta Lead) against the chosen studio. Stillorgan: a buyer with a trial history is refused before any row or payment (200 { success: false, code: \'trial_used\', error, help: { cta_label } }); otherwise inserts an awaiting_payment trial_purchases row and opens the Revolut payment, returning { purchaseId, checkout: { provider, token, url }, amount_cents, currency, product_name }. Hatch: no CRM charge; 400 terms_required (with the terms payload) without terms_accepted when the studio\'s un1t.online writes are on; an active member is refused before any un1t.online call (200 code active_member); otherwise inserts the row, finds or creates the un1t.online account and returns { purchaseId, redirect_url (un1t.online\'s hosted checkout, returned once, never stored), amount_cents, currency, product_name }. A refused or unclear un1t.online answer files the row for a call and answers 200 { success: false, code: \'help_filed\', error }.',
+  responses: {
+    200: { description: 'Checkout opened (Stillorgan checkout / Hatch redirect_url), or a refusal state: trial_used, active_member, help_filed' },
+    400: { description: 'Validation failed (including an unknown studio), not_configured, payments_unavailable or terms_required', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Lead capture or purchase row insert failed', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Provider checkout could not be opened (Stillorgan)', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'unavailable: studio config, location, contact or eligibility read unreadable, or un1t.online busy (the row is marked failed); try again', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/trial-purchases/help',
+  tags: ['Public'],
+  summary: 'Ask for a call instead of buying a trial (TRIALSTUDIO.5, the /trial page "I need help" button)',
+  description: 'Anonymous. Rate-limited to 5 per studio per IP per 15 min. Body: { studio: \'stillorgan\' | \'hatch\', first_name, last_name, email, phone }. Used when the buyer was refused before paying (Stillorgan trial history, Hatch active membership). Matches or creates the contact, re-runs the studio\'s eligibility read for the reasons, files one help_requested trial_purchases row (a Needs a call card; a second press reuses the open one) and alerts staff. No payment is taken. Returns { message, purchaseId }. 400 unknown_studio or not_configured.',
+  responses: {
+    200: { description: 'Help request filed (or the open one reused)' },
+    400: { description: 'Validation failed, unknown_studio or not_configured', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Landing row, contact or eligibility read unavailable', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/trial-purchases/{id}',
+  tags: ['Public'],
+  summary: 'Status of one paid trial purchase (checkout and confirming polls)',
+  description: 'Anonymous, display-safe. state: pending | paid (money in, grant in flight) | granted (the Glofox plan is on the account) | failed. Re-checks the provider while pending (capped at 20 per purchase per 5 min); a settled payment releases the row and nudges the trial-purchases worker.',
+  responses: {
+    200: { description: 'Status returned' },
+    404: { description: 'Unknown purchase', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/events/{slug}/donate',
+  tags: ['Public'],
+  summary: 'Start a card donation on a public event page (CHARITY.5)',
+  description: 'Anonymous. Rate-limited to 10 per slug per IP per 15 min. Body { amount_cents, name, email, message?, marketing_opt_in?, attribution? }. The event comes from the slug (published and active; registration state is irrelevant, so a closed or full event still takes a gift). The amount is the donor\'s but bounded by the event\'s own charity settings: min/max, or its preset list when custom amounts are off. Inserts an awaiting_payment donations row (contact left null until the paid side effects link it) and opens the provider payment. Returns { donation: { id, amount_cents, currency, checkout: { provider, token, url, connectedAccountId } } }. 400 invalid_amount (outside the event\'s bounds), not_enabled (the Charity day switch is off) or payments_unavailable; 502 checkout_failed (the row is marked failed); 500 unavailable (the insert failed).',
+  responses: {
+    200: { description: 'Donation row created and checkout opened' },
+    400: { description: 'Validation failed, invalid_amount, not_enabled or payments_unavailable', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown or unpublished event', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'unavailable: the donation row could not be created', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'checkout_failed: the provider checkout could not be opened', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/donations/{id}',
+  tags: ['Public'],
+  summary: 'Status of one donation (checkout and return-page polls)',
+  description: 'Anonymous, display-safe: no donor field (name, email, message) is ever returned. state: pending | paid | failed | refunded. Re-checks the provider while pending (capped at 100 per donation per 5 min). Every observation of a paid row runs the stamp-keyed side effects (contact, tag, consent, timeline note, receipt), so this poll also recovers a donor whose webhook never landed; in the first 60 s after paid_at only the observer that flipped the row sends the receipt. While the payment can still be completed the response carries the checkout block.',
+  responses: {
+    200: { description: 'Status returned: { id, state, paid, amount_cents, currency, match_multiplier, checkout }' },
+    404: { description: 'Unknown donation', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'get',
   path: '/api/public/offer-purchases/{id}',
@@ -456,6 +544,22 @@ registry.registerPath({
     403: { description: 'Missing approvals_offer_purchases', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Unknown or inaccessible purchase', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Purchase is not paid', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/trial-purchases/{id}/review',
+  tags: ['Approvals'],
+  summary: 'Retry or hand-resolve a paid trial purchase whose Glofox grant failed, or close a Needs-a-call help request (PAIDTRIAL.2, TRIALSTUDIO.8)',
+  description: "Session auth + the approvals_offer_purchases grant, judged at the purchase's studio; ids outside the caller's studios return 404. Body { action: 'retry' | 'resolve' | 'handled' }. handled closes a help_requested row (nobody paid; the buyer asked for a call) with no email. retry puts a needs_review row back in the queue (the write-ahead grant marker is kept, so a purchase Glofox never answered is never bought twice); resolve marks it granted by hand and emails the buyer.",
+  request: { body: { content: { 'application/json': { schema: z.object({ action: z.enum(['retry', 'resolve', 'handled']) }) } } } },
+  responses: {
+    200: { description: '{ status } (queued or granted), or { already: true }' },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing approvals_offer_purchases', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown or inaccessible purchase', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not paid (retry/resolve), or the row is not in a state this action applies to (queued/processing; handled on anything but help_requested)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -682,15 +786,19 @@ registry.registerPath({
             phone: z.string().max(50).optional(),
             team_name: z.string().max(200).optional(),
             waitlist_token: z.string().max(1000).optional().openapi({ description: 'EVENT-WAITLIST.1: the claim token from a waitlist offer link (?wl=); marks that waitlist row claimed once the registration exists. Never changes the answer.' }),
+            find_team: z.boolean().optional().openapi({ description: 'ENTRYPOLICY.1 (capacity, every mode): a wave\'s load counts confirmed entries and unpaid (pending_payment) ones still inside the event\'s unpaid_hold_hours (default 48 h; race_events.entry_policy); an older unpaid entry holds nothing and is never resumed by a re-book (its checkout is not reused even if still open; the row is cleared and a fresh registration made, as a dead checkout is), while a payment that completed meanwhile still confirms it. FINDTEAM.3: register one person as a team of one looking for a team; team_size is forced to 1 and team_name is ignored (the team is named "<name> (looking for a team)"); members must be empty (members non-empty -> 400). 400 find_team_unavailable on a non-race kind, 400 find_team_disabled when the event has the option off. A solo takes no team slot in teams capacity mode. FINDTEAM.8: deduped by person, not by team name: this contact already confirmed or placed on the event -> 409 already_registered; their own checkout still live -> the resume answer (payment.resumed); every new solo gets a team row of its own, suffixed " 2", " 3", … on a name clash. A captain re-registering a team whose entry is placed -> 409 already_registered (a placed row is never deleted). FINDTEAM.9: a refused or abandoned solo attempt discards the team row it made (never one a registration still points at), so attempts do not use up the suffixes; a captain re-book never stale-deletes a team entry that solos were placed into (409 already_registered whatever its own status; an unreadable count is a 500).' }),
           }).openapi('EventRegisterBody'),
         },
       },
     },
   },
   responses: {
-    200: { description: 'Registration confirmed' },
+    200: { description: 'Registration confirmed, or an existing live checkout resumed (payment.resumed)' },
     400: { description: 'Validation failed or registration closed', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'members_only_unverified', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Event not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'already_registered (a confirmed or placed entry, or a team entry solos were placed into) or wave_full', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'payment_init_failed: the registration is rolled back (a solo\'s team row with it)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -773,7 +881,7 @@ registry.registerPath({
   path: '/api/public/entry/{token}',
   tags: ['Public'],
   summary: 'The token holder\'s event entry, and whether they may change its date',
-  description: 'Anonymous; the token is the credential. Public entry shape (names only, no emails, phones or check-in codes) plus `can_move`, `move_blocked_reason` (unpaid, cancelled, checked in, past), `date_change_pending` and `date_change_failed` (a paid change was refused; shown until staff move or refund it). A pending date-change payment is refreshed from the provider first. Rate limited: 60 per IP per 5 minutes.',
+  description: 'Anonymous; the token is the credential. Public entry shape (names only, no emails, phones or check-in codes) plus `can_move`, `move_blocked_reason` (unpaid, cancelled, placed in a team, checked in, past, or ENTRYPOLICY.1: the event\'s date-change switch is off or the entrant is inside the hours-before cutoff, in the operator\'s own words), `date_change_pending`, `date_change_failed` (a paid change was refused; shown until staff move or refund it), `placed_into` (FINDTEAM.8: for a solo staff placed into a team, `{ team_name, wave: { start_time, label } }`; null otherwise) and ENTRYPOLICY.1 `lapsed` / `lapsed_message` / `register_url` (an unpaid entry past the event\'s unpaid_hold_hours: it no longer holds a place and is never resumed; the row stays). The event\'s `entry_policy` itself is never returned. A pending date-change payment is refreshed from the provider first. Rate limited: 60 per IP per 5 minutes.',
   request: { params: z.object({ token: EntryManageToken }) },
   responses: {
     200: { description: 'The entry', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntrySummary') } } },
@@ -787,7 +895,7 @@ registry.registerPath({
   path: '/api/public/entry/{token}/move-options',
   tags: ['Public'],
   summary: 'Dates and times the token holder may move their entry to',
-  description: 'Anonymous; the token is the credential. Same eligibility as the staff picker (same payee, published, upcoming, the entry size accepted) at a studio of the entry\'s own organisation (fails closed when that cannot be read) but only times with room are listed and NO capacity or count is ever returned. Each option carries `price_difference_cents` and `price_note`. A blocked entry answers `can_move: false`, its reason and no options. Rate limited with the summary: 60 per IP per 5 minutes.',
+  description: 'Anonymous; the token is the credential. Same eligibility as the staff picker (same payee, published, upcoming, the entry size accepted) at a studio of the entry\'s own organisation (fails closed when that cannot be read) but only times with room are listed and NO capacity or count is ever returned; a time\'s room counts confirmed entries and unpaid ones still inside the target event\'s unpaid_hold_hours (ENTRYPOLICY.1). Each option carries `price_difference_cents` and `price_note`. A blocked entry (status, check-in, past, or the event\'s entry policy: date changes off / inside the cutoff) answers `can_move: false`, its reason and no options. Rate limited with the summary: 60 per IP per 5 minutes.',
   request: { params: z.object({ token: EntryManageToken }) },
   responses: {
     200: { description: 'The options', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntryMoveOptions') } } },
@@ -802,7 +910,7 @@ registry.registerPath({
   path: '/api/public/entry/{token}/move',
   tags: ['Public'],
   summary: 'The token holder moves their entry to another date (pays the difference first when dearer)',
-  description: 'Anonymous; the token is the credential. Only a confirmed, unchecked entry on an upcoming event; the same rules as staff, never forced. Equal or cheaper: moved at once as actor `customer`, new tickets emailed, nothing refunded → `{ moved: true, registration, notified }`. Dearer: a price-difference payment carrying the pending move is minted and the move lands when it is paid → `{ moved: false, pay_url }`, where pay_url ends `#back=<this token>` so the checkout can return to the entry page. Targets are fenced to the entry\'s organisation. An immediate move closes any open dearer link on the entry. Every refusal carries `error` and a customer `message`. Rate limited: 10 per IP per 15 minutes.',
+  description: 'Anonymous; the token is the credential. Only a confirmed, unchecked entry on an upcoming event whose entry policy allows a customer date change (ENTRYPOLICY.1: 400 `disabled` when the event\'s switch is off, 400 `cutoff` inside the hours-before cutoff counted back from the entrant\'s wave start, both with the operator\'s own `message`); the same rules as staff, never forced. Equal or cheaper: moved at once as actor `customer`, new tickets emailed, nothing refunded → `{ moved: true, registration, notified }`. Dearer: a price-difference payment carrying the pending move is minted and the move lands when it is paid → `{ moved: false, pay_url }`, where pay_url ends `#back=<this token>` so the checkout can return to the entry page. Targets are fenced to the entry\'s organisation. An immediate move closes any open dearer link on the entry. Every refusal carries `error` and a customer `message`. Rate limited: 10 per IP per 15 minutes.',
   request: {
     params: z.object({ token: EntryManageToken }),
     body: { content: { 'application/json': { schema: z.object({
@@ -897,6 +1005,157 @@ registry.registerPath({
   },
 })
 
+// ============================================================================
+// OPENAPI-EVENTS.1 — the event itself: list, create, read, update, retire.
+// The create and update bodies are the handlers' own Zod objects, imported
+// from src/lib/event-save-schemas.js (the two route files re-export them as
+// CreateSchema / UpdateSchema), so a field added there reaches the spec with
+// no change here. Only the cross-field rules (superRefine) and what the
+// handler does AFTER validation are written out, in the descriptions.
+// `.extend({})` for the same reason as the Shelly block: the raw exports are
+// built before extendZodWithOpenApi runs, so they carry no `.openapi`.
+// ============================================================================
+
+const EventCreate = EventCreateFields.extend({}).openapi('EventCreate', {
+  description:
+    'POST /api/events body. Rules the schema adds across fields: every `kind` but lead_gen needs `race_date` and at least one wave; lead_gen (a no-date data-capture form) takes neither. '
+    + '`charity` (CHARITY.9) is the charity-day donation settings: name, heading, blurb, presets_cents, custom_allowed, min_cents, max_cents, match_multiplier (1..5), match_label, goal_cents, show_total, include_entries, consent_label, the thank-you and receipt copy, video_url (YouTube or Instagram) or video_file_url (uploaded through the event form); every key optional, a missing key is the default. '
+    + '`find_team` (FINDTEAM.6) is the "Find me a team" switch and copy: enabled, label, blurb, confirmation_paragraph, placed_subject, placed_intro. '
+    + `\`entry_policy\` (ENTRYPOLICY.1) is what a customer may do with their own entry and how long an unpaid entry keeps its place: self_cancel_enabled (default ${ENTRY_POLICY_DEFAULTS.self_cancel_enabled}), self_reschedule_enabled (default ${ENTRY_POLICY_DEFAULTS.self_reschedule_enabled}), cutoff_hours (0..${ENTRY_POLICY_HOURS_MAX}, default ${ENTRY_POLICY_DEFAULTS.cutoff_hours}; hours before the entrant's start, on the studio's clock, that self-service closes; 0 = no cutoff), unpaid_hold_hours (1..${ENTRY_POLICY_HOURS_MAX}, default ${ENTRY_POLICY_DEFAULTS.unpaid_hold_hours}; a pending_payment entry holds its place that long), and the operator copy cutoff_message, disabled_message, lapsed_message ({{hours}} and {{event_name}} are filled in). Every key optional; null or omitted = the defaults.`,
+})
+
+const EventUpdate = EventUpdateFields.extend({}).openapi('EventUpdate', {
+  description:
+    'PUT /api/events/{id} body. Every key optional: omitted = left as it is, null clears a nullable column. '
+    + 'Rule the schema adds across fields (CHARITY.12): `charity_enabled: true` sent with a `charity` whose name is blank is refused (nothing is written). '
+    + '`waves`, when sent, is the whole new wave set (at least one): a row with a known `id` updates that wave, a row without one is inserted, and an existing wave not in the set is deleted (registrations that pointed at it keep their place with no wave). '
+    + '`charity`, `find_team` and `entry_policy` take the same shapes as on create.',
+})
+
+const EventListRow = z.object({
+  id: uuidLike,
+  name: z.string(),
+  slug: z.string(),
+  kind: z.string().openapi({ description: 'race | workshop | seminar | open_day | masterclass | lead_gen' }),
+  race_date: z.string().nullable(),
+  start_time: z.string().nullable(),
+  active: z.boolean(),
+  shared: z.boolean(),
+  hosted_by: z.string().nullable().openapi({ description: "The payment host's name, or null for an internal event" }),
+  signup_summary: z.string().openapi({ description: 'Rendered server-side from the confirmed registrations and the capacity (teams or people)' }),
+  is_upcoming: z.boolean().openapi({ description: "Judged on the event's own studio day (TZ.9), so the client does no date maths" }),
+}).openapi('EventListRow')
+
+const EventDetail = z.object({}).passthrough().openapi('EventDetail', {
+  description:
+    'The race_events row as the handler selects it: id, location_id, name, slug, description, race_date, kind, staff_required, registration_opens_at/closes_at, allowed_team_sizes, active, created_at, updated_at, '
+    + 'member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, tv_logos, shared, host_id, hero_image_url, accent_hex, the confirmation/reminder/moved/gap/waitlist email subject and intro copy, the two email template ids, sending_location_id, charity_enabled, charity, find_team, entry_policy, '
+    + 'plus `waves` (id, start_time, capacity, label, display_order) and `registrations` (id, status, race_started_at, race_finished_at, registered_at, wave_id, team_composition, active_payment_id, and `teams` with its `team_members`).',
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/events',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Every event at a studio, shaped for the events browse list (staff with races at that studio)",
+  description:
+    'Session auth, then the `races` permission at any studio (403). `?location_id` (default: the active studio) must be a studio the caller belongs to (403), with `races` resolved AT that studio (403): no manager role is needed, this is the front-of-house list (door staff on the phone), unlike GET /api/races. '
+    + "Lists that studio's own events plus any sibling studio's event flagged `shared` (same organisation). For ADMIN_ROLES (master, owner, manager) at the active studio with `races` there, the organisation's HOST events are added too: they live on a per-host anchor location no staff member belongs to, so the active studio is the only judgement for them. "
+    + 'Rows come upcoming first (nearest date first), then past (most recent first), each stamped `is_upcoming` and a rendered `signup_summary`. No studio to list (no `location_id` and no active studio) answers an empty list.',
+  request: { query: z.object({ location_id: uuidLike.optional() }) },
+  responses: {
+    200: { description: 'The ordered rows', content: { 'application/json': { schema: SuccessResponse(z.array(EventListRow)) } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission at that studio, or a studio the caller does not belong to', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Create an event with its waves (staff with races at body.location_id; a payment host needs manager access)',
+  description:
+    'Session auth → `races` at any studio (403) → body validated (400 with `issues`) → the caller must belong to `location_id` (403 Forbidden) and hold `races` there (403). Any role may create an internal event; sending `host_id` (the payee, paid through Stripe Connect) needs ADMIN_ROLES (master, owner, manager) at that studio (403). '
+    + "Referential checks run before the insert, each a 400 carrying the code as `error`: `invalid_host` (host_id must be an event_hosts row in the studio's organisation), `invalid_template` (confirmation_email_template_id / reminder_email_template_id must be email_templates rows at that studio), `invalid_sending_location` (sending_location_id must be a non-anchor studio in the same organisation). "
+    + 'The public URL slug is derived from the studio, the date and the earliest wave (studio-oct17-1030, suffixed -2, -3 on a clash) unless `slug` is sent, which answers 409 when another event already uses it (slugs are global: the public /event/[slug] page has no studio filter). '
+    + 'Written when omitted: kind race, capacity_mode teams, staff_required 1, allowed_team_sizes [1, 2, 4] (sorted when sent), active true, payment_currency EUR, charity_enabled false; member_fee_cents is kept only when member_pricing_enabled is true. `charity`, `find_team` and `entry_policy` are stored as sent (null or omitted = the defaults). '
+    + 'Waves are inserted sorted by start_time (display_order defaults to that order); two waves on one start time answer 409 `duplicate_wave_time` and the event row is rolled back, so a 409 leaves nothing behind. Answers 201 with the row and its `waves` (an empty array for lead_gen).',
+  request: { body: { content: { 'application/json': { schema: EventCreate } } } },
+  responses: {
+    201: { description: 'Created: the race_events row with `waves`', content: { 'application/json': { schema: SuccessResponse(EventDetail) } } },
+    400: { description: 'Validation failed (`issues`), invalid_host, invalid_template, invalid_sending_location, or the insert failed (the database message)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission at the studio, a studio the caller does not belong to, or a payment host set without manager access', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The slug is already used by another event (duplicate_slug), or two waves share a start time (duplicate_wave_time; nothing created)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/events/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "One event with its waves and registrations (staff with races at the event's studio)",
+  description:
+    "Session auth, then `races` at any studio (403). The event must be at a studio the caller belongs to, with `races` resolved at the event's studio (403); an event the caller cannot see is a 404, never a 403, so ids cannot be enumerated. "
+    + "One exception (HOST-EDIT.1): a HOST event lives on the host's anchor location, so ADMIN_ROLES (master, owner, manager) at the active studio whose organisation owns the host may read it, with `races` judged at the active studio.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The event', content: { 'application/json': { schema: SuccessResponse(EventDetail) } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or at a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/events/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Update an event and, when sent, replace its waves (staff with races at the event's studio; payee and studio changes need manager access)",
+  description:
+    'Session auth → `races` at any studio (403) → body validated (400 with `issues`) → the same visibility rule as GET: 404 for an event at a studio the caller cannot see, with `races` judged at the event\'s studio (403), and the HOST-EDIT.1 exception for org admins on a host event. '
+    + "Two gates sit on top of `races`: changing `host_id` (assigning, switching or clearing the payee: it routes ticket money) needs ADMIN_ROLES (master, owner, manager) at the event's studio (403; an unchanged host_id passes); `location_id` (EVENT-OWNER.1, moving the event to another studio) is judged by judgeEventOwnerChange: ADMIN_ROLES at both studios with races on at the target (403), the same organisation (400 invalid_location), never a host's event (400) and never onto a host anchor, and a move drops a stored email template pointer the body did not replace, since templates are per studio. "
+    + 'Referential 400s as on create (`invalid_host`, `invalid_template`, `invalid_sending_location`), judged against the target studio when moving. '
+    + 'Scalars are patched as one update (a failed write is a 400 with the database message); then `waves`, when sent, is diffed and applied: update by id, insert the rest, delete the waves left out (their registrations keep their place with wave_id null); two waves on one start time answer 409 `duplicate_wave_time`. Answers the event re-read as GET returns it.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: EventUpdate } } },
+  },
+  responses: {
+    200: { description: 'The updated event, re-read with its waves and registrations', content: { 'application/json': { schema: SuccessResponse(EventDetail) } } },
+    400: { description: 'Validation failed (`issues`), invalid_host, invalid_template, invalid_sending_location, invalid_location, a move of a host\'s event, or a failed write (the database message)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission at the event's studio, a payee change without manager access, or a move without manager access at both studios", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, at a studio the caller cannot see, or (on a move) a target studio that does not exist', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Two waves share a start time (duplicate_wave_time)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'On a move, the studios could not be read; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/events/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Retire an event: active=false, registrations kept (staff, manager+ with races at the event's studio)",
+  description:
+    'Soft delete: sets `active` false so the registrations stay as history; no row is removed. Session auth, then MANAGER_ROLES (master, owner, manager, head_coach) and `races` at any studio (403), then membership of the event\'s studio (an event the caller cannot see is a 404) and the same role and permission resolved AT that studio (403). No host-event exception on this method. Answers `{ success: true }` with no data.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Retired', content: { 'application/json': { schema: z.object({ success: z.literal(true) }).openapi('EventRetired') } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "Manager role or races permission missing at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or at a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Write failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // EVENT-MOVE.1 — staff move an event entry (a race_registrations row) to
 // another event, possibly at another studio. Money never moves.
 registry.registerPath({
@@ -943,6 +1202,127 @@ registry.registerPath({
     404: { description: 'Entry or target event not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'wave_full (resend with force) or conflict (the entry changed mid-move)', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'load_failed or write_failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// FINDTEAM.8 — the cancel, edit and delete routes for a registration, with the
+// refusals the "placed" status added.
+registry.registerPath({
+  method: 'post',
+  path: '/api/registrations/{id}/cancel',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Cancel a race/event registration (staff, manager+ at the event\'s studio)',
+  description: 'Idempotent (a cancelled row answers already_cancelled). Refunds are a human decision. 409 `not_active` for a placed solo\'s row (status `placed`): it holds their payment and placement record. FINDTEAM.9: 409 `has_placed_solos` (with `placed_count`, the same body as the registration DELETE) for a team entry that solos were placed into: un-place them first (there is no un-place tool yet). Mia\'s cancel and the approvals route go through the same lib call and inherit both refusals.',
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: 'Cancelled', content: { 'application/json': { schema: z.object({ success: z.boolean(), already_cancelled: z.boolean() }).openapi('RegistrationCancelResult') } } },
+    403: { description: 'Not a manager at the event\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_active (a placed solo) or has_placed_solos (solos were placed into this team; `placed_count`)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The cancel, or the placed-entrants check, failed; nothing was cancelled', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/event-registrations/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Move a registration to another wave of its event, or set its status (staff, races at the event\'s studio)',
+  description: 'The status enum takes pending_payment, confirmed, cancelled, no_show (never `placed`). 409 `not_active` for a placed solo\'s row.',
+  request: {
+    params: z.object({ id: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({
+      wave_id: z.string().uuid().optional(),
+      status: z.enum(['pending_payment', 'confirmed', 'cancelled', 'no_show']).optional(),
+    }).openapi('EventRegistrationUpdate') } } },
+  },
+  responses: {
+    200: { description: 'Applied (or unchanged)' },
+    400: { description: 'A bad body, or a wave not on this event', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_active: the row is a placed solo', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/event-registrations/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Delete a registration (staff, races at the event\'s studio)',
+  description: '409 `not_active` for a placed solo\'s row; 409 `has_placed_solos` (with `placed_count`) for a team entry that solos were placed into: un-place them first (there is no un-place tool yet).',
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: 'Deleted' },
+    404: { description: 'Not found, or a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_active (a placed solo) or has_placed_solos (solos were placed into this team)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The placed-entrants check failed; nothing was deleted', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// FINDTEAM.5 — staff place a "Find me a team" solo into a team, or pair solos
+// into a new one. Both are service-role routes gated on `races` + a manager
+// role at the event's studio; neither reads race_events.find_team.
+registry.registerPath({
+  method: 'post',
+  path: '/api/registrations/{id}/place',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Place a solo looking for a team into an existing team (staff, manager+ with races at the event\'s studio)',
+  description:
+    'Write order: the solo\'s member row is copied onto the target team, the team size and the target entry\'s team composition are set from a fresh read of the team\'s members, ' +
+    'then the solo flips to status `placed` with `placed_into_registration_id`, `placed_at` and `placed_by`. Payments stay on the solo\'s own row. ' +
+    'FINDTEAM.8: when the flip matches no row (placed concurrently), the member row this call added is deleted and size/composition re-set, then 409 already_placed (500 write_failed with stage `rollback` if that clean-up fails). ' +
+    'The placed person is emailed best-effort (the placement stands whatever the email does). ' +
+    'Every refusal carries `error` (the code) and `message` (plain English): 404 not_found / wrong_event (or an id the caller cannot see), ' +
+    '409 not_paid / already_placed / not_solo / target_not_live / no_member_row, 500 load_failed / write_failed (with `stage` once a write has started).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      team_registration_id: uuidLike, // the confirmed team entry, on the same event, that the solo joins
+    }).openapi('PlaceSoloRequest') } } },
+  },
+  responses: {
+    200: { description: 'Placed', content: { 'application/json': { schema: z.object({ success: z.boolean(), data: z.object({ placed: z.boolean() }) }).openapi('PlaceSoloResult') } } },
+    400: { description: 'A bad body', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission or manager role at the event\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'not_found / wrong_event, or a registration at a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_paid, already_placed, not_solo, target_not_live or no_member_row', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed (a partial write is possible: reload and check the teams)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events/{id}/pair-solos',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Pair two or more solos into a new team (staff, manager+ with races at the event\'s studio)',
+  description:
+    'Two to eight ids, all confirmed solos (looking for a team, not yet placed) of this event. The wave is `wave_id`, or the solos\' common wave (400 mixed_waves otherwise; 400 invalid_wave for a wave not on the event). ' +
+    'In teams capacity mode the new team takes a slot, checked with the shared capacity rule: 409 wave_full (with `code` and `spots_left`) unless `force: true`. ' +
+    'A team-name clash retries once with " (2)", then 409 team_name_taken. The first solo becomes captain; the new registration is confirmed in that wave with `team_composition` from the solos\' member flags and the first solo\'s own marketing consent. ' +
+    'Each solo then flips to `placed`, and everyone placed is emailed best-effort. ' +
+    'Every refusal carries `error` (the code) and `message`: 400 too_few / mixed_waves / invalid_wave, 404 not_found (with `ids`), ' +
+    '409 not_paid / already_placed / not_solo / no_member_row / team_name_taken / wave_full, 500 load_failed / write_failed (with `stage`; a partial flip carries `registration_id` and the `ids` still queued).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      registration_ids: z.array(uuidLike).min(2).max(8).openapi({ description: 'The solos to pair; the first becomes captain' }),
+      team_name: z.string().min(1).max(80),
+      wave_id: uuidLike.nullable().optional(), // the new team's wave (default: the solos' common wave)
+      force: z.boolean().optional().openapi({ description: 'Skip the wave_full check (default false)' }),
+    }).openapi('PairSolosRequest') } } },
+  },
+  responses: {
+    200: { description: 'Paired', content: { 'application/json': { schema: z.object({ success: z.boolean(), data: z.object({ registration_id: uuidLike }) }).openapi('PairSolosResult') } } },
+    400: { description: 'A bad body, too_few, mixed_waves or invalid_wave', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission or manager role at the event\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event not found (or at a studio the caller cannot see), or a registration not on it', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A solo in the wrong state, team_name_taken, or wave_full (resend with force)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -1080,6 +1460,56 @@ registry.registerPath({
     409: { description: 'has_room, past or closed', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'load_failed or write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/events/{id}/donations',
+  tags: ['Events'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "An event's card donations, totals and charity settings (staff, races at the event's studio; CHARITY.10)",
+  description: 'Session auth + the races permission at the event\'s location; an event at a studio the caller cannot see is a 404. Rows newest first (every row, awaiting_payment included however old: staff reconcile them), each with paid_at_label rendered in the event location\'s zone and matched_cents (amount x the multiplier snapshotted at paid; 0 until paid). Returns { donations, totals, currency, settings: { name, match_multiplier, include_entries } }. `?format=csv` streams the hand-over file for the charity: paid_at, name, email, amount, matched, status, message (UTF-8 with BOM).',
+  request: { params: z.object({ id: uuidLike }), query: z.object({ format: z.enum(['csv']).optional() }) },
+  responses: {
+    200: { description: '{ donations, totals, currency, settings }, or text/csv with ?format=csv', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventDonations') } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events/{id}/donations/{donationId}/refunded',
+  tags: ['Events'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Record that a donation was refunded in the provider dashboard (staff, manager+ with races at the event's studio)",
+  description: 'Record-only: moves no money. Flips a paid donation to refunded and stamps refunded_at and refunded_by. Revolut never reports a refund, so this is how one is recorded; Stripe refunds arrive on charge.refunded. 404 when the donation is not on this event; 409 not_paid when the row is not paid (including a lost race with another refund click).',
+  request: { params: z.object({ id: uuidLike, donationId: uuidLike }) },
+  responses: {
+    200: { description: '{ changed }', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    403: { description: "No races permission or manager role at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event or donation not found, or the donation is on another event', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_paid: only a paid donation can be marked as refunded', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Write failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events/{id}/video/signed-upload',
+  tags: ['Events'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Mint a signed Storage upload for the charity-day video (staff with races at the event's studio)",
+  description: 'CHARITY.14. Body { content_type: video/mp4 | video/webm | video/quicktime }. Returns { path, token, url }: the browser PUTs the bytes straight to the public branding bucket under race-video/<event id>/ (bypassing the ~4.5MB function body cap; the bucket enforces its 200MB limit), then saves `url` as charity.video_file_url on the event. 400 for any other type; 404 for an unknown event or one at a studio the caller lacks.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ path, token, url }', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    400: { description: 'Unsupported video type, or Storage refused to mint the URL', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event not found or at another studio', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -1716,6 +2146,32 @@ registry.registerPath({
   request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('RevolutRacePaymentEvent') } } } },
   responses: {
     200: { description: 'Accepted' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/revolut/donations',
+  tags: ['Webhooks (Inbound)'],
+  security: [],
+  summary: 'Revolut donations webhook verification',
+  description: 'Configuration ping (200).',
+  responses: {
+    200: { description: 'OK' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/revolut/donations',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Revolut event-page donation payment events (CHARITY.7)',
+  description: 'Revolut Merchant → CRM. Separate webhook endpoint for card donations; register it in the Revolut dashboard. Verified with REVOLUT_DONATION_WEBHOOK_SECRET, falling back to REVOLUT_WEBHOOK_SECRET. Deduped per event:order. The order is re-read from Revolut and the donation marked, then the stamp-keyed paid side effects run on every observation of a paid row. Answers 200 for anything unrecognised (unknown order, empty body). Deferred paths (a provider read, an event read, a mark or re-read that throws) release the dedupe claim and answer 200 { deferred } so a dashboard resend is processed; the route never 500s after the claim.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('RevolutDonationEvent') } } } },
+  responses: {
+    200: { description: 'Accepted (processed, deduped, deferred or skipped)' },
     401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

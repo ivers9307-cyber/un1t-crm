@@ -9,7 +9,9 @@
 // never public"; this route is the public reduction of it).
 //
 // { can_move, move_blocked_reason, options }. A blocked entry (unpaid,
-// cancelled, checked in, past) answers can_move false, its reason and no
+// cancelled, checked in, past, or the event's entry policy: date changes
+// switched off or inside the hours-before cutoff, ENTRYPOLICY.1) answers
+// can_move false, its reason (the operator's own copy for the policy) and no
 // options. Shares the summary's rate limit bucket: 60 per 5 minutes per IP.
 
 import { NextResponse } from 'next/server'
@@ -18,7 +20,7 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { verifyEntryManageTokenFromEnv } from '@/lib/entry-manage-tokens'
 import { readRegistrationForMove, countEntryCheckins, listMoveTargets, moveLocationIds } from '@/lib/registration-move'
 import { entryMoveBlock, publicMoveOptions, customerMoveMessage, CUSTOMER_MOVE_STATUS } from '@/lib/registration-move-public'
-import { eventToday } from '@/lib/event-day'
+import { eventToday, eventZone } from '@/lib/event-day'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -46,7 +48,8 @@ export async function GET(request, props) {
 
   // TZ.9: "past" by the entry's own event's studio day (reg.race carries the
   // locations embed with its timezone).
-  const block = entryMoveBlock({ registration: reg, checkinCount: checkins.count, today: eventToday(reg.race) })
+  const nowMs = Date.now()
+  const block = entryMoveBlock({ registration: reg, checkinCount: checkins.count, today: eventToday(reg.race, nowMs), nowMs, zone: eventZone(reg.race) })
   if (block) {
     return NextResponse.json({ success: true, data: { can_move: false, move_blocked_reason: block.message, options: [] } })
   }

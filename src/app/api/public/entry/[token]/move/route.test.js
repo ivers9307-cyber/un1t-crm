@@ -232,3 +232,28 @@ describe('POST /api/public/entry/[token]/move — the organisation fence (review
     expect(closeCustomerGapLinks).not.toHaveBeenCalled()
   })
 })
+
+// ENTRYPOLICY.1 — the event's policy refuses before any rule runs, with the
+// operator's own sentence (not the generic one), as a 400.
+describe('POST /api/public/entry/[token]/move — the entry policy', () => {
+  it.each([
+    ['switched off', { self_reschedule_enabled: false, disabled_message: 'Ask the desk about {{event_name}}.' }, '2026-10-09T12:00:00Z', 'disabled', 'Ask the desk about Hatch Oct 18.'],
+    ['inside the cutoff', { cutoff_hours: 72, cutoff_message: '{{hours}}h rule for {{event_name}}.' }, '2026-10-16T12:00:00Z', 'cutoff', '72h rule for Hatch Oct 18.'],
+  ])('%s: 400 with the operator copy, nothing checked or written', async (_w, entry_policy, now, code, message) => {
+    vi.setSystemTime(new Date(now))
+    readRegistrationForMove.mockResolvedValue({ registration: { ...REG, race: { ...REG.race, entry_policy }, wave: { start_time: '11:00:00' } }, error: null })
+    const res = await POST(post(BODY), props())
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: code, message })
+    expect(checkMove).not.toHaveBeenCalled()
+    expect(moveRegistration).not.toHaveBeenCalled()
+    expect(createGapPayment).not.toHaveBeenCalled()
+  })
+  it('outside the cutoff with both switches on, the move proceeds', async () => {
+    readRegistrationForMove.mockResolvedValue({ registration: { ...REG, race: { ...REG.race, entry_policy: { cutoff_hours: 72 } }, wave: { start_time: '11:00:00' } }, error: null })
+    const res = await POST(post(BODY), props())
+    expect(res.status).toBe(200)
+    expect(moveRegistration).toHaveBeenCalled()
+  })
+})
+

@@ -19,6 +19,7 @@ import { addEventAttendeesToHostList } from '@/lib/host-contact-list'
 import { logError } from '@/lib/log'
 import { loadMoveHistory } from '@/lib/registration-move-history'
 import { entryLeadName } from '@/lib/registration-entry'
+import { pendingLapsed } from '@/lib/entry-policy'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -37,7 +38,7 @@ const CreateTeamSchema = z.object({
 async function loadRaceForAccess(db, raceId) {
   return db
     .from('race_events')
-    .select('id, location_id, allowed_team_sizes, waves:race_waves ( id )')
+    .select('id, location_id, allowed_team_sizes, entry_policy, waves:race_waves ( id )')
     .eq('id', raceId)
     .single()
 }
@@ -65,7 +66,8 @@ export async function GET(_request, props) {
     .select(`
       id, status, registered_at, team_composition, wave_id,
       race_started_at, race_finished_at,
-      contact:contact_id ( first_name, last_name, email ),
+      looking_for_team, placed_into_registration_id, placed_at,
+      contact:contact_id ( first_name, last_name, email, phone ),
       teams:team_id (
         id, name, size, captain_contact_id,
         team_members ( id, name, email, role, is_member, member_validation_status )
@@ -117,6 +119,11 @@ export async function GET(_request, props) {
 
   const { lastMoveByReg, movedOut } = await loadMoveHistory(db, { eventId: params.id, regIds })
   for (const r of regs) r.last_move = lastMoveByReg[r.id] || null
+  // ENTRYPOLICY.1 — an unpaid entry past the event's hold no longer holds its
+  // place; the Teams page shows it as "Lapsed (unpaid)". The row stays: staff
+  // may still confirm it by hand or delete it.
+  const nowMs = Date.now()
+  for (const r of regs) r.lapsed = pendingLapsed(r, nowMs, race)
 
   return NextResponse.json({ success: true, data: regs, moved_out: movedOut })
 }

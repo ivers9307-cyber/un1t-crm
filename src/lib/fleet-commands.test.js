@@ -184,3 +184,11 @@ describe('alert suppression', () => {
     expect(suppressionFor('pull_logs', now)).toBeNull()
   })
 })
+
+describe('screen role', () => {
+  // Spec: the Android TV boxes take no Pi action.
+  it('no fleet action applies to a screen', () => {
+    for (const action of ACTION_NAMES) expect(actionAppliesToRole(action, 'screen')).toBe(false)
+    expect(availableActions('screen', () => true)).toEqual([])
+  })
+})

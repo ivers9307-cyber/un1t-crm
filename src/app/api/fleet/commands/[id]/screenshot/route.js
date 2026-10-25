@@ -79,20 +79,34 @@ export async function POST(request, props) {
     })
     // Record the failure on the command so the UI says something truthful
     // rather than leaving it to expire silently.
-    await db.from('fleet_commands').update({
+    const { error: failStampError } = await db.from('fleet_commands').update({
       status: 'failed',
       finished_at: new Date().toISOString(),
       error: 'could not store the screenshot',
     }).eq('id', command.id)
+    // Best effort: the 500 below is the answer either way; a lost stamp means
+    // the row expires instead of reading "failed", so say so in the log.
+    if (failStampError) {
+      logWarn('fleet-cmd', 'could not record the screenshot failure', {
+        device: device.device_name, id: command.id, err: failStampError,
+      })
+    }
     return NextResponse.json({ ok: false, error: 'Upload failed' }, { status: 500 })
   }
 
-  await db.from('fleet_commands').update({
+  const { error: doneStampError } = await db.from('fleet_commands').update({
     status: 'succeeded',
     exit_code: 0,
     screenshot_path: path,
     finished_at: new Date().toISOString(),
   }).eq('id', command.id)
+  // The image is stored; a lost stamp must not turn that into a failure for the
+  // device (it would re-upload), so log it and carry on.
+  if (doneStampError) {
+    logWarn('fleet-cmd', 'could not record the screenshot as succeeded', {
+      device: device.device_name, id: command.id, err: doneStampError,
+    })
+  }
 
   logInfo('fleet-cmd', 'screenshot stored', {
     device: device.device_name, bytes: bytes.length,

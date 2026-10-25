@@ -3,7 +3,8 @@
 // What the UC Cast Pro loads as its Web URL content source.
 // Fullscreen, no chrome, black background. Token-gated (the URL
 // is the secret). Polls /api/public/tv/[token]/content every
-// 3s to detect pushes.
+// 6s to detect pushes, or every 60s with ?kiosk=1 (the Android TV
+// boxes, which are rung to reload when content is pushed).
 //
 // Sibling to the HR live board at /tv/live/[token]. Both live
 // under /tv/ (already public in middleware); each sits under its
@@ -13,6 +14,7 @@
 import TVDisplay from './TVDisplay'
 import { cache } from 'react'
 import { headers } from 'next/headers'
+import { isKioskParam } from '@/lib/tv-cast-poll'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,6 +46,7 @@ export async function generateMetadata(props) {
 
 export default async function TVPage(props) {
   const params = await props.params;
+  const { kiosk } = await props.searchParams
   const { initial, invalid } = await loadInitial(params.token)
 
   if (invalid) {
@@ -54,5 +57,5 @@ export default async function TVPage(props) {
     )
   }
 
-  return <TVDisplay token={params.token} initial={initial} />
+  return <TVDisplay token={params.token} initial={initial} kiosk={isKioskParam(kiosk)} />
 }

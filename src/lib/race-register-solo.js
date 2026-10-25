@@ -17,6 +17,7 @@ import { sendRaceConfirmations } from '@/lib/race-confirmations'
 import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { wouldFit } from '@/lib/event-signups'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
+import { holdingPlaces } from '@/lib/entry-policy'
 
 /**
  * Register one person for an event when it's FREE for them.
@@ -69,12 +70,13 @@ export async function registerSoloEventEntry(db, { race, waveId, contact, member
     const mode = race.capacity_mode === 'people' ? 'people' : 'teams'
     // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- wave-capacity gate; a single race wave never holds >1000 registrations
     const { data: waveRegs } = await db.from('race_registrations')
-      .select('status, team:teams ( size )')
+      .select('status, registered_at, looking_for_team, team:teams ( size )') // FINDTEAM.2: unplaced solos do not fill a teams-mode wave
       .eq('wave_id', wave.id)
       // Count reserved-but-unpaid spots too, else concurrent paid signups oversell.
       .in('status', LIVE_REGISTRATION_STATUSES)
       .limit(2000)
-    if (!wouldFit(wave.capacity, waveRegs || [], mode, 1)) return { ok: false, reason: 'wave_full' }
+    // ENTRYPOLICY.1 — an unpaid entry holds its place for unpaid_hold_hours only.
+    if (!wouldFit(wave.capacity, holdingPlaces(waveRegs || [], Date.now(), race), mode, 1, { held: true })) return { ok: false, reason: 'wave_full' }
   }
 
   // Member validation + pricing — identical to the route.

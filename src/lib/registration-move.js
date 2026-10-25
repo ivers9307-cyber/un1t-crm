@@ -19,6 +19,7 @@ import { emitEvent, EVENT_TYPES } from './contact-events'
 import { addEventAttendeesToHostList } from './host-contact-list'
 import { sendRegistrationMovedEmail } from './race-confirmations'
 import { moveLocationIds } from './move-locations'
+import { holdingPlaces } from './entry-policy'
 import {
   MOVE_ERRORS, MOVE_ERROR_MESSAGES, membersOf,
   entryLabel, entryHeadcount, entryLeadEmail, perPersonFeeCents, computePriceGapCents,
@@ -51,7 +52,8 @@ export function samePayee(a, b) {
  * @param {object} args.sourceEvent    race_events row
  * @param {object} args.targetEvent    race_events row with waves[]
  * @param {object|null} args.targetWave   race_waves row (null when none given)
- * @param {Array} args.targetWaveRegistrations  live rows in that wave ({status, team:{size}})
+ * @param {Array} args.targetWaveRegistrations  rows in that wave that HOLD a place
+ *   ({status, team:{size}}; the caller filters with holdingPlaces, ENTRYPOLICY.1)
  * @param {number} args.checkinCount   race_checkins rows for the entry
  * @param {object|null} args.existingOnTarget  another entry of the same team on the target, any status
  * @param {boolean} [args.force]       true = skip wave_full
@@ -96,8 +98,10 @@ export function evaluateMove({
   if (targetWave && !force) {
     const mode = targetEvent.capacity_mode === 'people' ? 'people' : 'teams'
     const regs = Array.isArray(targetWaveRegistrations) ? targetWaveRegistrations : []
-    if (!wouldFit(targetWave.capacity, regs, mode, headcount)) {
-      return fail(MOVE_ERRORS.WAVE_FULL, { spots_left: spotsLeft(targetWave.capacity, regs, mode) })
+    // ENTRYPOLICY.1 — the rows given hold a place (holdingPlaces); a fresh
+    // unpaid entry among them counts.
+    if (!wouldFit(targetWave.capacity, regs, mode, headcount, { held: true })) {
+      return fail(MOVE_ERRORS.WAVE_FULL, { spots_left: spotsLeft(targetWave.capacity, regs, mode, { held: true }) })
     }
   }
   return { ok: true }
@@ -108,7 +112,7 @@ const EVENT_COLUMNS = `
   capacity_mode, allowed_team_sizes,
   member_pricing_enabled, member_fee_cents, non_member_fee_cents, payment_currency,
   venue_name, accent_hex, hero_image_url, sending_location_id,
-  moved_email_subject, moved_email_intro,
+  moved_email_subject, moved_email_intro, entry_policy,
   waves:race_waves ( id, race_event_id, start_time, label, capacity, display_order ),
   locations:location_id ( id, name, is_host_anchor, organization_id, timezone )
 `
@@ -161,6 +165,8 @@ const WAVE_PAGE = 1000
  * Live rows in the given waves, shaped for event-signups' counters, in ONE
  * query paged past the 1,000-row cap. { rows, error }: on a failed read the
  * caller refuses (load_failed); an empty-looking wave would pass a full one.
+ * ENTRYPOLICY.1: `registered_at` rides along so the caller can keep only the
+ * rows that still hold a place (holdingPlaces, per target event's policy).
  */
 async function loadWaveRegistrations(db, waveIds) {
   const ids = [...new Set((waveIds || []).filter(Boolean))]
@@ -169,7 +175,7 @@ async function loadWaveRegistrations(db, waveIds) {
   for (let from = 0; ; from += WAVE_PAGE) {
     const { data, error } = await db
       .from('race_registrations')
-      .select('id, status, wave_id, team:teams!team_id ( size )')
+      .select('id, status, wave_id, registered_at, looking_for_team, team:teams!team_id ( size )') // FINDTEAM.2, ENTRYPOLICY.1
       .in('wave_id', ids)
       .in('status', ['confirmed', 'pending_payment'])
       .order('id')
@@ -328,13 +334,15 @@ export async function listMoveTargets(db, { registrationId, allowedEventIds = nu
   const { rows: waveRows, error: waveErr } = await loadWaveRegistrations(db, eligible.flatMap((ev) => (ev.waves || []).map((w) => w.id)))
   if (waveErr) return { ok: false, error: MOVE_ERRORS.LOAD_FAILED }
   const byWave = groupByWave(waveRows)
+  const nowMs = Date.now()
 
   const targets = []
   for (const ev of eligible) {
     const mode = ev.capacity_mode === 'people' ? 'people' : 'teams'
     const waves = sortWaves(ev.waves).map((w) => ({
       id: w.id, start_time: w.start_time, label: w.label, capacity: w.capacity,
-      spots_left: spotsLeft(w.capacity, byWave.get(w.id) || [], mode),
+      // ENTRYPOLICY.1 — a lapsed unpaid entry no longer holds its place.
+      spots_left: spotsLeft(w.capacity, holdingPlaces(byWave.get(w.id) || [], nowMs, ev), mode, { held: true }),
     }))
     targets.push({
       id: ev.id, name: ev.name, race_date: ev.race_date, kind: ev.kind,
@@ -407,8 +415,9 @@ export async function checkMove(db, {
 
   const verdict = evaluateMove({
     registration, sourceEvent: registration.race, targetEvent, targetWave,
-    // One wave was asked for, so every row is that wave's.
-    targetWaveRegistrations: waveRead.rows, checkinCount: checkinRead.count, existingOnTarget: existingRead.existing,
+    // One wave was asked for, so every row is that wave's. ENTRYPOLICY.1: only
+    // the rows that still hold a place under the TARGET event's policy.
+    targetWaveRegistrations: holdingPlaces(waveRead.rows, Date.now(), targetEvent), checkinCount: checkinRead.count, existingOnTarget: existingRead.existing,
     force, today,
   })
   if (!verdict.ok) return verdict

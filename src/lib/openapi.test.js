@@ -626,4 +626,49 @@ describe('getOpenApiSpec', () => {
     expect(op.responses).toHaveProperty('404')
     expect(JSON.stringify(op)).not.toContain('checkout_url')
   })
+
+  // OPENAPI-EVENTS.1 — the event save routes were never registered (noted by
+  // ENTRYPOLICY.1). The bodies are the handlers' own objects, so a field the
+  // handler accepts is a field the spec shows.
+  it('documents the event list/create/read/update/retire routes (OPENAPI-EVENTS.1)', () => {
+    const list = spec.paths['/api/events']
+    expect(list).toHaveProperty('get')
+    expect(list).toHaveProperty('post')
+    expect(list.get.tags).toEqual(['Races'])
+    expect(list.post.security).toEqual([{ CookieAuth: [] }, { BearerAuth: [] }])
+    expect(list.post.requestBody).toBeDefined()
+    expect(list.post.responses).toHaveProperty('201')
+    expect(list.post.responses).toHaveProperty('403')
+    expect(list.post.responses).toHaveProperty('409')
+    expect(list.post.description).toMatch(/`races`/)
+    expect(list.post.description).toMatch(/ADMIN_ROLES \(master, owner, manager\)/)
+
+    const one = spec.paths['/api/events/{id}']
+    expect(one).toHaveProperty('get')
+    expect(one).toHaveProperty('put')
+    expect(one).toHaveProperty('delete')
+    expect(one.put.requestBody).toBeDefined()
+    for (const m of ['get', 'put', 'delete']) {
+      expect(one[m].tags, m).toEqual(['Races'])
+      expect(one[m].security, m).toEqual([{ CookieAuth: [] }, { BearerAuth: [] }])
+      expect(one[m].responses, m).toHaveProperty('404')
+    }
+    expect(one.put.responses).toHaveProperty('409')
+    expect(one.delete.description).toMatch(/MANAGER_ROLES \(master, owner, manager, head_coach\)/)
+    expect(one.delete.description).toMatch(/active/)
+
+    // The body components are the handlers' Zod objects (src/lib/event-save-schemas.js).
+    const create = spec.components.schemas.EventCreate
+    const update = spec.components.schemas.EventUpdate
+    for (const [name, body] of [['EventCreate', create], ['EventUpdate', update]]) {
+      expect(Object.keys(body.properties), name).toEqual(expect.arrayContaining(['waves', 'charity_enabled', 'charity', 'find_team', 'entry_policy']))
+    }
+    expect(create.required).toEqual(expect.arrayContaining(['location_id', 'name']))
+    expect(update.required).toBeUndefined()
+    expect(create.properties.waves.items.properties).not.toHaveProperty('id')
+    expect(update.properties.waves.items.properties).toHaveProperty('id')
+    // entry_policy's keys and defaults are in the description (ENTRYPOLICY.1).
+    expect(create.description).toMatch(/cutoff_hours \(0\.\.720, default 48/)
+    expect(create.description).toMatch(/unpaid_hold_hours \(1\.\.720, default 48/)
+  })
 })

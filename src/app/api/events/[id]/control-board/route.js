@@ -79,6 +79,9 @@ export async function GET(_request, props) {
       penalties:race_penalties ( id, seconds, reason, applied_by, applied_at )
     `)
     .eq('race_event_id', params.id)
+    // FINDTEAM.8 (I1) — a placed solo races with the team it joined; its own
+    // row is history, never a team on the start line.
+    .neq('status', 'placed')
     .order('registered_at', { ascending: true })
 
   if (regErr) {

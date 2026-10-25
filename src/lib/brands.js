@@ -96,6 +96,7 @@ export const BRANDS = [
       '/hatch-street',  // pretty path → next.config rewrites to /welcome/hatch-street
       '/free-class',    // Stillorgan paid-traffic campaign landing page (src/app/free-class)
       '/start',         // Meta-ad booking wizard (src/app/start)
+      '/trial',         // PAIDTRIAL.1 — Meta-ad paid trial product page (src/app/trial)
       '/offers',        // OFFERS.7: weekend "lock in" sale pages (src/app/offers)
       '/privacy',       // GDPR privacy policy (waitlist consent link + App Store URL)
       '/terms',         // Terms of Service (Meta App Review + site footer)

@@ -62,6 +62,7 @@ import { agentRequestsProvider } from './providers/agent-requests'
 import { hyroxSessionsProvider } from './providers/hyrox-sessions'
 import { hostEventsProvider } from './providers/host-events'
 import { offerPurchasesProvider } from './providers/offer-purchases'
+import { trialPurchasesProvider } from './providers/trial-purchases'
 import { hasPermission } from '@/lib/permissions'
 import { bundlesDenyCategory } from '@shared/permission-bundles'
 
@@ -94,6 +95,9 @@ export const APPROVALS_PROVIDERS = Object.freeze([
   hostEventsProvider,
   // OFFERS.6 — paid sale-offer purchases awaiting Glofox fulfilment.
   offerPurchasesProvider,
+  // PAIDTRIAL.2 — paid trial purchases whose Glofox grant needs a hand
+  // (retry or mark granted in place).
+  trialPurchasesProvider,
 ])
 
 // BUNDLES.5 Task 2 — is this provider visible to `user`, combining the
