@@ -38,6 +38,8 @@ const SCHEMA = `
     location_id uuid NOT NULL REFERENCES public.locations(id) ON DELETE CASCADE,
     label text NOT NULL DEFAULT 'n', is_active boolean NOT NULL DEFAULT true,
     is_default boolean NOT NULL DEFAULT false, updated_at timestamptz DEFAULT now(),
+    phone_number_id text NOT NULL DEFAULT gen_random_uuid()::text,
+    UNIQUE (phone_number_id), -- mig 176's Meta id uniqueness: prod carries it, so the self-check must leave it alone
     UNIQUE (location_id, label));
   CREATE UNIQUE INDEX IF NOT EXISTS idx_whatsapp_numbers_default
     ON public.whatsapp_numbers (location_id) WHERE is_default = true;
