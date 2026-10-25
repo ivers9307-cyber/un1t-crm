@@ -12,13 +12,25 @@
 // another profile whose pin_hash verifies under this PIN). Without
 // the in-app check we'd let two staffers pick the same PIN, since
 // their hashes wouldn't collide.
+//
+// PINSCOPE.1 — that check is per ORGANISATION now: it compares against the
+// PIN holders who can work anywhere in the orgs the caller reaches (a PIN
+// may repeat between tenants, never inside one; the master's pool is the
+// whole estate). The 409 says a PIN is taken, which is an oracle, so POST
+// is rate-limited per user: an estate-wide 409 used to let any signed-in
+// staffer walk all 10,000 PINs and learn which existed.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { hashPin, isValidPinFormat, verifyPin } from '@/lib/studio-pin'
+import { hashPin, isValidPinFormat, verifyPin, pinHoldersInOrgs } from '@/lib/studio-pin'
+import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
+
+// Ten tries per quarter hour: enough to pick a PIN after a few clashes,
+// far too few to enumerate the 10,000.
+const SET_PIN_LIMIT = { max: 10, windowMs: 15 * 60_000 }
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -38,26 +50,19 @@ const PathBody = z.object({
 })
 
 /**
- * Check whether the PIN is already taken by some OTHER profile.
- *
- * Walks profiles with a pin_hash set and verifies each — same
- * mechanic as findProfileByPin but with the "this isn't me" filter
- * applied client-side. Cap matches findProfileByPin's safety bound.
+ * Check whether the PIN is already taken by some OTHER profile in the
+ * caller's uniqueness pool: the PIN holders who can work anywhere in the
+ * organisations the caller reaches (PINSCOPE.1). A master reaches every
+ * active organisation, so a master's PIN stays unique estate-wide.
  */
-async function pinTakenByOther(db, { pin, currentProfileId }) {
-  const { data: candidates, error } = await db
-    .from('profiles')
-    .select('id, pin_hash')
-    .not('pin_hash', 'is', null)
-    .neq('id', currentProfileId)
-    .eq('active', true)
-    .limit(201)
-  if (error) throw new Error(error.message)
-  if (!candidates || candidates.length === 0) return false
-  if (candidates.length > 200) {
-    throw new Error('Too many active profiles with a PIN set — please contact an admin.')
-  }
-  for (const p of candidates) {
+async function pinTakenByOther(db, { pin, user }) {
+  const orgIds = [
+    ...(user.locations || []).map((l) => l?.organization_id),
+    ...(user.orgAdminOrgIds || []),
+  ].filter(Boolean)
+  const holders = await pinHoldersInOrgs({ db, orgIds })
+  for (const p of holders) {
+    if (p.id === user.id) continue
     if (await verifyPin(pin, p.pin_hash)) return true
   }
   return false
@@ -75,9 +80,14 @@ export async function POST(request) {
 
   const db = createServerClient()
 
+  const limit = await checkRateLimit(db, `set-pin:${user.id}`, SET_PIN_LIMIT)
+  if (!limit.allowed) {
+    return rateLimitResponse(limit, 'Too many PIN changes. Please try again in a few minutes.')
+  }
+
   // In-app uniqueness check — see file-level comment.
   try {
-    if (await pinTakenByOther(db, { pin, currentProfileId: user.id })) {
+    if (await pinTakenByOther(db, { pin, user })) {
       return NextResponse.json({
         success: false,
         error: 'That PIN is already in use by another staff member. Please pick another.',
