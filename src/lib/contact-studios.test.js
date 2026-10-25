@@ -162,11 +162,12 @@ describe('setMembershipFacts', () => {
     expect(filter(db.ops[1], 'is', 'membership_since')).toBeNull()
     expect(filter(db.ops[1], 'eq', 'contact_id')).toBe(CT)
   })
-  it('ended: one update with membership_ended_at = endedAt ?? nowIso, no plan change when none given, and no since stamp', async () => {
+  it('ended: one update with membership_ended_at = endedAt ?? nowIso, guarded on the row still being active (never moves an earlier end date), no plan change, no since stamp', async () => {
     let db = fakeDb({ contact_studios: () => rowsBack })
     expect(await setMembershipFacts(db, { contactId: CT, locationId: A, status: 'ended', endedAt: '2026-09-01T00:00:00.000Z', nowIso: NOW })).toEqual({ ok: true, updated: true })
     expect(db.ops.map((o) => o.op)).toEqual(['update'])
     expect(db.ops[0].payload).toEqual({ membership_status: 'ended', membership_ended_at: '2026-09-01T00:00:00.000Z', updated_at: NOW })
+    expect(filter(db.ops[0], 'eq', 'membership_status')).toBe('active') // an already-ended row is untouched: updated:false
     db = fakeDb({ contact_studios: () => rowsBack })
     await setMembershipFacts(db, { contactId: CT, locationId: A, status: 'ended', nowIso: NOW })
     expect(db.ops[0].payload.membership_ended_at).toBe(NOW)

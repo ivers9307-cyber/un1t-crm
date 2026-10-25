@@ -11,11 +11,14 @@
 -- apply and the deploy the old code kept writing the table every 15 minutes
 -- and never the columns, so a membership that ended, started or changed plan
 -- in that window is newer on the table. Section 1 copies status, ended_at and
--- plan from every un1t_online_api row that differs from its relationship row
--- (membership_since only where the column is null), and prints how many it
--- copied: applied after a sync on the new code, that count reads 0, which is
--- the proof the migration can offer. Export-source rows are not read (the
--- HATCH-MEMBERS.1 CSV artefacts; mig 770 skipped them for the same reason).
+-- plan from every un1t_online_api row that is NEWER than its relationship row
+-- (the table's updated_at / last_seen_at against contact_studios.updated_at),
+-- keeps the earlier of two end dates and the earliest since, and prints how
+-- many rows it repaired. The columns are the newer side for anything the new
+-- code wrote after the deploy, and those changes stand (final review of
+-- #2198: a non-directional copy would have reverted them and dropped the
+-- evidence). Export-source rows are not read (the HATCH-MEMBERS.1 CSV
+-- artefacts; mig 770 skipped them for the same reason).
 --
 -- Refuses while any view, policy or function other than derive_contact_studio
 -- / reconcile_contact_studios (mig 770 re-created both without the table)
@@ -68,28 +71,52 @@ BEGIN
   END IF;
 END $$;
 
--- 1. The parity pass: anything the old code wrote to the table after 770's
---    backfill reaches the columns before the table goes.
+-- 1. The parity pass, DIRECTIONAL (final review of #2198). The table and the
+--    columns each carry a clock: the old code stamped updated_at / last_seen_at
+--    on every table write, and every write to the relationship row bumps
+--    contact_studios.updated_at (mig 764's trigger). Status and plan are copied
+--    from the table only where the TABLE is the newer side (a window change the
+--    new code has not seen: 771 applied before any sync); where the columns are
+--    newer (the new code's own endings, plan changes and rejoins after the
+--    deploy) they stand. An ending both sides know keeps the EARLIER date (the
+--    new code's first run stamps a window ending late), and since keeps the
+--    earliest of the two. Rows with a status/ended_at shape the CHECK refuses
+--    are left to the columns (mig 770 refused them already).
 DO $$
 DECLARE
   v_n int := 0;
 BEGIN
   IF to_regclass('public.contact_memberships') IS NULL THEN RETURN; END IF;
+  WITH cand AS (
+    SELECT cs.contact_id, cs.location_id,
+           CASE WHEN t.table_newer THEN cm.status ELSE cs.membership_status END AS n_status,
+           CASE WHEN t.table_newer THEN cm.plan_name ELSE cs.membership_plan END AS n_plan,
+           CASE
+             WHEN t.table_newer THEN cm.ended_at
+             WHEN cs.membership_status = 'ended' AND cm.status = 'ended' THEN LEAST(cs.membership_ended_at, cm.ended_at)
+             ELSE cs.membership_ended_at
+           END AS n_ended_at,
+           LEAST(cs.membership_since, cm.first_seen_at) AS n_since
+      FROM public.contact_studios cs
+      JOIN public.contact_memberships cm
+        ON cm.contact_id = cs.contact_id AND cm.location_id = cs.location_id AND cm.source = 'un1t_online_api'
+       AND ((cm.status = 'active' AND cm.ended_at IS NULL) OR (cm.status = 'ended' AND cm.ended_at IS NOT NULL))
+      CROSS JOIN LATERAL (SELECT greatest(cm.updated_at, cm.last_seen_at) > cs.updated_at AS table_newer) t
+  )
   UPDATE public.contact_studios cs
-     SET membership_plan = cm.plan_name,
-         membership_status = cm.status,
-         membership_ended_at = cm.ended_at,
-         membership_since = coalesce(cs.membership_since, cm.first_seen_at),
+     SET membership_status = c.n_status,
+         membership_plan = c.n_plan,
+         membership_ended_at = c.n_ended_at,
+         membership_since = c.n_since,
          updated_at = now()
-    FROM public.contact_memberships cm
-   WHERE cm.contact_id = cs.contact_id AND cm.location_id = cs.location_id AND cm.source = 'un1t_online_api'
-     AND ((cm.status = 'active' AND cm.ended_at IS NULL) OR (cm.status = 'ended' AND cm.ended_at IS NOT NULL))
-     AND (cs.membership_status IS DISTINCT FROM cm.status
-          OR cs.membership_ended_at IS DISTINCT FROM cm.ended_at
-          OR cs.membership_plan IS DISTINCT FROM cm.plan_name
-          OR cs.membership_since IS NULL);
+    FROM cand c
+   WHERE cs.contact_id = c.contact_id AND cs.location_id = c.location_id
+     AND (cs.membership_status IS DISTINCT FROM c.n_status
+          OR cs.membership_plan IS DISTINCT FROM c.n_plan
+          OR cs.membership_ended_at IS DISTINCT FROM c.n_ended_at
+          OR cs.membership_since IS DISTINCT FROM c.n_since);
   GET DIAGNOSTICS v_n = ROW_COUNT;
-  RAISE NOTICE 'mig 771: parity pass copied % api row(s) that were newer than the columns (0 once a sync has run on the new code)', v_n;
+  RAISE NOTICE 'mig 771: parity pass repaired % relationship row(s) from the table (window changes the new code had not seen, earlier end dates, earliest since)', v_n;
 END $$;
 
 -- 2. The drop.

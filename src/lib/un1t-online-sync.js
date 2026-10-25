@@ -500,6 +500,7 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
         locationId,
         memberContactIds: membership.memberContactIds || [],
         plan: membership.plan || new Map(),
+        activePlanByContact: membership.activePlanByContact || new Map(),
         endedContactIds: membership.endedContactIds || [],
         nowIso,
       })),
@@ -622,14 +623,16 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
     if (rows.length < PAGE) break
   }
 
+  // what each live member's row already says, so an unchanged member gets no write (7b)
+  const activePlanByContact = new Map(activeRows.map((r) => [r.contact_id, r.membership_plan ?? null]))
   let toEnd = activeRows.filter((r) => !best.has(r.contact_id))
-  if (toEnd.length === 0) return { counts, error: null, memberContactIds, endedContactIds, plan }
+  if (toEnd.length === 0) return { counts, error: null, memberContactIds, endedContactIds, plan, activePlanByContact }
 
   if (subscriptions.length === 0) {
     counts.end_skipped = 'no_subscriptions_pulled'
     counts.would_end = toEnd.length
     logWarn('un1t-online-sync', 'not ending memberships: the pull carried no subscriptions', { locationId, wouldEnd: toEnd.length })
-    return { counts, error: null, memberContactIds, endedContactIds, plan }
+    return { counts, error: null, memberContactIds, endedContactIds, plan, activePlanByContact }
   }
 
   // Every client the resolver could not attribute has an unknown
@@ -647,7 +650,7 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
       counts.end_skipped = 'contacts_unresolved'
       counts.would_end = toEnd.length
       logWarn('un1t-online-sync', 'not ending memberships: a client or subscription could not be attributed to a user id', { locationId, wouldEnd: toEnd.length })
-      return { counts, error: null, memberContactIds, endedContactIds, plan }
+      return { counts, error: null, memberContactIds, endedContactIds, plan, activePlanByContact }
     }
     const spared = new Set()
     for (const e of resolverErrors) {
@@ -667,7 +670,7 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
         counts.end_skipped = 'contacts_unreadable'
         counts.would_end = toEnd.length
         logWarn('un1t-online-sync', 'not ending memberships: could not read contacts to spare unresolved clients', { locationId, wouldEnd: toEnd.length, err: safeErr(error) })
-        return { counts, error: null, memberContactIds, endedContactIds, plan }
+        return { counts, error: null, memberContactIds, endedContactIds, plan, activePlanByContact }
       }
       for (const c of data || []) {
         if (c.un1t_user_id != null && unresolvedUserIds.has(String(c.un1t_user_id))) spared.add(String(c.id))
@@ -679,13 +682,13 @@ async function reconcileMemberships(db, { locationId, organizationId, subscripti
     if (counts.end_skipped_unresolved > 0) {
       logWarn('un1t-online-sync', 'not ending memberships of clients that failed to resolve', { locationId, spared: counts.end_skipped_unresolved })
     }
-    if (toEnd.length === 0) return { counts, error: null, memberContactIds, endedContactIds, plan }
+    if (toEnd.length === 0) return { counts, error: null, memberContactIds, endedContactIds, plan, activePlanByContact }
   }
 
   // The endings are written by writeMembershipFacts (after the relationship
   // write); here the decision is final.
   endedContactIds.push(...toEnd.map((r) => r.contact_id))
-  return { counts, error: null, memberContactIds, endedContactIds, plan }
+  return { counts, error: null, memberContactIds, endedContactIds, plan, activePlanByContact }
 }
 
 /**
@@ -735,22 +738,29 @@ async function writeContactStudios(db, { locationId, clients, contactIdOf, membe
  * rows: setMembershipFacts({ status: 'active', plan }) per live subscriber,
  * then ({ status: 'ended' }) per membership this run ended. Each is one
  * studio-scoped update (plus the guarded membership_since stamp on an
- * activation). Returns { activated, ended, rows_missing, failed }: rows_missing
+ * activation). Returns { activated, unchanged, ended, already_ended, rows_missing, failed }: unchanged = a live member whose row already says active with this plan (no write), already_ended = an ending that found the row no longer active (its date stands), rows_missing
  * = updates that touched no row (7a could not write it), failed = a failed
  * write; both logged, never thrown. `active` (live subscribers) stays reconcileMemberships'.
  */
-async function writeMembershipFacts(db, { locationId, memberContactIds, plan, endedContactIds, nowIso }) {
+async function writeMembershipFacts(db, { locationId, memberContactIds, plan, activePlanByContact = new Map(), endedContactIds, nowIso }) {
   // `active` stays reconcileMemberships' count of live subscribers; `activated` is the facts actually written.
-  const out = { activated: 0, ended: 0, rows_missing: 0, failed: 0 }
-  const writes = [
-    ...memberContactIds.map((contactId) => ({ contactId, status: 'active', plan: plan.get(contactId) ?? 'Membership' })),
-    ...endedContactIds.map((contactId) => ({ contactId, status: 'ended' })),
-  ]
+  const out = { activated: 0, unchanged: 0, ended: 0, already_ended: 0, rows_missing: 0, failed: 0 }
+  const writes = []
+  for (const contactId of memberContactIds) {
+    const want = plan.get(contactId) ?? 'Membership'
+    // already active with this plan: nothing to write (no updated_at bump, no since stamp)
+    if (activePlanByContact.has(contactId) && activePlanByContact.get(contactId) === want) { out.unchanged += 1; continue }
+    writes.push({ contactId, status: 'active', plan: want })
+  }
+  for (const contactId of endedContactIds) writes.push({ contactId, status: 'ended' })
   for (const w of writes) {
     const r = await setMembershipFacts(db, { contactId: w.contactId, locationId, plan: w.plan ?? null, status: w.status, nowIso })
     if (!r.ok) {
       out.failed += 1
       logError('un1t-online-sync', 'membership facts not written', { locationId, contactId: w.contactId, status: w.status, error: r.error })
+    } else if (!r.updated && w.status === 'ended') {
+      // the row was no longer active when the ending landed (a run that overlapped, or a hand edit): its end date stands
+      out.already_ended += 1
     } else if (!r.updated) {
       out.rows_missing += 1
       logError('un1t-online-sync', 'membership facts: no relationship row to carry them', { locationId, contactId: w.contactId, status: w.status })

@@ -142,7 +142,9 @@ export async function upsertContactStudio(db, {
  * log, never a write of a new row. ONE update of plan / status / ended_at;
  * when the membership is active and the update touched the row, a SECOND
  * guarded update stamps membership_since only where it is null (the
- * first_seen_at pattern: stamped once, never moved). Never names kind, status,
+ * first_seen_at pattern: stamped once, never moved). An ending is guarded on
+ * membership_status = 'active' (updated:false on an already-ended row: its
+ * end date is never moved). Never names kind, status,
  * source, stage_slug, first_seen_at or last_seen_at: those are the
  * relationship's, derived nightly; these columns are sync-owned facts the
  * reconcile never touches (contact_studios_upsert never names them).
@@ -158,12 +160,15 @@ export async function setMembershipFacts(db, {
     const payload = status === 'active'
       ? { membership_plan: plan, membership_status: 'active', membership_ended_at: null, updated_at: nowIso }
       : { membership_status: 'ended', membership_ended_at: endedAt ?? nowIso, updated_at: nowIso }
-    const { data, error } = await db
+    let write = db
       .from(TABLE)
       .update(payload)
       .eq('contact_id', contactId)
       .eq('location_id', locationId)
-      .select('contact_id')
+    // An ending lands only on a row that is still active: an already-ended row
+    // keeps its end date (updated:false, "already ended" to the caller).
+    if (status === 'ended') write = write.eq('membership_status', 'active')
+    const { data, error } = await write.select('contact_id')
     if (error) return fail(`contact_studios membership facts: ${message(error)}`)
     const updated = Array.isArray(data) && data.length > 0
     if (status === 'active' && updated) {

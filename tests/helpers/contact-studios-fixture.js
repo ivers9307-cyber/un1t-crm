@@ -60,7 +60,8 @@ export const BEFORE2 = `
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL, location_id uuid NOT NULL,
     contact_id uuid NOT NULL, source text NOT NULL, plan_name text NOT NULL DEFAULT 'Plan',
     status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'ended')),
-    first_seen_at timestamptz NOT NULL DEFAULT now(), last_seen_at timestamptz NOT NULL DEFAULT now(), ended_at timestamptz);
+    first_seen_at timestamptz NOT NULL DEFAULT now(), last_seen_at timestamptz NOT NULL DEFAULT now(), ended_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
   ALTER TABLE public.contact_memberships ENABLE ROW LEVEL SECURITY;
   REVOKE ALL ON public.contact_memberships FROM anon, authenticated;
   GRANT SELECT, INSERT, UPDATE, DELETE ON public.contact_memberships TO service_role;

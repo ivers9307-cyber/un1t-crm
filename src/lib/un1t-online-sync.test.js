@@ -857,6 +857,36 @@ describe('runUn1tSync', () => {
     expect(factsWrites(log)).toHaveLength(1) // the one update that touched nothing; no since stamp
   })
 
+  it('an unchanged active member gets NO facts write on the next run (counted unchanged); a plan change is written (final review I3)', async () => {
+    const { db, tables, log } = makeDb(baseSeed())
+    const lists = fixtureLists()
+    await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists }).factory, new Date('2026-10-16T10:00:00.000Z')))
+    const c1 = tables.contacts.find((c) => c.un1t_user_id === 'u1')
+    const before = log.length
+    const r2 = await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: fixtureLists() }).factory, new Date('2026-10-16T10:15:00.000Z')))
+    expect(factsWrites(log.slice(before))).toEqual([])
+    expect(r2.counts.memberships).toMatchObject({ active: 1, activated: 0, unchanged: 1, ended: 0 })
+    expect(factsRow(tables, c1.id)).toMatchObject({ membership_status: 'active', membership_since: '2026-10-16T10:00:00.000Z' })
+    const renamed = fixtureLists()
+    renamed['/subscriptions'][0].product = { title: 'Unlimited Plus' }
+    const b2 = log.length
+    const r3 = await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: renamed }).factory, new Date('2026-10-16T10:30:00.000Z')))
+    expect(factsWrites(log.slice(b2)).map((e) => e.payload)).toEqual([{ membership_plan: 'Unlimited Plus', membership_status: 'active', membership_ended_at: null, updated_at: '2026-10-16T10:30:00.000Z' }, { membership_since: '2026-10-16T10:30:00.000Z' }])
+    expect(r3.counts.memberships).toMatchObject({ activated: 1, unchanged: 0 })
+    expect(factsRow(tables, c1.id)).toMatchObject({ membership_plan: 'Unlimited Plus', membership_since: '2026-10-16T10:00:00.000Z' })
+  })
+
+  it('an ending is guarded on the row still being active: the update filters membership_status = active (final review I2)', async () => {
+    const seed = baseSeed({
+      contacts: [{ id: 'c-gone', organization_id: ORG, location_id: HATCH, email: 'gone@x.ie', un1t_user_id: 'u-gone' }],
+      contact_studios: [factsSeed('c-gone')],
+    })
+    const { db, log } = makeDb(seed)
+    await runUn1tSync(db, HATCH, opts(makeClient({ self: SELF, lists: fixtureLists() }).factory))
+    const endUpdate = factsWrites(log).find((e) => e.payload.membership_status === 'ended')
+    expect(endUpdate.filters).toEqual(expect.arrayContaining([['eq', 'membership_status', 'active'], ['eq', 'contact_id', 'c-gone'], ['eq', 'location_id', HATCH]]))
+  })
+
   it('an active subscription whose user has no contact is skipped and counted', async () => {
     const lists = fixtureLists()
     lists['/subscriptions'].push({ id: 's9', user_id: 'u-unknown', status: 'active', product: { title: 'Unlimited' }, studio_id: STUDIO })

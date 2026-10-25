@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { mig, LOC_A, LOC_B, signedOut, bootProd } from './helpers/contacts-resolvers-699-fixture.js'
 import {
   MIG_699, MIG_731, MIG_732, MIG_758, MIG_762, MIG_764, MIG_765, md5Of,
-  C_C1, C_D1, C_C2, BEFORE2, GLOFOX_ROWS, ENDED_ROW, PERSON_GROUPS_270, MEMBERSHIP_FACT_SEEDS,
+  C_C1, C_D1, C_C2, C_C3, BEFORE2, GLOFOX_ROWS, ENDED_ROW, PERSON_GROUPS_270, MEMBERSHIP_FACT_SEEDS,
 } from './helpers/contact-studios-fixture.js'
 
 const MIG_767 = mig('767_person_groups_organization.sql')
@@ -40,11 +40,14 @@ const tableGone = async (db) => (await db.query(`SELECT to_regclass('public.cont
 // The window: the old code ended C_C1's membership, changed C_D1's plan on its
 // ended row, and recorded a brand-new api membership for C_C2 at B (whose
 // relationship row carries no facts yet).
+// The old code stamped updated_at / last_seen_at on every table write, so the
+// table's rows are NEWER than the columns 770 backfilled: that is what the
+// parity pass copies.
 const WINDOW = `
-  UPDATE public.contact_memberships SET status = 'ended', ended_at = '2026-10-20T00:00:00Z' WHERE contact_id = '${C_C1}' AND location_id = '${LOC_B}' AND source = 'un1t_online_api';
-  UPDATE public.contact_memberships SET plan_name = 'Monthly (renamed)' WHERE contact_id = '${C_D1}' AND location_id = '${LOC_A}' AND source = 'un1t_online_api';
-  INSERT INTO public.contact_memberships (organization_id, location_id, contact_id, source, plan_name, status, first_seen_at)
-    SELECT organization_id, '${LOC_B}', '${C_C2}', 'un1t_online_api', 'New plan', 'active', '2026-10-21T00:00:00Z' FROM public.locations WHERE id = '${LOC_B}';
+  UPDATE public.contact_memberships SET status = 'ended', ended_at = '2026-10-20T00:00:00Z', updated_at = now() + interval '1 day' WHERE contact_id = '${C_C1}' AND location_id = '${LOC_B}' AND source = 'un1t_online_api';
+  UPDATE public.contact_memberships SET plan_name = 'Monthly (renamed)', updated_at = now() + interval '1 day' WHERE contact_id = '${C_D1}' AND location_id = '${LOC_A}' AND source = 'un1t_online_api';
+  INSERT INTO public.contact_memberships (organization_id, location_id, contact_id, source, plan_name, status, first_seen_at, updated_at)
+    SELECT organization_id, '${LOC_B}', '${C_C2}', 'un1t_online_api', 'New plan', 'active', '2026-10-21T00:00:00Z', now() + interval '1 day' FROM public.locations WHERE id = '${LOC_B}';
   INSERT INTO public.contact_studios (contact_id, location_id, organization_id, kind, status, source)
     SELECT '${C_C2}', '${LOC_B}', organization_id, 'member', 'active', 'un1t_online' FROM public.locations WHERE id = '${LOC_B}'
     ON CONFLICT (contact_id, location_id) DO NOTHING;
@@ -75,6 +78,27 @@ describe('after 771', () => {
     const before = await facts(db, C_C1, LOC_B)
     expect(await abortMessage(db, MIG_771)).toBeNull()
     expect(await facts(db, C_C1, LOC_B)).toEqual(before)
+  })
+})
+
+// Applied as designed (AFTER the deploy and one sync), the table is frozen at
+// deploy time and the COLUMNS are the newer side: the new code's endings,
+// plan changes and rejoins must stand, and an ending both sides know keeps the
+// EARLIER date (the new code's first run stamps a window ending late).
+const AFTER_DEPLOY = `
+  UPDATE public.contact_memberships SET updated_at = '2026-10-24T00:00:00Z', last_seen_at = '2026-10-24T00:00:00Z' WHERE source = 'un1t_online_api';
+  UPDATE public.contact_studios SET membership_status = 'ended', membership_ended_at = '2026-10-27T00:00:00Z' WHERE contact_id = '${C_C1}' AND location_id = '${LOC_B}';
+  UPDATE public.contact_studios SET membership_plan = 'New plan' WHERE contact_id = '${C_D1}' AND location_id = '${LOC_A}';
+  UPDATE public.contact_studios SET membership_ended_at = '2026-10-26T00:00:00Z', membership_since = '2026-02-15T00:00:00Z' WHERE contact_id = '${C_C3}' AND location_id = '${LOC_B}';
+`
+describe('after 771, applied after the deploy (the columns are the newer side)', () => {
+  beforeAll(async () => { db = await boot({ before771: AFTER_DEPLOY }); await signedOut(db); await db['exec'](MIG_771) }, 120_000)
+  afterAll(() => db?.close())
+  it('the new code\'s ending and plan change stand; an ending both sides know keeps the earlier date; since keeps the earliest', async () => {
+    expect(await tableGone(db)).toBe(true)
+    expect(await facts(db, C_C1, LOC_B)).toEqual({ membership_plan: 'Founding Membership — Unlimited', membership_status: 'ended', membership_since: new Date('2026-02-01T00:00:00Z'), membership_ended_at: new Date('2026-10-27T00:00:00Z') })
+    expect(await facts(db, C_D1, LOC_A)).toEqual({ membership_plan: 'New plan', membership_status: 'active', membership_since: new Date('2026-03-01T00:00:00Z'), membership_ended_at: null })
+    expect(await facts(db, C_C3, LOC_B)).toEqual({ membership_plan: 'Old plan', membership_status: 'ended', membership_since: new Date('2026-01-01T00:00:00Z'), membership_ended_at: new Date('2026-09-01T00:00:00Z') })
   })
 })
 
