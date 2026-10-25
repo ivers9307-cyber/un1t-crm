@@ -16,7 +16,10 @@ function stubFrom(handlers) {
         order() { return builder },
         range(from, to) { calls.range = [from, to]; return builder },
         limit(n) { calls.limit = n; return builder },
-        then(resolve) { return Promise.resolve(handlers[table](calls)).then(resolve) },
+        // A table no test names answers "no rows": the probes under test are
+        // additive (ORGCONTACTS.0 added glofox_crossover_members), so an
+        // older case that never mentions a newer table keeps its meaning.
+        then(resolve) { return Promise.resolve(handlers[table] ? handlers[table](calls) : { data: [] }).then(resolve) },
       }
       return builder
     },
@@ -409,6 +412,57 @@ describe('canViewContact', () => {
       expect(await canViewContact(db, { isMaster: true }, contact)).toBe(true)
       expect(await canViewContact(db, { isMaster: false, locations: [{ id: 'L2' }] }, contact)).toBe(true)
       expect(await canViewContact(db, { isMaster: false, locations: [] }, contact)).toBe(false)
+    })
+  })
+
+  describe('ORGCONTACTS.0 — a Glofox crossover member at one of the caller studios', () => {
+    const user = { isMaster: false, locations: [{ id: 'L1', role: 'staff' }, { id: 'L3', role: 'manager' }] }
+    const contact = { id: 'c1', location_id: 'L2' }
+    const err = { data: null, error: { code: '42501', message: 'boom' } }
+    const none = () => ({ data: [] })
+
+    it('a Glofox crossover row at a studio where the caller holds Contacts opens the contact', async () => {
+      let seen = null
+      const db = stubFrom({
+        contact_memberships: none,
+        un1t_clients: none,
+        glofox_crossover_members: (calls) => { seen = calls; return { data: [{ id: 'g1' }] } },
+        deals: none,
+      })
+      expect(await canViewContact(db, user, contact)).toBe(true)
+      expect(seen.filters).toEqual({ contact_id: 'c1', location_id: ['L1', 'L3'] })
+      expect(seen.limit).toBe(1)
+    })
+    it('a Glofox crossover row at a studio where the caller lacks Contacts grants nothing', async () => {
+      // Contacts off at L3 (override) and L1 is staff with the default on:
+      // the probe asks only about L1, and the row lives at L3.
+      const noContactsAtL3 = {
+        isMaster: false,
+        locations: [{ id: 'L1', role: 'staff' }, { id: 'L3', role: 'manager' }],
+        assignmentsByLocation: { L3: { role: 'manager', permissions: { contacts: false, mobile: { contacts: false } } } },
+      }
+      let seen = null
+      const db = stubFrom({
+        contact_memberships: none,
+        un1t_clients: none,
+        glofox_crossover_members: (calls) => { seen = calls; return { data: calls.filters.location_id.includes('L3') ? [{ id: 'g1' }] : [] } },
+        deals: none,
+      })
+      expect(await canViewContact(db, noContactsAtL3, contact)).toBe(false)
+      expect(seen.filters.location_id).toEqual(['L1'])
+    })
+    it('a failed glofox_crossover_members read is logged and falls through to the deal probe, never granting', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        const noDeal = stubFrom({ contact_memberships: none, un1t_clients: none, glofox_crossover_members: () => err, deals: none })
+        expect(await canViewContact(noDeal, user, contact)).toBe(false)
+        expect(error).toHaveBeenCalledTimes(1)
+        expect(JSON.stringify(error.mock.calls[0])).toContain('42501')
+        const deal = stubFrom({ contact_memberships: none, un1t_clients: none, glofox_crossover_members: () => err, deals: () => ({ data: [{ id: 'd1' }] }) })
+        expect(await canViewContact(deal, user, contact)).toBe(true)
+      } finally {
+        error.mockRestore()
+      }
     })
   })
 

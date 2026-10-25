@@ -45,15 +45,18 @@ function formatStage(slug) {
   return slug ? slug.replaceAll('_', ' ') : '—'
 }
 
-// Crossover marker — a home-studio pill + that contact's tags, shown when
-// the contact is owned by a different studio than the one being viewed.
+// Crossover marker — a primary-studio pill + that contact's tags, shown when
+// the contact's primary studio is not the one being viewed. The pill gives no
+// reason: a deal, an active membership, a un1t.online client row or a Glofox
+// crossover (migs 251, 731, 732, 758) all put the person on this list
+// (ORGCONTACTS.0).
 function CrossoverMarker({ ctx }) {
   if (!ctx) return null
   return (
     <span className="inline-flex flex-wrap items-center gap-1 align-middle ml-2">
       <span
         className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700"
-        title={`Owned by ${ctx.homeStudio} — shown here because they have a deal at this studio`}
+        title={`Primary studio: ${ctx.homeStudio}. Shown here because they have a relationship with this studio.`}
       >
         {ctx.homeStudio}
       </span>
@@ -65,7 +68,7 @@ function CrossoverMarker({ ctx }) {
 }
 
 // LISTFLAG.1 — "also on <studio>'s list". Distinct from CrossoverMarker above:
-// that one means "owned elsewhere, has a DEAL here", this one means "holds a
+// that one means "primary studio elsewhere, a relationship here", this one means "holds a
 // contact_location_preferences row at another studio", which is what actually
 // identifies a pre-opening waitlist. Muted styling when that studio's email
 // marketing is off, so "on the list" and "on the list but opted out" can never

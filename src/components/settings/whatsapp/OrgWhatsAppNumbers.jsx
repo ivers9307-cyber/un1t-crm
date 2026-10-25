@@ -40,12 +40,13 @@ const HISTORY_SYNC_NOTES = {
   expired: 'History import window expired',
 }
 
-const FIELD_HELP = {
+export const FIELD_HELP = {
   phone_number_id: 'Meta\'s PHONE_NUMBER_ID for this number. Find it under Meta Business → WhatsApp → API Setup.',
   business_account_id: 'WhatsApp Business Account ID (WABA). Required for template management.',
   app_id: 'Meta App ID. Required for the template media-upload flow.',
   access_token: 'Permanent system-user access token. Generated via Meta Business Manager → Users → System Users.',
-  home_location_id: 'Where the number is switched on first, and where new-enquiry threads and coexistence history land.',
+  // ORGCONTACTS.0 (spec §3.2): the home studio named for what it decides.
+  home_location_id: 'Unknown senders, Meta-made templates and chat-opener edits belong to this studio.',
 }
 
 export default function OrgWhatsAppNumbers({ organizationId, organizationName, locations }) {

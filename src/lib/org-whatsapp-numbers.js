@@ -3,14 +3,15 @@
 // were retired in their favour.
 //
 // A number belongs to an ORGANISATION; whatsapp_numbers.location_id is its HOME
-// studio (where new-enquiry threads and coexistence history land). Mig 743 fills
-// organization_id from the home studio when an insert omits it and switches the
-// number on at its home studio (AFTER INSERT trigger), but it does NOT refuse a
-// home studio of another organisation while organization_id is unchanged, so
+// studio: unknown senders, Meta-made templates and chat-opener edits belong to
+// it. Since ORGCONTACTS.0 (mig 763 dropped mig 743's compatibility triggers) an
+// insert must carry organization_id and nothing switches a new number on by
+// itself: the route does, through switchOnAtHome. The database does NOT refuse
+// a home studio of another organisation while organization_id is unchanged, so
 // every route that sets the home studio checks it here first.
 
 import { NextResponse } from 'next/server'
-import { logWarn } from '@/lib/log'
+import { logError } from '@/lib/log'
 import { ORG_NUMBERS_PAGE } from '@/lib/org-whatsapp-numbers-page'
 
 /** The 410 the studio-level write routes answer with now numbers live at the organisation. */
@@ -48,20 +49,49 @@ export async function requireHomeStudioInOrg(db, orgId, locationId) {
 }
 
 /**
- * Record who switched a new number on at its home studio. The row itself is the
- * database trigger's (R1): the route never inserts a link, and this is
- * bookkeeping, so a failure is logged and never fails the add.
+ * Switch a NEW number on at its home studio (R1), as the studio's default when
+ * it has none, naming who did it. ORGCONTACTS.0: this used to be mig 743's
+ * AFTER INSERT trigger; the route owns it now.
+ *
+ * The number row already exists when this runs, so a failure here must not
+ * undo the add: it is logged loudly and reported ({ ok: false }) and the
+ * studio's WhatsApp tab can still switch the number on by hand. A link that
+ * already exists (a concurrent switch-on) is success. A race on the
+ * one-default-per-studio index (two numbers added at once to a studio with no
+ * default) retries as non-default.
+ *
+ * @returns {Promise<{ ok: true, isDefault: boolean } | { ok: false }>}
  */
-export async function stampHomeLinkCreatedBy(db, { numberId, locationId, userId }) {
+export async function switchOnAtHome(db, { numberId, locationId, userId }) {
+  const insert = async (isDefault) => db
+    .from('location_whatsapp_numbers')
+    .insert({ location_id: locationId, whatsapp_number_id: numberId, is_default: isDefault, created_by: userId ?? null })
+    .select('whatsapp_number_id')
   try {
-    const { error } = await db
+    const { data: existing, error: readErr } = await db
       .from('location_whatsapp_numbers')
-      .update({ created_by: userId })
-      .eq('whatsapp_number_id', numberId)
+      .select('whatsapp_number_id, is_default')
       .eq('location_id', locationId)
-    if (error) logWarn('wa-org-numbers', 'could not stamp created_by on the home switch-on row', { numberId, locationId, error: error.message })
+    if (readErr) throw readErr
+    if ((existing || []).some((l) => l.whatsapp_number_id === numberId)) {
+      return { ok: true, isDefault: existing.some((l) => l.whatsapp_number_id === numberId && l.is_default) }
+    }
+    let isDefault = !(existing || []).some((l) => l.is_default)
+    let { error } = await insert(isDefault)
+    if (error && isDefault && /location_whatsapp_numbers_one_default/.test(error.message || '')) {
+      isDefault = false
+      ;({ error } = await insert(false))
+    }
+    if (error) {
+      if (/location_whatsapp_numbers_pkey/.test(error.message || '')) return { ok: true, isDefault: false }
+      throw error
+    }
+    return { ok: true, isDefault }
   } catch (e) {
-    logWarn('wa-org-numbers', 'could not stamp created_by on the home switch-on row', { numberId, locationId, error: e?.message || String(e) })
+    logError('wa-org-numbers', 'new number not switched on at its home studio; switch it on from the studio WhatsApp tab', {
+      numberId, locationId, error: e?.message || String(e),
+    })
+    return { ok: false }
   }
 }
 

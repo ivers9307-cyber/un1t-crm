@@ -295,17 +295,6 @@ export async function getConversationNumberConfig(locationId, conversationId) {
 }
 
 /**
- * The studio whose whatsapp_templates a send in this thread uses: the thread's
- * own studio (WAORGNUMBER.1: a number switched on here is this studio's to
- * send from, whatever its home; WAORGNUMBER.6 removed the sibling case).
- * Kept as the one seam template senders ask, so the callers table can count
- * them. Never throws.
- */
-export async function templateLocationIdFor(locationId, _conversationId) {
-  return locationId
-}
-
-/**
  * WAREPLYNUMBER.1 — pure: the config a reply goes from, given the thread's
  * own number (or null) and the location default. Free text/media/interactive
  * → the thread number. A TEMPLATE → the thread number only when it shares the

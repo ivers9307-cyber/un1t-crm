@@ -34,7 +34,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { orgWhatsAppEmbeddedSignupSchema } from '@/lib/schemas'
 import { publicShape } from '@/lib/whatsapp-numbers-shape'
-import { requireHomeStudioInOrg, stampHomeLinkCreatedBy } from '@/lib/org-whatsapp-numbers'
+import { requireHomeStudioInOrg, switchOnAtHome } from '@/lib/org-whatsapp-numbers'
 import {
   exchangeCodeForBusinessToken, subscribeAppToWaba, probeNumber,
   needsRegistration, generatePin, registerNumber, planPersistence,
@@ -239,7 +239,9 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: insertError.message }, { status: 500 })
   }
 
-  await stampHomeLinkCreatedBy(db, { numberId: inserted.id, locationId: inserted.location_id, userId: user.id })
+  // ORGCONTACTS.0: the route switches the number on at its home studio (mig
+  // 763 dropped the trigger that did). A failure keeps the number and says so.
+  const homeSwitchOn = await switchOnAtHome(db, { numberId: inserted.id, locationId: inserted.location_id, userId: user.id })
 
-  return NextResponse.json({ success: true, data: publicShape(inserted) })
+  return NextResponse.json({ success: true, data: publicShape(inserted), home_switch_on: homeSwitchOn })
 }

@@ -23,7 +23,7 @@ vi.mock('./supabase', async () => {
 vi.mock('./log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 const wa = await import('./whatsapp.js')
-const { getConversationReplyConfig, getConversationNumberConfig, templateLocationIdFor, classifyInboundOwner } = await import('./whatsapp-config.js')
+const { getConversationReplyConfig, getConversationNumberConfig, classifyInboundOwner } = await import('./whatsapp-config.js')
 const { link } = await import('./whatsapp-numbers-fake-db.test-helpers.js')
 const { isWhatsAppNumberMissing } = await import('./whatsapp-number-missing.js')
 const { logWarn } = await import('./log')
@@ -161,14 +161,6 @@ describe('WAORGNUMBER.6 — no sibling replies', () => {
     expect((await getConversationReplyConfig(LOC2, CONV)).phoneNumberId).toBe('PNI-n-hatch')
   })
 
-  it('templateLocationIdFor is always the thread’s studio', async () => {
-    state.links = [link(LOC, 'n-default', { is_default: true })]
-    state.conversations = [hatchConv('n-default')]
-    expect(await templateLocationIdFor(LOC2, CONV)).toBe(LOC2)
-    state.links = [link(LOC, 'n-default', { is_default: true }), link(LOC2, 'n-default', { is_default: true })]
-    expect(await templateLocationIdFor(LOC2, CONV)).toBe(LOC2)
-    expect(await templateLocationIdFor(LOC2, null)).toBe(LOC2)
-  })
 })
 
 // WAORGNUMBER.1 (R2) — the thread's stamped number is used only while it is
