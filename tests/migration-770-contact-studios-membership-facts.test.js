@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { mig, LOC_A, LOC_B, signedOut, bootProd } from './helpers/contacts-resolvers-699-fixture.js'
 import {
   MIG_699, MIG_731, MIG_732, MIG_758, MIG_762, MIG_764, MIG_765, md5Of,
-  C_C1, C_D1, C_C2, BEFORE2, GLOFOX_ROWS, ENDED_ROW, PERSON_GROUPS_270, MEMBERSHIP_FACT_SEEDS,
+  C_C1, C_D1, C_C2, C_C3, BEFORE2, GLOFOX_ROWS, ENDED_ROW, PERSON_GROUPS_270, MEMBERSHIP_FACT_SEEDS,
 } from './helpers/contact-studios-fixture.js'
 
 const MIG_767 = mig('767_person_groups_organization.sql')
@@ -55,19 +55,21 @@ describe('after 770', () => {
 
   it('backfills every un1t_online_api row (plan, status, since, ended_at) and no export row', async () => {
     expect(await facts(db, C_C1, LOC_B)).toEqual({ membership_plan: 'Founding Membership — Unlimited', membership_status: 'active', membership_since: new Date('2026-02-01T00:00:00Z'), membership_ended_at: null })
-    expect(await facts(db, C_D1, LOC_A)).toEqual({ membership_plan: 'Monthly', membership_status: 'ended', membership_since: new Date('2026-03-01T00:00:00Z'), membership_ended_at: new Date('2026-09-01T00:00:00Z') })
+    expect(await facts(db, C_D1, LOC_A)).toEqual({ membership_plan: 'Monthly', membership_status: 'active', membership_since: new Date('2026-03-01T00:00:00Z'), membership_ended_at: null })
+    expect(await facts(db, C_C3, LOC_B)).toEqual({ membership_plan: 'Old plan', membership_status: 'ended', membership_since: new Date('2026-01-01T00:00:00Z'), membership_ended_at: new Date('2026-09-01T00:00:00Z') })
     // the export artefact at B for C_C1 did not overwrite the api facts; a contact with export rows only carries none
     const { rows: [n] } = await db.query(`SELECT count(*)::int AS n FROM public.contact_studios WHERE membership_status IS NOT NULL`)
-    expect(n.n).toBe(2)
+    expect(n.n).toBe(3)
   })
 
   it("derive reads membership_status = 'active' as the membership (kind member) and membership_since into first_seen_at; an ended one is kind client", async () => {
     const { rows: [c1] } = await db.query(`SELECT kind, status, first_seen_at FROM public.derive_contact_studio($1, $2)`, [C_C1, LOC_B])
     expect(c1).toMatchObject({ kind: 'member', status: 'active' })
     expect(new Date(c1.first_seen_at).getTime()).toBeLessThanOrEqual(new Date('2026-02-01T00:00:00Z').getTime())
-    // C_D1 at A: the ended api row is no membership; the export row is still an active un1t client row in contact_memberships? No: 770 reads the columns only.
-    const { rows: [d1] } = await db.query(`SELECT kind, status FROM public.derive_contact_studio($1, $2)`, [C_D1, LOC_A])
-    expect(d1.kind).not.toBe('member')
+    // C_C3 at B: an ended membership is no membership (and nothing else holds the relationship)
+    const { rows: [c3] } = await db.query(`SELECT kind, status FROM public.derive_contact_studio($1, $2)`, [C_C3, LOC_B])
+    expect(c3.kind).not.toBe('member')
+    expect(c3.status).toBe('ended')
     const { rows: [src] } = await db.query(`SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure($1)`, [DERIVE])
     expect(src.prosrc).not.toMatch(/contact_memberships/)
     const { rows: [rsrc] } = await db.query(`SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure($1)`, [RECONCILE])

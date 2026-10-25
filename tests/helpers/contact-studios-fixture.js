@@ -119,13 +119,17 @@ export const PERSON_GROUPS_270 = `
 `
 
 // ORGCONTACTS.7 (mig 770): the un1t.online membership facts the backfill reads.
-// C_C1's api row at B gets a real plan and since; C_D1 gets an ENDED api row at
-// A beside its export row; C_C1 gets an export ARTEFACT at B (ended the day the
-// API sync took over, 16 Oct 2026) that the backfill must skip.
+// C_C1's api row at B gets a real plan and since; C_D1 gets an ACTIVE api row at
+// A beside its export row (as prod: the 20 export rows are artefacts whose
+// contacts all hold an active api row); C_C3 gets an ENDED api membership at B
+// (its relationship there is already ended, decision 2); C_C1 gets an export
+// ARTEFACT at B (ended the day the API sync took over, 16 Oct 2026) that the
+// backfill must skip.
 export const MEMBERSHIP_FACT_SEEDS = `
   UPDATE public.contact_memberships SET plan_name = 'Founding Membership — Unlimited', first_seen_at = '2026-02-01T00:00:00Z'
    WHERE contact_id = '${C_C1}' AND location_id = '${LOC_B}' AND source = 'un1t_online_api';
   INSERT INTO public.contact_memberships (organization_id, location_id, contact_id, source, plan_name, status, first_seen_at, ended_at) VALUES
-    ('${ORG1}', '${LOC_A}', '${C_D1}', 'un1t_online_api', 'Monthly', 'ended', '2026-03-01T00:00:00Z', '2026-09-01T00:00:00Z'),
+    ('${ORG1}', '${LOC_A}', '${C_D1}', 'un1t_online_api', 'Monthly', 'active', '2026-03-01T00:00:00Z', NULL),
+    ('${ORG1}', '${LOC_B}', '${C_C3}', 'un1t_online_api', 'Old plan', 'ended', '2026-01-01T00:00:00Z', '2026-09-01T00:00:00Z'),
     ('${ORG1}', '${LOC_B}', '${C_C1}', 'un1t_online_export', 'Founding Membership — Unlimited', 'ended', '2026-01-01T00:00:00Z', '2026-10-16T00:00:00Z');
 `
