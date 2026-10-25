@@ -1,11 +1,21 @@
 // POST /api/public/trial-purchases — PAIDTRIAL.1: start a paid trial purchase
-// from the /trial page. The studio and the product come from the landing row
-// the body's `path` names (its paid_trial block); the price is the BLOCK's,
-// never the client's. Captures the lead exactly as the class funnel does
-// (contact, lead_source, attribution, consent, deal placement, Meta Lead),
-// inserts an `awaiting_payment` trial_purchases row and opens the provider
-// payment. The webhook or the status route releases the row to the processor
-// once the money is in. No auth; rate-limited per landing path and IP.
+// from the /trial page. TRIALSTUDIO.6: the body names the studio
+// (`stillorgan` | `hatch`); the product comes from that studio's landing row
+// (its paid_trial block, loadTrialStudios); the price is the BLOCK's (or, at
+// Hatch, the mirrored un1t.online product's), never the client's. Captures the
+// lead exactly as the class funnel does (contact, lead_source, attribution,
+// consent, deal placement, Meta Lead) against the chosen studio, then:
+//   Stillorgan (Glofox): refuses a buyer with a trial history BEFORE any row
+//     or money (200 trial_used; a failed read is 503, never a refusal), else
+//     inserts an `awaiting_payment` row and opens the Revolut payment. The
+//     webhook or the status route releases the row to the processor once the
+//     money is in.
+//   Hatch Street (un1t.online): refuses an active member (200 active_member),
+//     needs the un1t.online terms tick when the studio's writes are on (400
+//     terms_required), inserts the row, then trial-purchase-un1t-checkout.js
+//     finds or creates the un1t.online account and returns un1t.online's own
+//     hosted checkout URL. The CRM never charges a Hatch buyer.
+// No auth; rate-limited per landing path and IP.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -16,16 +26,22 @@ import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
-import { resolveLandingPath } from '@/lib/public-landing'
-import { paidTrialConfigFromBlocks } from '@/lib/paid-trial'
+import { studioByKey, loadTrialStudios } from '@/lib/trial-studios'
+import { stillorganTrialHistory, hatchActiveMembership } from '@/lib/trial-eligibility'
 import { createTrialPurchasePayment } from '@/lib/trial-purchase-payments'
+import { startUn1tTrialCheckout } from '@/lib/trial-purchase-un1t-checkout'
 import { locationCanTakePayments } from '@/lib/location-payments'
+import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
+import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
+import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
 const Schema = z.object({
-  path: z.string().trim().max(64).optional(),
+  // A page loaded before the studio choice shipped posts no studio: it was
+  // the Stillorgan page, so that is the default (never a 400 for paid traffic).
+  studio: z.enum(['stillorgan', 'hatch']).default('stillorgan'),
   first_name: z.string().trim().min(1).max(120),
   last_name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(320),
@@ -45,7 +61,15 @@ const Schema = z.object({
     referrer: z.string().max(2000).optional(),
     landing_path: z.string().max(500).optional(),
   }).optional(),
+  // Hatch Street only: the un1t.online terms and waiver tick, required (true)
+  // when the studio's un1t.online writes are on; judged below.
+  terms_accepted: z.boolean().optional(),
 })
+
+const UNAVAILABLE = 'The trial is not available right now. Please try again in a moment.'
+const unavailable = (error = UNAVAILABLE) => NextResponse.json({ success: false, code: 'unavailable', error }, { status: 503 })
+// A refusal is a state the page shows, not a failure: 200 with the studio's copy.
+const refused = (code, error, product) => NextResponse.json({ success: false, code, error, help: { cta_label: product.helpCtaLabel } })
 
 export async function POST(request) {
   const db = createServerClient()
@@ -55,30 +79,58 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const b = validation.data
 
-  const landingPath = resolveLandingPath(b.path)
+  const studio = studioByKey(b.studio)
+  if (!studio) return NextResponse.json({ success: false, code: 'unknown_studio', error: 'Unknown studio.' }, { status: 400 })
+  const isHatch = studio.key === 'hatch'
+  const landingPath = studio.publicPath
   const limit = await checkRateLimit(db, `trialbuy:${landingPath}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
   if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
 
-  const { data: page, error: pageErr } = await db.from('landing_page_settings')
-    .select('location_id, blocks').eq('public_path', landingPath).maybeSingle()
-  if (pageErr) {
-    logError('trialbuy', 'landing row unreadable', { err: pageErr, landingPath })
-    return NextResponse.json({ success: false, code: 'unavailable', error: 'The trial is not available right now. Please try again in a moment.' }, { status: 503 })
+  const entry = (await loadTrialStudios(db)).find((s) => s.key === studio.key)
+  if (!entry || entry.unreadable) {
+    logError('trialbuy', 'studio config unreadable', { studio: studio.key })
+    return unavailable()
   }
-  const product = page?.location_id ? paidTrialConfigFromBlocks(page.blocks, landingPath) : null
-  if (!product) {
+  const product = entry.locationId ? entry.config : null
+  // Each studio sells through its own provider; a block of the other shape is not for sale here.
+  if (!product || product.provider !== (isHatch ? 'un1t_online' : 'glofox')) {
+    if (product) logError('trialbuy', 'paid_trial block provider does not match the studio', { studio: studio.key, provider: product.provider })
     return NextResponse.json({ success: false, code: 'not_configured', error: 'The trial is not available right now.' }, { status: 400 })
   }
-  const locationId = page.location_id
+  const locationId = entry.locationId
 
   const { data: location, error: locErr } = await db.from('locations')
     .select('id, name, organization_id, settings').eq('id', locationId).maybeSingle()
   if (locErr || !location) {
     logError('trialbuy', 'location unreadable', { err: locErr, locationId })
-    return NextResponse.json({ success: false, code: 'unavailable', error: 'The trial is not available right now. Please try again in a moment.' }, { status: 503 })
+    return unavailable()
   }
-  if (!locationCanTakePayments(location)) {
+  if (!isHatch && !locationCanTakePayments(location)) {
     return NextResponse.json({ success: false, code: 'payments_unavailable', error: 'Payments are not set up for this studio yet.' }, { status: 400 })
+  }
+
+  // Hatch: with un1t.online writes off there is no account or checkout to
+  // make, so nothing is for sale (refused before the lead is captured).
+  const un1tWrites = isHatch && un1tWriteSettingsFrom(location.settings).writesEnabled
+  if (isHatch && !un1tWrites) {
+    return NextResponse.json({ success: false, code: 'not_configured', error: 'The trial is not available right now.' }, { status: 400 })
+  }
+  // Hatch: a new un1t.online account needs the buyer's acceptance of the
+  // studio's terms and liability waiver, as the /start funnel collects it,
+  // gated on writes_enabled (this is not the funnel). The tick's wording rides
+  // on the refusal so the page can show it and try again.
+  if (un1tWrites && b.terms_accepted !== true) {
+    const { data: page, error: pageErr } = await db.from('landing_page_settings')
+      .select('blocks').eq('public_path', landingPath).eq('location_id', locationId).maybeSingle()
+    if (pageErr) {
+      logError('trialbuy', 'landing row unreadable', { err: pageErr, locationId })
+      return unavailable()
+    }
+    const terms = un1tTermsPayload({ blocks: page?.blocks, studioName: location.name, publicPath: landingPath })
+    return NextResponse.json({
+      success: false, code: 'terms_required', error: terms.required_message,
+      issues: { terms_accepted: terms.required_message }, terms,
+    }, { status: 400 })
   }
 
   // ── Capture the lead (the class funnel's steps, same helpers) ──
@@ -126,11 +178,80 @@ export async function POST(request) {
   } catch (e) { logWarn('trialbuy', 'consent failed', { err: e }) }
   try { await placeWaitlistEntry(db, { contactId, locationId, title: b.first_name || 'Trial buyer' }) } catch (e) { logWarn('trialbuy', 'deal placement failed', { err: e }) }
 
-  // ── The purchase row, then the provider payment ──
+  // Meta Lead (the studio's own dataset), sharing the browser's event id, and
+  // (TRIALCHECKOUT.1), once a checkout is open, an InitiateCheckout for the
+  // same moment with the price, under `trialcheckout-<lead id>` like the
+  // browser's: the Sales campaign's ad set optimises on it. A refused buyer
+  // (trial_used, active_member, help_filed) was still captured, so gets the
+  // Lead alone. Each is its own best-effort send.
   const { fbcFromFbclid } = await import('@/lib/meta-capi')
+  const fbc = fbcFromFbclid(b.attribution?.fbclid) || undefined
+  const sendConversions = async ({ initiateCheckout }) => {
+    try {
+      const { sendWebsiteConversion } = await import('@/lib/meta-capi')
+      const leadEventId = b.lead_event_id || `triallead-${contactId}`
+      const identity = {
+        locationId, email, phone: b.phone,
+        eventSourceUrl: product.eventSourceUrl,
+        contentName: product.productName,
+        fbc, clientIp: ip,
+        userAgent: request.headers.get('user-agent') || undefined,
+        firstName: b.first_name, lastName: b.last_name, externalId: contactId,
+        fbp: b.attribution?.fbp,
+      }
+      await sendWebsiteConversion(db, { ...identity, eventName: 'Lead', eventId: leadEventId })
+      if (!initiateCheckout) return
+      try {
+        await sendWebsiteConversion(db, {
+          ...identity, eventName: 'InitiateCheckout', eventId: `trialcheckout-${leadEventId}`,
+          value: product.priceCents / 100, currency: product.currency, contentType: 'product',
+        })
+      } catch (e) { logWarn('trialbuy', 'capi initiate checkout failed', { err: e }) }
+    } catch (e) { logWarn('trialbuy', 'capi lead failed', { err: e }) }
+  }
+  const refusedWithLead = async (code, error) => {
+    await sendConversions({ initiateCheckout: false })
+    return refused(code, error, product)
+  }
+
+  // ── Eligibility, before any row or money ──
+  let un1tContact = null
+  if (isHatch) {
+    const membership = await hatchActiveMembership(db, { locationId, contactId })
+    if (!membership.ok) return unavailable()
+    if (membership.active) return refusedWithLead('active_member', product.activeMemberText)
+    const { data: c, error: cErr } = await db.from('contacts')
+      .select('id, email, name, first_name, last_name, phone, un1t_user_id').eq('id', contactId).maybeSingle()
+    if (cErr || !c) {
+      logError('trialbuy', 'contact unreadable', { err: cErr, contactId, locationId })
+      return unavailable()
+    }
+    un1tContact = c
+  } else {
+    const { data: c, error: cErr } = await db.from('contacts')
+      .select('id, glofox_member_id, glofox_membership_status, glofox_membership_plan').eq('id', contactId).maybeSingle()
+    if (cErr || !c) {
+      logError('trialbuy', 'contact unreadable', { err: cErr, contactId, locationId })
+      return unavailable()
+    }
+    const history = await stillorganTrialHistory(db, { locationId, contact: c })
+    if (!history.ok) return unavailable()
+    if (history.hadTrial) return refusedWithLead('trial_used', product.trialUsedText)
+  }
+
+  // Hatch: the acceptance, with the documents' version at the time of the
+  // tick (null when they could not be read; the tick still stands).
+  let termsRecord = {}
+  if (un1tWrites && b.terms_accepted === true) {
+    let version = null
+    try { version = (await readUn1tLegalDocs(db, locationId)).version } catch (e) { logWarn('trialbuy', 'legal documents version unread', { err: e, locationId }) }
+    termsRecord = { terms_accepted_at: new Date().toISOString(), terms_source: 'website', terms_version: version }
+  }
+
+  // ── The purchase row, then the provider payment (Stillorgan) or un1t.online's checkout (Hatch) ──
   const attribution = {
     ...(b.attribution || {}),
-    fbc: fbcFromFbclid(b.attribution?.fbclid) || undefined,
+    fbc,
     event_source_url: product.eventSourceUrl,
   }
   delete attribution.fbclid
@@ -152,35 +273,45 @@ export async function POST(request) {
     status: 'awaiting_payment',
     lead_event_id: b.lead_event_id || null,
     attribution,
+    ...(isHatch ? { payment_provider: 'un1t_online', un1t_product_id: product.un1tProductId, ...termsRecord } : {}),
   }).select('*').single()
   if (insErr || !row) {
-    logError('trialbuy', 'purchase insert failed', { err: insErr, contactId })
+    // Ids and the code only: a PostgREST error's details can name the row (email, phone).
+    logError('trialbuy', 'purchase insert failed', { code: insErr?.code ?? null, contactId })
     return NextResponse.json({ success: false, code: 'unavailable', error: 'Could not start your purchase. Please try again.' }, { status: 500 })
   }
 
-  let payment
-  try {
-    payment = await createTrialPurchasePayment({ db, purchase: row, location, amountCents: product.priceCents, currency: product.currency })
-  } catch (e) {
-    logError('trialbuy', 'payment create failed', { err: e, purchaseId: row.id })
-    return NextResponse.json({ success: false, code: 'checkout_failed', error: 'Could not start checkout. Please try again.' }, { status: 502 })
+  let payment = null
+  let redirectUrl = null
+  if (isHatch) {
+    const outcome = await startUn1tTrialCheckout(db, { row, location, contact: un1tContact })
+    if (outcome.kind === 'unavailable') return unavailable()
+    if (outcome.kind === 'help_filed') {
+      await sendConversions({ initiateCheckout: false })
+      return NextResponse.json({ success: false, code: 'help_filed', error: product.helpSentText })
+    }
+    redirectUrl = outcome.checkoutUrl
+  } else {
+    try {
+      payment = await createTrialPurchasePayment({ db, purchase: row, location, amountCents: product.priceCents, currency: product.currency })
+    } catch (e) {
+      logError('trialbuy', 'payment create failed', { err: e, purchaseId: row.id })
+      return NextResponse.json({ success: false, code: 'checkout_failed', error: 'Could not start checkout. Please try again.' }, { status: 502 })
+    }
   }
 
-  // Meta Lead (the studio's own dataset), sharing the browser's event id.
-  try {
-    const { sendWebsiteConversion } = await import('@/lib/meta-capi')
-    await sendWebsiteConversion(db, {
-      locationId, eventName: 'Lead', email, phone: b.phone,
-      eventSourceUrl: product.eventSourceUrl,
-      eventId: b.lead_event_id || `triallead-${contactId}`,
-      contentName: product.productName,
-      fbc: attribution.fbc, clientIp: ip,
-      userAgent: request.headers.get('user-agent') || undefined,
-      firstName: b.first_name, lastName: b.last_name, externalId: contactId,
-      fbp: b.attribution?.fbp,
-    })
-  } catch (e) { logWarn('trialbuy', 'capi lead failed', { err: e }) }
+  await sendConversions({ initiateCheckout: true })
 
+  // Hatch: the checkout URL goes to the browser once; it is never stored on the row or logged.
+  if (isHatch) {
+    return NextResponse.json({ success: true, data: {
+      purchaseId: row.id,
+      redirect_url: redirectUrl,
+      amount_cents: product.priceCents,
+      currency: product.currency,
+      product_name: product.productName,
+    } })
+  }
   return NextResponse.json({ success: true, data: {
     purchaseId: payment.purchaseId,
     checkout: payment.checkout,

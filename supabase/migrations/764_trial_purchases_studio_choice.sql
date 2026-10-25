@@ -1,0 +1,189 @@
+-- 764 — TRIALSTUDIO.1: the /trial page's studio choice. trial_purchases learns
+-- the Hatch Street (un1t.online) purchase and the help/handled/expired states.
+--
+-- WHY. The public /trial page now lets the visitor pick a studio. Stillorgan
+-- still sells the Glofox-granted paid trial (mig 762). Hatch Street sells the
+-- trial product through a un1t.online checkout, so a row can have no Glofox
+-- membership or plan at all, and instead carries the un1t.online product, user
+-- and write-ledger row, plus the terms the buyer accepted. A buyer who cannot
+-- finish can ask for help, staff mark it handled, and a checkout nobody paid
+-- expires.
+--
+-- WHAT.
+--   (1) trial_purchases.membership_id and plan_code become nullable (a
+--       un1t.online row has neither).
+--   (2) New columns: un1t_product_id, un1t_user_id, un1t_ledger_id (the
+--       un1t_write_events row of the purchase), terms_accepted_at,
+--       terms_source, terms_version.
+--   (3) trial_purchases_status_check: awaiting_payment | queued | processing |
+--       granted | needs_review | failed | payment_failed | help_requested |
+--       handled | expired. Mig 762 had no status CHECK; every status it wrote
+--       is in the list.
+--   (4) idx_trial_purchases_un1t_open: the open un1t.online checkouts, for the
+--       sweeper that expires them.
+--   (4b) uniq_trial_purchases_un1t_ref (TRIALSTUDIO.7): one un1t.online
+--       payment settles at most one row. The settle sweep stamps the
+--       un1t.online transaction id as payment_provider_ref under a status
+--       guard, which protects only its own row: two overlapping sweeps (the
+--       2-minute cron runs up to 300s) could otherwise settle a buyer's two
+--       open rows off one payment. The second stamp now fails 23505 and the
+--       sweep treats it as a lost race. Partial: Revolut/Stripe refs are not
+--       constrained by it (their webhooks look a ref up on their own).
+--   (4c) uniq_trial_purchases_open_help (final review F6): at most one open
+--       help request (status 'help_requested') per contact at a location.
+--       The help route reads for an open row and then inserts, which two
+--       presses of "I need help" can interleave; the second insert now fails
+--       23505 and the route answers with the open row (no second card, no
+--       second alert). A handled row does not block a new request.
+--       Second writer: the Hatch checkout (trial-purchase-un1t-checkout.js)
+--       stamps a refused row help_requested; a 23505 there closes that row
+--       'failed' (help_card_already_open) with no second alert.
+--   (5) un1t_write_events_origin_check also admits 'web_trial' (the public
+--       /trial page as the origin of a ledger write); every origin mig 744
+--       allowed is kept.
+--
+-- GRANTS. No new table, view, sequence or function. trial_purchases stays
+-- service role only: the new columns need no grant, and the revoke from mig
+-- 762 is repeated at the end so a later default-ACL change cannot reopen it.
+--
+-- LOCKS. One transaction, 5s lock_timeout. Both tables are small (trial
+-- purchases: tens of rows; the ledger: a few hundred); the CHECK scans and the
+-- index builds are instant. No un1t_online row has a payment_provider_ref
+-- before this file, so the unique index cannot fail on existing data; no
+-- 'help_requested' row exists before this file either (its CHECK admits the
+-- status first). The new columns are nullable with no default.
+--
+-- IDEMPOTENT. IF NOT EXISTS on columns and the index, drop-if-exists then add
+-- on each CHECK, DROP NOT NULL is a no-op the second time. The DO block checks
+-- the POST-STATE in the catalog and aborts the whole file.
+--
+-- ORDER. Apply BEFORE the code that writes the new columns, statuses or the
+-- 'web_trial' origin deploys: until then the CHECKs refuse those rows and the
+-- new choice fails closed.
+
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+
+ALTER TABLE public.trial_purchases
+  ALTER COLUMN membership_id DROP NOT NULL,
+  ALTER COLUMN plan_code DROP NOT NULL,
+  ADD COLUMN IF NOT EXISTS un1t_product_id text,
+  ADD COLUMN IF NOT EXISTS un1t_user_id text,
+  ADD COLUMN IF NOT EXISTS un1t_ledger_id uuid,
+  ADD COLUMN IF NOT EXISTS terms_accepted_at timestamptz,
+  ADD COLUMN IF NOT EXISTS terms_source text,
+  ADD COLUMN IF NOT EXISTS terms_version text;
+
+ALTER TABLE public.trial_purchases
+  DROP CONSTRAINT IF EXISTS trial_purchases_status_check;
+ALTER TABLE public.trial_purchases
+  ADD CONSTRAINT trial_purchases_status_check
+  CHECK (status IN ('awaiting_payment', 'queued', 'processing', 'granted', 'needs_review', 'failed',
+                    'payment_failed', 'help_requested', 'handled', 'expired'));
+
+CREATE INDEX IF NOT EXISTS idx_trial_purchases_un1t_open
+  ON public.trial_purchases (created_at)
+  WHERE payment_provider = 'un1t_online' AND status = 'awaiting_payment';
+
+-- Two overlapping settle sweeps must not settle two rows off one un1t.online payment.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_trial_purchases_un1t_ref
+  ON public.trial_purchases (location_id, payment_provider_ref)
+  WHERE payment_provider = 'un1t_online' AND payment_provider_ref IS NOT NULL;
+
+-- Two presses of "I need help" must not file two cards for one person.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_trial_purchases_open_help
+  ON public.trial_purchases (location_id, contact_id)
+  WHERE status = 'help_requested';
+
+ALTER TABLE public.un1t_write_events
+  DROP CONSTRAINT IF EXISTS un1t_write_events_origin_check;
+ALTER TABLE public.un1t_write_events
+  ADD CONSTRAINT un1t_write_events_origin_check
+  CHECK (origin IN ('staff', 'funnel', 'approval', 'mia', 'test_account', 'web_trial'));
+
+COMMENT ON COLUMN public.trial_purchases.membership_id IS 'Glofox membership id of the Stillorgan trial. NULL on a un1t.online (Hatch Street) row (TRIALSTUDIO.1, mig 764).';
+COMMENT ON COLUMN public.trial_purchases.plan_code IS 'Glofox plan code of the Stillorgan trial. NULL on a un1t.online (Hatch Street) row (TRIALSTUDIO.1, mig 764).';
+COMMENT ON COLUMN public.trial_purchases.un1t_product_id IS 'TRIALSTUDIO.1: the un1t.online trial product sold on this row (Hatch Street). NULL on a Glofox row.';
+COMMENT ON COLUMN public.trial_purchases.un1t_user_id IS 'TRIALSTUDIO.1: the buyer''s un1t.online user id, once the CRM has created or found it.';
+COMMENT ON COLUMN public.trial_purchases.un1t_ledger_id IS 'TRIALSTUDIO.1: the un1t_write_events row (origin web_trial) that records the un1t.online checkout for this purchase.';
+COMMENT ON COLUMN public.trial_purchases.terms_accepted_at IS 'TRIALSTUDIO.1: when the buyer accepted the trial terms on the /trial page.';
+COMMENT ON COLUMN public.trial_purchases.terms_source IS 'TRIALSTUDIO.1: where the terms were accepted (the surface, e.g. the /trial checkbox).';
+COMMENT ON COLUMN public.trial_purchases.terms_version IS 'TRIALSTUDIO.1: the version of the terms text the buyer accepted.';
+COMMENT ON CONSTRAINT trial_purchases_status_check ON public.trial_purchases IS 'TRIALSTUDIO.1 (mig 764): awaiting_payment | queued | processing | granted | needs_review | failed | payment_failed | help_requested | handled | expired.';
+COMMENT ON INDEX public.idx_trial_purchases_un1t_open IS 'TRIALSTUDIO.1 (mig 764): open un1t.online trial checkouts (awaiting_payment), oldest first, for the expiry sweep.';
+COMMENT ON INDEX public.uniq_trial_purchases_open_help IS 'Final review F6 (mig 764): one open help request (status help_requested) per contact per location; a second insert from a double press fails 23505 and the help route answers with the open row; the Hatch checkout''s help stamp failing 23505 closes its row failed (help_card_already_open), no second alert. A handled row does not block a new one.';
+COMMENT ON INDEX public.uniq_trial_purchases_un1t_ref IS 'TRIALSTUDIO.7 (mig 764): one un1t.online transaction (payment_provider_ref) settles at most one trial_purchases row per location, even across overlapping settle sweeps.';
+
+-- Repeated from mig 762 so a later default-ACL change cannot reopen the table.
+ALTER TABLE public.trial_purchases ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.trial_purchases FROM anon, authenticated, PUBLIC;
+
+-- ---------------------------------------------------------------------------
+-- Self-check: the post-state in the catalog, never this file's text.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE
+  d text;
+  k text;
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_attribute
+              WHERE attrelid = 'public.trial_purchases'::regclass
+                AND attname IN ('membership_id', 'plan_code') AND attnotnull) THEN
+    RAISE EXCEPTION 'mig 764: trial_purchases.membership_id / plan_code still NOT NULL';
+  END IF;
+  FOREACH k IN ARRAY ARRAY['un1t_product_id', 'un1t_user_id', 'un1t_ledger_id', 'terms_accepted_at', 'terms_source', 'terms_version'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_attribute
+                    WHERE attrelid = 'public.trial_purchases'::regclass AND attname = k AND NOT attisdropped) THEN
+      RAISE EXCEPTION 'mig 764: trial_purchases.% missing', k;
+    END IF;
+  END LOOP;
+
+  d := pg_get_constraintdef((SELECT oid FROM pg_constraint
+        WHERE conrelid = 'public.trial_purchases'::regclass AND conname = 'trial_purchases_status_check'));
+  IF d IS NULL THEN
+    RAISE EXCEPTION 'mig 764: trial_purchases_status_check missing';
+  END IF;
+  FOREACH k IN ARRAY ARRAY['awaiting_payment', 'queued', 'processing', 'granted', 'needs_review', 'failed',
+                           'payment_failed', 'help_requested', 'handled', 'expired'] LOOP
+    IF d NOT LIKE '%''' || k || '''%' THEN
+      RAISE EXCEPTION 'mig 764: trial_purchases_status_check does not admit %: %', k, d;
+    END IF;
+  END LOOP;
+
+  d := (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_trial_purchases_un1t_open');
+  IF d IS NULL OR d NOT LIKE '%(created_at) WHERE%' OR d NOT LIKE '%''un1t_online''%' OR d NOT LIKE '%''awaiting_payment''%' THEN
+    RAISE EXCEPTION 'mig 764: idx_trial_purchases_un1t_open wrong or missing: %', d;
+  END IF;
+
+  d := (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'uniq_trial_purchases_un1t_ref');
+  IF d IS NULL OR d NOT LIKE 'CREATE UNIQUE INDEX%' OR d NOT LIKE '%(location_id, payment_provider_ref) WHERE%'
+     OR d NOT LIKE '%''un1t_online''%' OR d NOT LIKE '%payment_provider_ref IS NOT NULL%' THEN
+    RAISE EXCEPTION 'mig 764: uniq_trial_purchases_un1t_ref wrong or missing: %', d;
+  END IF;
+
+  d := (SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'uniq_trial_purchases_open_help');
+  IF d IS NULL OR d NOT LIKE 'CREATE UNIQUE INDEX%' OR d NOT LIKE '%(location_id, contact_id) WHERE%'
+     OR d NOT LIKE '%''help_requested''%' THEN
+    RAISE EXCEPTION 'mig 764: uniq_trial_purchases_open_help wrong or missing: %', d;
+  END IF;
+
+  d := pg_get_constraintdef((SELECT oid FROM pg_constraint
+        WHERE conrelid = 'public.un1t_write_events'::regclass AND conname = 'un1t_write_events_origin_check'));
+  IF d IS NULL THEN
+    RAISE EXCEPTION 'mig 764: un1t_write_events_origin_check missing';
+  END IF;
+  FOREACH k IN ARRAY ARRAY['staff', 'funnel', 'approval', 'mia', 'test_account', 'web_trial'] LOOP
+    IF d NOT LIKE '%''' || k || '''%' THEN
+      RAISE EXCEPTION 'mig 764: un1t_write_events_origin_check does not admit %: %', k, d;
+    END IF;
+  END LOOP;
+
+  -- Still closed to every client role.
+  IF EXISTS (SELECT 1 FROM information_schema.table_privileges
+              WHERE table_schema = 'public' AND table_name = 'trial_purchases'
+                AND grantee IN ('anon', 'authenticated', 'PUBLIC')) THEN
+    RAISE EXCEPTION 'mig 764: trial_purchases is open to a client role';
+  END IF;
+END $$;
+
+COMMIT;

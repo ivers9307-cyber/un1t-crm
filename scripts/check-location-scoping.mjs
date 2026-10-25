@@ -376,6 +376,9 @@ export const EXEMPT = {
   'src/app/api/public/events/[slug]/waitlist/route.js': {
     race_events: 'EVENT-WAITLIST.1 public waitlist join: race_events row resolved by published slug + active/published flags (the same row the public event page serves); the waitlist row is written at that event\'s own location_id by joinWaitlist. Answers only the new row id.',
   },
+  'src/app/api/public/events/[slug]/donate/route.js': {
+    race_events: 'CHARITY.5 public donation start: race_events row resolved by published slug + active/published flags (the same row the public event page serves); the donations row is inserted under that event\'s own race_event_id/location_id and no other tenant\'s rows are read. Rate-limited per slug and IP.',
+  },
   'src/app/api/public/classes/route.js': {
     landing_page_settings: 'Public landing-page class list: landing_page_settings row resolved by its public_path — the path IS the tenant selector for the public site.',
   },
@@ -391,6 +394,10 @@ export const EXEMPT = {
   'src/app/api/public/trial-purchases/[id]/route.js': {
     trial_purchases: 'PAIDTRIAL.1 public paid-trial status poll: the row is resolved by its own unguessable UUID (the purchaseId handed to the payer in the checkout response); the id IS the capability token, not enumerable. Returns only display-safe checkout fields and the public state, no buyer PII. Mirrors public/class-booking-payments/[id].',
   },
+  'src/app/api/public/donations/[id]/route.js': {
+    donations: 'CHARITY.6 public donation status poll: the row is resolved by its own unguessable UUID (the donationId handed to the donor in the donate response); the id IS the capability token, not enumerable. Returns only display-safe checkout fields and the public state, no donor PII. The race_events row is read by the donation\'s own race_event_id. Mirrors public/trial-purchases/[id].',
+    race_events: 'CHARITY.6 public donation status poll: the event row is read by the donation\'s own race_event_id (never by caller input) for the match multiplier and the paid side effects.',
+  },
   'src/app/api/public/offer-purchases/[id]/route.js': {
     offer_purchases: 'Public paid-purchase status poll (OFFERS.4): the row is resolved by its own unguessable UUID (the purchaseId handed to the payer in the checkout response) — the id IS the capability token, not enumerable. Returns only { paid, state }, no buyer PII. Mirrors public/class-booking-payments/[id].',
   },
@@ -404,6 +411,14 @@ export const EXEMPT = {
   'src/app/api/webhooks/revolut/route.js': {
     cars: 'Signature-verified webhook resolves the car by deposit_revolut_order_id — the provider\'s order id from the verified payload IS the row identity.',
     contacts: 'Buyer-email ilike lookup to link the deposit event to an existing contact; input comes from the signature-verified payload\'s order, only the contact id is used for the event emit.',
+  },
+  'src/app/api/webhooks/revolut/donations/route.js': {
+    donations: 'CHARITY.7 signature-verified donations webhook: the re-read is by the row\'s own id, taken from resolveDonationByRef on the provider\'s order id from the verified payload — the provider\'s order id IS the row identity.',
+    race_events: 'CHARITY.7 signature-verified donations webhook: the event row is read by the donation\'s own race_event_id (never by caller input) for the match multiplier and the paid side effects.',
+  },
+  'src/app/api/webhooks/stripe/route.js': {
+    donations: 'CHARITY.7 signature-verified Stripe webhook (constructEvent): the post-mark re-read is by the row\'s own id, taken from resolveDonationByRef on the verified Checkout Session id — the provider\'s session id IS the row identity.',
+    race_events: 'CHARITY.7 signature-verified Stripe webhook: the donation\'s event row is read by the donation\'s own race_event_id (never by caller input) for the match multiplier and the paid side effects.',
   },
   'src/app/api/webhooks/xero/route.js': {
     cars: 'Signature-verified webhook resolves the car by xero_invoice_id — the provider\'s invoice id IS the row identity (per-location Xero connections mint the ids).',

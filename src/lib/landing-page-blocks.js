@@ -19,6 +19,7 @@
 
 import { z } from 'zod'
 import { classFunnelCtaLabel, classFunnelShownOnLanding } from '@/lib/public-landing'
+import { PAID_TRIAL_PENDING_BODY, PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
 
 // Stable id helper — a uuid string. We keep ids in the saved JSON
 // because @dnd-kit needs stable per-item keys for smooth drag
@@ -216,6 +217,14 @@ const CLASS_FUNNEL_DEFAULT = ({ brand = '' } = {}) => ({
   currency:            'EUR',
 })
 
+// TRIALSTUDIO.2 — the active-member gate copy names the studio's brand like the
+// consent defaults do (W1.S1b: no default carries a literal gym), so the
+// brand-less block reads "at Hatch Street" and a branded one "at UN1T Hatch Street".
+export function paidTrialActiveMemberDefault(brand = '') {
+  const b = typeof brand === 'string' ? brand.trim() : ''
+  return `It looks like you already have an active membership at ${b ? `${b} ` : ''}Hatch Street, which already covers your classes. If that's not right, tap I need help and the team will be in touch.`
+}
+
 // PAIDTRIAL.1 — a paid trial product sold from its own page (/trial): the
 // price panel + buyer form + embedded checkout, then the grant of a Glofox
 // plan onto the buyer's account once the money is in. Every customer-facing
@@ -238,6 +247,21 @@ const PAID_TRIAL_DEFAULT = ({ brand = '' } = {}) => ({
   consent_label:  classFunnelConsentDefault(brand),
   done_title:     "You're in 🎉",
   done_body:      'Your 14 Day Reset is on your account. Check your email for how to book your first class.',
+  // TRIALSTUDIO.10 — a un1t.online (Hatch Street) purchase not settled yet.
+  pending_body:   PAID_TRIAL_PENDING_BODY,
+  // TRIALSTUDIO.2 — the studio choice. studio_label '' ⇒ the page shows the
+  // studio's own name. un1t_product_id names the un1t.online product a Hatch
+  // Street block sells (priced from the mirrored un1t_products row, not here).
+  studio_label:   '',
+  un1t_product_id: '',
+  trial_used_text: "It looks like you've already had a trial with us at Stillorgan, so the 14 Day Reset can't be redeemed on this account. If that's not right, or you'd like to talk about your options, tap I need help and the team will be in touch.",
+  active_member_text: paidTrialActiveMemberDefault(brand),
+  help_cta_label: 'I need help',
+  help_sent_text: 'Thanks. The team will be in touch shortly.',
+  // Final-review F2 — a un1t.online studio only: the email a buyer whose
+  // un1t.online account the CRM created gets once the purchase settles.
+  account_email_subject: PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject,
+  account_email_body:    PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_body,
   membership_id:  '',
   plan_code:      '',
   tag:            '',
@@ -291,7 +315,7 @@ export const BLOCK_TYPES = [
   { type: 'event',       label: 'Event signup', description: 'Embed the full signup form for a chosen event.',        factory: EVENT_DEFAULT },
   { type: 'lead_form',   label: 'Lead form',    description: 'Waitlist / interest capture — name, email, phone + consent.',  factory: LEAD_FORM_DEFAULT },
   { type: 'class_funnel', label: 'Glofox Class Booking Funnel', description: 'Pick a class, enter details, book. Live Glofox classes, or a timetable you type in for a studio without Glofox (staff then book by hand). Optional free-consult upsell.', factory: CLASS_FUNNEL_DEFAULT },
-  { type: 'paid_trial',  label: 'Paid trial product', description: 'A paid trial (e.g. 2 weeks for €39) sold from its own page: price panel, buyer form, embedded checkout, then the Glofox plan is put on their account.', factory: PAID_TRIAL_DEFAULT },
+  { type: 'paid_trial',  label: 'Paid trial product', description: 'A paid trial (e.g. 2 weeks for €39) sold from its own page: price panel, buyer form, embedded checkout, then the Glofox plan, or the un1t.online product, is put on their account.', factory: PAID_TRIAL_DEFAULT },
   { type: 'pillars',     label: 'Pillars',      description: '3 value-prop tiles. Each can have a photo.',           factory: PILLARS_DEFAULT },
   { type: 'gallery',     label: 'Photo gallery',description: 'Grid of photos with optional captions.',                factory: GALLERY_DEFAULT },
   { type: 'embed',       label: 'Video embed',  description: 'YouTube or Instagram video embed.',                    factory: EMBED_DEFAULT },

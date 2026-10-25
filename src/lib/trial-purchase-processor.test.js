@@ -20,7 +20,7 @@ vi.mock('@/lib/ops-alerts', () => ({ sendOpsAlert: mocks.ops }))
 vi.mock('@/lib/trial-purchase-emails', () => ({ sendTrialPurchaseEmail: mocks.email }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 
-import { processTrialPurchase } from './trial-purchase-processor'
+import { processTrialPurchase, alertTrialPurchaseStaff, REVIEW_REASONS } from './trial-purchase-processor'
 
 const ROW = {
   id: 'tp1', location_id: 'loc1', contact_id: 'c1', status: 'processing', payment_status: 'paid',
@@ -195,5 +195,96 @@ describe('processTrialPurchase', () => {
     mocks.capi.mockRejectedValue(new Error('meta down'))
     const { db } = makeDb()
     expect((await processTrialPurchase(db, ROW)).outcome).toBe('granted')
+  })
+})
+
+describe('alertTrialPurchaseStaff', () => {
+  it('the staff alert escapes the buyer name', async () => {
+    const { db } = makeDb()
+    mocks.purchase.mockResolvedValue({ ok: false, error: 'NO' })
+    await processTrialPurchase(db, { ...ROW, customer_name: '<img src=x onerror=alert(1)>' })
+    const html = mocks.ops.mock.calls[0][0].htmlBody
+    expect(html).not.toContain('<img')
+    expect(html).toContain('&lt;img')
+  })
+
+  it('escapes every buyer-typed or Glofox-supplied field, and leaves the push body plain text', async () => {
+    const { db } = makeDb()
+    const evil = '<script>x</script>'
+    await alertTrialPurchaseStaff(db, {
+      ...ROW, customer_name: 'A & B', customer_email: `a${evil}@x.com`, customer_phone: evil,
+      product_name: evil, membership_id: evil, plan_code: evil,
+    }, 'unknown_reason<i>', `<b>glofox</b>`)
+    const call = mocks.ops.mock.calls[0][0]
+    expect(call.htmlBody).not.toContain('<script>')
+    expect(call.htmlBody).not.toContain('<i>')
+    expect(call.htmlBody).not.toContain('<b>glofox')
+    expect(call.htmlBody).toContain('A &amp; B')
+    expect(call.htmlBody).toContain('&lt;b&gt;glofox&lt;/b&gt;')
+    expect(call.pushBody).toContain('A & B')
+    expect(call.pushBody).not.toContain('&amp;')
+  })
+
+  it('a help_requested row gets the help-request subject; any other row keeps the paid-trial subject', async () => {
+    const { db } = makeDb()
+    await alertTrialPurchaseStaff(db, { ...ROW, status: 'help_requested' }, 'trial_used')
+    expect(mocks.ops.mock.calls[0][0].subject).toBe('Trial help request: Ava Byrne (Stillorgan)')
+    await alertTrialPurchaseStaff(db, ROW, 'grant_refused')
+    expect(mocks.ops.mock.calls[1][0].subject).toBe('Paid trial needs a hand: Ava Byrne (Stillorgan)')
+  })
+
+  it('a help_requested body says nobody was charged and asks staff to contact the customer', async () => {
+    const { db } = makeDb()
+    await alertTrialPurchaseStaff(db, { ...ROW, status: 'help_requested' }, 'trial_used', 'glofox_trial_claim')
+    const html = mocks.ops.mock.calls[0][0].htmlBody
+    expect(html).toContain('A customer asked for help on the /trial page and was not charged.')
+    expect(html).toContain('glofox_trial_claim')
+    expect(html).toContain('Ava Byrne')
+    expect(html).toContain('contact the customer, then mark the card handled.')
+    expect(html).not.toContain('was taken')
+    expect(html).not.toContain('retry the grant')
+    expect(html).not.toContain('Paid:')
+    expect(mocks.ops.mock.calls[0][0].pushBody).not.toContain('manual grant')
+  })
+
+  it('a Hatch un1t.online refusal says un1t.online could not serve the buyer, not that they asked for help', async () => {
+    const { db } = makeDb()
+    await alertTrialPurchaseStaff(db, { ...ROW, status: 'help_requested' }, 'un1t_checkout_refused', 'purchase_limit_reached')
+    const html = mocks.ops.mock.calls[0][0].htmlBody
+    expect(html).toContain('A customer tried to buy the trial on the /trial page but un1t.online could not give them an account or a checkout; they were not charged.')
+    expect(html).not.toContain('A customer asked for help')
+    expect(html).toContain('purchase_limit_reached')
+    expect(html).toContain('contact the customer, then mark the card handled.')
+    // a buyer-asked help request keeps its wording
+    await alertTrialPurchaseStaff(db, { ...ROW, status: 'help_requested' }, 'active_member')
+    expect(mocks.ops.mock.calls[1][0].htmlBody).toContain('A customer asked for help on the /trial page and was not charged.')
+  })
+
+  it('a un1t.online row names its un1t.online product, never the empty Glofox ids', async () => {
+    const { db } = makeDb()
+    const un1tRow = { ...ROW, status: 'help_requested', product_name: 'The UN1T Trial', membership_id: null, plan_code: null, un1t_product_id: '674d62bf-<x>' }
+    await alertTrialPurchaseStaff(db, un1tRow, 'un1t_account_refused', 'account_ambiguous')
+    const html = mocks.ops.mock.calls[0][0].htmlBody
+    expect(html).toContain('<strong>Product:</strong> (The UN1T Trial, un1t.online product 674d62bf-&lt;x&gt;)<br/>')
+    expect(html).not.toContain('( / )')
+    // a Glofox row keeps its ids
+    await alertTrialPurchaseStaff(db, ROW, 'grant_refused')
+    expect(mocks.ops.mock.calls[1][0].htmlBody).toContain(`${ROW.product_name} (${ROW.membership_id} / ${ROW.plan_code})`)
+  })
+
+  it('a grant-failure body is unchanged', async () => {
+    const { db } = makeDb()
+    await alertTrialPurchaseStaff(db, ROW, 'grant_refused')
+    const html = mocks.ops.mock.calls[0][0].htmlBody
+    expect(html).toContain('A paid trial purchase was taken but the plan was not put on the account automatically.')
+    expect(html).toContain('<strong>Paid:</strong>')
+    expect(html).toContain('retry the grant')
+  })
+
+  it('has the five new review reasons', () => {
+    for (const k of ['trial_used', 'active_member', 'un1t_account_refused', 'un1t_checkout_refused', 'un1t_outcome_unknown']) {
+      expect(REVIEW_REASONS[k]).toBeTruthy()
+    }
+    expect(REVIEW_REASONS.trial_used).toBe('The buyer already had a trial here and asked for help.')
   })
 })

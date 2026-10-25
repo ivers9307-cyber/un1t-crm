@@ -33,6 +33,13 @@ export const AUTOMATIONS = Object.freeze([
     supportsBackfill: false,
     reviewBase: '/automations',
   },
+  {
+    key: 'screen_mode',
+    label: 'Class screens',
+    description: 'Show the class app on the floor screens during each class and marketing content the rest of the time.',
+    supportsBackfill: false,
+    reviewBase: '/automations',
+  },
 ])
 
 export function getAutomation(key) {
@@ -78,7 +85,7 @@ export function automationStatus(key, location, { connected } = {}) {
       trialConfigured: Boolean(g.trial_membership_id && g.trial_plan_code),
     }
   }
-  if (key === 'class_climate' || key === 'bathroom_climate') {
+  if (key === 'class_climate' || key === 'bathroom_climate' || key === 'screen_mode') {
     // Needs the class schedule as its trigger source. AC-device presence
     // is surfaced in the dedicated card (which has the device list); here
     // we only gate on the schedule source being connected.

@@ -1,14 +1,10 @@
-import { describe, it, expect } from 'vitest'
-import { registrationPaidCents } from './race-cancel.js'
+import { describe, it, expect, vi } from 'vitest'
+import { registrationPaidCents, cancelRaceRegistration, moveRegistrationWave, countPlacedInto, placedSolosRefusal } from './race-cancel.js'
+import { fakeDb } from './event-waitlist.test-helpers'
 
-// Minimal thenable db mock: db.from(t).select(c).eq(col,val).limit(n) -> { data }
+// db.from('race_payments')…limit(n) -> { data: rows }; no placed-into rows.
 function mockDb(rows) {
-  const builder = {
-    select: () => builder,
-    eq: () => builder,
-    limit: () => Promise.resolve({ data: rows }),
-  }
-  return { from: () => builder }
+  return fakeDb((q) => (q.table === 'race_payments' ? { data: rows, error: null } : { data: [], error: null }))
 }
 
 describe('registrationPaidCents', () => {
@@ -44,3 +40,149 @@ describe('registrationPaidCents', () => {
     expect(await registrationPaidCents(mockDb(null), 'reg1')).toBe(0)
   })
 })
+
+// FINDTEAM.8 (I3) — payments of solos placed INTO a team count as the team's.
+describe('registrationPaidCents — placed-into solos', () => {
+  it("sums the completed payments of registrations placed into this one", async () => {
+    const pays = { team: [{ amount_cents: 0, status: 'completed' }], s1: [{ amount_cents: 2000, status: 'completed' }], s2: [{ amount_cents: 2000, status: 'abandoned' }] }
+    const db = fakeDb((q) => {
+      if (q.table === 'race_registrations') return { data: [{ id: 's1' }, { id: 's2' }], error: null }
+      const ids = q.ops.find((o) => o[0] === 'in' && o[1] === 'race_registration_id')[2]
+      return { data: ids.flatMap((id) => pays[id] || []), error: null }
+    })
+    expect(await registrationPaidCents(db, 'team')).toBe(2000)
+    const placed = db.queries.find((x) => x.table === 'race_registrations')
+    expect(placed.ops).toContainEqual(['eq', 'placed_into_registration_id', 'team'])
+    const payQ = db.queries.find((x) => x.table === 'race_payments')
+    expect(payQ.ops).toContainEqual(['in', 'race_registration_id', ['team', 's1', 's2']])
+  })
+
+  it('throws on a failed read rather than reading as free', async () => {
+    const bad1 = fakeDb((q) => (q.table === 'race_registrations' ? { data: null, error: { message: 'x' } } : { data: [], error: null }))
+    await expect(registrationPaidCents(bad1, 'r')).rejects.toThrow()
+    const bad2 = fakeDb((q) => (q.table === 'race_payments' ? { data: null, error: { message: 'x' } } : { data: [], error: null }))
+    await expect(registrationPaidCents(bad2, 'r')).rejects.toThrow()
+  })
+})
+
+describe('cancel / move refuse a placed row (FINDTEAM.8 I3)', () => {
+  const regDb = (reg) => fakeDb((q) => (q.table === 'race_registrations' && q.action === 'select' ? { data: reg, error: null } : { data: null, error: null }))
+
+  it('cancelRaceRegistration refuses placed with not_active and writes nothing', async () => {
+    const db = regDb({ id: 'r1', status: 'placed' })
+    expect(await cancelRaceRegistration(db, 'r1')).toEqual({ ok: false, error: 'not_active' })
+    expect(db.queries.some((x) => x.action === 'update')).toBe(false)
+  })
+
+  it('cancelRaceRegistration still cancels a confirmed row', async () => {
+    const db = regDb({ id: 'r1', status: 'confirmed' })
+    expect(await cancelRaceRegistration(db, 'r1')).toEqual({ ok: true })
+  })
+
+  it('moveRegistrationWave refuses placed with not_active', async () => {
+    const db = regDb({ id: 'r1', race_event_id: 'e1', status: 'placed', wave_id: 'w1' })
+    expect(await moveRegistrationWave(db, 'r1', 'w2')).toEqual({ ok: false, error: 'not_active' })
+    expect(db.queries.some((x) => x.table === 'race_waves' || x.action === 'update')).toBe(false)
+  })
+})
+
+// FINDTEAM.9 — a team entry that solos were placed into cannot be cancelled:
+// their rows point at it. The count runs on the service role inside the lib, so
+// Mia's cancel and the approvals route inherit the refusal.
+describe('cancelRaceRegistration refuses a team with placed solos (FINDTEAM.9)', () => {
+  const cancelDb = ({ reg, placedCount = 0, placedErr = null }) => fakeDb((q) => {
+    if (q.table !== 'race_registrations' || q.action !== 'select') return { data: null, error: null }
+    if (q.ops.some((o) => o[0] === 'eq' && o[1] === 'placed_into_registration_id')) return { data: null, count: placedCount, error: placedErr }
+    return { data: reg, error: null }
+  })
+  const updates = (db) => db.queries.filter((x) => x.action === 'update')
+
+  it('answers has_placed_solos with the count and writes nothing', async () => {
+    const db = cancelDb({ reg: { id: 'team', status: 'confirmed' }, placedCount: 2 })
+    expect(await cancelRaceRegistration(db, 'team')).toEqual({ ok: false, error: 'has_placed_solos', placedCount: 2 })
+    expect(updates(db)).toHaveLength(0)
+    const count = db.queries.find((x) => x.ops.some((o) => o[0] === 'eq' && o[1] === 'placed_into_registration_id'))
+    expect(count.ops[0]).toEqual(['select', 'id', { count: 'exact', head: true }])
+    expect(count.ops).toContainEqual(['eq', 'placed_into_registration_id', 'team'])
+  })
+
+  it('an unreadable count refuses too: an unknown answer never cancels', async () => {
+    const db = cancelDb({ reg: { id: 'team', status: 'confirmed' }, placedErr: { message: 'boom' } })
+    expect(await cancelRaceRegistration(db, 'team')).toEqual({ ok: false, error: 'boom' })
+    expect(updates(db)).toHaveLength(0)
+  })
+
+  it('a team nobody was placed into still cancels', async () => {
+    const db = cancelDb({ reg: { id: 'team', status: 'confirmed' }, placedCount: 0 })
+    expect(await cancelRaceRegistration(db, 'team')).toEqual({ ok: true })
+    expect(updates(db)).toHaveLength(1)
+  })
+
+  it('a cancelled row answers already_cancelled before any count', async () => {
+    const db = cancelDb({ reg: { id: 'team', status: 'cancelled' }, placedCount: 2 })
+    expect(await cancelRaceRegistration(db, 'team')).toEqual({ ok: true, alreadyCancelled: true })
+    expect(db.queries).toHaveLength(1)
+  })
+
+  it('countPlacedInto returns the count, or the error', async () => {
+    expect(await countPlacedInto(cancelDb({ placedCount: 3 }), 'team')).toEqual({ count: 3 })
+    expect(await countPlacedInto(cancelDb({ placedCount: null }), 'team')).toEqual({ count: 0 })
+    expect(await countPlacedInto(cancelDb({ placedErr: { message: 'x' } }), 'team')).toEqual({ error: 'x' })
+  })
+
+  it('placedSolosRefusal is the one 409 body the DELETE and cancel routes share', () => {
+    expect(placedSolosRefusal(1, 'cancelled')).toEqual({
+      success: false,
+      error: 'has_placed_solos',
+      message: '1 placed entrant points at this team; un-place them first. There is no un-place tool in the CRM yet, so this team cannot be cancelled from here.',
+      placed_count: 1,
+    })
+    expect(placedSolosRefusal(2, 'deleted').message).toMatch(/^2 placed entrants point at this team; un-place them first\./)
+    expect(placedSolosRefusal(2, 'deleted').message).toMatch(/cannot be deleted from here\.$/)
+  })
+})
+
+// ENTRYPOLICY.1 — the target wave's load is judged by holdsPlace: a lapsed
+// unpaid entry no longer takes a place, a fresh one and a confirmed one do.
+describe('moveRegistrationWave — the unpaid hold on the target wave', () => {
+  const NOW = Date.parse('2026-10-24T12:00:00Z')
+  const waveDb = (inWave, entry_policy = null) => fakeDb((q) => {
+    if (q.table === 'race_registrations' && q.action === 'select' && q.ops.some((o) => o[0] === 'eq' && o[1] === 'id')) {
+      return { data: { id: 'r1', race_event_id: 'e1', status: 'confirmed', wave_id: 'w1' }, error: null }
+    }
+    if (q.table === 'race_waves') return { data: { id: 'w2', race_event_id: 'e1', capacity: 1, race: { entry_policy } }, error: null }
+    if (q.table === 'race_registrations' && q.action === 'select') return { data: inWave, error: null }
+    return { data: null, error: null }
+  })
+  const at = (h) => new Date(NOW - h * 3600_000).toISOString()
+  it('a lapsed unpaid entry frees the place; a fresh one or a confirmed one fills it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(NOW))
+    try {
+      expect(await moveRegistrationWave(waveDb([{ id: 'x', status: 'pending_payment', registered_at: at(49) }]), 'r1', 'w2')).toEqual({ ok: true })
+      expect(await moveRegistrationWave(waveDb([{ id: 'x', status: 'pending_payment', registered_at: at(1) }]), 'r1', 'w2')).toEqual({ ok: false, error: 'wave_full' })
+      expect(await moveRegistrationWave(waveDb([{ id: 'x', status: 'confirmed', registered_at: at(900) }]), 'r1', 'w2')).toEqual({ ok: false, error: 'wave_full' })
+      // the hold is the event's own
+      expect(await moveRegistrationWave(waveDb([{ id: 'x', status: 'pending_payment', registered_at: at(49) }], { unpaid_hold_hours: 72 }), 'r1', 'w2')).toEqual({ ok: false, error: 'wave_full' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('the wave read carries the event policy and the rows carry registered_at; an unreadable wave refuses', async () => {
+    const db = waveDb([])
+    await moveRegistrationWave(db, 'r1', 'w2')
+    const wave = db.queries.find((x) => x.table === 'race_waves')
+    expect(wave.ops[0][1]).toContain('race:race_event_id ( entry_policy )')
+    const rows = db.queries.find((x) => x.table === 'race_registrations' && x.ops.some((o) => o[0] === 'eq' && o[1] === 'wave_id'))
+    expect(rows.ops[0][1]).toContain('registered_at')
+    const broken = fakeDb((q) => {
+      if (q.table === 'race_registrations' && q.ops.some((o) => o[0] === 'eq' && o[1] === 'id')) return { data: { id: 'r1', race_event_id: 'e1', status: 'confirmed', wave_id: 'w1' }, error: null }
+      if (q.table === 'race_waves') return { data: { id: 'w2', race_event_id: 'e1', capacity: 5, race: null }, error: null }
+      if (q.table === 'race_registrations') return { data: null, error: { message: 'down' } }
+      return { data: null, error: null }
+    })
+    expect((await moveRegistrationWave(broken, 'r1', 'w2')).ok).toBe(false)
+    expect(broken.queries.some((x) => x.action === 'update')).toBe(false)
+  })
+})
+

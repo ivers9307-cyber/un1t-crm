@@ -23,6 +23,7 @@ import { getLocationBranding } from '@/lib/location-branding'
 import ChooserEditorForm from '@/components/ChooserEditorForm'
 import PageSwitcher from '@/components/landing-page/PageSwitcher'
 import { isActiveOrgAdmin } from '@/lib/org-admin'
+import { logWarn } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
 
@@ -111,13 +112,18 @@ export default async function LandingPageSettingsPage(props) {
     )
   }
 
-  const [settingsRes, eventTypesRes, eventsRes, brand] = await Promise.all([
+  const [settingsRes, eventTypesRes, eventsRes, brand, locRes] = await Promise.all([
     db.from('landing_page_settings').select('*').eq('location_id', selectedId).maybeSingle(),
     db.from('event_types').select('id, name, slug').eq('location_id', selectedId).eq('active', true).order('name'),
     db.from('race_events').select('id, name, slug, kind').eq('location_id', selectedId).eq('active', true).order('race_date', { ascending: false }),
     // W1.S1b — the studio's brand for the editor's defaults and hints.
     getLocationBranding(db, selectedId),
+    // The paid-trial block editor shows the product picker for the studio's rail.
+    db.from('locations').select('membership_source').eq('id', selectedId).maybeSingle(),
   ])
+  if (locRes?.error) {
+    logWarn('landing-page-settings', 'membership_source unreadable; editor falls back to Glofox fields', { locationId: selectedId, code: locRes.error.code })
+  }
   const selectedPage = pages.find((p) => p.location_id === selectedId) || null
 
   return (
@@ -137,6 +143,7 @@ export default async function LandingPageSettingsPage(props) {
       <LandingPageSettingsForm
         key={selectedId}
         locationId={selectedId}
+        membershipSource={locRes?.data?.membership_source || null}
         publicPath={selectedPage?.public_path || null}
         initialSettings={settingsRes.data || null}
         availableBookingTypes={eventTypesRes.data || []}
