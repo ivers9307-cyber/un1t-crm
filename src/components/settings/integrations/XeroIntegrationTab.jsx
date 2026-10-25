@@ -20,7 +20,13 @@ import XeroCallbackNotice from '@/components/settings/XeroCallbackNotice'
 // connection. The data is server-rendered, so Try again re-opens this tab.
 // XeroCallbackNotice: this tab is where GET /api/xero/callback lands by
 // default, so the connect's outcome (a code in the URL) is shown here.
-export default function XeroIntegrationTab({ location, connection, readFailed = false }) {
+//
+// INTEGONE.1 — hosted in the Integrations hub's Manage drawer too. There the
+// hub page already renders XeroCallbackNotice (showCallbackNotice=false, so
+// the outcome is not shown twice), the drawer re-reads its own context on
+// Try again (onRetry instead of the page href), and Connect bounces back to
+// the hub with this drawer open (returnTo).
+export default function XeroIntegrationTab({ location, connection, readFailed = false, showCallbackNotice = true, onRetry = null, returnTo = null }) {
   return (
     <div className="space-y-3">
       <div className="text-xs text-un1t-subtle">
@@ -28,11 +34,13 @@ export default function XeroIntegrationTab({ location, connection, readFailed = 
         when a car is marked completed, and to forward supplier-invoice docs into Xero's
         Bills inbox via auto-OCR.
       </div>
-      <XeroCallbackNotice />
+      {showCallbackNotice && <XeroCallbackNotice />}
       {readFailed ? (
-        <ReadFailedNote what="this location's Xero connection" href={`/settings/locations/${location.id}?tab=xero`} />
+        onRetry
+          ? <ReadFailedNote what="this location's Xero connection" onRetry={onRetry} />
+          : <ReadFailedNote what="this location's Xero connection" href={`/settings/locations/${location.id}?tab=xero`} />
       ) : (
-        <XeroLocationCard location={location} connection={connection || null} />
+        <XeroLocationCard location={location} connection={connection || null} returnTo={returnTo} />
       )}
     </div>
   )

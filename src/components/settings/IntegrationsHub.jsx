@@ -31,17 +31,24 @@
 // key is pasted on that page and a second connect form for it would be
 // a second place to get the key wrong.
 //
-// Every action is a DEEP LINK into an existing surface — the per-location
-// integrations tab (/settings/locations/<id>?tab=<key>), the email-domain
-// wizard, or the billing page — no new mutation surface here, and the old
-// tabs are untouched.
+// INTEGONE.1 — the hub is the ONLY integrations surface. Every per-location
+// card's Manage opens the drawer (IntegrationsHubDrawer), which hosts that
+// provider's FULL tab (the ones that used to live only on
+// /settings/locations/<id>); nothing links back out to it. Two cards joined
+// for the settings that existed only there: Membership source (first in tier
+// 1, since Glofox and un1t.online hang off it) and Payments. A drawer is also
+// a URL, /settings/integrations-hub?manage=<cardKey>&location=<id>
+// (hubManageHref): the hub opens it on load when that card is on screen for
+// this viewer, ignores it otherwise, and clears it on close. The email-domain
+// wizard, billing and Shelly stay deep links into the surface that owns them.
 
-import { createContext, useCallback, useContext, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import {
   Zap, MessageCircle, Landmark, Megaphone, Plug,
   Music2, Bot, Mail, Bell, DoorOpen, Snowflake,
-  CreditCard, FileCheck, Activity,
+  CreditCard, FileCheck, Activity, Users, Wallet,
 } from 'lucide-react'
 import { Instagram as InstagramIcon } from '@/components/icons/InstagramIcon'
 import { buttonClasses } from '@/components/ui'
@@ -404,6 +411,70 @@ function SectionHead({ title, sub, hidden }) {
   )
 }
 
+// ── Membership source + Payments (INTEGONE.1) ──
+const SOURCE_LABELS = { glofox: 'Glofox', un1t_online: 'un1t.online', un1t: 'un1t', none: 'None' }
+const MEMBERSHIP_CHIP_LABELS = {
+  connected: 'Configured',
+  action_needed: 'Action needed',
+  not_connected: 'None set',
+  unknown: 'Could not load',
+}
+
+function membershipDetail(r) {
+  const label = SOURCE_LABELS[r.source] || r.source || 'Unknown'
+  switch (r.state) {
+    case 'configured': return `${label} · configured`
+    case 'unconfigured':
+      return r.missing?.includes('provider')
+        ? `${label} · not available yet`
+        : `${label} · missing ${(r.missing || []).join(', ') || 'setup'}`
+    case 'none': return 'None (lead CRM only)'
+    default: return 'Could not load just now'
+  }
+}
+
+function paymentsDetail(r) {
+  if (r.provider === 'stripe_connect') {
+    return r.hasStripeAccount ? 'Stripe Connect · account connected' : 'Stripe Connect · onboarding not finished'
+  }
+  return 'Revolut · platform merchant, no setup needed'
+}
+
+/**
+ * INTEGONE.1 — may the hub open `cardKey`'s drawer for `locationId` from the
+ * URL? Only when that card (and, for per-row cards, that location's row) is on
+ * screen for this viewer and readable: a drawer opened over an unread row is
+ * an action on a state we could not read (HUBREAD.1). Anything else is
+ * ignored, never an error. Pure.
+ */
+export function canOpenFromUrl(data, isMaster, cardKey, locationId) {
+  if (!data || !cardKey || !locationId) return false
+  if (!(data.locations || []).some((l) => l.id === locationId)) return false
+  const rowOf = (arr) => (arr || []).find((r) => r.locationId === locationId) || null
+  const readableRow = (arr) => {
+    const r = rowOf(arr)
+    return !!r && r.status !== 'unknown'
+  }
+  const readableCard = (arr) => !(arr || []).some((r) => r.status === 'unknown')
+  switch (cardKey) {
+    case 'membership-source': return readableRow(data.membershipSource)
+    case 'payments': return readableRow(data.payments)
+    case 'glofox': return readableRow(data.glofox)
+    case 'whatsapp': return readableRow(data.whatsapp)
+    case 'un1t-online': {
+      const r = rowOf(data.un1t_online)
+      return !!r && r.status !== 'unknown' && (r.status !== 'not_connected' || r.offerConnect === true)
+    }
+    case 'instagram': return readableCard(data.instagram)
+    case 'xero': return readableCard(data.xero)
+    case 'ads': return readableCard(data.ads)
+    case 'unifi': return isMaster && readableRow(data.unifi)
+    case 'climate': return isMaster && readableRow(data.climate)
+    case 'bca': return isMaster && readableRow(data.bca)
+    default: return false
+  }
+}
+
 const DOT = {
   error: 'bg-red-600',
   warning: 'bg-amber-600',
@@ -423,6 +494,54 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
   // The per-card Manage drawer. Keyed by (cardKey, locationId) — Ads/IG are
   // per-location, so the drawer always targets one location's connection.
   const [managing, setManaging] = useState(null)
+
+  // INTEGONE.1 — a hosted tab that saves with router.refresh() re-renders this
+  // force-dynamic page, which hands a NEW `data` prop down. Take it (the card
+  // chips re-grade) and bump refreshKey so an open drawer re-reads its context.
+  const [refreshKey, setRefreshKey] = useState(0)
+  const seenInitial = useRef(initialData)
+  useEffect(() => {
+    if (seenInitial.current === initialData) return
+    seenInitial.current = initialData
+    setData(initialData)
+    setRefreshKey((k) => k + 1)
+  }, [initialData])
+
+  // INTEGONE.1 — ?manage=<cardKey>&location=<id> opens that drawer (on load,
+  // and on an in-page link such as an attention row's Open). A card this
+  // viewer cannot open there is ignored. Each param pair is acted on once, so
+  // a payload refresh never re-opens a drawer the viewer closed.
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+  const manageParam = searchParams?.get('manage') || null
+  const locationParam = searchParams?.get('location') || null
+  const handledParams = useRef(null)
+  useEffect(() => {
+    const key = manageParam && locationParam ? `${manageParam}|${locationParam}` : null
+    if (key === handledParams.current) return
+    handledParams.current = key
+    if (!key) return
+    if (canOpenFromUrl(data, isMaster, manageParam, locationParam)) {
+      setManaging({ cardKey: manageParam, locationId: locationParam })
+    }
+  }, [manageParam, locationParam, data, isMaster])
+
+  // Closing clears the drawer's params (any others, such as the Xero callback
+  // codes, are left alone). Held in refs so onClose keeps one identity while
+  // the drawer is open: the drawer's focus trap re-arms when it changes.
+  const navRef = useRef({ searchParams, router, pathname })
+  useEffect(() => { navRef.current = { searchParams, router, pathname } }, [searchParams, router, pathname])
+  const closeDrawer = useCallback(() => {
+    setManaging(null)
+    const { searchParams: sp, router: r, pathname: path } = navRef.current
+    if (!sp || !(sp.get('manage') || sp.get('location'))) return
+    const next = new URLSearchParams(sp.toString())
+    next.delete('manage')
+    next.delete('location')
+    const qs = next.toString()
+    r?.replace(qs ? `${path}?${qs}` : (path || '/settings/integrations-hub'), { scroll: false })
+  }, [])
 
   // HUBREAD.1 — the shared "Try again" state (see RetryButton).
   const [retryState, setRetryState] = useState({ pending: false, failedId: null })
@@ -463,6 +582,8 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
   // registry is the registry attention row's job, not a card of "Try again".
   const un1tOnline = (data.un1t_online || []).filter((r) => inScope(r.locationId) && r.status !== 'unknown'
     && (r.status !== 'not_connected' || r.offerConnect === true))
+  const membershipSource = (data.membershipSource || []).filter((r) => inScope(r.locationId))
+  const payments = (data.payments || []).filter((r) => inScope(r.locationId))
   const whatsapp = (data.whatsapp || []).filter((r) => inScope(r.locationId))
   const instagram = (data.instagram || []).filter((r) => inScope(r.locationId))
   const xero = (data.xero || []).filter((r) => inScope(r.locationId))
@@ -614,6 +735,43 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
       />
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
 
+        {/* Membership source (INTEGONE.1) — which system holds memberships at
+            each location. First: Glofox and un1t.online hang off it. */}
+        {membershipSource.length > 0 && (
+          <HubCard
+            icon={Users}
+            title="Membership source"
+            locTag={scopeTag(membershipSource)}
+            provider="Where memberships, credits and bookings are read from"
+            chip={(() => {
+              const s = worstOf(membershipSource.map((r) => r.status))
+              return <StatusChip status={s} label={MEMBERSHIP_CHIP_LABELS[s]} />
+            })()}
+          >
+            <div className="divide-y divide-un1t-border border-t border-un1t-border text-sm">
+              {membershipSource.map((r) => (
+                <div key={r.locationId} className="flex items-center gap-3 py-2">
+                  <span className="font-semibold min-w-[88px]">{nameById[r.locationId]}</span>
+                  <span className={`flex-1 text-xs truncate ${r.status === 'unknown' || r.status === 'action_needed' ? 'text-amber-700' : 'text-un1t-subtle'}`}>
+                    {membershipDetail(r)}
+                  </span>
+                  {r.status === 'unknown' ? (
+                    <RetryButton id={`membership-source-${r.locationId}`} />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setManaging({ cardKey: 'membership-source', locationId: r.locationId })}
+                      className={linkBtn(r.status === 'action_needed')}
+                    >
+                      Manage
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </HubCard>
+        )}
+
         {/* Glofox — per-location rows */}
         <HubCard
           icon={Zap}
@@ -636,7 +794,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
                 </span>
                 <button
                   type="button"
-                  onClick={() => setManaging({ cardKey: 'glofox', locationId: r.locationId, initial: r })}
+                  onClick={() => setManaging({ cardKey: 'glofox', locationId: r.locationId })}
                   className={linkBtn(r.status === 'not_connected')}
                 >
                   {r.status === 'not_connected' ? 'Connect' : 'Manage'}
@@ -648,7 +806,8 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
         </HubCard>
 
         {/* un1t.online — Hatch Street's gym platform; a read-only sync with an
-            API token pasted on the location's un1t.online tab (deep link, no drawer) */}
+            API token pasted in its Manage drawer (INTEGONE.1: the drawer hosts
+            the location's un1t.online tab) */}
         {un1tOnline.length > 0 && (
           <HubCard
             icon={Activity}
@@ -671,9 +830,13 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
                       </>
                     )}
                   </span>
-                  <Link href={r.href} className={linkBtn(r.status === 'not_connected')}>
-                    {r.status === 'not_connected' ? 'Connect' : 'Open'}
-                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => setManaging({ cardKey: 'un1t-online', locationId: r.locationId })}
+                    className={linkBtn(r.status === 'not_connected')}
+                  >
+                    {r.status === 'not_connected' ? 'Connect' : 'Manage'}
+                  </button>
                 </div>
               ))}
             </div>
@@ -703,7 +866,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
                   </span>
                   <button
                     type="button"
-                    onClick={() => setManaging({ cardKey: 'whatsapp', locationId: r.locationId, initial: r })}
+                    onClick={() => setManaging({ cardKey: 'whatsapp', locationId: r.locationId })}
                     className={linkBtn(r.numbers.length === 0)}
                   >
                     {r.numbers.length === 0 ? 'Connect' : 'Manage'}
@@ -818,7 +981,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
               <div className="flex gap-2 pt-1">
                 <button
                   type="button"
-                  onClick={() => setManaging({ cardKey: 'xero', locationId: r.locationId, initial: r })}
+                  onClick={() => setManaging({ cardKey: 'xero', locationId: r.locationId })}
                   className={linkBtn(r.status === 'error')}
                 >
                   {r.status === 'error' ? 'Reconnect' : 'Manage'}
@@ -827,6 +990,33 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
             </div>
           ))}
         </HubCard>
+
+        {/* Payments (INTEGONE.1) — the class-funnel intro-offer rail per location */}
+        {payments.length > 0 && (
+          <HubCard
+            icon={Wallet}
+            title="Payments"
+            locTag={scopeTag(payments)}
+            provider="Class-funnel intro offer · Revolut or Stripe Connect"
+            chip={<StatusChip status={worstOf(payments.map((r) => r.status))} />}
+          >
+            <div className="divide-y divide-un1t-border border-t border-un1t-border text-sm">
+              {payments.map((r) => (
+                <div key={r.locationId} className="flex items-center gap-3 py-2">
+                  <span className="font-semibold min-w-[88px]">{nameById[r.locationId]}</span>
+                  <span className="flex-1 text-xs text-un1t-subtle truncate">{paymentsDetail(r)}</span>
+                  <button
+                    type="button"
+                    onClick={() => setManaging({ cardKey: 'payments', locationId: r.locationId })}
+                    className={linkBtn(r.status === 'not_connected')}
+                  >
+                    Manage
+                  </button>
+                </div>
+              ))}
+            </div>
+          </HubCard>
+        )}
 
         {/* Meta Ads */}
         <HubCard
@@ -1046,7 +1236,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
               <button
                 key={r.locationId}
                 type="button"
-                onClick={() => setManaging({ cardKey: 'unifi', locationId: r.locationId, initial: r })}
+                onClick={() => setManaging({ cardKey: 'unifi', locationId: r.locationId })}
                 className={linkBtn()}
               >
                 Manage
@@ -1081,7 +1271,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
               <button
                 key={r.locationId}
                 type="button"
-                onClick={() => setManaging({ cardKey: 'climate', locationId: r.locationId, initial: r })}
+                onClick={() => setManaging({ cardKey: 'climate', locationId: r.locationId })}
                 className={linkBtn()}
               >
                 Manage
@@ -1122,7 +1312,7 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
             <div className="flex gap-2 pt-1 mt-auto">
               <button
                 type="button"
-                onClick={() => setManaging({ cardKey: 'bca', locationId: bca[0].locationId, initial: bca[0] })}
+                onClick={() => setManaging({ cardKey: 'bca', locationId: bca[0].locationId })}
                 className={linkBtn()}
               >
                 Manage
@@ -1150,27 +1340,25 @@ export default function IntegrationsHub({ data: initialData, isMaster = false, c
       )}
 
       <p className="mt-10 pt-4 border-t border-un1t-border text-xs text-un1t-muted max-w-3xl">
-        Glofox, UniFi, Climate, BCA, Meta Ads, Instagram, Xero and WhatsApp now connect and
-        disconnect right here in a Manage panel — secrets stay write-only (leave a field blank to
-        keep it); Xero connects over its OAuth redirect and WhatsApp over Meta&apos;s guided signup,
-        with the heavy config one click away. The remaining cards (email delivery, billing)
-        deep-link into the surface that owns them. The plan &amp; wallet strip itself is read-only.
+        Every location&apos;s integrations are managed right here: Manage opens that location&apos;s
+        full settings for the integration, from credentials to Xero&apos;s accounts sync, the studio&apos;s
+        WhatsApp numbers, the climate device table and the BCA document slots. Secrets stay
+        write-only (leave a field blank to keep it). Email delivery, billing and Shelly plugs
+        open the page that owns them. The plan &amp; wallet strip itself is read-only.
       </p>
 
-      {/* Per-card Manage drawer — Ads/Instagram (Phase 1) + Glofox/
-          UniFi/Climate/BCA credential forms (Phase 2) + Xero/WhatsApp
-          connect/disconnect (Phase 3). `initial` is the matched hub row so
-          the panel prefills state (Xero tenant/status, WhatsApp numbers) —
-          absent for a not-yet-connected Xero location; `isMaster` gates the
-          master-only credential providers read-only. */}
+      {/* Per-card Manage drawer (INTEGONE.1): hosts the location's full tab
+          for the card, reading its own context from
+          GET /api/integrations/hub/locations/[id] (roles judged there). Keyed
+          so a different card or location mounts a fresh drawer. */}
       {managing && (
         <IntegrationsHubDrawer
+          key={`${managing.cardKey}|${managing.locationId}`}
           cardKey={managing.cardKey}
           locationId={managing.locationId}
           locationName={nameById[managing.locationId] || null}
-          initial={managing.initial}
-          isMaster={isMaster}
-          onClose={() => setManaging(null)}
+          refreshKey={refreshKey}
+          onClose={closeDrawer}
           onChanged={refetchHub}
         />
       )}

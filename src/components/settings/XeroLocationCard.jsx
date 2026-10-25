@@ -32,7 +32,12 @@ function fmtRelative(d) {
   return fmt(d)
 }
 
-export default function XeroLocationCard({ location, connection }) {
+// `returnTo` (optional, INTEGONE.1): an internal path the OAuth callback
+// bounces back to (the Integrations hub's drawer passes its own URL, so the
+// connect lands back on the hub with the Xero drawer open). The connect route
+// and callback validate it against the return-to allowlist
+// (src/lib/xero/return-to.js); omitted, the callback's default applies.
+export default function XeroLocationCard({ location, connection, returnTo = null }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
 
@@ -45,7 +50,9 @@ export default function XeroLocationCard({ location, connection }) {
   const [contactsResult, setContactsResult] = useState(null)
 
   const onConnect = () => {
-    window.location.href = `/api/xero/connect?location_id=${location.id}`
+    const q = new URLSearchParams({ location_id: location.id })
+    if (returnTo) q.set('return_to', returnTo)
+    window.location.href = `/api/xero/connect?${q.toString()}`
   }
 
   const onDisconnect = async () => {

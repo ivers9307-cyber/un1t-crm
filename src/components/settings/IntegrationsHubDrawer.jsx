@@ -1,146 +1,135 @@
 'use client'
 
-// INTEG hub inline #4 — the per-card "Manage" slide-over.
+// INTEG hub inline #4 / INTEGONE.1 — the per-card "Manage" slide-over.
 //
-// PHASE 1 hosted the EXISTING per-location surfaces inline:
-//   ads       → AdsIntegrationTab (saves via PUT /api/settings/ads)
-//   instagram → ConnectionsSection (embedded)
+// The hub is the ONLY integrations surface. This drawer hosts the FULL
+// per-provider tab each card manages, the same components the per-location
+// Integrations tab (/settings/locations/[id], LocationIntegrations.jsx) used,
+// unchanged, so nothing here links back out for "the rest of" an integration.
+// The thin credential forms (IntegrationCredForm + PROVIDER_SPECS), the
+// compact Xero / WhatsApp panels and the "Advanced settings" footer link are
+// gone: they were a second, partial copy of those tabs.
 //
-// PHASE 3 adds two compact connect/disconnect panels that reuse EXISTING
-// routes verbatim — inventing no new routing/activation logic:
-//   xero      → Connect/Reconnect kicks off the full-page OAuth redirect
-//               (GET /api/xero/connect?location_id=…&return_to=/settings/
-//               integrations-hub — the return_to guard shipped in Phase-3
-//               part 1); Disconnect → POST /api/xero/disconnect.
-//   whatsapp  → WAORGNUMBER.1: the organisation's numbers with a per-studio
-//               on/off switch and default radio (StudioWhatsAppNumbers), with a
-//               link to the organisation's page (/settings/whatsapp-numbers),
-//               where numbers are connected, edited and removed. (It used to
-//               host the Embedded Signup card and a per-number Disconnect;
-//               both routes moved to the organisation.) The studio's own
-//               controls stay on the "Manage numbers" deep-link.
-//               WhatsApp is the LIVE customer channel — no send/routing code
-//               is touched here.
+// CONTEXT. Most hosted tabs take what that page assembled for them on the
+// server (the shaped location row, the Xero connection, the BCA sample car,
+// the membership-source state) plus props derived from the viewer's role AT
+// this location. The drawer reads all of it from ONE route when it opens,
+// GET /api/integrations/hub/locations/[id] (src/lib/integrations-hub-location.js),
+// which judges the roles server-side, so the drawer never reasons about them:
+//   loading  → a spinner
+//   error    → "Could not load …" with Try again (ReadFailedNote), and no tab:
+//              a tab rendered over unread data is how a working connection
+//              gets overwritten (CHANNELREAD.1)
+//   404      → not available to this viewer (owner here or master only)
+//   ready    → the hosted tab, with the props the old page gave it
+// Ads and Instagram need no context: they host as they did in Phase 1.
 //
-// PHASE 2 adds first-class inline Manage forms for the credential-bearing
-// providers stored on the `locations` row, saving through ONE new
-// service-role route — PUT/DELETE /api/locations/[id]/integrations/[provider]:
-//   glofox   (Tier 1, ADMIN_ROLES)  — branch/keys/token/webhook secret
-//   unifi    (Tier 3, MASTER-ONLY)  — host/token/policy ids
-//   climate  (Tier 3, MASTER-ONLY)  — Sensibo + LG ThinQ CREDS (device table
-//                                     stays on the Advanced-settings deep-link)
-//   bca      (Tier 3, MASTER-ONLY)  — BCA email + templates (doc slots stay
-//                                     on the deep-link; bca_config has NO secret)
+// REFRESH. A hosted tab that saves either calls onChanged (Ads, Instagram,
+// WhatsApp) or router.refresh() (the rest, as on the old page). Both reach
+// here: onChanged re-reads this context and asks the hub to re-grade its
+// cards; a router.refresh() re-renders the hub page, whose new payload the hub
+// hands down as a new `refreshKey`, and the context is re-read quietly then
+// too (the tab stays mounted; a failed quiet re-read keeps the last good one).
 //
-// WRITE-ONLY secrets: secret inputs render BLANK with a "currently set / not
-// set" caption — a blank field KEEPS the stored secret (the route's
-// integration-secret-merge guard), a typed value replaces it. The hub only
-// ever receives has_* booleans + non-secret values (never a token). Master-
-// only providers render READ-ONLY for a non-master viewer. On a successful
-// save/disconnect the drawer calls onChanged() so the hub re-grades from one
-// scoped GET /api/integrations/hub.
+// WhatsApp is the LIVE customer channel. This only HOSTS the existing studio
+// tab; no send, routing or number-resolution code is touched here.
 //
-// Accessibility (unchanged from Phase 1): role=dialog + aria-modal, ESC
-// closes, focus trap, focus restored to the opener, body-scroll lock,
-// motion-safe transitions, type="button" on every non-submit control.
+// Accessibility (unchanged): role=dialog + aria-modal, ESC closes, focus trap,
+// focus restored to the opener, body-scroll lock, motion-safe transitions,
+// type="button" on every non-submit control.
 
-import { useEffect, useId, useRef, useState } from 'react'
-import Link from 'next/link'
-import { X, Save, Loader2, Check, AlertCircle, Unplug, Plug, RefreshCw } from 'lucide-react'
-import { buttonClasses } from '@/components/ui'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { X, Loader2 } from 'lucide-react'
+import ReadFailedNote from './ReadFailedNote'
 import AdsIntegrationTab from './integrations/AdsIntegrationTab'
 import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
-import { NO_ACTIVE_NUMBER_NOTE, BROKEN_TOKEN_HINT } from '@/lib/whatsapp-number-copy'
-import { ORG_NUMBERS_PAGE } from '@/lib/org-whatsapp-numbers-page'
-import StudioWhatsAppNumbers from '@/components/settings/whatsapp/StudioWhatsAppNumbers'
+import GlofoxIntegrationTab from './integrations/GlofoxIntegrationTab'
+import Un1tOnlineIntegrationTab from './integrations/Un1tOnlineIntegrationTab'
+import PaymentsIntegrationTab from './integrations/PaymentsIntegrationTab'
+import XeroIntegrationTab from './integrations/XeroIntegrationTab'
+import WhatsAppIntegrationTab from './integrations/WhatsAppIntegrationTab'
+import UnifiIntegrationTab from './integrations/UnifiIntegrationTab'
+import AcDevicesIntegrationTab from './integrations/AcDevicesIntegrationTab'
+import BcaIntegrationTab from './integrations/BcaIntegrationTab'
+import MembershipSourceCard from './MembershipSourceCard'
+import { hubManageHref } from '@/lib/integrations-hub-links'
 
-// cardKey → { title, routeProvider, tabKey, masterOnly, intro, fields }.
-// `fields`: name (payload key) + label + kind. Secret fields carry has()
-// (presence off the hub row); non-secret fields carry from() (prefill value).
-const FORM_SPECS = {
-  glofox: {
-    title: 'Glofox',
-    routeProvider: 'glofox',
-    tabKey: 'glofox',
-    masterOnly: false,
-    intro:
-      'Booking + member source. The three-header auth (Branch ID + API Key + API Token) is required by Glofox v3; the webhook secret signs incoming Glofox webhooks. Leave a secret blank to keep the stored value.',
-    fields: [
-      { name: 'branch_id', label: 'Branch ID', mono: true, from: (i) => i?.branchId },
-      { name: 'api_key', label: 'API Key', secret: true, has: (i) => i?.hasApiKey },
-      { name: 'api_token', label: 'API Token', secret: true, has: (i) => i?.hasApiToken },
-      { name: 'webhook_secret', label: 'Webhook Secret', secret: true, has: (i) => i?.hasWebhookSecret },
-      { name: 'namespace', label: 'Namespace', mono: true, from: (i) => i?.namespace, hint: 'Required for /Analytics/report queries. Glofox provides this on request.' },
-    ],
-    advancedHint: 'Trial membership + hidden-class settings live under Advanced settings.',
-  },
-  unifi: {
-    title: 'UniFi Access',
-    routeProvider: 'unifi',
-    tabKey: 'unifi',
-    masterOnly: true,
-    intro:
-      'Door-access controller. Host must be reachable from Vercel (Cloudflare Tunnel). API token needs view:user / edit:user / view:policy. Leave the token blank to keep the stored value.',
-    fields: [
-      { name: 'host', label: 'Host', mono: true, from: (i) => i?.host, placeholder: 'https://unifi.example.com:12445' },
-      { name: 'api_token', label: 'API Token', secret: true, has: (i) => i?.hasToken },
-      { name: 'staff_policy_id', label: 'Staff policy ID', mono: true, from: (i) => i?.staffPolicyId },
-      { name: 'manager_policy_id', label: 'Manager policy ID', mono: true, from: (i) => i?.managerPolicyId },
-      { name: 'allow_self_signed', label: 'Allow self-signed certs', toggle: true, from: (i) => i?.allowSelfSigned === true },
-    ],
-  },
-  climate: {
-    title: 'Climate devices',
-    routeProvider: 'ac',
-    tabKey: 'ac-devices',
-    masterOnly: true,
-    intro:
-      'Sensibo + LG ThinQ credentials for this location. Leave a secret blank to keep the stored value. Adding/removing the device units themselves stays under Advanced settings.',
-    fields: [
-      { name: 'sensibo_api_key', label: 'Sensibo API key', secret: true, has: (i) => i?.sensibo?.hasKey },
-      { name: 'thinq_pat', label: 'LG ThinQ PAT', secret: true, has: (i) => i?.thinq?.hasPat },
-      { name: 'thinq_client_id', label: 'ThinQ Client ID', mono: true, from: (i) => i?.thinq?.clientId, hint: 'uuid4 — auto-generated server-side on first save if left blank.' },
-      { name: 'thinq_country_code', label: 'ThinQ Country code', mono: true, maxLength: 8, from: (i) => i?.thinq?.countryCode || 'IE' },
-    ],
-    advancedHint: 'The per-unit device table (discover / enable / defaults) lives under Advanced settings.',
-  },
-  bca: {
-    title: 'BCA Submit',
-    routeProvider: 'bca',
-    tabKey: 'bca',
-    masterOnly: true,
-    intro:
-      'BCA VAT-claim email. Send-from must be a Postmark-approved sender. No secrets are stored here. The document-slot labels stay under Advanced settings.',
-    fields: [
-      { name: 'send_from', label: 'Send from', from: (i) => i?.sendFrom, placeholder: 'vat-claims@ccfautos.com' },
-      { name: 'send_to', label: 'Send to (BCA recipient)', from: (i) => i?.sendTo, placeholder: 'vatclaims@bca.example' },
-      { name: 'cc', label: 'CC (optional)', from: (i) => i?.cc, placeholder: 'ops@ccfautos.com' },
-      { name: 'subject_template', label: 'Subject template', mono: true, from: (i) => i?.subjectTemplate },
-      { name: 'body_template', label: 'Body template', mono: true, textarea: true, from: (i) => i?.bodyTemplate },
-    ],
-    advancedHint: 'The document-slot labels + live preview live under Advanced settings.',
-  },
+export const DRAWER_TITLES = {
+  'membership-source': 'Membership source',
+  glofox: 'Glofox',
+  'un1t-online': 'un1t.online',
+  payments: 'Payments',
+  whatsapp: 'WhatsApp',
+  instagram: 'Instagram',
+  xero: 'Xero',
+  ads: 'Meta Ads',
+  unifi: 'UniFi Access',
+  climate: 'Climate devices',
+  bca: 'BCA Submit',
 }
 
-const TITLES = { ads: 'Meta Ads', instagram: 'Instagram', xero: 'Xero', whatsapp: 'WhatsApp' }
-const TAB_KEY = { ads: 'ads', instagram: 'instagram', xero: 'xero', whatsapp: 'whatsapp' }
-// Phase 3 — the footer deep-link label for the compact connect/disconnect
-// panels: the drawer handles the common connect/disconnect inline, and the
-// heavy per-provider config stays one click away in the existing tab.
-const DEEP_LINK_LABEL = { xero: 'Xero data & accounts', whatsapp: 'Manage numbers' }
+// Cards whose hosted component needs no server context.
+const NO_CONTEXT = new Set(['ads', 'instagram'])
+
+export const hubLocationContextUrl = (locationId) =>
+  `/api/integrations/hub/locations/${encodeURIComponent(locationId)}`
 
 const FOCUSABLE =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
 
-export default function IntegrationsHubDrawer({ cardKey, locationId, locationName, initial, isMaster = false, onClose, onChanged }) {
+export default function IntegrationsHubDrawer({ cardKey, locationId, locationName, refreshKey = 0, onClose, onChanged }) {
   const panelRef = useRef(null)
   const titleId = useId()
   const [entered, setEntered] = useState(false)
+  const needsContext = !NO_CONTEXT.has(cardKey)
+  // status: loading | ready | error | notFound
+  const [ctx, setCtx] = useState({ status: needsContext ? 'loading' : 'ready', data: null })
+  const seq = useRef(0)
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => setEntered(true))
     return () => cancelAnimationFrame(raf)
   }, [])
+
+  // mode: 'initial' (shows the spinner), 'retry' (Try again: the note stays
+  // mounted so it can say "Still could not load"), 'refresh' (after a save:
+  // the tab stays mounted, and a failure keeps the last good context).
+  const load = useCallback(async (mode = 'initial') => {
+    if (!needsContext) return true
+    const mine = ++seq.current
+    if (mode === 'initial') setCtx({ status: 'loading', data: null })
+    let res = null
+    let body = null
+    try {
+      res = await fetch(hubLocationContextUrl(locationId), { credentials: 'same-origin', cache: 'no-store' })
+      body = await res.json().catch(() => null)
+    } catch {
+      res = null
+    }
+    if (mine !== seq.current) return false // a newer read owns the state
+    if (res?.ok && body?.success && body.data) {
+      setCtx({ status: 'ready', data: body.data })
+      return true
+    }
+    if (mode === 'refresh') return false
+    setCtx({ status: res?.status === 404 ? 'notFound' : 'error', data: null })
+    return false
+  }, [locationId, needsContext])
+
+  useEffect(() => { load('initial') }, [load])
+
+  // The hub page re-rendered (a hosted tab called router.refresh()).
+  const lastRefreshKey = useRef(refreshKey)
+  useEffect(() => {
+    if (refreshKey === lastRefreshKey.current) return
+    lastRefreshKey.current = refreshKey
+    load('refresh')
+  }, [refreshKey, load])
+
+  const handleChanged = useCallback(() => {
+    onChanged?.()
+    load('refresh')
+  }, [onChanged, load])
 
   useEffect(() => {
     const panel = panelRef.current
@@ -185,9 +174,8 @@ export default function IntegrationsHubDrawer({ cardKey, locationId, locationNam
     }
   }, [onClose])
 
-  const spec = FORM_SPECS[cardKey]
-  const title = spec?.title || TITLES[cardKey] || 'Integration'
-  const tabKey = spec?.tabKey || TAB_KEY[cardKey]
+  const title = DRAWER_TITLES[cardKey] || 'Integration'
+  const where = locationName || 'this location'
 
   return (
     <>
@@ -202,7 +190,7 @@ export default function IntegrationsHubDrawer({ cardKey, locationId, locationNam
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`fixed inset-y-0 right-0 z-50 w-[540px] max-w-[94vw] flex flex-col bg-un1t-bg border-l border-un1t-border shadow-2xl outline-none transform motion-safe:transition-transform motion-safe:duration-200 ${entered ? 'translate-x-0' : 'translate-x-full'}`}
+        className={`fixed inset-y-0 right-0 z-50 w-[720px] max-w-[96vw] flex flex-col bg-un1t-bg border-l border-un1t-border shadow-2xl outline-none transform motion-safe:transition-transform motion-safe:duration-200 ${entered ? 'translate-x-0' : 'translate-x-full'}`}
       >
         <div className="flex items-start justify-between gap-3 border-b border-un1t-border px-5 py-3">
           <div className="min-w-0">
@@ -226,348 +214,95 @@ export default function IntegrationsHubDrawer({ cardKey, locationId, locationNam
           {cardKey === 'instagram' && (
             <ConnectionsSection locationId={locationId} locationName={locationName} embedded onChanged={onChanged} />
           )}
-          {cardKey === 'xero' && (
-            <XeroPanel
-              locationId={locationId}
-              locationName={locationName}
-              initial={initial}
-              onChanged={onChanged}
-              onDisconnected={onClose}
-            />
+
+          {needsContext && ctx.status === 'loading' && (
+            <div role="status" className="flex items-center gap-2 text-xs text-un1t-subtle py-6">
+              <Loader2 size={14} className="animate-spin" aria-hidden="true" /> {`Loading ${title} settings…`}
+            </div>
           )}
-          {cardKey === 'whatsapp' && (
-            <WhatsAppPanel locationId={locationId} onChanged={onChanged} />
+          {needsContext && ctx.status === 'error' && (
+            <ReadFailedNote what={`${title} for ${where}`} onRetry={() => load('retry')} />
           )}
-          {spec && (
-            <IntegrationCredForm
-              spec={spec}
-              locationId={locationId}
-              initial={initial}
-              readOnly={spec.masterOnly && !isMaster}
-              onChanged={onChanged}
-              onDisconnected={onClose}
+          {needsContext && ctx.status === 'notFound' && (
+            <p className="text-xs text-un1t-subtle bg-un1t-surface border border-un1t-border rounded-md px-3 py-2">
+              {`${title} for ${where} is managed by an owner at that location or a master. Ask one of them to make changes here.`}
+            </p>
+          )}
+          {needsContext && ctx.status === 'ready' && ctx.data && (
+            <HostedTab
+              cardKey={cardKey}
+              context={ctx.data}
+              onChanged={handleChanged}
+              onRetry={() => load('retry')}
             />
           )}
         </div>
-
-        {tabKey && (
-          <div className="border-t border-un1t-border px-5 py-2.5">
-            <Link
-              href={`/settings/locations/${locationId}?tab=${tabKey}`}
-              className={buttonClasses({ variant: 'secondary', size: 'sm' })}
-            >
-              {DEEP_LINK_LABEL[cardKey] || 'Advanced settings'}
-            </Link>
-          </div>
-        )}
       </aside>
     </>
   )
 }
 
-// ── The per-provider credential form (Phase 2) ──
-function IntegrationCredForm({ spec, locationId, initial, readOnly, onChanged, onDisconnected }) {
-  // Build initial input state: non-secret fields prefilled, secret fields BLANK.
-  const [values, setValues] = useState(() => {
-    const v = {}
-    for (const f of spec.fields) {
-      if (f.secret) v[f.name] = ''
-      else if (f.toggle) v[f.name] = !!(f.from ? f.from(initial) : false)
-      else v[f.name] = (f.from ? f.from(initial) : '') ?? ''
-    }
-    return v
-  })
-  const [saving, setSaving] = useState(false)
-  const [disconnecting, setDisconnecting] = useState(false)
-  const [error, setError] = useState(null)
-  const [savedAt, setSavedAt] = useState(null)
+// The hosted component per card, with exactly the props the old page's
+// LocationIntegrations gave it (roles from the server's `viewer` flags).
+function HostedTab({ cardKey, context, onChanged, onRetry }) {
+  const { location, xeroConnection, xeroReadFailed, sampleBcaCar, membershipSource, hasUn1tOnlineConnection } = context
+  const viewer = context.viewer || {}
+  if (!location) return null
 
-  const url = `/api/locations/${locationId}/integrations/${spec.routeProvider}`
-
-  function set(name, val) {
-    setValues((prev) => ({ ...prev, [name]: val }))
-  }
-
-  async function save() {
-    setSaving(true); setError(null); setSavedAt(null)
-    try {
-      const res = await fetch(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify(values),
-      })
-      const j = await res.json().catch(() => ({}))
-      if (!res.ok || j.success === false) {
-        setError(j.error || (j.issues && j.issues[0]?.message) || `Save failed (${res.status})`)
-        return
-      }
-      // Clear any typed secret from local state (never keep it around) — it's
-      // stored now and reads back as a presence boolean.
-      setValues((prev) => {
-        const next = { ...prev }
-        for (const f of spec.fields) if (f.secret) next[f.name] = ''
-        return next
-      })
-      setSavedAt(new Date())
-      onChanged?.()
-    } catch (e) {
-      setError(e.message || 'Network error')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function disconnect() {
-    if (!confirm(`Disconnect ${spec.title} for this location? Stored credentials are cleared and the connection is deactivated (not deleted). You can reconnect here anytime.`)) return
-    setDisconnecting(true); setError(null)
-    try {
-      const res = await fetch(url, { method: 'DELETE', credentials: 'same-origin' })
-      const j = await res.json().catch(() => ({}))
-      if (!res.ok || j.success === false) {
-        setError(j.error || `Disconnect failed (${res.status})`)
-        setDisconnecting(false)
-        return
-      }
-      onChanged?.()
-      onDisconnected?.()
-    } catch (e) {
-      setError(e.message || 'Network error')
-      setDisconnecting(false)
-    }
-  }
-
-  // Read-only view for a non-master viewer of a master-only provider.
-  if (readOnly) {
-    return (
-      <div className="space-y-4">
-        <p className="text-xs text-un1t-subtle">{spec.intro}</p>
-        <div className="rounded-md border border-un1t-border bg-un1t-surface px-3 py-2 text-xs text-un1t-subtle">
-          {spec.title} is master-only. You can see its status but only a master account can edit its credentials.
-        </div>
-        <dl className="space-y-2">
-          {spec.fields.map((f) => (
-            <div key={f.name} className="flex items-center justify-between gap-3 text-sm">
-              <dt className="text-un1t-subtle">{f.label}</dt>
-              <dd className="text-un1t-text font-mono text-xs">
-                {f.secret
-                  ? (f.has?.(initial) ? 'Set' : 'Not set')
-                  : f.toggle
-                    ? (f.from?.(initial) ? 'On' : 'Off')
-                    : (f.from?.(initial) || '—')}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </div>
-    )
-  }
-
-  return (
-    <div className="space-y-4">
-      <p className="text-xs text-un1t-subtle">{spec.intro}</p>
-
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
-          <AlertCircle size={12} className="mt-0.5" /> {error}
-        </div>
-      )}
-      {savedAt && !error && (
-        <div className="bg-green-500/10 border border-green-500/30 text-green-700 text-xs rounded-md p-2 inline-flex items-center gap-2">
-          <Check size={12} /> Saved at {savedAt.toLocaleTimeString()}
-        </div>
-      )}
-
-      {spec.fields.map((f) => {
-        if (f.toggle) {
-          return (
-            <div key={f.name} className="flex items-center justify-between border border-un1t-border rounded-md px-3 py-2">
-              <span className="text-sm text-un1t-text">{f.label}</span>
-              <button
-                type="button"
-                aria-pressed={!!values[f.name]}
-                onClick={() => set(f.name, !values[f.name])}
-                className={`w-10 h-5 rounded-full transition-colors ${values[f.name] ? 'bg-green-500' : 'bg-un1t-border'}`}
-              >
-                <div className={`w-4 h-4 rounded-full bg-white transition-transform ${values[f.name] ? 'translate-x-5' : 'translate-x-0.5'}`} />
-              </button>
-            </div>
-          )
-        }
+  switch (cardKey) {
+    case 'membership-source':
+      return <MembershipSourceCard locationId={location.id} membershipSource={membershipSource} canEdit={!!viewer.isOwnerOrMaster} />
+    case 'glofox':
+      return <GlofoxIntegrationTab location={location} canEdit={!!viewer.isOwnerOrMaster} />
+    case 'un1t-online': {
+      // UN1TSYNC.7's offer rule, kept from the old tab strip: a studio already
+      // on un1t.online, on 'none' (connecting selects it), or holding an active
+      // token (so it can always be disconnected). A Glofox studio is not offered it.
+      const source = location.membership_source ?? 'none'
+      if (!(hasUn1tOnlineConnection || source === 'un1t_online' || source === 'none')) {
         return (
-          <div key={f.name}>
-            <label className="block text-xs text-un1t-subtle mb-1">{f.label}</label>
-            {f.textarea ? (
-              <textarea
-                value={values[f.name]}
-                onChange={(e) => set(f.name, e.target.value)}
-                rows={6}
-                className={`w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text ${f.mono ? 'font-mono' : ''}`}
-              />
-            ) : (
-              <input
-                type="text"
-                value={values[f.name]}
-                onChange={(e) => set(f.name, e.target.value)}
-                maxLength={f.maxLength}
-                placeholder={f.secret ? (f.has?.(initial) ? '•••••• (leave blank to keep)' : 'Not set') : (f.placeholder || '')}
-                className={`w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text ${f.mono ? 'font-mono' : ''}`}
-              />
-            )}
-            {f.secret && (
-              <p className="text-[11px] text-un1t-muted mt-1">
-                {f.has?.(initial)
-                  ? 'Currently set. Leave blank to keep it, or enter a new value to replace it.'
-                  : 'Not set yet.'}
-              </p>
-            )}
-            {f.hint && <p className="text-[11px] text-un1t-muted mt-1">{f.hint}</p>}
-          </div>
+          <p className="text-xs text-un1t-subtle">
+            un1t.online is not offered here while this studio&apos;s membership source is Glofox. Change the membership source first.
+          </p>
         )
-      })}
-
-      {spec.advancedHint && <p className="text-[11px] text-un1t-muted">{spec.advancedHint}</p>}
-
-      <div className="flex items-center justify-between gap-2 pt-2 border-t border-un1t-border/40">
-        <button
-          type="button"
-          onClick={disconnect}
-          disabled={disconnecting || saving}
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-un1t-border text-sm text-red-700 hover:bg-red-500/10 disabled:opacity-50"
-        >
-          {disconnecting ? <Loader2 size={12} className="animate-spin" /> : <Unplug size={12} />} Disconnect
-        </button>
-        <button
-          type="button"
-          onClick={save}
-          disabled={saving || disconnecting}
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
-        >
-          {saving ? <><Loader2 size={12} className="animate-spin" /> Saving…</> : <><Save size={12} /> Save</>}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-// ── Xero connect/disconnect panel (Phase 3) ──
-//
-// Connect/Reconnect starts the EXISTING full-page OAuth flow
-// (GET /api/xero/connect) with return_to=/settings/integrations-hub so the
-// callback bounces the browser back to the hub (the return_to guard shipped
-// in Phase-3 part 1). Disconnect posts the EXISTING /api/xero/disconnect with
-// this location's id and the tab's exact confirm() copy. No new route, no
-// token rendered. `initial` is the assembled hub xero row (present only when
-// connected); its absence renders the not-connected Connect-only state.
-function XeroPanel({ locationId, locationName, initial, onChanged, onDisconnected }) {
-  const connected = !!initial && initial.status !== 'not_connected'
-  const [disconnecting, setDisconnecting] = useState(false)
-  const [error, setError] = useState(null)
-
-  function connect() {
-    // Full-page redirect — the OAuth handshake needs a top-level navigation;
-    // return_to (allowlist-guarded) returns the browser to the hub, which
-    // re-assembles fresh, so no in-place re-grade is needed here.
-    const returnTo = '/settings/integrations-hub'
-    window.location.href =
-      `/api/xero/connect?location_id=${encodeURIComponent(locationId)}&return_to=${encodeURIComponent(returnTo)}`
-  }
-
-  async function disconnect() {
-    if (!confirm(`Disconnect Xero from ${locationName || 'this location'}? Future invoice pushes will fail until you reconnect.`)) return
-    setDisconnecting(true); setError(null)
-    try {
-      const res = await fetch('/api/xero/disconnect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ location_id: locationId }),
-      })
-      const j = await res.json().catch(() => ({}))
-      if (!res.ok || j.success === false) {
-        setError(j.error || `Disconnect failed (${res.status})`)
-        setDisconnecting(false)
-        return
       }
-      onChanged?.()
-      onDisconnected?.()
-    } catch (e) {
-      setError(e.message || 'Network error')
-      setDisconnecting(false)
+      return <Un1tOnlineIntegrationTab location={location} canEdit={!!viewer.isOwnerOrMaster} />
     }
+    case 'payments':
+      return <PaymentsIntegrationTab location={location} canEdit={!!viewer.isOwnerOrMaster} />
+    case 'xero':
+      return (
+        <XeroIntegrationTab
+          location={location}
+          connection={xeroConnection}
+          readFailed={!!xeroReadFailed}
+          showCallbackNotice={false}
+          onRetry={onRetry}
+          returnTo={hubManageHref(location.id, 'xero')}
+        />
+      )
+    case 'whatsapp':
+      // WA-MULTI.1's rule from the old tab strip: the feature is on here (or a
+      // master is looking), and the viewer owns WhatsApp at this location.
+      if (!((location.features?.whatsapp !== false || viewer.isMaster) && viewer.ownsWhatsAppHere)) {
+        return <p className="text-xs text-un1t-subtle">WhatsApp is switched off for this location.</p>
+      }
+      return (
+        <WhatsAppIntegrationTab
+          location={location}
+          canEdit={!!viewer.ownsWhatsAppHere}
+          canManageNumbers={!!viewer.canManageNumbers}
+          canSwitch={!!viewer.canSwitchWhatsApp}
+          onChanged={onChanged}
+        />
+      )
+    case 'unifi':
+      return <UnifiIntegrationTab location={location} canEdit={!!viewer.isMaster} />
+    case 'climate':
+      return <AcDevicesIntegrationTab location={location} canEdit={!!viewer.isOwnerOrMaster} canManage={!!viewer.isMaster} />
+    case 'bca':
+      return <BcaIntegrationTab location={location} canEdit={!!viewer.isMaster} sampleCar={sampleBcaCar} />
+    default:
+      return null
   }
-
-  return (
-    <div className="space-y-4">
-      <p className="text-xs text-un1t-subtle">
-        Accounting sync. Connecting starts Xero&apos;s OAuth consent in this window and returns you
-        here. Used to push customer invoices and forward supplier docs into Xero&apos;s Bills inbox.
-      </p>
-
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
-          <AlertCircle size={12} className="mt-0.5" /> {error}
-        </div>
-      )}
-
-      {connected ? (
-        <div className="rounded-md border border-un1t-border bg-un1t-surface px-3 py-2 text-xs text-un1t-subtle space-y-0.5">
-          <div>
-            Connected to <span className="text-un1t-text font-medium">{initial.tenantName}</span>
-          </div>
-          {initial.connectedAt && (
-            <div>Linked {new Date(initial.connectedAt).toLocaleDateString()}{initial.lastRefreshedAt ? ` · refreshed ${new Date(initial.lastRefreshedAt).toLocaleDateString()}` : ''}</div>
-          )}
-          {initial.status === 'error' && initial.message && (
-            <div className="text-red-700">{initial.message}</div>
-          )}
-        </div>
-      ) : (
-        <div className="rounded-md border border-un1t-border bg-un1t-surface px-3 py-2 text-xs text-un1t-subtle">
-          No Xero organisation connected at this location.
-        </div>
-      )}
-
-      <div className="flex items-center justify-between gap-2 pt-2 border-t border-un1t-border/40">
-        {connected ? (
-          <button
-            type="button"
-            onClick={disconnect}
-            disabled={disconnecting}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-un1t-border text-sm text-red-700 hover:bg-red-500/10 disabled:opacity-50"
-          >
-            {disconnecting ? <Loader2 size={12} className="animate-spin" /> : <Unplug size={12} />} Disconnect
-          </button>
-        ) : <span />}
-        <button
-          type="button"
-          onClick={connect}
-          disabled={disconnecting}
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
-        >
-          {connected ? <><RefreshCw size={12} /> Reconnect</> : <><Plug size={12} /> Connect</>}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-// ── WhatsApp panel (Phase 3; WAORGNUMBER.1) ──
-//
-// A number belongs to the organisation, so connecting, editing and removing one
-// happens on the organisation's page; this panel lists the organisation's
-// numbers with the studio's switch and default (the same list as the studio's
-// WhatsApp tab) and points there. Switching re-grades the hub card.
-function WhatsAppPanel({ locationId, onChanged }) {
-  return (
-    <div className="space-y-4">
-      <p className="text-xs text-un1t-subtle">
-        WhatsApp Cloud API. Numbers belong to the organisation: an organisation admin connects,
-        edits and removes them on{' '}
-        <Link href={ORG_NUMBERS_PAGE} className="text-blue-700 hover:underline">WhatsApp numbers</Link>.{' '}
-        {NO_ACTIVE_NUMBER_NOTE} {BROKEN_TOKEN_HINT}
-      </p>
-      <StudioWhatsAppNumbers locationId={locationId} canSwitch onChanged={onChanged} />
-    </div>
-  )
 }

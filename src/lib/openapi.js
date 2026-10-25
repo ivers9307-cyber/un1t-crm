@@ -10169,6 +10169,36 @@ registry.registerPath({
   },
 })
 
+// INTEGONE.1 — the hub Manage drawer's per-location context.
+registry.registerPath({
+  method: 'get',
+  path: '/api/integrations/hub/locations/{id}',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Integrations hub drawer context for one location (owner at the location, or master)',
+  description:
+    'Read-only. What the hub\'s Manage drawer needs to host a location\'s full integration tab: ' +
+    '`location` (the location row shaped by toClientLocation: AC credentials replaced by has_sensibo_key / ' +
+    'has_thinq_pat, every other credential masked, bca_config intact), `xeroConnection` (the xero_connections ' +
+    'row or null), `xeroReadFailed` (CHANNELREAD.1: a failed read is never "not connected"), `sampleBcaCar` ' +
+    '(one car for the BCA template preview when bca_submit is on, else null), `membershipSource` ' +
+    '({ source, state: none | configured | unconfigured | unknown, missing? }), `hasUn1tOnlineConnection` ' +
+    '(an active un1t_online connection exists; a failed count reads true) and `viewer` ' +
+    '({ isMaster, isOwnerOrMaster, ownsWhatsAppHere, canSwitchWhatsApp, canManageNumbers }, judged at this location). ' +
+    'Access: a member of the location who is owner there (an organisation admin\'s synthetic owner role counts) ' +
+    'or a master. Anyone else, and a location that does not exist, gets 404.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: {
+      description: 'The drawer context',
+      content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('IntegrationsHubLocationContextResponse') } },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such location, or not owner there / master', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The location row could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ZOOMOPS.1 — Zoom contact sync operator surface: /settings/integrations/zoom-contacts
 registry.registerPath({
   method: 'post',
