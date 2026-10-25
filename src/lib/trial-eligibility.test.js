@@ -196,24 +196,25 @@ describe('hatchActiveMembership', () => {
     expect(ops).toContainEqual(['in', 'status', ['active', 'trialing', 'past_due']])
   })
 
-  it('an active contact_membership refuses, scoped to the location, not ended', async () => {
-    const { db, calls } = makeDb({ rows: { contact_memberships: [{ id: 'm1' }] } })
+  it('an active membership on the relationship row refuses, scoped to the location (ORGCONTACTS.7)', async () => {
+    const { db, calls } = makeDb({ rows: { contact_studios: [{ id: 'cs1' }] } })
     const r = await hatchActiveMembership(db, { locationId: 'loc-hatch', contactId: 'c1' })
     expect(r).toEqual({ ok: true, active: true, reasons: ['contact_membership_active'] })
-    const ops = calls.find((c) => c.table === 'contact_memberships').ops
+    const ops = calls.find((c) => c.table === 'contact_studios').ops
     expect(ops).toContainEqual(['eq', 'location_id', 'loc-hatch'])
-    expect(ops).toContainEqual(['eq', 'status', 'active'])
-    expect(ops).toContainEqual(['is', 'ended_at', null])
+    expect(ops).toContainEqual(['eq', 'contact_id', 'c1'])
+    expect(ops).toContainEqual(['eq', 'membership_status', 'active'])
+    expect(calls.find((c) => c.table === 'contact_memberships')).toBeUndefined()
   })
 
   it('a cancelled subscription and an ended membership do not refuse (the filters exclude them)', async () => {
     // Cancelled rows never come back from the status-filtered reads.
-    const { db } = makeDb({ rows: { un1t_subscriptions: [], contact_memberships: [] } })
+    const { db } = makeDb({ rows: { un1t_subscriptions: [], contact_studios: [] } })
     const r = await hatchActiveMembership(db, { locationId: 'loc-hatch', contactId: 'c1' })
     expect(r.active).toBe(false)
   })
 
-  it.each([['un1t_subscriptions'], ['contact_memberships']])('a failed %s read is ok:false', async (table) => {
+  it.each([['un1t_subscriptions'], ['contact_studios']])('a failed %s read is ok:false', async (table) => {
     const { db } = makeDb({ failing: [table] })
     expect(await hatchActiveMembership(db, { locationId: 'loc-hatch', contactId: 'c1' })).toEqual({ ok: false, reason: `${table}_unreadable` })
   })

@@ -92,7 +92,7 @@ function seed(extra = {}) {
     un1t_events: [{ id: id(), location_id: HATCH, un1t_id: 'e1', starts_at: iso(NOW - 2 * DAY) }],
     un1t_bookings: [{ id: id(), location_id: HATCH, un1t_user_id: 'u1', contact_id: 'c1', event_id: 'e1', status: 'attended', remote_created_at: iso(NOW - 3 * DAY) }],
     contacts: [contact(), contact({ id: 'cx', name: 'Other' })],
-    contact_memberships: [],
+    contact_studios: [],
     un1t_write_events: [],
     ...extra,
   }
@@ -255,9 +255,11 @@ describe('winbackContacts', () => {
     const { db, log } = makeDb(seed({
       un1t_subscriptions: [sub(), sub({ un1t_user_id: 'u2', contact_id: 'c2', synced_at: STALE })],
       un1t_clients: [client(), client({ un1t_user_id: 'u2', contact_id: 'c2', last_attended_at: iso(NOW - 60 * DAY) })],
-      contact_memberships: [
-        { id: id(), location_id: HATCH, contact_id: 'c3', plan_name: 'Export plan', ended_at: '2026-08-01T00:00:00Z', source: 'un1t_online_export', status: 'ended' },
-        { id: id(), location_id: STILLORGAN, contact_id: 'c4', plan_name: 'Glofox', ended_at: '2026-08-01T00:00:00Z', source: 'un1t_online_api', status: 'ended' },
+      // ORGCONTACTS.7 (mig 770): ex-members are relationship rows with an ended membership at THIS studio
+      contact_studios: [
+        { id: id(), location_id: HATCH, contact_id: 'c3', membership_plan: 'Old plan', membership_status: 'ended', membership_since: '2026-01-01T00:00:00Z', membership_ended_at: '2026-08-01T00:00:00Z' },
+        { id: id(), location_id: STILLORGAN, contact_id: 'c4', membership_plan: 'Glofox', membership_status: 'ended', membership_since: '2026-01-01T00:00:00Z', membership_ended_at: '2026-08-01T00:00:00Z' },
+        { id: id(), location_id: HATCH, contact_id: 'c5', membership_plan: null, membership_status: null, membership_since: null, membership_ended_at: null },
       ],
       contacts: [contact(), contact({ id: 'c2', name: 'Bea' }), contact({ id: 'c3', name: 'Cal' }), contact({ id: 'c4' })],
     }))
@@ -265,16 +267,17 @@ describe('winbackContacts', () => {
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]))
     expect(byId.c1.glofox_membership_status).toBe('member')
     expect(byId.c2).toMatchObject({ glofox_membership_status: 'ex_member', name: 'Bea' })
-    expect(byId.c3).toMatchObject({ glofox_membership_status: 'ex_member', glofox_membership_plan: 'Export plan', name: 'Cal' })
+    expect(byId.c3).toMatchObject({ glofox_membership_status: 'ex_member', glofox_membership_plan: 'Old plan', name: 'Cal' })
     expect(byId.c4).toBeUndefined()
-    const cm = log.find((q) => q.table === 'contact_memberships')
+    expect(byId.c5).toBeUndefined()
+    const cm = log.find((q) => q.table === 'contact_studios')
     expect(cm.filters).toContainEqual(['eq', 'location_id', HATCH])
-    expect(cm.filters).toContainEqual(['in', 'source', ['un1t_online_api', 'un1t_online_export']])
-    expect(cm.filters).toContainEqual(['eq', 'status', 'ended'])
+    expect(cm.filters).toContainEqual(['eq', 'membership_status', 'ended'])
+    expect(log.some((q) => q.table === 'contact_memberships')).toBe(false)
   })
 
   it('a failed read throws', async () => {
-    const { db } = makeDb(seed(), { fail: ['contact_memberships'] })
+    const { db } = makeDb(seed(), { fail: ['contact_studios'] })
     await expect(winbackContacts(db, HATCH, { nowMs: NOW })).rejects.toThrow()
   })
 })

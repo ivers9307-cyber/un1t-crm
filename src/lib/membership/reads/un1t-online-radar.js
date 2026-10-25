@@ -16,6 +16,7 @@
 // lead_source), plus, for leads only, the contacts L itself owns. Service-role
 // client; reads only. Every list read is selectAll paginated with an explicit
 // order; `.in()` lists are chunked (event ids at 200, contact ids at 300).
+import { MEMBERSHIP_FACT_READ_COLS, membershipRowsFromStudioRows } from '../membership-facts.js'
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { logInfo, logWarn } from '@/lib/log'
 import { MEMBER_STATUSES } from './un1t-online-shape'
@@ -36,7 +37,6 @@ const WINDOW_30D_MS = 30 * 86_400_000
 // last_booked_at only as a footprint test (any booking at all), so a member
 // whose only booking is older than 400 days has no recent footprint to show.
 const BOOKED_AT_LOOKBACK_MS = 400 * 86_400_000
-const STATUS_SOURCES = Object.freeze(['un1t_online_api', 'un1t_online_export'])
 
 const SUB_COLS = 'un1t_id, un1t_user_id, contact_id, status, product_id, product_title, price_cents, billing_interval, billing_interval_count, current_period_end, cancel_at_period_end, paused_at, paused_until, past_due_at, remote_created_at, synced_at'
 const CLIENT_COLS = 'un1t_user_id, contact_id, credit_balance, credit_unlimited, last_attended_at, bookings_30d_attended, bookings_30d_no_show, ltv_cents, remote_created_at'
@@ -46,7 +46,6 @@ const PRODUCT_COLS = 'un1t_id, type, price_cents, title'
 const EVENT_COLS = 'un1t_id, starts_at'
 const BOOKING_COLS = 'un1t_user_id, event_id, status'
 const BOOKED_AT_COLS = 'un1t_user_id, contact_id, remote_created_at'
-const ENDED_COLS = 'contact_id, plan_name, ended_at'
 const LEAD_CONTACT_COLS = 'id, name, email, phone, lead_source, joined_at, created_at'
 
 // selectAll stops SILENTLY at its hard cap; a radar that read a truncated
@@ -57,12 +56,12 @@ const HARD_CAP = 50_000
  * Every row of `table` at L, `build(q)` adding filters; paginated, ordered by
  * id. Throws on a failed page and when the hard cap is reached.
  */
-async function listAt(db, loc, table, cols, build = (q) => q) {
+async function listAt(db, loc, table, cols, build = (q) => q, { orderBy = 'id' } = {}) {
   const rows = await selectAll((from, to) => build(db
     .from(table)
     .select(cols)
     .eq('location_id', loc))
-    .order('id', { ascending: true })
+    .order(orderBy, { ascending: true })
     .range(from, to), { pageSize: PAGE, hardCap: HARD_CAP })
   if (rows.length >= HARD_CAP) throw new Error(`${table}: ${HARD_CAP} rows at one studio; refusing a truncated radar`)
   return rows
@@ -160,7 +159,8 @@ export async function winbackContacts(db, locationId, { nowMs = Date.now() } = {
   const [freshCutoffIso, allSubs, endedMemberships] = await Promise.all([
     subsCutoff(db, locationId),
     listAt(db, locationId, 'un1t_subscriptions', SUB_COLS),
-    listAt(db, locationId, 'contact_memberships', ENDED_COLS, (q) => q.in('source', STATUS_SOURCES).eq('status', 'ended')),
+    // ORGCONTACTS.7 (mig 770): ex-members are relationship rows with an ended membership at this studio
+    listAt(db, locationId, 'contact_studios', MEMBERSHIP_FACT_READ_COLS, (q) => q.eq('membership_status', 'ended'), { orderBy: 'contact_id' }).then(membershipRowsFromStudioRows),
   ])
   const input = await loadRadarInputs(db, locationId, nowMs, allSubs)
   // name for ex-members linked only through an ended membership row
