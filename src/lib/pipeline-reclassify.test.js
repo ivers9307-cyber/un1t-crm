@@ -21,7 +21,7 @@ import { triggerSequencesForPipelineStageChange } from './sequences/triggers.js'
 
 beforeEach(() => {
   vi.mocked(loadActiveElsewhere).mockReset()
-  vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(), studios: [] })
+  vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(), reasons: new Map(), studios: [] })
 })
 
 // HATCHPIPE.2 — the membership read seam is mocked: the un1t.online boards ask
@@ -497,9 +497,8 @@ describe('HATCHPIPE.2 — contacts-input path is unchanged', () => {
         ['eq', 'id', 'run-1']],
     ])
     expect(membershipReadsFor).not.toHaveBeenCalled()
-    expect(loadActiveElsewhere).not.toHaveBeenCalled() // PIPEEXCL.1 is Hatch-only
-    expect(out).toMatchObject({ ok: true, input_source: 'contacts', deals_moved: 1, deals_created: 1, pipelines_skipped: ['returning'] })
-    expect(out).not.toHaveProperty('deals_left_board')
+    expect(loadActiveElsewhere).toHaveBeenCalledWith(db, 'loc-st') // PIPEEXCL.2: the Glofox board reads the rule too
+    expect(out).toMatchObject({ ok: true, input_source: 'contacts', deals_moved: 1, deals_created: 1, pipelines_skipped: ['returning'], deals_left_board: 0, creates_withheld: 0, other_studio_check: 'ok' })
     expect(out).not.toHaveProperty('unlinked')
     expect(out).not.toHaveProperty('stage_histogram') // dry runs only
   })
@@ -1125,7 +1124,10 @@ describe('PIPEEXCL.1 — active members at another studio leave Hatch\'s (acquis
     })
   })
 
-  describe('Stillorgan (Glofox board): untouched — the rule is Hatch only (Richard: "yes hatch pipeline")', () => {
+  // PIPEEXCL.2 — the rule runs on the Glofox board too (Richard, 22 Oct 2026:
+  // Hatch customers and trialers were Stillorgan's New Leads), and someone
+  // TRAINING elsewhere leaves with their own timeline note.
+  describe('Stillorgan (Glofox board): PIPEEXCL.2 applies the rule here too', () => {
     const ST_PIPELINES = [{ id: 'p-acq', location_id: 'loc-st', key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true }]
     const ST_STAGES = [
       { id: 's-new', slug: 'new_lead', pipeline_id: 'p-acq' },
@@ -1135,36 +1137,89 @@ describe('PIPEEXCL.1 — active members at another studio leave Hatch\'s (acquis
     const lead = (id) => ({ id, name: id, email: null, glofox_membership_status: 'lead', joined_at: new Date().toISOString(), created_at: new Date().toISOString(), recent_bookings: [] })
     const member = (id) => ({ id, name: id, email: null, glofox_membership_status: 'member', converted_at: isoBefore(300), joined_at: isoBefore(400), created_at: isoBefore(400), recent_bookings: [] })
 
-    it('a Glofox board is untouched even for an active member elsewhere: the rule is never read, no deal closes, creates and moves as today', async () => {
-      vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(['c-hatch-lead', 'c-hatch-new', 'c-both']), studios: [{ locationId: HATCH, members: 3 }] })
+    it('a Hatch member and a Hatch trialer leave Stillorgan\'s board (lost + a timeline note per reason); one with no deal gets none; a member of both keeps member', async () => {
+      vi.mocked(loadActiveElsewhere).mockResolvedValue({
+        ok: true,
+        contactIds: new Set(['c-hatch-member', 'c-hatch-trialer', 'c-hatch-new', 'c-both']),
+        reasons: new Map([['c-hatch-member', 'member'], ['c-hatch-trialer', 'training'], ['c-hatch-new', 'training'], ['c-both', 'member']]),
+        studios: [{ locationId: HATCH, members: 2, training: 2 }],
+      })
       const rec = exclDb({
         pipelines: ST_PIPELINES, pipeline_stages: ST_STAGES,
-        contacts: [lead('c-hatch-lead'), lead('c-hatch-new'), member('c-both')],
+        contacts: [lead('c-hatch-member'), lead('c-hatch-trialer'), lead('c-hatch-new'), member('c-both')],
         deals: [
-          { id: 'd-1', contact_id: 'c-hatch-lead', stage_id: 's-dormant', pipeline_id: 'p-acq', status: 'open' },
-          { id: 'd-2', contact_id: 'c-both', stage_id: 's-member', pipeline_id: 'p-acq', status: 'open' },
+          { id: 'd-1', contact_id: 'c-hatch-member', stage_id: 's-dormant', pipeline_id: 'p-acq', location_id: 'loc-st', status: 'open' },
+          { id: 'd-2', contact_id: 'c-hatch-trialer', stage_id: 's-new', pipeline_id: 'p-acq', location_id: 'loc-st', status: 'open' },
+          { id: 'd-3', contact_id: 'c-both', stage_id: 's-member', pipeline_id: 'p-acq', location_id: 'loc-st', status: 'open' },
         ],
       })
 
       const out = await reclassifyAllContacts(rec.db, { locationId: 'loc-st' })
 
-      expect(loadActiveElsewhere).not.toHaveBeenCalled()
-      expect(closesIn(rec)).toHaveLength(0)
-      expect(rec.writes('activities', 'insert')).toHaveLength(0)
-      expect(rec.writes('deals', 'insert').map((e) => rec.arg(e, 'insert')[1].contact_id)).toEqual(['c-hatch-new'])
-      expect(rec.arg(rec.writes('deals', 'update')[0], 'update')[1]).toEqual({ stage_id: 's-new' })
-      expect(out).toMatchObject({ deals_moved: 1, deals_created: 1, deals_unchanged: 1, input_source: 'contacts' })
-      for (const k of ['deals_left_board', 'creates_withheld', 'other_studio_check', 'creates_held']) expect(out).not.toHaveProperty(k)
-      expect(JSON.stringify(out.movement_matrix)).not.toContain('left board')
+      expect(loadActiveElsewhere).toHaveBeenCalledWith(rec.db, 'loc-st')
+      const closes = closesIn(rec)
+      expect(closes).toHaveLength(1)
+      expect(closes[0]).toContainEqual(['in', 'id', ['d-1', 'd-2']])
+      expect(rec.writes('deals', 'insert')).toHaveLength(0)
+      expect(rec.calls.some((e) => e.some((x) => x[0] === 'delete'))).toBe(false)
+      const acts = rec.arg(rec.writes('activities', 'insert')[0], 'insert')[1]
+      expect(acts.map((a) => [a.deal_id, a.subject])).toEqual([
+        ['d-1', 'Pipeline: left the board (active member at another studio)'],
+        ['d-2', 'Pipeline: left the board (training at another studio)'],
+      ])
+      expect(acts[1].note).toMatch(/Booked or attended classes at another studio/)
+      expect(acts[1]).toMatchObject({ type: 'pipeline', contact_id: 'c-hatch-trialer', location_id: 'loc-st', done: true })
+      expect(out).toMatchObject({ deals_left_board: 2, creates_withheld: 1, deals_unchanged: 1, deals_created: 0, deals_moved: 0, other_studio_check: 'ok', input_source: 'contacts' })
+      expect(out.movement_matrix).toEqual({ dormant: { '(left board)': 1 }, new_lead: { '(left board)': 1 } })
     })
 
-    it('even a failing other-studio read cannot reach a Glofox board (nothing held)', async () => {
-      vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: false, reason: 'read_failed' })
-      const rec = exclDb({ pipelines: ST_PIPELINES, pipeline_stages: ST_STAGES, contacts: [lead('c-new')], deals: [] })
+    it('a Hatch trialer who also trains at Stillorgan stays (a prospect at both); a Hatch MEMBER who trains here still leaves', async () => {
+      vi.mocked(loadActiveElsewhere).mockResolvedValue({
+        ok: true,
+        contactIds: new Set(['c-shara', 'c-member-here']),
+        reasons: new Map([['c-shara', 'training'], ['c-member-here', 'member']]),
+        trainingHere: new Set(['c-shara', 'c-member-here']),
+        studios: [],
+      })
+      const rec = exclDb({
+        pipelines: ST_PIPELINES, pipeline_stages: ST_STAGES, contacts: [lead('c-shara'), lead('c-member-here')],
+        deals: [
+          { id: 'd-shara', contact_id: 'c-shara', stage_id: 's-dormant', pipeline_id: 'p-acq', location_id: 'loc-st', status: 'open' },
+          { id: 'd-m', contact_id: 'c-member-here', stage_id: 's-dormant', pipeline_id: 'p-acq', location_id: 'loc-st', status: 'open' },
+        ],
+      })
       const out = await reclassifyAllContacts(rec.db, { locationId: 'loc-st' })
-      expect(rec.writes('deals', 'insert')).toHaveLength(1)
-      expect(out.deals_created).toBe(1)
-      expect(logWarn).not.toHaveBeenCalledWith('pipeline-reclassify', 'other-studio members unavailable', expect.anything())
+      const closes = closesIn(rec)
+      expect(closes).toHaveLength(1)
+      expect(closes[0]).toContainEqual(['in', 'id', ['d-m']])
+      // Shara's deal is classified as usual (lead → new_lead): a move, not a close
+      expect(rec.writes('deals', 'update').filter((e) => rec.arg(e, 'update')[1]?.stage_id === 's-new')).toHaveLength(1)
+      expect(out).toMatchObject({ deals_left_board: 1, deals_moved: 1, creates_withheld: 0 })
+    })
+
+    it('an answer without reasons (an older shape) reads as member', async () => {
+      vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(['c-hatch-lead']), studios: [] })
+      const rec = exclDb({
+        pipelines: ST_PIPELINES, pipeline_stages: ST_STAGES, contacts: [lead('c-hatch-lead')],
+        deals: [{ id: 'd-1', contact_id: 'c-hatch-lead', stage_id: 's-dormant', pipeline_id: 'p-acq', location_id: 'loc-st', status: 'open' }],
+      })
+      await reclassifyAllContacts(rec.db, { locationId: 'loc-st' })
+      const acts = rec.arg(rec.writes('activities', 'insert')[0], 'insert')[1]
+      expect(acts[0].subject).toBe('Pipeline: left the board (active member at another studio)')
+    })
+
+    it('a failing other-studio read holds every create on the Glofox board too, and moves still run', async () => {
+      vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: false, reason: 'read_failed', studioId: HATCH, err: 'bookings boom' })
+      const rec = exclDb({
+        pipelines: ST_PIPELINES, pipeline_stages: ST_STAGES, contacts: [lead('c-new'), member('c-old')],
+        deals: [{ id: 'd-old', contact_id: 'c-old', stage_id: 's-dormant', pipeline_id: 'p-acq', location_id: 'loc-st', status: 'open' }],
+      })
+      const out = await reclassifyAllContacts(rec.db, { locationId: 'loc-st' })
+      expect(rec.writes('deals', 'insert')).toHaveLength(0)
+      expect(closesIn(rec)).toHaveLength(0)
+      expect(rec.arg(rec.writes('deals', 'update')[0], 'update')[1]).toEqual({ stage_id: 's-member' })
+      expect(out).toMatchObject({ deals_created: 0, creates_held: 1, deals_moved: 1, other_studio_check: 'unavailable' })
+      expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'other-studio members unavailable', expect.objectContaining({ reason: 'read_failed', creates_held: 1 }))
     })
   })
 })

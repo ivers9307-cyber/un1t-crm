@@ -14,9 +14,11 @@ vi.mock('next/headers', () => ({
 let db
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn() }))
+vi.mock('@/lib/screen-doorbell', () => ({ ringScreensForDisplay: vi.fn(async () => 1) }))
 
 import { PUT, DELETE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
+import { ringScreensForDisplay } from '@/lib/screen-doorbell'
 import {
   OWNER_A, STAFF_A, MOBILE_ONLY_A, LOC_A, LOC_B, TV_ID, TEMPLATE_ID,
   makeFakeDb, writesOf, jsonRequest, paramsOf, display,
@@ -37,6 +39,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   getCurrentUser.mockResolvedValue(OWNER_A)
   db = contentDb()
+  ringScreensForDisplay.mockImplementation(async () => 1)
 })
 
 describe('PUT /api/admin/tv-displays/[id]/content (push)', () => {
@@ -50,6 +53,25 @@ describe('PUT /api/admin/tv-displays/[id]/content (push)', () => {
       template_values: null, pushed_by: OWNER_A.id, triggered_by: `manual:${OWNER_A.id}`,
     })
     expect(Number.isNaN(Date.parse(w.payload.pushed_at))).toBe(false)
+  })
+
+  it('a push rings the screens linked to the display', async () => {
+    expect((await push({ source_type: 'url', source_ref: 'https://example.invalid/a.png' })).status).toBe(200)
+    expect(ringScreensForDisplay).toHaveBeenCalledTimes(1)
+    expect(ringScreensForDisplay).toHaveBeenCalledWith(db, TV_ID)
+  })
+
+  it('a ring failure never fails the push', async () => {
+    ringScreensForDisplay.mockRejectedValue(new Error('realtime down'))
+    const res = await push({ source_type: 'url', source_ref: 'https://example.invalid/a.png' })
+    expect(res.status).toBe(200)
+    expect((await res.json()).success).toBe(true)
+  })
+
+  it('a failed upsert does not ring', async () => {
+    db = contentDb({ write: () => ({ data: null, error: { message: 'boom' } }) })
+    expect((await push({ source_type: 'url', source_ref: 'https://example.invalid/a.png' })).status).toBe(500)
+    expect(ringScreensForDisplay).not.toHaveBeenCalled()
   })
 
   it('a photo push in the TV\'s studio folder is stored', async () => {
@@ -106,6 +128,19 @@ describe('DELETE /api/admin/tv-displays/[id]/content (clear)', () => {
   it('deletes that TV\'s content row', async () => {
     expect((await clear()).status).toBe(200)
     expect(writesOf(db)).toEqual([expect.objectContaining({ table: 'tv_content', op: 'delete', filters: [['eq', 'tv_display_id', TV_ID]] })])
+  })
+
+  it('a clear rings the screens linked to the display, and a ring failure never fails it', async () => {
+    expect((await clear()).status).toBe(200)
+    expect(ringScreensForDisplay).toHaveBeenCalledWith(db, TV_ID)
+    ringScreensForDisplay.mockRejectedValue(new Error('realtime down'))
+    expect((await clear()).status).toBe(200)
+  })
+
+  it('a failed delete does not ring', async () => {
+    db = contentDb({ write: () => ({ data: null, error: { message: 'boom' } }) })
+    expect((await clear()).status).toBe(500)
+    expect(ringScreensForDisplay).not.toHaveBeenCalled()
   })
 
   it('already idle: 200', async () => {

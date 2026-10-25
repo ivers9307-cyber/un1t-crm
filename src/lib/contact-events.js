@@ -42,6 +42,7 @@ export const EVENT_TYPES = Object.freeze({
   RACE_COMPLETED_7D_AGO:  'race.completed_7d_ago',
   MEMBER_VALIDATED:     'member.validated',
   MEMBER_VALIDATION_FAILED: 'member.validation_failed',
+  DONATION_PAID:        'donation.paid',
 })
 
 // ─── emitEvent ───────────────────────────────────────────────────

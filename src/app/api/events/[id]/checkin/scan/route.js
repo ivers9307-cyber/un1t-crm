@@ -2,6 +2,11 @@
 // QR. The QR opens a staff-only landing page that POSTs its token here. The
 // token carries identity (registration + member); authorisation is the staff
 // session + location access, same as the manual roster routes.
+//
+// FINDTEAM.8 (I2): a placed solo's QR still names their own (placed) row; the
+// check-in follows placed_into_registration_id and lands on the team they
+// joined (their member row there, by contact, else email), never on the dead
+// solo row.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -11,6 +16,7 @@ import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/perm
 import { validateBody } from '@/lib/validate'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { verifyCheckinToken } from '@/lib/event-checkin-tokens'
+import { followPlacementForCheckin, isPlacedRedirect } from '@/lib/placed-checkin'
 
 export const runtime = 'nodejs'
 
@@ -34,11 +40,12 @@ export async function POST(request, props) {
   }
 
   const db = createServerClient()
-  const { data: reg } = await db
+  const { data: reg, error: regErr } = await db
     .from('race_registrations')
-    .select('id, race_event_id, race_events!inner ( id, location_id ), teams ( id, team_members ( id, name, email, contact_id ) )')
+    .select('id, race_event_id, status, contact_id, placed_into_registration_id, race_events!inner ( id, location_id ), teams ( id, team_members ( id, name, email, contact_id ) )')
     .eq('id', payload.registrationId)
     .maybeSingle()
+  if (regErr) return NextResponse.json({ success: false, error: 'Could not read the registration' }, { status: 500 })
   if (!reg || reg.race_event_id !== params.id) {
     return NextResponse.json({ success: false, error: 'Registration not found for this event' }, { status: 404 })
   }
@@ -49,12 +56,29 @@ export async function POST(request, props) {
   if (!hasPermissionForLocation(user, locationId, 'races')) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
-  const member = (reg.teams?.team_members || []).find((m) => m.id === payload.memberId)
-  if (!member) return NextResponse.json({ success: false, error: 'That person is not on this registration' }, { status: 400 })
+  const scanned = (reg.teams?.team_members || []).find((m) => m.id === payload.memberId)
+  if (!scanned) return NextResponse.json({ success: false, error: 'That person is not on this registration' }, { status: 400 })
+
+  let member = scanned
+  let registrationId = payload.registrationId
+  if (isPlacedRedirect(reg)) {
+    const followed = await followPlacementForCheckin(db, {
+      eventId: params.id,
+      placedIntoId: reg.placed_into_registration_id,
+      person: { contact_id: scanned.contact_id || reg.contact_id || null, email: scanned.email },
+    })
+    if (!followed.ok) {
+      if (followed.reason === 'load_failed') return NextResponse.json({ success: false, error: 'Could not read the registration' }, { status: 500 })
+      if (followed.reason === 'not_found') return NextResponse.json({ success: false, error: 'Registration not found for this event' }, { status: 404 })
+      return NextResponse.json({ success: false, error: 'That person is not on this registration' }, { status: 400 })
+    }
+    member = followed.member
+    registrationId = followed.registrationId
+  }
 
   const { error } = await db.from('race_checkins').insert({
-    race_registration_id: payload.registrationId,
-    team_member_id: payload.memberId,
+    race_registration_id: registrationId,
+    team_member_id: member.id,
     contact_id: member.contact_id || null,
     location_id: locationId,
     checked_in_by: user.id,
@@ -71,8 +95,8 @@ export async function POST(request, props) {
       contactId: member.contact_id || null,
       locationId,
       sourceType: 'race_registration',
-      sourceId: payload.registrationId,
-      metadata: { event_id: params.id, team_member_id: payload.memberId, via: 'qr' },
+      sourceId: registrationId,
+      metadata: { event_id: params.id, team_member_id: member.id, via: 'qr' },
     })
   }
 

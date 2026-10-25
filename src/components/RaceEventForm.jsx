@@ -27,12 +27,15 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail } from 'lucide-react'
+import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail, HeartHandshake } from 'lucide-react'
 import Link from 'next/link'
 import { eventSlug } from '@/lib/event-slug'
-import { compressImageForUpload, parseUploadResponse } from '@/lib/landing-media-upload'
+import { compressImageForUpload, parseUploadResponse, uploadEventVideo } from '@/lib/landing-media-upload'
 import { generateWaveTimes } from '@/lib/wave-generate'
 import { PLATFORM_NAME } from '@/lib/brand-name'
+import { CHARITY_DEFAULTS, CharitySettingsSchema, formatCents } from '@/lib/charity-donations'
+import { FIND_TEAM_DEFAULTS } from '@/lib/find-team'
+import { ENTRY_POLICY_DEFAULTS, ENTRY_POLICY_TEXT_KEYS, ENTRY_POLICY_HOURS_MAX } from '@/lib/entry-policy'
 import { useLocationBrand } from './use-location-brand'
 
 const ALL_SIZES = [1, 2, 3, 4, 5, 6, 8]
@@ -329,6 +332,21 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
   // EVENT-WAITLIST.1 (mig 713) — the waitlist "a spot opened up" offer email.
   const [waitlistSubject, setWaitlistSubject] = useState(race?.waitlist_email_subject || '')
   const [waitlistIntro, setWaitlistIntro] = useState(race?.waitlist_email_intro || '')
+  // CHARITY.9 (mig 765) — "Charity day": card donations on the public page.
+  // The switch is race_events.charity_enabled; the rest is the charity jsonb,
+  // held as form strings and converted (euros -> cents) on save.
+  const [charityEnabled, setCharityEnabled] = useState(!!race?.charity_enabled)
+  const [charityForm, setCharityForm] = useState(() => charityToForm(race?.charity))
+  const setCharityField = (key, value) => setCharityForm((f) => ({ ...f, [key]: value }))
+  // FINDTEAM.6 (mig 766) — "Find me a team": race_events.find_team jsonb, the
+  // switch plus its copy. Race kind only.
+  const [findTeamForm, setFindTeamForm] = useState(() => findTeamToForm(race?.find_team))
+  const setFindTeamField = (key, value) => setFindTeamForm((f) => ({ ...f, [key]: value }))
+  // ENTRYPOLICY.1 (mig 767) — the entry policy: race_events.entry_policy
+  // jsonb, the two self-service switches, the cutoff, the unpaid hold and
+  // the refusal copy. Every kind with entries (not lead_gen).
+  const [entryPolicyForm, setEntryPolicyForm] = useState(() => entryPolicyToForm(race?.entry_policy))
+  const setEntryPolicyField = (key, value) => setEntryPolicyForm((f) => ({ ...f, [key]: value }))
   // The location's saved email templates, for the "Advanced: use a full
   // template" pickers. Fetched from the shared templates list endpoint,
   // scoped to this event's location. A fetch failure just leaves the list
@@ -576,6 +594,15 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       return
     }
 
+    // CHARITY.9 — sent on every save, switch on or off, so the settings survive a toggle.
+    const charityResult = charityFromForm(charityForm)
+    if (charityResult.error) { setError(charityResult.error); return }
+    // A blank name would read "Every euro goes to ." on the public page.
+    if (charityEnabled && !String(charityForm.name || '').trim()) {
+      setError('Charity day: enter the charity name. It is shown on the public page and the receipt.')
+      return
+    }
+
     setSaving(true)
     const payload = {
       ...(isEditing ? {} : { location_id: locationId, kind }),
@@ -630,6 +657,11 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       gap_email_intro: gapIntro.trim() || null,
       waitlist_email_subject: waitlistSubject.trim() || null,
       waitlist_email_intro: waitlistIntro.trim() || null,
+      charity_enabled: charityEnabled,
+      charity: charityResult.charity,
+      // Races only: another kind never touches the column (an unsent key is left as saved).
+      ...(kind === 'race' ? { find_team: findTeamFromForm(findTeamForm) } : {}),
+      ...(kind !== 'lead_gen' ? { entry_policy: entryPolicyFromForm(entryPolicyForm) } : {}),
       ...(meta.isLeadGen ? {} : {
         waves: outboundWaves.map((w, i) => ({
           ...(w.id ? { id: w.id } : {}),
@@ -1264,6 +1296,21 @@ export default function RaceEventForm({ race, locationId: initialLocationId, own
       </div>
       )}
 
+      <CharityDaySection
+        enabled={charityEnabled}
+        onEnabled={setCharityEnabled}
+        values={charityForm}
+        onChange={setCharityField}
+        eventId={isEditing ? race?.id || null : null}
+      />
+
+      {kind === 'race' && (
+        <FindTeamSection values={findTeamForm} onChange={setFindTeamField} />
+      )}
+      {kind !== 'lead_gen' && (
+        <EntryPolicySection values={entryPolicyForm} onChange={setEntryPolicyField} />
+      )}
+
       {/* TV-display logos. Race-only — non-race kinds don't have a
           TV display board. Within race, only shown after the event
           exists because the upload route needs an id to namespace
@@ -1720,6 +1767,502 @@ function EventEmailFields({
           </p>
         </div>
       )}
+    </div>
+  )
+}
+
+// CHARITY.9 — "Charity day" copy fields: blank = omitted from the saved object
+// (the schema rejects null for text), so CHARITY_DEFAULTS apply.
+const CHARITY_TEXT_KEYS = [
+  'name', 'heading', 'blurb', 'match_label', 'consent_label',
+  'thank_you_title', 'thank_you_body', 'thank_you_body_unmatched',
+  'receipt_subject', 'receipt_intro', 'video_url', 'video_file_url',
+]
+const centsToEuroText = (c) => (Number.isFinite(Number(c)) && c !== null && c !== undefined ? String(Number(c) / 100) : '')
+
+/** race_events.charity (jsonb) -> the form's string state. */
+function charityToForm(saved) {
+  const s = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {}
+  const f = {}
+  for (const k of CHARITY_TEXT_KEYS) f[k] = typeof s[k] === 'string' ? s[k] : ''
+  f.presets = Array.isArray(s.presets_cents) ? s.presets_cents.map(centsToEuroText).join(', ') : ''
+  f.min = centsToEuroText(s.min_cents)
+  f.max = centsToEuroText(s.max_cents)
+  f.goal = centsToEuroText(s.goal_cents)
+  f.match_multiplier = s.match_multiplier != null ? String(s.match_multiplier) : ''
+  f.custom_allowed = s.custom_allowed ?? CHARITY_DEFAULTS.custom_allowed
+  f.show_total = s.show_total ?? CHARITY_DEFAULTS.show_total
+  f.include_entries = s.include_entries ?? CHARITY_DEFAULTS.include_entries
+  return f
+}
+
+/**
+ * The form's string state -> `{ charity }` for the save payload (euros -> cents,
+ * presets in the order typed, blank text omitted), or `{ error }` for the form's
+ * inline error banner.
+ */
+function charityFromForm(f) {
+  const out = {}
+  for (const k of CHARITY_TEXT_KEYS) {
+    const v = f[k].trim()
+    if (v) out[k] = v
+  }
+
+  const parts = f.presets.split(',').map((p) => p.replace(/€/g, '').trim()).filter(Boolean)
+  if (parts.length > 0) {
+    const cents = []
+    for (const p of parts) {
+      const n = Number(p)
+      if (!Number.isFinite(n) || Math.round(n * 100) < 1) {
+        return { error: `Preset amounts must be positive euro amounts separated by commas, like 10, 25, 50 (got "${p}").` }
+      }
+      cents.push(Math.round(n * 100))
+    }
+    out.presets_cents = cents
+  }
+
+  for (const [key, field, label] of [['min_cents', 'min', 'Minimum amount'], ['max_cents', 'max', 'Maximum amount'], ['goal_cents', 'goal', 'Goal']]) {
+    const raw = f[field].trim()
+    if (!raw) continue
+    const n = Number(raw)
+    if (!Number.isFinite(n) || Math.round(n * 100) < 1) return { error: `${label} must be a positive number of euros (or leave it blank).` }
+    out[key] = Math.round(n * 100)
+  }
+
+  const multRaw = f.match_multiplier.trim()
+  if (multRaw) {
+    const m = Number(multRaw)
+    if (!Number.isFinite(m) || m < 1 || m > 5) return { error: 'Match multiplier must be a number between 1 and 5.' }
+    out.match_multiplier = m
+  }
+
+  out.custom_allowed = !!f.custom_allowed
+  out.show_total = !!f.show_total
+  out.include_entries = !!f.include_entries
+
+  // Name the offending amounts (the schema's rule is generic, and with a blank
+  // presets field the offender is a default the operator never typed).
+  const lo = out.min_cents ?? CHARITY_DEFAULTS.min_cents
+  const hi = out.max_cents ?? CHARITY_DEFAULTS.max_cents
+  if (lo > hi) return { error: `Charity day: the minimum ${formatCents(lo)} is above the maximum ${formatCents(hi)}.` }
+  if (out.custom_allowed) {
+    const typed = Array.isArray(out.presets_cents)
+    const which = typed ? 'preset' : 'default preset'
+    const advice = 'Enter your own presets or change the minimum/maximum.'
+    for (const p of typed ? out.presets_cents : CHARITY_DEFAULTS.presets_cents) {
+      if (p > hi) return { error: `Charity day: the ${which} ${formatCents(p)} is above your maximum ${formatCents(hi)}. ${advice}` }
+      if (p < lo) return { error: `Charity day: the ${which} ${formatCents(p)} is below your minimum ${formatCents(lo)}. ${advice}` }
+    }
+  }
+
+  const parsed = CharitySettingsSchema.safeParse(out)
+  if (!parsed.success) return { error: `Charity day: ${parsed.error.issues[0]?.message || 'check the settings.'}` }
+  return { charity: out }
+}
+
+// CHARITY.9 — the "Charity day" section: a switch plus every field of the
+// charity settings. Presentation only; state lives in RaceEventForm.
+function CharityDaySection({ enabled, onEnabled, values, onChange, eventId = null }) {
+  const input = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
+  const labelCls = 'block text-sm text-un1t-subtle mb-1'
+  const hintCls = 'text-[11px] text-un1t-muted mt-1'
+  // CHARITY.14 — an uploaded video file (straight to Storage via the event's
+  // signed-upload route; needs a saved event for the storage path).
+  const [videoBusy, setVideoBusy] = useState(false)
+  const [videoPct, setVideoPct] = useState(null)
+  const [videoErr, setVideoErr] = useState(null)
+  async function pickVideo(file) {
+    if (!file || !eventId) return
+    setVideoBusy(true)
+    setVideoErr(null)
+    setVideoPct(0)
+    const r = await uploadEventVideo({ file, eventId, onProgress: (p) => setVideoPct(Number.isFinite(p?.percent) ? Math.round(p.percent) : null) })
+    setVideoBusy(false)
+    setVideoPct(null)
+    if (r?.success && r.url) onChange('video_file_url', r.url)
+    else setVideoErr(r?.error || 'Upload failed. Please try again.')
+  }
+  const tagHint = (
+    <>Merge tags: <code>{'{{charity}}'}</code>, <code>{'{{brand}}'}</code>, <code>{'{{first_name}}'}</code>, <code>{'{{amount}}'}</code>, <code>{'{{matched}}'}</code>.</>
+  )
+  const text = (key, label, placeholder, { rows } = {}) => (
+    <div>
+      <label htmlFor={`charity-${key}`} className={labelCls}>{label}</label>
+      {rows ? (
+        <textarea id={`charity-${key}`} rows={rows} value={values[key]} onChange={(e) => onChange(key, e.target.value)} placeholder={placeholder} className={input} />
+      ) : (
+        <input id={`charity-${key}`} type="text" value={values[key]} onChange={(e) => onChange(key, e.target.value)} placeholder={placeholder} className={input} />
+      )}
+    </div>
+  )
+  const check = (key, label) => (
+    <label className="flex items-center gap-2 text-sm text-un1t-text">
+      <input type="checkbox" checked={!!values[key]} onChange={(e) => onChange(key, e.target.checked)} />
+      {label}
+    </label>
+  )
+
+  return (
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
+        <HeartHandshake size={14} /> Charity day
+      </h3>
+
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm text-un1t-text">Take card donations</div>
+          <div className="text-[11px] text-un1t-subtle">Adds a donation panel beside the signup on the public event page. Your settings below are kept when you switch it off.</div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Charity day"
+          onClick={() => onEnabled(!enabled)}
+          className={`shrink-0 w-10 h-5 rounded-full ${enabled ? 'bg-emerald-500' : 'bg-un1t-border'}`}
+        >
+          <div className={`w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+        </button>
+      </div>
+
+      {enabled && (
+        <div className="space-y-4 pt-2 border-t border-un1t-border">
+          <p className="text-[11px] text-un1t-subtle">Leave any text blank to use the default shown in grey.</p>
+
+          {text('name', 'Charity name', 'e.g. MS Ireland')}
+          {text('heading', 'Heading', CHARITY_DEFAULTS.heading)}
+          <div>
+            {text('blurb', 'Blurb', CHARITY_DEFAULTS.blurb, { rows: 2 })}
+            <p className={hintCls}>Merge tags: <code>{'{{charity}}'}</code>, <code>{'{{brand}}'}</code>.</p>
+          </div>
+
+          <div>
+            <label htmlFor="charity-presets" className={labelCls}>Preset amounts (€)</label>
+            <input
+              id="charity-presets"
+              type="text"
+              value={values.presets}
+              onChange={(e) => onChange('presets', e.target.value)}
+              placeholder={CHARITY_DEFAULTS.presets_cents.map((c) => c / 100).join(', ')}
+              className={input}
+            />
+            <p className={hintCls}>Comma-separated euros, shown on the page in the order you type them. Up to 8.</p>
+          </div>
+
+          <div className="space-y-2">
+            {check('custom_allowed', 'Let donors enter another amount')}
+            <div className="grid grid-cols-2 gap-3 max-w-md">
+              <div>
+                <label htmlFor="charity-min" className={labelCls}>Minimum custom amount (€)</label>
+                <input id="charity-min" type="number" min={0} step="0.01" value={values.min} onChange={(e) => onChange('min', e.target.value)} placeholder={String(CHARITY_DEFAULTS.min_cents / 100)} className={input} />
+              </div>
+              <div>
+                <label htmlFor="charity-max" className={labelCls}>Maximum custom amount (€)</label>
+                <input id="charity-max" type="number" min={0} step="0.01" value={values.max} onChange={(e) => onChange('max', e.target.value)} placeholder={String(CHARITY_DEFAULTS.max_cents / 100)} className={input} />
+              </div>
+            </div>
+            <p className={hintCls}>With other amounts on, every preset must sit between the minimum and maximum.</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 max-w-md">
+            <div>
+              <label htmlFor="charity-match_multiplier" className={labelCls}>Match multiplier</label>
+              <input id="charity-match_multiplier" type="number" min={1} max={5} step={0.5} value={values.match_multiplier} onChange={(e) => onChange('match_multiplier', e.target.value)} placeholder={String(CHARITY_DEFAULTS.match_multiplier)} className={input} />
+              <p className={hintCls}>1 = no match. 2 = every euro doubled.</p>
+            </div>
+            <div>
+              <label htmlFor="charity-goal" className={labelCls}>Goal (€)</label>
+              <input id="charity-goal" type="number" min={0} step="0.01" value={values.goal} onChange={(e) => onChange('goal', e.target.value)} placeholder="No goal" className={input} />
+              <p className={hintCls}>Blank = no goal bar.</p>
+            </div>
+          </div>
+          {text('match_label', 'Match label', CHARITY_DEFAULTS.match_label)}
+
+          <div className="space-y-2">
+            {check('show_total', 'Show the running total on the page')}
+            {check('include_entries', 'Count paid event entries toward the total')}
+          </div>
+          {text('consent_label', 'Consent checkbox label', 'Blank = the default organisation line')}
+          {text('video_url', 'Video beside the event summary (YouTube or Instagram link)', 'https://youtu.be/… — blank = no video')}
+          <div>
+            <label htmlFor="charity-video-file" className={labelCls}>Or upload a video file</label>
+            {!eventId ? (
+              <p className={hintCls}>Save the event first — you can upload a video once it exists.</p>
+            ) : values.video_file_url ? (
+              <div className="flex items-center gap-3">
+                <video src={values.video_file_url} controls preload="metadata" className="h-20 rounded-md bg-black" />
+                <button type="button" onClick={() => onChange('video_file_url', '')} className="text-xs text-red-700 hover:underline">
+                  Remove video
+                </button>
+              </div>
+            ) : (
+              <input
+                id="charity-video-file"
+                type="file"
+                accept="video/mp4,video/webm,video/quicktime"
+                disabled={videoBusy}
+                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; pickVideo(f) }}
+                className="block text-sm text-un1t-subtle"
+              />
+            )}
+            {videoBusy && <p className={hintCls}>Uploading{videoPct != null ? ` ${videoPct}%` : '…'}</p>}
+            {videoErr && <p className="text-xs text-red-700 mt-1">{videoErr}</p>}
+            <p className={hintCls}>MP4, WebM or MOV up to 200MB, compressed in the browser where possible. When both a link and a file are set, the file is what plays; the hero image is its poster.</p>
+          </div>
+
+          <div className="pt-4 border-t border-un1t-border space-y-4">
+            <div>
+              <h4 className="text-sm font-medium text-un1t-text">Thank-you screen</h4>
+              <p className="text-[11px] text-un1t-subtle">Shown after a donation is paid. {tagHint}</p>
+            </div>
+            {text('thank_you_title', 'Thank-you title', CHARITY_DEFAULTS.thank_you_title)}
+            {text('thank_you_body', 'Thank-you body (matched)', CHARITY_DEFAULTS.thank_you_body, { rows: 3 })}
+            {text('thank_you_body_unmatched', 'Thank-you body (no match)', CHARITY_DEFAULTS.thank_you_body_unmatched, { rows: 3 })}
+          </div>
+
+          <div className="pt-4 border-t border-un1t-border">
+            <EventEmailFields
+              title="Donation receipt"
+              description="Emailed to the donor once their donation is paid."
+              subject={values.receipt_subject}
+              onSubject={(v) => onChange('receipt_subject', v)}
+              subjectPlaceholder={CHARITY_DEFAULTS.receipt_subject}
+              intro={values.receipt_intro}
+              onIntro={(v) => onChange('receipt_intro', v)}
+              introPlaceholder="Optional note above the receipt"
+              showTemplate={false}
+              extraTags={['{{charity}}', '{{amount}}', '{{matched}}', '{{brand}}', '{{first_name}}']}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// FINDTEAM.6 — "Find me a team" copy fields: blank = omitted from the saved
+// object, so FIND_TEAM_DEFAULTS apply (the schema takes no null for text).
+const FIND_TEAM_TEXT_KEYS = ['label', 'blurb', 'confirmation_paragraph', 'placed_subject', 'placed_intro']
+
+/** race_events.find_team (jsonb) -> the form's state: a boolean and strings. */
+function findTeamToForm(saved) {
+  const s = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {}
+  const f = { enabled: s.enabled === true }
+  for (const k of FIND_TEAM_TEXT_KEYS) f[k] = typeof s[k] === 'string' ? s[k] : ''
+  return f
+}
+
+/** The form's state -> `find_team` for the save payload: `enabled` always, text only when non-blank. */
+function findTeamFromForm(f) {
+  const out = { enabled: f.enabled === true }
+  for (const k of FIND_TEAM_TEXT_KEYS) {
+    const v = String(f[k] ?? '').trim()
+    if (v) out[k] = v
+  }
+  return out
+}
+
+// FINDTEAM.6 — the "Find me a team" section: a switch, the choice's copy and
+// the placed email. Presentation only; state lives in RaceEventForm.
+function FindTeamSection({ values, onChange }) {
+  const input = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
+  const labelCls = 'block text-sm text-un1t-subtle mb-1'
+  const enabled = values.enabled
+  return (
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
+        <UserPlus size={14} /> Find me a team
+      </h3>
+
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm text-un1t-text">Let solo entrants ask for a team</div>
+          <div className="text-[11px] text-un1t-subtle">Adds a &apos;Find me a team&apos; choice before the team sizes on the public signup. Solo entrants pay for one place and you place them from the Teams page.</div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Find me a team"
+          onClick={() => onChange('enabled', !enabled)}
+          className={`shrink-0 w-10 h-5 rounded-full ${enabled ? 'bg-emerald-500' : 'bg-un1t-border'}`}
+        >
+          <div className={`w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+        </button>
+      </div>
+
+      {enabled && (
+        <div className="space-y-4 pt-2 border-t border-un1t-border">
+          <p className="text-[11px] text-un1t-subtle">Leave any text blank to use the default shown in grey.</p>
+
+          <div>
+            <label htmlFor="find-team-label" className={labelCls}>Choice label</label>
+            <input id="find-team-label" type="text" value={values.label} onChange={(e) => onChange('label', e.target.value)} placeholder={FIND_TEAM_DEFAULTS.label} className={input} />
+          </div>
+          <div>
+            <label htmlFor="find-team-blurb" className={labelCls}>Short description</label>
+            <textarea id="find-team-blurb" rows={2} value={values.blurb} onChange={(e) => onChange('blurb', e.target.value)} placeholder={FIND_TEAM_DEFAULTS.blurb} className={input} />
+            <p className="text-[11px] text-un1t-muted mt-1">Shown under the choice on the public signup.</p>
+          </div>
+          <div>
+            <label htmlFor="find-team-confirmation" className={labelCls}>Confirmation paragraph</label>
+            <textarea id="find-team-confirmation" rows={2} value={values.confirmation_paragraph} onChange={(e) => onChange('confirmation_paragraph', e.target.value)} placeholder={FIND_TEAM_DEFAULTS.confirmation_paragraph} className={input} />
+            <p className="text-[11px] text-un1t-muted mt-1">Added to the signup confirmation email a solo entrant receives.</p>
+          </div>
+
+          <div className="pt-4 border-t border-un1t-border">
+            <EventEmailFields
+              title="Placed email"
+              description="Emailed to a solo entrant when you place them in a team."
+              subject={values.placed_subject}
+              onSubject={(v) => onChange('placed_subject', v)}
+              subjectPlaceholder={FIND_TEAM_DEFAULTS.placed_subject}
+              intro={values.placed_intro}
+              onIntro={(v) => onChange('placed_intro', v)}
+              introPlaceholder={FIND_TEAM_DEFAULTS.placed_intro}
+              showTemplate={false}
+              extraTags={['{{first_name}}']}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ENTRYPOLICY.1 — the entry policy's form state. Switches are booleans
+// (default on); the two hour fields are strings so the operator can clear one
+// back to the default; copy is blank = omitted (defaults apply).
+/** race_events.entry_policy (jsonb) -> the form's state. */
+function entryPolicyToForm(saved) {
+  const s = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {}
+  const f = {
+    self_cancel_enabled: s.self_cancel_enabled !== false,
+    self_reschedule_enabled: s.self_reschedule_enabled !== false,
+    cutoff_hours: Number.isInteger(s.cutoff_hours) ? String(s.cutoff_hours) : '',
+    unpaid_hold_hours: Number.isInteger(s.unpaid_hold_hours) ? String(s.unpaid_hold_hours) : '',
+  }
+  for (const k of ENTRY_POLICY_TEXT_KEYS) f[k] = typeof s[k] === 'string' ? s[k] : ''
+  return f
+}
+
+/** The form's state -> `entry_policy` for the save payload: switches always, hours and text only when set. */
+function entryPolicyFromForm(f) {
+  const out = { self_cancel_enabled: f.self_cancel_enabled !== false, self_reschedule_enabled: f.self_reschedule_enabled !== false }
+  for (const k of ['cutoff_hours', 'unpaid_hold_hours']) {
+    const raw = String(f[k] ?? '').trim()
+    if (raw === '') continue
+    const n = Number(raw)
+    if (Number.isInteger(n)) out[k] = n
+  }
+  for (const k of ENTRY_POLICY_TEXT_KEYS) {
+    const v = String(f[k] ?? '').trim()
+    if (v) out[k] = v
+  }
+  return out
+}
+
+function PolicySwitch({ id, label, hint, checked, onChange }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <div className="text-sm text-un1t-text">{label}</div>
+        {hint && <div className="text-[11px] text-un1t-subtle">{hint}</div>}
+      </div>
+      <button
+        type="button"
+        role="switch"
+        id={id}
+        aria-checked={checked}
+        aria-label={label}
+        onClick={() => onChange(!checked)}
+        className={`shrink-0 w-10 h-5 rounded-full ${checked ? 'bg-emerald-500' : 'bg-un1t-border'}`}
+      >
+        <div className={`w-4 h-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
+      </button>
+    </div>
+  )
+}
+
+// ENTRYPOLICY.1 — the "Entry policy" section: what a customer may do with
+// their own entry (cancel, change the date or time), how long before their
+// start that closes, how long an unpaid entry holds its place, and the three
+// refusal sentences. Presentation only; state lives in RaceEventForm.
+function EntryPolicySection({ values, onChange }) {
+  const input = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
+  const labelCls = 'block text-sm text-un1t-subtle mb-1'
+  return (
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-2">
+        <Clock size={14} /> Entry policy
+      </h3>
+      <p className="text-[11px] text-un1t-subtle">
+        What a customer may do with their own entry from their entry page or with Mia. Staff can always act. Leave a number or text blank to use the default shown in grey.
+      </p>
+
+      <PolicySwitch
+        id="entry-policy-cancel"
+        label="Let customers cancel their own entry"
+        hint="Off: Mia and the entry page hand a cancel request to the team instead."
+        checked={values.self_cancel_enabled}
+        onChange={(v) => onChange('self_cancel_enabled', v)}
+      />
+      <PolicySwitch
+        id="entry-policy-reschedule"
+        label="Let customers change their date or time"
+        hint="Covers the entry page's date change, Mia's time change and Mia's move to another event."
+        checked={values.self_reschedule_enabled}
+        onChange={(v) => onChange('self_reschedule_enabled', v)}
+      />
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label htmlFor="entry-policy-cutoff" className={labelCls}>Self-service closes (hours before start)</label>
+          <input
+            id="entry-policy-cutoff"
+            type="number"
+            min={0}
+            max={ENTRY_POLICY_HOURS_MAX}
+            step={1}
+            value={values.cutoff_hours}
+            onChange={(e) => onChange('cutoff_hours', e.target.value)}
+            placeholder={String(ENTRY_POLICY_DEFAULTS.cutoff_hours)}
+            className={input}
+          />
+          <p className="text-[11px] text-un1t-muted mt-1">Counted back from the entrant&apos;s wave start. 0 = no cutoff.</p>
+        </div>
+        <div>
+          <label htmlFor="entry-policy-hold" className={labelCls}>Unpaid entry holds its place for (hours)</label>
+          <input
+            id="entry-policy-hold"
+            type="number"
+            min={1}
+            max={ENTRY_POLICY_HOURS_MAX}
+            step={1}
+            value={values.unpaid_hold_hours}
+            onChange={(e) => onChange('unpaid_hold_hours', e.target.value)}
+            placeholder={String(ENTRY_POLICY_DEFAULTS.unpaid_hold_hours)}
+            className={input}
+          />
+          <p className="text-[11px] text-un1t-muted mt-1">After this an unpaid entry stops counting toward capacity and is not resumed. Nothing is deleted; a payment that completes later still confirms it.</p>
+        </div>
+      </div>
+
+      <div className="space-y-4 pt-2 border-t border-un1t-border">
+        <p className="text-[11px] text-un1t-subtle">Customer wording. Tags: <code>{'{{hours}}'}</code>, <code>{'{{event_name}}'}</code>.</p>
+        <div>
+          <label htmlFor="entry-policy-cutoff-message" className={labelCls}>Too close to the start</label>
+          <textarea id="entry-policy-cutoff-message" rows={2} value={values.cutoff_message} onChange={(e) => onChange('cutoff_message', e.target.value)} placeholder={ENTRY_POLICY_DEFAULTS.cutoff_message} className={input} />
+        </div>
+        <div>
+          <label htmlFor="entry-policy-disabled-message" className={labelCls}>Self-service switched off</label>
+          <textarea id="entry-policy-disabled-message" rows={2} value={values.disabled_message} onChange={(e) => onChange('disabled_message', e.target.value)} placeholder={ENTRY_POLICY_DEFAULTS.disabled_message} className={input} />
+        </div>
+        <div>
+          <label htmlFor="entry-policy-lapsed-message" className={labelCls}>Unpaid entry lapsed</label>
+          <textarea id="entry-policy-lapsed-message" rows={2} value={values.lapsed_message} onChange={(e) => onChange('lapsed_message', e.target.value)} placeholder={ENTRY_POLICY_DEFAULTS.lapsed_message} className={input} />
+        </div>
+      </div>
     </div>
   )
 }

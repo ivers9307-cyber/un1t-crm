@@ -17,6 +17,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
+import { ringScreensForDisplay } from '@/lib/screen-doorbell'
 import {
   loadTvDisplayForUser, validateTvPush, TvPushSchema, TV_CONTENT_COLUMNS, tvBadRequest, tvServerError,
 } from '@/lib/tv-admin'
@@ -65,6 +66,10 @@ export async function PUT(request, props) {
     .single()
   if (error) return tvServerError(`Could not push to the TV: ${error.message}`)
 
+  // SCREENMODE.9 — wake the screen boxes linked to this TV so they reload now
+  // instead of at their next (slow, kiosk) poll.
+  try { await ringScreensForDisplay(db, display.id) } catch { /* a ring never changes the response */ }
+
   return NextResponse.json({ success: true, data })
 }
 
@@ -81,6 +86,8 @@ export async function DELETE(_request, props) {
     .eq('tv_display_id', display.id)
     .select('tv_display_id')
   if (error) return tvServerError(`Could not clear the TV: ${error.message}`)
+
+  try { await ringScreensForDisplay(db, display.id) } catch { /* a ring never changes the response */ }
 
   return NextResponse.json({ success: true })
 }

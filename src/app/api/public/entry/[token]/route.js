@@ -10,11 +10,22 @@
 // no check-in codes, which this page does not show) plus:
 //   can_move             the holder may change the date now
 //   move_blocked_reason  a plain sentence when they may not (unpaid,
-//                        cancelled, checked in, past)
+//                        cancelled, checked in, past, or the event's entry
+//                        policy: date changes switched off or inside the
+//                        hours-before cutoff, in the operator's own words;
+//                        ENTRYPOLICY.1)
+//   lapsed               ENTRYPOLICY.1: an unpaid entry whose hold on its
+//                        place has run out (never resumed, never counted; the
+//                        row stays). With lapsed_message (operator copy) and
+//                        register_url (the event page, to register again).
 //   date_change_pending  a dearer date change is waiting on its payment
 //   date_change_failed   a paid date change was refused (the time filled);
 //                        shown while the entry is still where it started and
 //                        the payment stands (a hand move or refund clears it)
+//   placed_into          FINDTEAM.8 (I5): for a solo staff placed into a team
+//                        (status 'placed'), the team they joined and its wave
+//                        ({ team_name, wave: { start_time, label } }); null
+//                        otherwise. Names and times only.
 //
 // A paid date change returns the buyer HERE, often before the payment
 // webhook: the newest date-change payment, if still pending, is refreshed
@@ -32,6 +43,7 @@ import { entryMoveBlock, customerMoveMessage } from '@/lib/registration-move-pub
 import { refreshRacePaymentFromProvider } from '@/lib/race-payments'
 import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 import { getLocationZone, todayStrIn } from '@/lib/location-time'
+import { pendingLapsed, lapsedMessage } from '@/lib/entry-policy'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -86,12 +98,13 @@ export async function GET(request, props) {
     .select(`
       id, status, race_event_id, registered_at, team_composition, race_started_at, race_finished_at,
       race:race_event_id (
-        id, name, slug, kind, race_date, location_id,
+        id, name, slug, kind, race_date, location_id, entry_policy,
         locations:location_id ( name, address )
       ),
       wave:wave_id ( id, start_time, label ),
       teams:team_id ( id, name, size,
-        team_members ( id, name, role, is_member ) )
+        team_members ( id, name, role, is_member ) ),
+      placed_into:placed_into_registration_id ( teams:team_id ( name ), wave:wave_id ( start_time, label ) )
     `)
     .eq('id', claim.registrationId)
     .maybeSingle()
@@ -104,16 +117,24 @@ export async function GET(request, props) {
   // read; an unreadable zone answers like an unreadable check-in count (the
   // move button hides with "try again"), never a guessed day.
   let today = null
+  let zone = null
+  const nowMs = Date.now()
   if (!checkins.error) {
     try {
-      today = todayStrIn(await getLocationZone(db, data.race?.location_id || null))
+      zone = await getLocationZone(db, data.race?.location_id || null)
+      today = todayStrIn(zone, nowMs)
     } catch (err) {
       logWarn('public-entry', 'event zone unreadable; move hidden this load', { err, registrationId: data.id })
     }
   }
+  // ENTRYPOLICY.1 — the event's policy (reschedule switch, cutoff) is judged
+  // here too, at the studio's clock, so the page shows the operator's reason.
   const block = !today
     ? { code: 'load_failed', message: customerMoveMessage('load_failed') }
-    : entryMoveBlock({ registration: data, checkinCount: checkins.count, today })
+    : entryMoveBlock({ registration: data, checkinCount: checkins.count, today, nowMs, zone })
+  // ENTRYPOLICY.1 — an unpaid entry past its hold is lapsed: say so and point
+  // at the event page to register again. The row itself is left alone.
+  const lapsed = pendingLapsed(data, nowMs, data.race || null)
 
   const members = (data.teams?.team_members || []).map((m) => ({ id: m.id, name: m.name, role: m.role, is_member: m.is_member }))
   const dateChangePending = change?.status === 'pending'
@@ -128,13 +149,22 @@ export async function GET(request, props) {
       status: data.status,
       registered_at: data.registered_at,
       team_composition: data.team_composition,
-      race: data.race,
+      race: data.race ? { ...data.race, entry_policy: undefined } : data.race,
       wave: data.wave,
       team: data.teams ? { id: data.teams.id, name: data.teams.name, size: data.teams.size, team_members: members } : null,
       can_move: !block,
       move_blocked_reason: block ? block.message : null,
+      lapsed,
+      lapsed_message: lapsed ? lapsedMessage(data.race || null) : null,
+      register_url: lapsed && data.race?.slug ? `/event/${data.race.slug}` : null,
       date_change_pending: dateChangePending,
       date_change_failed: dateChangeFailed,
+      placed_into: data.status === 'placed' && data.placed_into
+        ? {
+            team_name: data.placed_into.teams?.name || null,
+            wave: data.placed_into.wave ? { start_time: data.placed_into.wave.start_time, label: data.placed_into.wave.label } : null,
+          }
+        : null,
     },
   })
 }

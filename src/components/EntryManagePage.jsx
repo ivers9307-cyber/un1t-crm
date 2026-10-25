@@ -50,6 +50,17 @@ const STATUS_LABEL = {
   pending_payment: 'Awaiting payment',
   cancelled: 'Cancelled',
   no_show: 'Did not attend',
+  // FINDTEAM.8 (I5) — a solo entrant staff placed into a team.
+  placed: 'Placed in a team',
+}
+
+/** "You've been placed with team X (11:00 wave)." for a placed solo, else null. */
+function placedLine(placedInto) {
+  if (!placedInto?.team_name) return null
+  const when = placedInto.wave ? timeText(placedInto.wave) : ''
+  return when
+    ? `You've been placed with team ${placedInto.team_name} (${when} wave).`
+    : `You've been placed with team ${placedInto.team_name}.`
 }
 
 async function readJson(res) {
@@ -157,6 +168,9 @@ export default function EntryManagePage({ token, navigate = (url) => window.loca
   const members = (team.team_members || []).slice().sort((a, b) => (a.role === 'captain' ? 0 : 1) - (b.role === 'captain' ? 0 : 1))
   const whereLabel = race.locations?.name || race.locations?.address || ''
   const dearer = choice && choice.option.price_difference_cents > 0
+  // FINDTEAM.8 (I5) — a placed solo runs with the team they joined, at its time.
+  const placed = entry.status === 'placed' ? placedLine(entry.placed_into) : null
+  const shownWave = entry.status === 'placed' && entry.placed_into?.wave ? entry.placed_into.wave : entry.wave
 
   return (
     <div className="min-h-screen bg-black text-white px-4 pt-16 pb-20">
@@ -164,8 +178,20 @@ export default function EntryManagePage({ token, navigate = (url) => window.loca
         <div className="text-center mb-7">
           <p className="text-[11px] uppercase tracking-[0.2em] text-white/45 font-semibold mb-2">Your entry</p>
           <h1 className="text-3xl font-bold uppercase tracking-tight">{race.name || 'Your event'}</h1>
-          <p className="text-sm text-white/60 mt-2">{STATUS_LABEL[entry.status] || entry.status}</p>
+          <p className="text-sm text-white/60 mt-2">{entry.lapsed ? 'Lapsed (unpaid)' : (STATUS_LABEL[entry.status] || entry.status)}</p>
+          {placed && <p className="text-sm text-white/80 mt-2">{placed}</p>}
         </div>
+
+        {entry.lapsed && (
+          // ENTRYPOLICY.1 — an unpaid entry past the event's hold: the
+          // operator's sentence and the way back to the event page.
+          <div role="status" className="mb-5 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30">
+            <p className="text-sm text-amber-200">{entry.lapsed_message || 'Your unpaid entry has lapsed. You can register again if places remain.'}</p>
+            {entry.register_url && (
+              <a href={entry.register_url} className="inline-block mt-3 text-sm font-semibold underline text-white">Register again</a>
+            )}
+          </div>
+        )}
 
         {notice && (
           // A dark page: the light ramp is the readable one here (as on
@@ -197,10 +223,10 @@ export default function EntryManagePage({ token, navigate = (url) => window.loca
                 <dd className="text-[15px] font-semibold mt-1">{dateLabel(race.race_date)}</dd>
               </div>
             )}
-            {entry.wave && (
+            {shownWave && (
               <div className="bg-black p-3">
                 <dt className="text-[10px] uppercase tracking-[0.14em] text-white/45 font-semibold">{timeRowLabel(race.kind)}</dt>
-                <dd className="text-[15px] font-semibold mt-1">{timeText(entry.wave)}</dd>
+                <dd className="text-[15px] font-semibold mt-1">{timeText(shownWave)}</dd>
               </div>
             )}
             {whereLabel && (
