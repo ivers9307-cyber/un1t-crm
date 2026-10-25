@@ -1,6 +1,6 @@
 # Membership facts on the relationship row — design (2026-10-25)
 
-**Decision (Richard, 25 Oct 2026):** fold `contact_memberships` into `contact_studios` now, as columns on the relationship row, and drop the table. Follows spec 2026-10-20 §2.3 (ORGCONTACTS), whose plan left the table standing because the relationship row carried no plan name and no membership end date.
+**Status: implemented (ORGCONTACTS.7, plan docs/superpowers/plans/2026-10-25-membership-on-relationship-row.md).** **Decision (Richard, 25 Oct 2026):** fold `contact_memberships` into `contact_studios` now, as columns on the relationship row, and drop the table. Follows spec 2026-10-20 §2.3 (ORGCONTACTS), whose plan left the table standing because the relationship row carried no plan name and no membership end date.
 
 ## Intent and why
 
