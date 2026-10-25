@@ -11,7 +11,9 @@
 //   403: ids cannot be enumerated) · 403 the gate · 400 validation,
 //   'no_relationship' (no contact_studios row at the target),
 //   'other_organisation' (the target studio is not in the contact's
-//   organisation, or unknown) · 503 the rows read failed · 200 { location_id }.
+//   organisation, or unknown), 'studio_inactive' (a deactivated studio or a
+//   host anchor: never a primary studio, Review Focus 1) · 503 the rows read
+//   failed · 200 { location_id }.
 //
 // The write is contacts.location_id only: mig 712's trigger keeps
 // organization_id in step, the audit trigger logs it, and the target already
@@ -60,9 +62,12 @@ export async function POST(request, props) {
     return NextResponse.json({ success: true, data: { location_id: contact.location_id } })
   }
 
-  const { data: studio } = await db.from('locations').select('id, organization_id').eq('id', target).maybeSingle()
+  const { data: studio } = await db.from('locations').select('id, organization_id, active, is_host_anchor').eq('id', target).maybeSingle()
   if (!studio || !contact.organization_id || studio.organization_id !== contact.organization_id) {
     return NextResponse.json({ success: false, error: 'other_organisation' }, { status: 400 })
+  }
+  if (studio.active === false || studio.is_host_anchor === true) {
+    return NextResponse.json({ success: false, error: 'studio_inactive' }, { status: 400 })
   }
 
   const rel = await hasRelationshipAt(db, contact.id, [target])

@@ -236,7 +236,9 @@ export default function ContactsView({
   // 'classpass' stage, so they never share a chip with trialists.
   const visibleContacts = useMemo(() => {
     let rows = clientContacts !== null ? clientContacts : initialContacts
-    if (status) rows = rows.filter(c => c.pipeline_stage_slug === status)
+    // ORGCONTACTS.4 (decision 3): the stage AT this studio, the column the
+    // server page filtered on (studio_contacts.studio_stage_slug).
+    if (status) rows = rows.filter(c => c.studio_stage_slug === status)
     // SEARCH.1: when apiActive, the API has already done a wider
     // search (name + email + first_name + last_name + phone, multi-
     // token). Re-applying a name/email-only filter client-side would

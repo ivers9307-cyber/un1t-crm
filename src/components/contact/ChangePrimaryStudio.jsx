@@ -9,7 +9,10 @@
 import { useState } from 'react'
 
 export default function ChangePrimaryStudio({ contactId, currentLocationId, studios }) {
-  const others = (studios || []).filter((s) => s?.location_id && s.location_id !== currentLocationId)
+  // Review Focus 1: a deactivated studio or a host anchor is never a primary
+  // studio, whatever relationship the person holds there (the card still lists it).
+  const others = (studios || []).filter((s) => s?.location_id && s.location_id !== currentLocationId
+    && s.location?.active !== false && s.location?.is_host_anchor !== true)
   const [target, setTarget] = useState(others[0]?.location_id || '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -30,6 +33,7 @@ export default function ChangePrimaryStudio({ contactId, currentLocationId, stud
       if (!res.ok || !json?.success) {
         setError(json?.error === 'no_relationship' ? 'This person has no relationship at that studio yet.'
           : json?.error === 'other_organisation' ? 'That studio is in another organisation.'
+          : json?.error === 'studio_inactive' ? 'That studio is closed or is not a studio.'
           : json?.error || 'Could not change the primary studio.')
         return
       }

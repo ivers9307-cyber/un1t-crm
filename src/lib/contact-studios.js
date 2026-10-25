@@ -32,6 +32,11 @@
 export const KINDS = Object.freeze(['member', 'client', 'lead'])
 export const STATUSES = Object.freeze(['active', 'ended'])
 export const SOURCES = Object.freeze(['glofox', 'un1t_online', 'lead_form', 'deal', 'manual', 'import'])
+// The sources a membership sync owns. A write from any other source never
+// weakens a row carrying one of these (C1, final review): the Glofox readers,
+// Mia and PIPEEXCL.2 read the source, and after mig 768 the row is the only
+// record of a Glofox account at a sibling studio.
+export const MEMBERSHIP_SOURCES = Object.freeze(['glofox', 'un1t_online'])
 export const IN_CHUNK = 150
 
 const TABLE = 'contact_studios'
@@ -68,7 +73,14 @@ async function readAll(build) {
  * touches last_seen_at, sets ended_at with status, writes stage_slug only when
  * given (null clears it).
  *
- * @returns {Promise<{ ok: true, row: object } | { ok: false, error: string }>}
+ * Never weakens a membership row (C1): a write whose source is not in
+ * MEMBERSHIP_SOURCES first reads the row, and when the row's source IS a
+ * membership source it is kept untouched ({ ok: true, row, kept: true }). A
+ * race signup at Stillorgan by a Hatch-primary Glofox member used to turn the
+ * member row into kind lead / source lead_form until the next member sync.
+ * A read failure there is { ok: false }: the row is never guessed at.
+ *
+ * @returns {Promise<{ ok: true, row: object, kept?: true } | { ok: false, error: string }>}
  */
 export async function upsertContactStudio(db, {
   contactId, locationId, kind, source, status = 'active', firstSeenAt = null, stageSlug = undefined,
@@ -79,6 +91,17 @@ export async function upsertContactStudio(db, {
   if (!STATUSES.includes(status)) return fail(`contact_studios: status must be one of ${STATUSES.join(', ')}`)
   if (!SOURCES.includes(source)) return fail(`contact_studios: source must be one of ${SOURCES.join(', ')}`)
   try {
+    if (!MEMBERSHIP_SOURCES.includes(source)) {
+      const { data: have, error: readErr } = await db
+        .from(TABLE)
+        .select(ROW_COLUMNS)
+        .eq('contact_id', contactId)
+        .eq('location_id', locationId)
+        .limit(1)
+      if (readErr) return fail(`contact_studios read: ${message(readErr)}`)
+      const existing = Array.isArray(have) ? have[0] : null
+      if (existing && MEMBERSHIP_SOURCES.includes(existing.source)) return { ok: true, row: existing, kept: true }
+    }
     const payload = {
       contact_id: contactId, location_id: locationId, kind, status, source,
       ended_at: status === 'ended' ? nowIso : null,

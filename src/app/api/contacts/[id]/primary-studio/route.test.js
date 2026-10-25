@@ -39,7 +39,12 @@ function fakeDb({ contact = CONTACT, locations = { [LOC_A]: ORG, [LOC_B]: ORG, [
           throw new Error(`unexpected single on ${table}`)
         },
         async maybeSingle() {
-          if (table === 'locations') { const id = st.filters.find(([c]) => c === 'id')?.[1]; return { data: id in locations ? { id, organization_id: locations[id] } : null, error: null } }
+          if (table === 'locations') {
+            const id = st.filters.find(([c]) => c === 'id')?.[1]
+            const v = locations[id]
+            const row = v == null ? null : typeof v === 'string' ? { id, organization_id: v, active: true, is_host_anchor: false } : { id, active: true, is_host_anchor: false, ...v }
+            return { data: row, error: null }
+          }
           throw new Error(`unexpected maybeSingle on ${table}`)
         },
         then(res, rej) {
@@ -115,6 +120,19 @@ describe('POST /api/contacts/[id]/primary-studio', () => {
     expect(unknown.status).toBe(400)
     expect((await unknown.json()).error).toBe('other_organisation')
     expect(db.updates).toEqual([])
+  })
+
+  // Review Focus 1 (final review I3): a deactivated studio or a host anchor is
+  // never a primary studio; the picker hides them and the route refuses them.
+  it('400 studio_inactive for a deactivated or host-anchor target, with no write', async () => {
+    for (const target of [{ organization_id: ORG, active: false }, { organization_id: ORG, is_host_anchor: true }]) {
+      db = fakeDb({ locations: { [LOC_A]: ORG, [LOC_B]: target } })
+      createServerClient.mockReturnValue(db)
+      const res = await POST(req({ location_id: LOC_B }), props)
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toBe('studio_inactive')
+      expect(db.updates).toEqual([])
+    }
   })
 
   it('400 on a malformed body; the current primary is a no-op 200 with no write', async () => {

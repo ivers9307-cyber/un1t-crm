@@ -57,4 +57,18 @@ describe('ContactStudiosCard — change primary studio', () => {
     const { container: one } = render(<ContactStudiosCard studios={[rows[1]]} primaryLocationId="still" canRehome contactId="c-1" />)
     expect(one.querySelector('select[name="primary_location_id"]')).toBeNull()
   })
+
+  // Review Focus 1 (final review I3): a deactivated studio or a host anchor is
+  // never offered as a primary studio, whatever relationship the person holds there.
+  it('offers neither a deactivated studio nor a host anchor; with none left the control is not rendered', () => {
+    const closed = { ...rows[0], location_id: 'closed', location: { id: 'closed', name: 'UN1T Closed', active: false } }
+    const anchor = { ...rows[0], location_id: 'anchor', location: { id: 'anchor', name: 'Host anchor', is_host_anchor: true } }
+    const { container } = render(<ContactStudiosCard studios={[...rows, closed, anchor]} primaryLocationId="still" canRehome contactId="c-1" />)
+    const select = container.querySelector('select[name="primary_location_id"]')
+    expect([...select.querySelectorAll('option')].map((o) => o.value)).toEqual(['hatch'])
+    expect(container.textContent).toContain('UN1T Closed') // the card still lists the relationship
+
+    const { container: none } = render(<ContactStudiosCard studios={[rows[1], closed, anchor]} primaryLocationId="still" canRehome contactId="c-1" />)
+    expect(none.querySelector('select[name="primary_location_id"]')).toBeNull()
+  })
 })

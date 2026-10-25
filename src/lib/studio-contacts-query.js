@@ -12,7 +12,10 @@
 
 // PERF.2 — the explicit field set ContactsTable + ContactsView consume. Keep
 // the page and the search route on this one list.
-export const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at, location_id, glofox_membership_status, person_group_id'
+// studio_stage_slug (ORGCONTACTS.4, decision 3): the stage AT this studio, the
+// column the page filters on and the chip shows; pipeline_stage_slug is the
+// contact-wide stage (the primary studio's), kept for the classifier chips.
+export const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, studio_stage_slug, trial_credits_remaining, created_at, location_id, glofox_membership_status, person_group_id'
 
 function base(db, { locationId, primaryOnly }) {
   if (!db) throw new TypeError('studio-contacts-query: db is required')

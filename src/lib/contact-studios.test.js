@@ -75,11 +75,13 @@ describe('upsertContactStudio', () => {
     expect(db.ops).toHaveLength(1)
   })
   it("status 'ended' stamps ended_at = nowIso; stageSlug is written only when given (null clears it)", async () => {
-    const db = fakeDb({ contact_studios: () => ({ data: [{}], error: null }) })
+    // source deal is not a membership source, so each write reads the row first (C1); judge the upserts.
+    const db = fakeDb({ contact_studios: (call) => (call.op === 'select' ? { data: [], error: null } : { data: [{}], error: null }) })
     await upsertContactStudio(db, { contactId: CT, locationId: A, kind: 'lead', source: 'deal', status: 'ended', stageSlug: null, nowIso: NOW })
-    expect(db.ops[0].payload).toMatchObject({ status: 'ended', ended_at: NOW, stage_slug: null })
+    const upserts = () => db.ops.filter((o) => o.op === 'upsert')
+    expect(upserts()[0].payload).toMatchObject({ status: 'ended', ended_at: NOW, stage_slug: null })
     await upsertContactStudio(db, { contactId: CT, locationId: A, kind: 'lead', source: 'deal', stageSlug: 'waitlist', nowIso: NOW })
-    expect(db.ops[1].payload.stage_slug).toBe('waitlist')
+    expect(upserts()[1].payload.stage_slug).toBe('waitlist')
   })
   it('firstSeenAt is written with a second guarded update that only ever moves it EARLIER', async () => {
     const db = fakeDb({ contact_studios: (call) => ({ data: call.op === 'upsert' ? [{ contact_id: CT }] : [{ contact_id: CT }], error: null }) })
@@ -101,6 +103,42 @@ describe('upsertContactStudio', () => {
     expect(await upsertContactStudio(db, { contactId: null, locationId: A, kind: 'lead', source: 'deal' })).toMatchObject({ ok: false })
     expect(db.ops).toEqual([])
   })
+  // C1 (final review) — a public form (race / lead / class-booking signup) at
+  // a sibling studio writes a lead_form row for the person; it must never
+  // turn a member's or client's row (source glofox / un1t_online) into a lead:
+  // the Glofox readers, Mia and PIPEEXCL.2 read that source, and after mig 768
+  // the row is the only record of the Glofox link.
+  it('never weakens a membership-sourced row: a lead_form write onto a glofox row reads it and keeps it, writing nothing', async () => {
+    const existing = { contact_id: CT, location_id: A, kind: 'member', status: 'active', source: 'glofox', stage_slug: null, first_seen_at: NOW, last_seen_at: null, ended_at: null }
+    const db = fakeDb({ contact_studios: (call) => (call.op === 'select' ? { data: [existing], error: null } : { data: [{ ...existing, kind: 'lead', source: 'lead_form' }], error: null }) })
+    const r = await upsertContactStudio(db, { contactId: CT, locationId: A, kind: 'lead', source: 'lead_form', nowIso: NOW })
+    expect(r).toEqual({ ok: true, row: existing, kept: true })
+    expect(db.ops.map((o) => o.op)).toEqual(['select'])
+    expect(filter(db.ops[0], 'eq', 'contact_id')).toBe(CT)
+    expect(filter(db.ops[0], 'eq', 'location_id')).toBe(A)
+  })
+
+  it('a non-membership write onto a non-membership row, or onto no row, still writes; a membership write never reads first', async () => {
+    const lead = { contact_id: CT, location_id: A, kind: 'lead', status: 'active', source: 'deal', stage_slug: null }
+    let db = fakeDb({ contact_studios: (call) => (call.op === 'select' ? { data: [lead], error: null } : { data: [{ ...lead, source: 'lead_form' }], error: null }) })
+    expect(await upsertContactStudio(db, { contactId: CT, locationId: A, kind: 'lead', source: 'lead_form', nowIso: NOW })).toMatchObject({ ok: true, row: { source: 'lead_form' } })
+    expect(db.ops.map((o) => o.op)).toEqual(['select', 'upsert'])
+
+    db = fakeDb({ contact_studios: (call) => (call.op === 'select' ? { data: [], error: null } : { data: [{ ...lead, source: 'lead_form' }], error: null }) })
+    expect(await upsertContactStudio(db, { contactId: CT, locationId: A, kind: 'lead', source: 'lead_form', nowIso: NOW })).toMatchObject({ ok: true })
+    expect(db.ops.map((o) => o.op)).toEqual(['select', 'upsert'])
+
+    db = fakeDb({ contact_studios: (call) => (call.op === 'select' ? { throw: true } : { data: [{ ...lead, source: 'glofox', kind: 'member' }], error: null }) })
+    expect(await upsertContactStudio(db, { contactId: CT, locationId: A, kind: 'member', source: 'glofox', nowIso: NOW })).toMatchObject({ ok: true })
+    expect(db.ops.map((o) => o.op)).toEqual(['upsert'])
+  })
+
+  it('a failed read before a non-membership write is { ok: false, error }: the row is not guessed at', async () => {
+    const db = fakeDb({ contact_studios: (call) => (call.op === 'select' ? ERR : { data: [], error: null }) })
+    expect(await upsertContactStudio(db, { contactId: CT, locationId: A, kind: 'lead', source: 'lead_form' })).toEqual({ ok: false, error: expect.stringContaining('boom') })
+    expect(db.ops.map((o) => o.op)).toEqual(['select'])
+  })
+
   it('a failed write is { ok: false, error } and never throws; a zero-row upsert is an error too', async () => {
     expect(await upsertContactStudio(fakeDb({ contact_studios: () => ERR }), { contactId: CT, locationId: A, kind: 'lead', source: 'deal' })).toEqual({ ok: false, error: expect.stringContaining('boom') })
     expect(await upsertContactStudio(fakeDb({ contact_studios: () => ({ data: [], error: null }) }), { contactId: CT, locationId: A, kind: 'lead', source: 'deal' })).toMatchObject({ ok: false })

@@ -25,7 +25,8 @@ const SequencePicker = dynamic(() => import('./SequencePicker'), { ssr: false })
 const ContactMergeModal = dynamic(() => import('./ContactMergeModal'), { ssr: false })
 const ContactBulkDeleteModal = dynamic(() => import('./ContactBulkDeleteModal'), { ssr: false })
 
-// Badge palette keyed by pipeline_stage_slug (FUNNEL.1 taxonomy).
+// Badge palette keyed by the stage slug (FUNNEL.1 taxonomy). The chip reads
+// studio_stage_slug: the stage AT this studio (ORGCONTACTS.4, decision 3).
 // Unmapped slugs fall back to the neutral grey badge.
 const statusBadge = {
   new_lead:     'bg-blue-500/20 text-blue-700',
@@ -264,8 +265,8 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
                     <span className="text-xs px-1.5 py-0.5 bg-un1t-border rounded">{c.lead_source || '—'}</span>
                   </td>
                   <td className="p-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge[c.pipeline_stage_slug] || 'bg-un1t-border text-un1t-subtle'}`}>
-                      {formatStage(c.pipeline_stage_slug)}
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge[c.studio_stage_slug] || 'bg-un1t-border text-un1t-subtle'}`}>
+                      {formatStage(c.studio_stage_slug)}
                     </span>
                   </td>
                   <td className="p-3 text-un1t-subtle">{c.trial_credits_remaining ?? '—'}</td>
@@ -326,9 +327,9 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
                           {c.name}
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded-full uppercase tracking-wider ${
-                          statusBadge[c.pipeline_stage_slug] || 'bg-un1t-border text-un1t-subtle'
+                          statusBadge[c.studio_stage_slug] || 'bg-un1t-border text-un1t-subtle'
                         }`}>
-                          {formatStage(c.pipeline_stage_slug)}
+                          {formatStage(c.studio_stage_slug)}
                         </span>
                         <CrossoverMarker ctx={crossoverContext[c.id]} />
                         <ListFlagMarker flags={listFlags[c.id]} />
