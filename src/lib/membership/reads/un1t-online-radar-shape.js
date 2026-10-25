@@ -293,8 +293,9 @@ function radarCore({
  *         status is not proof that a membership ended;
  *   (ii)  an active / past_due row the API stopped returning (synced_at older
  *         than freshCutoffIso: the mirror never deletes);
- *   (iii) an ended contact_memberships row here (un1t_online_api or
- *         un1t_online_export; the caller filters the source).
+ *   (iii) ended membership facts here (contact_studios.membership_status =
+ *         'ended', mapped by membershipRowsFromStudioRows; the caller filters
+ *         the source).
  * A 'trialing'-only history is not evidence. A contact holding any FRESH
  * subscription on the live allowlist (UN1T_LIVE_SUB_STATUSES: active,
  * past_due, trialing, paused, unpaid; or paused_at set on a status that is not
@@ -319,7 +320,7 @@ function radarCore({
  *                   `allSubs`: the fresh rows, by the same cutoff), plus:
  * @param {object[]} a.allSubs           every un1t_subscriptions row at the studio, any status and age (synced_at)
  * @param {string|null} a.freshCutoffIso freshCutoff('un1t_subscriptions'); null = no rows
- * @param {object[]} a.endedMemberships  ended contact_memberships { contact_id, plan_name, ended_at }
+ * @param {object[]} a.endedMemberships  ended membership facts, mapped to { contact_id, plan_name, ended_at }
  * @returns {object[]}
  */
 export function shapeWinbackRows({ allSubs = [], freshCutoffIso = null, endedMemberships = [], ...input } = {}) {

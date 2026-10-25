@@ -8,8 +8,8 @@ import { pctDelta } from '@shared/dashboard-metrics'
 import { dayStrIn } from '@/lib/location-time'
 import { RETRY_NET_WINDOW_DAYS } from '@/lib/glofox-arrears'
 
-// The first un1t.online sync (UN1TSYNC.1). contact_memberships only learned
-// to END a membership from this day, so an earlier month has no cancellation
+// The first un1t.online sync (UN1TSYNC.1). The sync only learned to END a
+// membership from this day, so an earlier month has no cancellation
 // data, which is "not tracked yet" (null), never 0. Sales are not gated: the
 // transaction history was pulled whole.
 export const UN1T_CANCEL_TRACKING_START = '2026-10-16'
@@ -598,7 +598,7 @@ function aggregatorOf(bookings) {
  * Every list is this person's rows at `locationId` (the caller groups them):
  * `freshSubs` the FRESH un1t_subscriptions (see freshCutoff; a stale row never
  * makes a member), `transactions` all of them, `bookings` with their event's
- * `starts_at`, `memberships` contact_memberships with source 'un1t_online_api'
+ * `starts_at`, `memberships` the membership facts (membershipRowsFromStudioRows) with source 'un1t_online_api'
  * (a row naming another source is ignored), `ledgerTrials` spec D's
  * `op='trial'` done rows ([] until D ships).
  *

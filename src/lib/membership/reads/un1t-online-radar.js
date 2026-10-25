@@ -9,7 +9,7 @@
 //   arrears(db, L)                     → fetchArrearsSummary's { success, data } (+ estimated)
 //
 // Each THROWS on any failed read (a radar that cannot read is a 500, never an
-// empty radar). SCOPE: every un1t_* and contact_memberships query filters
+// empty radar). SCOPE: every un1t_* and contact_studios query filters
 // `location_id = L`, the studio the MEMBERSHIP is held at, so a contact owned
 // by Stillorgan with a Hatch membership counts at Hatch. `contacts` is read BY
 // ID for the people those rows link to (name; and for leads email, phone,
