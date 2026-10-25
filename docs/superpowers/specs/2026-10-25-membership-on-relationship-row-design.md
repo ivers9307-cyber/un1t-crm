@@ -53,6 +53,8 @@ Mig 769 is the person_groups column drop (ORGCONTACTS.6); this is 770 and the dr
 
 ### The writer
 
+Order inside the sync (the builder check's first question): step 7 keeps computing `best` (one subscription per contact), then reads the facts rows (`contact_studios` at the studio with `membership_status = 'active'`), then applies the three fail-closed ending guards exactly as today, so `toEnd` is known; THEN step 7a `writeContactStudios` runs once (member rows for `best`, client rows for every other linked client and for `toEnd`), THEN the facts are written: activations first (`setMembershipFacts` per contact: one UPDATE of plan/status/ended_at, plus a second guarded UPDATE `SET membership_since = :now WHERE membership_since IS NULL`, the `first_seen_at` pattern), then endings. One UPDATE per contact replaces today's chunked upsert (29 rows at Hatch; a studio ten times larger is still one short burst, and the sync already writes per client in step 7a). A member whose contact has no `un1t_clients` row still gets its relationship row from 7a's member list, so `membership_rows_missing` counts only a genuinely missing contact.
+
 `src/lib/contact-studios.js` gains `setMembershipFacts(db, { contactId, locationId, plan, status, since, endedAt, nowIso })`: an UPDATE of the four columns on the existing relationship row, `{ ok, updated }` (zero rows = `updated: false`, logged by the caller; the row is written by `writeContactStudios` just before). `upsertContactStudio`'s payload is unchanged.
 
 `reconcileMemberships` (un1t sync step 7) keeps every rule it has — one best subscription per contact, the fail-closed ending guards (no subscriptions pulled, unresolved clients, unreadable contacts) — and writes through `setMembershipFacts` instead of the table: active = `{ status: 'active', plan, since: coalesce(existing since, nowIso), endedAt: null }`; ending = `{ status: 'ended', endedAt: nowIso }` on rows whose `membership_status = 'active'`. The "active rows for this source" read becomes `contact_studios` at the studio with `membership_status = 'active'`. Step 7a (`writeContactStudios`) runs BEFORE the membership write so the row exists; a membership write that touched no row is counted (`membership_rows_missing`) and logged, never the run's failure. The sync is the ONLY writer of the four columns (`tests/un1t-online-write-guard.test.js`-style guard: a new writer fails a test).
@@ -67,7 +69,23 @@ Mig 769 is the person_groups column drop (ORGCONTACTS.6); this is 770 and the dr
 
 ### Migration 771 (applied AFTER the code deploys)
 
-Drops `contact_memberships`. Pre-check: no view, policy or function names it (the 768 pre-check pattern); the sync's last run on prod is after the deploy (the migration cannot know; the PR body says so). Rollback record: the 722 DDL and a backfill from the four columns.
+Before dropping, a **parity pass** (the builder check's second question): for every `un1t_online_api` row whose `(status, ended_at, plan_name)` differ from the columns on its relationship row, copy the row's values onto the columns (`membership_since` only where the column is null). This repairs the window between 770's apply and the deploy, in which the old code kept writing the table every 15 minutes and never the columns (a membership that ended in the window would otherwise end at the new code's first-run time, a start would get first-run time as its since), and it is the proof the migration can offer that nothing in the table is newer than the columns: the pass prints how many rows it copied, and the PR body asks the operator to apply it after at least one sync has run on the new code (the count then reads 0). Then drops `contact_memberships`. Pre-check: no view, policy or function names it (the 768 pre-check pattern); the sync's last run on prod is after the deploy (the migration cannot know; the PR body says so). Rollback record: the 722 DDL and a backfill from the four columns.
+
+### Replay safety (the builder check's third question)
+
+`tests/migration-648-credential-column-grants.test.js` replays every later migration over a two-column stub of `contact_memberships` (`id, source`), and the convention there is that every file is replay-safe on its own. So 770 guards its backfill on the four source columns existing (`information_schema.columns`; a stub without them backfills nothing and says so in a NOTICE), and 771 uses `DROP TABLE IF EXISTS` with pre-checks that pass when the table is already absent. The read-scope guard scans later migrations only for helper and policy re-creations; 770/771 touch neither. `CLOSED_TABLES` in `tests/helpers/sql-escapes.js` keeps `contact_memberships` as history (the guard reads the migrations, where the table still appears); the builder removes it only if that guard fails on an absent table.
+
+### Backfill rules (the builder check's fourth question)
+
+Fail closed: 770's pre-check lists any `un1t_online_api` row that would violate the new CHECK (`status = 'active'` with an `ended_at`, or `'ended'` without one) and aborts naming them; prod on 25 Oct 2026 has 0 such rows, 0 rows without a plan, 0 future `first_seen_at`, and every active api row's relationship row is already `kind = 'member', status = 'active'` (the sync's 7a wrote it), so the backfill does not touch `kind` and leaves it to the nightly reconcile as today.
+
+### The one-writer guard (the builder check's fifth question)
+
+A test pins the CALL, not the import: `setMembershipFacts(` appears in `src/lib/un1t-online-sync.js` and nowhere else under `src/`, `shared/`, `mobile/` (tests excepted), and no other `.update(` / `.upsert(` / `.insert(` whose chain names `contact_studios` carries a `membership_` key (the `un1t-online-write-guard` style, source-text level over the chain). SQL writers (770's backfill, 771's parity pass and rollback record, `private.contact_studios_upsert`, the three triggers) are pinned by the PGlite tests, not the JS guard.
+
+### Two small calls
+
+The mapper's `source` is `'un1t_online_api'` (the pure shapes drop any other source). `ROW_COLUMNS` in `contact-studios.js` gains the four columns, so every `studiosOfContact` reader (the contact page, the edit page, the WhatsApp webhook) carries plan names from now on: intended, the Studios card shows them; nothing else reads them.
 
 ### Tests and guards
 
@@ -85,7 +103,7 @@ CLAUDE.md contacts bullet (the membership columns and their one writer), REFEREN
 
 ## Left to the builder
 
-Column CHECK wording, the exact mapper and helper names, the Studios card copy, test names, and whether the export artefacts are counted in the 769 NOTICE or a report column.
+Column CHECK wording, the exact mapper and helper names, the Studios card copy, test names, and whether the export artefacts are counted in the 770 NOTICE or a report column.
 
 ## My calls (Richard can overturn)
 
