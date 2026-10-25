@@ -276,12 +276,35 @@ describe('DELETE /api/host/emails/[id] (HOST-EMAILS.2)', () => {
     expect(op(del, 'in').args).toEqual(['status', ['draft', 'scheduled']])
   })
 
-  it("409s \"Sent emails can't be deleted. They are the record of what went out.\" when nothing matched", async () => {
-    const { db } = makeDb(() => ({ data: [], error: null }))
+  // Zero deleted rows: a host-scoped re-read tells "past scheduled" (409)
+  // from "not this host's / no such email" (404).
+  const zeroDeleted = (existing, readErr = null) => (state) => (op(state, 'delete')
+    ? { data: [], error: null }
+    : { data: existing, error: readErr })
+
+  it('409s when the email exists for this host but is past scheduled', async () => {
+    const { db, statements } = makeDb(zeroDeleted({ id: CAMPAIGN_ID }))
     createServerClient.mockReturnValue(db)
     const res = await DELETE(req('DELETE'), props)
     expect(res.status).toBe(409)
-    expect((await res.json()).error).toBe("Sent emails can't be deleted. They are the record of what went out.")
+    expect((await res.json()).error).toMatch(/^Only drafts and scheduled emails can be deleted/)
+    const reread = statements.filter((s) => s.table === 'host_campaigns')[1]
+    expect(hasEq(reread, 'id', CAMPAIGN_ID)).toBe(true)
+    expect(hasEq(reread, 'host_id', HOST_ID)).toBe(true)
+  })
+
+  it("404s for an id that is not this host's, or does not exist", async () => {
+    const { db } = makeDb(zeroDeleted(null))
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE(req('DELETE'), props)
+    expect(res.status).toBe(404)
+  })
+
+  it('500s when the re-read fails', async () => {
+    const { db } = makeDb(zeroDeleted(null, { message: 'down' }))
+    createServerClient.mockReturnValue(db)
+    const res = await DELETE(req('DELETE'), props)
+    expect(res.status).toBe(500)
   })
 
   it('500 with the message on a db error', async () => {

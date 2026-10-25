@@ -110,7 +110,7 @@ export async function DELETE(_request, props) {
   // touched: it lives on Stripe and belongs to them, not us. We only drop our
   // row (the payee record + fee config).
   //
-  // HOST-EMAILS.2 — host_campaigns.host_id cascades, and mig 772's
+  // HOST-EMAILS.2 — host_campaigns.host_id cascades, and mig 593b's
   // host_campaigns_block_sent_delete trigger refuses to delete any campaign
   // that is not a draft or scheduled (its send rows and clicks are the record
   // of what went out). So a host that has ever sent email cannot be deleted,

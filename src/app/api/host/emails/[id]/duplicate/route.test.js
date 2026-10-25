@@ -94,6 +94,16 @@ describe('POST /api/host/emails/[id]/duplicate', () => {
     })
   })
 
+  it('a reminder duplicates into a normal draft for all contacts, so the host can pick its audience', async () => {
+    const reminder = { ...SOURCE, subject: 'Reminder: Race week', audience_kind: 'non_openers', audience_event_id: null, audience_campaign_id: 'a0000000-0000-0000-0000-0000000000p0', email_type: 'marketing' }
+    const { db, statements } = makeDb(routeFor({ source: reminder }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req(), props)
+    expect(res.status).toBe(200)
+    const ins = statements.find((s) => s.table === 'host_campaigns' && op(s, 'insert'))
+    expect(op(ins, 'insert').args[0]).toMatchObject({ audience_kind: 'all', audience_event_id: null, audience_campaign_id: null, subject: 'Copy of Reminder: Race week' })
+  })
+
   it('selects HOST_CAMPAIGN_LIST_COLUMNS on the insert and returns exactly the row the db handed back', async () => {
     const inserted = { id: NEW_ID, subject: 'Copy of Race week', status: 'draft', audience_campaign_id: null }
     const { db, statements } = makeDb(routeFor({ inserted }))

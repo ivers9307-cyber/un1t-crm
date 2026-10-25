@@ -8,7 +8,7 @@
 //       parent campaign (audience_campaign_id), resolved at send time.
 // DELETE /api/host/emails/[id] — HOST-EMAILS.2. Only a draft or scheduled
 //       email may go; a sent one is the record of what went out, and mig
-//       772's trigger refuses it at the database too.
+//       593b's trigger refuses it at the database too.
 // Tenancy: every query .eq('host_id', session.host.id) → 404, not 403.
 
 import { NextResponse } from 'next/server'
@@ -125,7 +125,7 @@ export async function PATCH(request, props) {
 
 // DELETE /api/host/emails/[id] — HOST-EMAILS.2. Only a draft or a scheduled
 // email may go (CAS on status); a sent one is the record of what went out,
-// and mig 772's trigger refuses it at the database too.
+// and mig 593b's trigger refuses it at the database too.
 export async function DELETE(_request, props) {
   const params = await props.params
   const session = await getCurrentHost()
@@ -140,8 +140,19 @@ export async function DELETE(_request, props) {
     .select('id')
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   if (!rows || rows.length === 0) {
+    // Zero rows means either "not this host's / no such email" (404, so ids
+    // stay unenumerable) or "exists but is past scheduled" (409). Re-read,
+    // scoped to the host, to tell them apart.
+    const { data: existing, error: readErr } = await db
+      .from('host_campaigns')
+      .select('id')
+      .eq('id', params.id)
+      .eq('host_id', session.host.id)
+      .maybeSingle()
+    if (readErr) return NextResponse.json({ success: false, error: readErr.message }, { status: 500 })
+    if (!existing) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     return NextResponse.json(
-      { success: false, error: "Sent emails can't be deleted. They are the record of what went out." },
+      { success: false, error: "Only drafts and scheduled emails can be deleted. Anything that has started sending is kept as the record of what went out." },
       { status: 409 },
     )
   }

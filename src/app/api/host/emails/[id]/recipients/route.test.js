@@ -8,7 +8,7 @@
 // HOST-EMAILS.2 — `paused_reason` (real hostSendBlockReason predicate, same
 // as the list route), `non_openers_count` (resolveHostRecipients with
 // nonOpenersOf: campaign.id, null on failure) and top-level `links`
-// (aggregated host_campaign_clicks rows, mig 772).
+// (aggregated host_campaign_clicks rows, mig 593b).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -359,17 +359,17 @@ describe('GET /api/host/emails/[id]/recipients — HOST-EMAILS.2', () => {
     expect(resolveHostRecipients).not.toHaveBeenCalled()
   })
 
-  it('links: aggregated per url with clicks and people, sorted by clicks desc, unsubscribe link last', async () => {
+  it('links: aggregated per url with clicks and people, sorted by clicks desc, unsubscribe link last (one row, tokens cut)', async () => {
     const clickRows = [
       { url: 'https://a', contact_id: 'c1', send_id: 's1' },
       { url: 'https://a', contact_id: 'c1', send_id: 's1' },
       { url: 'https://a', contact_id: 'c2', send_id: 's2' },
       { url: 'https://b', contact_id: 'c3', send_id: 's3' },
-      { url: 'https://crm/unsubscribe/host/t', contact_id: null, send_id: 's1' },
-      { url: 'https://crm/unsubscribe/host/t', contact_id: null, send_id: 's2' },
-      { url: 'https://crm/unsubscribe/host/t', contact_id: null, send_id: 's3' },
-      { url: 'https://crm/unsubscribe/host/t', contact_id: null, send_id: 's4' },
-      { url: 'https://crm/unsubscribe/host/t', contact_id: null, send_id: 's5' },
+      { url: 'https://crm/unsubscribe/host/tok1.sig', contact_id: null, send_id: 's1' },
+      { url: 'https://crm/unsubscribe/host/tok2.sig', contact_id: null, send_id: 's2' },
+      { url: 'https://crm/unsubscribe/host/tok3.sig', contact_id: null, send_id: 's3' },
+      { url: 'https://crm/unsubscribe/host/tok4.sig', contact_id: null, send_id: 's4' },
+      { url: 'https://crm/unsubscribe/host/tok5.sig', contact_id: null, send_id: 's5' },
     ]
     const { db } = makeDb(routeFor({ pages: [[]], clickPages: [clickRows] }))
     createServerClient.mockReturnValue(db)
@@ -379,8 +379,10 @@ describe('GET /api/host/emails/[id]/recipients — HOST-EMAILS.2', () => {
     expect(body.data.links).toEqual([
       { url: 'https://a', clicks: 3, people: 2, is_unsubscribe: false },
       { url: 'https://b', clicks: 1, people: 1, is_unsubscribe: false },
-      { url: 'https://crm/unsubscribe/host/t', clicks: 5, people: 5, is_unsubscribe: true },
+      // Five recipients' links, five different tokens: ONE row, no token.
+      { url: 'https://crm/unsubscribe/host/', clicks: 5, people: 5, is_unsubscribe: true },
     ])
+    expect(JSON.stringify(body)).not.toMatch(/tok\d\.sig/)
   })
 
   it('paginates the clicks read past 1000 rows', async () => {

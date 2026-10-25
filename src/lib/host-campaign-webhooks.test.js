@@ -228,10 +228,15 @@ describe('processHostCampaignEvent — send row outcomes (HOST-METRICS.1)', () =
     expect(db.clickUpserts).toEqual([{
       values: {
         host_id: 'h-1', campaign_id: 'hc-1', send_id: 'send-1', contact_id: 'c-1',
-        url: 'https://x/a', clicked_at: '2026-09-07T10:38:47Z', postmark_message_id: 'pm-9',
+        url: 'https://x/a', clicked_at: '2026-09-07T10:38:47.000Z', postmark_message_id: 'pm-9',
       },
       opts: { onConflict: 'send_id,url,clicked_at', ignoreDuplicates: true },
     }])
+  })
+  it("an unsubscribe Click is stored without the recipient's token", async () => {
+    const db = stubDb({ sendRow: ROW })
+    await processHostCampaignEvent(db, ev('Click', { OriginalLink: 'https://gym.example/unsubscribe/host/abc.sig', ReceivedAt: '2026-09-07T10:38:47Z' }))
+    expect(db.clickUpserts[0].values.url).toBe('https://gym.example/unsubscribe/host/')
   })
   it('Click without OriginalLink writes no click row', async () => {
     const db = stubDb({ sendRow: ROW })

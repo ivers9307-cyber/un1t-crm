@@ -33,7 +33,7 @@
 // DEFAULT IS A DRY RUN — the admin route only writes on an explicit ?dry=0.
 
 import { listOutboundMessages, getOutboundMessageDetails, listBounces } from './postmark-messages.js'
-import { bounceTypeFrom } from './host-campaign-outcome.js'
+import { bounceTypeFrom, clickUrlForStorage, clickInstant } from './host-campaign-outcome.js'
 import { logError, logWarn } from './log.js'
 
 const PAGE = 500
@@ -159,7 +159,10 @@ export function foldClickEvents(events) {
     if (e?.Type !== 'LinkClicked') continue
     const url = e?.Details?.Link
     if (typeof url !== 'string' || !url) continue
-    out.push({ url, at: e.ReceivedAt })
+    // Same keys the webhook writes: no unsubscribe token, millisecond instant.
+    const at = clickInstant(e.ReceivedAt)
+    if (!at) continue
+    out.push({ url: clickUrlForStorage(url), at })
   }
   return out
 }
@@ -295,16 +298,25 @@ export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromD
       }
 
       // Nothing left to learn: every timestamp column this backfill can set
-      // is already set AND no clicks are recorded, so no patch derived from
-      // the details call could ever change this row and there are no click
-      // rows to collect. Skip the (rate-limited) details call outright.
-      // HOST-EMAILS.2: a row WITH recorded clicks still needs the details
-      // call even when fully stamped, to fold its click rows — the unique
-      // index on host_campaign_clicks keeps a re-run idempotent.
-      const nothingLeftToLearn =
+      // is already set, so no patch derived from the details call could ever
+      // change this row. Skip the (rate-limited) details call outright.
+      // HOST-EMAILS.2: a fully stamped row has clicked_at, so it also has
+      // click rows to collect, and it is skipped only once some are stored
+      // (the webhook or an earlier run wrote them). One cheap read, made only
+      // for these rare fully stamped rows; a failed read is not a reason to
+      // skip, so it falls through to the details call. The unique index on
+      // host_campaign_clicks keeps a re-fold idempotent either way.
+      const fullyStamped =
         row.postmark_message_id && row.delivered_at && row.opened_at && row.clicked_at &&
-        (row.bounced_at || row.complained_at || row.unsubscribed_at) && row.click_count === 0
-      if (nothingLeftToLearn) continue
+        (row.bounced_at || row.complained_at || row.unsubscribed_at)
+      if (fullyStamped) {
+        const { data: storedClicks, error: storedErr } = await db
+          .from('host_campaign_clicks')
+          .select('id')
+          .eq('send_id', row.id)
+          .limit(1)
+        if (!storedErr && storedClicks?.length) continue
+      }
 
       const { details, error: detailsError } = await getOutboundMessageDetails(message.MessageID)
       if (detailsError) {

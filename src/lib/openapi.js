@@ -11108,7 +11108,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: "The report page's data for one host campaign (HOST-METRICS.1)",
   description:
-    "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Returns the campaign (with its host_campaign_stats() counts, mig 590) and every host_campaign_sends row for it, each carrying a DERIVED outcome (host-campaign-outcome.js: precedence over the raw timestamps, so a late Delivery event can never regress a recorded Open) plus its outcome_at and, for a failed row, host-facing failure_copy. `failed_reason`/postmark ids are the queue's own bookkeeping — the response omits postmark_message_id (provider ids stay server-side) but keeps failed_reason since failure_copy is derived from it. A stats-rpc hiccup never fails this route: `stats` is null when the stats function is unavailable, and the page shows counts as unavailable rather than zeros. HOST-EMAILS.2 — `paused_reason` (a `sending` campaign the queue has halted, from the same hostSendBlockReason predicate as the list route), `non_openers_count` (how many a reminder draft would reach right now, resolveHostRecipients with `nonOpenersOf`, null on a resolver failure, both null for a non-`sent` campaign), and top-level `links` (one row per clicked URL from host_campaign_clicks, mig 772, aggregated with a per-person count, sorted by clicks descending with the unsubscribe link always last).",
+    "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Returns the campaign (with its host_campaign_stats() counts, mig 590) and every host_campaign_sends row for it, each carrying a DERIVED outcome (host-campaign-outcome.js: precedence over the raw timestamps, so a late Delivery event can never regress a recorded Open) plus its outcome_at and, for a failed row, host-facing failure_copy. `failed_reason`/postmark ids are the queue's own bookkeeping — the response omits postmark_message_id (provider ids stay server-side) but keeps failed_reason since failure_copy is derived from it. A stats-rpc hiccup never fails this route: `stats` is null when the stats function is unavailable, and the page shows counts as unavailable rather than zeros. HOST-EMAILS.2 — `paused_reason` (a `sending` campaign the queue has halted, from the same hostSendBlockReason predicate as the list route), `non_openers_count` (how many a reminder draft would reach right now, resolveHostRecipients with `nonOpenersOf`, null on a resolver failure, both null for a non-`sent` campaign), and top-level `links` (one row per clicked URL from host_campaign_clicks, mig 593b, aggregated with a per-person count, sorted by clicks descending with the unsubscribe link always last).",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: {
@@ -11274,12 +11274,13 @@ registry.registerPath({
   tags: ['Host Portal'],
   security: [{ CookieAuth: [] }],
   summary: 'Delete a draft or scheduled host campaign (HOST-EMAILS.2)',
-  description: "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Compare-and-set delete: only a `draft` or `scheduled` row goes. A `sent`/`sending` campaign 409s — its send rows and clicks are the record of what actually went out, and mig 772's host_campaigns_block_sent_delete trigger refuses it at the database too, so this can never be bypassed by a stale read.",
+  description: "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Compare-and-set delete: only a `draft` or `scheduled` row goes. A `sent`/`sending` campaign 409s — its send rows and clicks are the record of what actually went out, and mig 593b's host_campaigns_block_sent_delete trigger refuses it at the database too, so this can never be bypassed by a stale read.",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Deleted', content: { 'application/json': { schema: SuccessResponse(z.object({ id: uuidLike })) } } },
     401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: "Sent emails can't be deleted. They are the record of what went out.", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not this host's", content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The email is past scheduled (sending, sent or failed); only drafts and scheduled emails can be deleted.', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Database error', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

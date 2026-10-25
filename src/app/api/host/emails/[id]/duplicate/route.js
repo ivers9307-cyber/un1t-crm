@@ -3,6 +3,11 @@
 // never the schedule, counts or timestamps. Subject "Copy of …" capped at
 // 200 (copySubject, src/lib/host-campaign-draft.js — route modules may only
 // export handlers, so the helper lives there).
+//
+// A reminder (audience 'non_openers') duplicates into a NORMAL draft
+// addressed to all contacts: a reminder's audience is fixed in the composer,
+// and duplicating is how a host picks a different one for the same content
+// (spec section 6). The composer's audience select then shows the choice.
 
 import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
@@ -29,6 +34,7 @@ export async function POST(_request, props) {
     .maybeSingle()
   if (readErr) return NextResponse.json({ success: false, error: readErr.message }, { status: 500 })
   if (!source) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  const isReminder = source.audience_kind === 'non_openers'
 
   const { data: row, error: insertErr } = await db
     .from('host_campaigns')
@@ -37,9 +43,9 @@ export async function POST(_request, props) {
       subject: copySubject(source.subject),
       body_html: source.body_html,
       design_json: source.design_json,
-      audience_kind: source.audience_kind,
-      audience_event_id: source.audience_event_id,
-      audience_campaign_id: source.audience_campaign_id,
+      audience_kind: isReminder ? 'all' : source.audience_kind,
+      audience_event_id: isReminder ? null : source.audience_event_id,
+      audience_campaign_id: isReminder ? null : source.audience_campaign_id,
       email_type: source.email_type,
       status: 'draft',
     })

@@ -149,7 +149,7 @@ describe('PATCH /api/hosts/[id] — postmark_stream_id', () => {
   })
 })
 
-// HOST-EMAILS.2 — a host that has sent email is kept: mig 772's trigger
+// HOST-EMAILS.2 — a host that has sent email is kept: mig 593b's trigger
 // refuses to delete a sent campaign, and host_campaigns cascades from the host.
 describe('DELETE /api/hosts/[id] — a host with sent email is kept', () => {
   const del = () => DELETE(new Request(`http://localhost/api/hosts/${HOST_ID}`, { method: 'DELETE' }), props)

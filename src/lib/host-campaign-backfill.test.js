@@ -114,7 +114,13 @@ describe('foldClickEvents (HOST-EMAILS.2)', () => {
       { Type: 'LinkClicked', ReceivedAt: '2026-09-04T11:00:00Z', Details: { Link: 'https://a' } },
       { Type: 'LinkClicked', ReceivedAt: '2026-09-04T11:00:01Z', Details: {} },
       { Type: 'LinkClicked', ReceivedAt: '2026-09-04T11:00:02Z', Details: { Link: 'https://b' } },
-    ])).toEqual([{ url: 'https://a', at: '2026-09-04T11:00:00Z' }, { url: 'https://b', at: '2026-09-04T11:00:02Z' }])
+    ])).toEqual([{ url: 'https://a', at: '2026-09-04T11:00:00.000Z' }, { url: 'https://b', at: '2026-09-04T11:00:02.000Z' }])
+  })
+  it('stores an unsubscribe click without its per-recipient token, at the instant the webhook writes', () => {
+    expect(foldClickEvents([
+      { Type: 'LinkClicked', ReceivedAt: '2026-09-04T07:00:00.1234567-04:00', Details: { Link: 'https://gym.example/unsubscribe/host/abc.sig' } },
+      { Type: 'LinkClicked', ReceivedAt: 'not a time', Details: { Link: 'https://a' } },
+    ])).toEqual([{ url: 'https://gym.example/unsubscribe/host/', at: '2026-09-04T11:00:00.123Z' }])
   })
   it('is empty for non-arrays', () => expect(foldClickEvents(null)).toEqual([]))
 })
@@ -163,8 +169,8 @@ describe('backfillHostCampaignEvents', () => {
       details: {
         MessageEvents: [
           { Type: 'Delivered', ReceivedAt: 'd' },
-          { Type: 'LinkClicked', ReceivedAt: 'c1', Details: { Link: 'https://a' } },
-          { Type: 'LinkClicked', ReceivedAt: 'c2', Details: { Link: 'https://b' } },
+          { Type: 'LinkClicked', ReceivedAt: '2026-09-04T11:00:00Z', Details: { Link: 'https://a' } },
+          { Type: 'LinkClicked', ReceivedAt: '2026-09-04T11:00:02Z', Details: { Link: 'https://b' } },
         ],
       },
       error: null,
@@ -178,8 +184,8 @@ describe('backfillHostCampaignEvents', () => {
     expect(r).toMatchObject({ clicks_seen: 2, clicks_written: 2 })
     const clickIns = statements.find((s) => s.table === 'host_campaign_clicks')
     expect(op(clickIns, 'upsert').args[0]).toEqual([
-      { host_id: 'h-1', campaign_id: 'hc-1', send_id: 's1', contact_id: 'c-1', url: 'https://a', clicked_at: 'c1', postmark_message_id: 'm1' },
-      { host_id: 'h-1', campaign_id: 'hc-1', send_id: 's1', contact_id: 'c-1', url: 'https://b', clicked_at: 'c2', postmark_message_id: 'm1' },
+      { host_id: 'h-1', campaign_id: 'hc-1', send_id: 's1', contact_id: 'c-1', url: 'https://a', clicked_at: '2026-09-04T11:00:00.000Z', postmark_message_id: 'm1' },
+      { host_id: 'h-1', campaign_id: 'hc-1', send_id: 's1', contact_id: 'c-1', url: 'https://b', clicked_at: '2026-09-04T11:00:02.000Z', postmark_message_id: 'm1' },
     ])
     expect(op(clickIns, 'upsert').args[1]).toEqual({ onConflict: 'send_id,url,clicked_at', ignoreDuplicates: true })
     expect(op(clickIns, 'select')).toEqual({ method: 'select', args: ['id'] })
@@ -190,8 +196,8 @@ describe('backfillHostCampaignEvents', () => {
     getOutboundMessageDetails.mockResolvedValueOnce({
       details: {
         MessageEvents: [
-          { Type: 'LinkClicked', ReceivedAt: 'c1', Details: { Link: 'https://a' } },
-          { Type: 'LinkClicked', ReceivedAt: 'c2', Details: { Link: 'https://b' } },
+          { Type: 'LinkClicked', ReceivedAt: '2026-09-04T11:00:00Z', Details: { Link: 'https://a' } },
+          { Type: 'LinkClicked', ReceivedAt: '2026-09-04T11:00:02Z', Details: { Link: 'https://b' } },
         ],
       },
       error: null,
@@ -242,15 +248,33 @@ describe('backfillHostCampaignEvents', () => {
     expect(r2.scanned).toBe(0)
   })
 
-  it('a row with nothing left to learn skips the details call entirely (re-run case)', async () => {
+  const fullyLearnedRow = () => row('s1', 'hc-1', 'c-1', {
+    postmark_message_id: 'm1', delivered_at: 'd', opened_at: 'o', clicked_at: 'c', bounced_at: 'b', click_count: 2,
+  })
+  const withStoredClicks = (stored) => {
+    const base = routeFor({ rows: [fullyLearnedRow()] })
+    return (state) => (state.table === 'host_campaign_clicks' && !op(state, 'upsert') ? stored : base(state))
+  }
+
+  it('a fully stamped row whose click rows are stored skips the details call entirely (re-run case)', async () => {
     listOutboundMessages.mockResolvedValueOnce({ total: 1, messages: [msg('m1')], error: null })
-    const fullyLearnedRow = row('s1', 'hc-1', 'c-1', {
-      postmark_message_id: 'm1', delivered_at: 'd', opened_at: 'o', clicked_at: 'c', bounced_at: 'b',
-    })
-    const { db } = makeDb(routeFor({ rows: [fullyLearnedRow] }))
+    const { db, statements } = makeDb(withStoredClicks({ data: [{ id: 'cl-1' }], error: null }))
     const r = await backfillHostCampaignEvents(db, { hostId: 'h-1', dry: false, sleep: async () => {} })
     expect(r).toMatchObject({ matched: 1, stamped: 0, updated: 0 })
     expect(getOutboundMessageDetails).not.toHaveBeenCalled()
+    const probe = statements.find((st) => st.table === 'host_campaign_clicks')
+    expect(op(probe, 'eq').args).toEqual(['send_id', 's1'])
+  })
+
+  it.each([
+    ['no click rows stored yet', { data: [], error: null }],
+    ['the click-row read failed', { data: null, error: { message: 'down' } }],
+  ])('a fully stamped row still gets the details call when %s, to collect its clicks', async (_label, stored) => {
+    listOutboundMessages.mockResolvedValueOnce({ total: 1, messages: [msg('m1')], error: null })
+    getOutboundMessageDetails.mockResolvedValueOnce({ details: { MessageEvents: [] }, error: null })
+    const { db } = makeDb(withStoredClicks(stored))
+    await backfillHostCampaignEvents(db, { hostId: 'h-1', dry: false, sleep: async () => {} })
+    expect(getOutboundMessageDetails).toHaveBeenCalledWith('m1')
   })
 
   it('updated only counts a message whose guarded write actually returned a row', async () => {

@@ -9,17 +9,17 @@ vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/host-campaign-email', () => ({ renderHostCampaignHtml: vi.fn() }))
 vi.mock('@/lib/postmark', () => ({ applyMergeTags: vi.fn() }))
-vi.mock('@/lib/app-url', () => ({ getAppUrl: vi.fn(() => 'https://crm.repset.ie') }))
+vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://gym-a.repset.ie') }))
 
 import { POST } from './route.js'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { renderHostCampaignHtml } from '@/lib/host-campaign-email'
 import { applyMergeTags } from '@/lib/postmark'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 const HOST_ID = 'b0000000-0000-0000-0000-0000000000b1'
-const HOST_ROW = { id: HOST_ID, name: 'Colm', sender_name: 'Colm Events', sender_email: 'news@runners.ie' }
+const HOST_ROW = { id: HOST_ID, name: 'Colm', sender_name: 'Colm Events', sender_email: 'news@runners.ie', anchor_location_id: 'loc-anchor' }
 
 let ops
 function makeDb(cfg = {}) {
@@ -99,8 +99,19 @@ describe('POST /api/host/emails/preview', () => {
     expect(ops.some((o) => o.method === 'insert' || o.method === 'update')).toBe(false)
   })
 
-  it('falls back to an empty base URL if getAppUrl throws', async () => {
-    getAppUrl.mockImplementationOnce(() => { throw new Error('not set') })
+  // W1.L3a — the footer link lands where the real one will: the tenant host
+  // of the host's anchor location, never the CRM host.
+  it("mints the footer link on the host anchor location's tenant host, as send-test does", async () => {
+    const db = makeDb()
+    createServerClient.mockReturnValue(db)
+    await POST(req({ subject: 'Hi', body_html: '<p>x</p>' }))
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, 'loc-anchor')
+    expect(renderHostCampaignHtml).toHaveBeenCalledWith(expect.objectContaining({ unsubscribeUrl: 'https://gym-a.repset.ie/unsubscribe/host/test-token' }))
+    expect(ops.find((o) => o.method === 'select').args[0]).toContain('anchor_location_id')
+  })
+
+  it('falls back to an empty base URL if the tenant host cannot be resolved', async () => {
+    resolveCustomerBaseUrl.mockRejectedValueOnce(new Error('not set'))
     createServerClient.mockReturnValue(makeDb())
     const res = await POST(req({ subject: 'Hi', body_html: '<p>x</p>' }))
     expect(res.status).toBe(200)

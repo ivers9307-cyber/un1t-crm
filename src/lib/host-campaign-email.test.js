@@ -56,13 +56,14 @@ function decodeForCheck(value) {
     .replace(/&(colon|tab|newline|amp|quot|apos|lt|gt|sol|nbsp);?/gi, (_, n) => ({ colon: ':', tab: '\t', newline: '\n', amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', sol: '/', nbsp: '\u00a0' }[n.toLowerCase()]))
 }
 
-// CSS as the CSS parser sees it, for the check below: comments removed and
-// escapes undone (`\\65 xpression(` is `expression(`, `u\\72 l(` is `url(`),
-// lowercased, whitespace dropped. Deliberately cruder than a CSS tokenizer:
-// it can only see MORE keywords than a browser would, never fewer.
+// CSS as the CSS parser sees it, for the check below: escapes undone
+// (`\\65 xpression(` is `expression(`, `u\\72 l(` is `url(`), lowercased,
+// whitespace dropped. Comments are left in: a comment splits a CSS token, so
+// `ex/**/pression(` is not `expression(` to a browser, and scrubCss removes
+// them before anything reaches here. Deliberately cruder than a CSS
+// tokenizer: it can only see MORE than a browser would, never less.
 function cssForCheck(css) {
   return String(css)
-    .replace(/\/\*[\s\S]*?(\*\/|$)/g, '')
     .replace(/\\([0-9a-f]{1,6})\s?/gi, (_, h) => { const c = parseInt(h, 16); return c > 0 && c <= 0x10ffff ? String.fromCodePoint(c) : '' })
     .replace(/\\(.)/g, '$1')
     .toLowerCase()

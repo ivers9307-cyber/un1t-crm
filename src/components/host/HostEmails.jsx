@@ -246,7 +246,15 @@ export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAM
     const script = existing || document.createElement('script')
     let loaded = false
     let timer
-    const onLoad = () => { loaded = true; clearTimeout(timer); setUnlayerReady(true) }
+    // A script that arrives AFTER the timeout already showed 'failed': take
+    // that notice back down, or it sits over a working editor (a parked
+    // design keeps 'loading' until the init effect loads it and clears it).
+    const onLoad = () => {
+      loaded = true
+      clearTimeout(timer)
+      setUnlayerReady(true)
+      setDesignerNotice((n) => (n === 'failed' ? (pendingDesignRef.current ? 'loading' : '') : n))
+    }
     const onError = () => { clearTimeout(timer); setDesignerNotice('failed'); if (!pendingDesignRef.current) setMode('text') }
     script.addEventListener('load', onLoad)
     script.addEventListener('error', onError)

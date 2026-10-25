@@ -17,7 +17,7 @@ import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { renderHostCampaignHtml } from '@/lib/host-campaign-email'
 import { applyMergeTags } from '@/lib/postmark'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -39,7 +39,7 @@ export async function POST(request) {
   const db = createServerClient()
   const { data: host, error: hostErr } = await db
     .from('event_hosts')
-    .select('id, name, sender_name, sender_email')
+    .select('id, name, sender_name, sender_email, anchor_location_id')
     .eq('id', session.host.id)
     .maybeSingle()
   if (hostErr) return NextResponse.json({ success: false, error: hostErr.message }, { status: 500 })
@@ -47,9 +47,10 @@ export async function POST(request) {
 
   // An inert token, same reasoning as send-test: the footer must RENDER, but
   // a real signed token in a preview surface would let it unsubscribe a
-  // genuine contact if it ever leaked out.
+  // genuine contact if it ever leaked out. W1.L3a: on the tenant host of the
+  // host's anchor location, where the real footer link lands, as send-test.
   let baseUrl
-  try { baseUrl = getAppUrl() } catch { baseUrl = '' }
+  try { baseUrl = await resolveCustomerBaseUrl(db, host.anchor_location_id) } catch { baseUrl = '' }
   const unsubscribeUrl = `${baseUrl}/unsubscribe/host/test-token`
 
   const sampleContact = {

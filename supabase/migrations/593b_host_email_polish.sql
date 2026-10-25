@@ -1,13 +1,14 @@
+-- NUMBERING (October 2026). This file is byte-for-byte the migration applied
+-- to prod on 7 Sep 2026 as `594_host_email_polish` (schema_migrations version
+-- 20260907115636; md5 of the statement matches everything below this
+-- header). It could not keep 594, which is main's 594_pipelines_table.sql,
+-- and it sits at 593b, where prod really ran it, because mig 667 already
+-- REVOKEs EXECUTE on host_campaigns_block_sent_delete(): a later number
+-- would leave a replay from scratch failing at 667 on a function that does
+-- not exist yet. The client REVOKE on host_campaign_clicks that 594 predated
+-- is mig 772.
+
 -- HOST-EMAILS.2 — host email polish: reminder audience, link clicks, delete guard.
---
--- Numbering: written as 594 and APPLIED TO PROD AS 594 on 7 Sep 2026
--- (schema_migrations 20260907115636 '594_host_email_polish'), but 594 is
--- main's 594_pipelines_table.sql, so the file is 772 here. Every statement is
--- idempotent (if not exists / or replace / drop-then-add), so replaying it on
--- prod changes nothing but the client REVOKE at the end, which 594 predated:
--- the table was made before mig 677 closed the default, so authenticated
--- still holds SELECT/INSERT/UPDATE/DELETE on it (RLS on with no policy keeps
--- every row out, but a grant nothing needs is still a grant).
 --
 -- 1. audience_kind 'non_openers' + audience_campaign_id: a reminder draft whose
 --    audience is "delivered but never opened nor clicked" on a parent campaign,
@@ -43,9 +44,6 @@ create unique index if not exists host_campaign_clicks_dedupe on host_campaign_c
 create index if not exists idx_host_campaign_clicks_campaign_url on host_campaign_clicks (campaign_id, url);
 create index if not exists idx_host_campaign_clicks_contact on host_campaign_clicks (contact_id);
 alter table host_campaign_clicks enable row level security;
--- Service role only: the Postmark webhook and the backfill write it, the
--- report route reads it. No client reads or writes it (mig 677 house style).
-revoke all on public.host_campaign_clicks from anon, authenticated;
 comment on table host_campaign_clicks is
   'HOST-EMAILS.2: one row per tracked-link click on a host campaign email (webhook Click + Postmark backfill). Service role only; no policies.';
 

@@ -15,14 +15,14 @@
 // list route); `non_openers_count` (how many a "Send a reminder" draft
 // would reach right now, from the same resolver the reminder-draft's send
 // uses — null, never 0, on a resolver failure); and top-level `links`, one
-// row per clicked URL from host_campaign_clicks (mig 772), aggregated with
+// row per clicked URL from host_campaign_clicks (mig 593b), aggregated with
 // a per-person count and sorted clicks desc, the unsubscribe link last.
 
 import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { loadHostCampaignStats, ZERO_STATS } from '@/lib/host-campaign-stats'
-import { deriveOutcome, outcomeAt, failureCopy } from '@/lib/host-campaign-outcome'
+import { deriveOutcome, outcomeAt, failureCopy, clickUrlForStorage, isHostUnsubscribeUrl } from '@/lib/host-campaign-outcome'
 import { resolveMissedRecipients, hostSendBlockReason } from '@/lib/host-campaign-launch'
 import { resolveHostRecipients } from '@/lib/host-campaign-email'
 import { reminderParentProblem } from '@/lib/host-campaign-draft'
@@ -154,7 +154,7 @@ export async function GET(_request, props) {
   }
 
   // HOST-EMAILS.2 — one row per clicked URL from host_campaign_clicks (mig
-  // 772), aggregated with a per-person count (contact_id, falling back to
+  // 593b), aggregated with a per-person count (contact_id, falling back to
   // send_id for a click with no matched contact). Sorted clicks desc, the
   // unsubscribe link always last regardless of its own click count.
   const clicksByUrl = new Map()
@@ -167,10 +167,13 @@ export async function GET(_request, props) {
       .range(from, from + PAGE - 1)
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
     for (const c of page || []) {
-      const agg = clicksByUrl.get(c.url) || { url: c.url, clicks: 0, people: new Set(), is_unsubscribe: c.url.includes('/unsubscribe/host/') }
+      // Keyed through clickUrlForStorage too, so a row written before the
+      // writers cut the token still groups (and is returned) without it.
+      const url = clickUrlForStorage(c.url)
+      const agg = clicksByUrl.get(url) || { url, clicks: 0, people: new Set(), is_unsubscribe: isHostUnsubscribeUrl(url) }
       agg.clicks += 1
       agg.people.add(c.contact_id || c.send_id)
-      clicksByUrl.set(c.url, agg)
+      clicksByUrl.set(url, agg)
     }
     if (!page || page.length < PAGE) break
   }

@@ -94,7 +94,7 @@ Live after merge: open the 4 Sep report as Colm and check the Links section; pre
 
 ## Rollout
 
-1. Apply mig 594 via Supabase MCP. (Done 7 Sep 2026; the file is 772 since the October merge, because 594 is main's pipelines table.)
+1. Apply mig 594 via Supabase MCP. (Done 7 Sep 2026. Since the October merge the file is `593b_host_email_polish.sql`, because 594 is main's pipelines table and mig 667 already names its trigger function; mig 772 adds the client REVOKE on `host_campaign_clicks` that 594 predated, applied to prod after merge.)
 2. Merge the PR.
 3. Run the click backfill by hand for the three historic campaigns.
 4. If section 10 is in: restore the three contacts.
